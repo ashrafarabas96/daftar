@@ -271,6 +271,136 @@ GRANT SELECT ON installment_plans, installments TO daftar_app;
 GRANT SELECT ON installment_plans, installments TO daftar_inventory_internal;
 GRANT SELECT ON installment_plans, installments TO daftar_accounting_internal;
 
+-- ── 2c. THE INVOICE-BORNE FACT — `TL-P4-COORD-R38`, DIRECTION (d) ────────
+--
+-- THIS SECTION EXISTS BECAUSE THE SAME DEFECT WAS SHIPPED THREE TIMES, AND
+-- THE THIRD TIME IT WAS INSIDE THE THING WRITTEN TO PREVENT IT.
+--
+-- The no-plan arm of `customer_ar_aging` used to be keyed on
+-- `NOT EXISTS (SELECT 1 FROM installment_plans …)` read through the CALLER's
+-- row security, and under row security ABSENT and INVISIBLE ARE ONE ANSWER.
+-- Three rounds of repair all tried to answer «can I see the plans?» from
+-- inside the reader:
+--
+--   1. `NOT EXISTS` alone — absent and invisible are one answer.
+--   2. A `SECURITY DEFINER` count of hidden plans — the definer reads as its
+--      OWNER through ONE policy, so `v_hidden = 0` meant both «no hidden
+--      plan» and «I can see no plans»; dropping `accounting_validator` alone
+--      made it answer `true`.
+--   3. A catalogue-property assertion over `pg_policy` — and the properties
+--      it checked were not the properties that decide whether a role can see
+--      a row. It compared `polpermissive`, `polcmd` and six `strpos` tests,
+--      never `polroles`; `strpos(x, t) > 0` is satisfied by any expression
+--      that merely CONTAINS `t`, so `tenant_membership` re-created with every
+--      token the check looks for plus one extra conjunct `AND created_at >
+--      now()` passed the guard, excluded every row, and left `NOT EXISTS`
+--      true. Measured, in three independent constructions, by the round-7
+--      challenger.
+--
+-- `TL-P4-COORD-R38` retires that whole family with a generalisation that is
+-- now a standing rule of this project: **A READER CANNOT CERTIFY ITS OWN
+-- VISIBILITY.** Every form of the question is answered by the same blinded
+-- principal that is asking it, and each repair moves the blindness one level
+-- further from the answer. No fourth construction of it is permitted, and in
+-- particular adding `polroles` to the catalogue check would close the three
+-- measured attacks and not close the family, because the third attack's extra
+-- conjunct is a VALUE INSIDE AN EXPRESSION and no finite set of substring
+-- tests bounds an expression.
+--
+-- SO THERE IS NOTHING LEFT TO ASSERT. The evidence for this direction is the
+-- challenger's own MEASURED NEGATIVE: with the session context unset, the
+-- caller is blind to `installment_plans` AND blind to `public.invoices` BY
+-- THE SAME POLICIES, so `open_invoice` is empty and the no-plan arm has
+-- nothing to serve. That is the symmetry argument WORKING, and it is why all
+-- three attacks had to break the symmetry between two relations rather than
+-- break the context. The repair therefore carries the fact ON THE ROW WHOSE
+-- VISIBILITY ALREADY GOVERNS THE ANSWER:
+--
+--     THE EXISTENCE OF AN ACTIVE INSTALLMENT PLAN IS A COLUMN ON THE INVOICE.
+--
+-- An invisible plan cannot then exist for a visible invoice, because the fact
+-- about the plan is read through the very policy evaluation that let the
+-- caller see the invoice — the same row, the same `pg_policy` entries, the
+-- same `tenant_id` and `business_id` comparisons. There is no second relation
+-- to desynchronise, so NO SINGLE-RELATION DDL CHANGE CAN DESYNCHRONISE
+-- ANYTHING, and no guard over the policy catalogue is needed or shipped.
+--
+-- WHAT A DENORMALISED FACT COSTS, AND WHAT MAKES IT RIGHT. A stored fact that
+-- can be wrong is worse than no fact at all — `P4-AL-06` is the whole reason
+-- this slice stores no balance, no outstanding and no paid figure, and
+-- challenger M-10 deleted an `installment_count` for being a stored count of
+-- another relation's rows. THIS COLUMN IS NOT OF THAT KIND, AND THE
+-- DIFFERENCE IS STATED RATHER THAN ASSUMED:
+--
+--   * it is not MONEY and not a derivation of money — it is one bit of
+--     LIFECYCLE, exactly the predicate `status = 'active'` that the
+--     projection's own `active_plan` CTE already applies;
+--   * it is maintained by THIS SLICE's triggers on the relation that owns the
+--     truth (section 3a), never by an application, never by a command layer
+--     and never by hand ([[daftar-wrapper-is-not-an-invariant]]);
+--   * it is RECOMPUTED FROM THE ROWS on every event rather than incremented,
+--     so it is idempotent, order-independent and immune to a trigger firing
+--     twice;
+--   * a transaction that ends with the column and the plan relation in
+--     disagreement IS REFUSED AT COMMIT by a deferred constraint trigger, the
+--     same device that already enforces obligation (a) of section 3;
+--   * and NO PRINCIPAL CAN WRITE IT except through that trigger, because the
+--     only `UPDATE` privilege on it anywhere is the column-level grant below.
+--
+-- THE INDUCTION, STATED IN FULL, BECAUSE «it is maintained» IS NOT A PROOF:
+--
+--   BASE CASE. The column is added here with `DEFAULT false`, in the SAME
+--   IMPLICIT TRANSACTION that `CREATE TABLE installment_plans` runs in, so
+--   the relation that could make it `true` is EMPTY at this instant and
+--   `false` is correct for every invoice that exists. THERE IS NO BACKFILL
+--   SCAN, and that is a property rather than an omission: a backfill scan
+--   here would read `invoices` as the applying principal, which is the OWNER
+--   and is therefore subject to `FORCE ROW LEVEL SECURITY` with no context
+--   set — it would read ZERO ROWS AND PASS VACUOUSLY, which is the exact trap
+--   `0075:439-441` names in the estate's own words («a green gate over an
+--   unchecked invariant»). A guard that reads nothing is worse than no guard,
+--   so none is written.
+--
+--   INDUCTIVE STEP. `installment_plan_fact_sync()` recomputes the column for
+--   every invoice implicated by every `INSERT`, `UPDATE` or `DELETE` on
+--   `installment_plans` — both sides of an `UPDATE` that moves a plan between
+--   invoices — and refuses the write if it cannot land the recomputation.
+--
+--   ENFORCEMENT. `installment_plan_fact_verify()` re-derives the fact at
+--   COMMIT, on both relations, and refuses any transaction that ends in
+--   disagreement — including one that writes the column DIRECTLY, and
+--   including an `INSERT INTO invoices` that is born with the column `true`,
+--   which is reachable because `0078:264`'s `GRANT INSERT ON invoices` is
+--   TABLE-LEVEL and a table-level grant covers a column added later.
+--
+--   PRIVILEGE. The grant below is the ONLY `UPDATE` privilege on this column
+--   in the tree, it is COLUMN-LEVEL on the `0081:660` precedent, and it goes
+--   to a NOLOGIN internal principal whose membership is `SET`-only — measured
+--   by the round-7 challenger as `pg_has_role('daftar_migrator',
+--   'daftar_accounting_internal','USAGE') = false`. `daftar_app` holds
+--   `SELECT` only (`0075:494`) and reads the new column through that
+--   table-level grant.
+--
+-- WHY IT IS A BOOLEAN AND NOT A PLAN ID. `installment_plans_one_active_per_invoice_uq`
+-- already makes at most one plan active per invoice, so an id would carry no
+-- information a boolean does not — and a `UUID` here would need a foreign key
+-- back onto `installment_plans`, which would close a reference cycle between
+-- two relations that already reference each other and would make the
+-- lifecycle `active -> completed` a two-relation write instead of one.
+ALTER TABLE invoices ADD COLUMN has_active_installment_plan BOOLEAN NOT NULL DEFAULT false;
+
+COMMENT ON COLUMN invoices.has_active_installment_plan IS
+  'P4-S7 (TL-P4-COORD-R38 direction (d); challenger C1.a, THIRD round). Whether an installment plan with status = ''active'' exists for this invoice. It is LIFECYCLE and not money: no balance, no outstanding, no paid figure and no count of rows (P4-AL-06, challenger M-10) — one bit, carrying exactly the predicate customer_ar_aging''s active_plan CTE applies. It exists because the aging''s no-plan arm must not be keyed on a NOT EXISTS over installment_plans read through the CALLER''s row security: under row security ABSENT and INVISIBLE are one answer, and three rounds of guards that tried to certify the reader''s own visibility all failed, the third by checking policy properties that are not the properties deciding whether a role can see a row. Carried HERE, the fact is read through the very policy evaluation that let the caller see the invoice, so an invisible plan cannot exist for a visible invoice and no guard is needed. Maintained ONLY by installment_plan_fact_sync() on installment_plans, recomputed from the rows and never incremented; any transaction ending with this column and installment_plans in disagreement is REFUSED AT COMMIT by installment_plan_fact_verify(). The only UPDATE privilege on it is the column-level grant to daftar_accounting_internal; daftar_app reads it and cannot write it.';
+
+-- THE ONLY WRITE AUTHORITY, column-level, on the `0081:660` precedent
+-- («GRANT UPDATE (status) ON invoices TO daftar_inventory_internal» — a
+-- column-level grant and one column, because PostgreSQL honours a locking
+-- clause on the strength of UPDATE on ANY single column, so a table-level
+-- grant would be a widening nobody asked for). The grantee is the NOLOGIN
+-- internal principal that owns the two trigger functions of section 3a; it
+-- cannot log in, and no runtime role is a `USAGE` member of it.
+GRANT UPDATE (has_active_installment_plan) ON invoices TO daftar_accounting_internal;
+
 -- ── 3. THE DEFERRED SCHEDULE VERIFIER — `R-SAL-06`, AND THE POLICY'S BOUND ─
 --
 -- `Σ instalments + down = invoice total` spans three relations, so a column
@@ -686,6 +816,259 @@ ALTER FUNCTION installment_schedule_verify() OWNER TO daftar_accounting_internal
 REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 
 
+-- ── 3a. THE FACT'S MAINTAINER AND ITS COMMIT-TIME VERIFIER ───────────────
+--
+-- Section 2c declares the column and the induction that keeps it right. This
+-- section is the inductive step and the enforcement, and it is placed HERE —
+-- below section 3's whole bracket — for the reason the `ORDER_NOTE` above
+-- records: `CREATE CONSTRAINT TRIGGER` resolves `EXECUTE FUNCTION` AT CREATE
+-- TIME, the file is one implicit transaction, and a trigger written above its
+-- function applies NOTHING. Function, then triggers, then the authority
+-- transfer, then take the lent `CREATE` back. `0075:632-634`'s order, a third
+-- time in this file.
+--
+-- ── WHY THERE ARE TWO ROUTINES AND NOT ONE ──────────────────────────────
+--
+-- They do different jobs for different principals and a single routine would
+-- have to be both, which is how round 6's `SECURITY DEFINER` count came to
+-- carry the defect it was written to close.
+--
+--   `installment_plan_fact_sync()` WRITES. It is the only thing in the tree
+--   that writes the column. It runs IMMEDIATELY (an ordinary `AFTER … FOR
+--   EACH ROW` trigger, not deferred), so the column is right as soon as the
+--   statement that changed a plan has completed, and so the verifier below
+--   has something to check at COMMIT.
+--
+--   `installment_plan_fact_verify()` only READS and RAISES. It is a DEFERRED
+--   CONSTRAINT TRIGGER on BOTH relations, so it judges the END STATE of the
+--   transaction once rather than every intermediate step — a plan may be
+--   inserted, its schedule written and its status moved inside one
+--   transaction and the fact is judged once, at COMMIT, exactly as obligation
+--   (a) of section 3 is judged.
+--
+-- ── THE ASYMMETRY THAT MAKES THIS WORK WHERE THREE GUARDS FAILED ────────
+--
+-- Both routines are `SECURITY DEFINER` owned by `daftar_accounting_internal`,
+-- and that is load-bearing in a way the retired guard's DEFINER was not.
+--
+--   THE MAINTAINER AND THE VERIFIER MUST SEE EVERYTHING, and they do: that
+--   principal holds the UNCONDITIONAL `accounting_validator` SELECT policy on
+--   `installment_plans` and `installments` (section 2a) and on `public.invoices`
+--   (`0075:457-458`), and the restrictive read policies admit it by
+--   `current_user`. So neither routine can be blinded by a missing session
+--   context, and neither is asked to decide anything about what a CALLER can
+--   see.
+--
+--   THE READER MUST SEE WHAT ITS CALLER SEES, and it does: `customer_ar_aging`
+--   stays `SECURITY INVOKER` and reads the column off the invoice row through
+--   the caller's own policies.
+--
+--   ROUND 6's DEFINER FAILED BECAUSE IT WAS ASKED THE READER'S QUESTION —
+--   «are there plans the caller cannot see?» — AS THE OWNER, so its own
+--   blindness read as «none». These two are never asked that question at all.
+--   The reader is not asked it either, because the fact is simply ON THE ROW.
+--
+-- ── WHAT THE WRITE DEPENDS ON, STATED BECAUSE IT IS A REAL CONDITION ────
+--
+-- `app_bypass()` IS NOT A SESSION SETTING ANY MORE. `0006:11` defined it as
+-- `current_setting('app.bypass_rls', true) = 'true'`; `0052:244` REPLACED it
+-- with `CURRENT_USER = 'daftar_platform'`. So on `public.invoices` the
+-- permissive `tenant_membership` and the restrictive `business_isolation_update`
+-- admit an `UPDATE` by `daftar_accounting_internal` only when
+-- `app.tenant_id` and `app.business_id` match the INVOICE's own values.
+-- `accounting_validator` does not help: it is `FOR SELECT`.
+--
+-- THAT IS NOT A WEAKNESS, IT IS THE SYMMETRY ENFORCED ON THE WRITE SIDE. A
+-- transaction may flag an invoice only if it could have updated that invoice
+-- in its own right — the same `tenant_id` and `business_id` predicates it
+-- already had to satisfy to INSERT the plan at all
+-- (`business_isolation_insert`, `tenant_membership`'s `WITH CHECK`). And the
+-- composite foreign key `installment_plans_invoice_fk` pins the plan's
+-- `business_id` to the invoice's, so the business half cannot disagree.
+--
+-- The `tenant_id` half CAN disagree, because that foreign key does not carry
+-- `tenant_id`: a plan inserted with a `tenant_id` of its own that differs from
+-- its invoice's would satisfy the plan's policies and NOT the invoice's. The
+-- recomputation would then land on ZERO ROWS — and the `ROW_COUNT` check
+-- below RAISES on exactly that rather than silently writing nothing, so the
+-- cross-tenant plan is REFUSED. That is a strengthening this section gets for
+-- free and it is stated so that nobody removes the `ROW_COUNT` check thinking
+-- it is defensive noise. IT IS THE REFUSAL.
+--
+-- THE OBLIGATION THIS PLACES ON THE FUTURE PLAN WRITER, since this
+-- specification ships none (`P4-AL-38`, section 2a): the command that creates,
+-- completes or cancels a plan must run with `app.tenant_id` and
+-- `app.business_id` set to the invoice's own values. Every application path
+-- already does — `0006`'s header states the contract («Context is set
+-- per-transaction via set_config(..., true)») — and a migration-level
+-- backfill must set them per business. It is not a convention: a writer that
+-- does not gets `installment.plan_fact_unwritable` and no row.
+GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
+
+CREATE OR REPLACE FUNCTION installment_plan_fact_sync() RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_business UUID;
+  v_invoices UUID[];
+  v_invoice  UUID;
+  v_state    BOOLEAN;
+  v_rows     INTEGER;
+BEGIN
+  -- `OLD` IS NOT ASSIGNED ON AN INSERT AND `NEW` IS NOT ASSIGNED ON A DELETE,
+  -- and plpgsql raises «record "old" is not assigned yet» on the attribute
+  -- rather than yielding NULL — so the three cases are branched explicitly
+  -- instead of being folded into a `coalesce` or a `CASE`, both of which would
+  -- evaluate the unassigned side.
+  IF TG_OP = 'INSERT' THEN
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.invoice_id];
+  ELSIF TG_OP = 'DELETE' THEN
+    v_business := OLD.business_id;
+    v_invoices := ARRAY[OLD.invoice_id];
+  ELSE
+    -- A plan may not change business: the old invoice's flag would then live
+    -- in a business this statement is not writing, and one recomputation
+    -- cannot reach both.
+    IF OLD.business_id IS DISTINCT FROM NEW.business_id THEN
+      RAISE EXCEPTION 'installment.plan_fact_unwritable: a plan may not move between businesses, because the invoice that carries its fact is keyed on the business'
+        USING ERRCODE = 'P0001';
+    END IF;
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.invoice_id];
+    -- BOTH SIDES. `invoice_id` is not immutable today, and an UPDATE that
+    -- moves a plan from one invoice to another leaves the OLD invoice flagged
+    -- for a plan it no longer has.
+    IF OLD.invoice_id IS DISTINCT FROM NEW.invoice_id THEN
+      v_invoices := v_invoices || OLD.invoice_id;
+    END IF;
+  END IF;
+
+  FOREACH v_invoice IN ARRAY v_invoices LOOP
+    -- RECOMPUTED FROM THE ROWS, never incremented and never derived from
+    -- `NEW.status` alone: an increment is wrong if the trigger fires twice and
+    -- a read of `NEW` alone is wrong when a SECOND plan on the same invoice is
+    -- still active. This is the projection's own `active_plan` predicate.
+    SELECT EXISTS (SELECT 1 FROM public.installment_plans p
+                    WHERE p.business_id = v_business AND p.invoice_id = v_invoice
+                      AND p.status = 'active')
+      INTO v_state;
+    -- NO `WHERE has_active_installment_plan IS DISTINCT FROM v_state` GUARD.
+    -- It would make `ROW_COUNT = 0` mean either «already correct» or «I could
+    -- not reach the row», which are the two answers this routine exists to
+    -- tell apart. The cost is one row version per plan write, and plan writes
+    -- are rare.
+    UPDATE public.invoices i SET has_active_installment_plan = v_state
+     WHERE i.business_id = v_business AND i.id = v_invoice;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    IF v_rows <> 1 THEN
+      RAISE EXCEPTION 'installment.plan_fact_unwritable: this transaction changed a plan on invoice %/% but could not write the invoice''s own has_active_installment_plan (% rows), so the aging would read a fact nobody maintained',
+        v_business, v_invoice, v_rows USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+  RETURN NULL;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_business UUID;
+  v_invoices UUID[];
+  v_invoice  UUID;
+  v_flag     BOOLEAN;
+  v_state    BOOLEAN;
+BEGIN
+  IF TG_TABLE_NAME = 'invoices' THEN
+    -- The invoice side. `0075`'s `invoices_no_delete` refuses every DELETE on
+    -- this relation, so `NEW` is always assigned here.
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.id];
+  ELSIF TG_OP = 'INSERT' THEN
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.invoice_id];
+  ELSIF TG_OP = 'DELETE' THEN
+    v_business := OLD.business_id;
+    v_invoices := ARRAY[OLD.invoice_id];
+  ELSE
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.invoice_id];
+    IF OLD.invoice_id IS DISTINCT FROM NEW.invoice_id THEN
+      v_invoices := v_invoices || OLD.invoice_id;
+    END IF;
+  END IF;
+
+  FOREACH v_invoice IN ARRAY v_invoices LOOP
+    SELECT i.has_active_installment_plan INTO v_flag
+      FROM public.invoices i
+     WHERE i.business_id = v_business AND i.id = v_invoice;
+    IF NOT FOUND THEN
+      -- A plan whose invoice this principal cannot find. It holds the
+      -- unconditional read on `invoices`, so «not found» is «not there» —
+      -- and a fact nobody carries is not a fact this read may draw a
+      -- conclusion from. It REFUSES rather than returning, because returning
+      -- here is precisely the vacuous pass that `0075:439-441` names.
+      RAISE EXCEPTION 'installment.plan_fact_desynchronised: no invoice %/% exists to carry the fact an installment plan asserts about it',
+        v_business, v_invoice USING ERRCODE = 'P0001';
+    END IF;
+    SELECT EXISTS (SELECT 1 FROM public.installment_plans p
+                    WHERE p.business_id = v_business AND p.invoice_id = v_invoice
+                      AND p.status = 'active')
+      INTO v_state;
+    IF v_flag IS DISTINCT FROM v_state THEN
+      RAISE EXCEPTION 'installment.plan_fact_desynchronised: invoices.has_active_installment_plan is % for %/% while an active installment plan %, and customer_ar_aging ages that invoice from this column',
+        v_flag, v_business, v_invoice,
+        CASE WHEN v_state THEN 'does exist' ELSE 'does not exist' END
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+  RETURN NULL;
+END;
+$fn$;
+
+-- The triggers, created while the migrator still owns the functions (a
+-- non-superuser must hold EXECUTE on a function to create a trigger on it) —
+-- `0075:632-634`.
+--
+-- THE SYNC IS NOT DEFERRED. It must have run before the verifier looks, and a
+-- deferred writer and a deferred verifier on the same event would be ordered
+-- by name rather than by meaning.
+CREATE TRIGGER installment_plans_fact_sync
+  AFTER INSERT OR UPDATE OR DELETE ON installment_plans
+  FOR EACH ROW EXECUTE FUNCTION installment_plan_fact_sync();
+
+-- THE VERIFIER IS DEFERRED, ON BOTH SIDES OF THE FACT.
+CREATE CONSTRAINT TRIGGER installment_plans_fact_agrees
+  AFTER INSERT OR UPDATE OR DELETE ON installment_plans
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  EXECUTE FUNCTION installment_plan_fact_verify();
+
+-- AND ON `invoices`, FOR `INSERT` AS WELL AS FOR THE COLUMN'S OWN `UPDATE`.
+-- `UPDATE OF` alone would leave the INSERT route open, and that route is
+-- REACHABLE: `0078:264`'s `GRANT INSERT ON invoices TO daftar_inventory_internal`
+-- is TABLE-LEVEL, and a table-level INSERT privilege covers a column added
+-- later — so an invoice can be born carrying `true` with no plan behind it.
+-- The cost is one `EXISTS` per inserted invoice at COMMIT, on a path that
+-- inserts one invoice per sale.
+CREATE CONSTRAINT TRIGGER invoices_installment_fact_agrees
+  AFTER INSERT OR UPDATE OF has_active_installment_plan ON invoices
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+  EXECUTE FUNCTION installment_plan_fact_verify();
+
+REVOKE ALL ON FUNCTION installment_plan_fact_sync() FROM PUBLIC;
+REVOKE ALL ON FUNCTION installment_plan_fact_verify() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION installment_plan_fact_sync() TO daftar_accounting_internal;
+GRANT EXECUTE ON FUNCTION installment_plan_fact_verify() TO daftar_accounting_internal;
+COMMENT ON FUNCTION installment_plan_fact_sync() IS
+  'P4-S7 (TL-P4-COORD-R38 direction (d)). The ONLY writer of invoices.has_active_installment_plan. An ordinary AFTER ROW trigger on installment_plans — not deferred, so the column is right as soon as the statement completes and the deferred verifier has something to check at COMMIT. It RECOMPUTES the fact from the rows (EXISTS over status = ''active'', the projection''s own active_plan predicate) rather than incrementing or reading NEW.status, so it is idempotent, order-independent and correct when a second plan on the same invoice is still active. It recomputes BOTH invoices of an UPDATE that moves a plan, and refuses a plan that changes business. It carries NO ''WHERE value IS DISTINCT FROM'' guard, deliberately: ROW_COUNT <> 1 must mean "I could not reach the invoice row" and not "it was already correct", and it RAISES installment.plan_fact_unwritable on it — which is what refuses a plan whose tenant_id disagrees with its invoice''s, since installment_plans_invoice_fk pins business_id and not tenant_id. SECURITY DEFINER owned by daftar_accounting_internal, which holds the unconditional accounting_validator read on both relations and the column-level UPDATE on invoices; the UPDATE still passes through invoices'' own tenant_membership and business_isolation_update policies, so a writer must carry the invoice''s app.tenant_id and app.business_id. Pinned search_path. No EXECUTE grantee but its owner.';
+COMMENT ON FUNCTION installment_plan_fact_verify() IS
+  'P4-S7 (TL-P4-COORD-R38 direction (d)). The COMMIT-time refusal that makes invoices.has_active_installment_plan true rather than merely maintained. A DEFERRABLE INITIALLY DEFERRED constraint trigger on BOTH sides of the fact: on installment_plans for INSERT, UPDATE and DELETE, and on invoices for INSERT and for UPDATE OF that column — the INSERT arm because 0078:264''s GRANT INSERT ON invoices is table-level and therefore covers a column added later, so an invoice could be born carrying the fact with no plan behind it. It re-derives EXISTS(active plan) and refuses installment.plan_fact_desynchronised on any disagreement, and refuses rather than returning when no invoice carries the fact at all, because returning there is the vacuous pass 0075:439-441 names. It only READS and RAISES: it writes nothing. SECURITY DEFINER owned by daftar_accounting_internal so that its reading cannot be blinded by an absent session context — the asymmetry that makes this construction sound where round 6''s DEFINER count was not: this routine is never asked what a CALLER can see, and the reader is never asked either, because the fact is on the row. Pinned search_path. No EXECUTE grantee but its owner.';
+
+ALTER FUNCTION installment_plan_fact_sync() OWNER TO daftar_accounting_internal;
+ALTER FUNCTION installment_plan_fact_verify() OWNER TO daftar_accounting_internal;
+
+REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
+
+
 -- ── 4. WHAT THIS SPECIFICATION DELIBERATELY DOES NOT CREATE ──────────────
 --
 --   * NO accounting source type. Neither relation carries an
@@ -827,245 +1210,155 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 -- (`projectInvoice`), and that file's header states why the TypeScript is a
 -- reference model and not a second implementation (`P4-AL-07`).
 
--- ── 6a. THE NO-PLAN ARM MUST FAIL CLOSED — challenger C1.a ───────────────
+-- -- 6a. THE NO-PLAN ARM FAILS CLOSED BY CONSTRUCTION -- challenger C1.a,
+--     THIRD ROUND, AND THE MECHANISM IS NO LONGER A GUARD ----------------
 --
--- THE DEFECT THE FIRST VERSION SHIPPED. Arm (c) of the projection was keyed on
--- `WHERE NOT EXISTS (SELECT 1 FROM active_plan …)`. `customer_ar_aging` is
--- `SECURITY INVOKER` (`R-P4-07`, and it must stay so), so `active_plan` is read
--- THROUGH THE CALLER'S ROW SECURITY. Under row security, «absent» and
--- «invisible» are the same answer, and `NOT EXISTS` asks the question that
--- cannot tell them apart. A caller who could see the invoice and not its plan
--- was therefore served THE WHOLE OUTSTANDING AT THE SINGLE INVOICE DUE DATE —
--- the exact pre-S7 defect this slice exists to repair, with no error, no empty
--- result and no `42501`. A plausible wrong number a merchant would believe.
+-- THE DEFECT, AND WHY IT SURVIVED TWO REPAIRS. Arm (c) of the projection was
+-- keyed on `WHERE NOT EXISTS (SELECT 1 FROM active_plan ...)`.
+-- `customer_ar_aging` is `SECURITY INVOKER` (`R-P4-07`, and it must stay so),
+-- so `active_plan` is read THROUGH THE CALLER'S ROW SECURITY. Under row
+-- security, "absent" and "invisible" are the same answer, and `NOT EXISTS`
+-- asks the one question that cannot tell them apart. A caller who could see
+-- the invoice and not its plan was served THE WHOLE OUTSTANDING AT THE SINGLE
+-- INVOICE DUE DATE -- the exact pre-S7 defect this slice exists to repair,
+-- with no error, no empty result and no `42501`. A plausible wrong number a
+-- merchant would believe.
 --
--- THE REPAIR HAS TWO HALVES, and the first is the one that matters.
+-- Two repairs were shipped and both carried the defect inside themselves,
+-- and the third shape is recorded in section 2c because it is the one that
+-- settles the direction: a `SECURITY DEFINER` count whose own blindness read
+-- as "no hidden plan", and then a `pg_policy` assertion whose checked
+-- properties were not the properties that decide whether a role can see a
+-- row. `TL-P4-COORD-R38` retires that whole family:
 --
---   1. REMOVE EVERY ASYMMETRY. The projection reads `public.invoices` through
---      the same row security, so for a caller whose visibility of the two
---      relations agrees, hiding the plan hides the invoice too and the result
---      is NO ROW rather than a wrong row. Two asymmetries existed and both are
---      now closed at their source: `daftar_inventory_internal` holds an
---      unconditional read on `invoices` (`0075:455-456`) and now holds one
---      here (section 2a); and a plan whose `tenant_id` differed from its
---      invoice's was expressible, which obligation (e) of section 3 now
---      refuses at COMMIT.
+--     A READER CANNOT CERTIFY ITS OWN VISIBILITY.
 --
---   2. AND THEN REFUSE WHEN THE PREMISE CANNOT BE CONFIRMED. An argument that
---      an asymmetry is unreachable is still an argument, and arm (c)'s
---      `NOT EXISTS` is only sound while the two relations really are read
---      through the same visibility. Section 6a asserts that, and raises when it
---      cannot.
+-- SO NOTHING CERTIFIES IT ANY MORE. Section 2c carries the fact on the
+-- invoice row, and the arm reads it from there:
 --
--- ── 6a. THE ARM'S PREMISE IS ASSERTED, NOT ASSUMED ───────────────────────
+--     no_plan = the open invoices whose OWN ROW says has_active_installment_plan
+--               IS FALSE
 --
--- ROUND 6, F2, CRITICAL: THE FIRST VERSION OF THIS GUARD CONTAINED THE DEFECT
--- IT WAS WRITTEN TO CLOSE, ONE LEVEL DOWN. It was `SECURITY DEFINER` and it
--- COUNTED hidden plans under its OWNER's row security:
+-- and NOT "the open invoices for which I can see no plan". The difference is
+-- the whole repair. The fact that decides arm (c) is now read through the
+-- very `pg_policy` entries, the very `tenant_id` and `business_id`
+-- comparisons and the very row that let the caller see the invoice at all, so
+-- plan-invisibility implies invoice-invisibility BY CONSTRUCTION and the
+-- question the three guards kept getting wrong is no longer asked.
 --
---     SELECT count(*) INTO v_hidden FROM public.installment_plans ... ;
---     IF v_hidden > 0 THEN RAISE ... ; END IF;  RETURN true;
+-- `installment_plan_visibility_assert()` IS DELETED. It is not weakened, not
+-- extended with `polroles`, and not kept beside the column: a retired guard
+-- left in place is a second answer to a question with one answer, and the
+-- next author would believe the wrong one. Nothing in this file reads
+-- `pg_policy` at read time any more.
 --
--- Its owner reads `installment_plans` through `accounting_validator`. **Drop
--- that one policy and the owner sees zero rows, so `v_hidden = 0`, so
--- `RETURN true`** — and the challenger measured the whole consequence: with
--- that policy dropped and the caller-side asymmetry added, `customer_ar_aging`
--- returns one row, the oldest band, the whole authoritative total, WITH NO
--- RAISE. The pre-S7 defect, reached by one ordinary `DROP POLICY`.
+-- ---- WHAT IS STILL ASSERTED, AND WHY IT IS NOT A FOURTH GUARD ----------
 --
--- «ABSENT AND INVISIBLE ARE ONE ANSWER» IS NOT A PROPERTY OF A PREDICATE. It
--- is a property of READING YOUR SUBJECT THROUGH ROW SECURITY AT ALL, so no
--- spelling of the count fixes it, and a DEFINER merely moves whose blindness
--- decides the answer. The guard therefore STOPS COUNTING. It asks instead the
--- only question it can answer soundly:
+-- The column removes the SILENT WRONG NUMBER. It does not by itself remove
+-- the SILENT OMISSION, and that case must be named rather than discovered:
 --
---     IS THE ROW-SECURITY CONFIGURATION THIS ARM'S SOUNDNESS DEPENDS ON
---     ACTUALLY IN PLACE?
+--   flag TRUE, plan INVISIBLE. Arms (a) and (b) read `active_plan` and get
+--   nothing; arm (c) excludes the invoice because its own row says it has a
+--   plan. The invoice would contribute ZERO -- a receivable silently absent
+--   from its own aging. Quieter than the old defect and still wrong.
 --
--- and raises `installment.plan_guard_blind` when it cannot confirm that. A
--- caller that cannot be shown to see plans exactly as it sees invoices gets a
--- REFUSAL, which is the only direction a financial read may fail in.
+--   flag FALSE, plan VISIBLE. Arms (a) and (b) would age the schedule AND arm
+--   (c) would age the whole figure at the due date: a DOUBLE COUNT, worse
+--   than the defect being repaired. This one cannot reach COMMIT -- section
+--   3a's deferred verifier refuses it and no principal can write the column
+--   outside that path -- but a disabled trigger is a state, and a read that
+--   serves a double count when it is in that state is not fail-closed.
 --
--- WHY IT IS `SECURITY INVOKER` AND TAKES NO ARGUMENTS — and this closes
--- round 6's F1 as well. The DEFINER version was granted to `daftar_app` and
--- took `(business_id, invoice_id[])` from the caller, so on its GRANTED
--- SURFACE — not at its one call site — it was a two-valued oracle over
--- `(business, invoice) -> has an active plan`, answerable by the application
--- role about rows row security denies it, with the COUNT in the error message.
--- The old COMMENT argued it «is asked only about invoices that came out of the
--- caller's own filtered read»: TRUE OF THE CALL SITE, FALSE OF THE FUNCTION,
--- and the grant is what an attacker holds. A comment citing a check, for the
--- fourth time in two days.
+--   plan VISIBLE, schedule INVISIBLE. `installments` is a second relation
+--   with its own policies. A caller who sees the plan and not its rows gets a
+--   schedule of one row -- the down payment -- and the rest of the figure
+--   lands in the residual at the invoice due date. The totals still
+--   telescope (proofs 1 and 4); the BUCKETS are silently coarsened. Section
+--   3's obligation (b) guarantees at least one `installments` row exists for
+--   every active plan, so seeing none means not being able to see them.
 --
--- A function that takes NO ARGUMENTS and reads only `pg_catalog` cannot be an
--- oracle about any tenant's rows: there is nothing to ask it about. That is
--- not an argument about its call site, it is the signature. And INVOKER keeps
--- the authority inside the caller, so the guard lends nobody anything.
+-- `installment_plan_fact_assert` refuses all three. IT IS NOT A GUARD OVER
+-- VISIBILITY AND THE DIFFERENCE IS STRUCTURAL, NOT RHETORICAL:
 --
--- WHAT IT ASSERTS, AND WHY THAT IS SOUND RATHER THAN A PROXY. Arm (c)'s
--- `NOT EXISTS` is sound exactly when the caller's visibility of
--- `installment_plans` agrees with its visibility of `public.invoices`. That
--- agreement is not decidable from an arbitrary policy set — but it is
--- GUARANTEED BY CONSTRUCTION when the policies are the ones this design
--- declares: keyed on the same two columns through the same context functions,
--- plus the two unconditional reads, with `business_id` pinned to the invoice's
--- by `installment_plans_invoice_fk` and `tenant_id` pinned to it by obligation
--- (e). So the guard asserts the CONSTRUCTION: the policy NAME SET, the two
--- unconditional policies with their own roles, row security enabled and
--- forced, the caller's own SELECT privilege, and — the symmetry claim itself —
--- that each read policy agrees with `public.invoices`' policy of the same name
--- in its permissive flag, its command, its key COLUMN and its context
--- FUNCTIONS. Asserted against the PREDECESSOR'S installed policies rather than
--- against this file's idea of them.
+--   * IT READS NOTHING. No relation, no catalogue, no `pg_policy`, no
+--     `has_table_privilege`, no `current_user`. Its whole body is three
+--     comparisons against zero.
+--   * IT IS TOLD AN ANSWER RATHER THAN ASKED A QUESTION. The three counts are
+--     computed BY THE CALLER, in the caller's own query, over the caller's own
+--     visible rows. Round 6's `pronargs = 0` was demanded because a guard that
+--     can be ASKED about a tenant's rows is an oracle over them. This routine
+--     cannot be asked anything: its argument list is exactly three `bigint`s,
+--     which section 2b pins by `proargtypes` -- a structural bound, not a
+--     substring test. Three numbers name no row.
+--   * IT IS `SECURITY INVOKER`, so it could not see anything the caller
+--     cannot see even if it tried to look.
+--   * AND IT COMPARES TWO READINGS OF DATA, not a property of a policy. No
+--     DDL statement on one relation can satisfy it while hiding rows: hiding
+--     the plans makes the two readings DISAGREE, which is what it refuses on.
+--     That is the property every previous version lacked.
 --
--- WHY NOT TEXTUAL EQUALITY, WHICH IS WHAT THIS CHECK FIRST ATTEMPTED — the
--- executor's answer, and it is worth recording because it is the
--- textual-coincidence shape in a new costume. `pg_get_expr` on `invoices`'
--- `tenant_membership` returns
+-- THE SCOPE OF THE COUNTS IS ALL OPEN INVOICES OF THIS CUSTOMER, NOT ONLY
+-- THOSE WITH A NON-ZERO OUTSTANDING, and that is deliberate: narrowing them
+-- would need the outstanding figures, which would mean a SECOND call to
+-- `invoice_outstanding` and would break "one authoritative money input, one
+-- call for the whole customer". The cost is that a caller blind to plans is
+-- refused even when the only flagged invoice is already fully paid and would
+-- have contributed nothing. That is over-strict in the safe direction, and a
+-- plan still `active` on a fully-paid invoice is a lifecycle anomaly anyway.
 --
---     (( SELECT app_bypass() AS app_bypass) OR (tenant_id = ( SELECT (NULLIF(app_tenant(), ''::text))::uuid AS "nullif")))
+-- WHERE IT IS CALLED, AND WHY THERE. At the ROOT of the query, on
+-- `invoice_checked`, which every other CTE reads from -- not inside arm (c).
+-- Round 7 measured that the old `CROSS JOIN (SELECT f() AS ok) g` inside arm
+-- (c) was evaluated exactly once even when the arm returned nothing, which is
+-- true and is not something to rely on: the dangerous state is
+-- "open invoices present, every one of them flagged, plans invisible", where
+-- the correct answer is a REFUSAL and the arm is empty. Rooting the call makes
+-- the assertion a dependency of every row the function can return instead of
+-- a property of one arm's plan shape.
 --
--- while the same source text on these relations returns
---
---     (app_bypass() OR (tenant_id = (NULLIF(app_tenant(), ''::text))::uuid))
---
--- PostgreSQL has REWRITTEN the predecessor's stable function calls into InitPlan
--- subselects — the per-row cost `0052` measured away — so **the installed text
--- of a policy is not the migration's source text**, and an equality test
--- against it refuses a healthy database. `0075`'s own end-state block knows
--- this: at `:921-928` it tests the tenant policy with `LIKE '%tenant_id%'` and
--- `NOT LIKE '%businesses%'` rather than comparing text. This check uses that
--- mechanism, and the bound is stated rather than implied: it proves the
--- DECLARED CONSTRUCTION is in place — a policy replaced by `true`, keyed on the
--- wrong column, stripped of its context functions, flipped between permissive
--- and restrictive, narrowed to the wrong command, missing, duplicated or joined
--- by an extra one all refuse — and it does not attempt to prove two arbitrary
--- SQL expressions equivalent, which is not decidable.
---
--- It is `STABLE`, so it is callable from the `STABLE` projection, and it reads
--- only catalogues, which every role may read.
+-- WHAT IS NO LONGER NEEDED AND IS THEREFORE GONE. The retired guard checked
+-- that row security was enabled and forced on both relations, that the caller
+-- held `SELECT`, and that the declared policy name set was present. None of
+-- those facts is load-bearing for this arm any more -- the arm does not read
+-- `installment_plans` to decide anything -- and section 2b asserts all three
+-- AT APPLY TIME, from the live catalogue, where they belong.
 GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
 
-CREATE OR REPLACE FUNCTION installment_plan_visibility_assert()
+CREATE OR REPLACE FUNCTION installment_plan_fact_assert(p_unreadable_plan BIGINT,
+                                                        p_unflagged_plan BIGINT,
+                                                        p_unreadable_schedule BIGINT)
 RETURNS BOOLEAN
 LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog, public, pg_temp AS $fn$
-DECLARE
-  -- `0075:843-846`'s `c_source`, verbatim. The same set section 2b compares
-  -- at apply time; re-asserted here at READ time, because an apply-time check
-  -- cannot see an operational `DROP POLICY`.
-  c_source CONSTANT TEXT[] := ARRAY['accounting_validator', 'business_isolation_delete', 'business_isolation_insert',
-                                    'business_isolation_read', 'business_isolation_update', 'inventory_internal_read',
-                                    'tenant_membership'];
-  v_relation TEXT;
-  v_actual   TEXT[];
-  v_policy   TEXT;
-  v_column   TEXT;
-  v_context  TEXT;
-  v_mine     TEXT;
-  v_theirs   TEXT;
-  v_mine_permissive   BOOLEAN;
-  v_theirs_permissive BOOLEAN;
-  v_mine_cmd   "char";
-  v_theirs_cmd "char";
 BEGIN
-  FOREACH v_relation IN ARRAY ARRAY['installment_plans', 'installments'] LOOP
-    -- (1) ROW SECURITY IS IN THE STATE THIS ARM WAS WRITTEN AGAINST. Not «is
-    --     enabled»: is EXACTLY enabled and forced, so a change in either
-    --     direction is noticed rather than silently tolerated.
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
-                    WHERE c.oid = ('public.' || v_relation)::regclass
-                      AND c.relrowsecurity AND c.relforcerowsecurity) THEN
-      RAISE EXCEPTION 'installment.plan_guard_blind: row security on % is not enabled and forced, so this read cannot tell an absent plan from an invisible one',
-        v_relation USING ERRCODE = 'P0001';
-    END IF;
-    -- (2) THE CALLER CAN READ IT AT ALL. Without this the arm is sound only by
-    --     accident: a revoked SELECT raises on its own, but it raises
-    --     elsewhere and says something else.
-    IF NOT pg_catalog.has_table_privilege(current_user, 'public.' || v_relation, 'SELECT') THEN
-      RAISE EXCEPTION 'installment.plan_guard_blind: this caller holds no SELECT on %, so an empty schedule is not evidence of an absent one',
-        v_relation USING ERRCODE = 'P0001';
-    END IF;
-    -- (3) THE WHOLE DECLARED POLICY SET IS PRESENT. This is the check whose
-    --     absence WAS round 6's F2: dropping `accounting_validator` alone
-    --     blinded the old DEFINER guard and it answered `true`. A set that is
-    --     `c_source` minus one name is not nearly right, it is a different
-    --     configuration, and this arm's soundness was argued about the
-    --     declared one.
-    SELECT array_agg(p.polname::TEXT ORDER BY p.polname) INTO v_actual
-      FROM pg_catalog.pg_policy p WHERE p.polrelid = ('public.' || v_relation)::regclass;
-    IF v_actual IS DISTINCT FROM c_source THEN
-      RAISE EXCEPTION 'installment.plan_guard_blind: the policies on % are %, not the set this read''s soundness was established for',
-        v_relation, v_actual USING ERRCODE = 'P0001';
-    END IF;
-    -- (4) THE TWO UNCONDITIONAL READS REACH THEIR OWN ROLES. A policy of the
-    --     right NAME granted to the wrong role satisfies (3) and leaves the
-    --     asymmetry (3) exists to exclude.
-    IF (SELECT pg_catalog.count(*) FROM pg_catalog.pg_policy p
-         WHERE p.polrelid = ('public.' || v_relation)::regclass
-           AND p.polpermissive AND p.polcmd = 'r'
-           AND pg_catalog.pg_get_expr(p.polqual, p.polrelid) = 'true'
-           AND ((p.polname = 'inventory_internal_read' AND p.polroles = ARRAY['daftar_inventory_internal'::regrole::oid])
-             OR (p.polname = 'accounting_validator'    AND p.polroles = ARRAY['daftar_accounting_internal'::regrole::oid]))) <> 2 THEN
-      RAISE EXCEPTION 'installment.plan_guard_blind: the two unconditional SELECT policies on % are not both present for their own roles',
-        v_relation USING ERRCODE = 'P0001';
-    END IF;
-    -- (5) THE SYMMETRY CLAIM ITSELF, against the PREDECESSOR. The arm is sound
-    --     because a caller sees a plan exactly as it sees the plan's invoice,
-    --     and that holds because these expressions are the ones
-    --     `public.invoices` carries, on columns the foreign key and obligation
-    --     (e) pin to the invoice's own values. Compared as TEXT, from the
-    --     catalogue, both relations against `public.invoices`.
-    FOR v_policy, v_column, v_context IN
-      SELECT * FROM (VALUES ('tenant_membership', 'tenant_id', 'app_tenant('),
-                            ('business_isolation_read', 'business_id', 'app_business(')) AS x(a, b, c)
-    LOOP
-      SELECT pg_catalog.pg_get_expr(p.polqual, p.polrelid), p.polpermissive, p.polcmd
-        INTO v_mine, v_mine_permissive, v_mine_cmd
-        FROM pg_catalog.pg_policy p
-       WHERE p.polrelid = ('public.' || v_relation)::regclass AND p.polname = v_policy;
-      SELECT pg_catalog.pg_get_expr(p.polqual, p.polrelid), p.polpermissive, p.polcmd
-        INTO v_theirs, v_theirs_permissive, v_theirs_cmd
-        FROM pg_catalog.pg_policy p
-       WHERE p.polrelid = 'public.invoices'::regclass AND p.polname = v_policy;
-      IF v_mine IS NULL OR v_theirs IS NULL
-         OR v_mine_permissive IS DISTINCT FROM v_theirs_permissive
-         OR v_mine_cmd IS DISTINCT FROM v_theirs_cmd
-         -- the KEY COLUMN and the CONTEXT FUNCTIONS, on BOTH sides. A policy
-         -- replaced by `true`, keyed on the wrong column, or stripped of its
-         -- context functions fails here.
-         --
-         -- `strpos(string, substring)` AND NOT `position(substring IN string)`:
-         -- the `IN` form is GRAMMAR rather than an argument list, so it is only
-         -- valid UNQUALIFIED — `pg_catalog.position(a IN b)` is `42601`, which
-         -- the parser said and no reading of mine had. The same class as
-         -- `COALESCE`/`NULLIF`: a construct that looks like a catalogue
-         -- function is not one. `strpos` IS a catalogue function, so it can be
-         -- pinned, which is what the pinned path is for.
-         OR pg_catalog.strpos(v_mine, v_column) = 0
-         OR pg_catalog.strpos(v_theirs, v_column) = 0
-         OR pg_catalog.strpos(v_mine, v_context) = 0
-         OR pg_catalog.strpos(v_theirs, v_context) = 0
-         OR pg_catalog.strpos(v_mine, 'app_bypass(') = 0
-         OR pg_catalog.strpos(v_theirs, 'app_bypass(') = 0
-      THEN
-        RAISE EXCEPTION 'installment.plan_guard_blind: the % policy on % does not agree with the one public.invoices carries, so visibility of a plan and of its invoice may disagree',
-          v_policy, v_relation USING ERRCODE = 'P0001';
-      END IF;
-    END LOOP;
-  END LOOP;
+  -- Three counts, three refusals, three DISTINCT messages. One message over a
+  -- summed count would tell a reader that something disagreed and not WHICH
+  -- reading disagreed, and a law that asserts "it refused" rather than "it
+  -- refused THIS" is satisfied by a routine that refuses everything.
+  IF p_unreadable_plan <> 0 THEN
+    RAISE EXCEPTION 'installment.plan_fact_unreadable: % of this customer''s open invoices carry has_active_installment_plan while this caller can read no active plan for them, so their schedules cannot be aged and must not be aged at the invoice due date instead',
+      p_unreadable_plan USING ERRCODE = 'P0001';
+  END IF;
+  IF p_unflagged_plan <> 0 THEN
+    RAISE EXCEPTION 'installment.plan_fact_unflagged: % of this customer''s open invoices have an active installment plan this caller can read while their own has_active_installment_plan is false, so the schedule and the whole figure would both be aged',
+      p_unflagged_plan USING ERRCODE = 'P0001';
+  END IF;
+  IF p_unreadable_schedule <> 0 THEN
+    RAISE EXCEPTION 'installment.plan_schedule_unreadable: % active installment plan(s) this caller can read have no installments row it can read, which section 3 obligation (b) makes impossible unless the schedule rows are invisible, so the schedule would be silently coarsened to its down payment',
+      p_unreadable_schedule USING ERRCODE = 'P0001';
+  END IF;
   RETURN true;
 END;
 $fn$;
 
-REVOKE ALL ON FUNCTION installment_plan_visibility_assert() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION installment_plan_visibility_assert() TO daftar_app, daftar_inventory_internal;
-COMMENT ON FUNCTION installment_plan_visibility_assert() IS
-  'P4-S7 (C1.a; round 6 F1 and F2). The premise of customer_ar_aging''s no-plan arm, asserted at READ time instead of assumed. That arm is keyed on NOT EXISTS over a relation read through the CALLER''s row security, and under row security "absent" and "invisible" are one answer — so the arm is sound only while a caller sees a plan exactly as it sees the plan''s invoice. This routine refuses with installment.plan_guard_blind when it cannot confirm that: row security enabled and forced on both relations, the caller holding SELECT, the whole declared policy name set present, the two unconditional SELECT policies present FOR THEIR OWN ROLES, and the tenant and business read expressions built the SAME WAY as the ones public.invoices carries — same permissive flag, same command, the key column, the context function and app_bypass( present in both. NOT textual equality: PostgreSQL rewrites a policy expression on installation (invoices carries the InitPlan subselect form of its STABLE calls, a fresh policy the direct form), so the INSTALLED TEXT OF A POLICY IS NOT ITS SOURCE TEXT and an equality test refuses a healthy database. 0075:921-928 knows this and uses LIKE for the same reason. It REPLACES a SECURITY DEFINER predecessor that counted hidden plans under its OWNER''s visibility and therefore carried the same defect one level down (dropping accounting_validator made it answer true), and that was additionally an oracle over (business, invoice) -> has a plan on its granted surface. This one takes NO ARGUMENTS and reads only pg_catalog, so there is nothing to ask it about, and it is SECURITY INVOKER so it lends nobody any authority. Its errors carry no count. STABLE; reads only.';
+REVOKE ALL ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT) TO daftar_app, daftar_inventory_internal;
+COMMENT ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT) IS
+  'P4-S7 (TL-P4-COORD-R38 direction (d); challenger C1.a, third round). The three refusals customer_ar_aging owes once the no-plan arm is keyed on invoices.has_active_installment_plan instead of on a NOT EXISTS through the caller''s row security. It is NOT a visibility guard and the difference is structural: it READS NOTHING -- no relation, no catalogue, no pg_policy, no has_table_privilege, no current_user -- and it is TOLD three counts the CALLER computed over the CALLER''s own visible rows rather than asked whether the caller can see anything. Its argument list is exactly three bigints, pinned by proargtypes in section 2b, so it cannot be asked about a row: three numbers name none. SECURITY INVOKER, so it could see nothing the caller cannot see even if it looked. What it refuses: plan_fact_unreadable, an invoice whose own row says it has an active plan while the caller can read none (the silent OMISSION that the column alone would leave); plan_fact_unflagged, a readable active plan whose invoice is not flagged (the DOUBLE COUNT, which section 3a''s deferred verifier already makes unreachable at COMMIT and which this refuses at read time anyway); plan_schedule_unreadable, a readable active plan with no readable installments row, which section 3 obligation (b) makes impossible unless the schedule rows are invisible and which would otherwise coarsen the schedule to its down payment. Called at the ROOT of the projection, on invoice_checked, so it is a dependency of every row the reader can return rather than a property of one arm''s plan shape. STABLE; reads nothing; grants nobody anything.';
 
 -- ...and the transfer last, for the reason section 3 records. Ownership is
 -- about who may later ALTER it, not about authority: this routine is INVOKER
 -- and grants its callers nothing.
-ALTER FUNCTION installment_plan_visibility_assert() OWNER TO daftar_accounting_internal;
+ALTER FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT) OWNER TO daftar_accounting_internal;
 
 REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 
@@ -1073,28 +1366,81 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 CREATE OR REPLACE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])
 RETURNS TABLE (bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER)
 LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
-  WITH open_invoice AS (
+  WITH invoice_fact AS (
+    -- THE INVOICE ROWS THIS READ IS ABOUT, AND THE FACT THEY CARRY.
+    --
+    -- `has_active_installment_plan` is read HERE, off the invoice row, and it
+    -- is the only thing that decides which arm ages an invoice (section 2c,
+    -- section 6a). Read on this row, through this row's own policies, the fact
+    -- about the plan cannot be visible when the invoice is not and cannot be
+    -- invisible when the invoice is: there is no second relation between the
+    -- question and the answer.
+    --
+    -- This also replaces the inline `SELECT array_agg(x.id) FROM public.invoices
+    -- x WHERE ...` the money call used to carry, so `public.invoices` is read
+    -- ONCE for the whole projection and the id set and the fact set are by
+    -- construction the same set.
+    SELECT x.id AS invoice_id, x.has_active_installment_plan AS flagged
+      FROM public.invoices x
+     WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open'
+  ),
+  visible_plan AS (
+    -- The active plans THIS CALLER CAN READ for those invoices. It is one of
+    -- the two readings `fact` compares; it is not an answer to "are there
+    -- plans I cannot see?", which is the question no reader can answer about
+    -- itself.
+    SELECT p.id, p.invoice_id, p.down_payment_minor, p.down_payment_due_date
+      FROM public.installment_plans p
+     WHERE p.business_id = p_business_id AND p.status = 'active'
+       AND p.invoice_id IN (SELECT i.invoice_id FROM invoice_fact i)
+  ),
+  fact AS (
+    -- THE TWO READINGS, COMPARED. One row, always -- an aggregate with no
+    -- GROUP BY -- so the assertion below is reached even when every count is
+    -- zero and even when there is no invoice at all.
+    SELECT pg_catalog.count(*) FILTER (WHERE i.flagged AND v.id IS NULL)::BIGINT          AS unreadable_plan,
+           pg_catalog.count(*) FILTER (WHERE NOT i.flagged AND v.id IS NOT NULL)::BIGINT  AS unflagged_plan,
+           pg_catalog.count(*) FILTER (WHERE v.id IS NOT NULL
+                                         AND NOT EXISTS (SELECT 1 FROM public.installments n
+                                                          WHERE n.business_id = p_business_id
+                                                            AND n.plan_id = v.id))::BIGINT AS unreadable_schedule
+      FROM invoice_fact i
+      LEFT JOIN visible_plan v ON v.invoice_id = i.invoice_id
+  ),
+  invoice_checked AS (
+    -- THE ROOT. Every CTE below reads the invoice set from HERE, so the three
+    -- refusals are a dependency of every row this function can return rather
+    -- than a property of one arm's plan shape. The assertion is TOLD the three
+    -- counts; it reads nothing and can be asked nothing (section 6a).
+    SELECT i.invoice_id, i.flagged
+      FROM invoice_fact i
+     CROSS JOIN (SELECT public.installment_plan_fact_assert(f.unreadable_plan,
+                                                            f.unflagged_plan,
+                                                            f.unreadable_schedule) AS ok
+                   FROM fact f) g
+     WHERE g.ok
+  ),
+  open_invoice AS (
     -- THE ONE AUTHORITATIVE MONEY INPUT, and one call for the whole customer.
     -- `T` and `B` are the stored authoritative PAIR recomposed from the figures
-    -- this call already returns, which is why no `JOIN public.invoices` is
-    -- needed for them and why `0084:593-596`'s appended `currency_code` and
-    -- `due_date` are read straight off it.
-    SELECT o.invoice_id, o.currency_code, o.due_date,
+    -- this call already returns, which is why no second `JOIN public.invoices`
+    -- is needed for them and why `0084:593-596`'s appended `currency_code` and
+    -- `due_date` are read straight off it. The id set comes from
+    -- `invoice_checked`, so the money read is downstream of the refusals.
+    SELECT o.invoice_id, o.currency_code, o.due_date, ic.flagged,
            o.paid_txn_minor, o.outstanding_txn_minor, o.outstanding_base_minor,
            (o.paid_txn_minor + o.outstanding_txn_minor)::BIGINT   AS total_txn_minor,
            (o.paid_base_minor + o.outstanding_base_minor)::BIGINT AS total_base_minor
       FROM public.invoice_outstanding(
              p_business_id,
-             (SELECT pg_catalog.array_agg(x.id)
-                FROM public.invoices x
-               WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open')) o
+             (SELECT pg_catalog.array_agg(ic2.invoice_id) FROM invoice_checked ic2)) o
+      JOIN invoice_checked ic ON ic.invoice_id = o.invoice_id
      WHERE o.outstanding_txn_minor <> 0
   ),
   active_plan AS (
-    SELECT p.id, p.invoice_id, p.down_payment_minor, p.down_payment_due_date
-      FROM public.installment_plans p
-     WHERE p.business_id = p_business_id AND p.status = 'active'
-       AND p.invoice_id IN (SELECT oi.invoice_id FROM open_invoice oi)
+    SELECT v.id, v.invoice_id, v.down_payment_minor, v.down_payment_due_date
+      FROM visible_plan v
+     WHERE v.invoice_id IN (SELECT oi.invoice_id FROM open_invoice oi)
   ),
   sched AS (
     -- The down payment is schedule row 0, dated by its OWN column. It is not
@@ -1160,13 +1506,25 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
               FROM prefixed y GROUP BY y.invoice_id) t ON t.invoice_id = oi.invoice_id
   ),
   no_plan AS (
-    -- The open invoices the caller sees NO active plan for. Named as its own
-    -- CTE so the guard of section 6a can be asked about the SET once, instead
-    -- of once per row, and so arm (c) below reads one relation and not two.
+    -- THE OPEN INVOICES WHOSE OWN ROW SAYS THEY HAVE NO ACTIVE PLAN.
+    --
+    -- THIS IS THE REPAIR, AND IT IS ONE WORD WIDE. It used to read
+    -- `WHERE NOT EXISTS (SELECT 1 FROM active_plan ap WHERE ...)` -- a question
+    -- about what THIS CALLER CAN SEE in `installment_plans`, which under row
+    -- security answers "absent" and "invisible" identically and served the
+    -- whole outstanding at the single invoice due date for an invisible plan.
+    -- It now reads the fact OFF THE INVOICE ROW, which the caller can see
+    -- exactly when it can see the invoice this arm would age.
+    --
+    -- The `NOT EXISTS` is NOT kept as a second condition. It would read as
+    -- belt and braces and would be the opposite: it would reintroduce the
+    -- relation whose invisibility is the defect, and `unflagged_plan` in
+    -- `fact` already refuses the only state in which the two could differ
+    -- in that direction.
     SELECT oi.invoice_id, oi.currency_code, oi.due_date,
            oi.outstanding_txn_minor, oi.outstanding_base_minor
       FROM open_invoice oi
-     WHERE NOT EXISTS (SELECT 1 FROM active_plan ap WHERE ap.invoice_id = oi.invoice_id)
+     WHERE NOT oi.flagged
   ),
   contribution AS (
     -- (a) THE SCHEDULE ROWS. The transaction allocation is a difference of two
@@ -1198,18 +1556,18 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
     --     `installments` rows is served by (a) and (b), which the reference
     --     model agrees with and section 3(b) makes unreachable.
     --
-    --     AND ITS PREMISE IS ASSERTED (section 6a). `NOT EXISTS` cannot
-    --     distinguish a plan that is ABSENT from one that is INVISIBLE, and
-    --     the invisible case served the pre-S7 number silently. The assertion
-    --     takes NO ARGUMENTS — it is not asked about these invoices, it is
-    --     asked whether this read can draw the conclusion at all — so it is
-    --     evaluated once for the query and can leak nothing about any row. It
-    --     returns a boolean or raises `installment.plan_guard_blind`.
+    --     AND ITS PREMISE IS NO LONGER ASSERTED, BECAUSE IT IS NO LONGER A
+    --     PREMISE (section 2c, section 6a; `TL-P4-COORD-R38`). `no_plan` is
+    --     keyed on the INVOICE's own `has_active_installment_plan`, read
+    --     through the policies that let this caller see the invoice, so an
+    --     invisible plan cannot present itself here as an absent one. There is
+    --     no guard over `pg_policy` in this file and no function that asks
+    --     whether this reader can see what it is reading. The three refusals
+    --     that remain are rooted at `invoice_checked` above and are
+    --     comparisons of two readings of DATA, not of a policy's properties.
     SELECT n.invoice_id, n.currency_code, n.due_date,
            n.outstanding_txn_minor, n.outstanding_base_minor
       FROM no_plan n
-     CROSS JOIN (SELECT public.installment_plan_visibility_assert() AS ok) g
-     WHERE g.ok
   )
   SELECT (1 + (SELECT pg_catalog.count(*)
                  FROM pg_catalog.unnest(p_bucket_days) AS t(threshold)
@@ -1431,17 +1789,60 @@ BEGIN
     RAISE EXCEPTION 'installment.authority_leak: installment_schedule_verify() has EXECUTE grantees % beyond its owner', v_actual
       USING ERRCODE = 'P0001';
   END IF;
+  -- THE TWO FACT ROUTINES OF SECTION 3a, which must be DEFINERS owned by the
+  -- internal principal: their soundness depends on their reading NOT being
+  -- blinded by an absent session context, which is the asymmetry that makes
+  -- direction (d) work (section 3a). Trigger return type, pinned path, and no
+  -- EXECUTE grantee beyond the owner.
+  FOREACH v_name IN ARRAY ARRAY['installment_plan_fact_sync', 'installment_plan_fact_verify'] LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+       WHERE p.oid = ('public.' || v_name || '()')::regprocedure
+         AND r.rolname = 'daftar_accounting_internal' AND NOT r.rolcanlogin
+         AND p.prosecdef AND p.prorettype = 'trigger'::regtype
+         AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=pg_catalog, public, pg_temp']
+    ) THEN
+      RAISE EXCEPTION 'installment.migration_end_state_invalid: % is not an internal-owned definer trigger function with the pinned path', v_name
+        USING ERRCODE = 'P0001';
+    END IF;
+    SELECT array_agg(x.grantee::regrole::TEXT ORDER BY 1) INTO v_actual
+      FROM pg_proc p, aclexplode(p.proacl) x
+     WHERE p.oid = ('public.' || v_name || '()')::regprocedure AND x.grantee <> p.proowner;
+    IF v_actual IS NOT NULL THEN
+      RAISE EXCEPTION 'installment.authority_leak: % has EXECUTE grantees % beyond its owner', v_name, v_actual
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+  -- AND THE READ-TIME REFUSAL IS A STABLE INVOKER THAT CAN BE TOLD THREE
+  -- NUMBERS AND NOTHING ELSE.
+  --
+  -- `proargtypes` AND NOT `pronargs`. Round 6 pinned `pronargs = 0` on the
+  -- retired guard, on the correct ground that a routine which can be ASKED
+  -- about a tenant's rows is an oracle over them whatever its call site does.
+  -- That ground is met here by the ARGUMENT TYPES rather than by their
+  -- absence: three `bigint`s cannot name a row, a business or a tenant, so the
+  -- routine cannot be asked a question about any of them -- while a widening
+  -- to `(uuid, uuid, bigint)` would red this block. It is a structural bound
+  -- on what the routine can receive, not a substring test on what it contains,
+  -- and that distinction is the whole of `TL-P4-COORD-R38`.
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
-     WHERE p.oid = 'public.installment_plan_visibility_assert()'::regprocedure
+     WHERE p.oid = 'public.installment_plan_fact_assert(bigint,bigint,bigint)'::regprocedure
        AND r.rolname = 'daftar_accounting_internal' AND NOT r.rolcanlogin
-       -- NOT prosecdef (round 6, F1 and F2): a DEFINER here was BOTH an oracle
-       -- on its granted surface AND blind in its own owner's row security, so
-       -- the label is asserted in the negative and not merely changed.
        AND NOT p.prosecdef AND p.provolatile = 's'
+       AND p.prorettype = 'boolean'::regtype
+       AND p.proargtypes = ARRAY['bigint'::regtype, 'bigint'::regtype, 'bigint'::regtype]::oidvector
        AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=pg_catalog, public, pg_temp']
   ) THEN
-    RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_plan_visibility_assert is not a STABLE internal-owned INVOKER with the pinned path'
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_plan_fact_assert is not a STABLE internal-owned INVOKER of exactly three bigints with the pinned path'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- AND THE RETIRED GUARD IS GONE, not weakened and not kept beside the
+  -- column. A retired guard left in place is a second answer to a question
+  -- with one answer.
+  IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public' AND p.proname = 'installment_plan_visibility_assert') THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_plan_visibility_assert still exists, and a reader that certifies its own visibility is the defect TL-P4-COORD-R38 retired'
       USING ERRCODE = 'P0001';
   END IF;
 
@@ -1468,23 +1869,94 @@ BEGIN
     RAISE EXCEPTION 'installment.migration_end_state_invalid: customer_ar_aging does not consume the canonical release law, or holds a rounding of its own'
       USING ERRCODE = 'P0001';
   END IF;
-  -- AND THE ASSERTION TAKES NO ARGUMENTS (round 6 F1). A guard that can be
-  -- asked about a tenant's rows is an oracle over them whatever its call site
-  -- does; one with an empty argument list cannot be, and that is a property of
-  -- the signature rather than of a comment.
-  IF EXISTS (SELECT 1 FROM pg_proc p
-              WHERE p.oid = 'public.installment_plan_visibility_assert()'::regprocedure
-                AND (p.pronargs <> 0 OR p.prosecdef)) THEN
-    RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_plan_visibility_assert takes arguments or is a DEFINER, either of which makes it an oracle over rows row security denies'
-      USING ERRCODE = 'P0001';
-  END IF;
-  -- AND THE NO-PLAN ARM ASSERTS ITS PREMISE (challenger C1.a): the installed
-  -- body really calls it. An arm keyed on NOT EXISTS alone cannot tell
-  -- «absent» from «invisible» and served the pre-S7 number silently.
+  -- AND THE NO-PLAN ARM IS KEYED ON THE INVOICE'S OWN COLUMN, not on a
+  -- `NOT EXISTS` over `installment_plans` (challenger C1.a, THIRD round;
+  -- `TL-P4-COORD-R38` direction (d)). The installed body must NAME the column
+  -- and must NOT carry the retired guard's call.
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = 'public.customer_ar_aging(uuid,uuid,date,integer[])'::regprocedure
-                    AND p.prosrc LIKE '%installment_plan_visibility_assert(%') THEN
-    RAISE EXCEPTION 'installment.migration_end_state_invalid: customer_ar_aging does not guard its no-plan arm against row-security invisibility'
+                    AND p.prosrc LIKE '%has_active_installment_plan%'
+                    AND p.prosrc LIKE '%installment_plan_fact_assert(%'
+                    AND p.prosrc NOT LIKE '%installment_plan_visibility_assert%') THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: customer_ar_aging does not age its no-plan arm from the invoice''s own has_active_installment_plan, or still calls the retired visibility guard'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- 7. THE INVOICE-BORNE FACT ITSELF (section 2c). The column, its type and
+  --    its default; the ONE write authority; and that no runtime principal
+  --    holds UPDATE on it at either grain.
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute a
+                  LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                  WHERE a.attrelid = 'public.invoices'::regclass
+                    AND a.attname = 'has_active_installment_plan'
+                    AND NOT a.attisdropped AND a.attnotnull
+                    AND a.atttypid = 'boolean'::regtype
+                    AND pg_get_expr(d.adbin, d.adrelid) = 'false') THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: invoices does not carry has_active_installment_plan as a NOT NULL BOOLEAN defaulting to false, which is the base case of section 2c''s induction'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- THE ONLY UPDATE GRANTEE, and the grant is COLUMN-LEVEL. A table-level
+  -- UPDATE on `invoices` would be a widening of everything `0081:649-660`
+  -- argues for, so the column grant is asserted and the table grant refused.
+  IF NOT has_column_privilege('daftar_accounting_internal', 'public.invoices',
+                              'has_active_installment_plan', 'UPDATE') THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: daftar_accounting_internal cannot write has_active_installment_plan, so section 3a''s sync can never land and every plan write would be refused'
+      USING ERRCODE = 'P0001';
+  END IF;
+  FOREACH v_role IN ARRAY c_runtime LOOP
+    IF has_column_privilege(v_role, 'public.invoices', 'has_active_installment_plan', 'UPDATE') THEN
+      RAISE EXCEPTION 'installment.authority_leak: % holds UPDATE on invoices.has_active_installment_plan, and only the section 3a trigger may write it',
+        v_role USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+  IF has_table_privilege('daftar_accounting_internal', 'public.invoices', 'UPDATE') THEN
+    RAISE EXCEPTION 'installment.authority_leak: daftar_accounting_internal holds TABLE-level UPDATE on invoices, and section 2c grants one column'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- 8. THE THREE TRIGGERS THAT MAKE THE FACT TRUE (section 3a). The sync is
+  --    an ORDINARY after-row trigger -- not deferred, because it must have run
+  --    before the verifier looks -- and the verifier is a DEFERRED CONSTRAINT
+  --    trigger on BOTH sides of the fact. Read from `pg_trigger`, which is
+  --    also the only thing that can be true if section 3a's statements were
+  --    ordered correctly.
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t
+                  WHERE t.tgrelid = 'public.installment_plans'::regclass AND NOT t.tgisinternal
+                    AND t.tgconstraint = 0 AND NOT t.tgdeferrable
+                    AND t.tgfoid = 'public.installment_plan_fact_sync()'::regprocedure
+                    AND (t.tgtype & 4) = 4 AND (t.tgtype & 8) = 8 AND (t.tgtype & 16) = 16) THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: the immediate installment_plan_fact_sync trigger is not present on installment_plans for INSERT, DELETE and UPDATE'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF (SELECT count(*) FROM pg_trigger t
+       WHERE t.tgrelid = ANY (ARRAY['public.installment_plans'::regclass, 'public.invoices'::regclass])
+         AND NOT t.tgisinternal
+         AND t.tgconstraint <> 0 AND t.tgdeferrable AND t.tginitdeferred
+         AND t.tgfoid = 'public.installment_plan_fact_verify()'::regprocedure) <> 2 THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: the two deferred constraint triggers on installment_plan_fact_verify() are not both present, one per side of the fact'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- THE `invoices` SIDE MUST COVER `INSERT` AND NOT ONLY THE COLUMN'S UPDATE.
+  -- `tgtype` bit 2 (value 4) is INSERT. `0078:264`'s GRANT INSERT is
+  -- table-level, so an invoice can be born carrying the fact, and `UPDATE OF`
+  -- alone would leave that route open.
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t
+                  WHERE t.tgrelid = 'public.invoices'::regclass AND NOT t.tgisinternal
+                    AND t.tgconstraint <> 0
+                    AND t.tgfoid = 'public.installment_plan_fact_verify()'::regprocedure
+                    AND (t.tgtype & 4) = 4 AND (t.tgtype & 16) = 16) THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: the invoices-side fact trigger does not fire on INSERT as well as on UPDATE'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- AND THE PLAN SIDE FIRES ON DELETE. Completing or cancelling a plan is an
+  -- UPDATE and removing one is a DELETE, and a DELETE that left the invoice
+  -- flagged would silently drop the invoice out of EVERY arm.
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t
+                  WHERE t.tgrelid = 'public.installment_plans'::regclass AND NOT t.tgisinternal
+                    AND t.tgconstraint <> 0
+                    AND t.tgfoid = 'public.installment_plan_fact_verify()'::regprocedure
+                    AND (t.tgtype & 8) = 8) THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: the plan-side fact trigger does not fire on DELETE'
       USING ERRCODE = 'P0001';
   END IF;
 END
