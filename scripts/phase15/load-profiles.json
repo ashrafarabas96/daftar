@@ -1,0 +1,426 @@
+{
+  "schema": "P15-LOAD-PROFILES/1",
+  "lane": "performance-evidence",
+  "status": "PREPARED / NOT PROMOTED",
+  "provenance": {
+    "targets_source": "docs/DAFTAR_SCALING_PLAN.md",
+    "declared_numbers_in_that_document": [
+      "docs/DAFTAR_SCALING_PLAN.md:27 — POS checkout (API) p95 ceiling",
+      "docs/DAFTAR_SCALING_PLAN.md:28 — dashboard first useful content ceiling",
+      "docs/DAFTAR_SCALING_PLAN.md:29 — storefront LCP ceiling on 4G",
+      "docs/DAFTAR_SCALING_PLAN.md:34 — the load scenarios named (10k active tenants, concurrent POS peak, offline-sync storm, seasonal storefront load)"
+    ],
+    "note": "The scaling plan states ceilings for USER-FACING surfaces (an API endpoint, a page's first useful content, a browser LCP). This harness measures a PostgreSQL transaction through COMMIT. A transaction is a PROPER SUBSET of an endpoint, so an endpoint ceiling is not an objective for it: using one here would widen a narrow result under a broad name. Every profile below therefore carries objective.state = UNDECLARED and names, for the reader, the nearest declared number and the surface it actually governs. Nothing here guesses a number the plan does not state."
+  },
+  "frozen_contracts_referenced_not_restated": [
+    {
+      "name": "Accounting Budget A",
+      "source": "tests/performance/accounting-budgets.test.ts:54",
+      "constant": "A_POST_P95",
+      "measured_region_includes_commit": "tests/performance/accounting-budgets.test.ts:357-364",
+      "sample_count_declared_at": "tests/performance/accounting-budgets.test.ts:69",
+      "warmup_declared_at": "tests/performance/accounting-budgets.test.ts:70",
+      "pinned_against_loosening_at": ["scripts/phase3-corrective-gate.ts:456", "scripts/phase3-s8-gate.ts:822"],
+      "note": "The ceiling is NOT copied into this file. The harness reads the constant out of that line when a profile inherits it, so there is exactly one place the number lives. No profile inherits it today: see objective.state on P15-LOAD-002."
+    }
+  ],
+  "sample_counts_are_this_harness_own": "The warmup and sample counts below are declared BY THIS HARNESS for its own profiles. They are not the Accounting-A contract's counts and must not be read as restating them; that contract declares its own at tests/performance/accounting-budgets.test.ts:69-70.",
+  "invalid_measurement_rules": {
+    "note": "A noisy measurement under contention is an INVALID MEASUREMENT — neither PASS nor FAIL. These are the ONLY rules that may produce that verdict, each with a declared bound, and the harness prints which one fired. A bound here may be TIGHTENED; loosening one to turn an INVALID run green is the weakening this lane exists to prevent.",
+    "R1_HOST_LOAD": {
+      "rule": "the 1-minute host load average, divided by the CPU count, exceeds the bound at either the start or the end of the measured region",
+      "max_loadavg_per_cpu": 1.5
+    },
+    "R2_WARMUP_DRIFT": {
+      "rule": "the steady-state median differs from the warmup median by more than the bound, in either direction — the system never settled, so the samples describe a transient",
+      "max_relative_drift": 0.5
+    },
+    "R3_DISPERSION": {
+      "rule": "p99 divided by p50 exceeds the bound — the sample set is dominated by stalls rather than by the operation",
+      "max_p99_over_p50": 25
+    },
+    "R4_FOREIGN_CLUSTER": {
+      "rule": "a PostgreSQL postmaster other than this harness's own is live on the host while the region is measured (another worker's cluster, a shared dev cluster) — the box is not exclusive, so absolute numbers taken on it prove nothing about the target",
+      "max_foreign_postmasters": 0
+    }
+  },
+  "verdicts": {
+    "PASS": "objective DECLARED, no INVALID rule fired, every invariant held, and the measured metric is within the objective",
+    "FAIL": "an invariant was violated, or the measured metric is outside a DECLARED objective",
+    "INVALID MEASUREMENT": "at least one invalid_measurement_rule fired — neither PASS nor FAIL",
+    "UNMEASURED-OBJECTIVE": "measured and reported, but the objective is UNDECLARED, so there is nothing to compare against. Never PASS.",
+    "REFUSAL": "no verdict at all, non-zero exit: the profile does not exist, zero rows were seeded, or zero samples were measured"
+  },
+  "parameter_binding": "Each statement is bound, in this fixed order, to $1 = worker index, $2 = iteration index, $3 = a fresh uuid, $4 = key A, $5 = key B. Key A and key B come from keys_sql and are chosen so that A < B, which is what makes the lock order deterministic. The harness passes only as many parameters as the statement's highest $n actually uses.",
+  "profiles": [
+    {
+      "id": "P15-LOAD-001",
+      "title": "POS checkout concurrency",
+      "surface": "one PostgreSQL transaction: ticket header + 3 ticket lines + a stock decrement, through COMMIT, on N concurrent connections",
+      "scenario_source": "docs/DAFTAR_SCALING_PLAN.md:34 (\"ذروة POS متزامنة\" — concurrent POS peak)",
+      "targets_product_code": false,
+      "lane": "performance-evidence",
+      "metric": "p95",
+      "concurrency": 8,
+      "duration_or_samples": { "kind": "samples", "samples_per_worker": 30, "total_samples": 240 },
+      "warmup": { "kind": "samples", "samples_per_worker": 5 },
+      "objective": {
+        "state": "UNDECLARED",
+        "owner_input_required": true,
+        "reason": "The scaling plan states a p95 ceiling for POS checkout at the API endpoint, not for the database transaction inside it. This profile measures the transaction. Promoting the endpoint ceiling onto it would widen a narrow result under a broad name.",
+        "nearest_declared_number": {
+          "source": "docs/DAFTAR_SCALING_PLAN.md:27",
+          "metric": "p95",
+          "value_ms": 500,
+          "governs_surface": "POS إتمام بيع (API) — the whole API call, not this transaction"
+        }
+      },
+      "dataset": {
+        "seed_sql": [
+          "CREATE TABLE p15_pos_stock (id int PRIMARY KEY, qty bigint NOT NULL)",
+          "CREATE TABLE p15_pos_tickets (id uuid PRIMARY KEY, worker int NOT NULL, iter int NOT NULL, created_at timestamptz NOT NULL DEFAULT now())",
+          "CREATE TABLE p15_pos_lines (ticket_id uuid NOT NULL REFERENCES p15_pos_tickets(id), line_no int NOT NULL, stock_id int NOT NULL, amount_minor bigint NOT NULL, PRIMARY KEY (ticket_id, line_no))",
+          "INSERT INTO p15_pos_stock (id, qty) SELECT g, 1000000 FROM generate_series(1, 500) g",
+          "ANALYZE p15_pos_stock"
+        ],
+        "rows_seeded_sql": "SELECT count(*)::bigint AS n FROM p15_pos_stock",
+        "keys_sql": "SELECT id::text AS key FROM p15_pos_stock ORDER BY id"
+      },
+      "workload": {
+        "operation_mix": [
+          {
+            "op": "checkout",
+            "share": 1.0,
+            "statements": [
+              "INSERT INTO p15_pos_tickets (id, worker, iter) VALUES ($3::uuid, $1::int, $2::int)",
+              "INSERT INTO p15_pos_lines (ticket_id, line_no, stock_id, amount_minor) VALUES ($3::uuid, 1, $4::int, 1500), ($3::uuid, 2, $4::int, 2500), ($3::uuid, 3, $4::int, 500)",
+              "UPDATE p15_pos_stock SET qty = qty - 3 WHERE id = $4::int"
+            ]
+          }
+        ]
+      },
+      "invariants": [
+        {
+          "name": "every committed ticket has exactly three lines",
+          "sql": "SELECT count(*)::bigint AS n FROM (SELECT ticket_id FROM p15_pos_lines GROUP BY ticket_id HAVING count(*) <> 3) x",
+          "expect": 0
+        }
+      ]
+    },
+    {
+      "id": "P15-LOAD-002",
+      "title": "Invoice posting latency, serial — one connection, one balanced two-line entry, through COMMIT",
+      "surface": "one PostgreSQL transaction: entry header + two balanced lines + a deferred balance check, through COMMIT, on a single connection",
+      "scenario_source": "the shape Accounting Budget A governs (tests/performance/accounting-budgets.test.ts:351-369)",
+      "targets_product_code": false,
+      "lane": "performance-evidence",
+      "metric": "p95",
+      "concurrency": 1,
+      "duration_or_samples": { "kind": "samples", "samples_per_worker": 200, "total_samples": 200 },
+      "warmup": { "kind": "samples", "samples_per_worker": 20 },
+      "objective": {
+        "state": "UNDECLARED",
+        "owner_input_required": true,
+        "reason": "Accounting Budget A is a DECLARED, frozen p95 ceiling at this latency shape, and the harness can read it (see frozen_contracts_referenced_not_restated). It is NOT inherited here, because Budget A governs the product's post() command executed through the accounting package, and this profile executes hand-written SQL. Same shape is not the same subject. An owner decision is required either to point this profile at the product command — after which the inherited objective becomes legitimate — or to declare a separate ceiling for raw SQL.",
+        "inheritable_from": {
+          "source": "tests/performance/accounting-budgets.test.ts:54",
+          "constant": "A_POST_P95",
+          "number_copied_here": false
+        }
+      },
+      "dataset": {
+        "seed_sql": [
+          "CREATE TABLE p15_entries (id uuid PRIMARY KEY, worker int NOT NULL, iter int NOT NULL)",
+          "CREATE TABLE p15_lines (entry_id uuid NOT NULL REFERENCES p15_entries(id), side char(1) NOT NULL CHECK (side IN ('D','C')), amount_minor bigint NOT NULL CHECK (amount_minor > 0), account_id int NOT NULL, PRIMARY KEY (entry_id, side))",
+          "CREATE TABLE p15_accounts (id int PRIMARY KEY, code text NOT NULL)",
+          "INSERT INTO p15_accounts (id, code) SELECT g, 'A' || g FROM generate_series(1, 64) g",
+          "ANALYZE p15_accounts"
+        ],
+        "rows_seeded_sql": "SELECT count(*)::bigint AS n FROM p15_accounts",
+        "keys_sql": "SELECT id::text AS key FROM p15_accounts ORDER BY id"
+      },
+      "workload": {
+        "operation_mix": [
+          {
+            "op": "post_entry",
+            "share": 1.0,
+            "statements": [
+              "INSERT INTO p15_entries (id, worker, iter) VALUES ($3::uuid, $1::int, $2::int)",
+              "INSERT INTO p15_lines (entry_id, side, amount_minor, account_id) VALUES ($3::uuid, 'D', 12345, $4::int), ($3::uuid, 'C', 12345, $5::int)",
+              "SELECT 1 FROM p15_lines WHERE entry_id = $3::uuid HAVING sum(CASE WHEN side = 'D' THEN amount_minor ELSE -amount_minor END) = 0"
+            ]
+          }
+        ]
+      },
+      "invariants": [
+        {
+          "name": "every committed entry is balanced",
+          "sql": "SELECT count(*)::bigint AS n FROM (SELECT entry_id FROM p15_lines GROUP BY entry_id HAVING sum(CASE WHEN side = 'D' THEN amount_minor ELSE -amount_minor END) <> 0) x",
+          "expect": 0
+        }
+      ]
+    },
+    {
+      "id": "P15-LOAD-003",
+      "title": "Invoice posting throughput, concurrent",
+      "surface": "the P15-LOAD-002 transaction on N concurrent connections, reported as committed transactions per second as well as latency percentiles",
+      "scenario_source": "docs/DAFTAR_SCALING_PLAN.md:34 (10k active tenants — sustained financial write load)",
+      "targets_product_code": false,
+      "lane": "performance-evidence",
+      "metric": "throughput",
+      "concurrency": 4,
+      "duration_or_samples": { "kind": "samples", "samples_per_worker": 50, "total_samples": 200 },
+      "warmup": { "kind": "samples", "samples_per_worker": 10 },
+      "objective": {
+        "state": "UNDECLARED",
+        "owner_input_required": true,
+        "reason": "docs/DAFTAR_SCALING_PLAN.md names the scenario (10k active tenants) but states no throughput floor anywhere — no transactions per second, no postings per hour. There is no number to derive, and inventing one would be the guess this lane forbids."
+      },
+      "dataset": {
+        "seed_sql": [
+          "CREATE TABLE p15_entries (id uuid PRIMARY KEY, worker int NOT NULL, iter int NOT NULL)",
+          "CREATE TABLE p15_lines (entry_id uuid NOT NULL REFERENCES p15_entries(id), side char(1) NOT NULL CHECK (side IN ('D','C')), amount_minor bigint NOT NULL CHECK (amount_minor > 0), account_id int NOT NULL, PRIMARY KEY (entry_id, side))",
+          "CREATE TABLE p15_accounts (id int PRIMARY KEY, code text NOT NULL)",
+          "INSERT INTO p15_accounts (id, code) SELECT g, 'A' || g FROM generate_series(1, 64) g",
+          "ANALYZE p15_accounts"
+        ],
+        "rows_seeded_sql": "SELECT count(*)::bigint AS n FROM p15_accounts",
+        "keys_sql": "SELECT id::text AS key FROM p15_accounts ORDER BY id"
+      },
+      "workload": {
+        "operation_mix": [
+          {
+            "op": "post_entry",
+            "share": 1.0,
+            "statements": [
+              "INSERT INTO p15_entries (id, worker, iter) VALUES ($3::uuid, $1::int, $2::int)",
+              "INSERT INTO p15_lines (entry_id, side, amount_minor, account_id) VALUES ($3::uuid, 'D', 12345, $4::int), ($3::uuid, 'C', 12345, $5::int)"
+            ]
+          }
+        ]
+      },
+      "invariants": [
+        {
+          "name": "every committed entry is balanced",
+          "sql": "SELECT count(*)::bigint AS n FROM (SELECT entry_id FROM p15_lines GROUP BY entry_id HAVING sum(CASE WHEN side = 'D' THEN amount_minor ELSE -amount_minor END) <> 0) x",
+          "expect": 0
+        }
+      ]
+    },
+    {
+      "id": "P15-LOAD-004",
+      "title": "Customer statement / receivables aging read",
+      "surface": "one read-only PostgreSQL transaction: per-customer open-balance statement plus a four-bucket aging roll-up over a seeded receivables table, through COMMIT",
+      "scenario_source": "docs/DAFTAR_SCALING_PLAN.md:23 (reporting reads belong on read models, never heavy on OLTP) and :30 (no N+1 on any list screen)",
+      "targets_product_code": false,
+      "lane": "performance-evidence",
+      "metric": "p95",
+      "concurrency": 4,
+      "duration_or_samples": { "kind": "samples", "samples_per_worker": 40, "total_samples": 160 },
+      "warmup": { "kind": "samples", "samples_per_worker": 5 },
+      "objective": {
+        "state": "UNDECLARED",
+        "owner_input_required": true,
+        "reason": "docs/DAFTAR_SCALING_PLAN.md states no latency ceiling for a customer statement or an aging report. The accepted accounting budgets do carry reporting ceilings (trial balance, ledger page, balance as-of, tests/performance/accounting-budgets.test.ts:52-65), but none of them is a statement or an aging report, and borrowing the nearest-looking one would be a guess."
+      },
+      "dataset": {
+        "seed_sql": [
+          "CREATE TABLE p15_customers (id int PRIMARY KEY, name text NOT NULL)",
+          "CREATE TABLE p15_receivables (id bigserial PRIMARY KEY, customer_id int NOT NULL REFERENCES p15_customers(id), due_date date NOT NULL, open_minor bigint NOT NULL)",
+          "INSERT INTO p15_customers (id, name) SELECT g, 'C' || g FROM generate_series(1, 2000) g",
+          "INSERT INTO p15_receivables (customer_id, due_date, open_minor) SELECT 1 + (g % 2000), current_date - ((g % 180))::int, 1000 + (g % 97) * 13 FROM generate_series(1, 200000) g",
+          "CREATE INDEX p15_receivables_customer_due ON p15_receivables (customer_id, due_date)",
+          "ANALYZE p15_customers",
+          "ANALYZE p15_receivables"
+        ],
+        "rows_seeded_sql": "SELECT count(*)::bigint AS n FROM p15_receivables",
+        "keys_sql": "SELECT id::text AS key FROM p15_customers ORDER BY id"
+      },
+      "workload": {
+        "operation_mix": [
+          {
+            "op": "statement_and_aging",
+            "share": 1.0,
+            "statements": [
+              "SELECT r.customer_id, sum(r.open_minor)::bigint AS open_total, count(*)::bigint AS docs FROM p15_receivables r WHERE r.customer_id = $4::int GROUP BY r.customer_id",
+              "SELECT sum(CASE WHEN current_date - due_date <= 0 THEN open_minor ELSE 0 END)::bigint AS current_b, sum(CASE WHEN current_date - due_date BETWEEN 1 AND 30 THEN open_minor ELSE 0 END)::bigint AS b1_30, sum(CASE WHEN current_date - due_date BETWEEN 31 AND 60 THEN open_minor ELSE 0 END)::bigint AS b31_60, sum(CASE WHEN current_date - due_date > 60 THEN open_minor ELSE 0 END)::bigint AS b60_plus FROM p15_receivables WHERE customer_id = $4::int"
+            ]
+          }
+        ]
+      },
+      "invariants": [
+        {
+          "name": "the read storm wrote nothing",
+          "sql": "SELECT (count(*) - 200000)::bigint AS n FROM p15_receivables",
+          "expect": 0
+        }
+      ]
+    },
+    {
+      "id": "P15-LOAD-005",
+      "title": "Inventory movement write storm",
+      "surface": "one PostgreSQL transaction: an append-only movement row plus the running stock-level update for its key, through COMMIT, on N concurrent connections contending over a small key set",
+      "scenario_source": "docs/DAFTAR_SCALING_PLAN.md:34 (\"عاصفة مزامنة Offline بعد انقطاع\" — the offline-sync storm after an outage) and :18 (movements named as a high-volume event table)",
+      "targets_product_code": false,
+      "lane": "performance-evidence",
+      "metric": "throughput",
+      "concurrency": 8,
+      "duration_or_samples": { "kind": "samples", "samples_per_worker": 40, "total_samples": 320 },
+      "warmup": { "kind": "samples", "samples_per_worker": 5 },
+      "objective": {
+        "state": "UNDECLARED",
+        "owner_input_required": true,
+        "reason": "docs/DAFTAR_SCALING_PLAN.md:34 names the offline-sync storm as a scenario to load-test and states no number for it — no movements per second, no ceiling on the catch-up window."
+      },
+      "dataset": {
+        "seed_sql": [
+          "CREATE TABLE p15_stock_levels (key_id int PRIMARY KEY, on_hand bigint NOT NULL, seq bigint NOT NULL DEFAULT 0)",
+          "CREATE TABLE p15_movements (id uuid PRIMARY KEY, key_id int NOT NULL REFERENCES p15_stock_levels(key_id), seq bigint NOT NULL, delta bigint NOT NULL, UNIQUE (key_id, seq))",
+          "INSERT INTO p15_stock_levels (key_id, on_hand) SELECT g, 0 FROM generate_series(1, 32) g",
+          "ANALYZE p15_stock_levels"
+        ],
+        "rows_seeded_sql": "SELECT count(*)::bigint AS n FROM p15_stock_levels",
+        "keys_sql": "SELECT key_id::text AS key FROM p15_stock_levels ORDER BY key_id"
+      },
+      "workload": {
+        "operation_mix": [
+          {
+            "op": "movement_append",
+            "share": 1.0,
+            "statements": [
+              "UPDATE p15_stock_levels SET seq = seq + 1, on_hand = on_hand + 7 WHERE key_id = $4::int",
+              "INSERT INTO p15_movements (id, key_id, seq, delta) SELECT $3::uuid, key_id, seq, 7 FROM p15_stock_levels WHERE key_id = $4::int"
+            ]
+          }
+        ]
+      },
+      "invariants": [
+        {
+          "name": "the running stock level equals the fold of its movements, and no sequence gap exists, for every key",
+          "sql": "SELECT count(*)::bigint AS n FROM p15_stock_levels l WHERE l.on_hand <> COALESCE((SELECT sum(m.delta) FROM p15_movements m WHERE m.key_id = l.key_id), 0) OR l.seq <> COALESCE((SELECT max(m.seq) FROM p15_movements m WHERE m.key_id = l.key_id), 0) OR COALESCE((SELECT count(*) FROM p15_movements m WHERE m.key_id = l.key_id), 0) <> l.seq",
+          "expect": 0
+        }
+      ]
+    },
+    {
+      "id": "P15-LOAD-006",
+      "title": "Dashboard read",
+      "surface": "one read-only PostgreSQL transaction holding the four aggregates a dashboard asks for in one round trip (today's sales, open receivables, low stock, movement count), through COMMIT, on N concurrent connections",
+      "scenario_source": "docs/DAFTAR_SCALING_PLAN.md:22 (monitor API latency) and :30 (no N+1 on a list screen)",
+      "targets_product_code": false,
+      "lane": "performance-evidence",
+      "metric": "p95",
+      "concurrency": 6,
+      "duration_or_samples": { "kind": "samples", "samples_per_worker": 40, "total_samples": 240 },
+      "warmup": { "kind": "samples", "samples_per_worker": 5 },
+      "objective": {
+        "state": "UNDECLARED",
+        "owner_input_required": true,
+        "reason": "The scaling plan's dashboard number is a first-useful-content ceiling for the PAGE — it covers network, render and skeletons as well as the query. This profile measures only the database round trip, which is a fraction of it. A page budget is not a query budget.",
+        "nearest_declared_number": {
+          "source": "docs/DAFTAR_SCALING_PLAN.md:28",
+          "metric": "first useful content",
+          "value_ms": 2000,
+          "governs_surface": "تحميل Dashboard الأول — the page's first useful content, not this query"
+        }
+      },
+      "dataset": {
+        "seed_sql": [
+          "CREATE TABLE p15_dash_sales (id bigserial PRIMARY KEY, sold_on date NOT NULL, total_minor bigint NOT NULL)",
+          "CREATE TABLE p15_dash_receivables (id bigserial PRIMARY KEY, open_minor bigint NOT NULL, due_date date NOT NULL)",
+          "CREATE TABLE p15_dash_stock (id int PRIMARY KEY, on_hand bigint NOT NULL, reorder_at bigint NOT NULL)",
+          "CREATE TABLE p15_dash_movements (id bigserial PRIMARY KEY, happened_on date NOT NULL)",
+          "INSERT INTO p15_dash_sales (sold_on, total_minor) SELECT current_date - (g % 365), 500 + (g % 991) FROM generate_series(1, 120000) g",
+          "INSERT INTO p15_dash_receivables (open_minor, due_date) SELECT 300 + (g % 877), current_date - (g % 120) FROM generate_series(1, 40000) g",
+          "INSERT INTO p15_dash_stock (id, on_hand, reorder_at) SELECT g, g % 50, 10 FROM generate_series(1, 5000) g",
+          "INSERT INTO p15_dash_movements (happened_on) SELECT current_date - (g % 90) FROM generate_series(1, 150000) g",
+          "CREATE INDEX p15_dash_sales_on ON p15_dash_sales (sold_on)",
+          "CREATE INDEX p15_dash_movements_on ON p15_dash_movements (happened_on)",
+          "ANALYZE p15_dash_sales",
+          "ANALYZE p15_dash_receivables",
+          "ANALYZE p15_dash_stock",
+          "ANALYZE p15_dash_movements"
+        ],
+        "rows_seeded_sql": "SELECT count(*)::bigint AS n FROM p15_dash_sales",
+        "keys_sql": "SELECT id::text AS key FROM p15_dash_stock ORDER BY id LIMIT 64"
+      },
+      "workload": {
+        "operation_mix": [
+          {
+            "op": "dashboard_tiles",
+            "share": 1.0,
+            "statements": [
+              "SELECT (SELECT COALESCE(sum(total_minor), 0)::bigint FROM p15_dash_sales WHERE sold_on = current_date) AS sales_today, (SELECT COALESCE(sum(open_minor), 0)::bigint FROM p15_dash_receivables WHERE due_date < current_date) AS overdue_open, (SELECT count(*)::bigint FROM p15_dash_stock WHERE on_hand <= reorder_at) AS low_stock, (SELECT count(*)::bigint FROM p15_dash_movements WHERE happened_on >= current_date - 7) AS movements_7d"
+            ]
+          }
+        ]
+      },
+      "invariants": [
+        {
+          "name": "the dashboard read wrote nothing",
+          "sql": "SELECT (count(*) - 120000)::bigint AS n FROM p15_dash_sales",
+          "expect": 0
+        }
+      ]
+    },
+    {
+      "id": "P15-LOAD-007",
+      "title": "Concurrent settlement race, deterministic lock order",
+      "surface": "one PostgreSQL transaction that locks TWO settlement rows with SELECT ... ORDER BY id FOR UPDATE and moves an allocation between them, through COMMIT, on N concurrent connections over the same small row set",
+      "scenario_source": "docs/DAFTAR_SCALING_PLAN.md:34 (concurrent POS peak over shared financial rows); the race shape itself follows the project's existing settlement idempotency work (tests/integration/settlement-s6-idempotency.test.ts)",
+      "targets_product_code": false,
+      "lane": "performance-evidence",
+      "metric": "error-rate",
+      "concurrency": 8,
+      "duration_or_samples": { "kind": "samples", "samples_per_worker": 30, "total_samples": 240 },
+      "warmup": { "kind": "samples", "samples_per_worker": 5 },
+      "race": {
+        "real_postgres": true,
+        "multiple_connections": true,
+        "deterministic_lock_ordering": "both rows are locked by a single SELECT ... WHERE id IN ($4, $5) ORDER BY id FOR UPDATE. Every worker therefore takes the lower id first, which is what makes the race contend without deadlocking. No sleep() appears anywhere in this profile: the contention is PostgreSQL's row locks, not a timer.",
+        "no_sleep": true
+      },
+      "objective": {
+        "state": "UNDECLARED",
+        "owner_input_required": true,
+        "reason": "No document in this repository states an error-rate ceiling or a latency ceiling for concurrent settlement. The profile's INVARIANT is nonetheless binding and is checked on every run: a violation is a FAIL whatever the objective says."
+      },
+      "dataset": {
+        "seed_sql": [
+          "CREATE TABLE p15_settlements (id int PRIMARY KEY, allocated_minor bigint NOT NULL CHECK (allocated_minor >= 0))",
+          "CREATE TABLE p15_settlement_moves (id uuid PRIMARY KEY, from_id int NOT NULL, to_id int NOT NULL, amount_minor bigint NOT NULL)",
+          "INSERT INTO p15_settlements (id, allocated_minor) SELECT g, 1000000 FROM generate_series(1, 8) g",
+          "ANALYZE p15_settlements"
+        ],
+        "rows_seeded_sql": "SELECT count(*)::bigint AS n FROM p15_settlements",
+        "keys_sql": "SELECT id::text AS key FROM p15_settlements ORDER BY id"
+      },
+      "workload": {
+        "operation_mix": [
+          {
+            "op": "move_allocation_under_contention",
+            "share": 1.0,
+            "statements": [
+              "SELECT id, allocated_minor FROM p15_settlements WHERE id IN ($4::int, $5::int) ORDER BY id FOR UPDATE",
+              "UPDATE p15_settlements SET allocated_minor = allocated_minor - 1 WHERE id = $4::int",
+              "UPDATE p15_settlements SET allocated_minor = allocated_minor + 1 WHERE id = $5::int",
+              "INSERT INTO p15_settlement_moves (id, from_id, to_id, amount_minor) VALUES ($3::uuid, $4::int, $5::int, 1)"
+            ]
+          }
+        ]
+      },
+      "invariants": [
+        {
+          "name": "the total allocation is conserved: 8 rows seeded at 1,000,000 each, and every committed move is a transfer of 1",
+          "sql": "SELECT ((SELECT sum(allocated_minor) FROM p15_settlements) - 8000000)::bigint AS n",
+          "expect": 0
+        },
+        {
+          "name": "no settlement row went negative",
+          "sql": "SELECT count(*)::bigint AS n FROM p15_settlements WHERE allocated_minor < 0",
+          "expect": 0
+        }
+      ]
+    }
+  ]
+}
