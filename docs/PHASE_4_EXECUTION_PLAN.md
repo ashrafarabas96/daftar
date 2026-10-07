@@ -295,7 +295,8 @@ Each slice-gate step therefore runs unconditionally: no `continue-on-error`, no 
 `workflow_dispatch`-only path, and the exact npm script as its command. A slice gate that is written and not
 wired is the blocker that ruling was issued over, so **wiring the step is part of completing the slice**. The
 only new workflows are the dispatched `phase4-s8-evidence.yml` and `phase4-s9-release.yml`, which are not
-required checks.
+among the six repository CI jobs. Whether any job is configured as a required check is **not verifiable from
+this tooling** (TD-08 — OPEN / EXTERNAL / UNVERIFIED), so nothing here asserts that it is.
 
 **The three Phase 3 couplings, resolved in P4-S1 before the first Phase 4 table or browser step exists.**
 A permanent Phase 3 suite asserts against the live catalogue that no relation matching `(customer|sale|invoice)`

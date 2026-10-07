@@ -1203,10 +1203,12 @@ that the workflow as it stands passes. It lives in `tests/guards/`, which `gate:
 directory (`GD-01`), so it executes **before** the step it is about on every required run.
 
 **P4-AL-59 — Phase 4 adds no CI job and renames none.**
-Job names are the required-checks keys and that configuration lives in repository settings, outside the tree
-(`ci.yml:6-7`) — no gate can verify it, so nothing touches it. Phase 4's work goes into steps of `backend`
-and `browser`; the only new workflows are the dispatched `phase4-s8-evidence.yml` and
-`phase4-s9-release.yml`, which are not required checks.
+Job names would be the keys of any required-check configuration, and that configuration lives in repository
+settings, outside the tree (`ci.yml:6-7`) — no gate can verify it and branch-protection inspection returns
+`403`, so nothing touches it and **nothing claims required checks are configured** (TD-08 — OPEN / EXTERNAL /
+UNVERIFIED). Phase 4's work goes into steps of `backend` and `browser`; the only new workflows are the
+dispatched `phase4-s8-evidence.yml` and `phase4-s9-release.yml`, which are not among the six repository CI
+jobs.
 
 ### 17.2 The migration prefix invariant
 

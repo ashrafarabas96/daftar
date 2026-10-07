@@ -771,3 +771,83 @@ at the head of this register — status here, ruling text in the lock.
 **Scope boundary.** This ruling is P4-S6's to implement. It gives P4-S4 no
 authority and changes nothing in this slice; recording it here is a
 documentation act, not a scope widening.
+
+---
+
+## 14. `TL-P4-RLS-INT-01` — RULED. The internal authority's broad read is INTENTIONAL
+
+**The observed fact, measured before the ruling.** `daftar_inventory_internal`
+and `daftar_accounting_internal` can read rows **across tenants** under their own
+role identity. It was measured behaviourally on a database built from zero by
+`tests/security/p4s4-rls-barrier-behaviour.test.ts`, and the mechanism is that
+frozen `0052` gives each of them its own PERMISSIVE read policy
+(`inventory_internal_read`, `accounting_validator`) whose body is `USING (true)`.
+PostgreSQL combines PERMISSIVE policies with **OR**, so a relation's read barrier
+is the disjunction of all of them and no narrowing of `business_isolation_read`
+can change this.
+
+**The ruling: `TL-P4-RLS-INT-01` — INTENTIONAL INTERNAL AUTHORITY VISIBILITY.**
+This fact **alone is not a tenant-isolation vulnerability**. Accordingly, and
+these are prohibitions, not preferences:
+
+- No migration is written merely to add `tenant_id = app_tenant()` to those
+  internal identities.
+- Frozen `0052` is **not** modified.
+- No future blanket narrowing task is created on the strength of this
+  observation.
+- Nothing is recorded as future tenant narrowing, unresolved tenant isolation or
+  security debt. **Intentional architecture is not technical debt.**
+
+**Why it is intentional.** These roles are not ordinary runtime service
+credentials. They are **NOLOGIN internal authority identities**, used by the
+accepted architecture as the owners and executors of tightly controlled
+`SECURITY DEFINER` validators and writers on both the accounting and inventory
+sides. Their purpose includes letting a database invariant inspect **every row
+the operation it is validating requires**. A COMMIT-time validator must not go
+blind because a caller-controlled `app.tenant_id` or `app.business_id` is absent,
+stale, incorrect, reset or maliciously supplied — and **a validator that reads
+zero rows and passes vacuously is more dangerous than an unreachable internal
+authority with broad read visibility.** The general law this states:
+
+> **VALIDATOR VISIBILITY MUST NOT DEPEND ON CALLER-CONTROLLED TENANT GUCS.**
+
+**The question that replaces it.** The security question is *not* "can the
+internal NOLOGIN authority see another tenant?" It is: **can an ORDINARY RUNTIME
+CREDENTIAL reach cross-tenant data or effect THROUGH that authority?** That
+boundary is what must be proven, permanently, and the proof obligations are
+role shape from the live catalogue, runtime `SET ROLE` refusal, ACL proven
+separately from RLS, a complete inventory of internal-owned definer entry points
+kept complete by its own law, and cross-tenant attack tests over the Phase 4
+command surface that prove both the refusal and the **absence of any effect** in
+the other tenant.
+
+**The four-way matrix, which may never be collapsed into one statement.**
+
+| case | principal | expected |
+|---|---|---|
+| A | internal NOLOGIN role reading several tenants directly | **EXPECTED / INTENTIONAL** |
+| B | `daftar_app` in Tenant A context reading Tenant B | **DENIED / INVISIBLE** |
+| C | a Tenant A merchant operating on a Tenant B object via a product command | **REFUSED** |
+| D | `daftar_platform` where the `SELECT` privilege does not exist | **REFUSED BY ACL** |
+
+Case D is the one most easily misread: `daftar_platform` appears in `app_bypass()`
+logic while holding **no `SELECT`** on the Phase 4 relations, so a policy escape
+alone is not a usable data path. **A policy expression does not grant table
+access**, and a theoretical policy bypass must never be reported as reachable
+when the role lacks the privilege. RLS and ACL are proven separately.
+
+**Conditions that REOPEN this ruling immediately.** An internal role that can
+LOGIN; one with `BYPASSRLS`; a runtime credential that can `SET ROLE` into one;
+PUBLIC or a runtime principal with unsafe `EXECUTE` on an internal definer; a
+caller reaching a definer without the required authority proof;
+caller-controlled tenant or business identifiers causing cross-tenant effect; an
+internal role used as a normal runtime login credential; or an internal writer
+performing arbitrary business writes outside its signed or structural contract.
+Any of these is a **security / data-integrity defect** and must be fixed before
+release.
+
+**Effect on P4-S4.** None by itself. The slice's migrations are not rewritten to
+narrow this, and S4 may proceed while runtime tenant isolation, cross-business
+isolation, role shape, `SET ROLE` refusal, ACL restrictions, the definer
+boundary, the cross-tenant attack tests, accounting integrity and RLS/FORCE
+integrity all remain green.

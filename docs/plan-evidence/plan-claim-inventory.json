@@ -756,7 +756,7 @@
     },
     {
       "file": "docs/PHASE_4_ARCHITECTURE_LOCK.md",
-      "line": 1435,
+      "line": 1437,
       "phase": "phase-4",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -764,7 +764,7 @@
     },
     {
       "file": "docs/PHASE_4_ARCHITECTURE_LOCK.md",
-      "line": 2233,
+      "line": 2235,
       "phase": "phase-4",
       "signals": ["plan-shape-word", "collation-dependent-range"],
       "kind": "assertion",
@@ -780,7 +780,7 @@
     },
     {
       "file": "docs/PHASE_4_EXECUTION_PLAN.md",
-      "line": 359,
+      "line": 360,
       "phase": "phase-4",
       "signals": ["planning-statistics"],
       "kind": "mention",
