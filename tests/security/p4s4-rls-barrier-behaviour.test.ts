@@ -2592,7 +2592,7 @@ async function withGrantPlant(c: Client, rel: Relation, plant: readonly string[]
   expect(await render(), `the SELECT privileges on ${rel} are back to the state captured before the plant`).toBe(before);
 }
 
-describe(`P4-S4 — THE PERMANENT FOUR-WAY AUTHORITY MATRIX (${RULING})`, () => {
+describe('P4-S4 — THE PERMANENT FOUR-WAY AUTHORITY MATRIX (TL-P4-RLS-INT-01)', () => {
   it('CASES A, B and D are three DIFFERENT statements, and CASE C is not this matrix to make', () => {
     assertCasesDoNotCollapse();
   });
@@ -2606,7 +2606,7 @@ describe(`P4-S4 — THE PERMANENT FOUR-WAY AUTHORITY MATRIX (${RULING})`, () => 
   }
 });
 
-describe(`P4-S4 — THE RED PROOFS for the four-way matrix: §17's three reopening conditions (${RULING})`, () => {
+describe("P4-S4 — THE RED PROOFS for the four-way matrix: §17's three reopening conditions (TL-P4-RLS-INT-01)", () => {
   it(`REOPENING CONDITION 1 — an internal NOLOGIN identity gains BYPASSRLS, and the matrix names the condition and ${RULING}`, async () => {
     await inCase(async (c, w) => {
       const rel: Relation = 'invoices';
