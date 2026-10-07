@@ -60,11 +60,25 @@ const BROKEN_SUBJECT = 'tests/guards/p4s5-refund-plan-red-proofs.test.ts';
 const fixtureCase = (title: string): string => `${'i'}t(${JSON.stringify(title)}, () => undefined);`;
 
 const temporary: string[] = [];
-/** A scratch root holding exactly the files given, so a mutation is applied to a TREE and not to a string the law never reads from disk. */
-function scratchRoot(files: Readonly<Record<string, string>>): string {
+/**
+ * A scratch root holding the files given, so a mutation is applied to a TREE
+ * and not to a string the law never reads from disk.
+ *
+ * IT ALSO WRITES THE NAMED ROWS, unless a test opts out. `rosterFiles` injects
+ * `S5_NAMED_SUITES` UNCONDITIONALLY, so a scratch root without them makes
+ * `rosterBijectionProblems` push "the tree does not hold it" whatever the law
+ * under test does — and a red proof that asserts only a NON-EMPTY list then
+ * passes over a law that has been deleted. An independent challenge deleted the
+ * skip law outright and this suite stayed 17 of 17 green. Removing the noise is
+ * half the remedy; asserting the SPECIFIC message is the other half, and every
+ * proof below now does both.
+ */
+function scratchRoot(files: Readonly<Record<string, string>>, options: { readonly includeNamed?: boolean } = {}): string {
   const root = mkdtempSync(join(tmpdir(), 'p4s5-gate-'));
   temporary.push(root);
-  for (const [rel, body] of Object.entries(files)) {
+  const all: Record<string, string> = { ...files };
+  if (options.includeNamed !== false) for (const named of S5_NAMED_SUITES) if (all[named] === undefined) all[named] = read(named);
+  for (const [rel, body] of Object.entries(all)) {
     mkdirSync(dirname(join(root, rel)), { recursive: true });
     writeFileSync(join(root, rel), body);
   }
@@ -126,8 +140,34 @@ describe('P4-S5 §A — the PARSE arm reds on a file that does not compile, and 
     expect(rows.length).toBeGreaterThan(0);
     // EVERY count arm silent, over a file the runner cannot open.
     expect(rosterBijectionProblems(root, rows)).toEqual([]);
-    // And only the parse arm refuses it.
-    expect(parseProblems(root, [BROKEN_SUBJECT])).not.toEqual([]);
+    // And only the parse arm refuses it — by its own message, not by being non-empty.
+    expect(parseProblems(root, [BROKEN_SUBJECT]).join(' | ')).toContain('DOES NOT PARSE');
+  });
+
+  it('RETRACTION, measured: a file can red the bijection arm TOO, so "the only arm that reds" was false of `6613b98`', () => {
+    // `TL-P4-COORD-R23` said in bold, twice, that `roster-parse` is the ONLY
+    // arm that reds on `6613b98`'s text. An independent challenge planted that
+    // text and TWO arms refused — parse, and bijection at 35 of 36 rows — for
+    // a reason that has nothing to do with syntax: a three-commit-old file
+    // predates the H1 row, so a recorded row has nothing to satisfy it.
+    //
+    // The narrow claim §A proves is about a MINIMAL break on TODAY'S text.
+    // This case proves the mechanism behind the wider claim's failure, on a
+    // subject that exists today: a file MISSING a recorded block reds
+    // bijection while the parse arm stays silent, so two arms CAN refuse one
+    // file for unrelated reasons and no single arm's verdict is the file's.
+    const row = ROSTER_RECORDED.find((r) => r.title.startsWith('H1 \u2014')) as RosterRow;
+    const source = read(row.suite);
+    const block = describeBlocks(source).find((b) => b.title === row.title) as { body: string };
+    const withoutH1 = source.replace(block.body, '');
+    expect(withoutH1).not.toBe(source);
+    const root = scratchRoot({ [row.suite]: withoutH1 });
+    // Parse: SILENT. The file compiles perfectly without that block.
+    expect(parseProblems(root, [row.suite])).toEqual([]);
+    // Bijection: refuses, by its own message, naming the row.
+    const problems = rosterBijectionProblems(root, [row]);
+    expect(problems.join(' | ')).toContain('no longer carries the recorded title');
+    expect(problems.join(' | ')).toContain(row.title);
   });
 
   it('the parse arm cannot be satisfied by judging nothing, and says so', () => {
@@ -181,7 +221,18 @@ describe('P4-S5 §B — the CASE FLOOR reds on a HOLLOWED block, which compiles 
     );
     expect(mutated).not.toBe(source);
     const root = scratchRoot({ [row.suite]: mutated });
-    expect(rosterBijectionProblems(root, [row])).not.toEqual([]);
+    const problems = rosterBijectionProblems(root, [row]);
+    // THE SPECIFIC MESSAGE, not a non-empty list. This case used to assert
+    // only `not.toEqual([])`, and an independent challenge replaced `skip`
+    // with `__nope__` in the gate's own regex — deleting the skip law — and
+    // this suite stayed 17 of 17 green, because the list was non-empty for an
+    // unrelated reason. A non-empty list names no law.
+    expect(problems.join(' | ')).toContain('no longer carries the recorded title');
+    expect(problems.join(' | ')).toContain(row.title);
+    // AND the skip is the ONLY reason it refuses: one problem, about this row.
+    expect(problems).toHaveLength(1);
+    // The unmutated tree is silent, so the red above is the skip and nothing else.
+    expect(rosterBijectionProblems(scratchRoot({ [row.suite]: source }), [row])).toEqual([]);
   });
 
   it('a row whose recorded title is an it( case rather than a describe( block is refused, so a floor is never a floor over nothing', () => {
@@ -227,11 +278,34 @@ describe('P4-S5 §C — the ratchet, and the derivation it rides on', () => {
 
   it('the NAMED row is named because no rule finds it, and its absence reds in both directions', () => {
     for (const named of S5_NAMED_SUITES) expect(S5_BASENAME.test(named.slice(named.lastIndexOf('/') + 1))).toBe(false);
+    const root = scratchRoot(
+      { 'tests/guards/p4s5-real.test.ts': `import { describe, it } from 'vitest';\ndescribe('d', () => {\n  ${fixtureCase('c')}\n});\n` },
+      // The ONE test that wants the named row absent, and it says so.
+      { includeNamed: false },
+    );
+    expect(rosterProblems(root).join(' | ')).toContain('NAMED roster row');
+    const problems = rosterBijectionProblems(root, []);
+    expect(problems.join(' | ')).toContain('the tree does not hold it');
+    // AND the empty-rows guard's OWN message, which nothing asserted before:
+    // it fired here and only the other half of the list was ever checked.
+    expect(problems.join(' | ')).toContain('judged no row and its silence is not evidence');
+  });
+
+  it('the ratchet judging NO row refuses, because a non-vacuity guard that cannot fire is the thing it was written to prevent', () => {
+    // This guard read the 36-row module constant and took no `rows`
+    // parameter, so nothing short of editing the gate could fire it — the
+    // SECOND dead non-vacuity guard in this file, one function from the one
+    // diagnosed the round before. The count arm could not cover for it: a
+    // floor derived from an empty record is 0, which every tree clears.
     const root = scratchRoot({
       'tests/guards/p4s5-real.test.ts': `import { describe, it } from 'vitest';\ndescribe('d', () => {\n  ${fixtureCase('c')}\n});\n`,
     });
-    expect(rosterProblems(root).join(' | ')).toContain('NAMED roster row');
-    expect(rosterBijectionProblems(root, []).join(' | ')).toContain('the tree does not hold it');
+    const problems = rosterRatchetProblems(root, []);
+    expect(problems.join(' | ')).toContain('judged NO recorded row');
+    expect(problems).toHaveLength(1);
+    // And with the real record it is silent over the real tree, so the red
+    // above is the empty record and not the guard misfiring.
+    expect(rosterRatchetProblems(ROOT)).toEqual([]);
   });
 
   it('the floor is DERIVED from the record, so the two cannot drift, and neither is empty', () => {
@@ -251,7 +325,13 @@ describe('P4-S5 §D — the record is COMPLETE over the tree it describes', () =
     expect(missing).toEqual([]);
   });
 
-  it('every recorded count is a FLOOR the tree meets exactly today, and the totals are the ones the runner reported', () => {
+  it('every recorded count is a FLOOR the tree meets exactly today, as the EXTRACTOR reads it — no runner is invoked here', () => {
+    // The earlier title said "the totals are the ones the runner reported".
+    // Nothing below invokes a runner: `testTitles` is a regex over text. The
+    // two views were measured separately and agreed on 2026-10-07, and that is
+    // a dated measurement, not something this case checks. Attributing it to
+    // the runner was a false attribution of evidence over the single
+    // assumption the whole 160-case record rests on.
     const measured = ROSTER_RECORDED.map((row) => {
       const block = describeBlocks(read(row.suite)).find((b) => b.title === row.title);
       return { title: row.title, recorded: row.cases, held: block === undefined ? undefined : testTitles(block.body).length };

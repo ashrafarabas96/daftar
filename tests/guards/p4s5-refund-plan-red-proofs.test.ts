@@ -2048,11 +2048,33 @@ describe('the refusal vocabulary and the route authority', () => {
  * promotion, so «the trigger fires» is PROVEN BY DATABASE CATALOGUE and is not
  * proven here and must not be read as if it were. What IS proven here, in a
  * suite the runner executes, is the SPECIFICATION's completeness and the thing
- * that actually failed: the pair. The subject is derived from
- * `S5_ACCOUNTING_SOURCE_TYPES` and not from a list written in this file, so a
- * fourth registered source type reds this block until it too has a validator,
- * a trigger that fires it, and both halves of §7's assertion. That is the
- * dead-registry test applied to the one registry H1 is about.
+ * that actually failed: the pair.
+ *
+ * WHAT A FOURTH SOURCE TYPE DOES HERE — TWO THINGS, AND AN EARLIER REVISION OF
+ * THIS PARAGRAPH COLLAPSED THEM INTO ONE CLAIM THE CODE DOES NOT MAKE. It said
+ * a fourth registered type "reds this block until it too has a validator, a
+ * trigger that fires it, and both halves of §7's assertion", which promises a
+ * CONDITIONAL, DIAGNOSTIC red. An independent challenge measured it: it
+ * registered `customer_goodwill_credit` WITH its validator and an
+ * exactly-shaped CONSTRAINT TRIGGER and got SIX of seven cases GREEN, with only
+ * the premise's cardinality red. So:
+ *
+ *  1. the PREMISE case below pins the registry CLOSED (`toHaveLength(3)` plus a
+ *     `toEqual` on the three names), so ANY fourth type reds it
+ *     UNCONDITIONALLY — a correct one included — and its message is about a
+ *     LENGTH and names nothing about a missing half. That is deliberate: the
+ *     authority registry is closed by rule, so adding to it is one deliberate
+ *     change, and `TL-P4-COORD-R24` records this as the only closed-registry
+ *     pin on that constant in the tree. The shortest path to green from that
+ *     refusal is to loosen this very case, so a reader who meets it must be
+ *     told what it is for, which is what this paragraph is now for;
+ *  2. INDEPENDENTLY, the PAIR LAW is DERIVED rather than listed, so a type in
+ *     the registry without both halves reds the pair law and IS NAMED BY IT.
+ *     A fourth type with neither half reds five of the seven cases, so the
+ *     block fails safe either way.
+ *
+ * That second half is the dead-registry test applied to the one registry H1 is
+ * about. The first half is a closure pin, and it is not a diagnostic.
  */
 describe('H1 — every registered S5 source type has a validator AND the trigger that FIRES it', () => {
   const DDL = readFileSync(join(__dirname, '../../docs/PHASE_4_S5_DDL_SPECIFICATION.md'), 'utf8');
@@ -2061,7 +2083,7 @@ describe('H1 — every registered S5 source type has a validator AND the trigger
   /** `journal_entries_<type>_complete`, the `0081:1725-1736` naming. */
   const triggerOf = (type: string): string => `journal_entries_${type}_complete`;
 
-  it('the premise: three registered types, and the derivation is the subject rather than a list in this file', () => {
+  it('the premise, and it is a CLOSURE PIN: the registry holds exactly these three, so ANY fourth type reds this case on a LENGTH', () => {
     expect(S5_ACCOUNTING_SOURCE_TYPES).toHaveLength(3);
     expect([...S5_ACCOUNTING_SOURCE_TYPES]).toEqual(['customer_return', 'customer_credit_note_application', 'customer_refund']);
     // The specification exists and is the subject a red below would be about.
@@ -2112,7 +2134,13 @@ describe('H1 — every registered S5 source type has a validator AND the trigger
     expect(S5_ACCOUNTING_SOURCE_TYPES.filter((t) => !DDL.includes(`CREATE CONSTRAINT TRIGGER ${triggerOf(t)}`))).toEqual([]);
   });
 
-  it('RED PROOF: a FOURTH registered source type reds this block until it has both halves, so the obligation is counted and not listed', () => {
+  it('RED PROOF of the PAIR LAW, which is the derived half: a type the specification does not cover is NAMED by it, not merely counted', () => {
+    // Not "a fourth type reds until it has both halves" — the premise above
+    // reds a fourth type unconditionally, on a length. THIS case is the other,
+    // independent half: the pair law is derived over whatever the registry
+    // holds, so it names the type that is missing a half rather than reporting
+    // a cardinality. Measured: a fourth type that arrives WITH both halves
+    // leaves this case green and reds only the premise.
     const invented = 'customer_restocking_fee';
     const registry = [...S5_ACCOUNTING_SOURCE_TYPES, invented];
     const incomplete = registry.filter((t) => !DDL.includes(`${validatorOf(t)}(`) || !DDL.includes(`CREATE CONSTRAINT TRIGGER ${triggerOf(t)}`));

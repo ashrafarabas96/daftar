@@ -153,12 +153,19 @@ export interface RosterRow {
  * THE RECORD: every top-level `describe(` block of all four P4-S5 suites, with
  * the case count the EXTRACTOR SEES TODAY, recorded by hand.
  *
- * 36 blocks, 14 + 99 + 19 + 11 + 17 = 160 cases, and the extractor's view and the
- * runner's view agree exactly on every one of the five files — measured, not
- * assumed: a brace-walking counter that read RAW source reported 85 for the
- * 92-case file, because braces inside string literals fooled it, which is the
- * same defect class as the quote-parity inversion the blanker self-test at
- * §14.0 of the mutation suite exists for.
+ * 36 blocks, 162 cases (14 + 99 + 19 + 11 + 19). EVERY NUMBER HERE IS THE EXTRACTOR'S, not the
+ * runner's, and nothing in this file invokes a runner: the floors are compared
+ * against `testTitles`, which is a regex over text. The two views were measured
+ * SEPARATELY and agreed file by file on 2026-10-07 (extractor 14/99/19/11/17;
+ * runner 149 in one root run plus 11 in the shared-contracts run), and that
+ * agreement is a dated measurement rather than something this record checks.
+ * Saying otherwise was a false attribution of evidence over the single
+ * assumption the whole record rests on.
+ *
+ * The extractor's numbers are not self-evident either: a brace-walking counter
+ * that read RAW source reported 85 for the 99-case file, because braces inside
+ * string literals fooled it — the same defect class as the quote-parity
+ * inversion the blanker self-test at §14.0 of the mutation suite exists for.
  *
  * It is a FLOOR, so adding cases is free; a block that loses one goes red
  * naming what it held, and a block that is DELETED goes red rather than
@@ -252,20 +259,20 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     title: 'the model implements the isolation level it names, and both halves matter',
     cases: 3,
   },
-  // ── tests/guards/p4s5-gate-execution.test.ts — 4 blocks, 17 ─────────────
+  // ── tests/guards/p4s5-gate-execution.test.ts — 4 blocks, 19 ─────────────
   // The record's OWN red proofs: a record whose falsifiability is unrecorded
   // is the next thing to be deleted quietly.
   {
     suite: 'tests/guards/p4s5-gate-execution.test.ts',
     title: 'P4-S5 \u00a7A \u2014 the PARSE arm reds on a file that does not compile, and the COUNT arms do not',
-    cases: 5,
+    cases: 6,
   },
   {
     suite: 'tests/guards/p4s5-gate-execution.test.ts',
     title: 'P4-S5 \u00a7B \u2014 the CASE FLOOR reds on a HOLLOWED block, which compiles perfectly',
     cases: 5,
   },
-  { suite: 'tests/guards/p4s5-gate-execution.test.ts', title: 'P4-S5 \u00a7C \u2014 the ratchet, and the derivation it rides on', cases: 4 },
+  { suite: 'tests/guards/p4s5-gate-execution.test.ts', title: 'P4-S5 \u00a7C \u2014 the ratchet, and the derivation it rides on', cases: 5 },
   { suite: 'tests/guards/p4s5-gate-execution.test.ts', title: 'P4-S5 \u00a7D \u2014 the record is COMPLETE over the tree it describes', cases: 3 },
   // ── packages/shared-contracts/test/phase4-s5-returns-contracts.test.ts ───
   {
@@ -308,12 +315,24 @@ export function rosterReport(root: string): string {
 /**
  * THE PARSE ARM — the one the textual mechanism lacks.
  *
- * Measured on the real broken text of `6613b98`: `describeBlocks` reports 21
- * blocks and `testTitles` reports 92 cases over a file with an unterminated
- * string literal, so every count arm of this gate is satisfied by it and only
- * this one refuses. `transpileModule` with `reportDiagnostics` is the public
- * API for the question; it does no type checking and needs no program, so this
- * arm is about SYNTAX and says so rather than claiming to be a typecheck.
+ * WHAT IS TRUE, AND IT IS NARROWER THAN THIS FILE FIRST CLAIMED. A MINIMAL
+ * SYNTAX BREAK ON TODAY'S TEXT reds THIS ARM ALONE: the count arms are regexes
+ * over text, and over a file whose only change is an unterminated string
+ * literal they report every block and every case. That is measured, in §A of
+ * `tests/guards/p4s5-gate-execution.test.ts`, on the live subject.
+ *
+ * WHAT IS FALSE, RETRACTED HERE AND IN `TL-P4-COORD-R23`. "The only arm that
+ * reds on `6613b98`'s text" — it is not. An independent challenge planted that
+ * text and TWO arms refused: this one, and `roster-bijection` at 35 of 36 rows
+ * and 153 of 160 cases, because a three-commit-old file differs from today's by
+ * more than its syntax — that text predates the H1 row, so a recorded row has
+ * nothing to satisfy it. The retracted sentence was printed INSIDE this arm's
+ * own refusal message, which is the worst place for a false measurement
+ * because the next reader stops looking.
+ *
+ * `transpileModule` with `reportDiagnostics` is the public API for the
+ * question; it does no type checking and needs no program, so this arm is
+ * about SYNTAX and says so rather than claiming to be a typecheck.
  */
 export function parseProblems(root: string, rows?: readonly string[]): string[] {
   const problems: string[] = [];
@@ -332,7 +351,9 @@ export function parseProblems(root: string, rows?: readonly string[]): string[] 
       continue;
     }
     for (const d of parseDiagnostics(read(root, file)))
-      problems.push(`${file} DOES NOT PARSE: ${d} — the runner never opened it, and every count arm of this gate is satisfied by it`);
+      problems.push(
+        `${file} DOES NOT PARSE: ${d} — the runner never opened it. A count arm cannot see this: over a file whose ONLY change is a syntax break, \`describeBlocks\` and \`testTitles\` report every block and every case. They may still refuse the same file for an unrelated reason, so read every arm's verdict rather than this sentence`,
+      );
   }
   return problems;
 }
@@ -359,20 +380,29 @@ export function parseReport(root: string): string {
 }
 
 /** THE NON-SHRINKING RATCHET: by count, and by MEMBERSHIP, because a count cannot see a swap. */
-export function rosterRatchetProblems(root: string): string[] {
+export function rosterRatchetProblems(root: string, rows: readonly RosterRow[] = ROSTER_RECORDED): string[] {
   const problems: string[] = [];
   const files = rosterFiles(root);
-  if (files.length < ROSTER_FLOOR)
+  // The floor is derived from the ROWS THIS CALL JUDGES, not from the module
+  // constant. With no `rows` parameter the non-vacuity guard below read the
+  // 36-row constant and could not fire without editing this module — a
+  // non-vacuity guard that cannot fire is the thing it was written to prevent,
+  // and it was the SECOND of that shape in this file. The count arm could not
+  // cover for it either: a floor derived from an empty record is 0, which
+  // every tree clears.
+  const floor = new Set(rows.map((r) => r.suite)).size;
+  if (files.length < floor)
     problems.push(
-      `the P4-S5 roster holds ${files.length} file(s) and the ratchet floor is ${ROSTER_FLOOR} — a rostered suite has left the roster, which is what a move AND rename out of the basename rule does. If a suite was retired deliberately, remove its rows from ROSTER_RECORDED in the same commit, which lowers this floor with them`,
+      `the P4-S5 roster holds ${files.length} file(s) and the ratchet floor is ${floor} — a rostered suite has left the roster, which is what a move AND rename out of the basename rule does. If a suite was retired deliberately, remove its rows from ROSTER_RECORDED in the same commit, which lowers this floor with them`,
     );
   const derived = new Set(files);
-  const gone = [...new Set(ROSTER_RECORDED.map((r) => r.suite))].filter((f) => !derived.has(f));
+  const gone = [...new Set(rows.map((r) => r.suite))].filter((f) => !derived.has(f));
   if (gone.length > 0)
     problems.push(
       `${gone.length} recorded P4-S5 suite(s) are no longer on the roster: ${gone.join(', ')} — a sibling's new file holds a count up, so membership is asserted and not only the total`,
     );
-  if (ROSTER_RECORDED.length === 0) problems.push('ROSTER_RECORDED is empty, so every arm that reads it judged nothing and its silence is not evidence');
+  if (rows.length === 0)
+    problems.push('the P4-S5 ratchet judged NO recorded row, so every arm that reads the record judged nothing and its silence is not evidence');
   return problems;
 }
 
@@ -513,11 +543,26 @@ export const CHECKS: readonly Check[] = [
   },
   {
     id: 'roster-bijection',
-    title: 'every recorded row still names a live law in its OWN file, down to the cases its block holds',
+    title: 'every recorded row still names a live law in its OWN file, down to the COUNT of cases its block holds',
     run: (root) => rosterBijectionProblems(root),
     note: rosterBijectionReport,
-    ok: 'every rostered path is on disk, every recorded title is still carried by the file that records it as a runnable block or case, titles are pairwise distinct, and every recorded block still holds at least the cases it held',
+    ok: "every rostered path is on disk, every recorded title is still carried by the file that records it as a runnable block or case, titles are pairwise distinct, and every recorded block still holds at least AS MANY cases as it held — a COUNT, not those same cases: replacing a block's 14 real cases with 14 trivial ones satisfies this arm exactly, and that is the inherent limit of a floor rather than a gap this gate claims to close",
   },
+];
+
+/**
+ * WHAT THIS GATE DOES NOT CLAIM, printed on every run.
+ *
+ * Both were measured by an independent challenge against `7146089` and both
+ * are stated rather than closed: the Tech Lead declined new mechanism for them,
+ * and a limitation a reader can see is worth more than an arm written in a
+ * hurry. A gate that prints only what it proves invites the reader to assume
+ * the rest.
+ */
+const LIMITATIONS: readonly string[] = [
+  'COMPLETENESS: this gate judges the rows the record HOLDS and never asks whether the record is complete. Append an unrecorded top-level describe( block to any rostered file and all four arms stay green while `roster-bijection` still reports "36 of 36 recorded row(s)". The completeness law lives in §D of tests/guards/p4s5-gate-execution.test.ts, which does red on it — so it is enforced by a TEST, not by this gate.',
+  "FLOOR, NOT IDENTITY: `roster-bijection` compares the COUNT of a block's runnable cases against its recorded number. Fourteen trivial cases satisfy a floor of fourteen. It catches a block that SHEDS a case; it cannot see one whose cases were replaced.",
+  'NOT IN REQUIRED CI: no step of the backend job runs this file, so nothing above runs automatically on a commit.',
 ];
 
 if (require.main === module) {
@@ -534,10 +579,11 @@ if (require.main === module) {
     }
     if (check.note !== undefined) console.log(`     ${check.id} measured: ${check.note(root)}`);
   }
+  for (const limitation of LIMITATIONS) console.log(`     limitation: ${limitation}`);
   console.log(
     failed === 0
-      ? `PASS gate:phase4:s5 at ${root}: ${CHECKS.length} check(s) ok — a RECORD, not yet a required CI step: no step of the backend job runs this file`
-      : `FAIL gate:phase4:s5 at ${root}: ${failed} of ${CHECKS.length} check(s) refuse this tree`,
+      ? `PASS gate:phase4:s5 at ${root}: ${CHECKS.length} check(s) ok, over the ${LIMITATIONS.length} limitation(s) printed above — a RECORD, not yet a required CI step`
+      : `FAIL gate:phase4:s5 at ${root}: ${failed} of ${CHECKS.length} check(s) refuse this tree — read EVERY arm's verdict above, because more than one can refuse the same file for unrelated reasons`,
   );
   process.exit(failed === 0 ? 0 : 1);
 }
