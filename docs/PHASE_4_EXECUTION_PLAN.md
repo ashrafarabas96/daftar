@@ -184,8 +184,18 @@ and exactly zero on full.
 calibration-derived, tighten-only, `3×` provisional).
 
 ### P4-S5 — Returns, credit notes, refunds
-**Scope.** `credit_notes`, `credit_note_items`, `refunds`; revenue reversed exactly once; the cap check inside
-the source's `FOR UPDATE`; `refunds` with exactly one non-null source and no column that could name a payment.
+**Scope.** `credit_notes`, `credit_note_items`, `credit_note_applications`, `refunds`; revenue reversed
+exactly once; the cap check inside the source's `FOR UPDATE`; `refunds` with exactly one non-null source and
+no column that could name a payment.
+
+> **Corrected 2026-10-07.** This line named three relations and omitted
+> `credit_note_applications`, which is load-bearing rather than incidental: §13 of
+> `docs/PHASE_4_DECISION_REGISTER.md` already records it as owed and absent, and
+> `INVOICE_REDUCER_VOCABULARY` (`scripts/phase4-s1-gate.ts:1237-1238`) already names it a reducer, so the
+> law that a refund is not an invoice-outstanding reducer is standing over a relation this scope did not
+> ask anyone to build. Without it an S5 reduces AR by writing `credit_notes` directly — no per-invoice
+> application row and no level chain — which is a second AR truth reached by omission rather than by
+> decision. The relation count is four.
 **Gate.** `gate:phase4:s5` — composes s4; the structural absence of a payment column asserted; the cap under
 concurrency; cross-currency caps in the source's own currency.
 **Exit.** G-06, G-08, G-09, G-12 green; P4-G calibrated; gate and CI green.
