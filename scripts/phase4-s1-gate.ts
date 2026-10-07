@@ -1757,23 +1757,56 @@ export const DEFERRED_SEAMS: readonly DeferredSeam[] = [
       // this does not catch is a self-call disguised by a cast or an
       // expression; closing that needs a resolver over the catalogue, which is
       // the behavioural half of the seam and not this static one.
+      //
+      // AND A DELEGATOR MAY NOT ALSO COMPUTE (TL-P4-S4-SEAM-01). A definition
+      // that names no settling relation is excused ONLY on the strength of the
+      // call it makes, so that call has to be the whole of what it does. A
+      // wrapper that delegates AND THEN adjusts the figure it was handed is
+      // precisely the hole this discharge would otherwise open, and it is
+      // excused twice over: it reads no reducer, so the first half lets it by,
+      // and it calls the compliant body, so the second half lets it by — while
+      // the number it returns is not the number that body computed. So a
+      // delegator's text, with its delegating calls REMOVED, must hold no
+      // ARITHMETIC OVER A MINOR AMOUNT. `0084:526` projects four columns by
+      // name and holds none, which is what "pure delegating wrapper" means
+      // when it is asserted instead of asserted about. What this does not
+      // catch is an adjustment made by a FUNCTION rather than an operator
+      // (`least(o.outstanding_txn_minor, …)`); that residual, like the
+      // cast-disguised self-call above, belongs to the behavioural half and is
+      // named here so that no later reader takes this static law for the whole
+      // of the seam.
       const flat = (text: string): string => text.replace(/\s+/g, '').toLowerCase();
-      const delegates = (def: string): boolean => {
-        const body = def.replace(/^CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?invoice_outstanding\s*/i, '');
-        const own = flat(
+      const CALL = /\b(?:public\.)?invoice_outstanding\s*\(([^()]*)\)/gi;
+      const MINOR_ARITHMETIC = /\w*_minor\b\s*[-+*/]|[-+*/]\s*(?:[a-z_][a-z0-9_]*\s*\.\s*)?\w*_minor\b/i;
+      const headless = (def: string): string => def.replace(/^CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?invoice_outstanding\s*/i, '');
+      const ownParameterNames = (def: string): string =>
+        flat(
           (definitionParameterText(def, 'invoice_outstanding') ?? '')
             .split(',')
             .map((p) => p.trim().split(/\s+/)[0] ?? '')
             .join(','),
         );
-        return [...body.matchAll(/\b(?:public\.)?invoice_outstanding\s*\(([^()]*)\)/gi)].some((m) => flat(m[1] ?? '') !== own);
+      /** Calls a DIFFERENT definition of the name: not the exact pass-through shape. */
+      const callsAnother = (def: string): boolean => {
+        const own = ownParameterNames(def);
+        return [...headless(def).matchAll(CALL)].some((m) => flat(m[1] ?? '') !== own);
       };
+      /** Holds no settlement arithmetic of its own once its delegating calls are gone. */
+      const computesNothing = (def: string): boolean => !MINOR_ARITHMETIC.test(headless(def).replace(CALL, ' '));
       return live
-        .filter((def) => missingIn(def).length > 0 && !delegates(def))
-        .map(
-          (def) =>
-            `seam S-P4-03: the live invoice_outstanding definition with signature (${routineSignature(def, 'invoice_outstanding') ?? 'unreadable'}) neither reads ${missingIn(def).join(', ')} nor delegates to another definition of invoice_outstanding — a reader-of-record that does not read a relation that settles an invoice reports the invoice unpaid, and a definition the database still holds is not excused by a sibling that is written correctly (P4-AL-05, P4-AL-07)`,
-        );
+        .filter((def) => missingIn(def).length > 0)
+        .flatMap((def) => {
+          const signature = routineSignature(def, 'invoice_outstanding') ?? 'unreadable';
+          if (!callsAnother(def))
+            return [
+              `seam S-P4-03: the live invoice_outstanding definition with signature (${signature}) neither reads ${missingIn(def).join(', ')} nor delegates to another definition of invoice_outstanding — a reader-of-record that does not read a relation that settles an invoice reports the invoice unpaid, and a definition the database still holds is not excused by a sibling that is written correctly (P4-AL-05, P4-AL-07)`,
+            ];
+          if (!computesNothing(def))
+            return [
+              `seam S-P4-03: the live invoice_outstanding definition with signature (${signature}) reads none of ${missingIn(def).join(', ')} and is excused only by the definition it delegates to, yet it computes over a minor amount of its own — a delegator that adjusts the figure it was handed returns a number no compliant definition computed, so the delegation discharges nothing (P4-AL-05, P4-AL-07)`,
+            ];
+          return [];
+        });
     },
   },
 ];

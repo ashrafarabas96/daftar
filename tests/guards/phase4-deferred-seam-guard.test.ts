@@ -637,6 +637,52 @@ $th$;
     expect(problems[0]).toContain('delegates');
   });
 
+  it('RED P7: a wrapper that delegates AND THEN ADJUSTS the figure is a finding — a delegator may not also compute', () => {
+    // The hole the delegation discharge opens if it only asks whether a call
+    // is there. This plant is excused by BOTH halves of the older rule: it
+    // names no settling relation, and it really does call the compliant
+    // definition with a different argument list. What it also does is
+    // subtract one from the figure that definition computed, so it returns a
+    // number no compliant definition ever produced — asserted here, not
+    // described.
+    const root = rootWith(
+      `${scalarForm(`    SELECT o.paid_txn_minor, o.paid_base_minor, o.outstanding_txn_minor - 1, o.outstanding_base_minor
+      FROM public.invoice_outstanding(p_business_id, ARRAY[p_invoice_id]) o;`)}${compliantArrayForm()}`,
+      '9999_planted_adjusting_delegation.sql',
+    );
+    // NON-VACUITY OF THE SUBJECT: the two facts that make the older rule
+    // green on this plant are both true of it, so the purity half is the only
+    // thing that can be reporting it.
+    const scalar = liveRoutineBodiesIn(phase4Sql(root), 'invoice_outstanding').live.find((def) => routineSignature(def, 'invoice_outstanding') === 'uuid,uuid');
+    expect(scalar, 'the plant really does leave a live scalar definition').toBeTruthy();
+    for (const name of reducerRelations(REPO))
+      expect(new RegExp(`\\b${name}\\b`).test(scalar ?? ''), `the adjusting wrapper names no ${name}, so the first half excuses it`).toBe(false);
+    expect(
+      /invoice_outstanding\s*\(\s*p_business_id\s*,\s*ARRAY/i.test(scalar ?? ''),
+      'and it really does call another definition, so the second half excuses it',
+    ).toBe(true);
+    const problems = deferredSeamProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('S-P4-03');
+    expect(problems[0]).toContain('uuid,uuid');
+    expect(problems[0], 'the finding says which half failed').toContain('computes over a minor amount of its own');
+  });
+
+  it('NOT A FINDING P8: the real wrapper projects its callee’s columns and is NOT read as computing', () => {
+    // The purity half judged against the tree it has to stay green on: the
+    // shipped `0084:526` is a projection of four columns by name, and the
+    // arithmetic the compliant array form legitimately holds is in a
+    // definition the purity half never reaches, because that one names every
+    // reducer and is never excused by delegation at all.
+    const live = liveRoutineBodiesIn(phase4Sql(REPO), 'invoice_outstanding').live;
+    const scalar = live.find((def) => routineSignature(def, 'invoice_outstanding') === 'uuid,uuid') ?? '';
+    const array = live.find((def) => routineSignature(def, 'invoice_outstanding') === 'uuid,uuid[]') ?? '';
+    expect(scalar, 'the shipped tree really does have a scalar form to judge').not.toBe('');
+    expect(/_minor\s*[-+]/.test(scalar), 'and it holds no arithmetic over a minor amount').toBe(false);
+    expect(/_minor\s*[-+]/.test(array), 'while the compliant form does — which is why the purity half must not reach it').toBe(true);
+    expect(deferredSeamProblems(REPO)).toEqual([]);
+  });
+
   it('RED A: a future reducer relation lands and the routine does not account for it — the finding names it', () => {
     const both = `${ALLOCATIONS}${WRITE_OFFS}
       CREATE OR REPLACE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_id UUID) RETURNS BIGINT
