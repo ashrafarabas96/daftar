@@ -86,11 +86,86 @@ const ACCEPTED_GATES: readonly { readonly script: string; readonly args: (root: 
 ];
 
 /**
- * The gate of the slice currently open. P4-AL-61 authorises its candidate-tense
- * boundary and requires its acceptance commit to delete it, so it is the one
- * gate that legitimately refuses a foreign successor migration.
+ * THE SLICE GATES, DISCOVERED FROM DISK, each one's tense read from its OWN
+ * accepted literal.
+ *
+ * This was a pinned name — `scripts/phase4-s2-gate.ts` — and the pin was the
+ * defect. S2 sealed, so the gate it named carried no fence, so the test below
+ * took the ACCEPTED arm every time and the OPEN arm's red proof was dormant
+ * for ever, while `scripts/phase4-s4-gate.ts` carried a real fence that
+ * nothing here looked at. The doc comment claimed the live arm was "read from
+ * the tree, never written down here"; the gate itself was written down here.
+ * It is the same shape as the rule-count equality this suite exists to refuse:
+ * a constant naming ONE slice inside a law that outlives it.
+ *
+ * A gate's tense is a property of the gate: `S{n}_ACCEPTED` holding no digest
+ * is the candidate tense, holding one is the accepted tense. Deriving it makes
+ * the law cover every gate on disk — the accepted ones and the open one
+ * together — and covers the next slice's gate the moment it exists.
  */
-const OPEN_SLICE_GATE = 'scripts/phase4-s2-gate.ts';
+interface SliceGate {
+  readonly rel: string;
+  readonly slice: number;
+  /** Its own `S{n}_ACCEPTED` holds at least one digest. */
+  readonly accepted: boolean;
+  /** That literal's body as read, or `null` if the gate declares no such literal. */
+  readonly body?: string | null;
+  /** `CANDIDATE-TENSE (P4-AL-61)` marker lines, both ends counted together. */
+  readonly fences: number;
+}
+
+/** A fence MARKER line, either end. A pair delimits a region; a lone one delimits nothing. */
+const FENCE_LINE = /^\s*\/\/\s*[─-]+\s*(?:end\s+)?CANDIDATE-TENSE \(P4-AL-61\)/;
+
+/** The number of fence marker lines in a gate's source. */
+const fenceCount = (text: string): number => text.split('\n').filter((l) => FENCE_LINE.test(l)).length;
+
+/** The slice gates on disk, in slice order, each with the tense its own literal declares. */
+function sliceGates(root: string): SliceGate[] {
+  return readdirSync(join(root, 'scripts'))
+    .map((f) => /^phase4-s(\d+)-gate\.ts$/.exec(f))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => {
+      const rel = `scripts/${m[0]}`;
+      const slice = Number(m[1]);
+      const text = readFileSync(join(root, rel), 'utf8');
+      // The literal's BODY, lazily to the first brace of either kind. A lazy
+      // `[\s\S]*?` to `\n};` ran past an EMPTY `S4_ACCEPTED = {};` — which has
+      // no `\n};` at all — into a later object, and reported the open slice as
+      // accepted. A body that cannot contain a brace cannot overrun.
+      const literal = new RegExp(`export const S${slice}_ACCEPTED\\b[^=]*=\\s*\\{([^{}]*)\\}`).exec(text);
+      return {
+        rel,
+        slice,
+        body: literal?.[1] ?? null,
+        // A digest is a quoted string inside the literal; an empty `{}` holds none.
+        accepted: /['"]/.test(literal?.[1] ?? ''),
+        fences: fenceCount(text),
+      };
+    })
+    .sort((a, b) => a.slice - b.slice);
+}
+
+/**
+ * P4-AL-61 as a law over the whole estate rather than over one named gate: an
+ * ACCEPTED gate carries no fence, an OPEN gate fences its candidate tense
+ * between a PAIR of markers, and at most one slice is open at a time. Pure, so
+ * the red proofs can feed it mutated records instead of rewriting a tree.
+ */
+export function tenseProblems(gates: readonly SliceGate[]): string[] {
+  const problems: string[] = [];
+  for (const g of gates) {
+    if (g.accepted && g.fences > 0)
+      problems.push(`${g.rel}: S${g.slice} is accepted and the candidate-tense block is still here — the acceptance commit deletes it (P4-AL-61)`);
+    if (!g.accepted && g.fences < 2)
+      problems.push(
+        `${g.rel}: S${g.slice} is open and its candidate tense is not fenced between two "CANDIDATE-TENSE (P4-AL-61)" markers, so the acceptance commit cannot find what to delete`,
+      );
+  }
+  const open = gates.filter((g) => !g.accepted).map((g) => g.rel);
+  if (open.length > 1) problems.push(`more than one slice gate is in the candidate tense at once: ${open.join(', ')} (P4-AL-61)`);
+  return problems;
+}
 
 /** The files the shape rules police: the Phase 4 estate and the permanent prefix modules. */
 const SHAPE_SCOPE: readonly string[] = ['scripts/phase2-prefix.ts', 'scripts/phase3-prefix.ts', 'scripts/phase4-prefix.ts'];
@@ -568,38 +643,100 @@ describe('P4-AL-61: the candidate tense is confined to the slice currently open'
    * and watches the rule refuse it, the accepted arm PLANTS a fence comment in a
    * gate that should carry none and watches the same rule refuse that.
    */
-  it('the candidate tense is fenced while a slice is open, and gone once it is accepted', () => {
+  it('the candidate tense is fenced while a slice is open, and gone once it is accepted — on every slice gate on disk', () => {
+    // The gates' OWN implementation of the rule, composed along the chain, over
+    // the real tree. This is the tie between the law stated here and the code
+    // that enforces it in the gates: if they disagree, one of them is wrong.
     expect(closureRuleProblems(REPO)).toEqual([]);
-    const root = copyTree('fence');
-    const gate = readFileSync(join(REPO, OPEN_SLICE_GATE), 'utf8');
-    const FENCE = /^\s*\/\/\s*[─-]+\s*(?:end\s+)?CANDIDATE-TENSE \(P4-AL-61\)/;
-    const fences = gate.split('\n').filter((l) => FENCE.test(l)).length;
 
-    if (fences > 0) {
-      // The open tense. A lone marker is not a fence: the deletion needs both ends.
-      expect(fences, `${OPEN_SLICE_GATE} must fence its candidate tense between two markers`).toBeGreaterThanOrEqual(2);
-      rewrite(root, OPEN_SLICE_GATE, gate.replace(/CANDIDATE-TENSE \(P4-AL-61\)/g, 'candidate tense'));
-      expect(closureRuleProblems(root).join('\n')).toContain('fenced');
-    } else {
-      // The accepted tense. The gate of an accepted slice carries no candidate
-      // tense at all, and a planted fence is refused even though it is "only" a
-      // comment, because the block it would fence is what P4-AL-61 forbids.
-      const planted = gate.replace(
-        /^(export function closureRuleProblems)/m,
-        '// ───── CANDIDATE-TENSE (P4-AL-61) ─────\n// ───── end CANDIDATE-TENSE (P4-AL-61) ─────\n$1',
-      );
-      expect(planted, 'the planted fence really was inserted').not.toBe(gate);
-      rewrite(root, OPEN_SLICE_GATE, planted);
-      expect(closureRuleProblems(root).join('\n')).toContain('still here');
+    const gates = sliceGates(REPO);
+    expect(
+      gates.map((g) => g.rel),
+      'the Phase 4 estate has no slice gate at all',
+    ).not.toEqual([]);
+    expect(tenseProblems(gates)).toEqual([]);
+
+    // NEITHER ARM IS DORMANT. The estate carries accepted gates and, while a
+    // slice is open, exactly one open gate; both are judged by the same law, so
+    // the proof below is a proof about the tree as it is, not about one side of
+    // a transition that has already happened.
+    const accepted = gates.filter((g) => g.accepted);
+    const open = gates.filter((g) => !g.accepted);
+    expect(
+      accepted.map((g) => g.rel),
+      'no slice gate is accepted, so the accepted arm proves nothing',
+    ).not.toEqual([]);
+    expect(open.length, 'at most one slice is open at a time (P4-AL-61)').toBeLessThanOrEqual(1);
+
+    // RED PROOF, THE ACCEPTED ARM: a fence planted in a gate whose slice is
+    // sealed is refused, because the block it would fence is what P4-AL-61
+    // requires the acceptance commit to have deleted.
+    for (const g of accepted) {
+      const planted = tenseProblems([{ ...g, fences: 2 }]);
+      expect(planted, `a fence planted in the accepted ${g.rel} is not refused`).toHaveLength(1);
+      expect(planted[0]).toContain('still here');
     }
+
+    // RED PROOF, THE OPEN ARM: the open gate's fence removed is refused, and a
+    // LONE marker is refused too — the acceptance deletion needs both ends, so
+    // one marker delimits nothing. This is the arm that was dormant while the
+    // gate was a pinned name.
+    for (const g of open) {
+      expect(g.fences, `${g.rel} is open and must fence its candidate tense`).toBeGreaterThanOrEqual(2);
+      for (const fences of [0, 1]) {
+        const unfenced = tenseProblems([{ ...g, fences }]);
+        expect(unfenced, `${g.rel} with ${fences} marker(s) is not refused`).toHaveLength(1);
+        expect(unfenced[0]).toContain('cannot find what to delete');
+      }
+    }
+
+    // And the law refuses TWO open slices at once, the shape a slice started
+    // before its predecessor sealed would have. Proved on records, because the
+    // tree must never be in that state for it to be provable.
+    const twoOpen = tenseProblems([
+      { rel: 'scripts/phase4-s9-gate.ts', slice: 9, accepted: false, fences: 2 },
+      { rel: 'scripts/phase4-s8-gate.ts', slice: 8, accepted: false, fences: 2 },
+    ]);
+    expect(twoOpen).toHaveLength(1);
+    expect(twoOpen[0]).toContain('more than one slice gate is in the candidate tense');
   }, 120_000);
 
-  it('the open slice gate is the only file in the Phase 4 estate that asserts a tense', () => {
+  it('the tense a gate declares is read from its own accepted literal, not from a name written here', () => {
+    // The derivation itself, proved on texts: this is what makes the law above
+    // follow the slice instead of a constant. An empty literal is the candidate
+    // tense, a filled one is the accepted tense, and the fence count comes from
+    // the marker lines rather than from every mention of the marker's words.
+    const fenced = ['// ───── CANDIDATE-TENSE (P4-AL-61) ─────', 'const x = 1;', '// ───── end CANDIDATE-TENSE (P4-AL-61) ─────'].join('\n');
+    expect(fenceCount(fenced)).toBe(2);
+    // A diagnostic that NAMES the marker is not a marker: a gate reporting its
+    // own surviving fence would otherwise report one for ever.
+    expect(fenceCount('problems.push(`the CANDIDATE-TENSE (P4-AL-61) block is still here`);')).toBe(0);
+
+    // And on the real gates: every one declares the literal, and a gate is in
+    // the accepted tense EXACTLY when that literal's body is not empty. The
+    // first draft of this derivation read the body with a lazy `[\s\S]*?` up
+    // to `\n};`, which an empty `S4_ACCEPTED = {};` does not contain — it ran
+    // on into a later object and declared the OPEN slice accepted. This arm is
+    // what caught that, so it stays.
+    const gates = sliceGates(REPO);
+    for (const g of gates) {
+      expect(g.body, `${g.rel} declares no S${g.slice}_ACCEPTED literal, so its tense cannot be read`).not.toBeNull();
+      expect(g.accepted, `${g.rel}: the tense derived disagrees with its own S${g.slice}_ACCEPTED body`).toBe((g.body ?? '').trim() !== '');
+    }
+  });
+
+  it('no file in the Phase 4 estate counts .sql files, pins frozenThrough, or names a migration that does not exist', () => {
+    // The shape rules, which are about COUNTS AND NAMES and nothing about
+    // tense: `forbiddenShapeProblems` refuses a `.sql` count compared with a
+    // literal, a `frozenThrough` equality, and a quoted migration number above
+    // the manifest's head. The title said "asserts a tense" and excluded one
+    // named gate; the rule never looked at a tense, so the exclusion was dead
+    // weight hiding what the check actually is. Every gate is judged now.
     const headNumber = Number(headOf(REPO).slice(0, 4));
     const estate = readdirSync(join(REPO, 'scripts'))
       .filter((f) => /^phase4-.*\.ts$/.test(f))
-      .map((f) => `scripts/${f}`)
-      .filter((rel) => rel !== OPEN_SLICE_GATE);
+      .map((f) => `scripts/${f}`);
+    expect(estate, 'the Phase 4 script estate is empty, so this proves nothing').not.toEqual([]);
     const problems = estate.flatMap((rel) => forbiddenShapeProblems(rel, readFileSync(join(REPO, rel), 'utf8'), headNumber));
     expect(problems).toEqual([]);
   });
