@@ -239,8 +239,61 @@ function isEmptyCollection(body: unknown): boolean {
 }
 
 /**
- * THE CLASSIFIER. It reads the status and the stable code and nothing else —
- * never a message, which is localized and may not be parsed.
+ * THE TEXT A VERDICT MAY BE READ OUT OF — the refusal envelope MINUS its
+ * CORRELATION ID.
+ *
+ * MEASURED, AND THE WHOLE REASON THIS FUNCTION EXISTS. The `backend` job of
+ * CI run 37611356635 (head `68bc5dd`) failed the customer leg of §16 CASE C
+ * with `expected 'grant' to be 'tenant_barrier'`, while the same suite passes
+ * on the embedded PostgreSQL 18.4 / `C` harness AND — measured, on a cluster
+ * initdb'd from zero at CI's own platform, PostgreSQL 16.13 with
+ * `datcollate = datctype = en_US.utf8` — 20 passed (20). So the verdict was
+ * neither the server version, nor the collation, nor a GRANT.
+ *
+ * It was THIS CLASSIFIER READING `error.requestId`. The body of this refusal
+ * is fixed in every field but that one — measured on the route itself:
+ *
+ *     {"error":{"code":"NOT_FOUND","message":"Resource not found",
+ *       "requestId":"<uuid v4>","details":{"sellingCode":"customer.not_found"}}}
+ *
+ * — and a v4 UUID is 32 hexadecimal digits, which contains the literal
+ * `42501` about once in a hundred thousand (1.00e-5 measured over 2e7 UUIDs;
+ * 21 of the 23 responses this file classifies carry one, so ~2e-4 per run of
+ * this file). A correlation id is OPAQUE: it names no relation, no role and
+ * no SQLSTATE. A verdict read out of it is a coin toss wearing a verdict's
+ * name, and it lands on the one verdict this file may never guess at.
+ *
+ * AND THE PROOF THAT CI'S `grant` WAS THAT COIN TOSS AND NOT A REAL PRIVILEGE
+ * REFUSAL — which matters, because a real one would be a PRODUCT finding and
+ * must not be papered over here. `apps/api/src/common/error.filter.ts:171-173`
+ * renders EVERY `42501` as `403 FORBIDDEN` / `Access denied`, with no
+ * `details` and «not even the relation name the privilege error carried»
+ * (`tests/integration/sale-s2-error-contract.test.ts:494-500`). So a
+ * `daftar_app` that genuinely lacked `SELECT` on `customers` would reach this
+ * classifier as status 403 with `codeOf(res) === 'FORBIDDEN'`, and `caseC`
+ * would have failed one assertion EARLIER, on the domain code
+ * (`/^customer\.not_found$/`), never on the verdict. CI failed on the VERDICT
+ * with the DOMAIN CODE matching, and `customer.not_found` is raised only
+ * where the row was invisible (`customer-reads.ts:179`), so the refusal CI
+ * classified was a real `tenant_barrier` 404 all along.
+ *
+ * The `grant` verdict is therefore NOT removed and NOT folded into
+ * `tenant_barrier`: the four authority models stay four, and a body that ever
+ * does carry a privilege refusal is still judged a grant and never a barrier.
+ * It is read from the fields that can CARRY one — the stable code, the safe
+ * message and the structured details — and never from the opaque id beside
+ * them.
+ */
+function verdictText(res: Response): string {
+  const err = (res.body as { error?: Record<string, unknown> } | undefined)?.error;
+  if (err === undefined || err === null) return JSON.stringify(res.body ?? {});
+  return JSON.stringify(Object.fromEntries(Object.entries(err).filter(([k]) => k !== 'requestId')));
+}
+
+/**
+ * THE CLASSIFIER. It reads the status, the stable code and the structured
+ * details the error filter renders — and never the correlation id beside
+ * them, for the reason `verdictText` records.
  *
  * A privilege refusal is looked for FIRST, because it can arrive under any
  * status: `42501` is what a missing GRANT raises, and a law that read it as
@@ -249,7 +302,7 @@ function isEmptyCollection(body: unknown): boolean {
  */
 function classify(res: Response): Verdict {
   const code = codeOf(res);
-  const text = JSON.stringify(res.body ?? {});
+  const text = verdictText(res);
   if (/42501|permission denied|row-level security|row level security/i.test(text)) return 'grant';
   if (res.status >= 200 && res.status < 300) return isEmptyCollection(res.body) ? 'empty_collection' : 'accepted';
   if (res.status === 401 || res.status === 403) return 'authorization';
@@ -777,7 +830,9 @@ describe('§16 CASE C — the eight Phase 4 command surfaces, each REFUSED with 
       code: /^invoice\.not_found$/,
       attempt: () => t.request.get(`/v1/invoices/${B.openInvoiceId}`).set(hdr(merchantA, A.businessId)),
     });
-    expect(got.verdict, 'the invoice read refused for some reason other than the row being invisible').toBe('tenant_barrier');
+    expect(got.verdict, `the invoice read refused for some reason other than the row being invisible: status ${got.status}, code ${got.code}`).toBe(
+      'tenant_barrier',
+    );
   });
 
   it('SETTLEMENT — GET /v1/invoices/:invoiceId/settlement over B’s OPEN invoice', async () => {
@@ -792,7 +847,9 @@ describe('§16 CASE C — the eight Phase 4 command surfaces, each REFUSED with 
       code: /^invoice\.not_found$/,
       attempt: () => t.request.get(`/v1/invoices/${B.openInvoiceId}/settlement`).set(hdr(merchantA, A.businessId)),
     });
-    expect(got.verdict, 'the settlement read refused for some reason other than the row being invisible').toBe('tenant_barrier');
+    expect(got.verdict, `the settlement read refused for some reason other than the row being invisible: status ${got.status}, code ${got.code}`).toBe(
+      'tenant_barrier',
+    );
   });
 
   it('CUSTOMER — the five customer reads over B’s customer, and not one of them is an empty collection', async () => {
@@ -828,7 +885,7 @@ describe('§16 CASE C — the eight Phase 4 command surfaces, each REFUSED with 
         code,
         attempt: () => t.request.get(path).set(hdr(merchantA, A.businessId)),
       });
-      expect(got.verdict, `${path} refused for some reason other than the row being invisible`).toBe('tenant_barrier');
+      expect(got.verdict, `${path} refused for some reason other than the row being invisible: status ${got.status}, code ${got.code}`).toBe('tenant_barrier');
     }
   });
 
@@ -1227,6 +1284,56 @@ describe('§16 CASE C — THE RED PROOFS: each law is shown to be able to fail, 
     const generic = (r: typeof sale): string => String((r.body as { error?: { code?: unknown } }).error?.code ?? '');
     expect(generic(sale), 'the two refusals no longer share a generic code, so reading error.code would have sufficed').toBe(generic(payment));
     expect(generic(sale)).toBe('NOT_FOUND');
+  });
+
+  it('RP-8 the verdict is read from the refusal and NOT from its correlation id — and `grant` still fires on a REAL privilege refusal', async () => {
+    // THE RED PROOF OF `verdictText`, and of the CI failure it explains.
+    //
+    // The subject is REAL: B's customer read, refused under A's header, the
+    // very response the case above classifies. Nothing about the refusal is
+    // fabricated — the ONE field varied is `error.requestId`, which the error
+    // filter fills with `randomUUID()` (`infra/request-context.ts:15`) and
+    // which names no relation, no role and no SQLSTATE.
+    const real = await t.request.get(`/v1/customers/${B.customerId}`).set(hdr(merchantA, A.businessId));
+    expect(classify(real), 'the customer read is no longer a barrier refusal, so this red proof has no subject').toBe('tenant_barrier');
+    const err = (real.body as { error: Record<string, unknown> }).error;
+    expect(typeof err['requestId'], 'the refusal carries no correlation id, so there is nothing to prove irrelevant').toBe('string');
+    // The SAME refusal, with only the opaque id replaced by a v4-shaped one
+    // whose hexadecimal digits happen to spell `42501`. A UUID does that about
+    // once in a hundred thousand, and that is EXACTLY what failed CI run
+    // 37611356635 at the customer leg before `verdictText` existed.
+    const sameRefusal = { ...real, body: { error: { ...err, requestId: '7ab0d97b-ca9f-4f00-b531-c3f8f0425018' } } } as unknown as Response;
+    expect(codeOf(sameRefusal), 'the varied body is no longer the same refusal, so this proves nothing about the id').toBe('customer.not_found');
+    expect(
+      classify(sameRefusal),
+      'the verdict MOVED when only the opaque correlation id changed — a coin toss is deciding which authority refused this request',
+    ).toBe('tenant_barrier');
+    // …AND THE OTHER HALF, which is what stops this from being a loosening:
+    // the `grant` verdict is still alive, and it is proved so against a REAL
+    // privilege refusal rather than an invented string. The relation is
+    // DISCOVERED out of the catalogue, never listed, so the proof survives a
+    // later slice granting or revoking anything.
+    const ungranted = (
+      await ownerPool().query<{ relation: string }>(
+        `SELECT c.relname::text AS relation FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relkind = 'r' AND NOT has_table_privilege('daftar_app', c.oid, 'SELECT')
+          ORDER BY c.relname LIMIT 1`,
+      )
+    ).rows[0]?.relation;
+    expect(ungranted, 'daftar_app may read EVERY relation in the catalogue, so no real privilege refusal exists to prove `grant` with').toBeTypeOf('string');
+    const refused = await asApp<{ n: string }>(A, `SELECT count(*)::text AS n FROM public.${String(ungranted)}`).then(
+      () => '(allowed)',
+      (e: unknown) => String((e as { message?: unknown }).message ?? e),
+    );
+    expect(refused, `${String(ungranted)} is readable after all, so this is not a privilege refusal`).toMatch(/permission denied for table/);
+    // PostgreSQL's OWN words, in the place the envelope carries safe text.
+    // This body never happens — the filter renders `42501` as `403 FORBIDDEN`
+    // with no details at all (`error.filter.ts:171-173`) — and the verdict is
+    // kept anyway, because a law that deleted it would have collapsed the
+    // grant model into the barrier, which is the one thing §15 forbids.
+    const leaked = { ...real, body: { error: { ...err, message: refused } } } as unknown as Response;
+    expect(classify(leaked), 'a body that really does carry a privilege refusal is no longer judged a grant').toBe('grant');
+    expect(REFUSALS, '`grant` is no longer a refusal verdict at all').toContain('grant');
   });
 
   it('RP-6 the response-leak law can fail: a body that really does carry B’s ids is caught', async () => {
