@@ -959,7 +959,7 @@ describe('TL-P4-RLS-INT-01 §11 — the live catalogue of a database built from 
 // it is left WORD FOR WORD although the roster is now four authorities rather
 // than "either". The subject is every rostered authority; the sweeps below
 // derive it.
-describe('TL-P4-RLS-INT-01 §12 — no runtime credential can assume either authority, measured live', () => {
+describe('TL-P4-RLS-INT-01 §12 — no runtime credential can assume ANY internal authority, measured live', () => {
   it('the catalogue roster holds no login role the hand-written §12 roster does not name', async () => {
     expect(rosterProblems(await liveLoginRoles())).toEqual([]);
   });

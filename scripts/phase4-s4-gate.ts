@@ -2222,17 +2222,17 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   {
     suite: 'tests/security/p4s4-internal-authority-shape.test.ts',
     title: 'TL-P4-RLS-INT-01 §11 — the live catalogue of a database built from the migrations',
-    cases: 8,
+    cases: 9,
   },
   {
     suite: 'tests/security/p4s4-internal-authority-shape.test.ts',
-    title: 'TL-P4-RLS-INT-01 §12 — no runtime credential can assume either authority, measured live',
+    title: 'TL-P4-RLS-INT-01 §12 — no runtime credential can assume ANY internal authority, measured live',
     cases: 5,
   },
   {
     suite: 'tests/security/p4s4-internal-authority-shape.test.ts',
     title: 'TL-P4-RLS-INT-01 §17 — the reopening conditions, planted live and put back',
-    cases: 3,
+    cases: 4,
   },
   { suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts', title: 'P4-S4 — the policy surface the behavioural laws rest on' },
   {
