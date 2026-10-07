@@ -57,7 +57,7 @@
  * would leave the signature identical — asserted as inequality, in the
  * message).
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -107,6 +107,109 @@ const IDENTITY = {
  * because nothing it reads has changed. That asymmetry is the detection.
  */
 const MUTANT = 'MUTATED_ACCOUNT_ID_NOT_IN_THE_CHART';
+
+/**
+ * TWO VIEWS OF A SOURCE FILE, and why one is not enough.
+ *
+ * This is the gate engineer's `stripProse` / `stripCommentsKeepStrings` pair,
+ * which is the shape this estate settled on. It is reimplemented here rather
+ * than imported because the module that exports it
+ * (`scripts/guards/performance-contract.ts`) is not on this branch; if it lands
+ * here, this should become an import and the duplicate should go.
+ *
+ * - `codeWithProseBlanked` blanks comments AND string bodies. It answers "is
+ *   this IDENTIFIER right", and no amount of prose can satisfy it;
+ * - `codeWithCommentsBlanked` blanks comments and KEEPS string bodies. It
+ *   answers "does this region RAISE this code", because a refusal code is a
+ *   string literal — `refuse('customer_refund.fx_rate_changed', …)` — so the
+ *   first view blanks the very thing being looked for and would classify every
+ *   code in the slice as unraised.
+ *
+ * Both preserve length, so an index computed in one addresses the same
+ * character in the other.
+ *
+ * Why this matters here and is not plumbing: the previous version of §15
+ * scanned RAW source, so a code named only in a COMMENT counted as raised.
+ * That is how a dead member comes to be declared closed, which is the exact
+ * subject of this file.
+ */
+function blankOut(source: string, blankStrings: boolean): string {
+  const out = source.split('');
+  const blank = (from: number, to: number): void => {
+    for (let i = from; i < to && i < out.length; i += 1) if (out[i] !== '\n') out[i] = ' ';
+  };
+  let i = 0;
+  while (i < source.length) {
+    const two = source.slice(i, i + 2);
+    if (two === '/*') {
+      const end = source.indexOf('*/', i + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (two === '//') {
+      let end = source.indexOf('\n', i);
+      if (end === -1) end = source.length;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    const ch = source[i];
+    if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      while (j < source.length && source[j] !== ch) j += source[j] === '\\' ? 2 : 1;
+      if (blankStrings) blank(i + 1, Math.min(j, source.length));
+      i = Math.min(j + 1, source.length);
+      continue;
+    }
+    if (ch === '`') {
+      let j = i + 1;
+      let textFrom = j;
+      while (j < source.length) {
+        if (source[j] === '\\') {
+          j += 2;
+          continue;
+        }
+        if (source[j] === '`') break;
+        if (source.slice(j, j + 2) === '${') {
+          if (blankStrings) blank(textFrom, j);
+          let depth = 1;
+          j += 2;
+          while (j < source.length && depth > 0) {
+            if (source[j] === '{') depth += 1;
+            else if (source[j] === '}') depth -= 1;
+            j += 1;
+          }
+          textFrom = j;
+          continue;
+        }
+        j += 1;
+      }
+      if (blankStrings) blank(textFrom, Math.min(j, source.length));
+      i = Math.min(j + 1, source.length);
+      continue;
+    }
+    i += 1;
+  }
+  return out.join('');
+}
+
+const codeWithProseBlanked = (source: string): string => blankOut(source, true);
+const codeWithCommentsBlanked = (source: string): string => blankOut(source, false);
+const readSource = (rel: string): string => readFileSync(join(__dirname, '../..', rel), 'utf8');
+
+/**
+ * The S5 module surface, DISCOVERED rather than listed — S5-5's finding was
+ * that the compensating literal scan covered two files by name.
+ */
+const s5ModuleFiles = (): readonly string[] => {
+  const dir = 'apps/api/src/modules/returns';
+  return readdirSync(join(__dirname, '../..', dir))
+    .filter((f) => f.endsWith('.ts'))
+    .sort()
+    .map((f) => `${dir}/${f}`);
+};
 
 /**
  * ONE scenario per planner invocation, each a LAWFUL command of the slice.
@@ -269,15 +372,58 @@ describe('P4-S5 §13 — every planner in the LIVE SET follows the canonical acc
       vi.resetModules();
     }
 
-    // NO DEAD CONFIG MEMBER. A member of the canonical table that moves nothing
-    // is declared and unreached — the `customer.aging_buckets_invalid` shape,
-    // and precisely what the ruling forbids.
+    // NO DEAD CONFIG MEMBER — with the ONE honest exception stated as a
+    // classification rather than hidden in the threshold.
+    //
+    // This lever can only observe a member that is read ACROSS the module
+    // boundary, because an ESM module's own internal reads do not go through
+    // its exports. `CUSTOMER_CREDIT_LIABILITY` has exactly one consumer and it
+    // is `refundLiabilityAccount`, INSIDE the declaring module, so no mock of
+    // that module's exports can move it. That is a limit of the lever, not a
+    // dead member — and inside one module there is no drift surface for a
+    // mutation to detect in the first place, which is precisely why the
+    // previous round's compensating check in `planCustomerRefund` was a
+    // tautology and had to be deleted.
+    //
+    // So the classification is declared, and then CHECKED IN BOTH DIRECTIONS:
+    // a declared domain-internal member must move nothing (or the
+    // classification is stale and a real cross-module reader now exists), and
+    // every other member must move something.
+    const DOMAIN_INTERNAL: readonly string[] = ['CUSTOMER_CREDIT_LIABILITY'];
     for (const member of members) {
+      const moved = movedBy.get(member) as number[];
+      if (DOMAIN_INTERNAL.includes(member)) {
+        expect(
+          moved.length,
+          `${member} is classified as read only inside its declaring module, but a mutation of it MOVED a planner — the classification is stale and this member should be proved by mutation like the others`,
+        ).toBe(0);
+        continue;
+      }
       expect(
-        (movedBy.get(member) as number[]).length,
+        moved.length,
         `the canonical member ${member} changed NO planner's behaviour: either it is a dead config member, or every reader of it holds a literal`,
       ).toBeGreaterThan(0);
     }
+
+    // And the domain-internal member is not left unproven, only proven
+    // DIFFERENTLY and more weakly, which is said out loud: its live consumer's
+    // answer is asserted to BE the canonical member, by value. That shows
+    // agreement; it cannot show non-duplication, and no test in this file
+    // claims otherwise.
+    const liveDomain: Domain = await vi.importActual('@daftar/domain-core');
+    const liveSettlement: Settlement = await vi.importActual('../../apps/api/src/modules/returns/returns-settlement');
+    const creditRefund = liveSettlement.planCustomerRefund({
+      source: refundSource('customer_credit'),
+      consumedMinor: 1_000n,
+      sameCurrency: false,
+      disbursementAmountMinor: 1_100n,
+      disbursement: BASE,
+    });
+    expect(
+      creditRefund.entryLines.map((l) => l.account),
+      'a refund on a customer credit must debit the canonical CUSTOMER_CREDIT_LIABILITY and no other liability',
+    ).toContain(liveDomain.S5_ACCOUNT.CUSTOMER_CREDIT_LIABILITY);
+    expect(creditRefund.entryLines.map((l) => l.account)).not.toContain(liveDomain.S5_ACCOUNT.CUSTOMER_REFUND_LIABILITY);
 
     // NO STRING-LITERAL BYPASS, stated semantically. Each scenario must be
     // moved by some member; a scenario that survives all nine mutations
@@ -291,15 +437,24 @@ describe('P4-S5 §13 — every planner in the LIVE SET follows the canonical acc
     });
 
     // And the specific pairings the ruling argued about, named so a reader does
-    // not have to reconstruct them from the matrix:
+    // not reconstruct them from the matrix — and stated at the strength the
+    // lever actually has, which is less than an earlier version of this file
+    // claimed:
     //
-    // - 2200 moves the APPLICATION (index 0), the RETURN entry (1) and the
-    //   refund drawn on a CREDIT NOTE (2) — the three laws that were three
-    //   equal literals, now all following one source;
-    // - 2210 moves ONLY the refund drawn on a CUSTOMER CREDIT (3), which is why
-    //   "make all three literals equal" was the wrong repair.
-    expect(movedBy.get('CUSTOMER_REFUND_LIABILITY')).toEqual([0, 1, 2]);
-    expect(movedBy.get('CUSTOMER_CREDIT_LIABILITY')).toEqual([3]);
+    // - 2200 moves the APPLICATION (index 0) and the RETURN entry (1). Those
+    //   are two of the three laws that were three equal literals, and they are
+    //   the two whose account-id reads cross the module boundary;
+    // - the third, the refund drawn on a credit note (2), takes its liability
+    //   from `refundLiabilityAccount` INSIDE the declaring module, so this
+    //   lever cannot move it and does not pretend to. It is covered by this
+    //   matrix through `POSTING_ACCOUNT` and `FX_GAIN` instead — the planner is
+    //   proved to consume the canonical source, just not at the liability line;
+    // - 2210 moves NOTHING, for the same reason, and is classified above.
+    expect(movedBy.get('CUSTOMER_REFUND_LIABILITY')).toEqual([0, 1]);
+    expect(movedBy.get('CUSTOMER_CREDIT_LIABILITY')).toEqual([]);
+    // The refund planner's own coverage, named rather than left implicit in the
+    // "every planner is moved" arm above.
+    expect(movedBy.get('POSTING_ACCOUNT')).toEqual([2, 3]);
   });
 
   it('MUTATION — the cross-module row validator CONSUMES the account rather than spelling it', async () => {
@@ -337,67 +492,110 @@ describe('P4-S5 §13 — every planner in the LIVE SET follows the canonical acc
     expect(code, 'the cross-module row validator must CONSUME the canonical account, not spell it').toBe('credit_note.posting_incomplete');
   });
 
-  it('MUTATION — the refund planner refuses in its OWN vocabulary when the role authority and the id authority disagree', async () => {
-    // This is the third planner's detection mechanism, and it is a different
-    // one on purpose. `refundLiabilityAccount` decides WHICH liability a source
-    // kind discharges and lives inside the domain package, so replacing the id
-    // table does not change its answer. The refund planner therefore CHECKS the
-    // answer against the canonical table and refuses when the two disagree —
-    // which is a deployment defect, 500, `registry_incomplete`, and never a
-    // merchant's mistake.
+  it('the refund planner is NOT given a compensating check, and the reason is recorded', async () => {
+    // A previous round added one here: it compared `refundLiabilityAccount`'s
+    // answer against the two `S5_ACCOUNT` members that function itself returns.
+    // Both authorities live in one module and the function reads the same
+    // frozen object the comparison reads, so the condition was `x !== A && x
+    // !== B` for `x` provably in `{A, B}` — always false in live code, and
+    // firing only under this file's own mock. It gave
+    // `customer_refund.registry_incomplete` a raise site that existed only
+    // under instrumentation, which is the `customer.aging_buckets_invalid`
+    // defect with a paragraph in the file denying it.
     //
-    // It is also what makes that code REACHABLE. Before this check it was
-    // declared in the status table and raised nowhere: a dead registry member.
-    vi.doUnmock(DOMAIN);
-    vi.resetModules();
-    const { settlement, observed } = await withMutatedMember('CUSTOMER_REFUND_LIABILITY');
-    expect(observed).toBe(MUTANT);
-    let code: string | null = null;
-    try {
-      settlement.planCustomerRefund({
-        source: refundSource('credit_note'),
-        consumedMinor: 1_000n,
-        sameCurrency: false,
-        disbursementAmountMinor: 900n,
-        disbursement: BASE,
-      });
-    } catch (e) {
-      code = ((e as { code?: unknown }).code as string) ?? null;
+    // This test asserts the DELETION, in both halves: the branch is gone from
+    // the live code, and the code it claimed to raise is now declared as OWED
+    // by an authority that is genuinely independent — the SQL chart of
+    // accounts, which is a different source and not a second read of the same
+    // object.
+    const settlementCode = codeWithCommentsBlanked(readSource('apps/api/src/modules/returns/returns-settlement.ts'));
+    expect(settlementCode, 'the tautological compensating check must not come back').not.toContain('registry_incomplete');
+    const errors = await import('../../apps/api/src/modules/returns/returns-errors');
+    const owed: Readonly<Record<string, string>> = errors.RETURNS_CODES_OWED_BY;
+    expect(Object.prototype.hasOwnProperty.call(owed, 'customer_refund.registry_incomplete')).toBe(true);
+    expect(owed['customer_refund.registry_incomplete']).toMatch(/level G/);
+    // And the lawful refund on either source kind still plans, so the deletion
+    // removed a refusal nobody could reach and nothing else.
+    const settlement: Settlement = await import('../../apps/api/src/modules/returns/returns-settlement');
+    for (const kind of ['credit_note', 'customer_credit'] as const) {
+      expect(() =>
+        settlement.planCustomerRefund({ source: refundSource(kind), consumedMinor: 1_000n, sameCurrency: false, disbursementAmountMinor: 900n, disbursement: BASE }),
+      ).not.toThrow();
     }
-    expect(code, 'a refund whose liability is not a member of the canonical account-id source must refuse as a registry defect').toBe(
-      'customer_refund.registry_incomplete',
-    );
   });
 });
 
 describe('P4-S5 §14 — no duplicate authority, no second mapping table, no dead member of the table', () => {
-  const read = (rel: string): string => readFileSync(join(__dirname, '../..', rel), 'utf8');
-  /** Source with every comment removed, so an audit of CODE is never satisfied by prose. */
-  const codeOnly = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  it('§14.0 — the two views of a source file actually work, so no scan below is vacuous', () => {
+    // A mis-copied blanker is the one failure that would make every scan in
+    // this file pass for every input, and nothing else would notice. So the
+    // blanker is exercised on a fixture whose answer is known by inspection.
+    const fixture = ["// a comment naming 'accounts_receivable'", "const a = 'fx_gain'; /* and 'cogs' in a block */", 'const b = `t ${x} t`;'].join('\n');
+    const kept = codeWithCommentsBlanked(fixture);
+    const prose = codeWithProseBlanked(fixture);
+    // Comments go in BOTH views.
+    expect(kept).not.toContain('accounts_receivable');
+    expect(kept).not.toContain('cogs');
+    expect(prose).not.toContain('accounts_receivable');
+    // A CODE string survives the comments-blanked view and not the prose view.
+    // This is the exact asymmetry §14.1 depends on, and the reason it uses the
+    // first view and §15's shape scan does too.
+    expect(kept).toContain("'fx_gain'");
+    expect(prose).not.toContain('fx_gain');
+    // The identifiers around the string survive both.
+    for (const view of [kept, prose]) expect(view).toContain('const a =');
+    // Length is preserved in both, so an index in one addresses the same
+    // character in the other.
+    expect(kept).toHaveLength(fixture.length);
+    expect(prose).toHaveLength(fixture.length);
+    // A template's `${…}` substitution is code and survives the prose view.
+    expect(prose).toContain('${x}');
+  });
 
-  it('§14.1 — NO ACCOUNT LITERAL survives in the two S5 modules, in code', () => {
-    // The semantic proof of this is the mutation matrix above; this assertion
-    // exists because a literal that happens to equal the canonical value today
-    // is invisible to a behavioural test until someone moves the canonical
-    // value, and catching it at the moment it is WRITTEN is cheaper than
-    // catching it at the moment it matters.
-    const modules = ['apps/api/src/modules/returns/returns-settlement.ts', 'apps/api/src/modules/returns/returns-ports.ts'];
-    for (const rel of modules) {
-      const code = codeOnly(read(rel));
-      // Non-vacuity: the stripper left the code, and the code DOES name
-      // accounts — through the canonical table.
-      expect(code, `${rel} must consume the canonical account-id source`).toContain('S5_ACCOUNT');
-      for (const id of ['sales_returns', 'accounts_receivable', 'customer_refund_liability', 'customer_credit_liability', 'inventory', 'cogs', 'fx_gain', 'fx_loss', 'posting_account']) {
-        // `'id'` as a VALUE. A property NAME (`fx_gain:`) is a key into the
-        // canonical table, not a second authority over the string, so the
-        // quoted form is what is forbidden.
-        expect(code.includes(`'${id}'`), `${rel} spells the account ${id} itself instead of taking it from S5_ACCOUNT`).toBe(false);
+  it('§14.1 — NO ACCOUNT LITERAL survives in ANY S5 module, in ANY quoting style', () => {
+    // S5-5's finding: the earlier version of this scan named two files and one
+    // quoting style. The file set is now DISCOVERED from the module directory,
+    // and all three JavaScript quoting styles are forbidden, because
+    // `"fx_gain"` and a backticked `fx_gain` are the same bypass as `'fx_gain'`.
+    //
+    // The semantic proof of consumption is §13's matrix. This exists because a
+    // literal that happens to EQUAL the canonical value today is invisible to a
+    // behavioural test until someone moves the canonical value, and catching it
+    // when it is written is cheaper than catching it when it matters.
+    const files = s5ModuleFiles();
+    // Non-vacuity: the discovery found the modules, including the two the old
+    // scan named.
+    expect(files.length).toBeGreaterThanOrEqual(4);
+    expect(files).toContain('apps/api/src/modules/returns/returns-settlement.ts');
+    expect(files).toContain('apps/api/src/modules/returns/returns-ports.ts');
+
+    const ids = ['sales_returns', 'accounts_receivable', 'customer_refund_liability', 'customer_credit_liability', 'inventory', 'cogs', 'fx_gain', 'fx_loss', 'posting_account'];
+    let consumers = 0;
+    for (const rel of files) {
+      // The COMMENTS-BLANKED view, and it must be that one. Every question in
+      // this describe is "does this STRING appear in code", so string bodies
+      // have to SURVIVE: under the prose-blanked view `'accounts_receivable'`
+      // is blanked to `'                  '` and the scan below would pass for
+      // every file whatever it contained. A draft of this file used the wrong
+      // view and was therefore vacuous; §14.0 exists so that cannot recur
+      // silently.
+      const code = codeWithCommentsBlanked(readSource(rel));
+      if (code.includes('S5_ACCOUNT')) consumers += 1;
+      for (const id of ids) {
+        for (const q of ["'", '"', '`']) {
+          // A quoted VALUE is forbidden. A property NAME (`fx_gain:`) is a key
+          // into the canonical table and not a second authority over the
+          // string, which is why only the quoted form is looked for.
+          expect(code.includes(`${q}${id}${q}`), `${rel} spells the account ${id} itself instead of taking it from S5_ACCOUNT`).toBe(false);
+        }
       }
     }
+    // And the scan is not passing because the modules name no accounts at all.
+    expect(consumers, 'no S5 module consumes the canonical account-id source — the scan above would then be vacuous').toBeGreaterThanOrEqual(2);
   });
 
   it('§14.2 — NO SECOND MAPPING TABLE: exactly one table in the slice maps an account vocabulary to S5 accounts', () => {
-    const code = codeOnly(read('apps/api/src/modules/returns/returns-settlement.ts'));
+    const code = codeWithCommentsBlanked(readSource('apps/api/src/modules/returns/returns-settlement.ts'));
     expect([...code.matchAll(/satisfies Record<ReceivableEntryLine\['account'\]/g)]).toHaveLength(1);
     expect([...code.matchAll(/satisfies Record<[^>]*EntryAccount[^>]*,\s*CreditNoteEntryAccount/g)]).toHaveLength(0);
   });
@@ -413,8 +611,16 @@ describe('P4-S5 §14 — no duplicate authority, no second mapping table, no dea
     const canonical: ReadonlySet<string> = new Set<string>(ids);
     for (const a of domain.REFUND_ENTRY_ACCOUNTS) expect(canonical.has(a), `${a} is in REFUND_ENTRY_ACCOUNTS but not in the canonical table`).toBe(true);
     for (const a of domain.CREDIT_NOTE_ENTRY_ACCOUNTS) expect(canonical.has(a), `${a} is in CREDIT_NOTE_ENTRY_ACCOUNTS but not in the canonical table`).toBe(true);
-    // And the ROLE authority's answers are members too, for both kinds — the
-    // agreement the refund planner checks at runtime, asserted here statically.
+    // The ROLE authority's answers are members too, for both kinds.
+    //
+    // **This is an agreement check and not an independence check, and the
+    // difference is the whole of S5-1.** `refundLiabilityAccount` reads the
+    // same object this assertion reads, so a disagreement here is impossible
+    // while both live in one module — which is why there is no runtime check of
+    // it in `planCustomerRefund` and why `customer_refund.registry_incomplete`
+    // is OWED rather than raised. A real independence check needs a second
+    // source, and the chart of accounts in the database is that source, at
+    // level G.
     expect(canonical.has(domain.refundLiabilityAccount('credit_note'))).toBe(true);
     expect(canonical.has(domain.refundLiabilityAccount('customer_credit'))).toBe(true);
     // The two roles still DISAGREE, which is why collapsing them was wrong.
@@ -426,95 +632,168 @@ describe('P4-S5 §14 — no duplicate authority, no second mapping table, no dea
     // detecting a coincidence. One line, and it is the premise of everything
     // above it.
     for (const rel of ['apps/api/src/modules/returns/returns-settlement.ts', 'apps/api/src/modules/returns/returns-ports.ts']) {
-      expect(codeOnly(read(rel))).toMatch(/import\s*\{[^}]*S5_ACCOUNT[^}]*\}\s*from\s*'@daftar\/domain-core'/);
+      expect(codeWithCommentsBlanked(readSource(rel))).toMatch(/import\s*\{[^}]*S5_ACCOUNT[^}]*\}\s*from\s*'@daftar\/domain-core'/);
     }
   });
 });
 
 describe('P4-S5 §15 — the refusal vocabulary has NO DEAD MEMBER either', () => {
   /**
-   * The same test the neighbouring module failed. `customer.aging_buckets_invalid`
-   * is declared in a status registry, thrown NOWHERE in the tree, and a
-   * docstring cited it as the check that justified a 500.
+   * The same test the neighbouring module failed, and that S5 then failed in
+   * its own way. `customer.aging_buckets_invalid` is declared in a status
+   * registry, thrown nowhere, and a docstring cited it as the check that
+   * justified a 500. S5's version was worse: a raise site whose condition could
+   * not be false, with a paragraph in the file asserting it made the code
+   * reachable.
    *
-   * The honest claim about this vocabulary is not that every code is live — the
-   * route handler and the SQL routines are owed at levels F and G and are not
-   * in the tree. It is that the vocabulary PARTITIONS: raised at a located site
-   * in live TypeScript, or listed in `RETURNS_CODES_OWED_BY` with the authority
-   * that will raise it NAMED. A code in neither set is dead; a code in both is
-   * a stale entry that will outlive its reason.
+   * The honest claim is not that every code is live — the route handler and the
+   * SQL routines are owed at levels F and G. It is that the vocabulary
+   * PARTITIONS: RAISED (a raise-shaped site in code, comments blanked), or OWED
+   * (listed in `RETURNS_CODES_OWED_BY` with its authority and level NAMED).
+   *
+   * **The classifier measures a raise SHAPE, not presence**, which is S5-4's
+   * finding. Three things it now rejects that raw-source presence accepted: a
+   * code named in a comment, a code named in a message or any other
+   * non-argument string, and a code named in a docstring that claims a check
+   * exists. What it still cannot see is whether a raise-shaped site's condition
+   * is REACHABLE — that is a semantic question, and the one place it mattered
+   * is settled by deleting the tautology rather than by teaching this scanner
+   * to find it.
    */
-  const read = (rel: string): string => readFileSync(join(__dirname, '../..', rel), 'utf8');
-
-  /**
-   * The live TypeScript of the slice, with the two DECLARATION regions removed —
-   * the `ReturnsRefusalCode` union and the `RETURNS_REFUSAL_CODES` list in the
-   * domain, and the status table itself. Declaring a code is not raising it, and
-   * a scan that counted declarations would pass vacuously for all of them.
-   */
-  const raiseSites = (): string => {
-    const domain = read('packages/domain-core/src/returns.ts');
-    const start = domain.indexOf('export type ReturnsRefusalCode =');
-    const listStart = domain.indexOf('export const RETURNS_REFUSAL_CODES');
-    const listEnd = domain.indexOf(']);', listStart);
-    expect(start, 'the declaration region must be locatable, or this scan is measuring nothing').toBeGreaterThan(0);
-    expect(listEnd).toBeGreaterThan(listStart);
-    const withoutDeclarations = domain.slice(0, start) + domain.slice(listEnd);
-    return (
-      withoutDeclarations +
-      read('apps/api/src/modules/returns/returns-settlement.ts') +
-      read('apps/api/src/modules/returns/returns-ports.ts') +
-      read('apps/api/src/modules/returns/returns-permissions.ts')
-    );
+  const RAISE_SHAPES = (code: string): readonly RegExp[] => {
+    const q = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return [
+      // Thrown directly: `refuse('code', …)`, `new ReturnsPlanError('code', …)`.
+      new RegExp(`refuse\\(\\s*'${q}'`),
+      new RegExp(`ReturnsPlanError\\(\\s*'${q}'`),
+      // RETURNED as a value by a domain refusal function — `return 'code'`,
+      // `=> 'code'`, and either arm of a conditional. The domain layer does not
+      // throw; it answers with a code and the caller refuses with it, so a
+      // scanner that only knew about `refuse(` would call most of this
+      // vocabulary dead.
+      new RegExp(`return\\s+'${q}'`),
+      new RegExp(`=>\\s*'${q}'`),
+      new RegExp(`\\?\\s*'${q}'`),
+      // A VALUE after a colon: the `{ code: 'x' }` result objects, and the
+      // translation map that turns a sibling slice's code into one of ours.
+      // The negative lookahead is what keeps a KEY from counting: the status
+      // table, the owed table and the type union all put the code on the left
+      // of a colon, and none of them raises anything.
+      new RegExp(`:\\s*'${q}'(?!\\s*:)`),
+    ];
   };
 
-  it('every declared code is EITHER raised in live code OR owed by a named authority — never neither, never both', async () => {
+  /**
+   * THE THIRD CATEGORY, and the one a shape scanner cannot have.
+   *
+   * Four codes are COMPOSED at runtime and appear nowhere as a literal:
+   * `returnsDateRefusal` returns `` `${domain}.date_invalid` `` and
+   * `` `${domain}.date_in_future` ``, so the only text in the tree is the
+   * suffix. A regex that accepted the suffix would accept a comment; a regex
+   * that demanded the whole code would call four live refusals dead.
+   *
+   * So these are not classified by shape at all. They are classified by
+   * CALLING the live function and collecting what it actually returns, which is
+   * a stronger statement than any of the shapes above: it proves the code is
+   * produced, not merely written. The input matrix is documented rather than
+   * minimal — two domains × two defects — so the set is derived from behaviour
+   * and not from a list someone has to maintain.
+   */
+  const composedCodes = async (): Promise<readonly string[]> => {
+    const domain: Domain = await import('@daftar/domain-core');
+    const out = new Set<string>();
+    for (const d of ['credit_note', 'customer_refund'] as const) {
+      // A malformed calendar date, and a document dated after the business's today.
+      for (const [documentDate, originDate, businessToday] of [
+        ['2026-13-45', '2026-01-01', '2026-03-04'],
+        ['2026-04-01', '2026-01-01', '2026-03-04'],
+      ] as const) {
+        const verdict = domain.returnsDateRefusal(d, documentDate, originDate, businessToday);
+        if (verdict !== null) out.add(verdict);
+      }
+    }
+    return [...out].sort();
+  };
+
+  /** The live TypeScript of the slice, comments blanked and string bodies KEPT. */
+  const liveCode = (): string =>
+    [`packages/domain-core/src/returns.ts`, ...s5ModuleFiles()].map((rel) => codeWithCommentsBlanked(readSource(rel))).join('\n');
+
+  it('the vocabulary partitions THREE ways — raise-shaped, composed-and-proved, or owed by a named authority — exhaustively and disjointly', async () => {
     const errors = await import('../../apps/api/src/modules/returns/returns-errors');
     const codes: readonly string[] = errors.RETURNS_CODES;
     const owed: Readonly<Record<string, string>> = errors.RETURNS_CODES_OWED_BY;
-    const sites = raiseSites();
-    // Non-vacuity of the scan: the declaration regions really were removed, so
-    // a code that is ONLY declared is not counted as raised.
+    const code = liveCode();
     expect(codes.length).toBeGreaterThan(30);
-    expect(sites).not.toContain('export const RETURNS_REFUSAL_CODES');
 
-    const raised = codes.filter((c) => sites.includes(`'${c}'`));
-    // The scan found raise sites at all — otherwise every code would fall to
-    // the owed table and the test would pass by collapsing.
+    const raised = codes.filter((c) => RAISE_SHAPES(c).some((re) => re.test(code)));
+    const composed = await composedCodes();
+    // Non-vacuity of both classifiers: the shape scan finds raise sites, and
+    // the composed arm really produced codes by calling the live function.
     expect(raised.length).toBeGreaterThan(10);
+    expect(composed.length).toBe(4);
+    // Every composed code is a declared code — the function cannot answer with
+    // something outside the vocabulary.
+    for (const c of composed) expect(codes.includes(c), `${c} was produced by a live refusal function but is not a declared code`).toBe(true);
+    // And the shape scan is STRICTER than presence, which is the point of the
+    // change: the declaration regions name every code and it counts none of
+    // them.
+    expect(raised.length).toBeLessThan(codes.length);
 
     for (const c of codes) {
       const isRaised = raised.includes(c);
+      const isComposed = composed.includes(c);
       const isOwed = Object.prototype.hasOwnProperty.call(owed, c);
-      expect(isRaised || isOwed, `${c} is declared in the status table and NOTHING raises it and NOBODY owes it — it is a dead config member`).toBe(true);
-      expect(isRaised && isOwed, `${c} is raised in live code AND still listed as owed — the owed entry is stale and must be removed`).toBe(false);
+      const where = [isRaised, isComposed, isOwed].filter(Boolean).length;
+      expect(
+        where,
+        `${c} is declared in the status table and NOTHING raises it, NOTHING composes it and NOBODY owes it — it is a dead config member`,
+      ).toBeGreaterThan(0);
+      expect(
+        where,
+        `${c} is in more than one category: a code that is raised or composed must not also be listed as owed, or the owed entry outlives its reason`,
+      ).toBe(1);
     }
-    // And the owed table names nothing outside the vocabulary.
     for (const c of Object.keys(owed)) expect(codes.includes(c), `${c} is owed by a named authority but is not a declared refusal code`).toBe(true);
-    // Each owed entry really NAMES an authority rather than carrying a placeholder.
     for (const [c, who] of Object.entries(owed)) {
       expect(who.length, `${c} is owed by nobody in particular`).toBeGreaterThan(20);
       expect(who, `${c} must name the level at which its authority is owed`).toMatch(/level [A-G]/);
     }
   });
 
+  it('RED PROOF — the classifier rejects a COMMENT-ONLY mention, which is how the previous version passed', () => {
+    // The subject is the real text of the real file. `returns-settlement.ts`
+    // names `customer_refund.registry_incomplete` twice in COMMENTS — the
+    // paragraph recording why its tautological check was deleted — and names it
+    // nowhere in code.
+    const settlement = readSource('apps/api/src/modules/returns/returns-settlement.ts');
+    const CODE = 'customer_refund.registry_incomplete';
+    // That the subject exists: the raw file really does mention it.
+    expect(settlement).toContain(CODE);
+    // That the two views really differ on this file, so the proof is not red
+    // for want of a subject.
+    expect(codeWithCommentsBlanked(settlement)).not.toContain(CODE);
+    // THE DETECTION, and the exact defect named: the old classifier asked
+    // whether the string was present and would have called this code raised
+    // from a comment alone; the new one asks for a raise shape and does not.
+    expect(settlement.includes(`'${CODE}'`), 'the raw-source classifier would have called this code RAISED from a comment').toBe(true);
+    expect(RAISE_SHAPES(CODE).some((re) => re.test(codeWithCommentsBlanked(settlement)))).toBe(false);
+  });
+
   it('RED PROOF — the partition check can FAIL: a code declared with no raiser and no owner is reported', async () => {
-    // The subject is REAL: `customer_refund.registry_incomplete` was exactly
-    // this until the refund planner's canonical-source check gave it a raise
-    // site, and `customer.aging_buckets_invalid` still is, one module over.
-    // Here the same predicate is run over a vocabulary with one invented
-    // member, to show the predicate is what reports it rather than the absence
-    // of a defect.
     const errors = await import('../../apps/api/src/modules/returns/returns-errors');
     const owed: Readonly<Record<string, string>> = errors.RETURNS_CODES_OWED_BY;
-    const sites = raiseSites();
+    const code = liveCode();
+    const composed = await composedCodes();
     const PLANTED = 'credit_note.aging_buckets_invalid';
-    // The plant is genuinely absent from the tree and from the owed table —
-    // otherwise this proof would be red for the wrong reason.
-    expect(sites).not.toContain(`'${PLANTED}'`);
+    // The plant is genuinely absent from all three categories, so this proof
+    // cannot be red for another reason.
+    expect(RAISE_SHAPES(PLANTED).some((re) => re.test(code))).toBe(false);
+    expect(composed.includes(PLANTED)).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(owed, PLANTED)).toBe(false);
     const verdict = [...errors.RETURNS_CODES, PLANTED].filter(
-      (c: string) => !sites.includes(`'${c}'`) && !Object.prototype.hasOwnProperty.call(owed, c),
+      (c: string) =>
+        !RAISE_SHAPES(c).some((re) => re.test(code)) && !composed.includes(c) && !Object.prototype.hasOwnProperty.call(owed, c),
     );
     // RESULT NON-EMPTY, and the EXACT intended defect named: the planted code
     // and nothing else.
@@ -526,13 +805,15 @@ describe('P4-S5 §15 — the refusal vocabulary has NO DEAD MEMBER either', () =
     // validator justified the 500. Two claims in this module's own comments are
     // held to their subjects here, because a comment is how a false belief
     // ships and nothing else in the tree would notice.
-    const errorsSource = read('apps/api/src/modules/returns/returns-errors.ts');
+    const errorsSource = readSource('apps/api/src/modules/returns/returns-errors.ts');
     // OD-03 is CLOSED for Phase 4. An earlier draft of this very file said
     // OPEN, which is the kind of stale claim this assertion exists to catch.
     expect(errorsSource).not.toMatch(/OD-03 is OPEN/);
     expect(errorsSource).toContain('OD-03 is CLOSED for Phase 4');
-    // And the one code the table describes as raised by the canonical-source
-    // check really is raised there.
-    expect(read('apps/api/src/modules/returns/returns-settlement.ts')).toContain("refuse('customer_refund.registry_incomplete'");
+    // And the claim that replaced the deleted one is held to ITS subject: the
+    // owed entry must name an authority that is not another read of
+    // `S5_ACCOUNT`. Asserted on the text of the entry, because that text is the
+    // claim.
+    expect(errorsSource).toMatch(/not a second read of S5_ACCOUNT \(level G\)/);
   });
 });

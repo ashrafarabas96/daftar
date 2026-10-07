@@ -324,24 +324,29 @@ export function planCustomerRefund(input: CustomerRefundInput): CustomerRefundPl
 
   // `refundLiabilityAccount` is the one authority over WHICH liability a source
   // kind discharges; `S5_ACCOUNT` is the one authority over how an account is
-  // SPELLED. This planner consumes both and spells nothing itself.
+  // SPELLED. This planner consumes both and spells neither itself.
   //
-  // The check below is not decoration and it is not a second mapping table: it
-  // is how this planner CONSUMES the canonical account-id source rather than
-  // trusting a string. If the role authority ever answers with an account the
-  // canonical source does not declare — a chart rename landed in one file and
-  // not the other, `PATCH-REQ-S5-008` applied by halves — the refund refuses
-  // instead of posting a debit to an account that is not in the chart.
+  // **There is deliberately NO check here that the answer is a member of
+  // `S5_ACCOUNT`, and the reason is worth recording because a previous round
+  // shipped one.** `refundLiabilityAccount` lives in the SAME module as
+  // `S5_ACCOUNT` and its whole body returns one of the two members the check
+  // would compare against, read through the same module-internal binding. The
+  // condition was therefore `x !== A && x !== B` for `x` provably in `{A, B}`:
+  // always false in any unmocked process, reachable only under a test that
+  // replaces one member while the real function closes over the real object.
   //
-  // It is `registry_incomplete` (500, ours) and not an amount refusal: no
-  // merchant input can reach it, and it is a deployment defect in exactly the
-  // sense that code is declared for. It is also what makes that code REACHABLE:
-  // a declared refusal nothing can raise is the dead registry member
-  // `customer.aging_buckets_invalid` turned out to be one module over.
+  // It was justified in this file as guarding "a chart rename landed in one
+  // file and not the other". There is no other file — both authorities sit in
+  // one ~70-line span — so there was no drift surface to guard, and the
+  // paragraph claiming the check made `customer_refund.registry_incomplete`
+  // REACHABLE was false. That is worse than a merely dead declared member: it
+  // is a dead member with a comment in the file asserting it is alive.
+  //
+  // `customer_refund.registry_incomplete` is therefore OWED rather than live,
+  // and `RETURNS_CODES_OWED_BY` in `returns-errors.ts` names the authority that
+  // will raise it — the SQL chart-of-accounts registry, level G — which is a
+  // genuinely independent source rather than the same object read twice.
   const liabilityAccount = refundLiabilityAccount(input.source.kind);
-  if (liabilityAccount !== S5_ACCOUNT.CUSTOMER_REFUND_LIABILITY && liabilityAccount !== S5_ACCOUNT.CUSTOMER_CREDIT_LIABILITY) {
-    refuse('customer_refund.registry_incomplete', 'a refund entry names only a liability the canonical account source declares');
-  }
   const lines: ReturnsEntryLine[] = [
     Object.freeze({
       account: liabilityAccount,

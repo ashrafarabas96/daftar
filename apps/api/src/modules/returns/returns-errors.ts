@@ -165,6 +165,11 @@ export type ReturnsCode = keyof typeof RETURNS_STATUS;
  * - raised at a located site in live TypeScript — the plan layer, the ports, or
  *   the `@daftar/domain-core` refusal helpers;
  * - listed HERE, with the authority that will raise it NAMED.
+
+ * A raise site counts only when it is RAISE-SHAPED in code with comments
+ * blanked: a code named in a comment is not raised, and neither is a code whose
+ * only "raise site" is a condition that cannot be false. This table's own last
+ * entry is there because one of them was.
  *
  * `tests/guards/p4s5-account-authority-mutation.test.ts` asserts the partition
  * is exhaustive and disjoint: a code in NEITHER set fails, and a code in BOTH
@@ -195,6 +200,20 @@ export const RETURNS_CODES_OWED_BY: Readonly<Record<string, string>> = Object.fr
   'customer_refund.source_changed': 'the refund command handler, when the locked source remaining differs from the one the caller was shown (level F)',
   'customer_refund.reference_required': 'the refund command handler, on a disbursement method whose payment method requires a reference (level F)',
   'customer_refund.not_found': 'the refund read and command handlers, on a tenant-scoped miss (level F)',
+  // The thirteenth, and the one with a history. A previous round gave this code
+  // a raise site in `planCustomerRefund` that compared `refundLiabilityAccount`'s
+  // answer against the two `S5_ACCOUNT` members the function itself returns —
+  // the same frozen object read twice, through one module-internal binding. The
+  // condition was always false in live code and fired only under a test that
+  // mocked one member, so the code was dead and the file said it was not.
+  //
+  // A genuine second authority over which accounts exist is the chart of
+  // accounts in the DATABASE, not another read of the same TypeScript object.
+  // That is level G, where the registry is queryable and a disagreement between
+  // the chart and this slice's account vocabulary is a real, observable
+  // deployment defect rather than a tautology.
+  'customer_refund.registry_incomplete':
+    'the SQL chart-of-accounts registry check, when a declared S5 account is absent from the chart — a genuinely independent authority, not a second read of S5_ACCOUNT (level G)',
 });
 
 /**

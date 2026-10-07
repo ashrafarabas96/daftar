@@ -526,17 +526,35 @@ it rebuilds the module graph and a reset graph is not a per-test concern:
   identically under all nine mutations is holding a literal, which is the only way that
   happens). Each row records that the member was really replaced, read back from the module
   graph the planners were loaded from;
-- **the pairings the ruling argued about, asserted by index**: 2200 moves the application, the
-  return entry AND the refund drawn on a credit note — the three laws that were three equal
-  literals, now all following one source — while 2210 moves ONLY the refund drawn on a customer
-  credit. The two roles agree on one source kind and DISAGREE on the other, which is why "make
-  all three literals equal" was the wrong repair;
-- **the third planner's own mechanism**: `refundLiabilityAccount` lives inside the domain
-  package, so replacing the id table does not change its answer. `planCustomerRefund` therefore
-  CHECKS the role authority's answer against the canonical table and refuses
-  `customer_refund.registry_incomplete` (500, ours) when the two disagree. That is detection for
-  the refund planner, and it is also what makes that code REACHABLE — before it, the code was
-  declared in the status table and raised nowhere;
+- **the pairings, asserted by index and at the strength the lever actually has** — which is less
+  than an earlier draft of this section claimed. 2200 moves the application and the return entry:
+  two of the three laws that were three equal literals, and the two whose account-id reads cross
+  the module boundary. The third, the refund drawn on a credit note, takes its liability from
+  `refundLiabilityAccount` INSIDE the declaring module, so this lever cannot move it; the matrix
+  covers that planner through `POSTING_ACCOUNT` and `FX_GAIN` instead, which proves it consumes
+  the canonical source without pretending to prove it at the liability line;
+- **one member is classified DOMAIN-INTERNAL, and the classification is checked both ways.**
+  `CUSTOMER_CREDIT_LIABILITY` has exactly one consumer, `refundLiabilityAccount`, inside the
+  declaring module, so no mock of that module's exports can move it. The suite asserts it moves
+  NOTHING — if it ever moves something, a real cross-module reader has appeared and the
+  classification is stale — and proves it instead by value: the live refund on a customer credit
+  debits that canonical member and not the other. **That is an agreement check, not an
+  independence check, and the suite says so.** Inside one module there is no drift surface, which
+  is exactly why the compensating runtime check a previous round shipped here was a tautology;
+
+**What was DELETED, and why it was worse than the defect it claimed to fix.** Round 3 added a
+check in `planCustomerRefund` comparing `refundLiabilityAccount`'s answer against the two
+`S5_ACCOUNT` members that function itself returns — the same frozen object read twice through one
+module-internal binding. The condition was `x !== A && x !== B` for `x` provably in `{A, B}`:
+always false in live code, firing only under this suite's own mock. It was justified in the file
+as guarding "a chart rename landed in one file and not the other" — there is no other file — and
+the paragraph claimed it made `customer_refund.registry_incomplete` REACHABLE. It did not. A dead
+declared member with a comment asserting it is alive is strictly worse than a merely dead one,
+because the justification names a mechanism that was never there and therefore cannot notice its
+absence. The branch and the paragraph are gone; the code is now OWED, by the SQL chart-of-accounts
+registry at level G, which is a genuinely independent authority rather than a second read of the
+same object. Deriving the membership set from a different TypeScript source was considered and
+rejected: it is new architecture to make one 500 reachable, and §14 forbids that;
 - **§14, stated structurally**: no account literal in code in either module (over
   comment-stripped source, so prose cannot satisfy it); exactly ONE map takes an account
   vocabulary to S5 accounts; the canonical table declares each id exactly once and both closed
@@ -547,14 +565,41 @@ it rebuilds the module graph and a reset graph is not a per-test concern:
 
 A neighbouring module has just been bitten by the inverse: `customer.aging_buckets_invalid` is
 declared in a status registry, thrown NOWHERE in the tree, and a docstring cited it as the check
-that justified a 500. The honest claim about S5's vocabulary is not that every code is live — the
-route handler and the SQL routines are owed at levels F and G — but that it PARTITIONS: raised at
-a located site in live TypeScript, or listed in `RETURNS_CODES_OWED_BY` with the authority that
-will raise it NAMED and its level given. The suite asserts the partition is exhaustive (a code in
-neither set fails) and disjoint (a code in both is a stale entry), over a scan with the two
-DECLARATION regions removed, because declaring a code is not raising it. Twelve codes are owed;
-`customer_refund.registry_incomplete` was the thirteenth until the canonical-source check gave it
-a raise site.
+that justified a 500. S5 then reproduced it in a worse form — see the deletion recorded in §5.1d.
+
+The honest claim about S5's vocabulary is not that every code is live — the route handler and the
+SQL routines are owed at levels F and G. It is that the vocabulary PARTITIONS **three ways**, and
+the suite asserts the partition is exhaustive and PAIRWISE DISJOINT (every code in exactly one
+category, so an owed entry cannot outlive its reason):
+
+1. **RAISED (24 codes)** — a RAISE-SHAPED site in code: thrown through `refuse(` or
+   `new ReturnsPlanError(`, or RETURNED as a value by a domain refusal function (`return 'x'`,
+   `=> 'x'`, either arm of a conditional, a value after a colon). The domain layer does not throw;
+   it answers with a code and the caller refuses with it, so a scanner that knew only `refuse(`
+   would call most of this vocabulary dead. A negative lookahead keeps a KEY from counting: the
+   status table, the owed table and the type union all put the code to the LEFT of a colon and
+   none of them raises anything.
+2. **COMPOSED AND PROVED (4 codes)** — `returnsDateRefusal` returns `` `${domain}.date_invalid` ``
+   and `` `${domain}.date_in_future` ``, so the only text in the tree is the suffix. A regex that
+   accepted the suffix would accept a comment; one that demanded the whole code would call four
+   live refusals dead. These are classified by CALLING the live function over a documented input
+   matrix and collecting what it returns — a stronger statement than any shape, because it proves
+   the code is PRODUCED and not merely written.
+3. **OWED (13 codes)** — listed in `RETURNS_CODES_OWED_BY` with the authority NAMED and its level
+   given.
+
+**The classifier measures a raise SHAPE and not presence**, which closes the hole the challenger
+found: the previous version scanned RAW source, so a code named only in a COMMENT counted as
+raised — and that is precisely how `customer_refund.registry_incomplete` came to be reported as
+closed. Both views of a source file (comments blanked keeping strings, and prose blanked) are the
+gate engineer's own `stripCommentsKeepStrings` / `stripProse` pair, reimplemented locally because
+that module is not on this branch, and §14.0 exercises the blanker on a fixture whose answer is
+known by inspection — a mis-copied blanker is the one failure that would make every scan in the
+file pass for every input.
+
+What the classifier still cannot see is whether a raise-shaped site's condition is REACHABLE. That
+is a semantic question, and the one place it mattered is settled by deleting the tautology rather
+than by teaching a scanner to find it.
 
 ### 5.2 The journal shapes
 
