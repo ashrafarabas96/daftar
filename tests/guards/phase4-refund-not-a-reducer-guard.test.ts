@@ -70,9 +70,12 @@ import {
   deferredSeamProblems,
   invoiceReducerProblems,
   phase4Migrations,
+  phase4RoutineBodies,
   phase4RoutineBody,
   phase4Sql,
   readTables,
+  routineDefinitionCountIn,
+  routineSignature,
   stripSql,
 } from '../../scripts/phase4-s1-gate';
 
@@ -154,7 +157,14 @@ describe('§A the law has a subject, and the tree satisfies it for a reason', ()
   it('the tree as it stands is silent, and the silence is a judgement over real receivable readers', () => {
     const readers = receivableReaders(REPO);
     expect(readers.length, 'the Phase 4 DDL defines no receivable reader, so this law would have no subject').toBeGreaterThan(0);
-    for (const name of readers) expect(phase4RoutineBody(REPO, name), `${name} has a body the law can read`).not.toBeNull();
+    // EVERY definition, not the last one: a name can carry several live
+    // signatures, and a reader whose last definition is readable while another
+    // of its forms is not is a reader this law has not been applied to (§H).
+    for (const name of readers) {
+      const definitions = phase4RoutineBodies(REPO, name);
+      expect(definitions.length, `${name} has a body the law can read`).toBeGreaterThan(0);
+      expect(routineDefinitionCountIn(phase4Sql(REPO), name), `${name} has a definition this law cannot read`).toBe(definitions.length);
+    }
     expect(invoiceReducerProblems(REPO)).toEqual([]);
   });
 
@@ -165,9 +175,17 @@ describe('§A the law has a subject, and the tree satisfies it for a reason', ()
     const reducers = reducerRelations(REPO);
     expect(reducers.length, 'the tree creates no reducer at all, so the paired claim would be vacuous').toBeGreaterThan(0);
     expect(deferredSeamProblems(REPO)).toEqual([]);
+    // THE TWO HALVES HAVE DIFFERENT SUBJECTS, which is the whole of §H. The
+    // POSITIVE half is about the live definition that holds the arithmetic —
+    // the set-based form, which is the last definition of the name — and the
+    // NEGATIVE half is about EVERY definition, because an absence claim over a
+    // set of definitions is true only if it holds for each of them.
     const executable = phase4RoutineBody(REPO, 'invoice_outstanding') ?? '';
     for (const name of reducers) expect(new RegExp(`\\b${name}\\b`).test(executable), `invoice_outstanding reads ${name}`).toBe(true);
-    expect(mentionsRefundRelation(executable), 'and reads no refund relation').toBe(false);
+    const definitions = phase4RoutineBodies(REPO, 'invoice_outstanding');
+    expect(definitions.length, 'the name carries more than one definition, so the negative half has more than one subject').toBeGreaterThan(1);
+    for (const [index, def] of definitions.entries())
+      expect(mentionsRefundRelation(def), `definition ${index + 1} of invoice_outstanding reads no refund relation`).toBe(false);
   });
 
   it('a tree with no Phase 4 DDL is silent, and a tree with DDL but no receivable reader is NOT', () => {
@@ -415,7 +433,10 @@ describe('§C the planted defects — direction C of TL-P4-S5-R1', () => {
     expect(out).toContain('a.id = p_id');
     // And the bodies the law reads really do arrive prose-free, which is the
     // precondition it asserts for itself rather than assuming.
-    for (const name of receivableReaders(REPO)) expect(phase4RoutineBody(REPO, name) ?? '').not.toMatch(/--|\/\*/);
+    // Over EVERY definition of every reader: "no comment marker survives" is
+    // an absence claim, and the last definition of a name is not the only one
+    // the law reads (§H).
+    for (const name of receivableReaders(REPO)) for (const def of phase4RoutineBodies(REPO, name)) expect(def).not.toMatch(/--|\/\*/);
   });
 
   it('RED C: if the prose stripping stops being in force, the law reports THAT instead of reading a sentence as SQL', () => {
@@ -566,10 +587,14 @@ describe('§E a literal containing a comment marker no longer amputates the line
   it('E4: the real tree is unchanged in the one way that matters — every reader still arrives prose-free and refund-free', () => {
     // The device changed for every check in the gate, so the property
     // TL-P4-S5-R1 stands on is re-asserted against the real tree under it.
+    // Both claims are ABSENCE claims, so both are over every definition (§H).
     for (const name of receivableReaders(REPO)) {
-      const body = phase4RoutineBody(REPO, name) ?? '';
-      expect(body, `${name} arrives with no comment marker`).not.toMatch(/--|\/\*/);
-      expect(mentionsRefundRelation(body), `${name} reads no refund relation`).toBe(false);
+      const definitions = phase4RoutineBodies(REPO, name);
+      expect(definitions.length, `${name} has no readable definition`).toBeGreaterThan(0);
+      for (const [index, body] of definitions.entries()) {
+        expect(body, `${name} definition ${index + 1} arrives with no comment marker`).not.toMatch(/--|\/\*/);
+        expect(mentionsRefundRelation(body), `${name} definition ${index + 1} reads no refund relation`).toBe(false);
+      }
     }
     expect(invoiceReducerProblems(REPO)).toEqual([]);
   });
@@ -681,14 +706,20 @@ $fn$;
       .sort();
     expect(readers, 'the tree defines no receivable reader, so this check has no subject').not.toEqual([]);
     for (const name of readers) {
-      const body = phase4RoutineBody(REPO, name);
-      expect(body, `${name} is no longer readable`).not.toBeNull();
-      // The body is the routine it claims to be, and it ends where its own
-      // opening tag closes rather than at some later routine's.
-      expect(body).toContain(name);
-      const tag = /AS\s+(\$[a-z_]*\$)/i.exec(body ?? '')?.[1];
-      expect(tag, `${name}: no dollar-quote opening found in the body read`).toBeTruthy();
-      expect(body?.endsWith(`${tag};`), `${name}: the body does not end at its own closing tag ${tag}`).toBe(true);
+      // EVERY definition, not the last one: the repair has to hold for each
+      // body the law now reads, and a name with several live signatures has
+      // several of them (§H).
+      const definitions = phase4RoutineBodies(REPO, name);
+      expect(definitions.length, `${name} is no longer readable`).toBeGreaterThan(0);
+      expect(routineDefinitionCountIn(phase4Sql(REPO), name), `${name} carries a definition the device cannot read`).toBe(definitions.length);
+      for (const [index, body] of definitions.entries()) {
+        // The body is the routine it claims to be, and it ends where its own
+        // opening tag closes rather than at some later routine's.
+        expect(body).toContain(name);
+        const tag = /AS\s+(\$[a-z0-9_]*\$)/i.exec(body)?.[1];
+        expect(tag, `${name} definition ${index + 1}: no dollar-quote opening found in the body read`).toBeTruthy();
+        expect(body.endsWith(`${tag};`), `${name} definition ${index + 1}: the body does not end at its own closing tag ${tag}`).toBe(true);
+      }
     }
     expect(invoiceReducerProblems(REPO)).toEqual([]);
   });
@@ -805,11 +836,12 @@ $pick$;
       'invoice_outstanding',
       'invoice_settlement_state',
     ]);
-    const dependent = defined.filter((n) => {
-      if (family.includes(n)) return false;
-      const body = phase4RoutineBody(REPO, n);
-      return body !== null && family.some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body));
-    });
+    // The gate discovers over EVERY definition, so this mirror of its
+    // discovery does too: a call written into one overload and not another is
+    // still a call (§H).
+    const dependent = defined.filter(
+      (n) => !family.includes(n) && phase4RoutineBodies(REPO, n).some((body) => family.some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body))),
+    );
     // NOT an inventory, and the correction is measured rather than argued:
     // a literal list here is a closure rule a later slice must append to
     // (P4-AL-88), and `0084` proved it the first time it landed —
@@ -824,18 +856,24 @@ $pick$;
     expect(dependent.length, 'the dependency discovery found no subject at all, so it is no wider than the name match').toBeGreaterThan(0);
     for (const name of dependent) {
       expect(RECEIVABLE_READER_VOCABULARY.test(name), `${name} is in the set BY DEPENDENCY, so its name must not have matched the vocabulary`).toBe(false);
-      const body = phase4RoutineBody(REPO, name);
-      expect(body, `${name} has a body this law can read`).not.toBeNull();
+      const definitions = phase4RoutineBodies(REPO, name);
+      expect(definitions.length, `${name} has a body this law can read`).toBeGreaterThan(0);
       expect(
-        family.some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body ?? '')),
+        definitions.some((body) => family.some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body))),
         `${name} is a subject only because it calls a family member, and it must genuinely do so`,
       ).toBe(true);
     }
-    // Every Phase 4 routine's body is readable, which is what makes the
-    // "unclassifiable subject" branch a report of an ANOMALY and not noise.
+    // EVERY DEFINITION of every Phase 4 routine is readable, which is what
+    // makes the "unclassifiable subject" branch a report of an ANOMALY and not
+    // noise — and `routineDefinitionCountIn` is what makes that a claim about
+    // all of them rather than about the last one of each (§H).
     expect(
-      defined.filter((n) => phase4RoutineBody(REPO, n) === null),
+      defined.filter((n) => phase4RoutineBodies(REPO, n).length === 0),
       'a Phase 4 routine body this gate cannot read',
+    ).toEqual([]);
+    expect(
+      defined.filter((n) => routineDefinitionCountIn(phase4Sql(REPO), n) !== phase4RoutineBodies(REPO, n).length),
+      'a Phase 4 routine with a definition this gate cannot read beside ones it can',
     ).toEqual([]);
     expect(invoiceReducerProblems(REPO)).toEqual([]);
   });
@@ -868,5 +906,168 @@ $sh$;
     const problems = invoiceReducerProblems(root);
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('invoice_outstanding_shadow');
+  });
+});
+
+/**
+ * §H A ROUTINE NAME IS NOT A SIGNATURE — the overload hole, and the negative
+ * law moved onto EVERY definition.
+ *
+ * MEASURED HOLE, closed here. `phase4RoutineBody` matches
+ * `CREATE [OR REPLACE] FUNCTION <name> (` on the NAME ALONE and returns the
+ * LAST textual match in the whole Phase 4 DDL. `invoice_outstanding` carries
+ * TWO LIVE SIGNATURES — the scalar `(UUID, UUID)` last written at `0084:526`
+ * and the set-based `(UUID, UUID[])` last written at `0084:593` — and because
+ * `:593` comes last in file order the scalar form was judged by NOTHING. A
+ * refund subtraction written into it alone produced ZERO findings from
+ * `invoiceReducerProblems`, measured against the unfixed device.
+ *
+ * The scalar form is a pure DELEGATING WRAPPER, which is exactly what made it
+ * the ideal hiding place: every reader's mental model of it is "it only
+ * delegates", so nobody looks. An ABSENCE CLAIM over a set of definitions is
+ * true only if it holds for EVERY definition — there is no delegation escape
+ * from a negative law — so this law now reads `phase4RoutineBodies`.
+ *
+ * H1 asserts BOTH halves in one test: the signature-blind reader still cannot
+ * see the plant, and the law does.
+ */
+describe('§H the negative law judges EVERY definition of a name, never only the last', () => {
+  /** The scalar wrapper as `0084:526` writes it, with its `RETURN QUERY` body supplied. */
+  const scalarWrapper = (body: string): string => `
+CREATE OR REPLACE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_id UUID)
+RETURNS TABLE (paid_txn_minor BIGINT, paid_base_minor BIGINT, outstanding_txn_minor BIGINT, outstanding_base_minor BIGINT)
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $sc$
+BEGIN
+  RETURN QUERY
+${body}
+END;
+$sc$;
+`;
+
+  /** What the real wrapper does: it delegates and holds no arithmetic. */
+  const DELEGATING = `    SELECT o.paid_txn_minor, o.paid_base_minor, o.outstanding_txn_minor, o.outstanding_base_minor
+      FROM public.invoice_outstanding(p_business_id, ARRAY[p_invoice_id]) o;`;
+
+  /** The same wrapper with the SECOND REDUCTION P4-AL-34 forbids written into it, and nothing else changed. */
+  const DELEGATING_LESS_REFUNDS = `    SELECT o.paid_txn_minor, o.paid_base_minor,
+           o.outstanding_txn_minor - coalesce((SELECT pg_catalog.sum(f.amount_txn_minor) FROM public.refunds f WHERE f.business_id = p_business_id), 0)::BIGINT,
+           o.outstanding_base_minor
+      FROM public.invoice_outstanding(p_business_id, ARRAY[p_invoice_id]) o;`;
+
+  /**
+   * The array form, LAST in every plant below exactly as `0084:510-520`
+   * arranges the real file, reading every reducer the TREE creates —
+   * DISCOVERED, so no relation name is written here.
+   */
+  const arrayForm = (extra = ''): string => `
+CREATE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_ids UUID[])
+RETURNS TABLE (invoice_id UUID, paid_txn_minor BIGINT, paid_base_minor BIGINT,
+               outstanding_txn_minor BIGINT, outstanding_base_minor BIGINT,
+               currency_code TEXT, due_date DATE)
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $ar$
+BEGIN
+  RETURN QUERY
+    SELECT i.id, 0::BIGINT, 0::BIGINT, i.total_txn_minor, i.total_base_minor, i.currency_code::TEXT, i.due_date
+      FROM public.invoices i
+${[...new Set(reducerRelations(REPO))].map((n) => `      LEFT JOIN public.${n} ${n}_r ON ${n}_r.invoice_id = i.id`).join('\n')}
+${extra}     WHERE i.business_id = p_business_id AND i.id = ANY(p_invoice_ids);
+END;
+$ar$;
+`;
+
+  /** How many definitions of the name the real tree already carries, so no plant pins a count the tree may grow past. */
+  const BASE = phase4RoutineBodies(REPO, 'invoice_outstanding').length;
+
+  it('H0 non-vacuity: the name really does carry more than one definition, and the scalar form is NOT the last of them', () => {
+    const defs = phase4RoutineBodies(REPO, 'invoice_outstanding');
+    expect(defs.length, 'invoice_outstanding has one definition, so every arm below would pass for want of a subject').toBeGreaterThan(1);
+    const signatures = defs.map((d) => routineSignature(d, 'invoice_outstanding'));
+    expect([...new Set(signatures)].sort(), 'the two live signatures of the reader-of-record').toEqual(['uuid,uuid', 'uuid,uuid[]']);
+    // THE PRECONDITION OF THE WHOLE HOLE: the scalar form is the last
+    // definition of its OWN signature and not the last definition of the NAME,
+    // so the signature-blind reader never reaches it.
+    expect(signatures[signatures.length - 1], 'the last definition of the name is the array form').toBe('uuid,uuid[]');
+    expect(signatures.lastIndexOf('uuid,uuid'), 'and a scalar definition comes before it').toBeGreaterThanOrEqual(0);
+    expect(routineSignature(phase4RoutineBody(REPO, 'invoice_outstanding') ?? '', 'invoice_outstanding')).toBe('uuid,uuid[]');
+    // The definition COUNT and the bodies READ agree, so none of the tree's
+    // definitions is silently missing from the law's subjects.
+    expect(routineDefinitionCountIn(phase4Sql(REPO), 'invoice_outstanding')).toBe(defs.length);
+    for (const [index, def] of defs.entries()) expect(mentionsRefundRelation(def), `definition ${index + 1} reads no refund relation`).toBe(false);
+    // And the widening is not confined to one name: a receivable reader with
+    // several definitions is now judged on each of them.
+    const several = receivableReaders(REPO).filter((n) => phase4RoutineBodies(REPO, n).length > 1);
+    expect(several.length, 'no receivable reader carries more than one definition, so the widening has no subject').toBeGreaterThan(0);
+    expect(invoiceReducerProblems(REPO)).toEqual([]);
+  });
+
+  it('RED H1 — THE HEADLINE: a refund subtraction in the SCALAR WRAPPER ALONE is found, and the last-definition reader still cannot see it', () => {
+    const root = rootWith(`${REFUNDS}${scalarWrapper(DELEGATING_LESS_REFUNDS)}${arrayForm()}`, '9999_planted_overload.sql');
+    const defs = phase4RoutineBodies(root, 'invoice_outstanding');
+    expect(defs, 'the plant adds one definition of each live signature').toHaveLength(BASE + 2);
+    expect(routineSignature(defs[defs.length - 1] ?? '', 'invoice_outstanding'), 'the array form is last, as the real file arranges it').toBe('uuid,uuid[]');
+    // HALF ONE — THE HOLE, ASSERTED. The signature-blind reader returns the
+    // clean array form, so a law reading through it is silent on this plant.
+    // That is the measurement, not a description of one: if this ever starts
+    // mentioning a refund, the two readers have been confused for each other.
+    expect(mentionsRefundRelation(phase4RoutineBody(root, 'invoice_outstanding') ?? ''), 'the LAST definition of the name is clean').toBe(false);
+    // HALF TWO — the law sees it anyway, because it judges every definition.
+    const problems = invoiceReducerProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('TL-P4-S5-R1');
+    expect(problems[0]).toContain('invoice_outstanding');
+    expect(problems[0]).toContain('refunds');
+    expect(problems[0], 'the finding names WHICH definition, so the fix is not a hunt').toContain('uuid,uuid');
+  });
+
+  it('RED H2 — THE MIRROR: a refund subtraction in the ARRAY form alone is still found, so no hole was traded for the other', () => {
+    const root = rootWith(
+      `${REFUNDS}${scalarWrapper(DELEGATING)}${arrayForm('      LEFT JOIN public.refunds f ON f.business_id = i.business_id\n')}`,
+      '9999_planted_mirror.sql',
+    );
+    const problems = invoiceReducerProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('refunds');
+    expect(problems[0]).toContain('uuid,uuid[]');
+  });
+
+  it('RED H3: a THIRD overload is judged too — the law is about the definition SET, not about two known signatures', () => {
+    const third = `
+CREATE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_id UUID, p_as_of DATE)
+RETURNS BIGINT
+LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $th$
+  SELECT coalesce((SELECT o.outstanding_txn_minor FROM public.invoice_outstanding(p_business_id, p_invoice_id) o), 0)::BIGINT
+       - coalesce((SELECT pg_catalog.sum(f.amount_txn_minor) FROM public.refunds f WHERE f.business_id = p_business_id), 0)::BIGINT;
+$th$;
+`;
+    const root = rootWith(`${REFUNDS}${scalarWrapper(DELEGATING)}${third}${arrayForm()}`, '9999_planted_third.sql');
+    expect(phase4RoutineBodies(root, 'invoice_outstanding')).toHaveLength(BASE + 3);
+    const problems = invoiceReducerProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('refunds');
+    expect(problems[0], 'the third signature is named, so it was really the subject').toContain('uuid,uuid,date');
+  });
+
+  it('H4: a definition this gate cannot read is reported even when its SIBLINGS can be read', () => {
+    // The vacuous pass the all-definitions reader could still have bought: a
+    // name whose last definition is readable and clean, carrying one further
+    // definition the device cannot read at all. Counting the `CREATE`
+    // statements and comparing is what refuses it.
+    const unreadable = `
+CREATE OR REPLACE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_id UUID)
+RETURNS BIGINT
+LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp
+AS 'SELECT 0::BIGINT';
+`;
+    const root = rootWith(`${REFUNDS}${unreadable}${arrayForm()}`, '9999_planted_unreadable_sibling.sql');
+    const sql = phase4Sql(root);
+    expect(
+      routineDefinitionCountIn(sql, 'invoice_outstanding') - phase4RoutineBodies(root, 'invoice_outstanding').length,
+      'the plant really does leave one definition unreadable',
+    ).toBe(1);
+    expect(phase4RoutineBody(root, 'invoice_outstanding'), 'and the LAST definition is perfectly readable').not.toBeNull();
+    const problems = invoiceReducerProblems(root);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('invoice_outstanding');
+    expect(problems[0]).toContain('an unreadable subject is not a pass');
   });
 });

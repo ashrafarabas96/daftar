@@ -1170,31 +1170,180 @@ function phase4Creates(root: string, name: string): boolean {
 }
 
 /**
- * The body of a Phase 4 routine, from its CREATE to the closing dollar-quote.
+ * The regular expression ONE Phase 4 routine definition is read with: from a
+ * `CREATE [OR REPLACE] FUNCTION <name> (` to the close of the dollar-quote
+ * that definition opens. ONE device, so the "last definition" reader, the
+ * "every definition" reader and the definition COUNT can never disagree about
+ * what a definition is.
  *
- * The LAST definition, not the first: a later `CREATE OR REPLACE` is what the
- * database ends up holding, so reading the first one would judge a slice by
- * the routine it replaced. The first draft of this helper took the first
- * match and reported a correctly-replaced routine as still missing its
- * relations.
+ * The dollar-quote TAG is captured and the close must repeat it. Reading to
+ * the first `$$;` instead was a hole, measured under TL-P4-S5-R1: this tree
+ * already dollar-quotes with `$coll$`, `$end$`, `$pre$`, `$post$` and
+ * `$proof$`, so a routine written `AS $fn$ … $fn$;` was simply NOT FOUND, and
+ * every law that reads a body through this device went silent on it. A planted
+ * `invoice_outstanding`-family reader subtracting `public.refunds` inside a
+ * `$fn$` body produced zero findings. On a financial law a body this device
+ * cannot read must never look like a body with nothing in it.
+ *
+ * The tag class admits DIGITS. It did not, so `AS $v2$ … $v2$;` — the obvious
+ * spelling for a second version of a routine — was unreadable by exactly the
+ * same mechanism the paragraph above describes.
+ */
+const routineDefinitionPattern = (name: string): RegExp =>
+  new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\([\\s\\S]*?(\\$[a-z0-9_]*\\$)[\\s\\S]*?\\1;`, 'gi');
+
+/**
+ * How many `CREATE … FUNCTION <name> (` statements `sql` carries, whether or
+ * not their bodies can be read. Compared against the bodies actually read, it
+ * is how a definition this gate CANNOT read is told apart from a definition
+ * that is not there — the difference between a subject and a vacuous pass.
+ */
+export const routineDefinitionCountIn = (sql: string, name: string): number =>
+  [...sql.matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\(`, 'gi'))].length;
+
+/** Every definition of `name` in `sql`, in file order. */
+export const routineBodiesIn = (sql: string, name: string): string[] => [...sql.matchAll(routineDefinitionPattern(name))].map((m) => m[0]);
+
+/**
+ * EVERY Phase 4 definition of `name`, in file order — the reader every
+ * NEGATIVE law must use.
+ *
+ * A ROUTINE NAME IS NOT A SIGNATURE. PostgreSQL overloads on the parameter
+ * list, so one name carries as many LIVE routines as it has distinct
+ * signatures. `invoice_outstanding` carries TWO: the scalar `(UUID, UUID)`,
+ * last written at `0084:526`, and the set-based `(UUID, UUID[])`, last written
+ * at `0084:593`. `phase4RoutineBody` below returns only the LAST textual
+ * match, so until TL-P4-S5-R1 every law that read a body through it judged the
+ * array form and judged the scalar form by NOTHING.
+ *
+ * MEASURED, not reasoned about: a refund subtraction planted into the scalar
+ * wrapper alone — array form left clean and last, exactly as `0084:510-520`
+ * arranges the real file — produced ZERO findings from
+ * `invoiceReducerProblems` and ZERO from seam S-P4-03. The same subtraction in
+ * the array form produced the finding at once. The scalar form is a pure
+ * delegating wrapper, which makes it the ideal hiding place: every reader's
+ * mental model of it is "it only delegates".
+ *
+ * An ABSENCE CLAIM over a set of definitions is true only if it holds for
+ * EVERY definition. There is no delegation escape from a negative law.
+ */
+export function phase4RoutineBodies(root: string, name: string): string[] {
+  return routineBodiesIn(phase4Sql(root), name);
+}
+
+/**
+ * The LAST Phase 4 definition of a routine — ONE OF POSSIBLY SEVERAL, and
+ * NEVER a subject for an absence claim.
+ *
+ * THIS READER IS SIGNATURE-BLIND. It matches on the NAME ALONE and returns the
+ * last textual match in the whole Phase 4 DDL. On a name that carries more
+ * than one live signature that is ONE live routine out of several, and every
+ * other one is judged by NOTHING — the hole TL-P4-S5-R1 closed, measured on
+ * `invoice_outstanding`'s two live forms. Use it ONLY where the subject really
+ * is "the definition the database ends up holding for this name" and the law
+ * is POSITIVE, a requirement that something IS there. For ANY law of the form
+ * "X does not appear", use `phase4RoutineBodies` and judge EVERY definition.
+ * A negative law reading this helper is the defect, not a shortcut.
+ *
+ * The LAST definition, not the first: a later `CREATE OR REPLACE` of the same
+ * signature is what the database ends up holding, so reading the first one
+ * would judge a slice by the routine it replaced. The first draft of this
+ * helper took the first match and reported a correctly-replaced routine as
+ * still missing its relations.
  */
 export function phase4RoutineBody(root: string, name: string): string | null {
-  // The dollar-quote TAG is captured and the close must repeat it. Reading to
-  // the first `$$;` instead was a hole, measured under TL-P4-S5-R1: this tree
-  // already dollar-quotes with `$coll$`, `$end$`, `$pre$`, `$post$` and
-  // `$proof$`, so a routine written `AS $fn$ … $fn$;` was simply NOT FOUND,
-  // and every law that reads a body through this helper went silent on it. A
-  // planted `invoice_outstanding`-family reader subtracting `public.refunds`
-  // inside a `$fn$` body produced zero findings. On a financial law a body
-  // this helper cannot read must never look like a body with nothing in it.
-  //
-  // The tag class admits DIGITS. It did not, so `AS $v2$ … $v2$;` — the
-  // obvious spelling for a second version of a routine — was unreadable by
-  // exactly the same mechanism the paragraph above describes.
-  const all = [
-    ...phase4Sql(root).matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\([\\s\\S]*?(\\$[a-z0-9_]*\\$)[\\s\\S]*?\\1;`, 'gi')),
-  ];
-  return all.length === 0 ? null : (all[all.length - 1]?.[0] ?? null);
+  const all = phase4RoutineBodies(root, name);
+  return all.length === 0 ? null : (all[all.length - 1] ?? null);
+}
+
+// ── Signature discrimination, for the POSITIVE laws ─────────────────────────
+//
+// A POSITIVE law's subject is the LIVE set, which is NOT "every definition": a
+// definition REPLACED by a later one of the SAME SIGNATURE is dead DDL.
+// `0075:722`'s `invoice_outstanding` was written before any reducer relation
+// existed — it names none of them and delegates to nothing — so a positive law
+// that judged every definition would go FALSE RED on the accepted tree. The
+// live set is therefore the LAST definition of each distinct SIGNATURE, which
+// for `invoice_outstanding` is `0084:526` and `0084:593`, and for every other
+// Phase 4 routine is its single last definition.
+
+const SQL_TYPE_HEAD =
+  /^(uuid|text|citext|bigint|integer|int|int2|int4|int8|smallint|boolean|bool|numeric|decimal|real|double|date|timestamptz|timestamp|time|interval|jsonb|json|bytea|character|char|varchar|name|oid|regprocedure|record|anyelement|anyarray|void|trigger)\b/;
+
+/** The parameter list of ONE definition, read by balancing parentheses, or null when it cannot be read. */
+function definitionParameterText(def: string, name: string): string | null {
+  const head = new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${name}\\s*\\(`, 'i').exec(def);
+  if (head === null) return null;
+  const start = head.index + head[0].length;
+  let depth = 1;
+  let index = start;
+  for (; index < def.length && depth > 0; index++) {
+    const ch = def[index];
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+  }
+  return depth === 0 ? def.slice(start, index - 1) : null;
+}
+
+/**
+ * The SIGNATURE of one definition: its ordered parameter TYPES, lowercased and
+ * whitespace-collapsed, which is what PostgreSQL overloads on. A parameter
+ * NAME is not part of a signature and is dropped; neither is a default.
+ *
+ * null when the parameter list cannot be read. Every caller REPORTS that
+ * rather than skipping the definition, because a definition whose signature
+ * cannot be read is a definition that cannot be placed in the live set — and
+ * dropping it silently is the same vacuous pass an unreadable body bought once
+ * already in this slice.
+ */
+export function routineSignature(def: string, name: string): string | null {
+  const params = definitionParameterText(def, name);
+  if (params === null) return null;
+  if (params.trim() === '') return '';
+  const items: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of params) {
+    if (ch === '(' || ch === '[') depth++;
+    else if (ch === ')' || ch === ']') depth--;
+    if (ch === ',' && depth === 0) {
+      items.push(current);
+      current = '';
+    } else current += ch;
+  }
+  items.push(current);
+  return items
+    .map((raw) => {
+      let text = raw.trim().replace(/\s+/g, ' ').toLowerCase();
+      text = text.replace(/^(?:in|out|inout|variadic)\s+/, '');
+      text = text.replace(/\s+(?:default\s|=\s*)[\s\S]*$/, '');
+      // A parameter in this tree is `name type`, and a NAMELESS parameter is
+      // legal PostgreSQL too — so the first token is dropped only when it is
+      // not itself the head of a type. `p_at timestamp with time zone` loses
+      // its name; a bare `timestamp with time zone` keeps every word.
+      if (!SQL_TYPE_HEAD.test(text) && text.includes(' ')) text = text.slice(text.indexOf(' ') + 1);
+      return text.replace(/\s*\[\s*\]/g, '[]');
+    })
+    .join(',');
+}
+
+/**
+ * The LIVE definitions of `name` in `sql` — the LAST definition of each
+ * distinct signature, in file order — beside the number of definitions this
+ * reader could not place in that set at all.
+ */
+export function liveRoutineBodiesIn(sql: string, name: string): { readonly live: readonly string[]; readonly unplaceable: number } {
+  const bySignature = new Map<string, string>();
+  let unplaceable = 0;
+  for (const def of routineBodiesIn(sql, name)) {
+    const signature = routineSignature(def, name);
+    if (signature === null) {
+      unplaceable++;
+      continue;
+    }
+    bySignature.set(signature, def);
+  }
+  return { live: [...bySignature.values()], unplaceable };
 }
 
 /**
@@ -1345,25 +1494,45 @@ export function invoiceReducerProblems(root: string): string[] {
   // hop and needs no list either.
   const callsAny = (body: string, targets: readonly string[], self: string): boolean =>
     targets.some((r) => r !== self && new RegExp(`\\b${r}\\s*\\(`, 'i').test(body));
-  // Each body is read ONCE. `phase4RoutineBody` goes to disk over the whole
-  // migration set, and the fixpoint below asks for a body on every pass, so
-  // reading per lookup turns a few dozen reads into a few thousand and the
-  // gate — a required CI step — into a minutes-long one.
-  const bodies = new Map<string, string | null>();
-  const bodyOf = (name: string): string | null => {
-    if (!bodies.has(name)) bodies.set(name, phase4RoutineBody(root, name));
-    return bodies.get(name) ?? null;
+  // EVERY DEFINITION, NOT THE LAST ONE. This is an ABSENCE claim, and an
+  // absence claim over a set of definitions is true only if it holds for
+  // EVERY definition. `phase4RoutineBody` is SIGNATURE-BLIND and returns the
+  // last textual match of the name, so a refund subtraction written into any
+  // live form but that one was INVISIBLE here — measured on
+  // `invoice_outstanding`'s scalar wrapper, which is the last definition of
+  // its OWN signature (`0084:526`) and not the last definition of the NAME
+  // (`0084:593` is). A refund subtraction planted into that wrapper alone,
+  // with the array form left clean and last exactly as `0084:510-520`
+  // arranges the real file, produced ZERO findings. The wrapper only
+  // delegates, which is what makes it the ideal hiding place: nobody looks.
+  // There is no delegation escape from a negative law.
+  //
+  // Each routine's definitions are read ONCE, off the `sql` already in hand.
+  // The fixpoint below asks for a body on every pass, so reading per lookup
+  // turns a few dozen reads into a few thousand and the gate — a required CI
+  // step — into a minutes-long one.
+  const bodies = new Map<string, string[]>();
+  const bodiesOf = (name: string): string[] => {
+    if (!bodies.has(name)) bodies.set(name, routineBodiesIn(sql, name));
+    return bodies.get(name) ?? [];
   };
+  // A name with more `CREATE … FUNCTION` statements than bodies read carries a
+  // definition this gate CANNOT read. That is reported, never skipped: a
+  // routine with one unreadable definition among several readable ones is
+  // precisely the shape that would otherwise pass on the definition nobody
+  // looks at.
+  const unreadableDefinitions = (name: string): number => routineDefinitionCountIn(sql, name) - bodiesOf(name).length;
   const dependent: string[] = [];
   for (const name of defined) {
-    const body = bodyOf(name);
-    // Measured zero unreadable bodies over all 48 Phase 4 routines, so a body
-    // this device cannot read is an ANOMALY and not the ordinary case. It is
-    // reported for the same reason the family loop below reports one: a
-    // routine whose body cannot be read is a routine this law cannot classify,
-    // and classifying it as "not a reader" is the vacuous pass a tagged
-    // dollar quote already bought once in this slice.
-    if (body === null) {
+    const defs = bodiesOf(name);
+    // Measured zero unreadable definitions over all 49 Phase 4 routines and
+    // all 60 of their definitions, so a definition this device cannot read is
+    // an ANOMALY and not the ordinary case. It is reported for the same reason
+    // the family loop below reports one: a routine whose body cannot be read
+    // is a routine this law cannot classify, and classifying it as "not a
+    // reader" is the vacuous pass a tagged dollar quote already bought once in
+    // this slice.
+    if (defs.length === 0 || unreadableDefinitions(name) > 0) {
       // A FAMILY member is already a subject of the law, and the loop below
       // reports its unreadable body in the law's own words. Reporting it here
       // too would say one thing twice about one routine. This branch is for
@@ -1372,9 +1541,13 @@ export function invoiceReducerProblems(root: string): string[] {
         problems.push(
           `TL-P4-S5-R1: ${name} is a Phase 4 routine whose body this gate cannot read, so whether it reads the derived receivable cannot be decided — an unclassifiable subject is not a pass (P4-AL-05, P4-AL-34)`,
         );
-      continue;
+      if (defs.length === 0) continue;
     }
-    if (!family.includes(name) && callsAny(body, family, name)) dependent.push(name);
+    // ANY definition calling the family makes the routine a reader. A call
+    // written into one overload and not another is still a call, and reading
+    // only the last definition under-discovered the subject set — which on a
+    // negative law is the same failure as missing the subtraction itself.
+    if (!family.includes(name) && defs.some((d) => callsAny(d, family, name))) dependent.push(name);
   }
   // The fixpoint. Each pass adds the routines that call something already
   // discovered; it terminates because `defined` is finite and a routine joins
@@ -1384,9 +1557,7 @@ export function invoiceReducerProblems(root: string): string[] {
     const known = [...family, ...dependent];
     for (const name of defined) {
       if (family.includes(name) || dependent.includes(name)) continue;
-      const body = bodyOf(name);
-      if (body === null) continue;
-      if (callsAny(body, known, name)) {
+      if (bodiesOf(name).some((d) => callsAny(d, known, name))) {
         dependent.push(name);
         grew = true;
       }
@@ -1394,66 +1565,77 @@ export function invoiceReducerProblems(root: string): string[] {
   }
   const readers = [...family, ...dependent].sort();
   for (const name of readers) {
-    const executable = bodyOf(name);
+    const definitions = bodiesOf(name);
     // A reader this law DISCOVERED in the very text whose body it then cannot
     // read is not a reader with nothing to say: it is the body-reading device
     // disagreeing with the discovery device, and skipping it is the same
     // vacuous pass the empty-readers branch above refuses. Measured: a
     // `$fn$`-quoted reader subtracting `public.refunds` was skipped here and
     // the whole check reported clean.
-    if (executable === null) {
+    //
+    // ONE UNREADABLE DEFINITION AMONG SEVERAL READABLE ONES IS THE SAME
+    // JUDGEMENT. A name whose last definition reads cleanly while another of
+    // its live forms cannot be read at all is a reader this law has not
+    // applied to, and "the one I could read was fine" is not an absence proof.
+    if (definitions.length === 0 || unreadableDefinitions(name) > 0) {
       problems.push(
         `TL-P4-S5-R1: ${name} is a reader of the derived receivable that this gate cannot read the body of, so the law that a refund may not reduce invoice AR again cannot be applied to it — an unreadable subject is not a pass (P4-AL-05, P4-AL-34)`,
       );
-      continue;
+      if (definitions.length === 0) continue;
     }
-    if (!new RegExp(`\\b${name}\\b`).test(executable)) {
-      problems.push(`TL-P4-S5-R1: the body read for ${name} does not contain ${name}, so this law would be reading the wrong text`);
-      continue;
+    for (const [index, executable] of definitions.entries()) {
+      // WHICH definition, named in every finding below, because a name with
+      // several live signatures gives a bare routine name nowhere to point.
+      const which =
+        definitions.length === 1 ? '' : ` (definition ${index + 1} of ${definitions.length}, signature ${routineSignature(executable, name) ?? 'unreadable'})`;
+      if (!new RegExp(`\\b${name}\\b`).test(executable)) {
+        problems.push(`TL-P4-S5-R1: the body read for ${name}${which} does not contain ${name}, so this law would be reading the wrong text`);
+        continue;
+      }
+      // The subject must be prose-free, because a comment must neither satisfy
+      // nor fail this law. `phase4Sql` strips comments out of every migration
+      // before a check sees one; if a marker survived, that device changed and
+      // this law would be reading a sentence as if it were SQL.
+      //
+      // The marker is looked for OUTSIDE string literals, which is the other
+      // half of `stripSql` being literal-aware: `'-- not a comment'` is a value
+      // the database compares, not prose, and a law that read it as a leftover
+      // comment would refuse a legitimate routine. Only the markers are
+      // blanked out here, never the literal's CONTENT, which the refund check
+      // below still reads.
+      if (/--|\/\*/.test(executable.replace(/'(?:''|[^'])*'/g, "''"))) {
+        problems.push(
+          `TL-P4-S5-R1: the body read for ${name}${which} still carries a comment marker, so the SQL prose stripping this law stands on is no longer in force — a comment must neither satisfy nor fail a financial law`,
+        );
+        continue;
+      }
+      // The refund check reads the WHOLE body, string literals INCLUDED, and that
+      // is deliberate: `EXECUTE 'SELECT … FROM public.refunds'` is a read, and a
+      // reader of the derived receivable has no business naming a refund relation
+      // in any form. The asymmetry with the precondition above is the point. Over-
+      // reporting here is a loud failure carrying the routine's own name; under-
+      // reporting is a second reduction of a customer's receivable that nobody
+      // sees. On a financial law that is not a close call.
+      //
+      // THE COST OF THAT CHOICE, NAMED SO THE NEXT PERSON MEETS IT EXPLAINED
+      // RATHER THAN DISCOVERING IT. The day someone writes a refusal code inside
+      // a receivable reader whose text literally contains a refund relation name
+      // — `'invoice_outstanding.refunds_not_a_reducer'` is exactly the name a
+      // future author would reach for — this check goes RED on a text that is not
+      // a defect. That is KNOWN, and it is the DELIBERATE direction of the error.
+      //
+      // The remedy is to NARROW the check to the read shapes — a `FROM`, a
+      // `JOIN`, an `UPDATE`/`INSERT INTO`, a `SELECT … FROM` inside an `EXECUTE`
+      // string — so that a refund named in a message is distinguished from a
+      // refund that is read. The remedy is NOT to widen it to ignore literals
+      // wholesale: that would hand back dynamic SQL, which is a read, and a
+      // false green on this law is a receivable reduced twice.
+      const refund = refundMention(executable);
+      if (refund !== null)
+        problems.push(
+          `TL-P4-S5-R1: ${name}${which} reads ${refund} in its executable body — a refund does not undo a payment and does not settle an invoice: it settles the credit-note or customer-credit liability it is paid out of, and the invoice receivable was already reduced once by that credit effect. Reading it here reduces invoice AR a second time (lock P4-AL-34, P4-AL-05)`,
+        );
     }
-    // The subject must be prose-free, because a comment must neither satisfy
-    // nor fail this law. `phase4Sql` strips comments out of every migration
-    // before a check sees one; if a marker survived, that device changed and
-    // this law would be reading a sentence as if it were SQL.
-    //
-    // The marker is looked for OUTSIDE string literals, which is the other
-    // half of `stripSql` being literal-aware: `'-- not a comment'` is a value
-    // the database compares, not prose, and a law that read it as a leftover
-    // comment would refuse a legitimate routine. Only the markers are
-    // blanked out here, never the literal's CONTENT, which the refund check
-    // below still reads.
-    if (/--|\/\*/.test(executable.replace(/'(?:''|[^'])*'/g, "''"))) {
-      problems.push(
-        `TL-P4-S5-R1: the body read for ${name} still carries a comment marker, so the SQL prose stripping this law stands on is no longer in force — a comment must neither satisfy nor fail a financial law`,
-      );
-      continue;
-    }
-    // The refund check reads the WHOLE body, string literals INCLUDED, and that
-    // is deliberate: `EXECUTE 'SELECT … FROM public.refunds'` is a read, and a
-    // reader of the derived receivable has no business naming a refund relation
-    // in any form. The asymmetry with the precondition above is the point. Over-
-    // reporting here is a loud failure carrying the routine's own name; under-
-    // reporting is a second reduction of a customer's receivable that nobody
-    // sees. On a financial law that is not a close call.
-    //
-    // THE COST OF THAT CHOICE, NAMED SO THE NEXT PERSON MEETS IT EXPLAINED
-    // RATHER THAN DISCOVERING IT. The day someone writes a refusal code inside
-    // a receivable reader whose text literally contains a refund relation name
-    // — `'invoice_outstanding.refunds_not_a_reducer'` is exactly the name a
-    // future author would reach for — this check goes RED on a text that is not
-    // a defect. That is KNOWN, and it is the DELIBERATE direction of the error.
-    //
-    // The remedy is to NARROW the check to the read shapes — a `FROM`, a
-    // `JOIN`, an `UPDATE`/`INSERT INTO`, a `SELECT … FROM` inside an `EXECUTE`
-    // string — so that a refund named in a message is distinguished from a
-    // refund that is read. The remedy is NOT to widen it to ignore literals
-    // wholesale: that would hand back dynamic SQL, which is a read, and a
-    // false green on this law is a receivable reduced twice.
-    const refund = refundMention(executable);
-    if (refund !== null)
-      problems.push(
-        `TL-P4-S5-R1: ${name} reads ${refund} in its executable body — a refund does not undo a payment and does not settle an invoice: it settles the credit-note or customer-credit liability it is paid out of, and the invoice receivable was already reduced once by that credit effect. Reading it here reduces invoice AR a second time (lock P4-AL-34, P4-AL-05)`,
-      );
   }
   return problems;
 }
@@ -1497,23 +1679,101 @@ export const DEFERRED_SEAMS: readonly DeferredSeam[] = [
   {
     id: 'S-P4-03',
     what: 'invoice_outstanding subtracts nothing, because nothing that settles an invoice exists yet',
+    // THE SUBJECT IS THE DEFINITION SET, NOT THE LAST DEFINITION.
+    //
+    // This law is POSITIVE — it requires that something IS read — and it used
+    // to read `phase4RoutineBody`, the LAST definition of the name. The
+    // migrations are ARRANGED around that: `0084:510-520` says so in prose,
+    // «R-100 requires the array form to be the last definition of
+    // `invoice_outstanding` for seam S-P4-03», and `0083` is ordered the same
+    // way. A fragile statement-ordering assumption was therefore load-bearing
+    // in a migration comment and asserted nowhere.
+    //
+    // Pointing this law at EVERY definition instead would be a FALSE RED.
+    // `invoice_outstanding` has two live signatures and the scalar
+    // `(UUID, UUID)` form is a pure DELEGATING WRAPPER (`0084:526`): it holds
+    // no arithmetic, names no relation, and reads the reducers THROUGH the
+    // set-based form. Requiring it to name them itself would be wrong.
+    //
+    // So the law is stated over the SET: every LIVE definition either names
+    // every settling relation ITSELF, or DELEGATES to another definition of
+    // the same name that does. The ordering is then CHECKED rather than
+    // trusted, and the delegation it relies on has to be real.
+    //
+    // LIVE, and not every definition, because `0075:722` predates every
+    // reducer relation: it names none of them and delegates to nothing, so a
+    // law over all seven definitions of the name would be red on the accepted
+    // tree. A definition replaced by a later one of the SAME SIGNATURE is dead
+    // DDL; one that is not is a routine the database still holds.
     run: (root) => {
-      const reducers = readTables(phase4Sql(root))
+      const sql = phase4Sql(root);
+      const reducers = readTables(sql)
         .tables.map((t) => t.name)
         .filter((n) => INVOICE_REDUCER_VOCABULARY.test(n))
         .sort();
       if (reducers.length === 0) return [];
-      const body = phase4RoutineBody(root, 'invoice_outstanding');
-      if (body === null)
+      const definitions = routineDefinitionCountIn(sql, 'invoice_outstanding');
+      if (definitions === 0)
         return [
           `seam S-P4-03: the Phase 4 DDL creates ${reducers.join(', ')} and no Phase 4 migration defines invoice_outstanding — the reader-of-record of a settlement cannot be absent once something settles (P4-AL-07)`,
         ];
-      const missing = reducers.filter((n) => !new RegExp(`\\b${n}\\b`).test(body));
-      return missing.length === 0
-        ? []
-        : [
-            `seam S-P4-03: invoice_outstanding does not read ${missing.join(', ')}, which a Phase 4 migration now creates — a reader-of-record that does not read a relation that settles an invoice reports the invoice unpaid (P4-AL-05, P4-AL-07)`,
-          ];
+      const { live, unplaceable } = liveRoutineBodiesIn(sql, 'invoice_outstanding');
+      // NON-VACUITY OF THE SUBJECT. A definition whose body this gate cannot
+      // read, or whose signature it cannot place in the live set, is a
+      // definition it cannot judge — and an undecidable seam is not a safe
+      // one. Counting the `CREATE` statements is what tells that apart from a
+      // definition that is simply not there.
+      const undecidable = definitions - routineBodiesIn(sql, 'invoice_outstanding').length + unplaceable;
+      if (undecidable > 0)
+        return [
+          `seam S-P4-03: ${undecidable} of the ${definitions} Phase 4 definitions of invoice_outstanding cannot be read or placed by this gate, so whether the reader-of-record reads ${reducers.join(', ')} cannot be decided — an undecidable seam is not a discharged one (P4-AL-05, P4-AL-07)`,
+        ];
+      const missingIn = (def: string): string[] => reducers.filter((n) => !new RegExp(`\\b${n}\\b`).test(def));
+      const compliant = live.filter((def) => missingIn(def).length === 0);
+      if (compliant.length === 0) {
+        // No live definition names them all, so there is nothing for a wrapper
+        // to delegate TO. The finding names the relations the definition
+        // CLOSEST to compliant still lacks, which on a tree whose reads have
+        // been removed wholesale is every one of them.
+        const missing = live.map(missingIn).sort((a, b) => a.length - b.length)[0] ?? reducers;
+        return [
+          `seam S-P4-03: invoice_outstanding does not read ${missing.join(', ')}, which a Phase 4 migration now creates, and no other live definition of it does either — a reader-of-record that does not read a relation that settles an invoice reports the invoice unpaid (P4-AL-05, P4-AL-07)`,
+        ];
+      }
+      // THE DELEGATION HAS TO BE REAL. The head of the definition is removed
+      // first, so the `CREATE … FUNCTION invoice_outstanding` that opens every
+      // definition is not mistaken for a call to one. Which OVERLOAD a call
+      // resolves to is not decidable from the text without a parser, so what
+      // is asserted is the pair of facts that together make the delegation
+      // sound: this definition calls the name, and some live definition of
+      // that name reads every settling relation.
+      //
+      // AND A DEFINITION THAT CALLS ITSELF HAS DELEGATED TO NOTHING. The one
+      // self-call this reader can be sure of is the exact pass-through shape —
+      // a call whose argument list is this definition's own parameter NAMES in
+      // order — and that shape is refused. `0084:526` passes
+      // `ARRAY[p_invoice_id]` for its second argument, which is how the real
+      // wrapper reaches the OTHER signature, so it is not that shape. What
+      // this does not catch is a self-call disguised by a cast or an
+      // expression; closing that needs a resolver over the catalogue, which is
+      // the behavioural half of the seam and not this static one.
+      const flat = (text: string): string => text.replace(/\s+/g, '').toLowerCase();
+      const delegates = (def: string): boolean => {
+        const body = def.replace(/^CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?invoice_outstanding\s*/i, '');
+        const own = flat(
+          (definitionParameterText(def, 'invoice_outstanding') ?? '')
+            .split(',')
+            .map((p) => p.trim().split(/\s+/)[0] ?? '')
+            .join(','),
+        );
+        return [...body.matchAll(/\b(?:public\.)?invoice_outstanding\s*\(([^()]*)\)/gi)].some((m) => flat(m[1] ?? '') !== own);
+      };
+      return live
+        .filter((def) => missingIn(def).length > 0 && !delegates(def))
+        .map(
+          (def) =>
+            `seam S-P4-03: the live invoice_outstanding definition with signature (${routineSignature(def, 'invoice_outstanding') ?? 'unreadable'}) neither reads ${missingIn(def).join(', ')} nor delegates to another definition of invoice_outstanding — a reader-of-record that does not read a relation that settles an invoice reports the invoice unpaid, and a definition the database still holds is not excused by a sibling that is written correctly (P4-AL-05, P4-AL-07)`,
+        );
     },
   },
 ];

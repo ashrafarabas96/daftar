@@ -151,7 +151,7 @@ import { R10, allocationFigures, collectPayment, rateToR10, type AllocationInput
 import { Database, type Scope } from '../../apps/api/src/infra/database';
 import { distribution, quantile, type Distribution } from './percentile';
 import { ACCEPTED, RATIOS, effectiveCeilingMs } from '../../scripts/phase4-budget-ratchet';
-import { phase4RoutineBody, phase4Sql } from '../../scripts/phase4-s1-gate';
+import { phase4RoutineBodies, phase4Sql } from '../../scripts/phase4-s1-gate';
 import {
   FAT_TAIL,
   FOREIGN_CURRENCY,
@@ -446,9 +446,18 @@ function readersOfRecord(root: string): string[] {
     let grew = false;
     for (const name of defined) {
       if (known.has(name)) continue;
-      const body = phase4RoutineBody(root, name);
-      if (body === null) continue; // unreadable bodies are the S1 gate's subject, not this one's
-      if ([...known].some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body))) {
+      // EVERY DEFINITION of the name, not the last one. `phase4RoutineBody`
+      // is signature-blind and returns the last textual match, so a routine
+      // that reaches a reader of record through one overload and not another
+      // was NOT discovered — and an under-discovered subject set is a route
+      // quietly exempted from the ceiling. `invoice_outstanding` itself
+      // carries two live signatures (`0084:526`, `0084:593`), which is where
+      // this was measured (TL-P4-S5-R1, §H of the refund guard). Widening it
+      // is byte-neutral on the tree as it stands — the set is the same four
+      // names — and strictly wider the day it is not.
+      const definitions = phase4RoutineBodies(root, name);
+      if (definitions.length === 0) continue; // unreadable bodies are the S1 gate's subject, not this one's
+      if (definitions.some((body) => [...known].some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body)))) {
         known.add(name);
         grew = true;
       }
