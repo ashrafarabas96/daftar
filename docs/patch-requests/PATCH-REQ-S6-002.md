@@ -1,4 +1,4 @@
-# PATCH-REQ-S6-002 — widen `InventoryErrorCode` with the nineteen S6 refusal codes
+# PATCH-REQ-S6-002 — widen `InventoryErrorCode` with every S6 refusal code
 
 **From:** P4-S6 owner, branch `p4s6/owner`, base `6587460ba3632231e4324c5ce2af92e1589d0705`.
 **Status:** OPEN.
@@ -9,7 +9,7 @@
 
 ## Required change
 
-Add the nineteen members of `REVERSAL_CODES`
+Add every member of `REVERSAL_CODES`
 (`packages/inventory/src/customer-reversal.ts`) to `InventoryErrorCode`, in three namespace
 blocks — `payment_reversal.*`, `allocation_reversal.*`, `invoice_void.*` — beside the
 existing `customer_payment.*` block (`errors.ts:128-135`).
@@ -41,13 +41,13 @@ None on the database. It can land as soon as S6 is promoted. Until it lands, S6'
 
 `packages/inventory/test/customer-reversal.test.ts` →
 *"the code union and its array are the same set, and the array is sorted"*, which pins the
-nineteen from S6's side so this request cannot drift from its subject. The test that requires
+the array itself from S6's side so this request cannot drift from its subject — and a COUNT is deliberately not written anywhere here, because a number in prose drifts from the array it describes, and three codes were in fact added after review (F6 and the date validation). The test that requires
 the **widening** is the `PLAN_CODES_ARE_INVENTORY_CODES` line above, which becomes writable
 the day it lands.
 
 ## Expected semantic diff
 
-Nineteen literals added to one union. No existing member changes. Every consumer of
+Every `REVERSAL_CODES` literal added to one union. No existing member changes. Every consumer of
 `InventoryErrorCode` keeps compiling, because a union only widens.
 
 ## What else this unblocks, and does not itself do

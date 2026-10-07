@@ -21,6 +21,8 @@
  * `'accepted'`, so a reworded refusal does not move a test and a renamed code
  * does.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   DIRECT_VOID_IS_REFUSED,
@@ -116,6 +118,19 @@ describe('the chain law over the ACTIVE subset', () => {
     expect(orderedActive(c).map((r) => r.level)).toEqual([0n, 400n]);
   });
 
+  // ──────────────────────────────────────────────────────────────────────
+  // ONE PLANTED FACT PER WORLD.
+  //
+  // A refusal only proves the law under test when the request is otherwise
+  // completely valid: a world broken in two ways proves nothing about either
+  // break, because the refusal could be naming the other one. So each planted
+  // world below carries its own OTHERWISE-VALID proof, asserted in the test
+  // rather than reasoned about in a comment — the plant is undone (or the
+  // single broken field is corrected) and the SAME constructor must then
+  // report a clean chain. Each of these three cases was previously pinned
+  // only by the refusal code; the otherwise-valid half is new.
+  // ──────────────────────────────────────────────────────────────────────
+
   it('PLANTED GAP — a chain whose middle reducer is dropped from the active set is reported as a gap, not silently re-chained', () => {
     // Plant: alloc-2 removed from ACTIVE while alloc-3 stays. This is exactly
     // the state a MID-CHAIN reversal would leave, and the counterexample
@@ -124,22 +139,71 @@ describe('the chain law over the ACTIVE subset', () => {
     expect(isContiguousFromZero(planted)).toBe(false);
     expect(chainBreak(planted)).toMatch(/gap/);
     expect(codeOf(() => tailOf(planted, 'allocation_reversal'))).toBe('allocation_reversal.chain_inconsistent');
+
+    // OTHERWISE VALID, two ways. (a) Undo the plant by dropping the stranded
+    // reducer: what remains is a clean chain with a tail, so the gap was the
+    // ONE fact that differed.
+    const withoutStranded = invoiceChain(INV, TOTAL, [R1]);
+    expect(chainBreak(withoutStranded)).toBeNull();
+    expect(tailOf(withoutStranded, 'allocation_reversal')?.reducerId).toBe('alloc-1');
+
+    // (b) Undo the plant the other way, by re-seating the SAME reducer at the
+    // level the recurrence gives it. Only `level` changes; the id, the amount
+    // and the entry are alloc-3's own. A clean chain here proves the gap was
+    // not an artefact of alloc-3's amount, its capacity fit or its ordering.
+    const reseated = invoiceChain(INV, TOTAL, [R1, alloc(R3.reducerId, 400n, R3.amount, 'entry-3')]);
+    expect(chainBreak(reseated)).toBeNull();
+    expect(activeTotal(reseated)).toBe(700n);
+    expect(tailOf(reseated, 'allocation_reversal')?.reducerId).toBe('alloc-3');
   });
 
   it('PLANTED OVERLAP — two active reducers at one level are an overlap, which is what the replaced level UNIQUE used to refuse', () => {
-    const planted = invoiceChain(INV, TOTAL, [R1, alloc('alloc-2b', 400n, 300n, 'entry-2b'), R2]);
+    const twin = alloc('alloc-2b', 400n, 300n, 'entry-2b');
+    const planted = invoiceChain(INV, TOTAL, [R1, twin, R2]);
     expect(chainBreak(planted)).toMatch(/overlap/);
     expect(codeOf(() => tailOf(planted, 'allocation_reversal'))).toBe('allocation_reversal.chain_inconsistent');
+
+    // OTHERWISE VALID: remove EITHER of the two rows at level 400 and the
+    // chain is clean. Both directions are asserted, because removing only one
+    // of them would leave open the possibility that the surviving row was
+    // itself the defect and the duplication incidental.
+    const withoutTwin = invoiceChain(INV, TOTAL, [R1, R2]);
+    expect(chainBreak(withoutTwin)).toBeNull();
+    expect(tailOf(withoutTwin, 'allocation_reversal')?.reducerId).toBe('alloc-2');
+
+    const withoutOriginal = invoiceChain(INV, TOTAL, [R1, twin]);
+    expect(chainBreak(withoutOriginal)).toBeNull();
+    expect(tailOf(withoutOriginal, 'allocation_reversal')?.reducerId).toBe('alloc-2b');
+
+    // And the overlap is not a disguised capacity break: 400 + 300 + 300 is
+    // below the invoice total, so capacity is NOT what the refusal names.
+    expect(chainBreak(planted)).not.toMatch(/capacity/);
   });
 
   it('PLANTED OVER-CAPACITY — an active set consuming more than the invoice total is refused', () => {
+    // The ONE planted fact is the capacity. The rows are untouched.
     const planted = invoiceChain(INV, 500n, [R1, R2]);
     expect(chainBreak(planted)).toMatch(/capacity/);
+    // Not a gap and not an overlap: the levels still follow the recurrence,
+    // so the refusal is the capacity law and not a chain defect.
+    expect(chainBreak(planted)).not.toMatch(/gap|overlap/);
+
+    // OTHERWISE VALID: the SAME rows against the real invoice total are a
+    // clean chain with a tail.
+    const atRealCapacity = invoiceChain(INV, TOTAL, [R1, R2]);
+    expect(chainBreak(atRealCapacity)).toBeNull();
+    expect(tailOf(atRealCapacity, 'allocation_reversal')?.reducerId).toBe('alloc-2');
+    // And the boundary is inclusive: consuming the capacity EXACTLY is lawful,
+    // so the refusal above is about exceeding it and not about reaching it.
+    const exactlyFull = invoiceChain(INV, 700n, [R1, R2]);
+    expect(chainBreak(exactlyFull)).toBeNull();
   });
 
-  it('an empty active set is a well-formed chain with no tail', () => {
+  it('an empty active set is a well-formed chain with no tail — an empty collection is never a refusal', () => {
     const empty = invoiceChain(INV, TOTAL, []);
+    expect(chainBreak(empty)).toBeNull();
     expect(isContiguousFromZero(empty)).toBe(true);
+    expect(activeTotal(empty)).toBe(0n);
     expect(tailOf(empty, 'allocation_reversal')).toBeNull();
   });
 });
@@ -174,14 +238,78 @@ describe('the LIFO law — only the last active settlement reducer', () => {
     expect(plan.freedLevels).toEqual([{ chainId: INV, chainKind: 'invoice_ar', freedLevel: 700n, amount: 300n }]);
   });
 
-  it('refuses a reducer that is not in the active set at all — it was already reversed', () => {
-    expect(codeOf(() => planAllocationReversal(allocationInput({ chains: [afterTailReversed()] })))).toBe('allocation_reversal.not_last_reducer');
+  it('an EXACT REPLAY of a reversal answers already_reversed, and the two commands answer that one state with ONE code', () => {
+    // THIS CASE PREVIOUSLY ASSERTED THE DEFECT. Its title said "it was already
+    // reversed" while its assertion pinned `not_last_reducer` — a test that
+    // names one law and holds the code to another, which is worse than no test
+    // because it looks like coverage. The challenger found the code unreachable
+    // for the condition it names; the title was the evidence.
+    expect(codeOf(() => planAllocationReversal(allocationInput({ chains: [afterTailReversed()] })))).toBe('allocation_reversal.already_reversed');
+
+    // And the payment command answers the SAME state with the SAME suffix, so
+    // a client sees one state and one code and never two.
+    const replayed = codeOf(() =>
+      planPaymentReversal({
+        reversalId: 'prev-1',
+        paymentId: 'payment-1',
+        allocations: [{ reducerId: 'alloc-3', originalEntryId: 'entry-3', chain: afterTailReversed() }],
+        surplusCredit: null,
+        reversalDate: '2026-03-02',
+        originalDate: '2026-03-01',
+        reason: 'replayed',
+      }),
+    );
+    expect(replayed).toBe('payment_reversal.already_reversed');
+    expect(replayed.split('.')[1]).toBe('allocation_reversal.already_reversed'.split('.')[1]);
+  });
+
+  it('a reducer the chain never carried is NOT confused with one already reversed when the chain still has a tail', () => {
+    // The membership test must not become a catch-all: a reducer that is simply
+    // the wrong one, on a chain whose tail is a DIFFERENT live reducer, is a
+    // LIFO refusal and not a replay. Without this case the fix above would be
+    // free to answer `already_reversed` for every miss.
+    expect(codeOf(() => planAllocationReversal(allocationInput({ reducerId: 'alloc-1', originalEntryId: 'entry-1' })))).toBe(
+      'allocation_reversal.not_last_reducer',
+    );
   });
 
   it('PLANTED — a reversal dated before its original is refused, and the date is the caller-stated one with no clock read', () => {
     expect(codeOf(() => planAllocationReversal(allocationInput({ reversalDate: '2026-02-28' })))).toBe('allocation_reversal.date_before_original');
     // Same civil date is lawful: a reversal on the day of the original is not a reversal before it.
     expect(codeOf(() => planAllocationReversal(allocationInput({ reversalDate: '2026-03-01' })))).toBe('accepted');
+  });
+
+  it('PLANTED — a NON-CANONICAL date that is EARLIER than the original no longer slips past the ordering law', () => {
+    // The challenger's demonstration, as a case here. `'2026-2-28'` is the 28th
+    // of February, which is BEFORE the original of the 1st of March — and by
+    // character order it is GREATER than `'2026-03-01'`, because `'2'` > `'0'`.
+    // So the `<` comparison passed it. The comparison was not the defect; the
+    // unvalidated input was.
+    expect('2026-2-28' > '2026-03-01', 'the premise of the finding: character order and calendar order disagree here').toBe(true);
+    expect(codeOf(() => planAllocationReversal(allocationInput({ reversalDate: '2026-2-28' })))).toBe('allocation_reversal.date_invalid');
+    expect(
+      codeOf(() =>
+        planPaymentReversal({
+          reversalId: 'prev-2',
+          paymentId: 'payment-1',
+          allocations: [{ reducerId: 'alloc-3', originalEntryId: 'entry-3', chain: fullChain() }],
+          surplusCredit: null,
+          reversalDate: '2026-2-28',
+          originalDate: '2026-03-01',
+          reason: 'modelled',
+        }),
+      ),
+    ).toBe('payment_reversal.date_invalid');
+  });
+
+  it('PLANTED — a date of the right SHAPE that names no day of the calendar is refused', () => {
+    // A regex alone would accept these. `2026-02-31` and `2026-13-01` match
+    // `\d{4}-\d{2}-\d{2}` exactly and are not days.
+    expect(codeOf(() => planAllocationReversal(allocationInput({ reversalDate: '2026-02-31' })))).toBe('allocation_reversal.date_invalid');
+    expect(codeOf(() => planAllocationReversal(allocationInput({ reversalDate: '2026-13-01' })))).toBe('allocation_reversal.date_invalid');
+    // And the canonical one is still accepted, so the validator refuses the
+    // non-day and not the date.
+    expect(codeOf(() => planAllocationReversal(allocationInput({ reversalDate: '2026-03-02' })))).toBe('accepted');
   });
 
   it('PLANTED — a blank reason is refused, and whitespace is not a reason', () => {
@@ -509,6 +637,14 @@ describe('the surface contracts this slice must not invent', () => {
     }
     // A thirteenth key would contradict P4-AL-36; this is the assertion that notices.
     expect((PERMISSIONS as readonly string[]).includes('reversals.approve')).toBe(false);
+
+    // THE READ KEY, which this case used to miss entirely because it iterated
+    // the WRITE mapping alone: the reversal read route of the contract pack §5
+    // requires `receivables.view`, which no row of REVERSAL_OPERATION_AUTHORITY
+    // names. It is registered, and it is NOT sensitive — a read route that
+    // demanded a sensitive key would be a quietly different authority model.
+    expect(PERMISSIONS as readonly string[]).toContain('receivables.view');
+    expect(SENSITIVE_PERMISSIONS as readonly string[]).not.toContain('receivables.view');
   });
 
   it('the required-wiring record names a patch request per row and leaves no row unowned', () => {
@@ -519,6 +655,24 @@ describe('the surface contracts this slice must not invent', () => {
       expect(row.edit.length).toBeGreaterThan(0);
     }
     expect(new Set(P4_S6_REQUIRED_WIRING.map((r) => r.patchRequest)).size).toBe(P4_S6_REQUIRED_WIRING.length);
+  });
+
+  it('the wiring registry names EVERY patch request on disk, in BOTH directions', () => {
+    // THE DEFECT THIS CASE EXISTS FOR: the registry listed six of the ten patch
+    // requests, and the case above could not have noticed, because it walked
+    // the registry and checked the shape of what it found — it held the array
+    // to itself. A registry that lists six of ten obligations reads as
+    // complete. So the claim is now BOTH directions against the directory.
+    const dir = path.join(__dirname, '..', '..', '..', 'docs', 'patch-requests');
+    const onDisk = fs
+      .readdirSync(dir)
+      .filter((f) => /^PATCH-REQ-S6-\d{3}\.md$/.test(f))
+      .map((f) => f.replace(/\.md$/, ''))
+      .sort();
+    // Non-vacuity: an empty directory would make both assertions below trivial.
+    expect(onDisk.length, 'no S6 patch request was found on disk, so this case proves nothing').toBeGreaterThan(0);
+    const named = [...P4_S6_REQUIRED_WIRING.map((r) => r.patchRequest)].sort();
+    expect(named, 'a patch request exists on disk that the wiring registry does not name').toEqual(onDisk);
   });
 
   it('this module names no migration number: the real prefix is unknown until the predecessors seal', () => {

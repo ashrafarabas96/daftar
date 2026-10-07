@@ -64,6 +64,24 @@ export interface CustomerPaymentReversalRequestDto {
   readonly reversalDate: string;
   /** Required, 1..200 trimmed characters. A reversal without a reason is refused. */
   readonly reason: string;
+  /**
+   * THE WEBHOOK IDENTITY, both present or both absent.
+   *
+   * `docs/PHASE_4_EXECUTION_PLAN.md:199` makes `provider_reference` idempotency **at the
+   * database** an exit condition of this slice's gate, and
+   * `docs/PHASE_4_ARCHITECTURE_LOCK.md:679` specifies a **partial unique** over
+   * `(business_id, provider_source, provider_reference)` as the mechanism. The column exists
+   * in **zero** of the 87 migrations, so S6 creates it:
+   * `docs/PHASE_4_S6_DDL_SPECIFICATION.md` §1A.
+   *
+   * A merchant-initiated reversal omits both. A payment provider's chargeback webhook (G-11)
+   * carries both, and a REDELIVERY of it carries the same pair with a **fresh** `reversalId` —
+   * which is why the stored intent hash does not cover `reversalId`, and why a replay found by
+   * the provider key returns the stored rows instead of conflicting. Carrying one without the
+   * other is unrepresentable at the database, not refused.
+   */
+  readonly providerSource?: string;
+  readonly providerReference?: string;
 }
 
 /**

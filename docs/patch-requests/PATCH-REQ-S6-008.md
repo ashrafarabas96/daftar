@@ -3,6 +3,14 @@
 **From:** P4-S6 owner, branch `p4s6/owner`, base `6587460ba3632231e4324c5ce2af92e1589d0705`.
 **Status:** OPEN. Documentation correction with a design consequence.
 
+**A status correction, recorded because the pack briefly said otherwise.** This request was
+reported as "withdrawn". It is not: what is withdrawn is the `allocation_reversal`
+**accounting source type** inside its body — the thing S6 must not register — and not the
+request, which stands. On the merits it is right and stays: the live registry
+(`0081:2467-2472`) holds no such row, the native `reversal` type carries the journal fact
+(`0065:17-18`, `:310`), and registering one would be the second source identity
+`P4-AL-23`/`P4-AL-09` forbid.
+
 ## Target file
 
 `docs/PHASE_4_ARCHITECTURE_LOCK.md:476-478` — the Architecture Lock, read-only for S6.

@@ -103,6 +103,7 @@ export type ReversalCode =
   | 'payment_reversal.chain_inconsistent'
   | 'payment_reversal.credit_consumed'
   | 'payment_reversal.date_before_original'
+  | 'payment_reversal.date_invalid'
   | 'payment_reversal.reason_required'
   // ── The allocation reversal ───────────────────────────────────────────
   | 'allocation_reversal.not_found'
@@ -111,10 +112,13 @@ export type ReversalCode =
   | 'allocation_reversal.not_last_reducer'
   | 'allocation_reversal.chain_inconsistent'
   | 'allocation_reversal.date_before_original'
+  | 'allocation_reversal.date_invalid'
   | 'allocation_reversal.reason_required'
   // ── The void surface ──────────────────────────────────────────────────
   | 'invoice_void.direct_update_refused'
   | 'invoice_void.not_found'
+  | 'invoice_void.idempotency_conflict'
+  | 'invoice_void.date_invalid'
   | 'invoice_void.state_invalid'
   | 'invoice_void.reducers_not_reversed';
 
@@ -127,11 +131,14 @@ export const REVERSAL_CODES: readonly ReversalCode[] = Object.freeze([
   'allocation_reversal.already_reversed',
   'allocation_reversal.chain_inconsistent',
   'allocation_reversal.date_before_original',
+  'allocation_reversal.date_invalid',
   'allocation_reversal.idempotency_conflict',
   'allocation_reversal.not_found',
   'allocation_reversal.not_last_reducer',
   'allocation_reversal.reason_required',
+  'invoice_void.date_invalid',
   'invoice_void.direct_update_refused',
+  'invoice_void.idempotency_conflict',
   'invoice_void.not_found',
   'invoice_void.reducers_not_reversed',
   'invoice_void.state_invalid',
@@ -139,6 +146,7 @@ export const REVERSAL_CODES: readonly ReversalCode[] = Object.freeze([
   'payment_reversal.chain_inconsistent',
   'payment_reversal.credit_consumed',
   'payment_reversal.date_before_original',
+  'payment_reversal.date_invalid',
   'payment_reversal.idempotency_conflict',
   'payment_reversal.not_found',
   'payment_reversal.not_last_reducer',
@@ -170,6 +178,36 @@ export class ReversalError extends Error {
 
 function refuse(code: ReversalCode, message: string): never {
   throw new ReversalError(code, message);
+}
+
+/**
+ * A `DATE` as the database stores it, and as the request carries it: exactly
+ * `YYYY-MM-DD`, and a real day of a real month.
+ *
+ * It exists because of a CHALLENGE FINDING. The two date comparisons below are
+ * `<` over strings — which is the right comparison for canonical ISO dates and
+ * the WRONG one for anything else, since `'2026-3-02' < '2026-03-01'` is true
+ * by character order and false by calendar. An unvalidated string therefore
+ * passed `date_before_original` while being earlier than the original. The
+ * comparison is kept (it is exact on canonical input, and it reads no clock,
+ * P4-AL-30); the input is now canonicalised FIRST, which is where the defect
+ * actually was. A non-canonical date is a payload fault, so it refuses with its
+ * own code rather than borrowing the ordering law's.
+ */
+const CANONICAL_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function assertCanonicalDate(value: string, what: string, code: ReversalCode): void {
+  if (!CANONICAL_DATE.test(value)) {
+    refuse(code, `${what} must be a canonical YYYY-MM-DD date; ${JSON.stringify(value)} is not`);
+  }
+  // A shape that matches the regex can still name no day: 2026-02-31 and
+  // 2026-13-01 both do. The round trip is the calendar's own answer and reads
+  // no clock — `Date.UTC` of the three parts, formatted back.
+  const [y, m, d] = value.split('-').map((x) => Number.parseInt(x, 10));
+  const t = new Date(Date.UTC(y ?? 0, (m ?? 0) - 1, d ?? 0));
+  if (t.toISOString().slice(0, 10) !== value) {
+    refuse(code, `${what} names no day of the calendar: ${JSON.stringify(value)}`);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -537,6 +575,8 @@ export function planAllocationReversal(input: AllocationReversalInput): Allocati
   if (input.reason.trim().length === 0) {
     refuse('allocation_reversal.reason_required', 'a reversal states a reason');
   }
+  assertCanonicalDate(input.reversalDate, 'the reversal date', 'allocation_reversal.date_invalid');
+  assertCanonicalDate(input.originalDate, "the original reducer's date", 'allocation_reversal.date_invalid');
   if (input.reversalDate < input.originalDate) {
     refuse('allocation_reversal.date_before_original', 'a reversal may not precede the reducer it reverses');
   }
@@ -557,6 +597,23 @@ export function planAllocationReversal(input: AllocationReversalInput): Allocati
 
   const freed: { chainId: string; chainKind: ChainKind; freedLevel: bigint; amount: bigint }[] = [];
   for (const chain of [...input.chains].sort((a, b) => (a.chainId < b.chainId ? -1 : a.chainId > b.chainId ? 1 : 0))) {
+    // ALREADY REVERSED, ANSWERED FIRST, and this is a CHALLENGE FINDING fixed
+    // rather than argued with. `already_reversed` was unreachable here for the
+    // condition it names: an exact replay presents a reducer that is no longer
+    // in the active set, the tail check therefore failed, and the answer was
+    // `not_last_reducer` — with advice (`reverseInThisOrder`) whose only
+    // "later" reducer was the one already reversed, so a client following it
+    // went in a circle. The payment command already answered `already_reversed`
+    // for the same state (`planPaymentReversal`), so the two commands disagreed
+    // about one state; a closed code set that answers one state two ways is not
+    // a closed code set. The membership test is the SAME anti-join the chain is
+    // built from, so no new fact is needed to make it.
+    if (!chain.active.some((r) => r.reducerId === input.reducerId)) {
+      refuse(
+        'allocation_reversal.already_reversed',
+        `reducer ${input.reducerId} is not among the active reducers of chain ${chain.chainId}, so it was already reversed`,
+      );
+    }
     const tail = tailOf(chain, 'allocation_reversal');
     if (tail === null) {
       refuse('allocation_reversal.not_found', `chain ${chain.chainId} carries no active reducer, so it has nothing to reverse`);
@@ -651,6 +708,8 @@ export function planPaymentReversal(input: PaymentReversalInput): PaymentReversa
   if (input.reason.trim().length === 0) {
     refuse('payment_reversal.reason_required', 'a reversal states a reason');
   }
+  assertCanonicalDate(input.reversalDate, 'the reversal date', 'payment_reversal.date_invalid');
+  assertCanonicalDate(input.originalDate, "the original payment's date", 'payment_reversal.date_invalid');
   if (input.reversalDate < input.originalDate) {
     refuse('payment_reversal.date_before_original', 'a reversal may not precede the payment it reverses');
   }
@@ -864,7 +923,7 @@ export const P4_S6_REQUIRED_WIRING: readonly { readonly patchRequest: string; re
   Object.freeze({
     patchRequest: 'PATCH-REQ-S6-002',
     file: 'packages/inventory/src/errors.ts',
-    edit: 'widen InventoryErrorCode with the nineteen REVERSAL_CODES',
+    edit: 'widen InventoryErrorCode with every member of REVERSAL_CODES (a count is not written here: the array is the subject, and a number in a comment drifts)',
   }),
   Object.freeze({
     patchRequest: 'PATCH-REQ-S6-003',
@@ -874,16 +933,43 @@ export const P4_S6_REQUIRED_WIRING: readonly { readonly patchRequest: string; re
   Object.freeze({
     patchRequest: 'PATCH-REQ-S6-004',
     file: 'the S6 migration (number unknown until the predecessors seal)',
-    edit: 'replace the three customer level UNIQUE constraints per docs/PHASE_4_S6_LEVEL_UNIQUENESS.md, and widen the two verifiers to the ACTIVE subset',
+    edit: 'create the three WIDER (level, generation) unique keys FIRST, then replace the three narrow customer level UNIQUE constraints per docs/PHASE_4_S6_LEVEL_UNIQUENESS.md, and widen the verifiers and invoice_outstanding(uuid, uuid[]) to the ACTIVE subset',
   }),
   Object.freeze({
     patchRequest: 'PATCH-REQ-S6-005',
-    file: 'infrastructure/database (the S6 migration) + tests/security/settlement-s6-guard-gaps.test.ts',
-    edit: "widening purchase_settlement_verify for TD-15's supplier twin breaks a prosrc digest pinned inside frozen 0067; this needs a Tech Lead ruling before any supplier-side reversal is written",
+    file: 'the S6 migration (number unknown until the predecessors seal)',
+    edit: "re-record purchase_settlement_verify's digest FORWARD in supplier_settlement_guard_gaps() in the same migration that widens it: the consumer suite computes both sides from live pg_proc and hard-codes no digest, so this is a task and not a ruling",
   }),
   Object.freeze({
     patchRequest: 'PATCH-REQ-S6-006',
     file: 'apps/api/src/modules/inventory/inventory-authorization.ts',
     edit: 'add three OPERATION_AUTHORITY rows, per REVERSAL_OPERATION_AUTHORITY above',
+  }),
+  // The four rows below were MISSING, and the test beside this array could not
+  // have noticed: it walked these rows and checked their shape, so it held the
+  // array to itself. A registry that lists six of ten obligations is a registry
+  // that reads as complete. The test now checks BOTH directions — every patch
+  // request under docs/patch-requests/ appears here, and every row here names a
+  // real one — which is `[[daftar-registry-before-state]]` applied to the
+  // registry rather than to the state.
+  Object.freeze({
+    patchRequest: 'PATCH-REQ-S6-007',
+    file: 'docs/PHASE_4_ARCHITECTURE_LOCK.md',
+    edit: "update P4-AL-22's accepted level-constraint enumeration IN THE 0081 SEAL COMMIT, which is the moment the accepted set changes, and not before",
+  }),
+  Object.freeze({
+    patchRequest: 'PATCH-REQ-S6-008',
+    file: 'docs/PHASE_4_ARCHITECTURE_LOCK.md',
+    edit: "correct P4-AL-20's source-type enumeration: the live registry holds no allocation_reversal row and S6 must not register one",
+  }),
+  Object.freeze({
+    patchRequest: 'PATCH-REQ-S6-009',
+    file: 'apps/api/src/modules/receivables + the three locale catalogues',
+    edit: 'a RECEIVABLES_STATUS-style classification for every REVERSAL_CODES member, and one error.* entry per code per locale',
+  }),
+  Object.freeze({
+    patchRequest: 'PATCH-REQ-S6-010',
+    file: 'the existing S4 suites under tests/ that S6 may not edit',
+    edit: 'three test hooks, named in the contract pack §13.3, each inside a suite S4 owns',
   }),
 ]);

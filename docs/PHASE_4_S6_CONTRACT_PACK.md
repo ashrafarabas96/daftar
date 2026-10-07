@@ -68,25 +68,56 @@ rounding account is invented and `classifyRoundingResidual`
 
 ---
 
-## 2. Four places where the live tree already contradicts an accepted document
+## 2. Four measurements of the live tree, two of them corrections to this pack's first draft
 
-Stated first, because the measurement is the deliverable.
+Stated first, because the measurement is the deliverable. Items 1 and 3 were drafted as
+contradictions between the tree and an accepted document; both were over-stated, and the
+corrected readings are below. **A finding I got wrong is a finding about my own work and is
+recorded as one, not quietly removed.**
 
-1. **There are FIVE `*_level_uq` constraints, not two.** `P4-AL-22`
-   (`docs/PHASE_4_ARCHITECTURE_LOCK.md:509-511`) names `supplier_credit_allocations_level_uq`
-   and `supplier_refunds_level_uq`. `0081` added three more (`:334`, `:470`, `:474`). The
-   live enumeration is in `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §0; the lock correction is
-   `PATCH-REQ-S6-007`.
+1. **There are FIVE `*_level_uq` constraints in the tree, of which TWO are accepted — which
+   is exactly what `P4-AL-22` says.** `P4-AL-22`
+   (`docs/PHASE_4_ARCHITECTURE_LOCK.md:509-511`) enumerates the **accepted**
+   level-uniqueness constraints: `supplier_credit_allocations_level_uq` (`0067:438`) and
+   `supplier_refunds_level_uq` (`0067:491`). `0081` adds three more (`:334`, `:470`, `:474`),
+   but `frozenThrough` is `0079`, so `0080`–`0086` are S4 **candidates** and none of them is
+   accepted. The same paragraph of the lock anticipates them in terms — *"Phase 4
+   **introduces** `payment_remaining_before_minor` on `payment_allocations`; it does not
+   inherit it."*
+
+   **The first draft of this pack called the lock's enumeration stale. That was wrong: the
+   conflation was between *accepted* and *live*, and it was mine.** The live read of five is
+   retained because S6's replacement work must address all five, and it is in
+   `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §0 with an accepted/candidate column.
+   `PATCH-REQ-S6-007` is rewritten accordingly: the lock's enumeration becomes stale **at the
+   moment `0081` is sealed**, and must be updated **in that seal commit** — not before,
+   because updating it earlier would make the lock claim an acceptance that has not happened.
 2. **`supplier_payment_allocations` carries no level constraint at all** (`0067:386-387`;
    `P4-AL-22:515-521` says so). So the supplier **payment** half of TD-15 is not blocked by a
    level constraint, which is the opposite of what a symmetric reading of TD-15 assumes.
-3. **TD-15's supplier twin is blocked by a `prosrc` digest pinned inside FROZEN `0067`, not
-   by a constraint.** `purchase_settlement_verify(uuid,uuid)`'s SHA-256 is recorded in
-   `supplier_settlement_guard_gaps()`' `c_digest` (`0067:1817`, discovery row 15 at
-   `0067:1829`) and is read by the existing Phase 3 suite
+3. **TD-15's supplier twin crosses a `prosrc` digest pinned inside FROZEN `0067` — and that
+   is an open ruling, not a blocker.** `purchase_settlement_verify(uuid,uuid)`'s SHA-256 is
+   recorded in `supplier_settlement_guard_gaps()`' `c_digest` (`0067:1817`, discovery row 15
+   at `0067:1829`) and is read by the existing Phase 3 suite
    `tests/security/settlement-s6-guard-gaps.test.ts`, which S6 may not edit. Widening that
-   verifier for the ACTIVE subset turns an accepted suite red. `PATCH-REQ-S6-005`;
+   verifier for the ACTIVE subset makes the recorded digest read false against the body the
+   database then holds, and that suite goes red at that moment.
+
+   **The first draft of this pack framed this as the slice's one blocker. That was an
+   over-escalation of mine.** The frozen **file** is not modified in any of the three paths —
+   the routine is replaced by **forward DDL**, which is already append-only — and the accepted
+   **suite** is not frozen, since byte-immutability binds the **migrations** alone. An
+   append-only safe solution therefore exists, and **nothing in the customer half of S6 waits
+   on it.** It stays an open ruling of the coordinator's, to be made at **S6 promotion** with
+   the independent challenger's signature. `PATCH-REQ-S6-005`;
    `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §5.2.
+
+   **The sharper hazard in the same change** is the one that is recorded and is not mine to
+   rule either: `0067:2790`, `0072:903` and `0077` each assert a **substring** of
+   `accounting_reversals_20_domain_source_guard()`'s refusal list, and an assertion on a
+   substring of a message is an assertion about the **wording**, not about the **law**. S6's
+   widening changes that list's membership, so the S6 migration must probe what those three
+   assertions still match.
 4. **`P4-AL-20`'s source-type enumeration does not describe this tree, and the discrepancy
    is in S6's own surface.** It names `payment_allocation`, `credit_note`, `refund` and
    `allocation_reversal` (`docs/PHASE_4_ARCHITECTURE_LOCK.md:476-478`); the live registry
@@ -94,6 +125,30 @@ Stated first, because the measurement is the deliverable.
    (`0081:2467-2472`) and holds no `allocation_reversal`. `docs/PHASE_4_S5_PREPARATION.md`
    §3.3 records the same finding from the S5 side. **S6 does not register an
    `allocation_reversal` accounting source type** (§7 says why).
+
+### 2A. What the independent challenge found, and what it changed
+
+Signature 2 returned fourteen findings. Nineteen claims of this pack held, including the
+exact-inverse law and the single-chain tail sufficiency. **Six findings changed the design or
+this pack, and three of them were defects in my own proofs rather than in my prose.** They are
+listed here, in the order of their consequence, so a reader of this section knows what the
+first draft got wrong without reading the first draft.
+
+| # | finding | severity | what changed |
+|---|---|---|---|
+| **F1** | the level-uniqueness replacement was **weaker** than what it dropped, on the unlocked path. A `UNIQUE` index is cross-transaction **mutual exclusion**; a `BEFORE INSERT` trigger that reads and a `DEFERRABLE` constraint trigger that fires inside the committing transaction provide none, so two direct inserts at one freed level both commit | CRITICAL | the replacement is now a **widened** key carrying the chain's reversal generation beside the level, never a drop: `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §1A, DDL spec §2A. **And my concurrency model was itself the reason I could not have caught it** — it declared READ COMMITTED and implemented READ UNCOMMITTED with no rollback. The model now stages writes per transaction, discards them on refusal, and models the index as a key-level exclusion; C-7 asserts the F1 state as a finding |
+| **F2** | the mandatory AR-reader widening named `invoice_outstanding(uuid,uuid)` at `0081:1334`, which has held **no reducer read since `0083`** and is a thin delegating wrapper. The reducer `UNION ALL` lives in the **array overload** at `0084:593`, which `0084:516` records as the last definition of that name **because seam `S-P4-03` reads the last one** | CRITICAL | the target is corrected in DDL spec §4 and in `PATCH-REQ-S6-004`; the scalar wrapper is specified as **NOT widened**, because widening it would be a second statement of the settlement sum. Implemented as first written, every invoice would have kept subtracting the reversed reducer for ever — the exact harm I called the row mandatory to prevent |
+| **F5** | the "blocker" I declared was none: `tests/security/settlement-s6-guard-gaps.test.ts:122-140` hard-codes **no digest**; it computes both sides from live `pg_proc`, and the `22 + 3` count is unchanged by a **replaced** entry. The precedent is `0067:1431-1435` in the same pair of functions, whose comment I had quoted | — | `PATCH-REQ-S6-005` is rewritten as a **task**, and the supplier half of TD-15 is now **specified** rather than deferred. I had applied one standard to dropping a frozen constraint by forward DDL and another to re-recording a frozen digest |
+| **F3** | `payment_reversals.original_entry_id NOT NULL` is unsatisfiable: a `payments` row posts **no** journal entry (`0081:2194`), so the column forced two rows claiming one journal reversal. I had mirrored `purchase_reversals`, a **1:1** document; a payment is **1:N** | HIGH | the column is nullable, renamed, and reserved for the surplus credit's entry with a pairing CHECK; the parent carries **no** binding and no generated source type (DDL spec §1.1) |
+| **F4** | three operation kinds were registered with **no command routine**, which necessarily reddens `tests/security/phase3-s8-operation-kinds.test.ts` clause 1 — the same cross-phase breakage class I had correctly raised one section earlier | HIGH | the three routines are specified, in the same migration as the registration (DDL spec §5A) |
+| **F6** | the void had **no idempotency**: no `invoice_void.idempotency_conflict`, and no relation held its `id` or `intent_sha256` — so the direct-void guard was specified to prove the existence of a row nothing created | HIGH | `invoice_voids` is specified (DDL spec §5.3) and the code is in the closed set. Law 7 was unmet for one of the three commands |
+
+Smaller findings taken in the same round: the `payments` FOR UPDATE is **removed** (§8.1) and
+with it a grant on an S4-owned table; `allocation_reversal.already_reversed` is now reachable
+for the condition it names (§9), where a unit case had **asserted the defect** in its own
+title; the date comparisons validate a canonical `YYYY-MM-DD` first (§9); and the required
+wiring registry named six of ten patch requests, which its own test could not notice because
+it walked the registry and checked the shape of what it found.
 
 ---
 
@@ -134,13 +189,22 @@ hope, and there are none of those below.
 | S5-8 | S5 adds no `reversed`, `voided` or `status` column to any reducer relation | the sealed DDL | the append-only law has a competing mechanism in the tree and `TL-P4-S6-R1`'s shape is contradicted |
 | S5-9 | S5's migrations occupy the numbers immediately after S4's candidates, so **S6's prefix is unknown until both seal** | `ls infrastructure/database/migrations/` | nothing in this pack changes: it allocates no number |
 
-**One assumption I could not settle from the tree at all, and it is recorded as such, not
-guessed:** whether S5's refund reversal (if S5 ships one) and S6's allocation reversal share
-one `allocation_reversals` relation or two. `docs/PHASE_4_S5_PREPARATION.md` §7 does not
-mention a reversal and `docs/PHASE_4_EXECUTION_PLAN.md:194-196` assigns both
-`payment_reversals` and `allocation_reversals` to S6, so the tree's answer is "S6's, both" —
-but the S5 *owner* may read `TL-P4-S5-R1` differently, and no diff of the base tree can tell
-me. It is a coordination question, not an engineering one.
+**The one coordination question in this pack is now SETTLED, from the tree and not by
+preference.** It was: whether S5's refund reversal (if S5 ships one) and S6's allocation
+reversal share one `allocation_reversals` relation or two. `docs/PHASE_4_S5_PREPARATION.md`
+§7 does not mention a reversal, and `docs/PHASE_4_EXECUTION_PLAN.md:194-196` assigns **both**
+`payment_reversals` and `allocation_reversals` to S6 while giving S5 only `credit_notes`,
+`credit_note_items` and `refunds`.
+
+> **Ruling (coordinator, from the execution plan): S6 owns both `payment_reversals` and
+> `allocation_reversals`. S5 owns `credit_notes`, `credit_note_items` and `refunds` and no
+> reversal relation.** The S5 owner has been told the same, so this pack treats it as settled
+> and specifies **one** `allocation_reversals`, S6's, covering every settlement reducer kind
+> including any S5 reducer that lands on the invoice chain (assumption S5-2).
+
+The consequence for S5-7 and S5-8 is unchanged: S5 still registers its own source types and
+still adds no `reversed` column, because the reversal **relation** being S6's is what makes
+both of those true rather than a second mechanism.
 
 ---
 
@@ -171,7 +235,7 @@ Specified in `docs/PHASE_4_S6_DDL_SPECIFICATION.md`. Two relations and one trigg
 | subject | why | detail |
 |---|---|---|
 | `payment_allocations_level_uq`, `customer_credit_applications_level_uq`, `customer_credit_applications_invoice_level_uq` | incompatible with reversal | `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §2–§4 |
-| `supplier_credit_allocations_level_uq`, `supplier_refunds_level_uq` | the same, on frozen relations, via FORWARD DDL only | ibid. §5; **blocked** by `PATCH-REQ-S6-005` |
+| `supplier_credit_allocations_level_uq`, `supplier_refunds_level_uq` | the same, on frozen relations, via FORWARD DDL only | ibid. §5; awaits the promotion-time ruling `PATCH-REQ-S6-005` (supplier half only) |
 | `invoice_settlement_verify`, `customer_credit_verify`, `invoice_outstanding` | the ACTIVE subset; and `0081:1380` already says the reader is replaced by the slice that adds a reducer relation | `CREATE OR REPLACE` by their owner, bodies diffed against the S4/S5 seal |
 | `accounting_reversals_20_domain_source_guard()` | the three customer source types move from the plain refusal arm to a `purchase`-style **paired** arm, admitting a reversal **iff** a paired `allocation_reversals` / `payment_reversals` row exists | `0081:1405-1417` is the body to replace; the mechanism is `0081:1410-1413` applied to three more types |
 | `customer_credit_consume`, `customer_credit_guard()` | one more lawful transition: the restoration a reversal makes. Same single writer, not a second one | `0081:1224`, `:1070` |
@@ -192,10 +256,14 @@ made about `payments.reverse`).
 
 | method | path | permission | sensitive | body |
 |---|---|---|---|---|
-| POST | `/v1/customer-payments/:paymentId/reversal` | `payments.reverse` | **yes** | `reversalId`, `reversalDate`, `reason` |
+| POST | `/v1/customer-payments/:paymentId/reversal` | `payments.reverse` | **yes** | `reversalId`, `reversalDate`, `reason`, and optionally `providerSource` + `providerReference` (both or neither — the webhook identity, §7.4) |
 | POST | `/v1/settlement-reducers/:reducerId/reversal` | `payments.reverse` | **yes** | `reversalId`, `reversalDate`, `reason` |
 | POST | `/v1/invoices/:invoiceId/void` | `sales.void` | **yes** | `voidId`, `voidDate`, `reason` |
 | GET | `/v1/customer-payments/:paymentId/reversal` | `receivables.view` | no | — |
+
+The provider pair is the one addition to a request since the first draft, and it is **not** a
+figure: it is an identity the client does not choose, and the reason the reversal's intent hash
+cannot cover the client-chosen `reversalId` (§7.4).
 
 **No request carries an amount.** That is the exact-inverse law and the whole-payment law
 expressed as absences: there is no `amountMinor`, no `releasedMinor`, no rate and no
@@ -205,19 +273,47 @@ figure the original did not say.
 **The read path is not optional.** The recorded lesson is the POS basket whose only readers
 were its own write commands (`tests/golden-regression/phase4/01-cross-tenant.golden.test.ts:129-136`):
 state whose only reader is its command's return value has **no read path**. So the `GET`
-above is part of the surface, behind the same gate and the same projection as the write, with
-its own refusal set (absence and authority only — it inherits none of the write's
-`*_inconsistent` refusals), and `200 []`/`404` rather than a refusal for an absent reversal.
+above is part of the surface, behind the same gate as the write, with its own refusal set
+(absence and authority only — it inherits none of the write's `*_inconsistent` refusals).
+
+**Its answer is 404, and the `200 []` of the first draft was incoherent** (challenger F12).
+`payment_reversals_payment_uq` makes a payment's reversal **at most one row**, and
+`CustomerPaymentReversalResultDto` is a single object, so there is no collection for an empty
+array to be the empty case of. A `200 []` would have been a response of a shape the contract
+does not declare. The rule, stated so it cannot be read as a policy about empty collections:
+**a one-or-none read of a single object answers `200 <object>` or `404`; the `200 []`
+content-isolation device belongs to the LIST reads** (`01-cross-tenant.golden.test.ts:565`,
+where an empty array is how a cross-business id is hidden rather than refused). Here the
+cross-business id and the absent reversal both answer `404`, which is the same hiding by a
+different shape (`G-02`).
+
+**"The same projection as the write" needed a body, and now has one.** The first draft said
+the read shares the write's projection and specified neither a port nor a mapping, which is
+a claim with nothing behind it. The read is specified as: `ReversalDocumentPort.reversalOf
+(paymentId) → PaymentReversalPlan | null`, mapped to the DTO by the **same** function the
+write's response uses — one mapping body, named in the contract module, so a field that
+appears on the write and not on the read is a type error rather than a discovered
+inconsistency.
 
 ---
 
 ## 6. Permissions
 
 Nothing is invented. The registry is a **closed set of twelve** (`permissions.ts:68-89`,
-`P4-AL-36`) and S6 uses two keys that are already in it:
+`P4-AL-36`) and S6 uses **THREE** keys that are already in it:
 
-- `payments.reverse` (`permissions.ts:85`) — **SENSITIVE** (`:142`);
-- `sales.void` (`permissions.ts:80`) — **SENSITIVE** (`:139`).
+- `payments.reverse` (`permissions.ts:85`) — **SENSITIVE** (`:142`), the write;
+- `sales.void` (`permissions.ts:80`) — **SENSITIVE** (`:139`), the write;
+- `receivables.view` (`permissions.ts:87`) — a **read** key, not sensitive, required by the
+  reversal read route of §5 (`receivables-permissions.ts:14`).
+
+**The third was missing from this section, and the test that covers the section could not have
+noticed** (challenger F13): it iterates `REVERSAL_OPERATION_AUTHORITY`, which maps the three
+**write** operation codes to their keys and has no row for a read route — so the read key was
+required by §5, used by no mapping and counted by nothing. The covering case in
+`packages/inventory/test/customer-reversal-concurrency.test.ts`' sibling unit suite now asserts
+the read key too, and asserts that it is **NOT** in `SENSITIVE_PERMISSIONS`, because a read
+route that demanded a sensitive key would be a quietly different authority model.
 
 Under the `OD-P4-01` **OPTION A** ruling neither may be a **default** of any built-in role,
 the cashier and the manager included, and `0076`'s `role_permissions` assertion
@@ -249,6 +345,16 @@ They are declared in `packages/inventory/src/customer-reversal.ts` as
 operation, so registering three with no routine behind them would make the gate report a path
 it cannot find. `PATCH-REQ-S6-001`.
 
+**The same argument applies at the DATABASE, and the first draft of this pack made it in one
+place and not the other** (challenger F4). `operationKindLaw`
+(`tests/security/phase3-s8-operation-kinds.test.ts:103`) is unscoped, and its clause 1
+requires **exactly one** consuming routine per registered `inventory_operation_kinds` row,
+owned by `daftar_inventory_internal` with `EXECUTE` exactly `{daftar_app}`. So the three rows
+and the three command routines **land in one migration or neither lands** —
+`docs/PHASE_4_S6_DDL_SPECIFICATION.md` §5A names the routines. Registering the kinds alone
+would have reddened an accepted suite S6 may not edit, which is the breakage class this pack
+raises against `purchase_settlement_verify` one section later and had missed here.
+
 ### 7.2 Accounting source types — S6 registers NONE, and that is the finding
 
 `P4-AL-20` lists `allocation_reversal` among Phase 4's source types
@@ -275,6 +381,45 @@ correction.
 customer types were left out: "None of the three joins `DOMAIN_REVERSIBLE_SOURCE_TYPES`
 below. Reversal is P4-S6" (`post.ts:280-282`). S6 adds them. `PATCH-REQ-S6-003`.
 
+### 7.4 `provider_reference` — a column S6 must CREATE, not an assumption it can record
+
+**Measured:** `provider_reference` appears in **zero of the 87 migrations** at the base SHA. It
+exists only in documents — `docs/PHASE_4_EXECUTION_PLAN.md:199`, which makes
+"`provider_reference` idempotency **at the database**" an **exit condition of
+`gate:phase4:s6`**, and `docs/PHASE_4_ARCHITECTURE_LOCK.md:679` and `:1342` (G-11), which
+specify the mechanism and the golden.
+
+**So it is not a predecessor assumption, and recording it as one would have been an error of
+the same kind as F2.** No sealed tree will contain it and no diff can confirm it: S6 creates
+the column and specifies the uniqueness, or its own gate's exit condition is unmeetable. The
+S8 owner's idempotency inventory already reports the hole with the subject named as *"the
+`provider_reference` column (exists nowhere)"*.
+
+The specification is `docs/PHASE_4_S6_DDL_SPECIFICATION.md` §1A. In brief:
+
+- **`payment_reversals` carries it, and nothing else does** — a provider originates the payment
+  reversal (G-11's chargeback) and nothing else in this slice. On a child it would give one
+  delivery several rows to be idempotent on, which is F3's defect in another costume.
+- **`provider_source` + `provider_reference`, both nullable, both or neither** under a pairing
+  CHECK. `provider_source` is trimmed text and **not** an enum: there is no provider in this
+  tree (`0048:25`, `:77-78`), and naming providers that do not exist is a promise the schema
+  cannot keep.
+- **A PARTIAL unique index**, `WHERE provider_reference IS NOT NULL`. A plain
+  `UNIQUE (business_id, provider_source, provider_reference)` would be **green and vacuous for
+  every merchant-initiated reversal**, because `NULLS DISTINCT` is the default and every such
+  row has a NULL reference. `NULLS NOT DISTINCT` is not proposed: nothing in this tree writes
+  it (the sole mention is a comment at `0005:74`).
+- **Law 7 over TWO identities.** A redelivered webhook is the same economic command with a
+  **fresh** client-chosen `reversalId`. The intent hash therefore does **not** cover
+  `reversalId` — a **declared departure** from `customer_collect_payment`, whose intent
+  includes the id — because with the id inside the hash a correct replay would be reported as a
+  changed intent. "Different id, same economic command" is made **unrepresentable** by
+  `payment_reversals_payment_uq` rather than detected.
+- **A new FIRST lock**, `pg_advisory_xact_lock('daftar.payment_provider_reference', …)`, because
+  two concurrent deliveries carry different ids and the step-1a key does not serialise them —
+  without it both insert and one gets `23505`, which is a refusal where law 7 requires a replay.
+  §8.1 carries it.
+
 ---
 
 ## 8. Lock order and transaction boundary
@@ -290,9 +435,10 @@ S6's:
 
 | step | lock | notes |
 |---|---|---|
-| 1 | `pg_advisory_xact_lock('daftar.<reversal document>_id', <id>)` | the reversal's own id; the idempotency key |
-| 1′ | `pg_advisory_xact_lock('daftar.payment_id', <payment>)` | payment reversal only, **after** step 1, so two advisory classes have a fixed order |
-| 2 | `payments` row FOR UPDATE | payment reversal only. A **new** lock class, taken **before** `invoices`; no S4 path takes a `payments` row lock at all, so it cannot close a cycle |
+| **1** | `pg_advisory_xact_lock('daftar.payment_provider_reference', hashtext(provider_source \|\| '\|' \|\| provider_reference))` | **payment reversal with a provider reference only** (§7.4). FIRST, because it is the identity under which the replay decision is made — and because two concurrent deliveries of one webhook carry DIFFERENT client ids, so the key below does not serialise them. Without this, both insert and the partial unique answers one of them `23505`: a refusal where law 7 requires an exact replay. A `hashtext` collision costs serialisation, never correctness |
+| 1a | `pg_advisory_xact_lock('daftar.<reversal document>_id', <id>)` | the reversal's own id; the client-chosen idempotency key |
+| 1b | `pg_advisory_xact_lock('daftar.payment_id', <payment>)` | payment reversal only, **after** steps 1 and 1a, so the three advisory classes have a fixed order. With step 2 removed, this key and `payment_reversals_payment_uq` are the whole of the per-payment serialisation |
+| ~~2~~ | ~~`payments` row FOR UPDATE~~ | **REMOVED** (challenger F11). It serialised nothing that step 1b and `payment_reversals_payment_uq` do not already: the advisory `daftar.payment_id` key makes two reversals of one payment serial, and the unique key makes the second **unrepresentable**. It bought that nothing with a `GRANT UPDATE (<placeholder>)` on an **S4-owned** table — a grant argument for a lock nobody needed. The lock class, and with it one of the three new entries the deadlock sweep would have to cover, is gone |
 | 3 | every affected `invoices` row FOR UPDATE, **in id order** | **THE CHAIN LOCK** — the same lock, on the same rows, as S4's cap lock |
 | 3′ | every affected `customer_credits` row FOR UPDATE, **in id order** | after step 3, which is S4's order |
 | 4 | the `customers` row FOR SHARE | |
@@ -317,34 +463,61 @@ surplus credit, and posts every mirror, in that one transaction. A reversal and 
 
 ### 8.3 The race proofs, as models (level C)
 
-`packages/inventory/test/customer-reversal-concurrency.test.ts`, 15 cases, green. No sleeps:
-every interleaving is a written-down list of which transaction advances next, and every
-contender's arrival in the queue is observed by `expectQueued`, which **fails** when a
-transaction never queued — two connections used in sequence are not contention. A deadlock
-has its own outcome kind and nothing retries.
+`packages/inventory/test/customer-reversal-concurrency.test.ts`, green. No sleeps: every
+interleaving is a written-down list of which transaction advances next, and every contender's
+arrival in the queue is observed by `expectQueued`, which **fails** when a transaction never
+queued — two connections used in sequence are not contention. A deadlock has its own outcome
+kind and nothing retries.
+
+**The model implements the isolation it names, and that is new.** Each transaction's writes
+are staged in its own buffer, published at commit and **discarded on refusal**; a read sees
+committed state plus its own buffer; and the deferred verifier runs **inside** the committing
+transaction, over what that transaction can see. The earlier revision declared READ COMMITTED
+and implemented READ UNCOMMITTED with no rollback, which is why it could not see F1 (§2A).
+Both mechanisms are proved load-bearing by mutation: making rollback publish instead of
+discard fails cases, and making every buffer visible to everyone fails cases — including the
+F1 finding itself.
 
 | case | what it settles |
 |---|---|
 | C-1 | reversal vs reversal of the same tail: exactly one commits, the loser is `not_last_reducer`, the original row is still there; and the **mirror** service order gives the mirror outcome, so the result is the protocol and not the schedule |
 | C-2 | reversal vs a new allocation, both orders: the allocation lands at the **freed** level while the reversed original still holds it (two rows at level 700), and the active chain is still contiguous |
 | C-3 | two allocations after a reversal: both commit at **successive** levels; when only one amount is free, the loser is capped under the lock |
-| C-4 | a two-chain reversal: both chain locks in ONE transaction in resource order, and a competing writer on **either** chain queues behind it |
-| C-5 | a stale head: refused `settlement_changed`; and over **four** interleavings, **no** stale head commits and **no** deadlock occurs |
-| C-6 | deadlock ordering: every relevant lock **pair** in **both** directions under the declared order → **zero** deadlocks; plus a **planted** lock-order defect (one party reversing the pair) that **must** deadlock, so the zero is not vacuous |
-| C-7 | a direct-SQL race: neither party locks (`s.queued` is empty — with no lock there is no contention, so the protection cannot be a lock), and the deferred verifier refuses at COMMIT; with a **single** direct insert at the freed level **accepted**, so the verifier refuses the overlap and not the level |
+| C-4 | a two-chain reversal: both chain locks in ONE transaction in resource order, the reducer that is the tail on **both** chains accepted, and **three planted cases** — tail on the invoice but not the credit, tail on the credit but not the invoice, and one chain presented alone (refused by arity). Its act step was previously `() => void 0` with the credit chain never seeded, so it proved the lock order and nothing about the two-chain law (F9) |
+| C-5 | a stale head: refused `settlement_changed`; with the reversal removed the same transaction commits; a **planted** variant with the recompute-under-the-lock step deleted **commits over a stale read**, which is the harm the step prevents (F10); and over **four** interleavings, no stale head commits, no deadlock occurs, and at least one interleaving is proved genuinely stale |
+| C-6 | deadlock ordering over **six** resource classes — including the two advisory document keys S6 **introduces**, which the earlier sweep omitted (F7): 30 arrangements, 15 pairs, 1 share/share pair excluded **by name**. Every contending pair is **proved** to have contended; with both parties in declared order, **zero** deadlocks; and the real both-directions claim — the two parties taking a pair in **opposite** orders — gives exactly one `40P01` victim for each of the 12 cycle-capable arrangements and **zero** for the 16 that contend but cannot cycle. The earlier case normalised both parties to the declared order before running, so "both directions" exercised six arrangements twice; and it conflated contention with cycle-capability, which are not the same predicate |
+| C-7 | the direct-SQL race, and **the F1 finding** (§2A): without a unique key, two direct inserts at one freed level **both commit** and the committed chain is left broken, with `verifyCommitted` throwing on it; the **level-alone** key refuses a **lawful** successor (`23505`), which is the incompatibility with no competitor present; under the **generation** key the second writer **queues on the index key** and is refused `23505`, through the contention barrier; the same key **admits** the lawful successor; a writer that **fabricates** the generation is refused by its own COMMIT; and a fabricated level the index does not cover is refused by the verifier alone |
 
 ---
 
 ## 9. Refusal codes
 
-`REVERSAL_CODES` in `packages/inventory/src/customer-reversal.ts` — nineteen, closed, sorted,
-held to its own type union by the compiler. Three namespaces: `payment_reversal.*`,
+`REVERSAL_CODES` in `packages/inventory/src/customer-reversal.ts` — closed, sorted, held to
+its own type union by the compiler. **No count is written here**: a number in prose drifts
+from the array, and the array is the subject. Three were added after review:
+`invoice_void.idempotency_conflict` (F6 — the void had no idempotency and no relation held its
+identity), and `payment_reversal.date_invalid` / `allocation_reversal.date_invalid` /
+`invoice_void.date_invalid` (the date comparison was `<` over **unvalidated** strings, so
+`'2026-2-28'` — the 28th of February — passed an ordering law against an original of the 1st
+of March, because by character order it is the greater). And one became reachable for the
+condition it names: `allocation_reversal.already_reversed` (F7). Three namespaces: `payment_reversal.*`,
 `allocation_reversal.*`, `invoice_void.*`.
 
 The one a merchant meets most is `*.not_last_reducer` (409), which is the LIFO law and is a
 real usability wall by ruling. Its details carry `reverseInThisOrder`, newest-first — the only
 order the law admits — so the client can offer the next lawful step. A refusal **never**
 carries an amount.
+
+**And an exact replay is no longer answered by that code.** `allocation_reversal.already_reversed`
+was unreachable for the condition it names: a replay presents a reducer that is no longer in
+the active set, the tail check failed, and the answer was `not_last_reducer` — whose
+`reverseInThisOrder` advice named, as the "later" reducer to reverse first, the one already
+reversed. A client following the advice went in a circle. The payment command answered the
+same state `payment_reversal.already_reversed` all along, so two commands answered one state
+two ways, which a closed code set must not do. The membership test is the same anti-join the
+chain is already built from, so no new fact was needed to fix it; the unit case that covered
+it previously **asserted the defect**, with a title that said "already reversed" above an
+assertion pinning `not_last_reducer`.
 
 **Owed:** these codes are not yet `InventoryErrorCode` (`PATCH-REQ-S6-002`), have no
 `RECEIVABLES_STATUS`-style classification, and have no `error.*` entry in the three locale
@@ -393,7 +566,7 @@ runtime credential** can reach cross-tenant data or effect **through** that auth
 the four-way matrix at `:824-831` may not be collapsed into one statement.
 
 `0086` is the RLS-quals-once-per-query migration and its law
-(`tests/security/p4s4-rls-quals-once-per-query.test.ts`) acquires the two new relations as
+(`tests/security/p4s4-rls-quals-once-per-query.test.ts`) acquires the three new relations as
 subjects the day they land. §13 counts that cost.
 
 ---
@@ -436,7 +609,7 @@ subjects the day they land. §13 counts that cost.
 
 ## 13. The estate cost, and the test hooks
 
-### 13.1 Discovery-based laws that acquire the two new relations as subjects
+### 13.1 Discovery-based laws that acquire the THREE new relations as subjects
 
 Measured by reading the laws, not by guessing: `tests/security/phase4-forward-evolution.test.ts`
 (the four forbidden claim shapes, over every suite discovered from disk);
@@ -444,6 +617,16 @@ Measured by reading the laws, not by guessing: `tests/security/phase4-forward-ev
 `tests/security/phase3-s8-grant-matrix.test.ts`' `od03Problems`, which reads **every** column
 matching `(^|_)tax(_|$)` on **every** relation in `public` — so S6's relations must carry no
 tax-named column at all, or carry one as a structural zero. **They carry none.**
+
+**Three relations, not two:** `payment_reversals`, `allocation_reversals` and `invoice_voids`
+(§2A, F6). And two **existing, S4-owned** relations gain a column — `chain_generation` on
+`payment_allocations` and on `customer_credit_applications`, plus `credit_chain_generation` on
+the latter (F1) — which puts those relations' own coverage laws in scope too:
+`tests/guards/p4s4-new-relation-coverage.test.ts` and
+`tests/guards/p4s4-settlement-surface-laws.test.ts` both read columns, and a slice that adds a
+column to another slice's table owes that slice's laws an answer. **This is the one place S6's
+DDL reaches outside its own tables**, and §14 item 4b flags it for the coordinator rather than
+assuming it.
 
 ### 13.2 What will NOT go red, and why that is a measurement
 
@@ -484,8 +667,24 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
    of which changes the shape of a verifier S6 replaces.
 3. **S6 promoted** by an explicit directive, and the migration prefix allocated by the one
    migration owner.
-4. **`PATCH-REQ-S6-005` ruled** — the frozen `prosrc` digest. Until it is, **no supplier-side
-   reversal may be written**, and TD-15 cannot close.
+4. ~~**`PATCH-REQ-S6-005` ruled**~~ — **WITHDRAWN as a gate.** There is nothing to rule: the
+   consumer suite computes both sides of the digest claim from live `pg_proc` and hard-codes
+   none, and the tree has performed the same forward re-recording once already
+   (`0067:1431-1435`). `-005` is a task inside the S6 migration, and the supplier half of
+   TD-15 is specified. What remains open from that request is the **substring** hazard: three
+   accepted migrations assert a substring of a refusal list, which is an assertion about the
+   wording and not about the law, and the durable fix is larger than S6.
+4a. **`invoice_voids` accepted into S6's scope** (DDL spec §5.3). The execution plan names
+   `payment_reversals` and `allocation_reversals` for S6 and not this one; a command with no
+   identity row cannot satisfy law 7, so it is specified and flagged rather than assumed.
+4c. **`provider_source` / `provider_reference` accepted into S6's scope** (§7.4). The execution
+   plan names neither column in S6's scope list while making its idempotency an exit
+   condition of S6's gate, so the specification resolves that in the only direction available
+   — S6 creates it — and flags it rather than assuming it.
+4b. **The `(level, generation)` widening accepted** as the level-uniqueness replacement
+   (`docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §1A). It adds a stored column to two **S4-owned**
+   relations, which is the one part of this specification that reaches outside S6's own
+   tables and therefore wants the coordinator's word, not mine.
 
 **Then, in order:**
 
@@ -498,13 +697,25 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
 7. Level F: the models of §8.3 re-expressed against a real cluster, every outcome the same,
    plus the real-database cases a model cannot reach — the deferred verifier firing at COMMIT,
    `40P01` from a planted lock-order defect, and the `provider_reference` idempotency at the
-   database (`docs/PHASE_4_EXECUTION_PLAN.md:198`).
+   database (`docs/PHASE_4_EXECUTION_PLAN.md:198`). **And, named separately because it is the
+   one level-F case the whole level-uniqueness argument now rests on: TWO CONNECTIONS, two
+   unlocked inserts at the same freed level, the second required to BLOCK on the first's index
+   entry and then raise `23505`.** A single-transaction red proof cannot see a two-transaction
+   race, which is how the first draft's replacement passed review (§2A, F1).
 8. The owed goldens: reversal and refund proven to be **two** operations by the merged-path
    red proof; a second reversal refused; the multi-currency reversal using the **original**
    snapshots; **no stale allocation after a payment reversal**.
 9. The routes mounted in **both** Nest compositions, with the cross-tenant golden's
    ALLOW/DENY pairs at the API **and again at SQL**, and `200 []`-style content isolation for
    the read.
+9a. **The `provider_reference` idempotency proved AT THE DATABASE** (§7.4,
+   `docs/PHASE_4_S6_DDL_SPECIFICATION.md` §1A) — the gate's own exit condition
+   (`docs/PHASE_4_EXECUTION_PLAN.md:199`), which needs: the partial index present **and
+   partial**; a redelivery with a fresh `reversalId` **replaying** rather than inserting; a
+   changed economic command under one provider reference answering
+   `payment_reversal.idempotency_conflict`; a merchant-initiated reversal with NULLs
+   unaffected; and **two connections** delivering one webhook concurrently, with the second
+   replaying rather than receiving `23505`.
 10. `P4-I` and `P4-J` calibrated and ratcheted.
 11. `gate:phase4:s6` composing `s5`; `gate:phase4:s4 --structural-only` still PASS.
 12. TD-15 closed **with its `TECHNICAL_DEBT.md` reference corrected**: the substantive spec is
@@ -514,8 +725,9 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
 
 **What is missing right now, in one sentence:** everything from level F onward, because the
 schema S6 binds to does not exist yet and the two documents that would tell me its final shape
-are still in acceptance — and, independently of that, the supplier half of TD-15 is blocked by
-a digest pinned inside a frozen migration, which is a ruling and not a task.
+are still in acceptance — and, independently of that, the supplier half of TD-15 waits on a
+ruling about a digest pinned inside a frozen migration, which is a decision at promotion and
+not a task, and not a blocker on the customer half.
 
 ---
 

@@ -1,4 +1,4 @@
-# PATCH-REQ-S6-009 — classify the nineteen S6 codes, and give each one a sentence in three locales
+# PATCH-REQ-S6-009 — classify every S6 code, and give each one a sentence in three locales
 
 **From:** P4-S6 owner, branch `p4s6/owner`, base `6587460ba3632231e4324c5ce2af92e1589d0705`.
 **Status:** OPEN. Depends on `PATCH-REQ-S6-002`.
@@ -13,7 +13,7 @@
 
 ## Required change
 
-For each of the nineteen `REVERSAL_CODES`
+For each member of `REVERSAL_CODES`
 (`packages/inventory/src/customer-reversal.ts`):
 
 1. one status-table row mapping it to its HTTP status — `404` for `*.not_found`, `409` for
@@ -64,5 +64,5 @@ go stale and cannot be skipped" (`customer-settlement.ts:124-127`).
 
 ## Expected semantic diff
 
-Nineteen rows in one status table; nineteen keys in each of three JSON catalogues. No
+One row per `REVERSAL_CODES` member in one status table; the same keys in each of three JSON catalogues. No
 existing key changes.
