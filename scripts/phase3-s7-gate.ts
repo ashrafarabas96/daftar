@@ -37,10 +37,28 @@ import { join, relative } from 'node:path';
 import { findMerchantJargon, findS7SourceViolations, type CatalogLocale } from './guards/merchant-jargon';
 import { discoverStoredRelations, stripComments } from './guards/sql-schema';
 import { findResponsiveViolations, responsiveSurface } from './guards/web-responsive';
+import { PREDECESSOR_ARGS, decideMode, compositionOutcome, laneBNotice, verdictSuffix, type LaneB } from './guards/gate-composition';
 
 const ROOT = join(__dirname, '..');
 const MIGRATIONS_DIR = join(ROOT, 'infrastructure/database/migrations');
 const LIST_ONLY = process.argv.slice(2).includes('--list');
+
+/**
+ * THE LANE THIS RUN IS IN (TL-P4-GATE-COMP-01).
+ *
+ * `--composition` says: you are a PREDECESSOR inside a later gate. Every Lane
+ * A verdict is still taken; the host-sensitive timing steps are left to the
+ * step that owns them. Read strictly — an undeclared `--` token is a refusal,
+ * never a silent fall back to a lane.
+ */
+const MODE_DECISION = decideMode(process.argv.slice(2), [{ flag: '--list' }, { flag: '--structural-only' }, { flag: '--root', takesValue: true }]);
+if (MODE_DECISION.refusal !== null) {
+  console.error(`P3-S7 GATE: FAIL — ${MODE_DECISION.refusal}`);
+  process.exit(1);
+}
+const MODE = MODE_DECISION.mode;
+/** The Lane B steps this run did not execute, named, for the verdict line. */
+const laneBSkipped: string[] = [];
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 /** The P3-S6 migrations, which P3-S7 sits directly on. */
@@ -372,8 +390,10 @@ function checkRunnersReportFailure(): void {
   canary('web', ['--config', 'apps/web/test/fixtures/runner-exit-code/vitest.config.mts', 'failing']);
 }
 
-const STEPS = (): { name: string; cmd: string; args: string[]; env?: Record<string, string> }[] => [
-  { name: 'P3-S6 gate (permanent predecessor, composes P3-S5 … P3-S1, P2 and Phase 1)', cmd: npm, args: ['run', 'gate:phase3:s6'] },
+type Step = { name: string; cmd: string; args: string[]; env?: Record<string, string> } & Partial<LaneB>;
+
+const STEPS = (): Step[] => [
+  { name: 'P3-S6 gate (permanent predecessor, composes P3-S5 … P3-S1, P2 and Phase 1)', cmd: npm, args: ['run', 'gate:phase3:s6', ...PREDECESSOR_ARGS] },
   { name: 'localization, with the S7 jargon and source pass', cmd: npm, args: ['run', 'check:localization'] },
   { name: 'static guards, with Rules 19 (G-6 widened) and 23', cmd: npm, args: ['run', 'check:guards'] },
   { name: '@daftar/shared-contracts unit suite', cmd: npm, args: ['run', 'test', '-w', '@daftar/shared-contracts'] },
@@ -389,6 +409,16 @@ const STEPS = (): { name: string; cmd: string; args: string[]; env?: Record<stri
     cmd: 'npx',
     args: ['vitest', 'run', BUDGET_SUITE],
     env: { P3S7_PERF_SCALE: TIER1_SCALE },
+    // LANE B (TL-P4-GATE-COMP-01). T-17 is four ABSOLUTE p95 ceilings in
+    // milliseconds (150/250/200/50) over a seeded 5,000-variant /
+    // 50,000-purchase / 200,000-AP-line dataset at scale 0.1. Host-sensitive
+    // by construction, and until this change it had NO CI path of its own:
+    // its only execution anywhere was recursive, inside P3-S8 → the Phase 3
+    // corrective gate → P4-S1. Suppressing it without giving it a named step
+    // would have DELETED a measurement, which the ruling forbids — hence the
+    // dedicated CI step this row names.
+    hostSensitive: true,
+    measuredBy: 'the dedicated `P3-S7 read budgets — T-17, measured` step of the required `backend` CI job',
   },
 ];
 
@@ -399,12 +429,28 @@ function runSteps(): void {
     console.error('\nP3-S7 GATE: FAIL — a test runner cannot report failure; refusing to run the regression matrix');
     process.exit(1);
   }
+  let executed = 0;
   for (const step of STEPS()) {
+    // TL-P4-GATE-COMP-01: a host-sensitive timing workload is not re-executed
+    // inside a composed predecessor gate. The step is NAMED in the log, with
+    // where its latency verdict is taken instead — never silently dropped.
+    if (MODE === 'composition' && step.hostSensitive === true) {
+      laneBSkipped.push(step.name);
+      console.log(laneBNotice(step.name, step.measuredBy ?? ''));
+      continue;
+    }
+    executed += 1;
     const started = Date.now();
     const res = spawnSync(step.cmd, [...step.args], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: { ...process.env, ...step.env } });
     const ms = Date.now() - started;
     if (res.status !== 0) fail('regression', `${step.name} failed (exit ${res.status ?? 'signal'}) after ${ms}ms`);
     else ok(`${step.name} (${ms}ms)`);
+  }
+  // RED PROOF (J): an empty composed subject is a FAILURE, never a pass.
+  const emptySubject = compositionOutcome('P3-S7 GATE', executed, laneBSkipped.length);
+  if (emptySubject !== null) {
+    console.error(`\n${emptySubject}`);
+    process.exit(1);
   }
 }
 
@@ -437,7 +483,7 @@ if (failures > 0) {
 runSteps();
 
 if (failures > 0) {
-  console.error(`\nP3-S7 GATE: FAIL (${failures})`);
+  console.error(`\nP3-S7 GATE: FAIL (${failures})${verdictSuffix(MODE, laneBSkipped)}`);
   process.exit(1);
 }
-console.log('\nP3-S7 GATE: PASS');
+console.log(`\nP3-S7 GATE: PASS${verdictSuffix(MODE, laneBSkipped)}`);

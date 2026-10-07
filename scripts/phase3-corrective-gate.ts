@@ -58,6 +58,8 @@ import { join, resolve } from 'node:path';
 import { PHASE3_STEPS } from '../tests/browser/flows';
 import { PHASE3_SLICE_PREFIX, checkPhase3Prefix } from './phase3-prefix';
 import { testTitles } from './phase3-s8-gate';
+import { PREDECESSOR_ARGS, decideMode, compositionOutcome, laneBNotice, verdictSuffix, type GateMode, type LaneB } from './guards/gate-composition';
+import { accountingContractProblems } from './guards/performance-contract';
 
 // ─────────────────────────────────────────────────────────────────────────
 // What the coordinator fills. Every `pending` below is a FAIL until filled.
@@ -450,13 +452,24 @@ export function redProofProblems(root: string): string[] {
   return problems;
 }
 
-/** Budget A stays 15 ms and B 60 ms. */
+/**
+ * THE ACCOUNTING PERFORMANCE CONTRACT STAYS, WITHOUT MEASURING IT
+ * (TL-P4-GATE-COMP-01 §4).
+ *
+ * This function used to be two regular expressions — `/\bA_POST_P95:\s*15,/`
+ * and its twin — and both were satisfiable by a doc comment, by a dead
+ * constant and by a duplicate unused threshold, so they proved that the
+ * CHARACTERS "15" appeared somewhere rather than that the budget was intact.
+ * They are replaced by the structural analyzer, which reads comment-stripped
+ * source, takes the ceilings out of ONE brace-matched object literal whose
+ * declaration must be unique, and additionally pins the sample counts, the
+ * `p95` verdict, COMMIT inside A's timed region and the dedicated evidence
+ * wiring. It is the Lane A half of the budget: it goes red on a weakened
+ * contract in EVERY mode, including every composed invocation, and it takes no
+ * timing, so its answer does not move with the load on the machine.
+ */
 export function budgetProblems(root: string): string[] {
-  const text = has(root, ACCOUNTING_BUDGETS) ? read(root, ACCOUNTING_BUDGETS) : '';
-  const problems: string[] = [];
-  if (!/\bA_POST_P95:\s*15,/.test(text)) problems.push(`Budget A is not 15 ms in ${ACCOUNTING_BUDGETS} — it is never raised`);
-  if (!/\bB_ADJUSTMENT_ENDPOINT_P95:\s*60,/.test(text)) problems.push(`Budget B is not 60 ms in ${ACCOUNTING_BUDGETS} — it is never raised`);
-  return problems;
+  return accountingContractProblems(root).map((p) => p.detail);
 }
 
 // ── The runtime plan ────────────────────────────────────────────────────────
@@ -464,7 +477,7 @@ export function budgetProblems(root: string): string[] {
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 export type Step =
-  | { readonly kind: 'command'; readonly name: string; readonly area: string; readonly cmd: string; readonly args: readonly string[] }
+  | ({ readonly kind: 'command'; readonly name: string; readonly area: string; readonly cmd: string; readonly args: readonly string[] } & Partial<LaneB>)
   | { readonly kind: 'in-process'; readonly name: string; readonly area: string; readonly fn: () => string[] };
 
 /** The runtime half, in order. Exported so the red proofs run a step's exact command. */
@@ -479,7 +492,8 @@ export function correctivePlan(root: string): readonly Step[] {
       name: 'P3-S8 gate (permanent predecessor; composes P3-S7 … P3-S1, P2-S8 … P2-S1 and Phase 1)',
       area: 'predecessor',
       cmd: npm,
-      args: ['run', 'gate:phase3:s8'],
+      // A predecessor is ALWAYS composed in composition mode (TL-P4-GATE-COMP-01).
+      args: ['run', 'gate:phase3:s8', ...PREDECESSOR_ARGS],
     },
     { kind: 'command', name: `corrective suites, root runner (${rootSuites.length})`, area: 'suites', cmd: 'npx', args: ['vitest', 'run', ...rootSuites] },
     {
@@ -531,14 +545,40 @@ export function correctivePlan(root: string): readonly Step[] {
         return existsSync(join(root, 'apps/api/dist')) ? ['apps/api/dist is still present after being removed'] : [];
       },
     },
-    ...CORRECTIVE_BUDGETS.map((b): Step => ({ kind: 'command', name: `corrective budget ${b}, alone`, area: 'perf', cmd: 'npx', args: ['vitest', 'run', b] })),
-    { kind: 'command', name: 'Budget A and B in isolation, last', area: 'perf', cmd: 'npx', args: ['vitest', 'run', ACCOUNTING_BUDGETS] },
+    ...CORRECTIVE_BUDGETS.map(
+      (b): Step => ({
+        kind: 'command',
+        name: `corrective budget ${b}, alone`,
+        area: 'perf',
+        cmd: 'npx',
+        args: ['vitest', 'run', b],
+        // LANE B (TL-P4-GATE-COMP-01): a corrective budget is an absolute
+        // millisecond ceiling like any other. The list is empty today; the
+        // marker is on the row so the next entry inherits the lane instead of
+        // quietly reintroducing the defect.
+        hostSensitive: true,
+        measuredBy: 'a dedicated measured step of the required `backend` CI job, named for that budget',
+      }),
+    ),
+    {
+      kind: 'command',
+      name: 'Budget A and B in isolation, last',
+      area: 'perf',
+      cmd: 'npx',
+      args: ['vitest', 'run', ACCOUNTING_BUDGETS],
+      // LANE B: the SIXTH direct spawn of the same accepted budget file, and
+      // the last one on the path from `gate:phase4:s1` down to P2-S8.
+      hostSensitive: true,
+      measuredBy: 'the `Phase 2 slice gate — P2-S8` step of the required `backend` CI job, which runs that gate in direct mode',
+    },
   ];
 }
 
 // ── The gate against a tree ─────────────────────────────────────────────────
 
-function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void {
+function runGate(root: string, listOnly: boolean, structuralOnly: boolean, mode: GateMode): void {
+  /** The Lane B steps this run did not execute, named, for the verdict line. */
+  const laneBSkipped: string[] = [];
   let failures = 0;
   const fail = (area: string, detail: string): void => {
     failures += 1;
@@ -600,7 +640,12 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
       'ar/en/tr × phone/tablet/desktop, as the browser gate runs it, with every planted kind',
     ],
     ['red proofs (§19)', 'red-proof', () => redProofProblems(root), `${RED_PROOFS.length} red proofs resolve to their tests`],
-    ['budgets', 'perf', () => budgetProblems(root), 'Budget A 15 ms and B 60 ms unchanged'],
+    [
+      'the accounting performance contract (TL-P4-GATE-COMP-01 §4)',
+      'perf-contract',
+      () => budgetProblems(root),
+      'the six accepted ceilings, 200 samples for A and B, the p95 verdict, COMMIT inside A’s timed region, and a real dedicated evidence step',
+    ],
   ];
   for (const [title, area, run, okText] of checks) {
     console.log(`P3 CORRECTIVE GATE — ${title}`);
@@ -635,8 +680,15 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
     return;
   }
 
-  console.log('P3 CORRECTIVE GATE — composed regression matrix');
+  console.log(`P3 CORRECTIVE GATE — composed regression matrix (${mode} mode)`);
+  let executed = 0;
   for (const step of correctivePlan(root)) {
+    if (mode === 'composition' && step.kind === 'command' && step.hostSensitive === true) {
+      laneBSkipped.push(step.name);
+      console.log(laneBNotice(step.name, step.measuredBy ?? ''));
+      continue;
+    }
+    executed += 1;
     const started = Date.now();
     if (step.kind === 'in-process') {
       const problems = step.fn();
@@ -649,17 +701,30 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
     if (res.status !== 0) fail(step.area, `${step.name} failed (exit ${res.status ?? 'signal'}) after ${ms}ms`);
     else ok(`${step.name} (${ms}ms)`);
   }
-  if (failures > 0) {
-    console.error(`\nP3 CORRECTIVE GATE: FAIL (${failures})`);
+  // RED PROOF (J): an empty composed subject is a FAILURE, never a pass.
+  const emptySubject = compositionOutcome('P3 CORRECTIVE GATE', executed, laneBSkipped.length);
+  if (emptySubject !== null) {
+    console.error(`\n${emptySubject}`);
     process.exitCode = 1;
     return;
   }
-  console.log('\nP3 CORRECTIVE GATE: PASS');
+  if (failures > 0) {
+    console.error(`\nP3 CORRECTIVE GATE: FAIL (${failures})${verdictSuffix(mode, laneBSkipped)}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`\nP3 CORRECTIVE GATE: PASS${verdictSuffix(mode, laneBSkipped)}`);
 }
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
   const rootFlag = argv.indexOf('--root');
   const root = rootFlag >= 0 ? resolve(argv[rootFlag + 1] ?? '.') : join(__dirname, '..');
-  runGate(root, argv.includes('--list'), argv.includes('--structural-only'));
+  const decision = decideMode(argv, [{ flag: '--list' }, { flag: '--structural-only' }, { flag: '--root', takesValue: true }]);
+  if (decision.refusal !== null) {
+    console.error(`P3 CORRECTIVE GATE: FAIL — ${decision.refusal}`);
+    process.exitCode = 1;
+  } else {
+    runGate(root, argv.includes('--list'), argv.includes('--structural-only'), decision.mode);
+  }
 }

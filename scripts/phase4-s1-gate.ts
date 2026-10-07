@@ -89,6 +89,8 @@ import { PHASE2_PREFIX_END, checkPhase2Prefix } from './phase2-prefix';
 import { PHASE3_PREFIX_END, checkPhase3Prefix } from './phase3-prefix';
 import { PHASE4_INHERITED_PREFIX_END, PHASE4_S1_PREFIX, checkPhase4Prefix, frozenThroughFloor, phase4MigrationsOnDisk } from './phase4-prefix';
 import { testTitles } from './phase3-s8-gate';
+import { PREDECESSOR_ARGS, decideMode, compositionOutcome, laneBNotice, verdictSuffix, type GateMode, type LaneB } from './guards/gate-composition';
+import { accountingContractProblems } from './guards/performance-contract';
 
 // ─────────────────────────────────────────────────────────────────────────
 // What the coordinator and the owning streams fill. Every `pending` is a FAIL.
@@ -2245,6 +2247,26 @@ export const CHECKS: readonly Check[] = [
     ok: 'every discovered Phase 4 route is named by the enumerated cross-tenant golden',
     liveWhen: 'a controller serves a route under a Phase 4 prefix',
   },
+  /**
+   * LANE A AT THE TOP OF THE CHAIN (TL-P4-GATE-COMP-01 §4).
+   *
+   * P4-S1 is where the recursive chain is entered in CI, and it is the gate
+   * that stopped EXECUTING the accounting benchmark six times over. So it is
+   * also the gate that must be able to refuse a WEAKENED accounting contract
+   * on its own authority, without relying on a predecessor it now composes in
+   * Lane A, and without taking a measurement. Reading this check as "P4-S1
+   * now cares about Phase 2's budgets" is the wrong reading: it cares that the
+   * thing it stopped running is still the thing it stopped running.
+   */
+  {
+    id: 'perf-contract',
+    title: 'the accounting performance contract it no longer re-executes (TL-P4-GATE-COMP-01 §4)',
+    area: 'perf-contract',
+    needs: 'live',
+    run: (root) => accountingContractProblems(root).map((p) => p.detail),
+    ok: 'Accounting A…F: the six accepted ceilings, 200 samples for A and B, the p95 verdict, COMMIT inside A’s timed region, and a real dedicated evidence step',
+    liveWhen: 'always',
+  },
 ];
 
 /** The closed registry of checks that may report NOT-YET-APPLICABLE. A check that goes inert without being here is a FAIL. */
@@ -2289,7 +2311,13 @@ export function applicabilityProblems(root: string, inert: readonly string[]): s
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-export type Step = { readonly kind: 'command'; readonly name: string; readonly area: string; readonly cmd: string; readonly args: readonly string[] };
+export type Step = {
+  readonly kind: 'command';
+  readonly name: string;
+  readonly area: string;
+  readonly cmd: string;
+  readonly args: readonly string[];
+} & Partial<LaneB>;
 
 /**
  * The runtime half, in order: the predecessor gate first (it composes the whole
@@ -2312,7 +2340,11 @@ export function s1Plan(): readonly Step[] {
       name: `${PREDECESSOR_SCRIPT} (permanent predecessor; composes the whole accepted chain back to Phase 1)`,
       area: 'predecessor',
       cmd: npm,
-      args: ['run', PREDECESSOR_SCRIPT],
+      // A predecessor is ALWAYS composed in composition mode (TL-P4-GATE-COMP-01):
+      // `gate:phase3:corrective` and everything it composes take their Lane A
+      // verdicts here and leave every host-sensitive latency verdict to the
+      // dedicated, separately named CI steps.
+      args: ['run', PREDECESSOR_SCRIPT, ...PREDECESSOR_ARGS],
     },
     ...commands.map(
       (c): Step => ({
@@ -2385,7 +2417,9 @@ interface Verdict {
   readonly phase4Routes: readonly string[];
 }
 
-function runGate(root: string, listOnly: boolean, structuralOnly: boolean, evidence: string | null): void {
+function runGate(root: string, listOnly: boolean, structuralOnly: boolean, evidence: string | null, mode: GateMode): void {
+  /** The Lane B steps this run did not execute, named, for the verdict line. */
+  const laneBSkipped: string[] = [];
   let failures = 0;
   const fail = (area: string, detail: string): void => {
     failures += 1;
@@ -2502,21 +2536,41 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean, evide
     return;
   }
 
-  console.log('P4-S1 GATE — composed regression matrix');
+  console.log(`P4-S1 GATE — composed regression matrix (${mode} mode)`);
+  let executed = 0;
   for (const step of s1Plan()) {
+    // P4-S1 declares no Lane B step of its own today — its whole runtime half
+    // is deterministic correctness. The branch is here so that the next
+    // host-sensitive step added to this plan inherits the lane instead of
+    // quietly reintroducing TL-P4-GATE-COMP-01's defect at the top of the
+    // chain, and so the law below has the same subject in every gate.
+    if (mode === 'composition' && step.hostSensitive === true) {
+      laneBSkipped.push(step.name);
+      console.log(laneBNotice(step.name, step.measuredBy ?? ''));
+      continue;
+    }
+    executed += 1;
     const started = Date.now();
     const res = spawnSync(step.cmd, [...step.args], { cwd: root, encoding: 'utf8', stdio: 'inherit', env: process.env });
     const ms = Date.now() - started;
     if (res.status !== 0) fail(step.area, `${step.name} failed (exit ${res.status ?? 'signal'}) after ${ms}ms`);
     else ok(`${step.name} (${ms}ms)`);
   }
-  if (failures > 0) {
-    console.error(`\nP4-S1 GATE: FAIL (${failures})${inertNote}`);
+  // RED PROOF (J): an empty composed subject is a FAILURE, never a pass.
+  const emptySubject = compositionOutcome('P4-S1 GATE', executed, laneBSkipped.length);
+  if (emptySubject !== null) {
+    console.error(`\n${emptySubject}`);
     record('FAIL');
     process.exitCode = 1;
     return;
   }
-  console.log(`\nP4-S1 GATE: PASS${inertNote}`);
+  if (failures > 0) {
+    console.error(`\nP4-S1 GATE: FAIL (${failures})${inertNote}${verdictSuffix(mode, laneBSkipped)}`);
+    record('FAIL');
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`\nP4-S1 GATE: PASS${inertNote}${verdictSuffix(mode, laneBSkipped)}`);
   record('PASS');
 }
 
@@ -2525,5 +2579,11 @@ if (require.main === module) {
   const rootFlag = argv.indexOf('--root');
   const root = rootFlag >= 0 ? resolve(argv[rootFlag + 1] ?? '.') : join(__dirname, '..');
   const evidence = argv.find((a) => a.startsWith('--evidence='))?.slice('--evidence='.length) ?? null;
-  runGate(root, argv.includes('--list'), argv.includes('--structural-only'), evidence);
+  const decision = decideMode(argv, [{ flag: '--list' }, { flag: '--structural-only' }, { flag: '--root', takesValue: true }, { prefix: '--evidence=' }]);
+  if (decision.refusal !== null) {
+    console.error(`P4-S1 GATE: FAIL — ${decision.refusal}`);
+    process.exitCode = 1;
+  } else {
+    runGate(root, argv.includes('--list'), argv.includes('--structural-only'), evidence, decision.mode);
+  }
 }

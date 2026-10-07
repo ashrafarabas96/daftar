@@ -322,6 +322,62 @@ jobs:
           # The range scan's head: the PR head on a pull_request run (the
           # checkout is GitHub's merge commit), the pushed SHA on a push run.
           PHASE3_SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      # ── TL-P4-GATE-COMP-01 — THE TWO LANES, VISIBLE SEPARATELY ────────────
+      #
+      # «HOST-SENSITIVE ABSOLUTE PERFORMANCE MUST NOT BE RE-EXECUTED INSIDE
+      # RECURSIVELY COMPOSED PREDECESSOR GATES.»
+      #
+      # The step above now composes the whole accepted chain in COMPOSITION
+      # MODE: every structural, migration, security, RLS, permission, runner
+      # canary and functional verdict is still taken, recursively, exactly as
+      # before, and so is the performance CONTRACT (the ceilings, the sample
+      # counts, the p95 semantics, COMMIT inside Budget A's timed region, the
+      # evidence wiring). What it no longer does is EXECUTE host-sensitive
+      # timing workloads inside a recursive chain. Before this change one run
+      # of `gate:phase4:s1` executed `tests/performance/accounting-budgets.test.ts`
+      # SIX times — once through each of P2-S8, P3-S4, P3-S5, P3-S6, P3-S8 and
+      # the Phase 3 corrective gate — plus a seventh execution in the direct
+      # `Phase 2 slice gate — P2-S8` step above. Each execution competed with
+      # the others for the same CPU, and any one of them could turn a
+      # CORRECTNESS gate red from contention it had itself created.
+      #
+      # WHY A REVIEWER CAN NOW TELL THE TWO APART. Each lane has its own named
+      # step. A red tick on `Phase 4 slice gate — P4-S1` means CORRECTNESS
+      # failed; a red tick on one of the three measured steps means a
+      # PERFORMANCE BUDGET failed. No single opaque gate collapses both into
+      # one unclassified red any more.
+      #
+      # NOTHING IS REMOVED. Three budgets lost a recursive execution path and
+      # all three keep a VISIBLE one:
+      #
+      #   — Accounting A…F (§34)  — the `Phase 2 slice gate — P2-S8` step
+      #     ABOVE, which is NOT changed by this ruling and NOT passed
+      #     `--composition`. It still runs that gate in direct mode and still
+      #     takes the Tier 1 verdict on every push, so f §5 is still satisfied
+      #     and §15 is respected: this file downgrades no part of that step's
+      #     performance verdict.
+      #   — P3-S7 T-17 read budgets and P3-S8 T-13 budgets — the steps
+      #     `P3-S7 read budgets — T-17, measured` and
+      #     `P3-S8 budgets — T-13, measured` of the SEPARATE
+      #     `performance-evidence` job, which is NEW. Until now their ONLY
+      #     execution anywhere was recursive, inside `gate:phase4:s1`;
+      #     suppressing that without giving them a step of their own would
+      #     have DELETED two measurements, which the ruling forbids in as
+      #     many words.
+      #
+      # WHY THEY ARE IN A JOB OF THEIR OWN, AND NOT A STEP OF THIS ONE.
+      # An early failure in a job SKIPS every later step of it, and a skipped
+      # measurement is UNMEASURED — never green. Placed in THIS job the two
+      # steps would run only when everything above them passed, so a
+      # CORRECTNESS failure in `Phase 4 slice gate — P4-S1` would delete two
+      # measurements that, before this change, ran whenever the composed chain
+      # was entered at all. That is strictly less measurement than the tree
+      # had, produced by the very change meant to protect it. Reordering them
+      # ahead of the gate only moves the loss: a budget failure would then skip
+      # the correctness verdict. A separate job removes the coupling in both
+      # directions, and it also states the two lanes more plainly than a step
+      # can — `backend` red means CORRECTNESS, `performance-evidence` red
+      # means a PERFORMANCE BUDGET.
       # TL-P4-S2-R3 — REQUIRED-CI CHAIN COMPOSITION. The P4-S2 gate is a DELTA
       # gate: it does not re-execute the ~50-minute P4-S1 predecessor inside
       # itself. The composition the Architecture Lock requires is satisfied
@@ -534,6 +590,53 @@ jobs:
   # -------------------------------------------------------------------------
   # 3. Web + Admin builds.
   # -------------------------------------------------------------------------
+  # ── TL-P4-GATE-COMP-01 — LANE B: PERFORMANCE EVIDENCE ──────────────────
+  #
+  # The dedicated performance-evidence job. It exists so that the latency
+  # verdicts suppressed inside recursive composition keep a VISIBLE place to
+  # be taken, and so that a reviewer can tell the two lanes apart from the
+  # job list alone: `backend` red means a CORRECTNESS verdict failed,
+  # `performance-evidence` red means a PERFORMANCE BUDGET failed.
+  #
+  # It deliberately does NOT `need: backend`. A correctness failure must not
+  # skip a measurement — a skipped step is UNMEASURED, never green — and the
+  # whole point of the split is that the two verdicts are independent.
+  #
+  # No `continue-on-error` and no `if:` on either step: either the budget is
+  # measured and judged, or the job is red.
+  performance-evidence:
+    needs: workspaces
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: P3-S7 read budgets — T-17, measured
+        run: npm run perf:phase3:s7
+        env:
+          PG_PORT: '5432'
+          # The Tier 1 scale the P3-S7 gate used when it ran this suite
+          # recursively. Carried here rather than baked into the npm script so
+          # the script body stays portable and the number stays visible.
+          P3S7_PERF_SCALE: '0.1'
+      - name: P3-S8 budgets — T-13, measured
+        run: npm run perf:phase3:s8
+        env:
+          PG_PORT: '5432'
+
   web-admin:
     needs: workspaces
     runs-on: ubuntu-latest
