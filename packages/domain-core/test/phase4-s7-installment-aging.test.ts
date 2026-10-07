@@ -2766,9 +2766,31 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // reorder them back". A comment cannot do that. `CREATE CONSTRAINT
     // TRIGGER` resolves `EXECUTE FUNCTION` AT CREATE TIME and the file is one
     // implicit transaction, so the reversed order applied NOTHING (42883).
-    const fn = SPEC.indexOf('CREATE OR REPLACE FUNCTION installment_schedule_verify()');
-    const trg = SPEC.indexOf('CREATE CONSTRAINT TRIGGER');
-    const own = SPEC.indexOf('ALTER FUNCTION installment_schedule_verify() OWNER TO');
+    //
+    // ROUND 6, F4, AND IT IS THE SAME LESSON A SIXTH TIME. This law was
+    // written over the RAW SPEC, so the challenger satisfied it with a
+    // COMMENT: plant a mention of the `CREATE` above, move the real `CREATE`
+    // below its triggers, and all 94 cases passed — a law written to refuse
+    // "a comment cannot do that" was itself satisfied by a comment.
+    //
+    // THE SUBJECT OF A CODE LAW IS CODE. `sqlCodeOnly` is this file's OWN
+    // extractor, already used by every other code law here and already
+    // mutation-tested: `sqlSchemaOnly` strips `--` and `/* */` EVERYWHERE,
+    // dollar-quoted bodies included, and `sqlCodeOnly` then blanks the
+    // single-quoted literals, so a mention planted in a comment and a mention
+    // planted in a `COMMENT ON ... IS '...'` string both disappear.
+    //
+    // THE BOUND, STATED. A mention inside a DOLLAR-QUOTED BODY survives, because
+    // `sqlCodeOnly` keeps those bodies verbatim so the projection can still be
+    // judged in full. That residue is a string literal inside plpgsql — e.g. a
+    // `RAISE EXCEPTION` text — and §2b's end-state block is what closes it for
+    // real: it reads `pg_trigger` and `pg_proc` from the LIVE CATALOGUE, where
+    // no arrangement of comments or literals can put a trigger before the
+    // function it executes.
+    const code = sqlCodeOnly(SPEC);
+    const fn = code.indexOf('CREATE OR REPLACE FUNCTION installment_schedule_verify()');
+    const trg = code.indexOf('CREATE CONSTRAINT TRIGGER');
+    const own = code.indexOf('ALTER FUNCTION installment_schedule_verify() OWNER TO');
     expect(fn, 'the verifier definition is not in the specification at all').toBeGreaterThan(-1);
     expect(trg, 'no constraint trigger is in the specification at all').toBeGreaterThan(-1);
     expect(own, 'the authority transfer is not in the specification at all').toBeGreaterThan(-1);
