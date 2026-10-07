@@ -35,6 +35,7 @@ import {
   parseProblems,
   rosterBijectionProblems,
   rosterFiles,
+  rosterFloorOf,
   rosterProblems,
   rosterRatchetProblems,
   type RosterRow,
@@ -241,7 +242,45 @@ describe('P4-S5 §B — the CASE FLOOR reds on a HOLLOWED block, which compiles 
     expect(rosterBijectionProblems(root, [row]).join(' | ')).toContain('is not a describe( BLOCK');
   });
 
-  it('two rows cannot share a title, so no file can satisfy another file’s row', () => {
+  it('N1 RED PROOF: TWO ROWS IN ONE FILE sharing a title refuses, because one block is then counted twice and another by nobody', () => {
+    // The same-file branch, the more consequential one, which no proof
+    // reached: the sibling case below covers only the CROSS-FILE branch and
+    // asserts its cross-file message. An independent re-read replaced this
+    // law's condition with `false && …` and this file reported 19 of 19 green.
+    //
+    // Two rows, ONE file, ONE title: the second row judges the block the first
+    // already judged, so the file's OTHER block is accounted for by nobody —
+    // a floor met while a law goes unwatched, which is the failure the whole
+    // record exists to prevent.
+    const suite = 'tests/guards/p4s5-duplicated.test.ts';
+    const rows: readonly RosterRow[] = [
+      { suite, title: 'one law', cases: 1 },
+      { suite, title: 'one law', cases: 1 },
+    ];
+    const body = [
+      `import { describe, it } from 'vitest';`,
+      `describe('one law', () => {`,
+      `  ${fixtureCase('a')}`,
+      `});`,
+      `describe('the block nobody is now watching', () => {`,
+      `  ${fixtureCase('b')}`,
+      `});`,
+      ``,
+    ].join('\n');
+    const root = scratchRoot({ [suite]: body });
+    const problems = rosterBijectionProblems(root, rows);
+    expect(problems.join(' | ')).toContain('records the title `one law` TWICE');
+    expect(problems.join(' | ')).toContain("one of the two rows is judging the other's block");
+    expect(problems.join(' | ')).toContain('ONE block is then accounted for twice and ANOTHER by nobody');
+    expect(problems).toHaveLength(1);
+    // And the cross-file message is NOT what fired, so the two branches are
+    // told apart rather than one standing in for the other.
+    expect(problems.join(' | ')).not.toContain('a title two FILES share');
+    // One row over the same file is silent, so the red is the duplication.
+    expect(rosterBijectionProblems(root, [rows[0] as RosterRow])).toEqual([]);
+  });
+
+  it('two rows cannot share a title ACROSS FILES, so no file can satisfy another file’s row', () => {
     const rows: readonly RosterRow[] = [
       { suite: 'tests/guards/p4s5-a.test.ts', title: 'shared' },
       { suite: 'tests/guards/p4s5-b.test.ts', title: 'shared' },
@@ -308,11 +347,49 @@ describe('P4-S5 §C — the ratchet, and the derivation it rides on', () => {
     expect(rosterRatchetProblems(ROOT)).toEqual([]);
   });
 
-  it('the floor is DERIVED from the record, so the two cannot drift, and neither is empty', () => {
+  it('the floor is DERIVED from the record so the two cannot drift, and the count of suites is a CLOSURE PIN on a length', () => {
     expect(ROSTER_RECORDED.length).toBeGreaterThan(0);
-    expect(ROSTER_FLOOR).toBe(new Set(ROSTER_RECORDED.map((r) => r.suite)).size);
+    // DERIVED: one expression, so the constant and the arm cannot disagree.
+    expect(ROSTER_FLOOR).toBe(rosterFloorOf(ROSTER_RECORDED));
+    // A CLOSURE PIN, and labelled as one for the same reason H1's premise is.
+    // This reds a legitimate SIXTH recorded suite on a LENGTH, naming nothing
+    // about that suite, and the shortest path to green from the refusal is to
+    // loosen this very line. That is deliberate: the slice's roster is closed
+    // for this round, so adding a suite to it is one deliberate change. It is
+    // the identical shape as H1's premise, and the round that relabelled that
+    // one left this one unlabelled — same defect, two instances, one commit.
     expect(ROSTER_FLOOR).toBe(5);
     expect(rosterFiles(ROOT).length).toBeGreaterThanOrEqual(ROSTER_FLOOR);
+  });
+
+  it('N2 RED PROOF: the ratchet’s COUNT half refuses by its own message, without `rows: []` and without a floor of 0', () => {
+    // The law at the `files.length < floor` branch. An independent re-read
+    // disabled it and this file reported 19 of 19 green: §C case 1 holds the
+    // total CONSTANT to isolate membership, and §C case 4 passes `rows: []`,
+    // which makes the floor 0 so nothing can reach the branch at all.
+    //
+    // AND IT CANNOT FIRE ALONE. With the floor derived from the rows judged,
+    // `files.length < floor` implies a recorded suite is ABSENT, so membership
+    // refuses in the same breath. The count half is SUBSUMED; its whole value
+    // is its MESSAGE, which names a TOTAL where membership names FILES. So
+    // this proof asserts THAT MESSAGE — a non-empty list here is membership's
+    // doing and names no law.
+    const rows = ROSTER_RECORDED;
+    const dropped = ['tests/guards/p4s5-refund-cap-concurrency-models.test.ts', 'tests/guards/p4s5-account-authority-mutation.test.ts'];
+    const kept: Record<string, string> = {};
+    for (const file of rosterFiles(ROOT)) if (!dropped.includes(file)) kept[file] = read(file);
+    const root = scratchRoot(kept);
+    expect(rosterFiles(root).length).toBeLessThan(rosterFloorOf(rows));
+    const problems = rosterRatchetProblems(root, rows);
+    // THE COUNT HALF, by its own words.
+    expect(problems.join(' | ')).toContain(`the ratchet floor is ${rosterFloorOf(rows)}`);
+    expect(problems.join(' | ')).toContain(`the P4-S5 roster holds ${rosterFiles(root).length} file(s)`);
+    // And the membership half beside it, named separately, so neither is
+    // mistaken for the other's evidence.
+    expect(problems.join(' | ')).toContain('no longer on the roster');
+    expect(problems).toHaveLength(2);
+    // The real tree is silent, so the red above is the two missing files.
+    expect(rosterRatchetProblems(ROOT, rows)).toEqual([]);
   });
 });
 
@@ -328,7 +405,8 @@ describe('P4-S5 §D — the record is COMPLETE over the tree it describes', () =
   it('every recorded count is a FLOOR the tree meets exactly today, as the EXTRACTOR reads it — no runner is invoked here', () => {
     // The earlier title said "the totals are the ones the runner reported".
     // Nothing below invokes a runner: `testTitles` is a regex over text. The
-    // two views were measured separately and agreed on 2026-10-07, and that is
+    // two views were measured separately and agreed on 2026-10-07 — extractor
+    // 14/99/19/11/21, runner 153 + 11, 164 in all — and that is
     // a dated measurement, not something this case checks. Attributing it to
     // the runner was a false attribution of evidence over the single
     // assumption the whole 160-case record rests on.

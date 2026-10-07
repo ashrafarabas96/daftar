@@ -153,11 +153,12 @@ export interface RosterRow {
  * THE RECORD: every top-level `describe(` block of all four P4-S5 suites, with
  * the case count the EXTRACTOR SEES TODAY, recorded by hand.
  *
- * 36 blocks, 162 cases (14 + 99 + 19 + 11 + 19). EVERY NUMBER HERE IS THE EXTRACTOR'S, not the
+ * 36 blocks, 164 cases (14 + 99 + 19 + 11 + 21). EVERY NUMBER HERE IS THE EXTRACTOR'S, not the
  * runner's, and nothing in this file invokes a runner: the floors are compared
  * against `testTitles`, which is a regex over text. The two views were measured
- * SEPARATELY and agreed file by file on 2026-10-07 (extractor 14/99/19/11/17;
- * runner 149 in one root run plus 11 in the shared-contracts run), and that
+ * SEPARATELY and agreed file by file on 2026-10-07 (extractor 14/99/19/11/21;
+ * runner 153 in one root run plus 11 in the shared-contracts run, 164 in all),
+ * and that
  * agreement is a dated measurement rather than something this record checks.
  * Saying otherwise was a false attribution of evidence over the single
  * assumption the whole record rests on.
@@ -259,7 +260,7 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     title: 'the model implements the isolation level it names, and both halves matter',
     cases: 3,
   },
-  // ── tests/guards/p4s5-gate-execution.test.ts — 4 blocks, 19 ─────────────
+  // ── tests/guards/p4s5-gate-execution.test.ts — 4 blocks, 21 ─────────────
   // The record's OWN red proofs: a record whose falsifiability is unrecorded
   // is the next thing to be deleted quietly.
   {
@@ -270,9 +271,9 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   {
     suite: 'tests/guards/p4s5-gate-execution.test.ts',
     title: 'P4-S5 \u00a7B \u2014 the CASE FLOOR reds on a HOLLOWED block, which compiles perfectly',
-    cases: 5,
+    cases: 6,
   },
-  { suite: 'tests/guards/p4s5-gate-execution.test.ts', title: 'P4-S5 \u00a7C \u2014 the ratchet, and the derivation it rides on', cases: 5 },
+  { suite: 'tests/guards/p4s5-gate-execution.test.ts', title: 'P4-S5 \u00a7C \u2014 the ratchet, and the derivation it rides on', cases: 6 },
   { suite: 'tests/guards/p4s5-gate-execution.test.ts', title: 'P4-S5 \u00a7D \u2014 the record is COMPLETE over the tree it describes', cases: 3 },
   // ── packages/shared-contracts/test/phase4-s5-returns-contracts.test.ts ───
   {
@@ -283,7 +284,19 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
 ];
 
 /** The ratchet's recorded file count, DERIVED from the record so it cannot drift from it. */
-export const ROSTER_FLOOR = new Set(ROSTER_RECORDED.map((r) => r.suite)).size;
+/**
+ * The floor a set of rows implies: the number of DISTINCT suites it names.
+ *
+ * ONE expression, used by the arm, by the report and by `ROSTER_FLOOR`. The
+ * arm derived its floor inline while the report printed the module constant;
+ * they coincided on every current path, but a reader diagnosing a refusal
+ * reads the PRINTED one, and two expressions for one number are two numbers
+ * waiting to disagree.
+ */
+export const rosterFloorOf = (rows: readonly RosterRow[]): number => new Set(rows.map((r) => r.suite)).size;
+
+/** The floor the full record implies. A CLOSURE PIN lives in the proof suite beside it; see there. */
+export const ROSTER_FLOOR = rosterFloorOf(ROSTER_RECORDED);
 
 /** The cases the record accounts for, as one number a reader can check against a run's own tally. */
 export const RECORDED_CASE_FLOOR = ROSTER_RECORDED.reduce((sum, row) => sum + (row.cases ?? 1), 0);
@@ -390,7 +403,19 @@ export function rosterRatchetProblems(root: string, rows: readonly RosterRow[] =
   // and it was the SECOND of that shape in this file. The count arm could not
   // cover for it either: a floor derived from an empty record is 0, which
   // every tree clears.
-  const floor = new Set(rows.map((r) => r.suite)).size;
+  //
+  // WHAT THE COUNT HALF BELOW CAN AND CANNOT DO, stated because an
+  // independent re-read found nothing exercised it. With the floor derived
+  // from the rows THIS CALL judges, every recorded suite that is present is
+  // also on the roster, so `files.length < floor` implies some recorded suite
+  // is ABSENT — which means the membership arm below refuses too. The count
+  // half therefore NEVER fires alone on consistent input: it is SUBSUMED by
+  // membership, and its whole value is its MESSAGE, which names a total where
+  // membership names files. Its red proof accordingly asserts that message's
+  // presence rather than a non-empty list, because a non-empty list here is
+  // membership's doing. Earlier, with `rows: []`, the floor was 0 and nothing
+  // could reach this at all.
+  const floor = rosterFloorOf(rows);
   if (files.length < floor)
     problems.push(
       `the P4-S5 roster holds ${files.length} file(s) and the ratchet floor is ${floor} — a rostered suite has left the roster, which is what a move AND rename out of the basename rule does. If a suite was retired deliberately, remove its rows from ROSTER_RECORDED in the same commit, which lowers this floor with them`,
@@ -410,7 +435,9 @@ export function rosterRatchetProblems(root: string, rows: readonly RosterRow[] =
 export function rosterRatchetReport(root: string): string {
   const derived = new Set(rosterFiles(root));
   const recorded = [...new Set(ROSTER_RECORDED.map((r) => r.suite))];
-  return `${derived.size} rostered file(s) against a floor of ${ROSTER_FLOOR}; ${recorded.filter((f) => derived.has(f)).length} of ${recorded.length} recorded suite(s) still rostered; ${ROSTER_RECORDED.length} recorded block row(s) accounting for ${RECORDED_CASE_FLOOR} case(s)`;
+  // `rosterFloorOf(ROSTER_RECORDED)`, the SAME expression the arm applies, not
+  // the module constant read a second time.
+  return `${derived.size} rostered file(s) against a floor of ${rosterFloorOf(ROSTER_RECORDED)}; ${recorded.filter((f) => derived.has(f)).length} of ${recorded.length} recorded suite(s) still rostered; ${ROSTER_RECORDED.length} recorded block row(s) accounting for ${RECORDED_CASE_FLOOR} case(s)`;
 }
 
 /**
@@ -462,7 +489,9 @@ export function rosterBijectionProblems(root: string, rows: readonly RosterRow[]
         `${row.suite} and ${owner} both record the title \`${row.title}\` — a title two FILES share is a title either file can satisfy for the other`,
       );
     if (owner !== undefined && owner === row.suite)
-      problems.push(`${row.suite} records the title \`${row.title}\` twice, so one of the two rows is judging the other's block`);
+      problems.push(
+        `${row.suite} records the title \`${row.title}\` TWICE, so one of the two rows is judging the other's block — ONE block is then accounted for twice and ANOTHER by nobody, which is a floor met while a law goes unwatched, the exact failure this record exists to prevent`,
+      );
     seen.set(row.title, row.suite);
     if (!has(root, row.suite)) {
       problems.push(`${row.suite} is a recorded roster row and is not on disk, so the row names nothing`);
@@ -563,6 +592,7 @@ const LIMITATIONS: readonly string[] = [
   'COMPLETENESS: this gate judges the rows the record HOLDS and never asks whether the record is complete. Append an unrecorded top-level describe( block to any rostered file and all four arms stay green while `roster-bijection` still reports "36 of 36 recorded row(s)". The completeness law lives in §D of tests/guards/p4s5-gate-execution.test.ts, which does red on it — so it is enforced by a TEST, not by this gate.',
   "FLOOR, NOT IDENTITY: `roster-bijection` compares the COUNT of a block's runnable cases against its recorded number. Fourteen trivial cases satisfy a floor of fourteen. It catches a block that SHEDS a case; it cannot see one whose cases were replaced.",
   'NOT IN REQUIRED CI: no step of the backend job runs this file, so nothing above runs automatically on a commit.',
+  'NO RUNNER IS CONSULTED, AND NO SUITE IS EXECUTED: every case count above — "164 case(s) held against a recorded floor of 164", "36 of 36 recorded row(s)" — is a REGEX\'S COUNT OVER TEXT (`testTitles`, `describeBlocks`). This gate parses the files and counts their titles; it never runs them, so "4 check(s) ok" over five named test files is NOT a test run and says nothing about whether a single case passes. The extractor and the runner were measured separately and agreed file by file on 2026-10-07; that is a dated measurement, not something this gate rechecks.',
 ];
 
 if (require.main === module) {
