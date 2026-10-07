@@ -2190,6 +2190,10 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   { suite: 'tests/integration/p4s4-refusal-audit.test.ts', title: 'the slice is present, so this suite has a subject' },
   { suite: 'tests/integration/p4s4-request-boundary.test.ts', title: 'P4-S4 the collection route states no derived figure' },
   { suite: 'tests/integration/p4s4-sale-commit-permission-replay.test.ts', title: '§A the lawful discounted sale' },
+  {
+    suite: 'tests/security/p4s4-internal-authority-shape.test.ts',
+    title: 'TL-P4-RLS-INT-01 §11 — the shape law is able to say no',
+  },
   { suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts', title: 'P4-S4 — the policy surface the behavioural laws rest on' },
   {
     suite: 'tests/security/p4s4-rls-quals-once-per-query.test.ts',
