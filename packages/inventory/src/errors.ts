@@ -49,6 +49,26 @@
  * over-consumption bounds (MP-3, MP-6), the same-currency amount rule, the
  * base-unit rule (A-08, TL-9), the chain verdicts of the two verify helpers
  * (R-62, R-63) and the method name rules (A-06).
+ *
+ * P4-S2 adds exactly two `sale.*` codes, and what it does NOT add is as
+ * deliberate as what it does (docs/PHASE_4_S2_CONTRACT.md A-09):
+ *
+ * - `sale.tax_policy_absent` — a non-zero sales tax, refused in the payload
+ *   builder as well as in the request schema and by `CHECK (tax_minor = 0)`.
+ *   It is the WHOLE of the tax vocabulary: there is no rate code, no exemption
+ *   code, no threshold code and no registration code, because none of those
+ *   concepts exists while sales tax is structurally zero (P4-AL-44) and OD-03
+ *   is OPEN;
+ * - `sale.total_zero` — a sale whose total is not positive. It exists because
+ *   `invoices.total_txn_minor` is `CHECK (total_txn_minor BETWEEN 1 AND
+ *   1000000000000000000)` (`0075:260`), so an invoice of zero is not
+ *   representable and a sale discounted to nothing could only ever end in a
+ *   rolled-back transaction.
+ *
+ * There is no oversell code here: `OD-P4-05` is RULED OPTION A and the refusal
+ * already exists as `inventory.insufficient_stock`, raised by the one stock
+ * writer under the level row's own lock (`0060:383`). A second code for the
+ * same refusal would be a second mechanism to keep in step.
  */
 export type InventoryErrorCode =
   | 'inventory.assertion_malformed'
@@ -98,7 +118,30 @@ export type InventoryErrorCode =
   | 'supplier_refund.amount_mismatch'
   | 'supplier_refund.amount_below_base_unit'
   | 'supplier_refund.residue_below_base_unit'
-  | 'supplier_credit_note.consumption_inconsistent';
+  | 'supplier_credit_note.consumption_inconsistent'
+  // The P4-S4 AR settlement arithmetic (`customer-settlement.ts`), the
+  // receivable mirror of the `supplier_*` families above. Written out per
+  // domain rather than templated on the side of the invoice chain, for the
+  // reason `ReceivableArithmeticCode` records: three raise sites are
+  // templated, so each produces two codes and a symmetric type would hide a
+  // code that is reachable and classified nowhere.
+  | 'customer_payment.arithmetic_invalid'
+  | 'customer_payment.allocations_invalid'
+  | 'customer_payment.amount_invalid'
+  | 'customer_payment.amount_exceeds_outstanding'
+  | 'customer_payment.amount_below_base_unit'
+  | 'customer_payment.amount_mismatch'
+  | 'customer_payment.residue_below_base_unit'
+  | 'customer_payment.credit_below_base_unit'
+  | 'customer_credit_application.amount_invalid'
+  | 'customer_credit_application.amount_exceeds_outstanding'
+  | 'customer_credit_application.amount_below_base_unit'
+  | 'customer_credit_application.amount_mismatch'
+  | 'customer_credit_application.residue_below_base_unit'
+  | 'customer_credit_application.credit_exhausted'
+  | 'customer_credit_application.amount_exceeds_credit'
+  | 'sale.tax_policy_absent'
+  | 'sale.total_zero';
 
 /** Typed, string-valued facts a refusal may carry beside its code (money as integer text). Never part of the message. */
 export type InventoryErrorDetails = Readonly<Record<string, string | readonly string[]>>;

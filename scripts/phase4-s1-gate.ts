@@ -1,0 +1,2529 @@
+#!/usr/bin/env tsx
+/**
+ * PHASE 4 SLICE GATE — P4-S1 — `npm run gate:phase4:s1`
+ * (docs/PHASE_4_EXECUTION_PLAN.md §5 and the P4-S1 section; lock §17.1
+ * P4-AL-57, §17.2 P4-AL-60/61/62, §17.3 P4-AL-63/88, §17.4 G-02/G-03/G-07/G-19).
+ *
+ * The first Phase 4 gate. It composes `gate:phase3:corrective` — and through it
+ * the whole accepted chain back to Phase 1 — plus the permanent core
+ * (`check:migrations`, `check:guards`, `check:localization`,
+ * `check:deployment-authority`) and the three prefix modules, and adds P4-S1's
+ * own business: the Phase 4 migration boundary in two tenses, forward
+ * evolution, the guards Phase 4 cannot inherit, composite-FK presence and
+ * validity, the enumerated cross-tenant surface, the schema lint (G-19) and
+ * numbering isolation (G-07, structural half).
+ *
+ * ── WHY THIS GATE EXISTS BEFORE `0074` DOES ──────────────────────────────
+ *
+ * `[[daftar-a-green-gate-must-prove-it-can-be-red]]`. DAFTAR's runner once
+ * exited 0 over four failing tests, and a gate that reads a verdict out of an
+ * exit status is worth nothing until that status has been shown to say no. So
+ * this gate is written, and its refusals are exercised, BEFORE the first Phase 4
+ * migration exists — while there is still nothing to be tempted to make green.
+ *
+ * Every check below is structurally able to run and to go red today. Some of
+ * them have no subject yet, because their subject is a Phase 4 relation or a
+ * Phase 4 route, and those report NOT-YET-APPLICABLE:
+ *
+ *   — `registered-by`, `composite-fk`, `schema-lint`, `numbering` become LIVE
+ *     the moment a migration numbered past the inherited prefix exists on disk;
+ *   — `cross-tenant` becomes LIVE the moment a controller serves a route under
+ *     one of the Phase 4 prefixes.
+ *
+ * NOT-YET-APPLICABLE IS NOT A PASS. An inert check never prints `ok`, it is
+ * named in every verdict line, and `INERT_ALLOWED` is a closed registry: a
+ * check that goes inert without being listed there is a FAIL, and once its
+ * subject exists the check is live with no edit to this file. That is the whole
+ * mechanism that stops "not applicable yet" from silently becoming "fine".
+ *
+ * ── THE TWO TENSES, AND THE ONE CLOSURE RULE THIS FILE IS ALLOWED ────────
+ *
+ * `[[daftar-a-closure-rule-is-not-an-invariant]]`. `gate:phase2:release` once
+ * said "nothing after 0052" and had to be corrected when `0053` landed. So:
+ *
+ *   — the PERMANENT invariant lives in `scripts/phase4-prefix.ts`, expresses
+ *     `frozenThrough` as a FLOOR, and says nothing about files it does not know;
+ *   — the CANDIDATE-TENSE boundary — `frozenThrough` exactly at the previous
+ *     head, the files after it exactly this slice's list, none of them in the
+ *     manifest — was a closure rule about THIS slice while it was open. P4-AL-61
+ *     authorised it in the gate of the slice currently open and REQUIRED the
+ *     acceptance commit to delete it. It was fenced between two
+ *     `CANDIDATE-TENSE` marker comments and nowhere else in the Phase 4 estate,
+ *     and `tests/security/phase4-forward-evolution.test.ts` holds that fence in
+ *     both tenses.
+ *
+ * P4-S1 IS ACCEPTED, so that block is GONE. The seal commit did, in one commit,
+ * exactly what P4-AL-61 requires: filled `S1_ACCEPTED` below with the digests
+ * computed from the accepted files, appended the same pairs to
+ * `PHASE4_S1_PREFIX` in `scripts/phase4-prefix.ts`, and deleted the fenced
+ * candidate-tense block — the candidate half of `boundaryProblems`, the whole of
+ * `candidateSurfaceProblems` and its `CHECKS` entry. Nothing else about this
+ * gate changed. `closureRuleProblems` now refuses a tree in which a fence
+ * marker survived, which is why the deletion could not be left half done.
+ *
+ * ── WHAT MAY NOT PASS SILENTLY ───────────────────────────────────────────
+ *
+ * Every required entry this gate names — a suite, a command, a red proof — is
+ * either filled or `{ pending }`, and a pending entry is a structural FAIL,
+ * never a skip (the `gate:phase3:corrective` form). A listed suite that is
+ * missing, or that carries `.skip`, `.only` or `.todo`, fails; so does a
+ * `p4-*` suite on disk that no entry lists, and so does a file in
+ * `tests/golden-regression/phase4/` that no entry lists.
+ *
+ * TODAY THIS GATE IS RED, ON PURPOSE. The P4-S1 streams it names — the guard
+ * arms, the per-phase browser step lists, the four goldens — have not landed,
+ * and each unlanded row is a FAIL that says which stream owes it. That is the
+ * gate working, not the gate broken.
+ *
+ * `--root <dir>` and `--structural-only` change WHERE the gate looks, never
+ * WHAT it demands; a structural-only run reports no verdict on tests it did not
+ * run. `--evidence=<file>` writes the machine-readable record.
+ *
+ * Usage: npm run gate:phase4:s1 [-- --list] [--root <dir> --structural-only] [--evidence=<file>]
+ */
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { PHASE2_PREFIX_END, checkPhase2Prefix } from './phase2-prefix';
+import { PHASE3_PREFIX_END, checkPhase3Prefix } from './phase3-prefix';
+import { PHASE4_INHERITED_PREFIX_END, PHASE4_S1_PREFIX, checkPhase4Prefix, frozenThroughFloor, phase4MigrationsOnDisk } from './phase4-prefix';
+import { testTitles } from './phase3-s8-gate';
+
+// ─────────────────────────────────────────────────────────────────────────
+// What the coordinator and the owning streams fill. Every `pending` is a FAIL.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The head this slice builds on: the last inherited migration. Derived, so no number is written here. */
+export const PREVIOUS_HEAD = PHASE4_INHERITED_PREFIX_END;
+
+/**
+ * The P4-S1 candidate migrations, in order, as the single migration owner names
+ * them. Empty until they are written: an empty list is the absence of a
+ * declared candidate, never a claim that the slice has no migration.
+ */
+export const S1_MIGRATIONS: readonly string[] = [
+  '0074_phase4_registry_widening.sql',
+  '0075_phase4_customers_invoices_numbering.sql',
+  '0076_phase4_permission_defaults_backfill.sql',
+];
+
+/**
+ * The digests recorded at the P4-S1 freeze, computed from the accepted files
+ * themselves in the accepted candidate tree and frozen into the manifest by the
+ * same commit that filled this literal. Empty while the slice is a candidate;
+ * filling it flips the tense, which is why the candidate-tense block is gone.
+ */
+export const S1_ACCEPTED: Readonly<Record<string, string>> = {
+  '0074_phase4_registry_widening.sql': '8f8fa9c080661255f77a6a036292bc8cd786a3c8f5a22a38f359cbbdaf66901d',
+  '0075_phase4_customers_invoices_numbering.sql': 'b5d64176c3af9fb38a56b26f3e767a36fd2fd4a583423a1f60b3165d5f239905',
+  '0076_phase4_permission_defaults_backfill.sql': '2bbad56286ac06e988e4d590b290957fbb716313a6d82c4ba85c1f164bc3dcec',
+};
+
+/** An entry an owning stream has not delivered yet: a FAIL, never a skip. */
+export interface Pending {
+  readonly id: string;
+  readonly area: string;
+  readonly owner: string;
+  readonly pending: string;
+}
+
+export interface SuiteEntry {
+  readonly id: string;
+  readonly area: string;
+  /** `root`: the root Vitest configuration; `web`: apps/web/vitest.config.mts. */
+  readonly runner: 'root' | 'web';
+  readonly file: string;
+  /**
+   * `file` is a DIRECTORY handed to the runner whole, so a suite added to it
+   * later is executed by existing rather than by somebody remembering to list
+   * it. Every file inside is still checked, and the canary refuses a directory
+   * that is empty or that holds a file the runner would not pick up.
+   */
+  readonly directory?: true;
+}
+
+export interface CommandEntry {
+  readonly id: string;
+  readonly area: string;
+  readonly npmScript: string;
+  readonly args: readonly string[];
+}
+
+export interface RedProof {
+  readonly id: string;
+  readonly defect: string;
+  /** `<test file>::<it( title prefix>` — the test that shows this gate, or the guard, failing on the defect. */
+  readonly proof: string;
+}
+
+export const isPending = (entry: object): entry is Pending => 'pending' in entry;
+
+const FORWARD_EVOLUTION = 'tests/security/phase4-forward-evolution.test.ts';
+/** The Phase 3 suite P4-AL-88 re-expresses: owned in P4-S1 by the authority owner, asserted about — never edited — here. */
+const SETTLEMENT_S6 = 'tests/security/settlement-s6-no-customer-payments.test.ts';
+const GOLDEN_DIR = 'tests/golden-regression/phase4';
+
+/**
+ * The guard red proofs live in their own directory, and NO gate and no npm
+ * script reached it: `test:integration` runs `tests/integration tests/security`
+ * and nothing else picks `tests/guards` up. So every planted-defect proof for
+ * G-3, G-6 and the merchant-language rules would have been written, committed
+ * and never executed — the exact shape of
+ * `[[daftar-a-green-gate-must-prove-it-can-be-red]]`, one level up: not a
+ * runner that cannot say no, but a proof nobody asked.
+ *
+ * This gate runs the DIRECTORY, never a list of names, so the next proof is
+ * picked up by existing. `guardSuiteProblems` is the canary: the directory must
+ * exist, hold at least one suite, and hold nothing the root runner would not
+ * execute when handed the directory.
+ */
+const GUARD_SUITE_DIR = 'tests/guards';
+/** P4-AL-63/P4-AL-68: the browser step partition and its red proofs. It lives inside `GUARD_SUITE_DIR`, so the directory row above already runs it; this constant exists so the red proofs can name the file that carries them. */
+const BROWSER_STEP_OWNERSHIP = `${GUARD_SUITE_DIR}/phase4-browser-step-ownership.test.ts`;
+
+/**
+ * Every P4-S1 suite, by id. Exact: nothing is discovered, and every `p4-*`
+ * suite on disk and every file under `tests/golden-regression/phase4/` must be
+ * listed by one of these rows.
+ */
+export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
+  // The permanent forward-evolution property (P4-AL-62): owned by this gate.
+  { id: 'FE-01', area: 'forward-evolution', runner: 'root', file: FORWARD_EVOLUTION },
+  // P4-AL-88: the re-expressed Phase 3 settlement suite. It is composed here
+  // because `gate:phase3:corrective` composes it; the row makes that visible.
+  { id: 'P3C-88', area: 'phase3-coupling', runner: 'root', file: SETTLEMENT_S6 },
+  // The guard arms of the six pre-migration actions (execution plan, P4-S1 §2,
+  // §3) and their planted defects: the whole of `tests/guards`, by directory.
+  { id: 'GD-01', area: 'guard-proofs', runner: 'root', file: GUARD_SUITE_DIR, directory: true },
+  // The permission-default authority of action 4 (OD-P4-01 A): the Phase 4 key
+  // set, the sensitivity vector, the delegation ceiling, the audited backfill,
+  // and the phase scoping of the registry assertions that action 7 rewrote.
+  // Named file by file rather than by directory: they live in tests/security
+  // beside the accepted estate, so a directory row there would claim suites
+  // this slice does not own.
+  { id: 'PD-01', area: 'permissions', runner: 'root', file: 'tests/security/phase4-permission-defaults.test.ts' },
+  { id: 'PD-02', area: 'permissions', runner: 'root', file: 'tests/security/phase4-registry-phase-scoping.test.ts' },
+  // P4-AL-37's own protection, in both directions: the migration-time
+  // `role_permissions` assertion over the twelve keys, planted against
+  // (`cashier -> sales.void` must raise) and exercised legitimately (a
+  // non-sensitive default must pass). It resolves its SQL from the one Phase 4
+  // migration that carries `phase4.permission_backfill_overreach` — `0076` —
+  // and from nothing else: the specification draft it fell back to while the
+  // migration owner had not written the file is deleted in the same commit,
+  // because a second copy of applied DDL in the tree is a second truth.
+  { id: 'PD-03', area: 'permissions', runner: 'root', file: 'tests/security/phase4-permission-backfill-assertion.test.ts' },
+  // P4-AL-88: the Phase 4 route-surface property. It carries the protection
+  // §B5 of the settlement suite used to hold — no customer settlement route —
+  // in the tense-independent form: the mounted `/v1` surface equals what the
+  // selling controllers DECLARE, both halves derived from the same Nest route
+  // metadata, so mounting a route updates both at once and P4-S4 does not turn
+  // it red. Composed here because the claim is Phase 4's, not Phase 3's.
+  { id: 'RS-01', area: 'route-surface', runner: 'root', file: 'tests/security/phase4-route-surface.test.ts' },
+  // P4-AL-88, the forward-scope proof for the estate re-expressions: a scratch
+  // database built to the inherited prefix, a successor applied, and then the
+  // three reds the scoping must still give — a rewritten Phase 3 registry row,
+  // a row written to a non-registry prefix relation, and a deleted Phase 3
+  // registry row. It is the guarantee that the scoped equalities in the
+  // permanent Phase 3 suites are not rubber stamps.
+  { id: 'FS-01', area: 'forward-scope', runner: 'root', file: 'tests/integration/phase4-s1-forward-scope.test.ts' },
+  // The four P4-S1 goldens (lock §17.4; execution plan P4-S1 Exit).
+  // GOLD-20: the suite's route list is asserted EQUAL to
+  // `discoverPhase4Routes`, so the enumeration this gate checks is the same
+  // list the suite walks, and a route added without a cross-tenant pair turns
+  // the suite itself red. The equality is the claim; no count is written here,
+  // because the surface grows every slice (eight routes at P4-S1, twenty once
+  // P4-S3's POS surface landed) and a number in this comment would only ever
+  // record the slice that last touched it.
+  { id: 'G-02', area: 'golden', runner: 'root', file: `${GOLDEN_DIR}/01-cross-tenant.golden.test.ts` },
+  // GOLD-30: the cross-business bindings attempted as the TABLE OWNER, so the
+  // refusal is the composite seam and not a privilege. Its two catalogue laws
+  // are exported from the file and planted against in the guard suite.
+  { id: 'G-03', area: 'golden', runner: 'root', file: `${GOLDEN_DIR}/02-cross-business-fk.golden.test.ts` },
+  // GOLD-48: the numbering laws, performed — two businesses of one tenant both
+  // holding ordinal 1, the duplicate refused, the year restart accepted.
+  { id: 'G-07', area: 'golden', runner: 'root', file: `${GOLDEN_DIR}/03-sequence-isolation.golden.test.ts` },
+  // GOLD-74: the LIVE half of the schema lint — the same law the static check
+  // above reads out of the SQL, asserted against the catalogue the migrations
+  // actually built, so a defect the text parser cannot see is still caught.
+  { id: 'G-19', area: 'golden', runner: 'root', file: `${GOLDEN_DIR}/04-schema-lint.golden.test.ts` },
+];
+
+/** The permanent core, run as commands after the predecessor gate. */
+export const S1_COMMANDS: readonly (CommandEntry | Pending)[] = [
+  { id: 'CORE-MIG', area: 'core', npmScript: 'check:migrations', args: [] },
+  { id: 'CORE-GUARD', area: 'core', npmScript: 'check:guards', args: [] },
+  { id: 'CORE-L10N', area: 'core', npmScript: 'check:localization', args: [] },
+  { id: 'CORE-DEPLOY', area: 'core', npmScript: 'check:deployment-authority', args: [] },
+];
+
+/** The predecessor this gate composes, and through it the whole accepted chain. */
+export const PREDECESSOR_SCRIPT = 'gate:phase3:corrective';
+
+/**
+ * One row per defect this gate claims to catch. A pending row is a FAIL: a
+ * check whose red proof is not wired is a claim, not a test (P4-AL-67).
+ */
+export const RED_PROOFS: readonly (RedProof | Pending)[] = [
+  {
+    id: 'RP-FORWARD',
+    defect: 'an accepted gate forbids forward evolution ("nothing after N"), so an authorized successor migration turns it red',
+    proof: `${FORWARD_EVOLUTION}::a gate that forbids a successor migration is named`,
+  },
+  {
+    id: 'RP-FLOOR',
+    defect: 'frozenThrough retreats below the accepted history, or the prefix is compared for equality instead of as a floor',
+    proof: `${FORWARD_EVOLUTION}::a retreating frozenThrough is refused`,
+  },
+  {
+    id: 'RP-SHAPE',
+    defect: 'a permanent gate carries one of the three forbidden shapes: a .sql count against a literal, a last-file-name comparison, a frozenThrough equality',
+    proof: `${FORWARD_EVOLUTION}::the forbidden shapes are absent from every permanent gate`,
+  },
+  {
+    id: 'RP-P3CLAIM',
+    defect: 'an accepted permanent Phase 3 suite makes a claim about the future, so the first Phase 4 relation or route turns an accepted Phase 3 gate red',
+    proof: `${FORWARD_EVOLUTION}::a Phase 3 suite that claims the future is named`,
+  },
+  {
+    id: 'RP-TENSE',
+    defect:
+      'a candidate-tense boundary assertion escapes the gate of the slice currently open and becomes a permanent closure rule, or survives the acceptance commit that was required to delete it',
+    proof: `${FORWARD_EVOLUTION}::the candidate tense is fenced while a slice is open, and gone once it is accepted`,
+  },
+  {
+    id: 'RP-G3',
+    defect: 'a Phase 4 migration stores an authoritative receivable, paid total, outstanding total or debt, and G-3 does not name it',
+    proof: `${GUARD_SUITE_DIR}/phase4-derived-truth-guard.test.ts::RED — every column of the lock’s reproduced fixture is named by the sales arm`,
+  },
+  {
+    id: 'RP-G3-DEBT',
+    defect:
+      'a stored debt, overdue, arrears or aging column passes, because the inherited AP/AR vocabulary needs a token boundary before `due` and never named `debt` at all',
+    proof: `${GUARD_SUITE_DIR}/phase4-derived-truth-guard.test.ts::RED — a stored DEBT truth`,
+  },
+  {
+    id: 'RP-JARGON',
+    defect: 'an accountant’s word reaches a Phase 4 merchant screen, in any of the three languages',
+    proof: `${GUARD_SUITE_DIR}/phase4-merchant-language-guard.test.ts::PLANTED: an accounting or tax WORD anywhere in a Phase 4 screen is reported as \`jargon\``,
+  },
+  {
+    id: 'RP-TAXCTL',
+    defect: 'a tax field ships on a merchant screen while OD-03 is open, including one named only in an aria-label or a placeholder',
+    proof: `${GUARD_SUITE_DIR}/phase4-merchant-language-guard.test.ts::PLANTED: a tax field on a Phase 4 screen is reported as \`tax-control\`, whatever element carries it`,
+  },
+  {
+    id: 'RP-STEPS',
+    defect: 'a browser step is declared twice, or belongs to neither phase list, so it is walked by no phase gate or overwrites another run\u2019s evidence',
+    proof: `${BROWSER_STEP_OWNERSHIP}::red: a step declared twice`,
+  },
+  {
+    id: 'RP-P3STEPS',
+    defect: 'a Phase 4 step reaches what gate:phase3:corrective walks, so a Phase 4 screen defect turns an accepted Phase 3 gate red',
+    proof: `${BROWSER_STEP_OWNERSHIP}::a Phase 4 step is not in what the Phase 3 gate walks`,
+  },
+  {
+    id: 'RP-REGWIDEN',
+    defect: 'a Phase 4 migration widens a registered_by CHECK and then puts the Phase-3-only pattern back, or never widens one of the four at all',
+    proof: `${GUARD_SUITE_DIR}/phase4-registry-widening-guard.test.ts::RED: a Phase 4 migration that RE-ADDS the Phase-3-only CHECK is still caught`,
+  },
+  {
+    id: 'RP-SEAM',
+    defect:
+      'a declared seam stops being safe and nothing says so: `sales` exists and invoices.sale_id still has no FK, the `invoice` source type is registered without the reversal guard naming it, or a relation that settles an invoice exists and invoice_outstanding does not read it',
+    proof: `${GUARD_SUITE_DIR}/phase4-deferred-seam-guard.test.ts::RED: the discharge is removed — \`sales\` exists and nothing binds invoices.sale_id to it`,
+  },
+  {
+    id: 'RP-REFUND-AR',
+    defect:
+      'a later slice subtracts a cash refund from the derived invoice receivable, so the invoice AR falls twice for one credit — once for the credit/return effect and again for the refund that settles it (TL-P4-S5-R1, lock P4-AL-34)',
+    proof: `${GUARD_SUITE_DIR}/phase4-refund-not-a-reducer-guard.test.ts::RED C: a direct \`refunds\` subtraction planted into invoice_outstanding`,
+  },
+  {
+    id: 'RP-FK',
+    defect:
+      'a reference between two commercial rows carries business_id on one side only, or on neither, so SQL can bind one business’s row to another business’s parent',
+    proof: `${GUARD_SUITE_DIR}/phase4-composite-seam-guard.test.ts::a COLUMN-level REFERENCES to a business-scoped parent`,
+  },
+  {
+    id: 'RP-LINT',
+    defect: 'a constraint names a column the relation does not have, a money column is declared floating point, or an unbound *_id sits in the financial core',
+    proof: `${GOLDEN_DIR}/04-schema-lint.golden.test.ts::RED: a relation whose CHECK names a column it does not have is caught`,
+  },
+  {
+    id: 'RP-SEQ',
+    defect: 'a document number is backed by a cluster-wide sequence, or by a UNIQUE that omits business_id, so two businesses of one tenant share one series',
+    proof: `${GOLDEN_DIR}/03-sequence-isolation.golden.test.ts::RED: a document-number UNIQUE that omits business_id is caught`,
+  },
+  {
+    id: 'RP-XTENANT',
+    defect:
+      'a Phase 4 route is mounted and no cross-tenant golden names it — the route nobody remembered to enumerate is the one route with no cross-tenant case',
+    proof: `${GUARD_SUITE_DIR}/phase4-cross-tenant-enumeration-guard.test.ts::a ninth route the golden does not mention is a finding, and the finding names it`,
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────
+// The Phase 4 surface this gate reasons about. All of it is vocabulary, not a
+// count: adding a route group or a relation cannot escape by arithmetic.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * The twelve Phase 4 permission keys P4-S1 declares (lock OD-P4-01 A), in the
+ * lock's own order. Used ONLY by the candidate-tense fence: the permanent
+ * suite requires each of them by name, and this is what makes "and no
+ * thirteenth" checkable while P4-S1 is the open slice.
+ */
+export const P4_S1_PERMISSION_KEYS: readonly string[] = [
+  'sales.view',
+  'sales.create',
+  'sales.void',
+  'sales.return',
+  'sales.discount',
+  'customers.view',
+  'customers.manage',
+  'payments.collect',
+  'payments.reverse',
+  'refunds.approve',
+  'receivables.view',
+  'installments.manage',
+];
+
+/** The route prefixes Phase 4 serves (lock §16, P4-AL-88's route list). A controller under one of these is a Phase 4 route. */
+export const PHASE4_ROUTE_PREFIXES: readonly string[] = [
+  '/v1/pos',
+  '/v1/customers',
+  '/v1/sales',
+  '/v1/invoices',
+  '/v1/payments',
+  '/v1/refunds',
+  '/v1/credit-notes',
+  '/v1/customer-credits',
+  // P4-S4's `ReceivablesController` is `@Controller('/v1')` and mounts
+  // `customer-payments` and `customer-payments/:paymentId`. NEITHER was a
+  // Phase 4 route to this function, because the prefix test below is
+  // `path === q || path.startsWith(`${q}/`)` and `/v1/customer-payments`
+  // satisfies neither against `/v1/payments`: a prefix is matched at a path
+  // SEGMENT boundary, and `customer-payments` is a different first segment
+  // from `payments`. So the slice's money-collecting POST and its read were
+  // invisible to `discoverPhase4Routes`, and with it to `crossTenantProblems`
+  // (G-02), which enumerates the cross-tenant golden from exactly this list —
+  // a route that takes a customer's money could have shipped with no
+  // cross-tenant pair at all.
+  //
+  // The gap was PARTIAL, which is what made it easy to miss: the slice's other
+  // two routes (`customer-credits/:creditId/applications` and
+  // `customers/:customerId/credits`) were already discovered under
+  // `/v1/customer-credits` and `/v1/customers`, so two of the four appeared
+  // and two did not.
+  //
+  // THIS LINE IS AN ADDITION TO A SEALED GATE, NOT A WEAKENING — the
+  // `InvoicesController` correction recorded at `discoverPhase4Routes` below is
+  // the precedent, and the same argument holds. This list is the gate's
+  // VOCABULARY, not a predicate and not a threshold: every check that reads it
+  // asks whether a discovered route is named by an enumerated golden, so a
+  // name ADDED here can only make MORE routes Phase 4 routes and therefore
+  // demand MORE golden rows. Nothing becomes permissible that was refused
+  // before this line; no route leaves the surface; no predicate in this file
+  // is relaxed. A name REMOVED from this list would be the weakening, and that
+  // is the edit this precedent does not authorise.
+  '/v1/customer-payments',
+  '/v1/installments',
+  '/v1/installment-plans',
+  '/v1/debts',
+  '/v1/statements',
+];
+
+/** The merchant key namespaces Phase 4 adds; the jargon guard and the tax rule must reach every one (action 3). */
+export const PHASE4_KEY_NAMESPACES: readonly string[] = ['pos.', 'sales.', 'customers.', 'invoices.', 'refunds.', 'installments.', 'debts.'];
+
+/** A Phase 4 web file the widened merchant-jargon scope must examine (action 3; `isS7WebFile` reaches none of these today). */
+export const PHASE4_WEB_FILE = 'apps/web/src/app/[locale]/pos/page.tsx';
+
+/** The four accepted registries whose `registered_by` CHECK must be widened before the first Phase 4 registration (action 1). */
+export const REGISTERED_BY_RELATIONS: readonly string[] = [
+  'inventory_operation_kinds',
+  'stock_movement_kinds',
+  'stock_source_types',
+  'inventory_operation_movement_kinds',
+];
+export const REGISTERED_BY_WIDENED = '^P[0-9]+-S[0-9]+$';
+export const REGISTERED_BY_PHASE3_ONLY = '^P3-S[0-9]+$';
+
+/**
+ * The G-3 sales arm, as a behaviour rather than a naming: the guard module,
+ * run over this DDL, must name every column in `mustFlag` and none in
+ * `mustNotFlag`. The plan records that today it flags only
+ * `customers.balance_minor`.
+ */
+export const DERIVED_TRUTH_FIXTURE = {
+  ddl: [
+    'CREATE TABLE customers (id uuid, business_id uuid, balance_minor BIGINT, amount_due_minor BIGINT, credit_limit_minor BIGINT);',
+    'CREATE TABLE invoices (id uuid, business_id uuid, total_minor BIGINT, paid_minor BIGINT, outstanding_minor BIGINT);',
+    'CREATE TABLE installments (id uuid, business_id uuid, amount_minor BIGINT, outstanding_minor BIGINT, settled_minor BIGINT);',
+  ].join('\n'),
+  tables: ['customers', 'invoices', 'installments'],
+  mustFlag: [
+    'customers.balance_minor',
+    'customers.amount_due_minor',
+    'invoices.paid_minor',
+    'invoices.outstanding_minor',
+    'installments.outstanding_minor',
+    'installments.settled_minor',
+  ],
+  /** A stored fact of the document and a policy input are not derived truth; a guard that flags these asserts nothing. */
+  mustNotFlag: ['invoices.total_minor', 'customers.credit_limit_minor', 'installments.amount_minor'],
+} as const;
+
+/** The contract the guard owner delivers, mirroring the accepted supplier arm (`discoverSupplierTables` / `findAuthoritativeSupplierColumns`). */
+const GUARD_MODULE = 'scripts/guards/no-authoritative-balance.ts';
+const GUARD_SALES_EXPORT = 'findAuthoritativeSalesColumns';
+const JARGON_MODULE = 'scripts/guards/merchant-jargon.ts';
+
+/** P4-AL-63: what `tests/browser/flows.ts` must export before the first Phase 4 browser step exists. */
+const FLOWS = 'tests/browser/flows.ts';
+const PHASE3_GATE = 'scripts/phase3-corrective-gate.ts';
+export const PHASE3_STEP_COUNT = 15;
+export const PHASE4_STEP_PREFIX = 'p4-';
+
+/** The business-scoped parents a Phase 4 FK must reach through a COMPOSITE key (G-03). */
+export const BUSINESS_SCOPED_PARENTS: readonly string[] = [
+  'customers',
+  'invoices',
+  'payment_methods',
+  'warehouses',
+  'credit_notes',
+  'installment_plans',
+  'sales',
+  'payments',
+  'product_variants',
+  'branches',
+];
+
+/** The Phase 4 financial core: the relations a polymorphic FK may never appear on (G-19). */
+export const FINANCIAL_CORE =
+  /^(sales|sale_items|invoices|invoice_items|payments|payment_allocations|payment_reversals|allocation_reversals|refunds|credit_notes|credit_note_items|customer_credits|customer_credit_applications|installment_plans|installments)$/;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────
+
+const read = (root: string, rel: string): string => readFileSync(join(root, rel), 'utf8');
+const has = (root: string, rel: string): boolean => existsSync(join(root, rel));
+const sha256 = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+const migrationsDir = (root: string): string => join(root, 'infrastructure/database/migrations');
+const manifestPath = (root: string): string => join(root, 'infrastructure/database/MIGRATION_MANIFEST.json');
+
+const SKIP = /\b(?:it|test|describe|suite)\.(?:skip|only|todo|skipIf|runIf)\b|\bx(?:it|describe)\s*\(|RELEASE_GATE_SKIP_/;
+const stripTsProse = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+const QUOTED = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/g;
+/**
+ * SQL with `--` and block comments removed, so a rule never fires on prose.
+ *
+ * This is the gate's comment-stripping device, and `phase4Sql` applies it to
+ * every migration before any check sees one, which is why every law in this
+ * file reads what the database EXECUTES and never what a comment mentions.
+ * TL-P4-S5-R1 depends on exactly that, and `invoiceReducerProblems` asserts
+ * the property rather than assuming it; it is exported so a guard proof can
+ * assert it too instead of trusting it.
+ *
+ * IT IS LITERAL-AWARE, AND THAT IS THE WHOLE POINT OF THE ONE PASS
+ * (TL-P4-S5-R1). It used to be two blind passes — block comments, then
+ * `--[^\n]*` — and neither knew what a string literal was. A line like
+ *
+ *   WHERE a.note <> '-- not a comment' AND x IN (SELECT … FROM public.refunds)
+ *
+ * was AMPUTATED at the literal's `--`, and everything after it on that line
+ * disappeared from every check in this file. On a financial law that is a
+ * FALSE GREEN: the refund read TL-P4-S5-R1 exists to refuse becomes invisible
+ * to it. A literal containing `/*` amputated the same way, across lines.
+ *
+ * The fix is not to blank literals. Several P4-S1 laws search for the CONTENT
+ * INSIDE a literal — a refusal code raised as `'invoice_settlement.…'`, a
+ * registered source type, a role name — and a device that blanked them would
+ * make those checks stop seeing the very thing they exist to see, silently and
+ * greenly, which is the failure mode this gate is built against.
+ *
+ * So one alternation pass decides what each match IS before deciding what to
+ * do with it: a literal is returned BYTE FOR BYTE, a block comment becomes a
+ * space and a line comment becomes nothing — the two substitutions the two
+ * blind passes used, unchanged. A `--` or a `/*` inside a literal is therefore
+ * part of the literal and never a comment, and an apostrophe inside a comment
+ * is part of the comment and never a literal, because a match is taken at the
+ * leftmost position and a comment's marker always precedes its own text. SQL
+ * escapes a quote by DOUBLING it, which `''` in the literal alternative is.
+ *
+ * This brings the SQL device up to the standard its TypeScript siblings above
+ * already meet: `stripTsProse` spares a `//` that follows a quote, and
+ * `QUOTED` reads a literal as one unit rather than as characters.
+ */
+export const stripSql = (sql: string): string =>
+  sql.replace(/'(?:''|[^'])*'|\/\*[\s\S]*?\*\/|--[^\n]*/g, (m) => (m.startsWith("'") ? m : m.startsWith('--') ? '' : ' '));
+
+interface Manifest {
+  readonly frozenThrough: string;
+  readonly migrations: readonly { readonly name: string; readonly sha256: string }[];
+}
+
+const manifest = (root: string): Manifest => JSON.parse(readFileSync(manifestPath(root), 'utf8')) as Manifest;
+
+/** The Phase 4 migration files under `root`, in order. The subject of every `phase4-migration` check. */
+export const phase4Migrations = (root: string): string[] => phase4MigrationsOnDisk(migrationsDir(root));
+
+/** The Phase 4 DDL under `root`: every Phase 4 migration, comment-stripped, concatenated in order. */
+export function phase4Sql(root: string): string {
+  return phase4Migrations(root)
+    .map((f) => stripSql(readFileSync(join(migrationsDir(root), f), 'utf8')))
+    .join('\n');
+}
+
+// ── A narrow DDL reader ─────────────────────────────────────────────────────
+//
+// Regex, not a parser, and deliberately narrow: it reads `CREATE TABLE name (
+// … );` bodies by balancing parentheses, and splits a body at depth-1 commas.
+// A construct it cannot read is REPORTED, never skipped — `unreadable` below —
+// because a lint that silently ignores what it does not understand is a lint
+// that passes on the defect it exists to catch.
+
+export interface TableDdl {
+  readonly name: string;
+  readonly columns: readonly string[];
+  /** Depth-1 items that begin with a constraint keyword, plus the constraints added by later ALTERs. */
+  readonly constraints: readonly string[];
+  readonly body: string;
+}
+
+const CONSTRAINT_START = /^(CONSTRAINT\b|PRIMARY\s+KEY\b|UNIQUE\b|FOREIGN\s+KEY\b|CHECK\b|EXCLUDE\b|LIKE\b)/i;
+
+function splitTopLevel(body: string): string[] {
+  const items: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of body) {
+    if (ch === '(') depth += 1;
+    if (ch === ')') depth -= 1;
+    if (ch === ',' && depth === 0) {
+      items.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim() !== '') items.push(current.trim());
+  return items;
+}
+
+export function readTables(sql: string): { tables: TableDdl[]; unreadable: string[] } {
+  const tables: TableDdl[] = [];
+  const unreadable: string[] = [];
+  const re = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\s*\(/gi;
+  for (const m of sql.matchAll(re)) {
+    const name = (m[1] ?? '').toLowerCase();
+    let depth = 1;
+    let i = (m.index ?? 0) + m[0].length;
+    while (i < sql.length && depth > 0) {
+      if (sql[i] === '(') depth += 1;
+      else if (sql[i] === ')') depth -= 1;
+      i += 1;
+    }
+    if (depth !== 0) {
+      unreadable.push(`CREATE TABLE ${name}: its body is not balanced, so this gate cannot read it`);
+      continue;
+    }
+    const body = sql.slice((m.index ?? 0) + m[0].length, i - 1);
+    const items = splitTopLevel(body);
+    const columns: string[] = [];
+    const constraints: string[] = [];
+    for (const item of items) {
+      if (CONSTRAINT_START.test(item)) {
+        constraints.push(item);
+        continue;
+      }
+      const col = /^"?([a-z_][a-z0-9_]*)"?\s/i.exec(item);
+      if (col) {
+        columns.push((col[1] ?? '').toLowerCase());
+        if (/\b(?:REFERENCES|UNIQUE|CHECK|PRIMARY\s+KEY)\b/i.test(item)) constraints.push(`${col[1] ?? ''} ${item}`);
+        continue;
+      }
+      unreadable.push(`${name}: this gate cannot read the table item "${item.slice(0, 60)}"`);
+    }
+    tables.push({ name, columns, constraints, body });
+  }
+  for (const m of sql.matchAll(/ALTER\s+TABLE\s+(?:ONLY\s+)?([a-z_][a-z0-9_]*)\s+ADD\s+(CONSTRAINT[\s\S]*?);/gi)) {
+    const name = (m[1] ?? '').toLowerCase();
+    const table = tables.find((t) => t.name === name);
+    if (table) (table.constraints as string[]).push(m[2] ?? '');
+  }
+  return { tables, unreadable };
+}
+
+/** The identifiers of a parenthesised column list, plus any quoted literal found inside it. */
+function columnList(text: string): { columns: string[]; literals: string[] } {
+  const inner = /\(([^()]*)\)/.exec(text)?.[1] ?? '';
+  const literals = [...inner.matchAll(/'([^']*)'/g)].map((m) => m[0]);
+  const columns = inner
+    .replace(/'[^']*'/g, ' ')
+    .split(',')
+    .map((c) => c.trim().replace(/^"|"$/g, '').toLowerCase())
+    .filter((c) => /^[a-z_][a-z0-9_]*$/.test(c));
+  return { columns, literals };
+}
+
+/**
+ * Words inside a CHECK expression that look like column references: lower-case
+ * identifiers that are not a SQL word, not a function call and not a cast
+ * target. The keyword list is curated; a false positive is answered by
+ * extending it, never by turning the rule off.
+ */
+const SQL_WORDS = new Set(
+  (
+    'and or not null is in between like ilike similar to escape true false case when then else end exists any all some cast as ' +
+    'current_date current_timestamp now localtimestamp interval date timestamp timestamptz time numeric decimal integer int bigint smallint ' +
+    'boolean text uuid jsonb json bytea char varchar real double precision serial bigserial array row unknown default value new old ' +
+    'coalesce nullif greatest least abs round trunc floor ceil ceiling length char_length octet_length lower upper btrim trim ltrim rtrim ' +
+    'substring position strpos overlay left right regexp_replace regexp_match split_part to_char to_number to_date to_timestamp ' +
+    'extract age date_trunc make_date jsonb_typeof jsonb_array_length jsonb_object_keys num_nonnulls num_nulls sign mod div'
+  ).split(/\s+/),
+);
+
+function checkExpressionColumns(expression: string): string[] {
+  const text = expression.replace(/'[^']*'/g, ' ').replace(/"([a-z_][a-z0-9_]*)"/gi, '$1');
+  const out = new Set<string>();
+  for (const m of text.matchAll(/(?<![\w."])([a-z_][a-z0-9_]*)\b(\s*\()?/g)) {
+    const word = (m[1] ?? '').toLowerCase();
+    if (m[2] !== undefined) continue; // a function call
+    if (SQL_WORDS.has(word)) continue;
+    out.add(word);
+  }
+  return [...out];
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The checks. Each takes the root it looks at and returns its problems.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The three prefix modules, in process: the inherited history is intact and Phase 4's floor holds (P4-AL-60). */
+export function prefixProblems(root: string): string[] {
+  return [
+    ...checkPhase2Prefix(migrationsDir(root), manifestPath(root)).map((p) => `Phase 2 prefix: ${p}`),
+    ...checkPhase3Prefix(migrationsDir(root), manifestPath(root)).map((p) => `Phase 3 prefix: ${p}`),
+    ...checkPhase4Prefix(migrationsDir(root), manifestPath(root)).map((p) => `Phase 4 prefix: ${p}`),
+  ];
+}
+
+/**
+ * The P4-S1 migration boundary, in the tense `accepted` names (P4-AL-61).
+ *
+ * ACCEPTED is the permanent half and is a floor. The CANDIDATE half is the one
+ * closure rule this file is allowed, and the acceptance commit deletes it.
+ */
+export function boundaryProblems(
+  root: string,
+  accepted: Readonly<Record<string, string>> = S1_ACCEPTED,
+  declared: readonly string[] = S1_MIGRATIONS,
+): string[] {
+  const problems: string[] = [];
+  const m = manifest(root);
+  const recorded = new Map(m.migrations.map((e) => [e.name, e.sha256]));
+  const after = phase4Migrations(root);
+
+  const last = declared[declared.length - 1] ?? PREVIOUS_HEAD;
+  if (JSON.stringify(after.slice(0, declared.length)) !== JSON.stringify([...declared]))
+    problems.push(
+      `the migrations after ${PREVIOUS_HEAD} begin with S1_MIGRATIONS (${declared.join(', ')}) — found ${after.slice(0, declared.length).join(', ') || 'none'}`,
+    );
+  if (JSON.stringify(Object.keys(accepted).sort()) !== JSON.stringify([...declared].sort()))
+    problems.push(`S1_ACCEPTED must name exactly S1_MIGRATIONS (${declared.join(', ')})`);
+  // A FLOOR: a later Phase 4 slice freezing further ahead is that slice doing its job.
+  if (!(m.frozenThrough >= last)) problems.push(`frozenThrough is ${m.frozenThrough} — it is a floor at ${last} once P4-S1 is accepted`);
+  for (const [name, digest] of Object.entries(accepted)) {
+    const path = join(migrationsDir(root), name);
+    if (!existsSync(path)) {
+      problems.push(`${name} was accepted but is missing`);
+      continue;
+    }
+    const onDisk = sha256(path);
+    if (onDisk !== digest) problems.push(`${name} hashes to ${onDisk.slice(0, 12)}… but was accepted at ${digest.slice(0, 12)}…`);
+    if (recorded.get(name) !== digest) problems.push(`${name} is not frozen in the manifest at its accepted digest`);
+  }
+  // The same acceptance commit appends the same pairs to the permanent module.
+  const inPrefix = PHASE4_S1_PREFIX.map(([name, digest]) => `${name}:${digest}`).join('\n');
+  const expected = [...declared].map((name) => `${name}:${accepted[name] ?? ''}`).join('\n');
+  if (inPrefix !== expected)
+    problems.push(`PHASE4_S1_PREFIX in scripts/phase4-prefix.ts does not hold exactly the accepted P4-S1 pairs — the acceptance commit fills both`);
+  return problems;
+}
+
+/** Every pending entry is a FAIL: the gate is red until the owning stream delivers. */
+export function pendingProblems(): string[] {
+  const rows: readonly object[] = [...S1_SUITES, ...S1_COMMANDS, ...RED_PROOFS];
+  return rows.filter(isPending).map((p) => `${p.id} (${p.area}) is not filled — ${p.owner} owes it: ${p.pending}`);
+}
+
+/** Every test file directly inside `dir`, sorted. Whatever extension it carries: a file the runner would not pick up is a finding, not an omission. */
+export function suitesIn(root: string, dir: string): string[] {
+  if (!has(root, dir)) return [];
+  return readdirSync(join(root, dir))
+    .filter((f) => /\.(test|spec)\.[tj]sx?$/.test(f))
+    .sort()
+    .map((f) => `${dir}/${f}`);
+}
+
+/**
+ * The canary on the guard red proofs. `tests/guards` was reached by no gate and
+ * no npm script, so a planted-defect proof written there was never executed.
+ * This refuses:
+ *
+ *   — the directory missing, or holding no suite at all — a gate that runs an
+ *     empty directory proves nothing, and vitest's own "no test files found"
+ *     would be the only sign;
+ *   — a file in it the ROOT runner would not execute when handed the directory:
+ *     `vitest.config.ts` includes `tests/**\/*.test.ts`, so a `.test.tsx` or a
+ *     `.spec.ts` there is a proof that silently never runs;
+ *   — the plan not naming the directory, which is the failure this canary is
+ *     named after.
+ */
+export function guardSuiteProblems(root: string): string[] {
+  const problems: string[] = [];
+  const wired = s1Plan().some((s) => s.args.includes(GUARD_SUITE_DIR));
+  if (!wired) problems.push(`no step of this gate runs ${GUARD_SUITE_DIR} — the guard red proofs would be committed and never executed`);
+  if (!has(root, GUARD_SUITE_DIR))
+    return [...problems, `${GUARD_SUITE_DIR} is missing — the guard owner's planted-defect proofs for G-3, G-6 and the merchant-language rules live there`];
+  const suites = suitesIn(root, GUARD_SUITE_DIR);
+  if (suites.length === 0) problems.push(`${GUARD_SUITE_DIR} holds no suite — this gate would hand the runner an empty directory and call the result a pass`);
+  const include = has(root, 'vitest.config.ts') ? read(root, 'vitest.config.ts') : '';
+  if (!include.includes("'tests/**/*.test.ts'"))
+    problems.push(
+      `vitest.config.ts no longer includes tests/**/*.test.ts — this gate hands ${GUARD_SUITE_DIR} to the root runner and relies on that pattern to pick every proof up`,
+    );
+  for (const suite of suites)
+    if (!suite.endsWith('.test.ts'))
+      problems.push(
+        `${suite} is not matched by the root runner's include (tests/**/*.test.ts), so handing it the directory would not execute it — rename it .test.ts`,
+      );
+  return problems;
+}
+
+/** The listed suites exist and do not skip; every `p4-*` suite and every Phase 4 golden on disk is listed; ids are unique. */
+export function suiteProblems(root: string): string[] {
+  const problems: string[] = [];
+  const ids = new Set<string>();
+  for (const e of [...S1_SUITES, ...S1_COMMANDS, ...RED_PROOFS]) {
+    if (ids.has(e.id)) problems.push(`${e.id} is listed twice`);
+    ids.add(e.id);
+  }
+  const files = S1_SUITES.filter((e): e is SuiteEntry => !isPending(e));
+  for (const e of files) {
+    if (!has(root, e.file)) {
+      problems.push(`${e.id} ${e.file} is missing`);
+      continue;
+    }
+    if ((e.runner === 'web') !== e.file.startsWith('apps/web/test/')) problems.push(`${e.id} ${e.file} is not a ${e.runner} suite`);
+    for (const file of e.directory === true ? suitesIn(root, e.file) : [e.file]) {
+      const hit = SKIP.exec(stripTsProse(read(root, file)).replace(QUOTED, "''"));
+      if (hit) problems.push(`${e.id} ${file} contains ${hit[0]} — no Phase 4 suite skips`);
+    }
+  }
+  problems.push(...guardSuiteProblems(root));
+  const listed = new Set(files.map((e) => e.file));
+  for (const dir of ['tests/integration', 'tests/security', 'tests/performance']) {
+    if (!has(root, dir)) continue;
+    for (const f of readdirSync(join(root, dir)).sort())
+      if (/^(?:p4|phase4)-.*\.test\.ts$/.test(f) && !listed.has(`${dir}/${f}`)) problems.push(`${dir}/${f} is a Phase 4 suite no S1_SUITES entry lists`);
+  }
+  if (has(root, GOLDEN_DIR))
+    for (const f of readdirSync(join(root, GOLDEN_DIR)).sort())
+      if (f.endsWith('.test.ts') && !listed.has(`${GOLDEN_DIR}/${f}`)) problems.push(`${GOLDEN_DIR}/${f} is a Phase 4 golden no S1_SUITES entry lists`);
+  return problems;
+}
+
+/** Every command, and the predecessor gate, name an npm script that exists. */
+export function commandProblems(root: string): string[] {
+  const problems: string[] = [];
+  const scripts = (JSON.parse(read(root, 'package.json')) as { scripts?: Record<string, string> }).scripts ?? {};
+  for (const c of S1_COMMANDS) {
+    if (isPending(c)) continue;
+    if (typeof scripts[c.npmScript] !== 'string') problems.push(`${c.id}: package.json has no script ${c.npmScript}`);
+  }
+  if (typeof scripts[PREDECESSOR_SCRIPT] !== 'string') problems.push(`package.json has no script ${PREDECESSOR_SCRIPT} — this gate composes it`);
+  for (const own of ['phase4-prefix', 'gate:phase4:s1'])
+    if (typeof scripts[own] !== 'string') problems.push(`package.json has no script ${own} — a gate nobody can run is not a gate`);
+  return problems;
+}
+
+/** Every red proof is filled and resolves to a real `it(` title (P4-AL-67). */
+export function redProofProblems(root: string): string[] {
+  const problems: string[] = [];
+  for (const row of RED_PROOFS) {
+    if (isPending(row)) continue;
+    const [file = '', prefix = ''] = row.proof.split('::');
+    if (prefix.trim() === '') {
+      problems.push(`${row.id}: ${row.proof} names no title`);
+      continue;
+    }
+    if (!has(root, file)) {
+      problems.push(`${row.id}: ${file} does not exist`);
+      continue;
+    }
+    if (!testTitles(read(root, file)).some((t) => t.startsWith(prefix))) problems.push(`${row.id}: no it( title in ${file} starts with "${prefix}"`);
+  }
+  return problems;
+}
+
+/**
+ * The guards Phase 4 cannot inherit (actions 2 and 3), asserted as BEHAVIOUR:
+ * the accepted guard modules are loaded and run over fixtures, so the check
+ * survives any internal refactor of the guards and fails only when the
+ * protection is genuinely absent.
+ */
+export function guardProblems(root: string): string[] {
+  const problems: string[] = [];
+  if (!has(root, GUARD_MODULE)) problems.push(`${GUARD_MODULE} is missing`);
+  else {
+    /* eslint-disable-next-line @typescript-eslint/no-require-imports */
+    const guard = require(join(root, GUARD_MODULE)) as Record<string, unknown>;
+    const find = guard[GUARD_SALES_EXPORT];
+    if (typeof find !== 'function')
+      problems.push(
+        `${GUARD_MODULE} exports no ${GUARD_SALES_EXPORT}(sql, tables) — guard G-3 has no sales arm, so nothing stops a Phase 4 migration storing an authoritative balance (lock P4-AL-06, plan action 2)`,
+      );
+    else {
+      const findings = (find as (sql: string, tables: readonly string[]) => { table?: string; column?: string }[])(
+        DERIVED_TRUTH_FIXTURE.ddl,
+        DERIVED_TRUTH_FIXTURE.tables,
+      );
+      const flagged = new Set(findings.map((f) => `${f.table ?? ''}.${f.column ?? ''}`));
+      for (const want of DERIVED_TRUTH_FIXTURE.mustFlag)
+        if (!flagged.has(want)) problems.push(`the G-3 sales arm does not flag ${want} — it is an authoritative stored balance (P4-AL-06)`);
+      for (const no of DERIVED_TRUTH_FIXTURE.mustNotFlag)
+        if (flagged.has(no))
+          problems.push(
+            `the G-3 sales arm flags ${no}, which is a stored fact of the document and not derived truth — a guard that flags everything asserts nothing`,
+          );
+    }
+  }
+  if (!has(root, JARGON_MODULE)) problems.push(`${JARGON_MODULE} is missing`);
+  else {
+    /* eslint-disable-next-line @typescript-eslint/no-require-imports */
+    const jargon = require(join(root, JARGON_MODULE)) as {
+      findMerchantJargon?: (catalogs: Record<string, Record<string, string>>) => unknown[];
+      findS7SourceViolations?: (files: Record<string, string>) => unknown[];
+    };
+    const catalogue = jargon.findMerchantJargon;
+    if (typeof catalogue !== 'function') problems.push(`${JARGON_MODULE} exports no findMerchantJargon`);
+    else {
+      for (const ns of PHASE4_KEY_NAMESPACES) {
+        const hits = catalogue({ en: { [`${ns}title`]: 'Journal ledger' } });
+        if (hits.length === 0)
+          problems.push(
+            `the merchant-jargon guard does not examine the ${ns}* key namespace — a Phase 4 screen may ship the accountant's words (plan action 3)`,
+          );
+      }
+      if (catalogue({ en: { 'accounting.title': 'Journal ledger' } }).length !== 0)
+        problems.push(
+          `the merchant-jargon guard examines accounting.* keys — that namespace IS the accountant chart, and widening the scope must not swallow it`,
+        );
+    }
+    const source = jargon.findS7SourceViolations;
+    if (typeof source !== 'function') problems.push(`${JARGON_MODULE} exports no findS7SourceViolations`);
+    else if (source({ [PHASE4_WEB_FILE]: '<p>Ledger</p>' }).length === 0)
+      problems.push(`the merchant-jargon source scope does not examine ${PHASE4_WEB_FILE} — a pos/ or customers/ file is never examined today (plan action 3)`);
+  }
+  problems.push(...readSurfaceCoverageProblems(root));
+  problems.push(...derivedTruthCitationProblems(root));
+  return problems;
+}
+
+/**
+ * G-6 must reach a Phase 4 read module, and it must reach it by SHAPE.
+ *
+ * `READ_SURFACE` was a path regex naming `accounting-reports`,
+ * `inventory-reads.ts` and `supplier-balance-reads.ts`, so a Phase 4 read
+ * module was never examined and an `OFFSET` or a `Number()` on money would
+ * ship green. The probes below are read modules in context directories that do
+ * not exist in the tree: they cannot be satisfied by adding a name, only by a
+ * rule about a module's shape. `apps/api/src/modules/<context>/<name>-reads.ts`
+ * is that rule.
+ *
+ * The accepted exclusions are asserted from the same side, so widening the rule
+ * cannot quietly swallow them: `purchasing-reads.ts` holds S6's command-side FX
+ * binding and must stay OFF the surface
+ * (`tests/integration/static-guards-s7.test.ts:141`), and a controller or a
+ * service is not a read module.
+ */
+export function readSurfaceCoverageProblems(root: string): string[] {
+  const module = 'scripts/guards/read-surface.ts';
+  if (!has(root, module)) return [`${module} is missing`];
+  /* eslint-disable-next-line @typescript-eslint/no-require-imports */
+  const guard = require(join(root, module)) as { READ_SURFACE?: RegExp };
+  const surface = guard.READ_SURFACE;
+  if (!(surface instanceof RegExp)) return [`${module} exports no READ_SURFACE pattern this gate can probe`];
+  const problems: string[] = [];
+  // A read module in a context nobody has created yet. If the surface misses
+  // one of these it is still a name list, however it is spelled.
+  for (const context of ['selling', 'sales', 'pos', 'receivables', 'invoices', 'customers', 'debts', 'installments'])
+    if (!surface.test(`apps/api/src/modules/${context}/${context}-reads.ts`))
+      problems.push(
+        `guard G-6's READ_SURFACE does not reach apps/api/src/modules/${context}/${context}-reads.ts — a Phase 4 read module is never examined, so an OFFSET or a Number() on money would ship green (G-6; the surface must be a rule about a module's shape, not a list of paths)`,
+      );
+  for (const [path, why] of [
+    [
+      'apps/api/src/modules/purchasing/purchasing-reads.ts',
+      "it holds S6's command-side FX binding and static-guards-s7.test.ts:141 requires it OFF the surface",
+    ],
+    ['apps/api/src/modules/selling/sales-reads.controller.ts', 'a controller is not a read module'],
+    ['apps/api/src/modules/selling/sales-movements.service.ts', 'a service is not a read module'],
+  ] as const)
+    if (surface.test(path))
+      problems.push(`guard G-6's READ_SURFACE now matches ${path}, and ${why} — widening the rule must not swallow the accepted exclusions`);
+  return problems;
+}
+
+/**
+ * The complement arm of G-3 returns the Phase 4 relations too, so its finding
+ * must cite the decision that governs a stored receivable. `static-guards.ts`
+ * is this gate's own file; the assertion keeps the correction from being
+ * reverted silently, since a wrong citation sends the next reader to a decision
+ * about the stock ledger.
+ */
+export function derivedTruthCitationProblems(root: string): string[] {
+  const file = 'scripts/static-guards.ts';
+  if (!has(root, file)) return [`${file} is missing`];
+  const code = read(root, file);
+  if (!/P4-AL-06/.test(code))
+    return [
+      `${file} reports a derived-truth finding without a Phase 4 citation — a receivable column failing under P3-AL-49 sends the reader to a decision about the stock ledger`,
+    ];
+  return [];
+}
+
+/**
+ * P4-AL-63: the two Phase 3 browser couplings, resolved before the first
+ * Phase 4 step exists. `tests/browser/flows.ts` is NOT this gate's file; this
+ * check states the contract it must satisfy and refuses until it does.
+ */
+export function browserStepProblems(root: string): string[] {
+  const problems: string[] = [];
+  if (!has(root, FLOWS)) return [`${FLOWS} is missing`];
+  const flows = stripTsProse(read(root, FLOWS));
+  const list = (name: string): string[] | null => {
+    const m = new RegExp(`export const ${name}\\b[^=]*=\\s*\\[([^\\]]*)\\]`).exec(flows);
+    return m ? [...(m[1] ?? '').matchAll(/'([^']*)'|"([^"]*)"/g)].map((x) => x[1] ?? x[2] ?? '') : null;
+  };
+  const p3 = list('PHASE3_STEPS');
+  const p4 = list('PHASE4_STEPS');
+  if (p3 === null)
+    problems.push(
+      `${FLOWS} exports no PHASE3_STEPS — ${PHASE3_GATE}:507-513 runs the browser matrix with no --steps, so the first Phase 4 step would make a Phase 4 screen defect turn an accepted PHASE 3 gate red (P4-AL-63)`,
+    );
+  if (p4 === null) problems.push(`${FLOWS} exports no PHASE4_STEPS — the Phase 4 gates cannot name the steps they own (P4-AL-63)`);
+  if (p3 !== null && p3.length !== PHASE3_STEP_COUNT)
+    problems.push(
+      `PHASE3_STEPS holds ${p3.length} names; the accepted Phase 3 matrix is exactly ${PHASE3_STEP_COUNT} steps, and pinning the Phase 3 gate to a different list changes accepted coverage`,
+    );
+  if (p3 !== null && p4 !== null) {
+    const shared = p3.filter((s) => p4.includes(s));
+    if (shared.length > 0)
+      problems.push(
+        `PHASE3_STEPS and PHASE4_STEPS share ${shared.join(', ')} — flows.ts:275 already has a step named "return", and a duplicate name is run by --steps=<PHASE3_STEPS> and collides in the evidence (P4-AL-68)`,
+      );
+  }
+  for (const step of p4 ?? [])
+    if (!step.startsWith(PHASE4_STEP_PREFIX))
+      problems.push(`the Phase 4 browser step "${step}" is not ${PHASE4_STEP_PREFIX}-prefixed, so it can collide with a Phase 3 step name (P4-AL-68)`);
+  const steps = new Set([...(p3 ?? []), ...(p4 ?? [])]);
+  const declared = [...flows.matchAll(/run\.step\(\s*'([^']+)'/g)].map((m) => m[1] ?? '');
+  for (const s of declared) if (steps.size > 0 && !steps.has(s)) problems.push(`${FLOWS} runs the step "${s}" that neither exported list names`);
+  const counts = new Map<string, number>();
+  for (const s of declared) counts.set(s, (counts.get(s) ?? 0) + 1);
+  for (const [s, n] of counts) if (n > 1) problems.push(`${FLOWS} declares the step "${s}" ${n} times — run.step refuses a duplicate name (P4-AL-68)`);
+  if (!has(root, PHASE3_GATE)) problems.push(`${PHASE3_GATE} is missing`);
+  else if (!/--steps=/.test(stripTsProse(read(root, PHASE3_GATE))))
+    problems.push(
+      `${PHASE3_GATE} still runs the browser matrix with no --steps — it must be pinned to PHASE3_STEPS before the first Phase 4 step exists (P4-AL-63). It is an ACCEPTED gate: the coordinator authorises that edit, no Phase 4 stream makes it unilaterally`,
+    );
+  return problems;
+}
+
+/**
+ * Action 1: before the first Phase 4 registration, the four accepted registries
+ * accept a `P4-Sn` registrant.
+ *
+ * `sql` defaults to the Phase 4 migrations on disk; it is a parameter so that
+ * `tests/guards/phase4-registry-widening-guard.test.ts` can plant the defect
+ * this rule exists to catch, rather than assert that a green rule is a correct
+ * rule.
+ */
+export function registeredByProblems(root: string, sql: string = phase4Sql(root)): string[] {
+  const problems: string[] = [];
+  for (const relation of REGISTERED_BY_RELATIONS) {
+    const widened = new RegExp(
+      `ALTER\\s+TABLE\\s+(?:ONLY\\s+)?${relation}\\b[\\s\\S]{0,600}?${REGISTERED_BY_WIDENED.replace(/[[\]$^*+?.()|{}\\]/g, '\\$&')}`,
+      'i',
+    );
+    if (!widened.test(sql))
+      problems.push(
+        `no Phase 4 migration widens ${relation}.registered_by to ${REGISTERED_BY_WIDENED} — the first Phase 4 registration fails the accepted CHECK (plan action 1)`,
+      );
+  }
+  for (const clause of addConstraintClauses(sql))
+    if (new RegExp(REGISTERED_BY_PHASE3_ONLY.replace(/[[\]$^*+?.()|{}\\]/g, '\\$&')).test(clause))
+      problems.push(`a Phase 4 migration re-introduces ${REGISTERED_BY_PHASE3_ONLY} — widening it and putting it back is not widening it`);
+  return problems;
+}
+
+/**
+ * Every `ADD CONSTRAINT … CHECK (…)` clause of the given SQL, up to the
+ * statement terminator.
+ *
+ * The re-introduction rule reads THESE and not the whole file, because the
+ * two places the Phase-3-only pattern can appear mean opposite things:
+ *
+ *   - inside an `ADD CONSTRAINT … CHECK`, it IS the re-introduction — the
+ *     committed state would once again refuse a Phase 4 registrant;
+ *   - inside a `DO` block that compares `pg_get_constraintdef()` against the
+ *     shape the migration was written for, it is the migration READING the
+ *     live catalogue, which is the discipline the lock demands of it
+ *     (P4-AL-84: "a migration reads the live catalogue, never the migration
+ *     that wrote it"), and `0074`'s pre-flight assertion is exactly that.
+ *
+ * A file-wide grep cannot tell those apart, so it fired on `0074`'s
+ * assertion and would have been answered by deleting the assertion — the
+ * check contorting its subject rather than the subject satisfying the
+ * check. Scoping the rule to the clause that actually installs a constraint
+ * makes it strictly sharper: `tests/guards/phase4-registry-widening-guard.test.ts`
+ * proves both directions, that a re-added Phase-3-only CHECK is still
+ * caught and that naming the old shape in an assertion is not a finding.
+ */
+export function addConstraintClauses(sql: string): string[] {
+  return [...sql.matchAll(/ADD\s+CONSTRAINT\b[\s\S]*?;/gi)].map((m) => m[0]);
+}
+
+/** G-03's structural half: every FK from a Phase 4 relation to a business-scoped parent is composite, present and VALID. */
+export function compositeFkProblems(root: string): string[] {
+  const sql = phase4Sql(root);
+  const { tables, unreadable } = readTables(sql);
+  const problems = [...unreadable];
+  const scoped = new Set([...BUSINESS_SCOPED_PARENTS, ...tables.filter((t) => t.columns.includes('business_id')).map((t) => t.name)]);
+  for (const table of tables) {
+    if (!table.columns.includes('business_id')) continue;
+    for (const constraint of table.constraints) {
+      // A COLUMN-level REFERENCES: the item begins with the column's own name,
+      // never with a constraint keyword (a table-level FOREIGN KEY is read below).
+      const inline = CONSTRAINT_START.test(constraint) ? null : /^([a-z_][a-z0-9_]*)\s[\s\S]*?\bREFERENCES\s+([a-z_][a-z0-9_]*)/i.exec(constraint);
+      if (inline && scoped.has((inline[2] ?? '').toLowerCase()))
+        problems.push(
+          `${table.name}.${inline[1] ?? ''} references the business-scoped ${inline[2] ?? ''} through a SINGLE column — the FK must carry business_id on both sides, or SQL can bind ${table.name}(A) to ${inline[2] ?? ''}(B) (G-03)`,
+        );
+      const fk = /FOREIGN\s+KEY\s*\(([^)]*)\)\s*REFERENCES\s+([a-z_][a-z0-9_]*)\s*\(([^)]*)\)/i.exec(constraint);
+      if (!fk) continue;
+      const parent = (fk[2] ?? '').toLowerCase();
+      if (!scoped.has(parent)) continue;
+      const child = columnList(`(${fk[1] ?? ''})`).columns;
+      const target = columnList(`(${fk[3] ?? ''})`).columns;
+      if (!child.includes('business_id') || !target.includes('business_id'))
+        problems.push(
+          `${table.name}: the foreign key (${child.join(', ')}) → ${parent} (${target.join(', ')}) omits business_id on one side — a composite seam is what refuses a cross-business binding (G-03)`,
+        );
+    }
+  }
+  for (const m of sql.matchAll(/ADD\s+CONSTRAINT\s+([a-z_][a-z0-9_]*)[\s\S]{0,400}?NOT\s+VALID/gi))
+    problems.push(`the Phase 4 constraint ${m[1] ?? ''} is added NOT VALID — a constraint nobody validated protects none of the rows that are already there`);
+  for (const m of sql.matchAll(/ALTER\s+TABLE\s+(?:ONLY\s+)?([a-z_][a-z0-9_]*)\s+DROP\s+CONSTRAINT\s+([a-z_][a-z0-9_]*)/gi))
+    if (/fk|foreign/i.test(m[2] ?? ''))
+      problems.push(`a Phase 4 migration drops the foreign key ${m[2] ?? ''} on ${m[1] ?? ''} — the composite seams are never dropped (P2-S8's accepted rule)`);
+  return problems;
+}
+
+/**
+ * ── THE DEFERRED SEAMS ─────────────────────────────────────────────────────
+ *
+ * A slice sometimes cannot close a seam without creating a later slice's
+ * relation, which P4-AL-86 refuses. The wrong answers are both familiar: leave
+ * the hole undeclared and let a later slice not notice it, or widen the slice
+ * until the hole closes and lose the boundary the Tech Lead set.
+ *
+ * The answer here is a declared seam. Each one names WHAT is open, WHY the
+ * open seam is safe today, and WHICH LATER CONDITION makes it unsafe — and the
+ * condition is DISCOVERED from the tree rather than written down as a slice
+ * number, because a slice number is a promise and a discovered condition is a
+ * fact ([[daftar-every-journal-writer-equally-protected]]: G-4 discovers
+ * writers from the schema instead of naming one).
+ *
+ * So this check is not a to-do list. It is red the moment the thing that made
+ * a seam safe stops being true, whichever slice is running, and it says
+ * nothing at all while the seam is safe. It is also the reason none of these
+ * three is a "nothing after N" claim (P4-AL-60): each asks what the tree
+ * HOLDS, never what it may not hold later.
+ */
+export interface DeferredSeam {
+  readonly id: string;
+  /** What is open. */
+  readonly what: string;
+  /** The problem to report when the seam has become unsafe. */
+  readonly run: (root: string) => string[];
+}
+
+/** Whether the Phase 4 DDL creates a relation named `name`. */
+function phase4Creates(root: string, name: string): boolean {
+  return readTables(phase4Sql(root)).tables.some((t) => t.name === name);
+}
+
+/**
+ * The regular expression ONE Phase 4 routine definition is read with: from a
+ * `CREATE [OR REPLACE] FUNCTION <name> (` to the close of the dollar-quote
+ * that definition opens. ONE device, so the "last definition" reader, the
+ * "every definition" reader and the definition COUNT can never disagree about
+ * what a definition is.
+ *
+ * The dollar-quote TAG is captured and the close must repeat it. Reading to
+ * the first `$$;` instead was a hole, measured under TL-P4-S5-R1: this tree
+ * already dollar-quotes with `$coll$`, `$end$`, `$pre$`, `$post$` and
+ * `$proof$`, so a routine written `AS $fn$ … $fn$;` was simply NOT FOUND, and
+ * every law that reads a body through this device went silent on it. A planted
+ * `invoice_outstanding`-family reader subtracting `public.refunds` inside a
+ * `$fn$` body produced zero findings. On a financial law a body this device
+ * cannot read must never look like a body with nothing in it.
+ *
+ * The tag class admits DIGITS. It did not, so `AS $v2$ … $v2$;` — the obvious
+ * spelling for a second version of a routine — was unreadable by exactly the
+ * same mechanism the paragraph above describes.
+ */
+const routineDefinitionPattern = (name: string): RegExp =>
+  new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\([\\s\\S]*?(\\$[a-z0-9_]*\\$)[\\s\\S]*?\\1;`, 'gi');
+
+/**
+ * How many `CREATE … FUNCTION <name> (` statements `sql` carries, whether or
+ * not their bodies can be read. Compared against the bodies actually read, it
+ * is how a definition this gate CANNOT read is told apart from a definition
+ * that is not there — the difference between a subject and a vacuous pass.
+ */
+export const routineDefinitionCountIn = (sql: string, name: string): number =>
+  [...sql.matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${name}\\s*\\(`, 'gi'))].length;
+
+/** Every definition of `name` in `sql`, in file order. */
+export const routineBodiesIn = (sql: string, name: string): string[] => [...sql.matchAll(routineDefinitionPattern(name))].map((m) => m[0]);
+
+/**
+ * EVERY Phase 4 definition of `name`, in file order — the reader every
+ * NEGATIVE law must use.
+ *
+ * A ROUTINE NAME IS NOT A SIGNATURE. PostgreSQL overloads on the parameter
+ * list, so one name carries as many LIVE routines as it has distinct
+ * signatures. `invoice_outstanding` carries TWO: the scalar `(UUID, UUID)`,
+ * last written at `0084:526`, and the set-based `(UUID, UUID[])`, last written
+ * at `0084:593`. `phase4RoutineBody` below returns only the LAST textual
+ * match, so until TL-P4-S5-R1 every law that read a body through it judged the
+ * array form and judged the scalar form by NOTHING.
+ *
+ * MEASURED, not reasoned about: a refund subtraction planted into the scalar
+ * wrapper alone — array form left clean and last, exactly as `0084:510-520`
+ * arranges the real file — produced ZERO findings from
+ * `invoiceReducerProblems` and ZERO from seam S-P4-03. The same subtraction in
+ * the array form produced the finding at once. The scalar form is a pure
+ * delegating wrapper, which makes it the ideal hiding place: every reader's
+ * mental model of it is "it only delegates".
+ *
+ * An ABSENCE CLAIM over a set of definitions is true only if it holds for
+ * EVERY definition. There is no delegation escape from a negative law.
+ */
+export function phase4RoutineBodies(root: string, name: string): string[] {
+  return routineBodiesIn(phase4Sql(root), name);
+}
+
+/**
+ * The LAST Phase 4 definition of a routine — ONE OF POSSIBLY SEVERAL, and
+ * NEVER a subject for an absence claim.
+ *
+ * THIS READER IS SIGNATURE-BLIND. It matches on the NAME ALONE and returns the
+ * last textual match in the whole Phase 4 DDL. On a name that carries more
+ * than one live signature that is ONE live routine out of several, and every
+ * other one is judged by NOTHING — the hole TL-P4-S5-R1 closed, measured on
+ * `invoice_outstanding`'s two live forms. Use it ONLY where the subject really
+ * is "the definition the database ends up holding for this name" and the law
+ * is POSITIVE, a requirement that something IS there. For ANY law of the form
+ * "X does not appear", use `phase4RoutineBodies` and judge EVERY definition.
+ * A negative law reading this helper is the defect, not a shortcut.
+ *
+ * The LAST definition, not the first: a later `CREATE OR REPLACE` of the same
+ * signature is what the database ends up holding, so reading the first one
+ * would judge a slice by the routine it replaced. The first draft of this
+ * helper took the first match and reported a correctly-replaced routine as
+ * still missing its relations.
+ */
+export function phase4RoutineBody(root: string, name: string): string | null {
+  const all = phase4RoutineBodies(root, name);
+  return all.length === 0 ? null : (all[all.length - 1] ?? null);
+}
+
+// ── Signature discrimination, for the POSITIVE laws ─────────────────────────
+//
+// A POSITIVE law's subject is the LIVE set, which is NOT "every definition": a
+// definition REPLACED by a later one of the SAME SIGNATURE is dead DDL.
+// `0075:722`'s `invoice_outstanding` was written before any reducer relation
+// existed — it names none of them and delegates to nothing — so a positive law
+// that judged every definition would go FALSE RED on the accepted tree. The
+// live set is therefore the LAST definition of each distinct SIGNATURE, which
+// for `invoice_outstanding` is `0084:526` and `0084:593`, and for every other
+// Phase 4 routine is its single last definition.
+
+const SQL_TYPE_HEAD =
+  /^(uuid|text|citext|bigint|integer|int|int2|int4|int8|smallint|boolean|bool|numeric|decimal|real|double|date|timestamptz|timestamp|time|interval|jsonb|json|bytea|character|char|varchar|name|oid|regprocedure|record|anyelement|anyarray|void|trigger)\b/;
+
+/** The parameter list of ONE definition, read by balancing parentheses, or null when it cannot be read. */
+function definitionParameterText(def: string, name: string): string | null {
+  const head = new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${name}\\s*\\(`, 'i').exec(def);
+  if (head === null) return null;
+  const start = head.index + head[0].length;
+  let depth = 1;
+  let index = start;
+  for (; index < def.length && depth > 0; index++) {
+    const ch = def[index];
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+  }
+  return depth === 0 ? def.slice(start, index - 1) : null;
+}
+
+/**
+ * The SIGNATURE of one definition: its ordered parameter TYPES, lowercased and
+ * whitespace-collapsed, which is what PostgreSQL overloads on. A parameter
+ * NAME is not part of a signature and is dropped; neither is a default.
+ *
+ * null when the parameter list cannot be read. Every caller REPORTS that
+ * rather than skipping the definition, because a definition whose signature
+ * cannot be read is a definition that cannot be placed in the live set — and
+ * dropping it silently is the same vacuous pass an unreadable body bought once
+ * already in this slice.
+ */
+export function routineSignature(def: string, name: string): string | null {
+  const params = definitionParameterText(def, name);
+  if (params === null) return null;
+  if (params.trim() === '') return '';
+  const items: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of params) {
+    if (ch === '(' || ch === '[') depth++;
+    else if (ch === ')' || ch === ']') depth--;
+    if (ch === ',' && depth === 0) {
+      items.push(current);
+      current = '';
+    } else current += ch;
+  }
+  items.push(current);
+  return items
+    .map((raw) => {
+      let text = raw.trim().replace(/\s+/g, ' ').toLowerCase();
+      text = text.replace(/^(?:in|out|inout|variadic)\s+/, '');
+      text = text.replace(/\s+(?:default\s|=\s*)[\s\S]*$/, '');
+      // A parameter in this tree is `name type`, and a NAMELESS parameter is
+      // legal PostgreSQL too — so the first token is dropped only when it is
+      // not itself the head of a type. `p_at timestamp with time zone` loses
+      // its name; a bare `timestamp with time zone` keeps every word.
+      if (!SQL_TYPE_HEAD.test(text) && text.includes(' ')) text = text.slice(text.indexOf(' ') + 1);
+      return text.replace(/\s*\[\s*\]/g, '[]');
+    })
+    .join(',');
+}
+
+/**
+ * The LIVE definitions of `name` in `sql` — the LAST definition of each
+ * distinct signature, in file order — beside the number of definitions this
+ * reader could not place in that set at all.
+ */
+export function liveRoutineBodiesIn(sql: string, name: string): { readonly live: readonly string[]; readonly unplaceable: number } {
+  const bySignature = new Map<string, string>();
+  let unplaceable = 0;
+  for (const def of routineBodiesIn(sql, name)) {
+    const signature = routineSignature(def, name);
+    if (signature === null) {
+      unplaceable++;
+      continue;
+    }
+    bySignature.set(signature, def);
+  }
+  return { live: [...bySignature.values()], unplaceable };
+}
+
+/**
+ * The Phase-4 relations whose financial existence can change the DERIVED
+ * invoice receivable/outstanding — the REDUCERS: a payment allocation, an
+ * applied credit note, a customer credit application, a write-off, or a
+ * reversal of any of those. DISCOVERED from the Phase 4 DDL, so the set grows
+ * by itself.
+ *
+ * A CASH REFUND IS INTENTIONALLY EXCLUDED, because it settles a
+ * credit-note/customer-credit liability and must not reduce invoice AR again
+ * (TL-P4-S5-R1, ruling on lock P4-AL-34). The financial identity this set
+ * encodes: an invoice becomes a receivable, and a reducer — a payment
+ * allocation, a customer-credit application, a credit-note effect where
+ * applicable — reduces that invoice receivable ONCE. A later refund does not
+ * reduce it a second time; it consumes the liability or right the credit note
+ * or the customer credit still carries and creates the matching OUTWARD cash
+ * movement. Credit/return effect may reduce AR; a refund must not reduce AR
+ * again.
+ *
+ * This set is therefore the discovery half of seam S-P4-03 only. The other
+ * half of TL-P4-S5-R1 is `invoiceReducerProblems` below: a permanent negative
+ * proof over EXECUTABLE SQL, so a later slice cannot put the second reduction
+ * back by subtracting a refund inside a receivable reader. Removing the token
+ * from this regex alone would leave that door open, and renaming a refund
+ * relation would walk straight through it.
+ */
+// WIDENED because both vocabularies were measured BLIND to the names P4-S5 is
+// most likely to use, which is a FALSE GREEN and not a false red.
+// `INVOICE_REDUCER_VOCABULARY` is anchored, so `customer_credit_notes` — the
+// name consistent with S4's own `customer_credits`/`customer_credit_applications`
+// — matched nothing and the seam would have passed cleanly while
+// `invoice_outstanding` did not read the new reducer: every invoice settled by
+// a credit note reporting itself unpaid. And `_` is a word character, so
+// `\brefunds\b` never matched `customer_refunds` — the exact mirror of the
+// existing `supplier_refunds`, and a name the estate already writes down in
+// `tests/security/settlement-s6-no-customer-payments.test.ts:76` — which left
+// TL-P4-S5-R1's permanent negative proof vacuous against the likeliest name.
+// Both reproduced by running the regexes themselves.
+export const INVOICE_REDUCER_VOCABULARY =
+  /^(payment_allocations|allocation_reversals|payment_reversals|credit_note_applications|credit_notes|customer_credit_notes|customer_credit_note_applications|customer_credit_applications|invoice_write_offs|write_offs|sale_returns|sales_returns|customer_returns|credit_note_allocations|customer_credit_note_allocations|customer_credit_allocations)$/;
+
+/**
+ * The names a Phase-4 CASH REFUND relation will carry. A vocabulary, not a
+ * list of what the tree has: `refunds` does not exist yet, and the whole point
+ * of TL-P4-S5-R1 is that the law must already be standing on the day it does.
+ */
+//
+// A TOKEN RULE, not an enumeration of prefixes. The prefix list missed
+// `pos_refunds`, `refund_lines`, `customer_refund_allocations`,
+// `credit_note_allocations` and every singular — and `_` is a word character,
+// so `\b` does not break at it and no prefix or suffix could ever match. The
+// rule is now: a token of the name is `refund` or `refunds`, EXCEPT where the
+// name is a SUPPLIER refund, which is Phase 3's and belongs to the supplier
+// chain rather than to this law. The exclusion is named and has its own red
+// proof rather than being an accident of the pattern.
+export const REFUND_SUPPLIER_EXCLUSION = /(^|_)(supplier|suppliers|purchase|purchases|vendor|vendors)(_|$)/i;
+export const REFUND_VOCABULARY = /(^|_)refunds?(_|$)/i;
+
+/** A relation name is a Phase 4 cash-refund relation when the token rule matches and the supplier exclusion does not. */
+export const isRefundRelation = (name: string): boolean => REFUND_VOCABULARY.test(name) && !REFUND_SUPPLIER_EXCLUSION.test(name);
+
+/**
+ * The first refund relation a TEXT mentions, or null — the one device every
+ * caller uses, so a NAME and a BODY are judged by the same rule.
+ *
+ * It scans IDENTIFIERS rather than running a pattern over the raw text,
+ * because the rule is about a name and `_` is a word character: no `\b`
+ * pattern can match a name by one of its tokens, which is why the earlier
+ * prefix-list regex missed `pos_refunds`, `refund_lines` and
+ * `customer_refund_allocations` outright. Scanning identifiers also means
+ * `public.refunds` is found, since `.` ends an identifier.
+ */
+export const refundMention = (text: string): string | null => (text.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).find(isRefundRelation) ?? null;
+
+/** Whether a text mentions any Phase 4 cash-refund relation. */
+export const mentionsRefundRelation = (text: string): boolean => refundMention(text) !== null;
+
+/**
+ * The routines that READ the derived invoice/customer receivable. Discovered
+ * from the Phase 4 DDL by what a receivable reader is CALLED, so the family
+ * grows by itself rather than being a list this slice happened to see.
+ */
+export const RECEIVABLE_READER_VOCABULARY = /(^|_)(outstanding|receivable|aging|settlement_state)($|_)/;
+
+/**
+ * TL-P4-S5-R1 — A REFUND MUST NOT REDUCE INVOICE AR AGAIN.
+ *
+ * `INVOICE_REDUCER_VOCABULARY` says which relations seam S-P4-03 requires a
+ * receivable reader to READ. This is the opposite law, and the one that
+ * outlives the slice: whatever a later slice creates and whatever it calls it,
+ * no routine that reads the derived receivable may subtract a cash refund,
+ * because the invoice receivable was already reduced once by the credit-note
+ * or customer-credit effect the refund now settles (lock P4-AL-34).
+ *
+ * It is a law about EXECUTABLE SQL SEMANTICS, never about prose. Every body it
+ * reads comes through `phase4Sql`, which applies `stripSql` first, so a
+ * comment mentioning a refund relation is GONE before this law looks: it can
+ * neither fail the law nor satisfy it. That is asserted, not assumed — a body
+ * that still carries a comment marker means the stripping device changed under
+ * this law, and the law reports THAT rather than reading prose as SQL.
+ *
+ * And it is non-vacuous by construction: it fails loudly if the Phase 4 DDL
+ * carries no reader of the derived receivable at all, and if a body no longer
+ * contains the routine it is supposed to be.
+ */
+export function invoiceReducerProblems(root: string): string[] {
+  const sql = phase4Sql(root);
+  // No Phase 4 DDL at all is the one state in which this law has nothing to
+  // say: the receivable itself does not exist yet. Seam S-P4-03 reads the same
+  // tree the same way.
+  if (sql.trim() === '') return [];
+  const defined = [
+    ...new Set([...sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-z_][a-z0-9_]*)\s*\(/gi)].map((m) => (m[1] ?? '').toLowerCase())),
+  ].sort();
+  // THE FAMILY: the routines that ARE the derived receivable, discovered by
+  // name. These are the subjects the law has always had.
+  const family = defined.filter((n) => RECEIVABLE_READER_VOCABULARY.test(n));
+  if (family.length === 0)
+    return [
+      'TL-P4-S5-R1: the Phase 4 DDL defines no reader of the derived receivable, so the law that a refund may not reduce invoice AR again has no subject — a check with no subject is not a pass (P4-AL-05, P4-AL-34)',
+    ];
+  const problems: string[] = [];
+  // DISCOVERY BY DEPENDENCY, which is the half the name match cannot reach.
+  //
+  // A routine reads the derived receivable if it CALLS one of the family, and
+  // its NAME need not say so. Measured on the Phase 4 DDL as it stands: 48
+  // routines, 4 in the family by name — and `customer_apply_credit` and
+  // `customer_collect_payment` call one and were OUTSIDE this law entirely.
+  // Those two are the invoice reducers' own command paths, which is precisely
+  // where a refund subtraction would do the damage P4-AL-34 forbids, so the
+  // hole was over the most dangerous routines rather than the least. `0084`'s
+  // page reader of the open invoices would have joined them: it reads the
+  // receivable through the family and carries none of the four name tokens.
+  //
+  // A list of extra names would have closed it for exactly as long as nobody
+  // added a routine (`[[daftar-a-closure-rule-is-not-an-invariant]]`, and
+  // P4-AL-88 refuses the shape). Discovery by dependency needs no list: it
+  // grows to cover each new reader the moment its migration exists, and it is
+  // strictly wider than the name match rather than a replacement for it.
+  //
+  // DISCOVERY IS A CLOSURE, NOT ONE HOP. A routine that calls a routine that
+  // calls the family reads the receivable just as surely as one that calls the
+  // family directly, and a one-hop rule is a list of extra names with extra
+  // steps: it closes the hole for exactly as long as nobody puts a wrapper in
+  // between. So the dependent set is grown to a FIXPOINT — anything calling
+  // anything already in the set joins it — which is strictly wider than one
+  // hop and needs no list either.
+  const callsAny = (body: string, targets: readonly string[], self: string): boolean =>
+    targets.some((r) => r !== self && new RegExp(`\\b${r}\\s*\\(`, 'i').test(body));
+  // EVERY DEFINITION, NOT THE LAST ONE. This is an ABSENCE claim, and an
+  // absence claim over a set of definitions is true only if it holds for
+  // EVERY definition. `phase4RoutineBody` is SIGNATURE-BLIND and returns the
+  // last textual match of the name, so a refund subtraction written into any
+  // live form but that one was INVISIBLE here — measured on
+  // `invoice_outstanding`'s scalar wrapper, which is the last definition of
+  // its OWN signature (`0084:526`) and not the last definition of the NAME
+  // (`0084:593` is). A refund subtraction planted into that wrapper alone,
+  // with the array form left clean and last exactly as `0084:510-520`
+  // arranges the real file, produced ZERO findings. The wrapper only
+  // delegates, which is what makes it the ideal hiding place: nobody looks.
+  // There is no delegation escape from a negative law.
+  //
+  // Each routine's definitions are read ONCE, off the `sql` already in hand.
+  // The fixpoint below asks for a body on every pass, so reading per lookup
+  // turns a few dozen reads into a few thousand and the gate — a required CI
+  // step — into a minutes-long one.
+  const bodies = new Map<string, string[]>();
+  const bodiesOf = (name: string): string[] => {
+    if (!bodies.has(name)) bodies.set(name, routineBodiesIn(sql, name));
+    return bodies.get(name) ?? [];
+  };
+  // A name with more `CREATE … FUNCTION` statements than bodies read carries a
+  // definition this gate CANNOT read. That is reported, never skipped: a
+  // routine with one unreadable definition among several readable ones is
+  // precisely the shape that would otherwise pass on the definition nobody
+  // looks at.
+  const unreadableDefinitions = (name: string): number => routineDefinitionCountIn(sql, name) - bodiesOf(name).length;
+  const dependent: string[] = [];
+  for (const name of defined) {
+    const defs = bodiesOf(name);
+    // Measured zero unreadable definitions over all 49 Phase 4 routines and
+    // all 60 of their definitions, so a definition this device cannot read is
+    // an ANOMALY and not the ordinary case. It is reported for the same reason
+    // the family loop below reports one: a routine whose body cannot be read
+    // is a routine this law cannot classify, and classifying it as "not a
+    // reader" is the vacuous pass a tagged dollar quote already bought once in
+    // this slice.
+    if (defs.length === 0 || unreadableDefinitions(name) > 0) {
+      // A FAMILY member is already a subject of the law, and the loop below
+      // reports its unreadable body in the law's own words. Reporting it here
+      // too would say one thing twice about one routine. This branch is for
+      // the routines the law would otherwise never have looked at.
+      if (!family.includes(name))
+        problems.push(
+          `TL-P4-S5-R1: ${name} is a Phase 4 routine whose body this gate cannot read, so whether it reads the derived receivable cannot be decided — an unclassifiable subject is not a pass (P4-AL-05, P4-AL-34)`,
+        );
+      if (defs.length === 0) continue;
+    }
+    // ANY definition calling the family makes the routine a reader. A call
+    // written into one overload and not another is still a call, and reading
+    // only the last definition under-discovered the subject set — which on a
+    // negative law is the same failure as missing the subtraction itself.
+    if (!family.includes(name) && defs.some((d) => callsAny(d, family, name))) dependent.push(name);
+  }
+  // The fixpoint. Each pass adds the routines that call something already
+  // discovered; it terminates because `defined` is finite and a routine joins
+  // at most once.
+  for (let grew = true; grew; ) {
+    grew = false;
+    const known = [...family, ...dependent];
+    for (const name of defined) {
+      if (family.includes(name) || dependent.includes(name)) continue;
+      if (bodiesOf(name).some((d) => callsAny(d, known, name))) {
+        dependent.push(name);
+        grew = true;
+      }
+    }
+  }
+  const readers = [...family, ...dependent].sort();
+  for (const name of readers) {
+    const definitions = bodiesOf(name);
+    // A reader this law DISCOVERED in the very text whose body it then cannot
+    // read is not a reader with nothing to say: it is the body-reading device
+    // disagreeing with the discovery device, and skipping it is the same
+    // vacuous pass the empty-readers branch above refuses. Measured: a
+    // `$fn$`-quoted reader subtracting `public.refunds` was skipped here and
+    // the whole check reported clean.
+    //
+    // ONE UNREADABLE DEFINITION AMONG SEVERAL READABLE ONES IS THE SAME
+    // JUDGEMENT. A name whose last definition reads cleanly while another of
+    // its live forms cannot be read at all is a reader this law has not
+    // applied to, and "the one I could read was fine" is not an absence proof.
+    if (definitions.length === 0 || unreadableDefinitions(name) > 0) {
+      problems.push(
+        `TL-P4-S5-R1: ${name} is a reader of the derived receivable that this gate cannot read the body of, so the law that a refund may not reduce invoice AR again cannot be applied to it — an unreadable subject is not a pass (P4-AL-05, P4-AL-34)`,
+      );
+      if (definitions.length === 0) continue;
+    }
+    for (const [index, executable] of definitions.entries()) {
+      // WHICH definition, named in every finding below, because a name with
+      // several live signatures gives a bare routine name nowhere to point.
+      const which =
+        definitions.length === 1 ? '' : ` (definition ${index + 1} of ${definitions.length}, signature ${routineSignature(executable, name) ?? 'unreadable'})`;
+      if (!new RegExp(`\\b${name}\\b`).test(executable)) {
+        problems.push(`TL-P4-S5-R1: the body read for ${name}${which} does not contain ${name}, so this law would be reading the wrong text`);
+        continue;
+      }
+      // The subject must be prose-free, because a comment must neither satisfy
+      // nor fail this law. `phase4Sql` strips comments out of every migration
+      // before a check sees one; if a marker survived, that device changed and
+      // this law would be reading a sentence as if it were SQL.
+      //
+      // The marker is looked for OUTSIDE string literals, which is the other
+      // half of `stripSql` being literal-aware: `'-- not a comment'` is a value
+      // the database compares, not prose, and a law that read it as a leftover
+      // comment would refuse a legitimate routine. Only the markers are
+      // blanked out here, never the literal's CONTENT, which the refund check
+      // below still reads.
+      if (/--|\/\*/.test(executable.replace(/'(?:''|[^'])*'/g, "''"))) {
+        problems.push(
+          `TL-P4-S5-R1: the body read for ${name}${which} still carries a comment marker, so the SQL prose stripping this law stands on is no longer in force — a comment must neither satisfy nor fail a financial law`,
+        );
+        continue;
+      }
+      // The refund check reads the WHOLE body, string literals INCLUDED, and that
+      // is deliberate: `EXECUTE 'SELECT … FROM public.refunds'` is a read, and a
+      // reader of the derived receivable has no business naming a refund relation
+      // in any form. The asymmetry with the precondition above is the point. Over-
+      // reporting here is a loud failure carrying the routine's own name; under-
+      // reporting is a second reduction of a customer's receivable that nobody
+      // sees. On a financial law that is not a close call.
+      //
+      // THE COST OF THAT CHOICE, NAMED SO THE NEXT PERSON MEETS IT EXPLAINED
+      // RATHER THAN DISCOVERING IT. The day someone writes a refusal code inside
+      // a receivable reader whose text literally contains a refund relation name
+      // — `'invoice_outstanding.refunds_not_a_reducer'` is exactly the name a
+      // future author would reach for — this check goes RED on a text that is not
+      // a defect. That is KNOWN, and it is the DELIBERATE direction of the error.
+      //
+      // The remedy is to NARROW the check to the read shapes — a `FROM`, a
+      // `JOIN`, an `UPDATE`/`INSERT INTO`, a `SELECT … FROM` inside an `EXECUTE`
+      // string — so that a refund named in a message is distinguished from a
+      // refund that is read. The remedy is NOT to widen it to ignore literals
+      // wholesale: that would hand back dynamic SQL, which is a read, and a
+      // false green on this law is a receivable reduced twice.
+      const refund = refundMention(executable);
+      if (refund !== null)
+        problems.push(
+          `TL-P4-S5-R1: ${name}${which} reads ${refund} in its executable body — a refund does not undo a payment and does not settle an invoice: it settles the credit-note or customer-credit liability it is paid out of, and the invoice receivable was already reduced once by that credit effect. Reading it here reduces invoice AR a second time (lock P4-AL-34, P4-AL-05)`,
+        );
+    }
+  }
+  return problems;
+}
+
+export const DEFERRED_SEAMS: readonly DeferredSeam[] = [
+  {
+    id: 'S-P4-01',
+    what: "invoices.sale_id carries no foreign key, because `sales` is a later slice's relation",
+    run: (root) => {
+      if (!phase4Creates(root, 'invoices') || !phase4Creates(root, 'sales')) return [];
+      // The edge has to be ON `invoices`. Asking the concatenated Phase 4 DDL
+      // whether a matching FOREIGN KEY appears ANYWHERE was a hole, found in
+      // P4-S2 and closed here: `0077` writes two edges that match the same
+      // shape, `sale_items_sale_fk` on `sale_items` and `invoices_sale_fk` on
+      // `invoices`, so dropping the one this seam exists for left the seam
+      // silent, satisfied by the other table's. A seam that reads no child
+      // relation reports the hole it watches as closed.
+      const invoices = readTables(phase4Sql(root)).tables.find((t) => t.name === 'invoices');
+      const fk = (invoices?.constraints ?? []).some((c) => /FOREIGN\s+KEY\s*\([^)]*\bsale_id\b[^)]*\)\s*REFERENCES\s+sales\b/i.test(c));
+      return fk
+        ? []
+        : [
+            'seam S-P4-01: a Phase 4 migration now creates `sales`, so invoices.sale_id owes its composite FK to it — the seam was safe only while the parent did not exist (P4-AL-09)',
+          ];
+    },
+  },
+  {
+    id: 'S-P4-02',
+    what: 'the accounting source type `invoice` is not registered, because no slice can post an invoice yet',
+    run: (root) => {
+      const sql = phase4Sql(root);
+      if (!/INSERT\s+INTO\s+accounting_source_types\b[\s\S]{0,400}?'invoice'/i.test(sql)) return [];
+      // P4-AL-47: the registration and the reversal guard's list move together.
+      return /accounting_reversals?[\s\S]{0,4000}?'invoice'/i.test(sql)
+        ? []
+        : [
+            "seam S-P4-02: a Phase 4 migration registers the `invoice` source type without naming it in the generic reversal guard's list — daftar_app could then reverse an invoice entry through the generic path (P4-AL-47)",
+          ];
+    },
+  },
+  {
+    id: 'S-P4-03',
+    what: 'invoice_outstanding subtracts nothing, because nothing that settles an invoice exists yet',
+    // THE SUBJECT IS THE DEFINITION SET, NOT THE LAST DEFINITION.
+    //
+    // This law is POSITIVE — it requires that something IS read — and it used
+    // to read `phase4RoutineBody`, the LAST definition of the name. The
+    // migrations are ARRANGED around that: `0084:510-520` says so in prose,
+    // «R-100 requires the array form to be the last definition of
+    // `invoice_outstanding` for seam S-P4-03», and `0083` is ordered the same
+    // way. A fragile statement-ordering assumption was therefore load-bearing
+    // in a migration comment and asserted nowhere.
+    //
+    // Pointing this law at EVERY definition instead would be a FALSE RED.
+    // `invoice_outstanding` has two live signatures and the scalar
+    // `(UUID, UUID)` form is a pure DELEGATING WRAPPER (`0084:526`): it holds
+    // no arithmetic, names no relation, and reads the reducers THROUGH the
+    // set-based form. Requiring it to name them itself would be wrong.
+    //
+    // So the law is stated over the SET: every LIVE definition either names
+    // every settling relation ITSELF, or DELEGATES to another definition of
+    // the same name that does. The ordering is then CHECKED rather than
+    // trusted, and the delegation it relies on has to be real.
+    //
+    // LIVE, and not every definition, because `0075:722` predates every
+    // reducer relation: it names none of them and delegates to nothing, so a
+    // law over all seven definitions of the name would be red on the accepted
+    // tree. A definition replaced by a later one of the SAME SIGNATURE is dead
+    // DDL; one that is not is a routine the database still holds.
+    run: (root) => {
+      const sql = phase4Sql(root);
+      const reducers = readTables(sql)
+        .tables.map((t) => t.name)
+        .filter((n) => INVOICE_REDUCER_VOCABULARY.test(n))
+        .sort();
+      if (reducers.length === 0) return [];
+      const definitions = routineDefinitionCountIn(sql, 'invoice_outstanding');
+      if (definitions === 0)
+        return [
+          `seam S-P4-03: the Phase 4 DDL creates ${reducers.join(', ')} and no Phase 4 migration defines invoice_outstanding — the reader-of-record of a settlement cannot be absent once something settles (P4-AL-07)`,
+        ];
+      const { live, unplaceable } = liveRoutineBodiesIn(sql, 'invoice_outstanding');
+      // NON-VACUITY OF THE SUBJECT. A definition whose body this gate cannot
+      // read, or whose signature it cannot place in the live set, is a
+      // definition it cannot judge — and an undecidable seam is not a safe
+      // one. Counting the `CREATE` statements is what tells that apart from a
+      // definition that is simply not there.
+      const undecidable = definitions - routineBodiesIn(sql, 'invoice_outstanding').length + unplaceable;
+      if (undecidable > 0)
+        return [
+          `seam S-P4-03: ${undecidable} of the ${definitions} Phase 4 definitions of invoice_outstanding cannot be read or placed by this gate, so whether the reader-of-record reads ${reducers.join(', ')} cannot be decided — an undecidable seam is not a discharged one (P4-AL-05, P4-AL-07)`,
+        ];
+      const missingIn = (def: string): string[] => reducers.filter((n) => !new RegExp(`\\b${n}\\b`).test(def));
+      const compliant = live.filter((def) => missingIn(def).length === 0);
+      if (compliant.length === 0) {
+        // No live definition names them all, so there is nothing for a wrapper
+        // to delegate TO. The finding names the relations the definition
+        // CLOSEST to compliant still lacks, which on a tree whose reads have
+        // been removed wholesale is every one of them.
+        const missing = live.map(missingIn).sort((a, b) => a.length - b.length)[0] ?? reducers;
+        return [
+          `seam S-P4-03: invoice_outstanding does not read ${missing.join(', ')}, which a Phase 4 migration now creates, and no other live definition of it does either — a reader-of-record that does not read a relation that settles an invoice reports the invoice unpaid (P4-AL-05, P4-AL-07)`,
+        ];
+      }
+      // THE DELEGATION HAS TO BE REAL. The head of the definition is removed
+      // first, so the `CREATE … FUNCTION invoice_outstanding` that opens every
+      // definition is not mistaken for a call to one. Which OVERLOAD a call
+      // resolves to is not decidable from the text without a parser, so what
+      // is asserted is the pair of facts that together make the delegation
+      // sound: this definition calls the name, and some live definition of
+      // that name reads every settling relation.
+      //
+      // AND A DEFINITION THAT CALLS ITSELF HAS DELEGATED TO NOTHING. The one
+      // self-call this reader can be sure of is the exact pass-through shape —
+      // a call whose argument list is this definition's own parameter NAMES in
+      // order — and that shape is refused. `0084:526` passes
+      // `ARRAY[p_invoice_id]` for its second argument, which is how the real
+      // wrapper reaches the OTHER signature, so it is not that shape. What
+      // this does not catch is a self-call disguised by a cast or an
+      // expression; closing that needs a resolver over the catalogue, which is
+      // the behavioural half of the seam and not this static one.
+      //
+      // AND A DELEGATOR MAY NOT ALSO COMPUTE (TL-P4-S4-SEAM-01). A definition
+      // that names no settling relation is excused ONLY on the strength of the
+      // call it makes, so that call has to be the whole of what it does. A
+      // wrapper that delegates AND THEN adjusts the figure it was handed is
+      // precisely the hole this discharge would otherwise open, and it is
+      // excused twice over: it reads no reducer, so the first half lets it by,
+      // and it calls the compliant body, so the second half lets it by — while
+      // the number it returns is not the number that body computed. So a
+      // delegator's text, with its delegating calls REMOVED, must hold no
+      // ARITHMETIC OVER A MINOR AMOUNT. `0084:526` projects four columns by
+      // name and holds none, which is what "pure delegating wrapper" means
+      // when it is asserted instead of asserted about. What this does not
+      // catch is an adjustment made by a FUNCTION rather than an operator
+      // (`least(o.outstanding_txn_minor, …)`); that residual, like the
+      // cast-disguised self-call above, belongs to the behavioural half and is
+      // named here so that no later reader takes this static law for the whole
+      // of the seam.
+      const flat = (text: string): string => text.replace(/\s+/g, '').toLowerCase();
+      const CALL = /\b(?:public\.)?invoice_outstanding\s*\(([^()]*)\)/gi;
+      const MINOR_ARITHMETIC = /\w*_minor\b\s*[-+*/]|[-+*/]\s*(?:[a-z_][a-z0-9_]*\s*\.\s*)?\w*_minor\b/i;
+      const headless = (def: string): string => def.replace(/^CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?invoice_outstanding\s*/i, '');
+      const ownParameterNames = (def: string): string =>
+        flat(
+          (definitionParameterText(def, 'invoice_outstanding') ?? '')
+            .split(',')
+            .map((p) => p.trim().split(/\s+/)[0] ?? '')
+            .join(','),
+        );
+      /** Calls a DIFFERENT definition of the name: not the exact pass-through shape. */
+      const callsAnother = (def: string): boolean => {
+        const own = ownParameterNames(def);
+        return [...headless(def).matchAll(CALL)].some((m) => flat(m[1] ?? '') !== own);
+      };
+      /** Holds no settlement arithmetic of its own once its delegating calls are gone. */
+      const computesNothing = (def: string): boolean => !MINOR_ARITHMETIC.test(headless(def).replace(CALL, ' '));
+      return live
+        .filter((def) => missingIn(def).length > 0)
+        .flatMap((def) => {
+          const signature = routineSignature(def, 'invoice_outstanding') ?? 'unreadable';
+          if (!callsAnother(def))
+            return [
+              `seam S-P4-03: the live invoice_outstanding definition with signature (${signature}) neither reads ${missingIn(def).join(', ')} nor delegates to another definition of invoice_outstanding — a reader-of-record that does not read a relation that settles an invoice reports the invoice unpaid, and a definition the database still holds is not excused by a sibling that is written correctly (P4-AL-05, P4-AL-07)`,
+            ];
+          if (!computesNothing(def))
+            return [
+              `seam S-P4-03: the live invoice_outstanding definition with signature (${signature}) reads none of ${missingIn(def).join(', ')} and is excused only by the definition it delegates to, yet it computes over a minor amount of its own — a delegator that adjusts the figure it was handed returns a number no compliant definition computed, so the delegation discharges nothing (P4-AL-05, P4-AL-07)`,
+            ];
+          return [];
+        });
+    },
+  },
+];
+
+/** Every deferred seam that has stopped being safe. */
+export function deferredSeamProblems(root: string): string[] {
+  return DEFERRED_SEAMS.flatMap((seam) => seam.run(root));
+}
+
+/** G-19 (GOLD-74): the schema lint over the Phase 4 tables. */
+export function schemaLintProblems(root: string): string[] {
+  const sql = phase4Sql(root);
+  const { tables, unreadable } = readTables(sql);
+  const problems = [...unreadable];
+  const byName = new Map(tables.map((t) => [t.name, t]));
+  for (const table of tables) {
+    const known = new Set(table.columns);
+    for (const constraint of table.constraints) {
+      const kind = /\b(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CHECK)\b/i.exec(constraint)?.[1]?.toUpperCase().replace(/\s+/g, ' ');
+      if (kind === undefined) continue;
+      if (kind === 'CHECK') {
+        const expression = /CHECK\s*\(([\s\S]*)\)/i.exec(constraint)?.[1] ?? '';
+        for (const word of checkExpressionColumns(expression))
+          if (!known.has(word))
+            problems.push(`${table.name}: the CHECK names "${word}", which is not a column of ${table.name} (${[...known].join(', ')}) — GOLD-74`);
+        continue;
+      }
+      const list = columnList(constraint.replace(/REFERENCES[\s\S]*$/i, ''));
+      for (const column of list.columns)
+        if (!known.has(column)) problems.push(`${table.name}: the ${kind} names the column "${column}", which ${table.name} does not have — GOLD-74`);
+      for (const literal of list.literals)
+        problems.push(
+          `${table.name}: the ${kind} column list contains the literal ${literal} — a constraint that pins a literal is not the constraint it looks like (GOLD-74)`,
+        );
+      const fk = /FOREIGN\s+KEY\s*\(([^)]*)\)\s*REFERENCES\s+([a-z_][a-z0-9_]*)\s*\(([^)]*)\)/i.exec(constraint);
+      if (fk) {
+        const parent = byName.get((fk[2] ?? '').toLowerCase());
+        const target = columnList(`(${fk[3] ?? ''})`).columns;
+        if (parent)
+          for (const column of target)
+            if (!parent.columns.includes(column))
+              problems.push(`${table.name}: the foreign key targets ${parent.name}.${column}, which ${parent.name} does not have — GOLD-74`);
+        if (columnList(`(${fk[1] ?? ''})`).columns.length !== target.length)
+          problems.push(
+            `${table.name}: the foreign key (${fk[1] ?? ''}) → ${fk[2] ?? ''} (${fk[3] ?? ''}) has a different number of columns on each side — GOLD-74`,
+          );
+      }
+    }
+    if (!FINANCIAL_CORE.test(table.name)) continue;
+    const referenced = new Set<string>();
+    for (const constraint of table.constraints) {
+      const inline = CONSTRAINT_START.test(constraint) ? null : /^([a-z_][a-z0-9_]*)\s[\s\S]*?\bREFERENCES\b/i.exec(constraint);
+      if (inline) referenced.add((inline[1] ?? '').toLowerCase());
+      const fk = /FOREIGN\s+KEY\s*\(([^)]*)\)/i.exec(constraint);
+      if (fk) for (const c of columnList(`(${fk[1] ?? ''})`).columns) referenced.add(c);
+    }
+    for (const column of table.columns) {
+      const m = /^(.*)_id$/.exec(column);
+      if (!m || referenced.has(column)) continue;
+      const stem = m[1] ?? '';
+      const discriminator = [`${stem}_type`, `${stem}_kind`].find((d) => known.has(d));
+      if (discriminator !== undefined)
+        problems.push(
+          `${table.name}: ${column} has no foreign key and sits beside ${discriminator} — that is a polymorphic reference, and the financial core has none (GOLD-74; the composite bridge pattern of P4-AL-29 is how a source is bound)`,
+        );
+    }
+  }
+  return problems;
+}
+
+/**
+ * A soft-delete predicate: the column that marks a row dead, asserted NULL.
+ *
+ * It is the ONE partial-index predicate under which a document-number series
+ * still has no duplicates in the sense G-07 means. The rows the predicate
+ * excludes are the dead ones, so uniqueness over the rest is uniqueness over
+ * the series as anybody reads it. Any OTHER predicate restricts the index to
+ * a subset this check cannot characterise, and a unique index over a subset
+ * is not a unique over the series — so it is reported rather than accepted.
+ */
+const SOFT_DELETE_PREDICATE = /^\(?\s*(removed_at|deleted_at|voided_at|cancelled_at|canceled_at|archived_at|reversed_at)\s+IS\s+NULL\s*\)?$/i;
+
+/**
+ * Every UNIQUE INDEX the Phase 4 migrations create, by table, with the
+ * columns it covers and its partial predicate when it has one.
+ *
+ * This exists because G-07 used to ask `table.constraints` alone, which reads
+ * only what is declared INSIDE `CREATE TABLE`. In PostgreSQL a unique INDEX
+ * binds exactly as hard as a unique CONSTRAINT — a constraint is implemented
+ * as one — so a relation that protected its series with `CREATE UNIQUE INDEX`
+ * was reported as having no protection at all. `pos_cart_lines.line_no` is
+ * that relation: it is covered by `pos_cart_lines_line_uq`, and the check
+ * could not see it.
+ *
+ * A unique CONSTRAINT cannot carry a predicate, so reading indexes is also
+ * the only way a tombstoned relation can be read correctly at all.
+ */
+function uniqueIndexes(sql: string): Map<string, { readonly columns: readonly string[]; readonly predicate: string | null }[]> {
+  const found = new Map<string, { readonly columns: readonly string[]; readonly predicate: string | null }[]>();
+  const re =
+    /CREATE\s+UNIQUE\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?[a-z_][a-z0-9_]*\s+ON\s+(?:ONLY\s+)?([a-z_][a-z0-9_.]*)\s*\(([^;]*?)\)\s*(?:WHERE\s+([^;]*?))?\s*;/gi;
+  for (const m of sql.matchAll(re)) {
+    const table = (m[1] ?? '').toLowerCase().replace(/^public\./, '');
+    const entry = { columns: columnList(`(${m[2] ?? ''})`).columns, predicate: (m[3] ?? '').trim() === '' ? null : (m[3] ?? '').trim() };
+    found.set(table, [...(found.get(table) ?? []), entry]);
+  }
+  return found;
+}
+
+/** G-07's structural half: document numbering is per business, and no global sequence backs a document number. */
+export function numberingProblems(root: string): string[] {
+  return numberingProblemsInSql(phase4Sql(root));
+}
+
+/**
+ * The same check over SQL rather than a checkout, so it can be driven over a
+ * planted defect and proved capable of saying no. A check whose red is never
+ * demonstrated is a check nobody has measured.
+ */
+export function numberingProblemsInSql(sql: string): string[] {
+  const { tables, unreadable } = readTables(sql);
+  const problems = [...unreadable];
+  const indexes = uniqueIndexes(sql);
+  for (const m of sql.matchAll(/CREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)/gi))
+    problems.push(
+      `a Phase 4 migration creates the sequence ${m[1] ?? ''} — a document number comes from a per-business counter row under a lock, never from a cluster-wide sequence that two businesses share (G-07)`,
+    );
+  for (const table of tables) {
+    for (const column of table.columns) {
+      if (new RegExp(`\\b${column}\\s+(?:big)?serial\\b`, 'i').test(table.body) && /(number|seq|no)$/.test(column))
+        problems.push(`${table.name}.${column} is a serial — a document number series is per business, and serial is per table (G-07)`);
+    }
+    const numbers = table.columns.filter((c) => /_(number|no)$/.test(c));
+    if (numbers.length === 0) continue;
+    if (!table.columns.includes('business_id')) {
+      problems.push(
+        `${table.name} carries the document number ${numbers.join(', ')} and no business_id — a number series that is not scoped to a business is shared between businesses (G-07)`,
+      );
+      continue;
+    }
+    for (const number of numbers) {
+      // A unique CONSTRAINT in the table body, and a unique INDEX on the same
+      // table, are both protection and both are read. `predicate` is null for
+      // a constraint, which cannot carry one.
+      const fromConstraints = table.constraints
+        .filter((c) => /\b(UNIQUE|PRIMARY\s+KEY)\b/i.test(c))
+        .map((c) => ({ columns: columnList(c.replace(/REFERENCES[\s\S]*$/i, '')).columns, predicate: null as string | null }));
+      const unique = [...fromConstraints, ...(indexes.get(table.name) ?? [])];
+      const covering = unique.filter((u) => u.columns.includes(number));
+      if (covering.length === 0) {
+        problems.push(`${table.name}.${number} is a document number with no UNIQUE over it — a series with duplicates is not a series (G-07)`);
+        continue;
+      }
+      // A partial unique whose predicate is not a soft-delete predicate
+      // protects a subset this check cannot characterise, so it does not
+      // count as covering the series. If NONE of the covering uniques is
+      // total or soft-delete-partial, the number is unprotected.
+      const effective = covering.filter((u) => u.predicate === null || SOFT_DELETE_PREDICATE.test(u.predicate));
+      if (effective.length === 0) {
+        problems.push(
+          `${table.name}.${number} is a document number whose only UNIQUE is partial on \`${covering.map((u) => u.predicate).join(' / ')}\` — that is a unique over a subset, not over the series, so the series may still hold duplicates (G-07)`,
+        );
+        continue;
+      }
+      for (const u of effective)
+        if (!u.columns.includes('business_id'))
+          problems.push(
+            `${table.name}: UNIQUE (${u.columns.join(', ')}) over the document number ${number} omits business_id — two businesses of one tenant must hold independent series (G-07)`,
+          );
+    }
+  }
+  return problems;
+}
+
+/** Every route the API serves under a Phase 4 prefix, discovered from the controllers so a new route cannot escape (G-02). */
+export function discoverPhase4Routes(root: string): string[] {
+  const dir = join(root, 'apps/api/src/modules');
+  if (!existsSync(dir)) return [];
+  const controllers: string[] = [];
+  const walk = (path: string): void => {
+    for (const entry of readdirSync(path).sort()) {
+      const full = join(path, entry);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (entry.endsWith('.controller.ts')) controllers.push(full);
+    }
+  };
+  walk(dir);
+  const routes: string[] = [];
+  for (const file of controllers) {
+    const source = stripTsProse(readFileSync(file, 'utf8'));
+    const prefix = /@Controller\(\s*'([^']*)'/.exec(source)?.[1] ?? '';
+    const normalized = `/${prefix.replace(/^\/+|\/+$/g, '')}`;
+    for (const m of source.matchAll(/@(Get|Post|Patch|Put|Delete)\(\s*(?:'([^']*)')?\s*\)/g)) {
+      const sub = (m[2] ?? '').replace(/^\/+/, '');
+      const path = sub === '' ? normalized : `${normalized}/${sub}`;
+      // The prefix is matched against the FULL ROUTE, never against the
+      // `@Controller` argument alone. `InvoicesController` is
+      // `@Controller('/v1')` and mounts `invoices`, `invoices/:invoiceId`,
+      // `invoices/:invoiceId/settlement` and `document-sequences`: matching the
+      // controller argument would have compared `/v1` against `/v1/invoices`
+      // and discovered NONE of them, so four Phase 4 routes escaped this
+      // function — and with it `crossTenantProblems` (G-02), which enumerates
+      // the cross-tenant golden from exactly this list, and the write-route
+      // check of the candidate-tense fence. A route is Phase 4 because of the
+      // path it SERVES, not because of how its controller happens to be split.
+      if (!PHASE4_ROUTE_PREFIXES.some((q) => path === q || path.startsWith(`${q}/`))) continue;
+      routes.push(`${(m[1] ?? '').toUpperCase()} ${path}`);
+    }
+  }
+  return [...new Set(routes)].sort();
+}
+
+/** G-02: every discovered Phase 4 route is named by the enumerated cross-tenant golden. */
+export function crossTenantProblems(root: string): string[] {
+  const routes = discoverPhase4Routes(root);
+  const goldens = S1_SUITES.filter((e): e is SuiteEntry => !isPending(e) && e.area === 'golden');
+  if (goldens.length === 0)
+    return routes.map(
+      (r) =>
+        `${r} is a Phase 4 route and no enumerated cross-tenant golden is declared yet (G-02) — every Phase 4 route refuses another tenant's token at the API and again at SQL`,
+    );
+  const text = goldens.map((g) => (has(root, g.file) ? read(root, g.file) : '')).join('\n');
+  const problems: string[] = [];
+  for (const route of routes) {
+    const path = route.split(' ')[1] ?? '';
+    if (!text.includes(path))
+      problems.push(`${route} appears in no cross-tenant golden — the suite is enumerated from the route surface so a new route cannot escape (G-02)`);
+  }
+  return problems;
+}
+
+/**
+ * This gate's own hygiene, and the reason it exists: the Phase 4 estate carries
+ * no permanent "nothing after N". The full estate-wide grep, over every
+ * accepted gate, is `tests/security/phase4-forward-evolution.test.ts`; this is
+ * the subset the gate can prove about its own two files without a runner.
+ */
+export function closureRuleProblems(root: string): string[] {
+  const problems: string[] = [];
+  const FORBIDDEN: readonly (readonly [RegExp, string])[] = [
+    [/\.sql['"`]\s*\)\s*\)?\s*\.length\s*[=!<>]==?\s*\d+/, 'a count of .sql files compared with a literal'],
+    [/frozenThrough\s*[=!]==/, 'a frozenThrough equality (it is a floor)'],
+  ];
+  // The head is READ from the tree, never written down: a permanent module may
+  // name a migration that exists (its accepted digests do) and may not name one
+  // that does not, and that rule stays correct as the head moves.
+  const head = Number(
+    readdirSync(migrationsDir(root))
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .slice(-1)[0]
+      ?.slice(0, 4) ?? '0',
+  );
+  for (const file of ['scripts/phase4-prefix.ts']) {
+    if (!has(root, file)) {
+      problems.push(`${file} is missing`);
+      continue;
+    }
+    const code = stripTsProse(read(root, file));
+    for (const [shape, why] of FORBIDDEN)
+      if (shape.test(code)) problems.push(`${file} contains ${why} — a permanent invariant never bounds the future (P4-AL-60)`);
+    for (const m of code.matchAll(/['"`](\d{4})_[a-z0-9_]+\.sql['"`]/g))
+      if (Number(m[1]) > head)
+        problems.push(`${file} names the migration ${m[0]}, which does not exist — a permanent module that names a future file bounds the future (P4-AL-60)`);
+  }
+  // The candidate tense is fenced, and the fence names the decision that allows it.
+  const self = 'scripts/phase4-s1-gate.ts';
+  if (has(root, self)) {
+    const text = read(root, self);
+    // The FENCE COMMENTS, not every mention: the diagnostic below names the
+    // marker too, and a function that counted its own error message would
+    // report a surviving fence in the accepted tense for ever.
+    const open = text.split('\n').filter((l) => /^\s*\/\/\s*[─-]+\s*(?:end\s+)?CANDIDATE-TENSE \(P4-AL-61\)/.test(l)).length;
+    const candidate = Object.keys(S1_ACCEPTED).length === 0;
+    if (candidate && open < 2)
+      problems.push(
+        `${self}: the candidate-tense block is not fenced between two "CANDIDATE-TENSE (P4-AL-61)" markers, so the acceptance commit cannot find what to delete`,
+      );
+    if (!candidate && open > 0)
+      problems.push(`${self}: P4-S1 is accepted and the candidate-tense block is still here — the acceptance commit deletes it (P4-AL-61)`);
+  }
+  return problems;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Applicability. A check with no subject yet is NOT-YET-APPLICABLE, which is
+// not a pass: it prints n/a, it is named in the verdict, and it becomes live
+// with no edit to this file the moment its subject exists.
+// ─────────────────────────────────────────────────────────────────────────
+
+export type Needs = 'live' | 'phase4-migration' | 'phase4-route';
+
+export interface Check {
+  readonly id: string;
+  readonly title: string;
+  readonly area: string;
+  readonly needs: Needs;
+  readonly run: (root: string) => string[];
+  readonly ok: string;
+  /** What makes an inert check live. Printed on every n/a line. */
+  readonly liveWhen?: string;
+}
+
+export const CHECKS: readonly Check[] = [
+  {
+    id: 'prefix',
+    title: 'the three migration prefixes',
+    area: 'prefix',
+    needs: 'live',
+    run: prefixProblems,
+    ok: `0000–${PHASE4_INHERITED_PREFIX_END.slice(0, 4)} intact byte for byte (Phase 2 through ${PHASE2_PREFIX_END.slice(0, 4)}, Phase 3 through ${PHASE3_PREFIX_END.slice(0, 4)}); frozenThrough a floor at ${frozenThroughFloor()}; later migrations permitted`,
+  },
+  {
+    id: 'boundary',
+    title: `the P4-S1 migration boundary (${Object.keys(S1_ACCEPTED).length === 0 ? 'candidate' : 'accepted'} tense)`,
+    area: 'boundary',
+    needs: 'live',
+    run: (root) => boundaryProblems(root),
+    ok:
+      Object.keys(S1_ACCEPTED).length === 0
+        ? `frozenThrough exactly ${PREVIOUS_HEAD}; after it exactly S1_MIGRATIONS, none recorded`
+        : 'the P4-S1 migrations are frozen at their accepted digests, and frozenThrough is a floor',
+  },
+  { id: 'pending', title: 'required entries', area: 'pending', needs: 'live', run: pendingProblems, ok: 'no required entry is pending' },
+  {
+    id: 'suites',
+    title: 'suites',
+    area: 'suites',
+    needs: 'live',
+    run: suiteProblems,
+    ok: `every listed suite exists and skips nothing; every p4-* suite and every ${GOLDEN_DIR} file is listed; every ${GUARD_SUITE_DIR} proof is one this gate executes`,
+  },
+  {
+    id: 'commands',
+    title: 'commands',
+    area: 'commands',
+    needs: 'live',
+    run: commandProblems,
+    ok: 'the permanent core, the predecessor gate and this gate all name scripts that exist',
+  },
+  {
+    id: 'red-proofs',
+    title: 'red proofs',
+    area: 'red-proof',
+    needs: 'live',
+    run: redProofProblems,
+    ok: `${RED_PROOFS.length} red proofs resolve to their tests`,
+  },
+  {
+    id: 'closure-rule',
+    title: 'no permanent "nothing after N"',
+    area: 'closure-rule',
+    needs: 'live',
+    run: closureRuleProblems,
+    ok: 'the permanent prefix module bounds nothing, and no candidate tense survives in this gate (P4-S1 is accepted)',
+  },
+  {
+    id: 'guards',
+    title: 'the guards Phase 4 cannot inherit (actions 2, 3)',
+    area: 'guards',
+    needs: 'live',
+    run: guardProblems,
+    ok: 'the G-3 sales arm names every authoritative balance column and no stored fact; the jargon guard reaches the Phase 4 namespaces and screens',
+  },
+  {
+    id: 'browser-steps',
+    title: 'the Phase 3 browser coupling (P4-AL-63)',
+    area: 'browser',
+    needs: 'live',
+    run: browserStepProblems,
+    ok: 'flows.ts exports disjoint PHASE3_STEPS/PHASE4_STEPS and the Phase 3 gate is pinned to its own fifteen',
+  },
+  {
+    id: 'registered-by',
+    title: 'the registries accept a Phase 4 registrant (action 1)',
+    area: 'registration',
+    needs: 'phase4-migration',
+    run: registeredByProblems,
+    ok: `all four registered_by CHECKs widened to ${REGISTERED_BY_WIDENED}`,
+    liveWhen: 'a migration numbered past the inherited prefix exists',
+  },
+  {
+    id: 'deferred-seams',
+    title: 'the declared seams are still safe (P4-AL-09, P4-AL-47, P4-AL-07)',
+    area: 'composite-fk',
+    // 'live', not 'phase4-migration': each seam's own predicate decides
+    // whether it has a subject, and an empty Phase 4 DDL makes every one of
+    // them vacuous rather than inert.
+    needs: 'live',
+    run: deferredSeamProblems,
+    ok: `the ${DEFERRED_SEAMS.length} declared seams (${DEFERRED_SEAMS.map((x) => x.id).join(', ')}) are each still safe: what made them safe is still true in the tree`,
+  },
+  {
+    id: 'refund-not-a-reducer',
+    title: 'a refund does not reduce invoice AR again (TL-P4-S5-R1, P4-AL-34)',
+    area: 'receivable-identity',
+    // 'live', like the seams above: the law reads the tree's own receivable
+    // readers and says nothing only when there is no Phase 4 DDL at all.
+    needs: 'live',
+    run: invoiceReducerProblems,
+    ok: 'no reader of the derived receivable subtracts a cash refund in its executable body — the credit effect reduced the invoice once and a refund settles that credit, not the invoice',
+  },
+  {
+    id: 'composite-fk',
+    title: 'composite-FK presence and validity (G-03)',
+    area: 'composite-fk',
+    needs: 'phase4-migration',
+    run: compositeFkProblems,
+    ok: 'every FK to a business-scoped parent carries business_id on both sides, is VALID and is never dropped',
+    liveWhen: 'a migration numbered past the inherited prefix exists',
+  },
+  {
+    id: 'schema-lint',
+    title: 'the schema lint (G-19 / GOLD-74)',
+    area: 'schema-lint',
+    needs: 'phase4-migration',
+    run: schemaLintProblems,
+    ok: 'every column named in every UNIQUE, CHECK and FK exists; no literal in a constraint column list; no polymorphic FK in the financial core',
+    liveWhen: 'a migration numbered past the inherited prefix exists',
+  },
+  {
+    id: 'numbering',
+    title: 'numbering isolation (G-07, structural half)',
+    area: 'numbering',
+    needs: 'phase4-migration',
+    run: numberingProblems,
+    ok: 'every document number is UNIQUE within its business and no global sequence backs one',
+    liveWhen: 'a migration numbered past the inherited prefix exists',
+  },
+  {
+    id: 'cross-tenant',
+    title: 'the enumerated cross-tenant surface (G-02)',
+    area: 'cross-tenant',
+    needs: 'phase4-route',
+    run: crossTenantProblems,
+    ok: 'every discovered Phase 4 route is named by the enumerated cross-tenant golden',
+    liveWhen: 'a controller serves a route under a Phase 4 prefix',
+  },
+];
+
+/** The closed registry of checks that may report NOT-YET-APPLICABLE. A check that goes inert without being here is a FAIL. */
+export const INERT_ALLOWED: readonly string[] = ['registered-by', 'composite-fk', 'schema-lint', 'numbering', 'cross-tenant'];
+
+export function isApplicable(needs: Needs, root: string): boolean {
+  if (needs === 'live') return true;
+  if (needs === 'phase4-migration') return phase4Migrations(root).length > 0;
+  return discoverPhase4Routes(root).length > 0;
+}
+
+/**
+ * The gate refuses to treat NOT-YET-APPLICABLE as a pass. Two rules, and both
+ * of them fire without anyone editing this file:
+ *
+ *   — an inert check must be in `INERT_ALLOWED`;
+ *   — once its subject exists, no check of that kind may be inert.
+ */
+export function applicabilityProblems(root: string, inert: readonly string[]): string[] {
+  const problems: string[] = [];
+  for (const id of inert)
+    if (!INERT_ALLOWED.includes(id))
+      problems.push(
+        `the check "${id}" reported NOT-YET-APPLICABLE and is not in INERT_ALLOWED — a check does not become optional by finding nothing to look at`,
+      );
+  const migrations = phase4Migrations(root);
+  if (migrations.length > 0)
+    for (const c of CHECKS)
+      if (c.needs === 'phase4-migration' && inert.includes(c.id))
+        problems.push(
+          `${migrations.length} Phase 4 migration(s) exist (${migrations.join(', ')}) and the check "${c.id}" is still inert — it is live from the first Phase 4 migration`,
+        );
+  const routes = discoverPhase4Routes(root);
+  if (routes.length > 0)
+    for (const c of CHECKS)
+      if (c.needs === 'phase4-route' && inert.includes(c.id))
+        problems.push(`${routes.length} Phase 4 route(s) exist and the check "${c.id}" is still inert — it is live from the first Phase 4 route`);
+  return problems;
+}
+
+// ── The runtime plan ────────────────────────────────────────────────────────
+
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+export type Step = { readonly kind: 'command'; readonly name: string; readonly area: string; readonly cmd: string; readonly args: readonly string[] };
+
+/**
+ * The runtime half, in order: the predecessor gate first (it composes the whole
+ * accepted chain), then the permanent core, then P4-S1's own suites, then the
+ * Phase 4 goldens — which also run in `test:golden`, and the duplicate
+ * execution is accepted (`OD-P4-10` OPTION A). It is not optimised away.
+ */
+export function s1Plan(): readonly Step[] {
+  const suites = S1_SUITES.filter((e): e is SuiteEntry => !isPending(e));
+  const rootSuites = suites.filter((e) => e.runner === 'root' && e.area !== 'golden' && e.area !== 'guard-proofs').map((e) => e.file);
+  const webSuites = suites.filter((e) => e.runner === 'web').map((e) => e.file);
+  const goldens = suites.filter((e) => e.area === 'golden').map((e) => e.file);
+  // Its own visible step: when a planted defect stops firing, a reviewer must
+  // see THAT in the step list, not inside a run of everything.
+  const guardProofs = suites.filter((e) => e.area === 'guard-proofs').map((e) => e.file);
+  const commands = S1_COMMANDS.filter((c): c is CommandEntry => !isPending(c));
+  return [
+    {
+      kind: 'command',
+      name: `${PREDECESSOR_SCRIPT} (permanent predecessor; composes the whole accepted chain back to Phase 1)`,
+      area: 'predecessor',
+      cmd: npm,
+      args: ['run', PREDECESSOR_SCRIPT],
+    },
+    ...commands.map(
+      (c): Step => ({
+        kind: 'command',
+        name: `${c.id} npm run ${c.npmScript}`,
+        area: 'core',
+        cmd: npm,
+        args: ['run', c.npmScript, ...(c.args.length ? ['--', ...c.args] : [])],
+      }),
+    ),
+    ...(guardProofs.length > 0
+      ? [
+          {
+            kind: 'command' as const,
+            name: `the guard planted-defect proofs, by directory (${guardProofs.join(', ')}) — reached by no other gate or script`,
+            area: 'guard-proofs',
+            cmd: 'npx',
+            args: ['vitest', 'run', ...guardProofs],
+          },
+        ]
+      : []),
+    ...(rootSuites.length > 0
+      ? [
+          {
+            kind: 'command' as const,
+            name: `P4-S1 suites, root runner (${rootSuites.length})`,
+            area: 'suites',
+            cmd: 'npx',
+            args: ['vitest', 'run', ...rootSuites],
+          },
+        ]
+      : []),
+    ...(webSuites.length > 0
+      ? [
+          {
+            kind: 'command' as const,
+            name: `P4-S1 suites, web runner (${webSuites.length})`,
+            area: 'web-suites',
+            cmd: 'npx',
+            args: ['vitest', 'run', '--config', 'apps/web/vitest.config.mts', ...webSuites],
+          },
+        ]
+      : []),
+    ...(goldens.length > 0
+      ? [
+          {
+            kind: 'command' as const,
+            name: `the P4-S1 goldens (${goldens.length}); they also run in test:golden, and OD-P4-10 accepts the duplicate`,
+            area: 'golden',
+            cmd: 'npx',
+            args: ['vitest', 'run', ...goldens],
+          },
+        ]
+      : []),
+  ];
+}
+
+// ── The gate against a tree ─────────────────────────────────────────────────
+
+interface Verdict {
+  readonly gate: 'gate:phase4:s1';
+  readonly root: string;
+  readonly tense: 'candidate' | 'accepted';
+  readonly structuralOnly: boolean;
+  readonly verdict: 'PASS' | 'STRUCTURAL_PASS' | 'FAIL';
+  readonly failures: number;
+  readonly inert: readonly { readonly id: string; readonly why: string }[];
+  readonly pending: readonly string[];
+  readonly phase4Migrations: readonly string[];
+  readonly phase4Routes: readonly string[];
+}
+
+function runGate(root: string, listOnly: boolean, structuralOnly: boolean, evidence: string | null): void {
+  let failures = 0;
+  const fail = (area: string, detail: string): void => {
+    failures += 1;
+    console.error(`  FAIL [${area}] ${detail}`);
+  };
+  const ok = (detail: string): void => console.log(`  ok      ${detail}`);
+  const tense = Object.keys(S1_ACCEPTED).length === 0 ? 'candidate' : 'accepted';
+  const migrations = phase4Migrations(root);
+  const routes = discoverPhase4Routes(root);
+
+  if (listOnly) {
+    console.log(`P4-S1 GATE plan (${tense} tense) at ${root}:`);
+    console.log(`  composes:   npm run ${PREDECESSOR_SCRIPT}, and through it the whole accepted chain back to Phase 1`);
+    console.log(`  subject:    ${migrations.length} Phase 4 migration(s) (${migrations.join(', ') || 'none'}); ${routes.length} Phase 4 route(s)`);
+    console.log('  structural checks:');
+    for (const c of CHECKS)
+      console.log(
+        `    ${c.id.padEnd(14)} ${isApplicable(c.needs, root) ? 'live' : `NOT-YET-APPLICABLE — live when ${c.liveWhen ?? 'its subject exists'}`}   ${c.title}`,
+      );
+    console.log('  suites:');
+    for (const e of S1_SUITES)
+      console.log(
+        `    ${e.id.padEnd(8)} ${isPending(e) ? `PENDING — FAILS until filled (${e.owner}): ${e.pending}` : `${e.runner.padEnd(4)} ${e.file}${has(root, e.file) ? '' : '   (missing)'}`}`,
+      );
+    console.log('  commands:');
+    for (const c of S1_COMMANDS)
+      console.log(
+        `    ${c.id.padEnd(12)} ${isPending(c) ? `PENDING — FAILS until filled (${c.owner}): ${c.pending}` : ['npm run', c.npmScript, ...c.args].join(' ')}`,
+      );
+    console.log('  red proofs:');
+    for (const r of RED_PROOFS)
+      console.log(
+        `    ${r.id.padEnd(12)} ${isPending(r) ? `PENDING — FAILS until filled (${r.owner}): ${r.pending}` : `${r.defect}\n                 ${r.proof}`}`,
+      );
+    console.log('  runtime:    the root and web runner canaries, before any result is trusted');
+    for (const s of s1Plan()) console.log(`  command:    ${s.cmd} ${s.args.join(' ')}`);
+    const pending = pendingProblems().length;
+    console.log(`\n${pending} pending entr${pending === 1 ? 'y' : 'ies'}: the gate FAILS until ${pending === 1 ? 'it is' : 'they are'} filled.`);
+    return;
+  }
+
+  const inert: { id: string; why: string }[] = [];
+  for (const check of CHECKS) {
+    console.log(`P4-S1 GATE — ${check.title}`);
+    if (!isApplicable(check.needs, root)) {
+      inert.push({ id: check.id, why: check.liveWhen ?? 'its subject exists' });
+      console.log(`  n/a     NOT-YET-APPLICABLE — this check is live when ${check.liveWhen ?? 'its subject exists'}; it is NOT a pass`);
+      continue;
+    }
+    const problems = check.run(root);
+    for (const p of problems) fail(check.area, p);
+    if (problems.length === 0) ok(check.ok);
+  }
+  console.log('P4-S1 GATE — applicability');
+  const applicability = applicabilityProblems(
+    root,
+    inert.map((i) => i.id),
+  );
+  for (const p of applicability) fail('applicability', p);
+  if (applicability.length === 0)
+    ok(
+      inert.length === 0
+        ? 'every check had a subject and ran'
+        : `${inert.length} check(s) NOT-YET-APPLICABLE, all of them in INERT_ALLOWED: ${inert.map((i) => i.id).join(', ')}`,
+    );
+
+  const record = (verdict: Verdict['verdict']): void => {
+    if (evidence === null) return;
+    const out: Verdict = {
+      gate: 'gate:phase4:s1',
+      root,
+      tense,
+      structuralOnly,
+      verdict,
+      failures,
+      inert,
+      pending: pendingProblems(),
+      phase4Migrations: migrations,
+      phase4Routes: routes,
+    };
+    mkdirSync(dirname(resolve(evidence)), { recursive: true });
+    writeFileSync(resolve(evidence), `${JSON.stringify(out, null, 2)}\n`);
+    console.log(`  evidence: ${evidence}`);
+  };
+  const inertNote = inert.length === 0 ? '' : ` — ${inert.length} check(s) NOT-YET-APPLICABLE: ${inert.map((i) => `${i.id} (live when ${i.why})`).join('; ')}`;
+
+  if (failures > 0) {
+    console.error(`\nP4-S1 GATE: FAIL (${failures} structural violation${failures === 1 ? '' : 's'}) — not running the regression matrix${inertNote}`);
+    record('FAIL');
+    process.exitCode = 1;
+    return;
+  }
+  if (structuralOnly) {
+    console.log(`\nP4-S1 GATE: PASS (structural checks only)${inertNote}`);
+    record('STRUCTURAL_PASS');
+    return;
+  }
+
+  console.log('P4-S1 GATE — runner canaries');
+  for (const [label, config] of [
+    ['root', 'tests/fixtures/runner-exit-code/vitest.config.ts'],
+    ['web', 'apps/web/test/fixtures/runner-exit-code/vitest.config.mts'],
+  ] as const) {
+    const res = spawnSync('npx', ['vitest', 'run', '--config', config, 'failing'], { cwd: root, encoding: 'utf8', env: process.env });
+    const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
+    if (!/1 failed/.test(output)) fail('runner', `the ${label} canary did not run its failing test, so this run proves nothing:\n${output.slice(-2000)}`);
+    else if (res.status === 0) fail('runner', `the ${label} runner exited 0 over a failing test; no result it gives is evidence (tests/helpers/exit-code.ts)`);
+    else ok(`the ${label} runner reports failure (canary exited ${res.status ?? 'on a signal'})`);
+  }
+  if (failures > 0) {
+    console.error('\nP4-S1 GATE: FAIL — a test runner cannot report failure; refusing to run the regression matrix');
+    record('FAIL');
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log('P4-S1 GATE — composed regression matrix');
+  for (const step of s1Plan()) {
+    const started = Date.now();
+    const res = spawnSync(step.cmd, [...step.args], { cwd: root, encoding: 'utf8', stdio: 'inherit', env: process.env });
+    const ms = Date.now() - started;
+    if (res.status !== 0) fail(step.area, `${step.name} failed (exit ${res.status ?? 'signal'}) after ${ms}ms`);
+    else ok(`${step.name} (${ms}ms)`);
+  }
+  if (failures > 0) {
+    console.error(`\nP4-S1 GATE: FAIL (${failures})${inertNote}`);
+    record('FAIL');
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`\nP4-S1 GATE: PASS${inertNote}`);
+  record('PASS');
+}
+
+if (require.main === module) {
+  const argv = process.argv.slice(2);
+  const rootFlag = argv.indexOf('--root');
+  const root = rootFlag >= 0 ? resolve(argv[rootFlag + 1] ?? '.') : join(__dirname, '..');
+  const evidence = argv.find((a) => a.startsWith('--evidence='))?.slice('--evidence='.length) ?? null;
+  runGate(root, argv.includes('--list'), argv.includes('--structural-only'), evidence);
+}

@@ -540,6 +540,13 @@ describe('G-7 strengthened and rule 22, in brief (the full mutation suite is inv
 // ───────────────────────────────────────────────────────────────────────────
 describe('scripts/static-guards.ts wiring', () => {
   const guards = readFileSync(join(ROOT, 'scripts/static-guards.ts'), 'utf8');
+  // The rule count is DERIVED from the script's own `// Rule N` headers, not
+  // written down here. A literal made every new rule a failure of this suite,
+  // which is how rule 24 reddened CI; a floor keeps it from silently
+  // shrinking, and the equality below keeps the banner honest.
+  const RULE_FLOOR = 23;
+  const RULE_COUNT = new Set([...guards.matchAll(/^\/\/ Rule (\d+)\b/gm)].map((m) => Number(m[1]))).size;
+  const BANNER = `STATIC GUARDS: PASS (${RULE_COUNT} rules)`;
 
   it('rule 6b covers the inventory package; rules 15, 16, 21 and 22 carry their inventory halves and watch-nothing checks', () => {
     expect(guards).toMatch(/'packages\/inventory\/src',\n\]\)/);
@@ -553,12 +560,13 @@ describe('scripts/static-guards.ts wiring', () => {
     expect(guards).toMatch(/rule 21 is watching nothing/);
     expect(guards).toMatch(/checkInventoryWriterAuthority/);
     expect(guards).toMatch(/rule 22 is watching nothing/);
-    expect(guards).toMatch(/STATIC GUARDS: PASS \(23 rules\)/);
+    expect(RULE_COUNT).toBeGreaterThanOrEqual(RULE_FLOOR);
+    expect(guards).toContain(BANNER);
   });
 
-  it('passes all 23 rules on the real tree', () => {
+  it('passes every declared rule on the real tree, and the banner names the number the script declares', () => {
     const tsx = join(ROOT, 'node_modules/.bin/tsx');
     const out = execFileSync(tsx, [join(ROOT, 'scripts/static-guards.ts')], { cwd: ROOT, encoding: 'utf8' });
-    expect(out.trim().split('\n').pop()).toBe('STATIC GUARDS: PASS (23 rules)');
+    expect(out.trim().split('\n').pop()).toBe(BANNER);
   });
 });

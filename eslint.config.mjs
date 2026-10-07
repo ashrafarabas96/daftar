@@ -18,6 +18,11 @@ export default tseslint.config(
       'apps/android/**',
       'apps/*/next.config.mjs',
       'infrastructure/database/migrations/**',
+      // Agent worktrees the harness creates inside the checkout. Each is a
+      // full second copy of this repository, so without this `eslint .`
+      // lints other people's in-progress trees: it reports THEIR findings as
+      // this tree's and takes several times as long. Never present in CI.
+      '.claude/**',
     ],
   },
   js.configs.recommended,

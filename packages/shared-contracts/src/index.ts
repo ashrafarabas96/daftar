@@ -389,6 +389,11 @@ export * from './purchasing';
 export * from './payment-methods';
 export * from './supplier-settlement';
 export * from './merchant-reads';
+// Phase 4 (P4-S1): the customer and invoice contract surface.
+export * from './customers';
+export * from './invoices';
+// Phase 4 (P4-S4): collecting a customer payment, and applying a customer credit.
+export * from './customer-settlement';
 /** RBAC permission registry (contract primitive): the exact keys the API accepts in role definitions. */
 export { PERMISSIONS } from '@daftar/domain-core';
 export type { Permission } from '@daftar/domain-core';
@@ -800,3 +805,7 @@ export interface AccountingBalanceListDto {
   baseCurrency: string;
   items: AccountingAccountBalanceDto[];
 }
+// Phase 4 (P4-S2): the atomic sale commit contract.
+export * from './sales';
+// Phase 4 (P4-S3): the POS read contract (the product type-ahead).
+export * from './pos';

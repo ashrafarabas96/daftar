@@ -658,12 +658,46 @@ export async function withRolledBackFixture<T>(
  * Phase 3 corrective (0072): plus exactly the corrective kinds
  * (`P3C_OPERATION_KINDS`; no source type, no op→kind row).
  */
+/**
+ * ── P4-S1 re-expression (plan action 7; same defect class as actions 5 and 6) ─
+ *
+ * Until Phase 4 the three registry reads below were ABSOLUTE: `array_agg` over
+ * the whole of `stock_source_types`, `inventory_operation_movement_kinds` and
+ * `inventory_operation_kinds`, compared by one `toEqual` against the
+ * `S1_/S3_/S4_/S5_/S6_/P3C_` literals. That is a closure rule ("these registries
+ * contain nothing else, ever"), not an invariant, and registering a SINGLE
+ * Phase 4 operation kind or stock source type turns it red — and with it every
+ * permanent Phase 3 suite that calls this helper.
+ *
+ * Re-expressed PER PHASE, and NOT loosened. Each read is now scoped by the
+ * registry's own provenance column, `registered_by ~ '^P3-'`, which is exactly
+ * the Phase 3 family: `P3-S1 … P3-S6` plus `P3-C`, the corrective pass
+ * (`inventory_operation_kinds`'s own CHECK is
+ * `registered_by ~ '^P3-S[0-9]+$' OR registered_by = 'P3-C'`; the other two are
+ * `^P3-S[0-9]+$`). So what is asserted is still EXACT EQUALITY over a closed
+ * set — every Phase 3 row must be present, and no unowned row may appear inside
+ * that set:
+ *
+ *   - a MISSING Phase 3 registration is still red;
+ *   - an EXTRA row claiming Phase 3 provenance is still red, so the scoping
+ *     cannot be dodged by mislabelling a Phase 4 row as `P3-S7`;
+ *   - a row a later phase legitimately registers as `P4-S2` is out of scope,
+ *     which is the whole point: that row is the later phase's gate's business.
+ *
+ * `uses`, `rels` and `fns` stay ABSOLUTE and unscoped: they assert the fixture
+ * left no trace anywhere, which is a statement about this helper's own fixture
+ * and has nothing to do with phases.
+ *
+ * `[[daftar-a-closure-rule-is-not-an-invariant]]`.
+ */
 export async function assertMigrationState(q: Queryable = ownerPool()): Promise<void> {
   const r = await q.query<{ types: string[]; mapping: string[]; kinds: string[]; uses: number; rels: number; fns: number }>(
-    `SELECT (SELECT array_agg(source_type || ':' || registered_by ORDER BY source_type) FROM stock_source_types) AS types,
+    `SELECT (SELECT array_agg(source_type || ':' || registered_by ORDER BY source_type)
+               FROM stock_source_types WHERE registered_by ~ '^P3-') AS types,
             (SELECT array_agg(op_code || ':' || movement_kind || ':' || registered_by ORDER BY op_code, movement_kind)
-               FROM inventory_operation_movement_kinds) AS mapping,
-            (SELECT array_agg(op_code ORDER BY op_code) FROM inventory_operation_kinds) AS kinds,
+               FROM inventory_operation_movement_kinds WHERE registered_by ~ '^P3-') AS mapping,
+            (SELECT array_agg(op_code ORDER BY op_code)
+               FROM inventory_operation_kinds WHERE registered_by ~ '^P3-') AS kinds,
             (SELECT count(*)::int FROM inventory_assertion_uses WHERE op_code LIKE 'fixture.%') AS uses,
             (SELECT count(*)::int FROM pg_class WHERE relname IN ('stock_fixture_lines', 'stock_source_bridge_fixture_line')) AS rels,
             (SELECT count(*)::int FROM pg_proc WHERE proname LIKE 'stock\\_fixture\\_%' OR proname = 'stock_binding_requires_fixture_line') AS fns`,
@@ -973,26 +1007,126 @@ export async function rewindToP3S2Checkpoint(c: Queryable): Promise<void> {
   const types = await c.query(`DELETE FROM stock_source_types WHERE registered_by = 'P3-S3'`);
   expect(types.rowCount, 'the P3-S3 stock source types').toBe(S3_SOURCE_TYPES.length);
   await c.query(`REVOKE SELECT ON stock_source_bindings FROM ${INTERNAL}`);
-  const left = await c.query<{ types: number; mapping: number; bindings: boolean }>(
+  /**
+   * ── P4-AL-88: the REWIND was incomplete, not the assertion ─────────────
+   *
+   * This helper reconstructs, in a rolled-back transaction, the exact state
+   * `0059`/`0060` left — so that each file's own frozen END-STATE BLOCK can
+   * be REPLAYED against it. Those blocks are inside migrations `0000`–`0073`,
+   * frozen byte for byte (P4-AL-85), and two of their clauses are absolute:
+   *
+   *   0059-E: `stock_movement_kinds` is exactly the ten P3-S2 seed rows;
+   *   0060-E: `stock_source_types` and `inventory_operation_movement_kinds`
+   *           are EMPTY after 0060.
+   *
+   * They are true of the checkpoint they describe and they cannot be
+   * re-expressed — nobody may edit a frozen migration. `0077` registers the
+   * `sale` stock source type, the `sale.commit → sale` mapping and the `sale`
+   * movement kind, and the rewind did not remove them, so the replay began
+   * reporting `inventory.authority_leak` for rows that have nothing to do
+   * with any leak.
+   *
+   * The defect was HERE: a rewind that leaves a later phase's registrations
+   * standing has not reached the checkpoint it claims to have reached. So it
+   * removes them too, by PROVENANCE — every row no Phase 3 registrant
+   * registered — and the original assertions below are then restored WORD FOR
+   * WORD: both registries empty, the internal principal's binding SELECT
+   * revoked, and (for 0059-E) `stock_movement_kinds` exactly the ten seeds.
+   * Nothing is weakened; a registry that does not reach the checkpoint is
+   * still red. The deletes are COUNTED against what the catalogue said was
+   * there, so a rewind that silently removed a Phase 3 row would be red too.
+   *
+   * This is a rolled-back transaction, so no registration is actually lost.
+   */
+  const beyond = await c.query<{ mapping: number; types: number; kinds: number }>(
+    `SELECT (SELECT count(*)::int FROM inventory_operation_movement_kinds WHERE registered_by !~ '^P3-') AS mapping,
+            (SELECT count(*)::int FROM stock_source_types WHERE registered_by !~ '^P3-') AS types,
+            (SELECT count(*)::int FROM stock_movement_kinds WHERE registered_by !~ '^P3-') AS kinds`,
+  );
+  const wanted = must(beyond.rows[0], 'the beyond-Phase-3 registrations');
+  // Children before parents: the mapping references both of the others.
+  const droppedMapping = await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE registered_by !~ '^P3-'`);
+  const droppedTypes = await c.query(`DELETE FROM stock_source_types WHERE registered_by !~ '^P3-'`);
+  const droppedKinds = await c.query(`DELETE FROM stock_movement_kinds WHERE registered_by !~ '^P3-'`);
+  expect(
+    { mapping: droppedMapping.rowCount, types: droppedTypes.rowCount, kinds: droppedKinds.rowCount },
+    'the rewind removed exactly the registrations no Phase 3 registrant made',
+  ).toEqual(wanted);
+
+  const left = await c.query<{ types: number; mapping: number; kinds: number; bindings: boolean }>(
     `SELECT (SELECT count(*)::int FROM stock_source_types) AS types,
             (SELECT count(*)::int FROM inventory_operation_movement_kinds) AS mapping,
+            (SELECT count(*)::int FROM stock_movement_kinds) AS kinds,
             has_table_privilege($1, 'stock_source_bindings', 'SELECT') AS bindings`,
     [INTERNAL],
   );
-  expect(left.rows[0], 'the P3-S2 checkpoint').toEqual({ types: 0, mapping: 0, bindings: false });
+  expect(left.rows[0], 'the P3-S2 checkpoint').toEqual({ types: 0, mapping: 0, kinds: SEEDED_KINDS.length, bindings: false });
+}
+
+/**
+ * TRUNCATE every relation in the transitive FK-referencing closure of `seed`.
+ *
+ * PostgreSQL refuses a TRUNCATE that does not name EVERY table referencing a
+ * table being truncated (`0A000`, "cannot truncate a table referenced in a
+ * foreign key constraint"), so the statement has to carry the whole
+ * referencing closure. Both fixtures that need this used to write that closure
+ * out by hand, one phase at a time — the S3, S4 and S5 bridges, the S5
+ * documents, the six S6 tables, the 0072 write-offs — and a hand-written
+ * closure is a closure rule in inventory shape
+ * ([[daftar-a-closure-rule-is-not-an-invariant]]): red the moment a later
+ * phase adds a reference, with the symptom a `beforeAll` dying in permanent
+ * Phase 3 suites and an error message about something else entirely. `0077`'s
+ * `stock_source_bridge_sale` references `stock_source_bindings` and did
+ * exactly that, in two helpers rather than one.
+ *
+ * So the closure is DISCOVERED from `pg_constraint` and transitively closed —
+ * the idiom already accepted at
+ * `tests/security/phase4-registry-phase-scoping.test.ts:82`. What a CALLER
+ * writes is the SEED: the relations its fixture owns and means to empty. A
+ * later phase's reference to one of them is swept in without an edit, and a
+ * reference that leaves the seed set is still refused by the database, which
+ * is the property the hand-written lists only appeared to have.
+ *
+ * Order is not load-bearing: one TRUNCATE naming every relation in the closure
+ * empties them together, so the children-first sequencing the old lists were
+ * careful about never mattered. The statement is sorted for stability.
+ *
+ * `required` is checked rather than assumed: a closure that lost its own seed
+ * would empty the wrong thing and read as a passing fixture.
+ */
+export async function truncateReferencingClosure(c: Queryable, seed: readonly string[], required: readonly string[]): Promise<readonly string[]> {
+  const bare = (x: string): string => x.replace(/^public\./, '');
+  const closure = new Set<string>();
+  let frontier = seed.map(bare);
+  while (frontier.length > 0) {
+    const r = await c.query<{ child: string }>(
+      `SELECT DISTINCT k.conrelid::regclass::text AS child
+         FROM pg_constraint k
+        WHERE k.contype = 'f'
+          AND k.confrelid = ANY (SELECT to_regclass('public.' || x) FROM unnest($1::text[]) x)`,
+      [frontier],
+    );
+    for (const x of frontier) closure.add(x);
+    frontier = r.rows.map((x) => bare(x.child)).filter((x) => !closure.has(x));
+  }
+  const present = await c.query<{ name: string }>(`SELECT x AS name FROM unnest($1::text[]) x WHERE to_regclass('public.' || x) IS NOT NULL ORDER BY x`, [
+    [...closure],
+  ]);
+  const targets = present.rows.map((x) => x.name);
+  for (const want of required) {
+    if (!targets.includes(bare(want))) throw new Error(`truncateReferencingClosure: the discovered closure lost ${want}`);
+  }
+  await c.query(`TRUNCATE ${targets.join(', ')}`);
+  return targets;
 }
 
 /**
  * Remove a committed fixture and everything it produced. Idempotent: every
  * step tolerates the fixture being absent. Append-only triggers refuse DELETE,
- * so the stock rows go by TRUNCATE (deliberately unguarded, E-24). Since 0061
- * the four P3-S3 bridges reference `stock_source_bindings`, and PostgreSQL
- * refuses to truncate a referenced table without its referencing ones
- * (0A000), so they are named in the same statement. P3-S4 (0063/0064): so
- * are the two P3-S4 bridges. P3-S5 (0065/0066): so are the two P3-S5
- * bridges, and the five S5 documents with them, children first (§7.3 row 16).
- * P3-S6 (0067/0068): the six S6 tables, children first and before the S5
- * credit notes they reference (§7.3 row 17).
+ * so the stock rows go by TRUNCATE (deliberately unguarded, E-24), and the
+ * relations that have to be named with them are DISCOVERED — see
+ * `truncateReferencingClosure`, which replaced the hand-written per-phase list
+ * this comment used to carry.
  */
 export async function removeCommittedFixture(): Promise<void> {
   const c = await ownerClient();
@@ -1001,11 +1135,13 @@ export async function removeCommittedFixture(): Promise<void> {
     const bridge = must((await c.query<{ r: string | null }>(`SELECT to_regclass('public.stock_source_bridge_fixture_line')::text AS r`)).rows[0]).r;
     const lines = must((await c.query<{ r: string | null }>(`SELECT to_regclass('public.stock_fixture_lines')::text AS r`)).rows[0]).r;
     const extra = [bridge, lines].filter((x): x is string => x !== null);
-    await c.query(
-      // P3-S4 (0063/0064): the two S4 bridges reference stock_source_bindings too.
-      // P3-S5 (0065/0066): so do the two S5 bridges; the S5 documents follow them.
-      // P3-S6 (0067/0068): the six S6 tables reference the purchases and the credit notes, so they precede the S5 documents.
-      `TRUNCATE ${['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_deficit_coverages', 'negative_inventory_deficits', ...S3_BRIDGES, ...S4_BRIDGES, ...S5_BRIDGES, ...S6_TABLES, ...S5_TABLES, ...extra].join(', ')}`,
+    // The seed: what this fixture owns and means to empty. Every bridge and
+    // document of every later slice arrives through the closure.
+    await c.query('SET LOCAL client_min_messages = warning');
+    await truncateReferencingClosure(
+      c,
+      ['stock_source_bindings', 'stock_movements', 'stock_levels', 'negative_inventory_deficits', ...extra],
+      ['stock_movements', 'stock_source_bindings'],
     );
     await c.query(`DROP TRIGGER IF EXISTS stock_binding_requires_${FIXTURE_SOURCE_TYPE} ON stock_source_bindings`);
     await c.query(`DROP TABLE IF EXISTS stock_source_bridge_fixture_line`);

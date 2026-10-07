@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import ar from '@/messages/ar.json';
 import en from '@/messages/en.json';
 import tr from '@/messages/tr.json';
@@ -8,6 +10,7 @@ import {
   ENVELOPE_CODES,
   MERCHANT_ACCOUNTING_CODES,
   OD03_UNKEYED,
+  REPO_ROOT,
   accountingCodes,
   inventoryCodes,
   paymentMethodCodes,
@@ -27,6 +30,34 @@ const CODE_LIKE = /\b[a-z]+_[a-z_]+\b|\b[a-z]+\.[a-z_]+\b|\b[A-Z]{2,}_[A-Z_]+\b/
 const purchasing = purchasingCodes();
 const paymentMethod = paymentMethodCodes();
 const inventory = inventoryCodes();
+
+/**
+ * The keys of `RECEIVABLES_STATUS` (P4-S4), read out of the API source the way
+ * `helpers/refusal-codes.ts` reads every other explicit table — the object
+ * literal's keys, never a list kept beside it.
+ *
+ * Returns `[]` when `receivables-errors.ts` has not merged into this tree,
+ * which is a real state while the slice's agents work in parallel worktrees.
+ * It is read locally rather than added to the shared helper because that
+ * helper's readers THROW on a missing module, which is right for a Phase 3
+ * table that must always be there and wrong for a Phase 4 one that is still
+ * landing. The caller makes the absence visible rather than passing quietly.
+ */
+function receivablesCodes(): readonly string[] {
+  let source: string;
+  try {
+    source = readFileSync(join(REPO_ROOT, 'apps/api/src/modules/receivables/receivables-errors.ts'), 'utf8');
+  } catch {
+    return [];
+  }
+  const from = source.indexOf('const RECEIVABLES_STATUS = {');
+  if (from < 0) throw new Error('receivables-errors.ts no longer declares `const RECEIVABLES_STATUS = {`');
+  const to = source.indexOf('\n} as const', from);
+  if (to < 0) throw new Error('receivables-errors.ts: the RECEIVABLES_STATUS table does not end in `} as const`');
+  const codes = [...new Set([...source.slice(from, to).matchAll(/^ {2}'([a-z_]+\.[a-z_]+)':/gm)].map((m) => m[1] ?? ''))];
+  if (codes.length === 0) throw new Error('receivables-errors.ts: the RECEIVABLES_STATUS table reads empty');
+  return codes.sort();
+}
 
 const REQUIRED: readonly string[] = [
   ...purchasing.filter((c) => !OD03_UNKEYED.includes(c)),
@@ -114,9 +145,39 @@ describe('refusalKey and the retryable 409s (§3(a)(c), Annex R #9, #12)', () =>
         'supplier_payment.settlement_changed',
         'supplier_refund.fx_rate_changed',
         'supplier_refund.settlement_changed',
+        // P4-S4: the receivables twins. Both commands are the SUPPLIER command
+        // shape, so a figure that moved between the service's read and the
+        // routine's locks is the same retryable race. There is no
+        // `customer_credit_application.fx_rate_changed`: applying a credit
+        // states no new rate, so only the payment path can meet a moved one.
+        'customer_payment.settlement_changed',
+        'customer_payment.fx_rate_changed',
+        'customer_credit_application.settlement_changed',
       ].sort(),
     );
-    for (const code of RETRYABLE_CONFLICTS) expect([...purchasing, ...inventory]).toContain(code);
+    // Every retryable code is one the API REALLY declares, checked against the
+    // registry that owns its namespace rather than against a list kept here.
+    //
+    // The receivables registry must BE THERE. `receivablesCodes()` answers
+    // `[]` on a tree where `receivables-errors.ts` has not merged, which was a
+    // real state while the slice's agents worked in parallel worktrees — but
+    // an empty answer would make every receivables check below pass over
+    // nothing, so it is refused HERE, before the loop, rather than tolerated.
+    // This is the assertion that keeps the loop honest: with it, the three
+    // receivables codes are checked against the registry unconditionally.
+    const receivables = receivablesCodes();
+    expect(
+      receivables.length,
+      'receivables-errors.ts declares no RECEIVABLES_STATUS codes — every receivables check below would pass over nothing',
+    ).toBeGreaterThan(0);
+    const isReceivable = (code: string) => /^customer_(?:payment|credit|credit_application)\./.test(code);
+    for (const code of RETRYABLE_CONFLICTS) {
+      if (isReceivable(code)) {
+        expect(receivables, code).toContain(code);
+      } else {
+        expect([...purchasing, ...inventory], code).toContain(code);
+      }
+    }
     expect(isRetryableConflict(new ApiError(409, 'CONFLICT', { purchasingCode: 'supplier_refund.fx_rate_changed' }))).toBe(true);
     expect(isRetryableConflict(new ApiError(409, 'CONFLICT', { purchasingCode: 'supplier_payment.idempotency_conflict' }))).toBe(false);
     expect(isRetryableConflict(new ApiError(422, 'VALIDATION_FAILED', { purchasingCode: 'supplier_payment.settlement_changed' }))).toBe(false);

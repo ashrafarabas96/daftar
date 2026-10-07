@@ -45,6 +45,20 @@ import { InventoryReadsController } from '../modules/inventory/inventory-reads.c
 import { SupplierBalanceReadService } from '../modules/purchasing/supplier-balance-reads';
 import { SupplierBalancesController } from '../modules/purchasing/supplier-balances.controller';
 import { PaymentMethodDefaultsController, PaymentMethodDefaultsReadService } from '../modules/payment-methods/payment-method-defaults.controller';
+// P4-S1: the Phase 4 customer and invoice read surface.
+import { CustomersController } from '../modules/selling/customers.controller';
+import { InvoicesController } from '../modules/selling/invoices.controller';
+import { SalesController } from '../modules/selling/sales.controller';
+import { sellingProviders } from '../modules/selling/selling.module';
+// P4-S3: the POS till session, the till's type-ahead and the server-side cart.
+import { TillSessionsController } from '../modules/pos/till-sessions.controller';
+import { PosReadsController } from '../modules/pos/pos-reads.controller';
+import { PosCartController } from '../modules/pos/pos-cart.controller';
+import { posProviders } from '../modules/pos/pos.module';
+// P4-S4: the receivables commands — collecting a customer payment and applying
+// a customer credit — and the reads of what they wrote.
+import { ReceivablesController } from '../modules/receivables/receivables.controller';
+import { receivablesProviders } from '../modules/receivables/receivables.module';
 import { AdminService } from '../modules/admin/admin.service';
 import { AdminController } from '../modules/admin/admin.controller';
 import { OutboxPublisher } from '../modules/outbox/publisher';
@@ -92,6 +106,26 @@ export class AppModule implements NestModule {
         InventoryReadsController,
         SupplierBalancesController,
         PaymentMethodDefaultsController,
+        // P4-S1: the customer and invoice reads (GET only; the invoice's one writer is the sale command).
+        CustomersController,
+        InvoicesController,
+        // P4-S2: the sale command and its read (POST /v1/sales, GET /v1/sales/:saleId).
+        SalesController,
+        // P4-S3: the till session lifecycle, the POS type-ahead and the
+        // server-side cart. All three are registered in MerchantApiModule too:
+        // a controller composed in one process only is a route no integration
+        // test can reach, which `P4_S3_REQUIRED_CONTROLLERS`
+        // (`pos-permissions.ts`) names and `phase4-route-surface.test.ts`
+        // refuses from both sides.
+        TillSessionsController,
+        PosReadsController,
+        PosCartController,
+        // P4-S4: POST /v1/customer-payments, POST
+        // /v1/customer-credits/:creditId/applications and their two reads.
+        // Registered in BOTH compositions (`P4_S4_REQUIRED_CONTROLLERS`): a
+        // controller composed in one process only is a route no integration
+        // test can reach.
+        ReceivablesController,
         AdminController,
       ],
       providers: [
@@ -122,6 +156,20 @@ export class AppModule implements NestModule {
         InventoryReadService,
         SupplierBalanceReadService,
         PaymentMethodDefaultsReadService,
+        // P4-S1: the customer and invoice read services of the two Phase 4 controllers.
+        ...sellingProviders(),
+        // P4-S3: the till-session minter, the POS read and the cart. Each
+        // needs only providers composed above — `Database`,
+        // `InventoryAuthorizationService` and `'LOGGER'` — which is why the
+        // POS slice adds no provider of its own (`pos.module.ts`).
+        ...posProviders(),
+        // P4-S4: the two receivables commands and their read service. Each
+        // needs only providers composed above — `Database`,
+        // `InventoryAuthorizationService`,
+        // `AccountingAssertionMinterService`,
+        // `DatabaseAccountingPostingAdapter` and `AuditService`
+        // (`identityProviders`, P4-AL-48's refusal audit).
+        ...receivablesProviders(),
         ...workerProviders(config, options),
         // Only PROCESS_MODE=all composes the reconciler beside the worker,
         // and only because this composition exists for dev and tests;

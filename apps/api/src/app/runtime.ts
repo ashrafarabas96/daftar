@@ -29,6 +29,7 @@ import { AccountingEngine, AccountingReports } from '@daftar/accounting';
 import { AccountingAssertionMinterService } from '../modules/accounting/accounting-assertion.minter';
 import { DatabaseAccountingPostingAdapter } from '../modules/accounting/accounting-posting.adapter';
 import { AccountingPostingService } from '../modules/accounting/accounting-posting.service';
+import { SalePostingService } from '../modules/accounting/sale-posting.service';
 import { DatabaseAccountingSourcesAdapter } from '../modules/accounting/accounting-sources.adapter';
 import { DatabaseAccountingLedgerReader } from '../modules/accounting/accounting-ledger.reader';
 import { AccountingSourcesService } from '../modules/accounting/accounting-sources.service';
@@ -212,6 +213,10 @@ export function accountingProviders(): Provider[] {
       inject: [AccountingAssertionMinterService, DatabaseAccountingPostingAdapter, DatabaseAccountingSourcesAdapter, DatabaseAccountingLedgerReader],
     },
     AccountingPostingService,
+    // P4-S2: the ONE place a sale's posting authority is minted. The selling
+    // services inject it and mint no assertion themselves, so there is no
+    // second posting authority without a permission check in front of it.
+    SalePostingService,
     AccountingSourcesService,
     // P2-S5: the FX rate registry. The port and the CONTROL minter are
     // injected by token rather than by class so the service depends on the

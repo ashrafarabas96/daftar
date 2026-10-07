@@ -93,15 +93,23 @@ jobs:
           npm run build -w packages/inventory
       - name: Migration manifest check
         run: npm run check:migrations
-      # The two historical invariants, on every push: the accepted Phase 2
-      # prefix 0000–0052 and the accepted Phase 3 prefix 0053–0069 stay
-      # byte-identical, and later migrations are permitted. Both run in
-      # seconds with no database. Until P3-S9 the Phase 2 one ran only inside
-      # `gate:phase2:release`, which no workflow on the Phase 3 branch runs.
+      # The three historical invariants, on every push: the accepted Phase 2
+      # prefix 0000–0052, the accepted Phase 3 prefix 0053–0073 and the Phase 4
+      # floor stay byte-identical, and later migrations are permitted. All three
+      # run in seconds with no database. Until P3-S9 the Phase 2 one ran only
+      # inside `gate:phase2:release`, which no workflow on the Phase 3 branch runs.
       - name: Phase 2 migration prefix
         run: npx tsx scripts/phase2-prefix.ts
       - name: Phase 3 migration prefix
         run: npx tsx scripts/phase3-prefix.ts
+      # Phase 4 (P4-AL-60): the inherited history 0000–0073 is intact and
+      # `frozenThrough` is a FLOOR at it. It asserts nothing about a file after
+      # 0073, so it is already true today, with no `0074` in the tree, and stays
+      # true when `0074` lands. Each Phase 4 acceptance commit appends that
+      # slice's accepted digests to the module, and the same checks then protect
+      # them. `[[daftar-a-closure-rule-is-not-an-invariant]]`.
+      - name: Phase 4 migration prefix
+        run: npm run phase4-prefix
       - name: Phase 1 machine gate
         run: npm run gate:phase1
       - name: Static guards
@@ -272,29 +280,231 @@ jobs:
         run: npm run gate:phase2:s8
         env:
           PG_PORT: '5432'
-      # The Phase 3 corrective gate (the Tech Lead's corrective directive §19),
-      # which replaces the P3-S8 step here and composes it FIRST: the permanent
-      # P3-S8 gate (0069 frozen at S8_ACCEPTED; the reconciler grants, the
-      # R-B1a guard, the definer law, the reconciliation reads, the S8 suites
-      # and T-13) and through it P3-S7 … P3-S1, P2-S8 and the chain back to
-      # Phase 1. Then every corrected blocker: the corrective migration
-      # boundary (0070 on, Phase 3 corrective hardening, frozen only after this
-      # gate passes), the corrective suites, the review-index check, the full
-      # Phase 3 secret range scan, the real-browser red proof and the full
-      # ar/en/tr × phone/tablet/desktop matrix on the production build, and
-      # Budget A last. An entry the coordinator has not filled is a FAIL, not
-      # a skip, so this step is red until every corrective stream has landed.
-      - name: Install Chromium for the corrective gate's real-browser matrix
+      # The P4-S1 slice gate, which REPLACES the Phase 3 corrective-gate step
+      # here and composes it FIRST — the same relationship the corrective gate
+      # itself has to the P3-S8 step it replaced, and for the same reason: the
+      # newest gate runs its predecessor as its first stream, so wiring both
+      # would run the corrective gate's real-browser matrix, its full ar/en/tr
+      # × phone/tablet/desktop pass and Budget A twice in one job.
+      #
+      # Through the predecessor it therefore still runs: the permanent P3-S8
+      # gate (0069 frozen at S8_ACCEPTED; the reconciler grants, the R-B1a
+      # guard, the definer law, the reconciliation reads, the S8 suites and
+      # T-13) and through that P3-S7 … P3-S1, P2-S8 and the chain back to Phase
+      # 1; then every corrected blocker — the corrective migration boundary,
+      # the corrective suites, the review-index check, the full Phase 3 secret
+      # range scan, the real-browser red proof, the browser matrix, and Budget
+      # A last.
+      #
+      # On top of that it adds P4-S1's own streams: the three migration
+      # prefixes (0000-0073 byte for byte, the candidate boundary, and the
+      # permanent module that bounds nothing), the four Phase 4 goldens, the
+      # guard red proofs, the declared deferred seams, composite-FK presence
+      # and validity, the schema lint and numbering isolation.
+      #
+      # It is wired in the commit that COMPLETES the slice, and not earlier:
+      # while a slice is open the gate reports a FAIL for every stream that has
+      # not landed, which is correct for the gate and wrong for a workflow job,
+      # because a job that is red by design cannot show a real regression
+      # appearing. The corrective gate was wired while still red and this is
+      # the lesson taken from that, not a departure from it — the verdict is
+      # read either way, it is simply read from the point where it can still
+      # say something new.
+      #
+      # An entry the coordinator has not filled is a FAIL, not a skip.
+      - name: Install Chromium for the gate's real-browser matrix
         run: npx playwright-core install --with-deps chromium
-      - name: Phase 3 corrective gate (composes P3-S8)
-        run: npm run gate:phase3:corrective
+      - name: Phase 4 slice gate — P4-S1 (composes the Phase 3 corrective gate)
+        run: npm run gate:phase4:s1
         env:
           PG_PORT: '5432'
           BROWSER_PG_DIR: ${{ runner.temp }}/corrective-browser-pg
           # The range scan's head: the PR head on a pull_request run (the
           # checkout is GitHub's merge commit), the pushed SHA on a push run.
           PHASE3_SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Keep the corrective gate's browser screenshots and results
+      # TL-P4-S2-R3 — REQUIRED-CI CHAIN COMPOSITION. The P4-S2 gate is a DELTA
+      # gate: it does not re-execute the ~50-minute P4-S1 predecessor inside
+      # itself. The composition the Architecture Lock requires is satisfied
+      # HERE instead, by this job: P4-S1 runs immediately above, P4-S2 runs
+      # immediately below, both VISIBLE and both REQUIRED, in that order, in
+      # the one required `backend` job. Neither step may carry
+      # `continue-on-error`, and neither may carry an `if:` — a step that can
+      # skip on an ordinary push or pull_request is not a gate.
+      #
+      # That arrangement is not a convention anybody has to remember: it is
+      # asserted structurally, by parsing THIS file, in
+      # `tests/guards/required-ci-chain-composition.test.ts`, which also plants
+      # each way of breaking it (the step removed, the two reordered,
+      # `continue-on-error` added, an `if:` added, the command changed) and
+      # requires the check to go red on every one. Reordering these two steps
+      # or moving either out of this job fails that suite.
+      #
+      # `A green workflow is not evidence for a gate the workflow never ran.`
+      - name: Phase 4 slice gate — P4-S2
+        run: npm run gate:phase4:s2
+        env:
+          # The same database environment as every other gate step in this job:
+          # PG_PORT=5432 makes the test harness reuse the `postgres` service
+          # above instead of starting an embedded instance.
+          PG_PORT: '5432'
+      # TL-P4-S2-R3, continued for P4-S3. The chain the Architecture Lock
+      # requires is composed HERE, by this job: P4-S1, then P4-S2, then P4-S3,
+      # all three VISIBLE and all three REQUIRED, in that order. The P4-S3
+      # gate is a delta gate like its predecessor — it does not re-execute
+      # P4-S2 inside itself — so the order of these steps IS the composition,
+      # and this step may carry neither `continue-on-error` nor any `if:`.
+      #
+      # That is not a convention anybody has to remember: it is asserted
+      # structurally, by parsing THIS file, in
+      # `tests/guards/required-ci-chain-composition.test.ts`, which plants each
+      # way of breaking it (this step removed, renamed, reordered before its
+      # predecessors, given `continue-on-error`, given an `if:`, its command
+      # changed, or moved into another job) and requires the check to go red on
+      # every one. That suite is itself on the P4-S3 gate's roster, so the gate
+      # executes the evidence for its own place in this job.
+      #
+      # `A green workflow is not evidence for a gate the workflow never ran.`
+      - name: Phase 4 slice gate — P4-S3
+        run: npm run gate:phase4:s3
+        env:
+          # The same database environment as every other gate step in this job:
+          # PG_PORT=5432 makes the test harness reuse the `postgres` service
+          # above instead of starting an embedded instance.
+          PG_PORT: '5432'
+      # P4-S3's READ BUDGET, NAMED IN THIS FILE.
+      #
+      # `tests/performance/pos-s3-budgets.test.ts` holds P4-A's `p95 <= 150 ms`
+      # and P4-B's `p95 <= 60 ms`, the two plan-shape claims P4-AL-71 states.
+      # The P4-S3 gate step above does execute that file — its
+      # `roster-execution` check derives the roster FROM THE TREE at run time
+      # and hands all fourteen suites to one bounded Vitest run. But a roster
+      # derived at run time is invisible to anything that reads this file, and
+      # `tests/performance/plan-evidence-contract.test.ts` must be able to
+      # prove from the text that required CI executes every plan-shape claim.
+      # What it was finding instead was one sentence in a comment inside
+      # `scripts/phase4-s3-gate.ts` that happens to name the file — so the law
+      # was green for a reason that would survive the execution going away.
+      # This step makes the reach readable, and holds if the gate's derivation
+      # rule ever stops matching the file. Roughly 30 s of a two-hour job.
+      - name: POS read budgets — P4-A and P4-B, measured
+        run: npx vitest run tests/performance/pos-s3-budgets.test.ts
+        env:
+          # The same database environment as every other gate step in this job:
+          # PG_PORT=5432 makes the test harness reuse the `postgres` service
+          # above instead of starting an embedded instance.
+          PG_PORT: '5432'
+      # The P4-S4 measured suites, named HERE because the plan-evidence
+      # contract resolves reachability by reading this file: a suite that
+      # holds a plan-shape claim and is executed by no step of the required
+      # job is a claim nothing in CI ever checks, which is the exact shape of
+      # the P4-S3 defect. The budgets suite runs through its own npm script,
+      # the same command the slice is measured with locally, so CI and the
+      # local round are not approximations of one another.
+      - name: Receivables read budgets — P4-D and P4-F, measured
+        run: npm run perf:phase4:s4
+        env:
+          PG_PORT: '5432'
+      - name: Set-based AR answer equivalence — the 0083/0084 readers against the per-invoice original
+        run: npx vitest run tests/performance/receivables-ar-setbased-equivalence.test.ts
+        env:
+          PG_PORT: '5432'
+      # `0084`'s own correctness evidence. It was in NO step of this job and
+      # in no `test*` script CI runs — `perf:phase2:s8` is the only script
+      # covering `tests/performance` and nothing runs it — so a 40 KB suite
+      # holding the open-invoice page's equivalence claim was never executed
+      # anywhere. That is exactly the shape the comment above describes, found
+      # by the gate's own `evidence-coverage` law rather than by reading.
+      - name: Open-invoice page equivalence — the 0084 page reader against the per-invoice original
+        run: npx vitest run tests/performance/receivables-open-page-equivalence.test.ts
+        env:
+          PG_PORT: '5432'
+      # TL-P4-S2-R3, continued for P4-S4 — the customer-settlement slice.
+      # The chain is composed HERE, by this job: P4-S1, P4-S2, P4-S3, then
+      # P4-S4, all VISIBLE and all REQUIRED, in that order. P4-S4 is a delta
+      # gate like its predecessors — it does not re-execute P4-S3 inside
+      # itself — so the order of these steps IS the composition, and this step
+      # carries neither `continue-on-error` nor any `if:`, exactly like the
+      # steps around it.
+      #
+      # The previous slice shipped a gate that was in no required job at all,
+      # so every green tick reported for it was green for a workflow that
+      # never ran it. That is not a convention anybody has to remember here:
+      # the P4-S4 gate's own `required-ci` check PARSES THIS FILE, and
+      # `tests/guards/p4s4-required-ci.test.ts` plants each way of breaking it
+      # (this step removed, renamed, reordered before P4-S3, given
+      # `continue-on-error`, given an `if:`, its command changed, or moved
+      # into another job) on a mutated copy of this text and requires the
+      # check to go red on every one. That suite is on the P4-S4 gate's own
+      # roster, which the gate EXECUTES — so the gate executes the evidence
+      # for its own place in this job.
+      #
+      # `A green workflow is not evidence for a gate the workflow never ran.`
+      - name: Phase 4 slice gate — P4-S4
+        run: npm run gate:phase4:s4
+        env:
+          # The same database environment as every other gate step in this job:
+          # PG_PORT=5432 makes the test harness reuse the `postgres` service
+          # above instead of starting an embedded instance.
+          PG_PORT: '5432'
+      # TL-P4-S3-R5. The process composition guard's PLANTED-DEFECT PROOF.
+      # It writes an unattached `@Controller()` into `apps/api/src/`, then
+      # registers a merchant controller in the platform runtime, and requires
+      # the guard to exit non-zero on each — reading the verdict off the
+      # spawn result object, never through a pipe — before restoring the tree
+      # and requiring green again. `A planted-defect proof that cannot be
+      # shown failing is not a proof`, so the proof runs here on every push
+      # and pull request rather than being asserted once by hand.
+      # `required-ci-chain-composition.test.ts` (C-9) asserts this step's
+      # presence, its command, its job and the absence of
+      # `continue-on-error` / `if:`.
+      - name: Process composition guard — planted-defect red proof
+        run: npm run proof:composition:red
+        env:
+          # The same database environment as every other gate step in this
+          # job: the guard's suite runs under the root Vitest config, whose
+          # global setup reuses the `postgres` service at PG_PORT=5432.
+          PG_PORT: '5432'
+      # TL-P4-S3-R4. THE PLAN-EVIDENCE CONTRACT. Every plan-shape assertion the
+      # tree declares is discovered from the tree, and each one must be
+      # reachable from this job; the contract also MEASURES the cluster it ran
+      # against — `server_version_num`, `datcollate`, `datctype`, the locale
+      # provider — and records whether that cluster is a deployment-equivalent
+      # one rather than a byte-order collation that answers `^@` differently.
+      # `A plan-shape claim made on a different server major or collation is
+      # not automatically a claim about deployment`: here the claim is made on
+      # the `postgres:16` service the product deploys against, so the P4-S3
+      # barcode defect could not have survived a single push.
+      # `required-ci-chain-composition.test.ts` (C-9) asserts this step's
+      # presence, command, job, name and the absence of
+      # `continue-on-error` / `if:`.
+      - name: Plan-evidence contract
+        run: npm run plan-evidence:contract
+        env:
+          # PG_PORT=5432 makes the contract REUSE the `postgres` service above
+          # and start nothing, so what it measures is the environment the
+          # required job's own gates ran on — not a cluster of its own.
+          PG_PORT: '5432'
+      # TL-P4-S3-R4, the half a structural contract cannot state:
+      # `Do not hard-code a spelling without first measuring what CI's
+      # PostgreSQL service reports`. The step above proves every plan claim is
+      # REACHABLE from this job; this one MEASURES the server the job reached
+      # it on and prints the measurement into the log —
+      # `server_version_num`, `datcollate`, `datctype`, the locale provider and
+      # the derived byte-order verdict — then exits non-zero unless that server
+      # is a deployment-equivalent one. Without it the environment behind every
+      # plan-shape PASS in this job is recorded nowhere, which is how the P4-S3
+      # barcode gate stayed green for months on a collation the product does
+      # not deploy on. It measures and starts nothing: the service is already
+      # listening, and `--measure` never calls `initdb`.
+      # `required-ci-chain-composition.test.ts` (C-9) asserts this step's
+      # presence, command, job, name and the absence of
+      # `continue-on-error` / `if:`.
+      - name: Plan-evidence target measurement
+        run: npm run plan-evidence:target -- --measure
+        env:
+          # The `postgres` service of this job, by the name this script reads.
+          PLAN_EVIDENCE_PG_PORT: '5432'
+      - name: Keep the gate's browser screenshots and results
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -405,6 +615,16 @@ jobs:
         run: npm run gate:browser -- --plant=all --steps=header,stock --out=release/browser-red-proof
         env:
           BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg-red
+      # P4-S3: the POS steps' own red proof. The Phase 3 proof above plants the
+      # four defects on two Phase 3 steps; this one plants them on the four POS
+      # steps, so the POS screens are proved able to go red in all NINE
+      # locale x viewport combinations and not only in the one a sampled run
+      # happened to use. The gate's own verdict is 0 only when EVERY planted
+      # kind was reported in EVERY run, so the step is the assertion.
+      - name: POS browser red proof (planted overflow, raw key, console error, missing string)
+        run: npm run gate:browser -- --plant=all --steps=p4-pos-till,p4-pos-sale,p4-pos-discount,p4-pos-close --out=release/browser-red-proof-pos
+        env:
+          BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg-red-pos
       - name: Browser gate (ar/en/tr x phone/tablet/desktop)
         run: npm run gate:browser
         env:
@@ -417,6 +637,7 @@ jobs:
           path: |
             release/browser
             release/browser-red-proof
+            release/browser-red-proof-pos
           retention-days: 30
 
   # -------------------------------------------------------------------------
