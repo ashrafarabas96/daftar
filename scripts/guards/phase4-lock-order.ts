@@ -428,16 +428,31 @@ export interface LockRank {
  * so where two resources are never taken together their relative rank here is a
  * free choice; where they are, this list follows the routine.
  */
-export const PHASE4_LOCK_ORDER: readonly LockRank[] = Object.freeze<LockRank>([
-  { name: 'daftar.pos_till_session_actor', kind: 'advisory-exclusive', exercised: true, why: 'pos_till_session_open takes three keys consecutively; this is the first' },
+export const PHASE4_LOCK_ORDER: readonly LockRank[] = Object.freeze<LockRank[]>([
+  {
+    name: 'daftar.pos_till_session_actor',
+    kind: 'advisory-exclusive',
+    exercised: true,
+    why: 'pos_till_session_open takes three keys consecutively; this is the first',
+  },
   { name: 'daftar.pos_till_terminal', kind: 'advisory-exclusive', exercised: true, why: 'pos_till_session_open, second of the three' },
   { name: 'daftar.pos_till_session_id', kind: 'advisory-exclusive', exercised: true, why: 'pos_till_session_open, third of the three' },
   { name: 'pos_till_sessions', kind: 'row', exercised: true, why: 'the till row, after the three till keys and before the cart line' },
   { name: 'pos_cart_lines', kind: 'row', exercised: true, why: 'pos_cart_set_line takes the till row first and the line second' },
   { name: 'daftar.sale_id', kind: 'advisory-exclusive', exercised: true, why: 'sale_commit, the per-document key, before every other acquisition it makes' },
   { name: 'sales', kind: 'row', exercised: true, why: 'sale_commit, after its own document key' },
-  { name: 'daftar.customer_id', kind: 'advisory-shared', exercised: true, why: 'sale_commit, SHARED and AFTER sales — the interleave that forbids a head block' },
-  { name: 'daftar.stock_target', kind: 'advisory-shared', exercised: true, why: 'sale_lock_commit_targets, reached through sale_commit after the customer key' },
+  {
+    name: 'daftar.customer_id',
+    kind: 'advisory-shared',
+    exercised: true,
+    why: 'sale_commit, SHARED and AFTER sales — the interleave that forbids a head block',
+  },
+  {
+    name: 'daftar.stock_target',
+    kind: 'advisory-shared',
+    exercised: true,
+    why: 'sale_lock_commit_targets, reached through sale_commit after the customer key',
+  },
   { name: 'products', kind: 'row', exercised: true, why: 'sale_lock_commit_targets, FOR SHARE per product, ascending by id' },
   {
     name: 'stock_levels',
@@ -445,19 +460,49 @@ export const PHASE4_LOCK_ORDER: readonly LockRank[] = Object.freeze<LockRank>([
     exercised: false,
     why: 'FOR UPDATE ascending by (warehouse_id, variant_id) inside the ONE frozen stock writer sale_commit calls — outside the migration range this sweep reads, so declared here and not measured here',
   },
-  { name: 'daftar.payment_id', kind: 'advisory-exclusive', exercised: true, why: 'customer_collect_payment, the per-document key; it is also what serialises the payment row, which is never row-locked' },
-  { name: 'daftar.customer_credit_application_id', kind: 'advisory-exclusive', exercised: true, why: 'customer_apply_credit, the per-document key. Never taken together with daftar.payment_id, so this pair is a free choice' },
-  { name: 'invoices', kind: 'row', exercised: true, why: 'BOTH settlement routines take the cap lock FIRST among their row locks, FOR UPDATE, ascending by id' },
+  {
+    name: 'daftar.payment_id',
+    kind: 'advisory-exclusive',
+    exercised: true,
+    why: 'customer_collect_payment, the per-document key; it is also what serialises the payment row, which is never row-locked',
+  },
+  {
+    name: 'daftar.customer_credit_application_id',
+    kind: 'advisory-exclusive',
+    exercised: true,
+    why: 'customer_apply_credit, the per-document key. Never taken together with daftar.payment_id, so this pair is a free choice',
+  },
+  {
+    name: 'invoices',
+    kind: 'row',
+    exercised: true,
+    why: 'BOTH settlement routines take the cap lock FIRST among their row locks, FOR UPDATE, ascending by id',
+  },
   { name: 'customer_credits', kind: 'row', exercised: true, why: 'customer_apply_credit takes the consumed source after invoices and before customers' },
-  { name: 'customers', kind: 'row', exercised: true, why: 'FOR SHARE, and LAST among the row locks both settlement routines share — which is why the pre-patch list ranking it 2nd described no command' },
+  {
+    name: 'customers',
+    kind: 'row',
+    exercised: true,
+    why: 'FOR SHARE, and LAST among the row locks both settlement routines share — which is why the pre-patch list ranking it 2nd described no command',
+  },
   {
     name: 'payment_methods',
     kind: 'row',
     exercised: true,
     why: 'customer_collect_payment takes it FOR SHARE AFTER customers. A LOOKUP, not a consumed source — which is why it ranks after customers and not with customer_credits',
   },
-  { name: 'accounting_opening_balances', kind: 'row', exercised: true, why: 'the reversal domain-source guard takes the opening-balance ROW FOR NO KEY UPDATE; no other Phase 4 routine takes it, so its rank is a free choice' },
-  { name: 'invoice_sequences', kind: 'row', exercised: true, why: 'LAST of the domain locks (P4-AL-32) — sale_commit takes it after every other acquisition it makes' },
+  {
+    name: 'accounting_opening_balances',
+    kind: 'row',
+    exercised: true,
+    why: 'the reversal domain-source guard takes the opening-balance ROW FOR NO KEY UPDATE; no other Phase 4 routine takes it, so its rank is a free choice',
+  },
+  {
+    name: 'invoice_sequences',
+    kind: 'row',
+    exercised: true,
+    why: 'LAST of the domain locks (P4-AL-32) — sale_commit takes it after every other acquisition it makes',
+  },
 ]);
 
 /** One relation a routine names and deliberately does not row-lock. */
@@ -480,7 +525,7 @@ export interface ReadUnlocked {
  * find this list, or the next edit will "fix" the order by granting the
  * inventory writer `UPDATE` on the tenancy root.
  */
-export const PHASE4_READ_UNLOCKED: readonly ReadUnlocked[] = Object.freeze<ReadUnlocked>([
+export const PHASE4_READ_UNLOCKED: readonly ReadUnlocked[] = Object.freeze<ReadUnlocked[]>([
   {
     relation: 'businesses',
     by: 'sale_commit',
@@ -568,8 +613,7 @@ function bodyScan(body: string, callees: readonly string[]): { readonly acquisit
     });
   }
   const calls: CallSite[] = [];
-  for (const fn of callees)
-    for (const m of clean.matchAll(new RegExp(String.raw`\b${fn}\s*\(`, 'g'))) calls.push({ fn, offset: m.index ?? 0 });
+  for (const fn of callees) for (const m of clean.matchAll(new RegExp(String.raw`\b${fn}\s*\(`, 'g'))) calls.push({ fn, offset: m.index ?? 0 });
   return {
     acquisitions: acquisitions.sort((a, b) => a.offset - b.offset || (a.acq.kind === 'advisory' ? -1 : 1)),
     calls: calls.sort((a, b) => a.offset - b.offset),
@@ -700,7 +744,10 @@ export function declarationProblems(sweep: LockOrderSweep, order: readonly LockR
   const counts = new Map<string, number>();
   for (const r of order) counts.set(r.name, (counts.get(r.name) ?? 0) + 1);
   for (const [name, n] of counts)
-    if (n > 1) problems.push(`the declared order ranks \`${name}\` ${n} times — "the rank of a name" is then whichever entry a Map kept, and every comparison against it is decided silently`);
+    if (n > 1)
+      problems.push(
+        `the declared order ranks \`${name}\` ${n} times — "the rank of a name" is then whichever entry a Map kept, and every comparison against it is decided silently`,
+      );
   const taken = new Map<string, Acquisition[]>();
   for (const r of sweep.lockTaking) for (const a of r.acquisitions) taken.set(a.name, [...(taken.get(a.name) ?? []), a]);
   for (const r of order) {
@@ -768,7 +815,10 @@ export function phase4LockOrderReport(root: string, order: readonly LockRank[] =
   const sweep = sweepPhase4Acquisitions(dir, files);
   const ranks = `${order.length} declared rank(s) (${order.filter((r) => r.exercised).length} statically exercised, ${order.filter((r) => !r.exercised).length} declared-not-measured)`;
   const seq = sweep.lockTaking
-    .map((r) => `${r.fn}: ${r.acquisitions.map((a) => `${a.kind === 'advisory' ? '@' : ''}${a.name}:${a.mode}${a.via === undefined ? '' : `(via ${a.via})`}`).join(' → ')}`)
+    .map(
+      (r) =>
+        `${r.fn}: ${r.acquisitions.map((a) => `${a.kind === 'advisory' ? '@' : ''}${a.name}:${a.mode}${a.via === undefined ? '' : `(via ${a.via})`}`).join(' → ')}`,
+    )
     .join('; ');
   return (
     `${files.length} Phase 4 migration(s) swept, ${files[0]}…${files[files.length - 1]}; ${sweep.routines.length} routine(s) defined, ` +

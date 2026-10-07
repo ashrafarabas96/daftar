@@ -427,7 +427,8 @@ function plant(root: string, file: string, find: string, into: string): void {
   const path = join(root, 'infrastructure', 'database', 'migrations', file);
   const text = readFileSync(path, 'utf8');
   const occurrences = text.split(find).length - 1;
-  if (occurrences !== 1) throw new Error(`NO SUBJECT — the plant anchor occurs ${occurrences} time(s) in ${file}, so the plant is not the one change it claims to be`);
+  if (occurrences !== 1)
+    throw new Error(`NO SUBJECT — the plant anchor occurs ${occurrences} time(s) in ${file}, so the plant is not the one change it claims to be`);
   writeFileSync(path, text.replace(find, into));
 }
 
@@ -459,7 +460,9 @@ describe('P4-AL-41 the ONE declared order, over a swept range: the gate arm and 
     const own = routineAcquisitions(SURFACE, 'sale_commit') ?? [];
     const effective = effectiveAcquisitions(SURFACE, 'sale_commit') ?? [];
     expect(own.length, 'NO SUBJECT — sale_commit reports no acquisitions at all').toBeGreaterThan(0);
-    expect(effective.length, `the call must ADD acquisitions, or this law is about nothing. own: ${own.map((a) => a.name).join(' → ')}`).toBeGreaterThan(own.length);
+    expect(effective.length, `the call must ADD acquisitions, or this law is about nothing. own: ${own.map((a) => a.name).join(' → ')}`).toBeGreaterThan(
+      own.length,
+    );
     expect(
       effective.map((a) => `${a.kind === 'advisory' ? '@' : ''}${a.name}`),
       'the spliced sequence, in body order, with the callee’s two legs between the customer key and the sequence row',
@@ -536,7 +539,9 @@ describe('P4-AL-41 the ONE declared order, over a swept range: the gate arm and 
     ];
     const ghost = declarationProblems(sweep, withGhost);
     expect(ghost, 'the arm refuses a rank nothing obeys').not.toEqual([]);
-    expect(ghost.join('\n'), 'and names P4-AL-60 as the reason').toMatch(/ranks `installment_plans` as EXERCISED and the sweep found no routine[\s\S]*P4-AL-60/);
+    expect(ghost.join('\n'), 'and names P4-AL-60 as the reason').toMatch(
+      /ranks `installment_plans` as EXERCISED and the sweep found no routine[\s\S]*P4-AL-60/,
+    );
     // AND THE OTHER DIRECTION: the one rank declared NOT statically measurable
     // is refused the moment the sweep can see it, so the exemption cannot
     // outlive its reason.
@@ -554,12 +559,15 @@ describe('P4-AL-41 the ONE declared order, over a swept range: the gate arm and 
     const merged = PHASE4_LOCK_ORDER.map((r) => (r.name === 'daftar.customer_id' ? { ...r, kind: 'row' as const } : r));
     const problems = declarationProblems(sweep, merged);
     expect(problems, 'the arm refuses the merge').not.toEqual([]);
-    expect(problems.join('\n'), 'and states the two lock spaces').toMatch(/ranks `daftar\.customer_id` as a row and the tree acquires it as a advisory-shared[\s\S]*different lock SPACES/);
+    expect(problems.join('\n'), 'and states the two lock spaces').toMatch(
+      /ranks `daftar\.customer_id` as a row and the tree acquires it as a advisory-shared[\s\S]*different lock SPACES/,
+    );
     // And the relation it is NOT a substitute for is recorded as read unlocked,
     // with the privilege reason.
-    expect(PHASE4_READ_UNLOCKED.map((u) => `${u.by}:${u.relation}`), 'sale_commit’s two unlocked reads are recorded').toEqual(
-      expect.arrayContaining(['sale_commit:businesses', 'sale_commit:customers']),
-    );
+    expect(
+      PHASE4_READ_UNLOCKED.map((u) => `${u.by}:${u.relation}`),
+      'sale_commit’s two unlocked reads are recorded',
+    ).toEqual(expect.arrayContaining(['sale_commit:businesses', 'sale_commit:customers']));
   });
 
   it('planted red: an EMPTY range is reported as VACUOUS and not as a pass', () => {
