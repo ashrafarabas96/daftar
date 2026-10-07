@@ -53,3 +53,9 @@ tree:tests/security/accounting-observability-redaction.test.ts:generic-api-key:4
 
 # Test fixture, not a credential: a forged onboarding idempotency key ('forged-key-12345'). line-sha256 84b4c0a10c251ad5103d067551682b6d2f2fb91a661487f99863720c6bdcd4b1
 tree:tests/security/provisioner-boundary.test.ts:generic-api-key:336
+
+# Test fixture, not a credential: the throwaway reconciler password of the P15 load harness's disposable cluster. line-sha256 8e13719220e4eecc9dead653dcceb618bb51047bb9a2872bacb3302f85fb7bcb
+tree:scripts/phase15/load-harness.ts:generic-api-key:726
+
+# Test fixture, not a credential: the throwaway migrator password of the P15 load harness's disposable cluster. line-sha256 8fad09006f1e38423daf366d66d3f25213472340865cc624f7e6e8d25edd5343
+tree:scripts/phase15/load-harness.ts:generic-api-key:727
