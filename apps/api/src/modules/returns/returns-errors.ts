@@ -34,7 +34,7 @@ import { ReturnsPlanError } from './returns-settlement';
  * The same deliberate split S4 records (`receivables-errors.ts:36-47`, OQ-6
  * ruled):
  *
- * - accounting source types: `customer_credit_note`,
+ * - accounting source types: `customer_return`,
  *   `customer_credit_note_application`, `customer_refund` — the live registry's
  *   `customer_`-prefixed singular convention (`0081:2468-2472`), NOT
  *   `P4-AL-20`'s stale bare `credit_note` / `refund`;
@@ -99,6 +99,13 @@ const RETURNS_STATUS = {
    * wrong place.
    */
   'credit_note.cogs_not_exact': 500,
+  /**
+   * `TL-P4-S5-R2`: a term of the entry is missing, or disagrees with the
+   * canonical settlement number that produced it. 500, because it is a defect
+   * of this module and never a merchant's mistake — a plan that balanced while
+   * omitting a realized-FX line is wrong in a way no request can cause.
+   */
+  'credit_note.posting_incomplete': 500,
   /** A non-zero sales tax. OD-03 is OPEN and sales tax is structurally zero in this estate. */
   'credit_note.tax_policy_absent': 422,
   'credit_note.not_found': 404,

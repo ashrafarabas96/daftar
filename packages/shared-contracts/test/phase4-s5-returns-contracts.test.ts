@@ -39,6 +39,11 @@ const SOURCE = readFileSync(join(__dirname, '../src/returns.ts'), 'utf8');
  * SQL bodies.
  */
 function interfaceFields(name: string): readonly string[] {
+  return Object.freeze(declaredMembers(interfaceBody(name)).map((m) => m.name));
+}
+
+/** The brace-balanced body of one shipped interface, with its comments stripped. */
+function interfaceBody(name: string): string {
   const start = SOURCE.indexOf(`export interface ${name} `);
   if (start < 0) throw new Error(`the contract declares no interface ${name} — this suite has lost its subject, which is not a pass`);
   const open = SOURCE.indexOf('{', start);
@@ -55,10 +60,36 @@ function interfaceFields(name: string): readonly string[] {
       }
     }
   }
-  const body = SOURCE.slice(open + 1, end)
+  return SOURCE.slice(open + 1, end)
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\/\/.*$/gm, '');
-  return Object.freeze([...body.matchAll(/^\s*readonly\s+([A-Za-z_][A-Za-z0-9_]*)\s*[?:]/gm)].map((m) => m[1] as string));
+}
+
+/**
+ * Every member of an interface body, `readonly` or NOT, with the modifier
+ * reported separately.
+ *
+ * The `readonly` was once part of the MATCH, and that was a defect rather than a
+ * detail: a field declared without it was invisible to every law in this file,
+ * so `invoiceId: string` on a refund DTO — the exact thing `TL-P4-S5-R1`
+ * forbids, and the exact thing a hurried edit produces — would have been
+ * extracted as nothing and judged as nothing. A law whose subject extractor can
+ * be defeated by dropping a keyword is a law that reads a filtered tree.
+ *
+ * So the modifier is now a SEPARATE assertion, and `declares every member
+ * readonly` below is the law that enforces it.
+ */
+function declaredMembers(body: string): readonly { readonly name: string; readonly readonly: boolean }[] {
+  return Object.freeze(
+    [...body.matchAll(/^[ \t]*(readonly[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*[?:]/gm)].map((m) =>
+      Object.freeze({ name: m[2] as string, readonly: m[1] !== undefined }),
+    ),
+  );
+}
+
+/** The members of one interface, with their modifiers — for the law that judges the modifier. */
+function interfaceMembers(name: string): readonly { readonly name: string; readonly readonly: boolean }[] {
+  return declaredMembers(interfaceBody(name));
 }
 
 describe('P4-S5 contract — the refund shape, read from the shipped declaration', () => {
@@ -69,6 +100,39 @@ describe('P4-S5 contract — the refund shape, read from the shipped declaration
     // A non-trivial field count, so a future empty interface cannot pass by
     // having nothing to judge.
     expect(interfaceFields('RefundDto').length).toBeGreaterThan(10);
+  });
+
+  it('RED PROOF — the extractor sees a field declared WITHOUT `readonly`, which the earlier one did not', () => {
+    // The planted subject is the exact declaration `TL-P4-S5-R1` forbids on a
+    // refund, written the way a hurried edit writes it — no `readonly`. An
+    // extractor that required the keyword returned nothing for this body, so
+    // every law in this file read a FILTERED tree and `invoiceId` on a refund
+    // DTO would have passed unseen.
+    const planted = '\n  readonly refundId: string;\n  invoiceId: string;\n  readonly amountMinor: string;\n';
+    const members = declaredMembers(planted);
+    expect(members.map((m) => m.name)).toEqual(['refundId', 'invoiceId', 'amountMinor']);
+    // And the earlier extractor, reconstructed here as the thing being refuted:
+    const readonlyOnly = [...planted.matchAll(/^\s*readonly\s+([A-Za-z_][A-Za-z0-9_]*)\s*[?:]/gm)].map((m) => m[1] as string);
+    expect(readonlyOnly).toEqual(['refundId', 'amountMinor']);
+    expect(readonlyOnly).not.toContain('invoiceId');
+    // So the law that matters — "a refund names no invoice" — is now answerable
+    // over this body, and was not before.
+    expect(refundInvoiceNamingFields(members.map((m) => m.name))).toEqual(['invoiceId']);
+  });
+
+  it('every member of every shipped S5 DTO is `readonly`, asserted SEPARATELY from being seen', () => {
+    // The modifier is a law of its own now rather than a condition of being
+    // extracted. Both halves hold, and neither hides the other.
+    for (const name of ['RefundDto', 'RefundResultDto', 'CreditNoteDto', 'CreditNoteItemDto', 'CreditNoteApplicationDto']) {
+      const mutable = interfaceMembers(name).filter((m) => !m.readonly);
+      expect(mutable.map((m) => `${name}.${m.name}`)).toEqual([]);
+    }
+    // Non-vacuous: the modifier check is shown able to FAIL on a real shape.
+    expect(
+      declaredMembers('\n  invoiceId: string;\n')
+        .filter((m) => !m.readonly)
+        .map((m) => m.name),
+    ).toEqual(['invoiceId']);
   });
 
   it('`RefundDto` names no invoice — TL-P4-S5-R1, over the real field list', () => {

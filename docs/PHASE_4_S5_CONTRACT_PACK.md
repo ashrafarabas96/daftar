@@ -65,7 +65,10 @@ section below is an answer to one of them.
 | 5 | one spelling of zero, through the SAME predicate the invoice uses; no tax field on the refund at all | `creditNoteTaxRefusal` → `isStructuralZeroTax` |
 | 6 | the chain verifier delegates to `verifyCreditChain` and adds nothing; the liability account is decided in ONE function | `verifySourceConsumptionChain`, `refundLiabilityAccount` |
 | 7 | the stock port asks the authority and reads back; it has no write method | `ReturnStockPort` |
-| 8 | the intent is a CLOSED ordered field list with an explicit absence encoding, compared by pre-image | `REFUND_INTENT_FIELDS`, `refundIntentPreimage`, `refundReplayVerdict` |
+| 9 | no command reads the clock: the comparison instant is NAMED (`RETURNS_DATE_COMPARISON_INSTANT`) and taken as a parameter, and the module contains no `new Date`, no `Date.now` and no `now()` | `returnsDateRefusal`; `[[daftar-a-command-must-not-read-the-clock]]` |
+| 10 | the realized exchange movement is BOUNDED by the liability it arises on, so a mistyped rate cannot post an unbounded FX line that still balances | `planCustomerRefund`'s `fx_rate_changed` bound, driven to its exact edge |
+| 11 | the shared lock rank's PREMISE is checked, not remembered: no command holds both source relations | `returnsLockTraceOneSource` |
+| 8 | the intent is a CLOSED ordered field list with an explicit absence encoding, compared by pre-image — for BOTH commands, since the credit note has an `idempotency_conflict` code and therefore owes a mechanism | `REFUND_INTENT_FIELDS` / `refundIntentPreimage` / `refundReplayVerdict`, and `CREDIT_NOTE_INTENT_FIELDS` / `creditNoteIntentItems` / `creditNoteIntentPreimage` / `creditNoteReplayVerdict`; the absence encoding is ONE function (`intentPreimage`), shared, not a convention written twice; `CreditNotePort.storedIntent` is the seam |
 
 ---
 
@@ -267,6 +270,75 @@ never enumerated. The convention the live rows establish — the row's own domai
 two deliberately differ" (`0081:2460-2465`) — is the authority. **Whichever spelling the Tech
 Lead rules, the lock's enumeration is not it.** `PATCH-REQ-S5-002`.
 
+### 5.1a `TL-P4-S5-R2` — the project owner's ruling on the AR reduction
+
+Recorded in full because it is binding and because it adds requirements that are not
+derivable from the eight laws alone.
+
+> **ONE AR REDUCTION / ONE CANONICAL CUSTOMER SETTLEMENT ALGORITHM.** A credit-note flow
+> reduces invoice AR exactly once. No second AR effect is allowed.
+>
+> **Do not implement independent credit-note AR arithmetic.** Reuse the accepted
+> customer-settlement arithmetic. The AR side derives from the stored invoice settlement pair
+> through the canonical mechanism equivalent to `arSide`, `arLines` and `realizedLines`,
+> including correct invoice-rate carrying release, base-value release, dust/residue handling
+> and realized FX gain/loss.
+>
+> **There must be exactly one accounting event** whose economic meaning is "this portion of
+> the credit note is applied against invoice AR".
+>
+> **ONE CONVERSION, NOT TWO.** Do not independently convert the applied amount and the
+> remaining amount and then reconcile the difference. Never feed a rounded quotient back as an
+> authoritative input.
+>
+> **The application write shape must be able to persist the facts its own schema requires** —
+> carrying base released, realized FX gain/loss, release-before level. *"A relation with
+> required financial columns that the legitimate command cannot populate is an invalid
+> design."*
+>
+> **The refund liability must not absorb unrecorded FX.** No realized exchange movement may
+> silently change `customer_refund_liability` without its accounting line.
+
+**The required identity**, reconciling exactly in integer minor units with no unexplained
+one-minor drift:
+
+```
+AR effect + realized FX effect + dust/residue effect + liability effect = 0
+```
+
+#### Where each limb is STRUCTURAL
+
+| limb | the structure | where |
+|---|---|---|
+| one AR reduction | `planCreditNoteReversal` takes no invoice, carries no `accounts_receivable` line, and `assertReturnEntryReducesNoReceivable` refuses one at runtime | `returns-settlement.ts` |
+| one canonical algorithm | `planCreditNoteApplication` CALLS `planCustomerCreditApplication`; `assertCanonicalArRelease` recomputes `rel` with `apRelease` from the invoice's stored pair and refuses a disagreement of one minor unit | `returns-settlement.ts`; `PATCH-REQ-S5-008` deletes the one remaining relabelling |
+| one accounting event | one source type, `customer_credit_note_application`, with one deferred validator; the `customer_return` validator asserts the ABSENCE of a 1100 line by name | DDL spec §5.2, §5.5 |
+| one conversion | `planCreditNoteReversal` contains exactly ONE `convert(` call, asserted over its shipped text; the applied amount is never converted in that function at all | red proof 7 |
+| the write shape | `CreditNoteApplicationWrite` carries all seven operands, asserted against the shipped declaration read off disk | `returns-ports.ts`; red proof 6 |
+| no absorbed FX | `assertApplicationEntryComplete` / `assertRefundEntryComplete` assert each TERM against the canonical number, not merely that the entry balances | red proof 5, which plants a defect that BALANCES and is still refused |
+| the identity | the four-term sum, over four scenarios including a dusty one and a full consumption | red-proof section 5a |
+
+#### The seven red proofs, as shipped
+
+All seven live in `tests/guards/p4s5-refund-plan-red-proofs.test.ts` §5a, and each plants a
+REAL subject — a line this slice's own code once produced, a value the pre-correction code
+computed, or a declaration read off disk. None is a lambda written in the test body.
+
+1. AR reduced from both credit-note creation and application → the deleted
+   `Cr accounts_receivable 3 633` line, reconstructed, refused by the guard the reversal path
+   calls on every entry.
+2. An application using its own FX conversion → `convertToBase(3 333, 1.0901) = 3 633` planted
+   against `apRelease(10 853, 10 000, 0, 3 333) = 3 617`.
+3. A missing realized FX line → the 16-minor `fx_gain` line removed from a plan that genuinely
+   realizes it.
+4. A missing dust/residue line → a scenario with a genuine second AR line, that line removed.
+5. The refund liability changed by an unposted FX difference → the FX line removed and the
+   liability widened by the same amount, so the entry **still balances** and is still refused.
+6. A write shape unable to populate the mandatory fields → the pre-correction field list,
+   reconstructed, measured against the seven operands.
+7. Two independent conversions → the shipped text of `planCreditNoteReversal`, one `convert(`;
+   the pre-correction body, two.
+
 ### 5.2 The journal shapes
 
 ```
@@ -362,9 +434,9 @@ recorded — and `payments.reverse` is P4-S6's.
 
 ## 7. Refusal codes
 
-40 codes, closed union, in `@daftar/domain-core`'s `ReturnsRefusalCode`; classified by an
+41 codes, closed union, in `@daftar/domain-core`'s `ReturnsRefusalCode`; classified by an
 EXPLICIT TABLE in `apps/api/src/modules/returns/returns-errors.ts`; rendered from
-`error.credit_note.*` and `error.customer_refund.*` in all three locale catalogues (955 keys ×
+`error.credit_note.*` and `error.customer_refund.*` in all three locale catalogues (956 keys ×
 3, `npm run check:localization` PASS).
 
 **Both directions are compile errors, not tests.** `satisfies Record<ReturnsRefusalCode, number>`
@@ -614,7 +686,7 @@ The checks, each with what makes it non-vacuous:
 | **B** | the repository ports, the refusal status table with its two compile-time totality checks, the route authority table | `apps/api/src/modules/returns/returns-ports.ts`, `-errors.ts`, `-permissions.ts` |
 | **C** | 49 unit tests and red proofs across 13 sections, every guard shown able to FAIL on a REAL planted subject | `tests/guards/p4s5-refund-plan-red-proofs.test.ts`, `packages/shared-contracts/test/phase4-s5-returns-contracts.test.ts` |
 | **C** | the five cap-race concurrency MODELS — deterministic, barrier-based, **no sleep, no timer** — each with a red proof that the broken protocol overdraws | `tests/guards/p4s5-refund-cap-concurrency-models.test.ts` |
-| **D** | the API surface (7 routes), and localization in ar/en/tr (40 keys × 3; `check:localization` PASS at 955 × 3) | `-permissions.ts`; `apps/web/src/messages/{ar,en,tr}.json` |
+| **D** | the API surface (7 routes), and localization in ar/en/tr (41 keys × 3; `check:localization` PASS at 956 × 3) | `-permissions.ts`; `apps/web/src/messages/{ar,en,tr}.json` |
 | **E** | the DDL **specification**: 4 relations, the full FK map, CHECKs, indexes, RLS policies, triggers, expected catalogue shape, upgrade expectations. **No `.sql`. No number.** | `docs/PHASE_4_S5_DDL_SPECIFICATION.md` |
 | — | 8 patch requests | `docs/patch-requests/PATCH-REQ-S5-001…008.md` |
 
@@ -628,6 +700,18 @@ Nothing on it can be done before S4 seals and this slice is promoted.
       or REFUTED, and every refutation's consequence worked through before any SQL is written.
       The five of §2.1 are the ones most likely to move.
 - [ ] S5 promoted, and a migration prefix ASSIGNED by the single migration owner.
+
+**Gate 0a — `TL-P4-S5-R2`'s own preconditions, which are not mine to waive**
+- [x] the second AR reducer REMOVED from the design (commit on `p4s5/owner`, F1).
+- [x] the AR side derived through the canonical arithmetic by CALLING it.
+- [x] the application write shape able to persist all seven mandatory facts.
+- [x] the seven red proofs written, each on a real planted subject, all green-and-provably-red.
+- [ ] the LIVE golden (Gate 3) — owed at level F, specified in Gate 3 above.
+- [ ] S4 SEALS.
+- [ ] the independent challenger SIGNS.
+- [ ] the coordinator has READ the actual diff.
+- [ ] the CONTRACT_DIFF against the sealed S4 is COMPLETE.
+**No migration number is reserved, requested or illustrated until every line above is ticked.**
 
 **Gate 1 — the patch requests**
 - [ ] `PATCH-REQ-S5-001` landed (the three op codes in the inventory vocabulary).
@@ -658,11 +742,32 @@ Nothing on it can be done before S4 seals and this slice is promoted.
 - [ ] `npm run check:db-from-zero` PASS.
 
 **Gate 3 — level G, the integrated gate**
-- [ ] **the owed financial test** (`docs/PHASE_4_DECISION_REGISTER.md:267-285`): open a credit
-      invoice; make the credit-note effect; verify AR falls **exactly once**; refund the
-      liability; verify the invoice outstanding does **not** fall again; verify cash and the
-      liability **do** move. **Every write through the product's own commands — no `refunds`,
-      `credit_notes` or `credit_note_applications` row inserted by hand.**
+- [ ] **the owed financial test / the `TL-P4-S5-R2` LIVE GOLDEN**
+      (`docs/PHASE_4_DECISION_REGISTER.md:267-285`, and the owner's ruling). "Live" means
+      against a real database, so it is owed HERE and specified — never faked at A–E. The
+      sequence is the ruling's, in order, each step asserted and not merely performed:
+      1. open a CREDIT invoice for a named customer, in a non-base currency so the FX terms
+         are non-zero and the dust is reachable;
+      2. make the credit-note effect — the `customer.issue_credit_note` command, which raises
+         `customer_refund_liability` for the note's whole total and posts the COGS reversal;
+      3. **verify AR falls EXACTLY ONCE**: `invoice_outstanding` before and after the
+         application, the single `credit_note_applications` row, and the single
+         `accounting_entry_lines` row on 1100 for that economic amount — counted, not sampled;
+      4. verify the AR amount is the INVOICE's canonical release and not the note's
+         conversion, by recomputing it from the invoice's stored `(total, carrying)` pair;
+      5. refund the resulting liability through `customer.refund`;
+      6. **verify the invoice outstanding does NOT fall again** — the same
+         `invoice_outstanding` reading as after step 3, to the minor unit;
+      7. verify CASH moves: the posting account's net movement equals the disbursement base;
+      8. verify the LIABILITY moves: `customer_refund_liability`'s net movement equals the
+         carrying the source released, dust line included;
+      9. verify the GL BALANCES and that `invoice_outstanding` AGREES WITH THE JOURNAL — the
+         AR account's net movement over the whole sequence equals the fall in outstanding,
+         converted through the invoice's own snapshot, with no one-minor drift.
+      **Every write through the product's own commands — no `refunds`, `credit_notes` or
+      `credit_note_applications` row inserted by hand**, and the seven red proofs of §5.1a
+      re-run against the real relations so each is shown able to go red with a database
+      underneath it.
 - [ ] the five cap races re-run **against a real database**, barrier-based and never timed, and
       each shown red without its guard.
 - [ ] the direct-SQL attack run against the real relations, at a fabricated level, refused by the

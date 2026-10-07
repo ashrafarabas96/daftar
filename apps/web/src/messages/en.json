@@ -933,6 +933,7 @@
   "error.credit_note.date_before_invoice": "The return date is before the invoice date. Nothing was saved. Choose a later date.",
   "error.credit_note.date_in_future": "The date is in the future. Nothing was saved. Choose today or an earlier date.",
   "error.credit_note.cogs_not_exact": "Something went wrong on our side. Nothing was saved. Try again; if it keeps happening, contact support.",
+  "error.credit_note.posting_incomplete": "Something went wrong on our side. Nothing was saved. Try again; if it keeps happening, contact support.",
   "error.credit_note.tax_policy_absent": "A return cannot carry tax here. Nothing was saved. Remove the tax amount and try again.",
   "error.credit_note.not_found": "We couldn't find this return note. Nothing was saved. Refresh and try again.",
   "error.credit_note.consumption_inconsistent": "Something went wrong on our side. Nothing was saved. Try again; if it keeps happening, contact support.",

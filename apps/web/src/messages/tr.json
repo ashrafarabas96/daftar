@@ -933,6 +933,7 @@
   "error.credit_note.date_before_invoice": "İade tarihi fatura tarihinden önce. Hiçbir şey kaydedilmedi. Daha sonraki bir tarih seçin.",
   "error.credit_note.date_in_future": "Tarih gelecekte. Hiçbir şey kaydedilmedi. Bugünü ya da daha önceki bir tarihi seçin.",
   "error.credit_note.cogs_not_exact": "Bizim tarafta bir şeyler ters gitti. Hiçbir şey kaydedilmedi. Tekrar deneyin; sürerse destekle iletişime geçin.",
+  "error.credit_note.posting_incomplete": "Bizim tarafta bir şeyler ters gitti. Hiçbir şey kaydedilmedi. Tekrar deneyin; sürerse destekle iletişime geçin.",
   "error.credit_note.tax_policy_absent": "Burada bir iade vergi taşıyamaz. Hiçbir şey kaydedilmedi. Vergi tutarını kaldırıp tekrar deneyin.",
   "error.credit_note.not_found": "Bu iade fişi bulunamadı. Hiçbir şey kaydedilmedi. Sayfayı yenileyip tekrar deneyin.",
   "error.credit_note.consumption_inconsistent": "Bizim tarafta bir şeyler ters gitti. Hiçbir şey kaydedilmedi. Tekrar deneyin; sürerse destekle iletişime geçin.",

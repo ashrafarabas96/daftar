@@ -73,6 +73,7 @@ import {
 } from '@daftar/domain-core';
 import {
   VALUE_LIMIT_MINOR,
+  apRelease,
   convertToBase,
   creditRelease,
   creditRemainingCarrying,
@@ -344,11 +345,28 @@ export function planCustomerRefund(input: CustomerRefundInput): CustomerRefundPl
     }),
   );
   const realizedMinor = consumed.carryingReleasedMinor - disbursementBaseMinor;
+  // F5: the realized FX is BOUNDED by the liability it arises on.
+  //
+  // `realized = cr_rel − db`, so `|realized| ≤ max(cr_rel, db)` is arithmetic
+  // and says nothing. The bound that says something is `|realized| ≤ cr_rel`:
+  // the exchange movement on discharging a liability cannot exceed the
+  // liability. It fails exactly when `db > 2·cr_rel` — a disbursement costing
+  // more than twice the carrying base the source gives up, which is a rate
+  // wrong by over 100% and not a refund anybody meant to make. Without it the
+  // plan will post an `fx_loss` line of unbounded size from a mistyped rate and
+  // balance perfectly while doing so.
+  //
+  // `fx_rate_changed` rather than `arithmetic_invalid`: the arithmetic is
+  // correct, the RATE is not, and the caller's remedy is to rebind the snapshot
+  // and retry — which is a 409 and not a 500.
+  if (abs(realizedMinor) > consumed.carryingReleasedMinor) {
+    refuse('customer_refund.fx_rate_changed', 'the realized exchange movement exceeds the liability it arises on');
+  }
   if (realizedMinor !== 0n) lines.push(baseLine(realizedMinor > 0n ? 'fx_gain' : 'fx_loss', realizedMinor > 0n ? 'C' : 'D', abs(realizedMinor)));
 
   const entryLines = balanced(lines);
   assertNoReceivableLine(entryLines);
-  return Object.freeze({
+  const plan: CustomerRefundPlan = Object.freeze({
     ...consumed,
     liabilityAccount,
     disbursementAmountMinor: d,
@@ -356,6 +374,10 @@ export function planCustomerRefund(input: CustomerRefundInput): CustomerRefundPl
     realizedMinor,
     entryLines,
   });
+  // `TL-P4-S5-R2`: the liability absorbs no unrecorded FX, and the four terms
+  // reconcile exactly in integer minor units.
+  assertRefundEntryComplete(plan);
+  return plan;
 }
 
 // ── (b) A credit note's revenue and COGS reversal ───────────────────────
@@ -459,6 +481,10 @@ export function planCreditNoteReversal(input: CreditNoteReversalInput): CreditNo
   }
   const cogsEntryLines = balanced([baseLine('inventory', 'D', cogs.baseMinor), baseLine('cogs', 'C', cogs.baseMinor)]);
   const revenueEntryLines = balanced(revenue);
+  // `TL-P4-S5-R2` limb 1, asserted and not assumed: this entry reduces no
+  // receivable. It is unexpressible by type and refused at runtime, and the red
+  // proof plants the exact line that was deleted from this function.
+  assertReturnEntryReducesNoReceivable(revenueEntryLines);
   for (const l of [...revenueEntryLines, ...cogsEntryLines]) {
     if (!isCreditNoteEntryAccount(l.account)) refuse('customer_refund.arithmetic_invalid', 'a credit note entry names only its seven accounts');
   }
@@ -609,7 +635,178 @@ export function planCreditNoteApplication(input: CreditNoteApplicationInput): Cr
     throw new ReturnsPlanError(mapped ?? 'credit_note.settlement_changed', 'the canonical AR arithmetic refused this credit note application');
   }
   const { entryLines: canonicalLines, ...amounts } = canonical;
-  return Object.freeze({ ...amounts, entryLines: balanced(canonicalLines.map(returnsLineOfReceivableLine)) });
+  const plan: CreditNoteApplicationPlan = Object.freeze({
+    ...amounts,
+    entryLines: balanced(canonicalLines.map(returnsLineOfReceivableLine)),
+  });
+  // `TL-P4-S5-R2` limbs 2 to 5 and the identity. The relabelling is pure, so
+  // these could only fail if the canonical arithmetic or the relabelling moved —
+  // which is exactly when they must.
+  assertCanonicalArRelease(input.invoice, plan);
+  assertApplicationEntryComplete(plan);
+  return plan;
+}
+
+// ── (b3) `TL-P4-S5-R2`: the posting-completeness assertions ─────────────
+
+/**
+ * The TypeScript twins of the deferred completeness validators, and the reason
+ * `TL-P4-S5-R2`'s seven red proofs have real subjects to plant against.
+ *
+ * The ruling, in the project owner's own terms: *"No realized exchange movement
+ * may silently change `customer_refund_liability` without its accounting line.
+ * The liability's amount and carrying value come from the same canonical
+ * settlement calculation that produced the AR release."* And the identity it
+ * requires, which must reconcile EXACTLY in integer minor units with no
+ * unexplained one-minor drift:
+ *
+ *     AR effect + realized FX effect + dust/residue effect + liability effect = 0
+ *
+ * `balanced()` already asserts that sum is zero, but it asserts it of whatever
+ * lines it is handed: a plan that omitted the realized-FX line AND understated
+ * the liability by the same amount balances perfectly and is wrong. So these
+ * functions assert each TERM separately against the canonical arithmetic that
+ * produced it, which is the half a balance check cannot see.
+ *
+ * They are functions with reachable refusals rather than comments, because a
+ * law with no refusal has no red proof and `[[daftar-a-green-gate-must-prove-it-can-be-red]]`.
+ */
+
+/** The NET base movement on one account across an entry: debits positive, credits negative. */
+function netBaseOn(lines: readonly ReturnsEntryLine[], account: string): bigint {
+  let net = 0n;
+  for (const l of lines) {
+    if (l.account !== account) continue;
+    net += l.side === 'D' ? l.baseAmountMinor : -l.baseAmountMinor;
+  }
+  return net;
+}
+
+const incomplete = (message: string): never => {
+  throw new ReturnsPlanError('credit_note.posting_incomplete', message);
+};
+
+/**
+ * `TL-P4-S5-R2`, limb 1: the credit note's OWN entry reduces no receivable.
+ *
+ * "A credit-note flow reduces invoice AR exactly once… the credit-note/return
+ * creation path must not independently post another AR reduction for the same
+ * economic amount." The account union already makes the line unexpressible in a
+ * well-typed call; this is the runtime half, so the law has a reachable refusal
+ * and therefore a red proof. The planted subject is the exact line that was
+ * deleted from `planCreditNoteReversal`.
+ */
+export function assertReturnEntryReducesNoReceivable(lines: readonly ReturnsEntryLine[]): void {
+  if (lines.some((l) => l.account === 'accounts_receivable')) {
+    refuse('customer_refund.arithmetic_invalid', 'a credit note entry raises its liability and reduces no receivable');
+  }
+}
+
+/**
+ * `TL-P4-S5-R2`, limb 2: the AR release is the CANONICAL one, recomputed.
+ *
+ * "Do not implement independent credit-note AR arithmetic… The AR side derives
+ * from the stored invoice settlement pair through the canonical mechanism."
+ *
+ * This recomputes `rel = R(X + a) − R(X)` with `apRelease` — the accepted
+ * primitive, the same one `arSide` calls — directly from the invoice's STORED
+ * pair, and refuses a plan that disagrees by even one minor unit. The defect it
+ * exists to catch is the one the first draft of this slice shipped: the applied
+ * part converted at the NOTE's snapshot (3 633 on the worked scenario) rather
+ * than released from the invoice's own pair (3 617).
+ */
+export function assertCanonicalArRelease(
+  invoice: InvoiceArState,
+  plan: Pick<CreditNoteApplicationPlan, 'arReleasedBeforeMinor' | 'invoiceAmountAppliedMinor' | 'invoiceCarryingReleasedMinor'>,
+): void {
+  const canonical = apRelease(invoice.totalBaseMinor, invoice.totalTxnMinor, plan.arReleasedBeforeMinor, plan.invoiceAmountAppliedMinor);
+  if (plan.invoiceCarryingReleasedMinor !== canonical) {
+    incomplete('the AR carrying release must be the canonical release over the invoice stored pair');
+  }
+  if (plan.arReleasedBeforeMinor !== invoice.totalTxnMinor - invoice.outstandingTxnMinor) {
+    incomplete('the AR level must be the invoice chain position the lock returned');
+  }
+}
+
+/**
+ * `TL-P4-S5-R2`, limbs 3, 4, 5 and the IDENTITY: every term of the entry is
+ * posted, and each equals the canonical number that produced it.
+ *
+ * Four separate assertions, deliberately not one:
+ *
+ * - the NET movement on `accounts_receivable` is exactly the carrying the
+ *   invoice released — the principal line AND its dust line together, so a
+ *   missing dust line is a mismatch and not a rounding;
+ * - the NET movement on the liability is exactly the carrying the note released
+ *   — so no realized exchange movement can silently change the liability;
+ * - the realized-FX line is present iff `realizedFxMinor ≠ 0`, for exactly
+ *   `|realizedFxMinor|`, on 4900 for a gain and 6900 for a loss;
+ * - and the four terms sum to zero, in integer minor units, which is the
+ *   ruling's identity stated as arithmetic rather than as prose.
+ */
+export function assertApplicationEntryComplete(plan: CreditNoteApplicationPlan): void {
+  const lines = plan.entryLines;
+  const arEffect = netBaseOn(lines, 'accounts_receivable');
+  const liabilityEffect = netBaseOn(lines, 'customer_refund_liability');
+  const fxEffect = netBaseOn(lines, 'fx_gain') + netBaseOn(lines, 'fx_loss');
+
+  // AR is CREDITED, so its net is negative and its magnitude is the release.
+  if (arEffect !== -plan.invoiceCarryingReleasedMinor) {
+    incomplete('the receivable movement must equal the invoice carrying release, dust line included');
+  }
+  // The liability is DEBITED, so its net is positive.
+  if (liabilityEffect !== plan.creditCarryingReleasedMinor) {
+    incomplete('the liability movement must equal the note carrying release, dust line included');
+  }
+  const fxLines = lines.filter((l) => l.account === 'fx_gain' || l.account === 'fx_loss');
+  if (plan.realizedFxMinor === 0n) {
+    if (fxLines.length !== 0) incomplete('a zero realized FX posts no line');
+  } else {
+    if (fxLines.length !== 1) incomplete('a non-zero realized FX posts exactly one line');
+    const fx = fxLines[0] as ReturnsEntryLine;
+    const expectedAccount = plan.realizedFxMinor > 0n ? 'fx_gain' : 'fx_loss';
+    const magnitude = plan.realizedFxMinor > 0n ? plan.realizedFxMinor : -plan.realizedFxMinor;
+    if (fx.account !== expectedAccount || fx.baseAmountMinor !== magnitude) {
+      incomplete('the realized FX line must name the gain or loss account for exactly the realized amount');
+    }
+    // A gain is a CREDIT and a loss a DEBIT, so the net is the negation.
+    if (fxEffect !== -plan.realizedFxMinor) incomplete('the realized FX line must carry the side its sign requires');
+  }
+  // The ruling's identity, in integer minor units, with no tolerance.
+  if (arEffect + liabilityEffect + fxEffect !== 0n) {
+    incomplete('AR, liability, dust and realized FX must reconcile exactly');
+  }
+}
+
+/**
+ * The same completeness law for a refund entry: the liability discharged is
+ * exactly the carrying the source released, the posting account carries exactly
+ * the disbursement's base, and the realized FX is posted rather than absorbed.
+ *
+ * `TL-P4-S5-R2`: *"The refund liability must not absorb unrecorded FX."* The
+ * plausible defect is a plan that debits the liability for the CONVERTED amount
+ * and omits the dust line, leaving the gap inside the liability with no line
+ * naming it — which balances only if something else is also wrong, and this
+ * catches it before that happens.
+ */
+export function assertRefundEntryComplete(plan: CustomerRefundPlan): void {
+  const lines = plan.entryLines;
+  const liabilityEffect = netBaseOn(lines, plan.liabilityAccount);
+  const postingEffect = netBaseOn(lines, 'posting_account');
+  const fxEffect = netBaseOn(lines, 'fx_gain') + netBaseOn(lines, 'fx_loss');
+  if (liabilityEffect !== plan.carryingReleasedMinor) {
+    incomplete('the liability discharged must equal the carrying the source released, dust line included');
+  }
+  if (postingEffect !== -plan.disbursementBaseMinor) {
+    incomplete('the posting account must carry exactly the disbursement base');
+  }
+  if (fxEffect !== -plan.realizedMinor) {
+    incomplete('the realized FX must be posted and not absorbed by the liability');
+  }
+  if (liabilityEffect + postingEffect + fxEffect !== 0n) {
+    incomplete('liability, cash, dust and realized FX must reconcile exactly');
+  }
+  assertNoReceivableLine(lines);
 }
 
 // ── (c) The consumption chain of a source, verified ─────────────────────

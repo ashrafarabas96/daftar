@@ -224,12 +224,21 @@ export function forbiddenRefundFields(fields: readonly string[]): readonly { rea
 /**
  * The system account keys a refund entry may name, and NOTHING else.
  *
- * Every key is one of the twenty-one already registered by
- * `0040_accounting_chart.sql:45-66`; S5 registers no account and invents no
- * code. `customer_refund_liability` is 2200, `customer_credit_liability` is
- * 2210 (and `0081:1594` already DEBITS it when a credit is consumed, so a
- * refund drawn on a customer credit is the same debit through a different
- * consumer), `fx_gain` is 4900, `fx_loss` is 6900.
+ * **FOUR of the five are registered system keys; `posting_account` is not, and
+ * saying otherwise was wrong.** `customer_refund_liability` is 2200,
+ * `customer_credit_liability` is 2210 (and `0081:1594` already DEBITS it when a
+ * credit is consumed, so a refund drawn on a customer credit is the same debit
+ * through a different consumer), `fx_gain` is 4900 and `fx_loss` is 6900 — each
+ * one of the twenty-one keys `0040_accounting_chart.sql:45-66` registers, with
+ * the registry CLOSED at 21 by the `DO $$` count at `0040:70-78`.
+ *
+ * `posting_account` is a PLACEHOLDER for a per-method account resolved at
+ * posting time from `payment_methods.posting_account_id`, which is a row
+ * reference and not a system key at all. It is in this list because the entry
+ * needs somewhere to name the cash side, and it is named here rather than
+ * silently so that nobody later reads this union as a list of chart keys and
+ * goes looking for `posting_account` in `0040`. S5 registers no account and
+ * invents no code either way.
  *
  * **`accounts_receivable` (1100) is absent, and that absence IS `TL-P4-S5-R1`.**
  * A refund entry has no place to put an AR movement, so it cannot make one. The
@@ -433,6 +442,7 @@ export type ReturnsRefusalCode =
   | 'credit_note.date_before_invoice'
   | 'credit_note.date_in_future'
   | 'credit_note.cogs_not_exact'
+  | 'credit_note.posting_incomplete'
   | 'credit_note.tax_policy_absent'
   | 'credit_note.not_found'
   // ── The refund ───────────────────────────────────────────────────
@@ -478,6 +488,7 @@ export const RETURNS_REFUSAL_CODES: readonly ReturnsRefusalCode[] = Object.freez
   'credit_note.date_before_invoice',
   'credit_note.date_in_future',
   'credit_note.cogs_not_exact',
+  'credit_note.posting_incomplete',
   'credit_note.tax_policy_absent',
   'credit_note.not_found',
   'customer_refund.idempotency_conflict',
@@ -534,6 +545,20 @@ export function refundSourceRefusal(problem: RefundSourceProblem): Extract<Retur
  * 3. `credit_notes` / `customer_credits` — the SOURCE, `FOR UPDATE`. **This is
  *    where the cap is checked**, inside the source, after the lock and never
  *    before it;
+ *
+ * **Why step 3 is ONE rank over two relations, and not two ranks.** A rank
+ * exists to order a PAIR of locks a single command might take. No S5 command
+ * can take both of these: a refund's source is `credit_note` XOR
+ * `customer_credit` by ruling, enforced by
+ * `CHECK (num_nonnulls(credit_note_id, customer_credit_id) = 1)` on the row and
+ * by `resolveRefundSource` in the command; the credit-note application touches
+ * `credit_notes` and never `customer_credits`; and the void command touches
+ * only its own note. So there is no pair to invert, and splitting the rank
+ * would assert an order between two locks that are never held together — which
+ * is not a stronger law, it is a law about nothing. `returnsLockTraceOneSource`
+ * below is what makes the premise checkable instead of remembered, and its red
+ * proof plants a trace holding both.
+ *
  * 4. `payment_methods` — the posting account, last, because it is a
  *    configuration read and nothing downstream of it takes a lock.
  *
@@ -546,6 +571,23 @@ export const RETURNS_LOCK_ORDER = ['customers', 'invoices', 'credit_notes|custom
 /** The position of a relation in the lock order, or `-1`. A test can assert monotonicity over a trace. */
 export function returnsLockRank(relation: string): number {
   return RETURNS_LOCK_ORDER.findIndex((step) => step.split('|').includes(relation));
+}
+
+/** The two relations that share rank 3 — the two source kinds, which no command holds together. */
+export const RETURNS_SOURCE_RELATIONS = ['credit_notes', 'customer_credits'] as const;
+
+/**
+ * The PREMISE of rank 3 being one rank: a single command's lock trace names at
+ * most ONE of the two source relations.
+ *
+ * Returns the offending pair when a trace holds both, and `null` otherwise. It
+ * is a function rather than a sentence in the comment above because the comment
+ * argues that no pair can be inverted, and an argument from a premise is worth
+ * only as much as the premise is checked.
+ */
+export function returnsLockTraceOneSource(trace: readonly string[]): readonly string[] | null {
+  const held = RETURNS_SOURCE_RELATIONS.filter((r) => trace.includes(r));
+  return held.length > 1 ? Object.freeze([...held]) : null;
 }
 
 /**
@@ -625,6 +667,23 @@ export const RETURNS_TRANSACTION_BOUNDARY: readonly {
  * an honest retry after a concurrent consumption look like a different command
  * and turn a `source_changed` into an `idempotency_conflict`.
  */
+/**
+ * The ONE absence encoding of this slice, and the ONE field separator.
+ *
+ * `\u0000` for an absent value and `\n` between fields. Both halves matter and
+ * the first is the one that silently differs between two implementations: `null`
+ * and `''` must not collide, or a refund with no reference and a refund whose
+ * reference is the empty string share a pre-image and therefore a hash, and a
+ * replay of one answers success for the other.
+ *
+ * It is a function rather than a convention repeated twice because there are now
+ * TWO commands with an intent — the refund and the credit note — and two copies
+ * of an encoding are two encodings as soon as one of them is edited.
+ */
+function intentPreimage(fields: readonly string[], intent: Readonly<Record<string, string | null>>): string {
+  return fields.map((f) => intent[f] ?? '\u0000').join('\n');
+}
+
 export const REFUND_INTENT_FIELDS = [
   'refundId',
   'customerId',
@@ -656,7 +715,7 @@ export type RefundIntent = { readonly [K in RefundIntentField]: string | null };
  * reference is the empty string share a hash.
  */
 export function refundIntentPreimage(intent: RefundIntent): string {
-  return REFUND_INTENT_FIELDS.map((f) => intent[f] ?? '\u0000').join('\n');
+  return intentPreimage(REFUND_INTENT_FIELDS, intent);
 }
 
 /** Whether two intents are the SAME economic command. Pre-image equality, never a field-by-field eyeball. */
@@ -676,6 +735,178 @@ export function isSameRefundIntent(a: RefundIntent, b: RefundIntent): boolean {
 export function refundReplayVerdict(stored: RefundIntent | null, incoming: RefundIntent): 'fresh' | 'replay' | 'conflict' {
   if (stored === null) return 'fresh';
   return isSameRefundIntent(stored, incoming) ? 'replay' : 'conflict';
+}
+
+// ── 7a. The credit note has an intent too, and it is not the refund's ────
+
+/**
+ * The fields that make up a CREDIT NOTE's intent hash.
+ *
+ * The credit note is a command under an idempotency key exactly as the refund
+ * is — `credit_note.idempotency_conflict` has existed in the refusal vocabulary
+ * since the first draft of this slice — and a command with a conflict code but
+ * no intent to compare has a code it can never lawfully raise. Law 8 is not
+ * "the refund replays exactly"; it is "a key replays the same economic command
+ * or conflicts", and it binds every command of the slice.
+ *
+ * Its own field list, and deliberately NOT the refund's: the two commands do not
+ * share a single field whose meaning is the same. A credit note names an invoice
+ * and a set of returned LINES; a refund names a source and a disbursement. The
+ * one structural thing they share is the absence encoding, which is
+ * `intentPreimage`, and that is shared as a function.
+ *
+ * `items` is in the list because it is the economic content: the same
+ * `creditNoteId` re-sent with one more line is a DIFFERENT command, and a
+ * replay that ignored the lines would accept it and return the first note's
+ * result while the caller believes the extra line was returned.
+ *
+ * `creditNoteNumber` is NOT in the list. The number is ALLOCATED by the
+ * command, not supplied to it (`allocateNumber`, G-07), so including it would
+ * make an intent uncomputable before the command runs — which is the one moment
+ * a replay has to compute it.
+ */
+export const CREDIT_NOTE_INTENT_FIELDS = [
+  'creditNoteId',
+  'customerId',
+  'invoiceId',
+  'creditNoteDate',
+  'currencyCode',
+  'totalMinor',
+  'taxMinor',
+  'reference',
+  'items',
+] as const;
+export type CreditNoteIntentField = (typeof CREDIT_NOTE_INTENT_FIELDS)[number];
+
+/** A credit note's intent, as the canonical pre-image is built from it. Every value is text; a number never enters a hash pre-image. */
+export type CreditNoteIntent = { readonly [K in CreditNoteIntentField]: string | null };
+
+/** One returned line, as the intent reads it. Its own value fields and nothing derived. */
+export interface CreditNoteIntentItem {
+  readonly lineNo: number;
+  readonly productId: string;
+  readonly quantity: string;
+  readonly unitPriceMinor: string;
+  readonly netMinor: string;
+}
+
+/**
+ * The returned lines, rendered into the ONE `items` field, in `lineNo` order.
+ *
+ * The separators are `\u001f` between a line's fields and `\u001e` between
+ * lines — the ASCII unit and record separators — and NEITHER is `\n`. That is
+ * the point rather than a flourish: if the lines were joined with the top-level
+ * separator, a set of lines could be rendered into a byte sequence that a
+ * DIFFERENT set of lines plus a different top-level field also renders into, and
+ * two distinct commands would share a pre-image. A nested encoding that reuses
+ * its parent's delimiter is not injective.
+ *
+ * The order is imposed here, by `lineNo`, so the same lines submitted in a
+ * different order are the same command. A caller's array order is not an
+ * economic fact.
+ */
+export function creditNoteIntentItems(items: readonly CreditNoteIntentItem[]): string {
+  return [...items]
+    .sort((a, b) => a.lineNo - b.lineNo)
+    .map((i) => [String(i.lineNo), i.productId, i.quantity, i.unitPriceMinor, i.netMinor].join('\u001f'))
+    .join('\u001e');
+}
+
+/**
+ * The canonical pre-image of a credit note's intent: the closed field list, in
+ * order, through the SAME absence encoding the refund uses.
+ *
+ * This file does not hash it, for the reason `refundIntentPreimage` gives:
+ * `accounting_fingerprint` (`0045:120-133`) and
+ * `packages/accounting/src/fingerprint.ts` are the one hashing authority in this
+ * estate.
+ */
+export function creditNoteIntentPreimage(intent: CreditNoteIntent): string {
+  return intentPreimage(CREDIT_NOTE_INTENT_FIELDS, intent);
+}
+
+/** Whether two credit-note intents are the SAME economic command. Pre-image equality, never a field-by-field eyeball. */
+export function isSameCreditNoteIntent(a: CreditNoteIntent, b: CreditNoteIntent): boolean {
+  return creditNoteIntentPreimage(a) === creditNoteIntentPreimage(b);
+}
+
+/**
+ * What a replay of `creditNoteId` must answer — the refund's verdict, for the
+ * other command.
+ *
+ * `replay` is the stored result, 200, `replayed: true`, nothing written.
+ * `conflict` is 409 `credit_note.idempotency_conflict` and never an acceptance.
+ * There is no third answer: a key whose intent cannot be compared is a conflict,
+ * not a fresh command. "An idempotency key is not permission."
+ */
+export function creditNoteReplayVerdict(stored: CreditNoteIntent | null, incoming: CreditNoteIntent): 'fresh' | 'replay' | 'conflict' {
+  if (stored === null) return 'fresh';
+  return isSameCreditNoteIntent(stored, incoming) ? 'replay' : 'conflict';
+}
+
+// ── 7b. The dates, and the instant they are compared against ───────────
+
+/**
+ * WHAT INSTANT `date_in_future` IS MEASURED AGAINST, stated once so no caller
+ * has to guess and no implementation gets to decide.
+ *
+ * It is **the business's own current date in its own time zone**, supplied by
+ * the caller as a `YYYY-MM-DD` string. It is NOT `new Date()` in this function,
+ * NOT the database's `now()` read inside the command, and NOT UTC midnight.
+ *
+ * `[[daftar-a-command-must-not-read-the-clock]]`, and the reason is not purity:
+ * a merchant in Amman posting at 01:00 local is at the PREVIOUS UTC day, so a
+ * command that compared against UTC "today" would refuse a credit note dated
+ * today as being in the future, for two hours every night. And a command that
+ * reads the clock cannot be replayed: the same idempotency key, re-sent after
+ * midnight, would answer differently from the same stored intent — which is law
+ * 8 broken by a function nobody thought of as financial.
+ *
+ * So the instant is a PARAMETER. The request boundary resolves it once, from the
+ * business's stored time zone, and every date comparison in the command uses
+ * that one value. This is also why `refundIntentPreimage` carries `refundDate`
+ * and not a timestamp: the intent is a claim about a DAY the caller named.
+ */
+export const RETURNS_DATE_COMPARISON_INSTANT = "the business's own current date in its own time zone, resolved once at the request boundary and passed in";
+
+/** A `YYYY-MM-DD` calendar date, as every date on this path is carried. */
+const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The two date laws of one S5 document, judged against a caller-supplied today.
+ *
+ * - a document dated after the business's today is refused (`date_in_future`);
+ * - a document dated before the thing it derives from — the invoice for a credit
+ *   note, the source for a refund — is refused (`date_before_invoice` /
+ *   `date_before_source`).
+ *
+ * String comparison is exact for `YYYY-MM-DD` and introduces no time zone of its
+ * own, which is the point: there is no `Date` object anywhere in this function,
+ * so there is nothing to interpret.
+ */
+export function returnsDateRefusal(
+  domain: 'credit_note' | 'customer_refund',
+  documentDate: string,
+  originDate: string,
+  businessToday: string,
+):
+  | 'credit_note.date_in_future'
+  | 'credit_note.date_before_invoice'
+  | 'customer_refund.date_in_future'
+  | 'customer_refund.date_before_source'
+  | 'credit_note.amount_invalid'
+  | 'customer_refund.amount_invalid'
+  | null {
+  for (const d of [documentDate, originDate, businessToday]) {
+    // A malformed date is not a date comparison at all. It is refused under the
+    // domain's generic invalid code rather than silently sorting as a string.
+    if (typeof d !== 'string' || !CALENDAR_DATE.test(d)) return `${domain}.amount_invalid` as const;
+  }
+  if (documentDate > businessToday) return `${domain}.date_in_future` as const;
+  if (documentDate < originDate) {
+    return domain === 'credit_note' ? 'credit_note.date_before_invoice' : 'customer_refund.date_before_source';
+  }
+  return null;
 }
 
 // ── 8. The cap, derived — and never stored ──────────────────────────────

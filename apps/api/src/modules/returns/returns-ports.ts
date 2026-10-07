@@ -38,7 +38,7 @@
  *    command before any posting (A-15). `fxRateChanged` is therefore an
  *    optimistic refusal the port REPORTS, never a re-read it performs.
  */
-import type { CreditNoteLifecycleState, RefundIntent, RefundSourceKind, ReturnedMovementValue } from '@daftar/domain-core';
+import type { CreditNoteIntent, CreditNoteLifecycleState, RefundIntent, RefundSourceKind, ReturnedMovementValue } from '@daftar/domain-core';
 import type { ConsumableSource, SourceConsumerRow } from './returns-settlement';
 
 /** The tenancy and actor scope every port call carries. Never defaulted and never inferred from a connection. */
@@ -114,6 +114,15 @@ export interface RefundSourcePort {
 // ── The credit-note port ────────────────────────────────────────────────
 
 /** A credit note's row as the command reads it back, before any DTO is shaped. */
+/**
+ * A credit note as a READ returns it: the lifecycle and the remaining PAIR,
+ * which is what a lock is taken for and what the cap is asked against.
+ *
+ * It is NOT what an insert needs, and `CreditNoteWrite` below is. A read
+ * projection doing double duty as a write shape is how a column that only a
+ * write can supply — the origin invoice, the date, the FX snapshot, the intent
+ * hash — ends up supplied by something other than the command.
+ */
 export interface CreditNoteRow {
   readonly creditNoteId: string;
   readonly creditNoteNumber: string;
@@ -123,6 +132,53 @@ export interface CreditNoteRow {
   readonly totalMinor: bigint;
   readonly remainingMinor: bigint;
   readonly remainingCarryingMinor: bigint;
+}
+
+/**
+ * One `credit_notes` row as the ISSUE command writes it.
+ *
+ * The three groups it carries that `CreditNoteRow` cannot:
+ *
+ * - **the provenance**: `invoiceId` is the ORIGIN of the return — the sale being
+ *   reversed, which is what makes `quantity_exceeds_sold` answerable and what
+ *   gives the COGS reversal its lineage. It is NOT an AR reduction; that is a
+ *   `credit_note_applications` row (DDL spec section 1.5);
+ * - **the FX snapshot**, bound once by the command and never re-read while
+ *   posting, plus the base total it produced at the ONE conversion
+ *   `planCreditNoteReversal` performs;
+ * - **`intentSha256`**, the hash of `creditNoteIntentPreimage`, computed by the
+ *   one hashing authority and never by this slice. Without it the row cannot
+ *   answer a replay, and `credit_note.idempotency_conflict` would be a code with
+ *   no mechanism behind it.
+ *
+ * The note is BORN at `remainingMinor = totalMinor` and
+ * `remainingCarryingMinor = totalBaseMinor`, so `g(OA) = OB` holds at birth —
+ * the condition `planCustomerCreditCreation` asserts for a customer credit
+ * (`packages/inventory/src/customer-settlement.ts:562`) and the same one a note's
+ * guard will assert. Those two fields are therefore NOT separately supplied
+ * here: they are the pair the command computed, and a write shape that let a
+ * caller name a remaining different from the total would let a note be born
+ * already partly consumed.
+ */
+export interface CreditNoteWrite {
+  readonly creditNoteId: string;
+  readonly creditNoteNumber: string;
+  readonly numberSeq: bigint;
+  readonly customerId: string;
+  /** The sale this return reverses. The ORIGIN, never the AR reduction. */
+  readonly invoiceId: string;
+  readonly creditNoteDate: string;
+  readonly reference: string | null;
+  readonly currencyCode: string;
+  readonly totalMinor: bigint;
+  /** The note's own stored snapshot: rate x 10^10, and the two exponents. */
+  readonly sourceToBaseRateR10: bigint;
+  /** The total at the note's ONE conversion. The note is born carrying exactly this. */
+  readonly totalBaseMinor: bigint;
+  /** Structural zero (OD-03 OPEN). The column exists under `CHECK (tax_minor = 0)`. */
+  readonly taxMinor: 0n;
+  /** The hash of `creditNoteIntentPreimage`. Computed by the one hashing authority, never by this slice. */
+  readonly intentSha256: string;
 }
 
 export interface CreditNotePort {
@@ -139,7 +195,7 @@ export interface CreditNotePort {
   allocateNumber(scope: ReturnsScope, period: string): Promise<{ readonly numberSeq: bigint; readonly documentNumber: string }>;
 
   /** Insert the note and its items, born whole in one statement set. A half-written document is never visible. */
-  insertCreditNote(scope: ReturnsScope, row: CreditNoteRow, items: readonly CreditNoteItemWrite[]): Promise<void>;
+  insertCreditNote(scope: ReturnsScope, row: CreditNoteWrite, items: readonly CreditNoteItemWrite[]): Promise<void>;
 
   /**
    * Insert the applications that reduce AR — at most one per invoice, each at
@@ -167,6 +223,23 @@ export interface CreditNotePort {
 
   /** Set the lifecycle. The enumerated transitions are the domain's; a port never decides one. */
   setLifecycle(scope: ReturnsScope, creditNoteId: string, to: CreditNoteLifecycleState): Promise<void>;
+
+  /**
+   * The intent stored under `creditNoteId`, or `null` if the key is unseen.
+   *
+   * The same seam the refund has, from the other side: `creditNoteReplayVerdict`
+   * decides, this port only reports. It returns the INTENT and not the hash,
+   * because the comparison is pre-image equality
+   * (`isSameCreditNoteIntent`) — comparing hashes here would make this slice a
+   * second place a fingerprint is computed, and
+   * `packages/accounting/src/fingerprint.ts` is the one place.
+   *
+   * A caller that skips this and relies on the primary key alone gets a unique
+   * violation for a replay, which is a 500 for what is a lawful 200 — and, worse,
+   * answers nothing at all for a DIFFERENT command sent under the same key. «An
+   * idempotency key is not permission.»
+   */
+  storedIntent(scope: ReturnsScope, creditNoteId: string): Promise<CreditNoteIntent | null>;
 }
 
 export interface CreditNoteItemWrite {
