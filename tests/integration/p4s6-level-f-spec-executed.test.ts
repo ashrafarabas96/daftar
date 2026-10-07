@@ -90,7 +90,10 @@ const LEVEL_UQ = readFileSync(join(DOCS, 'PHASE_4_S6_LEVEL_UNIQUENESS.md'), 'utf
 function extractOne(doc: string, label: string, anchor: RegExp): string {
   const found = [...doc.matchAll(anchor)];
   if (found.length !== 1) {
-    throw new Error(`P4-S6 level F: the anchor for ${label} matched ${found.length} times in the specification, and exactly one match is required. ` + `The document and this suite have diverged; correct whichever is wrong rather than loosening the anchor.`);
+    throw new Error(
+      `P4-S6 level F: the anchor for ${label} matched ${found.length} times in the specification, and exactly one match is required. ` +
+        `The document and this suite have diverged; correct whichever is wrong rather than loosening the anchor.`,
+    );
   }
   const text = (found[0]?.[1] ?? '').trim();
   if (text.length === 0) throw new Error(`P4-S6 level F: the anchor for ${label} matched an EMPTY body`);
@@ -98,10 +101,18 @@ function extractOne(doc: string, label: string, anchor: RegExp): string {
 }
 
 /** The repaired expressions of DDL spec §2A.1 — the single fenced block that carries all three. */
-const REPAIRED_BLOCK = extractOne(DDL_SPEC, 'the three repaired backfill expressions (§2A.1)', /```sql\n(-- \(1\) payment_allocations\.chain_generation[\s\S]*?)```/g);
+const REPAIRED_BLOCK = extractOne(
+  DDL_SPEC,
+  'the three repaired backfill expressions (§2A.1)',
+  /```sql\n(-- \(1\) payment_allocations\.chain_generation[\s\S]*?)```/g,
+);
 
 /** Round 4's defect, which §2A.1 retains on purpose so the repair has a named subject. */
-const ROUND4_DEFECT = extractOne(DDL_SPEC, "round 4's defective expression (§2A.1, retained as the named defect)", /```sql\n-- ROUND 4, WRONG\.[^\n]*\n([\s\S]*?)```/g);
+const ROUND4_DEFECT = extractOne(
+  DDL_SPEC,
+  "round 4's defective expression (§2A.1, retained as the named defect)",
+  /```sql\n-- ROUND 4, WRONG\.[^\n]*\n([\s\S]*?)```/g,
+);
 
 /** Split the repaired block into its three `UPDATE`s on the document's own `-- (n)` markers. */
 function repairedExpression(n: 1 | 2 | 3): string {
@@ -131,7 +142,9 @@ function replacementKey(name: string): { readonly name: string; readonly columns
   // prove nothing about this change.
   const last = columns[columns.length - 1];
   if (last === undefined || !/generation$/.test(last)) {
-    throw new Error(`P4-S6 level F: ${name} as the document writes it ends in "${String(last)}", not a generation column — that is the key this slice REPLACES, not its replacement`);
+    throw new Error(
+      `P4-S6 level F: ${name} as the document writes it ends in "${String(last)}", not a generation column — that is the key this slice REPLACES, not its replacement`,
+    );
   }
   return { name, columns };
 }
@@ -231,11 +244,18 @@ async function sessionAt(): Promise<Client> {
 async function expectBlockedOnLock(pid: number, what: string): Promise<void> {
   const deadline = Date.now() + 20_000;
   for (;;) {
-    const { rows } = await pool.query<{ wait_event_type: string | null; wait_event: string | null; state: string }>(`SELECT wait_event_type, wait_event, state FROM pg_stat_activity WHERE pid = $1`, [pid]);
+    const { rows } = await pool.query<{ wait_event_type: string | null; wait_event: string | null; state: string }>(
+      `SELECT wait_event_type, wait_event, state FROM pg_stat_activity WHERE pid = $1`,
+      [pid],
+    );
     const row = rows[0];
     if (row?.wait_event_type === 'Lock') return;
     if (Date.now() > deadline) {
-      throw new Error(`P4-S6 level F: ${what} — the second writer was NEVER observed waiting on a lock ` + `(state=${String(row?.state)}, wait=${String(row?.wait_event_type)}/${String(row?.wait_event)}). ` + `A writer that never queued did not contend, and this case proves nothing. This is a FAILURE, not a pass.`);
+      throw new Error(
+        `P4-S6 level F: ${what} — the second writer was NEVER observed waiting on a lock ` +
+          `(state=${String(row?.state)}, wait=${String(row?.wait_event_type)}/${String(row?.wait_event)}). ` +
+          `A writer that never queued did not contend, and this case proves nothing. This is a FAILURE, not a pass.`,
+      );
     }
     await new Promise((r) => setTimeout(r, 50));
   }
@@ -255,7 +275,9 @@ async function reset(): Promise<void> {
   await pool.query('DROP TRIGGER IF EXISTS g1 ON payment_allocations');
   await pool.query('DROP TRIGGER IF EXISTS g2 ON customer_credit_applications');
   await pool.query('DROP FUNCTION IF EXISTS p4s6_active_level_guard()');
-  await pool.query('DROP INDEX IF EXISTS payment_allocations_level_generation_uq, customer_credit_applications_invoice_level_generation_uq, customer_credit_applications_level_generation_uq');
+  await pool.query(
+    'DROP INDEX IF EXISTS payment_allocations_level_generation_uq, customer_credit_applications_invoice_level_generation_uq, customer_credit_applications_level_generation_uq',
+  );
   await pool.query('TRUNCATE allocation_reversals, payment_allocations, customer_credit_applications');
 }
 
@@ -264,11 +286,16 @@ async function seedReversedTail(): Promise<void> {
   await pool.query('INSERT INTO payment_allocations VALUES ($1,$2,$3,0,400,0,$4)', [B, u(1), I1, T(1)]);
   await pool.query('INSERT INTO payment_allocations VALUES ($1,$2,$3,400,300,0,$4)', [B, u(2), I1, T(2)]);
   await pool.query('INSERT INTO payment_allocations VALUES ($1,$2,$3,700,300,0,$4)', [B, u(3), I1, T(3)]);
-  await pool.query(`INSERT INTO allocation_reversals (business_id,id,reducer_id,reducer_kind,invoice_id,freed_ar_level_minor,created_at) VALUES ($1,$2,$3,'payment_allocation',$4,700,$5)`, [B, u(903), u(3), I1, T(4)]);
+  await pool.query(
+    `INSERT INTO allocation_reversals (business_id,id,reducer_id,reducer_kind,invoice_id,freed_ar_level_minor,created_at) VALUES ($1,$2,$3,'payment_allocation',$4,700,$5)`,
+    [B, u(903), u(3), I1, T(4)],
+  );
 }
 
 async function generations(): Promise<readonly { readonly id: string; readonly level: string; readonly gen: string }[]> {
-  const { rows } = await pool.query<{ id: string; level: string; gen: string }>(`SELECT id, ar_released_before_txn_minor::text AS level, chain_generation::text AS gen FROM payment_allocations ORDER BY ar_released_before_txn_minor, created_at`);
+  const { rows } = await pool.query<{ id: string; level: string; gen: string }>(
+    `SELECT id, ar_released_before_txn_minor::text AS level, chain_generation::text AS gen FROM payment_allocations ORDER BY ar_released_before_txn_minor, created_at`,
+  );
   return rows;
 }
 
@@ -441,7 +468,9 @@ describe('P4-S6 level F — the specification executed', () => {
       expect(r.ok === false ? r.e : null).toMatchObject({ code: '23505', constraint: KEY_PA.name });
       await b.query('ROLLBACK').catch(() => undefined);
 
-      const { rows } = await pool.query<{ n: string }>('SELECT count(*)::text AS n FROM payment_allocations WHERE ar_released_before_txn_minor = 700 AND chain_generation = 1');
+      const { rows } = await pool.query<{ n: string }>(
+        'SELECT count(*)::text AS n FROM payment_allocations WHERE ar_released_before_txn_minor = 700 AND chain_generation = 1',
+      );
       expect(rows[0]?.n).toBe('1'); // exactly ONE successor exists
     } finally {
       await a.end().catch(() => undefined);
@@ -515,7 +544,10 @@ describe('P4-S6 level F — the specification executed', () => {
    */
   async function seedCreditWithReversalAbove(): Promise<void> {
     await pool.query('INSERT INTO customer_credit_applications VALUES ($1,$2,$3,$4,0,1200,200,0,0,$5)', [B, u(20), I1, C1, T(1)]);
-    await pool.query(`INSERT INTO allocation_reversals (business_id,id,reducer_id,reducer_kind,invoice_id,credit_id,freed_ar_level_minor,freed_credit_level_minor,created_at) VALUES ($1,$2,$3,'credit_application',$4,$5,0,1200,$6)`, [B, u(920), u(20), I1, C1, T(2)]);
+    await pool.query(
+      `INSERT INTO allocation_reversals (business_id,id,reducer_id,reducer_kind,invoice_id,credit_id,freed_ar_level_minor,freed_credit_level_minor,created_at) VALUES ($1,$2,$3,'credit_application',$4,$5,0,1200,$6)`,
+      [B, u(920), u(20), I1, C1, T(2)],
+    );
   }
 
   /** What each expression ANSWERS for a row, computed by the server, not typed by hand. */
@@ -558,7 +590,9 @@ describe('P4-S6 level F — the specification executed', () => {
       expect(r.ok).toBe(false);
       expect(r.ok === false ? r.e : null).toMatchObject({ code: '23505', constraint: KEY_CCA_CREDIT.name });
       await b.query('ROLLBACK').catch(() => undefined);
-      const { rows } = await pool.query<{ n: string }>('SELECT coalesce(sum(amount_minor),0)::text AS n FROM customer_credit_applications WHERE credit_remaining_before_minor = 1000');
+      const { rows } = await pool.query<{ n: string }>(
+        'SELECT coalesce(sum(amount_minor),0)::text AS n FROM customer_credit_applications WHERE credit_remaining_before_minor = 1000',
+      );
       expect(rows[0]?.n).toBe('400'); // the credit is spent ONCE at that level
     } finally {
       await a.end().catch(() => undefined);
@@ -586,7 +620,9 @@ describe('P4-S6 level F — the specification executed', () => {
       // nothing to exclude. Both commit.
       await a.query('COMMIT');
       await b.query('COMMIT');
-      const { rows } = await pool.query<{ n: string }>('SELECT coalesce(sum(amount_minor),0)::text AS n FROM customer_credit_applications WHERE credit_remaining_before_minor = 1000');
+      const { rows } = await pool.query<{ n: string }>(
+        'SELECT coalesce(sum(amount_minor),0)::text AS n FROM customer_credit_applications WHERE credit_remaining_before_minor = 1000',
+      );
       // 800 applied at ONE remaining level of 1000, by two parties neither of
       // which lied. The credit is double-spent at that level. THE EXACT DEFECT,
       // and the reason expression (3)'s WHERE names `credit_id`.
@@ -602,7 +638,10 @@ describe('P4-S6 level F — the specification executed', () => {
   it.runIf(ENABLED)('L-F4 — one invoice level, two RELATIONS: neither writer queues and 1300 is released against 1000', async () => {
     await reset();
     await pool.query('INSERT INTO payment_allocations VALUES ($1,$2,$3,0,400,0,$4)', [B, u(30), I1, T(1)]);
-    await pool.query(`INSERT INTO allocation_reversals (business_id,id,reducer_id,reducer_kind,invoice_id,freed_ar_level_minor,created_at) VALUES ($1,$2,$3,'payment_allocation',$4,0,$5)`, [B, u(930), u(30), I1, T(2)]);
+    await pool.query(
+      `INSERT INTO allocation_reversals (business_id,id,reducer_id,reducer_kind,invoice_id,freed_ar_level_minor,created_at) VALUES ($1,$2,$3,'payment_allocation',$4,0,$5)`,
+      [B, u(930), u(30), I1, T(2)],
+    );
     await pool.query(createKey(KEY_PA, 'payment_allocations'));
     await pool.query(createKey(KEY_CCA_INVOICE, 'customer_credit_applications'));
 
@@ -615,7 +654,10 @@ describe('P4-S6 level F — the specification executed', () => {
       await b.query('INSERT INTO customer_credit_applications VALUES ($1,$2,$3,$4,0,1000,700,1,0,$5)', [B, u(32), I1, C1, T(4)]);
       await a.query('COMMIT');
       await b.query('COMMIT');
-      const { rows } = await pool.query<{ n: string }>(`SELECT ((SELECT coalesce(sum(amount_minor),0) FROM payment_allocations WHERE invoice_id = $1 AND id <> $2) + (SELECT coalesce(sum(amount_minor),0) FROM customer_credit_applications WHERE invoice_id = $1))::text AS n`, [I1, u(30)]);
+      const { rows } = await pool.query<{ n: string }>(
+        `SELECT ((SELECT coalesce(sum(amount_minor),0) FROM payment_allocations WHERE invoice_id = $1 AND id <> $2) + (SELECT coalesce(sum(amount_minor),0) FROM customer_credit_applications WHERE invoice_id = $1))::text AS n`,
+        [I1, u(30)],
+      );
       // 600 + 700 = 1300 released against an invoice of 1000. The seam is
       // OPEN, it is PRE-EXISTING (0081:330-332 records it), and it is
       // reachable only from the direct-SQL path because both routines take the
@@ -656,9 +698,11 @@ describe('P4-S6 level F — the specification executed', () => {
     `);
     // Level 0 is occupied by an ACTIVE payment allocation: the cross-relation
     // write is refused by NAME. Sequential, so the guard's read sees it.
-    await expect(pool.query('INSERT INTO customer_credit_applications VALUES ($1,$2,$3,$4,0,1000,700,0,0,$5)', [B, u(32), I1, C1, T(3)])).rejects.toMatchObject({
-      message: expect.stringContaining('invoice_settlement.active_level_occupied'),
-    });
+    await expect(pool.query('INSERT INTO customer_credit_applications VALUES ($1,$2,$3,$4,0,1000,700,0,0,$5)', [B, u(32), I1, C1, T(3)])).rejects.toMatchObject(
+      {
+        message: expect.stringContaining('invoice_settlement.active_level_occupied'),
+      },
+    );
     await pool.query('DROP TRIGGER g1 ON payment_allocations; DROP TRIGGER g2 ON customer_credit_applications; DROP FUNCTION p4s6_active_level_guard()');
   });
 });
