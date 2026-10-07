@@ -2194,6 +2194,22 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     suite: 'tests/security/p4s4-internal-definer-inventory.test.ts',
     title: 'TL-P4-RLS-INT-01 §14 — the internal SECURITY DEFINER inventory is COMPLETE and matches the catalogue',
   },
+  // The shape and reachability sentinels, recorded by the laws that MEASURE a
+  // live catalogue rather than by the record-based arms that prove those laws
+  // can say no. A row naming only the falsifiability arm would leave the
+  // measurement itself deletable with every roster count unmoved.
+  {
+    suite: 'tests/security/p4s4-internal-authority-shape.test.ts',
+    title: 'TL-P4-RLS-INT-01 §11 — the live catalogue of a database built from the migrations',
+  },
+  {
+    suite: 'tests/security/p4s4-internal-authority-shape.test.ts',
+    title: 'TL-P4-RLS-INT-01 §12 — no runtime credential can assume either authority, measured live',
+  },
+  {
+    suite: 'tests/security/p4s4-internal-authority-shape.test.ts',
+    title: 'TL-P4-RLS-INT-01 §17 — the reopening conditions, planted live and put back',
+  },
   { suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts', title: 'P4-S4 — the policy surface the behavioural laws rest on' },
   {
     suite: 'tests/security/p4s4-rls-quals-once-per-query.test.ts',
