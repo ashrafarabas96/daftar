@@ -1,0 +1,805 @@
+/**
+ * Phase 4 returns domain — credit notes, refunds and the structural half of
+ * `TL-P4-S5-R1` (P4-S5, maturity level A).
+ *
+ * What this file is, and deliberately is not:
+ *
+ * - it is the credit note's lifecycle, the refund's SOURCE ALGEBRA, the closed
+ *   refusal vocabulary, the operation-code and source-type spellings, the lock
+ *   order and the idempotency intent shape. Every export is a pure function of
+ *   its arguments, reads no clock and touches no database;
+ * - it computes **no carrying base, no realized FX and no rounded quantity.**
+ *   Those are the four accepted primitives of `@daftar/inventory`
+ *   (`convertToBase`, `apRelease`, `creditRemainingCarrying`, `creditRelease`)
+ *   and the chain verifiers beside them. `@daftar/domain-core` is below
+ *   `@daftar/inventory` in the dependency order and must not import it, so the
+ *   S5 plan layer that calls those primitives lives at the API module
+ *   (`apps/api/src/modules/returns/returns-settlement.ts`) exactly as S4's did
+ *   before its reconciliation, and NOTHING here re-implements any of them.
+ *   P4-AL-07: a second body of a financial truth "disagrees only under the
+ *   numbers nobody tested";
+ * - it stores no cap and derives none from an average. The refund cap is the
+ *   source document's own `remaining_amount_minor`, whose agreement with
+ *   `original − Σ(exact stored consumer rows)` is established by the COMMIT-time
+ *   chain verifier in the database and by the one TypeScript twin of it. There
+ *   is deliberately **no `refundedAmountMinor` anywhere in this slice** — see
+ *   `FORBIDDEN_REFUND_FIELD_NAMES`;
+ * - tax is **structurally zero**: `OD-03` is OPEN and the owner's alone. A
+ *   credit note carries no rate, no jurisdiction and no tax path. Where it
+ *   mirrors `invoices.tax_minor` at all it mirrors it as a structural zero,
+ *   through the existing `isStructuralZeroTax` of `./invoice`.
+ *
+ * ## The one financial law this file makes structural
+ *
+ * `TL-P4-S5-R1`: **a refund is not an invoice-outstanding reducer.** The
+ * lifecycle is
+ *
+ * ```
+ *   invoice  →  the credit-note / return effect reduces AR  ONCE
+ *            →  the refund consumes the credit note's or the customer
+ *               credit's remaining
+ *            →  AR UNCHANGED
+ *            →  cash / bank moves
+ * ```
+ *
+ * The slice does not obey that by remembering to. It obeys it because a refund
+ * has nowhere to put an AR reduction: it names no invoice
+ * (`REFUND_NAMES_NO_INVOICE`), its entry's account set excludes
+ * `accounts_receivable` by a closed list (`REFUND_ENTRY_ACCOUNTS`), and the
+ * field names that would carry either are refused by name
+ * (`FORBIDDEN_REFUND_FIELD_NAMES`). Each of those three is proved able to FAIL
+ * by its own red proof; a guard never shown able to go red is not a guard.
+ */
+import { isStructuralZeroTax } from './invoice';
+
+// ── 1. The credit note's lifecycle (the P4-AL-24 shape) ──────────────────
+
+/**
+ * `credit_notes.status` is LIFECYCLE ONLY, the `invoices.status` precedent
+ * (`./invoice`'s `INVOICE_LIFECYCLE_STATES`) and the `purchases.status` one
+ * before it. There is no `refunded`, no `applied` and no `consumed` status: how
+ * much of a credit note is left is the remaining pair on the row, and a status
+ * that could disagree with it is the second truth P4-AL-14 forbids.
+ */
+export const CREDIT_NOTE_LIFECYCLE_STATES = ['draft', 'issued', 'void'] as const;
+export type CreditNoteLifecycleState = (typeof CREDIT_NOTE_LIFECYCLE_STATES)[number];
+
+/**
+ * The enumerated transitions. `void` is terminal and there is no path back to
+ * `draft`: P4-AL-46 corrects a commercial mistake with a new document, never by
+ * editing the old one.
+ *
+ * A credit note that has been consumed at all cannot be voided — but that is
+ * NOT expressed here, because it is a question about stored consumer rows and
+ * this table is about the lifecycle alone. It is
+ * `creditNoteVoidRefusal` below, which takes the consumption as an argument.
+ */
+export const CREDIT_NOTE_LIFECYCLE_TRANSITIONS: readonly {
+  readonly from: CreditNoteLifecycleState;
+  readonly to: CreditNoteLifecycleState;
+}[] = Object.freeze([
+  Object.freeze({ from: 'draft' as const, to: 'issued' as const }),
+  Object.freeze({ from: 'draft' as const, to: 'void' as const }),
+  Object.freeze({ from: 'issued' as const, to: 'void' as const }),
+]);
+
+/** Whether the enumerated table permits this lifecycle transition. */
+export function isCreditNoteLifecycleTransitionAllowed(from: CreditNoteLifecycleState, to: CreditNoteLifecycleState): boolean {
+  return CREDIT_NOTE_LIFECYCLE_TRANSITIONS.some((t) => t.from === from && t.to === to);
+}
+
+/**
+ * Why a void is refused, or `null` when the enumerated table and the stored
+ * consumption both permit it.
+ *
+ * `consumedMinor` is `original − remaining` read off the row — not a stored
+ * total of anything. A note any part of which has been applied to an invoice or
+ * refunded is corrected by a NEW document; voiding it would silently unwind an
+ * AR reduction or a disbursement that already happened.
+ */
+export function creditNoteVoidRefusal(
+  from: CreditNoteLifecycleState,
+  consumedMinor: bigint,
+): 'credit_note.lifecycle_invalid' | 'credit_note.already_consumed' | null {
+  if (!isCreditNoteLifecycleTransitionAllowed(from, 'void')) return 'credit_note.lifecycle_invalid';
+  if (consumedMinor > 0n) return 'credit_note.already_consumed';
+  return null;
+}
+
+// ── 2. The refund's source algebra — `credit_note` XOR `customer_credit` ──
+
+/**
+ * The two — and only two — kinds of source a refund may draw on.
+ *
+ * `TL-P4-S5-R1`: **exactly one of `credit_note` XOR `customer_credit`.** There
+ * is no `payment` source, because refunding a payment is the AR reduction the
+ * ruling forbids wearing a different name: a payment already released the
+ * invoice's carrying base, so consuming it again would release it twice.
+ *
+ * Both kinds are *consumable sources* in the P4-AL-22 sense: each carries a
+ * remaining PAIR (amount and carrying base) and each is decremented only by a
+ * backed consumption. That is why one refund shape serves both and there is no
+ * second refund model.
+ */
+export const REFUND_SOURCE_KINDS = ['credit_note', 'customer_credit'] as const;
+export type RefundSourceKind = (typeof REFUND_SOURCE_KINDS)[number];
+
+/**
+ * A refund's stated source, as it arrives from a caller or is read off a row:
+ * two optional ids, never a kind discriminator.
+ *
+ * **There is no `sourceType` / `sourceKind` field, and its absence is the
+ * design.** A stored discriminator beside two nullable ids is a second truth
+ * about which id is set, and in the database it is exactly the shape GOLD-74
+ * refuses on the financial core (`scripts/phase4-s1-gate.ts:1565-1577`: a
+ * `*_id` beside a `*_type`/`*_kind` with no foreign key). The kind is DERIVED
+ * from which id is present, by `resolveRefundSource`, in one place.
+ */
+export interface RefundSourceRef {
+  readonly creditNoteId?: string | null;
+  readonly customerCreditId?: string | null;
+}
+
+/** Why a stated source is not one lawful source. */
+export type RefundSourceProblem = 'source_absent' | 'source_ambiguous';
+
+/**
+ * The resolved kind and id, or the problem.
+ *
+ * Both-set is `source_ambiguous` and neither-set is `source_absent`, and the
+ * two are deliberately DIFFERENT problems: "you named two sources" and "you
+ * named none" are different merchant mistakes and a single code would make the
+ * client guess which. This is the TypeScript twin of the row's
+ * `CHECK (num_nonnulls(credit_note_id, customer_credit_id) = 1)`.
+ */
+export function resolveRefundSource(
+  ref: RefundSourceRef,
+): { readonly ok: true; readonly kind: RefundSourceKind; readonly sourceId: string } | { readonly ok: false; readonly problem: RefundSourceProblem } {
+  const note = ref.creditNoteId ?? null;
+  const credit = ref.customerCreditId ?? null;
+  if (note !== null && credit !== null) return Object.freeze({ ok: false as const, problem: 'source_ambiguous' as const });
+  if (note !== null) return Object.freeze({ ok: true as const, kind: 'credit_note' as const, sourceId: note });
+  if (credit !== null) return Object.freeze({ ok: true as const, kind: 'customer_credit' as const, sourceId: credit });
+  return Object.freeze({ ok: false as const, problem: 'source_absent' as const });
+}
+
+/**
+ * `TL-P4-S5-R1`, as a predicate over a shape rather than a sentence in a
+ * document: a refund NAMES NO INVOICE.
+ *
+ * Given the field names a refund request or row carries, this is true only when
+ * none of them could identify an invoice. An `invoiceId` on a refund is the
+ * second AR reduction the ruling forbids, expressed as a column — and so is an
+ * `invoiceIds`, an `invoiceNumber` or an `againstInvoice`.
+ */
+const INVOICE_NAMING_FIELD = /(^|_)invoice(s)?($|_)|^invoice|invoice(Id|Ids|No|Number)$/i;
+
+/** The subset of `fields` that would let a refund name an invoice. Empty is a pass. */
+export function refundInvoiceNamingFields(fields: readonly string[]): readonly string[] {
+  return Object.freeze(fields.filter((f) => INVOICE_NAMING_FIELD.test(f)));
+}
+
+/** True when nothing in `fields` could name an invoice. */
+export function REFUND_NAMES_NO_INVOICE(fields: readonly string[]): boolean {
+  return refundInvoiceNamingFields(fields).length === 0;
+}
+
+/**
+ * Field names a refund request, DTO or row may NEVER carry, each with the law
+ * that refuses it. A closed table, so a reader can check it against the laws
+ * instead of trusting a regular expression's mood.
+ *
+ * - a payment source — `TL-P4-S5-R1`, "it carries no `payment_id`", and the
+ *   execution plan's "no column that could name a payment";
+ * - a stored consumption total — the cap is derived from the exact stored rows,
+ *   and `refunded_amount_minor` is also an authoritative-balance COLUMN to G-3
+ *   (`AP_BALANCE_COLUMN`, `scripts/guards/no-authoritative-balance.ts:314`), so
+ *   it is refused twice over by two different laws;
+ * - a stored discriminator beside two nullable foreign keys — GOLD-74, §2
+ *   above.
+ */
+export const FORBIDDEN_REFUND_FIELD_NAMES: readonly { readonly pattern: RegExp; readonly reason: string }[] = Object.freeze([
+  Object.freeze({ pattern: /(^|_)payment(s)?($|_)|^payment(Id|Ids)$/i, reason: 'TL-P4-S5-R1: a refund has no payment source' }),
+  Object.freeze({ pattern: /(^|_)refunded($|_)|refundedAmount/i, reason: 'G-3 / law 3: the cap is derived, never stored' }),
+  Object.freeze({
+    pattern: /(^|_)(source|refund)_(type|kind)($|_)|^(source|refund)(Type|Kind)$/i,
+    reason: 'GOLD-74: no discriminator beside two nullable FKs',
+  }),
+  Object.freeze({ pattern: /(^|_)(outstanding|collected|allocated|settled)($|_)/i, reason: 'G-3: no stored derived settlement figure' }),
+]);
+
+/** Every `(field, reason)` pair a shape's field list violates. Empty is a pass. */
+export function forbiddenRefundFields(fields: readonly string[]): readonly { readonly field: string; readonly reason: string }[] {
+  const out: { readonly field: string; readonly reason: string }[] = [];
+  for (const field of fields) {
+    for (const rule of FORBIDDEN_REFUND_FIELD_NAMES) {
+      if (rule.pattern.test(field)) out.push(Object.freeze({ field, reason: rule.reason }));
+    }
+  }
+  return Object.freeze(out);
+}
+
+// ── 3. The refund entry's account set (law 1, made structural) ───────────
+
+/**
+ * The system account keys a refund entry may name, and NOTHING else.
+ *
+ * Every key is one of the twenty-one already registered by
+ * `0040_accounting_chart.sql:45-66`; S5 registers no account and invents no
+ * code. `customer_refund_liability` is 2200, `customer_credit_liability` is
+ * 2210 (and `0081:1594` already DEBITS it when a credit is consumed, so a
+ * refund drawn on a customer credit is the same debit through a different
+ * consumer), `fx_gain` is 4900, `fx_loss` is 6900.
+ *
+ * **`accounts_receivable` (1100) is absent, and that absence IS `TL-P4-S5-R1`.**
+ * A refund entry has no place to put an AR movement, so it cannot make one. The
+ * rounding account 6100 and the tax account 2100 are absent for the reasons
+ * P4-AL-19 and OD-03 give: no rounding account is invented to make arithmetic
+ * balance, and there is no tax line in this slice.
+ */
+export const REFUND_ENTRY_ACCOUNTS = ['customer_refund_liability', 'customer_credit_liability', 'fx_gain', 'fx_loss', 'posting_account'] as const;
+export type RefundEntryAccount = (typeof REFUND_ENTRY_ACCOUNTS)[number];
+
+/** True only for one of the five. A test may plant `accounts_receivable` and watch this refuse it. */
+export function isRefundEntryAccount(key: string): key is RefundEntryAccount {
+  return (REFUND_ENTRY_ACCOUNTS as readonly string[]).includes(key);
+}
+
+/**
+ * The liability a refund discharges, per source kind. One function, so the two
+ * kinds cannot drift apart, and no branch anywhere else in the slice decides
+ * it.
+ */
+export function refundLiabilityAccount(kind: RefundSourceKind): Extract<RefundEntryAccount, 'customer_refund_liability' | 'customer_credit_liability'> {
+  return kind === 'credit_note' ? 'customer_refund_liability' : 'customer_credit_liability';
+}
+
+/**
+ * The system account keys a CREDIT NOTE entry may name.
+ *
+ * `sales_returns` is 4100 — already registered, and
+ * `packages/accounting/src/sale-posting.ts:31` records in its own words that
+ * "4100 is the RETURN account and belongs to P4-S5". So the revenue reversal is
+ * a debit of 4100 and never a negative credit of 4000: a contra-revenue account
+ * exists precisely so that returns are visible rather than netted away.
+ *
+ * `accounts_receivable` IS here, and must be: the credit-note effect is the one
+ * place AR falls, and it falls exactly once. `inventory` and `cogs` are the COGS
+ * reversal's pair.
+ */
+export const CREDIT_NOTE_ENTRY_ACCOUNTS = [
+  'sales_returns',
+  'accounts_receivable',
+  'customer_refund_liability',
+  'inventory',
+  'cogs',
+  'fx_gain',
+  'fx_loss',
+] as const;
+export type CreditNoteEntryAccount = (typeof CREDIT_NOTE_ENTRY_ACCOUNTS)[number];
+
+/** True only for one of the seven. */
+export function isCreditNoteEntryAccount(key: string): key is CreditNoteEntryAccount {
+  return (CREDIT_NOTE_ENTRY_ACCOUNTS as readonly string[]).includes(key);
+}
+
+// ── 4. The operation codes and the accounting source types ───────────────
+
+/**
+ * The `invctl/1` operation codes S5 needs.
+ *
+ * The spelling is forced, not chosen: `inventory_operation_kinds.op_code` is
+ * `CHECK (op_code ~ '^[a-z]+(\.[a-z_]+)+$')` frozen inside
+ * `inventory_payload_digest` (`0054:229`, probed at `0074:62-70`), so the FIRST
+ * SEGMENT may hold no underscore and `customer_refund.create` is
+ * unrepresentable. Hence `customer.*`, the same namespace as S4's
+ * `customer.collect_payment` and `customer.apply_credit`.
+ *
+ * **These are a REQUEST, not a registration.** The union they belong to lives in
+ * `packages/inventory/src/payload.ts`, which is the inventory primitives and not
+ * S5's to edit; `PATCH-REQ-S5-001` asks for them there. Until that lands, this
+ * list is what the plan layer and the tests name, and nothing reads it as a
+ * registry.
+ */
+export const S5_OPERATION_CODES = ['customer.issue_credit_note', 'customer.void_credit_note', 'customer.refund'] as const;
+export type S5OperationCode = (typeof S5_OPERATION_CODES)[number];
+
+/** The frozen `0054:229` shape, so a proposed op code can be judged before anybody writes a migration. */
+export const OPERATION_CODE_SHAPE = /^[a-z]+(\.[a-z_]+)+$/;
+
+/** True when `code` is representable at all under the frozen digest's CHECK. */
+export function isRepresentableOperationCode(code: string): boolean {
+  return OPERATION_CODE_SHAPE.test(code);
+}
+
+/**
+ * The accounting source types S5 needs.
+ *
+ * The naming convention is the LIVE REGISTRY's, not `P4-AL-20`'s enumeration:
+ * the live rows are `customer_payment_allocation`, `customer_credit_application`
+ * and `customer_credit` (`0077:1702-1703`, `0081:2468-2472`), and the S4 gate
+ * pins those spellings as RULED (`scripts/phase4-s4-gate.ts:577`). The lock's
+ * bare `credit_note` / `refund` is stale on exactly the point the registry
+ * decides, and the preparation page records it (§3.3). So S5's types are
+ * `customer_`-prefixed, singular, in the row's own domain.
+ *
+ * ## Measured: no row exists for any of these three, and the registry is closed
+ *
+ * `accounting_source_types` is created closed by `0042:65-68` (three natives) and
+ * widened only by an explicit `INSERT`. Every such `INSERT` in the tree was read
+ * at `6587460`; the live registry holds SEVENTEEN types and **none of them is a
+ * credit note, a return of a customer's goods, or a refund to a customer**:
+ *
+ * ```
+ * 0042  opening_balance, manual_adjustment, reversal                      (1-3)
+ * 0061  inventory_adjustment, inventory_opening
+ * 0063  purchase, negative_inventory_cost_adjustment
+ * 0065  supplier_return
+ * 0067  supplier_payment, supplier_credit_allocation, supplier_refund
+ * 0072  purchase_residue_write_off
+ * 0077  sale (13), invoice (14)
+ * 0081  customer_payment_allocation (15), customer_credit_application (16),
+ *       customer_credit (17)
+ * ```
+ *
+ * So binding to an existing identity is NOT available for the customer return or
+ * the customer refund: there is nothing to bind to. Minting is forced, and S5's
+ * three take `sort_order` 18, 19 and 20.
+ *
+ * ## The naming follows `0065`'s precedent: the EVENT, not the row
+ *
+ * `supplier_credit_notes.accounting_source_type` is
+ * `GENERATED ALWAYS AS ('supplier_return') STORED` (`0065:199`) — the supplier
+ * credit note binds to the `supplier_return` type and **no `supplier_credit_note`
+ * type was ever minted**, because the credit note is the accounting FACE of the
+ * return rather than a second event. `purchase_reversals` does the same thing one
+ * step further out, binding to the native `reversal` (`0065:310`).
+ *
+ * S5 therefore names the first type **`customer_return`** and not
+ * `customer_credit_note`: the event is the customer returning goods, and
+ * `credit_notes` is its document. That is the exact mirror of the supplier side,
+ * and it means the registry gains one identity for the whole return rather than
+ * one per relation.
+ *
+ * ## Why the application and the refund are still separate types
+ *
+ * `customer_credit_note_application` is the type of the entry that reduces AR and
+ * `customer_refund` the type of the entry that moves cash. They are three types
+ * and not one because they are three entries at three grains with three different
+ * expected journal shapes, and **one type with a branch inside its completeness
+ * validator is how a shape nobody checks arrives** — `TL-P4-S1-R1`'s whole
+ * substance. The supplier side reached the same answer: `supplier_return`,
+ * `supplier_credit_allocation` and `supplier_refund` are three types, not one.
+ *
+ * ## S5 mints NO reversal type and ships NO reversal relation
+ *
+ * `payment_reversals` and `allocation_reversals` belong to P4-S6, with
+ * `void_invoice`. Measured: there is no `allocation_reversal` row in the live
+ * registry at all, and nothing in this slice names, specifies or needs one. A
+ * refund is not a reversal — it lawfully discharges a liability that was
+ * correctly recorded — so the refund path has no dependency on S6 whatever.
+ */
+export const S5_ACCOUNTING_SOURCE_TYPES = ['customer_return', 'customer_credit_note_application', 'customer_refund'] as const;
+export type S5AccountingSourceType = (typeof S5_ACCOUNTING_SOURCE_TYPES)[number];
+
+/**
+ * The `accounting_reversals_20_domain_source_guard()` obligation, as data.
+ *
+ * `0081:1405-1412` lists thirteen source types and `P4-AL-47` / seam `S-P4-02`
+ * require a registration and that list to move TOGETHER. The moment these three
+ * types are registered, that routine must be replaced to name them or
+ * `daftar_app` can reverse an S5 entry through the generic path. It is a
+ * `CREATE OR REPLACE` in a NEW migration — never an edit of the frozen file —
+ * and `PATCH-REQ-S5-002` is the request for it.
+ */
+export const S5_SOURCE_TYPES_OWED_TO_REVERSAL_GUARD: readonly S5AccountingSourceType[] = Object.freeze([...S5_ACCOUNTING_SOURCE_TYPES]);
+
+// ── 5. The closed refusal vocabulary ────────────────────────────────────
+
+/**
+ * Every refusal the S5 surface can raise, as a closed literal union.
+ *
+ * Written out per domain rather than templated, for the reason
+ * `packages/inventory/src/customer-settlement.ts:116-145` records at length: a
+ * templated union is symmetric by construction and hides the one defect the
+ * list exists to prevent — a live raise site whose code no status table
+ * classifies, which turns a merchant's input error into a 500 blaming our
+ * arithmetic. The API's `returns-errors.ts` holds this union to its status
+ * table at COMPILE TIME, so a code added here without a status is a type error
+ * rather than a review find.
+ *
+ * The asymmetry is deliberate. Only a refund has a `cap_exceeded` and a
+ * `source_*`; only a credit note has an `already_consumed`, a
+ * `cogs_not_exact` and a `tax_policy_absent`.
+ */
+export type ReturnsRefusalCode =
+  // ── The credit note ──────────────────────────────────────────────
+  | 'credit_note.idempotency_conflict'
+  | 'credit_note.lifecycle_invalid'
+  | 'credit_note.already_consumed'
+  | 'credit_note.items_invalid'
+  | 'credit_note.quantity_exceeds_sold'
+  | 'credit_note.amount_invalid'
+  | 'credit_note.amount_below_base_unit'
+  | 'credit_note.residue_below_base_unit'
+  | 'credit_note.amount_mismatch'
+  | 'credit_note.customer_mismatch'
+  | 'credit_note.invoice_state_invalid'
+  | 'credit_note.invoice_walkin'
+  | 'credit_note.settlement_changed'
+  | 'credit_note.date_before_invoice'
+  | 'credit_note.date_in_future'
+  | 'credit_note.cogs_not_exact'
+  | 'credit_note.tax_policy_absent'
+  | 'credit_note.not_found'
+  // ── The refund ───────────────────────────────────────────────────
+  | 'customer_refund.idempotency_conflict'
+  | 'customer_refund.source_absent'
+  | 'customer_refund.source_ambiguous'
+  | 'customer_refund.source_exhausted'
+  | 'customer_refund.amount_invalid'
+  | 'customer_refund.amount_exceeds_source'
+  | 'customer_refund.amount_below_base_unit'
+  | 'customer_refund.residue_below_base_unit'
+  | 'customer_refund.amount_mismatch'
+  | 'customer_refund.customer_mismatch'
+  | 'customer_refund.source_changed'
+  | 'customer_refund.fx_rate_changed'
+  | 'customer_refund.date_before_source'
+  | 'customer_refund.date_in_future'
+  | 'customer_refund.reference_required'
+  | 'customer_refund.not_found'
+  // ── Ours, never theirs ───────────────────────────────────────────
+  | 'customer_refund.arithmetic_invalid'
+  | 'customer_refund.registry_incomplete'
+  | 'credit_note.consumption_inconsistent';
+
+/** The same union as a runtime list, for a suite that drives every code rather than trusting the type. */
+export const RETURNS_REFUSAL_CODES: readonly ReturnsRefusalCode[] = Object.freeze([
+  'credit_note.idempotency_conflict',
+  'credit_note.lifecycle_invalid',
+  'credit_note.already_consumed',
+  'credit_note.items_invalid',
+  'credit_note.quantity_exceeds_sold',
+  'credit_note.amount_invalid',
+  'credit_note.amount_below_base_unit',
+  'credit_note.residue_below_base_unit',
+  'credit_note.amount_mismatch',
+  'credit_note.customer_mismatch',
+  'credit_note.invoice_state_invalid',
+  'credit_note.invoice_walkin',
+  'credit_note.settlement_changed',
+  'credit_note.date_before_invoice',
+  'credit_note.date_in_future',
+  'credit_note.cogs_not_exact',
+  'credit_note.tax_policy_absent',
+  'credit_note.not_found',
+  'customer_refund.idempotency_conflict',
+  'customer_refund.source_absent',
+  'customer_refund.source_ambiguous',
+  'customer_refund.source_exhausted',
+  'customer_refund.amount_invalid',
+  'customer_refund.amount_exceeds_source',
+  'customer_refund.amount_below_base_unit',
+  'customer_refund.residue_below_base_unit',
+  'customer_refund.amount_mismatch',
+  'customer_refund.customer_mismatch',
+  'customer_refund.source_changed',
+  'customer_refund.fx_rate_changed',
+  'customer_refund.date_before_source',
+  'customer_refund.date_in_future',
+  'customer_refund.reference_required',
+  'customer_refund.not_found',
+  'customer_refund.arithmetic_invalid',
+  'customer_refund.registry_incomplete',
+  'credit_note.consumption_inconsistent',
+]);
+
+/** True for an exact member of the closed vocabulary. */
+export function isReturnsRefusalCode(code: string): code is ReturnsRefusalCode {
+  return (RETURNS_REFUSAL_CODES as readonly string[]).includes(code);
+}
+
+/** The localization key a refusal renders through: `error.<code>`, the accepted S4 shape. */
+export function returnsRefusalMessageKey(code: ReturnsRefusalCode): string {
+  return `error.${code}`;
+}
+
+/** The source problem of §2, mapped onto the refusal vocabulary. One mapping, in one place. */
+export function refundSourceRefusal(problem: RefundSourceProblem): Extract<ReturnsRefusalCode, `customer_refund.source_${'absent' | 'ambiguous'}`> {
+  return problem === 'source_absent' ? 'customer_refund.source_absent' : 'customer_refund.source_ambiguous';
+}
+
+// ── 6. The lock order and the transaction boundary ──────────────────────
+
+/**
+ * The order in which an S5 command takes its row locks, named once.
+ *
+ * A deadlock between two S5 commands is not prevented by care; it is prevented
+ * by every command taking the same locks in the same order. The order is the
+ * data-flow order and it is also the order S4's commands already use for the
+ * rows they share, so an S5 command and an S4 command interleaving cannot
+ * invert a pair:
+ *
+ * 1. `customers` — the identity pin, taken first because every later lock is
+ *    scoped by it;
+ * 2. `invoices` — only the credit-note command takes this, and only for the
+ *    invoice its application names. A refund NEVER takes it (`TL-P4-S5-R1`);
+ * 3. `credit_notes` / `customer_credits` — the SOURCE, `FOR UPDATE`. **This is
+ *    where the cap is checked**, inside the source, after the lock and never
+ *    before it;
+ * 4. `payment_methods` — the posting account, last, because it is a
+ *    configuration read and nothing downstream of it takes a lock.
+ *
+ * `invoice_sequences` is taken by the document-numbering primitive inside step
+ * 1's scope and is listed as part of it rather than as a fifth step, because a
+ * number is allocated before any financial row exists.
+ */
+export const RETURNS_LOCK_ORDER = ['customers', 'invoices', 'credit_notes|customer_credits', 'payment_methods'] as const;
+
+/** The position of a relation in the lock order, or `-1`. A test can assert monotonicity over a trace. */
+export function returnsLockRank(relation: string): number {
+  return RETURNS_LOCK_ORDER.findIndex((step) => step.split('|').includes(relation));
+}
+
+/**
+ * Whether a trace of lock acquisitions respects the order. Equal ranks are
+ * allowed (two invoices of one credit note), a decrease is not.
+ *
+ * A relation outside the order is a DEFECT, not a pass: an S5 command that
+ * locks something the order does not name is a command whose deadlock
+ * behaviour nobody has reasoned about.
+ */
+export function isLawfulLockTrace(trace: readonly string[]): boolean {
+  let last = -1;
+  for (const relation of trace) {
+    const rank = returnsLockRank(relation);
+    if (rank < 0 || rank < last) return false;
+    last = rank;
+  }
+  return true;
+}
+
+/**
+ * The transaction boundary of each S5 command: ONE transaction, and what must
+ * be inside it.
+ *
+ * A refund that disbursed cash in one transaction and decremented its source in
+ * another is a refund that can pay twice. A credit note whose revenue reversal
+ * committed without its COGS reversal is a credit note that moved revenue and
+ * not cost.
+ */
+export const RETURNS_TRANSACTION_BOUNDARY: readonly {
+  readonly command: S5OperationCode;
+  readonly inOneTransaction: readonly string[];
+}[] = Object.freeze([
+  Object.freeze({
+    command: 'customer.issue_credit_note' as const,
+    inOneTransaction: Object.freeze([
+      'allocate the credit-note number under the sequence row lock',
+      'insert credit_notes and credit_note_items',
+      'insert credit_note_applications for the AR reduction (at most one per invoice, at the invoice level)',
+      'request the return stock movements from the one stock-movement authority',
+      'post the revenue-reversal entry (4100) and the COGS-reversal entry (1200/5000)',
+      'verify the invoice settlement chain and the credit-note consumption chain at COMMIT',
+    ]),
+  }),
+  Object.freeze({
+    command: 'customer.void_credit_note' as const,
+    inOneTransaction: Object.freeze(['re-read the note FOR UPDATE', 'refuse when any part is consumed', 'set the lifecycle to void']),
+  }),
+  Object.freeze({
+    command: 'customer.refund' as const,
+    inOneTransaction: Object.freeze([
+      'lock the single source FOR UPDATE',
+      'check the cap against the locked remaining',
+      'insert refunds at the locked level',
+      'decrement the source remaining pair through its ONE writer',
+      'post the refund entry (liability / posting account, no AR line)',
+      'verify the source consumption chain at COMMIT',
+    ]),
+  }),
+]);
+
+// ── 7. Idempotency: the same identity, the same intent ──────────────────
+
+/**
+ * The fields that make up a refund's intent hash — a CLOSED list, in a fixed
+ * order, because the hash is a claim about WHICH economic command a key stands
+ * for.
+ *
+ * Law 8: a key must preserve the same identity and the same intent hash, replay
+ * exactly, and CONFLICT on a changed intent. "An idempotency key is not
+ * permission": a replay must prove which command it is replaying before it
+ * answers success, so every field that could change where the money goes, how
+ * much of it goes, or which source pays is in this list.
+ *
+ * The level (`remainingBeforeMinor`) is deliberately NOT in it. The level is
+ * where the row landed, not what the caller asked for; including it would make
+ * an honest retry after a concurrent consumption look like a different command
+ * and turn a `source_changed` into an `idempotency_conflict`.
+ */
+export const REFUND_INTENT_FIELDS = [
+  'refundId',
+  'customerId',
+  'creditNoteId',
+  'customerCreditId',
+  'paymentMethodId',
+  'refundDate',
+  'sourceCurrency',
+  'sourceAmountConsumedMinor',
+  'disbursementCurrency',
+  'disbursementAmountMinor',
+  'reference',
+] as const;
+export type RefundIntentField = (typeof REFUND_INTENT_FIELDS)[number];
+
+/** A refund's intent, as the canonical pre-image is built from it. Every value is text; a number never enters a hash pre-image. */
+export type RefundIntent = { readonly [K in RefundIntentField]: string | null };
+
+/**
+ * The canonical pre-image of a refund's intent: the closed field list, in
+ * order, newline-separated, `\u0000` for an absent value.
+ *
+ * This file does NOT hash it. `accounting_fingerprint` (`0045:120-133`) and
+ * `packages/accounting/src/fingerprint.ts` are the one hashing authority in
+ * this estate and a second `sha256` here would be a second fingerprint free to
+ * drift. What this function fixes is the ORDER and the ABSENCE ENCODING, which
+ * is the half that silently differs between two implementations: `null` and
+ * `""` must not collide, or a refund with no reference and a refund whose
+ * reference is the empty string share a hash.
+ */
+export function refundIntentPreimage(intent: RefundIntent): string {
+  return REFUND_INTENT_FIELDS.map((f) => intent[f] ?? '\u0000').join('\n');
+}
+
+/** Whether two intents are the SAME economic command. Pre-image equality, never a field-by-field eyeball. */
+export function isSameRefundIntent(a: RefundIntent, b: RefundIntent): boolean {
+  return refundIntentPreimage(a) === refundIntentPreimage(b);
+}
+
+/**
+ * What a replay of `refundId` must answer.
+ *
+ * `replay` when the stored intent is the same command — the stored result,
+ * written nothing, 200 and `replayed: true`. `conflict` when it is a different
+ * one — 409 `customer_refund.idempotency_conflict`, and never an acceptance. No
+ * third answer exists: a key whose intent cannot be compared is a conflict, not
+ * a fresh command.
+ */
+export function refundReplayVerdict(stored: RefundIntent | null, incoming: RefundIntent): 'fresh' | 'replay' | 'conflict' {
+  if (stored === null) return 'fresh';
+  return isSameRefundIntent(stored, incoming) ? 'replay' : 'conflict';
+}
+
+// ── 8. The cap, derived — and never stored ──────────────────────────────
+
+/**
+ * A consumable source, as the cap question reads it. Both kinds have exactly
+ * this shape, which is why one refund model serves both.
+ *
+ * `remainingMinor` is the source document's own stored remaining, read under
+ * `FOR UPDATE`. It is NOT a second truth: it is the row's half of the P4-AL-14
+ * remaining PAIR, the one thing `remaining_*` is explicitly permitted for
+ * (`scripts/guards/no-authoritative-balance.ts`'s own note: "a credit note's
+ * remaining pair is part of the source document, and it is what P4-AL-14 is
+ * built on"), and its agreement with `original − Σ(exact stored consumer rows)`
+ * is established at COMMIT by the chain verifier — not here, and not twice.
+ */
+export interface ConsumableSourceCap {
+  readonly kind: RefundSourceKind;
+  readonly originalMinor: bigint;
+  /** The stored remaining, read under `FOR UPDATE` in the SAME transaction that will consume it. */
+  readonly remainingMinor: bigint;
+}
+
+/**
+ * The cap on a refund drawn on this source: its locked remaining, and nothing
+ * else.
+ *
+ * There is no `refundedAmountMinor`, no `availableMinor` and no running total
+ * anywhere in this slice. Those names are refused by `FORBIDDEN_REFUND_FIELD_NAMES`
+ * and by G-3's `AP_BALANCE_COLUMN`, and the reason is the one P4-AL-22 gives:
+ * "a direct SQL attacker simply declares a different level", so a cap that is a
+ * stored number is a cap an attacker can rewrite, while a cap that is the
+ * source's own remaining is a cap the source's own guard and COMMIT-time
+ * verifier both defend.
+ */
+export function refundCapMinor(source: ConsumableSourceCap): bigint {
+  return source.remainingMinor;
+}
+
+/**
+ * The cap verdict for a requested consumption. Pure, and it takes the LOCKED
+ * remaining as an argument so a caller cannot ask this question without having
+ * taken the lock.
+ *
+ * `source_exhausted` and `amount_exceeds_source` are different codes because
+ * they are different merchant situations: nothing is left at all, versus less is
+ * left than you asked for. `amount_invalid` covers zero and negative — a refund
+ * of nothing is not a refund.
+ */
+export function refundCapRefusal(
+  source: ConsumableSourceCap,
+  requestedMinor: bigint,
+): Extract<ReturnsRefusalCode, 'customer_refund.amount_invalid' | 'customer_refund.source_exhausted' | 'customer_refund.amount_exceeds_source'> | null {
+  if (requestedMinor <= 0n) return 'customer_refund.amount_invalid';
+  if (source.remainingMinor <= 0n) return 'customer_refund.source_exhausted';
+  if (requestedMinor > refundCapMinor(source)) return 'customer_refund.amount_exceeds_source';
+  return null;
+}
+
+// ── 9. The structural zero, mirrored ────────────────────────────────────
+
+/**
+ * A credit note's tax element, judged.
+ *
+ * `OD-03` is OPEN and the owner's alone: S5 researches no rate, infers no
+ * jurisdiction and closes no decision. What it owes is the STRUCTURAL ZERO,
+ * because `od03Problems` (`tests/security/phase3-s8-grant-matrix.test.ts:174`)
+ * reads every column matching `(^|_)tax(_|$)` on every relation in `public` and
+ * there is no allowlist — "nothing is permitted by being named, only by being
+ * structurally zero".
+ *
+ * So there are exactly two lawful designs and this function is the first of
+ * them: if a credit note mirrors `invoices.tax_minor` at all it mirrors it as a
+ * structural zero, through the SAME predicate the invoice uses. There is no
+ * second spelling of zero.
+ */
+export function creditNoteTaxRefusal(taxMinor: string): Extract<ReturnsRefusalCode, 'credit_note.tax_policy_absent'> | null {
+  return isStructuralZeroTax(taxMinor) ? null : 'credit_note.tax_policy_absent';
+}
+
+// ── 10. The COGS reversal's input must be EXACT ─────────────────────────
+
+/**
+ * The COGS a credit note reverses, as the only lawful input: the SUM OF THE
+ * EXACT STORED INTEGERS the stock-movement authority wrote.
+ *
+ * `packages/accounting/src/sale-posting.ts:66-78` states the law this mirrors:
+ * the one official identity is
+ * `GL Inventory (1200) = Σ stock_movements.value_delta_base_minor`, never
+ * `Σ(qty × avg)`, because an average cost is itself a rounded quotient
+ * (`[[daftar-a-rounded-quotient-is-never-an-input]]`) and because recomputing
+ * cannot reproduce the branch where a movement empties a stock key and takes its
+ * stored valuation EXACTLY with no rounding at all.
+ *
+ * There is therefore deliberately NO `quantity` and NO `unitCost` argument
+ * here. The shape makes the wrong computation unexpressible rather than
+ * forbidden: a caller that has only a quantity and an average has nothing to
+ * pass.
+ */
+export interface ReturnedMovementValue {
+  readonly movementId: string;
+  /** The movement's own stored `value_delta_base_minor`, exactly as the stock writer wrote it. */
+  readonly valueDeltaBaseMinor: bigint;
+}
+
+/**
+ * The COGS reversal amount, or the refusal.
+ *
+ * An inbound return movement has a POSITIVE `value_delta_base_minor` (stock came
+ * back in), so the reversal debits `inventory` and credits `cogs` by their sum.
+ * A zero or negative sum, or an empty list, is `cogs_not_exact`: it means the
+ * caller did not supply the movements, and a COGS reversal computed from
+ * nothing is the second truth this whole section exists to refuse.
+ *
+ * A repeated `movementId` is also `cogs_not_exact`. Summing one movement twice
+ * is exactly how a plausible-looking double reversal arrives.
+ */
+export function creditNoteCogsReversalBaseMinor(
+  movements: readonly ReturnedMovementValue[],
+): { readonly ok: true; readonly baseMinor: bigint } | { readonly ok: false; readonly code: Extract<ReturnsRefusalCode, 'credit_note.cogs_not_exact'> } {
+  if (movements.length === 0) return Object.freeze({ ok: false as const, code: 'credit_note.cogs_not_exact' as const });
+  const seen = new Set<string>();
+  let sum = 0n;
+  for (const m of movements) {
+    if (seen.has(m.movementId)) return Object.freeze({ ok: false as const, code: 'credit_note.cogs_not_exact' as const });
+    seen.add(m.movementId);
+    if (typeof m.valueDeltaBaseMinor !== 'bigint' || m.valueDeltaBaseMinor <= 0n) {
+      return Object.freeze({ ok: false as const, code: 'credit_note.cogs_not_exact' as const });
+    }
+    sum += m.valueDeltaBaseMinor;
+  }
+  return Object.freeze({ ok: true as const, baseMinor: sum });
+}
