@@ -38,12 +38,22 @@
  * Extending P4-S4's (`0081:1755-1765`), never reordering it:
  *
  *   1.  advisory `daftar.payment_provider_reference` (payment reversal carrying a
- *       webhook identity — the FIRST lock, because two concurrent deliveries of one
- *       webhook carry DIFFERENT client ids and nothing below serialises them)
- *   1a. advisory `daftar.<reversal document>_id`
+ *       webhook identity). A CHALLENGE FINDING (F-C7) corrected the reason this is
+ *       ranked here. The earlier reason — "two deliveries of one webhook carry
+ *       DIFFERENT client ids and nothing below serialises them" — is REFUTED by step
+ *       1b in this same list: two deliveries of one webhook are two reversals of one
+ *       PAYMENT, so `daftar.payment_id` serialises them, the second waits, finds the
+ *       committed row by the payment lookup and replays. What this key genuinely buys
+ *       is the OTHER case: one provider reference presented against two DIFFERENT
+ *       payments, where the payment keys differ, neither party waits, and without it
+ *       the partial unique index answers a raw `23505` where law 7 wants a domain
+ *       refusal decided before any state is read. It is first because it is the
+ *       outermost identity and because the replay lookup consults it first; any TOTAL
+ *       order would be deadlock-free, and a total order is the requirement.
+ *   1a. advisory `daftar.payment_reversal_id` / `daftar.allocation_reversal_id`
  *   1b. advisory `daftar.payment_id` of the original payment (payment reversal)
  *       (the `payments` FOR UPDATE this file's earlier revision listed here is GONE: it
- *       serialised nothing that step 1' and `payment_reversals_payment_uq` do not already,
+ *       serialised nothing that step 1b and `payment_reversals_payment_uq` do not already,
  *       and it bought that nothing with a grant on an S4-owned table)
  *   3.  every affected `invoices` FOR UPDATE, IN ID ORDER   ← THE CHAIN LOCK
  *   3'. every affected `customer_credits` FOR UPDATE, IN ID ORDER
@@ -63,7 +73,9 @@ import {
   orderedActive,
   planAllocationReversal,
   tailOf,
+  writeTimeGeneration,
   type ActiveReducer,
+  type ReversalSequence,
   type SettlementChain,
 } from '../src/customer-reversal';
 
@@ -129,6 +141,12 @@ function pendingMode(step: Step): 'exclusive' | 'share' {
 interface Store {
   commit(txn: string): void;
   rollback(txn: string): void;
+  /**
+   * The scheduler hands the store a way to ask whether a transaction HOLDS a
+   * resource, so a store that models an index can refuse a case which forgot
+   * to take the index-key lock (F-C8). Optional, so a store need not have one.
+   */
+  attach?(probe: (txn: string, resource: string) => boolean): void;
 }
 
 class Scheduler {
@@ -147,6 +165,7 @@ class Scheduler {
       this.gens.set(t.id, t.body());
       this.held.set(t.id, []);
     }
+    store?.attach?.((txn, resource) => (this.held.get(txn) ?? []).some((h) => h.resource === resource));
   }
 
   /** Advance `id` by one step. A blocked transaction does not advance, and saying so is the barrier. */
@@ -390,6 +409,37 @@ interface Row {
    * and it is the second column of the replacement UNIQUE key.
    */
   readonly generation: bigint;
+  /**
+   * HOW MANY REVERSALS THIS CHAIN ALREADY HELD WHEN THIS ROW WAS WRITTEN.
+   *
+   * The `World` STAMPS it on insert and a caller cannot choose it, because in
+   * PostgreSQL it is `created_at DEFAULT now()` (`0081:321`, `0081:465`) and a
+   * row does not get to say when it was written. That asymmetry is the design:
+   * a direct-SQL writer can fabricate the GENERATION, which is a column it
+   * supplies, and cannot fabricate the WRITE TIME, which is what the backfill
+   * and the verifier reconstruct it from.
+   *
+   * Seeded rows default to `0` — a seed is the state as of before everything.
+   */
+  readonly writtenAfter?: number;
+  /**
+   * WHICH RELATION THE ROW IS IN (F-C5). It defaults to `payment_allocations`,
+   * which is what every case written before this round used.
+   *
+   * It exists because a UNIQUE index is per-relation, and an invoice's
+   * settlement chain is a UNION over two of them (`0081:739-748`). Round 4's
+   * `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §4 claimed the replacement refuses
+   * two rows at one invoice level "at statement time and at COMMIT" even when
+   * they are one per relation, and said this model hosted that race. It did
+   * not: every row this file built was a `payment_allocation`, so the second
+   * writer never existed and the claim rested on nothing.
+   */
+  readonly relation?: 'payment_allocations' | 'customer_credit_applications';
+}
+
+/** The relation a row sits in, defaulted. */
+function relationOf(r: Row): 'payment_allocations' | 'customer_credit_applications' {
+  return r.relation ?? 'payment_allocations';
 }
 
 /**
@@ -418,7 +468,10 @@ class World implements Store {
 
   public seed(chainId: string, capacity: bigint, rows: readonly Row[]): void {
     this.capacity.set(chainId, capacity);
-    this.committedRows.set(chainId, [...rows]);
+    this.committedRows.set(
+      chainId,
+      rows.map((r) => ({ ...r, writtenAfter: r.writtenAfter ?? 0 })),
+    );
   }
 
   /** A reversal that is already COMMITTED before the race starts. */
@@ -433,7 +486,9 @@ class World implements Store {
     // never created is a model defect, not a business outcome.
     must(this.committedRows.get(chainId), `rows for chain ${chainId}`);
     const b = this.rowBuf.get(txn) ?? [];
-    b.push({ chainId, row });
+    // The write time is stamped here and nowhere else: the number of reversals
+    // this transaction can see at the moment of the insert.
+    b.push({ chainId, row: { ...row, writtenAfter: this.reversalSequence(txn, chainId).length } });
     this.rowBuf.set(txn, b);
   }
 
@@ -459,7 +514,7 @@ class World implements Store {
       .filter((r) => !reversed.has(r.reducerId))
       .map((r) => ({
         reducerId: r.reducerId,
-        kind: 'payment_allocation',
+        kind: relationOf(r) === 'customer_credit_applications' ? 'credit_application' : 'payment_allocation',
         level: r.level,
         amount: r.amount,
         originalEntryId: r.entryId,
@@ -473,35 +528,75 @@ class World implements Store {
   }
 
   /**
-   * THE CHAIN GENERATION AT A LEVEL: how many reversals on this chain have
-   * freed a level at or below `level`. It is computed from the append-only
-   * reversal rows and from nothing else, so every party that can see the same
-   * reversals computes the same number — which is what makes the replacement
-   * UNIQUE key a MUTUAL EXCLUSION between two concurrent lawful writers at one
-   * level, and what makes a fabricated generation detectable at COMMIT.
+   * THIS CHAIN'S REVERSALS IN ORDER, each named by the level it freed — the
+   * argument the generation law takes. `visibleReversed` is insertion-ordered,
+   * and the order of insertion IS the order of the reversals: an order, never a
+   * clock (`P4-AL-42`). Reversals whose original is not a row of this chain are
+   * dropped, because they freed no level here.
    */
-  private generationAt(level: bigint, rows: readonly Row[], reversed: ReadonlySet<string>): bigint {
-    let n = 0n;
+  private reversalSequence(txn: string, chainId: string): ReversalSequence {
+    return this.sequenceOf(this.visibleRows(txn, chainId), this.visibleReversed(txn));
+  }
+
+  private sequenceOf(rows: readonly Row[], reversed: ReadonlySet<string>): ReversalSequence {
+    const seq: bigint[] = [];
     for (const id of reversed) {
       const original = rows.find((r) => r.reducerId === id);
-      if (original !== undefined && original.level <= level) n += 1n;
+      if (original !== undefined) seq.push(original.level);
     }
-    return n;
+    return seq;
   }
 
-  /** The generation a writer at `level` must declare, as `txn` sees the chain. */
+  /** The order of the reversals this chain holds, as reducer ids. */
+  private reversalOrderOf(rows: readonly Row[], reversed: ReadonlySet<string>): readonly string[] {
+    return [...reversed].filter((id) => rows.some((r) => r.reducerId === id));
+  }
+
+  /**
+   * THE GENERATION OF ONE ROW, under the level-A law and NOT under a private
+   * copy of it (F-C2). The model used to carry its own `generationAt`, which
+   * the verifier then checked the rows against — an expression compared with
+   * itself, and so an assertion no defect in the law could ever make red. There
+   * is now ONE implementation, in `src/customer-reversal.ts`, and
+   * `customer-reversal-generation.test.ts` compares the SPECIFICATION'S SQL
+   * against that same one.
+   */
+  private generationOf(row: Row, rows: readonly Row[], reversed: ReadonlySet<string>): bigint {
+    const order = this.reversalOrderOf(rows, reversed);
+    const at = order.indexOf(row.reducerId);
+    return writeTimeGeneration(
+      { rowId: row.reducerId, level: row.level, writtenAfter: row.writtenAfter ?? 0, reversedAt: at === -1 ? null : at },
+      this.sequenceOf(rows, reversed),
+    );
+  }
+
+  /**
+   * The generation a writer at `level` must declare NOW, as `txn` sees the
+   * chain: the law applied to a row about to be written, whose write time is
+   * therefore the whole of the sequence it can see.
+   */
   public generationFor(txn: string, chainId: string, level: bigint): bigint {
-    return this.generationAt(level, this.visibleRows(txn, chainId), this.visibleReversed(txn));
+    const seq = this.reversalSequence(txn, chainId);
+    return writeTimeGeneration({ rowId: '(the row about to be written)', level, writtenAfter: seq.length, reversedAt: null }, seq);
   }
 
-  /** The replacement UNIQUE key: the level AND the generation. */
+  /**
+   * The replacement UNIQUE key: the level AND the generation — PER RELATION.
+   *
+   * The relation name is part of the key because an index lives in ONE
+   * relation. Two rows at one invoice level, one in each relation, therefore
+   * take two DIFFERENT index keys and neither blocks on the other. That is not
+   * a modelling convenience; it is the hole `0081:330-332` already records in
+   * its own words, and the key must say so rather than hide it behind a shared
+   * string.
+   */
   public static keyOf(chainId: string, r: Row): string {
-    return `${chainId}|${r.level}|${r.generation}`;
+    return `${relationOf(r)}|${chainId}|${r.level}|${r.generation}`;
   }
 
-  /** The key the OLD constraint used: the level alone. */
+  /** The key the OLD constraint used: the level alone, and still per relation. */
   public static levelKeyOf(chainId: string, r: Row): string {
-    return `${chainId}|${r.level}`;
+    return `${relationOf(r)}|${chainId}|${r.level}`;
   }
 
   private verify(chainId: string, rows: readonly Row[], reversed: ReadonlySet<string>): void {
@@ -512,13 +607,21 @@ class World implements Store {
       before += r.amount;
     }
     if (before > chain.capacity) throw new Error('invoice_settlement.settlement_inconsistent');
-    // THE GENERATION LAW, the third device of the replacement: every ACTIVE
-    // row's declared generation must be the one the reversal rows imply. A
-    // direct-SQL writer that fabricates a generation to dodge the UNIQUE key
-    // is refused here, by its OWN commit, over rows it can see.
+    // THE GENERATION LAW, the third device of the replacement: EVERY row's
+    // declared generation must be the one the reversal rows imply — and that
+    // means every row, not every ACTIVE row (F-C2). The earlier revision of
+    // this file skipped reversed rows, so the one row round 4's backfill
+    // expression got wrong was structurally outside the model's reach and no
+    // case in the slice could have found it.
+    //
+    // The deployed verifier is still scoped to ACTIVE rows, and that scoping is
+    // sound rather than lucky: `generationFormsAgreeOnActive` is the theorem,
+    // and `customer-reversal-generation.test.ts` falsifies it on an unlawful
+    // chain so that it is a claim and not a tautology. The model checks the
+    // wider set because a BACKFILL writes the narrower set's complement, and a
+    // model that cannot see those rows cannot see a backfill defect.
     for (const r of rows) {
-      if (reversed.has(r.reducerId)) continue;
-      if (r.generation !== this.generationAt(r.level, rows, reversed)) {
+      if (r.generation !== this.generationOf(r, rows, reversed)) {
         throw new Error('invoice_settlement.settlement_generation_invalid');
       }
     }
@@ -587,8 +690,25 @@ class World implements Store {
     return { kind: 'lock', resource: `uniqueindex:${key}`, mode: 'exclusive' };
   }
 
+  /**
+   * F-C8. The scheduler installs this on construction, so `insertUnique` can
+   * refuse a case that FORGOT to yield `indexKeyLock`. Without it a future case
+   * silently gets no mutual exclusion and no warning — a green test over a
+   * world with no index, which is the vacuity this whole file exists against.
+   */
+  private holds: ((txn: string, resource: string) => boolean) | null = null;
+
+  public attach(probe: (txn: string, resource: string) => boolean): void {
+    this.holds = probe;
+  }
+
   public insertUnique(txn: string, chainId: string, row: Row, keyOf: (chainId: string, r: Row) => string, index: string): void {
     const key = keyOf(chainId, row);
+    // The index-key lock must be HELD. A case that forgot to yield it is a
+    // model defect and says so, rather than quietly proving nothing.
+    if (this.holds !== null && !this.holds(txn, `uniqueindex:${key}`)) {
+      throw new Error(`model defect: ${txn} inserts under ${index} at key ${key} without having yielded indexKeyLock for it`);
+    }
     // The duplicate check is against COMMITTED state, because that is what the
     // index holds once the other party's entry has either committed (it is
     // there, and this raises) or rolled back (it is gone, and this proceeds).
@@ -596,7 +716,11 @@ class World implements Store {
     // EVERY row in the relation is indexed, active or not: an index cannot see
     // the activeness ANTI-JOIN, and that is exactly why the level-alone key is
     // incompatible with reversal rather than merely inconvenient.
-    if (this.committedRowsOf(chainId).some((r) => keyOf(chainId, r) === key)) {
+    // COMMITTED rows, and this transaction's OWN uncommitted ones (F-C8): a
+    // unique index refuses two equal keys inside ONE transaction too, and a
+    // model that admitted them would pass a command PostgreSQL rejects.
+    const own = (this.rowBuf.get(txn) ?? []).filter((e) => e.chainId === chainId).map((e) => e.row);
+    if ([...this.committedRowsOf(chainId), ...own].some((r) => keyOf(chainId, r) === key)) {
       throw new Error(`23505 unique_violation ${index}`);
     }
     this.insert(txn, chainId, row);
@@ -1178,24 +1302,36 @@ describe('C-6 — DEADLOCK ORDERING: every relevant lock pair, in BOTH direction
    *
    * A CHALLENGE FINDING (F7): the earlier `RESOURCES` held the four classes a
    * reversal SHARES with a settlement and omitted every class this slice adds —
-   * the two advisory document keys of steps 1 and 1'. A deadlock sweep that
-   * omits the new lock classes sweeps the predecessor's lock order, not this
-   * slice's, and the new classes are the only ones whose ordering had never
-   * been exercised anywhere.
+   * the advisory document keys. A deadlock sweep that omits the new lock
+   * classes sweeps the predecessor's lock order, not this slice's, and the new
+   * classes are the only ones whose ordering had never been exercised anywhere.
+   *
+   * A LATER FINDING ON THE SAME SWEEP (F-C3), recorded rather than quietly
+   * fixed: round 4 made the provider key the NEW step 1 of the declared order
+   * in three documents and in this file's own header, raised a patch request
+   * saying S6 takes THREE advisory keys in one transaction — and did not add it
+   * here, in the same commit that turned this sweep's counts into an identity.
+   * An identity cannot drift, and it did not; what it cannot do is notice a
+   * class that was never enumerated. A census is only as wide as its roster,
+   * which is the one thing in this file that no assertion can check for itself.
    *
    * (The `payments` FOR UPDATE that was step 2 is NOT here, because it is gone:
    * it serialised nothing the advisory key and `payment_reversals_payment_uq`
    * do not already — see the header's lock order.)
    */
-  const REVERSAL_KEY = 'advisory:daftar.allocation_reversal_id:rev-1';
+  const PROVIDER_KEY = 'advisory:daftar.payment_provider_reference:stripe|evt_1';
+  const REVERSAL_KEY = 'advisory:daftar.payment_reversal_id:rev-1';
   const PAYMENT_KEY = 'advisory:daftar.payment_id:payment-1';
-  const RESOURCES = [REVERSAL_KEY, PAYMENT_KEY, INV_LOCK, CREDIT_LOCK, 'customers:cust-1', 'businesses:biz-1'] as const;
+  const RESOURCES = [PROVIDER_KEY, REVERSAL_KEY, PAYMENT_KEY, INV_LOCK, CREDIT_LOCK, 'customers:cust-1', 'businesses:biz-1'] as const;
 
   /**
-   * The declared order, in full: the reversal's own key → the payment key →
-   * `invoices` → `customer_credits` → `customers` → `businesses`.
+   * The declared order, in full: the provider key → the reversal's own key →
+   * the payment key → `invoices` → `customer_credits` → `customers` →
+   * `businesses`. The first three are the block `PATCH-REQ-S6-012` asks
+   * `P4-AL-41` to rank; the last four are its existing domain list, unchanged
+   * and not reordered.
    */
-  const DECLARED_ORDER: readonly string[] = [REVERSAL_KEY, PAYMENT_KEY, INV_LOCK, CREDIT_LOCK, 'customers:cust-1', 'businesses:biz-1'];
+  const DECLARED_ORDER: readonly string[] = [PROVIDER_KEY, REVERSAL_KEY, PAYMENT_KEY, INV_LOCK, CREDIT_LOCK, 'customers:cust-1', 'businesses:biz-1'];
 
   /**
    * The mode the protocol takes each resource in: the two chain locks are
@@ -1276,13 +1412,18 @@ describe('C-6 — DEADLOCK ORDERING: every relevant lock pair, in BOTH direction
     // Exactly the two share/share orderings, named, so a later resource added
     // in share mode cannot silently join the excluded set.
     expect(impossible.map(([a, b]) => `${a} + ${b}`).sort()).toEqual(['businesses:biz-1 + customers:cust-1', 'customers:cust-1 + businesses:biz-1']);
-    // Six resource classes: 30 ordered arrangements, 15 pairs, exactly one of
-    // which is share/share. The numbers are asserted so that adding a resource
-    // without extending this sweep is a failure and not a silent narrowing.
-    expect(pairs.length).toBe(30);
-    expect(pairs.length - impossible.length).toBe(28);
-    expect(unorderedPairs().length).toBe(15);
-    expect(unorderedPairs().filter(([a, b]) => canContend(a, b)).length).toBe(14);
+    // SEVEN resource classes — five exclusive and two shared: 42 ordered
+    // arrangements, 21 pairs, exactly one of which is share/share. The numbers
+    // are asserted so that adding a resource without extending this sweep is a
+    // failure and not a silent narrowing; and they are derived from the roster
+    // itself, so the roster is the only thing a reader must check by hand.
+    const exclusive = RESOURCES.filter((r) => modeOf(r) === 'exclusive').length;
+    expect(exclusive, 'the five exclusive classes: three advisory keys and the two chain locks').toBe(5);
+    expect(pairs.length).toBe(RESOURCES.length * (RESOURCES.length - 1));
+    expect(pairs.length).toBe(42);
+    expect(pairs.length - impossible.length).toBe(40);
+    expect(unorderedPairs().length).toBe(21);
+    expect(unorderedPairs().filter(([a, b]) => canContend(a, b)).length).toBe(20);
   });
 
   it('a share/share pair genuinely CANNOT contend: no queue entry exists, which is why it is not evidence of a lock order', () => {
@@ -1320,7 +1461,7 @@ describe('C-6 — DEADLOCK ORDERING: every relevant lock pair, in BOTH direction
       expect(s.queued.length, `neither transaction ever waited on pair ${a} + ${b}: zero deadlocks here is vacuous`).toBeGreaterThan(0);
       contended.push(`${a} + ${b}`);
     }
-    expect(contended.length, 'the contending-pair set shrank; every pair with an exclusive lock must be covered').toBe(14);
+    expect(contended.length, 'the contending-pair set shrank; every pair with an exclusive lock must be covered').toBe(20);
   });
 
   it('BOTH DIRECTIONS, for real: for every contending pair, the two parties taking it in OPPOSITE orders deadlock — and in the SAME order they never do', () => {
@@ -1331,13 +1472,16 @@ describe('C-6 — DEADLOCK ORDERING: every relevant lock pair, in BOTH direction
     // A THIRD FINDING, and this one came out of writing the case: CONTENTION
     // and CYCLE-CAPABILITY ARE NOT THE SAME PREDICATE, and the first draft of
     // this case conflated them. It required every CONTENDING arrangement to
-    // deadlock when opposed, and 16 of the 28 do not — because a cycle needs
+    // deadlock when opposed, and half of them do not — because a cycle needs
     // BOTH parties to wait, so BOTH resources must conflict. A pair of one
     // exclusive and one shared lock contends on the exclusive one and never on
     // the shared one, so the opposed arrangement produces a wait and no cycle.
     // That is correct database behaviour, and a model that demanded a deadlock
     // there would have been asserting a defect as a law. The sweep therefore
-    // splits again: 12 arrangements can cycle and must, 16 contend and must not.
+    // splits again: the cycle-capable arrangements must deadlock when opposed,
+    // and the rest must contend and must not — 20 and 20 over seven classes,
+    // both counts derived from the roster below and neither written as a
+    // literal here.
     let opposedDeadlocks = 0;
     let matchedRuns = 0;
     let contendedWithoutCycle = 0;
@@ -1394,7 +1538,7 @@ describe('C-6 — DEADLOCK ORDERING: every relevant lock pair, in BOTH direction
     expect(contendOnlyCount, 'no arrangement contends without cycling, so the other half proves nothing').toBeGreaterThan(0);
     // The literal census lives in ONE place — the pair-census case above — so
     // these numbers are stated once and derived everywhere else.
-    expect(canCycleCount + contendOnlyCount).toBe(28);
+    expect(canCycleCount + contendOnlyCount).toBe(40);
   });
 
   it('PLANTED LOCK-ORDER DEFECT — the planting is in the ORDER ALONE, and it raises 40P01 on exactly one victim', () => {
@@ -1551,7 +1695,7 @@ describe('C-7 — the DIRECT-SQL race: no routine, no lock, no tail check', () =
         order: ['D1', 'D2', 'D1', 'D1', 'D2', 'D2'],
       };
     };
-    const { s, race } = raceProvingContention(build, 'D2', `uniqueindex:${CHAIN}|700|1`, 'D1');
+    const { s, race } = raceProvingContention(build, 'D2', `uniqueindex:payment_allocations|${CHAIN}|700|1`, 'D1');
     expect(s.outcomes()).toEqual({
       D1: { kind: 'committed' },
       D2: { kind: 'refused', code: `23505 unique_violation ${REPAIRED_UNIQUE}` },
@@ -1598,6 +1742,164 @@ describe('C-7 — the DIRECT-SQL race: no routine, no lock, no tail check', () =
     // The refusal came from its own COMMIT, which is the claim being made.
     expect(s.queued).toEqual([]);
     expect(() => w.verifyCommitted(CHAIN)).not.toThrow();
+  });
+
+  it('F-C1 IN THE MODEL — round 4`s backfill value on the REVERSED original is refused by the very verifier it was said to agree with', () => {
+    // The state round 4's `UPDATE` would leave behind: the reversed original at
+    // level 700 carrying generation 1, because its own reversal satisfied
+    // `o.ar_released_before_txn_minor <= a.ar_released_before_txn_minor`.
+    //
+    // No concurrency here and none needed. The claim is about a VALUE, and the
+    // model could not make it before this round because `verify` skipped every
+    // reversed row — which is why the defect needed a real server to surface
+    // and should not have.
+    const w = new World();
+    w.seed(CHAIN, 1000n, [
+      { reducerId: 'alloc-1', level: 0n, amount: 400n, entryId: 'entry-1', generation: 0n },
+      { reducerId: 'alloc-2', level: 400n, amount: 300n, entryId: 'entry-2', generation: 0n },
+      // THE BACKFILLED VALUE, as round 4's expression computes it.
+      { reducerId: 'alloc-3', level: 700n, amount: 300n, entryId: 'entry-3', generation: 1n },
+    ]);
+    w.seedReversed('alloc-3');
+    expect(() => w.verifyCommitted(CHAIN)).toThrow(/settlement_generation_invalid/);
+  });
+
+  it('F-C1, the consequence — and the SAME world with the law`s value passes, so the refusal is about the backfill and not about reversal', () => {
+    const w = afterReversal(); // alloc-3 reversed, carrying its write-time 0
+    expect(() => w.verifyCommitted(CHAIN)).not.toThrow();
+    // And the lawful successor at the freed level takes (700, 1) — the key
+    // round 4's backfill had already given away to the reversed original,
+    // which is the duplicate PostgreSQL refused to index.
+    const s = new Scheduler([directInsert(w, 'L', bad('lawful', 700n, 1n), { keyOf: World.keyOf, name: REPAIRED_UNIQUE })], w);
+    s.run(['L', 'L', 'L', 'L']);
+    expect(s.outcomeOf('L')).toEqual({ kind: 'committed' });
+    expect(w.committedRowsOf(CHAIN).map((r) => `${r.level}|${r.generation}`)).toEqual(['0|0', '400|0', '700|0', '700|1']);
+  });
+
+  it('F-C8 — two equal keys inside ONE transaction are refused 23505, as a unique index refuses them', () => {
+    // The model used to check the key against COMMITTED rows alone, so one
+    // transaction could insert two identical keys and the model would admit a
+    // command PostgreSQL rejects.
+    const w = afterReversal();
+    const twice: Txn = {
+      id: 'T',
+      body: function* () {
+        const first = bad('a', 700n, 1n);
+        const second = bad('b', 700n, 1n);
+        yield w.indexKeyLock(World.keyOf(CHAIN, first));
+        yield { kind: 'act', what: 'the first insert', fn: () => w.insertUnique('T', CHAIN, first, World.keyOf, REPAIRED_UNIQUE) };
+        yield { kind: 'act', what: 'the second insert, at the same key', fn: () => w.insertUnique('T', CHAIN, second, World.keyOf, REPAIRED_UNIQUE) };
+        yield { kind: 'commit' };
+      },
+    };
+    const s = new Scheduler([twice], w);
+    s.run(['T', 'T', 'T', 'T']);
+    expect(s.outcomeOf('T')).toEqual({ kind: 'refused', code: `23505 unique_violation ${REPAIRED_UNIQUE}` });
+    // Rolled back whole: neither row landed.
+    expect(w.committedRowsOf(CHAIN).map((r) => r.reducerId)).toEqual(['alloc-1', 'alloc-2', 'alloc-3']);
+  });
+
+  it('F-C8, the other half — a case that FORGETS the index-key lock is reported as a model defect and not as a business outcome', () => {
+    // The probe the scheduler installs. Without it the forgotten lock is
+    // silent: the insert succeeds, nothing queues, and the case proves nothing
+    // while looking green.
+    const w = afterReversal();
+    const forgetful: Txn = {
+      id: 'F',
+      body: function* () {
+        yield {
+          kind: 'act',
+          what: 'insert with no index-key lock taken',
+          fn: () => w.insertUnique('F', CHAIN, bad('x', 700n, 1n), World.keyOf, REPAIRED_UNIQUE),
+        };
+        yield { kind: 'commit' };
+      },
+    };
+    const s = new Scheduler([forgetful], w);
+    s.run(['F', 'F']);
+    const o = s.outcomeOf('F');
+    expect(o, 'the forgetful transaction never settled').not.toBe('running');
+    if (o === 'running') return;
+    expect(o.kind).toBe('refused');
+    expect(o.kind === 'refused' ? o.code : '').toMatch(/model defect: F inserts under payment_allocations_level_generation_uq/);
+  });
+
+  it('F-C5 — THE CROSS-RELATION SAME-LEVEL RACE IS OPEN, and the replacement does NOT close it: two rows at one invoice level, one per relation, BOTH commit', () => {
+    // Round 4's `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §4 said two rows at one
+    // invoice level, one in each relation, "are refused at statement time and
+    // at COMMIT". Both halves are false CONCURRENTLY, by the same F1 reasoning
+    // the document applies correctly one paragraph earlier: a `BEFORE INSERT`
+    // trigger that reads cannot see another transaction's uncommitted row, and
+    // a `DEFERRABLE INITIALLY DEFERRED` trigger fires inside its own
+    // transaction and cannot either. The index cannot see it at all, because an
+    // index lives in one relation.
+    //
+    // The hole is PRE-EXISTING and S4 records it honestly at `0081:330-332`:
+    // "a UNIQUE index cannot see across `payment_allocations` and
+    // `customer_credit_applications`". What round 4 added was a document saying
+    // it was closed — which is worse than the hole, because a reviewer reading
+    // §4 stops checking. So the claim is deleted there and the seam is proved
+    // OPEN here.
+    const w = afterReversal();
+    const alloc: Row = { reducerId: 'bad-pa', level: 700n, amount: 300n, entryId: 'e-pa', generation: 1n, relation: 'payment_allocations' };
+    const credit: Row = { reducerId: 'bad-cca', level: 700n, amount: 300n, entryId: 'e-cca', generation: 1n, relation: 'customer_credit_applications' };
+    const s = new Scheduler(
+      [
+        directInsert(w, 'T1', alloc, { keyOf: World.keyOf, name: REPAIRED_UNIQUE }),
+        directInsert(w, 'T2', credit, { keyOf: World.keyOf, name: 'customer_credit_applications_invoice_level_generation_uq' }),
+      ],
+      w,
+    );
+    s.run(['T1', 'T2', 'T1', 'T2', 'T1', 'T2', 'T1', 'T2']);
+
+    // NEITHER WAITED. The two index keys differ in their first component —
+    // the relation — so there was never anything to wait on.
+    expect(s.queued, 'if either queued, the two keys collided and this is not the seam').toEqual([]);
+    // AND BOTH COMMITTED. This is the finding, asserted and not described.
+    expect(s.outcomes()).toEqual({ T1: { kind: 'committed' }, T2: { kind: 'committed' } });
+
+    // The committed world: two ACTIVE rows at level 700, releasing 1300
+    // against a capacity of 1000 — 300 minor of AR released past capacity.
+    const active = w.committedRowsOf(CHAIN).filter((r) => !w.committedReversals().includes(r.reducerId));
+    expect(active.filter((r) => r.level === 700n).map((r) => r.reducerId)).toEqual(['bad-pa', 'bad-cca']);
+    expect(active.reduce((a, r) => a + r.amount, 0n)).toBe(1300n);
+    expect(w.capacity.get(CHAIN)).toBe(1000n);
+    // The verifier WOULD refuse this state — run by hand, after the fact, by
+    // this assertion. Nothing in the protocol is obliged to run it again, and
+    // that gap between "would refuse" and "is obliged to look" is the seam.
+    expect(() => w.verifyCommitted(CHAIN)).toThrow(/settlement_inconsistent/);
+  });
+
+  it('F-C5, the condition that WOULD close it — one shared exclusion point per invoice level, modelled as a single key both relations take', () => {
+    // Stated as a condition and not as a design: PostgreSQL has no unique index
+    // across two relations, so closing this needs either ONE relation for both
+    // reducer kinds (an S4 schema change, not S6's) or a shared exclusion point
+    // both writers take by protocol. The CHAIN LOCK of step 3 is exactly such a
+    // point, and the ROUTINES take it — which is why this hole is reachable
+    // only from the direct-SQL path.
+    //
+    // Modelled by giving both writers one key: the second now QUEUES and is
+    // refused, which is what the index would do if it could span relations. The
+    // case exists so the condition is a mechanism and not a wish.
+    const sharedKey = (chainId: string, r: Row): string => `${chainId}|${r.level}|${r.generation}`;
+    const alloc: Row = { reducerId: 'bad-pa', level: 700n, amount: 300n, entryId: 'e-pa', generation: 1n, relation: 'payment_allocations' };
+    const credit: Row = { reducerId: 'bad-cca', level: 700n, amount: 300n, entryId: 'e-cca', generation: 1n, relation: 'customer_credit_applications' };
+    const build = (): WorldRace => {
+      const world = afterReversal();
+      return {
+        world,
+        txns: [
+          directInsert(world, 'T1', alloc, { keyOf: sharedKey, name: 'the hypothetical cross-relation key' }),
+          directInsert(world, 'T2', credit, { keyOf: sharedKey, name: 'the hypothetical cross-relation key' }),
+        ],
+        order: ['T1', 'T2', 'T1', 'T1', 'T2', 'T2'],
+      };
+    };
+    const { s } = raceProvingContention(build, 'T2', `uniqueindex:${CHAIN}|700|1`, 'T1');
+    expect(s.outcomes()).toEqual({
+      T1: { kind: 'committed' },
+      T2: { kind: 'refused', code: '23505 unique_violation the hypothetical cross-relation key' },
+    });
   });
 
   it('PLANTED — a direct insert at a fabricated MID-CHAIN level is refused at COMMIT even with no competitor', () => {

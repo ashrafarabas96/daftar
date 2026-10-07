@@ -48,16 +48,36 @@ ordering is load-bearing:
 then the domain locks of P4-AL-41, unchanged and NOT reordered
 ```
 
-## Why rank 1 must be the provider key, and not a later one
+## Why the provider key is ranked first — WITH THE ARGUMENT CORRECTED
 
-Two concurrent deliveries of one payment-provider webhook carry the **same** provider reference
-and **different** client-chosen ids. So `daftar.payment_reversal_id` does not serialise them:
-each takes its own key, neither waits, both find no prior row, both insert, and
-`payment_reversals_provider_uq` answers one of them `23505`. **That is a refusal where law 7
-requires an exact replay** (`docs/PHASE_4_S6_DDL_SPECIFICATION.md` §1A.4, §1A.5). Only a key on
-the identity the two deliveries actually share serialises them, and it has to be taken before
-the replay lookup, which is itself before any read of current state
-(`[[daftar-registry-before-state]]`).
+> **CHALLENGE FINDING F-C7, ACCEPTED. The argument this request made in round 4 was refuted by
+> the row below it in this request's own table.** The request stands; the premise does not, and a
+> new lock class at the head of the order, a new rank asked of the Architecture Lock and a
+> `hashtext` collision surface should not be bought with a refuted one.
+
+**The withdrawn argument.** It read: two deliveries of one webhook carry the same provider
+reference and different client ids, so `daftar.payment_reversal_id` does not serialise them —
+both insert and one takes a `23505` where law 7 requires an exact replay. But **step `1b` of the
+block below is `daftar.payment_id`**, and two deliveries of one webhook are two reversals of ONE
+PAYMENT. Step `1b` serialises them: the second waits, finds the committed row by the payment
+lookup, compares the hash and replays. **The stated race cannot occur under the order this
+request itself declares.**
+
+**What the key genuinely buys.** One provider reference presented against **two different
+payments** — a provider error, an event pointed at the wrong payment, a malicious resend. There
+the payment keys differ, `1b` serialises nothing, both parties find no row, and the partial
+unique index answers one of them a raw `23505`. Under this key the second waits, finds the row by
+the provider lookup, compares the hash, finds it different, and answers
+`payment_reversal.idempotency_conflict`. The outcome is a conflict either way — it IS a different
+economic command — and what changes is that the conflict becomes a **domain refusal decided
+before any state is read** instead of a constraint violation surfacing from storage, which §9 of
+the contract pack ("one state, one code") requires.
+
+**And why FIRST.** Because it is the outermost identity — the one a redelivery shares when
+nothing else does — and because the replay lookup consults it first, so a later rank would mean
+reading under a key not yet held (`[[daftar-registry-before-state]]`). For deadlock freedom any
+**total** order would serve, and a total order is the requirement; the block below is a choice
+among correct orders, not the only correct one.
 
 ## Required change — the exact rank, and the checker's expected new list
 
@@ -111,15 +131,25 @@ between that sweep covering the advisory keys and skipping them.
 
 ## The tests that require it
 
-`packages/inventory/test/customer-reversal-concurrency.test.ts` C-6, which now sweeps **six**
-resource classes including two advisory ones S6 introduces: 30 ordered arrangements, 14
-contending pairs, every contending arrangement proved to have contended, zero deadlocks when
-both parties use the declared order, and — the real both-directions claim — exactly one `40P01`
-victim for each of the 12 cycle-capable arrangements and zero for the 16 that contend without
-cycling. The three counts are asserted as an **identity** over the enumeration, not as three
-literals, so the sweep cannot silently cover less than it claims. That is the model; the
-database-level sweep is `gate:phase4:s8`'s, and it needs block 0 to exist to have anything to
-compare against.
+`packages/inventory/test/customer-reversal-concurrency.test.ts` C-6, which now sweeps **seven**
+resource classes — five exclusive, including all THREE advisory keys, and two shared: 42 ordered
+arrangements, 20 contending pairs, every contending arrangement proved to have contended, zero
+deadlocks when both parties use the declared order, and — the real both-directions claim —
+exactly one `40P01` victim for each of the 20 cycle-capable arrangements and zero for the 20 that
+contend without cycling. The counts are asserted as an **identity** over the enumeration rather
+than as literals, so the sweep cannot silently cover less than it claims.
+
+**A FINDING ABOUT THAT SWEEP, recorded rather than quietly fixed (F-C3).** In round 4 it covered
+**six** classes and the provider key was not among them — declared as the new step 1 in three
+documents and in that file's own header, raised in this request as one of three keys taken in one
+transaction, and left out of the census, in the same commit that made the census an identity. An
+identity cannot drift and it did not; what it cannot do is notice a class that was never
+enumerated. **A census is only as wide as its roster**, and the roster is the one thing in that
+file no assertion can check for itself. Three of C-6's cases went red the moment the class was
+added, which is the machinery working.
+
+That is the model; the database-level sweep is `gate:phase4:s8`'s, and it needs block 0 to exist
+to have anything to compare against.
 
 ## Expected semantic diff
 

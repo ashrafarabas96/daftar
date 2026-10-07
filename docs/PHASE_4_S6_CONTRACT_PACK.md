@@ -152,6 +152,35 @@ it walked the registry and checked the shape of what it found.
 
 ---
 
+### 2B. The SECOND challenge, which found the round-4 repair itself defective
+
+Signature 2 returned again, on round 4's own work: eight findings, one CRITICAL, and the
+CRITICAL was in the repair that round 4 had just been commended for. **All eight are accepted.**
+Nothing here challenges `TL-P4-S6-R1` or reopens Option B, and the central §1A.3 claim — that
+the widened key restores mutual exclusion atomically with no lock taken — was measured on two
+real connections and **held**.
+
+| # | finding | severity | what changed |
+|---|---|---|---|
+| **F-C1** | §2A.1's backfill expression had **no bound on WHEN**, so it counted every reversal at a level `<= L` as of now. A reversed original at level `L` counted the reversal of ITSELF and stored `1` where the law says `0`; step 0c then manufactured the duplicate key that step 0d refuses, so **the migration could not apply to any tree holding a reversal** | CRITICAL | one conjunct — `AND r.created_at < a.created_at` — and **three expressions** instead of one. The two roles are separated: a write-time reconstruction for the backfill, an as-of-now recount for the verifier, with the bridge between them as a falsifiable theorem. DDL spec §2A.1, `PATCH-REQ-S6-011`. And round 4's sentence "it is the same expression the deferred verifier recomputes, so the backfill and the verifier cannot disagree" is **withdrawn**: they disagree, and structurally — the verifier is scoped to active rows and so never evaluates the row the expression gets wrong |
+| **F-C2** | the concurrency model could not represent that defect: `verify` skipped every reversed row, and every row's generation was produced by `generationAt` and then checked against `generationAt` — an expression compared with itself | HIGH | the model evaluates the law on **every** row, and the law lives in `src/customer-reversal.ts` with ONE implementation. `customer-reversal-generation.test.ts` compares the specification's SQL against it, with round 4's expression kept as the planted counterpart |
+| **F-C3** | round 4 made the provider key the new step 1 in three documents and in the model's own header, and **did not add it to C-6's census** — in the same commit that turned that census into an identity | HIGH | the seventh class is in `RESOURCES` and `DECLARED_ORDER`; 42 ordered arrangements, 20 cycle-capable, 20 contending without cycling. Three cases went red when the class was added. **A census is only as wide as its roster**, and the roster is the one thing no assertion in that file can check for itself |
+| **F-C4** | the intent hash was specified **two incompatible ways** — this pack said request-only with no derived figure, the DDL spec said it covered the ordered set of reversed allocation ids — and the second reading made §1A.5's ordering **unsatisfiable**, because the set is read from state. Worse, a redelivery would recompute the set as empty and a correct replay would be answered `idempotency_conflict` | HIGH | resolved in favour of the principle, not the list: the intent is `payment_id`, `reversal_date`, `reason`, `provider_source`, `provider_reference`. Stated ONCE, in DDL spec §1A.3, and referred to from everywhere else. Item 4 of §7.1 below is corrected too: the id is **out** |
+| **F-C5** | `LEVEL_UNIQUENESS.md` §4 claimed the cross-relation same-level race is "refused at statement time and at COMMIT". Both halves are false concurrently, by this slice's own F1 reasoning; and the model that row cited could not host the race, because every `World` row was a `payment_allocation` | HIGH | the claim is **withdrawn in place** and the seam declared open, with the condition that would close it and the fact that the routines' chain lock makes it direct-SQL-only. A `Row` now carries its relation, the index key carries it too, and C-7 proves the seam open and then proves the condition |
+| **F-C6** | three generation columns were given one expression and the phrase "the mirror of it … with `>=`". The credit column's key is on the **credit**; a generation counted over the row's invoice chain is not a function of that chain, so two truthful writers at one credit remaining level compute different keys and the credit is **double-spent** | MEDIUM | all three expressions are written out (DDL spec §2A.1) and the double-spend is measured in `customer-reversal-generation.test.ts`. The `>=` flip itself was verified correct; the key was the wrong half |
+| **F-C7** | the new first lock's justification was refuted by the row below it: two deliveries of one webhook are two reversals of one payment, so `daftar.payment_id` **does** serialise them | MEDIUM | the argument is replaced with the true one — one provider reference against two **different** payments, where the key converts a raw `23505` into a domain refusal decided before any state read — in §8.1, DDL spec §1A.4, `PATCH-REQ-S6-012` and the model's header. The rank is unchanged; its reason is not |
+| **F-C8** | `World.insertUnique` checked only committed rows, so two equal keys inside ONE transaction were admitted by the model and refused by PostgreSQL; and `indexKeyLock` was yielded by the caller, so a case that forgot it got no exclusion and no warning | LOW | the duplicate check covers the transaction's own buffer, and the scheduler installs a lock probe so a forgotten `indexKeyLock` is reported as a **model defect** and never as a business outcome. Both have cases |
+
+**The lesson round 4 is charged with, and it is the right charge.** Round 4 added about 150
+lines of §2A prose, disclosed honestly that neither upgrade path could prove the backfill — and
+shipped an expression that was wrong. The generation law is a **pure function** of a level and a
+reversal sequence: it needed no server, no cluster and no migration to be checked, and it was not
+checked. **A disclosure that a proof is owed is not a substitute for the cheap proof that was
+available.** `packages/inventory/test/customer-reversal-generation.test.ts` is that proof, 29
+cases, written in this round and owed in the last one.
+
+---
+
 ## 3. Predecessor assumptions, each stated so a diff against the SEALED tree can CONFIRM or REFUTE it
 
 Every row is a claim about a tree that has not sealed. The **check** column is the command or
@@ -414,11 +443,16 @@ The specification is `docs/PHASE_4_S6_DDL_SPECIFICATION.md` §1A. In brief:
   `reversalId` — a **declared departure** from `customer_collect_payment`, whose intent
   includes the id — because with the id inside the hash a correct replay would be reported as a
   changed intent. "Different id, same economic command" is made **unrepresentable** by
-  `payment_reversals_payment_uq` rather than detected.
-- **A new FIRST lock**, `pg_advisory_xact_lock('daftar.payment_provider_reference', …)`, because
-  two concurrent deliveries carry different ids and the step-1a key does not serialise them —
-  without it both insert and one gets `23505`, which is a refusal where law 7 requires a replay.
-  §8.1 carries it.
+  `payment_reversals_payment_uq` rather than detected. **Nor does it cover the reversed
+  allocation set** (F-C4): that is derived, is on no request, cannot differ for one payment under
+  law 3, and including it would make the before-state ordering unsatisfiable.
+- **A new FIRST lock**, `pg_advisory_xact_lock('daftar.payment_provider_reference', …)`. **Its
+  reason is corrected by F-C7**: it is NOT that the key below fails to serialise two deliveries
+  of one webhook — `daftar.payment_id` does serialise them, because two deliveries of one webhook
+  are two reversals of one payment. What it buys is one provider reference against two
+  **different** payments, where the payment keys differ and the partial unique would otherwise
+  answer a raw `23505` instead of a domain refusal decided before any state read. §8.1 and DDL
+  spec §1A.4 carry it.
 
 ---
 
@@ -435,7 +469,7 @@ S6's:
 
 | step | lock | notes |
 |---|---|---|
-| **1** | `pg_advisory_xact_lock('daftar.payment_provider_reference', hashtext(provider_source \|\| '\|' \|\| provider_reference))` | **payment reversal with a provider reference only** (§7.4). FIRST, because it is the identity under which the replay decision is made — and because two concurrent deliveries of one webhook carry DIFFERENT client ids, so the key below does not serialise them. Without this, both insert and the partial unique answers one of them `23505`: a refusal where law 7 requires an exact replay. A `hashtext` collision costs serialisation, never correctness |
+| **1** | `pg_advisory_xact_lock('daftar.payment_provider_reference', hashtext(provider_source \|\| '\|' \|\| provider_reference))` | **payment reversal with a provider reference only** (§7.4). FIRST because it is the **outermost shared identity** and because the replay lookup consults it first, so a later rank would read under a key not yet held. **The reason given in round 4 is WITHDRAWN (F-C7):** it said two deliveries of one webhook carry different client ids so "the key below does not serialise them" — step 1b is `daftar.payment_id`, and two deliveries of one webhook are two reversals of ONE payment, so step 1b DOES serialise them and the second replays. What this key genuinely buys is one provider reference against two **different** payments, where it converts a raw `23505` into a domain refusal decided before any state is read. For deadlock freedom any TOTAL order would serve, and a total order is the requirement. A `hashtext` collision costs serialisation, never correctness |
 | 1a | `pg_advisory_xact_lock('daftar.<reversal document>_id', <id>)` | the reversal's own id; the client-chosen idempotency key |
 | 1b | `pg_advisory_xact_lock('daftar.payment_id', <payment>)` | payment reversal only, **after** steps 1 and 1a, so the three advisory classes have a fixed order. With step 2 removed, this key and `payment_reversals_payment_uq` are the whole of the per-payment serialisation |
 | ~~2~~ | ~~`payments` row FOR UPDATE~~ | **REMOVED** (challenger F11). It serialised nothing that step 1b and `payment_reversals_payment_uq` do not already: the advisory `daftar.payment_id` key makes two reversals of one payment serial, and the unique key makes the second **unrepresentable**. It bought that nothing with a `GRANT UPDATE (<placeholder>)` on an **S4-owned** table — a grant argument for a lock nobody needed. The lock class, and with it one of the three new entries the deadlock sweep would have to cover, is gone |
@@ -463,11 +497,26 @@ surplus credit, and posts every mirror, in that one transaction. A reversal and 
 
 ### 8.3 The race proofs, as models (level C)
 
-`packages/inventory/test/customer-reversal-concurrency.test.ts`, green. No sleeps: every
-interleaving is a written-down list of which transaction advances next, and every contender's
-arrival in the queue is observed by `expectQueued`, which **fails** when a transaction never
-queued — two connections used in sequence are not contention. A deadlock has its own outcome
-kind and nothing retries.
+`packages/inventory/test/customer-reversal-concurrency.test.ts`, 33 cases, green, beside
+`customer-reversal-generation.test.ts`'s 29. No sleeps: every interleaving is a written-down
+list of which transaction advances next, and every contender's arrival in the queue is observed
+by `expectQueued`, which **fails** when a transaction never queued — two connections used in
+sequence are not contention. A deadlock has its own outcome kind and nothing retries.
+
+**What the SECOND challenge changed in the model itself**, since three of its eight findings were
+about this file rather than about the design:
+
+- the generation law is evaluated on **every** row, reversed ones included, and comes from ONE
+  implementation in `src/customer-reversal.ts` rather than a private copy the verifier then
+  compared with itself (F-C2);
+- C-6's census covers **seven** resource classes: 42 ordered arrangements, 20 cycle-capable, 20
+  contending without cycling. The provider key had been declared in three documents and left out
+  of the roster (F-C3);
+- a `Row` carries its **relation**, and the index key carries it too, because an index lives in
+  one relation. C-7 now hosts the cross-relation same-level race the model previously could not
+  express — and proves it **open** (F-C5);
+- the index refuses two equal keys inside **one** transaction, and a case that forgets to take
+  the index-key lock is reported as a **model defect** rather than passing silently (F-C8).
 
 **The model implements the isolation it names, and that is new.** Each transaction's writes
 are staged in its own buffer, published at commit and **discarded on refusal**; a read sees
@@ -593,9 +642,13 @@ subjects the day they land. §13 counts that cost.
    adds is the **precondition** (§"the void surface" of the DDL spec) and the **refusal of the
    direct path**.
 4. **Idempotency.** Same identity + same intent hash → exact replay, writing nothing;
-   changed intent → `*.idempotency_conflict`. The intent is **request-only** — the reversal
-   id, the document id, the date and the reason — so no derived figure is in the digest and a
-   rate movement between retries is not a false conflict
+   changed intent → `*.idempotency_conflict`. The intent is **request-only** — the document id,
+   the date, the reason and, for a payment reversal, the provider pair — so no derived figure is
+   in the digest and a rate movement between retries is not a false conflict. **Corrected by
+   F-C4:** the **client-chosen reversal id is NOT in the digest** (Ruling 4), and neither is the
+   reversed allocation set, which is derived, is not on any request, and cannot differ for one
+   payment under law 3. The one statement of the digest is DDL spec §1A.3; this bullet refers to
+   it and does not restate its fields
    (`[[daftar-registry-before-state]]`, `0081:1912-1918`). **No key may silently accept a
    different economic command**, and because no request carries an amount there is no amount
    a changed intent could smuggle past the hash.
@@ -735,10 +788,15 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
    zero rows, and on the real upgrade every correct answer is also `0`, because the reversal
    relations are created empty in the same migration. So **both paths agree with `DEFAULT 0`
    by construction**, which is exactly the condition under which a wrong expression ships. The
-   proof: seed a chain, reverse its tail through the command, re-run the expression, require
-   `1` at or below the freed level — **with the planted counterpart that a constant-`0`
-   backfill FAILS that assertion.** Without the counterpart the test passes against the defect
-   it exists to catch.
+   proof: seed a chain, reverse its tail through the command, re-run the **three** expressions,
+   require `1` for a row written after the reversal at or below the freed level and `0` for the
+   reversed original — **with TWO planted counterparts, both of which must FAIL that assertion:
+   a constant-`0` backfill, and round 4's `<=`-without-`created_at` expression** (F-C1), which
+   stores `1` on the reversed original and makes the index uncreatable. Without the counterparts
+   the test passes against the defects it exists to catch. The LAW itself is already proved at
+   level C — `packages/inventory/test/customer-reversal-generation.test.ts`, 29 cases, with
+   every row's generation written out by hand — and what remains owed is only that PostgreSQL
+   evaluates these `UPDATE`s that way over real rows.
 8b. **The replay lookup proved, including its ORDERING** (DDL spec §1A.5): a redelivery with a
    fresh id returning the stored rows; the same provider reference against a different payment
    conflicting; a stale redelivery after a later transition replaying rather than refusing
@@ -753,6 +811,15 @@ All three are `tests/**` and belong to S4's suites, so they are **patch requests
    `payment_reversal.idempotency_conflict`; a merchant-initiated reversal with NULLs
    unaffected; and **two connections** delivering one webhook concurrently, with the second
    replaying rather than receiving `23505`.
+8c. **The cross-relation same-level seam measured and recorded as OPEN** (F-C5,
+   `docs/PHASE_4_S6_LEVEL_UNIQUENESS.md` §4): two connections, one row per relation at one
+   invoice level, both committing, with the resulting state shown to exceed the invoice's
+   capacity — and the companion that the ROUTINES' chain lock closes it, so the seam is
+   direct-SQL-only. The claim that the replacement closed this is **withdrawn**; what is owed is
+   the measurement of the seam that remains, not a repair S6 can make.
+8d. **The credit-chain generation proved to be keyed on the CREDIT** (F-C6): two applications of
+   one credit at one remaining level against two different invoices, required to compute ONE key
+   — with the planted invoice-keyed variant that lets both commit and spends the credit twice.
 10. `P4-I` and `P4-J` calibrated and ratcheted.
 11. `gate:phase4:s6` composing `s5`; `gate:phase4:s4 --structural-only` still PASS.
 12. TD-15 closed **with its `TECHNICAL_DEBT.md` reference corrected**: the substantive spec is

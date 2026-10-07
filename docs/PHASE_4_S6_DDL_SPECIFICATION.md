@@ -129,42 +129,103 @@ in:
 > report `idempotency_conflict`, and **a correct replay would be refused as a changed intent**
 > — turning law 7 upside down for the one path it exists to protect.
 
-The hash covers: `payment_id`, `reversal_date`, `reason`, `provider_source`,
-`provider_reference`, and the ordered set of reversed allocation ids. The `id` remains the
-primary-key identity and is matched by the key lookup, not by the hash — so "same id, changed
-intent" still conflicts, and "different id, same economic command" is made **unrepresentable**
-by `payment_reversals_payment_uq` rather than detected. **No key silently accepts a different
-economic command:** change the payment, the date, the reason or the allocation set under one
-provider reference and the stored hash differs, which is the conflict.
+**WHAT THE HASH COVERS — and a CONTRADICTION BETWEEN TWO OF THIS SLICE'S OWN DOCUMENTS,
+resolved here (CHALLENGE FINDING F-C4, ACCEPTED).** Round 4 said two incompatible things. This
+document said the hash covers "the ordered set of reversed allocation ids"; the contract pack
+said the intent is "request-only — the reversal id, the document id, the date and the reason —
+so no derived figure is in the digest". Those differ on the id, and they differ on whether a
+DERIVED set is in the digest, which the pack elsewhere states is on no request at all.
 
-### 1A.4 The lock order the provider key needs, and the race that forces it
+**The pack's principle was right and this document's list was wrong, and the resolution is not a
+preference — the other reading is UNSATISFIABLE.** §1A.5 requires the replay lookup and the hash
+comparison to happen BEFORE any read of current state. The allocation set is not in the request;
+it is READ from the payment's active allocations. So a hash that covers the set cannot be
+computed before state is read, and the ordering law is not merely unenforced but impossible.
+Worse, the harm is the one the departure existed to prevent: payment `P` allocated 600 and 400,
+the webhook reverses it, the stored hash covers `[A1,A2]`; the redelivery arrives, the provider
+key finds the row, and recomputing the request's hash now sees `P`'s active allocation set as
+**empty** — because the reversal emptied it. `[] ≠ [A1,A2]`, so **a correct exact replay is
+answered `idempotency_conflict`**, which is law 7 upside down, reintroduced through the
+allocation set after it had been removed from the id. And taking the set from the STORED children
+instead makes the comparison a tautology that can never detect a changed intent at all.
 
-Two concurrent deliveries of one webhook carry **different** `id`s, so the advisory
-`daftar.payment_reversal_id` key of step 1 does not serialise them — each takes its own key and
-neither waits. Both then read "no such reversal", both insert, and the partial unique arbitrates
-with `23505` for one of them. A `23505` is a refusal, and law 7 requires an **exact replay**, so
-that outcome is wrong by one step.
+**THE INTENT, final, and the only statement of it in this slice:**
 
-The fix is an advisory key on the identity that is actually shared, taken **first**:
+```
+intent_sha256 = sha256 over, in this order:
+    payment_id, reversal_date, reason, provider_source, provider_reference
+```
+
+Request-only, no derived figure, and **not** the client-chosen `id`. Every field is a byte of the
+request, so the digest is computable before the first `SELECT` — which is what makes §1A.5's
+ordering satisfiable rather than aspirational.
+
+**And nothing is lost by leaving the allocation set out**, which is the question to answer rather
+than assert:
+
+- the set is **not a choice**. The whole-payment law (law 3) reverses every active allocation of
+  the payment or refuses the whole command, so for one payment there is exactly ONE lawful set.
+  A digest cannot distinguish intents that cannot differ;
+- "the same payment, a different set" is **unrepresentable**, not merely undetected:
+  `payment_reversals_payment_uq` permits one reversal row per payment, so a second attempt is
+  found by the lookup before any set is computed;
+- what a changed economic command actually varies — the payment, the date, the reason, the
+  provider identity — is in the digest, and **no request carries an amount**, so there is no
+  figure a changed intent could smuggle past it.
+
+The `id` remains the primary-key identity and is matched by the LOOKUP, not by the hash — so
+"same id, changed intent" still conflicts, and "different id, same economic command" is made
+unrepresentable by `payment_reversals_payment_uq` rather than detected.
+
+### 1A.4 The lock order the provider key needs, and the race it actually closes
+
+> **CHALLENGE FINDING F-C7, ACCEPTED. Round 4's justification for this rank was refuted by the
+> row below it in round 4's own table.** It is replaced rather than deleted, because the premise
+> was repeated in three documents and a reader who met it there should find it withdrawn here.
+
+**The refuted argument.** It read: two concurrent deliveries of one webhook carry different
+`id`s, so the `daftar.payment_reversal_id` key does not serialise them; each takes its own key,
+neither waits, both read "no such reversal", both insert, and the partial unique answers `23505`
+where law 7 requires an exact replay. **Step 1b of the same table is
+`pg_advisory_xact_lock('daftar.payment_id', payment)`, and two deliveries of one webhook are two
+reversals of ONE PAYMENT.** So step 1b serialises them: the second waits, finds the committed row
+by the payment lookup, compares the hash and replays. **The stated race cannot occur under the
+order this specification declares.**
+
+**What the provider key genuinely buys, which is a smaller thing and a real one.** One provider
+reference presented against **two different payments** — a provider error, a replayed event
+pointed at the wrong payment, a malicious resend. The payment keys differ, so step 1b serialises
+nothing; both parties pass the payment lookup finding no row; and the partial unique index
+`payment_reversals_provider_uq` answers one of them a raw **`23505`**. Under this key the second
+party waits, finds the row by the **provider** lookup, compares the hash, finds it different —
+the payment differs — and answers `payment_reversal.idempotency_conflict`. The outcome is a
+conflict either way, which is correct: it IS a different economic command. What the key changes
+is that the conflict is a **domain refusal decided before any state is read** rather than a
+constraint violation surfacing from the storage layer, and §9's "one state, one code" requires
+the former.
+
+**And why it is ranked FIRST, now that the reason is not the refuted one.** Because it is the
+outermost identity — the one a redelivery shares when nothing else does — and because §1A.5's
+lookup consults it first, so taking it last would mean reading under a key not yet held. For
+deadlock freedom any TOTAL order would serve, and **a total order is the requirement**; `0` in
+`PATCH-REQ-S6-012`'s block is a choice among correct orders, not the only correct one.
 
 | step | lock | notes |
 |---|---|---|
-| **1** | `pg_advisory_xact_lock('daftar.payment_provider_reference', hashtext(provider_source || '\|' || provider_reference))` | **payment reversal with a provider reference only.** Before everything, because it is the identity under which the whole replay decision is made. A collision on `hashtext` costs serialisation and never correctness |
-| 1a | `pg_advisory_xact_lock('daftar.payment_reversal_id', id)` | the client-chosen id, as before |
-| 1b | `pg_advisory_xact_lock('daftar.payment_id', payment)` | as before |
+| **1** | `pg_advisory_xact_lock('daftar.payment_provider_reference', hashtext(provider_source \|\| '\|' \|\| provider_reference))` | **payment reversal with a provider reference only.** First, because it is the outermost shared identity and the lookup consults it first. A collision on `hashtext` costs serialisation and never correctness |
+| 1a | `pg_advisory_xact_lock('daftar.payment_reversal_id', id)` | the client-chosen id |
+| 1b | `pg_advisory_xact_lock('daftar.payment_id', payment)` | **this is the key that serialises two deliveries of one webhook** |
 | 3 … | the chain locks and the rest, unchanged | contract pack §8.1 |
 
-With step 1 held, the second delivery waits, then reads the committed row, compares the hash
-and **replays**. The `23505` becomes unreachable on the lawful path and survives only as the
-physical floor for a direct-SQL writer that took no lock — which is exactly the division of
-labour §2A sets out for the level key, and the same lesson: **the index is the floor, the lock
-is the protocol, and neither substitutes for the other.**
+The `23505` therefore survives as the **physical floor** for a direct-SQL writer that took no
+lock, which is the same division of labour §2A sets out for the level key: **the index is the
+floor, the lock is the protocol, and neither substitutes for the other.**
 
 **This is a level-F case and is named as one** (contract pack §14 item 7): it needs two
-connections, because a single-transaction test cannot see it. The level-C model of it is the
-one the concurrency suite already provides in shape — `World.insertUnique` plus
-`indexKeyLock` — and extending it to the provider key is work for the round that has the
-column.
+connections, because a single-transaction test cannot see it. The level-C model of it is the one
+the concurrency suite already provides in shape — `World.insertUnique` plus `indexKeyLock` — and
+the provider key is now the seventh class of C-6's deadlock census, which round 4 declared in
+three documents and left out of the sweep (F-C3).
 
 ### 1A.5 The replay LOOKUP, which the hash's composition makes load-bearing
 
@@ -221,11 +282,18 @@ client that replays chooses the same id. S6's payment reversal cannot borrow tha
 party that replays is a payment provider which never saw the id. The departure is therefore:
 **the id leaves the hash, and the lookup moves from the id to the provider key and the payment
 key** — one change with two halves, and specifying only the first half would have left the
-command unable to find what it must replay. The hash covers `payment_id`, `reversal_date`,
-`reason`, `provider_source`, `provider_reference` and the ordered set of reversed allocation
-ids; the id remains the primary key and is still matched by the key lookup, so "same id,
-changed intent" conflicts, and "different id, same economic command" stays **unrepresentable**
-under `payment_reversals_payment_uq` rather than merely detected.
+command unable to find what it must replay. The intent is the one §1A.3 states and nothing else
+— `payment_id`, `reversal_date`, `reason`, `provider_source`, `provider_reference`, all
+request-only, no derived figure, not the client id — and it is stated THERE and referred to from
+here, because a law written twice drifts and F-C4 is what that drift cost. The id remains the
+primary key and is still matched by the key lookup, so "same id, changed intent" conflicts, and
+"different id, same economic command" stays **unrepresentable** under
+`payment_reversals_payment_uq` rather than merely detected.
+
+**And the ordering of §1A.5 is SATISFIABLE for exactly that reason:** every field of the digest
+is a byte of the request, so the hash is computed from the request alone and the comparison
+needs no `SELECT` but the two key lookups. An intent that covered the payment's active allocation
+set could not have been computed before state was read, and F-C4 is the finding that caught it.
 
 **Owed at level F, and named so it is not mistaken for proved:** a redelivery with a fresh id
 returning the stored rows; the same provider reference against a different payment conflicting;
@@ -380,16 +448,77 @@ ALTER TABLE customer_credit_applications
 | **integrity** | the deferred verifier recomputes it for every ACTIVE row and refuses a disagreement — `invoice_settlement.settlement_generation_invalid`. It is therefore not a trusted client-supplied field, which is the whole difference between this and a `reversed` boolean |
 | **what it is NOT** | not a status, not a flag, not mutable. It is written once with the row and never updated; activeness remains the anti-join and nothing here brings it back as a column |
 
-### 2A.1 The backfill — an EXPRESSION, never a constant, and the ordering it forces
+### 2A.1 The backfill — THREE expressions, a WRITE-TIME reconstruction, and the ordering it forces
 
-`DEFAULT 0` is a device for **new** rows. It is not the backfill, and treating it as one is the
-failure mode of this change: a default of `0` is silently wrong for any chain that already
-carries a reversal, and nothing in the catalogue would say so.
+> **CHALLENGE FINDING F-C1, CRITICAL, ACCEPTED IN FULL. Round 4's expression was wrong, and
+> wrong in a way that made the migration unable to apply at all.** It is kept below, named as
+> the defect, because deleting it would hide what the repair is a repair of.
 
-**The backfill is the generation law itself, evaluated over the append-only reversal rows and
-nothing else:**
+`DEFAULT 0` is a device for **new** rows. It is not the backfill, and treating it as one is one
+failure mode of this change. Round 4 said so, and then wrote this:
+
+```sql
+-- ROUND 4, WRONG. Retained as the named defect; do not restore it.
+SET chain_generation = (
+      SELECT pg_catalog.count(*) FROM public.allocation_reversals r
+        JOIN public.payment_allocations o ON o.business_id = r.business_id AND o.id = r.reducer_id
+       WHERE r.business_id = a.business_id AND r.invoice_id = a.invoice_id
+         AND o.ar_released_before_txn_minor <= a.ar_released_before_txn_minor);
+```
+
+**Why it is wrong.** It has no bound on WHEN, so it counts every reversal at a level `<= L` **as
+of now**. For a reversed original at level `L`, the reversal **of that very row** freed level
+`L`, and `L <= L` is true — so the row counts its own reversal and stores `1` where the law says
+`0`. The law at §2A's table is "as of the moment this row was written", and a row written before
+any reversal existed has a write-time value of `0`. The `<=` double-counts the row it is about,
+and that is a property of the expression's text.
+
+**Why it is worse than a wrong number.** Chain `PA@0`, `PA@400`, `PA@700`; reverse the tail at
+700; this expression stores `0, 0, 1`. Add the lawful successor at the freed level 700, which
+carries generation `1` and is the one row this whole repair exists to admit, and the ordering
+below runs 0c and then 0d:
 
 ```
+ERROR:  could not create unique index "payment_allocations_level_generation_uq"
+DETAIL: Key (business_id, invoice_id, ar_released_before_txn_minor, chain_generation)
+        =(…, 700, 1) is duplicated.
+```
+
+**Step 0c manufactures the duplicate that step 0d refuses.** The migration aborts. It is
+fail-safe — step 5 never runs, so the narrow key survives and no data is lost — but it is a
+migration that cannot apply to any tree holding a reversal, and with two reversals it compounds.
+
+**And it refutes a sentence of round 4's own.** That sentence read: "it is the same expression
+the deferred verifier recomputes, so the backfill and the verifier cannot disagree." They do
+disagree, and structurally rather than by slip. **The verifier is scoped to ACTIVE rows — which
+is correct — and so it never evaluates the one row the expression gets wrong.** One expression
+was being asked to serve two roles that need different ones:
+
+| role | what it needs | scope |
+|---|---|---|
+| the deferred **verifier** | an AS-OF-NOW recount, no ordering | ACTIVE rows only |
+| the **backfill** | a WRITE-TIME reconstruction, which is an ordering question | EVERY row, active and reversed |
+
+Both forms are now code, at level A, in `packages/inventory/src/customer-reversal.ts`:
+`asOfNowGeneration`, `writeTimeGeneration`, and `generationFormsAgreeOnActive` — the theorem
+that makes the cheap verifier sound rather than lucky, with its own falsifying case.
+
+**The choice this specification makes, stated explicitly because F-C1 asks for it: a WRITE-TIME
+RECONSTRUCTION, and NOT an exclusion of reversed rows.** The stored value therefore satisfies
+the law exactly as §2A's table states it, for every row in the relation, and the law is
+unchanged. Excluding reversed rows would have left the column holding something that is not the
+law for a third of the rows, and would have owed a statement of what that something is; and it
+would not even be simpler, because the reversed rows are precisely the ones the wider UNIQUE key
+has to keep apart from their lawful successors.
+
+**The repaired expressions. THREE columns, THREE expressions** — F-C6, accepted: round 4 wrote
+one and delegated the rest to "the mirror of it … with `>=`", which is a different join
+relation, a different chain key and a different level column, and the phrase hid a double-spend
+(the test block at the end of `packages/inventory/test/customer-reversal-generation.test.ts`
+measures it).
+
+```sql
+-- (1) payment_allocations.chain_generation — the INVOICE chain, ascending.
 UPDATE payment_allocations a
    SET chain_generation = (
          SELECT pg_catalog.count(*)
@@ -398,14 +527,60 @@ UPDATE payment_allocations a
              ON o.business_id = r.business_id AND o.id = r.reducer_id
           WHERE r.business_id = a.business_id
             AND r.invoice_id  = a.invoice_id
-            AND o.ar_released_before_txn_minor <= a.ar_released_before_txn_minor);
+            AND o.ar_released_before_txn_minor <= a.ar_released_before_txn_minor
+            AND r.created_at  <  a.created_at);          -- ← THE REPAIR, and the whole of it
+
+-- (2) customer_credit_applications.chain_generation — the SAME invoice chain, so the same
+--     shape, but the reversal's original is a credit application and the join relation differs.
+UPDATE customer_credit_applications a
+   SET chain_generation = (
+         SELECT pg_catalog.count(*)
+           FROM public.allocation_reversals r
+           JOIN public.customer_credit_applications o
+             ON o.business_id = r.business_id AND o.id = r.reducer_id
+          WHERE r.business_id = a.business_id
+            AND r.invoice_id  = a.invoice_id
+            AND o.ar_released_before_txn_minor <= a.ar_released_before_txn_minor
+            AND r.created_at  <  a.created_at);
+
+-- (3) customer_credit_applications.credit_chain_generation — the CREDIT chain, which DESCENDS,
+--     and which is keyed on the CREDIT and not on the invoice. The `>=` is the easy half.
+UPDATE customer_credit_applications a
+   SET credit_chain_generation = (
+         SELECT pg_catalog.count(*)
+           FROM public.allocation_reversals r
+           JOIN public.customer_credit_applications o
+             ON o.business_id = r.business_id AND o.id = r.reducer_id
+          WHERE r.business_id = a.business_id
+            AND o.credit_id   = a.credit_id               -- ← THE CREDIT, not the invoice
+            AND o.credit_remaining_before_minor >= a.credit_remaining_before_minor
+            AND r.created_at  <  a.created_at);
 ```
 
-— and the mirror of it for `customer_credit_applications`' two chains, the credit one with
-`>=` over `credit_remaining_before_minor`, because that chain descends. **One expression per
-chain, and it is the same expression the deferred verifier recomputes**, so the backfill and
-the verifier cannot disagree: if they could, the migration would install data its own verifier
-rejects.
+Expression (1) and expression (2) are not one statement over a union, because each `UPDATE` has
+its own target and its own join relation; they are the same LAW over the same chain, read from
+the two relations the chain unions (`0081:739-748`). Expression (3) is the same law again over a
+different chain, and **its `WHERE` clause names `credit_id`**: a generation counted over the row's
+INVOICE chain is not a function of the CREDIT chain the key
+`customer_credit_applications_level_generation_uq` is on, so two truthful writers applying one
+credit at one remaining level against two different invoices would compute DIFFERENT keys, the
+index would exclude neither, and the credit would be spent twice at one level. That is measured,
+not asserted: see the last four cases of `customer-reversal-generation.test.ts`.
+
+**`created_at` is the write-time witness, and both relations already carry it** —
+`created_at TIMESTAMPTZ NOT NULL DEFAULT now()` at `0081:321` and `0081:465`, and
+`allocation_reversals` carries the same (§2.1). It is the right witness precisely because a row
+does not choose it: a direct-SQL writer can fabricate the GENERATION, which is a column it
+supplies, and cannot fabricate the WRITE TIME.
+
+**The tie, and the direction it is resolved in.** `r.created_at < a.created_at` is strict. A tie
+means the reversal and the row share a transaction timestamp, which the command boundary already
+forbids — a reversal and the allocation it retires are separate commands in separate
+transactions — so a tie is either a clock collision or a direct-SQL writer. On a tie the strict
+comparison treats the row as written BEFORE the reversal, which gives a lawful successor the
+generation of its own reversed original, which the **unique index then REFUSES**. The tie
+therefore fails closed, and that is why the comparison is strict in this direction and not the
+other.
 
 **The ordering this forces, which corrects §6's step 0 as first written.** "Create the wider key
 before dropping the narrower one" was right and too coarse — the expression is not evaluable
@@ -413,10 +588,10 @@ until the reversal relations exist, and the index must be built over backfilled 
 
 | # | step | why this position and no other |
 |---|---|---|
-| 0a | `CREATE TABLE allocation_reversals` (and `payment_reversals`), empty | the backfill expression names `allocation_reversals`; it cannot run before the relation exists |
+| 0a | `CREATE TABLE allocation_reversals` (and `payment_reversals`), empty | the backfill expressions name `allocation_reversals`; they cannot run before the relation exists |
 | 0b | `ALTER TABLE … ADD COLUMN chain_generation BIGINT NOT NULL DEFAULT 0` | metadata-only on PostgreSQL 11+; no table rewrite |
-| 0c | **run the backfill `UPDATE`**, then **assert** that the stored value equals the expression for **every** row | the assertion is what makes the constant and the expression distinguishable at all |
-| 0d | `CREATE UNIQUE INDEX … (…, level, chain_generation)` | built over backfilled values; and still **before** any drop, so the relation is never without a unique key over the level |
+| 0c | **run the three backfill `UPDATE`s**, then **assert** that the stored value equals the expression for **every** row of **each** relation | the assertion is what makes the constant and the expression distinguishable at all — and §2A.2 says why, on today's data, it still cannot |
+| 0d | `CREATE UNIQUE INDEX … (…, level, chain_generation)` ×3 | built over backfilled values; and still **before** any drop, so the relations are never without a unique key over the level |
 | 1–4 | the guard, the widened verifier, the catalogue reads | unchanged |
 | 5 | `DROP CONSTRAINT` the narrow level-alone keys | last, as before |
 
@@ -432,6 +607,29 @@ until the reversal relations exist, and the index must be built over backfilled 
 > **So the migration cannot prove its own backfill, on either path, and saying so is part of the
 > specification.** Both paths agree with `DEFAULT 0` by construction, which is exactly the
 > condition under which a wrong expression ships unnoticed.
+
+**AND THE PART ROUND 4 GOT WRONG ABOUT ITS OWN DISCLOSURE (F-C1).** The paragraph above was
+honest and it was right, and the expression inside it was wrong. The lesson is in the gap: round
+4 added about 150 lines of §2A prose and **not one line of executable evidence**, when the
+generation law is a PURE FUNCTION of a level and a reversal sequence and could have had a
+level-C test with no server, no cluster and no migration at all. **A disclosure that a proof is
+owed is not a substitute for the cheap proof that was available.**
+
+That proof now exists: `packages/inventory/test/customer-reversal-generation.test.ts`, 29 cases.
+It carries five histories with **every row's generation written out by hand**, requires the
+repaired expression to equal the law on all of them, requires round 4's expression to be
+**right** on a chain with no reversal and **wrong** on every chain that holds one, and then
+reproduces the consequence: under round 4's backfill the key set holds `I1|700|1` twice and the
+index cannot be created; under the law every row takes its own key. The two forms are compared,
+and the bridge is falsified on an unlawful chain so that it is a claim and not a tautology — an
+earlier draft of that bridge **was** a tautology, and its own test caught it.
+
+What that test does and does not settle, stated so the two are not confused:
+
+| | settled | not settled |
+|---|---|---|
+| level C, today | the LAW, and that each printed expression's SHAPE computes it — which is the thing round 4 got wrong | that PostgreSQL evaluates these `UPDATE`s this way over real rows |
+| level F, owed | — | the above, with the planted constant-`0` counterpart, and a planted `<=`-without-`created_at` counterpart that must now fail too |
 
 **What does prove it** is a test that makes the non-zero case exist, and it is owed at level F:
 seed a chain, reverse its tail through the command so a real `allocation_reversals` row exists,

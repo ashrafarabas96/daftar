@@ -39,15 +39,36 @@ and two truthful concurrent writers at one level still compute **one** key.
 0a. create `allocation_reversals` (and `payment_reversals`), empty — the backfill expression
     names them and cannot run before they exist;
 0b. `ADD COLUMN … NOT NULL DEFAULT 0` — metadata-only on PostgreSQL 11+, no table rewrite;
-0c. **run the backfill EXPRESSION** — `count(*)` over the reversal rows at or below (for the
-    credit chain, at or above) each row's own level — and **assert the stored value equals the
-    expression for every row**. `DEFAULT 0` is a device for new rows and **is not the
-    backfill**; a default taken as the backfill is silently wrong for any chain that already
-    carries a reversal;
+0c. **run the THREE backfill EXPRESSIONS** — one per column — and **assert the stored value
+    equals the expression for every row of each relation**. `DEFAULT 0` is a device for new rows
+    and **is not the backfill**; a default taken as the backfill is silently wrong for any chain
+    that already carries a reversal;
 0d. `CREATE UNIQUE INDEX` the three wider keys — over backfilled values, and **before any
     drop**, so the relations are never without a unique key over the level;
 1–4. the guard, the widened verifier, the catalogue reads;
 5.  **only then** `DROP CONSTRAINT` the three narrow keys.
+
+## CORRECTION TO THIS REQUEST'S FIRST VERSION — the expression it named could not apply
+
+**CHALLENGE FINDING F-C1, CRITICAL, ACCEPTED IN FULL.** The expression this request carried in
+round 4 counted every reversal at a level `<= L` **as of now**, with no bound on WHEN. A reversed
+original at level `L` therefore counted the reversal of ITSELF — `L <= L` — and stored `1` where
+the law says `0`. Step 0c manufactured a duplicate `(…, 700, 1)` and **step 0d of this same
+request then refused to index it**: the migration could not apply to any tree holding a reversal.
+It fails safe (step 5 never runs, the narrow key survives, no data is lost) and it is still a
+migration that aborts.
+
+The repair is one conjunct — `AND r.created_at < a.created_at` — and **three expressions rather
+than one**: `docs/PHASE_4_S6_DDL_SPECIFICATION.md` §2A.1 now prints all three, because the credit
+column's expression is keyed on the **credit** and not on the invoice, and round 4's phrase "the
+mirror of it … with `>=`" hid a double-spend (F-C6). Both relations already carry
+`created_at TIMESTAMPTZ NOT NULL DEFAULT now()` — `0081:321` and `0081:465` — and the comparison
+is strict so that a tie fails CLOSED: it gives a successor the generation of its reversed
+original, which the new unique index refuses.
+
+The level-C proof that was available all along and was not written now exists:
+`packages/inventory/test/customer-reversal-generation.test.ts`, 29 cases, with round 4's
+expression retained as the planted counterpart it must disagree with.
 
 ## What the CONTRACT_DIFF should classify, stated plainly
 
@@ -63,7 +84,7 @@ and two truthful concurrent writers at one level still compute **one** key.
 ## The honest weakness in the upgrade proof, disclosed rather than discovered
 
 §2A.2: on **both** paths — `check:db-from-zero` and the real upgrade — every correct answer to
-the backfill expression is also `0`, because the reversal relations are created empty in the
+each backfill expression is also `0`, because the reversal relations are created empty in the
 same migration. The fresh-install assertion iterates over **nothing**. So **neither path can
 distinguish the expression from the constant**, which is precisely the condition under which a
 wrong backfill ships unnoticed. The proof is owed at level F: seed a chain, reverse its tail
@@ -89,5 +110,5 @@ asserts the **unrepaired** design lets both inserts commit.
 ## Expected semantic diff
 
 Three columns on two relations, three unique indexes created, three constraints dropped last,
-one backfill `UPDATE` that touches zero rows on every path that exists today, and the
+three backfill `UPDATE`s that touch zero rows on every path that exists today, and the
 assertions that say so.

@@ -382,6 +382,146 @@ export function isContiguousFromZero(chain: SettlementChain): boolean {
 }
 
 /**
+ * ── THE REVERSAL GENERATION LAW, as a PURE FUNCTION (CHALLENGE FINDING F-C1) ──
+ *
+ * The second column of the replacement UNIQUE key (`chain_generation`) holds,
+ * for a row at chain level `L`:
+ *
+ *     the number of reversals on this chain that freed a level AT OR BELOW `L`
+ *     **and that already existed when this row was written**.
+ *
+ * Round 4 specified that law in prose and then wrote an SQL expression that
+ * dropped its second clause. The expression counted every reversal at a level
+ * `<= L` **as of now**, so a reversed original at level `L` counted THE REVERSAL
+ * OF ITSELF — `L <= L` is true — and came out `1` where its write-time value is
+ * `0`. That is not merely a wrong stored number: it manufactures the exact
+ * duplicate key that the same migration's `CREATE UNIQUE INDEX` then refuses,
+ * so the migration could not apply to any tree holding a reversal.
+ *
+ * The law is restated here as code so that it is a thing that can be WRONG in a
+ * test rather than a paragraph that can only be re-read. Two forms are given,
+ * because the design needs two and round 4's error was believing it needed one:
+ *
+ * - `writeTimeGeneration` — what a row STORES, and therefore what a backfill
+ *   must reconstruct. It needs the reversal SEQUENCE, because "already existed"
+ *   is an ordering question;
+ * - `asOfNowGeneration` — what the deferred verifier RECOMPUTES. It needs no
+ *   ordering, and it is only ever evaluated over ACTIVE rows.
+ *
+ * `generationFormsAgreeOnActive` is the bridge, and it is what makes the cheap
+ * verifier SOUND rather than lucky: the two forms agree for every ACTIVE row of
+ * a lawful chain. That is a theorem about the LIFO law and not a coincidence,
+ * and the reason is short — while a row at `L` is active, no reversal at a
+ * level BELOW `L` can exist, because freeing one would have required this row
+ * to be reversed first; and every reversal at exactly `L` retired an earlier
+ * row at `L`, so it predates this one. The reversals an active row did not see
+ * are therefore all at levels ABOVE its own, and neither form counts those.
+ *
+ * The bridge is FALSIFIABLE and a case below falsifies it: hand it a chain with
+ * a reversal below an active row — the state a direct-SQL writer can reach and
+ * the commands cannot — and it answers `false`.
+ */
+export interface GenerationRow {
+  /** The row's own id. */
+  readonly rowId: string;
+  /** Its declared chain level, in the one ASCENDING form this module reasons in. */
+  readonly level: bigint;
+  /**
+   * HOW MANY REVERSALS ON THIS CHAIN ALREADY EXISTED WHEN THIS ROW WAS WRITTEN
+   * — the row's position in the chain's reversal sequence, not a count of the
+   * ones that matter. It is what the backfill reconstructs, in SQL, as the
+   * number of the chain's reversal rows created before this row
+   * (`r.created_at < a.created_at`).
+   *
+   * It is carried SEPARATELY from `reversedAt` on purpose. An earlier draft of
+   * this law let an active row mean "all of them", which made the bridge
+   * predicate below a tautology that no input could falsify — the exact vacuity
+   * `[[daftar-a-green-gate-must-prove-it-can-be-red]]` is about, and its own
+   * test caught it.
+   */
+  readonly writtenAfter: number;
+  /**
+   * The position of THIS row's own reversal in the chain's reversal sequence,
+   * or `null` while the row is still active. It is an ORDER, never a timestamp:
+   * `P4-AL-42` (interleaving, never timing) applies to the law as much as to
+   * the races, and no clock is needed to say which reversal came first.
+   */
+  readonly reversedAt: number | null;
+}
+
+/**
+ * The chain's reversals in creation order, each named by the level it freed —
+ * the level of the row it retired. Position `i` is the `i`-th reversal on the
+ * chain. Derived from the append-only reversal relations and from nothing else.
+ */
+export type ReversalSequence = readonly bigint[];
+
+function assertSequence(seq: ReversalSequence, row: GenerationRow): void {
+  if (!Number.isInteger(row.writtenAfter) || row.writtenAfter < 0 || row.writtenAfter > seq.length) {
+    refuse(
+      'allocation_reversal.chain_inconsistent',
+      `row ${row.rowId} claims ${String(row.writtenAfter)} reversals existed when it was written, which a sequence of ${seq.length} cannot support`,
+    );
+  }
+  if (row.reversedAt === null) return;
+  if (row.reversedAt < row.writtenAfter) {
+    refuse(
+      'allocation_reversal.chain_inconsistent',
+      `row ${row.rowId} is reversed at position ${row.reversedAt} and claims ${row.writtenAfter} reversals preceded its own write — a row cannot be reversed before it exists`,
+    );
+  }
+  if (!Number.isInteger(row.reversedAt) || row.reversedAt < 0 || row.reversedAt >= seq.length) {
+    refuse(
+      'allocation_reversal.chain_inconsistent',
+      `row ${row.rowId} names reversal position ${String(row.reversedAt)}, which is not a position of a sequence of ${seq.length}`,
+    );
+  }
+  const freed = seq[row.reversedAt];
+  if (freed !== row.level) {
+    refuse('allocation_reversal.chain_inconsistent', `row ${row.rowId} sits at level ${row.level} but the reversal it names freed level ${String(freed)}`);
+  }
+}
+
+/**
+ * THE VALUE THE ROW STORES. The count of reversals at a level at or below the
+ * row's own among the `writtenAfter` that already existed when the row was
+ * written. Nothing later counts, whatever its level — which is the clause round
+ * 4's SQL dropped.
+ */
+export function writeTimeGeneration(row: GenerationRow, reversals: ReversalSequence): bigint {
+  assertSequence(reversals, row);
+  let n = 0n;
+  for (let i = 0; i < row.writtenAfter; i += 1) {
+    const freed = reversals[i];
+    if (freed !== undefined && freed <= row.level) n += 1n;
+  }
+  return n;
+}
+
+/**
+ * WHAT THE DEFERRED VERIFIER RECOMPUTES: the same count with no ordering bound.
+ * It is correct ONLY over active rows, and the verifier is scoped to those.
+ * Applied to a reversed row it counts that row's own reversal, which is
+ * precisely the defect F-C1 names.
+ */
+export function asOfNowGeneration(level: bigint, reversals: ReversalSequence): bigint {
+  let n = 0n;
+  for (const freed of reversals) if (freed <= level) n += 1n;
+  return n;
+}
+
+/**
+ * The bridge, as a predicate a test can make FALSE: the two forms agree for
+ * every row the verifier evaluates, and for no reason other than the LIFO law.
+ * It answers `false` the moment a caller hands it a history in which a reversal
+ * at a level below an ACTIVE row exists — which the LIFO law forbids and which
+ * is therefore the shape of a corrupted chain, not of a new case.
+ */
+export function generationFormsAgreeOnActive(rows: readonly GenerationRow[], reversals: ReversalSequence): boolean {
+  return rows.filter((r) => r.reversedAt === null).every((r) => writeTimeGeneration(r, reversals) === asOfNowGeneration(r.level, reversals));
+}
+
+/**
  * THE LIFO PREDICATE. The chain's last active settlement reducer, or `null`
  * when the chain has none.
  *
