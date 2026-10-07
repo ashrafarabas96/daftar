@@ -125,9 +125,7 @@ describe('S6 challenge — §2A.1 backfill expression on a real cluster', () => 
     await pa(4, I1, 700n, 1n); // the LAWFUL successor at the freed level, gen 1
     await pool.query(BACKFILL_PA); // step 0c
     await expect(
-      pool.query(
-        'CREATE UNIQUE INDEX pa_lvl_gen_uq ON payment_allocations (business_id, invoice_id, ar_released_before_txn_minor, chain_generation)',
-      ),
+      pool.query('CREATE UNIQUE INDEX pa_lvl_gen_uq ON payment_allocations (business_id, invoice_id, ar_released_before_txn_minor, chain_generation)'),
     ).rejects.toThrow(/duplicate key|23505|could not create unique index/i);
     const g = await gens();
     expect([g['003@700'], g['004@700']]).toEqual(['1', '1']); // two rows, ONE key

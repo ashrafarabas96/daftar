@@ -108,9 +108,7 @@ describe('S6 challenge — two REAL writers under the widened keys', () => {
       await new Promise((r) => setTimeout(r, 700));
       expect(settled, 'T2 did not block on the index entry: the mutual exclusion is not there').toBe('blocked');
       // Neither party took a row lock or an advisory key — this is the unlocked path.
-      const locks = await pool.query<{ n: string }>(
-        `SELECT count(*)::text AS n FROM pg_locks WHERE locktype = 'advisory'`,
-      );
+      const locks = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM pg_locks WHERE locktype = 'advisory'`);
       expect(locks.rows[0]?.n).toBe('0');
 
       await t1.query('COMMIT');
@@ -118,9 +116,7 @@ describe('S6 challenge — two REAL writers under the widened keys', () => {
       expect(settled).toBe('raised');
       await t2.query('ROLLBACK').catch(() => undefined);
 
-      const rows = await pool.query<{ id: string }>(
-        'SELECT id FROM payment_allocations WHERE ar_released_before_txn_minor = 700 AND chain_generation = 1',
-      );
+      const rows = await pool.query<{ id: string }>('SELECT id FROM payment_allocations WHERE ar_released_before_txn_minor = 700 AND chain_generation = 1');
       expect(rows.rows.map((r) => r.id)).toEqual([u(11)]);
     } finally {
       await t1.end().catch(() => undefined);
