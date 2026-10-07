@@ -2256,6 +2256,11 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     title: 'P4-S4 — THE PERMANENT FOUR-WAY AUTHORITY MATRIX (TL-P4-RLS-INT-01)',
     cases: 2,
   },
+  {
+    suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts',
+    title: 'P4-S4 — THE RED PROOFS for the reachability half',
+    cases: 9,
+  },
   // CASE C of the same matrix, and a DIFFERENT authority model from the three
   // above it: a real merchant credential exercising a real route, refused by the
   // barrier, with the other tenant's state proven byte-identical afterwards.
@@ -2269,7 +2274,7 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   {
     suite: 'tests/security/p4s4-cross-tenant-command-refusal.test.ts',
     title: '§16 CASE C — THE RED PROOFS: each law is shown to be able to fail, against a real subject',
-    cases: 8,
+    cases: 9,
   },
   {
     suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts',

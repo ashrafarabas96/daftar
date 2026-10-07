@@ -888,6 +888,32 @@ is now handed to the law through a recording proxy and the set of fields the law
 touched must equal all thirteen, so a fourteenth attribute turns the suite red
 until a clause reads it.
 
+**A second correction the reachability law produced, and it enlarges a surface.**
+The law that proves the barrier holds on every path a relation is reachable by
+derived its `SECURITY DEFINER` surface by asking which routine bodies NAME one
+of the four relations. That closure was textual and stopped at zero hops, so a
+routine reading a relation only through another routine was outside a surface it
+had always been inside. `invoice_outstanding`
+(`infrastructure/database/migrations/0083_phase4_ar_outstanding_set_based.sql`)
+is `STABLE` and `SECURITY INVOKER`, like every reader of record under R-P4-07 —
+so inside a definer routine owned by an escape-list role it reads under the
+**definer's** row security, and one remove was a complete bypass of the law.
+Closing the surface over **one named hop**, derived from the catalogue rather
+than listed, takes it from four members to **seven**:
+`accounting_open_balance_post`, `accounting_post_manual_adjustment` and
+`accounting_post_reversal` reach `sales` through the `accounting_post_entry`
+they each call (`0045`), naming none of the four relations themselves. Each of
+the three was then measured to be gated exactly as the original four are
+(`P0001` with `accounting.assertion_missing`), so **this is the law widened to
+what is true of the catalogue and not a product finding** — but the law had
+claimed a closure of four over a surface of seven, and that claim was false. No
+ruling or document described this surface as "the four commands", so no wording
+is reconciled; the one place that phrase appears
+(`docs/PHASE_4_S3_MIGRATION_DESIGN.md`) is about the POS cart commands and is a
+different subject. The boundary is now a checked law rather than an accident of
+a pattern: exactly one hop, the reader set non-empty, strictly enlarging the
+direct surface and losing nothing it saw.
+
 **Effect on P4-S4.** None by itself. The slice's migrations are not rewritten to
 narrow this, and S4 may proceed while runtime tenant isolation, cross-business
 isolation, role shape, `SET ROLE` refusal, ACL restrictions, the definer
