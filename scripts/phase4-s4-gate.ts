@@ -2214,6 +2214,12 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   {
     suite: 'tests/security/p4s4-internal-definer-inventory.test.ts',
     title: 'TL-P4-RLS-INT-01 §14 — the internal SECURITY DEFINER inventory is COMPLETE and matches the catalogue',
+    cases: 9,
+  },
+  {
+    suite: 'tests/security/p4s4-internal-definer-inventory.test.ts',
+    title: 'TL-P4-RLS-INT-01 §14 RED PROOF — the completeness law can fail, and names the condition',
+    cases: 15,
   },
   // The shape and reachability sentinels, recorded by the laws that MEASURE a
   // live catalogue rather than by the record-based arms that prove those laws
