@@ -219,6 +219,29 @@ of saying nothing.
 
 ---
 
+## 5A. THIS FILE QUOTES "OD-03 IS OPEN" THREE TIMES AND ASSERTS IT NOWHERE
+
+Recorded because `TL-P4-COORD-R5`'s forward law — **no NEW file may assert OD-03 is open** — is
+the kind of law that gets implemented as a regex, and a regex cannot tell a quotation from an
+assertion.
+
+The three occurrences in this file, all inside quotation marks or a blockquote, all in service of
+recording the closure or naming the defect:
+
+| line | what it is |
+|---|---|
+| `:33` | my own corrected sentence, quoted and named as the defect it was |
+| `:103` | a blockquote of `selling.schemas.ts:33-36`, the strong-form precedent |
+| `:113` | a blockquote of `receivables.schemas.ts:39-40`, the weak-form precedent |
+
+**A document that records a closure must be able to quote the claim it closes.** The Phase 3
+release gate already solved this for its own patterns with a `HISTORICAL` escape — a line that
+says of itself that it is history is not a stale claim — and the forward law needs the same
+escape, or **the first files it reddens are the ones recording the closure.** Raised for the gate
+engineer, who holds the gate half of `TL-P4-COORD-R5`; it is not this request's to build.
+
+---
+
 ## 6. THE STATUS OF THE CLAIM WHILE THIS IS BLOCKED
 
 **S6's tax position is SPECIFIED AND NOT ENFORCED.** It is recorded that way in
