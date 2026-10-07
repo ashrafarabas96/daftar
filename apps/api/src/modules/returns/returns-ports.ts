@@ -513,10 +513,7 @@ export interface ReturnsReadPort {
  * known to the command because `sameCurrency` is an INPUT to
  * `planCreditNoteApplication`.
  */
-export function creditNoteApplicationRow(
-  identity: CreditNoteApplicationIdentity,
-  plan: CreditNoteApplicationPlan,
-): CreditNoteApplicationWrite {
+export function creditNoteApplicationRow(identity: CreditNoteApplicationIdentity, plan: CreditNoteApplicationPlan): CreditNoteApplicationWrite {
   for (const [name, value] of Object.entries(identity)) {
     // A `NOT NULL` column with no default and an empty string are the same
     // defect arriving at different layers. This refusal IS reachable from a

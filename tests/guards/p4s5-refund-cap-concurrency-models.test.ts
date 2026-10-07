@@ -807,12 +807,14 @@ describe('P4-S5 concurrency model — race 5: direct-SQL writers that never take
     // staged, BOTH rows would have reached the relation at level 10 000 and the
     // source would have given up 12 000 of its 10 000. The model says so.
     const overdrawn = creditNote();
-    expect(overdrawn.insertAtLevel('A', { by: 'A', remainingBeforeMinor: 10_000n, consumedMinor: 6_000n, releasedBaseMinor: overdrawn.releaseFor(10_000n, 6_000n) })).toBe('ok');
+    expect(
+      overdrawn.insertAtLevel('A', { by: 'A', remainingBeforeMinor: 10_000n, consumedMinor: 6_000n, releasedBaseMinor: overdrawn.releaseFor(10_000n, 6_000n) }),
+    ).toBe('ok');
     overdrawn.forceDecrement('A', 6_000n);
     overdrawn.commit('A');
-    expect(overdrawn.insertAtLevel('B', { by: 'B', remainingBeforeMinor: 10_000n, consumedMinor: 6_000n, releasedBaseMinor: overdrawn.releaseFor(10_000n, 6_000n) })).toBe(
-      'duplicate_key',
-    );
+    expect(
+      overdrawn.insertAtLevel('B', { by: 'B', remainingBeforeMinor: 10_000n, consumedMinor: 6_000n, releasedBaseMinor: overdrawn.releaseFor(10_000n, 6_000n) }),
+    ).toBe('duplicate_key');
   });
 
   it('a writer that FABRICATES the level dodges the index, and the deferred verifier refuses it inside its own transaction', () => {

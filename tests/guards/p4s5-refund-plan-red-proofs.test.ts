@@ -397,12 +397,31 @@ describe('an application reduces AR through the ONE canonical algorithm', () => 
     expect(mineLines.map((l) => `${l.side} ${l.account} ${l.baseAmountMinor}`)).toEqual(
       canonicalLines.map((l) => `${l.side} ${l.account === 'customer_credit_liability' ? 'customer_refund_liability' : l.account} ${l.baseAmountMinor}`),
     );
-    // L4: and the relabelling changed the ACCOUNT and NOTHING ELSE. The two
-    // other fields of a line are checked in both directions, because an earlier
-    // version compared only `side`, `account` and `baseAmountMinor` — so a
-    // mapper that dropped the transaction amount or mislabelled the currency
-    // would have passed.
-    expect(mineLines.map((l) => `${l.currency} ${l.txnAmountMinor}`)).toEqual(canonicalLines.map((l) => `${l.currency} ${l.txnAmountMinor}`));
+    // L4: and TWO things are translated, not one — which executing this test is
+    // what established. The account is relabelled 2210 → 2200, and the CURRENCY
+    // SNAPSHOT NAME `credit` becomes `source`, because S5's line vocabulary
+    // names the consumed source's currency `source` and has no member called
+    // `credit`. Both translations live in one declared map each, and both are
+    // asserted here rather than left for a reader to discover.
+    //
+    // This assertion previously claimed the account was the ONLY difference. It
+    // was wrong, and it said so in a comment about being thorough.
+    const CURRENCY_TRANSLATION: Record<string, string> = { credit: 'source' };
+    const translatedCurrency = (c: string): string => CURRENCY_TRANSLATION[c] ?? c;
+    expect(mineLines.map((l) => `${l.currency} ${l.txnAmountMinor}`)).toEqual(
+      canonicalLines.map((l) => `${translatedCurrency(l.currency)} ${l.txnAmountMinor}`),
+    );
+    // Non-vacuity of the translation: it really fires on this plan, so the line
+    // above is not an identity map dressed up as one.
+    expect(canonicalLines.some((l) => l.currency === 'credit')).toBe(true);
+    expect(mineLines.some((l) => l.currency === 'source')).toBe(true);
+    // Widened ON PURPOSE. `ReturnsEntryLine['currency']` has no `credit` member,
+    // so the compiler rejects this comparison outright with TS2367 — which is a
+    // STRONGER statement than any runtime check: the translation is not merely
+    // performed, the untranslated value is unrepresentable on an S5 line. The
+    // runtime check is kept over a widened view so the law is also asserted
+    // against the VALUES the mapper produced and not only the type it declares.
+    expect((mineLines as readonly { readonly currency: string }[]).some((l) => l.currency === 'credit')).toBe(false);
     const relabelled = mineLines.filter((l) => l.account === 'customer_refund_liability');
     const original = canonicalLines.filter((l) => l.account === 'customer_credit_liability');
     expect(relabelled).toHaveLength(original.length);
@@ -410,7 +429,7 @@ describe('an application reduces AR through the ONE canonical algorithm', () => 
     for (let i = 0; i < relabelled.length; i += 1) {
       const a = relabelled[i] as ReturnsEntryLine;
       const b = original[i] as (typeof original)[number];
-      expect(a.currency).toBe(b.currency);
+      expect(a.currency).toBe(translatedCurrency(b.currency));
       expect(a.txnAmountMinor).toBe(b.txnAmountMinor);
       expect(a.baseAmountMinor).toBe(b.baseAmountMinor);
       expect(a.side).toBe(b.side);
@@ -770,7 +789,12 @@ describe('TL-P4-S5-R2 — the seven red proofs', () => {
     // `R(x) = HE(3x/2)`, so every ODD `x` is an exact half — and a rate of 1.5
     // keeps `conv_R(a)` at or above one base minor unit, so the scenario is a
     // lawful application rather than an `amount_below_base_unit` refusal.
-    const TIE_INVOICE = { totalTxnMinor: 20n, totalBaseMinor: 30n, outstandingTxnMinor: 20n, conversion: { rateR10: 15n * 10n ** 9n, txnExponent: 2, baseExponent: 2 } };
+    const TIE_INVOICE = {
+      totalTxnMinor: 20n,
+      totalBaseMinor: 30n,
+      outstandingTxnMinor: 20n,
+      conversion: { rateR10: 15n * 10n ** 9n, txnExponent: 2, baseExponent: 2 },
+    };
     let ties = 0;
     for (let applied = 1n; applied <= 20n; applied += 1n) {
       const p = planCreditNoteApplication({
@@ -800,15 +824,38 @@ describe('TL-P4-S5-R2 — the seven red proofs', () => {
     // RED, and reachable: a plan whose level is NOT the chain position the lock
     // returned. A handler that passed the outstanding instead of the released
     // level reaches this with a legitimate invoice and a legitimate amount.
+    // The invoice is PARTLY SETTLED, which the first execution of this test
+    // showed is necessary for the plant to be a plant at all: over a fresh
+    // invoice, `outstanding` IS the total, so `outstanding + applied` exceeds
+    // it and `apRelease` refuses in the INVENTORY vocabulary before this guard
+    // is ever reached. The proof then measured the inventory primitive's
+    // precondition instead of S5's level law.
+    //
+    // Here `outstanding = 6 667`, so the lock's chain position is
+    // `total − outstanding = 3 333`. The handler wrongly passes the OUTSTANDING
+    // as the level, with the carrying release that is consistent with it — so
+    // the first arm agrees and the LEVEL law is what fires, which is the defect
+    // this case is named for.
+    const PARTLY_SETTLED = { ...WORKED_INVOICE, outstandingTxnMinor: 6_667n };
+    expect(PARTLY_SETTLED.outstandingTxnMinor + 3_333n).toBe(PARTLY_SETTLED.totalTxnMinor);
     expect(
       codeOf(() =>
-        assertCanonicalArRelease(WORKED_INVOICE, {
-          arReleasedBeforeMinor: WORKED_INVOICE.outstandingTxnMinor,
+        assertCanonicalArRelease(PARTLY_SETTLED, {
+          arReleasedBeforeMinor: PARTLY_SETTLED.outstandingTxnMinor,
           invoiceAmountAppliedMinor: 3_333n,
-          invoiceCarryingReleasedMinor: apRelease(WORKED_INVOICE.totalBaseMinor, WORKED_INVOICE.totalTxnMinor, WORKED_INVOICE.outstandingTxnMinor, 3_333n),
+          invoiceCarryingReleasedMinor: apRelease(PARTLY_SETTLED.totalBaseMinor, PARTLY_SETTLED.totalTxnMinor, PARTLY_SETTLED.outstandingTxnMinor, 3_333n),
         }),
       ),
     ).toBe('credit_note.posting_incomplete');
+    // And the LAWFUL level over the same invoice is accepted, so the refusal
+    // above is about the level and not about the invoice.
+    expect(() =>
+      assertCanonicalArRelease(PARTLY_SETTLED, {
+        arReleasedBeforeMinor: 3_333n,
+        invoiceAmountAppliedMinor: 3_333n,
+        invoiceCarryingReleasedMinor: apRelease(PARTLY_SETTLED.totalBaseMinor, PARTLY_SETTLED.totalTxnMinor, 3_333n, 3_333n),
+      }),
+    ).not.toThrow();
 
     // A full release that does not release the whole carrying value, refused.
     //
@@ -911,7 +958,12 @@ describe('TL-P4-S5-R2 — the seven red proofs', () => {
     // the number this slice is held to. A reader that found nothing would make
     // every assertion below pass.
     expect(columns.map((c) => c.name)).toContain('realized_fx_gain_loss_minor');
-    expect(columns).toHaveLength(20);
+    // 19, and the number is the DERIVATION's — not a remembered one. This read
+    // 20 and the mandatory count below read 15 until the suite was executed;
+    // the specification has had 19 such columns throughout (checked against the
+    // previous commit), so both anchors were simply wrong and the file's syntax
+    // error is why nobody found out.
+    expect(columns).toHaveLength(19);
 
     // The five columns the COMMAND does not supply, each with the reason it is
     // exempt. An exemption is a sentence, not a silence.
@@ -925,10 +977,11 @@ describe('TL-P4-S5-R2 — the seven red proofs', () => {
     // The snake_case → field renames, written out because two columns carry a
     // `Code` suffix in the contract and `id` is the application's own.
     const RENAME: Record<string, string> = { id: 'applicationId', credit_currency: 'creditCurrencyCode', invoice_currency: 'invoiceCurrencyCode' };
-    const fieldOf = (column: string): string =>
-      RENAME[column] ?? column.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase());
+    const fieldOf = (column: string): string => RENAME[column] ?? column.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase());
     const MANDATORY = columns.filter((c) => !(c.name in EXEMPT)).map((c) => fieldOf(c.name));
-    expect(MANDATORY).toHaveLength(15);
+    // 19 NOT NULL columns with no default, minus the five the SCOPE supplies.
+    expect(Object.keys(EXEMPT)).toHaveLength(5);
+    expect(MANDATORY).toHaveLength(14);
     expect(MANDATORY).toContain('creditNoteId');
 
     const shapeOf = (source: string): readonly string[] => {
@@ -973,7 +1026,7 @@ describe('TL-P4-S5-R2 — the seven red proofs', () => {
       },
       plan(),
     );
-    expect(MANDATORY.filter((m) => (row as Record<string, unknown>)[m] === undefined)).toEqual([]);
+    expect(MANDATORY.filter((m) => (row as unknown as Record<string, unknown>)[m] === undefined)).toEqual([]);
   });
 
   it('7 — TWO independent conversions of the released and the remaining carrying value', () => {
@@ -1347,9 +1400,32 @@ describe('the date laws name their comparison instant and take it as an argument
     // strings without error and both would sort WRONG, so a date law built on
     // bare `>` without a shape check is green and incorrect.
     expect('2026-10-7' > '2026-10-07').toBe(true); // the trap, demonstrated…
-    expect(returnsDateRefusal('credit_note', '2026-10-7', '2026-10-01', '2026-10-07')).toBe('credit_note.amount_invalid'); // …and refused.
-    expect(returnsDateRefusal('customer_refund', '07/10/2026', '2026-10-01', '2026-10-07')).toBe('customer_refund.amount_invalid');
-    expect(returnsDateRefusal('credit_note', '2026-10-07', '2026-10-01', '')).toBe('credit_note.amount_invalid');
+    // …and refused, under `date_invalid` and NOT `amount_invalid`. These three
+    // expectations said `amount_invalid` until this file was executed for the
+    // first time: the domain had already been corrected — telling a merchant
+    // who mistyped a DATE that the AMOUNT was wrong sends them to a field that
+    // is correct — and the test kept the old answer, unnoticed because a
+    // separate syntax error meant the file never compiled.
+    expect(returnsDateRefusal('credit_note', '2026-10-7', '2026-10-01', '2026-10-07')).toBe('credit_note.date_invalid');
+    expect(returnsDateRefusal('customer_refund', '07/10/2026', '2026-10-01', '2026-10-07')).toBe('customer_refund.date_invalid');
+    expect(returnsDateRefusal('credit_note', '2026-10-07', '2026-10-01', '')).toBe('credit_note.date_invalid');
+
+    // THE SHAPE TEST WAS NOT ENOUGH, and executing this suite is what found it.
+    // `2026-13-45` is the example the domain's own comment cites as the input
+    // `date_invalid` catches, and it passed `/^\d{4}-\d{2}-\d{2}$/` — month 13
+    // then sorted after every real month, so the nonsense date was reported as
+    // `date_in_future`: a refusal pointing at the wrong problem, which is
+    // exactly what the comment claimed had been fixed.
+    expect(returnsDateRefusal('credit_note', '2026-13-45', '2026-10-01', '2026-10-07')).toBe('credit_note.date_invalid');
+    // A real month with an impossible day, and the Gregorian leap rule in both
+    // directions — 2026 is not a leap year and 2024 is.
+    expect(returnsDateRefusal('credit_note', '2026-02-30', '2026-01-01', '2026-10-07')).toBe('credit_note.date_invalid');
+    expect(returnsDateRefusal('credit_note', '2026-04-31', '2026-01-01', '2026-10-07')).toBe('credit_note.date_invalid');
+    expect(returnsDateRefusal('credit_note', '2026-02-29', '2026-01-01', '2026-10-07')).toBe('credit_note.date_invalid');
+    expect(returnsDateRefusal('credit_note', '2024-02-29', '2024-01-01', '2024-10-07')).toBeNull();
+    // And a lawful date is still lawful, so the tightening refused nothing real.
+    expect(returnsDateRefusal('credit_note', '2026-10-07', '2026-10-01', '2026-10-07')).toBeNull();
+    expect(returnsDateRefusal('credit_note', '2026-12-31', '2026-01-01', '2026-12-31')).toBeNull();
   });
 });
 
@@ -1530,9 +1606,17 @@ describe('TL-P4-S5-R3 — the symmetric 2× refund-FX sanity bound, at every bou
     expect(SETTLEMENT_LAW_SOURCE).toContain('REFRESH THE RATE AND');
     expect(SETTLEMENT_LAW_SOURCE).toContain('Phase 4 policy');
     // And it says what it is NOT, in the ruling's own terms.
-    expect(SETTLEMENT_LAW_SOURCE).toContain('does not cap a legitimate accounting value');
-    expect(SETTLEMENT_LAW_SOURCE).toContain('creates no
-  // gain or loss amount');
+    //
+    // Over a FLOWED view: the phrase spans a comment line break in the source,
+    // so a line break plus the next line's comment marker — `//` here, `*` in a
+    // JSDoc block — is collapsed to a single space before the comparison. An earlier
+    // draft of this assertion simply broke the string literal across two lines
+    // to match — which is a SYNTAX ERROR, so this whole file never compiled and
+    // every proof in it was unrunnable. That is the single strongest argument
+    // for running a suite rather than reading it.
+    const flowed = SETTLEMENT_LAW_SOURCE.replace(/\n\s*(?:\*|\/\/)\s?/g, ' ');
+    expect(flowed).toContain('does not cap a legitimate accounting value');
+    expect(flowed).toContain('creates no gain or loss amount');
   });
 });
 
@@ -1768,8 +1852,14 @@ describe('H3 — the credit-note lifecycle is deleted, everywhere', () => {
     // the comment that records their deletion — that is the point of it — so
     // the assertion is over `export`ed declarations, not over the text.
     const exported = [...domain.matchAll(/^export (?:const|function|type|interface) ([A-Za-z_][A-Za-z0-9_]*)/gm)].map((m) => m[1] as string);
-    expect(exported.filter((n) => /[Ll]ifecycle/.test(n))).toEqual(['CREDIT_NOTE_HAS_NO_LIFECYCLE']);
-    expect(exported.filter((n) => /[Vv]oid/.test(n))).toEqual([]);
+    // Case-INSENSITIVE, because the surviving constant is SCREAMING_CASE:
+    // `/[Ll]ifecycle/` matched neither `LIFECYCLE` nor the constant that
+    // carries it, so this filter returned `[]` and the assertion was comparing
+    // an empty list against an expectation that could never be met. Executing
+    // the suite is what showed it; the non-vacuity line above passed throughout,
+    // which is why the defect was invisible to reading.
+    expect(exported.filter((n) => /lifecycle/i.test(n))).toEqual(['CREDIT_NOTE_HAS_NO_LIFECYCLE']);
+    expect(exported.filter((n) => /void/i.test(n))).toEqual([]);
   });
 
   it('the refusal vocabulary and the operation codes no longer promise a void', () => {
@@ -1786,11 +1876,22 @@ describe('H3 — the credit-note lifecycle is deleted, everywhere', () => {
   });
 
   it('every dead code is gone from the API status table and from all THREE locale catalogues', () => {
+    // `RETURNS_CODES` is the vocabulary as an ARRAY, so membership is the
+    // array's own and NOT `Object.keys`. An earlier draft asked
+    // `Object.keys(RETURNS_CODES)` — which on an array yields "0", "1", "2" —
+    // so this loop compared code names against numeric indices and could never
+    // fail. It was VACUOUS, and the line below it was a type error that kept
+    // the whole file from compiling, which is why neither was noticed.
     for (const dead of DEAD) {
-      expect(Object.keys(RETURNS_CODES)).not.toContain(dead);
+      expect(RETURNS_CODES as readonly string[]).not.toContain(dead);
     }
-    // Non-vacuity: the status table is the real one and is not empty.
-    expect(RETURNS_CODES['credit_note.date_invalid']).toBe(422);
+    // Non-vacuity, of the right kind: the vocabulary is the real one, a LIVE
+    // code is in it, and the status table classifies that code. Asserted
+    // through `returnsStatus`, which is the status authority — the array is a
+    // list of codes and has no statuses in it to look up.
+    expect(RETURNS_CODES.length).toBeGreaterThan(30);
+    expect(RETURNS_CODES as readonly string[]).toContain('credit_note.date_invalid');
+    expect(returnsStatus('credit_note.date_invalid')).toBe(422);
     for (const lang of ['en', 'ar', 'tr']) {
       const catalogue = JSON.parse(read(`apps/web/src/messages/${lang}.json`)) as Record<string, string>;
       for (const dead of DEAD) expect(catalogue[`error.${dead}`]).toBeUndefined();
@@ -1808,14 +1909,28 @@ describe('H3 — the credit-note lifecycle is deleted, everywhere', () => {
     // columns in. Non-vacuity first: the reader can find a column that IS there.
     expect(ddl).toMatch(/^number_seq\s+BIGINT NOT NULL/m);
     expect(ddl).not.toMatch(/^status\s+TEXT NOT NULL/m);
-    expect(ddl).not.toContain('customer_void_credit_note(...)');
+    // The routine is not DECLARED, which is a different claim from the string
+    // being absent — and the weaker claim is the right one for the same reason
+    // the domain test gives: the specification NAMES the withdrawn routine in
+    // the sentence that records its withdrawal, and that sentence is the point.
+    // Asserting the string's absence made this proof red against a document
+    // that was correct, which executing it is what showed.
+    expect(ddl).toContain('It is withdrawn');
+    expect(ddl).not.toMatch(/^CREATE (?:OR REPLACE )?FUNCTION\s+customer_void_credit_note/m);
+    expect(ddl).not.toMatch(/^customer_void_credit_note\b/m);
+    // Non-vacuity of the routine reader: the TWO routines that ARE specified
+    // are found at a line start by the same shape, so the absence above is the
+    // absence of a declaration and not of a reader.
+    expect(ddl).toMatch(/^customer_issue_credit_note\b/m);
+    expect(ddl).toMatch(/^customer_refund_pay\b/m);
   });
 
   it('RED PROOF — the deletion sweep can FAIL: the same readers, run over the text that shipped before it', () => {
     // The planted subject is the real pre-correction text of each site, so this
     // proves the four assertions above are capable of going red rather than
     // merely passing over files that no longer mention the subject.
-    const preDdl = 'number_seq                           BIGINT NOT NULL CHECK (number_seq >= 1)\nstatus                               TEXT NOT NULL CHECK (status IN (\'draft\',\'issued\',\'void\'))\n';
+    const preDdl =
+      "number_seq                           BIGINT NOT NULL CHECK (number_seq >= 1)\nstatus                               TEXT NOT NULL CHECK (status IN ('draft','issued','void'))\n";
     expect(preDdl).toMatch(/^status\s+TEXT NOT NULL/m);
     const preCatalogue = { 'error.credit_note.lifecycle_invalid': 'This return note cannot be changed that way.' } as Record<string, string>;
     expect(preCatalogue['error.credit_note.lifecycle_invalid']).toBeTruthy();

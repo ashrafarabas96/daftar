@@ -935,8 +935,37 @@ export function creditNoteReplayVerdict(stored: CreditNoteIntent | null, incomin
  */
 export const RETURNS_DATE_COMPARISON_INSTANT = "the business's own current date in its own time zone, resolved once at the request boundary and passed in";
 
-/** A `YYYY-MM-DD` calendar date, as every date on this path is carried. */
-const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** A `YYYY-MM-DD` SHAPE, which is necessary and NOT sufficient — see `isCalendarDate`. */
+const CALENDAR_DATE = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
+
+/** Days per month, January first. February's 28 is corrected for leap years below. */
+const MONTH_LENGTHS: readonly number[] = Object.freeze([31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]);
+
+/**
+ * A REAL calendar date in `YYYY-MM-DD`, not merely a string of the right shape.
+ *
+ * The shape test alone was the whole check until a suite was executed for the
+ * first time and caught it: `/^\d{4}-\d{2}-\d{2}$/` accepts `2026-13-45`, and
+ * the comment on `returnsDateRefusal` cited that exact string as the input
+ * `date_invalid` exists to catch. It did not catch it. Month 13 sorted after
+ * every real month, so the nonsense date compared as a FUTURE date and the
+ * merchant was told `date_in_future` — a refusal pointing at the wrong problem,
+ * which is the defect the comment claimed had been fixed.
+ *
+ * So the range is checked, and then the month's own length, with February
+ * corrected for the Gregorian leap rule. **No `Date` object**: the function
+ * above promises there is none anywhere on this path, and a `Date` would
+ * reintroduce a time zone into a comparison that is deliberately about a DAY.
+ */
+function isCalendarDate(d: unknown): d is string {
+  if (typeof d !== 'string' || !CALENDAR_DATE.test(d)) return false;
+  const year = Number(d.slice(0, 4));
+  const month = Number(d.slice(5, 7));
+  const day = Number(d.slice(8, 10));
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const length = month === 2 && leap ? 29 : (MONTH_LENGTHS[month - 1] as number);
+  return day <= length;
+}
 
 /**
  * The two date laws of one S5 document, judged against a caller-supplied today.
@@ -969,7 +998,14 @@ export function returnsDateRefusal(
     // merchant who typed `2026-13-45` was told the amount was wrong and sent to
     // look at a field that was correct. The vocabulary now carries
     // `date_invalid` for exactly this, in both domains.
-    if (typeof d !== 'string' || !CALENDAR_DATE.test(d)) return `${domain}.date_invalid` as const;
+    //
+    // `2026-13-45` is the comment's own example and it is now genuinely
+    // refused, which it was not while this check was a SHAPE test: month 13
+    // passed `\d{2}` and then sorted after every real month, so the nonsense
+    // date was reported as `date_in_future`. `isCalendarDate` checks the range
+    // and the month's length, so the example in this comment is a case the code
+    // actually handles rather than one it was believed to handle.
+    if (!isCalendarDate(d)) return `${domain}.date_invalid` as const;
   }
   if (documentDate > businessToday) return `${domain}.date_in_future` as const;
   if (documentDate < originDate) {

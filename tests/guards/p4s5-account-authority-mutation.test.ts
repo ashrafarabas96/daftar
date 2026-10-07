@@ -156,6 +156,49 @@ function blankOut(source: string, blankStrings: boolean): string {
       continue;
     }
     const ch = source[i];
+    // A REGEX LITERAL, skipped WHOLE — the case that makes a blanker fail
+    // silently rather than loudly. `/\bfrom\s+'([^']+)'/g` holds three
+    // apostrophes; a scanner that does not know it is a regex reads the first
+    // as a string opener and inverts quote parity for the rest of the FILE,
+    // while still returning a string of the correct length. Every later comment
+    // then goes unblanked and every law over it answers "no subject found"
+    // instead of "defect found". §14.0 drives exactly this shape.
+    //
+    // Regex-or-division cannot be decided without parsing, so this is a
+    // HEURISTIC and is written as one: a `/` opens a regex only where a value
+    // may begin — after an operator, a comma, an opening bracket, a semicolon,
+    // or one of the keywords that take an expression. After an identifier, a
+    // number, `)` or `]` it is division. The failure mode is bounded in both
+    // directions and §14.0 asserts both: a missed regex loses the rest of a
+    // line, and a misread division swallows the code after it.
+    if (ch === '/') {
+      let k = i - 1;
+      while (k >= 0 && /\s/.test(source[k] as string)) k -= 1;
+      const prev = k >= 0 ? (source[k] as string) : '';
+      const word = /[A-Za-z]/.test(prev) ? /([A-Za-z]+)$/.exec(source.slice(0, k + 1))?.[1] : undefined;
+      const KEYWORDS = ['return', 'typeof', 'case', 'in', 'of', 'new', 'delete', 'void', 'do', 'else', 'yield', 'await', 'instanceof'];
+      const valueMayBegin = prev === '' || '(,=:[!&|?{};+-*%^<>~'.includes(prev) || (word !== undefined && KEYWORDS.includes(word));
+      if (valueMayBegin) {
+        let j = i + 1;
+        let inClass = false;
+        while (j < source.length) {
+          const c = source[j] as string;
+          if (c === '\\') {
+            j += 2;
+            continue;
+          }
+          if (c === '\n') break; // an unterminated regex is not a regex
+          if (c === '[') inClass = true;
+          else if (c === ']') inClass = false;
+          else if (c === '/' && !inClass) break;
+          j += 1;
+        }
+        // The body is CODE in both views: it is neither a comment nor a string,
+        // and a law about an identifier inside a pattern is a real law.
+        i = Math.min(j + 1, source.length);
+        continue;
+      }
+    }
     if (ch === "'" || ch === '"') {
       let j = i + 1;
       while (j < source.length && source[j] !== ch) j += source[j] === '\\' ? 2 : 1;
@@ -263,8 +306,13 @@ const SCENARIOS: readonly Scenario[] = Object.freeze([
     planner: 'planCustomerRefund',
     run: (s) =>
       accountsOf(
-        s.planCustomerRefund({ source: refundSource('credit_note'), consumedMinor: 1_000n, sameCurrency: false, disbursementAmountMinor: 900n, disbursement: BASE })
-          .entryLines,
+        s.planCustomerRefund({
+          source: refundSource('credit_note'),
+          consumedMinor: 1_000n,
+          sameCurrency: false,
+          disbursementAmountMinor: 900n,
+          disbursement: BASE,
+        }).entryLines,
       ),
   },
   {
@@ -519,7 +567,13 @@ describe('P4-S5 §13 — every planner in the LIVE SET follows the canonical acc
     const settlement: Settlement = await import('../../apps/api/src/modules/returns/returns-settlement');
     for (const kind of ['credit_note', 'customer_credit'] as const) {
       expect(() =>
-        settlement.planCustomerRefund({ source: refundSource(kind), consumedMinor: 1_000n, sameCurrency: false, disbursementAmountMinor: 900n, disbursement: BASE }),
+        settlement.planCustomerRefund({
+          source: refundSource(kind),
+          consumedMinor: 1_000n,
+          sameCurrency: false,
+          disbursementAmountMinor: 900n,
+          disbursement: BASE,
+        }),
       ).not.toThrow();
     }
   });
@@ -530,7 +584,23 @@ describe('P4-S5 §14 — no duplicate authority, no second mapping table, no dea
     // A mis-copied blanker is the one failure that would make every scan in
     // this file pass for every input, and nothing else would notice. So the
     // blanker is exercised on a fixture whose answer is known by inspection.
-    const fixture = ["// a comment naming 'accounts_receivable'", "const a = 'fx_gain'; /* and 'cogs' in a block */", 'const b = `t ${x} t`;'].join('\n');
+    //
+    // The REGEX LINE is the case the gate engineer proved can break a blanker
+    // silently: a regex literal holding an apostrophe — `/\bfrom\s+'([^']+)'/g`
+    // — inverts quote parity for the REST OF THE FILE while still returning a
+    // string of the correct LENGTH, so every later comment goes unblanked and
+    // every later law answers "no subject found" instead of "defect found".
+    // The two lines AFTER it are what detect that: a comment that must be gone
+    // and a literal that must survive, both downstream of the regex.
+    const fixture = [
+      "// a comment naming 'accounts_receivable'",
+      "const a = 'fx_gain'; /* and 'cogs' in a block */",
+      'const b = `t ${x} t`;',
+      "const re = /\\bfrom\\s+'([^']+)'/g;",
+      "// a comment AFTER the regex, naming 'sales_returns'",
+      "const c = 'posting_account';",
+      "const q = total / count; const d = 'inventory';",
+    ].join('\n');
     const kept = codeWithCommentsBlanked(fixture);
     const prose = codeWithProseBlanked(fixture);
     // Comments go in BOTH views.
@@ -550,6 +620,19 @@ describe('P4-S5 §14 — no duplicate authority, no second mapping table, no dea
     expect(prose).toHaveLength(fixture.length);
     // A template's `${…}` substitution is code and survives the prose view.
     expect(prose).toContain('${x}');
+
+    // THE PARITY ARM. Everything below the regex literal must still be read
+    // correctly, which is the whole of the gate engineer's finding.
+    expect(kept, 'a comment AFTER a quote-bearing regex literal was not blanked — quote parity inverted').not.toContain('sales_returns');
+    expect(kept, 'a code literal AFTER a quote-bearing regex literal was lost').toContain("'posting_account'");
+    // And a DIVISION is not mistaken for a regex, which is the other half of
+    // the same heuristic: if `/` after an identifier opened a regex, the
+    // literal after it would be swallowed.
+    expect(kept, 'a division was read as a regex literal and swallowed the code after it').toContain("'inventory'");
+    // The regex's own body is CODE, so it survives the comments-blanked view.
+    // This is the non-vacuity of the three assertions above: if the regex line
+    // were simply dropped, they would pass for the wrong reason.
+    expect(kept).toContain('\\bfrom');
   });
 
   it('§14.1 — NO ACCOUNT LITERAL survives in ANY S5 module, in ANY quoting style', () => {
@@ -569,7 +652,17 @@ describe('P4-S5 §14 — no duplicate authority, no second mapping table, no dea
     expect(files).toContain('apps/api/src/modules/returns/returns-settlement.ts');
     expect(files).toContain('apps/api/src/modules/returns/returns-ports.ts');
 
-    const ids = ['sales_returns', 'accounts_receivable', 'customer_refund_liability', 'customer_credit_liability', 'inventory', 'cogs', 'fx_gain', 'fx_loss', 'posting_account'];
+    const ids = [
+      'sales_returns',
+      'accounts_receivable',
+      'customer_refund_liability',
+      'customer_credit_liability',
+      'inventory',
+      'cogs',
+      'fx_gain',
+      'fx_loss',
+      'posting_account',
+    ];
     let consumers = 0;
     for (const rel of files) {
       // The COMMENTS-BLANKED view, and it must be that one. Every question in
@@ -610,7 +703,8 @@ describe('P4-S5 §14 — no duplicate authority, no second mapping table, no dea
     // member of each is a member of the canonical table.
     const canonical: ReadonlySet<string> = new Set<string>(ids);
     for (const a of domain.REFUND_ENTRY_ACCOUNTS) expect(canonical.has(a), `${a} is in REFUND_ENTRY_ACCOUNTS but not in the canonical table`).toBe(true);
-    for (const a of domain.CREDIT_NOTE_ENTRY_ACCOUNTS) expect(canonical.has(a), `${a} is in CREDIT_NOTE_ENTRY_ACCOUNTS but not in the canonical table`).toBe(true);
+    for (const a of domain.CREDIT_NOTE_ENTRY_ACCOUNTS)
+      expect(canonical.has(a), `${a} is in CREDIT_NOTE_ENTRY_ACCOUNTS but not in the canonical table`).toBe(true);
     // The ROLE authority's answers are members too, for both kinds.
     //
     // **This is an agreement check and not an independence check, and the
@@ -705,7 +799,16 @@ describe('P4-S5 §15 — the refusal vocabulary has NO DEAD MEMBER either', () =
     for (const d of ['credit_note', 'customer_refund'] as const) {
       // A malformed calendar date, and a document dated after the business's today.
       for (const [documentDate, originDate, businessToday] of [
-        ['2026-13-45', '2026-01-01', '2026-03-04'],
+        // A malformed date, and a document dated after the business's today.
+        //
+        // `'2026-10-7'` and not `'2026-13-45'`: the first execution of this
+        // suite found that `2026-13-45` passed the shape test, so it produced
+        // `date_in_future` rather than `date_invalid` and this matrix yielded
+        // two codes instead of four. The domain now range-checks the calendar,
+        // and the stricter case lives in the date suite; this one stays
+        // shape-invalid so the input is refused for the reason named here
+        // whatever the calendar rules later become.
+        ['2026-10-7', '2026-01-01', '2026-03-04'],
         ['2026-04-01', '2026-01-01', '2026-03-04'],
       ] as const) {
         const verdict = domain.returnsDateRefusal(d, documentDate, originDate, businessToday);
@@ -716,8 +819,7 @@ describe('P4-S5 §15 — the refusal vocabulary has NO DEAD MEMBER either', () =
   };
 
   /** The live TypeScript of the slice, comments blanked and string bodies KEPT. */
-  const liveCode = (): string =>
-    [`packages/domain-core/src/returns.ts`, ...s5ModuleFiles()].map((rel) => codeWithCommentsBlanked(readSource(rel))).join('\n');
+  const liveCode = (): string => [`packages/domain-core/src/returns.ts`, ...s5ModuleFiles()].map((rel) => codeWithCommentsBlanked(readSource(rel))).join('\n');
 
   it('the vocabulary partitions THREE ways — raise-shaped, composed-and-proved, or owed by a named authority — exhaustively and disjointly', async () => {
     const errors = await import('../../apps/api/src/modules/returns/returns-errors');
@@ -761,23 +863,42 @@ describe('P4-S5 §15 — the refusal vocabulary has NO DEAD MEMBER either', () =
     }
   });
 
-  it('RED PROOF — the classifier rejects a COMMENT-ONLY mention, which is how the previous version passed', () => {
-    // The subject is the real text of the real file. `returns-settlement.ts`
-    // names `customer_refund.registry_incomplete` twice in COMMENTS — the
-    // paragraph recording why its tautological check was deleted — and names it
-    // nowhere in code.
+  it('RED PROOF — the classifier rejects a COMMENT-ONLY mention, which raw-source presence could not', () => {
+    // **The first version of this proof asserted something false**, and running
+    // it is what showed that. It claimed `returns-settlement.ts` names
+    // `customer_refund.registry_incomplete` in a comment in the QUOTED form the
+    // old classifier looked for. It does not — the comments spell it in
+    // backticks — so the old classifier would not have been fooled by this
+    // particular comment either, and the proof was red for the wrong reason.
+    //
+    // The honest proof has two halves, and the second is explicitly a fixture:
+    //
+    // 1. over the REAL file: the raw text names the code and the
+    //    comments-blanked view does not, so the two views genuinely differ on
+    //    the subject — and the new classifier finds no raise shape in it;
+    // 2. over a FIXTURE: a real code quoted in a comment, where the old
+    //    predicate (presence anywhere in raw source) says RAISED and the new
+    //    one says not. No file in the tree currently contains that shape, which
+    //    is why it is a fixture and is labelled one rather than dressed up as a
+    //    live subject.
     const settlement = readSource('apps/api/src/modules/returns/returns-settlement.ts');
     const CODE = 'customer_refund.registry_incomplete';
-    // That the subject exists: the raw file really does mention it.
+    // Half 1. The subject exists in the raw file, and only in prose.
     expect(settlement).toContain(CODE);
-    // That the two views really differ on this file, so the proof is not red
-    // for want of a subject.
     expect(codeWithCommentsBlanked(settlement)).not.toContain(CODE);
-    // THE DETECTION, and the exact defect named: the old classifier asked
-    // whether the string was present and would have called this code raised
-    // from a comment alone; the new one asks for a raise shape and does not.
-    expect(settlement.includes(`'${CODE}'`), 'the raw-source classifier would have called this code RAISED from a comment').toBe(true);
     expect(RAISE_SHAPES(CODE).some((re) => re.test(codeWithCommentsBlanked(settlement)))).toBe(false);
+
+    // Half 2. The fixture, with a REAL code of the vocabulary in a comment.
+    const fixture = `// the handler answers '${CODE}' here\nconst x = 1;\n`;
+    const oldPredicate = (c: string, text: string): boolean => text.includes(`'${c}'`);
+    const newPredicate = (c: string, text: string): boolean => RAISE_SHAPES(c).some((re) => re.test(codeWithCommentsBlanked(text)));
+    // THE DETECTION, and the exact defect named: presence-in-raw-source counts
+    // a comment as a raise site; a raise shape over a blanked view does not.
+    expect(oldPredicate(CODE, fixture), 'the fixture must contain the quoted form, or this proves nothing').toBe(true);
+    expect(newPredicate(CODE, fixture)).toBe(false);
+    // And the new predicate is not simply always false: the same code in a real
+    // raise position IS found, so the contrast is the comment and nothing else.
+    expect(newPredicate(CODE, `refuse('${CODE}', 'x');\n`)).toBe(true);
   });
 
   it('RED PROOF — the partition check can FAIL: a code declared with no raiser and no owner is reported', async () => {
@@ -792,8 +913,7 @@ describe('P4-S5 §15 — the refusal vocabulary has NO DEAD MEMBER either', () =
     expect(composed.includes(PLANTED)).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(owed, PLANTED)).toBe(false);
     const verdict = [...errors.RETURNS_CODES, PLANTED].filter(
-      (c: string) =>
-        !RAISE_SHAPES(c).some((re) => re.test(code)) && !composed.includes(c) && !Object.prototype.hasOwnProperty.call(owed, c),
+      (c: string) => !RAISE_SHAPES(c).some((re) => re.test(code)) && !composed.includes(c) && !Object.prototype.hasOwnProperty.call(owed, c),
     );
     // RESULT NON-EMPTY, and the EXACT intended defect named: the planted code
     // and nothing else.

@@ -425,7 +425,8 @@ export function planCustomerRefund(input: CustomerRefundInput): CustomerRefundPl
   // Not two branches computing two amounts: swapping which carrying value is
   // larger must REVERSE THE SIGN of one quantity, never switch algorithm.
   const realizedMinor = consumed.carryingReleasedMinor - disbursementBaseMinor;
-  if (realizedMinor !== 0n) lines.push(baseLine(realizedMinor > 0n ? S5_ACCOUNT.FX_GAIN : S5_ACCOUNT.FX_LOSS, realizedMinor > 0n ? 'C' : 'D', abs(realizedMinor)));
+  if (realizedMinor !== 0n)
+    lines.push(baseLine(realizedMinor > 0n ? S5_ACCOUNT.FX_GAIN : S5_ACCOUNT.FX_LOSS, realizedMinor > 0n ? 'C' : 'D', abs(realizedMinor)));
 
   const entryLines = balanced(lines);
   assertNoReceivableLine(entryLines);
@@ -930,7 +931,10 @@ export function assertCanonicalArRelease(
   if (independent < 0n || independent > invoice.totalBaseMinor) {
     incomplete('a carrying release lies between zero and the whole carrying value of the invoice');
   }
-  if (plan.arReleasedBeforeMinor + plan.invoiceAmountAppliedMinor === invoice.totalTxnMinor && independent !== invoice.totalBaseMinor - R(plan.arReleasedBeforeMinor)) {
+  if (
+    plan.arReleasedBeforeMinor + plan.invoiceAmountAppliedMinor === invoice.totalTxnMinor &&
+    independent !== invoice.totalBaseMinor - R(plan.arReleasedBeforeMinor)
+  ) {
     incomplete('releasing the whole remaining AR releases the whole remaining carrying value');
   }
   if (plan.arReleasedBeforeMinor !== invoice.totalTxnMinor - invoice.outstandingTxnMinor) {
