@@ -559,6 +559,91 @@ describe('§E THE 265-DAY CASE THROUGH THE ROUTINE — and the predecessor on th
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+describe('§D2 PR-6 (round 6 F3) — the outage is TOTAL, which is the arm M10 never had', () => {
+  // THIS IS ITS OWN `describe` ON PURPOSE. §E's `afterAll` is what removes the
+  // plan, and an arm about the PLAN-LESS read placed among §E's cases would
+  // have run WITH the plan still attached and measured the planned case
+  // twice — the same shape as the finding it exists to correct.
+  it('a customer with NO plan, and a customer with NO invoice, are refused all the same', async () => {
+    // MY OWN M10 CLAIM WAS FALSE AS STATED. It said the missing EXECUTE made
+    // the base column unreachable "on an invoice under a plan" — a partial,
+    // data-dependent outage that a merchant with no installment plans would
+    // never meet. The arm above measures only the PLANNED case, so nothing
+    // here exercised the plan-less read and the claim was belief.
+    //
+    // The mechanism refutes it: `customer_ar_aging` is `LANGUAGE sql`, and
+    // EXECUTE on a function NAMED IN A `LANGUAGE sql` BODY is checked when the
+    // body is PLANNED, not per row. So the refusal cannot depend on whether
+    // any row reaches the call. The outage is TOTAL: every call by
+    // `daftar_app`, for every customer, with or without a plan, with or
+    // without an invoice.
+    //
+    // Measured here at the two extremes the planned arm cannot reach: a
+    // customer with no plan, and a customer with no invoice at all — where the
+    // projection's own answer is zero rows and `supplier_ap_release` would be
+    // evaluated zero times.
+    const app = new Pool({ connectionString: appDbUrl, max: 1 });
+    try {
+      // (i) A REAL CUSTOMER WITH A REAL OPEN INVOICE AND NO PLAN. §E's plan is
+      //     torn down in its own `afterAll`, so this reads the same customer
+      //     with nothing of this slice attached — and the owner's reading
+      //     proves the question is answerable, or the refusal below would be
+      //     indistinguishable from "nothing to answer".
+      const noPlan = await ownerPool().query<{ n: string }>(`SELECT count(*)::text AS n FROM installment_plans WHERE business_id = $1 AND status = 'active'`, [
+        w.shop.businessId,
+      ]);
+      expect(noPlan.rows[0]?.n, 'a plan is still attached, so this arm is not the plan-less case it claims to be').toBe('0');
+      const ownerAnswer = await aging(asOf);
+      expect(ownerAnswer.length, 'the owner cannot answer the plan-less question either, so the refusal below measures nothing').toBeGreaterThan(0);
+
+      let planlessError = '';
+      try {
+        await app.query(`SELECT * FROM customer_ar_aging($1, $2, $3::DATE, $4::INTEGER[])`, [w.shop.businessId, customerId, asOf, BUCKET_DAYS]);
+      } catch (e) {
+        planlessError = (e as { code?: string }).code ?? String(e);
+      }
+      expect(planlessError, 'PLAN-LESS AND STILL REFUSED: the outage is total, so M10 was wrong to call it data-dependent').toBe('42501');
+
+      // (ii) A CUSTOMER WITH NO INVOICE AT ALL. The owner's reading of this
+      //      same question is ZERO ROWS, so there is no row for the
+      //      unreachable call to be evaluated on — and it is refused anyway,
+      //      which is the plan-time check itself and not an inference about it.
+      const emptyCustomer = await newCustomer(w);
+      const emptyOwner = await ownerPool().query(`SELECT * FROM customer_ar_aging($1, $2, $3::DATE, $4::INTEGER[])`, [
+        w.shop.businessId,
+        emptyCustomer,
+        asOf,
+        BUCKET_DAYS,
+      ]);
+      expect(emptyOwner.rowCount, 'the empty customer is not empty, so the zero-row claim below is false').toBe(0);
+
+      let emptyError = '';
+      let emptyMessage = '';
+      try {
+        await app.query(`SELECT * FROM customer_ar_aging($1, $2, $3::DATE, $4::INTEGER[])`, [w.shop.businessId, emptyCustomer, asOf, BUCKET_DAYS]);
+      } catch (e) {
+        emptyError = (e as { code?: string }).code ?? String(e);
+        emptyMessage = e instanceof Error ? e.message : String(e);
+      }
+      expect(emptyError, 'ZERO ROWS AND STILL REFUSED: EXECUTE is checked at PLAN time, which is why the outage cannot be partial').toBe('42501');
+      // ...and it is THE PRIVILEGE PR-6 NAMES that was refused. A `42501` from
+      // some other object would have satisfied the code test while measuring a
+      // different outage, which is how a law ends up about a coincidence.
+      expect(emptyMessage, `the 42501 does not name the function PR-6 asks for: ${emptyMessage}`).toContain('supplier_ap_release');
+
+      // ...and NON-VACUITY of the whole arm: `daftar_app` really can call the
+      // PREDECESSOR'S shape of this question, so `42501` above is about the
+      // one missing EXECUTE and not about the role being unable to read
+      // receivables at all.
+      const predecessorCall = await app.query(`SELECT * FROM customer_ar_outstanding($1, $2)`, [w.shop.businessId, emptyCustomer]);
+      expect(predecessorCall.rowCount, 'daftar_app cannot reach the receivable readers at all, so 42501 above is not evidence about PR-6').toBe(0);
+    } finally {
+      await app.end();
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 describe('§F MODEL-TO-SQL EQUIVALENCE — the reference model and the routine answer alike', () => {
   /**
    * P4-AL-07 says the derived value is read through the PRODUCT'S OWN
