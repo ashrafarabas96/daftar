@@ -76,6 +76,7 @@ import { join } from 'node:path';
 import { testTitles } from './phase3-s8-gate';
 import { ACCEPTED as ACCEPTED_BUDGETS } from './phase4-budget-ratchet';
 import { MIGRATIONS_SUBDIR, type LiveRelation, applierRelations, livePhase4Relations, phase4RlsForceStructuralProblems } from './guards/phase4-rls-force';
+import { phase4LockOrderProblems, phase4LockOrderReport } from './guards/phase4-lock-order';
 import {
   discoverSalesTables,
   findAuthoritativeSalesColumns,
@@ -2447,6 +2448,11 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     title: 'P4-AL-41 the advisory keys: ranked for this slice, discovered for the whole phase',
     cases: 6,
   },
+  {
+    suite: 'tests/guards/p4s4-lock-order-law.test.ts',
+    title: 'P4-AL-41 the ONE declared order, over a swept range: the gate arm and every way it refuses',
+    cases: 9,
+  },
 ];
 
 /**
@@ -3689,6 +3695,13 @@ export const CHECKS: readonly Check[] = [
     run: commandRefusalAuditProblems,
     note: commandRefusalAuditReport,
     ok: "the Phase 4 operation vocabulary was read off its own type unions, at least one command path was discovered from the code, every discovered command's refusal path reaches the one `auditThenRethrow…` composer, and every surface binding of that composer delegates to the single refusal-audit module",
+  },
+  {
+    id: 'lock-order',
+    title: "P4-AL-41's ONE declared lock order, over a DISCOVERED sweep of every acquisition the range ships",
+    run: phase4LockOrderProblems,
+    note: phase4LockOrderReport,
+    ok: 'every lock-taking routine the discovered Phase 4 migration range defines acquires its resources — advisory keys and row locks in ONE sequence, with the acquisitions it reaches through a call to an in-range routine spliced in at the call site — in the declared order; every resource any of them acquires carries a rank, so a slice cannot add an ungoverned one and pass; every rank the order declares as statically exercised was actually seen taken, with the lock SPACE the order names it in; and the sweep is non-vacuous, so its silence is a measurement and not an empty subject',
   },
   {
     id: 'closure-and-tense',

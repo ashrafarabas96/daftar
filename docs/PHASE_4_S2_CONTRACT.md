@@ -732,9 +732,31 @@ Its order of operations:
    any other** (`[[daftar-registry-before-state]]`);
 4. re-verify the payload digest against the assertion, so the figures the
    routine stores are the figures the authority was minted over;
-5. take the domain locks in `SALE_COMMIT_LOCK_ORDER`
-   (`businesses`, `customers`, `stock_levels`, `invoice_sequences`) — ONE
-   order, never a retry (`[[daftar-lock-order-not-retry]]`);
+5. take the domain locks in the ONE declared Phase 4 order, never a retry
+   (`[[daftar-lock-order-not-retry]]`). `0078:643` and the
+   `COMMENT ON FUNCTION` at `0078:1024` call that order
+   `SALE_COMMIT_LOCK_ORDER`, and `0078` is byte-immutable, so the name stays
+   in the estate; it has **no definition in the tree** and must not be given a
+   second one. The order lives in exactly one place —
+   `PHASE4_LOCK_ORDER`, `scripts/guards/phase4-lock-order.ts:431`, declared as
+   prose in `P4-AL-41` (`docs/PHASE_4_ARCHITECTURE_LOCK.md:931-937`) and
+   enforced by the `lock-order` arm of `gate:phase4:s4`. What the name denotes
+   is **ranks 6-11 and 19** of that list, in the order this routine's body
+   takes them:
+   `daftar.sale_id` (exclusive advisory, `0078:554`) ->
+   `sales` `FOR UPDATE` (`0078:586`) ->
+   `daftar.customer_id` (**shared** advisory, `0078:674`) ->
+   `daftar.stock_target` (shared advisory, `0078:309`) ->
+   `products` `FOR SHARE` (`0078:340`) ->
+   `stock_levels` `FOR UPDATE` (inside the frozen stock writer) ->
+   `invoice_sequences` `FOR NO KEY UPDATE` (`0078:959`, step 10, LAST --
+   P4-AL-32).
+   `businesses` (`0078:668`) and `customers` (`0078:675`) are **READ UNLOCKED
+   and carry no rank**: every PostgreSQL locking clause requires `UPDATE` on
+   the relation, so row-locking the tenancy root would mean granting the
+   inventory writer the right to WRITE it (`0078:649-667`). The `customers`
+   rank in the declared list is the SETTLEMENT routines' row lock, which
+   `sale_commit` does not take;
 6. re-compute every amount from the catalogue and refuse `sale.state_changed`
    on any disagreement with its arguments. **Client totals are never
    authoritative and neither are the service's**: the routine is the last

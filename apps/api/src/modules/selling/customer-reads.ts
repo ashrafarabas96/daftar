@@ -39,8 +39,14 @@ import type { CustomerAgingQuery, CustomerListQuery, CustomerOpenInvoicesQuery }
  * page, the cursor, the bucket labels — and none of the money.
  *
  * Rules this module holds itself to, the G-6 reporting-surface rules
- * (`scripts/guards/read-surface.ts`) applied by hand because that guard's path
- * regex does not yet reach a Phase 4 module:
+ * (`scripts/guards/read-surface.ts`). They are ENFORCED here, not applied by
+ * hand: P4-S1 made the merchant half of `READ_SURFACE` a rule about what the
+ * file IS — `apps/api/src/modules/<context>/<name>-reads.ts`,
+ * `scripts/guards/read-surface.ts:97` — so this module is on the surface and
+ * is examined by the guard. (The earlier wording here, "applied by hand
+ * because that guard's path regex does not yet reach a Phase 4 module",
+ * described the pre-P4-S1 regex, which spelled out the directory and so never
+ * looked at `selling/`.)
  *
  * - no write of any kind. A GET that stamped a row or backfilled a total would
  *   be a mutation the merchant did not ask for and cannot audit;
@@ -53,7 +59,14 @@ import type { CustomerAgingQuery, CustomerListQuery, CustomerOpenInvoicesQuery }
  * - no `Number(`, `parseInt(` or `parseFloat(` on a money value. A cumulative
  *   receivable exceeds 2^53 long before it exceeds what a merchant can earn.
  *   Amounts leave the database as text and reach the DTO as text;
- * - no module-level result cache.
+ * - no module-level result cache;
+ * - a row this surface cannot PLACE is refused, never skipped. The aging fold
+ *   maps the SQL function's 1-based `bucket_no` onto the 0-based label array
+ *   as `bucket_no - 1`, and a `bucket_no` it cannot place raises
+ *   `customer.aging_bucket_mapping_invalid` through `sellingRefusal`. The
+ *   `continue` that used to stand there dropped the oldest band's money out of
+ *   the report with no sound; see `foldCustomerAging` below for the full
+ *   reasoning and for the shape invariant it also enforces.
  */
 
 /** Phase 4 relations and functions this module reads. None exists until the first Phase 4 migration lands. */

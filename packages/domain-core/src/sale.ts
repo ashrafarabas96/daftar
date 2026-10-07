@@ -157,32 +157,27 @@ export const MAX_SALE_LINES = 200;
  */
 export const SALE_MINOR_LIMIT = 1_000_000_000_000_000_000n;
 
-// ── The declared lock order (P4-AL-41) ───────────────────────────────────
-
-/**
- * The domain rows a sale commit acquires, in the order it acquires them — the
- * sale's slice of the lock's §12 list, with the positions a sale does not
- * touch omitted rather than renumbered.
- *
- * `accounting_post_entry` is deliberately **absent**: it takes its own locks in
- * its own fixed internal order at each call, and a sale calls it twice (the
- * COGS entry, then the revenue/AR entry), so a linear order that named
- * `journal_entries` once could not describe the sale at all. The routine's own
- * order is asserted separately, once, against its body.
- *
- * `stock_levels` is acquired **inside** `inventory_apply_stock_movements`,
- * ascending by `(warehouse_id, variant_id)` whatever the payload order
- * (`0060:289-299`) — which is both position 5 of the declared order and the
- * mechanism that refuses the last-item race. The sale command does not lock a
- * level row itself; doing so would be a second lock on the writer's own key and
- * a second place for the order to be wrong.
- */
-export const SALE_COMMIT_LOCK_ORDER: readonly string[] = Object.freeze([
-  'businesses', // 1 — the scope row, shared
-  'customers', // 2 — the customer whose receivable is affected
-  'stock_levels', // 5 — ascending by (warehouse_id, variant_id), inside the stock writer
-  'invoice_sequences', // 7 — last of the domain locks (P4-AL-32)
-]);
+// ── The declared lock order (P4-AL-41) — DELETED FROM HERE, ON PURPOSE ───
+//
+// `SALE_COMMIT_LOCK_ORDER` stood here: a frozen four-entry array under the
+// heading above, with ZERO consumers in the whole tree. It named `businesses`
+// and `customers` as acquisitions of `sale_commit`, and the routine ROW-LOCKS
+// NEITHER — `0078:649-667` reads both unlocked on purpose, because every
+// PostgreSQL locking clause needs `UPDATE` on the relation and granting the
+// inventory writer `UPDATE` on the tenancy root is more authority than the lock
+// is worth. The customer gets a SHARED ADVISORY key on `daftar.customer_id`
+// instead. The array also ranked none of the eight advisory keys the phase
+// takes, and omitted `sales`, `daftar.sale_id`, `daftar.stock_target` and
+// `products`, which `sale_commit` does take.
+//
+// It is DELETED rather than corrected. Correcting it would leave a second home
+// for one truth, which is the defect this estate keeps finding; the order now
+// lives in exactly one place that a check actually reads:
+// `PHASE4_LOCK_ORDER` in `scripts/guards/phase4-lock-order.ts`, declared as
+// prose in `docs/PHASE_4_ARCHITECTURE_LOCK.md` `P4-AL-41` and enforced by the
+// `lock-order` arm of `gate:phase4:s4` over a discovered sweep of the whole
+// Phase 4 migration range. A constant no check reads cannot be wrong loudly,
+// and this one was wrong quietly for a whole slice.
 
 // ── The tax boundary (P4-AL-44, OD-03 OPEN) ──────────────────────────────
 
