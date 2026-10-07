@@ -38,7 +38,7 @@
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { MIGRATIONS_SUBDIR } from '../../scripts/guards/phase4-rls-force';
 import {
@@ -1205,6 +1205,53 @@ describe('P4-S4 — the roster is a RATCHET: the derived set may grow and may no
     );
   });
 
+  it('the floor counts PATHS, so two recorded laws on one path do not lift it above the file count', () => {
+    // The subject bug this arm exists for. `rosterRatchetProblems` compares the
+    // floor against `rosterFiles(root).length`, a count of FILES. While every
+    // recorded row happened to name a different file the two agreed by
+    // accident, so a row count passed for a file count. The moment one path
+    // carries two recorded laws — which is exactly what TL-P4-RLS-INT-01's
+    // matrix and its reopening red proofs do, both living in the barrier suite
+    // beside the evidence they rest on — a row count exceeds the file count and
+    // the floor goes red over a tree that has lost nothing.
+    const paths = new Set(ROSTER_RECORDED.map((r) => r.suite));
+    expect(
+      ROSTER_RECORDED.length,
+      'no recorded path carries two laws, so this arm has no subject and the floor could still be a row count without anyone noticing',
+    ).toBeGreaterThan(paths.size);
+    expect(ROSTER_FLOOR, 'ROSTER_FLOOR is a row count, and the thing it bounds is a file count — a floor and its subject must be the same kind').toBe(
+      paths.size,
+    );
+    expect(rosterRatchetProblems(REPO), 'the real checkout is below its own floor, which is the arithmetic this arm refuses').toEqual([]);
+  });
+
+  it('RP-RT-D red: a recorded path whose second law is deleted keeps every count green and only the bijection sees it', () => {
+    // And this is why the two rows are worth recording at all. The matrix is a
+    // law inside an ALREADY-rostered file, so deleting it moves no count: the
+    // path is still derived, the basename still matches the rule, the directory
+    // is still occupied and the file still holds other titles. Only a row that
+    // names the LAW can see the loss.
+    const victim = 'tests/security/p4s4-rls-barrier-behaviour.test.ts';
+    const law = 'P4-S4 — THE PERMANENT FOUR-WAY AUTHORITY MATRIX (TL-P4-RLS-INT-01)';
+    expect(
+      ROSTER_RECORDED.map((r) => r.title),
+      'the law is not recorded, so this plant has no subject',
+    ).toContain(law);
+    const dir = mkdtempSync(join(tmpdir(), 'p4s4-law-'));
+    for (const file of rosterFiles(REPO)) {
+      mkdirSync(join(dir, dirname(file)), { recursive: true });
+      const body = readFileSync(join(REPO, file), 'utf8');
+      writeFileSync(join(dir, file), file === victim ? body.split(law).join('P4-S4 — something else entirely') : body);
+    }
+    expect(rosterRatchetProblems(dir), 'the ratchet saw the deletion, so the hole was not where this proof says').toEqual([]);
+    const found = rosterBijectionProblems(dir);
+    expect(
+      found.some((m) => m.includes(law) && m.includes(victim)),
+      `the bijection missed the deleted law: ${JSON.stringify(found)}`,
+    ).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('RP-RT-A red: a rostered suite moved AND renamed out of the rule takes the roster below the floor and is named', () => {
     // The exact attack, on a copy of the real tests tree. The security suite
     // is renamed so the basename rule no longer matches it — which is how a
@@ -1329,9 +1376,14 @@ describe('P4-S4 — the roster is a RATCHET: the derived set may grow and may no
 
   it('ROSTER_RECORDED is exactly what the tree derives today, and an ADDITION is never a finding', () => {
     // Both directions, so the record cannot drift from the tree: every derived
-    // file is recorded and every recorded file is derived.
+    // file is recorded and every recorded file is derived. The comparison is
+    // over DISTINCT PATHS, because a row names a LAW and one file may carry
+    // two of them — `TL-P4-RLS-INT-01`'s matrix and its reopening red proofs
+    // both live in the barrier suite. Comparing the raw row list against a file
+    // list made the two laws' second row look like drift, which would have
+    // priced recording a law at the cost of this arm.
     expect(
-      ROSTER_RECORDED.map((r) => r.suite).sort(),
+      [...new Set(ROSTER_RECORDED.map((r) => r.suite))].sort(),
       'the record and the derived roster have drifted apart — a row is recorded that the rule no longer derives, or a derived suite is unrecorded',
     ).toEqual(rosterFiles(REPO));
     // And a file the record does not name joins freely: a new suite must never

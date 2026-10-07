@@ -2195,10 +2195,35 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     suite: 'tests/security/p4s4-rls-quals-once-per-query.test.ts',
     title: 'P4-S4 — 0086: the read quals are evaluated once per query and answer identically',
   },
+  // TWO ROWS ON ONE PATH, DELIBERATELY. `TL-P4-RLS-INT-01`'s four-way matrix and
+  // its reopening-condition red proofs live in the barrier suite beside the
+  // evidence they rest on, and that path was ALREADY rostered — so without these
+  // two rows the matrix could be deleted from the file and every roster law
+  // would stay green: the path is still derived, the basename still matches, and
+  // the file still holds other titles. A row names a LAW, not a filename.
+  {
+    suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts',
+    title: 'P4-S4 — THE PERMANENT FOUR-WAY AUTHORITY MATRIX (TL-P4-RLS-INT-01)',
+  },
+  {
+    suite: 'tests/security/p4s4-rls-barrier-behaviour.test.ts',
+    title: "P4-S4 — THE RED PROOFS for the four-way matrix: §17's three reopening conditions (TL-P4-RLS-INT-01)",
+  },
 ];
 
-/** The ratchet's total floor, DERIVED from the record so one list is the single fact. */
-export const ROSTER_FLOOR = ROSTER_RECORDED.length;
+/**
+ * The ratchet's total floor, DERIVED from the record so one list is the single
+ * fact — and derived as DISTINCT SUITE PATHS, not as a row count.
+ *
+ * `rosterRatchetProblems` compares this against `rosterFiles(root).length`,
+ * which counts FILES. The two agreed only while every recorded row happened to
+ * name a different file; the moment one path carries two recorded laws the row
+ * count exceeds the file count and the floor goes red over a tree that has lost
+ * nothing. A floor and the thing it bounds must have the SAME SUBJECT, so the
+ * subject here is the path. The per-title claim is not weakened by this: it is
+ * `rosterBijectionProblems`, which keys on the title and judges every row.
+ */
+export const ROSTER_FLOOR = new Set(ROSTER_RECORDED.map((r) => r.suite)).size;
 
 /**
  * The directories the roster occupied when this ratchet was written, each its
