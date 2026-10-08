@@ -32,6 +32,8 @@ export * from './period';
 export * from './proration';
 export * from './addons';
 export * from './invoice';
+export * from './credit';
+export * from './plan-change';
 export * from './dunning';
 export * from './ports';
 export * from './fake-provider';

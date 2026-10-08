@@ -40,6 +40,14 @@ export type BillingErrorCode =
   // Add-ons.
   | 'billing.addon_quantity_invalid'
   | 'billing.addon_kind_unsupported'
+  /**
+   * `TL-P5-R5` (§21): an add-on that grants a limit key whose usage the live
+   * entitlement engine does not MEASURE may not be priced as an enforced
+   * metered limit. Refused, because "no customer can be charged for a meter
+   * the system does not measure" and a sold-but-unmeasured limit is
+   * indistinguishable, from the merchant's side, from one that is enforced.
+   */
+  | 'billing.addon_meter_unmeasured'
   // Subscription invoice composition.
   | 'billing.invoice_empty'
   | 'billing.invoice_currency_mismatch'
@@ -55,6 +63,18 @@ export type BillingErrorCode =
    * The code names no jurisdiction and carries no rate.
    */
   | 'billing.subscription_tax_unsupported'
+  /**
+   * The platform billing credit (`TL-P5-R3`). A negative proration creates a
+   * credit, never an automatic cash refund, and the balance is a FOLD over
+   * immutable adjustments — so these five refusals are all about the LEDGER's
+   * integrity, never about an authorization to pay money out.
+   */
+  | 'billing.credit_adjustment_replayed'
+  | 'billing.credit_reason_required'
+  | 'billing.credit_currency_mismatch'
+  | 'billing.credit_ledger_out_of_order'
+  /** A consumption beyond the balance. Refused, never clamped to zero. */
+  | 'billing.credit_overdrawn'
   // Dunning — the retry/grace schedule.
   | 'billing.dunning_policy_invalid'
   | 'billing.dunning_attempt_out_of_order'
@@ -81,6 +101,8 @@ export interface BillingErrorContext {
   readonly planKey?: string;
   readonly planVersionId?: string;
   readonly addOnKey?: string;
+  /** A limit key from `limit_definitions`. A key is not a quantity. */
+  readonly limitKey?: string;
   /** A civil instant a refusal is about, ISO-8601. An instant is not a value. */
   readonly at?: string;
   /** Which period, counted from the anchor. An index is not a value. */
