@@ -20,6 +20,7 @@
  */
 import { refuse } from './errors';
 import { catalogEntry, kindsForEventType, type NotificationKind } from './catalog';
+import type { NotificationOrigin } from './identity';
 
 export interface OutboxRow {
   readonly id: string;
@@ -32,8 +33,14 @@ export interface DispatchIntent {
   readonly businessId: string;
   /** The ids the hydrator resolves against canonical reads. */
   readonly subjectRefs: Readonly<Record<string, string>>;
-  readonly idempotencyKey: string;
-  readonly sourceEventId: string;
+  /**
+   * Where this obligation came from. There is deliberately NO idempotency key
+   * here: an intent does not yet know its recipients, and a key made before the
+   * recipients are known would be an event-only key — exactly the shape
+   * TL-P8-R1 forbids, because nine of ten recipients disappear behind it. The
+   * obligation key is derived per recipient, after hydration.
+   */
+  readonly origin: NotificationOrigin;
 }
 
 export interface ConsumerPlan {
@@ -71,13 +78,7 @@ export function planFromOutboxRow(row: OutboxRow): ConsumerPlan {
       if (typeof value === 'string' && value !== '') subjectRefs[key] = value;
     }
 
-    intents.push({
-      kind,
-      businessId,
-      subjectRefs,
-      idempotencyKey: `${row.id}:${kind}`,
-      sourceEventId: row.id,
-    });
+    intents.push({ kind, businessId, subjectRefs, origin: { source: 'event', eventId: row.id } });
   }
   return { intents, unmapped: false };
 }

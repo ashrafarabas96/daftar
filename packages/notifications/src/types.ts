@@ -33,16 +33,33 @@ export const LOCALES: readonly Locale[] = ['ar', 'en', 'tr'];
  */
 export type ConsentClass = 'transactional' | 'operational' | 'marketing';
 
-/** Who a notification is addressed to, and under which business. */
+/**
+ * Who a notification is addressed to.
+ *
+ * TL-P8-R1 / §39: the reference is a TYPED union, not a polymorphic
+ * (kind, id) pair that the type system lets you get wrong. A customer
+ * recipient has a customer id and no user id; a staff recipient the reverse.
+ * "Exactly one of these two is set" is then a fact about the type rather than
+ * a convention a caller may break, and the relational shape mirrors it with
+ * two nullable columns, a XOR check and composite ownership keys.
+ *
+ * `businessId` is part of the recipient, not context around it: a recipient
+ * that does not name its business cannot be proven to belong to this tenant.
+ */
+export type RecipientRef = { readonly kind: 'customer'; readonly customerId: string } | { readonly kind: 'user'; readonly userId: string };
+
 export interface Recipient {
   readonly businessId: string;
-  /** Customer id, or staff user id. Exactly one of the two is set. */
-  readonly customerId?: string;
-  readonly userId?: string;
+  readonly ref: RecipientRef;
   readonly locale: Locale;
   /** E.164, digits only with a leading '+'. Validated at the provider edge. */
   readonly phoneE164?: string;
   readonly email?: string;
+}
+
+/** The id inside a recipient reference, for keys and log lines. */
+export function recipientId(ref: RecipientRef): string {
+  return ref.kind === 'customer' ? ref.customerId : ref.userId;
 }
 
 /**

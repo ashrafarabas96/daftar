@@ -16,12 +16,19 @@ export type NotificationRefusalCode =
   | 'notification.template_variable_type_mismatch'
   | 'notification.money_formatter_missing'
   | 'notification.date_formatter_missing'
-  // Consent / addressing
+  // Consent / addressing / eligibility
   | 'notification.channel_not_supported_for_kind'
   | 'notification.consent_missing'
   | 'notification.channel_blocked'
   | 'notification.address_missing'
   | 'notification.address_invalid'
+  /** §40: the provider's or the law's own channel eligibility said no. An
+   *  internal consent class never answers this question on its own. */
+  | 'notification.channel_not_eligible'
+  /** §39: the recipient does not belong to the business the obligation names. */
+  | 'notification.recipient_business_mismatch'
+  /** §41: a scheduled kind fired with no configured schedule behind it. */
+  | 'notification.schedule_not_configured'
   // Provider edge
   | 'notification.provider_not_configured'
   | 'notification.provider_template_required'

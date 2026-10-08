@@ -143,6 +143,17 @@ describe('each law turns red on its own violation', () => {
     expect(laws(registryViolations(set, templates()))).toContain('L7_OUTBOX_EVENT_TYPE_SHAPE');
   });
 
+  it('L8_SCHEDULE_REQUIRES_CONFIGURATION — a scheduled kind claims it needs no configuration', () => {
+    const c = catalog();
+    const target = c.find((x) => x.kind === 'customer_statement');
+    expect(target).toBeDefined();
+    if (!target || target.trigger.source !== 'schedule') return;
+    expect(target.trigger.requiresConfiguration).toBe(true); // mutation lands against a true baseline
+    const mutated: CatalogEntry = { ...target, trigger: { ...target.trigger, requiresConfiguration: false } };
+    const set = c.map((x) => (x === target ? mutated : x));
+    expect(laws(registryViolations(set, templates()))).toContain('L8_SCHEDULE_REQUIRES_CONFIGURATION');
+  });
+
   it('every declared law name is reachable by one of the proofs above', () => {
     // The list and the proofs are kept honest against each other: a law added
     // to REGISTRY_LAWS without a red proof fails here by name.
@@ -156,6 +167,7 @@ describe('each law turns red on its own violation', () => {
       'L5_CHANNELS_DUPLICATE',
       'L6_MARKETING_AUDIENCE',
       'L7_OUTBOX_EVENT_TYPE_SHAPE',
+      'L8_SCHEDULE_REQUIRES_CONFIGURATION',
     ];
     expect([...REGISTRY_LAWS].sort()).toEqual([...proven].sort());
   });

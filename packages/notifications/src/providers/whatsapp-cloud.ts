@@ -13,9 +13,12 @@
  * API accepts nothing else, and a notification engine cannot know from here
  * whether a window is open — so the safe shape is the only shape.
  *
- * Status: ENGINEERING COMPLETE — EXTERNAL ACTIVATION PENDING. No credentials
- * exist in this project yet; the HTTP port makes the adapter fully testable
- * without them, and nothing in it has been exercised against Meta.
+ * Status (§36, stated narrowly): WHATSAPP ADAPTER CORE PREPARED / TESTED IN
+ * ISOLATION. Phase 8 is NOT engineering-complete, and this adapter is not
+ * either in any sense beyond its own unit tests: no credentials exist in this
+ * project, nothing here has ever spoken to Meta, and the DB, RLS, API
+ * composition, outbox integration, concurrency, webhook security, CI and
+ * signatures all remain owed.
  */
 import { refuse } from '../errors';
 import type { NotificationProvider, OutgoingMessage, ProviderSendResult } from '../provider';

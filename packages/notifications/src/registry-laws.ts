@@ -26,6 +26,7 @@ export const REGISTRY_LAWS: readonly string[] = [
   'L5_CHANNELS_DUPLICATE',
   'L6_MARKETING_AUDIENCE',
   'L7_OUTBOX_EVENT_TYPE_SHAPE',
+  'L8_SCHEDULE_REQUIRES_CONFIGURATION',
 ];
 
 /**
@@ -95,6 +96,13 @@ export function registryViolations(
     // L7 — an outbox-triggered kind names a versioned event type and the keys
     // it reads. `businessId` is mandatory: a notification without a business
     // cannot be tenant-scoped, and an untenanted notification is a data leak.
+    // L8 — §41: a scheduled kind fires only from a configured schedule. A row
+    // that claims otherwise would mean a cadence or a lead time was decided in
+    // source, which is a business policy this package may not invent.
+    if (entry.trigger.source === 'schedule' && !entry.trigger.requiresConfiguration) {
+      out.push({ law: 'L8_SCHEDULE_REQUIRES_CONFIGURATION', subject: `${entry.kind}/${entry.trigger.scheduleId}` });
+    }
+
     if (entry.trigger.source === 'outbox') {
       if (!/^[a-z][a-z_]*\.[a-z][a-z_]*(\.v\d+)?$/.test(entry.trigger.eventType)) {
         out.push({ law: 'L7_OUTBOX_EVENT_TYPE_SHAPE', subject: `${entry.kind}/${entry.trigger.eventType}` });

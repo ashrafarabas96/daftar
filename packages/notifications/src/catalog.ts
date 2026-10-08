@@ -44,7 +44,14 @@ export interface CatalogEntry {
   readonly variables: readonly KindVariable[];
   readonly trigger:
     | { readonly source: 'outbox'; readonly eventType: string; readonly payloadKeys: readonly string[] }
-    | { readonly source: 'schedule'; readonly scheduleId: string };
+    /**
+     * §41: a scheduled kind carries NO cadence and NO lead time in source.
+     * `requiresConfiguration` records that: until a business configures the
+     * schedule, nothing fires — an unconfigured statement schedule sends no
+     * statement, and an unset instalment lead sends no reminder. A default
+     * invented here would be a business policy invented in source.
+     */
+    | { readonly source: 'schedule'; readonly scheduleId: string; readonly requiresConfiguration: boolean };
   /** The slice whose canonical read hydrates this kind. */
   readonly boundTo: string;
 }
@@ -116,7 +123,7 @@ const CATALOG: readonly CatalogEntry[] = [
       { name: 'outstanding', type: 'money', required: true },
       { name: 'oldestBandDays', type: 'int', required: false },
     ],
-    trigger: { source: 'schedule', scheduleId: 'p8.statement.monthly' },
+    trigger: { source: 'schedule', scheduleId: 'p8.statement.monthly', requiresConfiguration: true },
     boundTo: 'P4-S4 aging read (foldCustomerAging)',
   },
   {
@@ -129,7 +136,7 @@ const CATALOG: readonly CatalogEntry[] = [
       { name: 'dueDate', type: 'date', required: true },
       { name: 'dueAmount', type: 'money', required: true },
     ],
-    trigger: { source: 'schedule', scheduleId: 'p8.installment.due_soon' },
+    trigger: { source: 'schedule', scheduleId: 'p8.installment.due_soon', requiresConfiguration: true },
     boundTo: 'P4-S7 installment schedule (NOT SEALED)',
   },
   {
@@ -143,7 +150,7 @@ const CATALOG: readonly CatalogEntry[] = [
       { name: 'dueAmount', type: 'money', required: true },
       { name: 'daysOverdue', type: 'int', required: true },
     ],
-    trigger: { source: 'schedule', scheduleId: 'p8.installment.overdue' },
+    trigger: { source: 'schedule', scheduleId: 'p8.installment.overdue', requiresConfiguration: true },
     boundTo: 'P4-S7 installment aging (NOT SEALED)',
   },
   {
@@ -156,7 +163,7 @@ const CATALOG: readonly CatalogEntry[] = [
       { name: 'salesTotal', type: 'money', required: true },
       { name: 'invoiceCount', type: 'int', required: true },
     ],
-    trigger: { source: 'schedule', scheduleId: 'p8.report.daily_sales' },
+    trigger: { source: 'schedule', scheduleId: 'p8.report.daily_sales', requiresConfiguration: true },
     boundTo: 'P4-S4 sales reads',
   },
   {
@@ -169,7 +176,7 @@ const CATALOG: readonly CatalogEntry[] = [
       { name: 'onHand', type: 'int', required: true },
       { name: 'threshold', type: 'int', required: true },
     ],
-    trigger: { source: 'schedule', scheduleId: 'p8.alert.low_stock' },
+    trigger: { source: 'schedule', scheduleId: 'p8.alert.low_stock', requiresConfiguration: true },
     boundTo: 'Phase 3 inventory reads (SEALED)',
   },
 ];

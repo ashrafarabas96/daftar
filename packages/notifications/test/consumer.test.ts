@@ -19,11 +19,19 @@ describe('outbox consumer', () => {
     expect(intent?.subjectRefs).toEqual({ saleId: 's-1', invoiceId: 'i-1', businessTransactionId: 't-1' });
   });
 
-  it('derives the idempotency key from the event row, so a repeat is the same key', () => {
+  it('carries the event origin and NO idempotency key — TL-P8-R1', () => {
+    const intent = planFromOutboxRow(saleRow).intents[0];
+    expect(intent?.origin).toEqual({ source: 'event', eventId: '11111111-1111-4111-8111-111111111111' });
+    // An intent does not know its recipients yet, so it cannot hold an
+    // obligation key; a key made here would be an event-only key, and nine of
+    // ten recipients would disappear behind it.
+    expect(Object.keys(intent ?? {})).not.toContain('idempotencyKey');
+  });
+
+  it('produces the same origin for a repeated delivery of the same row', () => {
     const first = planFromOutboxRow(saleRow).intents[0];
     const second = planFromOutboxRow({ ...saleRow, payload: { ...saleRow.payload } }).intents[0];
-    expect(first?.idempotencyKey).toBe('11111111-1111-4111-8111-111111111111:invoice_issued');
-    expect(second?.idempotencyKey).toBe(first?.idempotencyKey);
+    expect(second?.origin).toEqual(first?.origin);
   });
 
   it('ignores the events notifications do not subscribe to, without erroring', () => {
