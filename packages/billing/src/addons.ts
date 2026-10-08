@@ -120,12 +120,19 @@ export function priceAddOn(
   if (!charge || typeof charge.key !== 'string' || charge.key.trim().length === 0) {
     refuse('billing.payload_invalid', 'an add-on charge must name its catalogue key');
   }
-  // Typed before it is validated: `Array.isArray` widens its argument to
-  // `any[]` (see the note in `invoice.ts`).
-  const measured: readonly string[] = measuredLimitKeys ?? [];
-  if (!Array.isArray(measuredLimitKeys)) {
+  // `Array.isArray` narrows its argument to `any[]`, which would make every
+  // later access an unchecked `any`. Casting to `unknown` INSIDE the call
+  // confines the narrowing to the cast expression, so the parameter keeps its
+  // declared type and the local needs no fallback. An earlier draft wrote
+  // `measuredLimitKeys ?? []` for the same reason, and that fallback was
+  // unreachable — the guard below refuses before it could ever apply. A
+  // mutation harness duly showed that changing it to a PERMISSIVE default
+  // left every case green, because dead code cannot be tested. The way to
+  // close that is not another case; it is to have no default at all.
+  if (!Array.isArray(measuredLimitKeys as unknown)) {
     refuse('billing.payload_invalid', 'pricing an add-on requires the set of limit keys the system measures', { addOnKey: charge.key });
   }
+  const measured: readonly string[] = measuredLimitKeys;
   if (charge.grantsLimitKey !== undefined) {
     if (typeof charge.grantsLimitKey !== 'string' || charge.grantsLimitKey.trim().length === 0) {
       refuse('billing.payload_invalid', 'a granted limit key must be a key, or absent', { addOnKey: charge.key });
