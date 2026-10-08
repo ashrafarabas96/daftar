@@ -17,3 +17,4 @@ export * from './tool-registry';
 export * from './draft-state';
 export * from './preview-digest';
 export * from './injection';
+export * from './provider-boundary';

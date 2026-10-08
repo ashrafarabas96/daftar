@@ -35,6 +35,14 @@ export const REFUSAL_CODES = [
   'ai_draft.authority_revoked',
   'ai_draft.already_executed',
   'ai_draft.tax_non_zero_refused',
+  // Provider boundary (TL §70 / TL-P12-R2). Four codes, not one: an auditor must be able to tell an
+  // attempt to CHOOSE a provider from merely naming an unapproved one.
+  'ai_provider.selection_not_server_controlled',
+  'ai_provider.not_approved',
+  'ai_provider.host_not_approved',
+  'ai_provider.insecure_transport',
+  // Retention is unconfigured (TL §72). UNCONFIGURED blocks activation; it never means "forever".
+  'ai.retention_unconfigured',
   'ai.injection_suspected',
   'ai.provider_timeout',
 ] as const;

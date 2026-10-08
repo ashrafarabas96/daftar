@@ -30,8 +30,10 @@ export const SURFACES = ['phase1.catalog', 'phase2.accounting', 'phase3.inventor
 export type SurfaceId = (typeof SURFACES)[number];
 
 /**
- * 'waiting' means the owning phase's command/read surface is not integrated on this base. Such a
- * tool is DECLARED but unreachable: it refuses `ai_tool.surface_unavailable`.
+ * CANONICAL INTEGRATED AVAILABILITY of the underlying surface — TL ruling §67. 'integrated' means the
+ * owning phase's canonical command/read surface is sealed and callable; it does NOT mean "a code file
+ * for it exists". A `waiting` tool is DECLARED but unreachable: it refuses
+ * `ai_tool.surface_unavailable`.
  */
 export type SurfaceState = 'integrated' | 'waiting';
 
@@ -72,7 +74,10 @@ export const TOOL_REGISTRY: readonly ToolSpec[] = [
   { name: 'supplier.search', plane: 'read', surface: 'phase3.purchasing', surfaceState: 'integrated', authority: AUTHORITY_PENDING },
   { name: 'purchase.read', plane: 'read', surface: 'phase3.purchasing', surfaceState: 'integrated', authority: AUTHORITY_PENDING },
   { name: 'accounting.balance.read', plane: 'read', surface: 'phase2.accounting', surfaceState: 'integrated', authority: AUTHORITY_PENDING },
-  { name: 'ai.draft.list', plane: 'read', surface: 'phase12.assistant', surfaceState: 'integrated', authority: AUTHORITY_PENDING },
+  // TL ruling §67: `surfaceState` means CANONICAL INTEGRATED AVAILABILITY, not "a code file exists".
+  // Phase 12 has no canonical database or API surface, so its own tool is `waiting` like every other
+  // unintegrated one. This entry was wrongly `integrated` in the first draft of the registry.
+  { name: 'ai.draft.list', plane: 'read', surface: 'phase12.assistant', surfaceState: 'waiting', authority: AUTHORITY_PENDING },
   { name: 'customer.search', plane: 'read', surface: 'phase4.sales', surfaceState: 'waiting', authority: AUTHORITY_PENDING },
   { name: 'customer.balance.read', plane: 'read', surface: 'phase4.sales', surfaceState: 'waiting', authority: AUTHORITY_PENDING },
   { name: 'invoice.read', plane: 'read', surface: 'phase4.sales', surfaceState: 'waiting', authority: AUTHORITY_PENDING },

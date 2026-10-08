@@ -57,6 +57,56 @@ describe('registry shape', () => {
   it('is structurally valid', () => {
     expect(validateRegistry(TOOL_REGISTRY)).toEqual([]);
   });
+
+  // TL ruling §67: `surfaceState` means canonical integrated availability, not "a code file exists".
+  it('marks NO Phase 12 surface integrated while Phase 12 is only preparation', () => {
+    const own = TOOL_REGISTRY.filter((t) => t.surface === 'phase12.assistant');
+    expect(own.length).toBeGreaterThan(0);
+    for (const t of own) expect(t.surfaceState).toBe('waiting');
+  });
+
+  it('refuses the Phase 12 tool as surface_unavailable, not as something else', () => {
+    const decision = gateToolCall('ai.draft.list', { holds: (): boolean => true });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.code).toBe('ai_tool.surface_unavailable');
+  });
+
+  it('marks integrated only surfaces of phases sealed on this base', () => {
+    // Phase 1-3 are sealed on 6fc505d; Phase 4 is in flight and Phase 12 is this preparation.
+    const integratedSurfaces = [...new Set(TOOL_REGISTRY.filter((t) => t.surfaceState === 'integrated').map((t) => t.surface))].sort();
+    expect(integratedSurfaces).toEqual(['phase1.catalog', 'phase2.accounting', 'phase3.inventory', 'phase3.purchasing']);
+  });
+});
+
+describe('injected content cannot widen the tool layer (TL §73)', () => {
+  const INJECTED_TOOL_NAMES = ['notification.send', 'whatsapp.send', 'webhook.post', 'http.fetch', 'sql.execute', 'permission.grant', 'journal.post'];
+
+  it.each(INJECTED_TOOL_NAMES)('cannot add the tool %s — the registry is a closed set', (name) => {
+    expect(lookupTool(name)).toBeUndefined();
+    const decision = gateToolCall(name, { holds: (): boolean => true });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.code).toBe('ai_tool.not_registered');
+  });
+
+  it('cannot bypass authority: an unbound tool refuses whatever the oracle answers', () => {
+    const decision = gateToolCall('product.search', { holds: (): boolean => true });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.code).toBe('ai_tool.authority_unbound');
+  });
+
+  it('cannot inject unknown arguments', () => {
+    const decision = validateArgs(['query'], { query: 'cable', __proto__hack: 1, provider: 'evil.example' });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.code).toBe('ai_tool.args_invalid');
+  });
+
+  it('cannot send via a Phase 8 or Phase 14 surface — neither is a declared surface', () => {
+    const declared = SURFACES as readonly string[];
+    for (const forbidden of ['phase8.notifications', 'phase8.whatsapp', 'phase14.api', 'phase14.webhooks']) {
+      expect(declared).not.toContain(forbidden);
+    }
+    expect(TOOL_REGISTRY.some((t) => /phase8|phase14/.test(t.surface))).toBe(false);
+  });
 });
 
 describe('the authority model is open, and the registry says so rather than guessing', () => {

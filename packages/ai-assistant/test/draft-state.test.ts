@@ -10,11 +10,14 @@ import { describe, expect, it } from 'vitest';
 import {
   canTransition,
   checkNotExpired,
+  currentState,
   decideConfirm,
   DRAFT_STATES,
   isTerminal,
   transition,
   type ConfirmRequest,
+  type DraftState,
+  type DraftTransitionRow,
   type FetchedDraft,
 } from '../src/draft-state';
 
@@ -169,5 +172,65 @@ describe('decideConfirm — an unfetched draft refuses, never proceeds (Law P12-
   it('NON-VACUITY: the sound case passes, so every refusal above is caused by its own defect', () => {
     // Without this, each refusal case could be passing because the sound path refuses too.
     expect(decideConfirm(draft(), request(), NOW, true).ok).toBe(true);
+  });
+});
+
+describe('one state truth — state derives from the transition log (TL-P12-R1, §68)', () => {
+  const log = (...steps: readonly (readonly [number, DraftState | null, DraftState])[]): DraftTransitionRow[] =>
+    steps.map(([seq, fromStatus, toStatus]) => ({ seq, fromStatus, toStatus }));
+
+  it('derives the state of a sound history', () => {
+    const decision = currentState(
+      log([1, null, 'created'], [2, 'created', 'awaiting_confirmation'], [3, 'awaiting_confirmation', 'confirmed'], [4, 'confirmed', 'executed']),
+    );
+    expect(decision.ok).toBe(true);
+    if (decision.ok) expect(decision.value).toBe('executed');
+  });
+
+  it('orders by seq rather than by array position', () => {
+    const decision = currentState(log([3, 'awaiting_confirmation', 'confirmed'], [1, null, 'created'], [2, 'created', 'awaiting_confirmation']));
+    expect(decision.ok).toBe(true);
+    if (decision.ok) expect(decision.value).toBe('confirmed');
+  });
+
+  it('refuses an empty history instead of inventing a state', () => {
+    const decision = currentState([]);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.code).toBe('ai_draft.wrong_state');
+  });
+
+  it('refuses a history that does not begin at created', () => {
+    const decision = currentState(log([1, null, 'confirmed']));
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.detail).toBe('history does not begin at created');
+  });
+
+  it('refuses a first row that claims a predecessor', () => {
+    const decision = currentState(log([1, 'created', 'awaiting_confirmation']));
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.detail).toBe('first row is not a creating row');
+  });
+
+  it('refuses a gap, naming the row — a plausible tail over a broken chain', () => {
+    // This is the whole point of validating rather than reading the last row: the tail below says
+    // "confirmed", which is a perfectly plausible answer, and the history is broken.
+    const decision = currentState(log([1, null, 'created'], [3, 'awaiting_confirmation', 'confirmed']));
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.refusal.detail).toBe('history is not contiguous');
+      expect(decision.refusal.field).toBe('seq=3');
+    }
+  });
+
+  it('refuses an illegal edge recorded in the log', () => {
+    const decision = currentState(log([1, null, 'created'], [2, 'created', 'executed']));
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.code).toBe('ai_draft.wrong_state');
+  });
+
+  it('NON-VACUITY: reading the tail alone would have accepted both broken histories above', () => {
+    const broken = log([1, null, 'created'], [3, 'awaiting_confirmation', 'confirmed']);
+    expect(broken[broken.length - 1]?.toStatus).toBe('confirmed');
+    expect(currentState(broken).ok).toBe(false);
   });
 });

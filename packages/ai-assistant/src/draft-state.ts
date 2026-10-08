@@ -76,6 +76,12 @@ export interface FetchedDraft {
   readonly tenantId: string;
   readonly businessId: string;
   readonly actorUserId: string;
+  /**
+   * DERIVED, never a stored mutable column — TL-P12-R1 (§68). The authoritative state history is the
+   * append-only transition log, and this field must be computed from it by `currentState()`. The first
+   * draft of this pack shipped both an append-only log *and* a mutable `status` column, which is two
+   * independent truths; the column is withdrawn.
+   */
   readonly state: DraftState;
   readonly version: number;
   readonly previewDigest: string;
@@ -129,4 +135,49 @@ export function decideConfirm(
   const next = transition(fetched.state, 'confirmed');
   if (!next.ok) return deny(next.refusal);
   return allow({ nextState: next.value, draft: fetched });
+}
+
+// ---------------------------------------------------------------------------
+// One state truth — TL-P12-R1 (§68)
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of the append-only transition log, which IS the authoritative state history.
+ *
+ * `seq` orders the log. The pack's first draft also carried a mutable `status` column on the draft
+ * itself and called it "a materialized convenience"; that is two independent truths, and the column is
+ * withdrawn rather than reconciled.
+ */
+export interface DraftTransitionRow {
+  readonly seq: number;
+  readonly fromStatus: DraftState | null;
+  readonly toStatus: DraftState;
+}
+
+/**
+ * Derive the current state from the log.
+ *
+ * It does NOT simply read the last row. It validates that the log is a contiguous, legal chain from a
+ * creating row, and refuses otherwise — because a corrupted or partially-applied history that still
+ * has a plausible last row is exactly the input that would make a derived state silently wrong. A
+ * reader that trusts the tail cannot tell a sound log from a broken one.
+ */
+export function currentState(transitions: readonly DraftTransitionRow[]): Decision<DraftState> {
+  if (transitions.length === 0) return deny(refuse('ai_draft.wrong_state', { detail: 'empty transition history' }));
+  const ordered = [...transitions].sort((a, b) => a.seq - b.seq);
+  const first = ordered[0];
+  if (first === undefined) return deny(refuse('ai_draft.wrong_state', { detail: 'empty transition history' }));
+  if (first.fromStatus !== null) return deny(refuse('ai_draft.wrong_state', { field: 'seq=' + String(first.seq), detail: 'first row is not a creating row' }));
+  if (first.toStatus !== 'created')
+    return deny(refuse('ai_draft.wrong_state', { field: 'seq=' + String(first.seq), detail: 'history does not begin at created' }));
+  let state: DraftState = first.toStatus;
+  for (const row of ordered.slice(1)) {
+    if (row.fromStatus !== state) {
+      return deny(refuse('ai_draft.wrong_state', { field: 'seq=' + String(row.seq), detail: 'history is not contiguous' }));
+    }
+    const step = transition(state, row.toStatus);
+    if (!step.ok) return deny(step.refusal);
+    state = step.value;
+  }
+  return allow(state);
 }
