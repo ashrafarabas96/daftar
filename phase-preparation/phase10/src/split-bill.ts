@@ -68,10 +68,20 @@ export function splitEvenly(totalMinor: bigint, parts: number): readonly bigint[
  *
  * This is the mode a waiter uses when guests say "I'll put 20 on mine". It is a
  * SETTLEMENT split, not a sale split: the bill stays one sale and the amounts
- * become several payments against it, which the Phase 4 payment/allocation
- * authority already supports. Splitting a sale into several sales is only
- * possible by LINE (`splitByLines`), because a sale is made of lines, not of
- * an arbitrary amount.
+ * become several tenders against it. Splitting a sale into several sales is only
+ * possible by LINE (`splitByLines`), because a sale is made of lines, not of an
+ * arbitrary amount.
+ *
+ * ── STATUS: `WAITING_FOR_INTEGRATED_SURFACE` (directive §51) ──
+ * What this function proves is ARITHMETIC: the amounts conserve the total. It
+ * proves nothing about whether the sealed financial path can represent one
+ * restaurant sale settled by several tenders, and this pack does not claim that
+ * it can. Split-by-amount is therefore NOT enabled. Before it is, the sealed
+ * path must be shown to express: one restaurant sale, multiple tenders, walk-in
+ * settlement where applicable, no invented customer, no invented receivable, no
+ * duplicated stock, no duplicated COGS, and till totals that stay atomic and
+ * consistent. If it cannot, Phase 10 does not fake it — the additive
+ * multi-tender seam is the Accounting/Sales authority's design to make.
  */
 export function assertAmountsConserve(totalMinor: bigint, amountsMinor: readonly bigint[]): void {
   if (totalMinor < 0n) {
