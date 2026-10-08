@@ -167,6 +167,17 @@ Stated as limitations rather than left to be discovered.
     the proof drives them that way; a partially applied reschedule is impossible by
     transaction semantics rather than by anything this work added.
 
+11. **The proofs ran on top of the sealed Phase 3 head of `main`, not on top of the Phase 4
+    candidates.** This is deliberate — the Phase 4 candidate migrations are unfrozen and may
+    still change, so a proof against them would be invalidated by their next revision, and
+    Part 42 keeps a future-phase track out of the Phase 4 integration tree. It is sound for
+    this slice because the spec's only outward references are `users`, `businesses` and
+    `branches`, all Phase 1–2 relations far below the frozen boundary; it depends on no Phase
+    4 relation. The one coupling that does exist is the `customers` foreign key, and it is
+    already deferred to promotion (§2 of the patch request). The Migration Owner will apply
+    this slice after the Phase 4 candidates, and when Phase 4 is sealed these suites can be
+    re-run against that head unchanged to confirm it.
+
 ---
 
 ## 5. Compliance
