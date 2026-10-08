@@ -390,7 +390,7 @@ GRANT SELECT ON installment_plans, installments TO daftar_accounting_internal;
 ALTER TABLE invoices ADD COLUMN has_active_installment_plan BOOLEAN NOT NULL DEFAULT false;
 
 COMMENT ON COLUMN invoices.has_active_installment_plan IS
-  'P4-S7 (TL-P4-COORD-R38 direction (d); challenger C1.a, THIRD round). Whether an installment plan with status = ''active'' exists for this invoice. It is LIFECYCLE and not money: no balance, no outstanding, no paid figure and no count of rows (P4-AL-06, challenger M-10) — one bit, carrying exactly the predicate customer_ar_aging''s active_plan CTE applies. It exists because the aging''s no-plan arm must not be keyed on a NOT EXISTS over installment_plans read through the CALLER''s row security: under row security ABSENT and INVISIBLE are one answer, and three rounds of guards that tried to certify the reader''s own visibility all failed, the third by checking policy properties that are not the properties deciding whether a role can see a row. Carried HERE, the fact is read through the very policy evaluation that let the caller see the invoice, so an invisible plan cannot exist for a visible invoice and no guard is needed. Maintained ONLY by installment_plan_fact_sync() on installment_plans, recomputed from the rows and never incremented; any transaction ending with this column and installment_plans in disagreement is REFUSED AT COMMIT by installment_plan_fact_verify(). The only UPDATE privilege on it is the column-level grant to daftar_accounting_internal; daftar_app reads it and cannot write it.';
+  'P4-S7 (TL-P4-COORD-R38 direction (d); challenger C1.a, THIRD round). Whether an installment plan with status = ''active'' exists for this invoice. It is LIFECYCLE and not money: no balance, no outstanding, no paid figure and no count of rows (P4-AL-06, challenger M-10) — one bit, carrying exactly the predicate customer_ar_aging''s active_plan CTE applies. It exists because the aging''s no-plan arm must not be keyed on a NOT EXISTS over installment_plans read through the CALLER''s row security: under row security ABSENT and INVISIBLE are one answer, and three rounds of guards that tried to certify the reader''s own visibility all failed, the third by checking policy properties that are not the properties deciding whether a role can see a row. Carried HERE, the fact is read through the very policy evaluation that let the caller see the invoice, so an invisible plan cannot exist for a visible invoice and no guard is needed. Maintained ONLY by installment_plan_fact_sync() on installment_plans, recomputed from the rows and never incremented; any transaction ending with this column and installment_plans in disagreement is REFUSED AT COMMIT by installment_plan_fact_verify(), and a sync whose own recomputation contradicts the plan row it was handed is refused at WRITE time by installment_plan_fact_sync() as installment.plan_fact_blind rather than committing a value that could never heal (TL-P4-COORD-R41 F1-b). ONE ROUTE ESCAPES BOTH AND IS DECLARED RATHER THAN CLAIMED SHUT: TRUNCATE installment_plans fires neither trigger, leaving this column true with no plan behind it, which customer_ar_aging refuses at read time as installment.plan_fact_unreadable instead of serving a figure. It is owner-only reachable and assigned to a later round. The only UPDATE privilege on it is the column-level grant to daftar_accounting_internal; daftar_app reads it and cannot write it.';
 
 -- THE ONLY WRITE AUTHORITY, column-level, on the `0081:660` precedent
 -- («GRANT UPDATE (status) ON invoices TO daftar_inventory_internal» — a
@@ -913,16 +913,31 @@ DECLARE
   v_invoice  UUID;
   v_state    BOOLEAN;
   v_rows     INTEGER;
+  -- THE INVOICE THE ROW THIS TRIGGER WAS HANDED ASSERTS AN ACTIVE PLAN ON, or
+  -- NULL when the handed row asserts nothing. It is set from `NEW` alone and
+  -- NEVER from a read of any relation, which is the whole point of it
+  -- (`TL-P4-COORD-R41`, F1-b).
+  v_asserted UUID;
 BEGIN
   -- `OLD` IS NOT ASSIGNED ON AN INSERT AND `NEW` IS NOT ASSIGNED ON A DELETE,
   -- and plpgsql raises «record "old" is not assigned yet» on the attribute
   -- rather than yielding NULL — so the three cases are branched explicitly
   -- instead of being folded into a `coalesce` or a `CASE`, both of which would
   -- evaluate the unassigned side.
+  --
+  -- EACH BRANCH ALSO RECORDS WHAT THE HANDED ROW ASSERTS. `NEW.status` is a
+  -- field of a record this trigger was given; reading it is not a query and
+  -- cannot be blinded by a policy on anything.
   IF TG_OP = 'INSERT' THEN
     v_business := NEW.business_id;
     v_invoices := ARRAY[NEW.invoice_id];
+    IF NEW.status = 'active' THEN v_asserted := NEW.invoice_id; END IF;
   ELSIF TG_OP = 'DELETE' THEN
+    -- A DELETE asserts nothing POSITIVE. `OLD.status = 'active'` says a plan
+    -- WAS active and says nothing about whether another one still is, so the
+    -- recomputation below cannot be contradicted on this path and
+    -- `v_asserted` stays NULL. That asymmetry is not an oversight: see the
+    -- paragraph after the loop.
     v_business := OLD.business_id;
     v_invoices := ARRAY[OLD.invoice_id];
   ELSE
@@ -935,6 +950,7 @@ BEGIN
     END IF;
     v_business := NEW.business_id;
     v_invoices := ARRAY[NEW.invoice_id];
+    IF NEW.status = 'active' THEN v_asserted := NEW.invoice_id; END IF;
     -- BOTH SIDES. `invoice_id` is not immutable today, and an UPDATE that
     -- moves a plan from one invoice to another leaves the OLD invoice flagged
     -- for a plan it no longer has.
@@ -952,6 +968,47 @@ BEGIN
                     WHERE p.business_id = v_business AND p.invoice_id = v_invoice
                       AND p.status = 'active')
       INTO v_state;
+
+    -- ---- THE WRITER DOES NOT DECIDE THE FACT BY A READ THAT CAN BE BLINDED.
+    --
+    -- `TL-P4-COORD-R41`, F1-b. The recomputation above is a READ of
+    -- `installment_plans`, taken as this DEFINER's owner. If that read is
+    -- blinded -- a `RESTRICTIVE ... FOR SELECT USING (false)` on the plan
+    -- relation reaches the owner too -- it answers `false`, and `false` then
+    -- means BOTH «no active plan» and «I can see no plans». That is the
+    -- sentence this slice has now written four times, and on the WRITE side it
+    -- is worse than on the read side: the desynchronised row COMMITS, and
+    -- because nothing revisits a row once its triggers have fired, restoring
+    -- the policy does not restore the flag. A silent wrong answer that
+    -- converts into a permanent `plan_fact_unflagged` refusal.
+    --
+    -- IT IS CLOSED WITHOUT ASKING A VISIBILITY QUESTION, because this trigger
+    -- IS HANDED THE ROW. When `NEW.status = 'active'` for `v_invoice`, an
+    -- active plan on that invoice EXISTS -- this statement just wrote it, and
+    -- an AFTER ROW trigger sees its own statement's effects. So a
+    -- recomputation of `false` is not evidence of absence; it is evidence that
+    -- the recomputation is blind. The two are told apart by COMPARING THE
+    -- RECOMPUTATION AGAINST WHAT WAS HANDED, and nothing is read to do it.
+    --
+    -- THE RECOMPUTATION IS KEPT, and that is deliberate. Reading
+    -- `NEW.status` ALONE would be wrong whenever a SECOND plan on the same
+    -- invoice is still active, which is exactly why the loop recomputes. The
+    -- fix does not replace the recomputation with `NEW`; it makes `NEW` the
+    -- FLOOR the recomputation may not fall below.
+    --
+    -- ONE-SIDED, AND THE OTHER SIDE IS NOT AN OVERSIGHT. A handed row can
+    -- establish that an active plan EXISTS; no handed row can establish that
+    -- none does, because a plan this statement did not touch may be active.
+    -- So `v_state = true` is never a contradiction, and the DELETE and
+    -- `active -> completed` directions carry no floor. Their failure mode is
+    -- the opposite one -- a flag left `true` with no plan -- which the READ
+    -- refuses as `plan_fact_unreadable` rather than serving, and which is
+    -- fail-closed. Section 6a's table states this per relation.
+    IF v_asserted IS NOT NULL AND v_invoice = v_asserted AND NOT v_state THEN
+      RAISE EXCEPTION 'installment.plan_fact_blind: this transaction wrote an ACTIVE plan on invoice %/% and the recomputation over installment_plans then found none, so the recomputation is blinded rather than the plan absent, and writing false would commit a fact that can never heal',
+        v_business, v_invoice USING ERRCODE = 'P0001';
+    END IF;
+
     -- NO `WHERE has_active_installment_plan IS DISTINCT FROM v_state` GUARD.
     -- It would make `ROW_COUNT = 0` mean either «already correct» or «I could
     -- not reach the row», which are the two answers this routine exists to
@@ -1010,6 +1067,58 @@ BEGIN
       RAISE EXCEPTION 'installment.plan_fact_desynchronised: no invoice %/% exists to carry the fact an installment plan asserts about it',
         v_business, v_invoice USING ERRCODE = 'P0001';
     END IF;
+    -- ---- THE FIRST TEST READS NO SECOND RELATION AT ALL.
+    --
+    -- `TL-P4-COORD-R41`, F1-b: the previous version of this routine computed
+    -- `v_state` with the SAME blind `EXISTS` the sync used, so the COMMIT-time
+    -- check compared a blinded reading against a column written from the same
+    -- blinded reading. THEY COULD NOT DISAGREE, which is why thirty-six green
+    -- cases could not see it. A verifier whose only test is «does my read
+    -- agree with the write that came from my read» verifies nothing.
+    --
+    -- THE DECISION THEREFORE MOVED TO THE WRITER, and this routine is no
+    -- longer where it is taken. `installment_plan_fact_sync()` above now
+    -- refuses `installment.plan_fact_blind` when its recomputation contradicts
+    -- the row it was handed, so a flag written from a blinded read CANNOT
+    -- REACH this verifier: the write is refused before COMMIT. What remains
+    -- here is a comparison of two readings, which is a STRENGTHENING of that
+    -- floor and not a substitute for it.
+    --
+    -- A HANDED-ROW FLOOR WAS TRIED HERE AND DOES NOT HOLD, a
+    -- limit found by working the repair rather than by asserting it. This
+    -- trigger is DEFERRED: the row it was handed is a snapshot of an event,
+    -- and by COMMIT that row may legitimately be GONE. INSERT an active plan
+    -- and DELETE it again in one transaction and this event still fires, with
+    -- `NEW.status = 'active'` and a flag the DELETE's sync correctly set
+    -- `false`. A floor applied there would refuse a consistent transaction.
+    -- The stale case and the blinded case are INDISTINGUISHABLE without asking
+    -- whether the handed row is still visible -- and `installment_plans`
+    -- carries `FORCE ROW LEVEL SECURITY` (section 2's `:170`), so NO principal
+    -- short of `rolbypassrls` has an unblindable read of it, the owner
+    -- included. Asking would be the fifth construction of the retired family.
+    --
+    -- SO THE FLOOR LIVES ON THE IMMEDIATE SYNC, WHERE IT HAS NO STALENESS
+    -- WINDOW -- «this statement just wrote it» is a fact at the moment the
+    -- sync runs and a guess at COMMIT -- and this deferred routine carries no
+    -- handed-row test at all. It carries the two-reading comparison below,
+    -- which degrades to a REFUSAL under blindness in every direction except
+    -- `v_flag = false` with a hidden plan, and that one direction is the one
+    -- the sync's floor makes unreachable.
+    --
+    -- This is stated rather than papered over because the enumeration in
+    -- section 6a has to be honest about which relations' invisibility is
+    -- observable and which is not, and the deferred side of this routine is
+    -- one of the places where it is not.
+
+    -- ---- THE SECOND TEST IS THE TWO-READING COMPARISON, AND IT IS KEPT.
+    --
+    -- It catches what no handed row can: a flag `true` with no plan behind it
+    -- (the INSERT route onto `invoices`), and a SECOND plan the handed row
+    -- knows nothing about. Blinded, it degrades to `v_state = false`, and
+    -- every state it then reports is a REFUSAL rather than a pass -- except
+    -- `v_flag = false`, which the test above already covers whenever a handed
+    -- row asserts otherwise. It is a strengthening of the first test, never
+    -- the only one.
     SELECT EXISTS (SELECT 1 FROM public.installment_plans p
                     WHERE p.business_id = v_business AND p.invoice_id = v_invoice
                       AND p.status = 'active')
@@ -1264,18 +1373,28 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 --
 --   flag FALSE, plan VISIBLE. Arms (a) and (b) would age the schedule AND arm
 --   (c) would age the whole figure at the due date: a DOUBLE COUNT, worse
---   than the defect being repaired. This one cannot reach COMMIT -- section
---   3a's deferred verifier refuses it and no principal can write the column
---   outside that path -- but a disabled trigger is a state, and a read that
---   serves a double count when it is in that state is not fail-closed.
+--   than the defect being repaired. Section 3a's sync refuses to WRITE this
+--   state and its deferred verifier refuses to COMMIT it, but a disabled or
+--   dropped trigger is a state, not a hypothesis, and a read that serves a
+--   double count while in that state is not fail-closed. So the read refuses
+--   it too. THIS SENTENCE IS NOT A CLAIM THAT THE STATE IS UNREACHABLE: an
+--   earlier draft said «cannot reach COMMIT» and a challenger MEASURED it
+--   reaching COMMIT, by blinding the writer's own read (F1-b, now closed in
+--   section 3a) and by `TRUNCATE`, which fires neither trigger and is
+--   recorded as OPEN at the end of this section.
 --
---   plan VISIBLE, schedule INVISIBLE. `installments` is a second relation
---   with its own policies. A caller who sees the plan and not its rows gets a
---   schedule of one row -- the down payment -- and the rest of the figure
---   lands in the residual at the invoice due date. The totals still
---   telescope (proofs 1 and 4); the BUCKETS are silently coarsened. Section
---   3's obligation (b) guarantees at least one `installments` row exists for
---   every active plan, so seeing none means not being able to see them.
+--   plan VISIBLE, schedule PARTLY OR WHOLLY INVISIBLE. `installments` is a
+--   second relation with its own policies, and this is the case that was got
+--   WRONG by asking it as an existence question. A caller who sees the plan
+--   and only SOME of its rows ages a short schedule, and the missing amount
+--   lands in the residual at the invoice due date: the totals still telescope
+--   (proofs 1 and 4) and the BUCKETS are silently coarsened. The test is
+--   therefore ARITHMETIC, not existential -- section 3 obligation (a) makes
+--   `down + Σ a_i = invoices.total_txn_minor` EXACT for every active plan, so
+--   a visible sum that differs from the invoice's own stored total is proof
+--   of rows this caller cannot read, and `amount_txn_minor >= 1` makes every
+--   hidden row move that sum. The `visible_schedule` CTE and the second
+--   disjunct of `unreadable_schedule` are where this lands.
 --
 -- `installment_plan_fact_assert` refuses all three. IT IS NOT A GUARD OVER
 -- VISIBILITY AND THE DIFFERENCE IS STRUCTURAL, NOT RHETORICAL:
@@ -1322,6 +1441,131 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 -- those facts is load-bearing for this arm any more -- the arm does not read
 -- `installment_plans` to decide anything -- and section 2b asserts all three
 -- AT APPLY TIME, from the live catalogue, where they belong.
+--
+-- ======================================================================
+-- THE COMPLETENESS ENUMERATION (`TL-P4-COORD-R41`)
+-- ======================================================================
+--
+-- The rule this section is built to, stated by the coordinator after the
+-- repair was applied to ONE of the TWO second relations and to NEITHER
+-- writer:
+--
+--     "Carry the fact on the row whose visibility governs the answer" must be
+--     applied to EVERY relation whose invisibility can change the answer --
+--     and the fact's WRITER must not decide it by a read that can be blinded.
+--
+-- This is the enumeration that rule asks for, and it is EXHAUSTIVE over the
+-- relations `customer_ar_aging` reads, directly or through the one money call.
+-- It is written as a completeness check, not as an argument: for each relation
+-- it names WHAT MAKES ITS INVISIBILITY OBSERVABLE FROM INSIDE THE CALLER'S OWN
+-- VISIBLE SET, and WHERE NOTHING DOES, IT SAYS SO. Four earlier rounds were
+-- lost to a check invented in place of that admission.
+--
+--   1. `invoices` -- READ BY THIS FUNCTION, in `invoice_fact`.
+--      Observable: NOT APPLICABLE, AND THIS IS THE FOUNDATION RATHER THAN A
+--      GAP. The question this function answers is "age THIS CUSTOMER's open
+--      receivables", and the receivables ARE these rows. An invoice the caller
+--      cannot see is not a wrong answer about that invoice; it is an answer
+--      about a smaller set, which is what row security is for. Every other
+--      entry below is observable BECAUSE it is reduced to a disagreement with
+--      something read off this relation.
+--
+--   2. `installment_plans` -- READ BY THIS FUNCTION, in `visible_plan`.
+--      Observable: YES, ON THE INVOICE ROW. `invoices.has_active_installment_plan`
+--      (section 2c) carries the existence of an active plan, and
+--      `unreadable_plan` counts the invoices whose own row says `true` where
+--      `visible_plan` has nothing. PARTIAL invisibility of this relation does
+--      not exist as a separate case: `installment_plans_one_active_per_invoice_uq`
+--      admits at most one active plan per invoice, so per invoice it is
+--      all-or-nothing. The converse direction -- a plan visible with the flag
+--      `false` -- is `unflagged_plan`.
+--
+--   3. `installments` -- READ BY THIS FUNCTION, in `visible_schedule` and in
+--      `sched`.
+--      Observable: YES, BY ARITHMETIC, and this is F1-a's repair. Section 3
+--      obligation (a) forces `down + Σ amount_txn_minor = invoices.total_txn_minor`
+--      EXACTLY for every active plan, and the right-hand side is a column on
+--      the governing invoice row, read in `invoice_fact`. So
+--      `unreadable_schedule` compares the caller's own visible sum against the
+--      caller's own invoice total. `amount_txn_minor >= 1` (`:153`) makes
+--      every hidden row move the sum, so no non-empty hidden subset escapes --
+--      the existence test it replaces caught only the all-hidden case.
+--
+--   4. `invoice_payments` and whatever else `invoice_outstanding()` reads for
+--      `paid`, `outstanding` and the base figures.
+--      Observable: NOT BY THIS FUNCTION, AND NOT BY ANY CHECK IT COULD CARRY.
+--      These figures arrive as the AUTHORITATIVE PAIR from one call
+--      (`0084`), and nothing on the invoice row restates them -- that is
+--      `P4-AL-06`/M-10 and it is deliberate: a stored balance beside a
+--      computed one is two answers to one question. So a caller blinded to
+--      part of the payment history gets a LARGER outstanding, aged correctly
+--      against the schedule it can see, with the sum and telescoping laws
+--      intact. SAID PLAINLY: THIS SLICE DOES NOT DETECT IT. The direction is
+--      conservative (over-stated receivable, never under-stated), it is the
+--      same exposure every other reader of `invoice_outstanding` has, and it
+--      belongs to that function's owner and not here. An arithmetic signature
+--      is NOT available, because no second relation is obliged to agree with
+--      the pair.
+--
+--   5. `customers` -- not read. The customer is a PARAMETER, matched against
+--      `invoices.customer_id` on the invoice row itself. A caller blind to the
+--      customer row still ages the invoices, so this relation cannot change
+--      the answer and needs no entry beyond saying so.
+--
+--   6. `businesses` / `tenant_membership` and the context functions the
+--      policies call. Not read by this function; they are the MACHINERY of
+--      entry 1 rather than a relation whose invisibility is a separate case.
+--      Asking about them is precisely the retired construction
+--      (`TL-P4-COORD-R38`), and section 2b asserts their shape AT APPLY TIME
+--      from the live catalogue, which is a different question asked by a
+--      different principal at a different time.
+--
+-- AND THE WRITER SIDE OF THE SAME RULE, which `R41` found had been left out
+-- entirely:
+--
+--   7. The WRITER of entry 2's fact -- `installment_plan_fact_sync()`,
+--      section 3a.
+--      It decided the fact with a `SECURITY DEFINER` `EXISTS` over
+--      `installment_plans`, and `installment_plans` is `FORCE ROW LEVEL
+--      SECURITY` (`:170`), so that read is blindable even for the owner.
+--      Blinded, it wrote `false`, the row COMMITTED, and nothing revisited it
+--      -- a silent wrong answer that turned into a permanent refusal.
+--      CLOSED WITHOUT ASKING A VISIBILITY QUESTION: the trigger is HANDED the
+--      row, so `NEW.status = 'active'` with a recomputation of `false` is a
+--      SELF-CONTRADICTION, and it refuses `installment.plan_fact_blind`. The
+--      recomputation is kept, because a second active plan on the same
+--      invoice makes `NEW` alone insufficient; `NEW` is the FLOOR the
+--      recomputation may not fall below. One-sided, and the other side is not
+--      observable: no handed row can establish that NO plan is active.
+--
+--   8. The DEFERRED VERIFIER of the same fact -- `installment_plan_fact_verify()`.
+--      Its blind `EXISTS` was IDENTICAL to the sync's, so the two agreed
+--      instead of catching each other. The decision moved to the writer
+--      (entry 7); what is left here is a two-reading comparison that degrades
+--      to a REFUSAL under blindness in every direction but one, and that one
+--      is the direction the sync's floor makes unreachable. A handed-row
+--      floor was tried HERE and does not hold, because deferral makes the
+--      handed row stale -- see the paragraph in that routine.
+--
+--   9. The WRITER of entry 1's own column by the `invoices` route -- a direct
+--      `INSERT` or `UPDATE OF has_active_installment_plan`.
+--      That writer READS NOTHING: it is handed a value. The route is bounded
+--      by AUTHORITY rather than by a check -- the only `UPDATE` privilege on
+--      the column is section 2c's column-level grant to a NOLOGIN internal
+--      principal, no runtime role holds it at either grain (section 2b part
+--      7), and the `INSERT` route is covered by the deferred verifier on this
+--      side.
+--
+-- WHAT THIS ENUMERATION LEAVES OPEN, named here so the next reader does not
+-- have to find it:
+--
+--   * `TRUNCATE installment_plans` fires NEITHER trigger of section 3a
+--     (measured: `tgtype` 29/29/21), so the flag survives as `true` with zero
+--     plans. It FAILS CLOSED at read time -- `unreadable_plan` counts it and
+--     the read refuses -- but it misdiagnoses the fault, and it falsifies
+--     section 2c's COMMENT a second time. Owner-only reachability. OPEN, and
+--     assigned to a later round rather than repaired here.
+--   * Entry 4 is undetectable by construction, as stated there.
 GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
 
 CREATE OR REPLACE FUNCTION installment_plan_fact_assert(p_unreadable_plan BIGINT,
@@ -1380,7 +1624,19 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
     -- x WHERE ...` the money call used to carry, so `public.invoices` is read
     -- ONCE for the whole projection and the id set and the fact set are by
     -- construction the same set.
-    SELECT x.id AS invoice_id, x.has_active_installment_plan AS flagged
+    -- `total_txn_minor` IS READ HERE TOO, AND OFF THE SAME ROW. It is the
+    -- RIGHT-HAND SIDE of section 3 obligation (a), so carrying it on the
+    -- governing row is the same move as carrying the flag there: the operand
+    -- the schedule must add up to cannot be visible when the invoice is not,
+    -- and cannot be hidden when the invoice is (`TL-P4-COORD-R41`, F1-a).
+    -- It is `invoices.total_txn_minor` (`0075:262`, NOT NULL, >= 1) and NOT
+    -- `paid + outstanding` from the money call, because obligation (a) is
+    -- written against the COLUMN and the verifier judges it against the
+    -- column (`installment_schedule_verify`, section 3). Comparing against a
+    -- differently derived total would make a disagreement between two correct
+    -- figures look like a hidden row.
+    SELECT x.id AS invoice_id, x.has_active_installment_plan AS flagged,
+           x.total_txn_minor AS declared_total
       FROM public.invoices x
      WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open'
   ),
@@ -1394,18 +1650,89 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
      WHERE p.business_id = p_business_id AND p.status = 'active'
        AND p.invoice_id IN (SELECT i.invoice_id FROM invoice_fact i)
   ),
+  visible_schedule AS (
+    -- THE VISIBLE SCHEDULE SUM, PER VISIBLE PLAN: the plan's own down payment
+    -- plus the `installments` rows THIS CALLER CAN READ. At most one row per
+    -- invoice, because `installment_plans_one_active_per_invoice_uq` makes at
+    -- most one plan active per invoice, so joining it below multiplies
+    -- nothing.
+    --
+    -- This is a READING, not a question about visibility. It is the left-hand
+    -- side of obligation (a) evaluated over the caller's own visible set, and
+    -- the comparison in `fact` is between it and a figure read off the
+    -- invoice row -- two readings of DATA, which is the one shape this family
+    -- permits.
+    SELECT v.invoice_id,
+           (v.down_payment_minor
+              + coalesce((SELECT pg_catalog.sum(n.amount_txn_minor)
+                            FROM public.installments n
+                           WHERE n.business_id = p_business_id AND n.plan_id = v.id), 0))::BIGINT
+             AS visible_total,
+           (SELECT pg_catalog.count(*)
+              FROM public.installments n2
+             WHERE n2.business_id = p_business_id AND n2.plan_id = v.id)::BIGINT
+             AS visible_rows
+      FROM visible_plan v
+  ),
   fact AS (
     -- THE TWO READINGS, COMPARED. One row, always -- an aggregate with no
     -- GROUP BY -- so the assertion below is reached even when every count is
     -- zero and even when there is no invoice at all.
     SELECT pg_catalog.count(*) FILTER (WHERE i.flagged AND v.id IS NULL)::BIGINT          AS unreadable_plan,
            pg_catalog.count(*) FILTER (WHERE NOT i.flagged AND v.id IS NOT NULL)::BIGINT  AS unflagged_plan,
+           -- THE SCHEDULE RELATION, JUDGED BY ARITHMETIC AND NOT BY EXISTENCE.
+           --
+           -- `TL-P4-COORD-R41`, F1-a. This count used to be a bare
+           -- existence test over the `installments` relation -- and the
+           -- retired shape is DESCRIBED here rather than QUOTED, because
+           -- section 2b's ratchet forbids that shape by searching `prosrc`,
+           -- and `prosrc` holds this comment too. Quoting it would have made
+           -- the ratchet refuse the very body that satisfies it, which is the
+           -- SIXTH time in this file that explaining a removal has tripped the
+           -- test for the removal. It asked whether ANY instalment row was
+           -- visible and never whether
+           -- the visible ones ADD UP. One DDL statement hiding SOME of a
+           -- schedule -- `AND seq_no < 2` on `installments` -- passed it
+           -- 0/0/0 with the plan visible and the flag `true`, and the reader
+           -- then served the pre-S7 figure in one coarse band. Existence was
+           -- all-or-nothing where the harm is partial, and because it is
+           -- value-dependent it was silent.
+           --
+           -- SECTION 3 OBLIGATION (a) MAKES THE TEST EXACT:
+           --
+           --     down_payment_minor + Σ amount_txn_minor = invoices.total_txn_minor
+           --
+           -- for EVERY active plan, refused at COMMIT in BOTH directions by
+           -- `installment_schedule_verify()` on `<>` and not `>`. So the
+           -- declared schedule of a visible active plan sums to the invoice's
+           -- own stored total, EXACTLY -- and a visible sum that differs from
+           -- it is arithmetic proof that rows exist which this caller cannot
+           -- read. No policy is inspected, no privilege is tested, no
+           -- `current_user` is named: two numbers that must be equal are not.
+           --
+           -- AND IT IS COMPLETE RATHER THAN VALUE-DEPENDENT, which the
+           -- existence test was not. `installments.amount_txn_minor` carries
+           -- `CHECK (amount_txn_minor >= 1)` (section 2, `:153`), so EVERY
+           -- hidden instalment row removes at least one minor unit from
+           -- `visible_total`. Hiding any non-empty subset of a schedule
+           -- therefore makes the comparison fail -- there is no subset whose
+           -- concealment this misses, and no total for which it is quiet.
+           --
+           -- THE EXISTENCE TEST IS KEPT AS THE FIRST DISJUNCT ANYWAY, and not
+           -- as belt and braces: it is what holds if someone ever relaxes
+           -- `amount_txn_minor >= 1` to `>= 0`. Under that relaxation a
+           -- schedule of zero-amount rows could sum to the total with every
+           -- row hidden, and obligation (b)'s «at least one instalment row»
+           -- is then the only thing left to notice. Both disjuncts are one
+           -- count, so the assertion still takes exactly three arguments and
+           -- section 2b still pins it by `proargtypes`.
            pg_catalog.count(*) FILTER (WHERE v.id IS NOT NULL
-                                         AND NOT EXISTS (SELECT 1 FROM public.installments n
-                                                          WHERE n.business_id = p_business_id
-                                                            AND n.plan_id = v.id))::BIGINT AS unreadable_schedule
+                                         AND (s.visible_rows = 0
+                                              OR s.visible_total <> i.declared_total))::BIGINT
+             AS unreadable_schedule
       FROM invoice_fact i
       LEFT JOIN visible_plan v ON v.invoice_id = i.invoice_id
+      LEFT JOIN visible_schedule s ON s.invoice_id = i.invoice_id
   ),
   invoice_checked AS (
     -- THE ROOT. Every CTE below reads the invoice set from HERE, so the three
@@ -1879,6 +2206,36 @@ BEGIN
                     AND p.prosrc LIKE '%installment_plan_fact_assert(%'
                     AND p.prosrc NOT LIKE '%installment_plan_visibility_assert%') THEN
     RAISE EXCEPTION 'installment.migration_end_state_invalid: customer_ar_aging does not age its no-plan arm from the invoice''s own has_active_installment_plan, or still calls the retired visibility guard'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- 6b. THE TWO WRITE-SIDE RATCHETS OF `TL-P4-COORD-R41`, pinned by `prosrc`
+  --     because both are the ABSENCE of a defect and a name test cannot see
+  --     either. They are substring tests and they are honest about being
+  --     substring tests: they stop the exact regression that was measured,
+  --     which is what a ratchet is for.
+  --
+  --     F1-b. The fact's WRITER must not decide it by a read that can be
+  --     blinded. `installment_plan_fact_sync()` keeps its recomputation and
+  --     refuses when that recomputation contradicts the row it was handed, so
+  --     the refusal name must be IN the installed body.
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p
+                  WHERE p.oid = 'public.installment_plan_fact_sync()'::regprocedure
+                    AND p.prosrc LIKE '%plan_fact_blind%'
+                    AND p.prosrc LIKE '%NEW.status%') THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_plan_fact_sync does not refuse installment.plan_fact_blind when its recomputation contradicts the plan row it was handed, so the fact''s writer decides it by a read that FORCE ROW LEVEL SECURITY on installment_plans can blind'
+      USING ERRCODE = 'P0001';
+  END IF;
+  --     F1-a. The schedule relation is judged by ARITHMETIC and not by
+  --     existence. The installed body must carry the visible-sum reading and
+  --     the invoice's own declared total, and must NOT carry the retired
+  --     all-or-nothing `NOT EXISTS` over `installments`.
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p
+                  WHERE p.oid = 'public.customer_ar_aging(uuid,uuid,date,integer[])'::regprocedure
+                    AND p.prosrc LIKE '%visible_schedule%'
+                    AND p.prosrc LIKE '%declared_total%'
+                    AND p.prosrc NOT LIKE '%NOT EXISTS (SELECT 1 FROM public.installments%') THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: customer_ar_aging does not compare the caller''s visible schedule sum against invoices.total_txn_minor, or still asks the retired existence question about installments, which section 3 obligation (a) makes exact and which partial schedule invisibility defeats'
       USING ERRCODE = 'P0001';
   END IF;
 
