@@ -52,6 +52,14 @@
  * edited away from what this file proves reddens on every ordinary run, with no
  * cluster involved and no flag set.
  *
+ * The gate is DERIVED from `GRANTED_EVIDENCE_LEVEL` in
+ * `tests/helpers/evidence-level-grant.ts`, not from this file's own reading
+ * of an environment variable. That is the other side of the ratchet: the
+ * first draft of this gate was correct to refuse to over-claim, but nothing
+ * in it would have reddened when the grant moved to F, so the thirteen cases
+ * below would have stayed dark forever (`TL-P4-COORD-R28`). The variable
+ * survives only as an owner's PRE-GRANT override.
+ *
  * Set `P4S6_LEVEL_F=1` with a `PG_DIR`/`PG_PORT` pair nobody else holds:
  *
  *   P4S6_LEVEL_F=1 PG_DIR=/tmp/daftar-pg-p4s6f PG_PORT=56861 \
@@ -67,8 +75,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { adminUrl, ensureDatabase, startOrReuse } from '../helpers/embedded-cluster';
 import { writeTimeGeneration, asOfNowGeneration, type GenerationRow } from '../../packages/inventory/src/customer-reversal';
+import { EVIDENCE_LEVELS, GRANTED_EVIDENCE_LEVEL, levelDefaultEnabled, levelEnabled } from '../helpers/evidence-level-grant';
 
-const ENABLED = process.env['P4S6_LEVEL_F'] === '1';
+// The default is DERIVED from the granted level, never hardcoded: when the
+// grant moves to F these cases stop being skippable without anyone editing
+// this file. `TL-P4-COORD-R28`; see `tests/helpers/evidence-level-grant.ts`.
+const ENABLED = levelEnabled('F', process.env['P4S6_LEVEL_F']);
 
 const DOCS = join(__dirname, '../../docs');
 const DDL_SPEC = readFileSync(join(DOCS, 'PHASE_4_S6_DDL_SPECIFICATION.md'), 'utf8');
@@ -315,6 +327,26 @@ describe('P4-S6 level F — the specification executed', () => {
   });
 
   // ── The gate's own non-vacuity ─────────────────────────────────────────
+
+  it('the gate DERIVES from the granted level, so raising the grant un-skips it', () => {
+    // `[[daftar-a-ratchet-has-two-sides]]`. These assertions are about the
+    // DERIVATION, taken against levels passed in as arguments, so they are
+    // non-vacuous while the real grant is still E. A gate rewritten to read
+    // only the environment variable reds on the second one.
+    expect(levelDefaultEnabled('E', 'F', undefined)).toBe(false);
+    expect(levelDefaultEnabled('F', 'F', undefined)).toBe(true);
+    expect(levelDefaultEnabled('G', 'F', undefined)).toBe(true);
+    // The override is a PRE-grant convenience and can never close an opened
+    // gate: no value of it turns a reached grant back off.
+    for (const override of [undefined, '', '0', '1', 'false']) {
+      expect(levelDefaultEnabled('F', 'F', override)).toBe(true);
+    }
+    expect(levelDefaultEnabled('E', 'F', '1')).toBe(true);
+    // And the ladder is ordered, so `levelReached` cannot be satisfied by a
+    // string comparison that happens to agree on these two letters.
+    expect(EVIDENCE_LEVELS.indexOf(GRANTED_EVIDENCE_LEVEL)).toBeGreaterThanOrEqual(0);
+    expect(ENABLED).toBe(levelDefaultEnabled(GRANTED_EVIDENCE_LEVEL, 'F', process.env['P4S6_LEVEL_F']));
+  });
 
   it('the opt-in gate is not vacuous: asked to run, it RAN', () => {
     // `[[daftar-a-green-gate-must-prove-it-can-be-red]]`. Without this case a
