@@ -125,6 +125,21 @@ async function commitPlan(
   let statementsAccepted = false;
   try {
     await client.query('BEGIN');
+    // THE WRITER'S OBLIGATION, STATED BY THE SPECIFICATION AND NOT BY THIS
+    // SUITE. `installment_plan_fact_sync()` writes the invoice's
+    // `has_active_installment_plan` as `daftar_accounting_internal`, and
+    // `invoices`' own `tenant_membership` / `business_isolation_update`
+    // policies admit that UPDATE only when `app.tenant_id` and
+    // `app.business_id` match the invoice's. Specification section 3a says
+    // so in terms — «the command that creates, completes or cancels a plan
+    // must run with app.tenant_id and app.business_id set to the invoice's
+    // own values … a writer that does not gets
+    // installment.plan_fact_unwritable and no row». This helper did not set
+    // them, so after round 9 every plan write in this file was refused by
+    // that rule instead of by the law under test. Transaction-local, the way
+    // `0006` requires: nothing leaks into the next test.
+    await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [w.shop.tenantId]);
+    await client.query(`SELECT set_config('app.business_id', $1, true)`, [w.shop.businessId]);
     await client.query(
       `INSERT INTO installment_plans (tenant_id, business_id, id, invoice_id, customer_id, status,
                                       down_payment_minor, down_payment_due_date, created_by, business_transaction_id)
@@ -164,6 +179,21 @@ async function removePlan(planId: string): Promise<string | null> {
   const client = await ownerPool().connect();
   try {
     await client.query('BEGIN');
+    // THE WRITER'S OBLIGATION, STATED BY THE SPECIFICATION AND NOT BY THIS
+    // SUITE. `installment_plan_fact_sync()` writes the invoice's
+    // `has_active_installment_plan` as `daftar_accounting_internal`, and
+    // `invoices`' own `tenant_membership` / `business_isolation_update`
+    // policies admit that UPDATE only when `app.tenant_id` and
+    // `app.business_id` match the invoice's. Specification section 3a says
+    // so in terms — «the command that creates, completes or cancels a plan
+    // must run with app.tenant_id and app.business_id set to the invoice's
+    // own values … a writer that does not gets
+    // installment.plan_fact_unwritable and no row». This helper did not set
+    // them, so after round 9 every plan write in this file was refused by
+    // that rule instead of by the law under test. Transaction-local, the way
+    // `0006` requires: nothing leaks into the next test.
+    await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [w.shop.tenantId]);
+    await client.query(`SELECT set_config('app.business_id', $1, true)`, [w.shop.businessId]);
     await client.query(`DELETE FROM installments WHERE business_id = $1 AND plan_id = $2`, [w.shop.businessId, planId]);
     await client.query(`DELETE FROM installment_plans WHERE business_id = $1 AND id = $2`, [w.shop.businessId, planId]);
     await client.query('COMMIT');
@@ -257,6 +287,14 @@ afterAll(async () => {
   // here; this comment is the disclosure, and the drops below are the
   // teardown doing what it can.
   await p.query('DROP TRIGGER IF EXISTS invoices_installment_fact_agrees ON invoices').catch(() => undefined);
+  // AND `TL-P4-COORD-R43` F1-d PUTS A SECOND ONE THERE, for the same reason:
+  // obligation (a)'s right-hand side is `invoices.total_txn_minor`, so the
+  // relation that carries it has to be one of the verifier's events. Without
+  // this drop an interrupted run leaves the trigger behind and the NEXT run of
+  // this file fails to apply the specification at all, with
+  // `42710 trigger "invoices_installment_schedule_complete" ... already
+  // exists` — measured, this round, on exactly that sequence.
+  await p.query('DROP TRIGGER IF EXISTS invoices_installment_schedule_complete ON invoices').catch(() => undefined);
   await p.query('ALTER TABLE invoices DROP COLUMN IF EXISTS has_active_installment_plan').catch(() => undefined);
   await p.query('DROP FUNCTION IF EXISTS installment_schedule_verify()').catch(() => undefined);
   await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_sync()').catch(() => undefined);
@@ -367,6 +405,21 @@ describe('§B THE TRIGGERS FIRE — at COMMIT, in every direction the sum can be
     let error: string | null = null;
     try {
       await client.query('BEGIN');
+      // THE WRITER'S OBLIGATION, STATED BY THE SPECIFICATION AND NOT BY THIS
+      // SUITE. `installment_plan_fact_sync()` writes the invoice's
+      // `has_active_installment_plan` as `daftar_accounting_internal`, and
+      // `invoices`' own `tenant_membership` / `business_isolation_update`
+      // policies admit that UPDATE only when `app.tenant_id` and
+      // `app.business_id` match the invoice's. Specification section 3a says
+      // so in terms — «the command that creates, completes or cancels a plan
+      // must run with app.tenant_id and app.business_id set to the invoice's
+      // own values … a writer that does not gets
+      // installment.plan_fact_unwritable and no row». This helper did not set
+      // them, so after round 9 every plan write in this file was refused by
+      // that rule instead of by the law under test. Transaction-local, the way
+      // `0006` requires: nothing leaks into the next test.
+      await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [w.shop.tenantId]);
+      await client.query(`SELECT set_config('app.business_id', $1, true)`, [w.shop.businessId]);
       const del = await client.query(`DELETE FROM installments WHERE business_id = $1 AND plan_id = $2 AND seq_no = 2`, [w.shop.businessId, planId]);
       expect(del.rowCount, 'the DELETE really removed a row, or the trigger had nothing to fire on').toBe(1);
       deleteAccepted = true;
@@ -411,17 +464,40 @@ describe('§B THE TRIGGERS FIRE — at COMMIT, in every direction the sum can be
     expect(r.error ?? '').toContain('(c)');
   });
 
-  it("B5 obligation (e): a plan whose tenant is not its invoice's is REFUSED at COMMIT", async () => {
-    // This is the OTHER asymmetry, and it was mine: `tenant_id` is tied to
-    // nothing by any key, and every policy here is keyed on it, so a plan with
-    // a foreign tenant was invisible to the very caller who could see the
-    // invoice. Measured as a refusal, not argued as unlikely.
+  it('B5 the tenant divergence is REFUSED IMMEDIATELY now, by the structural edge F2 found had been left off', async () => {
+    // This is the OTHER asymmetry, and it was mine: every policy here is keyed
+    // on `tenant_id`, so a plan with a foreign tenant was invisible to the
+    // very caller who could see the invoice.
+    //
+    // IT WAS A DEFERRED CHECK, obligation (e), and its stated reason was that
+    // no composite key existed for a foreign key to name. `TL-P4-COORD-R43`
+    // F2 measured that reason FALSE — `0016:10` is
+    // `businesses (tenant_id, id) UNIQUE` and `0075:318` already names it from
+    // `invoices` — so the edge is carried now and the refusal is the FOREIGN
+    // KEY, at the statement, not a verifier at COMMIT. This arm therefore
+    // asserts the EARLIER refusal, which is a strengthening: the state is
+    // unreachable rather than caught.
     const foreign = randomUUID();
     const client = await ownerPool().connect();
     let error: string | null = null;
     let accepted = false;
     try {
       await client.query('BEGIN');
+      // THE WRITER'S OBLIGATION, STATED BY THE SPECIFICATION AND NOT BY THIS
+      // SUITE. `installment_plan_fact_sync()` writes the invoice's
+      // `has_active_installment_plan` as `daftar_accounting_internal`, and
+      // `invoices`' own `tenant_membership` / `business_isolation_update`
+      // policies admit that UPDATE only when `app.tenant_id` and
+      // `app.business_id` match the invoice's. Specification section 3a says
+      // so in terms — «the command that creates, completes or cancels a plan
+      // must run with app.tenant_id and app.business_id set to the invoice's
+      // own values … a writer that does not gets
+      // installment.plan_fact_unwritable and no row». This helper did not set
+      // them, so after round 9 every plan write in this file was refused by
+      // that rule instead of by the law under test. Transaction-local, the way
+      // `0006` requires: nothing leaks into the next test.
+      await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [w.shop.tenantId]);
+      await client.query(`SELECT set_config('app.business_id', $1, true)`, [w.shop.businessId]);
       const pid = randomUUID();
       await client.query(
         `INSERT INTO installment_plans (tenant_id, business_id, id, invoice_id, customer_id, status,
@@ -442,10 +518,9 @@ describe('§B THE TRIGGERS FIRE — at COMMIT, in every direction the sum can be
     } finally {
       client.release();
     }
-    expect(accepted, 'the refusal is DEFERRED, not immediate').toBe(true);
-    expect(error ?? '').toContain('installment.schedule_incomplete');
-    expect(error ?? '').toContain('(e)');
-    expect(error ?? '').toContain('the plan tenant');
+    expect(accepted, 'the refusal came at COMMIT, so the structural edge is not the thing that refused').toBe(false);
+    expect(error ?? '').toContain('installment_plans_tenant_fk');
+    expect(error ?? '').toContain('foreign key constraint');
   });
 });
 
@@ -958,7 +1033,12 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
       // 3. AND WITH THE REFUSAL NEUTRALISED IT IS AN OMISSION AND NOT A WRONG
       //    NUMBER. The column has already removed the pre-S7 answer; this is
       //    what the three counts are for.
-      await p.query(`CREATE OR REPLACE FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT)
+      // THE PARAMETER NAMES ARE PART OF THE SIGNATURE TO `CREATE OR REPLACE`:
+      // PostgreSQL refuses `cannot change name of input parameter
+      // "p_unreadable_plan"`, and this stub omitted them. It was never
+      // reached until this round, because every plan write in this file was
+      // being refused upstream.
+      await p.query(`CREATE OR REPLACE FUNCTION installment_plan_fact_assert(p_unreadable_plan BIGINT, p_unflagged_plan BIGINT, p_unreadable_schedule BIGINT)
                      RETURNS BOOLEAN LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS 'SELECT true'`);
       try {
         const open = await asRole<{ bucket_no: number; txn_minor: string }>('daftar_inventory_internal', {}, AGING, [
@@ -1062,69 +1142,88 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     const AGING = `SELECT bucket_no, txn_minor::text AS txn_minor FROM customer_ar_aging($1, $2, $3::DATE, $4::INTEGER[]) ORDER BY bucket_no`;
     const args = [w.shop.businessId, customerId, asOf, BUCKET_DAYS];
 
-    // NON-VACUITY FIRST: on a healthy database the read ANSWERS, or every
-    // refusal below is a refusal of everything.
-    const ok = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
-    expect(ok.error, `the read refuses a healthy database: ${ok.error ?? ''}`).toBeNull();
-    expect(ok.rows.length).toBeGreaterThan(1);
+    // ── ONE DISCLOSED FIXTURE DEPARTURE, FOR THE LENGTH OF THIS ARM ONLY.
+    //
+    // This arm reads as `daftar_app`, and `daftar_app` holds NO EXECUTE on
+    // `supplier_ap_release` in this database: that is PATCH REQUEST PR-6, a
+    // declared blocker, and §D and §D2 of this same file MEASURE its absence,
+    // so it cannot be pre-applied for the whole suite without falsifying them.
+    // It is therefore granted here and REVOKED in the `finally`, which is the
+    // only arrangement under which both readings are of the real database.
+    // Without it this arm's own non-vacuity check fails with `42501
+    // permission denied for function supplier_ap_release` and the arm measures
+    // the missing grant instead of the law — which is what it did when the
+    // plan writes in this file started reaching it.
+    await p.query(`GRANT EXECUTE ON FUNCTION public.supplier_ap_release(BIGINT, BIGINT, BIGINT, BIGINT) TO daftar_app`);
+    try {
+      // NON-VACUITY FIRST: on a healthy database the read ANSWERS, or every
+      // refusal below is a refusal of everything.
+      const ok = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
+      expect(ok.error, `the read refuses a healthy database: ${ok.error ?? ''}`).toBeNull();
+      expect(ok.rows.length).toBeGreaterThan(1);
 
-    const hides: readonly { readonly label: string; readonly code: string; readonly fault: string; readonly undo: string }[] = [
-      {
-        label: 'the plan relation hidden from the caller',
-        code: 'installment.plan_fact_unreadable',
-        fault: `DROP POLICY business_isolation_read ON installment_plans;
+      const hides: readonly { readonly label: string; readonly code: string; readonly fault: string; readonly undo: string }[] = [
+        {
+          label: 'the plan relation hidden from the caller',
+          code: 'installment.plan_fact_unreadable',
+          fault: `DROP POLICY business_isolation_read ON installment_plans;
                 CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT USING (false)`,
-        undo: `DROP POLICY business_isolation_read ON installment_plans;
+          undo: `DROP POLICY business_isolation_read ON installment_plans;
                CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
                  USING (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal')
                         OR business_id = nullif(app_business(), '')::uuid)`,
-      },
-      {
-        label: 'the SCHEDULE relation hidden while the plan stays visible',
-        code: 'installment.plan_schedule_unreadable',
-        fault: `DROP POLICY business_isolation_read ON installments;
+        },
+        {
+          label: 'the SCHEDULE relation hidden while the plan stays visible',
+          code: 'installment.plan_schedule_unreadable',
+          fault: `DROP POLICY business_isolation_read ON installments;
                 CREATE POLICY business_isolation_read ON installments AS RESTRICTIVE FOR SELECT USING (false)`,
-        undo: `DROP POLICY business_isolation_read ON installments;
+          undo: `DROP POLICY business_isolation_read ON installments;
                CREATE POLICY business_isolation_read ON installments AS RESTRICTIVE FOR SELECT
                  USING (app_bypass() OR current_user IN ('daftar_inventory_internal', 'daftar_accounting_internal')
                         OR business_id = nullif(app_business(), '')::uuid)`,
-      },
-    ];
-    for (const c of hides) {
-      await p.query(c.fault);
-      try {
-        const r = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
-        expect(r.error ?? '', `${c.label}: the read did not refuse`).toContain(c.code);
-      } finally {
-        await p.query(c.undo);
+        },
+      ];
+      for (const c of hides) {
+        await p.query(c.fault);
+        try {
+          const r = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
+          expect(r.error ?? '', `${c.label}: the read did not refuse`).toContain(c.code);
+        } finally {
+          await p.query(c.undo);
+        }
+        const after = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
+        expect(after.error, `${c.label}: the undo did not restore the database`).toBeNull();
+        expect(after.rows.length, `${c.label}: the undo restored the policy but not the answer`).toBeGreaterThan(1);
       }
-      const after = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
-      expect(after.error, `${c.label}: the undo did not restore the database`).toBeNull();
-      expect(after.rows.length, `${c.label}: the undo restored the policy but not the answer`).toBeGreaterThan(1);
-    }
 
-    // AND THE WIDENINGS, which must NOT refuse.
-    const widenings: readonly { readonly label: string; readonly fault: string; readonly undo: string }[] = [
-      {
-        label: 'row security no longer FORCED',
-        fault: `ALTER TABLE installments NO FORCE ROW LEVEL SECURITY`,
-        undo: `ALTER TABLE installments FORCE ROW LEVEL SECURITY`,
-      },
-      {
-        label: 'an EXTRA permissive policy nobody declared',
-        fault: `CREATE POLICY an_extra_policy ON installment_plans FOR SELECT TO daftar_app USING (true)`,
-        undo: `DROP POLICY an_extra_policy ON installment_plans`,
-      },
-    ];
-    for (const c of widenings) {
-      await p.query(c.fault);
-      try {
-        const r = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
-        expect(r.error, `${c.label}: a WIDENING made the read refuse, which is refusing on a proxy: ${r.error ?? ''}`).toBeNull();
-        expect(r.rows.length, `${c.label}: the answer changed under a widening`).toBe(ok.rows.length);
-      } finally {
-        await p.query(c.undo);
+      // AND THE WIDENINGS, which must NOT refuse.
+      const widenings: readonly { readonly label: string; readonly fault: string; readonly undo: string }[] = [
+        {
+          label: 'row security no longer FORCED',
+          fault: `ALTER TABLE installments NO FORCE ROW LEVEL SECURITY`,
+          undo: `ALTER TABLE installments FORCE ROW LEVEL SECURITY`,
+        },
+        {
+          label: 'an EXTRA permissive policy nobody declared',
+          fault: `CREATE POLICY an_extra_policy ON installment_plans FOR SELECT TO daftar_app USING (true)`,
+          undo: `DROP POLICY an_extra_policy ON installment_plans`,
+        },
+      ];
+      for (const c of widenings) {
+        await p.query(c.fault);
+        try {
+          const r = await asRole<{ bucket_no: number }>('daftar_app', ctx, AGING, args);
+          expect(r.error, `${c.label}: a WIDENING made the read refuse, which is refusing on a proxy: ${r.error ?? ''}`).toBeNull();
+          expect(r.rows.length, `${c.label}: the answer changed under a widening`).toBe(ok.rows.length);
+        } finally {
+          await p.query(c.undo);
+        }
       }
+    } finally {
+      // PR-6 GOES BACK. §D and §D2 measure its absence, so the database must be
+      // left exactly as this arm found it.
+      await p.query(`REVOKE EXECUTE ON FUNCTION public.supplier_ap_release(BIGINT, BIGINT, BIGINT, BIGINT) FROM daftar_app`);
     }
   });
 

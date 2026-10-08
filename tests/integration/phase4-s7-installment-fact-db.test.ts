@@ -75,6 +75,116 @@ interface AgingRow {
   readonly invoice_count: number;
 }
 
+/**
+ * THE TWO PRE-REPAIR WRITERS, QUOTED VERBATIM RATHER THAN DERIVED BY REGEX.
+ *
+ * A counterfactual produced by rewriting the shipped body with a regular
+ * expression is only a counterfactual while the regex still matches, and a
+ * regex that stops matching produces a measurement of the SHIPPED routine
+ * labelled as a measurement of the old one. That happened to this file once
+ * (`F1b_counterfactual_rewrote` is the check that caught it), so the two
+ * pre-repair constructions are written out here, in full, and the only thing
+ * asserted about them is that they DIFFER from the shipped body and carry (or
+ * lack) the markers of their own round.
+ *
+ * `SYNC_R8` — round 8. The fact is decided by a recomputation over
+ * `installment_plans` and there is no floor of any kind. Blinded, it writes
+ * `false`.
+ *
+ * `SYNC_R9` — round 9, which is commit `d5e9035`, the construction this round
+ * repairs. Same recomputation, same unconditional write, plus `v_asserted`:
+ * a floor scoped to «the handed row asserts an ACTIVE plan on this invoice».
+ * A write of a NON-ACTIVE plan row sets `v_asserted` to NULL, so the floor is
+ * absent and the blindable recomputation still decides the value — which is
+ * `TL-P4-COORD-R43` F1-c.
+ */
+const SYNC_HEAD = `CREATE OR REPLACE FUNCTION public.installment_plan_fact_sync() RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_business UUID;
+  v_invoices UUID[];
+  v_invoice  UUID;
+  v_state    BOOLEAN;
+  v_rows     INTEGER;`;
+const SYNC_TAIL = `  FOREACH v_invoice IN ARRAY v_invoices LOOP
+    SELECT EXISTS (SELECT 1 FROM public.installment_plans p
+                    WHERE p.business_id = v_business AND p.invoice_id = v_invoice
+                      AND p.status = 'active')
+      INTO v_state;
+__FLOOR__
+    UPDATE public.invoices i SET has_active_installment_plan = v_state
+     WHERE i.business_id = v_business AND i.id = v_invoice;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    IF v_rows <> 1 THEN
+      RAISE EXCEPTION 'installment.plan_fact_unwritable: this transaction changed a plan on invoice %/% but could not write the invoice''s own has_active_installment_plan (% rows), so the aging would read a fact nobody maintained',
+        v_business, v_invoice, v_rows USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+  RETURN NULL;
+END;
+$fn$;`;
+
+const SYNC_R8 = `${SYNC_HEAD}
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.invoice_id];
+  ELSIF TG_OP = 'DELETE' THEN
+    v_business := OLD.business_id;
+    v_invoices := ARRAY[OLD.invoice_id];
+  ELSE
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.invoice_id];
+    IF OLD.invoice_id IS DISTINCT FROM NEW.invoice_id THEN
+      v_invoices := v_invoices || OLD.invoice_id;
+    END IF;
+  END IF;
+${SYNC_TAIL.replace('__FLOOR__\n', '')}`;
+
+const SYNC_R9 = `${SYNC_HEAD}
+  v_asserted UUID;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.invoice_id];
+    IF NEW.status = 'active' THEN v_asserted := NEW.invoice_id; END IF;
+  ELSIF TG_OP = 'DELETE' THEN
+    v_business := OLD.business_id;
+    v_invoices := ARRAY[OLD.invoice_id];
+  ELSE
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.invoice_id];
+    IF NEW.status = 'active' THEN v_asserted := NEW.invoice_id; END IF;
+    IF OLD.invoice_id IS DISTINCT FROM NEW.invoice_id THEN
+      v_invoices := v_invoices || OLD.invoice_id;
+    END IF;
+  END IF;
+${SYNC_TAIL.replace(
+  '__FLOOR__',
+  `    IF v_asserted IS NOT NULL AND v_invoice = v_asserted AND NOT v_state THEN
+      RAISE EXCEPTION 'installment.plan_fact_blind: this transaction wrote an ACTIVE plan on invoice %/% and the recomputation over installment_plans then found none, so the recomputation is blinded rather than the plan absent, and writing false would commit a fact that can never heal',
+        v_business, v_invoice USING ERRCODE = 'P0001';
+    END IF;`,
+)}`;
+
+/** The restrictive read policy as the specification ships it. */
+const RESTORE_PLANS_READ_SQL = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
+     USING (app_bypass() OR current_user IN ('daftar_inventory_internal','daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid)`;
+/** Hidden from EVERYBODY, which is what §F1-b and §F1-c use. */
+const BLIND_PLANS_SQL = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT USING (false)`;
+/**
+ * HIDDEN FROM THE WRITER AND FROM NOBODY ELSE — `TL-P4-COORD-R43` F1-c prime.
+ * The shipped text with `AND current_user <> 'daftar_accounting_internal'`
+ * folded in: `daftar_app` still reads every plan row, `daftar_migrator` still
+ * reads them by `business_id`, and the one principal that cannot is the owner
+ * of the two DEFINER trigger functions — the only principal whose blindness
+ * round 9's floor could not detect.
+ */
+const BLIND_WRITER_ONLY_SQL = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
+     USING (app_bypass()
+            OR (current_user <> 'daftar_accounting_internal'
+                AND (current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid)))`;
+
 let db: ScratchDb;
 let sup: Pool;
 let mig: Pool;
@@ -286,7 +396,7 @@ beforeAll(async () => {
   const OLD_BODY = NEW_BODY.replace(
     /FROM open_invoice oi\n\s*WHERE NOT oi\.flagged/,
     'FROM open_invoice oi\n     WHERE NOT EXISTS (SELECT 1 FROM active_plan ap WHERE ap.invoice_id = oi.invoice_id)',
-  ).replace(/CROSS JOIN \(SELECT public\.installment_plan_fact_assert\([\s\S]*?FROM fact f\) g\n\s*WHERE g\.ok/, 'WHERE true');
+  ).replace(/WHERE \(SELECT public\.installment_plan_fact_assert\([\s\S]*?FROM fact f\)\n/, 'WHERE true\n');
   M['E_counterfactual_rewrote'] = OLD_BODY !== NEW_BODY && !OLD_BODY.includes('installment_plan_fact_assert') && OLD_BODY.includes('NOT EXISTS');
 
   const ATTACKS: readonly { label: string; mutate: readonly string[]; restore: readonly string[] }[] = [
@@ -476,12 +586,17 @@ beforeAll(async () => {
   //    trigger to RUN and to decide wrongly. Only the one `CREATE OR REPLACE`
   //    uses `sup`; every reading below is taken as the role the policy names.
   const SYNC_NEW = (await mig.query<{ d: string }>(`SELECT pg_get_functiondef('public.installment_plan_fact_sync()'::regprocedure) AS d`)).rows[0]?.d as string;
-  const SYNC_R8 = SYNC_NEW.replace(/IF v_asserted IS NOT NULL[\s\S]*?END IF;/, '');
-  M['F1b_counterfactual_rewrote'] = SYNC_R8 !== SYNC_NEW && !SYNC_R8.includes('plan_fact_blind');
+  M['F1b_counterfactual_rewrote'] =
+    SYNC_NEW !== SYNC_R8 &&
+    SYNC_NEW !== SYNC_R9 &&
+    !SYNC_R8.includes('plan_fact_blind') &&
+    SYNC_R9.includes('plan_fact_blind') &&
+    SYNC_R9.includes('v_asserted') &&
+    !SYNC_NEW.includes('v_asserted') &&
+    SYNC_NEW.includes('plan_fact_blind');
 
-  const BLIND_PLANS = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT USING (false)`;
-  const RESTORE_PLANS_READ = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
-       USING (app_bypass() OR current_user IN ('daftar_inventory_internal','daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid)`;
+  const BLIND_PLANS = BLIND_PLANS_SQL;
+  const RESTORE_PLANS_READ = RESTORE_PLANS_READ_SQL;
 
   const blindDdl: (string | null)[] = [];
   blindDdl.push(await ddl(`DROP POLICY business_isolation_read ON installment_plans`));
@@ -548,6 +663,391 @@ beforeAll(async () => {
     ])
   ).error;
   M['F1b_control_cleanup_flag'] = await flag();
+
+  // ══════════════════════════════════════════════════════════════════════
+  // §F1-c THE FLOOR'S SCOPE — `TL-P4-COORD-R43`, F1-c, CRITICAL
+  //
+  // Round 9's floor was scoped to «the handed row asserts an ACTIVE plan on
+  // this invoice» and the write it guarded was scoped to «this invoice». A
+  // write of a NON-ACTIVE plan row therefore carried NO floor and still
+  // overwrote the invoice's fact from the blindable recomputation.
+  //
+  // THE STATE IS ORDINARY. `installment_plans_one_active_per_invoice_uq` is a
+  // PARTIAL index on `WHERE status = 'active'`, so one `active` plan beside one
+  // `cancelled` plan on the same invoice is legal and is what a re-planned
+  // receivable looks like.
+  //
+  // BOTH DIRECTIONS ARE MEASURED, because they are closed by DIFFERENT parts of
+  // the repair and a suite that measured only one would not know which:
+  //   (i)  the INSERT of a non-active plan — closed by the writer's own
+  //        blindness probe, which round 9 had on no transition at all;
+  //   (ii) the DELETE of a non-active plan — closed by the DERIVATION, which
+  //        gives that transition an EMPTY write set. There is no probe on the
+  //        DELETE path, so (ii) measures direction 1 and nothing else.
+  // ══════════════════════════════════════════════════════════════════════
+  const truth = async (): Promise<string> =>
+    String(
+      (
+        await inCtx(sup, {}, [
+          {
+            sql: `SELECT EXISTS (SELECT 1 FROM installment_plans p WHERE p.invoice_id = $1 AND p.status = 'active')::text AS t`,
+            params: [world.invoiceId],
+          },
+        ])
+      ).rows[0]?.['t'] ?? 'MISSING',
+    );
+  const planCount = async (): Promise<string> =>
+    String(
+      (await inCtx(sup, {}, [{ sql: `SELECT count(*)::text AS n FROM installment_plans WHERE invoice_id = $1`, params: [world.invoiceId] }])).rows[0]?.['n'] ??
+        'MISSING',
+    );
+  /** A plan row with NO schedule. Only an ACTIVE plan is bound by obligation (a). */
+  const commitBarePlan = async (status: string, planId: string): Promise<string | null> =>
+    (
+      await inCtx(mig, APP_CTX(), [
+        {
+          sql: `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+                VALUES ($1,$2,$3,$4,$5,$6,0,'2026-01-02'::DATE,$7,gen_random_uuid())`,
+          params: [world.tenantId, world.businessId, planId, world.invoiceId, world.customerId, status, world.userId],
+        },
+      ])
+    ).error;
+  const dropBarePlan = async (planId: string): Promise<string | null> =>
+    (await inCtx(mig, APP_CTX(), [{ sql: `DELETE FROM installment_plans WHERE id = $1`, params: [planId] }])).error;
+  const installSync = async (body: string): Promise<string | null> => {
+    try {
+      await sup.query(body);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  };
+  const rePolicy = async (create: string): Promise<(string | null)[]> => [
+    await ddl(`DROP POLICY business_isolation_read ON installment_plans`),
+    await ddl(create),
+  ];
+
+  // ── (i) THE INSERT DIRECTION, ROUND 9, BLINDED TO EVERYBODY.
+  M['F1c_r9_install'] = await installSync(SYNC_R9);
+  const r9Active = await commitPlan(APP_CTX());
+  M['F1c_pre_commit'] = r9Active.error;
+  M['F1c_pre_flag'] = await flag();
+  M['F1c_blind_ddl'] = await rePolicy(BLIND_PLANS_SQL);
+  const cancelledA = randomUUID();
+  M['F1c_r9_insert_cancelled_error'] = await commitBarePlan('cancelled', cancelledA);
+  //    THE CHALLENGER'S MEASURED BAD STATE, read as the superuser so the
+  //    reading is of the DATA and not of anybody's visibility.
+  M['F1c_r9_bad_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  //    AND THE READ, WHILE STILL BLIND: the pre-S7 answer, byte for byte.
+  M['F1c_r9_aging_while_blind'] = await aging(app, APP_CTX());
+  //    IT DOES NOT HEAL.
+  M['F1c_r9_restore_ddl'] = await rePolicy(RESTORE_PLANS_READ_SQL);
+  M['F1c_r9_flag_after_restore'] = await flag();
+  M['F1c_r9_aging_after_restore'] = await aging(app, APP_CTX());
+
+  // ── (ii) THE DELETE DIRECTION, ROUND 9, BLINDED TO EVERYBODY. The cancelled
+  //        plan written above is still there; deleting it changes nothing about
+  //        whether an active plan exists, and round 9 writes `false` anyway.
+  //        THE BLINDING HERE IS THE WRITER-ONLY ONE, and that is a MECHANICAL
+  //        necessity rather than a choice: PostgreSQL applies SELECT policies
+  //        to the row-finding of a `DELETE ... WHERE id = $1`, so hiding the
+  //        relation from everybody would hide the row from the DELETE itself
+  //        and nothing would reach the trigger. Blinding only
+  //        `daftar_accounting_internal` leaves `daftar_migrator` able to delete
+  //        the row and leaves the sync's recomputation blind — which is the
+  //        state under test.
+  M['F1c_r9_delete_blind_ddl'] = await rePolicy(BLIND_WRITER_ONLY_SQL);
+  M['F1c_r9_delete_error'] = await dropBarePlan(cancelledA);
+  M['F1c_r9_delete_bad_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['F1c_r9_delete_restore_ddl'] = await rePolicy(RESTORE_PLANS_READ_SQL);
+
+  //    Put the fixture back: the active plan and its schedule go, in ONE
+  //    transaction, and the flag returns to the base case.
+  M['F1c_r9_cleanup'] = (
+    await inCtx(mig, APP_CTX(), [
+      { sql: `DELETE FROM installments WHERE plan_id = $1`, params: [r9Active.planId] },
+      { sql: `DELETE FROM installment_plans WHERE id = $1`, params: [r9Active.planId] },
+    ])
+  ).error;
+  M['F1c_r9_cleanup_flag'] = await flag();
+
+  // ── (iii) THE SHIPPED WRITER, the same two writes, the same blindness.
+  M['F1c_new_install'] = await installSync(SYNC_NEW);
+  const newActive = await commitPlan(APP_CTX());
+  M['F1c_new_pre_commit'] = newActive.error;
+  M['F1c_new_pre_flag'] = await flag();
+  await rePolicy(BLIND_PLANS_SQL);
+  const cancelledB = randomUUID();
+  M['F1c_new_insert_cancelled_error'] = await commitBarePlan('cancelled', cancelledB);
+  M['F1c_new_insert_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(RESTORE_PLANS_READ_SQL);
+
+  //    THE DELETE DIRECTION, SHIPPED. The cancelled plan has to exist to be
+  //    deleted, so it is written SIGHTED first — the subject is the DELETE.
+  M['F1c_new_cancelled_sighted_error'] = await commitBarePlan('cancelled', cancelledB);
+  M['F1c_new_cancelled_sighted_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(BLIND_WRITER_ONLY_SQL);
+  M['F1c_new_delete_error'] = await dropBarePlan(cancelledB);
+  M['F1c_new_delete_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(RESTORE_PLANS_READ_SQL);
+  //    AND THE SIGHTED DELETE, which is the control for the one above: the
+  //    same transition, nothing blinded, and the fact must be left alone.
+  M['F1c_new_delete_sighted_error'] = await dropBarePlan(cancelledB);
+  M['F1c_new_delete_sighted_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['F1c_new_aging_after'] = await aging(app, APP_CTX());
+
+  //    AND THE CONTROL THAT STOPS THIS BEING "NEVER WRITE": cancelling the
+  //    ACTIVE plan must still clear the flag, sighted, through the derivation.
+  M['F1c_new_cancel_active_error'] = (
+    await inCtx(mig, APP_CTX(), [{ sql: `UPDATE installment_plans SET status = 'cancelled' WHERE id = $1`, params: [newActive.planId] }])
+  ).error;
+  M['F1c_new_cancel_active_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['F1c_new_cleanup'] = (
+    await inCtx(mig, APP_CTX(), [
+      { sql: `DELETE FROM installments WHERE plan_id = $1`, params: [newActive.planId] },
+      { sql: `DELETE FROM installment_plans WHERE id = $1`, params: [newActive.planId] },
+    ])
+  ).error;
+  M['F1c_new_cleanup_flag'] = await flag();
+
+  // ══════════════════════════════════════════════════════════════════════
+  // §F1-c′ THE WRITER IS THE PRINCIPAL THE PREDICATE EXEMPTS — F1-c prime
+  //
+  // The shipped restrictive read policy plus
+  // `AND current_user <> 'daftar_accounting_internal'` blinds EXACTLY the owner
+  // of the two DEFINER trigger functions. `daftar_app` keeps reading every plan
+  // row, so this is NOT the blindness §F1-b and §F1-c measure: the reader is
+  // SIGHTED throughout, and the harm is that a healthy receivable becomes
+  // permanently unreadable.
+  // ══════════════════════════════════════════════════════════════════════
+  M['F1cp_r9_install'] = await installSync(SYNC_R9);
+  const cpActive = await commitPlan(APP_CTX());
+  M['F1cp_pre_commit'] = cpActive.error;
+  M['F1cp_pre_flag'] = await flag();
+  M['F1cp_blind_ddl'] = await rePolicy(BLIND_WRITER_ONLY_SQL);
+  //    THE BLINDING IS ASYMMETRIC, AND THAT IS ASSERTED BEFORE ANYTHING IS
+  //    CONCLUDED FROM IT: the caller still sees the plan.
+  M['F1cp_app_still_sees'] = (await visiblePlans(app, APP_CTX())).rows[0]?.['n'] ?? null;
+  const cpCancelled = randomUUID();
+  M['F1cp_r9_insert_error'] = await commitBarePlan('cancelled', cpCancelled);
+  M['F1cp_r9_bad_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['F1cp_r9_restore_ddl'] = await rePolicy(RESTORE_PLANS_READ_SQL);
+  M['F1cp_r9_flag_after_restore'] = await flag();
+  M['F1cp_r9_aging_after_restore'] = await aging(app, APP_CTX());
+  M['F1cp_r9_cleanup'] = (
+    await inCtx(mig, APP_CTX(), [
+      { sql: `DELETE FROM installment_plans WHERE id = $1`, params: [cpCancelled] },
+      { sql: `DELETE FROM installments WHERE plan_id = $1`, params: [cpActive.planId] },
+      { sql: `DELETE FROM installment_plans WHERE id = $1`, params: [cpActive.planId] },
+    ])
+  ).error;
+  M['F1cp_r9_cleanup_flag'] = await flag();
+
+  M['F1cp_new_install'] = await installSync(SYNC_NEW);
+  const cpActive2 = await commitPlan(APP_CTX());
+  M['F1cp_new_pre_commit'] = cpActive2.error;
+  await rePolicy(BLIND_WRITER_ONLY_SQL);
+  M['F1cp_new_insert_error'] = await commitBarePlan('cancelled', randomUUID());
+  M['F1cp_new_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(RESTORE_PLANS_READ_SQL);
+  //    THE CONTROL: the same write, sighted, COMMITS and leaves the fact alone.
+  const cpControl = randomUUID();
+  M['F1cp_new_control_error'] = await commitBarePlan('cancelled', cpControl);
+  M['F1cp_new_control_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['F1cp_new_control_aging'] = await aging(app, APP_CTX());
+  M['F1cp_new_cleanup'] = (
+    await inCtx(mig, APP_CTX(), [
+      { sql: `DELETE FROM installment_plans WHERE id = $1`, params: [cpControl] },
+      { sql: `DELETE FROM installments WHERE plan_id = $1`, params: [cpActive2.planId] },
+      { sql: `DELETE FROM installment_plans WHERE id = $1`, params: [cpActive2.planId] },
+    ])
+  ).error;
+  M['F1cp_new_cleanup_flag'] = await flag();
+
+  // ══════════════════════════════════════════════════════════════════════
+  // §F1-d THE RIGHT-HAND SIDE OF OBLIGATION (a) — `TL-P4-COORD-R43`, F1-d
+  //
+  // `0075:561` gates `invoice.posted_amount_immutable` on
+  // `OLD.status <> 'draft'`, so a DRAFT invoice's money IS mutable, and until
+  // this round the two schedule-completeness triggers were on the PLAN side
+  // only. Build a plan and a LAWFUL schedule against a draft invoice, bump the
+  // invoice's total, promote `draft -> open`: obligation (a) is never
+  // re-judged and the reader refuses `plan_schedule_unreadable` FOR EVER.
+  //
+  // NO ROW SECURITY IS TOUCHED ANYWHERE IN THIS SECTION, and no trigger is
+  // dropped: the counterfactual is the ABSENCE of the new `invoices` trigger,
+  // reproduced by DISABLING exactly it. Its own customer, so the aging read is
+  // of this fixture and of nothing else.
+  // ══════════════════════════════════════════════════════════════════════
+  const draftWorld = await (async (): Promise<{ customerId: string; a: string; b: string }> => {
+    const c = await sup.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('ALTER TABLE sales DISABLE TRIGGER USER');
+      const dCustomer = randomUUID();
+      await c.query(
+        `INSERT INTO customers (tenant_id,business_id,id,name,status,revision,create_intent_sha256,last_intent_sha256,business_transaction_id,created_by,updated_by)
+         VALUES ($1,$2,$3,'F1d Customer','active',1,$4,$4,gen_random_uuid(),$5,$5)`,
+        [world.tenantId, world.businessId, dCustomer, SHA, world.userId],
+      );
+      const ids: string[] = [];
+      for (const n of [1, 2]) {
+        const saleId = randomUUID();
+        await c.query(
+          `INSERT INTO sales (tenant_id,business_id,id,customer_id,branch_id,warehouse_id,status,settlement_mode,document_date,currency_code,
+                              subtotal_txn_minor,discount_txn_minor,total_txn_minor,total_base_minor,source_to_base_rate,rate_source,rate_timestamp,
+                              customer_name_snapshot,commit_intent_sha256,confirmed_by,confirmed_at,business_transaction_id,created_by,binding_source_id)
+           SELECT $1,$2,$3,$4,s.branch_id,s.warehouse_id,'confirmed','credit','2026-01-02','ILS',900000,0,900000,900000,1,'base',$5::timestamptz,
+                  'F1d Customer',$6,$7,$5::timestamptz,gen_random_uuid(),$7,$3
+             FROM sales s WHERE s.id = $8`,
+          [world.tenantId, world.businessId, saleId, dCustomer, STAMP, SHA, world.userId, world.saleId2],
+        );
+        const invoiceId = randomUUID();
+        // A DRAFT, so `invoices_binding_owed_ck` demands a NULL binding.
+        await c.query(
+          `INSERT INTO invoices (tenant_id,business_id,id,sale_id,customer_id,branch_id,document_kind,document_number,number_seq,period,issue_date,due_date,
+                                 currency_code,status,subtotal_txn_minor,discount_txn_minor,tax_minor,total_txn_minor,total_base_minor,source_to_base_rate,
+                                 rate_source,rate_timestamp,customer_name_snapshot,issue_intent_sha256,business_transaction_id,created_by,binding_source_id)
+           SELECT $1,$2,$3,$4,$5,i.branch_id,'invoice',$6,$7,'2026','2026-01-02','2026-01-02','ILS','draft',900000,0,0,900000,900000,1,'base',$8::timestamptz,
+                  'F1d Customer',$9,gen_random_uuid(),$10,NULL
+             FROM invoices i WHERE i.id = $11`,
+          [world.tenantId, world.businessId, invoiceId, saleId, dCustomer, `INV-DRAFT-${String(n)}`, 500 + n, STAMP, SHA, world.userId, world.invoiceId],
+        );
+        ids.push(invoiceId);
+      }
+      await c.query('COMMIT');
+      await c.query('ALTER TABLE sales ENABLE TRIGGER USER');
+      return { customerId: dCustomer, a: ids[0] as string, b: ids[1] as string };
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      throw new Error(`the §F1-d draft fixture did not build: ${err(e)}`);
+    } finally {
+      c.release();
+    }
+  })();
+  M['F1d_world'] = draftWorld;
+
+  /** A plan and a schedule summing EXACTLY to 900000 against one draft invoice. */
+  const planOnDraft = async (invoiceId: string): Promise<{ error: string | null; planId: string }> => {
+    const planId = randomUUID();
+    const r = await inCtx(mig, APP_CTX(), [
+      {
+        sql: `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+              VALUES ($1,$2,$3,$4,$5,'active',100000,'2026-01-02'::DATE,$6,gen_random_uuid())`,
+        params: [world.tenantId, world.businessId, planId, invoiceId, draftWorld.customerId, world.userId],
+      },
+      {
+        sql: `INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+              VALUES ($1,$2,gen_random_uuid(),$3,1,'2026-02-02'::DATE,400000),
+                     ($1,$2,gen_random_uuid(),$3,2,'2026-06-02'::DATE,400000)`,
+        params: [world.tenantId, world.businessId, planId],
+      },
+    ]);
+    return { error: r.error, planId };
+  };
+  const bumpMoney = async (invoiceId: string, total: number): Promise<string | null> =>
+    (
+      await inCtx(sup, APP_CTX(), [
+        {
+          sql: `UPDATE invoices SET subtotal_txn_minor = $2, total_txn_minor = $2, total_base_minor = $2 WHERE id = $1`,
+          params: [invoiceId, total],
+        },
+      ])
+    ).error;
+  const promote = async (invoiceId: string): Promise<string | null> =>
+    (await inCtx(sup, APP_CTX(), [{ sql: `UPDATE invoices SET status = 'open', binding_source_id = id WHERE id = $1`, params: [invoiceId] }])).error;
+  const draftAging = async (): Promise<Outcome> =>
+    inCtx(app, APP_CTX(), [
+      {
+        sql: `SELECT * FROM public.customer_ar_aging($1,$2,$3::DATE,$4::INTEGER[]) ORDER BY bucket_no`,
+        params: [world.businessId, draftWorld.customerId, '2026-06-30', BUCKETS],
+      },
+    ]);
+
+  // NON-VACUITY FIRST: the draft really is a draft and its money really is
+  // mutable, which is the whole premise. Measured, not cited.
+  M['F1d_draft_status'] = (await inCtx(sup, {}, [{ sql: `SELECT status FROM invoices WHERE id = $1`, params: [draftWorld.a] }])).rows[0]?.['status'];
+
+  // ── (i) THE DEFECT, with the new trigger DISABLED — the pre-repair tree.
+  M['F1d_disable_ddl'] = await ddl(`ALTER TABLE invoices DISABLE TRIGGER invoices_installment_schedule_complete`);
+  const dPlanA = await planOnDraft(draftWorld.a);
+  M['F1d_plan_on_draft_commits'] = dPlanA.error;
+  M['F1d_pre_bump_aging'] = await draftAging();
+  M['F1d_bump_without_trigger'] = await bumpMoney(draftWorld.a, 1000000);
+  M['F1d_promote'] = await promote(draftWorld.a);
+  M['F1d_state_after'] = (
+    await inCtx(sup, {}, [
+      {
+        sql: `SELECT i.status, i.total_txn_minor::text AS total,
+                     (p.down_payment_minor + (SELECT coalesce(sum(n.amount_txn_minor),0) FROM installments n WHERE n.plan_id = p.id))::text AS schedule
+                FROM invoices i JOIN installment_plans p ON p.invoice_id = i.id AND p.status = 'active'
+               WHERE i.id = $1`,
+        params: [draftWorld.a],
+      },
+    ])
+  ).rows[0];
+  M['F1d_aging_refused_forever'] = await draftAging();
+  //    AND IT IS UNHEALABLE WITHOUT A WRITE: re-enabling the trigger changes
+  //    nothing about the row that is already there.
+  M['F1d_enable_ddl'] = await ddl(`ALTER TABLE invoices ENABLE TRIGGER invoices_installment_schedule_complete`);
+  M['F1d_aging_still_refused'] = await draftAging();
+
+  // ── (ii) THE REPAIR, on the SECOND draft invoice, trigger ENABLED.
+  const dPlanB = await planOnDraft(draftWorld.b);
+  M['F1d_plan_b_commits'] = dPlanB.error;
+  M['F1d_bump_with_trigger'] = await bumpMoney(draftWorld.b, 1000000);
+  M['F1d_b_total_after_refusal'] = (
+    await inCtx(sup, {}, [{ sql: `SELECT total_txn_minor::text AS t FROM invoices WHERE id = $1`, params: [draftWorld.b] }])
+  ).rows[0]?.['t'];
+  //    THE CONTROL THAT MAKES IT A DISCRIMINATION: the SAME bump, with the
+  //    schedule corrected in the SAME transaction, COMMITS.
+  M['F1d_bump_with_fix_commits'] = (
+    await inCtx(sup, APP_CTX(), [
+      {
+        sql: `UPDATE invoices SET subtotal_txn_minor = 1000000, total_txn_minor = 1000000, total_base_minor = 1000000 WHERE id = $1`,
+        params: [draftWorld.b],
+      },
+      { sql: `UPDATE installments SET amount_txn_minor = 450000 WHERE plan_id = $1`, params: [dPlanB.planId] },
+    ])
+  ).error;
+  M['F1d_b_state_after_fix'] = (
+    await inCtx(sup, {}, [
+      {
+        sql: `SELECT i.total_txn_minor::text AS total,
+                     (p.down_payment_minor + (SELECT coalesce(sum(n.amount_txn_minor),0) FROM installments n WHERE n.plan_id = p.id))::text AS schedule
+                FROM invoices i JOIN installment_plans p ON p.invoice_id = i.id AND p.status = 'active'
+               WHERE i.id = $1`,
+        params: [draftWorld.b],
+      },
+    ])
+  ).rows[0];
+  //    AND A SECOND CONTROL: a money bump on a draft invoice with NO plan is
+  //    untouched by the new trigger, so it does not refuse every invoice write.
+  M['F1d_bump_unplanned_commits'] = await (async (): Promise<string | null> => {
+    const r = await inCtx(mig, APP_CTX(), [
+      { sql: `DELETE FROM installments WHERE plan_id = $1`, params: [dPlanB.planId] },
+      { sql: `DELETE FROM installment_plans WHERE id = $1`, params: [dPlanB.planId] },
+    ]);
+    if (r.error !== null) return `cleanup: ${r.error}`;
+    return bumpMoney(draftWorld.b, 1100000);
+  })();
+  M['F1d_b_flag_after'] = (
+    await inCtx(sup, {}, [{ sql: `SELECT has_active_installment_plan::text AS f FROM invoices WHERE id = $1`, params: [draftWorld.b] }])
+  ).rows[0]?.['f'];
+  //    AND THE FIXTURE IS READABLE WHEN OBLIGATION (a) IS NOT IN QUESTION:
+  //    promote the second invoice and the aging ANSWERS. Without this the
+  //    refusals above could be a reader that refuses this customer always.
+  //    Invoice `a` is the BROKEN one and it is permanently unreadable, so it
+  //    has to leave the picture first — its plan is removed, which is the only
+  //    repair available once the total has moved under a committed schedule.
+  M['F1d_a_plan_removed'] = (
+    await inCtx(mig, APP_CTX(), [
+      { sql: `DELETE FROM installments WHERE plan_id = $1`, params: [dPlanA.planId] },
+      { sql: `DELETE FROM installment_plans WHERE id = $1`, params: [dPlanA.planId] },
+    ])
+  ).error;
+  M['F1d_promote_b'] = await promote(draftWorld.b);
+  M['F1d_aging_answers'] = await draftAging();
 
   // ── §D THE COMMIT-TIME REFUSAL, both directions.
   //    D1: the sync trigger disabled, so the column is never written.
@@ -745,13 +1245,17 @@ describe('P4-S7 §C the inductive step, both directions', () => {
     expect(String(M['C7_no_context_write'])).not.toContain('installment.plan_fact_unwritable');
   });
 
-  it("and the CROSS-TENANT plan — the one state the invoice foreign key cannot pin — is refused BY the fact's maintenance", () => {
-    // `installment_plans_invoice_fk` is (business_id, invoice_id) and carries
-    // no `tenant_id`, so a plan with a tenant of its own satisfies the plan's
-    // policies and not the INVOICE's. The recomputation then lands on zero
-    // rows and the ROW_COUNT check turns that into a refusal rather than a
-    // silent no-op — which is why that check is the refusal and not noise.
-    expect(String(M['C7_cross_tenant_write'])).toContain('installment.plan_fact_unwritable');
+  it('and the CROSS-TENANT plan is now refused STRUCTURALLY, by the tenant edge that F2 found had been left off', () => {
+    // `TL-P4-COORD-R43`, F2. Round 9 refused this state LATE — the invoice's
+    // own `tenant_membership` refused the flag write, the recomputation landed
+    // on zero rows and the sync's ROW_COUNT check turned that into
+    // `installment.plan_fact_unwritable` — and justified the missing edge by
+    // asserting that no composite key existed to name. The key does exist
+    // (`0016:10`, `businesses (tenant_id, id) UNIQUE`, named by 62 foreign keys
+    // in the frozen estate including `invoices_tenant_fk` at `0075:318`), so
+    // the edge is carried now and the state is UNREACHABLE rather than caught.
+    expect(String(M['C7_cross_tenant_write'])).toContain('installment_plans_tenant_fk');
+    expect(String(M['C7_cross_tenant_write'])).toContain('foreign key constraint');
   });
 });
 
@@ -967,6 +1471,191 @@ describe("P4-S7 §F1-b the fact's writer, blinded", () => {
     expect(sum(rows(M['F1b_control_aging']))).toBe(TOTAL);
     expect(M['F1b_control_cleanup']).toBeNull();
     expect(M['F1b_control_cleanup_flag']).toBe('false');
+  });
+});
+
+describe("P4-S7 §F1-c the floor's SCOPE — a non-active plan write carried none (TL-P4-COORD-R43, F1-c)", () => {
+  it('the two counterfactuals are the ROUND-8 and ROUND-9 writers, quoted and not derived', () => {
+    expect(M['F1b_counterfactual_rewrote'], 'the quoted counterfactuals are not distinguishable from the shipped body').toBe(true);
+    expect(M['F1c_r9_install'], 'the round-9 sync did not install').toBeNull();
+    expect(M['F1c_new_install'], 'the shipped sync did not reinstall').toBeNull();
+    expect(M['F1c_blind_ddl']).toEqual([null, null]);
+    expect(M['F1c_pre_commit'], 'the active plan the whole section is about did not commit').toBeNull();
+    expect(M['F1c_pre_flag'], 'the fixture did not start from a correctly flagged invoice').toBe('true');
+  });
+
+  it("the ROUND-9 writer commits the challenger's EXACT bad state from an ORDINARY cancelled plan", () => {
+    // `installment_plans_one_active_per_invoice_uq` is PARTIAL, so one active
+    // plan beside one cancelled plan on one invoice is legal — the re-planned
+    // receivable. `v_asserted` is NULL on that write, so round 9's floor is
+    // absent and the blinded recomputation decides.
+    expect(M['F1c_r9_insert_cancelled_error'], 'the cancelled plan did not commit, so the bad state was never reached').toBeNull();
+    expect(M['F1c_r9_bad_state']).toEqual({ flag: 'false', truth: 'true', plans: '2' });
+  });
+
+  it('and the read then serves the pre-S7 figure BYTE-IDENTICALLY — one coarse band at the invoice due date', () => {
+    const served = rows(M['F1c_r9_aging_while_blind']);
+    expect(errOf(M['F1c_r9_aging_while_blind']), 'the read refused instead of serving, so the defect was not reproduced').toBe('');
+    expect(served).toEqual([{ bucket_no: 4, currency_code: 'ILS', txn_minor: '900000', base_minor: '900000', invoice_count: 1 }]);
+    // AND IT IS THE PRE-S7 ANSWER, compared against the reading §B took of
+    // this same invoice before any plan existed, rather than against a
+    // literal somebody typed.
+    expect(served).toEqual(rows(M['B_aging_no_plan']));
+  });
+
+  it('and it DOES NOT HEAL: the flag stays false and every sighted caller is refused for ever', () => {
+    expect(M['F1c_r9_restore_ddl']).toEqual([null, null]);
+    expect(M['F1c_r9_flag_after_restore']).toBe('false');
+    expect(errOf(M['F1c_r9_aging_after_restore'])).toContain('installment.plan_fact_unflagged');
+  });
+
+  it('the ROUND-9 writer commits the same bad state from a non-active plan DELETE, with the reader never blinded', () => {
+    // The DELETE direction of the same defect, and the one that measures
+    // DERIVATION rather than probing: deleting a CANCELLED plan cannot change
+    // whether an active plan exists, and round 9 recomputes and writes anyway.
+    expect(M['F1c_r9_delete_blind_ddl']).toEqual([null, null]);
+    expect(M['F1c_r9_delete_error'], 'the DELETE did not happen, so the arm measures nothing').toBeNull();
+    expect(M['F1c_r9_delete_bad_state']).toEqual({ flag: 'false', truth: 'true', plans: '1' });
+    expect(M['F1c_r9_delete_restore_ddl']).toEqual([null, null]);
+    expect(M['F1c_r9_cleanup']).toBeNull();
+    expect(M['F1c_r9_cleanup_flag']).toBe('false');
+  });
+
+  it('the SHIPPED writer REFUSES the blinded non-active INSERT by name, and no row survives', () => {
+    expect(M['F1c_new_pre_commit']).toBeNull();
+    expect(M['F1c_new_pre_flag']).toBe('true');
+    expect(String(M['F1c_new_insert_cancelled_error'])).toContain('installment.plan_fact_blind');
+    // The transaction never lands, so there is no desynchronised row to heal.
+    expect(M['F1c_new_insert_state']).toEqual({ flag: 'true', truth: 'true', plans: '1' });
+  });
+
+  it('and the SHIPPED writer never commits a wrong fact on a non-active DELETE: it writes nothing, so the transaction is REFUSED instead', () => {
+    // THERE IS NO PROBE ON THE DELETE PATH, so this arm measures the
+    // DERIVATION and nothing else: the write set for «delete a plan that was
+    // not active» is EMPTY, so the blinded recomputation has nothing to
+    // decide and the flag is LEFT at `true`.
+    //
+    // THE TRANSACTION IS THEN REFUSED, AND THAT IS THE MEASUREMENT RATHER
+    // THAN A DISAPPOINTMENT. The deferred verifier is blinded by the same
+    // policy, so its own `EXISTS` reads `false` against a flag of `true` and
+    // it refuses `plan_fact_desynchronised` — the degradation-to-refusal that
+    // section 6a entry 8 claims for it, here measured. Round 9 under the
+    // IDENTICAL blinding COMMITTED `{flag: false, truth: true}` because its
+    // sync had already written the verifier's blinded reading into the column,
+    // so the two agreed. One commits a fact that can never heal; the other
+    // refuses the transaction. Nothing is lost: restoring the policy lets the
+    // same DELETE through, which the sighted control below measures.
+    expect(M['F1c_new_cancelled_sighted_error'], 'the cancelled plan to be deleted did not commit').toBeNull();
+    expect(M['F1c_new_cancelled_sighted_state']).toEqual({ flag: 'true', truth: 'true', plans: '2' });
+    expect(String(M['F1c_new_delete_error'])).toContain('installment.plan_fact_desynchronised');
+    expect(M['F1c_new_delete_state'], 'the refused DELETE still moved the fact').toEqual({ flag: 'true', truth: 'true', plans: '2' });
+    // THE SIGHTED CONTROL: the same DELETE, nothing blinded, commits and
+    // leaves the fact exactly where the derivation says it belongs.
+    expect(M['F1c_new_delete_sighted_error']).toBeNull();
+    expect(M['F1c_new_delete_sighted_state']).toEqual({ flag: 'true', truth: 'true', plans: '1' });
+    expect(errOf(M['F1c_new_aging_after']), 'the read refuses after a transition the writer correctly ignored').toBe('');
+    expect(sum(rows(M['F1c_new_aging_after']))).toBe(TOTAL);
+  });
+
+  it('and the CONTROL: cancelling the ACTIVE plan still clears the flag, so this is a derivation and not a refusal to write', () => {
+    expect(M['F1c_new_cancel_active_error']).toBeNull();
+    expect(M['F1c_new_cancel_active_state']).toEqual({ flag: 'false', truth: 'false', plans: '1' });
+    expect(M['F1c_new_cleanup']).toBeNull();
+    expect(M['F1c_new_cleanup_flag']).toBe('false');
+  });
+});
+
+describe('P4-S7 §F1-c′ the WRITER is the principal the predicate exempts (TL-P4-COORD-R43, F1-c prime)', () => {
+  it('the blinding is ASYMMETRIC, and that is measured before anything is concluded from it', () => {
+    expect(M['F1cp_r9_install']).toBeNull();
+    expect(M['F1cp_pre_commit']).toBeNull();
+    expect(M['F1cp_pre_flag']).toBe('true');
+    expect(M['F1cp_blind_ddl']).toEqual([null, null]);
+    // The CALLER still reads the plan. This is not §F1-b's blindness: only the
+    // owner of the two DEFINER trigger functions has been blinded.
+    expect(M['F1cp_app_still_sees'], 'the caller was blinded too, so this is not the writer-only case').toBe('1');
+  });
+
+  it('the ROUND-9 writer commits the bad state against a FULLY SIGHTED reader — the blindness its floor could not see', () => {
+    expect(M['F1cp_r9_insert_error'], 'the write did not commit, so the state was never reached').toBeNull();
+    expect(M['F1cp_r9_bad_state']).toEqual({ flag: 'false', truth: 'true', plans: '2' });
+  });
+
+  it('and the harm is a PERMANENT refusal of a healthy receivable, not a silent number', () => {
+    expect(M['F1cp_r9_restore_ddl']).toEqual([null, null]);
+    expect(M['F1cp_r9_flag_after_restore']).toBe('false');
+    expect(errOf(M['F1cp_r9_aging_after_restore'])).toContain('installment.plan_fact_unflagged');
+    expect(M['F1cp_r9_cleanup']).toBeNull();
+    expect(M['F1cp_r9_cleanup_flag']).toBe('false');
+  });
+
+  it('the SHIPPED writer refuses it, because it now asks one question whose answer it already knows', () => {
+    expect(M['F1cp_new_install']).toBeNull();
+    expect(M['F1cp_new_pre_commit']).toBeNull();
+    expect(String(M['F1cp_new_insert_error'])).toContain('installment.plan_fact_blind');
+    expect(String(M['F1cp_new_insert_error'])).toContain('by primary key');
+    expect(M['F1cp_new_state']).toEqual({ flag: 'true', truth: 'true', plans: '1' });
+  });
+
+  it('and the CONTROL commits — the probe refuses blindness, not non-active plan writes', () => {
+    expect(M['F1cp_new_control_error']).toBeNull();
+    expect(M['F1cp_new_control_state']).toEqual({ flag: 'true', truth: 'true', plans: '2' });
+    expect(errOf(M['F1cp_new_control_aging'])).toBe('');
+    expect(sum(rows(M['F1cp_new_control_aging']))).toBe(TOTAL);
+    expect(M['F1cp_new_cleanup']).toBeNull();
+    expect(M['F1cp_new_cleanup_flag']).toBe('false');
+  });
+});
+
+describe("P4-S7 §F1-d obligation (a)'s RIGHT-HAND SIDE (TL-P4-COORD-R43, F1-d)", () => {
+  it('the fixture is a DRAFT invoice with a LAWFUL schedule, and no row security is touched anywhere here', () => {
+    expect(M['F1d_world'], 'the draft fixture did not build').toBeTruthy();
+    expect(M['F1d_draft_status'], 'the fixture invoice is not a draft, so its money is not mutable and the premise is false').toBe('draft');
+    expect(M['F1d_disable_ddl'], 'the new invoices trigger could not be disabled, so the counterfactual is not the pre-repair tree').toBeNull();
+    expect(M['F1d_plan_on_draft_commits'], 'a plan against a draft invoice was refused, so the exploit has no subject').toBeNull();
+    // A draft is invisible to the reader — which is why the PROMOTION is what
+    // makes the broken state visible, and why the bump alone looks harmless.
+    expect(errOf(M['F1d_pre_bump_aging'])).toBe('');
+    expect(rows(M['F1d_pre_bump_aging'])).toEqual([]);
+  });
+
+  it('WITHOUT the invoices trigger the money bump COMMITS and the promotion carries a broken obligation (a)', () => {
+    expect(M['F1d_bump_without_trigger'], "0075:561 should leave a draft invoice's money mutable").toBeNull();
+    expect(M['F1d_promote'], 'the draft -> open promotion was refused').toBeNull();
+    expect(M['F1d_state_after']).toEqual({ status: 'open', total: '1000000', schedule: '900000' });
+  });
+
+  it('and the reader then refuses that receivable FOR EVER — no DDL fault, no blinding, nothing to restore', () => {
+    expect(errOf(M['F1d_aging_refused_forever'])).toContain('installment.plan_schedule_unreadable');
+    // THE MESSAGE NOW NAMES THE STATE IT IS IN (`TL-P4-COORD-R43`, F3): this
+    // is not «no readable installments row», and until this round it said so.
+    expect(errOf(M['F1d_aging_refused_forever'])).toContain('does not equal');
+    expect(M['F1d_enable_ddl']).toBeNull();
+    // Re-enabling the trigger does not revisit a row that is already there.
+    expect(errOf(M['F1d_aging_still_refused'])).toContain('installment.plan_schedule_unreadable');
+  });
+
+  it('WITH the invoices trigger the SAME money bump is REFUSED at COMMIT, by name, and the total does not move', () => {
+    expect(M['F1d_plan_b_commits'], 'the second plan did not commit, so there is nothing to protect').toBeNull();
+    expect(String(M['F1d_bump_with_trigger'])).toContain('installment.schedule_incomplete');
+    expect(String(M['F1d_bump_with_trigger'])).toContain('(a) the schedule sums to 900000 and the invoice total is 1000000');
+    expect(M['F1d_b_total_after_refusal'], 'the refused bump still landed').toBe('900000');
+  });
+
+  it('and BOTH CONTROLS commit, so the trigger discriminates instead of refusing every invoice write', () => {
+    // (1) the same bump with the schedule corrected in the SAME transaction.
+    expect(M['F1d_bump_with_fix_commits']).toBeNull();
+    expect(M['F1d_b_state_after_fix']).toEqual({ total: '1000000', schedule: '1000000' });
+    // (2) a money bump on a draft invoice with NO active plan.
+    expect(M['F1d_bump_unplanned_commits']).toBeNull();
+    expect(M['F1d_b_flag_after']).toBe('false');
+    // (3) and the fixture is READABLE when obligation (a) is not in question.
+    expect(M['F1d_a_plan_removed'], "the broken invoice's plan could not be removed").toBeNull();
+    expect(M['F1d_promote_b']).toBeNull();
+    expect(errOf(M['F1d_aging_answers'])).toBe('');
+    // 1 000 000 for the invoice whose total moved and whose plan is now gone,
+    // plus 1 100 000 for the one the trigger protected.
+    expect(sum(rows(M['F1d_aging_answers']))).toBe(2100000n);
   });
 });
 

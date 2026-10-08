@@ -2090,18 +2090,33 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     // counting every constraint trigger in the file — which would otherwise
     // turn a later slice's trigger into a failure of the sum law.
     const triggers = allConstraintTriggers.filter((t) => (t[3] ?? '') === 'installment_schedule_verify');
-    expect(triggers.length).toBe(2);
+    // THREE, NOT TWO, SINCE `TL-P4-COORD-R43` F1-d. The equality reads THREE
+    // relations and its RIGHT-HAND SIDE is `invoices.total_txn_minor`, which
+    // `0075:561` leaves MUTABLE while the invoice is a draft. With the two
+    // plan-side triggers alone the equality could be falsified from the right
+    // — build a lawful schedule against a draft invoice, bump its total,
+    // promote it — and the reader then refuses that receivable for ever.
+    expect(triggers.length).toBe(3);
     // ...and the fact's own pair is there too, so this selection is a filter
     // and not a way of not looking.
     expect(allConstraintTriggers.filter((t) => (t[3] ?? '') === 'installment_plan_fact_verify')).toHaveLength(2);
     const onRelation = new Map(triggers.map((t) => [/\bON\s+(\w+)/i.exec(t[2] ?? '')?.[1] ?? '?', { events: t[2] ?? '', fn: t[3] ?? '' }]));
     // Both relations of the schedule, both judged by the ONE verifier.
-    expect([...onRelation.keys()].sort()).toEqual(['installment_plans', 'installments']);
+    expect([...onRelation.keys()].sort()).toEqual(['installment_plans', 'installments', 'invoices']);
     for (const [rel, t] of onRelation) {
       expect(t.fn, rel).toBe('installment_schedule_verify');
       expect(t.events, rel).toMatch(/DEFERRABLE INITIALLY DEFERRED/i);
-      expect(t.events, rel).toMatch(/AFTER[\s\S]*INSERT/i);
       expect(t.events, rel).toMatch(/AFTER[\s\S]*UPDATE/i);
+      // The two SCHEDULE relations carry the INSERT arm. The `invoices` arm is
+      // `UPDATE OF total_txn_minor` and NOTHING else: that one column is the
+      // whole of what this relation contributes to the equality, and no plan
+      // can exist for an invoice being INSERTed (`installment_plans_invoice_fk`).
+      if (rel === 'invoices') {
+        expect(t.events, rel).toMatch(/UPDATE\s+OF\s+total_txn_minor/i);
+        expect(t.events, rel).not.toMatch(/INSERT/i);
+      } else {
+        expect(t.events, rel).toMatch(/AFTER[\s\S]*INSERT/i);
+      }
     }
     // The row relation must also fire on DELETE — that is the direction a
     // prose-only law would have left open.
@@ -2866,20 +2881,43 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // no principal short of `rolbypassrls` has an unblindable read of it.
     expect(code).toContain('ALTER TABLE installment_plans FORCE ROW LEVEL SECURITY;');
 
-    // THE CLOSURE ASKS NO VISIBILITY QUESTION: the trigger is HANDED the row,
-    // so `NEW.status = 'active'` against a recomputation of `false` is a
-    // self-contradiction. The floor is set from `NEW` and from nothing else.
-    expect(code).toMatch(/IF NEW\.status = 'active' THEN v_asserted := NEW\.invoice_id; END IF;/);
-    expect(code).toMatch(/IF v_asserted IS NOT NULL AND v_invoice = v_asserted AND NOT v_state THEN/);
-    expect(code).toContain('installment.plan_fact_blind');
-    // ...and it is set in BOTH write branches that can assert a plan, not only
-    // on INSERT: an UPDATE to `status = 'active'` asserts the same thing.
-    expect(code.match(/IF NEW\.status = 'active' THEN v_asserted := NEW\.invoice_id; END IF;/g)).toHaveLength(2);
+    // ROUND 9'S FLOOR IS GONE, AND THAT IS THE SUBJECT OF THIS LAW NOW
+    // (`TL-P4-COORD-R43`, F1-c). `v_asserted` was scoped to «the handed row
+    // asserts an ACTIVE plan on this invoice» while the write it guarded was
+    // scoped to the invoice, so a NON-ACTIVE plan write carried NO floor and
+    // still took its value from the blindable recomputation. The challenger
+    // committed `{flag: false, truth: true, plans: 2}` through it with an
+    // ordinary cancelled plan, which the PARTIAL unique index permits.
+    const sync = code.slice(code.indexOf('CREATE OR REPLACE FUNCTION installment_plan_fact_sync()'));
+    const syncBody = sync.slice(0, sync.indexOf('CREATE OR REPLACE FUNCTION installment_plan_fact_verify()'));
+    expect(syncBody, 'round 9 floor still present').not.toContain('v_asserted');
 
-    // THE RECOMPUTATION SURVIVES. Reading `NEW.status` ALONE would be wrong
-    // whenever a SECOND plan on the same invoice is still active, which is why
-    // the loop recomputes at all; `NEW` is the FLOOR, not the answer.
-    expect(code).toMatch(/SELECT EXISTS \(SELECT 1 FROM public\.installment_plans p[\s\S]{0,200}INTO v_state;/);
+    // THE WRITE SET IS DERIVED FROM THE TRANSITION, from `NEW.status` and
+    // `OLD.status` and nothing read, and it is EMPTY for a transition that
+    // determines nothing.
+    expect(syncBody).toMatch(/v_is\s*:=\s*\(NEW\.status = 'active'\);/);
+    expect(syncBody).toMatch(/v_was\s*:=\s*\(OLD\.status = 'active'\);/);
+    expect(syncBody).toMatch(/v_invoices UUID\[\]\s*:= ARRAY\[\]::UUID\[\];/);
+    // The value written is `v_value`, taken from the derived array, and never
+    // `v_state` — which is what makes the recomputation unable to decide.
+    expect(syncBody).toMatch(/SET has_active_installment_plan = v_value/);
+    expect(syncBody, 'the recomputation is still writing the fact').not.toMatch(/SET has_active_installment_plan = v_state/);
+
+    // THE RECOMPUTATION SURVIVES AS A CROSS-CHECK THAT MAY ONLY REFUSE.
+    expect(syncBody).toMatch(/SELECT EXISTS \(SELECT 1 FROM public\.installment_plans p[\s\S]{0,200}INTO v_state;/);
+    expect(syncBody).toMatch(/IF v_state IS DISTINCT FROM v_value THEN/);
+    expect(code).toContain('installment.plan_fact_blind');
+
+    // AND THE WRITER DETECTS ITS OWN BLINDNESS (F1-c prime): it reads the row
+    // it was HANDED, by primary key, on every INSERT and UPDATE. That row
+    // exists in this snapshot, so «I cannot find it» has a known wrong answer.
+    expect(syncBody).toMatch(/WHERE p\.business_id = NEW\.business_id AND p\.id = NEW\.id/);
+    expect(syncBody).toMatch(/IF TG_OP <> 'DELETE' THEN/);
+
+    // THE DERIVATION RESTS ON THE PARTIAL UNIQUE INDEX, and the apply-time
+    // block refuses the migration unless that index is there in that shape.
+    expect(code).toContain("c.relname = 'installment_plans_one_active_per_invoice_uq'");
+    expect(code).toContain("pg_get_expr(x.indpred, x.indrelid) = '(status = ''active''::text)'");
 
     // AND THE DEFERRED VERIFIER CARRIES NO HANDED-ROW FLOOR, because deferral
     // makes the handed row stale: an INSERT-then-DELETE in one transaction
@@ -2895,6 +2933,8 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // THE RATCHET for the write side.
     expect(code).toContain("p.prosrc LIKE '%plan_fact_blind%'");
     expect(code).toContain("p.prosrc LIKE '%NEW.status%'");
+    expect(code).toContain("p.prosrc LIKE '%OLD.status%'");
+    expect(code).toContain("p.prosrc NOT LIKE '%v_asserted%'");
 
     // AND THE ENUMERATION `R41` ORDERED IS IN THE FILE, with the one relation
     // whose invisibility is NOT observable named as such rather than given an
@@ -2903,14 +2943,48 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(SPEC).toContain('SAID PLAINLY: THIS SLICE DOES NOT DETECT IT.');
   });
 
-  it("C1 obligation (e): a plan whose tenant is not its invoice's is refused, which is where the asymmetry came from", () => {
+  it("C1 the tenant divergence is now UNREACHABLE, and obligation (e)'s stated reason was measurably false (TL-P4-COORD-R43, F2)", () => {
     const code = sqlCodeOnly(SPEC);
-    expect(code).toContain('(e) the plan tenant');
-    expect(code).toContain('(e) % instalments do not carry the plan tenant');
-    // The verifier really reads the invoice's tenant, or (e) compares a value
-    // with itself.
-    expect(code).toMatch(/SELECT i\.total_txn_minor, i\.tenant_id INTO v_total, v_invoice_tenant/);
-    expect(code).toMatch(/v_plan_tenant IS DISTINCT FROM v_invoice_tenant/);
+
+    // OBLIGATION (e) WAS A DEFERRED COMPARISON, justified by the claim that no
+    // composite key existed for a foreign key to name. THE CLAIM WAS FALSE,
+    // and it is false in the FROZEN estate, which is read here rather than
+    // cited: `0016` makes `businesses (tenant_id, id)` UNIQUE, and the edge
+    // onto it is already carried by dozens of relations including `invoices`.
+    const uq = MIGRATIONS.filter((m) => /ADD CONSTRAINT businesses_tenant_id_uq UNIQUE \(tenant_id, id\)/.test(m.sql));
+    expect(uq.length, 'the composite key obligation (e) said did not exist is not in the tree after all').toBe(1);
+    const edges = MIGRATIONS.reduce(
+      (n, m) => n + [...m.sql.matchAll(/FOREIGN KEY \(tenant_id, business_id\) REFERENCES businesses \(tenant_id, id\)/g)].length,
+      0,
+    );
+    expect(edges, 'the tenant edge is not an estate-wide pattern').toBeGreaterThan(50);
+    expect(
+      MIGRATIONS.some((m) => /CONSTRAINT invoices_tenant_fk FOREIGN KEY \(tenant_id, business_id\) REFERENCES businesses \(tenant_id, id\)/.test(m.sql)),
+    ).toBe(true);
+
+    // SO THE EDGE IS CARRIED, BY BOTH RELATIONS, and the plan's tenant is the
+    // invoice's by construction: `business_id` is already pinned to the
+    // invoice's, and one `business_id` has exactly one `tenant_id`.
+    expect(code).toContain('CONSTRAINT installment_plans_tenant_fk FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id)');
+    expect(code).toContain('CONSTRAINT installments_tenant_fk FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id)');
+
+    // AND THE LATE CHECK IS DELETED RATHER THAN KEPT BESIDE THE CONSTRAINT
+    // THAT SUBSUMES IT, for the reason this file states about the retired
+    // visibility guard: a check that can no longer fire is a second answer.
+    //
+    // SCOPED TO THE VERIFIER'S OWN BODY, because the apply-time block's RATCHET
+    // quotes the retired message in order to refuse it, and that quotation
+    // lives inside a dollar-quoted body that `sqlCodeOnly` passes through
+    // verbatim. Asserting the absence over the whole file would be refuted by
+    // the very statement that enforces the absence — the seventh time in this
+    // slice that explaining a removal has tripped the test for the removal.
+    const verifier = code.slice(code.indexOf('CREATE OR REPLACE FUNCTION installment_schedule_verify()'));
+    const verifierBody = verifier.slice(0, verifier.indexOf('CREATE CONSTRAINT TRIGGER'));
+    expect(verifierBody).not.toContain('(e) the plan tenant');
+    expect(verifierBody).not.toContain('v_plan_tenant');
+    expect(verifierBody).not.toContain('v_tenant_mismatch');
+    // ...and the apply-time block refuses a tree where any of them comes back.
+    expect(code).toContain("p.prosrc LIKE '%(e) the plan tenant%'");
   });
 
   it('H6 THE ORDER LAW IS EXECUTABLE — the verifier is DEFINED ABOVE the triggers that execute it', () => {

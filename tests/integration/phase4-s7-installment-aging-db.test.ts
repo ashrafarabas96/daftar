@@ -169,7 +169,7 @@ describe("§A THE PARSER'S OPINION — a specification is design until PostgreSQ
     // §A and closed by §B, which actually RUNS it.
   });
 
-  it('the two constraint triggers EXIST, deferred, on both relations, and the row one fires on DELETE', async () => {
+  it('the THREE constraint triggers EXIST, deferred, one per relation the equality reads, and the row one fires on DELETE', async () => {
     const r = await db.pool.query<{ tgname: string; rel: string; deferred: boolean; events: string }>(
       `SELECT t.tgname, c.relname AS rel, t.tgdeferrable AND t.tginitdeferred AS deferred,
               concat_ws(',', CASE WHEN (t.tgtype & 4) <> 0 THEN 'INSERT' END,
@@ -178,7 +178,12 @@ describe("§A THE PARSER'S OPINION — a specification is design until PostgreSQ
          FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
         WHERE NOT t.tgisinternal AND t.tgname LIKE '%schedule_complete' ORDER BY c.relname`,
     );
-    expect(r.rows.map((x) => x.rel)).toEqual(['installment_plans', 'installments']);
+    // THREE, NOT TWO (`TL-P4-COORD-R43`, F1-d). Obligation (a) is an equality
+    // and its RIGHT-HAND SIDE is `invoices.total_txn_minor`, which `0075:561`
+    // leaves MUTABLE while the invoice is a draft. With only the two plan-side
+    // triggers the equality could be falsified from the right and the reader
+    // then refused `plan_schedule_unreadable` permanently.
+    expect(r.rows.map((x) => x.rel)).toEqual(['installment_plans', 'installments', 'invoices']);
     for (const row of r.rows) expect(row.deferred, row.tgname).toBe(true);
     const byRel = new Map(r.rows.map((x) => [x.rel, x.events]));
     expect(byRel.get('installment_plans')).toContain('INSERT');
@@ -187,6 +192,11 @@ describe("§A THE PARSER'S OPINION — a specification is design until PostgreSQ
     // row, so a verifier that fired only on INSERT and UPDATE would leave one
     // of the three directions unenforceable whatever the prose said.
     expect(byRel.get('installments')).toContain('DELETE');
+    // THE `invoices` ARM IS `UPDATE OF total_txn_minor` AND NOTHING ELSE: that
+    // column is the whole of what this relation contributes to the equality,
+    // and no plan can exist for an invoice being INSERTed
+    // (`installment_plans_invoice_fk`), so there is no INSERT arm to carry.
+    expect(byRel.get('invoices')).toBe('UPDATE');
   });
 
   it('`customer_ar_aging` KEPT its five-column return shape — `CREATE OR REPLACE` proves it, since 42P13 is the alternative', async () => {
