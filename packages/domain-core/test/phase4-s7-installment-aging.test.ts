@@ -2816,6 +2816,93 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(sketch).not.toContain('SECURITY DEFINER');
   });
 
+  it('C1.b THE SCHEDULE RELATION IS JUDGED BY ARITHMETIC, not by existence (round 8 F1-a)', () => {
+    const code = sqlCodeOnly(SPEC);
+    const sketch = projectionSketch(SPEC);
+    const sketchCode = sketch
+      .split('\n')
+      .map((l) => l.replace(/^\s*--.*$/, ''))
+      .join('\n');
+
+    // `TL-P4-COORD-R41`: direction (d) was applied to ONE of the TWO second
+    // relations. `installments` is the other one, and its PARTIAL invisibility
+    // was invisible to a `NOT EXISTS` — which fires only when EVERY row is
+    // hidden. The replacement is section 3 obligation (a) read backwards: the
+    // declared schedule of an active plan sums EXACTLY to the invoice's own
+    // stored total, so a visible sum that differs is proof of hidden rows.
+    expect(sketchCode).toContain('visible_schedule AS (');
+    expect(sketchCode).toContain('x.total_txn_minor AS declared_total');
+    expect(sketchCode).toMatch(/AND \(s\.visible_rows = 0\s*\n\s*OR s\.visible_total <> i\.declared_total\)/);
+    // THE OPERAND COMES OFF THE GOVERNING ROW, not from the money call. The
+    // obligation is written against the COLUMN and the constraint trigger
+    // judges the COLUMN, so comparing against `paid + outstanding` would make
+    // two correct figures disagreeing look like a hidden row.
+    expect(sketchCode).not.toMatch(/visible_total <> oi\.total_txn_minor/);
+    // AND THE RETIRED EXISTENCE TEST IS GONE FROM THE CODE. Judged over code,
+    // because the CTE's own comment DESCRIBES the retired shape — it must not
+    // QUOTE it, since section 2b's ratchet searches `prosrc` and `prosrc`
+    // holds comments too. Sixth occurrence of this file's oldest lesson.
+    expect(sketchCode).not.toMatch(/NOT EXISTS \(SELECT 1 FROM public\.installments/);
+
+    // THE RATCHET, so a future author cannot put the existence test back
+    // without the specification refusing to apply.
+    expect(code).toContain("p.prosrc LIKE '%visible_schedule%'");
+    expect(code).toContain("p.prosrc LIKE '%declared_total%'");
+    expect(code).toContain("p.prosrc NOT LIKE '%NOT EXISTS (SELECT 1 FROM public.installments%'");
+
+    // AND THE COMPLETENESS THE TEST RESTS ON IS DECLARED, not assumed: every
+    // hidden row moves the sum only because no instalment may be worth zero.
+    expect(code).toContain('CHECK (amount_txn_minor >= 1)');
+  });
+
+  it("C1.c THE FACT'S WRITER DOES NOT DECIDE IT BY A READ THAT CAN BE BLINDED (round 8 F1-b)", () => {
+    const code = sqlCodeOnly(SPEC);
+
+    // `TL-P4-COORD-R41`: the sync decided the fact with a `SECURITY DEFINER`
+    // `EXISTS` over `installment_plans`, and the verifier repeated the
+    // IDENTICAL read — so the COMMIT-time check compared a blinded reading
+    // against a column written from the same blinded reading, and the two
+    // could not disagree. `installment_plans` is FORCE ROW LEVEL SECURITY, so
+    // no principal short of `rolbypassrls` has an unblindable read of it.
+    expect(code).toContain('ALTER TABLE installment_plans FORCE ROW LEVEL SECURITY;');
+
+    // THE CLOSURE ASKS NO VISIBILITY QUESTION: the trigger is HANDED the row,
+    // so `NEW.status = 'active'` against a recomputation of `false` is a
+    // self-contradiction. The floor is set from `NEW` and from nothing else.
+    expect(code).toMatch(/IF NEW\.status = 'active' THEN v_asserted := NEW\.invoice_id; END IF;/);
+    expect(code).toMatch(/IF v_asserted IS NOT NULL AND v_invoice = v_asserted AND NOT v_state THEN/);
+    expect(code).toContain('installment.plan_fact_blind');
+    // ...and it is set in BOTH write branches that can assert a plan, not only
+    // on INSERT: an UPDATE to `status = 'active'` asserts the same thing.
+    expect(code.match(/IF NEW\.status = 'active' THEN v_asserted := NEW\.invoice_id; END IF;/g)).toHaveLength(2);
+
+    // THE RECOMPUTATION SURVIVES. Reading `NEW.status` ALONE would be wrong
+    // whenever a SECOND plan on the same invoice is still active, which is why
+    // the loop recomputes at all; `NEW` is the FLOOR, not the answer.
+    expect(code).toMatch(/SELECT EXISTS \(SELECT 1 FROM public\.installment_plans p[\s\S]{0,200}INTO v_state;/);
+
+    // AND THE DEFERRED VERIFIER CARRIES NO HANDED-ROW FLOOR, because deferral
+    // makes the handed row stale: an INSERT-then-DELETE in one transaction
+    // still fires the INSERT's event with `NEW.status = 'active'` against a
+    // correctly-false flag. The stale case and the blinded case cannot be told
+    // apart without asking the forbidden question, so the floor lives on the
+    // IMMEDIATE writer and this is recorded rather than papered over.
+    const verify = code.slice(code.indexOf('CREATE OR REPLACE FUNCTION installment_plan_fact_verify()'));
+    const verifyBody = verify.slice(0, verify.indexOf('CREATE TRIGGER'));
+    expect(verifyBody).not.toContain('v_asserted');
+    expect(verifyBody).toContain('installment.plan_fact_desynchronised');
+
+    // THE RATCHET for the write side.
+    expect(code).toContain("p.prosrc LIKE '%plan_fact_blind%'");
+    expect(code).toContain("p.prosrc LIKE '%NEW.status%'");
+
+    // AND THE ENUMERATION `R41` ORDERED IS IN THE FILE, with the one relation
+    // whose invisibility is NOT observable named as such rather than given an
+    // invented check.
+    expect(SPEC).toContain('THE COMPLETENESS ENUMERATION');
+    expect(SPEC).toContain('SAID PLAINLY: THIS SLICE DOES NOT DETECT IT.');
+  });
+
   it("C1 obligation (e): a plan whose tenant is not its invoice's is refused, which is where the asymmetry came from", () => {
     const code = sqlCodeOnly(SPEC);
     expect(code).toContain('(e) the plan tenant');

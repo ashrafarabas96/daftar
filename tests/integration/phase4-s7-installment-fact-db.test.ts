@@ -380,6 +380,73 @@ beforeAll(async () => {
   M['E5_no_context'] = await aging(app, {});
   M['E5_no_context_invoices'] = await inCtx(app, {}, [{ sql: `SELECT count(*)::text AS n FROM public.invoices WHERE id = $1`, params: [world.invoiceId] }]);
 
+  // ── §F1-a PARTIAL SCHEDULE INVISIBILITY (`TL-P4-COORD-R41`, F1-a).
+  //    §E4 above hides EVERY `installments` row, which the round-8 existence
+  //    test already caught. This hides SOME of them — the challenger's
+  //    `AND seq_no < 2` shape — which that test passed 0/0/0 while the reader
+  //    served the pre-S7 figure in one coarse band.
+  //
+  //    THE COUNTERFACTUAL HERE IS THE ROUND-8 READER, NOT THE ROUND-7 ONE.
+  //    `OLD_BODY` above removes arm (c)'s whole repair; that is the wrong
+  //    control for this finding. `R8_BODY` changes exactly one thing: the
+  //    arithmetic comparison goes back to the existence test it replaced, and
+  //    nothing else in the body moves.
+  const R8_BODY = NEW_BODY.replace(
+    /AND \(s\.visible_rows = 0\n\s*OR s\.visible_total <> i\.declared_total\)/,
+    'AND NOT EXISTS (SELECT 1 FROM public.installments n WHERE n.business_id = p_business_id AND n.plan_id = v.id)',
+  );
+  M['F1a_counterfactual_rewrote'] =
+    R8_BODY !== NEW_BODY && !R8_BODY.includes('visible_total <>') && R8_BODY.includes('NOT EXISTS (SELECT 1 FROM public.installments');
+
+  const RESTORE_INSTALLMENTS_READ = `CREATE POLICY business_isolation_read ON installments AS RESTRICTIVE FOR SELECT
+       USING (app_bypass() OR current_user IN ('daftar_inventory_internal','daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid)`;
+
+  //    BOTH HALVES OF THE SCHEDULE, SEPARATELY. The challenger disclosed that
+  //    under the existence test hiding the OTHER instalment changed nothing
+  //    either, so the harm was value-dependent. Both are measured here and
+  //    both must refuse, which is the claim that the arithmetic test is
+  //    COMPLETE rather than lucky.
+  const PARTIALS: readonly { label: string; hide: string }[] = [
+    { label: 'F1a-1 seq_no < 2 visible, so instalment 2 of 2 is hidden', hide: 'seq_no < 2' },
+    { label: 'F1a-2 seq_no > 1 visible, so instalment 1 of 2 is hidden', hide: 'seq_no > 1' },
+  ];
+  const partialLog: unknown[] = [];
+  for (const p of PARTIALS) {
+    const ddlErrors: (string | null)[] = [];
+    ddlErrors.push(await ddl(`DROP POLICY business_isolation_read ON installments`));
+    ddlErrors.push(
+      await ddl(`CREATE POLICY business_isolation_read ON installments AS RESTRICTIVE FOR SELECT
+                   USING (app_bypass() OR current_user IN ('daftar_inventory_internal','daftar_accounting_internal')
+                          OR (business_id = nullif(app_business(), '')::uuid AND ${p.hide}))`),
+    );
+    const rowsSeen = await inCtx(app, APP_CTX(), [
+      { sql: `SELECT count(*)::text AS n, coalesce(sum(amount_txn_minor),0)::text AS s FROM public.installments WHERE plan_id = $1`, params: [planned.planId] },
+    ]);
+    const plansSeen = await visiblePlans(app, APP_CTX());
+    const r8Install = await ddl(R8_BODY);
+    const r8Read = await aging(app, APP_CTX());
+    const newInstall = await ddl(NEW_BODY);
+    const newRead = await aging(app, APP_CTX());
+    const restoreErrors: (string | null)[] = [];
+    restoreErrors.push(await ddl(`DROP POLICY business_isolation_read ON installments`));
+    restoreErrors.push(await ddl(RESTORE_INSTALLMENTS_READ));
+    const restored = await aging(app, APP_CTX());
+    partialLog.push({
+      label: p.label,
+      ddlErrors,
+      instalmentsVisible: rowsSeen.rows[0] ?? rowsSeen.error,
+      plansVisible: plansSeen.rows[0]?.['n'] ?? plansSeen.error,
+      flag: await flag(),
+      r8Install,
+      r8ReaderServed: r8Read,
+      newInstall,
+      newReaderRefused: newRead.error,
+      restoreErrors,
+      restoredReader: restored,
+    });
+  }
+  M['F1a_partials'] = partialLog;
+
   // ── §C4/§C5 THE LIFECYCLE. completion and deletion both clear the column.
   M['C4_complete'] = (
     await inCtx(mig, APP_CTX(), [{ sql: `UPDATE installment_plans SET status = 'completed' WHERE id = $1`, params: [planned.planId] }])
@@ -395,6 +462,92 @@ beforeAll(async () => {
   M['C6_delete'] = del.error;
   M['C6_flag'] = await flag();
   M['C6_aging'] = await aging(app, APP_CTX());
+
+  // ── §F1-b THE FACT'S WRITER, BLINDED (`TL-P4-COORD-R41`, F1-b).
+  //    `installment_plans` carries FORCE ROW LEVEL SECURITY, so a RESTRICTIVE
+  //    `FOR SELECT USING (false)` blinds the sync's own SECURITY DEFINER read
+  //    as well as every caller's. Before the repair the sync wrote `false`,
+  //    the plan COMMITTED, and restoring the policy did not restore the flag.
+  //
+  //    DISCLOSED FIXTURE DEPARTURE: the pre-repair sync is installed AS THE
+  //    SUPERUSER. The function's owner is `daftar_accounting_internal`, a
+  //    NOLOGIN role, so `daftar_migrator` cannot replace it; §D's trigger
+  //    disabling is not a substitute because this measurement needs the
+  //    trigger to RUN and to decide wrongly. Only the one `CREATE OR REPLACE`
+  //    uses `sup`; every reading below is taken as the role the policy names.
+  const SYNC_NEW = (await mig.query<{ d: string }>(`SELECT pg_get_functiondef('public.installment_plan_fact_sync()'::regprocedure) AS d`)).rows[0]?.d as string;
+  const SYNC_R8 = SYNC_NEW.replace(/IF v_asserted IS NOT NULL[\s\S]*?END IF;/, '');
+  M['F1b_counterfactual_rewrote'] = SYNC_R8 !== SYNC_NEW && !SYNC_R8.includes('plan_fact_blind');
+
+  const BLIND_PLANS = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT USING (false)`;
+  const RESTORE_PLANS_READ = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
+       USING (app_bypass() OR current_user IN ('daftar_inventory_internal','daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid)`;
+
+  const blindDdl: (string | null)[] = [];
+  blindDdl.push(await ddl(`DROP POLICY business_isolation_read ON installment_plans`));
+  blindDdl.push(await ddl(BLIND_PLANS));
+  M['F1b_blind_ddl'] = blindDdl;
+
+  // (i) THE PRE-REPAIR WRITER, under blindness.
+  let r: string | null = null;
+  try {
+    await sup.query(SYNC_R8);
+  } catch (e) {
+    r = err(e);
+  }
+  M['F1b_r8_install'] = r;
+  const r8Plan = await commitPlan(APP_CTX());
+  M['F1b_r8_commit_error'] = r8Plan.error;
+  M['F1b_r8_flag'] = await flag();
+  M['F1b_r8_aging_while_blind'] = await aging(app, APP_CTX());
+  //    AND IT DOES NOT HEAL: restore the policy and re-read the SAME row.
+  await ddl(`DROP POLICY business_isolation_read ON installment_plans`);
+  await ddl(RESTORE_PLANS_READ);
+  M['F1b_r8_flag_after_restore'] = await flag();
+  M['F1b_r8_plans_visible_after_restore'] = (await visiblePlans(app, APP_CTX())).rows[0]?.['n'] ?? null;
+  M['F1b_r8_aging_after_restore'] = await aging(app, APP_CTX());
+  //    Clean up that row — both relations in ONE transaction, because
+  //    `installment_schedule_verify` refuses a half-deleted schedule.
+  M['F1b_r8_cleanup'] = (
+    await inCtx(mig, APP_CTX(), [
+      { sql: `DELETE FROM installments WHERE plan_id = $1`, params: [r8Plan.planId] },
+      { sql: `DELETE FROM installment_plans WHERE id = $1`, params: [r8Plan.planId] },
+    ])
+  ).error;
+  M['F1b_r8_cleanup_flag'] = await flag();
+
+  // (ii) THE SHIPPED WRITER, the same blindness, the same write.
+  let r2: string | null = null;
+  try {
+    await sup.query(SYNC_NEW);
+  } catch (e) {
+    r2 = err(e);
+  }
+  M['F1b_new_install'] = r2;
+  await ddl(`DROP POLICY business_isolation_read ON installment_plans`);
+  await ddl(BLIND_PLANS);
+  const blindPlan = await commitPlan(APP_CTX());
+  M['F1b_new_commit_error'] = blindPlan.error;
+  M['F1b_new_flag'] = await flag();
+  M['F1b_new_plans_rows_after'] =
+    (await inCtx(sup, {}, [{ sql: `SELECT count(*)::text AS n FROM installment_plans WHERE invoice_id = $1`, params: [world.invoiceId] }])).rows[0]?.['n'] ??
+    null;
+
+  // (iii) THE CONTROL. Policy restored, same write, and it must COMMIT —
+  //       otherwise the law above refuses every plan and proves nothing.
+  await ddl(`DROP POLICY business_isolation_read ON installment_plans`);
+  await ddl(RESTORE_PLANS_READ);
+  const sighted = await commitPlan(APP_CTX());
+  M['F1b_control_commit_error'] = sighted.error;
+  M['F1b_control_flag'] = await flag();
+  M['F1b_control_aging'] = await aging(app, APP_CTX());
+  M['F1b_control_cleanup'] = (
+    await inCtx(mig, APP_CTX(), [
+      { sql: `DELETE FROM installments WHERE plan_id = $1`, params: [sighted.planId] },
+      { sql: `DELETE FROM installment_plans WHERE id = $1`, params: [sighted.planId] },
+    ])
+  ).error;
+  M['F1b_control_cleanup_flag'] = await flag();
 
   // ── §D THE COMMIT-TIME REFUSAL, both directions.
   //    D1: the sync trigger disabled, so the column is never written.
@@ -682,6 +835,138 @@ describe('P4-S7 §E the three round-7 attacks, reproduced and then closed', () =
     expect(rows(M['E5_no_context_invoices'])[0]).toEqual({ n: '0' });
     expect(errOf(M['E5_no_context'])).toBe('');
     expect(rows(M['E5_no_context'])).toHaveLength(0);
+  });
+});
+
+describe('P4-S7 §F1-a partial schedule invisibility, judged by arithmetic', () => {
+  it('the counterfactual really is the ROUND-8 reader and nothing else', () => {
+    expect(M['F1a_counterfactual_rewrote'], 'the existence-test rewrite did not take, so §F1-a measures nothing').toBe(true);
+  });
+
+  interface Partial {
+    readonly label: string;
+    readonly instalmentsVisible: Record<string, string> | string;
+    readonly plansVisible: string | null;
+    readonly flag: string;
+    readonly r8Install: string | null;
+    readonly r8ReaderServed: Outcome;
+    readonly newInstall: string | null;
+    readonly newReaderRefused: string | null;
+    readonly restoredReader: Outcome;
+  }
+  const partials = (): readonly Partial[] => (M['F1a_partials'] as readonly Partial[] | undefined) ?? [];
+
+  it('both halves of the schedule were actually hidden, one at a time, with the plan still readable and the flag still true', () => {
+    const ps = partials();
+    expect(ps).toHaveLength(2);
+    for (const p of ps) {
+      // THE ATTACK LANDED: one of two instalments readable, the PLAN readable,
+      // the flag correct. Without these three the refusal below could be
+      // coming from anywhere.
+      expect(p.instalmentsVisible, p.label).toEqual({ n: '1', s: '400000' });
+      expect(p.plansVisible, p.label).toBe('1');
+      expect(p.flag, p.label).toBe('true');
+      expect(p.r8Install, p.label).toBeNull();
+      expect(p.newInstall, p.label).toBeNull();
+    }
+  });
+
+  it('the ROUND-8 reader serves a SILENTLY COARSENED figure — the defect, reproduced in this database', () => {
+    // A CORRECTION OF MY OWN LAW, recorded rather than quietly weakened. I
+    // first asserted this of BOTH halves, with "fewer bands than the fully
+    // visible reading" as the discriminator. IT MEASURED FALSE for F1a-2 and
+    // the measurement is right: see the next law. The defect is reproduced by
+    // hiding the LATER instalment, and that is what this law is about.
+    const p = partials()[0];
+    expect(p?.label).toContain('F1a-1');
+    expect(p?.r8ReaderServed.error, 'the round-8 reader must SERVE, not refuse — that is the defect').toBeNull();
+    const r = rows(p?.r8ReaderServed);
+    // ONE band where the truth is two, the whole figure parked at the invoice
+    // due date, and the authoritative total intact so nothing looks wrong.
+    expect(r).toEqual([{ bucket_no: 4, currency_code: 'ILS', txn_minor: '900000', base_minor: '900000', invoice_count: 1 }]);
+    expect(sum(r)).toBe(TOTAL);
+    expect(rows(M['C2_aging_with_plan'])).toHaveLength(2);
+  });
+
+  it('MEASURED NEGATIVE, and it is the reason an existence test is not enough: hiding the OTHER instalment leaves the round-8 answer BYTE-IDENTICAL to the correct one', () => {
+    // Hiding instalment 1 of 2 — the EARLIER one — and the round-8 reader
+    // returns exactly what a fully sighted caller gets. The paid-anchored
+    // levels absorb it: the missing early amount was already below `paid`, so
+    // no bucket moves. THE HARM IS VALUE-DEPENDENT, which is precisely what
+    // made it silent, and it is why a test that fires only when the answer
+    // visibly changes is not a test. The reader cannot know it got lucky.
+    const p = partials()[1];
+    expect(p?.label).toContain('F1a-2');
+    expect(p?.r8ReaderServed.error).toBeNull();
+    expect(rows(p?.r8ReaderServed)).toEqual(rows(M['C2_aging_with_plan']));
+  });
+
+  it('the SHIPPED reader refuses BOTH halves by its own name — including the one whose answer was accidentally right', () => {
+    // THE COMPLETENESS CLAIM, and the whole of F1-a's repair. The arithmetic
+    // signature does not ask whether the coincidence above happened to be
+    // benign: `amount_txn_minor >= 1` means every hidden row moves the visible
+    // sum away from `invoices.total_txn_minor`, so the test fires on the
+    // harmless case too. That is OVER-STRICT IN THE SAFE DIRECTION and it is
+    // deliberate — a caller that cannot read the whole schedule has no way to
+    // know which case it is in, so it must not answer at all.
+    const ps = partials();
+    expect(ps).toHaveLength(2);
+    for (const p of ps) {
+      expect(String(p.newReaderRefused), p.label).toContain('installment.plan_schedule_unreadable');
+    }
+  });
+
+  it('and restoring the policy restores the ANSWER, not merely the absence of an error', () => {
+    for (const p of partials()) {
+      expect(p.restoredReader.error, p.label).toBeNull();
+      const r = rows(p.restoredReader);
+      expect(sum(r), p.label).toBe(TOTAL);
+      expect(r, p.label).toEqual(rows(M['C2_aging_with_plan']));
+    }
+  });
+});
+
+describe("P4-S7 §F1-b the fact's writer, blinded", () => {
+  it('the counterfactual really is the ROUND-8 sync and nothing else', () => {
+    expect(M['F1b_counterfactual_rewrote'], 'the floor-removal rewrite did not take, so §F1-b measures nothing').toBe(true);
+    expect(M['F1b_r8_install'], 'the pre-repair sync did not install').toBeNull();
+    expect(M['F1b_new_install'], 'the shipped sync did not reinstall').toBeNull();
+    expect(M['F1b_blind_ddl']).toEqual([null, null]);
+  });
+
+  it('the ROUND-8 writer COMMITS a plan while recording that there is none', () => {
+    // The defect, reproduced: the write succeeds, and the column that governs
+    // the aging says `false` while an active plan exists.
+    expect(M['F1b_r8_commit_error']).toBeNull();
+    expect(M['F1b_r8_flag']).toBe('false');
+  });
+
+  it('and it DOES NOT HEAL: restoring the policy leaves the row wrong, and every sighted caller is then refused FOREVER', () => {
+    expect(M['F1b_r8_flag_after_restore']).toBe('false');
+    // The plan is now visible again and the flag still says there is none, so
+    // the read's `unflagged_plan` count fires. A silent wrong answer that has
+    // turned into a permanent refusal — worse than either.
+    expect(M['F1b_r8_plans_visible_after_restore']).toBe('1');
+    expect(String(errOf(M['F1b_r8_aging_after_restore']))).toContain('installment.plan_fact_unflagged');
+    expect(M['F1b_r8_cleanup']).toBeNull();
+    expect(M['F1b_r8_cleanup_flag']).toBe('false');
+  });
+
+  it('the SHIPPED writer refuses the same write at WRITE time, by name, and no plan row survives', () => {
+    expect(String(M['F1b_new_commit_error'])).toContain('installment.plan_fact_blind');
+    // NOT a read-time refusal and NOT a COMMIT-time one: the transaction never
+    // lands, so there is no desynchronised row to heal.
+    expect(M['F1b_new_flag']).toBe('false');
+    expect(M['F1b_new_plans_rows_after']).toBe('0');
+  });
+
+  it('and the CONTROL commits — the law refuses blindness, not plan writes', () => {
+    expect(M['F1b_control_commit_error']).toBeNull();
+    expect(M['F1b_control_flag']).toBe('true');
+    expect(errOf(M['F1b_control_aging'])).toBe('');
+    expect(sum(rows(M['F1b_control_aging']))).toBe(TOTAL);
+    expect(M['F1b_control_cleanup']).toBeNull();
+    expect(M['F1b_control_cleanup_flag']).toBe('false');
   });
 });
 
