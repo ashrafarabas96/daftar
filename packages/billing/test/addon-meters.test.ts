@@ -29,7 +29,8 @@
  * case labels, and six registered keys.
  */
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { priceAddOn } from '../src/addons';
 import { BillingError } from '../src/errors';
@@ -83,15 +84,31 @@ function measuredLimitKeys(source: string): string[] {
   return [...new Set(keys)].sort();
 }
 
-/** Every key `limit_definitions` registers, from the migration that seeds it. */
-function registeredLimitKeys(): string[] {
-  const files = readdirSync(MIGRATIONS)
+/**
+ * Every key `limit_definitions` registers, from the migration that seeds it.
+ *
+ * The directory is a PARAMETER, defaulting to the live one. That is not a
+ * seam: the law below reads the live tree, and the parameter exists so the
+ * extractor's sensitivity can be proved against a fixture directory instead
+ * of by mutating `infrastructure/database/migrations`, which PART E forbids
+ * this thread to touch and which holds frozen files. A red proof that
+ * requires editing a frozen migration is not a red proof anyone may run.
+ */
+function registeredLimitKeys(dir: string = MIGRATIONS): string[] {
+  const files = readdirSync(dir)
     .filter((f) => f.endsWith('.sql'))
     .sort();
-  expect(files.length, 'no migrations were found; the path this suite reads is wrong').toBeGreaterThan(20);
+  // Only the LIVE tree is held to a size: a fixture directory is small on
+  // purpose, and a guard that forced it to be large would be padding a
+  // fixture to satisfy an assertion about something else.
+  if (dir === MIGRATIONS) {
+    expect(files.length, 'no migrations were found; the path this suite reads is wrong').toBeGreaterThan(20);
+  } else {
+    expect(files.length, 'the fixture directory holds no SQL').toBeGreaterThan(0);
+  }
   const keys: string[] = [];
   for (const f of files) {
-    const sql = readFileSync(join(MIGRATIONS, f), 'utf8');
+    const sql = readFileSync(join(dir, f), 'utf8');
     const insert = /INSERT\s+INTO\s+limit_definitions[\s\S]*?;/gi;
     for (const block of sql.match(insert) ?? []) {
       for (const m of block.matchAll(/\(\s*'([A-Z0-9_]+)'/g)) keys.push(m[1] as string);
@@ -123,6 +140,34 @@ describe('the measured set, read from the live entitlement engine', () => {
     // `measurement_strategy` that describes an intent, and read 0 from
     // `getUsage` forever. A quota check against 0 always passes.
     expect(UNMEASURED).toEqual(['MAX_AI_USAGE', 'MAX_STORAGE', 'MAX_WHATSAPP_USAGE']);
+  });
+
+  it('would see a seventh registered key, proved against a fixture directory', () => {
+    // The live assertion above pins six keys. This proves the extractor is
+    // what would notice a seventh, without the frozen tree being touched to
+    // show it. The fixture carries two decoys — a registration inside a SQL
+    // comment, and an INSERT into a different table — because an extractor
+    // that read either would also mis-read the live migrations.
+    const dir = mkdtempSync(join(tmpdir(), 'p5-limit-registry-'));
+    const fixture = [
+      "-- ('MAX_DECOY_IN_A_COMMENT', 'count', 'x', 'y');",
+      'INSERT INTO limit_definitions (key, unit, description, measurement_strategy) VALUES',
+      "  ('MAX_USERS', 'count', 'x', 'count_rows'),",
+      "  ('MAX_SMS_USAGE', 'messages', 'x', 'metered');",
+      "INSERT INTO features (key) VALUES ('MAX_NOT_A_LIMIT');",
+      '',
+    ].join('\n');
+    writeFileSync(join(dir, '0021_fixture.sql'), fixture, 'utf8');
+    const found = registeredLimitKeys(dir);
+    expect(found).toContain('MAX_SMS_USAGE');
+    expect(found).toContain('MAX_USERS');
+    expect(found).not.toContain('MAX_DECOY_IN_A_COMMENT');
+    expect(found).not.toContain('MAX_NOT_A_LIMIT');
+    // And a key the extractor reports but `getUsage` does not measure lands in
+    // the unmeasured gap, which is what the §21 refusal keys off. So a
+    // seventh registered key reaches the refusal, not just the extractor.
+    expect(found.filter((k) => !MEASURED.includes(k))).toContain('MAX_SMS_USAGE');
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it('is not an empty extraction', () => {
