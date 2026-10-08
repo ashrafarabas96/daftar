@@ -89,6 +89,16 @@ object P7Laws {
         "A local read cache is a projection of server truth and holds no authority, so a server read replaces it silently and entirely; it is never merged, never reconciled field by field and never wins a disagreement.",
     )
 
+    /**
+     * The Tech Lead's ruling of 2026-10-08 (§34): classification belongs beside
+     * each domain's command definition, Phase 7 invents none, and an unknown
+     * command effect refuses rather than defaulting.
+     */
+    val NO_DEFAULT_EFFECT_CLASS = OfflineLaw(
+        "P7-L11-NO-DEFAULT-EFFECT-CLASS",
+        "A command's effect class is declared by its own domain owner and is never defaulted or inferred; an unclassified command has no classification to pass at the call site and refuses by name at run time, and is never treated as benign.",
+    )
+
     val NO_LAST_WRITE_WINS_ON_MATERIAL_STATE = OfflineLaw(
         "P7-L10-NO-LAST-WRITE-WINS-ON-MATERIAL-STATE",
         "Timestamp ordering, vector clocks, last-write-wins and every other automatic merge are forbidden for financial and inventory state in both directions; an automatic strategy is legitimate only for a read projection, which has no authority to lose.",
@@ -106,5 +116,6 @@ object P7Laws {
         DEVICE_CLOCK_NOT_AUTHORITY,
         READ_CACHE_IS_A_PROJECTION,
         NO_LAST_WRITE_WINS_ON_MATERIAL_STATE,
+        NO_DEFAULT_EFFECT_CLASS,
     )
 }

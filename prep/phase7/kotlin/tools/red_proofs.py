@@ -131,6 +131,22 @@ PROOFS: list[Proof] = [
         expect_red="last-write-wins and field merge are permitted nowhere, over the whole table",
         why="money and stock become resolvable by whichever clock is later, which is the defect the entire conflict model exists to forbid",
     ),
+    Proof(
+        law="P7-L11-NO-DEFAULT-EFFECT-CLASS",
+        path="src/app/daftar/offline/CommandEffects.kt",
+        find="    fun require(kind: CommandKind): EffectClass = registered[kind] ?: throw UnclassifiedCommand(kind)",
+        replace="    fun require(kind: CommandKind): EffectClass = registered[kind] ?: EffectClass.BENIGN",
+        expect_red="an unregistered command refuses by name and is never treated as benign",
+        why="an unclassified command is answered BENIGN, so an unregistered sale becomes something the device may abandon by itself",
+    ),
+    Proof(
+        law="HARNESS-THE-BENIGN-FALLBACK-GUARD-CAN-SEE",
+        path="src/app/daftar/offline/CommandEffects.kt",
+        find="    fun register(kind: CommandKind, effect: EffectClass) {",
+        replace="    fun register(kind: CommandKind, effect: EffectClass = EffectClass.BENIGN) {",
+        expect_red="no source in the kernel defaults or falls back to BENIGN",
+        why="a defaulted BENIGN parameter is planted where no caller omits the argument, so ONLY the textual guard can notice it — which is what makes that guard's green verdict mean absence rather than blindness",
+    ),
     # ── The harness proving its OWN guards, not the kernel's ───────────────
     Proof(
         law="HARNESS-THE-MODEL-CHECK-IS-NOT-VACUOUS",
@@ -217,6 +233,22 @@ def main() -> int:
         else:
             verdict = f"RED as required ({len(failing)} case(s) failed)"
         print(f"  [{i:2}] {proof.law}\n       plant: {proof.why}\n       expect red: {proof.expect_red}\n       {verdict}")
+
+    # §83: the baseline must RESTORE green. Each proof ran in its own copy, so
+    # nothing could have leaked into the original — but "could not have" is an
+    # argument, and this is a measurement. It also catches the case the argument
+    # misses: a proof that reached outside its copy.
+    rc, _, log = run_suite(baseline_tree)
+    restored = re.search(r"\[\s*(\d+) tests successful", log)
+    restored_cases = int(restored.group(1)) if restored else -1
+    if rc != 0 or restored_cases != baseline_cases:
+        failures.append(
+            f"the baseline did not restore green after the proofs: exit {rc}, "
+            f"{restored_cases} cases green against {baseline_cases} before"
+        )
+        print(f"\nBASELINE DID NOT RESTORE: exit {rc}, {restored_cases}/{baseline_cases} cases")
+    else:
+        print(f"\nBASELINE RESTORED: exit 0, {restored_cases} cases green, unchanged")
 
     print()
     if failures:

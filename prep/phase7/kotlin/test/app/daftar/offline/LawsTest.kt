@@ -37,6 +37,8 @@ class LawsTest {
             "ConflictTest.a read cache is replaced and nothing else",
         P7Laws.NO_LAST_WRITE_WINS_ON_MATERIAL_STATE.id to
             "ConflictTest.last-write-wins and field merge are permitted nowhere, over the whole table",
+        P7Laws.NO_DEFAULT_EFFECT_CLASS.id to
+            "CommandEffectsTest.an unregistered command refuses by name and is never treated as benign",
     )
 
     @Test
@@ -44,7 +46,7 @@ class LawsTest {
         val stated = P7Laws.ALL.map { it.id }.toSet()
         assertEquals(stated, defendedBy.keys, "the law table and the coverage map have drifted apart")
         assertEquals(P7Laws.ALL.size, stated.size, "two laws share an id")
-        assertTrue(stated.size >= 10, "only ${stated.size} laws are stated")
+        assertTrue(stated.size >= 11, "only ${stated.size} laws are stated")
     }
 
     @Test
@@ -66,7 +68,7 @@ class LawsTest {
     fun `the defenders are distinct, so no one test is credited with every law`() {
         val distinct = defendedBy.values.distinct()
         assertTrue(
-            distinct.size >= 8,
+            distinct.size >= 9,
             "only ${distinct.size} distinct tests defend ${defendedBy.size} laws — a single test credited " +
                 "with several laws is how an undefended law reads as covered",
         )

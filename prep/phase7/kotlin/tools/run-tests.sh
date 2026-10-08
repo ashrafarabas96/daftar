@@ -39,7 +39,7 @@ fi
 
 # A suite that cannot compile reports nothing, so compilation is checked above
 # as its own exit code before anything is allowed to look green.
-java -jar "$JUNIT_JAR" execute \
+java -Dp7.src="$SRC" -jar "$JUNIT_JAR" execute \
   -cp "$OUT/test:$OUT/main:$TEST_CP" \
   --select-package=app.daftar.offline \
   --details=summary --disable-ansi-colors > "$OUT/run.log" 2>&1
