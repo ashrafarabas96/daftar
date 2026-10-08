@@ -29,6 +29,13 @@ const LINE2 = '22222222-2222-4222-8222-222222222222';
 const SALE = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const WAREHOUSE = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const CUSTOMER = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+const STAFF = '77777777-7777-4777-8777-777777777777';
+const MANAGER = '88888888-8888-4888-8888-888888888888';
+
+/** The honest cash path: the money changed hands, and a named person collected it. */
+const CASH_COLLECTED = { kind: 'cash_collected_on_handover', collectedByUserId: STAFF } as const;
+/** The only thing that turns canonical credit on, per order, with an authorizing human. */
+const CREDIT_AUTHORIZED = { kind: 'authorized_customer_credit', authorizedByUserId: MANAGER } as const;
 
 const KEY = stockKeyOf({ productId: PRODUCT, variantId: VARIANT });
 const PRECISION = new Map([[KEY, 0]]);
@@ -47,6 +54,7 @@ function snapshot(state: OrderState, saleId: string | null = null): OrderSnapsho
 const CASH: OrderCheckoutFacts = {
   saleId: SALE,
   settlementMode: 'cash',
+  settlementEvidence: CASH_COLLECTED,
   customerId: null,
   warehouseId: WAREHOUSE,
   documentDate: '2026-10-01',
@@ -101,17 +109,18 @@ describe('buildSaleCommitIntent', () => {
   });
 });
 
-describe('the credit laws', () => {
-  it('refuses a credit checkout with no customer', () => {
-    expect(() => buildSaleCommitIntent(snapshot('accepted'), POSITIONS, { ...CASH, settlementMode: 'credit' })).toThrowError(
-      expect.objectContaining({ code: 'order.checkout_customer_required' }),
-    );
+describe('the credit laws (TL-P6-R3, TL-P6-R4) and the settlement-truth gate (section 25)', () => {
+  it('refuses a credit checkout with no customer — an anonymous receivable is forbidden', () => {
+    expect(() =>
+      buildSaleCommitIntent(snapshot('accepted'), POSITIONS, { ...CASH, settlementMode: 'credit', settlementEvidence: CREDIT_AUTHORIZED }),
+    ).toThrowError(expect.objectContaining({ code: 'order.checkout_customer_required' }));
   });
 
-  it('admits a credit checkout that names one, with a due date on the document date', () => {
+  it('admits a credit checkout that names one and was authorized, with a due date on the document date', () => {
     const intent = buildSaleCommitIntent(snapshot('accepted'), POSITIONS, {
       ...CASH,
       settlementMode: 'credit',
+      settlementEvidence: CREDIT_AUTHORIZED,
       customerId: CUSTOMER,
       dueDate: '2026-10-01',
     });
@@ -119,17 +128,52 @@ describe('the credit laws', () => {
     expect(intent.dueDate).toBe('2026-10-01');
   });
 
-  it('refuses a due date on a cash checkout, and on a walk-in', () => {
-    expect(() => buildSaleCommitIntent(snapshot('accepted'), POSITIONS, { ...CASH, customerId: CUSTOMER, dueDate: '2026-10-02' })).toThrowError(
-      expect.objectContaining({ code: 'order.checkout_customer_required' }),
-    );
-    expect(() => buildSaleCommitIntent(snapshot('accepted'), POSITIONS, { ...CASH, settlementMode: 'credit', dueDate: '2026-10-02' })).toThrowError(
-      expect.objectContaining({ code: 'order.checkout_customer_required' }),
+  it('refuses a credit CLAIM backed only by collected cash — the claim is never adopted on trust', () => {
+    expect(() =>
+      buildSaleCommitIntent(snapshot('accepted'), POSITIONS, { ...CASH, settlementMode: 'credit', customerId: CUSTOMER, settlementEvidence: CASH_COLLECTED }),
+    ).toThrowError(expect.objectContaining({ code: 'order.settlement_mode_unsupported' }));
+  });
+
+  it('refuses a cash CLAIM backed only by a credit authorization — and never silently corrects it', () => {
+    // Silently adopting the evidence's mode would commit a receivable the
+    // merchant never asked for. The refusal is the whole point.
+    expect(() => buildSaleCommitIntent(snapshot('accepted'), POSITIONS, { ...CASH, customerId: CUSTOMER, settlementEvidence: CREDIT_AUTHORIZED })).toThrowError(
+      expect.objectContaining({ code: 'order.settlement_mode_unsupported' }),
     );
   });
 
-  it('admits a cash walk-in', () => {
+  it('refuses a verified online payment: no merchant provider is integrated (section 31)', () => {
+    expect(() =>
+      buildSaleCommitIntent(snapshot('accepted'), POSITIONS, { ...CASH, settlementEvidence: { kind: 'payment_verified', providerRef: 'ref-1' } }),
+    ).toThrowError(expect.objectContaining({ code: 'order.payment_surface_not_integrated' }));
+  });
+
+  it('refuses a due date without a credit settlement, whichever side is missing', () => {
+    expect(() => buildSaleCommitIntent(snapshot('accepted'), POSITIONS, { ...CASH, customerId: CUSTOMER, dueDate: '2026-10-02' })).toThrowError(
+      expect.objectContaining({ code: 'order.checkout_customer_required' }),
+    );
+    expect(() =>
+      buildSaleCommitIntent(snapshot('accepted'), POSITIONS, {
+        ...CASH,
+        settlementMode: 'credit',
+        settlementEvidence: CREDIT_AUTHORIZED,
+        dueDate: '2026-10-02',
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'order.checkout_customer_required' }));
+  });
+
+  it('admits a cash walk-in, because collected cash from a walk-in is a true fact', () => {
     expect(buildSaleCommitIntent(snapshot('accepted'), POSITIONS, CASH).customerId).toBeNull();
+  });
+
+  it('carries the ESTABLISHED mode into the intent, not the claimed one', () => {
+    const intent = buildSaleCommitIntent(snapshot('accepted'), POSITIONS, {
+      ...CASH,
+      settlementMode: 'credit',
+      settlementEvidence: CREDIT_AUTHORIZED,
+      customerId: CUSTOMER,
+    });
+    expect(intent.settlementMode).toBe('credit');
   });
 });
 
@@ -145,6 +189,7 @@ describe('the dates', () => {
       buildSaleCommitIntent(snapshot('accepted'), POSITIONS, {
         ...CASH,
         settlementMode: 'credit',
+        settlementEvidence: CREDIT_AUTHORIZED,
         customerId: CUSTOMER,
         dueDate: '2026-09-30',
       }),

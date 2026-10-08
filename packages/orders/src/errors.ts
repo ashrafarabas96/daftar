@@ -79,6 +79,42 @@ export type OrderErrorCode =
   /** `documentDate` or `dueDate` is not a `YYYY-MM-DD` civil date, or the due date precedes it. */
   | 'order.checkout_date_invalid'
 
+  // ── settlement truth at the order → sale boundary (settlement.ts) ────────
+  /** The stated settlement evidence is not an evidence kind this package recognises. */
+  | 'order.settlement_not_established'
+  /**
+   * The stated evidence cannot support the claimed settlement mode. Never
+   * corrected silently: quietly turning a claimed `cash` into a `credit` commits
+   * a receivable the merchant never asked for, and the reverse posts cash
+   * nobody collected.
+   */
+  | 'order.settlement_mode_unsupported'
+  /**
+   * A verified online payment was claimed while no merchant payment provider is
+   * integrated (§31). Phase 5's SaaS-platform provider is NOT the merchant's
+   * payment authority, and accepting the claim on the caller's word would be the
+   * simulated cash substitute the ruling forbids.
+   */
+  | 'order.payment_surface_not_integrated'
+
+  // ── the commercial quote snapshot (quote.ts) ─────────────────────────────
+  /** An amount is not non-negative integer minor units as a canonical decimal string. */
+  | 'order.quote_amount_invalid'
+  /** A quote version is not an integer of at least 1. */
+  | 'order.quote_version_invalid'
+  /** A quote expires before or at the instant it was issued, or `asOf` precedes its issue. */
+  | 'order.quote_expiry_invalid'
+  /** Two quote lines name one stock key. */
+  | 'order.quote_line_duplicate'
+  /** The displayed total is not the exact sum of the quoted line totals. */
+  | 'order.quote_total_mismatch'
+  /** The quote does not match its own digest: it was edited after it was issued. */
+  | 'order.quote_tampered'
+  /** The quote has expired and must be re-issued before it is confirmed. */
+  | 'order.quote_expired'
+  /** The confirmed version is not the order's current quote version. */
+  | 'order.quote_version_stale'
+
   // ── channel reconciliation (reconciliation.ts) ───────────────────────────
   /** Two input rows claim the same order id. */
   | 'order.reconciliation_order_duplicate'

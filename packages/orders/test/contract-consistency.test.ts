@@ -14,13 +14,26 @@
  * compare the vocabulary to itself.
  */
 import { describe, expect, it } from 'vitest';
-import { ORDER_CHANNELS, ORDER_CLIENT_ERROR_CODES, ORDER_EDGES, TERMINAL_ORDER_STATES, type OrderChannelDto, type OrderStateDto } from '../src';
+import {
+  ORDER_CHANNELS,
+  ORDER_CLIENT_ERROR_CODES,
+  ORDER_EDGES,
+  ORDER_SETTLEMENT_EVIDENCE_KINDS,
+  SETTLEMENT_MODE_BY_EVIDENCE,
+  TERMINAL_ORDER_STATES,
+  type OrderChannelDto,
+  type OrderSettlementEvidenceKindDto,
+  type OrderStateDto,
+} from '../src';
 
 /** Hand-written from `OrderStateDto`. Edited only when that union is edited. */
 const DTO_STATES: readonly OrderStateDto[] = ['placed', 'accepted', 'rejected', 'cancelled', 'fulfilling', 'fulfilled', 'completed'];
 
 /** Hand-written from `OrderChannelDto`. */
 const DTO_CHANNELS: readonly OrderChannelDto[] = ['storefront', 'pos', 'admin', 'marketplace'];
+
+/** Hand-written from `OrderSettlementEvidenceKindDto`. */
+const DTO_EVIDENCE_KINDS: readonly OrderSettlementEvidenceKindDto[] = ['cash_collected_on_handover', 'payment_verified', 'authorized_customer_credit'];
 
 describe('the state vocabulary', () => {
   it('is the same set on both sides of the API boundary', () => {
@@ -42,6 +55,25 @@ describe('the channel vocabulary', () => {
   });
 });
 
+describe('the settlement evidence vocabulary (section 25)', () => {
+  it('is the same set on both sides of the API boundary', () => {
+    expect([...DTO_EVIDENCE_KINDS].sort()).toEqual([...ORDER_SETTLEMENT_EVIDENCE_KINDS].sort());
+  });
+
+  it('offers no kind on either side that would let an unpaid order be committed as paid', () => {
+    for (const kind of [...DTO_EVIDENCE_KINDS, ...ORDER_SETTLEMENT_EVIDENCE_KINDS]) {
+      expect(kind).not.toMatch(/pend|unpaid|await|assume|uncollected/i);
+    }
+  });
+
+  it('maps every declared kind to exactly one settlement mode', () => {
+    for (const kind of DTO_EVIDENCE_KINDS) {
+      expect(['cash', 'credit']).toContain(SETTLEMENT_MODE_BY_EVIDENCE[kind]);
+    }
+    expect(Object.keys(SETTLEMENT_MODE_BY_EVIDENCE)).toHaveLength(DTO_EVIDENCE_KINDS.length);
+  });
+});
+
 describe('the client error codes', () => {
   it('are a non-empty, duplicate-free subset of codes this package can actually raise', () => {
     expect(ORDER_CLIENT_ERROR_CODES.length).toBeGreaterThan(0);
@@ -56,5 +88,15 @@ describe('the client error codes', () => {
     // never cancelled. A client that offered a Cancel button there would ask for
     // a refusal it could not explain.
     expect(ORDER_CLIENT_ERROR_CODES).toContain('order.cancel_after_sale');
+  });
+
+  it('name the refusals a checkout client must be able to render', () => {
+    // A storefront that could not render these would strand the shopper at the
+    // one moment they can still act: an expired quote, a superseded price, a
+    // settlement the evidence does not support, and a payment surface that is
+    // not integrated.
+    for (const code of ['order.quote_expired', 'order.quote_version_stale', 'order.settlement_mode_unsupported', 'order.payment_surface_not_integrated']) {
+      expect(ORDER_CLIENT_ERROR_CODES).toContain(code);
+    }
   });
 });

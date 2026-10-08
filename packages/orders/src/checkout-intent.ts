@@ -40,12 +40,10 @@
  * nothing in this module can generate one.
  */
 import type { BasketPosition } from './cart';
+import { requireSettlementTruth, type OrderSettlementEvidence, type OrderSettlementMode } from './settlement';
 import { OrderError, assertCanonicalId } from './errors';
 import { isCanonicalCivilDate } from './instant';
 import { SALE_BOUND_ORDER_STATES, type OrderSnapshot } from './state';
-
-/** How the sale is settled at commit, as the merchant states it. Mirrors `SaleSettlementMode`. */
-export type OrderSettlementMode = 'cash' | 'credit';
 
 /** One line of the sale commit intent. Mirrors `SaleCommitLineDto` at `93084f8`. */
 export interface SaleCommitIntentLine {
@@ -149,7 +147,24 @@ const NON_NEGATIVE_MINOR = /^(0|[1-9]\d*)$/;
 export interface OrderCheckoutFacts {
   /** The id stored ON THE ORDER, not minted per attempt. */
   saleId: string;
+  /**
+   * What the merchant CLAIMS the settlement is. It is a claim, not a fact: the
+   * evidence below decides whether it may be committed under, and a mismatch is
+   * refused rather than silently corrected.
+   */
   settlementMode: OrderSettlementMode;
+  /**
+   * The fact that makes `settlementMode` TRUE (`TL-P6-R2`, §25).
+   *
+   * REQUIRED, and there is no variant meaning "pending". A shopper clicking
+   * Place Order produces an order, not money: cash on delivery not yet
+   * collected, an unpaid order and a payment still pending are all unpaid, and
+   * committing any of them as a `cash` sale would post cash the business never
+   * received. When settlement is not yet true the answer is to not build a
+   * checkout at all, which is why the absence of a `pending` value is the law
+   * rather than an omission.
+   */
+  settlementEvidence: OrderSettlementEvidence;
   customerId: string | null;
   /** The warehouse the stock leaves. Its home branch is the sale's branch, resolved by the server. */
   warehouseId: string;
@@ -179,6 +194,10 @@ export interface OrderCheckoutFacts {
  * The order must be `accepted` or `fulfilling`: before acceptance there is
  * nothing to commit, after the sale there already is one, and a terminal order
  * has none coming. `order.checkout_state_invalid` says which.
+ *
+ * And the settlement must be TRUE, not merely claimed: `requireSettlementTruth`
+ * runs before any figure is assembled, so an unpaid order cannot reach the point
+ * of producing a `cash` sale request at all (§25, `TL-P6-R2`).
  */
 export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readonly BasketPosition[], facts: OrderCheckoutFacts): SaleCommitIntent {
   if (snapshot.saleId !== null || SALE_BOUND_ORDER_STATES.includes(snapshot.state)) {
@@ -207,15 +226,18 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
     }
   }
 
-  // A credit sale with no customer is a receivable owed by nobody, and a due
-  // date with nobody to owe it is the same defect on the way in. Phase 4's
-  // `invoices_walkin_no_ar` trigger and `invoices_walkin_terms_ck` refuse both
-  // physically; refusing them here means the order never builds a request the
-  // database would have to reject.
-  if (facts.settlementMode === 'credit' && facts.customerId === null) {
-    throw new OrderError('order.checkout_customer_required', 'a credit checkout names the customer who owes it');
-  }
-  if (facts.dueDate !== null && (facts.customerId === null || facts.settlementMode !== 'credit')) {
+  // The settlement-truth gate, BEFORE any figure is assembled. It establishes
+  // the mode from the evidence rather than taking the claim on trust, and it
+  // carries the credit laws: canonical credit needs a NAMED customer and an
+  // authorizing merchant user, a guest is never AR, and no customer row is
+  // invented to satisfy the mechanics (`TL-P6-R3`, `TL-P6-R4`).
+  //
+  // Phase 4's `invoices_walkin_no_ar` trigger and `invoices_walkin_terms_ck`
+  // refuse an anonymous receivable physically; refusing it here means the order
+  // never builds a request the database would have to reject.
+  const settlement = requireSettlementTruth(facts.settlementMode, facts.settlementEvidence, facts.customerId);
+
+  if (facts.dueDate !== null && (facts.customerId === null || settlement.mode !== 'credit')) {
     throw new OrderError('order.checkout_customer_required', 'a due date requires a credit checkout with a named customer');
   }
 
@@ -253,7 +275,10 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
 
   const intent: SaleCommitIntent = {
     saleId: facts.saleId,
-    settlementMode: facts.settlementMode,
+    // The ESTABLISHED mode, not the claimed one. They are equal by now — the
+    // gate refuses them otherwise — and carrying the established value is what
+    // makes that structural instead of a convention.
+    settlementMode: settlement.mode,
     customerId: facts.customerId,
     warehouseId: facts.warehouseId,
     documentDate: facts.documentDate,

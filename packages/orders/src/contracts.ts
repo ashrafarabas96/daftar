@@ -38,6 +38,22 @@ export type OrderStateDto = 'placed' | 'accepted' | 'rejected' | 'cancelled' | '
 /** Mirrors `OrderSettlementMode`. */
 export type OrderSettlementModeDto = 'cash' | 'credit';
 
+/**
+ * Mirrors the evidence kinds of `OrderSettlementEvidence`.
+ *
+ * **There is no `pending` and no `cash_on_delivery_uncollected`, and that is the
+ * law rather than an omission** (§25). Placing an order is not proof that money
+ * changed hands, so when settlement is not yet true the answer is that the sale
+ * is not committed — not that it is committed under a mode that describes
+ * nothing.
+ *
+ * `payment_verified` is declared and REFUSED: no merchant payment provider is
+ * integrated, Phase 5's SaaS-platform provider is not the merchant's payment
+ * authority (§31), and online payment is `WAITING_FOR_INTEGRATED_SURFACE` with
+ * no simulated cash substitute.
+ */
+export type OrderSettlementEvidenceKindDto = 'cash_collected_on_handover' | 'payment_verified' | 'authorized_customer_credit';
+
 // ── The basket ────────────────────────────────────────────────────────────
 
 /**
@@ -125,8 +141,14 @@ export interface OrderPlaceDto {
   /** The sale this order will commit as, stated ONCE, here. */
   saleId: string;
   channel: OrderChannelDto;
-  settlementMode: OrderSettlementModeDto;
-  /** `null` is a walk-in, admissible only for a `cash` order. */
+  /**
+   * How the merchant or shopper INTENDS to settle. It binds nothing and settles
+   * nothing (§25): a canonical sale is committed under the mode its evidence
+   * establishes at the `record_sale` moment, and an order placed with an
+   * intention of `cash` whose cash is never collected never becomes a cash sale.
+   */
+  intendedSettlementMode: OrderSettlementModeDto;
+  /** `null` is a guest order. A guest order is never a receivable (`TL-P6-R4`). */
   customerId: string | null;
   /** The warehouse the stock will leave. */
   warehouseId: string;
@@ -161,8 +183,72 @@ export interface OrderTransitionRequestDto {
   /** RFC3339 UTC at second precision, stated by the caller. */
   occurredAt: string;
   saleId: string | null;
+  /**
+   * REQUIRED for `record_sale` and FORBIDDEN for every other kind: the fact that
+   * makes the settlement true at the moment the sale is committed
+   * (`TL-P6-R2`). `authorizedByUserId` / `collectedByUserId` is the human behind
+   * it, and `providerRef` belongs to the kind this surface refuses.
+   */
+  settlementEvidence: { kind: OrderSettlementEvidenceKindDto; actorUserId: string | null; providerRef: string | null } | null;
+  /** The quote version the shopper confirmed — REQUIRED for `record_sale` (§27). */
+  confirmedQuoteVersion: number | null;
   /** 1..500 characters after trimming for `reject` and `cancel`; a refusal nobody explained cannot be reviewed. */
   reason: string | null;
+}
+
+// ── The commercial quote snapshot (section 27) ────────────────────────────
+
+/** One priced line as the shopper saw it. Carried verbatim from the pricing authority. */
+export interface OrderQuoteLineDto {
+  productId: string;
+  variantId: string | null;
+  quantity: string;
+  unitPriceMinor: string;
+  discountMinor: string;
+  lineTotalMinor: string;
+}
+
+/**
+ * `GET /v1/orders/:orderId/quote` — the immutable snapshot of what the shopper
+ * was shown.
+ *
+ * **This is not a ledger, not AR and not settlement**, and it is served from its
+ * own relation for that reason. No posting reads it, no stock movement reads it,
+ * and it is never the canonical amount: the sale command recomputes the truth,
+ * and where the recomputation diverges beyond the merchant's policy the
+ * automatic commit is refused and the shopper is asked again.
+ *
+ * `digest` makes the immutability checkable rather than promised. A quote edited
+ * in place fails its own digest.
+ */
+export interface OrderQuoteDto {
+  quoteId: string;
+  orderId: string;
+  /** 1-based. A re-quote is a new version with a new id; nothing is edited in place. */
+  version: number;
+  currency: string;
+  items: OrderQuoteLineDto[];
+  /** The exact sum of the line totals, checked at issue. */
+  displayedTotalMinor: string;
+  issuedAt: string;
+  expiresAt: string | null;
+  /** Lowercase hex sha256 over the canonical serialization. */
+  digest: string;
+}
+
+/**
+ * What a checkout answers when the recomputed commercial amount diverges from
+ * the confirmed quote beyond policy: the commit did NOT happen, and these are
+ * the two figures the shopper must be shown before they agree again.
+ */
+export interface OrderQuoteReconfirmationRequiredDto {
+  orderId: string;
+  quoteId: string;
+  quotedTotalMinor: string;
+  recomputedTotalMinor: string;
+  differenceMinor: string;
+  /** Always `false` here — stated, so no client reads this response as a success. */
+  readonly committed: false;
 }
 
 /** One transition as the read reports it. */
@@ -192,13 +278,22 @@ export interface OrderDto {
   orderNumber: string;
   channel: OrderChannelDto;
   state: OrderStateDto;
-  settlementMode: OrderSettlementModeDto;
+  /** The INTENTION stated at placement. Settles nothing — see `OrderPlaceDto`. */
+  intendedSettlementMode: OrderSettlementModeDto;
+  /**
+   * The mode the canonical sale was actually committed under, established from
+   * evidence. `null` until the sale exists, and it may legitimately differ from
+   * the intention.
+   */
+  settledMode: OrderSettlementModeDto | null;
   customerId: string | null;
   warehouseId: string;
   documentDate: string;
   dueDate: string | null;
   /** The canonical sale, once one exists. The ONLY financial link an order carries. */
   saleId: string | null;
+  /** The current quote. An order always has one; a re-quote replaces it with a new version. */
+  quote: OrderQuoteDto | null;
   notes: string | null;
   /** `true` when an identical request returned the existing order. */
   replayed: boolean;
@@ -317,5 +412,9 @@ export const ORDER_CLIENT_ERROR_CODES: readonly string[] = Object.freeze([
   'order.cart_quantity_invalid',
   'order.checkout_customer_required',
   'order.checkout_tax_policy_absent',
+  'order.settlement_mode_unsupported',
+  'order.payment_surface_not_integrated',
+  'order.quote_expired',
+  'order.quote_version_stale',
   'order.checkout_date_invalid',
 ]);
