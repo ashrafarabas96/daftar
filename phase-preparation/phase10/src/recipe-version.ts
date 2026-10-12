@@ -13,6 +13,20 @@
  * on the Q4 grain, which is the rule the SQL authority already uses
  * (`inventory_half_even`) and the one the sale path's own pricing uses. One rule
  * everywhere, so a dish cannot be expanded two ways.
+ *
+ * ── §57, units ──
+ * A component quantity is stated on the CANONICAL inventory unit and the
+ * canonical Q4 grain, never on a restaurant unit of its own. This module owns no
+ * conversion factor and will not invent one: a component whose recipe unit is
+ * not the unit the warehouse holds is REFUSED at validation, before service, so
+ * the configuration is corrected rather than silently converted. Conversion,
+ * when it is genuinely needed, is the canonical inventory unit-conversion
+ * authority's answer and arrives here already on the stock unit. Scaling is the
+ * single HALF_EVEN rule above on the Q4 grain; STORING is checked against the
+ * component's own `unit_decimals`, because `inventory_quantity_is_representable`
+ * (`0060:258`) is what the canonical writer actually enforces, and a quantity
+ * off that grain is refused rather than rounded onto it. So no quantity is
+ * changed quietly in either direction.
  */
 
 export type RecipeRefusalCode =
@@ -22,7 +36,15 @@ export type RecipeRefusalCode =
   | 'restaurant_recipe.component_quantity_not_positive'
   | 'restaurant_recipe.component_quantity_rounds_to_zero'
   | 'restaurant_recipe.version_not_positive'
-  | 'restaurant_recipe.sold_quantity_not_positive';
+  | 'restaurant_recipe.sold_quantity_not_positive'
+  /** A component states a recipe unit that is not the stock unit; this pack owns no conversion. */
+  | 'restaurant_recipe.component_unit_not_canonical'
+  /** A component's declared precision is outside the inventory authority's 0..4. */
+  | 'restaurant_recipe.component_unit_decimals_invalid'
+  /** A component quantity carries a digit finer than the component's own unit precision. */
+  | 'restaurant_recipe.component_quantity_not_representable'
+  /** A component declares no unit at all, so nothing proves it is on the canonical grain. */
+  | 'restaurant_recipe.component_unit_absent';
 
 export class RecipeRefusal extends Error {
   constructor(
@@ -44,6 +66,21 @@ export interface RecipeComponent {
   readonly componentVariantId: string;
   /** How much of this component the recipe's whole yield consumes, in Q4. */
   readonly quantityQ4: bigint;
+  /**
+   * The unit the recipe states this quantity in, and the unit the warehouse
+   * holds the component in. Both are recorded because §57 forbids this module
+   * from assuming they agree — see `assertRecipeVersionWellFormed`.
+   */
+  readonly recipeUnit: string;
+  readonly stockUnit: string;
+  /**
+   * The component product's own `products.unit_decimals` (0..4). This is NOT
+   * decoration: `inventory_quantity_is_representable` (`0060:258`) makes the
+   * canonical stock writer REFUSE a movement whose quantity carries a digit
+   * finer than this, so it is the grain every consumption of this component
+   * must land on.
+   */
+  readonly unitDecimals: number;
 }
 
 /**
@@ -87,6 +124,43 @@ export function halfEvenDiv(numerator: bigint, denominator: bigint): bigint {
   return quotient % 2n === 0n ? quotient : quotient + 1n;
 }
 
+/** 10^(4 - unitDecimals): the Q4 step one unit of the component's own precision spans. */
+function precisionStepQ4(unitDecimals: number): bigint {
+  let step = 1n;
+  for (let i = unitDecimals; i < 4; i += 1) step *= 10n;
+  return step;
+}
+
+/** Is this Q4 quantity expressible at `unitDecimals` places, as the authority requires? */
+export function isRepresentableAtPrecision(quantityQ4: bigint, unitDecimals: number): boolean {
+  return quantityQ4 % precisionStepQ4(unitDecimals) === 0n;
+}
+
+/**
+ * The nearest quantity on the component's own grain, HALF_EVEN — offered for
+ * DIAGNOSIS, never used to produce a movement.
+ *
+ * §57 has two clauses and they do different work. "Rounding must match the
+ * canonical inventory Q4 precision/rounding contract" governs the SCALING step:
+ * dividing a recipe by its yield is HALF_EVEN on the Q4 grain, which is what
+ * `halfEvenDiv` does. "If it cannot represent the exact allowed precision,
+ * REFUSE before service. No silent quantity loss" governs the STORING step, and
+ * it is not a rounding instruction — it is a refusal instruction.
+ *
+ * The distinction matters because the two steps lose different things. Scaling
+ * HALF_EVEN to Q4 lands on the grain the recipe is authored on, so nothing is
+ * lost that was ever stated. Rounding again onto a coarser `unit_decimals` would
+ * change what the dish consumes by up to half of the warehouse's grain —
+ * 2.25 cups silently becoming 2 — and that is the silent quantity change §57
+ * forbids. So `expandRecipe` refuses instead, and this function exists only so a
+ * refusal can tell the configurator which quantity would have been representable.
+ */
+export function nearestRepresentableQuantity(quantityQ4: bigint, unitDecimals: number): bigint {
+  const step = precisionStepQ4(unitDecimals);
+  if (step === 1n) return quantityQ4;
+  return halfEvenDiv(quantityQ4, step) * step;
+}
+
 /**
  * Validate a recipe version's own shape, independently of any sale.
  *
@@ -114,6 +188,46 @@ export function assertRecipeVersionWellFormed(recipe: RecipeVersion): void {
   }
   const seen = new Set<string>();
   for (const component of recipe.components) {
+    // §57, before anything is computed: the quantity is only meaningful once the
+    // unit it is stated in is the unit the warehouse holds.
+    if (component.recipeUnit.length === 0 || component.stockUnit.length === 0) {
+      throw new RecipeRefusal(
+        'restaurant_recipe.component_unit_absent',
+        `Component ${component.componentProductId} does not state both its recipe unit and its stock unit`,
+        { componentProductId: component.componentProductId, recipeUnit: component.recipeUnit, stockUnit: component.stockUnit },
+      );
+    }
+    if (component.recipeUnit !== component.stockUnit) {
+      throw new RecipeRefusal(
+        'restaurant_recipe.component_unit_not_canonical',
+        `Component ${component.componentProductId} is stated in ${component.recipeUnit} but held in ${component.stockUnit}; the restaurant pack owns no conversion factor, so this configuration is refused before service`,
+        {
+          componentProductId: component.componentProductId,
+          recipeUnit: component.recipeUnit,
+          stockUnit: component.stockUnit,
+          resolution: 'convert through the canonical inventory unit-conversion authority and state the component on the stock unit, or correct the recipe',
+        },
+      );
+    }
+    if (!Number.isSafeInteger(component.unitDecimals) || component.unitDecimals < 0 || component.unitDecimals > 4) {
+      throw new RecipeRefusal(
+        'restaurant_recipe.component_unit_decimals_invalid',
+        `Component ${component.componentProductId} declares a precision of ${component.unitDecimals}; the inventory authority allows 0 to 4`,
+        { componentProductId: component.componentProductId, unitDecimals: component.unitDecimals },
+      );
+    }
+    if (component.quantityQ4 > 0n && !isRepresentableAtPrecision(component.quantityQ4, component.unitDecimals)) {
+      throw new RecipeRefusal(
+        'restaurant_recipe.component_quantity_not_representable',
+        `Component ${component.componentProductId} is authored at a grain finer than its own ${component.unitDecimals}-place unit precision; the canonical stock writer would refuse the movement, so the recipe is refused before service`,
+        {
+          componentProductId: component.componentProductId,
+          quantityQ4: component.quantityQ4.toString(),
+          unitDecimals: component.unitDecimals,
+          stockUnit: component.stockUnit,
+        },
+      );
+    }
     if (component.quantityQ4 <= 0n) {
       throw new RecipeRefusal(
         'restaurant_recipe.component_quantity_not_positive',
@@ -143,6 +257,15 @@ export function assertRecipeVersionWellFormed(recipe: RecipeVersion): void {
  * A component that scales to zero is REFUSED, not dropped. Consuming none of an
  * ingredient the recipe says is needed is a silent loss of stock truth, and a
  * silent loss is the one outcome this pack may not produce.
+ *
+ * Every expanded quantity must be expressible on the COMPONENT'S OWN precision
+ * grain, not merely on Q4 — see `nearestRepresentableQuantity` for why the two
+ * differ. One that is not is refused HERE, which is the whole point: the
+ * alternative is `inventory_quantity_is_representable` (`0060:258`) refusing the
+ * movement inside the canonical stock writer at sale commit, which is after the
+ * dish was cooked and served. The same recipe at a portion size that does divide
+ * cleanly is accepted, so the refusal is about this portioning and not about
+ * fractional sales as such.
  */
 export function expandRecipe(recipe: RecipeVersion, soldQuantityQ4: bigint): readonly ExpandedComponent[] {
   assertRecipeVersionWellFormed(recipe);
@@ -153,6 +276,21 @@ export function expandRecipe(recipe: RecipeVersion, soldQuantityQ4: bigint): rea
   }
   const expanded = recipe.components.map((component) => {
     const quantityQ4 = halfEvenDiv(component.quantityQ4 * soldQuantityQ4, recipe.yieldQuantityQ4);
+    if (quantityQ4 > 0n && !isRepresentableAtPrecision(quantityQ4, component.unitDecimals)) {
+      throw new RecipeRefusal(
+        'restaurant_recipe.component_quantity_not_representable',
+        `Component ${component.componentProductId} scales to a quantity finer than its own ${component.unitDecimals}-place unit precision at this portion size; rounding it would silently change what the dish consumes, so the sale is refused instead`,
+        {
+          componentProductId: component.componentProductId,
+          componentVariantId: component.componentVariantId,
+          scaledQuantityQ4: quantityQ4.toString(),
+          unitDecimals: component.unitDecimals,
+          stockUnit: component.stockUnit,
+          nearestRepresentableQ4: nearestRepresentableQuantity(quantityQ4, component.unitDecimals).toString(),
+          soldQuantityQ4: soldQuantityQ4.toString(),
+        },
+      );
+    }
     if (quantityQ4 <= 0n) {
       throw new RecipeRefusal(
         'restaurant_recipe.component_quantity_rounds_to_zero',
@@ -163,6 +301,7 @@ export function expandRecipe(recipe: RecipeVersion, soldQuantityQ4: bigint): rea
           recipeQuantityQ4: component.quantityQ4.toString(),
           soldQuantityQ4: soldQuantityQ4.toString(),
           yieldQuantityQ4: recipe.yieldQuantityQ4.toString(),
+          unitDecimals: component.unitDecimals,
         },
       );
     }

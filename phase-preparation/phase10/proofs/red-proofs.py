@@ -220,6 +220,130 @@ MUTATIONS = [
         "      if (a.componentProductId !== b.componentProductId) return a.componentProductId < b.componentProductId ? 1 : -1;",
         "expands deterministically and in a canonical order",
     ),
+    (
+        "§59 — a duplicated lineId is refused, not counted twice",
+        "src/split-bill.ts",
+        """    if (declared.has(line.lineId)) {""",
+        """    if (false) {""",
+        "refuses a duplicated lineId in middle position",
+    ),
+    (
+        "§59 — the duplicate refusal names the repeat's own position",
+        "src/split-bill.ts",
+        """  const declared = new Set<string>();
+  for (const [index, line] of lines.entries()) {""",
+        """  const declared = new Set<string>();
+  for (const [index, line] of [...lines.entries()].reverse()) {""",
+        "reports the repeat position, so the caller can see which line it sent twice",
+    ),
+    (
+        "§59 — a negative line total is refused, not aggregated",
+        "src/split-bill.ts",
+        "    if (line.lineTotalMinor < 0n) {",
+        "    if (false) {",
+        "refuses a negative lineTotalMinor rather than aggregating it",
+    ),
+    (
+        "§59 — a ZERO line total stays allowed (the refusal is not widened)",
+        "src/split-bill.ts",
+        "    if (line.lineTotalMinor < 0n) {",
+        "    if (line.lineTotalMinor <= 0n) {",
+        "still allows a zero line total, which the canonical source allows",
+    ),
+    (
+        "§56 — the recipe version binds only at the start of preparation",
+        "src/recipe-binding.ts",
+        "  return current === 'queued' && event === 'start';",
+        "  return event === 'start' || current === 'ready';",
+        "binds on queued/start and on nothing else",
+    ),
+    (
+        "§56 — a bound version is never replaced",
+        "src/recipe-binding.ts",
+        "  if (existing !== null) {",
+        "  if (false) {",
+        "refuses to replace a binding a line already carries",
+    ),
+    (
+        "§56 — a later version cannot govern a line already prepared",
+        "src/recipe-binding.ts",
+        "  if (binding.version !== usedVersion) {",
+        "  if (false) {",
+        "refuses a later version for every reader, which is the recipe-edited-mid-preparation case",
+    ),
+    (
+        "§56 — an absent binding is refused rather than defaulted",
+        "src/recipe-binding.ts",
+        "  if (binding === null) {",
+        "  if (false) {",
+        "refuses an absent binding and a wrong recipe with distinct codes",
+    ),
+    (
+        "§56 — the advisory candidate is offered only while queued",
+        "src/recipe-binding.ts",
+        "  if (state !== 'queued') return null;",
+        "  if (state === 'cancelled') return null;",
+        "offers the latest version only while queued",
+    ),
+    (
+        "§57 — a non-canonical component unit is refused, not converted",
+        "src/recipe-version.ts",
+        "    if (component.recipeUnit !== component.stockUnit) {",
+        "    if (false) {",
+        "refuses a recipe unit that differs from the stock unit instead of converting it",
+    ),
+    (
+        "§57 — a component that states no unit is refused",
+        "src/recipe-version.ts",
+        "    if (component.recipeUnit.length === 0 || component.stockUnit.length === 0) {",
+        "    if (false) {",
+        "refuses a component that states no unit at all",
+    ),
+    (
+        "§57 — the unit check runs at validation, ahead of expansion",
+        "src/recipe-version.ts",
+        """export function expandRecipe(recipe: RecipeVersion, soldQuantityQ4: bigint): readonly ExpandedComponent[] {
+  assertRecipeVersionWellFormed(recipe);""",
+        "export function expandRecipe(recipe: RecipeVersion, soldQuantityQ4: bigint): readonly ExpandedComponent[] {",
+        "refuses the mismatch at validation, before any expansion computes a quantity",
+    ),
+    (
+        "§57 — a quantity off the component's own grain is refused, not stored",
+        "src/recipe-version.ts",
+        "    if (quantityQ4 > 0n && !isRepresentableAtPrecision(quantityQ4, component.unitDecimals)) {",
+        "    if (false) {",
+        "refuses a fractional portion of a dish whose component is counted in whole units",
+    ),
+    (
+        "§57 — the grain is unit_decimals, not Q4 (a Q4-only test would pass anything)",
+        "src/recipe-version.ts",
+        "  return quantityQ4 % precisionStepQ4(unitDecimals) === 0n;",
+        "  return quantityQ4 % 1n === 0n;",
+        "reads representability the way inventory_quantity_is_representable does",
+    ),
+    (
+        "§57 — the authored recipe is checked against its own grain too",
+        "src/recipe-version.ts",
+        "    if (component.quantityQ4 > 0n && !isRepresentableAtPrecision(component.quantityQ4, component.unitDecimals)) {",
+        "    if (false) {",
+        "refuses a recipe authored finer than its component can be counted",
+    ),
+    (
+        "§57 — a precision outside the inventory authority's 0..4 is refused",
+        "src/recipe-version.ts",
+        "    if (!Number.isSafeInteger(component.unitDecimals) || component.unitDecimals < 0 || component.unitDecimals > 4) {",
+        "    if (false) {",
+        "refuses a declared precision the inventory authority does not allow",
+    ),
+    (
+        "§57 — the refusal must not silently round onto the coarser grain instead",
+        "src/recipe-version.ts",
+        """    const quantityQ4 = halfEvenDiv(component.quantityQ4 * soldQuantityQ4, recipe.yieldQuantityQ4);
+    if (quantityQ4 > 0n && !isRepresentableAtPrecision(quantityQ4, component.unitDecimals)) {""",
+        """    const quantityQ4 = nearestRepresentableQuantity(halfEvenDiv(component.quantityQ4 * soldQuantityQ4, recipe.yieldQuantityQ4), component.unitDecimals);
+    if (false) {""",
+        "refuses a fractional portion of a dish whose component is counted in whole units",
+    ),
 ]
 
 

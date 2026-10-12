@@ -174,3 +174,161 @@ describe('splitByLines — the assignment must be a partition', () => {
     expect(() => splitByLines([], new Map())).toThrowError(expect.objectContaining({ code: 'restaurant.split.empty_bill' }));
   });
 });
+
+describe('§59 — the pure split boundary refuses impossible input', () => {
+  const codeOf = (fn: () => unknown): string => {
+    try {
+      fn();
+    } catch (error) {
+      if (error instanceof SplitRefusal) return error.code;
+      throw error;
+    }
+    throw new Error('expected a SplitRefusal, none was thrown');
+  };
+
+  /**
+   * The three positions are separate cases because the defect was positional in
+   * character: `assignment` is keyed by lineId, so it carried ONE key however
+   * many times the line appeared, and the partition check saw nothing wrong
+   * wherever the repeat sat. Only the accumulation loop doubled the money.
+   */
+  it('refuses a duplicated lineId in first position', () => {
+    const lines = [
+      { lineId: 'A', lineTotalMinor: 1000n },
+      { lineId: 'A', lineTotalMinor: 1000n },
+      { lineId: 'B', lineTotalMinor: 500n },
+      { lineId: 'C', lineTotalMinor: 300n },
+    ];
+    const assignment = new Map([
+      ['A', 0],
+      ['B', 0],
+      ['C', 1],
+    ]);
+    expect(codeOf(() => splitByLines(lines, assignment))).toBe('restaurant.split.duplicate_line');
+  });
+
+  it('refuses a duplicated lineId in middle position', () => {
+    const lines = [
+      { lineId: 'A', lineTotalMinor: 1000n },
+      { lineId: 'B', lineTotalMinor: 500n },
+      { lineId: 'B', lineTotalMinor: 500n },
+      { lineId: 'C', lineTotalMinor: 300n },
+    ];
+    const assignment = new Map([
+      ['A', 0],
+      ['B', 0],
+      ['C', 1],
+    ]);
+    expect(codeOf(() => splitByLines(lines, assignment))).toBe('restaurant.split.duplicate_line');
+  });
+
+  it('refuses a duplicated lineId in last position', () => {
+    const lines = [
+      { lineId: 'A', lineTotalMinor: 1000n },
+      { lineId: 'B', lineTotalMinor: 500n },
+      { lineId: 'C', lineTotalMinor: 300n },
+      { lineId: 'C', lineTotalMinor: 300n },
+    ];
+    const assignment = new Map([
+      ['A', 0],
+      ['B', 0],
+      ['C', 1],
+    ]);
+    expect(codeOf(() => splitByLines(lines, assignment))).toBe('restaurant.split.duplicate_line');
+  });
+
+  it('reports the repeat position, so the caller can see which line it sent twice', () => {
+    try {
+      splitByLines(
+        [
+          { lineId: 'A', lineTotalMinor: 1000n },
+          { lineId: 'B', lineTotalMinor: 500n },
+          { lineId: 'A', lineTotalMinor: 1000n },
+        ],
+        new Map([
+          ['A', 0],
+          ['B', 1],
+        ]),
+      );
+      throw new Error('expected a refusal');
+    } catch (error) {
+      expect(error).toBeInstanceOf(SplitRefusal);
+      expect((error as SplitRefusal).details).toEqual({ lineId: 'A', index: 2 });
+    }
+  });
+
+  it('refuses before any money is accumulated, so no refusal can report a doubled subtotal', () => {
+    // A duplicate alongside a NEGATIVE line: the duplicate is refused, which
+    // proves the uniqueness pass runs ahead of the per-line money checks and
+    // ahead of the accumulation they guard.
+    const code = codeOf(() =>
+      splitByLines(
+        [
+          { lineId: 'A', lineTotalMinor: 1000n },
+          { lineId: 'A', lineTotalMinor: -5n },
+        ],
+        new Map([['A', 0]]),
+      ),
+    );
+    expect(code).toBe('restaurant.split.duplicate_line');
+  });
+
+  it('refuses a negative lineTotalMinor rather than aggregating it', () => {
+    expect(codeOf(() => splitByLines([{ lineId: 'A', lineTotalMinor: -1n }], new Map([['A', 0]])))).toBe('restaurant.split.line_total_negative');
+    expect(
+      codeOf(() =>
+        splitByLines(
+          [
+            { lineId: 'A', lineTotalMinor: 1000n },
+            { lineId: 'B', lineTotalMinor: -1000n },
+          ],
+          new Map([
+            ['A', 0],
+            ['B', 1],
+          ]),
+        ),
+      ),
+    ).toBe('restaurant.split.line_total_negative');
+  });
+
+  it('still allows a zero line total, which the canonical source allows', () => {
+    // A comped dish and an unpriced modifier are both real zero-priced lines.
+    // Refusing zero would refuse an ordinary restaurant bill.
+    const bills = splitByLines(
+      [
+        { lineId: 'A', lineTotalMinor: 0n },
+        { lineId: 'B', lineTotalMinor: 1500n },
+      ],
+      new Map([
+        ['A', 0],
+        ['B', 0],
+      ]),
+    );
+    expect(bills).toHaveLength(1);
+    expect(at(bills, 0).subtotalMinor).toBe(1500n);
+    expect(at(bills, 0).lineIds).toHaveLength(2);
+  });
+
+  it('conserves the bill exactly once the boundary holds', () => {
+    const lines = [
+      { lineId: 'A', lineTotalMinor: 1000n },
+      { lineId: 'B', lineTotalMinor: 500n },
+      { lineId: 'C', lineTotalMinor: 333n },
+      { lineId: 'D', lineTotalMinor: 0n },
+    ];
+    const billTotal = lines.reduce((acc, l) => acc + l.lineTotalMinor, 0n);
+    const bills = splitByLines(
+      lines,
+      new Map([
+        ['A', 0],
+        ['B', 1],
+        ['C', 1],
+        ['D', 2],
+      ]),
+    );
+    const sum = bills.reduce((acc, b) => acc + b.subtotalMinor, 0n);
+    expect(sum).toBe(billTotal);
+    expect(sum).toBe(1833n);
+    expect(bills.flatMap((b) => [...b.lineIds])).toHaveLength(lines.length);
+  });
+});

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { at } from './at';
-import { assertRecipeVersionWellFormed, expandRecipe, halfEvenDiv, type RecipeVersion } from '../src/recipe-version';
+import {
+  assertRecipeVersionWellFormed,
+  expandRecipe,
+  halfEvenDiv,
+  isRepresentableAtPrecision,
+  nearestRepresentableQuantity,
+  type RecipeVersion,
+} from '../src/recipe-version';
 import {
   STOCK_EFFECT_MODES,
   type ActualMovement,
@@ -20,9 +27,9 @@ const CAPPUCCINO: RecipeVersion = {
   variantId: null,
   yieldQuantityQ4: Q(1),
   components: [
-    { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.018) },
-    { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(0.15) },
-    { componentProductId: 'cup', componentVariantId: 'cup-unit', quantityQ4: Q(1) },
+    { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.018), recipeUnit: 'kg', stockUnit: 'kg', unitDecimals: 3 },
+    { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(0.15), recipeUnit: 'l', stockUnit: 'l', unitDecimals: 3 },
+    { componentProductId: 'cup', componentVariantId: 'cup-unit', quantityQ4: Q(1), recipeUnit: 'unit', stockUnit: 'unit', unitDecimals: 0 },
   ],
 };
 
@@ -101,10 +108,51 @@ describe('§49 — a sale binds an immutable recipe version', () => {
   });
 
   it('a yield above one portion divides the components down', () => {
-    const batch: RecipeVersion = { ...CAPPUCCINO, recipeId: 'r-batch', yieldQuantityQ4: Q(10) };
+    // A ten-portion batch, and the cup scaled to 10 so that one portion still
+    // takes exactly one cup. The earlier shape of this fixture kept the cup at 1
+    // and is now REFUSED, correctly: a cup is counted in whole pieces
+    // (`unitDecimals: 0`), so a tenth of a cup is a quantity the canonical stock
+    // writer would reject. A batch recipe states its components for the whole
+    // batch, which is what makes every portion of it representable.
+    const batch: RecipeVersion = {
+      ...CAPPUCCINO,
+      recipeId: 'r-batch',
+      yieldQuantityQ4: Q(10),
+      components: [
+        { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.18), recipeUnit: 'kg', stockUnit: 'kg', unitDecimals: 3 },
+        { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(1.5), recipeUnit: 'l', stockUnit: 'l', unitDecimals: 3 },
+        { componentProductId: 'cup', componentVariantId: 'cup-unit', quantityQ4: Q(10), recipeUnit: 'unit', stockUnit: 'unit', unitDecimals: 0 },
+      ],
+    };
     const perOne = expandRecipe(batch, Q(1));
     expect(at(perOne, 2).componentProductId).toBe('milk');
-    expect(at(perOne, 2).quantityQ4).toBe(Q(0.015));
+    expect(at(perOne, 2).quantityQ4).toBe(Q(0.15));
+    expect(at(perOne, 1).componentProductId).toBe('cup');
+    expect(at(perOne, 1).quantityQ4).toBe(Q(1));
+  });
+
+  it('refuses a batch recipe whose per-portion component is finer than that component can be counted', () => {
+    // The fixture above, before it was corrected: one cup across ten portions.
+    // This is the defect the §57 precision grain exists to catch, and catching
+    // it HERE is the point — the alternative is the canonical stock writer
+    // refusing the movement at sale commit, after the coffee was served.
+    const badBatch: RecipeVersion = {
+      ...CAPPUCCINO,
+      recipeId: 'r-batch-bad',
+      yieldQuantityQ4: Q(10),
+      components: [{ componentProductId: 'cup', componentVariantId: 'cup-unit', quantityQ4: Q(1), recipeUnit: 'unit', stockUnit: 'unit', unitDecimals: 0 }],
+    };
+    try {
+      expandRecipe(badBatch, Q(1));
+      throw new Error('expected a refusal');
+    } catch (error) {
+      expect((error as { code?: string }).code).toBe('restaurant_recipe.component_quantity_not_representable');
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      // The refusal reports the scaled figure, so the configurator can see that
+      // the quantity existed and the grain is what it cannot express.
+      expect(details.scaledQuantityQ4).toBe('1000'); // 0.1 of a cup
+      expect(details.unitDecimals).toBe(0);
+    }
   });
 
   it('refuses a component that scales to zero instead of consuming none of it', () => {
@@ -112,7 +160,7 @@ describe('§49 — a sale binds an immutable recipe version', () => {
       ...CAPPUCCINO,
       recipeId: 'r-saffron',
       yieldQuantityQ4: Q(1000),
-      components: [{ componentProductId: 'saffron', componentVariantId: 'saffron-g', quantityQ4: 1n }],
+      components: [{ componentProductId: 'saffron', componentVariantId: 'saffron-g', quantityQ4: 1n, recipeUnit: 'g', stockUnit: 'g', unitDecimals: 4 }],
     };
     try {
       expandRecipe(saffron, Q(1));
@@ -136,13 +184,16 @@ describe('§49 — a sale binds an immutable recipe version', () => {
       assertRecipeVersionWellFormed({
         ...CAPPUCCINO,
         components: [
-          { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(1) },
-          { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(2) },
+          { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(1), recipeUnit: 'l', stockUnit: 'l', unitDecimals: 3 },
+          { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(2), recipeUnit: 'l', stockUnit: 'l', unitDecimals: 3 },
         ],
       }),
     ).toThrowError(expect.objectContaining({ code: 'restaurant_recipe.component_duplicate' }));
     expect(() =>
-      assertRecipeVersionWellFormed({ ...CAPPUCCINO, components: [{ componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: 0n }] }),
+      assertRecipeVersionWellFormed({
+        ...CAPPUCCINO,
+        components: [{ componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: 0n, recipeUnit: 'l', stockUnit: 'l', unitDecimals: 3 }],
+      }),
     ).toThrowError(expect.objectContaining({ code: 'restaurant_recipe.component_quantity_not_positive' }));
   });
 
@@ -336,5 +387,192 @@ describe('DIRECT — a stock-tracked line consumes itself (§46)', () => {
         { componentProductId: 'bottled-water', componentVariantId: 'water-500', quantityQ4: Q(2) },
       ]),
     ).toThrowError(expect.objectContaining({ code: 'restaurant_stock_effect.component_quantity_mismatch' }));
+  });
+});
+
+describe('§57 — a component quantity is meaningless without its unit', () => {
+  const codeOf = (fn: () => unknown): string => {
+    try {
+      fn();
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code === 'string') return code;
+      throw error;
+    }
+    throw new Error('expected a refusal, none was thrown');
+  };
+
+  it('accepts a component stated on the unit the warehouse holds', () => {
+    expect(() => assertRecipeVersionWellFormed(CAPPUCCINO)).not.toThrow();
+  });
+
+  it('refuses a recipe unit that differs from the stock unit instead of converting it', () => {
+    // 150 millilitres of milk held by the litre. The honest factor is 1000, and
+    // this module may not know it: §57 forbids inventing a conversion here.
+    const mismatched: RecipeVersion = {
+      ...CAPPUCCINO,
+      components: [{ componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(150), recipeUnit: 'ml', stockUnit: 'l', unitDecimals: 3 }],
+    };
+    expect(codeOf(() => assertRecipeVersionWellFormed(mismatched))).toBe('restaurant_recipe.component_unit_not_canonical');
+  });
+
+  it('refuses the mismatch at validation, before any expansion computes a quantity', () => {
+    const mismatched: RecipeVersion = {
+      ...CAPPUCCINO,
+      components: [{ componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(150), recipeUnit: 'ml', stockUnit: 'l', unitDecimals: 3 }],
+    };
+    // expandRecipe validates first, so the refusal arrives before a movement
+    // quantity exists at all — "refuse the configuration before service".
+    expect(codeOf(() => expandRecipe(mismatched, Q(1)))).toBe('restaurant_recipe.component_unit_not_canonical');
+  });
+
+  it('names the conversion authority rather than a factor', () => {
+    const mismatched: RecipeVersion = {
+      ...CAPPUCCINO,
+      components: [{ componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(150), recipeUnit: 'ml', stockUnit: 'l', unitDecimals: 3 }],
+    };
+    try {
+      assertRecipeVersionWellFormed(mismatched);
+      throw new Error('expected a refusal');
+    } catch (error) {
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      expect(details.recipeUnit).toBe('ml');
+      expect(details.stockUnit).toBe('l');
+      expect(String(details.resolution)).toContain('unit-conversion authority');
+      // No factor anywhere in the refusal: this module states no conversion.
+      expect(Object.values(details).some((v) => typeof v === 'number')).toBe(false);
+    }
+  });
+
+  it('refuses a component that states no unit at all', () => {
+    for (const over of [
+      { recipeUnit: '', stockUnit: 'l' },
+      { recipeUnit: 'l', stockUnit: '' },
+      { recipeUnit: '', stockUnit: '' },
+    ]) {
+      const unstated: RecipeVersion = {
+        ...CAPPUCCINO,
+        components: [{ componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(1), unitDecimals: 3, ...over }],
+      };
+      expect(codeOf(() => assertRecipeVersionWellFormed(unstated))).toBe('restaurant_recipe.component_unit_absent');
+    }
+  });
+
+  it('keeps rounding on the canonical Q4 grain, which is the halfEvenDiv rule and nothing else', () => {
+    // 1/3 of a unit at Q4: 3333.33… → 3333 (HALF_EVEN, below half).
+    expect(halfEvenDiv(Q(1), 3n)).toBe(3333n);
+    // Exactly half rounds to the even quotient both ways, so no bias accumulates.
+    expect(halfEvenDiv(5n, 2n)).toBe(2n);
+    expect(halfEvenDiv(7n, 2n)).toBe(4n);
+  });
+});
+
+describe("§57 — the grain is the component's own unit_decimals, not Q4", () => {
+  const codeOf = (fn: () => unknown): string => {
+    try {
+      fn();
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code === 'string') return code;
+      throw error;
+    }
+    throw new Error('expected a refusal, none was thrown');
+  };
+
+  it('reads representability the way inventory_quantity_is_representable does', () => {
+    // 0.1500 at 3 places: representable. 0.1505 at 3 places: not.
+    expect(isRepresentableAtPrecision(Q(0.15), 3)).toBe(true);
+    expect(isRepresentableAtPrecision(1505n, 3)).toBe(false);
+    expect(isRepresentableAtPrecision(Q(1), 0)).toBe(true);
+    expect(isRepresentableAtPrecision(Q(0.5), 0)).toBe(false);
+    // At 4 places every Q4 integer qualifies, which is why Q4 alone cannot be the test.
+    expect(isRepresentableAtPrecision(1505n, 4)).toBe(true);
+  });
+
+  it('names the nearest representable quantity for a refusal to report, without using it', () => {
+    expect(nearestRepresentableQuantity(1505n, 3)).toBe(1500n); // .1505 -> .150 (half, even)
+    expect(nearestRepresentableQuantity(1515n, 3)).toBe(1520n); // .1515 -> .152 (half, even)
+    expect(nearestRepresentableQuantity(1506n, 3)).toBe(1510n);
+    expect(nearestRepresentableQuantity(1505n, 4)).toBe(1505n); // a 4-place component is already on grain
+  });
+
+  it('refuses a recipe authored finer than its component can be counted', () => {
+    const tooFine: RecipeVersion = {
+      ...CAPPUCCINO,
+      components: [{ componentProductId: 'cup', componentVariantId: 'cup-unit', quantityQ4: Q(0.5), recipeUnit: 'unit', stockUnit: 'unit', unitDecimals: 0 }],
+    };
+    expect(codeOf(() => assertRecipeVersionWellFormed(tooFine))).toBe('restaurant_recipe.component_quantity_not_representable');
+  });
+
+  it('refuses a declared precision the inventory authority does not allow', () => {
+    for (const unitDecimals of [-1, 5, 1.5]) {
+      const bad: RecipeVersion = {
+        ...CAPPUCCINO,
+        components: [{ componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(1), recipeUnit: 'l', stockUnit: 'l', unitDecimals }],
+      };
+      expect(codeOf(() => assertRecipeVersionWellFormed(bad))).toBe('restaurant_recipe.component_unit_decimals_invalid');
+    }
+  });
+
+  it('never emits an expanded quantity the canonical writer would refuse', () => {
+    // The property that matters: whatever the sold quantity, every component of
+    // every accepted recipe lands on its own grain. A quantity off the grain is
+    // what `0060:258` rejects at commit, i.e. after service.
+    for (const soldUnits of [1, 2, 3, 7, 11, 13, 100]) {
+      const expanded = expandRecipe(CAPPUCCINO, Q(soldUnits));
+      for (const component of expanded) {
+        const declared = CAPPUCCINO.components.find((c) => c.componentProductId === component.componentProductId);
+        if (declared === undefined) throw new Error(`expanded an undeclared component ${component.componentProductId}`);
+        expect(isRepresentableAtPrecision(component.quantityQ4, declared.unitDecimals)).toBe(true);
+      }
+    }
+  });
+
+  it('refuses a fractional portion of a dish whose component is counted in whole units', () => {
+    // Half a cappuccino takes half a cup, and a cup is a whole piece. Rounding
+    // 2.25 cups down to 2, or 1.5 up to 2, would change what the dish consumed
+    // without saying so, which is the silent quantity change §57 forbids. The
+    // grain belongs to the warehouse, and this pack does not get to round a cup.
+    expect(codeOf(() => expandRecipe(CAPPUCCINO, Q(1.5)))).toBe('restaurant_recipe.component_quantity_not_representable');
+    expect(codeOf(() => expandRecipe(CAPPUCCINO, Q(2.25)))).toBe('restaurant_recipe.component_quantity_not_representable');
+    // Below half a cup there is not even a nearest nonzero answer, and that case
+    // keeps its own older code so the two defects stay distinguishable.
+    expect(codeOf(() => expandRecipe(CAPPUCCINO, Q(0.25)))).toBe('restaurant_recipe.component_quantity_not_representable');
+  });
+
+  it('reports the nearest representable quantity so the portioning can be corrected', () => {
+    try {
+      expandRecipe(CAPPUCCINO, Q(2.25));
+      throw new Error('expected a refusal');
+    } catch (error) {
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      // Beans are checked first and already fail: 0.018 kg x 2.25 = 0.0405 kg,
+      // and a kilogram is held to three places, so the fourth digit has nowhere
+      // to go. The cup would fail too; the first component to fail is enough.
+      expect(details.componentProductId).toBe('beans');
+      expect(details.scaledQuantityQ4).toBe('405'); // 0.0405 kg
+      expect(details.nearestRepresentableQ4).toBe('400'); // 0.040 kg — named, not used
+      expect(details.unitDecimals).toBe(3);
+    }
+  });
+
+  it('allows a fractional portion once every component can express it', () => {
+    // The same fractional sale against litre/kilogram components alone, both at
+    // three places, is fine — so the refusal above is about the grain and not
+    // about fractional sales as such.
+    const drinkOnly: RecipeVersion = {
+      ...CAPPUCCINO,
+      recipeId: 'r-cap-no-cup',
+      components: [
+        { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.018), recipeUnit: 'kg', stockUnit: 'kg', unitDecimals: 3 },
+        { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(0.15), recipeUnit: 'l', stockUnit: 'l', unitDecimals: 3 },
+      ],
+    };
+    const half = expandRecipe(drinkOnly, Q(0.5));
+    expect(at(half, 1).componentProductId).toBe('milk');
+    expect(at(half, 1).quantityQ4).toBe(Q(0.075));
+    for (const component of half) {
+      expect(isRepresentableAtPrecision(component.quantityQ4, 3)).toBe(true);
+    }
   });
 });

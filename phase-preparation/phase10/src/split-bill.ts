@@ -23,7 +23,11 @@ export type SplitRefusalCode =
   /** A by-line split that left a line unassigned or assigned it twice. */
   | 'restaurant.split.line_assignment_not_a_partition'
   /** A by-line split that produced an empty bill. */
-  | 'restaurant.split.empty_bill';
+  | 'restaurant.split.empty_bill'
+  /** The same `lineId` appears twice in the input lines. */
+  | 'restaurant.split.duplicate_line'
+  /** A line total is negative; the pure boundary refuses an impossible financial input. */
+  | 'restaurant.split.line_total_negative';
 
 export class SplitRefusal extends Error {
   constructor(
@@ -125,12 +129,48 @@ export interface LineSplitBill {
  * lines: every line assigned exactly once, no unknown line, no empty bill.
  * Anything else is refused — an unassigned line is a line nobody pays for, and
  * that is how a restaurant loses money quietly.
+ *
+ * ── Two boundary refusals this function used NOT to make (directive §59) ──
+ * `assignment` is keyed by lineId, so it holds ONE key per line however many
+ * times that line appears in `lines`. The partition check therefore passed for
+ * a duplicated line while the accumulation loop added its money twice: a
+ * duplicated 1000 produced split subtotals summing to 2500 against a real bill
+ * of 1500. The reverse check could not see it, because the duplicate IS
+ * assigned. Uniqueness of `lineId` is now established over `lines` BEFORE any
+ * money is accumulated, so the overstatement cannot be formed at all.
+ *
+ * A negative `lineTotalMinor` was likewise aggregated. The sale authority
+ * upstream should never produce one, but this is a pure boundary and an
+ * impossible financial input is rejected here rather than carried into a
+ * subtotal. Zero is allowed: the canonical source allows a zero-priced line
+ * (a comped item, an unpriced modifier), and refusing it would refuse a real
+ * restaurant bill.
  */
 export function splitByLines(lines: readonly SplittableLine[], assignment: ReadonlyMap<string, number>): readonly LineSplitBill[] {
   const seen = new Set<string>();
   const buckets = new Map<number, { lineIds: string[]; subtotalMinor: bigint }>();
 
+  // Uniqueness FIRST, before a single minor unit is accumulated. Ordering is the
+  // whole point: a duplicate detected after the fact would already have doubled
+  // a subtotal, and a refusal that reports a corrupted figure is worse than none.
+  const declared = new Set<string>();
+  for (const [index, line] of lines.entries()) {
+    if (declared.has(line.lineId)) {
+      throw new SplitRefusal('restaurant.split.duplicate_line', `Line ${line.lineId} appears more than once in the bill's lines (at index ${index})`, {
+        lineId: line.lineId,
+        index,
+      });
+    }
+    declared.add(line.lineId);
+  }
+
   for (const line of lines) {
+    if (line.lineTotalMinor < 0n) {
+      throw new SplitRefusal('restaurant.split.line_total_negative', `Line ${line.lineId} has a negative total: ${line.lineTotalMinor}`, {
+        lineId: line.lineId,
+        lineTotalMinor: line.lineTotalMinor.toString(),
+      });
+    }
     const billIndex = assignment.get(line.lineId);
     if (billIndex === undefined) {
       throw new SplitRefusal('restaurant.split.line_assignment_not_a_partition', `Line ${line.lineId} is on no bill`, {
