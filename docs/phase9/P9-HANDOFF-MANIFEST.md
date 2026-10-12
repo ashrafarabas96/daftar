@@ -25,7 +25,7 @@ first (PART 4), a migration number must be allocated by the one Migration Owner
 ## Exact prep SHA
 
 ```
-69642237295d508d67149b3f2315143206849956
+c4e727ea76425046eda5b34959d2c219fe83c00f
 ```
 
 Branch: `claude/project-thread-4i752q`
@@ -46,7 +46,9 @@ git diff --stat <subject> <head>
 ```
 
 No test file, no DDL and no other document differs between them, so a result measured at
-the subject is a result about the head's code. Per PART 16 that is stated as a verifiable
+the subject is a result about the head's code. The stored run log names its own subject SHA
+in its header, and that subject is the commit this manifest is written against — so the
+reconciliation is readable from the artifact itself and not only from here. Per PART 16 that is stated as a verifiable
 relation, not as "the same commit".
 
 ## Artifacts
@@ -58,12 +60,12 @@ not live in Git.
 
 | artifact | location | committed | SHA256 |
 |---|---|---|---|
-| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `53c14763e8025b4dd1dd5c13aa5cadfbf005bae5881a6fa0cf89c54a71c6fbfa` |
-| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `1f4f850fbbda7c4bd38b930c70116b19a2f5d75629259b320dc71c11be0b9157` |
+| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `39e880d0ffc3f3a100f1d5c0b3bd05b08cc54256042db0aba5aa015b1b97b277` |
+| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `a5ff4671a4942302ebf0752fa888a313ef886367277cb83e1d8d371af90ec77b` |
 | Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
-| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `ce4ca43c8b8df8cca1a10fd63cb983d7402d2d6edee13191204d89c11ff98647` |
+| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `c48992cb96eff7b6baba64f7ea28b3262d9c3efe109b6cc86ae27f9a63c4a01c` |
 | Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
-| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `14ac1fa02d5b97ef0eda04260d654da36462e56d4d4de01fe36730e1d896d488` |
+| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `8aae2daac251d4c558a5c13a6e35e0af38ae60d2623054c9a6aa9107b944fe9d` |
 | This manifest | `docs/phase9/P9-HANDOFF-MANIFEST.md` | yes (next commit) | — |
 
 No artifact is referenced by any of the above that does not exist. There are no
