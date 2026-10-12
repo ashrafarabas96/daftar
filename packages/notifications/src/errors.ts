@@ -51,6 +51,24 @@ export type NotificationRefusalCode =
   // Provider payload limits (Mission §15: body limits)
   | 'notification.body_too_long'
   | 'notification.parameter_invalid'
+  /**
+   * Mission V2 §15: post-render content that is EMPTY. A message with nothing
+   * in it is not a cheaper message, it is a message the recipient cannot act
+   * on while the ledger records a delivery. Refused rather than sent.
+   */
+  | 'notification.content_empty'
+  /**
+   * Mission V2 §15: post-render content carrying control characters. In a
+   * subject they are a header-injection vector; in a body they are an upstream
+   * rendering defect reaching a customer. Refused, never stripped — stripping
+   * would change the text of a message about money without saying so.
+   */
+  | 'notification.content_invalid'
+  /**
+   * Mission V2 §15: "ChannelLimits must come from approved provider policy".
+   * A limit whose origin is unstated cannot be approved, so it is not usable.
+   */
+  | 'notification.limits_policy_unstated'
   // Provider edge
   | 'notification.provider_not_configured'
   | 'notification.provider_template_required'

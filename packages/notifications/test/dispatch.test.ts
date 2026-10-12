@@ -111,7 +111,11 @@ describe('dispatch — obligations', () => {
   it('a hydrator that repeats a recipient still sends once', async () => {
     const provider = new FakeNotificationProvider({ channels: ['whatsapp', 'email', 'inapp'] });
     const outcomes = await dispatchIntent(intentOf(), ports({ provider, hydrator: hydratorOf([obligation(), obligation()]) }));
-    expect(outcomes).toHaveLength(1);
+    // Mission V2 §15: the duplicate is still only sent ONCE, and the drop is
+    // now a named outcome rather than a silent `continue` — two obligations in,
+    // two outcomes out, one message.
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.map((o) => o.result)).toEqual(['delivered', 'already_owed']);
     expect(provider.deliveryCount()).toBe(1);
   });
 

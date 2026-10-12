@@ -420,7 +420,16 @@ export async function dispatchIntent(intent: DispatchIntent, ports: DispatchPort
     const key = `${one.recipient.ref.kind}:${recipientId(one.recipient.ref)}`;
     // A hydrator that returns the same recipient twice would otherwise send
     // twice: the obligation key is identical, so the second is already owed.
-    if (seen.has(key)) continue;
+    //
+    // Mission V2 §15 — and the header of this file — say every obligation ends
+    // in a NAMED outcome. This path used to `continue` silently, so a hydrator
+    // that duplicated a recipient produced one fewer outcome than obligations
+    // with nothing saying why: exactly the "vanished without a reason" case the
+    // law forbids, in the one place the law itself did not read.
+    if (seen.has(key)) {
+      outcomes.push({ result: 'already_owed', kind: intent.kind, obligation: obligationKey(intent.origin, intent.kind, one.recipient.ref) });
+      continue;
+    }
     seen.add(key);
     outcomes.push(...(await dispatchOne(intent, one, ports)));
   }

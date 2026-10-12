@@ -82,6 +82,25 @@ export function sourceViolations(files: Record<string, string> = readSource()): 
     if (/\brollback\b|\bbeginTransaction\b|\.rollback\s*\(|\.commit\s*\(|\bsavepoint\b/i.test(body)) {
       found.push({ law: 'L-M15-1 the engine cannot cancel a sale', file, detail: 'transaction control reached a pure domain module' });
     }
+
+    // L-M15V2-1 (Mission V2 §15): "ChannelLimits must come from approved
+    // provider policy". The shipped table is provider documentation read from
+    // this container, with no live provider call and no owner confirmation, so
+    // every one of its entries must keep saying UNAPPROVED. The day the owner
+    // rules, that is an edit to this line and a visible diff — not a figure
+    // that quietly became policy because it had been there a while.
+    if (file === 'limits.ts') {
+      const entries = [...body.matchAll(/policySource:\s*([A-Za-z0-9_]+|'[^']*')/g)].map((m) => m[1] ?? '');
+      // `policySource: string` is the INTERFACE, not an entry — a law that
+      // counted it would be satisfied by a table with no entries at all.
+      const shipped = entries.filter((e) => !e.startsWith("'") && e !== 'string');
+      if (shipped.length < 4) {
+        found.push({ law: 'L-M15V2-1 shipped limits declare their policy source', file, detail: `${shipped.length} of 4 channels name a source` });
+      }
+      if (!/UNAPPROVED/.test(body)) {
+        found.push({ law: 'L-M15V2-1 shipped limits declare their policy source', file, detail: 'the shipped default no longer declares itself unapproved' });
+      }
+    }
   }
   return found;
 }
@@ -92,6 +111,7 @@ const LAWS = [
   'L-P42-3 an adapter declares its idempotency semantics',
   'L-P48-1 no caller-supplied signatureVerified',
   'L-M15-1 the engine cannot cancel a sale',
+  'L-M15V2-1 shipped limits declare their policy source',
 ] as const;
 
 describe('PART 42/48 — laws read over the live source', () => {
@@ -171,6 +191,23 @@ describe('PART 42/48 — laws read over the live source', () => {
     expect(sourceViolations(files)).toEqual([]);
   });
 
+  it('L-M15V2-1 reds when the shipped limits stop declaring themselves unapproved', () => {
+    const files = readSource();
+    const planted = {
+      ...files,
+      'limits.ts': fileOf(files, 'limits.ts').replace(/UNAPPROVED/g, 'APPROVED-BY-NOBODY'),
+    };
+    expect(code(fileOf(planted, 'limits.ts')), 'the mutation must land').not.toMatch(/UNAPPROVED/);
+    expect(sourceViolations(planted).map((v) => v.law)).toContain('L-M15V2-1 shipped limits declare their policy source');
+  });
+
+  it('L-M15V2-1 also reds when the shipped table carries no policy source at all', () => {
+    const files = readSource();
+    const planted = { ...files, 'limits.ts': fileOf(files, 'limits.ts').replaceAll('policySource: UNAPPROVED,', '') };
+    expect(code(fileOf(planted, 'limits.ts')), 'the mutation must land').not.toMatch(/policySource: UNAPPROVED,/);
+    expect(sourceViolations(planted).map((v) => v.law)).toContain('L-M15V2-1 shipped limits declare their policy source');
+  });
+
   it('every declared law has a red proof above', () => {
     // The law that reds if a law is added without one. The names below are the
     // ones each red proof asserts on; a new law with no proof fails here.
@@ -180,6 +217,7 @@ describe('PART 42/48 — laws read over the live source', () => {
       'L-P42-3 an adapter declares its idempotency semantics',
       'L-P48-1 no caller-supplied signatureVerified',
       'L-M15-1 the engine cannot cancel a sale',
+      'L-M15V2-1 shipped limits declare their policy source',
     ]);
     for (const law of LAWS) expect(proved.has(law), law).toBe(true);
     expect(proved.size).toBe(LAWS.length);
