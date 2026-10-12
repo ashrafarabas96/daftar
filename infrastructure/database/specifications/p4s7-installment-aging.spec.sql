@@ -1268,9 +1268,39 @@ BEGIN
                     WHERE p.business_id = v_business AND p.invoice_id = v_invoice
                       AND p.status = 'active')
       INTO v_state;
-    IF v_state IS DISTINCT FROM v_value THEN
-      RAISE EXCEPTION 'installment.plan_fact_blind: the status transition this transaction wrote on invoice %/% determines has_active_installment_plan = %, and a recomputation over installment_plans then found %. A single statement moving active between two plans of one invoice is refused earlier, as installment.plan_active_conflict, so the remaining causes are that this routine''s read of installment_plans is blinded or that installment_plans_one_active_per_invoice_uq is gone — either way the recomputation is not evidence about the plan and writing from it would commit a fact that can never heal',
-        v_business, v_invoice, v_value, v_state USING ERRCODE = 'P0001';
+    -- AND THE TWO DIRECTIONS OF THE DISAGREEMENT HAVE DIFFERENT CAUSES AND
+    -- THEREFORE DIFFERENT NAMES (`TL-P4-COORD-R46`, F-4). This used to be one
+    -- refusal under one name with one message, and that message was a FALSE
+    -- DIAGNOSIS in one of the two directions. The asymmetry is forced and is
+    -- the whole of the repair:
+    --
+    --   A BLINDED `EXISTS` CAN ONLY READ `false`. So
+    --   «derived `false`, recomputed `true`» is NEVER caused by blindness. The
+    --   only states that produce it are that ANOTHER plan of this invoice is
+    --   genuinely active -- a single statement that moved `active` between two
+    --   plans of one invoice, or two active plans coexisting because
+    --   `installment_plans_one_active_per_invoice_uq` is gone -- and in both of
+    --   them the sentence «another plan of this invoice is active» is TRUE.
+    --   That is `installment.plan_active_conflict`, the same name
+    --   `installment_plan_active_exclusive()` raises before the row is
+    --   written, and naming it the same thing here is what makes the behaviour
+    --   DETERMINISTIC IN KIND: MEASURED, with the cancelled row first in the
+    --   heap the BEFORE trigger answers, with the ACTIVE row first this does,
+    --   and the writer sees ONE name in both orders instead of
+    --   `installment.plan_fact_blind` in one and `23505` in the other.
+    --
+    --   «derived `true`, recomputed `false`» is the other direction and it IS
+    --   the blind one: this routine was handed a row that asserts an active
+    --   plan and its own read cannot find one. A dropped index cannot produce
+    --   it. That keeps `installment.plan_fact_blind`, and its message is now
+    --   true of every state that reaches it.
+    IF v_state AND NOT v_value THEN
+      RAISE EXCEPTION 'installment.plan_active_conflict: the status transition this transaction wrote on invoice %/% determines has_active_installment_plan = false, and a recomputation over installment_plans then found an ACTIVE plan there. A blinded read can only report FALSE, so this is not blindness: another plan of this invoice is active. Either one statement moved active from one plan to another -- cancel the outgoing plan in one statement and activate the incoming plan in a later one -- or installment_plans_one_active_per_invoice_uq is gone and two plans are active at once',
+        v_business, v_invoice USING ERRCODE = 'P0001';
+    END IF;
+    IF v_value AND NOT v_state THEN
+      RAISE EXCEPTION 'installment.plan_fact_blind: the status transition this transaction wrote on invoice %/% determines has_active_installment_plan = true, and a recomputation over installment_plans then found no active plan there. This statement just wrote that plan, so the recomputation is blinded rather than the plan absent, and writing from it would commit a fact that can never heal',
+        v_business, v_invoice USING ERRCODE = 'P0001';
     END IF;
 
     -- NO `WHERE has_active_installment_plan IS DISTINCT FROM v_value` GUARD.
@@ -1432,15 +1462,30 @@ $fn$;
 --     a row may not BECOME the active plan of an invoice while another plan
 --     is that invoice's active plan IN THIS STATEMENT'S OWN SNAPSHOT.
 --
--- A query inside a trigger does not see the changes the CURRENT command is
--- making, so the outgoing row still reads `active` whichever heap order the
--- statement walks — and both orders are refused
--- `installment.plan_active_conflict`, at the statement, before the index is
--- consulted. `activate, then cancel` in two statements meets the same name for
--- the same reason. `cancel, then activate` in two statements still COMMITS,
--- because by the second statement the outgoing row's `cancelled` is a
--- committed change of an EARLIER command and is visible here. That is the
--- documented route and it is now the only route.
+-- AND ONE NAME COMES FROM TWO SITES, WHICH WAS MEASURED RATHER THAN ASSUMED.
+-- The first attempt at this repair was this trigger ALONE, on the belief that a
+-- query inside a BEFORE trigger cannot see the changes the current command is
+-- making. THAT BELIEF IS FALSE and the measurement said so: with the CANCELLED
+-- row first in the heap this trigger answers, because the outgoing row is still
+-- `active` when the incoming row is judged — but with the ACTIVE row first the
+-- outgoing row's `cancelled` IS already visible here, this trigger passes, and
+-- the statement went on to be refused `installment.plan_fact_blind` by the
+-- sync's AFTER-time cross-check, which is the very false diagnosis F-4 is
+-- about.
+--
+-- SO THE OTHER HALF OF THE REPAIR IS IN THE CROSS-CHECK, where that direction
+-- of the disagreement now raises THIS NAME: a blinded `EXISTS` can only read
+-- `false`, so «derived false, recomputed true» cannot be blindness and is
+-- always another active plan. Between the two sites every row order is refused
+-- `installment.plan_active_conflict` — measured, three repeats per order —
+-- and `activate, then cancel` in two statements meets the same name here, at
+-- the first statement, where it used to meet `23505`.
+--
+-- `cancel, then activate` in two statements still COMMITS, because by the
+-- second statement the outgoing row's `cancelled` is a committed change of an
+-- EARLIER command. That is the documented route, it is now the ONLY route, and
+-- the refusal says so in its own message rather than leaving the writer to
+-- find it here.
 --
 -- WHAT THIS IS NOT. It is NOT a second answer to the one-active question and
 -- it does not replace anything: the read is of `installment_plans`, which
@@ -1523,7 +1568,7 @@ GRANT EXECUTE ON FUNCTION installment_plan_fact_sync() TO daftar_accounting_inte
 GRANT EXECUTE ON FUNCTION installment_plan_fact_verify() TO daftar_accounting_internal;
 GRANT EXECUTE ON FUNCTION installment_plan_active_exclusive() TO daftar_accounting_internal;
 COMMENT ON FUNCTION installment_plan_fact_sync() IS
-  'P4-S7 (TL-P4-COORD-R38 direction (d); TL-P4-COORD-R43 F1-c and F1-c-prime). The ONLY writer of invoices.has_active_installment_plan. An ordinary AFTER ROW trigger on installment_plans — not deferred, so the column is right as soon as the statement completes and the deferred verifier has something to check at COMMIT. THE WRITE SET IS DERIVED FROM THE HANDED ROW''S STATUS TRANSITION AND FROM NOTHING ELSE: NEW.status, OLD.status and the two invoice_ids are fields of records this trigger was given, which no policy can hide, and installment_plans_one_active_per_invoice_uq makes the derivation TOTAL — at most one active plan exists per invoice, so a row that BECAME active determines true, a row that LOST active determines false because it was the only active one there was, and a row that was not and is not active determines NOTHING and is NOT WRITTEN. That empty write set is F1-c''s repair: round 9 derived a floor from NEW but let a blindable recomputation decide the value for every transition, so a NON-ACTIVE plan write — the ordinary re-planned receivable, which the PARTIAL unique index permits — carried no floor and still overwrote the fact. THE RECOMPUTATION IS KEPT AND MAY ONLY REFUSE: EXISTS over status = ''active'' is compared against the derived value and a disagreement raises installment.plan_fact_blind, because it is evidence of a blinded read or of a dropped unique index and never evidence of absence. THE SINGLE-STATEMENT MOVE IS NOT JUDGED HERE ANY MORE (TL-P4-COORD-R46, F-4): installment_plan_active_exclusive() refuses it BEFORE the row is written, as installment.plan_active_conflict, in every row order, because judging it here was row-order dependent and named a blinded policy that had not been touched. AND THE WRITER DETECTS A BLINDING THAT HIDES THE ROW IT WAS HANDED: on every INSERT and UPDATE it reads that row by primary key — a row that exists in this snapshot because this statement just wrote it — and raises installment.plan_fact_blind when it cannot find it, which is F1-c-prime, the one principal round 9''s floor could not watch. ITS SCOPE IS THAT AND NOT MORE (TL-P4-COORD-R46, F-3, correcting a claim that said every INSERT and every UPDATE whatever the transition): a policy predicated on status <> ''active'' leaves a non-active handed row VISIBLE, so the probe passes while the recomputation is blind, and what closes that direction is the EMPTY write set rather than the probe — measured, with round 9''s INSERT branch committing {flag: false, active plans: 1} on exactly that construction and this body refusing it. The DELETE direction carries no such probe and needs none, because no read enters its derived value. It refuses a plan that changes business. It carries NO ''WHERE value IS DISTINCT FROM'' guard, deliberately: ROW_COUNT <> 1 must mean "I could not reach the invoice row" and not "it was already correct", and it RAISES installment.plan_fact_unwritable on it. SECURITY DEFINER owned by daftar_accounting_internal, which holds the unconditional accounting_validator read on both relations and the column-level UPDATE on invoices; the UPDATE still passes through invoices'' own tenant_membership and business_isolation_update policies, so a writer must carry the invoice''s app.tenant_id and app.business_id. Pinned search_path. No EXECUTE grantee but its owner.';
+  'P4-S7 (TL-P4-COORD-R38 direction (d); TL-P4-COORD-R43 F1-c and F1-c-prime). The ONLY writer of invoices.has_active_installment_plan. An ordinary AFTER ROW trigger on installment_plans — not deferred, so the column is right as soon as the statement completes and the deferred verifier has something to check at COMMIT. THE WRITE SET IS DERIVED FROM THE HANDED ROW''S STATUS TRANSITION AND FROM NOTHING ELSE: NEW.status, OLD.status and the two invoice_ids are fields of records this trigger was given, which no policy can hide, and installment_plans_one_active_per_invoice_uq makes the derivation TOTAL — at most one active plan exists per invoice, so a row that BECAME active determines true, a row that LOST active determines false because it was the only active one there was, and a row that was not and is not active determines NOTHING and is NOT WRITTEN. That empty write set is F1-c''s repair: round 9 derived a floor from NEW but let a blindable recomputation decide the value for every transition, so a NON-ACTIVE plan write — the ordinary re-planned receivable, which the PARTIAL unique index permits — carried no floor and still overwrote the fact. THE RECOMPUTATION IS KEPT AND MAY ONLY REFUSE: EXISTS over status = ''active'' is compared against the derived value and a disagreement is never evidence of absence. THE TWO DIRECTIONS CARRY DIFFERENT NAMES BECAUSE THEY HAVE DIFFERENT CAUSES (TL-P4-COORD-R46, F-4): a blinded EXISTS can only read false, so derived-false-recomputed-true cannot be blindness and raises installment.plan_active_conflict -- another plan of this invoice is active, from a single statement that moved active between two plans or from a dropped unique index -- while derived-true-recomputed-false is the blind direction and keeps installment.plan_fact_blind. THE SINGLE-STATEMENT MOVE IS NOT JUDGED HERE ANY MORE (TL-P4-COORD-R46, F-4): installment_plan_active_exclusive() refuses it BEFORE the row is written, as installment.plan_active_conflict, in every row order, because judging it here was row-order dependent and named a blinded policy that had not been touched. AND THE WRITER DETECTS A BLINDING THAT HIDES THE ROW IT WAS HANDED: on every INSERT and UPDATE it reads that row by primary key — a row that exists in this snapshot because this statement just wrote it — and raises installment.plan_fact_blind when it cannot find it, which is F1-c-prime, the one principal round 9''s floor could not watch. ITS SCOPE IS THAT AND NOT MORE (TL-P4-COORD-R46, F-3, correcting a claim that said every INSERT and every UPDATE whatever the transition): a policy predicated on status <> ''active'' leaves a non-active handed row VISIBLE, so the probe passes while the recomputation is blind, and what closes that direction is the EMPTY write set rather than the probe — measured, with round 9''s INSERT branch committing {flag: false, active plans: 1} on exactly that construction and this body refusing it. The DELETE direction carries no such probe and needs none, because no read enters its derived value. It refuses a plan that changes business. It carries NO ''WHERE value IS DISTINCT FROM'' guard, deliberately: ROW_COUNT <> 1 must mean "I could not reach the invoice row" and not "it was already correct", and it RAISES installment.plan_fact_unwritable on it. SECURITY DEFINER owned by daftar_accounting_internal, which holds the unconditional accounting_validator read on both relations and the column-level UPDATE on invoices; the UPDATE still passes through invoices'' own tenant_membership and business_isolation_update policies, so a writer must carry the invoice''s app.tenant_id and app.business_id. Pinned search_path. No EXECUTE grantee but its owner.';
 COMMENT ON FUNCTION installment_plan_fact_verify() IS
   'P4-S7 (TL-P4-COORD-R38 direction (d)). The COMMIT-time refusal that makes invoices.has_active_installment_plan true rather than merely maintained. A DEFERRABLE INITIALLY DEFERRED constraint trigger on BOTH sides of the fact: on installment_plans for INSERT, UPDATE and DELETE, and on invoices for INSERT and for UPDATE OF that column — the INSERT arm because 0078:264''s GRANT INSERT ON invoices is table-level and therefore covers a column added later, so an invoice could be born carrying the fact with no plan behind it. It re-derives EXISTS(active plan) and refuses installment.plan_fact_desynchronised on any disagreement, and refuses rather than returning when no invoice carries the fact at all, because returning there is the vacuous pass 0075:439-441 names. Blinded, its EXISTS reads false and every state it then reports is a refusal EXCEPT a flag of false beside a hidden active plan; that one direction is quiet here and is NOT claimed unreachable (TL-P4-COORD-R43 F1-c found round 9 claiming exactly that, falsely). What is true is narrower: after F1-c''s repair a false flag can only be WRITTEN by a transition that DETERMINES false from the handed row, with no read in the value, so the writer cannot produce the state from a blinded read — while TRUNCATE and a disabled trigger still can, and in those states the READ refuses as plan_fact_unflagged. It only READS and RAISES: it writes nothing. SECURITY DEFINER owned by daftar_accounting_internal so that its reading cannot be blinded by an absent session context — the asymmetry that makes this construction sound where round 6''s DEFINER count was not: this routine is never asked what a CALLER can see, and the reader is never asked either, because the fact is on the row. Pinned search_path. No EXECUTE grantee but its owner.';
 
@@ -3006,13 +3051,19 @@ BEGIN
   --     a row becomes an invoice's active plan by changing `status` OR by
   --     changing `invoice_id`, so a column list would have to name both and
   --     would be one more thing to get wrong.
+  --
+  --     MEASURED, because the obvious spelling is wrong: for an unqualified
+  --     `UPDATE` the `tgattr` vector is EMPTY and
+  --     `array_length(tgattr::SMALLINT[], 1)` is **0**, not NULL -- PostgreSQL
+  --     18.4, `tgtype` 23 for `BEFORE INSERT OR UPDATE ... FOR EACH ROW` and
+  --     `tgattr` `''`. An `IS NULL` test here reds a correct trigger.
   IF NOT EXISTS (SELECT 1 FROM pg_trigger t
                   WHERE t.tgrelid = 'public.installment_plans'::regclass AND NOT t.tgisinternal
                     AND t.tgconstraint = 0 AND NOT t.tgdeferrable
                     AND t.tgfoid = 'public.installment_plan_active_exclusive()'::regprocedure
                     AND (t.tgtype & 1) = 1 AND (t.tgtype & 2) = 2
                     AND (t.tgtype & 4) = 4 AND (t.tgtype & 16) = 16 AND (t.tgtype & 8) = 0
-                    AND pg_catalog.array_length(t.tgattr::SMALLINT[], 1) IS NULL) THEN
+                    AND pg_catalog.array_length(t.tgattr::SMALLINT[], 1) = 0) THEN
     RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_plans carries no BEFORE INSERT OR UPDATE row trigger on installment_plan_active_exclusive() over the whole row, so the one-active exclusion is not judged before the row is written and its refusal is row-order dependent again'
       USING ERRCODE = 'P0001';
   END IF;

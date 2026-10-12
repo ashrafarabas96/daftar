@@ -8,7 +8,7 @@ import type { ScratchDb } from '../helpers/scratch-db';
 import { createScratchDb, urlOf } from '../helpers/scratch-db';
 
 const DB = 'daftar_s7r11_w';
-const SPEC = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'), 'utf8');
+const SPEC = readFileSync(process.env['S7_SPEC'] ?? join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'), 'utf8');
 const SYNC_HEAD = `CREATE OR REPLACE FUNCTION public.installment_plan_fact_sync() RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
 DECLARE
@@ -183,7 +183,7 @@ beforeAll(async () => {
   let specError: string | null = null;
   try { await mig.query(SPEC); } catch (e) { specError = err(e); }
   M['specError'] = specError;
-  if (specError !== null) { writeFileSync('/tmp/claude-0/s7r11-w.json', JSON.stringify(M, null, 2)); return; }
+  if (specError !== null) { writeFileSync((process.env['S7_OUT'] ?? '/tmp/claude-0/s7r11-w.json'), JSON.stringify(M, null, 2)); return; }
 
   // PROVE WHAT IS INSTALLED before trusting any probe.
   M['installed_sync_sha'] = (await sup.query(`SELECT md5(prosrc) AS h, (prosrc LIKE '%plan_fact_blind%') AS blind, (prosrc LIKE '%v_asserted%') AS asserted FROM pg_proc WHERE oid='public.installment_plan_fact_sync()'::regprocedure`)).rows[0];
@@ -319,7 +319,18 @@ beforeAll(async () => {
     { sql: `UPDATE installment_plans SET business_id = $2 WHERE id=$1`, params: [bare, otherBiz] },
   ])).error;
 
-  writeFileSync('/tmp/claude-0/s7r11-w.json', JSON.stringify(M, null, 2));
+  // ══ W5 THE EXCLUSION IS NOT THE MECHANISM. Its read of installment_plans is
+  //    blindable, so with the relation hidden from the definer it passes and the
+  //    PARTIAL UNIQUE INDEX -- which is physical -- refuses instead.
+  const w5a = randomUUID();
+  M['W5_build'] = await planWithSchedule(world.invoice2Id, w5a);
+  M['W5_sighted_second_active'] = await barePlan(world.invoice2Id, 'active', randomUUID());
+  await rePolicy(STATUS_BLIND_WRITER_ONLY);
+  M['W5_blinded_second_active'] = await barePlan(world.invoice2Id, 'active', randomUUID());
+  await rePolicy(RESTORE);
+  M['W5_state'] = await state(world.invoice2Id);
+
+  writeFileSync((process.env['S7_OUT'] ?? '/tmp/claude-0/s7r11-w.json'), JSON.stringify(M, null, 2));
 }, 1800000);
 
 afterAll(async () => {

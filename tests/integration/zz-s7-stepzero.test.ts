@@ -8,7 +8,7 @@ import type { ScratchDb } from '../helpers/scratch-db';
 import { createScratchDb, urlOf } from '../helpers/scratch-db';
 
 const DB = 'daftar_s7r11_z';
-const SPEC = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'), 'utf8');
+const SPEC = readFileSync(process.env['S7_SPEC'] ?? join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'), 'utf8');
 const SHA = 'a'.repeat(64);
 const STAMP = '2026-01-02T00:00:00Z';
 const BUCKETS = [30, 60, 90];
@@ -113,7 +113,7 @@ beforeAll(async () => {
   let specError: string | null = null;
   try { await mig.query(SPEC); } catch (e) { specError = err(e); }
   M['specError'] = specError;
-  if (specError !== null) { writeFileSync('/tmp/claude-0/s7r11-stepzero.json', JSON.stringify(M, null, 2)); return; }
+  if (specError !== null) { writeFileSync((process.env['S7_OUT'] ?? '/tmp/claude-0/s7r11-stepzero.json'), JSON.stringify(M, null, 2)); return; }
 
   // PROVE WHAT IS INSTALLED before trusting any probe.
   M['installed_sync_sha'] = (await sup.query(`SELECT md5(prosrc) AS h, (prosrc LIKE '%plan_fact_blind%') AS blind, (prosrc LIKE '%v_asserted%') AS asserted FROM pg_proc WHERE oid='public.installment_plan_fact_sync()'::regprocedure`)).rows[0];
@@ -225,7 +225,7 @@ beforeAll(async () => {
   M['Z6_state_after_repair'] = await state(world.invoice2Id);
   M['Z6_aging_after_repair'] = await aging();
 
-  writeFileSync('/tmp/claude-0/s7r11-stepzero.json', JSON.stringify(M, null, 2));
+  writeFileSync((process.env['S7_OUT'] ?? '/tmp/claude-0/s7r11-stepzero.json'), JSON.stringify(M, null, 2));
 }, 1800000);
 
 afterAll(async () => {
