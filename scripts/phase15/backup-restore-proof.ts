@@ -511,6 +511,32 @@ function validateData(source: Readonly<Record<string, string>>, restored: Readon
       };
 }
 
+/**
+ * Connect as the runtime role, or report WHY not — never throw.
+ *
+ * Three validators (V4, V6, V7) probe the restored database AS the application
+ * role, and each called `client.connect()` bare. So a cluster where the role
+ * cannot authenticate aborted the entire drill with
+ * `password authentication failed`, instead of each validator reporting that it
+ * could not measure. R11 found this by planting exactly that defect: the thing
+ * V8 exists to detect took the whole proof down before V8 ran.
+ *
+ * A failed connection is not a clean bill and it is not a failure of the
+ * property under test either — it is an absent measurement, which is its own
+ * verdict (PART 18). Returning UNMEASURED keeps the drill running so the
+ * validator that OWNS authentication, V8, is the one that reds.
+ */
+async function connectAsRuntimeRole(port: number): Promise<{ readonly client: Client } | { readonly unmeasured: string }> {
+  const client = new Client({ connectionString: roleUrl(port, APP_ROLE, APP_PASSWORD, DB) });
+  try {
+    await client.connect();
+    return { client };
+  } catch (e) {
+    await client.end().catch(() => undefined);
+    return { unmeasured: `could not connect as ${APP_ROLE}: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
 /** V3 — on the RESTORED database, every posted entry still balances, in integer minor units. */
 async function validateLedgerBalance(pool: Pool): Promise<ValidatorResult> {
   const count = Number((await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM journal_entries`)).rows[0]?.n ?? '0');
@@ -563,8 +589,17 @@ async function validateTenantIsolation(port: number, fx: Fixture): Promise<Valid
       message: 'fewer than two tenants were seeded — a cross-tenant probe has no subject',
     };
   }
-  const client = new Client({ connectionString: roleUrl(port, APP_ROLE, APP_PASSWORD, DB) });
-  await client.connect();
+  const conn = await connectAsRuntimeRole(port);
+  if ('unmeasured' in conn) {
+    return {
+      id: 'V4',
+      title: 'tenant isolation survives the restore',
+      verdict: 'UNMEASURED',
+      subjects: 0,
+      message: `${conn.unmeasured} — isolation is therefore UNPROBED, which is not the same as intact. V8 owns this failure.`,
+    };
+  }
+  const client = conn.client;
   const ids = async (tenantId: string | null, businessId: string | null): Promise<string[]> => {
     await client.query('BEGIN');
     try {
@@ -714,8 +749,17 @@ async function validateImmutabilityEnforced(pool: Pool): Promise<ValidatorResult
 
 /** V7 — the runtime role's privileges came back as narrow as they were. */
 async function validateRuntimePrivileges(port: number): Promise<ValidatorResult> {
-  const client = new Client({ connectionString: roleUrl(port, APP_ROLE, APP_PASSWORD, DB) });
-  await client.connect();
+  const conn = await connectAsRuntimeRole(port);
+  if ('unmeasured' in conn) {
+    return {
+      id: 'V7',
+      title: 'the runtime role is still as unprivileged as the source',
+      verdict: 'UNMEASURED',
+      subjects: 0,
+      message: `${conn.unmeasured} — its privileges are therefore UNPROBED. V8 owns this failure.`,
+    };
+  }
+  const client = conn.client;
   const refused: { readonly what: string; readonly sql: string }[] = [
     {
       what: 'write the journal directly',
@@ -878,6 +922,25 @@ interface RedProof {
   readonly landedExpected: string;
   /** The validator that must fail, and a fragment its message must contain. */
   readonly expect: { readonly validator: string; readonly messageContains: string };
+  /**
+   * A mutation applied on the CLUSTER (roles, passwords) rather than inside the
+   * restored database, with the statement that undoes it.
+   *
+   * Roles are cluster-wide, so unlike `mutate` — which lands in a database that
+   * is dropped and recreated before the next proof — a role change SURVIVES
+   * into every later proof. `clusterCleanup` is therefore not optional
+   * housekeeping: without it a V8 proof would silently corrupt the proofs after
+   * it, and a red proof that damages its neighbours is worse than no red proof.
+   */
+  readonly clusterMutate?: string;
+  readonly clusterCleanup?: string;
+  /**
+   * Damage a COPY of a backup artefact rather than the artefact itself, and
+   * point V9 at the copy. V9's subject is a file, so no SQL can redden it; and
+   * truncating the real dump would destroy the subject every later proof
+   * restores from.
+   */
+  readonly artefact?: { readonly which: 'globals' | 'dump'; readonly bytes: number };
 }
 
 const RED_PROOFS: readonly RedProof[] = [
@@ -948,6 +1011,119 @@ const RED_PROOFS: readonly RedProof[] = [
     landedProbe: `SELECT (pg_get_constraintdef(oid) LIKE '%btrim%')::text FROM pg_constraint WHERE conname = 'purchases_notes_check'`,
     landedExpected: 'false',
     expect: { validator: 'V1', messageContains: 'REAL difference' },
+  },
+  {
+    id: 'R9',
+    title: 'an UNBALANCED ledger after the restore is detected — V3 can go red',
+    // The independent challenger's F-04: V3 and V4 were never shown to fail,
+    // and on a bookkeeping platform they are the two highest-value validators
+    // in the set. A debit changed without its credit is the defect that matters
+    // most and the one a digest comparison alone would describe only as "some
+    // table differs".
+    //
+    // `session_replication_role = replica` is how the row is changed without
+    // the immutability trigger refusing it, as in R4: the subject here is a
+    // ledger that came back WRONG from a restore, not a user edit, and leaving
+    // the trigger enabled keeps V6 green so the failure is attributable.
+    //
+    // V2 (row-level data identical) necessarily reds too, because the data did
+    // change. That is not a defect of this proof and it is not hidden: the
+    // contract asserts on V3's own verdict and message, so V2 reddening cannot
+    // satisfy it. What the proof establishes is that V3 reds on its own terms,
+    // which a vacuous V3 would not.
+    //
+    // THREE columns move together, and the first attempt at this proof is the
+    // reason. Bumping `debit_minor` alone aborted the whole drill on
+    // `journal_lines_base_amount_ck`, because 0042 requires
+    // `base_amount_minor = GREATEST(debit_minor, credit_minor)`, and the
+    // same-currency fixture rows are also held by `journal_lines_fx_shape_ck`
+    // to `txn_amount_minor = base_amount_minor`. A constraint that fires first
+    // hides the one under test, and it aborted rather than reddening V3 — so
+    // the mutation now satisfies every money-shape invariant and breaks only
+    // the one V3 asserts: debits equal credits.
+    //
+    // That is worth recording as a finding in its own right: an unbalanced
+    // ledger cannot be produced by a single-column accident here. It takes a
+    // deliberate, coordinated edit across three columns — and V3 still catches
+    // it, which is the point.
+    mutate: `SET session_replication_role = replica; UPDATE journal_lines SET debit_minor = debit_minor + 1, base_amount_minor = debit_minor + 1, txn_amount_minor = debit_minor + 1 WHERE id = (SELECT id FROM journal_lines WHERE debit_minor > 0 ORDER BY 1 LIMIT 1); SET session_replication_role = origin`,
+    landedProbe: `SELECT (sum(debit_minor) <> sum(credit_minor))::text FROM journal_lines`,
+    landedExpected: 'true',
+    expect: { validator: 'V3', messageContains: 'do not balance' },
+  },
+  {
+    id: 'R10',
+    title: 'tenant isolation BROKEN after the restore is detected — V4 can go red',
+    // The other half of F-04, and the one with the most behind it: a restore
+    // that brings the rows back but not the isolation is a cross-tenant data
+    // leak that every structural check can pass through. The policy is widened
+    // rather than dropped, so the relation still HAS a policy and still has RLS
+    // forced -- which is what makes this stronger than R1: the catalogue still
+    // looks right, and only an actual cross-tenant read as the runtime role
+    // shows the leak.
+    mutate: `ALTER POLICY tenant_membership ON journal_entries USING (true)`,
+    landedProbe: `SELECT count(*)::text FROM pg_policies WHERE tablename='journal_entries' AND policyname='tenant_membership' AND qual = 'true'`,
+    landedExpected: '1',
+    //
+    // The asserted clause is the one V4 actually reaches, and the first attempt
+    // got that wrong: widening only the PERMISSIVE policy does not let tenant A
+    // read tenant B's entry, because the RESTRICTIVE `business_isolation`
+    // policy still holds — RLS ANDs restrictive policies with the permissive
+    // ones. What leaks is the mismatched-context probe: a session carrying A's
+    // tenant GUC with B's business GUC now returns a row. That is a genuine
+    // cross-tenant read, and V4 names it precisely; the original expectation
+    // simply named the wrong clause. R10b below plants the other half, so both
+    // of V4's cross-tenant clauses are shown able to fire.
+    expect: { validator: 'V4', messageContains: 'restrictive business policy should have left it empty' },
+  },
+  {
+    id: 'R10b',
+    title: "the RESTRICTIVE business policy dropped is detected — V4's own-context leak clause can go red",
+    // Dropping the restrictive policy while leaving the permissive one widened
+    // is the full isolation failure: tenant A, in its own proper context, reads
+    // tenant B's journal entry. This is the clause R10 was originally expected
+    // to hit, and together they prove V4 can red on EITHER cross-tenant path
+    // rather than on one incidental probe.
+    mutate: `ALTER POLICY tenant_membership ON journal_entries USING (true); DROP POLICY business_isolation ON journal_entries`,
+    landedProbe: `SELECT count(*)::text FROM pg_policies WHERE tablename='journal_entries' AND policyname='business_isolation'`,
+    landedExpected: '0',
+    expect: { validator: 'V4', messageContains: "can see tenant B's entry" },
+  },
+  {
+    id: 'R11',
+    title: 'a runtime role that survives but cannot authenticate is detected — V8 can go red',
+    // V8's own comment states the hazard it exists for: "a role that exists but
+    // whose password did not survive cannot connect, and the application would
+    // be down with every catalogue check green." That sentence was never
+    // tested. This plants exactly it -- the role is present, so the presence
+    // half of V8 stays green and only the authentication half reds.
+    //
+    // The password is restored afterwards because roles are cluster-wide and
+    // every later proof connects as this role.
+    mutate: `SELECT 1`,
+    landedProbe: `SELECT 1::text`,
+    landedExpected: '1',
+    clusterMutate: `ALTER ROLE daftar_app PASSWORD 'p15-r11-wrong-password'`,
+    clusterCleanup: `ALTER ROLE daftar_app PASSWORD '${APP_PASSWORD}'`,
+    expect: { validator: 'V8', messageContains: 'cannot authenticate' },
+  },
+  {
+    id: 'R12',
+    title: 'a truncated backup artefact is detected — V9 can go red',
+    // V9's subject is a FILE, so no SQL can redden it. A 512-byte dump is the
+    // realistic failure: a backup that was cut short by a full disk or a killed
+    // process still exists, is still named correctly, and still hashes to
+    // something -- so a check that only asserts existence and a digest would
+    // pass it. V9 asserts a floor on the size, and this proves that floor is
+    // load-bearing rather than decorative.
+    //
+    // A COPY is truncated. The real dump is the subject every later proof
+    // restores from, and damaging it would end the drill.
+    mutate: `SELECT 1`,
+    landedProbe: `SELECT 1::text`,
+    landedExpected: '1',
+    artefact: { which: 'dump', bytes: 512 },
+    expect: { validator: 'V9', messageContains: 'under 1 KiB' },
   },
 ];
 
@@ -1095,7 +1271,7 @@ async function main(): Promise<void> {
       console.log('');
       console.log(`RED PROOFS — ${RED_PROOFS.length} planted defects, each must turn a named validator red`);
       for (const rp of RED_PROOFS) {
-        redResults.push(await runRedProof(rp, dumpFile, sourceStructure, sourceData, sourceHistory, fixture));
+        redResults.push(await runRedProof(rp, dumpFile, globalsFile, sourceStructure, sourceData, sourceHistory, fixture));
       }
     }
 
@@ -1197,6 +1373,7 @@ async function main(): Promise<void> {
 async function runRedProof(
   rp: RedProof,
   dumpFile: string,
+  globalsFile: string,
   sourceStructure: Snapshot,
   sourceData: Readonly<Record<string, string>>,
   sourceHistory: readonly string[],
@@ -1212,6 +1389,30 @@ async function runRedProof(
   restoreDatabase(TARGET.port, DB, dumpFile);
   const pool = new Pool({ connectionString: dbUrl(TARGET.port, DB), max: 2 });
   pool.on('error', () => undefined);
+
+  // A cluster-level mutation (a role, a password) is applied on the admin
+  // connection, because it is not an object inside the restored database.
+  if (rp.clusterMutate !== undefined) {
+    const admin = new Pool({ connectionString: adminUrl(TARGET.port), max: 1 });
+    try {
+      await admin.query(rp.clusterMutate);
+    } finally {
+      await admin.end().catch(() => undefined);
+    }
+  }
+
+  // An artefact proof damages a COPY and points V9 at it. The real dump is what
+  // every later proof restores from.
+  let artefactGlobals = globalsFile;
+  let artefactDump = dumpFile;
+  if (rp.artefact !== undefined) {
+    const src = rp.artefact.which === 'globals' ? globalsFile : dumpFile;
+    const copy = `${src}.r-${rp.id}.truncated`;
+    writeFileSync(copy, readFileSync(src).subarray(0, rp.artefact.bytes));
+    if (rp.artefact.which === 'globals') artefactGlobals = copy;
+    else artefactDump = copy;
+  }
+
   try {
     await pool.query(rp.mutate);
     const landed = (await pool.query<{ c: string }>(rp.landedProbe)).rows[0];
@@ -1233,6 +1434,11 @@ async function runRedProof(
       await validateMigrationRecovery(pool, sourceHistory),
       await validateImmutabilityEnforced(pool),
       await validateRuntimePrivileges(TARGET.port),
+      // V8 and V9 were absent from this list, which is the mechanical reason
+      // they could carry no red proof: a proof naming them would have been
+      // reported as "names a validator which did not run".
+      await validateRolesRecovered(TARGET.port),
+      validateArtifacts(artefactGlobals, artefactDump),
     ];
     results.length = before; // a red proof's own runs are not the drill's verdict
     const named = got.find((g) => g.id === rp.expect.validator);
@@ -1257,6 +1463,17 @@ async function runRedProof(
     return { id: rp.id, title: rp.title, outcome: 'RED AS REQUIRED', note };
   } finally {
     await pool.end().catch(() => undefined);
+    // A cluster-level mutation MUST be undone here. Roles outlive the database
+    // this proof drops, so leaving a broken password behind would make every
+    // later proof measure this proof's leftovers rather than its own defect.
+    if (rp.clusterCleanup !== undefined) {
+      const admin = new Pool({ connectionString: adminUrl(TARGET.port), max: 1 });
+      try {
+        await admin.query(rp.clusterCleanup);
+      } finally {
+        await admin.end().catch(() => undefined);
+      }
+    }
   }
 }
 
