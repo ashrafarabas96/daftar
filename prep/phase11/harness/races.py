@@ -31,6 +31,7 @@ TA='11111111-1111-1111-1111-111111111111'
 PR='4a000000-0000-0000-0000-00000000004a'  # race A product
 PB='4b000000-0000-0000-0000-00000000004b'  # race B product
 PC='4c000000-0000-0000-0000-00000000004c'  # race C product
+PD='4d000000-0000-0000-0000-00000000004d'  # race B2 product (the reverse arrival order)
 
 class Session:
     def __init__(self, name, role="postgres"):
@@ -129,6 +130,40 @@ record("B  axis removed vs variant inserted",
        f"T2 blocked: {b2}. T2: {(' '.join(i2+cm2)[:50] or 'committed')}. Variants naming an unregistered axis after both commit: {orphan}",
        "PASS — the closure invariant holds after both commit" if orphan=="0" else "**FINDING — the committed state violates the closure invariant**")
 
+# ── RACE B2 — THE REVERSE ARRIVAL ORDER ─────────────────────────────────────
+# Phase 4's TL-P4-COORD-R62 (measured there, PG18.4): a BEFORE ROW DELETE
+# trigger cannot take a lock before the row being deleted, because the
+# executor produces OLD through GetTupleForTrigger, which LOCKS that tuple
+# before the trigger body is called. So `product_matrix_axes_10_axis_in_use`
+# is a REFUSAL guard and never a lock-order device, and the ordering in race
+# B comes from the INSERT side's `FOR KEY SHARE` meeting that executor lock.
+#
+# Which exposes a gap in race B: it only ran DELETE-first. The reverse order
+# is the one where the trigger body matters — the deleter waits on the
+# inserter's key-share lock, and then the guard must SEE the now-committed
+# variant. R62's mechanism is exactly why it does (the lock is taken before
+# the body runs), and one arrival order is half a proof; Phase 9's deadlock
+# test runs both orders for the same reason.
+product(PD,'RACE-B2')
+s1,s2=Session("1"),Session("2")
+s1.send("BEGIN;"); s2.send("BEGIN;")
+i1,_=s1.send(V(PD,'c1000000-0000-0000-0000-0000000000b2','{"size":"l","color":"green"}'))
+d2,b2d=s2.send(f"DELETE FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PD}' AND axis_code='color';")
+cm1,_=s1.send("COMMIT;")
+d2b,_=s2.send(""); cm2,_=s2.send("COMMIT;")
+s1.close(); s2.close()
+_,axes,_=admin(f"SELECT count(*) FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PD}' AND axis_code='color';")
+_,vars_,_=admin(f"SELECT count(*) FROM product_variants WHERE business_id='{A}' AND product_id='{PD}' AND NOT is_base AND attributes ? 'color';")
+derr=" ".join(d2+d2b+cm2)
+# The committed state must be closed: either the axis survives with its
+# variant, or neither exists. A variant naming a deleted axis is the failure.
+ok_b2 = (axes=="1" and vars_=="1")
+record("B2 variant inserted vs axis removed (reverse order)",
+       "INSERT a variant naming 'color', then COMMIT",
+       "DELETE the 'color' axis, concurrently",
+       f"T2 blocked: {b2d}. T2: {('refused on catalog.matrix_axis_in_use' if 'matrix_axis_in_use' in derr else (derr[:50] or 'committed'))}. Axis rows after both: {axes}; variants naming it: {vars_}",
+       "PASS — the deleter waits on the inserter's key-share lock and the guard then SEES the committed variant (R62's mechanism: the executor locks OLD before the trigger body)" if ok_b2 else "**FINDING — the closure invariant depends on arrival order**")
+
 # ── RACE C ──────────────────────────────────────────────────────────────────
 product(PC,'RACE-C')
 VC='c1000000-0000-0000-0000-00000000000c'
@@ -155,7 +190,7 @@ record("C  attributes changed vs first stock movement",
        "**FINDING — the identity lock is bypassed by interleaving**" if bypassed else "PASS — the interleaving does not produce a changed-attributes-with-stock row")
 
 w=max(len(r[0]) for r in rows)
-print("## RESULT MATRIX — three races, real backends, no sleep()\n")
+print("## RESULT MATRIX — four races, real backends, no sleep()\n")
 print(f"| {'race':<{w}} | T1 | T2 | observed | verdict |")
 print(f"|{'-'*(w+2)}|---|---|---|---|")
 for r in rows: print(f"| {r[0]:<{w}} | {r[1]} | {r[2]} | {r[3]} | {r[4]} |")
