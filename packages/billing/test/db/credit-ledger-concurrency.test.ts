@@ -433,7 +433,32 @@ describe('FIFO is also the deadlock avoidance', () => {
     }
   });
 
-  it('an allocator that wrote the same rows in the OPPOSITE order deadlocks — which is why the order is pinned', async () => {
+  /**
+   * ROUND 8. This case used to assert `40P01` (`deadlock_detected`), and it
+   * was right to: two writers drawing the same two grants in opposite order
+   * formed a cycle, and PostgreSQL killed one of them, so a merchant invoice
+   * failed for no reason but the order its rows were written in. That is
+   * still the hazard PART 25's "ordered deterministically" exists to prevent,
+   * and the proof of it is in `P5-RED-PROOF-RECORD.md` for rounds 4 to 7.
+   *
+   * It is no longer REACHABLE. Round 8's fix for the challenger's F-03 takes
+   * the per-business advisory lock inside `pca_chronology()`, so the lock is
+   * held from the first ledger INSERT of either writer, and the second one
+   * waits instead of acquiring a row lock the first will reach for. The case
+   * now asserts what the schema actually does — serialize — and asserts the
+   * ABSENCE of the deadlock, which is the stronger statement.
+   *
+   * LIMIT, stated because it is the cost of that fix: `lock_grants_in_order`
+   * was built as a SECOND line, protecting a future path that forgets the
+   * advisory lock. No path can forget it any more, so the suite can no longer
+   * observe the FIFO row ordering independently of the advisory lock — a
+   * defence observed only behind another defence is not observed. It is now
+   * measurable only by mutation, and the mutation that removes the `PERFORM
+   * pg_advisory_xact_lock` line from `pca_chronology()` restores the `40P01`
+   * this case used to assert. That mutation is recorded as a round-8 red
+   * proof; it is the only thing keeping this law honest.
+   */
+  it('an allocator that writes the same rows in the OPPOSITE order is serialized, not deadlocked', async () => {
     const s = await freshScope('p5scratch');
     const older = await insertGrant(owner, 'p5scratch', s, 1000n, T0, 'grant-older');
     const newer = await insertGrant(owner, 'p5scratch', s, 1000n, T1, 'grant-newer');
@@ -453,10 +478,19 @@ describe('FIFO is also the deadlock avoidance', () => {
       // requires. B draws the NEWER one first — the same amounts, the same
       // grants, only the write order reversed.
       await insertConsumption(a, 'p5scratch', s, older, 100n, invA, 'inv-A', T2);
-      await insertConsumption(b, 'p5scratch', s, newer, 100n, invB, 'inv-B', T2);
+      const bFirst = insertConsumption(b, 'p5scratch', s, newer, 100n, invB, 'inv-B', T2).then(
+        () => '',
+        (e: unknown) => sqlstate(e),
+      );
 
-      // Each now reaches for the row the other holds. The first reach
-      // blocks (observed, not assumed); the second closes the cycle.
+      // B's first insert is already waiting: A took the business's advisory
+      // lock inside the chronology trigger and holds it to commit. Observed
+      // on B's own pid, not assumed, and the bound is a FAILURE.
+      await waitUntilBlocked(observer, bPid, 'B reaching for the advisory lock A holds');
+
+      // A can still finish its own allocation: it holds the lock, so its
+      // second row meets no other writer at all. This is the reach that used
+      // to block on B's row lock and close the cycle.
       const aSecond = a
         .query(
           `INSERT INTO p5scratch.platform_credit_adjustments
@@ -466,8 +500,13 @@ describe('FIFO is also the deadlock avoidance', () => {
           [uuid(), s.tenantId, s.businessId, T2, newer, invA],
         )
         .then(() => '', (e: unknown) => sqlstate(e));
-      await waitUntilBlocked(observer, aPid, 'A reaching for the newer grant B holds');
+      expect(await aSecond, 'A could not finish its own allocation while holding the lock').toBe('');
+      expect(aPid).toBeGreaterThan(0);
 
+      // Only now, with A committed, does B proceed — and it proceeds in the
+      // order it chose, against a committed world.
+      await a.query('COMMIT');
+      expect(await bFirst, 'B was refused once A had committed').toBe('');
       const bSecond = b
         .query(
           `INSERT INTO p5scratch.platform_credit_adjustments
@@ -478,15 +517,12 @@ describe('FIFO is also the deadlock avoidance', () => {
         )
         .then(() => '', (e: unknown) => sqlstate(e));
 
-      // 40P01 is `deadlock_detected`. One of the two transactions is killed
-      // by PostgreSQL, which means a merchant invoice fails for no reason
-      // other than the order its rows were written in. This is the
-      // mechanical consequence of a non-deterministic allocation order, and
-      // the reason PART 25's "ordered deterministically" is a correctness
-      // requirement and not a tidiness preference.
-      const codes = await Promise.all([aSecond, bSecond]);
-      expect(codes).toContain('40P01');
-      expect(bPid).toBeGreaterThan(0);
+      // 40P01 is `deadlock_detected`, and its ABSENCE is the assertion. B
+      // wrote the same two grants in the reverse of the pinned order and was
+      // made to wait rather than killed, so no merchant invoice fails for the
+      // order its rows were written in.
+      expect(await bSecond, 'the reverse-order writer was deadlocked after all').not.toBe('40P01');
+      await b.query('COMMIT').catch(() => undefined);
       await a.query('ROLLBACK').catch(() => undefined);
       await b.query('ROLLBACK').catch(() => undefined);
     } finally {
@@ -528,6 +564,61 @@ describe('the pure core and the requested DDL agree', () => {
 });
 
 describe('the ordering conflict, resolved at the write', () => {
+  /**
+   * ROUND 8, the independent challenger's F-03, a P2. The case below was
+   * sequential, and the guard it proved was a SNAPSHOT read: two concurrent
+   * writers could not see each other's uncommitted row, so BOTH passed, and
+   * the committed ledger was non-monotonic in `(created_at, id)` — the
+   * allocation key. Because the ledger is append-only by trigger, the row
+   * could never be amended; because `foldCreditBalance` is the single
+   * credit-balance authority and refuses a non-monotonic ledger, that
+   * business's balance in that currency became permanently unreadable. A
+   * writer that promises what it cannot enforce, and a reader that bricks on
+   * the result, is worse than no guard.
+   *
+   * The concurrent case is the one that matters, so it is written first.
+   */
+  it('two CONCURRENT grants in reverse order: the later writer is refused, not admitted', async () => {
+    const s = await freshScope('p5scratch');
+    const a = await connect(ownerUrl());
+    const b = await connect(ownerUrl());
+    try {
+      await a.query('BEGIN');
+      await b.query('BEGIN');
+      const bPid = await pidOf(b);
+
+      // A writes the LATER instant and takes the earlier `created_at`.
+      await insertGrant(a, 'p5scratch', s, 100n, T1, 'concurrent-newer');
+
+      // B writes the EARLIER instant. Before round 8 its trigger read a
+      // snapshot without A's row and admitted it. Now the chronology trigger
+      // takes the business's advisory lock, which A holds to commit, so B
+      // waits — observed on B's own pid, and the bound is a FAILURE.
+      const bRun = insertGrant(b, 'p5scratch', s, 100n, T0, 'concurrent-backdated').then(
+        () => '',
+        (e: unknown) => sqlstate(e),
+      );
+      await waitUntilBlocked(observer, bPid, 'B waiting for the chronology lock A holds');
+      await a.query('COMMIT');
+
+      // B now reads a committed world and sees what it could not see before.
+      expect(await bRun, 'a concurrent backdated grant was admitted into the ledger').toBe('23000');
+      await b.query('ROLLBACK').catch(() => undefined);
+    } finally {
+      await a.end();
+      await b.end();
+    }
+    // And the ledger is monotonic, which is the property the guard exists for
+    // — asserted on the rows, not on the refusal.
+    const rows = await owner.query<{ occurred_at: Date }>(
+      `SELECT occurred_at FROM p5scratch.platform_credit_adjustments
+        WHERE tenant_id = $1 AND business_id = $2 AND currency = $3 ORDER BY created_at, id`,
+      [s.tenantId, s.businessId, s.currency],
+    );
+    const instants = rows.rows.map((r) => r.occurred_at.getTime());
+    expect([...instants].sort((x, y) => x - y)).toStrictEqual(instants);
+  });
+
   it('a row whose occurred_at would make the ledger non-monotonic in allocation order is refused', async () => {
     const s = await freshScope('p5scratch');
     await insertGrant(owner, 'p5scratch', s, 100n, T1);

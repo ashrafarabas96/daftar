@@ -388,3 +388,61 @@ describe('what finalization may write, and nothing else', () => {
     }
   });
 });
+
+describe('the principals this lane proves things about', () => {
+  /**
+   * ROUND 8, the independent challenger's F-05. The evidence ledger claimed
+   * "no RLS claim in this lane is made as a superuser", and the schema owner
+   * was the cluster's bootstrap superuser, which bypasses row-level security
+   * unconditionally. The claim happened to survive — the seven cases that
+   * assert RLS do connect as the application role — but the premise was
+   * false, `FORCE ROW LEVEL SECURITY` constrained nothing for the owner, and
+   * that bypass is what concealed F-01. The principal of a run is part of its
+   * result, so it is now asserted by a case and not described in a document.
+   */
+  it('neither the schema owner nor the invariant principal can bypass row-level security', async () => {
+    const r = await owner.query<{ rolname: string; rolsuper: boolean; rolbypassrls: boolean }>(
+      `SELECT rolname, rolsuper, rolbypassrls FROM pg_roles
+        WHERE rolname IN ('p5owner', 'p5_app', 'p5_invariants') ORDER BY rolname`,
+    );
+    expect(r.rows).toStrictEqual([
+      { rolname: 'p5_app', rolsuper: false, rolbypassrls: false },
+      { rolname: 'p5_invariants', rolsuper: false, rolbypassrls: false },
+      { rolname: 'p5owner', rolsuper: false, rolbypassrls: false },
+    ]);
+  });
+
+  it('the invariant principal may read exactly two relations and write nothing', async () => {
+    // The definer of `assert_invoice_credit_agrees` is the smallest principal
+    // that can state the invariant. Asserted against the catalogue, because
+    // "SELECT only" in a comment is not a privilege.
+    const priv = async (table: string, p: string): Promise<boolean> => {
+      const r = await owner.query<{ ok: boolean }>(`SELECT has_table_privilege('p5_invariants', $1, $2) AS ok`, [table, p]);
+      return r.rows[0]?.ok === true;
+    };
+    for (const table of ['p5scratch.subscription_invoices', 'p5scratch.platform_credit_adjustments']) {
+      expect(await priv(table, 'SELECT'), `${table}: the invariant cannot read what it compares`).toBe(true);
+      for (const write of ['INSERT', 'UPDATE', 'DELETE']) {
+        expect(await priv(table, write), `${table}: the invariant may ${write}`).toBe(false);
+      }
+    }
+    // Not on the remainder table at all, and not able to create anything:
+    // the CREATE needed for the ownership transfer is revoked again.
+    expect(await priv('p5scratch.platform_credit_grant_remainders', 'SELECT')).toBe(false);
+    const schema = await owner.query<{ ok: boolean }>(
+      `SELECT has_schema_privilege('p5_invariants', 'p5scratch', 'CREATE') AS ok`,
+    );
+    expect(schema.rows[0]?.ok).toBe(false);
+  });
+
+  it('the invariant function is owned by that principal and is definer-rights', async () => {
+    const r = await owner.query<{ owner: string; security: boolean; config: string[] | null }>(
+      `SELECT pg_get_userbyid(p.proowner) AS owner, p.prosecdef AS security, p.proconfig AS config
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'p5scratch' AND p.proname = 'assert_invoice_credit_agrees'`,
+    );
+    expect(r.rows[0]?.owner).toBe('p5_invariants');
+    expect(r.rows[0]?.security, 'the agreement invariant runs with the caller’s rights').toBe(true);
+    expect(r.rows[0]?.config).toStrictEqual(['search_path=p5scratch, pg_temp']);
+  });
+});

@@ -185,11 +185,44 @@ CREATE TRIGGER pca_append_only_trg
 -- pure core already refuses such a ledger on read
 -- (`billing.credit_ledger_out_of_order`); this refuses it on write, so no
 -- reader has to.
+--
+-- ROUND 8, the independent challenger's F-03. The `max(occurred_at)` below
+-- is a SNAPSHOT read, and two concurrent transactions cannot see each
+-- other's uncommitted row, so both used to pass: A wrote 10:00 and took the
+-- earlier `created_at`, B wrote 09:00 and took the later one, and the
+-- committed ledger was non-monotonic in `(created_at, id)` — the allocation
+-- key. Because the ledger is append-only by trigger, the offending row can
+-- never be amended, and `foldCreditBalance` is the single credit-balance
+-- authority and refuses a non-monotonic ledger: that business's balance in
+-- that currency became PERMANENTLY unreadable, with no remediation path.
+-- A writer promising a property it cannot enforce, and a reader bricking on
+-- the result, is worse than no guard at all.
+--
+-- The per-business advisory lock is taken HERE rather than left to the
+-- caller, for the reason already recorded above `lock_grants_in_order`: the
+-- caller convention is what round 4's case 12 violated. Finalization already
+-- holds this exact key (`hashtext(schema || ':' || business_id)`), and an
+-- advisory lock is re-entrant within a transaction, so that path is
+-- unaffected; the ADMIN GRANT path, which takes no lock of its own, is the
+-- one this closes.
+--
+-- The lock is taken BEFORE the read and held to commit, so the second writer
+-- waits for the first and then reads a committed world. LIMIT, stated rather
+-- than discovered later: this makes the guard total under READ COMMITTED,
+-- which is what this lane runs and what the API uses. Under REPEATABLE READ
+-- the second transaction's snapshot predates the first's commit and the read
+-- would still not see it; a serializable caller needs
+-- `pg_advisory_xact_lock` before it opens its statement, not inside a
+-- trigger. A transaction that holds remainder row locks WITHOUT having taken
+-- this key and then inserts a grant can now deadlock with a finalization —
+-- PostgreSQL detects it and aborts one of them, which is a refusal and not a
+-- corruption, and no path in this slice does that.
 CREATE FUNCTION p5scratch.pca_chronology() RETURNS trigger
 LANGUAGE plpgsql AS $fn$
 DECLARE
   latest timestamptz;
 BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('p5scratch:' || NEW.business_id::text));
   SELECT max(occurred_at) INTO latest
     FROM p5scratch.platform_credit_adjustments
    WHERE tenant_id = NEW.tenant_id AND business_id = NEW.business_id
@@ -433,8 +466,38 @@ ALTER TABLE p5scratch.platform_credit_adjustments
 -- table at RUNTIME: a single function reading `NEW.invoice_id` compiles
 -- fine and then fails with `record "new" has no field "invoice_id"` the
 -- first time the invoice table fires it. (It did.)
+--
+-- ROUND 8, the independent challenger's F-01, a P1. This function used to be
+-- plain `LANGUAGE plpgsql` with no `SECURITY DEFINER` and no `search_path`,
+-- unlike its two neighbours `pca_maintain_remainder()` and
+-- `lock_grants_in_order()`, which both carry it. So both of its reads ran
+-- under the CALLER's row-level security policy, which is keyed to
+-- `current_setting('app.business_id', true)`. When the invoice was not
+-- visible, `claimed` came back NULL and the function took the branch below
+-- that treats NULL as "the invoice is gone" and RETURNED. Silently. The
+-- triggers are DEFERRABLE INITIALLY DEFERRED, so this runs at COMMIT, by
+-- which time a pooled worker that processes tenants in a loop may have
+-- legitimately moved `app.business_id` on — no privilege required that the
+-- application role does not already hold. The challenger's reproduction
+-- committed an invoice claiming 500 of credit against consumption rows
+-- summing to 300. The ledger is append-only, so that state is not
+-- repairable by any later write.
+--
+-- `pca_invoice_fk` does not save it: foreign-key enforcement bypasses RLS,
+-- so the key was satisfied while the agreement check was skipped.
+--
+-- The second read was wrong the same way and nobody had noticed: even with
+-- the invoice visible, `sum(a.amount_minor)` over the consumption rows is
+-- subject to the same policy, so a partially visible ledger would have made
+-- `consumed` too small and raised on a transaction that was correct.
+--
+-- Definer rights make the invariant see the whole relation, which is what an
+-- invariant must do. The schema owner holds the two `..._invariant_read`
+-- policies in `credit-ledger-roles.sql`, so this does NOT rest on the owner
+-- being a superuser — which is the thing the challenger's F-05 showed was
+-- concealing this defect.
 CREATE FUNCTION p5scratch.assert_invoice_credit_agrees(p_invoice uuid) RETURNS void
-LANGUAGE plpgsql AS $fn$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, pg_temp AS $fn$
 DECLARE
   claimed bigint;
   consumed bigint;
@@ -443,9 +506,16 @@ BEGIN
   SELECT i.credit_minor, i.state INTO claimed, invoice_state
     FROM p5scratch.subscription_invoices i WHERE i.id = p_invoice;
   IF claimed IS NULL THEN
-    -- The invoice is gone: the transaction rolled it back, or never wrote
-    -- it. `pca_invoice_fk` is the constraint that reports that; there is
-    -- nothing here left to compare.
+    -- The invoice does not exist: the transaction rolled it back, or never
+    -- wrote it. `pca_invoice_fk` is the constraint that reports that, and it
+    -- is PROVEN to: "consumption rows with no invoice at all cannot commit
+    -- either" in `credit-ledger-atomicity.test.ts` reddens when that key is
+    -- dropped (round 7's mutation M28). So this RETURN hands the case to a
+    -- constraint that is measured, not to an assumption.
+    --
+    -- Under definer rights, NULL now means "no such row" and nothing else.
+    -- Before round 8 it also meant "a row I am not allowed to see", and
+    -- those two are not the same thing — which is the whole of F-01.
     RETURN;
   END IF;
   IF invoice_state = 'draft' THEN

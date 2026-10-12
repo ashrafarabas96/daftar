@@ -561,3 +561,97 @@ describe('the invoice and the ledger commit together, or not at all', () => {
     expect(await remainderOf(owner, grant)).toBe(0n);
   });
 });
+
+describe('the agreement invariant cannot be hidden from, round 8', () => {
+  /**
+   * The independent challenger's F-01, a P1, as this suite's own regression.
+   *
+   * `assert_invoice_credit_agrees` used to run with the CALLER's rights, so
+   * both of its reads were filtered by the row-level security policy keyed to
+   * `current_setting('app.business_id', true)`. The triggers that call it are
+   * DEFERRABLE INITIALLY DEFERRED, so they run at COMMIT — by which time a
+   * pooled worker processing tenants in a loop may have legitimately moved
+   * that setting on. With the invoice invisible, the function read NULL,
+   * concluded "the invoice is gone" and returned, and a transaction claiming
+   * 500 of platform credit against 300 of consumption rows COMMITTED. The
+   * ledger is append-only, so that state can never be repaired.
+   *
+   * Why no case caught it: every writer in this file connects as the schema
+   * owner, and the owner was the cluster's bootstrap superuser, which always
+   * sees every row. The principal is what concealed the defect, so this pair
+   * is written as the application role — `NOSUPERUSER NOBYPASSRLS` — and the
+   * two halves differ by one `set_config` and nothing else.
+   */
+  const OTHER_BUSINESS = '7f1c0d9e-2b3a-4c5d-8e9f-0a1b2c3d4e5f';
+
+  async function underfundedFinalization(c: Client, s: Scope, invoiceId: string, grant: string, moveContextTo?: string): Promise<string> {
+    await c.query('BEGIN');
+    await c.query(`SELECT set_config('app.business_id', $1, false)`, [s.businessId]);
+    // 300 of consumption rows against an invoice that will claim 500.
+    await insertConsumption(c, 'p5scratch', s, grant, 300n, invoiceId, 'inv-underfunded', T1);
+    await c.query(
+      `UPDATE p5scratch.subscription_invoices
+          SET state = 'open', credit_minor = 500, total_minor = charge_minor - 500, issued_at = $2
+        WHERE id = $1`,
+      [invoiceId, T1],
+    );
+    if (moveContextTo !== undefined) {
+      // The attack, and the whole of it: the session's business context moves
+      // on before COMMIT. No privilege is needed that the role does not hold.
+      await c.query(`SELECT set_config('app.business_id', $1, false)`, [moveContextTo]);
+    }
+    const code = await c.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e));
+    await c.query('ROLLBACK').catch(() => undefined);
+    return code;
+  }
+
+  it('refuses an invoice that claims more credit than its consumption rows hold', async () => {
+    const s = await freshScope();
+    const grant = await insertGrant(owner, 'p5scratch', s, 1000n, T0);
+    const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+    const app = await connect(appUrl());
+    try {
+      // The CONTROL. 23000 is the agreement trigger's own refusal.
+      expect(await underfundedFinalization(app, s, invoiceId, grant)).toBe('23000');
+    } finally {
+      await app.end();
+    }
+    expect(await invoiceRow(owner, invoiceId)).toEqual({ state: 'draft', credit: 0n, payable: 1000n });
+  });
+
+  it('refuses it just the same when the session has moved to another business before COMMIT', async () => {
+    const s = await freshScope();
+    const grant = await insertGrant(owner, 'p5scratch', s, 1000n, T0);
+    const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+    const app = await connect(appUrl());
+    try {
+      // The ATTACK. Before round 8 this COMMITTED and left the invoice
+      // claiming 500 against 300.
+      const code = await underfundedFinalization(app, s, invoiceId, grant, OTHER_BUSINESS);
+      expect(code, 'an invoice claiming unbacked platform credit was committed').toBe('23000');
+    } finally {
+      await app.end();
+    }
+    // Read back as the owner, which the attack's RLS context cannot affect:
+    // the invoice is untouched and no consumption row survived.
+    expect(await invoiceRow(owner, invoiceId)).toEqual({ state: 'draft', credit: 0n, payable: 1000n });
+    expect(await consumedMinor(owner, 'p5scratch', s)).toBe(0n);
+  });
+
+  it('the application role can create a draft invoice, not only finalize one', async () => {
+    // The challenger's F-08. `createDraftInvoice` takes its period index from
+    // a sequence the grant set never gave the role USAGE on, so the invoice
+    // CREATION path had never been executed as the application role at all —
+    // and §7's grant set, promoted as written, would have failed in
+    // production at the first draft invoice with `42501`.
+    const s = await freshScope();
+    const app = await connect(appUrl());
+    try {
+      await app.query(`SELECT set_config('app.business_id', $1, false)`, [s.businessId]);
+      const invoiceId = await createDraftInvoice(app, 'p5scratch', s, 400n);
+      expect(await invoiceRow(owner, invoiceId)).toEqual({ state: 'draft', credit: 0n, payable: 400n });
+    } finally {
+      await app.end();
+    }
+  });
+});

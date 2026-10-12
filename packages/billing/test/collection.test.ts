@@ -19,7 +19,6 @@ import {
   collectionRequestFor,
   COLLECTION_KEY_NAMESPACE,
   MAX_COLLECTION_ATTEMPT_NO,
-  nextCollectionAttemptNo,
   type CollectionAttemptIdentity,
   type CollectionRequestInput,
 } from '../src/collection';
@@ -102,17 +101,6 @@ describe('the key is derived, never generated', () => {
 });
 
 describe('an attempt with no verdict does not advance the ordinal', () => {
-  it('issues a fresh ordinal while every attempt has an answer', () => {
-    expect(nextCollectionAttemptNo([])).toBe(1);
-    expect(nextCollectionAttemptNo([attempt(PERIOD_END, 'failed')])).toBe(2);
-    expect(nextCollectionAttemptNo([attempt(PERIOD_END, 'failed'), attempt('2026-04-02T00:00:00.000Z', 'failed')])).toBe(3);
-  });
-
-  it('returns the unknown attempt’s OWN ordinal while it is unresolved', () => {
-    const history = [attempt(PERIOD_END, 'failed'), attempt('2026-04-02T00:00:00.000Z', 'unknown')];
-    expect(nextCollectionAttemptNo(history), 'a new ordinal after a lost response is a new key, and a new key is a second charge').toBe(2);
-  });
-
   it('the dunning schedule says reconcile, not charge, and names that same ordinal', () => {
     const history = [attempt(PERIOD_END, 'unknown')];
     const decision = decide(history, '2026-04-10T00:00:00.000Z');

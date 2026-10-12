@@ -44,7 +44,7 @@
  * the costume of the fix.
  */
 import { refuse } from './errors';
-import type { DunningAttempt, DunningDecision } from './dunning';
+import type { DunningDecision } from './dunning';
 import type { ChargeRequest } from './ports';
 import type { Price } from './types';
 
@@ -98,19 +98,21 @@ export function collectionAttemptKey(identity: CollectionAttemptIdentity): strin
 }
 
 /**
- * The ordinal the NEXT provider call must carry, given the history.
+ * ROUND 8, the challenger's F-07. A `nextCollectionAttemptNo(attempts)` used
+ * to stand here, and it is DELETED rather than repaired.
  *
- * This is the rule in one expression: while the last attempt has no verdict,
- * the next call is that attempt again — same ordinal, therefore same key,
- * therefore at most one charge at the provider. A fresh ordinal is issued
- * only once every recorded attempt has an answer.
+ * It was a second implementation of the ordinal rule that nothing called:
+ * `collectionRequestFor` takes its ordinal from `decision.attemptNo`, which
+ * `decideDunning` produces. The two had already drifted — it inspected only
+ * the last element, so on `[unknown, failed]` it returned a FRESH ordinal
+ * while attempt 1 was still unanswered, which by this module's own argument
+ * is a second debit, and its docstring claimed the opposite. It also derived
+ * the ordinal from array position rather than from any recorded ordinal, so
+ * a non-contiguous history produced the wrong key.
+ *
+ * The ordinal has exactly ONE source: `decideDunning`. A dead exported
+ * factory was removed in round 4 for the same reason.
  */
-export function nextCollectionAttemptNo(attempts: readonly DunningAttempt[]): number {
-  const history: readonly DunningAttempt[] = Array.isArray(attempts) ? attempts : [];
-  const last = history.length > 0 ? history[history.length - 1] : undefined;
-  if (last?.outcome === 'unknown') return history.length;
-  return history.length + 1;
-}
 
 export interface CollectionRequestInput {
   /** The merchant being charged. The port carries it; the KEY does not. */

@@ -192,10 +192,15 @@ describe('each exported union constant is the set its validator enforces', () =>
 
   it('DUNNING_OUTCOMES', () => {
     // `unknown` joined the set in round 6: a provider that accepted the
-    // charge and lost the response. It is pinned here as well as in
-    // `collection.test.ts` because this is the law that would otherwise let
-    // a fourth outcome be added without a validator knowing about it.
-    expect([...DUNNING_OUTCOMES]).toEqual(['succeeded', 'failed', 'unknown']);
+    // charge and lost the response. `declined` joined it in round 8, for the
+    // challenger's F-02: it was already in `CHARGE_OUTCOMES`, in the fake
+    // provider and in the DDL, and its absence HERE meant the authority
+    // refused the commonest card outcome outright. This pin is what made the
+    // gap visible once it was closed — and, until round 8, what locked it in
+    // place. A pin states the set; it does not state that the set is right,
+    // which is why `dunning.test.ts` now also asserts that every
+    // `ChargeOutcome` is a member.
+    expect([...DUNNING_OUTCOMES]).toEqual(['succeeded', 'declined', 'failed', 'unknown']);
     const policy = { retryOffsetHours: [24, 48], graceHours: 72 } as const;
     const input = (outcome: (typeof DUNNING_OUTCOMES)[number] | 'pending') => ({
       policy,

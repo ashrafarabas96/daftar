@@ -1,7 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { decideDunning, DUNNING_GRACE_STATE, DUNNING_SUSPENDED_STATE, type DunningAttempt, type DunningPolicy } from '../src/dunning';
+import {
+  decideDunning,
+  DUNNING_FAILURE_OUTCOMES,
+  DUNNING_GRACE_STATE,
+  DUNNING_OUTCOMES,
+  DUNNING_SUSPENDED_STATE,
+  type DunningAttempt,
+  type DunningOutcome,
+  type DunningPolicy,
+} from '../src/dunning';
+import { CHARGE_OUTCOMES } from '../src/ports';
+import { FakePaymentProvider } from '../src/fake-provider';
 import { BillingError } from '../src/errors';
 
 function expectRefusal(fn: () => unknown, code: string): void {
@@ -289,6 +300,132 @@ describe('decideDunning — refusals', () => {
     expectRefusal(
       () => decideDunning({ policy: POLICY, periodEndsAt: PERIOD_END, attempts: [], asOf: 'soon', storedState: 'active' }),
       'billing.as_of_required',
+    );
+  });
+});
+
+describe('a decline is an outcome this authority can read', () => {
+  /**
+   * ROUND 8, the independent challenger's F-02. Five places in this slice
+   * named the outcomes of a charge and they did not agree: `CHARGE_OUTCOMES`,
+   * the shipped fake, the scratch DDL's `sca_outcome_known` and the DDL's
+   * reconciliation transition all carried `declined`, and `DUNNING_OUTCOMES`
+   * did not. So the commonest end of a card payment produced an attempt the
+   * database accepted and the authority could not read at all: no retry, no
+   * grace period, no suspension, and a merchant whose card declined forever
+   * kept full entitlement forever — which is the exact defect this module's
+   * opening comment says it exists to prevent.
+   *
+   * The first case is the LAW, not the symptom: the two unions are related by
+   * containment, and a sixth place that adds an outcome to one of them reds
+   * here rather than going quietly missing in the other.
+   */
+  const at = (iso: string, outcome: DunningOutcome): DunningAttempt => ({ attemptedAt: iso, outcome });
+  const decide = (attempts: readonly DunningAttempt[], asOf: string) =>
+    decideDunning({ policy: POLICY, periodEndsAt: PERIOD_END, attempts, asOf, storedState: 'active' });
+
+  it('every outcome a charge can have is an outcome a recorded attempt can have', () => {
+    const dunning = new Set<string>(DUNNING_OUTCOMES);
+    const missing = [...CHARGE_OUTCOMES].filter((o) => !dunning.has(o));
+    expect(missing, 'a charge can end in an outcome the dunning authority cannot read').toStrictEqual([]);
+    // And the other direction is deliberately NOT containment: `unknown` is
+    // this module's own, because a provider never returns it — it is what we
+    // record when no verdict was read.
+    expect(dunning.has('unknown')).toBe(true);
+    expect([...CHARGE_OUTCOMES].includes('unknown' as never)).toBe(false);
+  });
+
+  it('the shipped fake returns `declined`, so the gap was reachable with no real provider', async () => {
+    const provider = new FakePaymentProvider({ byInstrument: { card_bad: 'decline' } });
+    const result = await provider.charge({
+      businessId: '11111111-1111-4111-8111-111111111111',
+      amount: { amountMinor: 1000n, currency: 'USD' },
+      instrumentRef: 'card_bad',
+      idempotencyKey: 'daftar.p5.collect:inv-decline:1',
+    });
+    expect(result.outcome).toBe('declined');
+  });
+
+  it('a declined attempt schedules the next retry instead of refusing the history', () => {
+    // Attempt 1 declined at the period end. The schedule's second offset is
+    // +24h, and the decision is taken at +25h, so the charge is due now.
+    const decision = decide([at(PERIOD_END, 'declined')], '2026-04-02T01:00:00.000Z');
+    expect(decision.action).toBe('charge');
+    expect(decision.attemptNo).toBe(2);
+    expect(decision.nextAttemptAt).toBe('2026-04-02T00:00:00.000Z');
+    expect(decision.targetState).toBe(DUNNING_GRACE_STATE);
+    expect(decision.exhausted).toBe(false);
+  });
+
+  it('declines exhaust the schedule and suspend, exactly as failures do', () => {
+    const history = [at(PERIOD_END, 'declined'), at('2026-04-02T00:00:00.000Z', 'declined'), at('2026-04-04T00:00:00.000Z', 'declined')];
+    // Three declines against a three-offset schedule, read after the grace
+    // window closes at +120h.
+    const decision = decide(history, '2026-04-06T01:00:00.000Z');
+    expect(decision.exhausted, 'three declines left the schedule unexhausted — the merchant is never suspended').toBe(true);
+    expect(decision.targetState).toBe(DUNNING_SUSPENDED_STATE);
+    expect(decision.action).toBe('none');
+  });
+
+  it('a decline and a failure are counted by the same rule, so a mixed history advances', () => {
+    const mixed = [at(PERIOD_END, 'declined'), at('2026-04-02T00:00:00.000Z', 'failed')];
+    expect(decide(mixed, '2026-04-04T01:00:00.000Z').attemptNo).toBe(3);
+    expect([...DUNNING_FAILURE_OUTCOMES].sort()).toStrictEqual(['declined', 'failed']);
+    // `unknown` must NOT count: counting it would advance the ordinal, which
+    // mints a new idempotency key, which is a second debit.
+    expect(DUNNING_FAILURE_OUTCOMES.has('unknown')).toBe(false);
+    expect(DUNNING_FAILURE_OUTCOMES.has('succeeded')).toBe(false);
+  });
+
+  it('a success still ends the period, and still beats a decline before it', () => {
+    const history = [at(PERIOD_END, 'declined'), at('2026-04-02T00:00:00.000Z', 'succeeded')];
+    expect(decide(history, '2026-04-10T00:00:00.000Z')).toStrictEqual({
+      action: 'none',
+      attemptNo: 0,
+      nextAttemptAt: null,
+      targetState: null,
+      exhausted: false,
+    });
+  });
+});
+
+describe('an unresolved debit is resolved first, whatever surrounds it', () => {
+  /**
+   * ROUND 8, the independent challenger's F-06. The `reconcile` branch sat
+   * after the `succeeded` short-circuit and after the dunnable-state gate, so
+   * `[succeeded, unknown]` — the one history that means we may have debited
+   * this merchant twice and have no verdict for one of those debits — came
+   * back `action: 'none'`, "nothing to do". The malformed-history loop did not
+   * catch it either: it only refuses an `unknown` that is not last.
+   */
+  const at = (iso: string, outcome: DunningOutcome): DunningAttempt => ({ attemptedAt: iso, outcome });
+  const decide = (attempts: readonly DunningAttempt[], storedState: 'active' | 'cancelled') =>
+    decideDunning({ policy: POLICY, periodEndsAt: PERIOD_END, attempts, asOf: '2026-04-10T00:00:00.000Z', storedState });
+
+  it('an unknown AFTER a success is reconciled, not treated as nothing to do', () => {
+    const decision = decide([at(PERIOD_END, 'succeeded'), at('2026-04-02T00:00:00.000Z', 'unknown')], 'active');
+    expect(decision.action, 'a possible second debit with no verdict was reported as nothing to do').toBe('reconcile');
+    // The ordinal is the unknown attempt's OWN, so the caller's next provider
+    // call carries that attempt's key and cannot become a third debit.
+    expect(decision.attemptNo).toBe(2);
+    expect(decision.nextAttemptAt).toBeNull();
+  });
+
+  it('an unknown on a subscription that is no longer dunnable is still reconciled', () => {
+    // There is nothing left to collect from a cancelled subscription, which
+    // is why dunning stops — but an attempt that may have taken the
+    // merchant's money still has to be accounted for.
+    const decision = decide([at(PERIOD_END, 'unknown')], 'cancelled');
+    expect(decision.action).toBe('reconcile');
+    expect(decision.attemptNo).toBe(1);
+    // No state is implied: dunning does not move a cancelled subscription.
+    expect(decision.targetState).toBeNull();
+  });
+
+  it('an unknown that is not last is still refused, not reconciled', () => {
+    expectRefusal(
+      () => decide([at(PERIOD_END, 'unknown'), at('2026-04-02T00:00:00.000Z', 'failed')], 'active'),
+      'billing.collection_awaiting_reconciliation',
     );
   });
 });

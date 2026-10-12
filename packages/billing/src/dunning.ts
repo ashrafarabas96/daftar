@@ -53,9 +53,37 @@ const HOUR_MS = 3_600_000;
  * until this round, and that absence was the defect: every caller had to
  * record a lost response as `failed` or record nothing, and both of those
  * produce the second charge.
+ *
+ * `declined` is the fourth, added in round 8 after the independent
+ * challenger's F-02 — the commonest outcome of a card charge was the one
+ * outcome this authority could not read. `ports.ts`'s `CHARGE_OUTCOMES`
+ * produced it, the shipped fake returned it, and the scratch DDL's
+ * `sca_outcome_known` stored it, while this union did not contain it: so
+ * `decideDunning` refused the whole history with `billing.payload_invalid`
+ * and issued no retry, no grace period and no suspension. A merchant whose
+ * card declined forever kept full entitlement forever. One concept, two
+ * closed unions, nothing mapping between them — the same shape as round 6's
+ * `total_minor`, which is why the mapping is now a LAW and not a convention:
+ * `test/dunning.test.ts` fails if any `ChargeOutcome` is not a
+ * `DunningOutcome`.
  */
-export const DUNNING_OUTCOMES = ['succeeded', 'failed', 'unknown'] as const;
+export const DUNNING_OUTCOMES = ['succeeded', 'declined', 'failed', 'unknown'] as const;
 export type DunningOutcome = (typeof DUNNING_OUTCOMES)[number];
+
+/**
+ * The outcomes that advance the retry schedule.
+ *
+ * A decline is a definitive refusal by the issuer, so it counts: it is a
+ * failure for scheduling even though it is not an error. `unknown` is
+ * deliberately absent — an attempt whose verdict was never read must not
+ * advance the schedule, because advancing it mints a new idempotency key and
+ * asks for a second debit. `succeeded` is absent for the obvious reason.
+ *
+ * Named rather than inlined as `outcome === 'failed'`, which is what the
+ * challenger found: a filter on one string silently stopped counting the
+ * moment a second failing outcome existed.
+ */
+export const DUNNING_FAILURE_OUTCOMES: ReadonlySet<DunningOutcome> = new Set<DunningOutcome>(['failed', 'declined']);
 
 export interface DunningAttempt {
   /** ISO-8601 instant the attempt was made. */
@@ -224,10 +252,8 @@ export function decideDunning(input: DunningInput): DunningDecision {
     }
   }
 
-  if (!DUNNABLE_STATES.has(input.storedState)) return idle;
-  if (attempts.some((a) => a.outcome === 'succeeded')) return idle;
-
-  const failures = attempts.filter((a) => a.outcome === 'failed').length;
+  const dunnable = DUNNABLE_STATES.has(input.storedState);
+  const failures = attempts.filter((a) => DUNNING_FAILURE_OUTCOMES.has(a.outcome)).length;
   const graceEndMs = periodEndMs + policy.graceHours * HOUR_MS;
 
   /**
@@ -237,7 +263,8 @@ export function decideDunning(input: DunningInput): DunningDecision {
    * would leave the caller to re-derive the state from the same inputs — a
    * second implementation of this rule, in the caller.
    */
-  const targetState: SubscriptionState | null = failures === 0 ? null : asOfMs >= graceEndMs ? DUNNING_SUSPENDED_STATE : DUNNING_GRACE_STATE;
+  const targetState: SubscriptionState | null =
+    !dunnable || failures === 0 ? null : asOfMs >= graceEndMs ? DUNNING_SUSPENDED_STATE : DUNNING_GRACE_STATE;
 
   /**
    * The unknown verdict wins over every scheduled step, including an
@@ -246,10 +273,24 @@ export function decideDunning(input: DunningInput): DunningDecision {
    * unknown attempt's own ordinal, NOT a new one, because the caller's next
    * provider call must carry that attempt's key — see
    * `collectionAttemptKey` in `collection.ts`.
+   *
+   * ROUND 8, the challenger's F-06. This branch used to sit AFTER the
+   * `succeeded` short-circuit and after the dunnable-state gate, so the two
+   * histories that most need reconciling fell through it:
+   * `[succeeded, unknown]` returned `action: 'none'` — "nothing to do" for the
+   * one history that means we may have debited the merchant twice and have no
+   * verdict for one of those debits — and an unknown on a cancelled
+   * subscription returned the same. An unresolved external debit is not
+   * conditional on the subscription's state or on a later success: it is the
+   * first thing to resolve in every case, which is what this module's own
+   * round-6 reasoning says. So it is tested first.
    */
   if (attempts.length > 0 && attempts[attempts.length - 1]?.outcome === 'unknown') {
     return { action: 'reconcile', attemptNo: attempts.length, nextAttemptAt: null, targetState, exhausted: false };
   }
+
+  if (!dunnable) return idle;
+  if (attempts.some((a) => a.outcome === 'succeeded')) return idle;
 
   const exhausted = failures >= policy.retryOffsetHours.length;
   if (exhausted) {

@@ -15,6 +15,12 @@ set -uo pipefail
 PGBIN=${PGBIN:-/usr/lib/postgresql/16/bin}
 PGPORT_P5=${PGPORT_P5:-54329}
 PGUSER_P5=p5owner
+# ROUND 8, the challenger's F-05: the cluster is initialised with `postgres`
+# as the bootstrap superuser, and `p5owner` is created afterwards as an
+# explicitly NOSUPERUSER NOBYPASSRLS schema owner. Before this round
+# `initdb -U p5owner` made the schema owner the cluster superuser, so every
+# RLS policy was bypassed for it and a P1 (F-01) hid behind that bypass.
+PGUSER_BOOTSTRAP=postgres
 CLUSTER=${P5_CLUSTER_DIR:-/home/p5pg/p5cluster}
 # The DEPLOY COLLATION. The approved target is PostgreSQL 16 with
 # `en_US.utf8` (Master Continuous Mission V3 §15, restated by the
@@ -47,7 +53,7 @@ if [ ! -f "$CLUSTER/data/PG_VERSION" ]; then
     echo "Generate it (locale-gen) or state the gap. This lane does not silently fall back to C."
     exit 1
   fi
-  su p5pg -c "$PGBIN/initdb -D $CLUSTER/data -U $PGUSER_P5 --auth=trust -E UTF8 --locale=$P5_LOCALE" \
+  su p5pg -c "$PGBIN/initdb -D $CLUSTER/data -U $PGUSER_BOOTSTRAP --auth=trust -E UTF8 --locale=$P5_LOCALE" \
     > "$CLUSTER/initdb.log" 2>&1 || { echo "initdb failed"; tail -5 "$CLUSTER/initdb.log"; exit 1; }
 fi
 
@@ -60,8 +66,25 @@ if ! pg_isready -h localhost -p "$PGPORT_P5" >/dev/null 2>&1; then
     -l $CLUSTER/pg.log start -w" || { echo "pg_ctl failed"; tail -10 "$CLUSTER/pg.log"; exit 1; }
 fi
 
+export P5_DB_BOOTSTRAP_URL="postgresql://$PGUSER_BOOTSTRAP@localhost:$PGPORT_P5/postgres"
 export P5_DB_OWNER_URL="postgresql://$PGUSER_P5@localhost:$PGPORT_P5/postgres"
 export P5_DB_APP_URL="postgresql://p5_app:p5apppw@localhost:$PGPORT_P5/postgres"
+
+# Roles first, as the cluster superuser, because the schema owner is now one
+# of the things being created rather than the principal creating them.
+psql -v ON_ERROR_STOP=1 "$P5_DB_BOOTSTRAP_URL" -f "$SQLDIR/credit-ledger-bootstrap.sql" > /dev/null || exit 1
+
+# The principal of a run is part of its result: asserted here, in the lane,
+# so a later report cannot describe a principal the run did not have.
+psql -tA "$P5_DB_OWNER_URL" -c \
+  "SELECT 'principal=' || current_user || ' rolsuper=' || rolsuper || ' rolbypassrls=' || rolbypassrls FROM pg_roles WHERE rolname = current_user"
+PRINCIPAL=$(psql -tA "$P5_DB_OWNER_URL" -c \
+  "SELECT rolsuper::text || ':' || rolbypassrls::text FROM pg_roles WHERE rolname = current_user" | tr -d '[:space:]')
+if [ "$PRINCIPAL" != "false:false" ]; then
+  echo "PRINCIPAL TOO STRONG: the schema owner is $PRINCIPAL (rolsuper:rolbypassrls), so row-level"
+  echo "security is bypassed and every policy in this schema is unverified. See the challenger's F-05."
+  exit 1
+fi
 
 psql -v ON_ERROR_STOP=1 "$P5_DB_OWNER_URL" -f "$SQLDIR/credit-ledger-scratch.sql" > /dev/null || exit 1
 psql -v ON_ERROR_STOP=1 "$P5_DB_OWNER_URL" -f "$SQLDIR/credit-ledger-naive.sql"   > /dev/null || exit 1
