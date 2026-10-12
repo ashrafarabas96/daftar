@@ -102,6 +102,29 @@ A trial run that printed `SOURCE_TREE_DIRTY : YES` is deliberately **not** repor
 
 **What is NOT evidence, stated so no reader promotes it:** no npm workspace suite ran at all — this container has **Node 22.22.0 while the repository requires `>=24 <25`** and has no `node_modules`, so `format`, `lint`, `typecheck` and every Vitest suite are `UNMEASURED`. There is **no CI run** for any of this and a local green is never reported as CI. There is **no timing or performance number**, measured or claimed. Lot, serial and repair remain `SPEC ONLY`. There is **no challenger signature**.
 
+**And two notes about npm gates that this phase does not cite but a later reader
+will, relayed by the round-5 challenger as a correction against its OWN
+evidence (`P11-CHALLENGE-5bad734.md` §0.1) and recorded here as `RELAYED,
+NOT MEASURED HERE`:**
+
+- **A fresh clone in these containers has no `node_modules` at all**, so
+  `npx prettier --check .` resolves whatever version the npx cache holds — the
+  challenger measured **3.9.10** where the repository pins **3.7.1** in
+  `devDependencies` and `package-lock.json`. **Any figure citing `npm run
+  format`, `lint` or `typecheck` therefore needs an `npm ci` beside it**, or it
+  is a claim about a tool the repository does not install. No figure in any
+  Phase 11 document cites an npm gate — every one of them is `UNMEASURED` above
+  — and this line exists so no later round quietly adds one.
+- **Node 24 is fetchable in these containers after all** (the challenger put
+  `node-v24.21.0-linux-x64.tar.xz` on PATH, verified against that release's
+  `SHASUMS256.txt`), and re-ran the repository's own gate under it with
+  `npm ci` from the lockfile: `prettier 3.7.1`, `All matched files use Prettier
+  code style!`, exit `0`. That is **its** measurement, not this thread's: the
+  runs reported in this manifest were taken under **Node 22.22.0 with no
+  `node_modules`**, and their headers say so, which is what made the version
+  mismatch visible at all. An exit code belongs to the tree AND the engine it
+  ran on.
+
 Every other verdict in every Phase 11 document remains labelled `SPEC ONLY`, `DESIGN ONLY`, `UNMEASURED`, `BLOCKED` or `WAITING_FOR_INTEGRATED_SURFACE`, never two classes in one sentence (§82).
 
 What is owed, and by whom, is in `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` §3 as a T0–T7 estate. The first execution step is fixed by §12 of the master directive and by `P11-AL-19`: apply the Phase 11 DDL **as `daftar_migrator`, the application role and the internal roles — never superuser-only** — on a scratch cluster and read the earliest error, *before* any TypeScript. The nearby precedent is the one that justifies the order: eight of twelve defects in a comparable slice were found that way, two of them exactly the shapes this DDL invites (a constraint trigger created above its function, and RLS forced with no policy so the validator refuses everything rather than only the incomplete cases).
