@@ -78,6 +78,13 @@ export type OrderErrorCode =
   /** A line discount is larger than the line value it discounts, so the line would be negative money. */
   | 'order.quote_discount_exceeds_line'
 
+  /**
+   * A quote, or one of its lines, carries a field the canonical stream does not
+   * cover — so the digest attests to nothing about it, while still answering
+   * "untampered" for the quote as a whole (round-10 challenge F-34).
+   */
+  | 'order.quote_field_undeclared'
+
   // ── the advisory availability read (availability.ts) ─────────────────────
   /** An on-hand figure was supplied for a stock key the basket does not name. */
   | 'order.availability_subject_unknown'

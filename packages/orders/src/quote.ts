@@ -229,12 +229,166 @@ function digestOf(quote: CommercialQuoteInput): string {
 }
 
 /**
+ * The fields the canonical stream above covers, written out beside it.
+ *
+ * Round 10's F-34 is why these exist. `buildCommercialQuote` returned
+ * `{ ...input, lines, digest }` while the stream is a hand-written field list,
+ * so a field a caller added to the input RODE ONTO the returned quote outside
+ * the digest — and `assertQuoteIntact` then answered "untampered" after that
+ * field had been rewritten from `'5'` to `'500000'`. I reproduced it, and it is
+ * WIDER than the report: it holds for a LINE's extra field too, which the
+ * challenger measured only at the top level.
+ *
+ * TypeScript refuses an extra property on an object LITERAL (`TS2353`) but not
+ * on a spread variable, which is exactly how an application tier assembles an
+ * input — so the type system was never the guard here, and this package's own
+ * law is that a type-only requirement has no runtime existence.
+ *
+ * These two arrays and the stream must be edited together. A field added to the
+ * stream and not here is stripped from the carrier; a field added here and not
+ * to the stream rides again. The case
+ * "the digested stream and the carried fields are THE SAME SET" asserts the
+ * agreement rather than trusting this comment.
+ */
+const CANONICAL_QUOTE_FIELDS: readonly (keyof CommercialQuoteInput)[] = Object.freeze([
+  'quoteId',
+  'orderId',
+  'version',
+  'currency',
+  'lines',
+  'displayedTotalMinor',
+  'issuedAt',
+  'expiresAt',
+]);
+const CANONICAL_LINE_FIELDS: readonly (keyof QuoteLineSnapshot)[] = Object.freeze([
+  'stockKey',
+  'productId',
+  'variantId',
+  'quantity',
+  'unitPriceMinor',
+  'discountMinor',
+  'lineTotalMinor',
+]);
+
+/** The input reduced to exactly the fields the digest covers, lines included. */
+function canonicalCarrier(input: CommercialQuoteInput): CommercialQuoteInput {
+  const lines = input.lines.map((line) => {
+    const kept: Partial<QuoteLineSnapshot> = {};
+    for (const field of CANONICAL_LINE_FIELDS) kept[field] = line[field] as never;
+    return Object.freeze(kept as QuoteLineSnapshot);
+  });
+  const kept: Partial<CommercialQuoteInput> = {};
+  for (const field of CANONICAL_QUOTE_FIELDS) kept[field] = input[field] as never;
+  kept.lines = Object.freeze(lines);
+  return kept as CommercialQuoteInput;
+}
+
+/**
+ * Refuse an INPUT that carries a field the canonical stream does not cover.
+ *
+ * `canonicalCarrier` already keeps such a field off the returned quote, so
+ * nothing can ride along unattested. But stripping is silent, and silence is
+ * the wrong answer to the one case this package was asked about: a
+ * DOCUMENT-LEVEL FEE. The pack claims a document-level fee is "fail-closed, not
+ * silently dropped" (`ACC-REQ-P6-03`). With stripping alone that sentence was
+ * false in one direction — a fee folded into `displayedTotalMinor` is refused
+ * as `order.quote_total_mismatch`, but a fee sent as a FIELD was accepted and
+ * quietly left out of the quote the shopper is shown. The coordinator's review
+ * of `7834bfb` named it `R-16`.
+ *
+ * So the refusal happens at the INPUT, before anything is computed, and it
+ * NAMES the field. A caller who sends `documentFeeMinor` learns that this
+ * package does not price a document-level fee, instead of watching it vanish.
+ * Phase 6 does not own fee policy; `ACC-REQ-P6-03` asks the Accounting
+ * Authority for it, and until there is a ruling the fail-closed answer is to
+ * refuse the field rather than to invent a treatment for it.
+ *
+ * This is strict about storage too, and deliberately: a layer that reads rows
+ * with their own columns attached (`created_at`, a row id, `business_id`) must
+ * project to the declared shape before calling in. That obligation is written
+ * in `P6-INTEGRATION-PATCH-REQUEST.md` §6, and it fails closed.
+ */
+function assertCanonicalInput(input: CommercialQuoteInput): void {
+  const allowed = new Set<string>(CANONICAL_QUOTE_FIELDS as readonly string[]);
+  const extra = Object.keys(input).filter((key) => !allowed.has(key));
+  if (extra.length > 0) {
+    throw new OrderError(
+      'order.quote_field_undeclared',
+      'the quote input carries a field this package does not price or digest; a document-level fee or any other amount must be ruled on by the Accounting Authority (ACC-REQ-P6-03) before it can be carried',
+      {
+        quoteId: String((input as { quoteId?: unknown }).quoteId),
+        fields: extra.sort().join(','),
+      },
+    );
+  }
+  const allowedLine = new Set<string>(CANONICAL_LINE_FIELDS as readonly string[]);
+  const lines = Array.isArray(input.lines) ? input.lines : [];
+  for (const [index, line] of lines.entries()) {
+    if (line === null || typeof line !== 'object') continue;
+    const extraLine = Object.keys(line).filter((key) => !allowedLine.has(key));
+    if (extraLine.length > 0) {
+      throw new OrderError('order.quote_field_undeclared', 'a quote input LINE carries a field this package does not price or digest', {
+        quoteId: String((input as { quoteId?: unknown }).quoteId),
+        lineIndex: String(index),
+        fields: extraLine.sort().join(','),
+      });
+    }
+  }
+}
+
+/**
+ * Refuse a quote whose CARRIER is not the digested stream.
+ *
+ * The digest covers a field list; an object can carry more. A consumer reading
+ * such a field off a quote has NO tamper evidence for it, while the quote's own
+ * digest check answers "untampered" — which is worse than no evidence, because
+ * the check was consulted and said yes. So an undeclared field is refused
+ * rather than ignored, and the refusal names it.
+ *
+ * This is deliberately strict about one thing in particular: a storage layer
+ * that reads a quote back with its own columns attached (`created_at`, a row
+ * id) must map to the declared shape before this function is reached. That is
+ * the cost of the immutability claim being checkable, and it fails closed.
+ */
+function assertCanonicalCarrier(quote: CommercialQuote): void {
+  const allowed = new Set<string>([...CANONICAL_QUOTE_FIELDS, 'digest']);
+  const extra = Object.keys(quote).filter((key) => !allowed.has(key));
+  if (extra.length > 0) {
+    throw new OrderError('order.quote_field_undeclared', 'a quote carries a field the canonical stream does not cover, so nothing attests to it', {
+      quoteId: String(quote.quoteId),
+      fields: extra.sort().join(','),
+    });
+  }
+  const allowedLine = new Set<string>(CANONICAL_LINE_FIELDS);
+  for (const [index, line] of quote.lines.entries()) {
+    const extraLine = Object.keys(line).filter((key) => !allowedLine.has(key));
+    if (extraLine.length > 0) {
+      throw new OrderError('order.quote_field_undeclared', 'a quote LINE carries a field the canonical stream does not cover, so nothing attests to it', {
+        quoteId: String(quote.quoteId),
+        lineIndex: String(index),
+        fields: extraLine.sort().join(','),
+      });
+    }
+  }
+}
+
+/**
  * What is CHECKED about a quote without being part of it.
  *
- * It is a second parameter rather than a field of the input on purpose: the
- * input is exactly what the digest is taken over, and a checking aid that lived
- * on the input would either enter the canonical stream or have to be excluded
- * from it by hand, which is the kind of exception a later author drops.
+ * It is a second parameter rather than a field of the input on purpose: a
+ * checking aid that lived on the input would either enter the canonical stream
+ * or have to be excluded from it by hand, which is the kind of exception a
+ * later author drops.
+ *
+ * This paragraph used to justify that by saying "the input is exactly what the
+ * digest is taken over". That was NOT true, and round 10's F-34 was right to
+ * name the sentence rather than only the behaviour: the digest is taken over a
+ * hand-written field list, and the builder used to return the whole input
+ * beside it. The decision was sound and its stated reason was not. As of this
+ * commit the sentence is true in the only way that can be checked — the
+ * builder returns exactly the digested fields and `assertQuoteIntact` refuses a
+ * carrier that holds more (`order.quote_field_undeclared`) — and the reason
+ * above no longer rests on the claim.
  */
 export interface CommercialQuoteChecks {
   /**
@@ -256,12 +410,35 @@ export interface CommercialQuoteChecks {
  * inventing a pricing policy.
  */
 export function buildCommercialQuote(input: CommercialQuoteInput, checks?: CommercialQuoteChecks): CommercialQuote {
+  // R-16: an undeclared field is refused HERE, by name, before anything is
+  // computed. `canonicalCarrier` below then keeps the carrier equal to the
+  // digested stream even for a caller that reaches the builder another way
+  // (`assertQuoteIntact` re-runs this function on a stored quote). Two layers,
+  // because the first states the law to the caller and the second keeps the
+  // claim true for a quote that was not built here.
+  assertCanonicalInput(input);
   assertCanonicalId(input.quoteId, 'quoteId');
   assertCanonicalId(input.orderId, 'orderId');
 
   if (!Number.isInteger(input.version) || input.version < 1) {
     throw new OrderError('order.quote_version_invalid', 'a quote version is an integer of at least 1');
   }
+  // R-20, named rather than closed, and the limit is stated where a reader
+  // meets it: this is a SHAPE check, so `XYZ` is accepted. The platform's
+  // currency registry (`@daftar/domain-core`, `minorUnitsOf`, which throws for
+  // an unsupported code) is not consulted, because `packages/orders` does not
+  // depend on `@daftar/domain-core` and adding a workspace dependency
+  // regenerates the ROOT lockfile, which belongs to the Repo Owner (PART 8).
+  // `P6-INTEGRATION-PATCH-REQUEST.md` §7 asks for it, together with an FK from
+  // `order_quotes.currency` to `currencies` so the database closes it too.
+  //
+  // What the gap can and cannot cost, measured rather than assumed: every
+  // amount in this module already arrives in integer MINOR units, so the
+  // rounding rule never consults an exponent and cannot default to a wrong one.
+  // An unknown code therefore cannot move money here; it can only let an
+  // unknown code be STORED on a quote. That is why this is a residual and not a
+  // blocker, and why the suite carries an exponent-0 case (JPY) to pin that the
+  // rule is exponent-agnostic.
   if (!/^[A-Z]{3}$/.test(input.currency)) {
     throw new OrderError('order.quote_amount_invalid', 'currency must be a three-letter uppercase code', { field: 'currency' });
   }
@@ -329,7 +506,11 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
     });
   }
 
-  return { ...input, lines: Object.freeze([...input.lines]), digest: digestOf(input) };
+  // The carrier is reduced to exactly the digested fields (F-34). Spreading the
+  // input would hand back whatever else the caller had attached, with the
+  // package's own digest beside it and nothing attesting to it.
+  const carrier = canonicalCarrier(input);
+  return Object.freeze({ ...carrier, digest: digestOf(carrier) });
 }
 
 /**
@@ -341,6 +522,10 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
  * the shopper confirmed.
  */
 export function assertQuoteIntact(quote: CommercialQuote, checks?: CommercialQuoteChecks): void {
+  // BEFORE the digest, because the digest's verdict is only as wide as the
+  // fields it covers: a quote carrying an undeclared field gets "untampered"
+  // for bytes nobody attested to (F-34).
+  assertCanonicalCarrier(quote);
   const { digest, ...rest } = quote;
   const recomputed = digestOf(rest);
   if (recomputed !== digest) {

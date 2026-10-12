@@ -103,7 +103,34 @@ export interface ChannelReconciliationReport {
   /** Sales with a null `orderId` — direct and POS sales, correctly out of scope. */
   salesWithoutChannelOrigin: number;
   findings: readonly ReconciliationFinding[];
-  /** `true` only when the findings list is empty. */
+  /**
+   * The finding codes that had NOTHING to judge in this input, so their absence
+   * from `findings` says nothing about the world.
+   *
+   * The coordinator's review of `7834bfb` raised this as `R-19`: the report
+   * returned `isReconciled: true` while two of its six checks were structurally
+   * blind, and the only hint was a count the reader had to interpret. Two of
+   * the six are reachable ONLY through `CanonicalSaleRow.orderId`, and Phase 4's
+   * `sales` relation at `93084f8` has no order back-reference
+   * (`0077_sales_core.sql:219-253`), so a faithful caller supplies `null` for
+   * every sale and those two checks never fire. That is a cross-phase seam, not
+   * a defect of this function, and the honest thing is to SAY SO in the report
+   * rather than to let an empty findings list read as coverage.
+   *
+   * It is DERIVED from the input, never hard-coded: if a single supplied sale
+   * names an order, both checks were live and this list is empty. So when Phase
+   * 4 gains the back-reference, the list empties itself with no edit here.
+   */
+  blindChecks: readonly ReconciliationFindingCode[];
+  /**
+   * `true` only when the findings list is empty.
+   *
+   * It is NOT a statement that everything was checked: read it together with
+   * `blindChecks`, which names what could not be. Keeping the two separate is
+   * deliberate — `isReconciled` answers "did any check I could run fail?", and
+   * conflating that with coverage would make a clean POS-only day read as a
+   * discrepancy.
+   */
   isReconciled: boolean;
 }
 
@@ -172,11 +199,13 @@ export function reconcileChannelOrders(orders: readonly ChannelOrderRow[], sales
   }
 
   let salesWithoutChannelOrigin = 0;
+  let salesNamingAnOrder = 0;
   for (const sale of sales) {
     if (sale.orderId === null) {
       salesWithoutChannelOrigin += 1;
       continue;
     }
+    salesNamingAnOrder += 1;
     const order = orderById.get(sale.orderId);
     if (order === undefined) {
       findings.push({ code: 'sale_without_order', orderId: sale.orderId, saleId: sale.saleId, counterpartId: null });
@@ -192,6 +221,11 @@ export function reconcileChannelOrders(orders: readonly ChannelOrderRow[], sales
     checkedSales: sales.length,
     salesWithoutChannelOrigin,
     findings: Object.freeze(findings),
+    // Both of these read `sale.orderId`, and nothing else does. If no supplied
+    // sale named an order, neither could have fired, whatever the findings say.
+    blindChecks: Object.freeze(
+      salesNamingAnOrder === 0 ? (['sale_without_order', 'order_sale_mismatch'] as const).slice() : [],
+    ) as readonly ReconciliationFindingCode[],
     isReconciled: findings.length === 0,
   };
 }

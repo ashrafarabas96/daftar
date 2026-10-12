@@ -887,3 +887,141 @@ describe('a malformed approval is refused, not crashed on (coordinator R-09)', (
     expect(() => assertQuoteApproved(honest, ORDER)).not.toThrow();
   });
 });
+
+// Round-10 challenge F-34. `buildCommercialQuote` returned `{ ...input, lines,
+// digest }` while `canonicalQuoteBytes` is a hand-written field list, so a field
+// the caller had attached to the input rode onto the returned quote OUTSIDE the
+// digest — and `assertQuoteIntact` then answered "untampered" after that field
+// had been rewritten. Reproduced here first, and it was WIDER than the report:
+// it held for a LINE's extra field too. The money path was never open (a total
+// inflated by a fee is refused as `order.quote_total_mismatch`), so what this
+// closes is the SCOPE of the immutability claim: a consumer reading a field off
+// a quote now either has tamper evidence for it or cannot read it at all.
+describe('the carrier is the digested stream, not a superset of it (round-10 F-34)', () => {
+  const withExtra = { ...INPUT, documentFeeMinor: '5' } as CommercialQuoteInput & { documentFeeMinor: string };
+
+  it('R-16: the builder REFUSES a field the canonical stream does not cover, and names it', () => {
+    // Until this commit the builder STRIPPED it. The coordinator's review of
+    // `7834bfb` was right that stripping makes the pack's own sentence false:
+    // `ACC-REQ-P6-03` says a document-level fee is "fail-closed, not silently
+    // dropped", and a silently dropped field is the definition of the second.
+    // The refusal happens at the INPUT, before anything is computed, so a
+    // caller who sends a fee learns that this package does not price one.
+    try {
+      buildCommercialQuote(withExtra);
+      throw new Error('a quote input carrying an undeclared field was accepted');
+    } catch (error) {
+      expect((error as OrderError).code).toBe('order.quote_field_undeclared');
+      expect((error as OrderError).details?.fields).toBe('documentFeeMinor');
+    }
+  });
+
+  it('R-16: names EVERY undeclared field, sorted, not just the first one found', () => {
+    const two = { ...INPUT, documentFeeMinor: '5', serviceChargeMinor: '9' } as CommercialQuoteInput;
+    try {
+      buildCommercialQuote(two);
+      throw new Error('accepted two undeclared fields');
+    } catch (error) {
+      expect((error as OrderError).details?.fields).toBe('documentFeeMinor,serviceChargeMinor');
+    }
+  });
+
+  it('R-16: refuses it on a LINE too, with the line index', () => {
+    const lineExtra = {
+      ...INPUT,
+      lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), surcharge: '7' }, ...INPUT.lines.slice(1)],
+    } as CommercialQuoteInput;
+    try {
+      buildCommercialQuote(lineExtra);
+      throw new Error('a quote input line carrying an undeclared field was accepted');
+    } catch (error) {
+      expect((error as OrderError).code).toBe('order.quote_field_undeclared');
+      expect((error as OrderError).details?.lineIndex).toBe('0');
+      expect((error as OrderError).details?.fields).toBe('surcharge');
+    }
+  });
+
+  it('a lawful input still builds, and to the same digest — the refusal is scoped to extra fields', () => {
+    expect(buildCommercialQuote(INPUT).digest).toBe(QUOTED.digest);
+  });
+
+  it('refuses a hand-built carrier that holds an undeclared field, and NAMES it', () => {
+    // The challenger's own case: set the fee, build, then rewrite it in place —
+    // exactly what `order.quote_tampered` exists to catch. Before this commit
+    // `assertQuoteIntact` answered UNTAMPERED.
+    const forged = { ...QUOTED, documentFeeMinor: '500000' } as CommercialQuote;
+    try {
+      assertQuoteIntact(forged);
+      throw new Error('a quote carrying an undeclared field was accepted as intact');
+    } catch (error) {
+      expect((error as OrderError).code).toBe('order.quote_field_undeclared');
+      expect((error as OrderError).details?.fields).toBe('documentFeeMinor');
+    }
+  });
+
+  it('refuses it on a line, with the line INDEX, so the holder can be found', () => {
+    const forged = { ...QUOTED, lines: [QUOTED.lines[0] as object, { ...(QUOTED.lines[1] as object), surcharge: '9' }] } as unknown as CommercialQuote;
+    try {
+      assertQuoteIntact(forged);
+      throw new Error('a quote line carrying an undeclared field was accepted as intact');
+    } catch (error) {
+      expect((error as OrderError).code).toBe('order.quote_field_undeclared');
+      expect((error as OrderError).details?.lineIndex).toBe('1');
+      expect((error as OrderError).details?.fields).toBe('surcharge');
+    }
+  });
+
+  it('the digested stream and the carried fields are THE SAME SET', () => {
+    // The agreement the two field lists and `canonicalQuoteBytes` have to keep,
+    // asserted rather than left to a comment. Every carried field must be
+    // digest-RELEVANT: changing it alone must change the bytes. A field in the
+    // carrier that the stream ignores would be F-34 again under another name.
+    const { digest: _digest, ...carried } = QUOTED;
+    expect(Object.keys(carried).sort()).toEqual(['currency', 'displayedTotalMinor', 'expiresAt', 'issuedAt', 'lines', 'orderId', 'quoteId', 'version'].sort());
+    expect(Object.keys(QUOTED.lines[0] as object).sort()).toEqual(
+      ['discountMinor', 'lineTotalMinor', 'productId', 'quantity', 'stockKey', 'unitPriceMinor', 'variantId'].sort(),
+    );
+    const base = canonicalQuoteBytes(carried as CommercialQuoteInput);
+    const moved: Record<string, unknown> = {
+      quoteId: ORDER,
+      orderId: QUOTE,
+      version: 2,
+      currency: 'USD',
+      displayedTotalMinor: '3800',
+      issuedAt: '2026-10-01T09:00:01Z',
+      expiresAt: null,
+      lines: [INPUT.lines[1], INPUT.lines[0]],
+    };
+    for (const [field, value] of Object.entries(moved)) {
+      expect(canonicalQuoteBytes({ ...(carried as CommercialQuoteInput), [field]: value })).not.toBe(base);
+    }
+    for (const field of Object.keys(QUOTED.lines[0] as object)) {
+      const line = { ...(INPUT.lines[0] as (typeof INPUT.lines)[number]) } as Record<string, unknown>;
+      line[field] = field === 'variantId' ? null : `${String(line[field])}x`;
+      expect(canonicalQuoteBytes({ ...(carried as CommercialQuoteInput), lines: [line as unknown as (typeof INPUT.lines)[number]] })).not.toBe(base);
+    }
+  });
+
+  it('the APPROVAL path reaches the same refusal, so a refactor of it cannot drop the guard', () => {
+    // The coordinator's ruling: one call site, not two, and a case proving the
+    // path reaches it. `assertQuoteApproved` validates the quote through
+    // `assertQuoteIntact`, so a wider carrier is refused there too — and the day
+    // someone reorders that path, this case reds instead of the guard silently
+    // disappearing from the approval route.
+    const forged = { ...QUOTED, documentFeeMinor: '500000' } as CommercialQuote;
+    const approvalOfForged = approve(forged);
+    try {
+      assertQuoteApproved(approvalOfForged, ORDER);
+      throw new Error('an approval of a quote carrying an undeclared field was accepted');
+    } catch (error) {
+      expect((error as OrderError).code).toBe('order.quote_field_undeclared');
+      expect((error as OrderError).details?.fields).toBe('documentFeeMinor');
+    }
+  });
+
+  it('and an ordinary quote is still intact, so the new guard refuses nothing lawful', () => {
+    expect(() => assertQuoteIntact(QUOTED)).not.toThrow();
+    expect(() => assertQuoteApproved(APPROVAL, ORDER)).not.toThrow();
+    expect(() => assertQuoteIntact({ ...QUOTED, currency: 'USD' })).toThrowError(expect.objectContaining({ code: 'order.quote_tampered' }));
+  });
+});

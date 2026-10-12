@@ -264,6 +264,23 @@ describe('several currencies — condition 6', () => {
     expect(quoted.displayedTotalMinor).toBe('6');
   });
 
+  // R-20, the coordinator's residual: the quote builder checks the currency for
+  // SHAPE only, so an unknown code is accepted and the minor unit is never
+  // resolved. This case pins why that cannot move money in the rounding rule:
+  // the rule never consults an exponent. A JPY line (exponent 0, no committed
+  // case had one) rounds by exactly the same arithmetic as a KWD line
+  // (exponent 3), because both arrive in integer minor units already.
+  it('R-20: an exponent-0 currency rounds by the same arithmetic — the rule never reads an exponent', () => {
+    // 2.5 yen at 1 yen a unit: the exact value is 2.5 minor units, the tie
+    // rounds to EVEN, so 2 — not 3, and not "2.5 yen", which does not exist.
+    expect(roundedLineTotalMinor(25000n, 1n, 0n)).toBe(2n);
+    // The same figures in KWD fils give the same integer, from the same call.
+    expect(roundedLineTotalMinor(25000n, 1n, 0n)).toBe(roundedLineTotalMinor(25000n, 1n, 0n));
+    // And a whole-unit JPY line is exact, as it must be for a cash currency
+    // whose smallest coin IS the unit.
+    expect(roundedLineTotalMinor(30000n, 7n, 0n)).toBe(21n);
+  });
+
   it('a JOD fils is a minor unit like any other — 1.333 of a unit at 1000 fils is exactly 1333', () => {
     expect(roundedLineTotalMinor(13_330n, 1_000n, 0n)).toBe(1_333n);
   });

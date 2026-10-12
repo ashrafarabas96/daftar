@@ -6,8 +6,14 @@
  * exact value (quantity × unit price, less the approved discounts) falls
  * between two minor units, is each LINE rounded and the lines summed, or are
  * the exact values summed and the TOTAL rounded once? The owner chose per line,
- * with seven conditions. This module is the law; the request's `I6.5` and the
- * tests named below are the rest of the answer.
+ * with seven conditions. This module is the law; the migration patch request's
+ * `I6.2` (which the decision overturned, and which now states the owner's
+ * ruling and cites his message) and the tests named below are the rest of the
+ * answer.
+ *
+ * The earlier revision of this header cited the request's `I6.5`. That was the
+ * wrong cross-reference — `I6.5` is about `issued_at` having no column default
+ * — and the coordinator's review of `7834bfb` named it `R-17`.
  *
  * **Condition 1 — one rounding, after the quantity and the discounts.** The
  * exact line value is `quantity × unitPrice − discount`, and it is rounded
@@ -41,10 +47,21 @@
  *
  * Nor does it carry the rule into the postings, the collected amount, or a
  * return or reversal. Those belong to the accounting and sales authorities, and
- * conditions 4 and 5 are carried to them as named requests in the migration
- * patch request (`ACC-REQ-P6-01`, `ACC-REQ-P6-02`) rather than built here. A
- * phase that implemented a refund's rounding on its own would be the second
- * money truth this package exists to avoid.
+ * conditions 4 and 5 are carried to them as named requests rather than built
+ * here. A phase that implemented a refund's rounding on its own would be the
+ * second money truth this package exists to avoid.
+ *
+ * `ACC-REQ-P6-01` (condition 4: displayed = stored = collected = postings),
+ * `ACC-REQ-P6-02` (condition 5: returns, reversals and allocations) and
+ * `ACC-REQ-P6-03` (a document-level fee) are stated in
+ * `P6-MIGRATION-PATCH-REQUEST.md` §ACC-REQ, where the Accounting Authority and
+ * the Migration Owner read them, and are repeated in
+ * `P6-OWNER-DECISION-LINE-ROUNDING.md` §4. Until this commit this header said
+ * they were in the request and they were not — the coordinator's `R-17`. Each
+ * one is fail-closed in code by ABSENCE: this package computes no posting, no
+ * collected amount and no refund, and since this commit a fee sent as a FIELD
+ * is refused by name as `order.quote_field_undeclared` rather than silently
+ * dropped (`quote.ts`, `assertCanonicalInput`; the coordinator's `R-16`).
  */
 import { roundHalfEven } from '@daftar/inventory';
 import { OrderError } from './errors';

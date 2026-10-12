@@ -681,3 +681,44 @@ describe('the retraction instant seam, stated (coordinator R-06)', () => {
     ).not.toThrow();
   });
 });
+
+// Round-10 addendum F-37 and F-38: the two things the consumption skip does NOT
+// do. Both are deliberate and both were unstated; these cases pin the behaviour
+// so a later reader meets it here rather than at the till, and so a change of
+// mind has to red a case rather than slip through.
+describe('what the consumption skip deliberately does not check (round-10 addendum)', () => {
+  const ORDER_X = '99999999-9999-4999-8999-999999999999';
+  const consumed = (over: Partial<CartLine> = {}): CartLine => ({
+    lineId: LINE(2),
+    productId: PRODUCT_A,
+    variantId: null,
+    quantity: '5',
+    retractedAt: null,
+    consumedByOrderId: ORDER_X,
+    ...over,
+  });
+  const live: CartLine = { lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity: '2', retractedAt: null, consumedByOrderId: null };
+
+  it('F-37: garbage on a consumed line is ACCEPTED, because the skip comes first', () => {
+    for (const over of [{ productId: 'not-a-uuid' }, { quantity: 'abc' }, { quantity: '-5' }, { productId: PRODUCT_B, variantId: VARIANT_1 }]) {
+      const positions = summariseAt([live, consumed(over)], PRECISION);
+      expect(positions).toHaveLength(1);
+      expect(positions[0]?.totalQuantity).toBe('2.0000');
+    }
+  });
+
+  it('F-37: and a live line with that same garbage is still refused, so nothing was loosened', () => {
+    expect(() => summariseAt([{ ...live, productId: 'not-a-uuid' }], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.id_invalid' }));
+    expect(() => summariseAt([{ ...live, quantity: 'abc' }], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_quantity_invalid' }));
+  });
+
+  it('F-38: a line consumed by an UNRELATED order is skipped exactly like one consumed by this order', () => {
+    const byAnother = summariseAt([live, consumed({ consumedByOrderId: '88888888-8888-4888-8888-888888888888' })], PRECISION);
+    const byThis = summariseAt([live, consumed()], PRECISION);
+    expect(byAnother.map((p) => p.totalQuantity)).toEqual(byThis.map((p) => p.totalQuantity));
+    // The identity half is an app-tier seam, not a law this function can claim:
+    // it is never given an order id, and the relation's `I2.3d` closes the
+    // BUSINESS scope rather than the order identity.
+    expect(summariseBasket.length).toBe(3);
+  });
+});

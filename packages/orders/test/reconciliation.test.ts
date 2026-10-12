@@ -202,6 +202,37 @@ describe('the sale-side seam is stated, not assumed away (coordinator R-10)', ()
     expect(report.salesWithoutChannelOrigin).toBe(1);
   });
 
+  it('R-19: the report NAMES the two blind checks, so a clean result is not read as coverage', () => {
+    const report = reconcileChannelOrders([{ orderId: O1, channel: 'storefront', state: 'fulfilled', saleId: S1 }], [{ saleId: S1, orderId: null }]);
+    expect(report.isReconciled).toBe(true);
+    // The coordinator's R-19: `isReconciled: true` over a structural blind spot
+    // said more than the function knew. It still answers "no check I could run
+    // failed", and `blindChecks` now answers "and these could not be run".
+    expect([...report.blindChecks].sort()).toEqual(['order_sale_mismatch', 'sale_without_order']);
+  });
+
+  it('R-19: and the list EMPTIES ITSELF as soon as one sale names an order — it is derived, not hard-coded', () => {
+    const report = reconcileChannelOrders([{ orderId: O1, channel: 'storefront', state: 'fulfilled', saleId: S1 }], [{ saleId: S1, orderId: O1 }]);
+    expect(report.blindChecks).toEqual([]);
+    // A mixed day: one POS sale with no order, one channel sale with one. The
+    // checks were live, so nothing is blind even though a null is present.
+    const mixed = reconcileChannelOrders(
+      [{ orderId: O1, channel: 'storefront', state: 'fulfilled', saleId: S1 }],
+      [
+        { saleId: S1, orderId: O1 },
+        { saleId: S2, orderId: null },
+      ],
+    );
+    expect(mixed.blindChecks).toEqual([]);
+    expect(mixed.salesWithoutChannelOrigin).toBe(1);
+  });
+
+  it('R-19: an EMPTY sale list is blind too — nothing judged it, so nothing may be claimed', () => {
+    const report = reconcileChannelOrders([{ orderId: O1, channel: 'storefront', state: 'placed', saleId: null }], []);
+    expect(report.isReconciled).toBe(true);
+    expect([...report.blindChecks].sort()).toEqual(['order_sale_mismatch', 'sale_without_order']);
+  });
+
   it('and they DO fire the moment a sale names an order, so the fold itself is not the gap', () => {
     expect(codes([], [{ saleId: S1, orderId: O1 }])).toEqual(['sale_without_order']);
     expect(codes([{ orderId: O1, channel: 'storefront', state: 'fulfilled', saleId: S2 }], [{ saleId: S1, orderId: O1 }])).toContain('order_sale_mismatch');

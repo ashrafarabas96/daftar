@@ -242,6 +242,38 @@ export function summariseBasket(
       // Its id stays claimed above, so it cannot be reused to smuggle a
       // duplicate, and `I2.7`'s finality is the database's answer to a second
       // consumption of the same line.
+      //
+      // WHICH PART OF THE RETRACTION REASONING CARRIES OVER, and which does not
+      // (round-10 addendum F-37, and the challenger was right that the silence
+      // was the finding). Because the skip happens HERE, a consumed line with a
+      // garbage `productId`, an unparseable quantity, or a stock key the caller
+      // declared no precision for is ACCEPTED — measured. For a retraction the
+      // justification is the shopper: they removed the line, and the catalogue
+      // may legitimately have changed its unit precision since, so the line may
+      // no longer be priceable through no fault of anyone's. **That half does
+      // NOT carry over.** A consumed line was not removed by the shopper, it was
+      // turned into an order, so garbage on it is evidence that something
+      // upstream is wrong rather than evidence that the catalogue moved.
+      //
+      // What does carry over is the consequence, and it is why this is still a
+      // skip: the line is no longer part of this basket, refusing the whole
+      // basket over it cannot help the shopper, and the order that consumed it is
+      // where those same figures were already checked and digested. A caller
+      // that wants the upstream defect SURFACED should validate the rows it
+      // reads, not ask the merge to refuse a basket over a line it is not
+      // pricing.
+      //
+      // AND THIS LAYER DOES NOT CHECK **WHICH** ORDER CONSUMED THE LINE
+      // (round-10 addendum F-38): a line consumed by an unrelated order is
+      // skipped exactly like one consumed by this order's own checkout. It
+      // cannot check it — the merge is not given an order id, and handing it one
+      // would make a basket read depend on a checkout, inverting the dependency.
+      // The relation closes the BUSINESS scope (`I2.3d`,
+      // `(business_id, consumed_by_order_id) → orders (business_id, id)`) and not
+      // the order identity, so the identity half is an APP-TIER seam: whoever
+      // reads basket lines for a checkout reads the live ones
+      // (`WHERE consumed_by_order_id IS NULL`, `R8`) rather than relying on this
+      // skip to sort out whose consumption it was.
       consumedLines += 1;
       continue;
     }
