@@ -77,11 +77,47 @@ export async function createBusiness(
   businessId: string,
   baseCurrency = 'USD',
 ): Promise<void> {
-  await c.query(`INSERT INTO ${schema}.tenants (id) VALUES ($1) ON CONFLICT DO NOTHING`, [tenantId]);
+  // ROUND 12: the column list is DISCOVERED, not written down, because this
+  // same helper now creates a business in the FIXTURE copy and in the REAL
+  // `businesses`, and the real one has thirteen columns to the fixture's
+  // six. Writing the real list here would make the fixture lane fail;
+  // writing the fixture list here is what made the real-schema lane fail
+  // with `invalid IANA timezone: <NULL>` the first time it ran — the
+  // frozen table carries a `timezone` NOT NULL and a trigger that
+  // validates it against `pg_timezone_names`, which no fixture had.
+  const columns = await c.query<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema = $1 AND table_name = 'businesses'`,
+    [schema],
+  );
+  const have = new Set(columns.rows.map((row) => row.column_name));
+  if (have.size === 0) throw new Error(`no ${schema}.businesses to create a business in`);
+
+  // `PS` and `Asia/Hebron` are the frozen `country_registry` row for
+  // Palestine, so the country FK and the timezone trigger are both
+  // satisfied by data the project itself seeds.
+  const supply: ReadonlyArray<readonly [string, unknown]> = [
+    ['tenant_id', tenantId],
+    ['id', businessId],
+    ['name', `fixture ${businessId}`],
+    ['store_slug', `b-${businessId}`],
+    ['country_code', 'PS'],
+    ['base_currency', baseCurrency],
+    ['timezone', 'Asia/Hebron'],
+  ];
+  const used = supply.filter(([column]) => have.has(column));
+  const names = used.map(([column]) => column).join(', ');
+  const holes = used.map((_, i) => `$${i + 1}`).join(', ');
+
+  if (have.has('tenant_id')) {
+    // The real `tenants` table may carry columns of its own; the same
+    // discovery applies, and anything NOT NULL without a default that this
+    // helper cannot supply is a finding, not something to guess at.
+    await c.query(`INSERT INTO ${schema}.tenants (id) VALUES ($1) ON CONFLICT DO NOTHING`, [tenantId]);
+  }
   await c.query(
-    `INSERT INTO ${schema}.businesses (tenant_id, id, name, store_slug, country_code, base_currency)
-     VALUES ($1, $2, $3, $4, 'PS', $5)`,
-    [tenantId, businessId, `fixture ${businessId}`, `b-${businessId}`, baseCurrency],
+    `INSERT INTO ${schema}.businesses (${names}) VALUES (${holes})`,
+    used.map(([, value]) => value),
   );
 }
 

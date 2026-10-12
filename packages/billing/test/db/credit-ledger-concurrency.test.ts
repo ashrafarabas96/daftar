@@ -38,7 +38,7 @@ import type { Client } from 'pg';
 
 import { foldCreditBalance } from '../../src/credit';
 import { BillingError } from '../../src/errors';
-import { appUrl, connect, isBlocked, ownerUrl, pidOf, refusedBy, uuid, waitUntilBlocked } from './helpers/cluster';
+import { appUrl, borrowedSchema, connect, isBlocked, ownerUrl, pidOf, refusedBy, setRequestContext, uuid, waitUntilBlocked } from './helpers/cluster';
 import {
   consumedMinor,
   createBusiness,
@@ -63,7 +63,7 @@ async function freshScope(schema: string, currency = 'USD'): Promise<Scope> {
   const businessId = uuid();
   if (schema === 'p5scratch') {
     // ROUND 11: the fixture now carries the real table's NOT NULL columns.
-    await createBusiness(owner, schema, TENANT, businessId, currency);
+    await createBusiness(owner, borrowedSchema(), TENANT, businessId, currency);
   } else {
     // `p5naive` is the DELIBERATELY WRONG design, kept as the control that
     // shows the hazard exists at all. Its stub stays a stub: making it
@@ -726,7 +726,7 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
     await insertGrant(owner, 'p5scratch', s, 100n, T0);
     const app = await connect(appUrl());
     try {
-      await app.query(`SELECT set_config('app.business_id', $1, false)`, [s.businessId]);
+      await setRequestContext(app, s);
       const upd = await app
         .query(`UPDATE p5scratch.platform_credit_adjustments SET reason = 'x' WHERE business_id = $1`, [s.businessId])
         .then(() => '', (e: unknown) => refusedBy(e));
@@ -760,7 +760,7 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
 
     const app = await connect(appUrl());
     try {
-      await app.query(`SELECT set_config('app.business_id', $1, false)`, [mine.businessId]);
+      await setRequestContext(app, mine);
       const seen = await app.query<{ n: string }>(
         `SELECT count(*)::text AS n FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`,
         [theirs.businessId],

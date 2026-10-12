@@ -25,73 +25,24 @@
 --     That is a weaker claim than `PROVEN BY DATABASE CATALOGUE` on the
 --     real tree and it is deliberately named differently.
 --
--- `p5scratch.businesses`, `p5scratch.tenants` and `p5scratch.currencies`
--- are STAND-INS for the live relations, and from ROUND 11 they are copied
--- from the frozen migrations rather than reduced to the columns this
--- package happened to need. The challenger's §5 cross-check measured the
--- old stub: `businesses` had 2 of the real table's 13 columns, four of
--- which are NOT NULL with no default (`name`, `store_slug`,
--- `country_code`, `base_currency`), so a two-column INSERT that worked
--- here would have failed on the real table; and `tenants`, which the real
--- `businesses.tenant_id` references, was absent entirely. Those four
--- columns and that reference are now here, with the real CHECKs, copied
--- from `0003_tenancy.sql`. `currencies` and its seven seeded rows are
--- copied from `0001_platform.sql`, including `minor_units`, which is the
--- canonical source of a currency's precision — nothing in this package
--- restates it.
---
--- They are still a FIXTURE, not the real tables: the remaining nine
--- columns of `businesses` are absent, and no RLS policy of the live
--- schema is reproduced on them. `P5-CHECKPOINT.md` §9 states that limit
--- rather than leaving it to be discovered at promotion.
+-- `businesses`, `tenants`, `currencies` and `business_entitlements` are
+-- referenced here and defined NOWHERE in this file. In the fixture lane
+-- they are the copies in `credit-ledger-fixture.sql`; in the real-schema
+-- lane they are the FROZEN relations in `public`, created by applying the
+-- whole migration history with the project's own runner. Which of the two
+-- a given run used is part of that run's evidence, because they are not
+-- the same claim: the fixture omits nine columns of `businesses` and every
+-- live RLS policy on the borrowed relations, as `P5-CHECKPOINT.md` §9
+-- states.
 -- =====================================================================
 
-DROP SCHEMA IF EXISTS p5scratch CASCADE;
-CREATE SCHEMA p5scratch;
-
--- From `0001_platform.sql`, verbatim in shape and in seed. `minor_units`
--- is why it is here: a currency's precision is a FACT OF THIS TABLE, and
--- JOD has three minor units while every other seeded currency has two.
--- A three-letter shape CHECK cannot know that, and `ZZZ` passes a shape
--- CHECK while naming no currency at all.
-CREATE TABLE p5scratch.currencies (
-  code         text     PRIMARY KEY,
-  numeric_code text     NOT NULL UNIQUE,
-  minor_units  smallint NOT NULL CHECK (minor_units BETWEEN 0 AND 3)
-);
-INSERT INTO p5scratch.currencies (code, numeric_code, minor_units) VALUES
-  ('ILS','376',2), ('JOD','400',3), ('LBP','422',2), ('SYP','760',2),
-  ('TRY','949',2), ('USD','840',2), ('EUR','978',2);
-
--- The relation the real `businesses.tenant_id` references. One column of
--- it is enough for a reference to be a reference; the point is that the
--- fixture no longer omits the parent.
-CREATE TABLE p5scratch.tenants (
-  id uuid NOT NULL PRIMARY KEY
-);
-
-CREATE TABLE p5scratch.businesses (
-  tenant_id     uuid NOT NULL REFERENCES p5scratch.tenants (id),
-  id            uuid NOT NULL PRIMARY KEY,
-  -- The four NOT NULL columns with no default, with the live CHECKs from
-  -- `0003_tenancy.sql`. They are unnamed here exactly as they are there.
-  name          text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 160),
-  store_slug    text NOT NULL UNIQUE CHECK (store_slug ~ '^[a-z0-9][a-z0-9-]{1,62}$'),
-  country_code  text NOT NULL CHECK (country_code ~ '^[A-Z]{2}$'),
-  base_currency text NOT NULL REFERENCES p5scratch.currencies (code),
-  CONSTRAINT businesses_tenant_id_id_uq UNIQUE (tenant_id, id)
-);
-
--- From `0007_entitlements.sql` with the state set `0021_saas_enforcement.sql`
--- replaced it with. It is here for ONE purpose: to show that this slice has
--- no write path into it. The subscription state machine is not Phase 5's to
--- move, and `P5-ENTITLEMENT-RECONCILIATION-CONTRACT.md` says who owns it and
--- what P5 may do instead. Keyed by `business_id` ALONE, as the real table is.
-CREATE TABLE p5scratch.business_entitlements (
-  business_id uuid NOT NULL PRIMARY KEY REFERENCES p5scratch.businesses (id),
-  state       text NOT NULL CHECK (state IN ('trial','active','grace_period','past_due','paused',
-                                             'cancel_at_period_end','cancelled','expired','complimentary'))
-);
+-- ROUND 12: the borrowed relations moved to `credit-ledger-fixture.sql`,
+-- and every reference to one of them below is UNQUALIFIED on purpose, so
+-- that this same DDL can be applied either on top of the fixture copies or
+-- on top of the REAL schema produced by the project's own migration runner.
+-- The lane creates the schema; this file no longer does, because in the
+-- real-schema lane the fixture file is not applied at all.
+SET search_path = p5scratch, public;
 
 -- ── the ledger ───────────────────────────────────────────────────────
 CREATE TABLE p5scratch.platform_credit_adjustments (
@@ -136,9 +87,9 @@ CREATE TABLE p5scratch.platform_credit_adjustments (
   -- regular expression, and the regular expression stays only as the
   -- cheap first answer.
   CONSTRAINT pca_currency_fk FOREIGN KEY (currency)
-    REFERENCES p5scratch.currencies (code),
+    REFERENCES currencies (code),
   CONSTRAINT pca_owner_fk FOREIGN KEY (tenant_id, business_id)
-    REFERENCES p5scratch.businesses (tenant_id, id),
+    REFERENCES businesses (tenant_id, id),
 
   -- the identity the self-FK below resolves against: it carries owner,
   -- currency and kind, which is what makes the FK enforce all three.
@@ -191,7 +142,7 @@ CREATE TABLE p5scratch.platform_credit_grant_remainders (
 -- application role has no privilege on this table at all, so there is no
 -- route by which a remainder can disagree with the rows it summarises.
 CREATE FUNCTION p5scratch.pca_maintain_remainder() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, pg_temp AS $fn$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, public, pg_temp AS $fn$
 DECLARE
   hit integer;
 BEGIN
@@ -318,10 +269,45 @@ ALTER TABLE p5scratch.platform_credit_adjustments FORCE ROW LEVEL SECURITY;
 ALTER TABLE p5scratch.platform_credit_grant_remainders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE p5scratch.platform_credit_grant_remainders FORCE ROW LEVEL SECURITY;
 
-CREATE POLICY pca_tenant_isolation ON p5scratch.platform_credit_adjustments
-  FOR SELECT USING (business_id = current_setting('app.business_id', true)::uuid);
-CREATE POLICY pca_tenant_insert ON p5scratch.platform_credit_adjustments
-  FOR INSERT WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);
+-- ROUND 12, the challenger's F-13: the HOUSE PATTERN, copied from the
+-- LIVE policies rather than from the migration that first introduced them.
+--
+-- Two layers, as `0006_rls.sql` states them in its own comment:
+--
+--   * a PERMISSIVE tenant-membership policy, and
+--   * a RESTRICTIVE business-scoping policy,
+--
+-- which together are default-deny — "without app.business_id set, the app
+-- role sees ZERO rows". The old policies here were the permissive half
+-- ALONE, read `current_setting` directly, and were split per command, so
+-- they could not be compared with the frozen ones at all.
+--
+-- THREE DETAILS COME FROM THE LIVE DEFINITIONS, NOT FROM 0006, and each
+-- one would have made this lane prove something the deployment does not do:
+--
+--   1. `app_bypass()` is a ROLE TEST, not a session setting. 0006 defined
+--      it as `app.bypass_rls = 'true'`; `0013_security_boundary.sql`
+--      redefined it as `current_user = 'daftar_platform'` and
+--      `0052_accounting_journal_lines_rls_performance.sql` hardened the
+--      same predicate. A lane that copied 0006 would have granted itself a
+--      bypass with a GUC that the deployed function ignores.
+--   2. A table that carries its own `tenant_id` compares it DIRECTLY —
+--      `tenant_id = NULLIF(app_tenant(), '')::uuid` — instead of running a
+--      correlated EXISTS over `businesses`. 0052 made that change
+--      deliberately, and every Phase 5 relation carries `tenant_id`.
+--   3. The RESTRICTIVE policy admits the INVARIANT PRINCIPAL by name, the
+--      way `journal_lines.business_isolation` admits
+--      `daftar_accounting_internal`. Without that, a definer invariant
+--      cannot read the rows it exists to compare, and every one of its
+--      checks fails closed — measured here, 73 of 111 cases, before this
+--      clause was added. The fail-closed branch is the right backstop and
+--      the wrong default.
+CREATE POLICY pca_tenant_membership ON p5scratch.platform_credit_adjustments
+  USING (app_bypass() OR tenant_id = NULLIF(app_tenant(), '')::uuid)
+  WITH CHECK (app_bypass() OR tenant_id = NULLIF(app_tenant(), '')::uuid);
+CREATE POLICY pca_business_isolation ON p5scratch.platform_credit_adjustments AS RESTRICTIVE
+  USING (app_bypass() OR CURRENT_USER = 'p5_invariants'::name OR business_id = NULLIF(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR CURRENT_USER = 'p5_invariants'::name OR business_id = NULLIF(app_business(), '')::uuid);
 
 -- =====================================================================
 -- ROUND 5 — added for Master Continuous Mission V2 §12.
@@ -363,7 +349,7 @@ CREATE POLICY pca_tenant_insert ON p5scratch.platform_credit_adjustments
 -- the deadlock, separately.
 CREATE FUNCTION p5scratch.lock_grants_in_order(p_tenant uuid, p_business uuid, p_currency text)
 RETURNS integer
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, pg_temp AS $fn$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, public, pg_temp AS $fn$
 DECLARE
   locked integer;
 BEGIN
@@ -478,9 +464,9 @@ CREATE TABLE p5scratch.subscription_invoices (
   CONSTRAINT si_total_is_charge_minus_credit CHECK (total_minor = charge_minor - credit_minor + tax_minor),
   -- ROUND 11, as on the ledger: the canonical currency set is a key.
   CONSTRAINT si_currency_fk FOREIGN KEY (currency)
-    REFERENCES p5scratch.currencies (code),
+    REFERENCES currencies (code),
   CONSTRAINT si_owner_fk FOREIGN KEY (tenant_id, business_id)
-    REFERENCES p5scratch.businesses (tenant_id, id),
+    REFERENCES businesses (tenant_id, id),
   -- §5's defence against a double renewal: a second invoice for the same
   -- business and period cannot insert, whatever the application does.
   CONSTRAINT si_one_per_period_uq UNIQUE (business_id, period_index),
@@ -604,7 +590,7 @@ ALTER TABLE p5scratch.platform_credit_adjustments
 -- being a superuser — which is the thing the challenger's F-05 showed was
 -- concealing this defect.
 CREATE FUNCTION p5scratch.assert_invoice_credit_agrees(p_invoice uuid) RETURNS void
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, pg_temp AS $fn$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, public, pg_temp AS $fn$
 DECLARE
   claimed bigint;
   consumed bigint;
@@ -689,19 +675,18 @@ CREATE CONSTRAINT TRIGGER pca_credit_agrees_trg
 
 ALTER TABLE p5scratch.subscription_invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE p5scratch.subscription_invoices FORCE ROW LEVEL SECURITY;
-CREATE POLICY si_tenant_isolation ON p5scratch.subscription_invoices
-  FOR SELECT USING (business_id = current_setting('app.business_id', true)::uuid);
-CREATE POLICY si_tenant_insert ON p5scratch.subscription_invoices
-  FOR INSERT WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);
--- An UPDATE policy is required and is NOT implied by the other two: with
--- FORCE RLS and no UPDATE policy, the application role holds the UPDATE
--- privilege and can still update no row at all — which would look like a
--- working finalization in a unit test and fail in production. Both the
--- USING and the WITH CHECK side are scoped, so a row cannot be moved to
--- another business by updating it either.
-CREATE POLICY si_tenant_update ON p5scratch.subscription_invoices
-  FOR UPDATE USING (business_id = current_setting('app.business_id', true)::uuid)
-          WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);
+-- The house pair is FOR ALL, which is what makes the UPDATE path work:
+-- with FORCE RLS and no policy covering UPDATE, the application role holds
+-- the privilege and can still update no row at all — a finalization that
+-- looks fine in a unit test and writes nothing in production. Both sides
+-- of both policies are scoped, so a row cannot be moved to another
+-- business by updating it either.
+CREATE POLICY si_tenant_membership ON p5scratch.subscription_invoices
+  USING (app_bypass() OR tenant_id = NULLIF(app_tenant(), '')::uuid)
+  WITH CHECK (app_bypass() OR tenant_id = NULLIF(app_tenant(), '')::uuid);
+CREATE POLICY si_business_isolation ON p5scratch.subscription_invoices AS RESTRICTIVE
+  USING (app_bypass() OR CURRENT_USER = 'p5_invariants'::name OR business_id = NULLIF(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR CURRENT_USER = 'p5_invariants'::name OR business_id = NULLIF(app_business(), '')::uuid);
 
 -- =====================================================================
 -- ROUND 6 — the collection attempt, and the rule V3 §12 adds
@@ -765,7 +750,7 @@ CREATE TABLE p5scratch.subscription_charge_attempts (
   CONSTRAINT sca_key_names_attempt CHECK (idempotency_key LIKE '%:' || invoice_id::text || ':' || attempt_no::text),
   CONSTRAINT sca_key_long_enough   CHECK (length(idempotency_key) >= 8),
   CONSTRAINT sca_owner_fk FOREIGN KEY (tenant_id, business_id)
-    REFERENCES p5scratch.businesses (tenant_id, id),
+    REFERENCES businesses (tenant_id, id),
   CONSTRAINT sca_invoice_fk FOREIGN KEY (tenant_id, business_id, currency, invoice_id)
     REFERENCES p5scratch.subscription_invoices (tenant_id, business_id, currency, id),
   -- One key is one charge, and the order of attempts is a fact.
@@ -838,10 +823,9 @@ CREATE TRIGGER sca_append_only_trg
 
 ALTER TABLE p5scratch.subscription_charge_attempts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE p5scratch.subscription_charge_attempts FORCE ROW LEVEL SECURITY;
-CREATE POLICY sca_tenant_isolation ON p5scratch.subscription_charge_attempts
-  FOR SELECT USING (business_id = current_setting('app.business_id', true)::uuid);
-CREATE POLICY sca_tenant_insert ON p5scratch.subscription_charge_attempts
-  FOR INSERT WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);
-CREATE POLICY sca_tenant_update ON p5scratch.subscription_charge_attempts
-  FOR UPDATE USING (business_id = current_setting('app.business_id', true)::uuid)
-          WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);
+CREATE POLICY sca_tenant_membership ON p5scratch.subscription_charge_attempts
+  USING (app_bypass() OR tenant_id = NULLIF(app_tenant(), '')::uuid)
+  WITH CHECK (app_bypass() OR tenant_id = NULLIF(app_tenant(), '')::uuid);
+CREATE POLICY sca_business_isolation ON p5scratch.subscription_charge_attempts AS RESTRICTIVE
+  USING (app_bypass() OR CURRENT_USER = 'p5_invariants'::name OR business_id = NULLIF(app_business(), '')::uuid)
+  WITH CHECK (app_bypass() OR CURRENT_USER = 'p5_invariants'::name OR business_id = NULLIF(app_business(), '')::uuid);

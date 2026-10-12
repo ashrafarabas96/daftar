@@ -86,6 +86,17 @@ if [ "$PRINCIPAL" != "false:false" ]; then
   exit 1
 fi
 
+# ROUND 12: the schema itself, then the BORROWED relations, then the
+# requested DDL on top. In the real-schema lane (P5_REAL_SCHEMA=1) the
+# fixture file is skipped and the frozen relations in `public` are used
+# instead; see §9 of the checkpoint for why the two are different claims.
+psql -v ON_ERROR_STOP=1 "$P5_DB_OWNER_URL" -c "DROP SCHEMA IF EXISTS p5scratch CASCADE; CREATE SCHEMA p5scratch; DROP SCHEMA IF EXISTS p5naive CASCADE; CREATE SCHEMA p5naive;" > /dev/null || exit 1
+if [ "${P5_REAL_SCHEMA:-0}" = "1" ]; then
+  echo "SCHEMA_UNDER_TEST=real (frozen history applied by the project runner)"
+else
+  echo "SCHEMA_UNDER_TEST=fixture (credit-ledger-fixture.sql)"
+  psql -v ON_ERROR_STOP=1 "$P5_DB_OWNER_URL" -f "$SQLDIR/credit-ledger-fixture.sql" > /dev/null || exit 1
+fi
 psql -v ON_ERROR_STOP=1 "$P5_DB_OWNER_URL" -f "$SQLDIR/credit-ledger-scratch.sql" > /dev/null || exit 1
 psql -v ON_ERROR_STOP=1 "$P5_DB_OWNER_URL" -f "$SQLDIR/credit-ledger-naive.sql"   > /dev/null || exit 1
 psql -v ON_ERROR_STOP=1 "$P5_DB_OWNER_URL" -f "$SQLDIR/credit-ledger-roles.sql"   > /dev/null || exit 1

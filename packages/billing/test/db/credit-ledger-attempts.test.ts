@@ -23,7 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
 import { collectionAttemptKey } from '../../src/collection';
-import { appUrl, connect, ownerUrl, pidOf, refusedBy, uuid, waitUntilBlocked } from './helpers/cluster';
+import { appUrl, borrowedSchema, connect, ownerUrl, pidOf, refusedBy, setRequestContext, uuid, waitUntilBlocked } from './helpers/cluster';
 import { createBusiness, createDraftInvoice, type Scope } from './helpers/finalize';
 
 const TENANT = '7f1a0000-0000-4000-8000-000000000004';
@@ -34,7 +34,7 @@ let observer: Client;
 
 async function freshScope(currency = 'USD'): Promise<Scope> {
   const businessId = uuid();
-  await createBusiness(owner, 'p5scratch', TENANT, businessId, currency);
+  await createBusiness(owner, borrowedSchema(), TENANT, businessId, currency);
   return { tenantId: TENANT, businessId, currency };
 }
 
@@ -299,7 +299,7 @@ describe('the application role can do exactly this and no more', () => {
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     const app = await connect(appUrl());
     try {
-      await app.query(`SELECT set_config('app.business_id', $1, false)`, [s.businessId]);
+      await setRequestContext(app, s);
       await attemptInsert(app, s, invoiceId, 1);
       await app.query(`UPDATE p5scratch.subscription_charge_attempts SET outcome = 'declined', provider_code = 'fake_card_declined' WHERE invoice_id = $1`, [invoiceId]);
       const r = await app.query<{ outcome: string }>(`SELECT outcome FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [invoiceId]);
@@ -326,7 +326,7 @@ describe('the application role can do exactly this and no more', () => {
     await attemptInsert(owner, theirs, theirInvoice, 1, { outcome: 'failed' });
     const app = await connect(appUrl());
     try {
-      await app.query(`SELECT set_config('app.business_id', $1, false)`, [mine.businessId]);
+      await setRequestContext(app, mine);
       const seen = await app.query<{ n: string }>(`SELECT count(*)::text AS n FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [theirInvoice]);
       expect(seen.rows[0]?.n, 'another business’s attempt was visible').toBe('0');
       const wrote = await attemptInsert(app, theirs, theirInvoice, 2).then(() => '', (e: unknown) => refusedBy(e));

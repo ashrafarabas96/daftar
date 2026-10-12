@@ -27,6 +27,18 @@
  *      assertion, or appears in `MASKED` below WITH its reason and the
  *      constraint that answers first. An exemption is a sentence someone has
  *      to write, not a silence.
+ *   3. The DDL declares no ANONYMOUS table CHECK. ROUND 12, the challenger's
+ *      F-12 (P3): a text scan for `CONSTRAINT <name> CHECK` cannot see an
+ *      inline `CHECK (...)`, which PostgreSQL names itself and which
+ *      enforces just as hard — it planted one and this gate stayed green.
+ *      Two things changed. This file now REFUSES the anonymous form
+ *      outright, so law 2's extractor cannot miss a constraint that exists;
+ *      and the authoritative enumeration moved to where a catalogue can be
+ *      asked, `test/db/credit-ledger-checks.test.ts`, which reads
+ *      `pg_constraint` for the requested relations and requires every CHECK
+ *      on them — anonymous ones included — to be named by a case. This
+ *      gate is the cheap mirror that runs without a cluster; that one is the
+ *      measurement.
  *
  * Both laws read STRING LITERALS, not raw source, through the shared lexer:
  * a text law over unstripped source is satisfied by a comment, which is the
@@ -71,6 +83,33 @@ const MASKED: ReadonlyMap<string, string> = new Map([
 const dbTests = readdirSync(DB_DIR)
   .filter((f) => f.endsWith('.test.ts'))
   .map((f) => ({ file: f, literals: stringLiteralsOf(readFileSync(join(DB_DIR, f), 'utf8')) }));
+
+describe('the requested DDL declares no anonymous CHECK', () => {
+  it('names every table CHECK it declares', () => {
+    const ddl = readFileSync(DDL, 'utf8');
+    const offences: string[] = [];
+    ddl.split('\n').forEach((line, i) => {
+      // `WITH CHECK (...)` is a POLICY clause, not a table constraint, and
+      // the house RLS pattern uses it on every policy.
+      const stripped = line.replace(/--.*$/, '');
+      if (!/\bCHECK\s*\(/i.test(stripped)) return;
+      if (/\bWITH\s+CHECK\s*\(/i.test(stripped)) return;
+      if (/\bCONSTRAINT\s+\w+\s+CHECK\s*\(/i.test(stripped)) return;
+      offences.push(`line ${i + 1}: ${stripped.trim()}`);
+    });
+    expect(offences, 'an anonymous CHECK in the requested DDL — PostgreSQL would name it, and no case could assert that name').toStrictEqual([]);
+  });
+
+  it('proves that scan can see an anonymous CHECK at all', () => {
+    // The law above is a prohibition; this is its non-vacuity witness.
+    const planted = '  amount_minor bigint NOT NULL CHECK (amount_minor > 0),';
+    expect(/\bCHECK\s*\(/i.test(planted)).toBe(true);
+    expect(/\bCONSTRAINT\s+\w+\s+CHECK\s*\(/i.test(planted)).toBe(false);
+    // And a policy clause is not mistaken for one.
+    const policy = '  WITH CHECK (app_bypass() OR business_id::text = app_business());';
+    expect(/\bWITH\s+CHECK\s*\(/i.test(policy)).toBe(true);
+  });
+});
 
 describe('a refusal in the DB lane names the defence that refused, not its class', () => {
   it('finds the DB cases at all', () => {

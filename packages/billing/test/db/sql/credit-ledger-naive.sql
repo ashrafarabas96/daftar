@@ -18,8 +18,10 @@
 -- outcome to is the one removed.
 -- =====================================================================
 
-DROP SCHEMA IF EXISTS p5naive CASCADE;
-CREATE SCHEMA p5naive;
+-- ROUND 12: the schema is created by the LANE, not by this file, because
+-- in the real-schema lane the principal applying it holds no CREATE on the
+-- database — exactly as a deployment principal would not.
+SET search_path = p5naive, public;
 
 CREATE TABLE p5naive.businesses (
   tenant_id uuid NOT NULL,

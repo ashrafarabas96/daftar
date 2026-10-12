@@ -34,7 +34,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
-import { appUrl, connect, isBlocked, ownerUrl, pidOf, refusedBy, uuid, waitUntilBlocked } from './helpers/cluster';
+import { appUrl, borrowedSchema, connect, isBlocked, ownerUrl, pidOf, refusedBy, setRequestContext, uuid, waitUntilBlocked } from './helpers/cluster';
 import {
   consumedMinor,
   createBusiness,
@@ -56,7 +56,7 @@ let observer: Client;
 
 async function freshScope(currency = 'USD'): Promise<Scope> {
   const businessId = uuid();
-  await createBusiness(owner, 'p5scratch', TENANT, businessId, currency);
+  await createBusiness(owner, borrowedSchema(), TENANT, businessId, currency);
   return { tenantId: TENANT, businessId, currency };
 }
 
@@ -521,7 +521,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
     const theirInvoice = await createDraftInvoice(owner, 'p5scratch', theirs, 100n);
     const app = await connect(appUrl());
     try {
-      await app.query(`SELECT set_config('app.business_id', $1, false)`, [mine.businessId]);
+      await setRequestContext(app, mine);
       const seen = await app.query<{ n: string }>(
         `SELECT count(*)::text AS n FROM p5scratch.subscription_invoices WHERE id = $1`,
         [theirInvoice],
@@ -547,9 +547,9 @@ describe('the invoice and the ledger commit together, or not at all', () => {
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 200n);
     const app = await connect(appUrl());
     try {
-      await app.query(`SELECT set_config('app.business_id', $1, false)`, [s.businessId]);
+      await setRequestContext(app, s);
       await app.query('BEGIN');
-      await app.query(`SELECT set_config('app.business_id', $1, false)`, [s.businessId]);
+      await setRequestContext(app, s);
       await finalizeInvoice(app, 'p5scratch', s, invoiceId, 200n, 'inv-own', T1, {
         withLock: true,
         withGrantLocks: true,
@@ -587,7 +587,7 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
 
   async function underfundedFinalization(c: Client, s: Scope, invoiceId: string, grant: string, moveContextTo?: string): Promise<string> {
     await c.query('BEGIN');
-    await c.query(`SELECT set_config('app.business_id', $1, false)`, [s.businessId]);
+    await setRequestContext(c, s);
     // 300 of consumption rows against an invoice that will claim 500.
     await insertConsumption(c, 'p5scratch', s, grant, 300n, invoiceId, 'inv-underfunded', T1);
     await c.query(
@@ -599,7 +599,7 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
     if (moveContextTo !== undefined) {
       // The attack, and the whole of it: the session's business context moves
       // on before COMMIT. No privilege is needed that the role does not hold.
-      await c.query(`SELECT set_config('app.business_id', $1, false)`, [moveContextTo]);
+      await setRequestContext(c, { tenantId: TENANT, businessId: moveContextTo });
     }
     const refusal = await c.query('COMMIT').then(
       () => '',
@@ -636,8 +636,21 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
       // The ATTACK. Before round 8 this COMMITTED and left the invoice
       // claiming 500 against 300.
       const code = await underfundedFinalization(app, s, invoiceId, grant, OTHER_BUSINESS);
-      // The SAME named refusal as the control, which is the whole point: the
-      // session's RLS context did not change which invariant answered.
+      // ROUND 12, MEASURED TWICE, and the second measurement is the one
+      // that counts. My first adoption of the house pattern moved this
+      // answer to the fail-closed branch, because the restrictive policy I
+      // wrote scoped the definer's reads to the session too. The LIVE
+      // frozen policies — read out of `pg_policies`, not out of
+      // `0006_rls.sql`'s three-redefinitions-stale text — admit the
+      // internal principal BY NAME inside the restrictive policy, so the
+      // invariant's own reads do NOT move with the caller's context, and
+      // the ARITHMETIC branch answers here as it did in round 9. The
+      // challenger measured that answer and corrected my prediction then;
+      // under the real pattern it is correct again.
+      //
+      // The transaction is refused either way. The fail-closed branch is
+      // proved separately and by name in the suite below, so neither
+      // defence is resting on this case.
       expect(code, 'an invoice claiming unbacked platform credit was committed').toBe('23000/si_credit_agrees_with_ledger');
     } finally {
       await app.end();
@@ -657,7 +670,7 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
     const s = await freshScope();
     const app = await connect(appUrl());
     try {
-      await app.query(`SELECT set_config('app.business_id', $1, false)`, [s.businessId]);
+      await setRequestContext(app, s);
       const invoiceId = await createDraftInvoice(app, 'p5scratch', s, 400n);
       expect(await invoiceRow(owner, invoiceId)).toEqual({ state: 'draft', credit: 0n, payable: 400n });
     } finally {

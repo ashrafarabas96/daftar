@@ -40,7 +40,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
-import { connect, ownerUrl, refusedBy, uuid } from './helpers/cluster';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { borrowedSchema, connect, ownerUrl, refusedBy, uuid } from './helpers/cluster';
+import { stringLiteralsOf } from '../helpers/lexer';
 import { createBusiness, insertGrant, type Scope } from './helpers/finalize';
 
 const TENANT = '7f1a0000-0000-4000-8000-000000000006';
@@ -58,7 +62,7 @@ interface Ground {
 
 async function ground(): Promise<Ground> {
   const businessId = uuid();
-  await createBusiness(owner, 'p5scratch', TENANT, businessId, 'USD');
+  await createBusiness(owner, borrowedSchema(), TENANT, businessId, 'USD');
   const scope: Scope = { tenantId: TENANT, businessId, currency: 'USD' };
   const invoiceId = uuid();
   await owner.query(
@@ -376,7 +380,7 @@ describe('the canonical currency set is a key, not a shape', () => {
     // and `test/currency-is-canonical.test.ts` scans `src/` for exactly
     // that. Here the fact is read from the table, where it belongs.
     const r = await owner.query<{ code: string; minor_units: number }>(
-      `SELECT code, minor_units FROM p5scratch.currencies ORDER BY code`,
+      `SELECT code, minor_units FROM ${borrowedSchema()}.currencies ORDER BY code`,
     );
     expect(r.rows.length, 'the canonical currency fixture is empty').toBe(7);
     expect(r.rows.filter((row) => row.minor_units !== 2).map((row) => `${row.code}=${row.minor_units}`)).toStrictEqual([
@@ -388,7 +392,7 @@ describe('the canonical currency set is a key, not a shape', () => {
 describe('the subscription state machine is not this slice to move', () => {
   it('gives the application role no write of any kind on the entitlement record', async () => {
     const r = await owner.query<{ privilege: string; held: boolean }>(
-      `SELECT p AS privilege, has_table_privilege('p5_app', 'p5scratch.business_entitlements', p) AS held
+      `SELECT p AS privilege, has_table_privilege('p5_app', '${borrowedSchema()}.business_entitlements', p) AS held
          FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) AS p`,
     );
     expect(r.rows.length, 'the privilege probe returned nothing').toBe(4);
@@ -405,12 +409,21 @@ describe('the subscription state machine is not this slice to move', () => {
         WHERE n.nspname = 'p5scratch' AND p.prosrc ILIKE '%business_entitlements%'`,
     );
     expect(fns.rows.map((row) => row.proname)).toStrictEqual([]);
+    // A trigger on the relation only matters if its function is one of
+    // THIS schema's: the frozen schema is entitled to its own triggers on
+    // its own table, and in the real-schema lane there may be some.
     const trgs = await owner.query<{ tgname: string }>(
       `SELECT t.tgname
-         FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'p5scratch' AND c.relname = 'business_entitlements' AND NOT t.tgisinternal`,
+         FROM pg_trigger t
+         JOIN pg_class c ON c.oid = t.tgrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_proc f ON f.oid = t.tgfoid
+         JOIN pg_namespace fn ON fn.oid = f.pronamespace
+        WHERE n.nspname = $1 AND c.relname = 'business_entitlements'
+          AND NOT t.tgisinternal AND fn.nspname = 'p5scratch'`,
+      [borrowedSchema()],
     );
-    expect(trgs.rows.map((row) => row.tgname)).toStrictEqual([]);
+    expect(trgs.rows.map((row) => row.tgname), 'a trigger of this schema sits on the entitlement record').toStrictEqual([]);
     // And the probe is not vacuous: the same question about a relation this
     // schema DOES maintain finds its maintainer.
     const live = await owner.query<{ proname: string }>(
@@ -419,5 +432,90 @@ describe('the subscription state machine is not this slice to move', () => {
         WHERE n.nspname = 'p5scratch' AND p.prosrc ILIKE '%platform_credit_grant_remainders%'`,
     );
     expect(live.rows.length, 'the catalogue probe finds nothing even where it should').toBeGreaterThan(0);
+  });
+});
+
+describe('the catalogue, not the file, decides which constraints exist', () => {
+  // ROUND 12, the challenger's F-12 (P3): the pure-lane gate extracts
+  // constraints with /CONSTRAINT\s+(\w+)\s+CHECK/, so it sees only the
+  // NAMED form. PostgreSQL names an inline CHECK itself, so an anonymous
+  // one is a real enforcing constraint that a text scan cannot see — the
+  // challenger planted one on a P5 table with no case for it and the gate
+  // stayed green. The authoritative enumeration is therefore here, in the
+  // lane that has a catalogue to ask.
+  //
+  // Scope: the relations THIS REQUEST asks for. The borrowed relations
+  // (`businesses`, `currencies`, `business_entitlements`) carry five
+  // anonymous CHECKs of their own, copied from the frozen schema along with
+  // everything else about them; witnessing those is not Phase 5's job, and
+  // they now live in `credit-ledger-fixture.sql` so the two sets cannot be
+  // confused.
+  const P5_RELATIONS = [
+    'platform_credit_adjustments',
+    'platform_credit_grant_remainders',
+    'subscription_invoices',
+    'subscription_charge_attempts',
+  ] as const;
+
+  /** Constraints no case can provoke alone, with the defence that masks each. */
+  const MASKED = new Map<string, string>([
+    [
+      'si_total_non_negative',
+      'masked by si_credit_within_charge; see the header of this file and P5-CHALLENGE-RESPONSE-2597219.md §5.3',
+    ],
+  ]);
+
+  it('finds every CHECK on the requested relations named by a case, anonymous ones included', async () => {
+    const live = await owner.query<{ conname: string; relname: string }>(
+      `SELECT c.conname, t.relname
+         FROM pg_constraint c
+         JOIN pg_class t ON t.oid = c.conrelid
+         JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'p5scratch' AND c.contype = 'c' AND t.relname = ANY($1)
+        ORDER BY t.relname, c.conname`,
+      [[...P5_RELATIONS]],
+    );
+    expect(live.rows.length, 'no CHECK constraints were read from the catalogue — this law would be vacuous').toBeGreaterThanOrEqual(25);
+
+    const named = new Set<string>();
+    for (const file of readdirSync(__dirname).filter((f) => f.endsWith('.test.ts'))) {
+      for (const literal of stringLiteralsOf(readFileSync(join(__dirname, file), 'utf8'))) {
+        const m = /^\d{5}\/(\w+)$/.exec(literal);
+        if (m?.[1] !== undefined) named.add(m[1]);
+      }
+    }
+    expect(named.size, 'no named refusals were extracted from the cases').toBeGreaterThan(20);
+
+    const unwitnessed = live.rows
+      .filter((row) => !named.has(row.conname) && !MASKED.has(row.conname))
+      .map((row) => `${row.relname}.${row.conname}`)
+      .sort();
+    expect(unwitnessed, 'a CHECK constraint on a requested relation is provoked by no case').toStrictEqual([]);
+
+    // An exemption that has become reachable is a stale excuse, and one for
+    // a constraint the catalogue no longer has is an orphan.
+    const liveNames = new Set(live.rows.map((row) => row.conname));
+    expect([...MASKED.keys()].filter((c) => named.has(c)).sort(), 'a masked constraint is now asserted by name').toStrictEqual([]);
+    expect([...MASKED.keys()].filter((c) => !liveNames.has(c)).sort(), 'an exemption names a constraint the catalogue does not have').toStrictEqual([]);
+  });
+
+  it('carries no anonymous CHECK of its own on a requested relation', async () => {
+    // Everything the request asks for is named, so that a refusal can be
+    // asserted by name at all. A system-generated name (relation_column_check)
+    // is the shape an anonymous CHECK gets, and it would make the assertion
+    // depend on PostgreSQL's naming rather than on this schema's vocabulary.
+    const live = await owner.query<{ conname: string; relname: string }>(
+      `SELECT c.conname, t.relname
+         FROM pg_constraint c
+         JOIN pg_class t ON t.oid = c.conrelid
+         JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'p5scratch' AND c.contype = 'c' AND t.relname = ANY($1)`,
+      [[...P5_RELATIONS]],
+    );
+    const systemNamed = live.rows
+      .filter((row) => new RegExp(`^${row.relname}_\\w+_check\\d*$`).test(row.conname))
+      .map((row) => `${row.relname}.${row.conname}`)
+      .sort();
+    expect(systemNamed, 'a requested relation carries an anonymous CHECK, which PostgreSQL named for it').toStrictEqual([]);
   });
 });

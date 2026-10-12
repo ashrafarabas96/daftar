@@ -17,10 +17,74 @@ function required(name: string): string {
 export const ownerUrl = (): string => required('P5_DB_OWNER_URL');
 export const appUrl = (): string => required('P5_DB_APP_URL');
 
+/**
+ * The schema the BORROWED relations live in.
+ *
+ * ROUND 12: `p5scratch` in the fixture lane, where they are copies, and
+ * `public` in the real-schema lane, where they are the frozen relations
+ * created by applying the whole migration history with the project's own
+ * runner. The requested DDL references them unqualified and resolves them
+ * through `search_path`, so this is the only place a case has to care.
+ */
+export const borrowedSchema = (): string => process.env['P5_BORROWED_SCHEMA'] ?? 'p5scratch';
+
+/** Which of the two schemas a run measured, for the evidence line. */
+export const schemaUnderTest = (): 'fixture' | 'real' =>
+  process.env['P5_REAL_SCHEMA'] === '1' ? 'real' : 'fixture';
+
 export async function connect(url: string): Promise<Client> {
   const c = new Client({ connectionString: url });
   await c.connect();
+  // ROUND 12, the challenger's F-13. The schema carries the house RLS
+  // pattern: a PERMISSIVE tenant-membership policy and a RESTRICTIVE
+  // business-scoping policy, default-deny for every role under FORCE ROW
+  // LEVEL SECURITY — and a bypass that is a ROLE, not a setting. The live
+  // `app_bypass()` is `CURRENT_USER = 'daftar_platform'`, and this lane's
+  // copy names `p5owner`, so the owner connection bypasses by being the
+  // principal it is and needs no `set_config` at all. An earlier form of
+  // this helper set `app.bypass_rls`, which the live function has ignored
+  // since `0013_security_boundary.sql`.
   return c;
+}
+
+/**
+ * A connection with NO request context at all — no business, no tenant, no
+ * bypass. What the house pattern promises such a session is zero rows.
+ */
+export async function connectWithoutContext(url: string): Promise<Client> {
+  const c = new Client({ connectionString: url });
+  await c.connect();
+  return c;
+}
+
+/**
+ * The REQUEST CONTEXT, set the way the frozen schema expects it.
+ *
+ * ROUND 12, the challenger's F-13. `0006_rls.sql` scopes a business-scoped
+ * table with TWO policies: a permissive tenant-membership policy, which is
+ * an EXISTS over `businesses` comparing `b.tenant_id` to `app_tenant()`,
+ * and a restrictive business-scoping policy comparing `business_id` to
+ * `app_business()`. A session that sets only `app.business_id` therefore
+ * satisfies the restrictive half and FAILS the permissive one — which is
+ * what this lane did until this round, and what made its isolation claims
+ * incomparable with the frozen schema's.
+ *
+ * `transactionLocal` is the frozen discipline: `set_config(..., true)` has
+ * SET LOCAL semantics, so the context dies with the transaction and a
+ * pooled connection cannot carry a stale one. It is passed `true` wherever
+ * the case owns a transaction, and the sites that do not are the lane's
+ * own divergence, recorded in `P5-CHECKPOINT.md` §9 item 3.
+ */
+export async function setRequestContext(
+  c: Client,
+  scope: { readonly tenantId: string; readonly businessId: string },
+  transactionLocal = false,
+): Promise<void> {
+  await c.query(`SELECT set_config('app.tenant_id', $1, $3), set_config('app.business_id', $2, $3)`, [
+    scope.tenantId,
+    scope.businessId,
+    transactionLocal,
+  ]);
 }
 
 export async function pidOf(c: Client): Promise<number> {

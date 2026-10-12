@@ -24,7 +24,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
-import { connect, constraintOf, ownerUrl, refusedBy, uuid } from './helpers/cluster';
+import { borrowedSchema, connect, constraintOf, ownerUrl, refusedBy, uuid } from './helpers/cluster';
 import { createBusiness, createDraftInvoice, finalizeInvoice, insertGrant, remainderOf, type Scope } from './helpers/finalize';
 import {
   canTransitionInvoice,
@@ -40,7 +40,7 @@ let owner: Client;
 
 async function freshScope(currency = 'USD'): Promise<Scope> {
   const businessId = uuid();
-  await createBusiness(owner, 'p5scratch', TENANT, businessId, currency);
+  await createBusiness(owner, borrowedSchema(), TENANT, businessId, currency);
   return { tenantId: TENANT, businessId, currency };
 }
 
@@ -454,6 +454,10 @@ describe('the principals this lane proves things about', () => {
     );
     expect(r.rows[0]?.owner).toBe('p5_invariants');
     expect(r.rows[0]?.security, 'the agreement invariant runs with the caller’s rights').toBe(true);
-    expect(r.rows[0]?.config).toStrictEqual(['search_path=p5scratch, pg_temp']);
+    // ROUND 12: `public` joined the definer's search path, because the
+    // borrowed relations the invariant reads now live either in the fixture
+    // schema or in `public` (the real-schema lane), and a definer function
+    // with no `public` on its path cannot see the frozen ones.
+    expect(r.rows[0]?.config).toStrictEqual(['search_path=p5scratch, public, pg_temp']);
   });
 });

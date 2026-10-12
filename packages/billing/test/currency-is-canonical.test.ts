@@ -42,7 +42,13 @@ import { blankOut, numericLiteralsOf } from './helpers/lexer';
 const REPO_ROOT = join(__dirname, '..', '..', '..');
 const MIGRATIONS_DIR = join(REPO_ROOT, 'infrastructure', 'database', 'migrations');
 const SRC = join(__dirname, '..', 'src');
-const SCRATCH_DDL = join(__dirname, 'db', 'sql', 'credit-ledger-scratch.sql');
+// ROUND 12: the borrowed relations, the currency seed among them, moved out
+// of the requested DDL into a fixture file of their own, so that the SAME
+// requested DDL applies in the fixture lane and on the real migrated schema.
+// This pin follows them, and it stays a pin on a FIXTURE: in the real lane
+// the rows are the frozen ones themselves, which is a stronger claim and a
+// different one.
+const FIXTURE_DDL = join(__dirname, 'db', 'sql', 'credit-ledger-fixture.sql');
 
 interface CurrencyRow {
   readonly code: string;
@@ -73,7 +79,7 @@ function frozenCurrencies(): { rows: CurrencyRow[]; file: string } {
 
 /** The same rows, as the scratch fixture seeds them. */
 function fixtureCurrencies(): CurrencyRow[] {
-  const sql = readFileSync(SCRATCH_DDL, 'utf8');
+  const sql = readFileSync(FIXTURE_DDL, 'utf8');
   const insert = /INSERT\s+INTO\s+p5scratch\.currencies\s*\([^)]*\)\s*VALUES([\s\S]*?);/i.exec(sql);
   expect(insert?.[1], 'the scratch fixture seeds no currencies — the pin below would be vacuous').toBeTruthy();
   return [...(insert?.[1] ?? '').matchAll(/\(\s*'([A-Z]{3})'\s*,\s*'(\d{3})'\s*,\s*(\d)\s*\)/g)].map((m) => ({

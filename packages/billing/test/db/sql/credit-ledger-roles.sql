@@ -11,7 +11,13 @@ GRANT USAGE ON SCHEMA p5scratch TO p5_app;
 -- SELECT and INSERT only. Invariant (3): no UPDATE, no DELETE for the
 -- application role. And nothing at all on the remainder table.
 GRANT SELECT, INSERT ON p5scratch.platform_credit_adjustments TO p5_app;
-GRANT SELECT ON p5scratch.businesses TO p5_app;
+-- ROUND 12: the grant on `businesses` moved to `credit-ledger-fixture.sql`
+-- (fixture lane) and to the lane script (real-schema lane), because a
+-- privilege on a BORROWED relation can only be granted by whoever owns it,
+-- and in the real-schema lane that is `daftar_migrator`, not `p5owner`.
+-- The application role needs SELECT on it either way: the house
+-- tenant-membership policy is an EXISTS over `businesses`, and a policy's
+-- subquery runs as the invoking role.
 -- ROUND 5: the invoice relation. SELECT, INSERT and UPDATE — an invoice is
 -- NOT append-only (a draft becomes finalized), which is exactly why it is a
 -- different relation from the ledger and not a column on it. No DELETE.
@@ -19,11 +25,21 @@ GRANT SELECT, INSERT, UPDATE ON p5scratch.subscription_invoices TO p5_app;
 GRANT EXECUTE ON FUNCTION p5scratch.lock_grants_in_order(uuid, uuid, text) TO p5_app;
 REVOKE ALL ON p5scratch.platform_credit_grant_remainders FROM p5_app;
 
+-- ROUND 12: the admin policies name `CURRENT_USER`, not a literal role.
+-- The policies are not role-agnostic — `pg_policies` records the role they
+-- resolved to, so a reader of the catalogue still sees exactly who may do
+-- what. What changed is that the SAME FILE now applies in both lanes: the
+-- fixture lane's platform principal is `p5owner`, and the real-schema lane's
+-- is `daftar_platform`, because there `app_bypass()` is the REAL function
+-- and tests for that role by name. A literal `p5owner` here would have made
+-- the real lane apply a different file, and then the two lanes would not be
+-- proving the same schema.
+
 -- The remainder table is under FORCE RLS, so even its owner is subject to
 -- policy. The maintaining function is SECURITY DEFINER and runs as the
 -- schema owner, so the owner needs one policy.
 CREATE POLICY pcgr_owner_only ON p5scratch.platform_credit_grant_remainders
-  FOR ALL TO p5owner USING (true) WITH CHECK (true);
+  FOR ALL TO CURRENT_USER USING (true) WITH CHECK (true);
 
 -- ── ROUND 8: the admin principal, made explicit ──────────────────────
 -- The schema owner is NOSUPERUSER NOBYPASSRLS from this round on (the
@@ -35,11 +51,11 @@ CREATE POLICY pcgr_owner_only ON p5scratch.platform_credit_grant_remainders
 -- superuser bypass is not. `pcgr_owner_only` above was always this; these
 -- say the same thing about the other three relations.
 CREATE POLICY pca_owner_admin ON p5scratch.platform_credit_adjustments
-  FOR ALL TO p5owner USING (true) WITH CHECK (true);
+  FOR ALL TO CURRENT_USER USING (true) WITH CHECK (true);
 CREATE POLICY si_owner_admin ON p5scratch.subscription_invoices
-  FOR ALL TO p5owner USING (true) WITH CHECK (true);
+  FOR ALL TO CURRENT_USER USING (true) WITH CHECK (true);
 CREATE POLICY sca_owner_admin ON p5scratch.subscription_charge_attempts
-  FOR ALL TO p5owner USING (true) WITH CHECK (true);
+  FOR ALL TO CURRENT_USER USING (true) WITH CHECK (true);
 
 -- ── ROUND 8, the challenger's F-01: the invariant's own reads ────────
 -- `assert_invoice_credit_agrees` is SECURITY DEFINER, for the reasons
