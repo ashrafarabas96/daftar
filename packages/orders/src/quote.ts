@@ -229,6 +229,18 @@ export function assertQuoteIntact(quote: CommercialQuote): void {
  * an older version than the order's current quote is `order.quote_version_stale`
  * — the shopper agreed to a figure that has since been superseded, and the
  * correct answer is to show them the new one, not to charge either.
+ *
+ * ## The expiry boundary is HALF-OPEN, and it was wrong here
+ *
+ * **A quote is valid only while `asOf < expiresAt`, so `asOf === expiresAt` is
+ * EXPIRED.** Until Directive #11 PART 34 named it, this function compared with
+ * `> 0` and therefore ACCEPTED the exact expiry instant — a quote was usable
+ * for one whole second past the moment it was declared to stop being usable.
+ * An inclusive bound is the kind of defect no reviewer feels, because the
+ * wording "expires at T" reads true either way; only stating which side T
+ * falls on, and then testing the three instants around it, settles it.
+ * Equality must never be admitted by accident, so it is admitted by nothing:
+ * the comparison is `>= 0`.
  */
 export function assertQuoteConfirmable(quote: CommercialQuote, asOf: string, confirmedVersion: number): void {
   assertQuoteIntact(quote);
@@ -238,7 +250,7 @@ export function assertQuoteConfirmable(quote: CommercialQuote, asOf: string, con
   if (compareCanonical(asOf, quote.issuedAt) < 0) {
     throw new OrderError('order.quote_expiry_invalid', 'asOf precedes the instant the quote was issued');
   }
-  if (quote.expiresAt !== null && compareCanonical(asOf, quote.expiresAt) > 0) {
+  if (quote.expiresAt !== null && compareCanonical(asOf, quote.expiresAt) >= 0) {
     throw new OrderError('order.quote_expired', 'the quote has expired and must be re-issued before it is confirmed', { quoteId: quote.quoteId });
   }
   if (confirmedVersion !== quote.version) {
@@ -255,25 +267,41 @@ export type QuoteDivergenceVerdict =
   | { status: 'requires_reconfirmation'; quotedTotalMinor: string; recomputedTotalMinor: string; differenceMinor: string };
 
 /**
+ * The Phase 6 v1 divergence policy, set by Directive #11 PART 33:
+ * **EXACTLY ZERO MINOR UNITS.**
+ *
+ * Any difference at all between the total the shopper confirmed and the total
+ * the canonical sale recomputes requires explicit re-confirmation. One minor
+ * unit more is overcharging; one minor unit less is not the transaction that
+ * was agreed either.
+ *
+ * This is a CONSTANT and not a parameter on purpose. A tolerance is a
+ * commercial policy, and while no such policy exists the only safe shape is one
+ * that no caller can widen — a function taking a tolerance can be passed a
+ * non-zero one by any future caller, with nothing going red. When a later
+ * explicit commercial policy supplies a figure, it arrives here, with its own
+ * authority named, and the tests below change with it.
+ *
+ * (This closes `OD-P6-06`, which this preparation had raised to the owner with
+ * `"0"` recommended. The owner's ruling is the recommended value, so the value
+ * stops being a caller's input at all.)
+ */
+export const P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR = '0';
+
+/**
  * Compare what the sale command recomputed against what the shopper confirmed.
  *
- * `toleranceMinor` is a REQUIRED input with no default anywhere in this package.
- * A tolerance is a commercial policy — how much of a price change a business is
- * willing to charge without asking again — and a default written here would be a
- * policy DAFTAR invented on the merchant's behalf, silently, in the one place a
- * shopper would feel it. **The recommended value is `"0"`**: any divergence at
- * all requires explicit re-confirmation. That is raised to the owner as
- * `OD-P6-06` and is not decided here.
+ * There is no tolerance argument: see `P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR`.
  *
  * The difference is ABSOLUTE: a recomputation that came out LOWER than the quote
- * also requires re-confirmation beyond tolerance. Charging less than the shopper
- * agreed to is still not the transaction they agreed to, and a one-sided
- * comparison is how a discount bug ships as a feature.
+ * also requires re-confirmation. Charging less than the shopper agreed to is
+ * still not the transaction they agreed to, and a one-sided comparison is how a
+ * discount bug ships as a feature.
  */
-export function assessQuoteDivergence(quote: CommercialQuote, recomputedTotalMinor: string, toleranceMinor: string): QuoteDivergenceVerdict {
+export function assessQuoteDivergence(quote: CommercialQuote, recomputedTotalMinor: string): QuoteDivergenceVerdict {
   assertQuoteIntact(quote);
   const recomputed = requireMinor(recomputedTotalMinor, 'recomputedTotalMinor');
-  const tolerance = requireMinor(toleranceMinor, 'toleranceMinor');
+  const tolerance = requireMinor(P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR, 'P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR');
   const quoted = BigInt(quote.displayedTotalMinor);
 
   const signed = recomputed - quoted;

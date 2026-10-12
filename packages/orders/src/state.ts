@@ -261,3 +261,65 @@ export function placeOrder(transition: OrderTransition): OrderTransitionResult {
   const history = Object.freeze([transition]);
   return { snapshot: foldOrderHistory(history), replayed: false, history };
 }
+
+/**
+ * Law 5 (Directive #11 PART 36) — **PHYSICAL HANDOVER IS NOT A STATE OF ITS OWN.**
+ *
+ * PART 36 forbids a "goods physically handed over" state that exists without
+ * the canonical sale and stock commit, where the business intends the handover
+ * to finalize the sale. This machine satisfies that BY CONSTRUCTION rather than
+ * by a check: there is no `handed_over`, `delivered` or `dispatched` state at
+ * all. The only edge that leaves `fulfilling` is `record_sale`, which is
+ * refused unless it names a `saleId` — and a `saleId` exists only because the
+ * canonical atomic sale commit (Phase 4) succeeded, which is the same
+ * transaction that moved the stock. So the order cannot say the goods are gone
+ * unless the sale that released them exists.
+ *
+ * "By construction" is a claim about today's edge table, though, and a future
+ * slice adding a `delivered` state between `fulfilling` and `record_sale` would
+ * silently undo it. This function is the detector: it derives, from
+ * `ORDER_EDGES` alone, every state an order can reach WITHOUT the sale binding.
+ * The test asserts that set against a hand-written list, so adding any such
+ * state reds — the author then either binds it to the sale or states why a
+ * state outside the sale's reach is not a handover.
+ *
+ * The derivation is a fixed-point walk from `placed`, crossing every edge
+ * except `record_sale`, which is exactly "where can an order get to before any
+ * sale exists".
+ */
+export function orderStatesReachableWithoutSale(): readonly OrderState[] {
+  const reached = new Set<OrderState>([ORDER_EDGES.place.to]);
+  for (;;) {
+    let grew = false;
+    for (const kind of Object.keys(ORDER_EDGES) as OrderTransitionKind[]) {
+      if (kind === SALE_BINDING_TRANSITION || kind === 'place') continue;
+      const edge = ORDER_EDGES[kind];
+      if (edge.from.some((from) => reached.has(from)) && !reached.has(edge.to)) {
+        reached.add(edge.to);
+        grew = true;
+      }
+    }
+    if (!grew) break;
+  }
+  return Object.freeze([...reached]);
+}
+
+/**
+ * The converse half of law 5: once an order is sale-bound it stays sale-bound.
+ *
+ * Derives every edge that would carry an order OUT of a sale-bound state into
+ * one that is not. A non-empty result means an order could reach a state whose
+ * name says no sale exists while its history says one does — two answers to
+ * "was this sold", which is the second financial truth PART 7 forbids.
+ */
+export function saleBindingEscapeEdges(): readonly OrderTransitionKind[] {
+  const escapes: OrderTransitionKind[] = [];
+  for (const kind of Object.keys(ORDER_EDGES) as OrderTransitionKind[]) {
+    const edge = ORDER_EDGES[kind];
+    const leavesBoundState = edge.from.some((from) => SALE_BOUND_ORDER_STATES.includes(from));
+    if (leavesBoundState && !SALE_BOUND_ORDER_STATES.includes(edge.to)) {
+      escapes.push(kind);
+    }
+  }
+  return Object.freeze(escapes);
+}

@@ -66,9 +66,15 @@ describe('the settlement evidence vocabulary (section 25)', () => {
     }
   });
 
-  it('maps every declared kind to exactly one settlement mode', () => {
+  it('maps every declared kind to one settlement mode, or to none where the seam owes the answer', () => {
+    // `null` is admitted deliberately (Directive #11 PART 31): the mode a
+    // verified card payment settles into belongs to the merchant payment and
+    // tender seam, so Phase 6 leaves it unanswered rather than guessing `cash`.
+    // `undefined` is NOT admitted: that would be a DTO kind the domain has never
+    // heard of.
     for (const kind of DTO_EVIDENCE_KINDS) {
-      expect(['cash', 'credit']).toContain(SETTLEMENT_MODE_BY_EVIDENCE[kind]);
+      expect(Object.prototype.hasOwnProperty.call(SETTLEMENT_MODE_BY_EVIDENCE, kind)).toBe(true);
+      expect(['cash', 'credit', null]).toContain(SETTLEMENT_MODE_BY_EVIDENCE[kind]);
     }
     expect(Object.keys(SETTLEMENT_MODE_BY_EVIDENCE)).toHaveLength(DTO_EVIDENCE_KINDS.length);
   });

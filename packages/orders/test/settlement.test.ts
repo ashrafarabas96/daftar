@@ -18,6 +18,7 @@ import {
   ORDER_SETTLEMENT_EVIDENCE_KINDS,
   OrderError,
   SETTLEMENT_MODE_BY_EVIDENCE,
+  ORDER_EVIDENCE_KINDS_AWAITING_SEAM,
   requireSettlementTruth,
   type OrderSettlementEvidence,
 } from '../src';
@@ -121,14 +122,33 @@ describe('the unintegrated payment surface (section 31)', () => {
     }
   });
 
-  it('is refused even though the mapping table says it would support cash — the surface check wins', () => {
-    // The table entry is real: when the adapter arrives, this kind supports a
-    // cash settlement. The refusal is about the adapter not existing yet, which
-    // is why the check sits ahead of the mode comparison rather than inside it.
-    expect(SETTLEMENT_MODE_BY_EVIDENCE['payment_verified']).toBe('cash');
+  it('PART 31 — the table states NO mode for it: a card payment must not masquerade as cash', () => {
+    // An earlier revision mapped `payment_verified` to `cash`. PART 31 forbids
+    // exactly that masquerade where Phase 4 `cash` means literal cash in a till,
+    // and the mode a verified card payment settles into is the Sales +
+    // Accounting authorities' answer when they define the merchant payment and
+    // tender seam — not Phase 6's. So the kind is enumerated and its mode is
+    // unanswered.
+    expect(SETTLEMENT_MODE_BY_EVIDENCE['payment_verified']).toBeNull();
     expect(() => requireSettlementTruth('cash', PAYMENT_VERIFIED, null)).toThrowError(
       expect.objectContaining({ code: 'order.payment_surface_not_integrated' }),
     );
+  });
+
+  it('the awaiting-seam list is exactly the kinds with no mode', () => {
+    // This ties the published list to the table, so neither can drift from the
+    // other: a kind whose mode is unanswered must be declared as awaiting the
+    // seam, and a kind declared as awaiting the seam must have no mode.
+    const withoutMode = Object.keys(SETTLEMENT_MODE_BY_EVIDENCE)
+      .filter((kind) => SETTLEMENT_MODE_BY_EVIDENCE[kind] === null)
+      .sort();
+    expect([...ORDER_EVIDENCE_KINDS_AWAITING_SEAM].sort()).toEqual(withoutMode);
+    expect(withoutMode).toEqual(['payment_verified']);
+  });
+
+  it('no evidence kind other than literally collected cash establishes the cash mode', () => {
+    const cashKinds = Object.keys(SETTLEMENT_MODE_BY_EVIDENCE).filter((kind) => SETTLEMENT_MODE_BY_EVIDENCE[kind] === 'cash');
+    expect(cashKinds).toEqual(['cash_collected_on_handover']);
   });
 });
 
@@ -140,9 +160,10 @@ describe('an unrecognised evidence kind', () => {
 });
 
 describe('the whole mapping, enumerated — no unpaid path reaches a committed sale', () => {
-  const EXPECTED: Readonly<Record<string, 'cash' | 'credit'>> = {
+  const EXPECTED: Readonly<Record<string, 'cash' | 'credit' | null>> = {
     cash_collected_on_handover: 'cash',
-    payment_verified: 'cash',
+    // PART 31 — unanswered on purpose; see the awaiting-seam block above.
+    payment_verified: null,
     authorized_customer_credit: 'credit',
   };
 

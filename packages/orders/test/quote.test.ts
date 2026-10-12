@@ -18,6 +18,7 @@ import {
   assertQuoteConfirmable,
   assertQuoteIntact,
   assessQuoteDivergence,
+  P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR,
   buildCommercialQuote,
   canonicalQuoteBytes,
   type CommercialQuote,
@@ -190,14 +191,37 @@ describe('assertQuoteConfirmable', () => {
     expect(() => assertQuoteConfirmable(QUOTED, '2026-10-01T09:30:00Z', 1)).not.toThrow();
   });
 
-  it('admits a confirmation exactly at the expiry instant, and refuses one a second later', () => {
-    expect(() => assertQuoteConfirmable(QUOTED, '2026-10-01T10:00:00Z', 1)).not.toThrow();
+  // Directive #11 PART 34 — the expiry boundary is HALF-OPEN: a quote is valid
+  // only while `asOf < expiresAt`, so the exact expiry instant is EXPIRED.
+  //
+  // The three instants around the boundary are named one by one, with the
+  // boundary written as a literal rather than derived from the quote, because
+  // the previous revision of this suite asserted the OPPOSITE on this very line
+  // ("admits a confirmation exactly at the expiry instant") and was green. A
+  // test can pin the wrong side of a boundary just as confidently as the right
+  // one; what distinguishes them is a stated rule to check the test against.
+  it('PART 34 — one instant BEFORE the expiry is valid', () => {
+    // expiresAt is 2026-10-01T10:00:00Z.
+    expect(() => assertQuoteConfirmable(QUOTED, '2026-10-01T09:59:59Z', 1)).not.toThrow();
+  });
+
+  it('PART 34 — the EXACT expiry instant is EXPIRED, never admitted by accident', () => {
+    expect(() => assertQuoteConfirmable(QUOTED, '2026-10-01T10:00:00Z', 1)).toThrowError(expect.objectContaining({ code: 'order.quote_expired' }));
+  });
+
+  it('PART 34 — one instant AFTER the expiry is expired', () => {
     expect(() => assertQuoteConfirmable(QUOTED, '2026-10-01T10:00:01Z', 1)).toThrowError(expect.objectContaining({ code: 'order.quote_expired' }));
   });
 
-  it('never expires a quote with no expiry', () => {
+  it('PART 34 — a quote with no expiry is subject to the OTHER checks, not exempt from them', () => {
     const forever = buildCommercialQuote({ ...INPUT, expiresAt: null });
+    // No expiry: never expires, however far out the instant is.
     expect(() => assertQuoteConfirmable(forever, '2099-01-01T00:00:00Z', 1)).not.toThrow();
+    // ...but the version check and the digest check still apply to it.
+    expect(() => assertQuoteConfirmable(forever, '2099-01-01T00:00:00Z', 2)).toThrowError(expect.objectContaining({ code: 'order.quote_version_stale' }));
+    expect(() => assertQuoteConfirmable({ ...forever, displayedTotalMinor: '1' }, '2099-01-01T00:00:00Z', 1)).toThrowError(
+      expect.objectContaining({ code: 'order.quote_tampered' }),
+    );
   });
 
   it('refuses a stale version — the shopper agreed to a figure that has been superseded', () => {
@@ -219,12 +243,25 @@ describe('assertQuoteConfirmable', () => {
 });
 
 describe('assessQuoteDivergence', () => {
-  it('passes an exact match at zero tolerance', () => {
-    expect(assessQuoteDivergence(QUOTED, '3799', '0')).toEqual({ status: 'within_policy', differenceMinor: '0' });
+  // Directive #11 PART 33 — Phase 6 v1 tolerance is EXACTLY 0 minor units, and
+  // it is a constant rather than a parameter so that no caller can widen it.
+  it('PART 33 — the v1 tolerance is exactly zero, stated as a literal', () => {
+    expect(P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR).toBe('0');
   });
 
-  it('requires re-confirmation for one minor unit more at zero tolerance', () => {
-    expect(assessQuoteDivergence(QUOTED, '3800', '0')).toEqual({
+  it('PART 33 — the function takes NO tolerance argument, so no caller can widen the policy', () => {
+    // An extra argument would be silently ignored by JS, so arity is asserted
+    // directly: this is the only mechanical check that a tolerance parameter has
+    // not quietly come back.
+    expect(assessQuoteDivergence.length).toBe(2);
+  });
+
+  it('passes an exact match', () => {
+    expect(assessQuoteDivergence(QUOTED, '3799')).toEqual({ status: 'within_policy', differenceMinor: '0' });
+  });
+
+  it('PART 33 — one minor unit MORE requires re-confirmation', () => {
+    expect(assessQuoteDivergence(QUOTED, '3800')).toEqual({
       status: 'requires_reconfirmation',
       quotedTotalMinor: '3799',
       recomputedTotalMinor: '3800',
@@ -232,23 +269,20 @@ describe('assessQuoteDivergence', () => {
     });
   });
 
-  it('requires re-confirmation for one minor unit LESS too — charging less is still not what was agreed', () => {
-    const verdict = assessQuoteDivergence(QUOTED, '3798', '0');
+  it('PART 33 — one minor unit LESS requires re-confirmation too — charging less is still not what was agreed', () => {
+    const verdict = assessQuoteDivergence(QUOTED, '3798');
     expect(verdict.status).toBe('requires_reconfirmation');
     expect(verdict.differenceMinor).toBe('1');
   });
 
-  it('treats the tolerance as inclusive, and the unit beyond it as divergent', () => {
-    // Quoted 3799, tolerance 5: the admitted band is 3794..3804 inclusive, and
-    // the first unit beyond it on EITHER side diverges. The band is written out
-    // as explicit numbers rather than computed in the test, so an arithmetic slip
-    // here cannot agree with an arithmetic slip in the implementation.
-    expect(assessQuoteDivergence(QUOTED, '3804', '5').status).toBe('within_policy');
-    expect(assessQuoteDivergence(QUOTED, '3794', '5').status).toBe('within_policy');
-    expect(assessQuoteDivergence(QUOTED, '3805', '5').status).toBe('requires_reconfirmation');
-    expect(assessQuoteDivergence(QUOTED, '3805', '5').differenceMinor).toBe('6');
-    expect(assessQuoteDivergence(QUOTED, '3793', '5').status).toBe('requires_reconfirmation');
-    expect(assessQuoteDivergence(QUOTED, '3793', '5').differenceMinor).toBe('6');
+  it('PART 33 — the admitted set is exactly ONE total, written out as a literal', () => {
+    // Quoted 3799. At a tolerance of zero the only recomputation that may commit
+    // automatically is 3799 itself; both neighbours diverge. The three numbers
+    // are written out rather than derived, so an arithmetic slip in the test
+    // cannot agree with one in the implementation.
+    expect(assessQuoteDivergence(QUOTED, '3798').status).toBe('requires_reconfirmation');
+    expect(assessQuoteDivergence(QUOTED, '3799').status).toBe('within_policy');
+    expect(assessQuoteDivergence(QUOTED, '3800').status).toBe('requires_reconfirmation');
   });
 
   it('is exact above Number.MAX_SAFE_INTEGER — a double could not hold this comparison', () => {
@@ -258,18 +292,18 @@ describe('assessQuoteDivergence', () => {
       lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), lineTotalMinor: big }],
       displayedTotalMinor: big,
     });
-    expect(assessQuoteDivergence(huge, big, '0')).toEqual({ status: 'within_policy', differenceMinor: '0' });
-    expect(assessQuoteDivergence(huge, '9007199254740994', '0').status).toBe('requires_reconfirmation');
+    expect(assessQuoteDivergence(huge, big)).toEqual({ status: 'within_policy', differenceMinor: '0' });
+    expect(assessQuoteDivergence(huge, '9007199254740994').status).toBe('requires_reconfirmation');
   });
 
-  it('refuses a negative or non-canonical tolerance rather than reading it as zero', () => {
+  it('refuses a negative or non-canonical recomputed total rather than reading it as zero', () => {
     for (const bad of ['-1', '0.5', '']) {
-      expect(() => assessQuoteDivergence(QUOTED, '3799', bad)).toThrowError(expect.objectContaining({ code: 'order.quote_amount_invalid' }));
+      expect(() => assessQuoteDivergence(QUOTED, bad)).toThrowError(expect.objectContaining({ code: 'order.quote_amount_invalid' }));
     }
   });
 
   it('refuses a tampered quote before comparing anything', () => {
-    expect(() => assessQuoteDivergence({ ...QUOTED, displayedTotalMinor: '3798' }, '3798', '0')).toThrowError(
+    expect(() => assessQuoteDivergence({ ...QUOTED, displayedTotalMinor: '3798' }, '3798')).toThrowError(
       expect.objectContaining({ code: 'order.quote_tampered' }),
     );
   });

@@ -99,11 +99,29 @@ export const ORDER_REACHABLE_EVIDENCE_KINDS: readonly string[] = Object.freeze([
  * mapping, as data. Nothing maps to two modes, and no mode is reachable without
  * evidence.
  */
-export const SETTLEMENT_MODE_BY_EVIDENCE: Readonly<Record<string, OrderSettlementMode>> = Object.freeze({
+export const SETTLEMENT_MODE_BY_EVIDENCE: Readonly<Record<string, OrderSettlementMode | null>> = Object.freeze({
   cash_collected_on_handover: 'cash' as OrderSettlementMode,
-  payment_verified: 'cash' as OrderSettlementMode,
+  // Directive #11 PART 31: "if Phase 4 `cash` semantics mean literal cash/till,
+  // a card/provider payment must NOT masquerade as cash." An earlier revision of
+  // this table mapped `payment_verified` to `cash`, which is that masquerade
+  // written down — harmless only because the kind is refused below. It is `null`
+  // now, because the mode a verified card payment settles into is the answer the
+  // Sales + Accounting authorities owe when they define the merchant
+  // payment/tender seam, and Phase 6 answering it here would be a second
+  // settlement authority (PART 7). The entry exists so the KIND is enumerated;
+  // its mode stays unanswered until the seam names one.
+  payment_verified: null,
   authorized_customer_credit: 'credit' as OrderSettlementMode,
 });
+
+/**
+ * The evidence kinds whose settlement mode is not Phase 6's to state.
+ *
+ * `WAITING_FOR_INTEGRATED_SURFACE` in the directive's own vocabulary (PART 15).
+ * A kind listed here is refused by `requireSettlementTruth` whatever the caller
+ * claims, and the refusal names the missing surface rather than the mode.
+ */
+export const ORDER_EVIDENCE_KINDS_AWAITING_SEAM: readonly string[] = Object.freeze(['payment_verified']);
 
 /** What the gate established. Returned rather than assumed, so a caller cannot skip it. */
 export interface EstablishedSettlement {
@@ -125,23 +143,41 @@ export interface EstablishedSettlement {
  * asked for, and quietly doing the reverse would post cash nobody collected.
  */
 export function requireSettlementTruth(claimedMode: OrderSettlementMode, evidence: OrderSettlementEvidence, customerId: string | null): EstablishedSettlement {
-  const supported = SETTLEMENT_MODE_BY_EVIDENCE[evidence.kind];
-  if (supported === undefined) {
+  // Recognition is by KEY, not by value: a kind whose mode is deliberately
+  // unanswered (`null`) is recognised and refused, which is a different fact
+  // from a kind nobody has heard of.
+  if (!Object.prototype.hasOwnProperty.call(SETTLEMENT_MODE_BY_EVIDENCE, evidence.kind)) {
     throw new OrderError('order.settlement_not_established', 'the stated settlement evidence is not one this package recognises', {
       kind: String(evidence.kind),
     });
   }
+  const supported = SETTLEMENT_MODE_BY_EVIDENCE[evidence.kind] ?? null;
 
-  // §31, before anything else: an unintegrated surface cannot be the thing that
-  // makes a sale true, whatever the caller claims about it.
+  // PART 31, before anything else: an unintegrated surface cannot be the thing
+  // that makes a sale true, whatever the caller claims about it.
+  // The discriminant is compared literally rather than through
+  // `ORDER_EVIDENCE_KINDS_AWAITING_SEAM.includes(...)`, because only the literal
+  // narrows the union and lets the exhaustiveness check at the end of this
+  // function work. The constant and this branch are tied together by a test
+  // (`the awaiting-seam list is exactly the kinds with no mode`), not by hope —
+  // and any future kind with an unstated mode is caught by the `null` check
+  // below even if someone forgets both.
   if (evidence.kind === 'payment_verified') {
     throw new OrderError(
       'order.payment_surface_not_integrated',
       'no merchant payment provider is integrated, so a verified online payment cannot be established here',
       {
-        kind: evidence.kind,
+        kind: String(evidence.kind),
       },
     );
+  }
+
+  // Fail closed on a kind whose mode nobody has stated, even if a future edit
+  // forgets to list it above: an unknown mode is never guessed into one.
+  if (supported === null) {
+    throw new OrderError('order.settlement_not_established', 'no settlement mode has been established for this evidence kind', {
+      kind: String(evidence.kind),
+    });
   }
 
   if (supported !== claimedMode) {
@@ -165,9 +201,20 @@ export function requireSettlementTruth(claimedMode: OrderSettlementMode, evidenc
     return { mode: 'credit', evidenceKind: evidence.kind, establishedByUserId: evidence.authorizedByUserId, customerId };
   }
 
-  assertCanonicalId(evidence.collectedByUserId, 'collectedByUserId');
-  // A collected-cash sale MAY name a customer and MAY be a walk-in. Both are
-  // true facts; neither is invented.
-  if (customerId !== null) assertCanonicalId(customerId, 'customerId');
-  return { mode: 'cash', evidenceKind: evidence.kind, establishedByUserId: evidence.collectedByUserId, customerId };
+  if (evidence.kind === 'cash_collected_on_handover') {
+    assertCanonicalId(evidence.collectedByUserId, 'collectedByUserId');
+    // A collected-cash sale MAY name a customer and MAY be a walk-in. Both are
+    // true facts; neither is invented.
+    if (customerId !== null) assertCanonicalId(customerId, 'customerId');
+    return { mode: 'cash', evidenceKind: evidence.kind, establishedByUserId: evidence.collectedByUserId, customerId };
+  }
+
+  // Exhaustive by construction: every kind above either returned or threw, so
+  // this line is reachable only once a new kind is added to the union without
+  // being handled here. It refuses rather than falling into the nearest branch,
+  // and the `never` annotation makes the compiler say so at build time too.
+  const unhandled: never = evidence;
+  throw new OrderError('order.settlement_not_established', 'no settlement mode has been established for this evidence kind', {
+    kind: String((unhandled as { kind?: unknown }).kind),
+  });
 }

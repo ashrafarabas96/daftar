@@ -16,6 +16,9 @@ import {
   foldOrderHistory,
   isTerminalOrderState,
   placeOrder,
+  orderStatesReachableWithoutSale,
+  saleBindingEscapeEdges,
+  SALE_BOUND_ORDER_STATES,
   type OrderState,
   type OrderTransition,
   type OrderTransitionKind,
@@ -230,5 +233,51 @@ describe('the history itself', () => {
       expect.objectContaining({ code: 'order.id_invalid' }),
     );
     expect(() => placeOrder(t(ID.saleDoc.toUpperCase(), 'place', '2026-10-01T09:00:00Z'))).toThrowError(expect.objectContaining({ code: 'order.id_invalid' }));
+  });
+});
+
+describe('law 5 — physical handover is not a state of its own (Directive #11 PART 36)', () => {
+  it('names every state an order can reach before any canonical sale exists', () => {
+    // Derived from ORDER_EDGES on one side, written by hand on the other. PART 36
+    // forbids a "goods physically handed over" state that exists without the
+    // canonical sale and stock commit. None of the four below claims the goods
+    // left: `accepted` and `fulfilling` are work in progress, and the two
+    // refusal states and `placed` plainly predate any handover. (The literal
+    // first omitted `accepted` and the derivation caught it, which is what a
+    // hand-written side is for.)
+    //
+    // Adding a `delivered`, `dispatched` or `handed_over` state reaches this
+    // list and reds. That is the point: the author must then bind it to the
+    // sale, or state why a state outside the sale's reach is not a handover.
+    expect([...orderStatesReachableWithoutSale()].sort()).toEqual(['accepted', 'cancelled', 'fulfilling', 'placed', 'rejected']);
+  });
+
+  it('proves the sale-bound states are NOT among them — the goods cannot be gone without the sale', () => {
+    const withoutSale = orderStatesReachableWithoutSale();
+    expect([...SALE_BOUND_ORDER_STATES].sort()).toEqual(['completed', 'fulfilled']);
+    for (const bound of SALE_BOUND_ORDER_STATES) {
+      expect(withoutSale).not.toContain(bound);
+    }
+  });
+
+  it('proves sale-boundness is monotone — no edge carries an order back out of it', () => {
+    // An order whose state said "no sale" while its history said one exists
+    // would be two answers to "was this sold", which PART 7 forbids.
+    expect(saleBindingEscapeEdges()).toEqual([]);
+  });
+
+  it('refuses record_sale without a saleId, so reaching `fulfilled` requires the committed sale', () => {
+    const placed = placeOrder(t(ID.place, 'place', '2026-10-01T09:00:00Z'));
+    const accepted = applyOrderTransition(placed.history, t(ID.accept, 'accept', '2026-10-01T09:01:00Z'));
+    const fulfilling = applyOrderTransition(accepted.history, t(ID.start, 'start_fulfilment', '2026-10-01T09:02:00Z'));
+    expect(fulfilling.snapshot.state).toBe('fulfilling');
+    // The handover command cannot finalize the order on its own: without the
+    // canonical sale's id there is no transition out of `fulfilling` at all.
+    expect(() => applyOrderTransition(fulfilling.history, t(ID.sale, 'record_sale', '2026-10-01T09:03:00Z', null))).toThrowError(
+      expect.objectContaining({ code: 'order.sale_binding_invalid' }),
+    );
+    const sold = applyOrderTransition(fulfilling.history, t(ID.sale, 'record_sale', '2026-10-01T09:03:00Z', ID.saleDoc));
+    expect(sold.snapshot.state).toBe('fulfilled');
+    expect(sold.snapshot.saleId).toBe(ID.saleDoc);
   });
 });
