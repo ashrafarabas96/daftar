@@ -476,10 +476,12 @@ function main(): number {
   lines.push('output. A next-task list that still names finished work sends the next session to');
   lines.push('redo it.');
   lines.push('');
-  lines.push('**On the pinned engine:** `engines` asks for `>=24 <25`. The seventh challenge round');
-  lines.push('fetched Node v24.12.0, verified its digest against the published `SHASUMS256`, and ran');
-  lines.push('the whole inventory on it with the runner exiting 0 — so that debt is paid, by a second');
-  lines.push('party rather than by this author. It is not a standing property of the environment:');
+  lines.push('**On the pinned engine:** `engines` asks for `>=24 <25`. Round-8 R6: an unscoped "that');
+  lines.push('debt is paid" named no SHA, so it read as a standing property. The SHAs are: the seventh');
+  lines.push('challenge round ran the whole inventory on Node v24.12.0 at **`9a34a75`**, and this');
+  lines.push(`author's authoritative runs on it are at **\`d801098\`** and at the head above. Each run`);
+  lines.push('fetched the tarball and verified its digest against the published `SHASUMS256` for that');
+  lines.push('run, never from a cache. It is not a standing property of the environment:');
   lines.push("this container's image carries Node 20, 21 and 22, so a session that means to measure");
   lines.push('on the pinned engine fetches it first and prints `node -v` in the record.');
   lines.push('');
