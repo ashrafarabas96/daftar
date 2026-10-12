@@ -180,7 +180,16 @@ describe('allocateRedemption — refusals, never a rounded-into-existence value'
   const lines = [line('a', 10n, 10000n), line('b', 5n, 10000n)];
 
   it('refuses a value above what the lines can absorb, and does not clamp it', () => {
-    expect(() => allocateRedemption(16n, lines, { basis: 'first_line_first' })).toThrow(LoyaltyRefusal);
+    // F-06 — asserted by code, not by class: `toThrow(LoyaltyRefusal)` would
+    // also pass if the call refused for a reason this case rules out.
+    let firstLineRefusal: unknown;
+    try {
+      allocateRedemption(16n, lines, { basis: 'first_line_first' });
+    } catch (error) {
+      firstLineRefusal = error;
+    }
+    expect(firstLineRefusal).toBeInstanceOf(LoyaltyRefusal);
+    expect((firstLineRefusal as LoyaltyRefusal).code).toBe('loyalty.allocation_exceeds_capacity');
     try {
       allocateRedemption(16n, lines, { basis: 'pro_rata_by_net', remainderTo: 'first_line_first' });
       expect.unreachable('a redemption above capacity must refuse');

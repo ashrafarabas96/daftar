@@ -76,6 +76,16 @@ export const ANALYTICS_REFUSALS = {
   'loyalty.date_not_civil': 422,
   /** Fewer eligible points than the consumption asks for. */
   'loyalty.insufficient_eligible_points': 422,
+  /**
+   * A positive movement that is neither an earn nor a registered un-horizoned
+   * grant reached the expiry fold.
+   *
+   * 500, not 422: the caller did not do anything wrong. Such a row means the
+   * ledger holds a restoration whose horizon the fold cannot attribute, and
+   * the honest answer to "what expires" is then that the fold cannot say —
+   * never that nothing does. See `foldExpiry`.
+   */
+  'loyalty.unattributable_positive_movement': 500,
   /** A redemption value or line figure that is not usable integer minor units. */
   'loyalty.allocation_value_invalid': 422,
   /** A redemption with no lines to split across. */
