@@ -312,6 +312,12 @@ const INSTRUMENTS: readonly Instrument[] = [
     nonZeroMeans: '1 = a finding OR an UNMEASURED scan (the tool could not be obtained); the summary line says which',
   },
   {
+    script: 'scan:secrets:release:prove',
+    what: 'the ways the release scan can miss a subject — an unmerged path, a dirty tracked file, a nested ignore file',
+    cluster: false,
+    nonZeroMeans: 'the scan did not notice a planted hole in its own coverage, so its 0 findings are a statement about what it looked at, not about the tree',
+  },
+  {
     script: 'verify:rc-identity',
     what: 'the release-candidate identity claims, over an archive the CALLER names',
     cluster: false,
