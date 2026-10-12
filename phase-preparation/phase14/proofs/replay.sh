@@ -13,10 +13,13 @@
 #                                 from a freshly created DB
 #
 # The filter is a SUBSTRING of the script path, not a family name, and that is
-# easy to forget: `./replay.sh nope` replays 33 cases, because
-# `c7c_assertio[nope]rable.sql` contains it. Measured while testing the
-# no-match path, which is why the no-match path is loud (exit 2) rather than an
-# empty success.
+# easy to forget: `./replay.sh nope` replays 36 cases, because
+# `c7c_assertion_inoperable.sql` contains "nope" inside "i-nope-rable". An
+# earlier edition of this comment misspelled the file name in its own example
+# and quoted a count that later went stale (COORD-DIFF-REVIEW R1 P3-15); both
+# are measured above the line now. It is a small instance of what this file is
+# full of: an example nobody executed. Found while testing the no-match path,
+# which is why the no-match path is loud (exit 2) rather than an empty success.
 #
 # Round-5 CHALLENGE P2-01: the filtered form used to SKIP the database
 # recreation, the fixture AND the preflight, so it could not exit 0 in any state

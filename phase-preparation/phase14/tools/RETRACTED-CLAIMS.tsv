@@ -1,0 +1,25 @@
+# Claims this pack has RETRACTED, and the ONLY files allowed to contain them.
+# ROUND-7 CHALLENGE P3-02: a retracted sentence was corrected in two documents
+# and survived in a third -- the handoff manifest, the first page a handoff
+# reader reads. Neither existing --check could see it: one validates digests and
+# row/file correspondence, the other one generated block. Prose was the blind
+# spot, so retractions become data and `tools/retracted-claims.py --check`
+# enforces them. A sentence may legitimately appear where the retraction is
+# RECORDED (the amendment that retracts it, the challenge report that found it,
+# and the corrected row that quotes it as retracted), and nowhere else.
+#
+# A CHALLENGE REPORT is always allowed: those files are committed byte-for-byte
+# as received and are the record of what the reviewer claimed. Editing one to
+# satisfy this check would be falsifying a review, so `P14-CHALLENGE-*.md` is
+# exempt in code, not by listing. An amendment of this thread's own is NOT
+# exempt: where it stated a claim since retracted, it carries the retraction
+# inline (see Amendment 09) and is then listed here.
+#
+# claim<TAB>allowed-files (comma separated)<TAB>why it was retracted
+cited only for Phase 4 surface facts	P14-HANDOFF-MANIFEST.md,P14-TASK-DAG.md,P14-AMENDMENT-11-CHALLENGE-ROUND-7.md	0079 is cited as the freeze boundary, not a surface fact (R6 P2-01, R7 P3-02)
+cannot verify the freeze boundary	P14-MIGRATION-PATCH-REQUEST.md,P14-AMENDMENT-10-CHALLENGE-ROUND-6.md,P14-CHALLENGE-2430504.md	the boundary is a FIELD in MIGRATION_MANIFEST.json, present at both trees: it CONTRADICTS at 6fc505d (0073), which is worse (R6 P2-01)
+six of the fourteen	P14-MIGRATION-PATCH-REQUEST.md,P14-AMENDMENT-09-CHALLENGE-ROUNDS-4-5.md	the count was typed from a hand-kept list; it is generated now (R4 P2-01)
+six of fourteen	P14-MIGRATION-PATCH-REQUEST.md,P14-AMENDMENT-09-CHALLENGE-ROUNDS-4-5.md,P14-HANDOFF-MANIFEST.md	same, and it had spread to four documents (R4 P2-01, R5)
+is not present in this container	P14-AMENDMENT-10-CHALLENGE-ROUND-6.md,P14-CHALLENGE-2430504-ADDENDUM-01.md,README.md	the reviewer WITHDREW this: locale-gen exists and runs (R5 P3-04, withdrawn)
+the binary is present, the path is not	P14-AMENDMENT-10-CHALLENGE-ROUND-6.md,README.md	this thread's own unmeasured inference: /usr/sbin IS on the unprivileged account's PATH
+every cited frozen migration is byte-identical	P14-MIGRATION-PATCH-REQUEST.md,P14-AMENDMENT-09-CHALLENGE-ROUNDS-4-5.md,P14-HANDOFF-MANIFEST.md,P14-CHALLENGE-fcb85f8.md	0076, 0079 and 0086 are absent at 6fc505d (R4 P3-03)

@@ -9,6 +9,9 @@ p14_owner     cases/c1_grant_full.sql
 p14_resolver  cases/c1b_lookup_succeeds.sql
 p14_owner     cases/c1c_red_proof.sql
 p14_resolver  cases/c1b_lookup_succeeds.sql                 c1c_redproof_expect_3
+p14_owner     cases/c1_rename_secret_col.sql
+p14_resolver  cases/c1a_restrict_column_refused.sql          c1a_lawunproved_expect_3
+p14_owner     cases/c1_restore_secret_col.sql
 p14_owner     cases/c2_grant_table_insert.sql
 p14_merchant  cases/c2a_forgery_succeeds.sql
 p14_owner     cases/c2_scope_insert.sql

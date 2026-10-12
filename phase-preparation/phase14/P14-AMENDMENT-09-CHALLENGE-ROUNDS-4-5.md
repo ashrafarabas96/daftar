@@ -111,9 +111,19 @@ not used to upgrade it.
 `locale-gen` **does** exist on this image — at `/usr/sbin/locale-gen`, which is
 not on a non-root `PATH`. So the finding stands as a defect in the recipe (step
 one failed for the challenger and would fail for any unprivileged replayer)
-while the stated cause is corrected: the binary is present, the path is not.
-Both `proofs/README.md` and `P14-EVIDENCE-2026-10-12.md` now document
-`localedef -i en_US -f UTF-8 en_US.UTF-8`, give the absolute path of the other,
+while the stated cause is corrected.
+
+> **BOTH HALVES RETRACTED at round 6.** The reviewer **withdrew** the finding
+> after running the command, and this thread's own re-diagnosis — that the
+> binary was present but off the `PATH` — was an inference it never executed:
+> `/usr/sbin` IS on the unprivileged account's `PATH`. The documents are
+> restored to `locale-gen`, the command actually run. See
+> `P14-AMENDMENT-10-CHALLENGE-ROUND-6.md` and
+> `P14-CHALLENGE-2430504-ADDENDUM-01.md`. The paragraph below records what this
+> amendment claimed at the time.
+>
+> Both `proofs/README.md` and `P14-EVIDENCE-2026-10-12.md` then documented
+`localedef -i en_US -f UTF-8 en_US.UTF-8`, gave the absolute path of the other,
 and the evidence row still records that the **original** run used `locale-gen`,
 because rewriting what was run would be inventing evidence.
 
@@ -173,9 +183,15 @@ than checking them wrongly, which is the better of the two failures.
 not true that all three absences are route-surface facts: `0079` is cited as
 the **freeze boundary itself** (`frozenThrough =
 0079_phase4_pos_till_sessions_cart.sql`, in four places), so **a reader on
-`6fc505d` cannot verify the freeze boundary at all.** That is the one
-consequence of the absence that touches a rule rather than a citation, and §15
-now says so.
+`6fc505d` the freeze line is not simply unverifiable.**
+
+> **RETRACTED at round 6, and the retraction is recorded here rather than
+> rewritten away.** This paragraph originally said a reader there *could not
+> verify the boundary at all*. It was never measured: the boundary is a FIELD,
+> in `infrastructure/database/MIGRATION_MANIFEST.json`, which exists at both
+> trees and reads `0073_default_warehouse_locale_name.sql` at `6fc505d`. A
+> reader verifies it and gets an answer six migrations wrong, which is worse.
+> See §15 and `P14-AMENDMENT-10-CHALLENGE-ROUND-6.md`.
 
 **`P3-04` — the ambiguous citations are CITED BY PATH.** An unqualified
 errors.ts matched three real files and an unqualified tokens.ts matched two

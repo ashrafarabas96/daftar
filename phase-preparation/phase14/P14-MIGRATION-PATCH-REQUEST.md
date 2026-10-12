@@ -1433,11 +1433,12 @@ Two corrections came out of generating it rather than typing it:
 | `infrastructure/database/migrations/0025_credential_payload_protection.sql` | identical | `0025_credential_payload_protection.sql` | P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
 | `infrastructure/database/migrations/0045_accounting_post_entry.sql` | identical | `0045_accounting_post_entry.sql` | P14-AMENDMENT-03-CONTINUOUS-MISSION, P14-MIGRATION-PATCH-REQUEST |
 | `infrastructure/database/migrations/0054_inventory_assertion_authority.sql` | identical | `0054_inventory_assertion_authority.sql` | P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
-| `infrastructure/database/migrations/0073_default_warehouse_locale_name.sql` | identical | `0073_default_warehouse_locale_name.sql` | P14-AMENDMENT-10-CHALLENGE-ROUND-6, P14-MIGRATION-PATCH-REQUEST |
+| `infrastructure/database/migrations/0073_default_warehouse_locale_name.sql` | identical | `0073_default_warehouse_locale_name.sql` | P14-AMENDMENT-09-CHALLENGE-ROUNDS-4-5, P14-AMENDMENT-10-CHALLENGE-ROUND-6, P14-HANDOFF-MANIFEST, P14-MIGRATION-PATCH-REQUEST |
 | `infrastructure/database/migrations/0076_phase4_permission_defaults_backfill.sql` | **ABSENT at 6fc505d** | `0076_phase4_permission_defaults_backfill.sql` | P14-MIGRATION-PATCH-REQUEST |
 | `infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql` | **ABSENT at 6fc505d** | `0079_phase4_pos_till_sessions_cart.sql` | P14-AMENDMENT-10-CHALLENGE-ROUND-6, P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
 | `infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql` | **ABSENT at 6fc505d** | `0086_phase4_rls_quals_once_per_query.sql` | P14-MIGRATION-PATCH-REQUEST |
-| `infrastructure/database/MIGRATION_MANIFEST.json` | **DIFFERS** (+27/-3) | `MIGRATION_MANIFEST.json` | P14-AMENDMENT-10-CHALLENGE-ROUND-6, P14-HANDOFF-MANIFEST, P14-MIGRATION-PATCH-REQUEST |
+| `docs/DAFTAR_DATA_MODEL.md` | identical | `DAFTAR_DATA_MODEL.md` | P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/MIGRATION_MANIFEST.json` | **DIFFERS** (+27/-3) | `MIGRATION_MANIFEST.json` | P14-AMENDMENT-10-CHALLENGE-ROUND-6, P14-AMENDMENT-11-CHALLENGE-ROUND-7-AND-COORD-REVIEW, P14-HANDOFF-MANIFEST, P14-MIGRATION-PATCH-REQUEST, README-AR |
 | `apps/api/src/common/guards.ts` | identical | `apps/api/src/common/guards.ts` | P14-HANDOFF-MANIFEST, P14-S0-ARCHITECTURE-LOCK, P14-TASK-DAG |
 | `apps/api/src/infra/database.ts` | **DIFFERS** (+190/-15) | `apps/api/src/infra/database.ts` | P14-AMENDMENT-03-CONTINUOUS-MISSION |
 | `apps/api/src/infra/redis.ts` | identical | `apps/api/src/infra/redis.ts` | P14-AMENDMENT-01-SEALED-CONTRACTS, P14-HANDOFF-MANIFEST, P14-S0-ARCHITECTURE-LOCK, P14-TASK-DAG |
@@ -1447,6 +1448,8 @@ Two corrections came out of generating it rather than typing it:
 | `apps/api/src/modules/outbox/publisher.ts` | identical | `apps/api/src/modules/outbox/publisher.ts` | P14-AMENDMENT-01-SEALED-CONTRACTS, P14-HANDOFF-MANIFEST, P14-S0-ARCHITECTURE-LOCK, P14-TASK-DAG |
 | `apps/api/src/modules/receivables/receivables.controller.ts` | **ABSENT at 6fc505d** | `apps/api/src/modules/receivables/receivables.controller.ts` | P14-OPEN-DECISIONS-AR, P14-S0-ARCHITECTURE-LOCK |
 | `packages/domain-core/src/capabilities.ts` | identical | `capabilities.ts` | P14-AMENDMENT-02-DIRECTIVE-11 |
+| `docs/DAFTAR_SECURITY_MODEL.md` | identical | `docs/DAFTAR_SECURITY_MODEL.md` | P14-OPEN-DECISIONS-AR, P14-S0-ARCHITECTURE-LOCK |
+| `docs/DAFTAR_THREAT_MODEL.md` | identical | `docs/DAFTAR_THREAT_MODEL.md` | P14-OPEN-DECISIONS-AR, P14-S0-ARCHITECTURE-LOCK |
 | `packages/domain-core/src/errors.ts` | identical | `domain-core/src/errors.ts` | P14-CONTRACT-PACK |
 | `apps/api/src/common/error.filter.ts` | **DIFFERS** (+59/-0) | `error.filter.ts` | P14-S0-ARCHITECTURE-LOCK |
 | `apps/api/src/infra/request-context.ts` | identical | `infra/request-context.ts` | P14-CONTRACT-PACK |
@@ -1457,22 +1460,24 @@ Two corrections came out of generating it rather than typing it:
 | `packages/domain-core/src/permissions.ts` | **DIFFERS** (+66/-1) | `packages/domain-core/src/permissions.ts` | P14-HANDOFF-MANIFEST, P14-S0-ARCHITECTURE-LOCK, P14-TASK-DAG |
 | `apps/api/src/modules/pos/pos-cart-routes.ts` | **ABSENT at 6fc505d** | `pos/pos-cart-routes.ts` | P14-AMENDMENT-05-MISSION-V3, P14-MIGRATION-PATCH-REQUEST |
 | `apps/api/src/modules/pos/pos-permissions.ts` | **ABSENT at 6fc505d** | `pos/pos-permissions.ts` | P14-AMENDMENT-05-MISSION-V3, P14-MIGRATION-PATCH-REQUEST |
+| `packages/accounting/vectors/README.md` | identical | `proofs/README.md` | P14-AMENDMENT-08-CHALLENGE-ROUND-3, P14-AMENDMENT-09-CHALLENGE-ROUNDS-4-5, P14-AMENDMENT-10-CHALLENGE-ROUND-6 |
 | `scripts/static-guards.ts` | **DIFFERS** (+106/-9) | `scripts/static-guards.ts` | P14-S0-ARCHITECTURE-LOCK |
 | `apps/api/src/modules/selling/customers.controller.ts` | **ABSENT at 6fc505d** | `selling/customers.controller.ts` | P14-AMENDMENT-05-MISSION-V3, P14-MIGRATION-PATCH-REQUEST |
 | `apps/api/src/modules/pos/till-sessions.controller.ts` | **ABSENT at 6fc505d** | `till-sessions.controller.ts` | P14-MIGRATION-PATCH-REQUEST |
 
-**37 cited files resolved: 6 DIFFER, 22 identical, 9 ABSENT at `6fc505d`.**
+**41 cited files resolved: 6 DIFFER, 26 identical, 9 ABSENT at `6fc505d`.**
 
-Scanned population: backticked citations with one of these extensions — `.ts`, `.tsx`, `.sql`, `.yaml`, `.yml`, `.kt`, `.js`, `.json`, `.sh`, `.py`. The set is printed because `ROUND-6 P2-01` found the sentence claiming more than the pattern matched: `json` was missing, and the one cited file whose difference changes a RULE is a `.json`.
+Scanned population: backticked citations with one of these extensions — `.ts`, `.tsx`, `.sql`, `.yaml`, `.yml`, `.kt`, `.js`, `.json`, `.sh`, `.py`, `.md` — taken from **21 document(s)**: every `.md` and `.yaml` under the pack, walked recursively (so `proofs/README.md` and the case headers are included), excluding the challenge reports and the coordinator reviews, which are other people's words committed unedited, and excluding this generated block itself, which would otherwise count its own rows. The population is printed because `ROUND-6 P2-01` and `COORD-DIFF-REVIEW R1 P3-12` each found the sentence claiming more than the pattern matched: first `json` was missing — and the one cited file whose difference changes a RULE is a `.json` — then `md` was, and only top-level documents were read.
 
 Absent at `6fc505d`: `apps/api/src/modules/pos/pos-cart-routes.ts`, `apps/api/src/modules/pos/pos-permissions.ts`, `apps/api/src/modules/pos/till-sessions.controller.ts`, `apps/api/src/modules/receivables/receivables.controller.ts`, `apps/api/src/modules/selling/customers.controller.ts`, `infrastructure/database/migrations/0076_phase4_permission_defaults_backfill.sql`, `infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql`, `infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql`, `packages/shared-contracts/src/invoices.ts` — a reader on that tree cannot verify these citations at all.
 
-**Cited tokens that are not live code at `93084f8`, classified:**
-- 47 resolve to real files INSIDE this pack (its proof scripts, its driver and its tools), which live in the pack and not in the repo. Measured by resolving each against the pack directory, not by a name pattern.
-- 2 are the pack's own artifacts.
-- 1 were proof scripts this pack DELETED and still names: `cases/c7a_cross_business_accepted.sql`. Git knows them under the pack, so they are neither live code nor proposed files, and a reader must not look for them.
-- 10 are files this phase PROPOSES and that correctly do not exist yet: `apps/api/src/modules/integrations/key-material.ts`, `c7a_cross_business_accepted.sql`, `packages/domain-core/src/api-scopes.ts`, `packages/shared-contracts/src/public-api.ts`, `scripts/phase14-event-catalogue-gate.ts`, `scripts/phase14-gate.ts`, `scripts/phase14-openapi.ts`, `scripts/phase14-registry-gate.ts`, `webhooks/egress-guard.ts`, `webhooks/signature.ts`
-  A reader should not look for these in any tree. They are absent at `93084f8` by this scan's own construction -- an entry here that later RESOLVES means either the phase has been built or the citation is wrong, and `--check` turns that into drift (exit 1). No gate in this pack asserts their absence, and none is claimed to.
+**Cited tokens that are not live code at `93084f8`, classified.** Each token is in exactly one bucket, and the generator asserts the four add up to the 99 unresolved tokens. The counts below are of FILES (spellings of one path folded together); the token count is given beside each, because an earlier edition counted tokens while saying files and the buckets summed to one more than existed (`COORD-DIFF-REVIEW R1 P2-02`).
+- **75 file(s)** (78 tokens) resolve to real files INSIDE this pack — its proof scripts, its driver and its tools — which live in the pack and not in the repo.
+- **1 file(s)** (2 tokens) were proof scripts this pack DELETED and still names: `cases/c7a_cross_business_accepted.sql`. Git knows them under the pack, so they are neither live code nor proposed files, and a reader must not look for them.
+- **8 file(s)** (8 tokens) are cited by an ABSOLUTE path outside the repository (`/mnt/project-files/directives/DIRECTIVE-11-PER-PHASE.md`, `/mnt/project-files/directives/MASTER-CONTINUOUS-MISSION-PER-PHASE.md`, `/mnt/project-files/directives/MASTER-CONTINUOUS-MISSION-V2-DELTA.md`, `/mnt/project-files/directives/MASTER-CONTINUOUS-MISSION-V3-DELTA.md`, `/mnt/project-files/phase14/P14-AMENDMENT-01-SEALED-CONTRACTS.md`, `/mnt/project-files/phase14/P14-MIGRATION-PATCH-REQUEST.md`, `/mnt/project-files/phase14/P14-OPEN-DECISIONS-AR.md`, `/mnt/project-files/phase14/P14-OPENAPI-SKELETON.yaml`). They are not resolved here: resolving an absolute token would measure this host rather than either tree.
+- **1 file(s)** (1 tokens) are documents that live OUTSIDE this pack and outside both trees — another phase's pack, or a directive — cited by name: `P4-SLOT4-ROSTER-PROOF-LAW.md`. They are not files this phase proposes.
+- **9 file(s)** (10 tokens) are files this phase PROPOSES and that correctly do not exist yet: `apps/api/src/modules/integrations/key-material.ts`, `packages/domain-core/src/api-scopes.ts`, `packages/shared-contracts/src/public-api.ts`, `scripts/phase14-event-catalogue-gate.ts`, `scripts/phase14-gate.ts`, `scripts/phase14-openapi.ts`, `scripts/phase14-registry-gate.ts`, `webhooks/egress-guard.ts`, `webhooks/signature.ts`
+  A reader should not look for these in any tree. They are absent at `93084f8` by this scan's own construction. **No gate asserts their absence, and `--check` cannot detect their arrival**: resolution is pinned to `93084f8`, so building the phase would not make them resolve there. What `--check` does detect is this block drifting from the trees it describes.
 <!-- END GENERATED citation-provenance -->
 
 **The frozen-migration sentence, corrected (CHALLENGE R4 P3-03).** Earlier
@@ -1505,6 +1510,18 @@ trees, and it was read at both rather than reasoned about:
 |---|---|
 | `93084f8` (declared base) | `0079_phase4_pos_till_sessions_cart.sql` |
 | `6fc505d` (checked out) | **`0073_default_warehouse_locale_name.sql`** |
+
+**And at the declared base that file disagrees with itself
+(`COORD-DIFF-REVIEW R1 P3-11`).** At `93084f8`, `MIGRATION_MANIFEST.json` has
+`frozenThrough = 0079_phase4_pos_till_sessions_cart.sql` on line 3, while its
+own `policy` text on line 4 says *"Migrations 0000–0078 are FROZEN"* and
+*"every schema correction is a NEW migration appended after 0078"*. Both were
+read, not inferred. **Fixing that is not Phase 14's to do; disclosing it is**,
+and it matters here because this pack's standing rule — `0000`–`0079` are
+byte-immutable — follows the field and not the prose, so a reader comparing the
+two will find the file's own two answers before they find a disagreement with
+this pack. It is raised to the Migration Owner with no number and no filename
+proposed, like everything else in this request.
 
 So a reader on `6fc505d` does **not** fail to verify the freeze line. They
 verify it, get `0073`, and conclude this pack's boundary is wrong by six

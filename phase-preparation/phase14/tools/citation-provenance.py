@@ -30,7 +30,12 @@ import argparse, os, re, subprocess, sys, collections
 # list's defect in a new form: not a wrong count, a count of the wrong
 # population. The extension set is named in the output now, so the claim cannot
 # outrun the scan again.
-EXTS = ('ts','tsx','sql','yaml','yml','kt','js','json','sh','py')
+# COORD-DIFF-REVIEW R1 P3-12: `.md` was outside the population too. The pack
+# cites `docs/DAFTAR_DATA_MODEL.md`, `docs/DAFTAR_SECURITY_MODEL.md` and
+# `docs/DAFTAR_THREAT_MODEL.md`; all three are identical at both trees today, so
+# no row was lost -- but "currently harmless" is not a reason to keep a
+# population narrower than the sentence over it. Admitted.
+EXTS = ('ts','tsx','sql','yaml','yml','kt','js','json','sh','py','md')
 CITE = re.compile(r'`([A-Za-z0-9_./-]+\.(?:%s))(?::[0-9][0-9,\s–-]*)?`' % '|'.join(EXTS))
 
 BEGIN = '<!-- BEGIN GENERATED citation-provenance -- do not edit by hand -->'
@@ -46,11 +51,19 @@ def tracked(repo, rev):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--pack', default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    # The repo root, not the cwd: the gate must give the same answer from the
-    # pack directory and from the repo root. A default of '.' made --check
-    # report STALE from one and current from the other, which is a gate that
-    # disagrees with itself.
-    _top = subprocess.run(['git','rev-parse','--show-toplevel'],
+    # ROUND-7 CHALLENGE P2-01: the repository must be derived from the PACK, not
+    # from the working directory. Round 6 replaced a '.' default with the CWD's
+    # `git rev-parse --show-toplevel`, which fixed the two cases anybody tested
+    # and left the gate still deciding by location: from a cwd outside the
+    # repository, or inside a DIFFERENT worktree of it, --repo named another
+    # tree than --pack, `os.path.relpath` then climbed out of it with `../..`,
+    # git refused that pathspec, and `was_in_pack` answered False for every
+    # token -- so the deleted-scripts bucket collapsed into the proposed one and
+    # the gate reported `BLOCK IS STALE`. A LOCATION problem printed as a
+    # CONTENT verdict, with two fixed points selected by cwd. --pack is the one
+    # argument that cannot be wrong, so the repository is read from it.
+    _top = subprocess.run(['git','-C',ap.get_default('pack'),
+                           'rev-parse','--show-toplevel'],
                           capture_output=True, text=True)
     ap.add_argument('--repo', default=(_top.stdout.strip() or '.'))
     ap.add_argument('--base', default='93084f8')
@@ -60,8 +73,18 @@ def main():
     ap.add_argument('--check')
     a = ap.parse_args()
 
-    docs = sorted(f for f in os.listdir(a.pack)
-                  if f.endswith(('.md','.yaml')) and not f.startswith('P14-CHALLENGE'))
+    # COORD-DIFF-REVIEW R1 P3-12: only TOP-LEVEL pack documents were scanned, so
+    # `proofs/README.md` and every case header were outside the population while
+    # the output said "cited files". The walk is recursive now, and the scanned
+    # set is printed with the result.
+    docs = []
+    for root, dirs, names in os.walk(a.pack):
+        dirs[:] = [d for d in dirs if d != '.git']
+        for f in sorted(names):
+            if f.endswith(('.md','.yaml')) and not f.startswith('P14-CHALLENGE') \
+               and not f.startswith('P14-COORD-DIFF-REVIEW'):
+                docs.append(os.path.relpath(os.path.join(root, f), a.pack))
+    docs = sorted(docs)
     hits = collections.defaultdict(set)          # cited token -> {doc, ...}
     for d in docs:
         text = open(os.path.join(a.pack,d), encoding='utf-8').read()
@@ -132,10 +155,16 @@ def main():
         print()
         print('**%d cited files resolved: %d DIFFER, %d identical, %d ABSENT at `%s`.**'
               % (total, len(differ), len(identical), len(absent), a.other))
-        print('\nScanned population: backticked citations with one of these extensions — %s.'
-              ' The set is printed because `ROUND-6 P2-01` found the sentence claiming more than the'
-              ' pattern matched: `json` was missing, and the one cited file whose difference changes a'
-              ' RULE is a `.json`.' % ', '.join('`.%s`' % e for e in EXTS))
+        print('\nScanned population: backticked citations with one of these extensions — %s —'
+              ' taken from **%d document(s)**: every `.md` and `.yaml` under the pack, walked'
+              ' recursively (so `proofs/README.md` and the case headers are included), excluding the'
+              ' challenge reports and the coordinator reviews, which are other people\'s words'
+              ' committed unedited, and excluding this generated block itself, which would otherwise'
+              ' count its own rows. The population is printed because `ROUND-6 P2-01` and'
+              ' `COORD-DIFF-REVIEW R1 P3-12` each found the sentence claiming more than the pattern'
+              ' matched: first `json` was missing — and the one cited file whose difference changes a'
+              ' RULE is a `.json` — then `md` was, and only top-level documents were read.'
+              % (', '.join('`.%s`' % e for e in EXTS), len(docs)))
         if absent:
             print('\nAbsent at `%s`: %s — a reader on that tree cannot verify these citations at all.'
                   % (a.other, ', '.join('`%s`'%x for x in absent)))
@@ -156,58 +185,103 @@ def main():
             # called. (Widening the extensions to `.sh`/`.py` immediately proved
             # the point: the pack's own driver and tools were classified as
             # files the phase proposes.)
+            # COORD-DIFF-REVIEW R1 P2-02: these buckets counted TOKENS, not
+            # files, and they overlapped -- `replay.sh` and `proofs/replay.sh`
+            # each counted, `packown` was still a name pattern that intersected
+            # the in-pack bucket, `deleted` was folded BEFORE `future` was built
+            # from "not in deleted" so the folded-out basename leaked into
+            # PROPOSES, and an absolute `/mnt/...` token was resolved against
+            # the HOST filesystem. The buckets summed to 60 against 59 tokens
+            # and nothing noticed, which is the defect: a classification nobody
+            # can add up is not a measurement. So: membership is computed on the
+            # UNFOLDED token set with a strict priority, folding is for DISPLAY
+            # only, and the totals are ASSERTED to partition the set.
             def in_pack(tok):
+                if os.path.isabs(tok):
+                    return False          # not ours to resolve on this host
                 return any(os.path.exists(os.path.join(a.pack, d, tok))
                            for d in ('', 'proofs', 'proofs/cases'))
-            proofs = [x for x in unresolved if in_pack(x)]
-            # And a token that is in neither tree NOR the pack, but that git
-            # knows under the pack, is a file this pack DELETED -- which is a
-            # third thing and not a file the phase proposes. Measured, again,
-            # rather than listed.
+            # ROUND-7 P2-01, second remedy, taken as well as the first: a
+            # pathspec that leaves the repository must FAIL LOUDLY. Answering
+            # False turns a misconfiguration into a silent misclassification,
+            # and a wrong bucket then reads as drift.
+            rel = os.path.relpath(a.pack, a.repo)
+            if rel.startswith('..') or os.path.isabs(rel):
+                print('CONFIGURATION ERROR: --pack (%s) is not inside --repo (%s), so no pathspec'
+                      ' under the pack can be resolved and every classification below would be'
+                      ' silently wrong. Pass --repo for the repository that contains the pack.'
+                      % (a.pack, a.repo), file=sys.stderr)
+                return 2
             def was_in_pack(tok):
-                rel = os.path.relpath(a.pack, a.repo)
+                if os.path.isabs(tok):
+                    return False
                 for d in ('', 'proofs', 'proofs/cases'):
                     r = git(a.repo, 'log', '--all', '--oneline', '-1', '--',
                             os.path.join(rel, d, tok))
                     if r.returncode == 0 and r.stdout.strip():
                         return True
                 return False
+
+            fold = lambda xs: sorted(x for x in xs
+                                     if not any(y != x and y.endswith('/'+x) for y in xs))
+            # strict priority, each token in exactly one bucket
+            proofs  = [x for x in unresolved if in_pack(x)]
             deleted = [x for x in unresolved if x not in proofs and was_in_pack(x)]
-            fold = lambda xs: [x for x in xs
-                               if not any(y != x and y.endswith('/'+x) for y in xs)]
-            deleted = fold(deleted)
-            packown = [x for x in unresolved if x.endswith(('.yaml',)) and 'P14-' in x]
-            future = [x for x in unresolved if x not in proofs and x not in packown
-                      and x not in deleted]
-            # ROUND-6 P3-04: a bare basename and the path it names are the same
-            # file, and counting both inflated this bucket (`public-api.ts` and
-            # `packages/shared-contracts/src/public-api.ts`). Fold a basename
-            # into a longer token that ends with it.
-            future = fold(future)
-            print('\n**Cited tokens that are not live code at `%s`, classified:**' % a.base)
-            print('- %d resolve to real files INSIDE this pack (its proof scripts, its driver and its'
-                  ' tools), which live in the pack and not in the repo. Measured by resolving each'
-                  ' against the pack directory, not by a name pattern.' % len(proofs))
-            if packown:
-                print('- %d are the pack\'s own artifacts.' % len(packown))
-            if deleted:
-                print('- %d were proof scripts this pack DELETED and still names: %s. Git knows them'
-                      ' under the pack, so they are neither live code nor proposed files, and a'
-                      ' reader must not look for them.'
-                      % (len(deleted), ', '.join('`%s`' % x for x in sorted(deleted))))
-            print('- %d are files this phase PROPOSES and that correctly do not exist yet: %s'
-                  % (len(future), ', '.join('`%s`'%x for x in sorted(future))))
-            # ROUND-6 P3-02: this line used to credit `P14-GATE-034` with
-            # asserting these stay absent. GATE-034 is replay-after-purge, and
-            # NO gate in the pack makes that assertion -- round-2 P1-01's
-            # species (a right rule on a wrong law number), in generated prose,
-            # so it would have regenerated identically forever. What is true is
-            # structural and is stated instead.
+            abspath = [x for x in unresolved if x not in proofs and x not in deleted
+                       and os.path.isabs(x)]
+            # A `.md`/`.yaml` token that is neither in the pack nor in either
+            # tree is another document -- another phase's pack, a directive --
+            # cited by name. It is NOT a file this phase proposes: this phase
+            # proposes source files and gates, and no markdown outside its own
+            # folder. Lumping the two together put `P4-SLOT4-ROSTER-PROOF-LAW.md`
+            # among Phase 14's proposed files, which is simply false.
+            otherdocs = [x for x in unresolved if x not in proofs and x not in deleted
+                         and x not in abspath and x.endswith(('.md','.yaml'))]
+            future  = [x for x in unresolved if x not in proofs and x not in deleted
+                       and x not in abspath and x not in otherdocs]
+            assert (len(proofs)+len(deleted)+len(abspath)+len(otherdocs)+len(future)
+                    == len(unresolved)), 'the buckets do not partition the unresolved tokens'
+            fp, fd, fa, fo, ff = (fold(proofs), fold(deleted), fold(abspath),
+                                  fold(otherdocs), fold(future))
+            print('\n**Cited tokens that are not live code at `%s`, classified.** Each token is in'
+                  ' exactly one bucket, and the generator asserts the four add up to the %d'
+                  ' unresolved tokens. The counts below are of FILES (spellings of one path folded'
+                  ' together); the token count is given beside each, because an earlier edition'
+                  ' counted tokens while saying files and the buckets summed to one more than'
+                  ' existed (`COORD-DIFF-REVIEW R1 P2-02`).'
+                  % (a.base, len(unresolved)))
+            print('- **%d file(s)** (%d tokens) resolve to real files INSIDE this pack — its proof'
+                  ' scripts, its driver and its tools — which live in the pack and not in the repo.'
+                  % (len(fp), len(proofs)))
+            if fd:
+                print('- **%d file(s)** (%d tokens) were proof scripts this pack DELETED and still'
+                      ' names: %s. Git knows them under the pack, so they are neither live code nor'
+                      ' proposed files, and a reader must not look for them.'
+                      % (len(fd), len(deleted), ', '.join('`%s`' % x for x in fd)))
+            if fa:
+                print('- **%d file(s)** (%d tokens) are cited by an ABSOLUTE path outside the'
+                      ' repository (%s). They are not resolved here: resolving an absolute token'
+                      ' would measure this host rather than either tree.'
+                      % (len(fa), len(abspath), ', '.join('`%s`' % x for x in fa)))
+            if fo:
+                print('- **%d file(s)** (%d tokens) are documents that live OUTSIDE this pack and'
+                      ' outside both trees — another phase\'s pack, or a directive — cited by name:'
+                      ' %s. They are not files this phase proposes.'
+                      % (len(fo), len(otherdocs), ', '.join('`%s`' % x for x in fo)))
+            print('- **%d file(s)** (%d tokens) are files this phase PROPOSES and that correctly do'
+                  ' not exist yet: %s'
+                  % (len(ff), len(future), ', '.join('`%s`' % x for x in ff)))
+            # COORD-DIFF-REVIEW R1 P3-08: this line used to say `--check` turns a
+            # proposed file that later appears into drift. It cannot: resolution
+            # is against the PINNED base, so building the phase can never make
+            # one resolve at `93084f8`. A gate credited with a detection it
+            # cannot make is the same species as a gate cited by the wrong
+            # number, so the claim is withdrawn rather than reworded.
             print('  A reader should not look for these in any tree. They are absent at `%s` by this'
-                  ' scan\'s own construction -- an entry here that later RESOLVES means either the'
-                  ' phase has been built or the citation is wrong, and `--check` turns that into'
-                  ' drift (exit 1). No gate in this pack asserts their absence, and none is claimed to.'
-                  % a.base)
+                  " scan's own construction. **No gate asserts their absence, and `--check` cannot"
+                  ' detect their arrival**: resolution is pinned to `%s`, so building the phase would'
+                  ' not make them resolve there. What `--check` does detect is this block drifting'
+                  ' from the trees it describes.' % (a.base, a.base))
     block = buf.getvalue().strip('\n')
 
     if a.markdown:

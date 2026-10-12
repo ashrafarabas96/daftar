@@ -62,6 +62,11 @@ because they fence the **absence** of a relation a case needs and never the
 **presence** of state it needs to be absent: one direction only, which is the
 shape Phase 11 paid for in its closure law. Both halves are now closed:
 
+- the filter is a **substring of the script path**, so `./replay.sh nope`
+  replays 36 cases (`c7c_assertion_inoperable.sql` contains it). The counts in
+  this file and in the driver's comment are measured, not remembered: an
+  earlier edition of that comment misspelled the file in its own example and
+  quoted a count that had gone stale (`COORD-DIFF-REVIEW R1 P3-15`);
 - there is **one setup path**, taken unconditionally, and a filter selects the
   `ORDER` prefix up to and including the last matching line — its prerequisites
   included, since `ORDER` is topologically sorted. A filter matching nothing

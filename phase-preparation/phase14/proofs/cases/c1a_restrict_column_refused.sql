@@ -29,10 +29,10 @@ BEGIN
     EXECUTE 'SELECT name FROM p14s.api_keys WHERE secret_sha256 = $1'
       INTO got USING repeat('a',64);
     RAISE EXCEPTION 'LAW VIOLATED: lookup on an ungranted column SUCCEEDED, returned %', got;
-  EXCEPTION WHEN insufficient_privilege THEN
+  EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS st = RETURNED_SQLSTATE;
     IF st <> '42501' THEN
-      RAISE EXCEPTION 'LAW UNPROVED: refused with SQLSTATE %, not 42501 — a refusal for another reason is not this law', st;
+      RAISE EXCEPTION 'LAW UNPROVED: the lookup failed with SQLSTATE %, not 42501 — a failure for another reason is not this law', st;
     END IF;
     RAISE NOTICE 'LAW HELD: refused with SQLSTATE 42501, and the control above proves the granted columns were readable';
   END;

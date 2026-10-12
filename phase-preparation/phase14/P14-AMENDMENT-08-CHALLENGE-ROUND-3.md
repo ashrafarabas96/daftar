@@ -1,5 +1,17 @@
 # P14 — AMENDMENT 08: response to the independent challenge, round 3 (at `6f744c1`)
 
+> **ANNOTATION ADDED 2026-10-12 (`COORD-DIFF-REVIEW R1 P3-14`). This amendment
+> presents clean challenge rounds as validating the design, and that reading is
+> withdrawn.** Where it says *no finding has landed against the architecture*
+> and *all 39 laws have been re-measured by an independent session and are
+> sound*, the correct statement is the one in
+> `P14-AMENDMENT-10-CHALLENGE-ROUND-6.md`: **the architecture is not vindicated,
+> it is unexecuted.** The executed evidence covers **nine case families**
+> (C1–C9), not 39 laws; there is no API, no DDL, no route and no CI in Phase 14,
+> and every gate is `UNMEASURED`. The text below is kept as the record of what
+> this amendment claimed at the time.
+
+
 **Status: `PREPARED`, `CHALLENGED`, `NOT PROMOTED`. `READY_TO_PROMOTE` = NO.**
 Round 3's verdict was **PASS-WITH-SCOPE, narrower than round 2**: every round-2
 item closed by construction, all 43 recorded exit codes reproduced when the
