@@ -72,6 +72,22 @@ psql -v ON_ERROR_STOP=1 "$P5_DB_OWNER_URL" -f "$SQLDIR/credit-ledger-roles.sql" 
 psql -tA "$P5_DB_OWNER_URL" -c \
   "SELECT 'PG=' || current_setting('server_version') || ' lc_collate=' || datcollate || ' lc_ctype=' || datctype || ' encoding=' || pg_encoding_to_char(encoding) FROM pg_database WHERE datname = current_database()" 
 
+# ROUND 7 CORRECTION. The locale guard above only runs when the cluster is
+# being CREATED. A cluster initialised in an earlier round under `--locale=C`
+# is reused as it stands, so the lane printed `lc_collate=C` while claiming
+# `P5_LOCALE=en_US.utf8` — the silent downgrade this script was changed to
+# prevent, one step further back than the guard reached. The collation of the
+# cluster the proof actually ran against is therefore asserted here, against
+# a LIVE catalogue read, and a disagreement FAILS the lane.
+LIVE_COLLATE=$(psql -tA "$P5_DB_OWNER_URL" -c \
+  "SELECT datcollate FROM pg_database WHERE datname = current_database()" | tr -d '[:space:]')
+if [ "$LIVE_COLLATE" != "$P5_LOCALE" ]; then
+  echo "COLLATION MISMATCH: the cluster at $CLUSTER is $LIVE_COLLATE, the requested target is $P5_LOCALE."
+  echo "A proof taken under $LIVE_COLLATE is not a proof about the deploy target. Point"
+  echo "P5_CLUSTER_DIR/PGPORT_P5 at a cluster of the right collation, or set P5_LOCALE deliberately."
+  exit 1
+fi
+
 psql -tA "$P5_DB_OWNER_URL" -c "SELECT version()"
 npx vitest run --config vitest.db.config.ts "$@"
 rc=$?

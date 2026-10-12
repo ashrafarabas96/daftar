@@ -24,8 +24,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
-import { connect, ownerUrl, sqlstate, uuid } from './helpers/cluster';
-import { createDraftInvoice, type Scope } from './helpers/finalize';
+import { connect, constraintOf, ownerUrl, sqlstate, uuid } from './helpers/cluster';
+import { createDraftInvoice, finalizeInvoice, insertGrant, remainderOf, type Scope } from './helpers/finalize';
 import {
   canTransitionInvoice,
   FINALIZATION_WRITABLE_COLUMNS,
@@ -209,6 +209,86 @@ describe('the transitions the database allows are the transitions the package al
         .then(() => '', (e: unknown) => sqlstate(e));
       expect(code, `a ${state} invoice was deleted`).toBe('23000');
     }
+  });
+});
+
+describe('the currency boundary — a grant funds its own currency and no other', () => {
+  /**
+   * ROUND 7. The High-Velocity mission lists "Credit and FX correctness"
+   * among the Phase 5 fixes to preserve, and the author's own challenger
+   * brief had to admit this boundary was asserted in the pure core and
+   * never attacked from the DATABASE side. It is attacked here. There is
+   * no FX CONVERSION anywhere in this slice — a credit is spent in the
+   * currency it was granted in or not at all — so what has to hold is that
+   * no row can be written which spends across currencies.
+   */
+  it('refuses a consumption whose currency differs from the grant it names', async () => {
+    const usd = await freshScope('USD');
+    const eur: Scope = { ...usd, currency: 'EUR' };
+    const grantUsd = await insertGrant(owner, 'p5scratch', usd, 1000n, T1);
+    // The INVOICE is EUR, like the consumption. That is deliberate: the
+    // first version of this case invoiced in USD, so `pca_invoice_fk`
+    // refused the row and the case passed without the grant key ever being
+    // consulted. Mutation M27 proved it — removing the currency from
+    // `pca_grant_same_owner_currency_kind` left the case green. Only the
+    // GRANT disagrees here, so only the grant key can answer.
+    const invoiceEur = await createDraftInvoice(owner, 'p5scratch', eur, 1000n);
+    const refusal = await owner
+      .query(
+        `INSERT INTO p5scratch.platform_credit_adjustments
+           (id, tenant_id, business_id, kind, amount_minor, currency, occurred_at, source_ref, reason,
+            applies_to_grant_id, invoice_id)
+         VALUES ($1,$2,$3,'consumption',100,'EUR',$4,'inv-fx','spending a USD grant as EUR',$5,$6)`,
+        [uuid(), usd.tenantId, usd.businessId, T1, grantUsd, invoiceEur],
+      )
+      .then(
+        () => ({ code: '', constraint: '' }),
+        (e: unknown) => ({ code: sqlstate(e), constraint: constraintOf(e) }),
+      );
+    // 23503 is the self-FK: the referenced identity carries the currency,
+    // so a EUR consumption resolves against no USD grant. The constraint is
+    // named because 23503 is the code of every key in this schema.
+    expect(refusal, 'a consumption spent a grant of another currency').toStrictEqual({
+      code: '23503',
+      constraint: 'pca_grant_same_owner_currency_kind',
+    });
+  });
+
+  it('refuses a consumption whose currency differs from the invoice it names', async () => {
+    const usd = await freshScope('USD');
+    const eur: Scope = { ...usd, currency: 'EUR' };
+    const grantEur = await insertGrant(owner, 'p5scratch', eur, 1000n, T1);
+    const invoiceUsd = await createDraftInvoice(owner, 'p5scratch', usd, 1000n);
+    await owner.query('BEGIN');
+    await owner.query(
+      `INSERT INTO p5scratch.platform_credit_adjustments
+         (id, tenant_id, business_id, kind, amount_minor, currency, occurred_at, source_ref, reason,
+          applies_to_grant_id, invoice_id)
+       VALUES ($1,$2,$3,'consumption',100,'EUR',$4,'inv-fx-2','a EUR consumption against a USD invoice',$5,$6)`,
+      [uuid(), usd.tenantId, usd.businessId, T1, grantEur, invoiceUsd],
+    );
+    // The invoice FK is DEFERRABLE INITIALLY DEFERRED, so the refusal is
+    // due at COMMIT and not at the INSERT. Asserting it at the INSERT would
+    // have reported this boundary as unenforced.
+    const code = await owner.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e));
+    await owner.query('ROLLBACK').catch(() => undefined);
+    expect(code, 'a consumption named an invoice in another currency').toBe('23503');
+  });
+
+  it('spends only the currency being invoiced, leaving the other untouched', async () => {
+    const usd = await freshScope('USD');
+    const eur: Scope = { ...usd, currency: 'EUR' };
+    const usdGrant = await insertGrant(owner, 'p5scratch', usd, 700n, T1);
+    const eurGrant = await insertGrant(owner, 'p5scratch', eur, 900n, T1);
+
+    const invoice = await createDraftInvoice(owner, 'p5scratch', usd, 500n);
+    await owner.query('BEGIN');
+    const plan = await finalizeInvoice(owner, 'p5scratch', usd, invoice, 500n, 'inv-usd', T1, { withLock: true });
+    await owner.query('COMMIT');
+
+    expect(plan.application.appliedMinor).toBe(500n);
+    expect(await remainderOf(owner, usdGrant)).toBe(200n);
+    expect(await remainderOf(owner, eurGrant), 'the other currency’s grant was drawn into a USD invoice').toBe(900n);
   });
 });
 

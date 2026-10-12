@@ -74,3 +74,18 @@ export function uuid(): string {
 export function sqlstate(e: unknown): string {
   return typeof e === 'object' && e !== null && 'code' in e && typeof e.code === 'string' ? e.code : '';
 }
+
+/**
+ * The CONSTRAINT a pg error names, or ''. Round 7: asserting a SQLSTATE
+ * alone proved too weak. 23503 is the code of every foreign key in the
+ * schema, so a case that asserts only `23503` passes when a DIFFERENT key
+ * refuses — which is how the first version of the cross-currency case
+ * stayed green with the currency removed from the key it was written to
+ * observe. A case that names the constraint cannot be satisfied by its
+ * neighbour.
+ */
+export function constraintOf(e: unknown): string {
+  return typeof e === 'object' && e !== null && 'constraint' in e && typeof e.constraint === 'string'
+    ? e.constraint
+    : '';
+}
