@@ -43,6 +43,55 @@ data class OwnerScope(
         require(memberId.isNotBlank()) { "a queue row must record the member who captured it" }
     }
 
+    /**
+     * Whether a session holding THIS scope may apply `event` to a row owned by
+     * `owner`.
+     *
+     * Challenger finding F-05. Comparing the whole triple for every event was
+     * the obvious reading of L13 and it strands a shift change: Alice captures
+     * a sale while the till is offline, her shift ends and her session is
+     * revoked as PART 40 item 2.3 requires, Bob signs in — and the row is then
+     * unsendable, uncancellable, unresolvable and unminimizable, while L4 and
+     * L5 forbid dropping it. That is not fail-closed; it is a material
+     * operation that can never settle, which is the same class of defect as
+     * the one V2 found in L16.
+     *
+     * The split follows the reasoning this file already states. The tenant and
+     * the business are the identity the SERVER CANNOT VALIDATE: it derives the
+     * source id from `(business, key)` and both halves look consistent, so a
+     * mislabelled business is an undetectable cross-tenant write. Those are
+     * compared for everything, with no exception and no handover.
+     *
+     * The member is different, by this file's own header: "the server resolves
+     * membership itself and is the authority on it, so the member is not a
+     * security boundary here". It is compared for the three events a PERSON
+     * originates — releasing, cancelling, resolving, restoring — because one
+     * cashier must not act on another's captures. It is NOT compared for a
+     * send, because a send asserts nothing about who the actor is: the server
+     * authorizes the sending session on its own, and the row names its
+     * capturer for the audit either way.
+     *
+     * So a till can finish Alice's sale after Alice has gone home, into the
+     * same business, under the same key, with the same bytes — and still
+     * cannot touch it from the wrong business, and still cannot let Bob cancel
+     * what Alice captured.
+     */
+    fun mayAct(owner: OwnerScope, event: QueueEvent.ByScope): Boolean {
+        // Never relaxed, for any event: this is the half the server cannot check.
+        if (tenantId != owner.tenantId || businessId != owner.businessId) return false
+        return when (event) {
+            // A transmission. Authorized by the server, not by the row.
+            is QueueEvent.Send -> true
+
+            // A person deciding something about someone else's capture.
+            is QueueEvent.Release,
+            is QueueEvent.CancelByMerchant,
+            is QueueEvent.ResolveByMerchant,
+            is QueueEvent.RestorePayload,
+            -> memberId == owner.memberId
+        }
+    }
+
     /** For an alert or a log line: identifies the scope without quoting a token. */
     override fun toString(): String = "$tenantId/$businessId/$memberId"
 }

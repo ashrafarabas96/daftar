@@ -68,6 +68,8 @@ class ReentryAndRetentionTest {
             Triple(PriorOutcome.NEVER_SENT, ReceiptLookup.UNAVAILABLE, Provenance.ORIGINAL_LOST),
             Triple(PriorOutcome.UNKNOWN, ReceiptLookup.ABSENT_FENCED, Provenance.ORIGINAL_LOST),
         )
+        // F-01. UNDETERMINED permits a new key NOWHERE, for any receipt
+        // answer: there is no key to look up, so the receipt cannot help.
         // Finish the original instead. Wherever its identity survives and it
         // may still need sending.
         val useOriginal = setOf(
@@ -79,11 +81,16 @@ class ReentryAndRetentionTest {
             Triple(PriorOutcome.UNKNOWN, ReceiptLookup.ABSENT_FENCED, Provenance.ORIGINAL_RECOVERABLE),
             Triple(PriorOutcome.UNKNOWN, ReceiptLookup.ABSENT_UNFENCED, Provenance.ORIGINAL_RECOVERABLE),
             Triple(PriorOutcome.UNKNOWN, ReceiptLookup.UNAVAILABLE, Provenance.ORIGINAL_RECOVERABLE),
+            Triple(PriorOutcome.UNDETERMINED, ReceiptLookup.COMMITTED, Provenance.ORIGINAL_RECOVERABLE),
+            Triple(PriorOutcome.UNDETERMINED, ReceiptLookup.ABSENT_FENCED, Provenance.ORIGINAL_RECOVERABLE),
+            Triple(PriorOutcome.UNDETERMINED, ReceiptLookup.ABSENT_UNFENCED, Provenance.ORIGINAL_RECOVERABLE),
+            Triple(PriorOutcome.UNDETERMINED, ReceiptLookup.UNAVAILABLE, Provenance.ORIGINAL_RECOVERABLE),
         )
         val lawOfRefusal = mapOf(
             "offline.original_already_committed" to P7Laws.NO_REENTRY_BEFORE_THE_ORIGINAL_IS_SETTLED.id,
             "offline.original_unsettled" to P7Laws.NO_REENTRY_BEFORE_THE_ORIGINAL_IS_SETTLED.id,
             "offline.absence_not_fenced" to P7Laws.AN_UNFENCED_ABSENCE_SETTLES_NOTHING.id,
+            "offline.prior_state_undetermined" to P7Laws.AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE.id,
         )
 
         var checked = 0
@@ -119,7 +126,7 @@ class ReentryAndRetentionTest {
             PriorOutcome.entries.size * ReceiptLookup.entries.size * Provenance.entries.size, checked,
             "the cross product was not swept in full",
         )
-        assertEquals(32, checked, "the enums changed size; the stated verdicts must be revisited")
+        assertEquals(40, checked, "the enums changed size; the stated verdicts must be revisited")
         // Non-vacuity in every direction: a function that gave one answer to
         // everything would pass at most one of these three.
         assertTrue(permitted.size in 1 until checked, "the permitted table is degenerate")
@@ -207,6 +214,162 @@ class ReentryAndRetentionTest {
                     "a first capture was blocked by a $lookup receipt lookup",
                 )
             }
+        }
+    }
+
+    // ── F-01: who says there was no prior operation ──────────────────────
+
+    /**
+     * The challenger's finding, as the test that would have caught it.
+     *
+     * Alice captures a 500-unit sale. The send leaves, the server commits, the
+     * answer is lost. The phone is wiped and the app reinstalled. The merchant
+     * re-enters the sale: the app has no row, no key and no bytes, so the only
+     * store it can consult says "nothing here".
+     *
+     * Before L19, that honestly became `PriorOutcome.NONE`, which permits a new
+     * key without consulting anything — and the customer was charged twice with
+     * every law in `Laws.kt` holding. The classification was the hole, not any
+     * arm of the gate.
+     */
+    @Test
+    fun `a wiped install cannot report an absence, so re-entry is refused rather than permitted`() {
+        val classified = PriorState.classify(StoreAttestation.CANNOT_VOUCH, rowState = null)
+        assertEquals(
+            PriorOutcome.UNDETERMINED, classified,
+            "an install that cannot vouch for its store reported an absence, which is F-01",
+        )
+
+        val decision = Reconciliation.decideReentry(
+            classified, ReceiptLookup.ABSENT_UNFENCED, Provenance.ORIGINAL_LOST,
+        )
+        val refused = assertIs<Reentry.Refused>(
+            decision, "the wiped-device re-entry that charges twice was permitted",
+        )
+        assertEquals("offline.prior_state_undetermined", refused.code)
+        assertEquals(P7Laws.AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE.id, refused.law)
+    }
+
+    /**
+     * And the classification in full, because the fix is worthless if it only
+     * holds for the one case that was reported. Finding something is evidence;
+     * finding nothing is evidence only from a store that can vouch for itself.
+     */
+    @Test
+    fun `only a vouched install can turn an empty store into an absence`() {
+        assertEquals(
+            PriorOutcome.NONE, PriorState.classify(StoreAttestation.VOUCHED, rowState = null),
+            "a vouched install cannot report an absence, so no first sale is possible at all",
+        )
+        assertEquals(
+            PriorOutcome.UNDETERMINED, PriorState.classify(StoreAttestation.CANNOT_VOUCH, rowState = null),
+        )
+        // A row that is PRESENT is evidence whatever the install can prove
+        // about itself, which is the asymmetry the law rests on.
+        for (attestation in StoreAttestation.entries) {
+            for (held in listOf(PriorOutcome.UNKNOWN, PriorOutcome.COMMITTED, PriorOutcome.NEVER_SENT)) {
+                assertEquals(
+                    held, PriorState.classify(attestation, held),
+                    "a row the store actually holds was overridden by $attestation",
+                )
+            }
+        }
+    }
+
+    /**
+     * The one escape, and the reason it costs a merchant nothing: a wipe is
+     * followed by a sign-in, which is already an online operation. So the
+     * install can be resolved at the moment it is created, and a till that has
+     * signed in is a vouched till.
+     */
+    @Test
+    fun `a recoverable original resolves an undetermined install without any lookup`() {
+        for (lookup in ReceiptLookup.entries) {
+            assertIs<Reentry.UseOriginalKey>(
+                Reconciliation.decideReentry(
+                    PriorOutcome.UNDETERMINED, lookup, Provenance.ORIGINAL_RECOVERABLE,
+                ),
+                "a recovered original did not resolve an undetermined install when the receipt said $lookup",
+            )
+        }
+    }
+
+    @Test
+    fun `an empty store is not a verdict and cannot be passed as one`() {
+        // `NONE` and `UNDETERMINED` are outputs of the classification, never
+        // inputs to it: accepting them would let a caller skip the one step
+        // F-01 was about.
+        for (verdict in listOf(PriorOutcome.NONE, PriorOutcome.UNDETERMINED)) {
+            val thrown = runCatching { PriorState.classify(StoreAttestation.VOUCHED, verdict) }
+            assertTrue(
+                thrown.exceptionOrNull() is IllegalArgumentException,
+                "classify accepted $verdict as something the store holds",
+            )
+        }
+    }
+
+    // ── F-06: nothing may infer a fence ──────────────────────────────────
+
+    /**
+     * Challenger finding F-06, brought up to the standard L11 already sets.
+     *
+     * L17's whole content is the difference between an absence the server has
+     * FENCED and one it has not, and the only thing defending it was a doc
+     * comment asking the caller to pick the right enum member. The challenger
+     * measured that against this kernel's own treatment of the structurally
+     * identical risk — `EffectClass` has no default, a textual guard forbids
+     * four ways of writing one, the guard proves it can see a planted
+     * violation, and a red proof plants one where only the guard catches it.
+     * Four mechanisms for BENIGN, none for `ABSENT_FENCED`, which is newer and
+     * which permits minting a new key.
+     *
+     * So the same guard, against the ways an absence gets INFERRED: an HTTP
+     * status, an empty collection, a null, or a cached read. A fence is a
+     * statement the server makes about a key; nothing else may be mapped to
+     * it.
+     */
+    @Test
+    fun `no source in the kernel infers a fenced absence from a status, a null or an empty read`() {
+        val root = java.io.File(System.getProperty("p7.src") ?: "prep/phase7/kotlin/src")
+        assertTrue(root.isDirectory, "the kernel source was not found at ${root.absolutePath}")
+        val sources = root.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.toList()
+        assertTrue(sources.size >= 7, "only ${sources.size} kernel sources found — the sweep found no subject")
+
+        val forbidden = listOf(
+            Regex("""ReceiptLookup\s*=\s*ReceiptLookup\.ABSENT_FENCED"""), // a defaulted parameter
+            Regex("""\?:\s*ReceiptLookup\.ABSENT_FENCED"""), // an elvis fallback from a null
+            Regex("""isEmpty\(\)[^\n]*ReceiptLookup\.ABSENT_FENCED"""), // an empty collection
+            Regex("""(status|code)\s*==[^\n]*ReceiptLookup\.ABSENT_FENCED"""), // an HTTP status
+            Regex("""(cache|cached|projection)[^\n]*ReceiptLookup\.ABSENT_FENCED""", RegexOption.IGNORE_CASE),
+        )
+        val offenders = mutableListOf<String>()
+        for (file in sources) {
+            val text = file.readText()
+            for (pattern in forbidden) {
+                pattern.find(text)?.let { offenders += "${file.name}: ${it.value}" }
+            }
+        }
+        assertEquals(
+            emptyList(), offenders,
+            "a fenced absence was inferred rather than stated by the server " +
+                "(${P7Laws.AN_UNFENCED_ABSENCE_SETTLES_NOTHING.id})",
+        )
+
+        // And the guard can see what it is looking for. Without this, a green
+        // verdict above means the patterns are broken just as readily as it
+        // means the kernel is clean.
+        val plants = listOf(
+            "val lookup: ReceiptLookup = ReceiptLookup.ABSENT_FENCED",
+            "val answer = serverSaid ?: ReceiptLookup.ABSENT_FENCED",
+            "if (rows.isEmpty()) ReceiptLookup.ABSENT_FENCED else read(rows)",
+            "if (status == 404) ReceiptLookup.ABSENT_FENCED else ReceiptLookup.UNAVAILABLE",
+            "val fromCache = cache.lookup(key) ?: ReceiptLookup.ABSENT_FENCED",
+        )
+        for (planted in plants) {
+            assertTrue(
+                forbidden.any { it.containsMatchIn(planted) },
+                "no pattern matches the planted inference <$planted>, so their green verdict means nothing",
+            )
         }
     }
 
@@ -378,24 +541,89 @@ class ReentryAndRetentionTest {
         assertTrue(step.operation.effect.isMaterial && !step.operation.isTerminal)
     }
 
+    /**
+     * Challenger finding F-04: this test was named "anywhere except" and
+     * walked four of the six other states, omitting `UNKNOWN_OUTCOME` — the
+     * one that matters most for the law it is named after. So it sweeps every
+     * state now, reached through the real reducer, with the count asserted.
+     */
     @Test
     fun `a deadline means nothing anywhere except on an operation awaiting a person`() {
-        // Minimizing a payload that is still going to be sent would destroy the
-        // frozen bytes, so every other state refuses rather than obliging.
-        var op = Operation.capture(key, scope, EffectClass.FINANCIAL, digest)
-        val captured = assertIs<Step.Refused>(op.step(QueueEvent.RetentionDeadlineReached))
-        assertEquals("offline.nothing_awaiting_a_person", captured.code)
-        assertEquals(P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id, captured.law)
+        var swept = 0
+        for (state in OperationState.entries) {
+            val op = operationIn(state)
+            val step = op.step(QueueEvent.RetentionDeadlineReached)
+            if (state == OperationState.NEEDS_ATTENTION) {
+                assertIs<Step.Moved>(step, "the one state a deadline means something in refused it")
+            } else {
+                val refused = assertIs<Step.Refused>(
+                    step, "a retention deadline was honoured in $state, which would destroy frozen bytes",
+                )
+                assertEquals("offline.nothing_awaiting_a_person", refused.code, "refused in $state for the wrong reason")
+                assertEquals(P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id, refused.law)
+            }
+            swept++
+        }
+        assertEquals(OperationState.entries.size, swept, "the state sweep did not run in full")
+        assertEquals(7, swept, "the state enum changed size; the retention verdicts must be revisited")
+    }
 
+    /**
+     * The half of F-04 that is a limit rather than a defect, asserted so that
+     * nobody reads L16 as more than it is.
+     *
+     * `UNKNOWN_OUTCOME` is neither moving nor terminal: it is where a row sits
+     * when the server cannot be reached, and a device offline for a week holds
+     * its full payload for that week. Retention is bounded for rows awaiting a
+     * PERSON and not for rows awaiting the NETWORK.
+     *
+     * That is deliberate and the challenger agreed it should not be "fixed" by
+     * minimizing here: these bytes are the ones L3 froze and L7 needs to
+     * replay, and destroying them would strand the operation permanently — a
+     * worse defect than holding the data. The bound for this state has to come
+     * from somewhere that can still settle the operation, which is off the
+     * device. So the gap is recorded here and in `P7-S2` §6 rather than closed
+     * with a minimization that cannot be correct.
+     */
+    @Test
+    fun `retention is bounded for rows awaiting a person and NOT for rows awaiting the network`() {
+        val awaitingNetwork = operationIn(OperationState.UNKNOWN_OUTCOME)
+        val refused = assertIs<Step.Refused>(awaitingNetwork.step(QueueEvent.RetentionDeadlineReached))
+        assertEquals("offline.nothing_awaiting_a_person", refused.code)
+        assertTrue(
+            !awaitingNetwork.payloadMinimized,
+            "an unknown-outcome payload was minimized, which destroys the bytes L7 needs to replay",
+        )
+
+        // And the contrast, so this test states a difference rather than a fact.
+        val awaitingPerson = assertIs<Step.Moved>(
+            waitingForAPerson().step(QueueEvent.RetentionDeadlineReached),
+        )
+        assertTrue(awaitingPerson.operation.payloadMinimized)
+    }
+
+    /** Every state, reached by the events that actually produce it. */
+    private fun operationIn(state: OperationState): Operation {
+        var op = Operation.capture(key, scope, EffectClass.FINANCIAL, digest)
+        if (state == OperationState.CAPTURED) return op
+        if (state == OperationState.DISCARDED) {
+            return (op.step(QueueEvent.CancelByMerchant(scope)) as Step.Moved).operation
+        }
+        if (state == OperationState.NEEDS_ATTENTION) return waitingForAPerson()
         op = (op.step(QueueEvent.Release(scope)) as Step.Moved).operation
-        assertIs<Step.Refused>(op.step(QueueEvent.RetentionDeadlineReached))
+        if (state == OperationState.QUEUED) return op
         op = (op.step(QueueEvent.Send(digest, scope)) as Step.Moved).operation
-        assertIs<Step.Refused>(op.step(QueueEvent.RetentionDeadlineReached))
-        op = (
-            op.step(QueueEvent.Observe(AttemptResult.Answered(200, null, true, null))) as Step.Moved
-            ).operation
-        assertEquals(OperationState.SYNCED, op.state)
-        assertIs<Step.Refused>(op.step(QueueEvent.RetentionDeadlineReached))
+        if (state == OperationState.IN_FLIGHT) return op
+        return when (state) {
+            OperationState.UNKNOWN_OUTCOME ->
+                (op.step(QueueEvent.Observe(AttemptResult.NoAnswer)) as Step.Moved).operation
+
+            OperationState.SYNCED -> (
+                op.step(QueueEvent.Observe(AttemptResult.Answered(201, null, false, null))) as Step.Moved
+                ).operation
+
+            else -> error("unreachable: $state is handled above")
+        }
     }
 
     /**

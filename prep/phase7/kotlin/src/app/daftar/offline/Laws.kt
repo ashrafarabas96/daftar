@@ -25,7 +25,7 @@ data class OfflineLaw(
 /**
  * The absolute law of the Tech Lead's directive — an offline device is never
  * canonical financial authority, and there is no silent conflict resolution
- * for money or stock — together with the seventeen laws it implies once the LIVE
+ * for money or stock — together with the eighteen laws it implies once the LIVE
  * server contract is read rather than assumed and the Tech Lead's rulings on
  * effect classification (§34) and local data security (PART 40) are applied.
  *
@@ -207,6 +207,37 @@ object P7Laws {
         "Where an operation's original key and the exact bytes frozen with it can be recovered, the operation is resent under that key and never re-entered under a new one, because the server's own source uniqueness settles a resend with no receipt lookup, no fence and no possibility of a second commit.",
     )
 
+    /**
+     * The independent challenger's finding F-01 against `162b2c8`, which is
+     * correct and which no law here reached.
+     *
+     * `decideReentry` was proven total over its inputs, and nothing specified
+     * who SUPPLIES them. Two of the four prior outcomes permitted a new key
+     * without consulting the receipt at all — `NONE` and `NEVER_SENT` — and
+     * both are sound only given a true classification. The only observation
+     * site for either is the local store, and a wipe destroys exactly that
+     * store. So a wiped device, asked "is there an earlier operation for this
+     * intent?", looks in the one place it has, finds nothing, and honestly
+     * answers `NONE`. The gate then permits a new key over a sale the server
+     * already holds. **Every law held and the customer was charged twice.**
+     *
+     * The hole was not in any arm. It was that an absence of evidence was
+     * allowed to present itself as evidence of absence, which is the same
+     * defect as L17 one level further out: there, an absent receipt did not
+     * settle an in-flight original; here, an empty store does not establish
+     * that nothing was ever captured.
+     *
+     * So the store must vouch for itself before its silence counts, exactly
+     * as L11 made an unclassified command refuse rather than default to
+     * benign. An install that cannot tell "nothing was captured" from
+     * "whatever was captured is gone" says so, and what it says is never read
+     * as absence.
+     */
+    val AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE = OfflineLaw(
+        "P7-L19-AN-UNVOUCHED-STORE-CANNOT-REPORT-ABSENCE",
+        "A local store's silence counts as \"nothing was ever captured\" only where the install can prove it is the one that would have held the row; an install that cannot distinguish an empty store from a destroyed one reports its prior state as undetermined, and an undetermined prior state is never read as an absence and never permits a new key for a material operation.",
+    )
+
     /** Every stated law, for the completeness proof. */
     val ALL: List<OfflineLaw> = listOf(
         DEVICE_NOT_AUTHORITY,
@@ -227,5 +258,6 @@ object P7Laws {
         EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION,
         AN_UNFENCED_ABSENCE_SETTLES_NOTHING,
         THE_ORIGINAL_KEY_OUTRANKS_A_NEW_ONE,
+        AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE,
     )
 }

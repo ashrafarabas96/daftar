@@ -133,10 +133,13 @@ class ScopeAndSchemaTest {
     @Test
     fun `another member on the same till cannot release, cancel or resolve another member's capture`() {
         val captured = sale(alice)
+        // Challenger finding F-05 changed this list: `Send` is no longer
+        // here, and the test below it is the reason. What a PERSON decides
+        // about someone else's capture is still refused, which is what this
+        // half of L13 was always about.
         val attempted: List<QueueEvent> = listOf(
             QueueEvent.Release(bob),
             QueueEvent.CancelByMerchant(bob),
-            QueueEvent.Send(digest, bob),
             QueueEvent.ResolveByMerchant(true, bob),
             QueueEvent.ResolveByMerchant(false, bob),
             QueueEvent.RestorePayload(digest, bob),
@@ -147,7 +150,7 @@ class ScopeAndSchemaTest {
             assertEquals("offline.scope_switched", step.code, "$event was refused for the wrong reason")
             assertEquals(P7Laws.NO_CROSS_ACCOUNT_SEND.id, step.law)
         }
-        assertEquals(6, attempted.size, "every session-originated event must be covered")
+        assertEquals(5, attempted.size, "every member-gated event must be covered")
     }
 
     /**
@@ -184,6 +187,71 @@ class ScopeAndSchemaTest {
         // operating system can be told no.
         assertTrue(QueueEvent.Observe(AttemptResult.NoAnswer) !is QueueEvent.ByScope)
         assertTrue(QueueEvent.ProcessDeath !is QueueEvent.ByScope)
+    }
+
+    /**
+     * Challenger finding F-05, as the test that would have caught it.
+     *
+     * The shift change the test above describes, carried one step further.
+     * Alice captures a sale while the till is offline; her shift ends and her
+     * session is revoked, as PART 40 item 2.3 requires; Bob signs in. If the
+     * send is gated on the member too, that row is now unsendable,
+     * uncancellable, unresolvable and unminimizable — and L4 and L5 forbid
+     * dropping it. A permanently closed state is not fail-closed; it is a
+     * material operation that can never settle, which is the same class of
+     * defect V2 found in L16.
+     *
+     * So the send goes through, into the SAME business, under the same key and
+     * the same bytes. The member is not a security boundary for a transmission
+     * — the server authorizes the sending session itself — and the row still
+     * names its capturer for the audit.
+     */
+    @Test
+    fun `the next shift can finish a sale the previous shift captured, and nothing else`() {
+        var op = released(alice)
+
+        val sent = assertIs<Step.Moved>(
+            op.step(QueueEvent.Send(digest, bob)),
+            "Alice's offline sale was stranded when her shift ended, with no way to ever settle it",
+        )
+        val attempt = sent.effects.filterIsInstance<SideEffect.SendAttempt>().single()
+        // F-02: and it goes out under ALICE's scope, not Bob's, because the
+        // effect carries the row's own scope rather than the sender's.
+        assertEquals(alice, attempt.scope, "the attempt would have been sent under the wrong business")
+        assertEquals(op.id, attempt.idempotencyKey)
+
+        // Everything a person decides is still Alice's alone.
+        for (event in listOf(QueueEvent.CancelByMerchant(bob), QueueEvent.Release(bob))) {
+            val refused = assertIs<Step.Refused>(op.step(event), "$event by the next shift was allowed")
+            assertEquals("offline.scope_switched", refused.code)
+        }
+    }
+
+    /**
+     * And the half that is never relaxed, for any event, including the send:
+     * the business is the part of the source identity the server cannot
+     * validate, so a wrong one is an undetectable cross-tenant write.
+     */
+    @Test
+    fun `the business is compared for every event, the send included`() {
+        val otherBusiness = OwnerScope(alice.tenantId, "business-2", alice.memberId)
+        val otherTenant = OwnerScope("tenant-2", alice.businessId, alice.memberId)
+        val op = released(alice)
+        for (foreign in listOf(otherBusiness, otherTenant)) {
+            for (event in listOf<QueueEvent>(
+                QueueEvent.Send(digest, foreign),
+                QueueEvent.CancelByMerchant(foreign),
+                QueueEvent.Release(foreign),
+                QueueEvent.ResolveByMerchant(true, foreign),
+                QueueEvent.RestorePayload(digest, foreign),
+            )) {
+                val refused = assertIs<Step.Refused>(
+                    op.step(event), "$event from $foreign was allowed",
+                )
+                assertEquals("offline.scope_switched", refused.code)
+                assertEquals(P7Laws.NO_CROSS_ACCOUNT_SEND.id, refused.law)
+            }
+        }
     }
 
     /**

@@ -178,6 +178,15 @@ class QueueModelCheckTest {
                                     "a send carried a payload that is not the captured one",
                                 )
                                 assertEquals(next.attempts, send.attempt, "the send's attempt number disagrees")
+                                // F-02: the business is the half of the source
+                                // identity the server cannot validate, so the
+                                // effect must name it rather than leaving the
+                                // transport to re-derive it at build time.
+                                assertEquals(
+                                    op.scope, send.scope,
+                                    "a send carried a scope that is not the row's own: $op on $event " +
+                                        "(${P7Laws.NO_CROSS_ACCOUNT_SEND.id})",
+                                )
                             }
 
                             val committed = history.serverCommitted ||
@@ -289,8 +298,14 @@ class QueueModelCheckTest {
         // asserted nothing would pass every invariant above, so the search
         // itself is measured: every state reachable, every event exercised,
         // every side effect produced, and both verdicts observed.
+        // Challenger finding F-03: this used to read `statesSeen +
+        // OperationState.SYNCED`, which satisfied the assertion for SYNCED by
+        // construction — and SYNCED is the one state INV-1 is about. A
+        // plausible "do not explore from a terminal state" optimization would
+        // have made INV-1 vacuous with all tests green. The union was dead
+        // weight too: the search reaches SYNCED on its own.
         assertEquals(
-            OperationState.entries.toSet(), statesSeen + OperationState.SYNCED,
+            OperationState.entries.toSet(), statesSeen,
             "the search did not reach every state; it saw $statesSeen",
         )
         assertEquals(

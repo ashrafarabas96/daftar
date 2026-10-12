@@ -53,6 +53,8 @@ class LawsTest {
             "ReentryAndRetentionTest.an absence settles the original only when the original key is fenced",
         P7Laws.THE_ORIGINAL_KEY_OUTRANKS_A_NEW_ONE.id to
             "ReentryAndRetentionTest.a recoverable original is resent under its own key whatever the receipt says",
+        P7Laws.AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE.id to
+            "ReentryAndRetentionTest.a wiped install cannot report an absence, so re-entry is refused rather than permitted",
     )
 
     @Test
@@ -60,7 +62,7 @@ class LawsTest {
         val stated = P7Laws.ALL.map { it.id }.toSet()
         assertEquals(stated, defendedBy.keys, "the law table and the coverage map have drifted apart")
         assertEquals(P7Laws.ALL.size, stated.size, "two laws share an id")
-        assertTrue(stated.size >= 18, "only ${stated.size} laws are stated")
+        assertTrue(stated.size >= 19, "only ${stated.size} laws are stated")
     }
 
     @Test

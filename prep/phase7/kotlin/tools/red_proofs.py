@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -292,6 +293,106 @@ PROOFS: list[Proof] = [
         expect_red="every reachable configuration honours every invariant",
         why="the search stops exercising the restore, so INV-11 and INV-12 hold vacuously: no minimized row is ever offered a way forward, and only the counted event set notices that the settlement path was never walked",
     ),
+    Proof(
+        law="P7-L1-DEVICE-IS-NOT-AUTHORITY-AT-THE-SCREEN",
+        path="src/app/daftar/offline/Recovery.kt",
+        find="""        OperationState.CAPTURED -> MerchantView(
+            MerchantMessage.SALE_NOT_CONFIRMED_YET,
+            RecoveryAction.CONFIRM_THE_CAPTURE,
+            blocksNewCaptures = false,
+            showsMoneyAsTaken = false,""",
+        replace="""        OperationState.CAPTURED -> MerchantView(
+            MerchantMessage.SALE_NOT_CONFIRMED_YET,
+            RecoveryAction.CONFIRM_THE_CAPTURE,
+            blocksNewCaptures = false,
+            showsMoneyAsTaken = true,""",
+        expect_red="no state but SYNCED is ever shown to the merchant as money taken",
+        why="a captured sale that has never been sent is presented to the cashier as recorded money, which makes the device a financial authority at the only boundary where a person can be misled by it, however correct the kernel underneath remains",
+    ),
+    Proof(
+        law="P7-L15-THE-RE-ENTRY-GATE-MUST-REACH-THE-TILL",
+        path="src/app/daftar/offline/Recovery.kt",
+        find="""        "offline.original_unsettled" ->
+            view(MerchantMessage.ORIGINAL_NOT_SETTLED_YET, RecoveryAction.WAIT_IT_IS_IN_PROGRESS, blocks = true)""",
+        replace="""        "offline.original_unsettled" ->
+            view(MerchantMessage.ORIGINAL_NOT_SETTLED_YET, RecoveryAction.WAIT_IT_IS_IN_PROGRESS, blocks = false)""",
+        expect_red="only the re-entry refusals stop the till, and all three of them do",
+        why="the kernel still refuses the re-entry, but the till keeps taking captures, so a merchant told no with nothing stopping them keys the sale in again — which is the duplicate charge L15 exists to prevent, arriving through the UI instead of the kernel",
+    ),
+    Proof(
+        law="P7-L4-A-DEVICE-DEFECT-IS-NOT-A-MERCHANT-PROBLEM",
+        path="src/app/daftar/offline/Recovery.kt",
+        find="        Outcome.isDivergence(operation.lastCode) -> MerchantView(",
+        replace="        false -> MerchantView(",
+        expect_red="needing attention is not one state as far as the merchant is concerned",
+        why="a reused key with a different payload is offered to a supervisor as something to escalate, when the server will refuse it identically forever: the merchant is sent to a person who also cannot fix it, instead of to the developer who can",
+    ),
+    Proof(
+        law="HARNESS-AN-UNMAPPED-REFUSAL-CODE-CANNOT-REACH-A-TILL",
+        path="src/app/daftar/offline/Queue.kt",
+        find='Step.Refused("offline.already_released", P7Laws.KEY_MINTED_AT_CAPTURE.id)',
+        replace='Step.Refused("offline.a_newly_added_refusal", P7Laws.KEY_MINTED_AT_CAPTURE.id)',
+        expect_red="every refusal code the kernel can produce has a stated merchant view",
+        why="this is the real failure the source sweep exists for: a refusal code added to the kernel without deciding what a person is told. The code reaches a cashier as a generic device-software problem, erasing what they could have done about it, and only a sweep of the kernel's own source notices — a hand-written list of codes would still be green",
+    ),
+    Proof(
+        law="P7-L19-AN-UNVOUCHED-STORE-CANNOT-REPORT-ABSENCE",
+        path="src/app/daftar/offline/Reconciliation.kt",
+        find="            StoreAttestation.CANNOT_VOUCH -> PriorOutcome.UNDETERMINED",
+        replace="            StoreAttestation.CANNOT_VOUCH -> PriorOutcome.NONE",
+        expect_red="a wiped install cannot report an absence, so re-entry is refused rather than permitted",
+        why="challenger finding F-01, restored: an install that cannot tell an empty queue from a destroyed one reports an absence, which permits a new key with no lookup at all — so a wiped phone re-enters a sale the server already holds and the customer is charged twice, while every other law in the file still holds",
+    ),
+    Proof(
+        law="P7-L19-UNDETERMINED-IS-NOT-ROUTED-TO-A-REFUSAL",
+        path="src/app/daftar/offline/Reconciliation.kt",
+        find="""            Provenance.ORIGINAL_LOST -> Reentry.Refused(
+                "offline.prior_state_undetermined",""",
+        replace="""            Provenance.ORIGINAL_LOST -> Reentry.Permitted(
+                "offline.prior_state_undetermined",""",
+        expect_red="every prior outcome, receipt answer and provenance has a stated verdict",
+        why="the classification correctly reports that it cannot vouch for the store, and the decision then permits a new key anyway: F-01 reintroduced one level further in, where the new enum value exists but decides nothing",
+    ),
+    Proof(
+        law="P7-L13-THE-SEND-EFFECT-CARRIES-ITS-OWN-BUSINESS",
+        path="src/app/daftar/offline/Queue.kt",
+        find="listOf(SideEffect.SendAttempt(id, payloadDigest, attempts + 1, scope)),",
+        replace="listOf(SideEffect.SendAttempt(id, payloadDigest, attempts + 1, event.actingScope)),",
+        expect_red="every reachable configuration honours every invariant",
+        why="challenger finding F-02: the attempt goes out under the SENDER's scope instead of the row's. After a shift change that is A's key with B's business, both halves internally consistent, answered 201, and deriveSourceId writes A's sale into B's ledger with nothing able to detect it",
+    ),
+    Proof(
+        law="HARNESS-THE-STATE-COVERAGE-GUARD-CAN-FAIL-ON-SYNCED",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="                        val print = fingerprint(next, nextHistory)",
+        replace="                        val print = if (next.state == OperationState.SYNCED) \"skip\" else fingerprint(next, nextHistory)",
+        expect_red="every reachable configuration honours every invariant",
+        why="challenger finding F-03, as its probe 3: a plausible do-not-explore-from-a-terminal-state optimization. The search stops dequeuing SYNCED nodes, so INV-1 — the invariant the whole model check exists for — becomes vacuous. Before the union was removed this stayed 72/72 green; the guard that is supposed to notice could not",
+    ),
+    Proof(
+        law="P7-L13-THE-BUSINESS-IS-NEVER-RELAXED",
+        path="src/app/daftar/offline/Scope.kt",
+        find="        if (tenantId != owner.tenantId || businessId != owner.businessId) return false",
+        replace="        if (tenantId != owner.tenantId) return false",
+        expect_red="the business is compared for every event, the send included",
+        why="the F-05 split is widened one field too far. Relaxing the member for a send is sound because the server authorizes the session; relaxing the BUSINESS is the undetectable cross-tenant write, because the server derives the source id from the business it was handed and both halves look consistent",
+    ),
+    Proof(
+        law="P7-L13-A-PERSON-STILL-CANNOT-ACT-ON-ANOTHER-MEMBERS-CAPTURE",
+        path="src/app/daftar/offline/Scope.kt",
+        find="            -> memberId == owner.memberId",
+        replace="            -> true",
+        expect_red="another member on the same till cannot release, cancel or resolve another member's capture",
+        why="the F-05 split collapses entirely and the member stops being compared for anything: Bob can cancel and clear the local row of a sale Alice captured, which is the shared-till case PART 40 item 2 names",
+    ),
+    Proof(
+        law="P7-L17-NOTHING-MAY-INFER-A-FENCE",
+        path="src/app/daftar/offline/Reconciliation.kt",
+        find="    UNAVAILABLE,\n}",
+        replace="    UNAVAILABLE;\n\n    companion object {\n        fun of(status: Int): ReceiptLookup =\n            if (status == 404) ReceiptLookup.ABSENT_FENCED else ReceiptLookup.UNAVAILABLE\n    }\n}",
+        expect_red="no source in the kernel infers a fenced absence from a status, a null or an empty read",
+        why="challenger finding F-06: a fence inferred from an HTTP 404. A 404 says the server did not find the key at that instant and says nothing about whether the original can still arrive, so this converts the one absence that settles the original into the one that does not — and nothing but a textual guard can see it, because the type checks out perfectly",
+    ),
 ]
 
 FAILURE_LINE = re.compile(r"^\s+JUnit Jupiter:(\S+):(.+)\(\)\s*$")
@@ -325,8 +426,18 @@ def main() -> int:
     baseline_cases = int(tests.group(1)) if tests else 0
     print(f"BASELINE: exit 0, {baseline_cases} cases green\n")
 
-    failures: list[str] = []
-    for i, proof in enumerate(PROOFS, start=1):
+    # One proof per tree, and the trees are independent, so they run in
+    # parallel. This is scheduling, not correctness: every proof does exactly
+    # what it did sequentially, in its own copy, and the verdicts are printed
+    # in order so two runs read the same. It matters because an independent
+    # reviewer could not FINISH the sequential run — it timed out at 21 of 27
+    # with no exit code, and a proof harness nobody can run to completion
+    # proves nothing to anybody but its author.
+    workers = max(1, min(len(PROOFS), (os.cpu_count() or 2)))
+
+    def run_one(indexed: tuple[int, Proof]) -> tuple[int, Proof, str | None, str]:
+        """Returns (index, proof, failure or None, verdict line)."""
+        i, proof = indexed
         tree = tempfile.mkdtemp(prefix=f"p7-proof-{i}-")
         for part in ("src", "test"):
             shutil.copytree(os.path.join(ROOT, part), os.path.join(tree, part))
@@ -335,31 +446,42 @@ def main() -> int:
 
         hits = before.count(proof.find)
         if hits != 1:
-            failures.append(
+            return (
+                i,
+                proof,
                 f"{proof.law}: the mutation pattern matched {hits} times in {proof.path} "
-                f"(must be exactly 1) — THE MUTATION DID NOT LAND, so this proof measured nothing"
+                f"(must be exactly 1) — THE MUTATION DID NOT LAND, so this proof measured nothing",
+                f"MUTATION DID NOT LAND ({hits} matches)",
             )
-            print(f"  [{i:2}] {proof.law}\n       MUTATION DID NOT LAND ({hits} matches)")
-            continue
         after = before.replace(proof.find, proof.replace)
         if after == before:
-            failures.append(f"{proof.law}: replacement produced an identical file")
-            continue
+            return (i, proof, f"{proof.law}: replacement produced an identical file", "REPLACEMENT WAS A NO-OP")
         open(target, "w", encoding="utf-8").write(after)
 
-        rc, failing, log = run_suite(tree)
+        rc, failing, _log = run_suite(tree)
         named = any(proof.expect_red in name for name in failing)
         if rc == 0:
-            failures.append(f"{proof.law}: the suite stayed GREEN with the defect planted — the law is undefended")
-            verdict = "STAYED GREEN"
-        elif not named:
-            failures.append(
-                f"{proof.law}: the suite went red but '{proof.expect_red}' did not fail "
-                f"(failed instead: {sorted(failing) or 'nothing named — did it compile?'})"
+            return (
+                i, proof,
+                f"{proof.law}: the suite stayed GREEN with the defect planted — the law is undefended",
+                "STAYED GREEN",
             )
-            verdict = "RED, BUT NOT THE NAMED TEST"
-        else:
-            verdict = f"RED as required ({len(failing)} case(s) failed)"
+        if not named:
+            return (
+                i, proof,
+                f"{proof.law}: the suite went red but '{proof.expect_red}' did not fail "
+                f"(failed instead: {sorted(failing) or 'nothing named — did it compile?'})",
+                "RED, BUT NOT THE NAMED TEST",
+            )
+        return (i, proof, None, f"RED as required ({len(failing)} case(s) failed)")
+
+    print(f"Running {len(PROOFS)} proofs across {workers} worker(s); each in its own tree.\n")
+    failures: list[str] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = sorted(pool.map(run_one, enumerate(PROOFS, start=1)), key=lambda r: r[0])
+    for i, proof, failure, verdict in results:
+        if failure is not None:
+            failures.append(failure)
         print(f"  [{i:2}] {proof.law}\n       plant: {proof.why}\n       expect red: {proof.expect_red}\n       {verdict}")
 
     # §83: the baseline must RESTORE green. Each proof ran in its own copy, so

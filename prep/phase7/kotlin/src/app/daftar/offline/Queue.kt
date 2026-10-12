@@ -36,11 +36,32 @@ enum class OperationState {
 /** Something the caller must actually do as a result of a step. */
 sealed interface SideEffect {
     /**
-     * Send this operation. The key and the digest are carried in the effect
-     * rather than read from anywhere else, so the transport has no opportunity
-     * to supply its own.
+     * Send this operation. The key, the digest **and the scope** are carried
+     * in the effect rather than read from anywhere else, so the transport has
+     * no opportunity to supply its own.
+     *
+     * Challenger finding F-02: the scope was missing, and the reasoning that
+     * put the key here applies to it with more force. The gate in `step`
+     * refuses a sender that ASSERTS the wrong scope, but an effect is
+     * performed later, from a coroutine or a WorkManager job, and the live
+     * `ApiClient` builds `X-Business-Id` from mutable client state at send
+     * time. An account switch between the gate and the send therefore
+     * produces a request carrying business B with A's key — both halves
+     * internally consistent, answered 201, and `deriveSourceId(business,
+     * key)` writes A's sale into B's ledger with nothing able to detect it.
+     *
+     * Carrying the scope makes the fix structural instead of a sentence in a
+     * patch request owed to another owner: an implementer who wires this
+     * effect faithfully cannot read the business from anywhere else, because
+     * the effect already names it.
      */
-    data class SendAttempt(val idempotencyKey: String, val payloadDigest: String, val attempt: Int) : SideEffect
+    data class SendAttempt(
+        val idempotencyKey: String,
+        val payloadDigest: String,
+        val attempt: Int,
+        /** The tenant, business and member the row was captured under (L12/L13). */
+        val scope: OwnerScope,
+    ) : SideEffect
 
     /** Raise an operational signal; `code` is for the observability pipeline. */
     data class Alert(val code: String, val law: String) : SideEffect
@@ -248,7 +269,15 @@ class Operation private constructor(
         // each one. L13 is about every session-originated event, so a
         // per-arm test would be a law restated four times, and the fifth arm
         // added later is the one that would omit it.
-        if (event is QueueEvent.ByScope && event.actingScope != scope) {
+        //
+        // What the gate COMPARES is decided in one place too, by `mayAct`,
+        // for challenger finding F-05: comparing the whole triple on a SEND
+        // stranded a shift change. Alice captures offline, her shift ends and
+        // her session is revoked as PART 40 requires, Bob signs in — and the
+        // row is then unsendable, uncancellable and unminimizable, while L4
+        // and L5 forbid dropping it. A permanently closed state is not
+        // fail-closed, it is a lost sale.
+        if (event is QueueEvent.ByScope && !event.actingScope.mayAct(scope, event)) {
             return Step.Refused("offline.scope_switched", P7Laws.NO_CROSS_ACCOUNT_SEND.id)
         }
         return stepWithinScope(event)
@@ -287,7 +316,7 @@ class Operation private constructor(
             } else {
                 Step.Moved(
                     moved(OperationState.IN_FLIGHT, attempts = attempts + 1),
-                    listOf(SideEffect.SendAttempt(id, payloadDigest, attempts + 1)),
+                    listOf(SideEffect.SendAttempt(id, payloadDigest, attempts + 1, scope)),
                 )
             }
 

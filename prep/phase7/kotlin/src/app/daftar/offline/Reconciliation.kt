@@ -169,6 +169,27 @@ object Reconciliation {
             )
         }
 
+        // F-01. There is nothing to look up: an undetermined prior state has
+        // no key to ask about, so the receipt is not consulted and could not
+        // help if it were. Only recovering the original resolves this, and
+        // that is resolved off the device — at sign-in, which is already an
+        // online operation, so requiring it costs a merchant nothing they were
+        // not already paying.
+        PriorOutcome.UNDETERMINED -> when (provenance) {
+            Provenance.ORIGINAL_RECOVERABLE -> Reentry.UseOriginalKey(
+                "the install cannot vouch for its store, but the original key and bytes were " +
+                    "recovered, so the operation is finished rather than re-entered",
+            )
+
+            Provenance.ORIGINAL_LOST -> Reentry.Refused(
+                "offline.prior_state_undetermined",
+                P7Laws.AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE.id,
+                "this install cannot tell an empty queue from a destroyed one, so it cannot " +
+                    "establish that nothing was captured; a new key here would commit a second " +
+                    "time if the earlier operation landed",
+            )
+        }
+
         PriorOutcome.UNKNOWN -> when (provenance) {
             // The resolution L7 always wanted, now reachable after a wipe. It
             // is deliberately decided BEFORE the lookup is read: a resend of
@@ -221,10 +242,89 @@ object Reconciliation {
     }
 }
 
+/**
+ * What the local store can attest about ITSELF, which is not the same thing as
+ * what it contains.
+ *
+ * Challenger finding F-01: every arm of `decideReentry` was sound given a true
+ * classification, and nothing established one. This enum is the missing
+ * premise. It is deliberately about the INSTALL, not about the row: the
+ * question "is there an earlier operation?" can only be answered by a store
+ * that is the store that would have held it.
+ */
+enum class StoreAttestation {
+    /**
+     * This install can prove it is the one that would hold the row — a marker
+     * kept outside the queue store itself matches, or the server has
+     * confirmed this install has no operations outstanding from an earlier
+     * one. Only here does an empty store mean "nothing was ever captured".
+     *
+     * How an install earns this is an Android and API concern, not the
+     * kernel's: see `P7-S1` §8.1. The kernel states what follows from it.
+     */
+    VOUCHED,
+
+    /**
+     * A fresh install, a restored backup, a cleared data directory, or a
+     * marker that does not match. The store may be empty because nothing was
+     * captured, or because what was captured is gone, and this install cannot
+     * tell those apart.
+     *
+     * The default for any install that has not established otherwise. An
+     * install that is unsure is `CANNOT_VOUCH`, because being unsure is what
+     * `CANNOT_VOUCH` means.
+     */
+    CANNOT_VOUCH,
+}
+
+/**
+ * The classification step, which is where F-01 lived.
+ *
+ * Fail-closed in the one direction that matters: a store that cannot vouch for
+ * itself never produces `NONE`. It may still produce a row's own state, because
+ * a row that is PRESENT is evidence regardless of what else was lost — finding
+ * something tells you something, finding nothing does not.
+ */
+object PriorState {
+    /**
+     * @param attestation what this install can prove about its own store.
+     * @param rowState the state of the row the store actually holds for this
+     *   intent, or `null` when the store holds none. `NONE` is not accepted
+     *   here: "the store holds no row" is the `null`, and whether that means
+     *   absence is precisely what this function decides.
+     */
+    fun classify(attestation: StoreAttestation, rowState: PriorOutcome?): PriorOutcome {
+        require(rowState != PriorOutcome.NONE && rowState != PriorOutcome.UNDETERMINED) {
+            "rowState is what the store HOLDS; pass null for an empty store rather than a verdict"
+        }
+        if (rowState != null) return rowState
+        return when (attestation) {
+            StoreAttestation.VOUCHED -> PriorOutcome.NONE
+            StoreAttestation.CANNOT_VOUCH -> PriorOutcome.UNDETERMINED
+        }
+    }
+}
+
 /** What is known locally about the operation the merchant is re-entering. */
 enum class PriorOutcome {
-    /** No earlier operation exists for this intent. A first capture. */
+    /**
+     * No earlier operation exists for this intent, **and the store that says
+     * so can vouch for itself** (L19). Only `PriorState.classify` produces
+     * this, and only from a `VOUCHED` install.
+     */
     NONE,
+
+    /**
+     * The store holds no row and cannot establish that none was ever held —
+     * the state a wiped or freshly installed device is in.
+     *
+     * Not a synonym for `UNKNOWN`. `UNKNOWN` means a specific operation was
+     * sent and its answer was lost, so there is a key to replay and a receipt
+     * to look up. `UNDETERMINED` means there may be no operation at all, or
+     * one whose key this device cannot name — so there is nothing to look up,
+     * and the lookup cannot help.
+     */
+    UNDETERMINED,
 
     /** An earlier attempt was made and its outcome was never established. */
     UNKNOWN,
