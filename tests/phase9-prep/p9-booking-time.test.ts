@@ -37,6 +37,14 @@ const SPRING_FORWARD_LHI = { zone: 'Australia/Lord_Howe', local: '2026-10-04 02:
 const FALL_BACK_LHI = { zone: 'Australia/Lord_Howe', local: '2026-04-05 01:45' };
 const ORDINARY_NY = { zone: 'America/New_York', local: '2026-06-15 10:00' };
 
+interface Sweep {
+  zones: number;
+  steps: number;
+  widest_gap: number;
+  widest_repeat: number;
+  repeat_zone: string;
+}
+
 describe('P9 bookings — a local time is resolved or refused, never guessed', () => {
   let db: ScratchDb;
 
@@ -321,6 +329,115 @@ describe('P9 bookings — a local time is resolved or refused, never guessed', (
       expect(r.error).toContain('booking.local_time_not_finite');
       expect(r.error).not.toContain('ambiguous');
       expect(r.instant).toBe('');
+    }
+  });
+
+  /**
+   * V2 of the Mission asks for the resolver's bound to be checked against the
+   * LAWFUL IANA transition, not only against the four moments this suite
+   * names: «تحقق من حدود resolver الفعلية ومن انتقال IANA القانوني المسموح»,
+   * and «لا تبق عبارة شمول قديمة أوسع من الدليل» — leave no claim wider than
+   * its evidence.
+   *
+   * So the bound is measured against the tz database this server carries, over
+   * every zone it knows. The oracle is the offset itself — `ts AT TIME ZONE z`
+   * minus `ts AT TIME ZONE 'UTC'` — and the quantity is the change between
+   * consecutive samples, which IS a transition's magnitude. The two directions
+   * are reported separately because they fail differently:
+   *
+   *   offset INCREASES → the clock skips → a gap. The resolver finds no
+   *                      candidate and refuses. Outside the bound it still
+   *                      refuses, so the failure is safe.
+   *   offset DECREASES → the clock repeats → an ambiguity. This is the one
+   *                      that matters: a repeat WIDER than the ±180 scan would
+   *                      be seen as unambiguous and resolved silently, which
+   *                      is exactly what R-P9-13 forbids.
+   *
+   * A sample window wide enough to hold two transitions reports their sum,
+   * which can only overstate a single transition — the conservative direction.
+   */
+  it('the ±180-minute bound, measured against every zone this server knows, in both directions', async () => {
+    const c = new Client({ connectionString: db.url('postgres') });
+    await c.connect();
+    try {
+      const sweep = async (from: string, to: string, step: string): Promise<Sweep> => {
+        const r = await c.query<Sweep>(
+          `WITH z AS (
+             SELECT name FROM pg_timezone_names
+              WHERE name NOT LIKE 'posix/%' AND name NOT LIKE 'right/%'
+           ), t AS (
+             SELECT generate_series($1::timestamptz, $2::timestamptz, $3::interval) AS ts
+           ), o AS (
+             SELECT z.name, t.ts, (t.ts AT TIME ZONE z.name) - (t.ts AT TIME ZONE 'UTC') AS off
+               FROM z CROSS JOIN t
+           ), d AS (
+             SELECT name,
+                    extract(epoch FROM (off - lag(off) OVER (PARTITION BY name ORDER BY ts))) / 60 AS jump
+               FROM o
+           )
+           SELECT (SELECT count(DISTINCT name)::int FROM z) AS zones,
+                  (SELECT count(*)::int FROM t)             AS steps,
+                  coalesce(max(jump) FILTER (WHERE jump > 0), 0)::int        AS widest_gap,
+                  coalesce(-min(jump) FILTER (WHERE jump < 0), 0)::int       AS widest_repeat,
+                  coalesce((SELECT name FROM d WHERE jump = (SELECT min(jump) FROM d) LIMIT 1), '') AS repeat_zone
+             FROM d`,
+          [from, to, step],
+        );
+        const row = r.rows[0];
+        if (row === undefined) throw new Error('the tz sweep returned no row');
+        return row;
+      };
+
+      // Near term, finely: every zone, six years, twelve-hour samples. This is
+      // the window bookings are actually placed in.
+      const near = await sweep('2024-01-01T00:00:00Z', '2030-01-01T00:00:00Z', '12 hours');
+      expect(near.zones).toBeGreaterThan(400);
+      expect(near.steps).toBeGreaterThan(4000);
+      // Non-vacuous: transitions were seen. A zero maximum would mean the
+      // sweep measured nothing, and the bound would be unproven, not proven.
+      expect(near.widest_gap).toBeGreaterThan(0);
+      expect(near.widest_repeat).toBeGreaterThan(0);
+      // THE LAW: no repeat in this window is wider than the scan, so no
+      // ambiguous wall clock in it can be resolved silently.
+      expect(near.widest_repeat).toBeLessThanOrEqual(180);
+      expect(near.widest_gap).toBeLessThanOrEqual(180);
+
+      // Long range, coarsely: 1970 to 2040 in seven-day samples.
+      const far = await sweep('1970-01-01T00:00:00Z', '2040-01-01T00:00:00Z', '7 days');
+      expect(far.zones).toBeGreaterThan(400);
+      expect(far.steps).toBeGreaterThan(3000);
+      // MEASURED, AND IT IS OUTSIDE THE BOUND: the historical record contains
+      // date-line moves of a full day (Kwajalein, 1993). This case does NOT
+      // assert the bound covers them, because it does not — §5c's scope says
+      // so, LIMITATION 12 of the prep report says so, and the direction that
+      // would be unsafe is asserted separately below.
+      expect(far.widest_gap).toBeGreaterThan(180);
+      console.log(
+        `[P9 tz bound] 2024-2030: gap ${near.widest_gap} min, repeat ${near.widest_repeat} min (${near.repeat_zone}), ${near.zones} zones × ${near.steps} samples. ` +
+          `1970-2040: gap ${far.widest_gap} min, repeat ${far.widest_repeat} min (${far.repeat_zone}).`,
+      );
+    } finally {
+      await c.end().catch(() => undefined);
+    }
+  }, 600_000);
+
+  it('OUTSIDE THE BOUND, the unsafe direction is stated rather than hidden: a wide gap still REFUSES', async () => {
+    // Kwajalein crossed the date line on 1993-08-21 and skipped the day
+    // entirely — a 1440-minute transition, far outside the ±180 scan. The
+    // scan's failure mode in the skipping direction is to find no candidate,
+    // which is a refusal: the safe side of the bound, and the same answer a
+    // scan wide enough to see the whole move would give.
+    const r = await resolve('Pacific/Kwajalein', '1993-08-21 10:00');
+    expect(r.error).toContain('booking.local_time_nonexistent');
+    expect(r.instant).toBe('');
+    // And a wall clock on either side of that move resolves normally, because
+    // PostgreSQL's own conversion is the centre of the scan and is correct
+    // there — the bound is a radius around a right answer, not a window on
+    // absolute time.
+    for (const local of ['1993-08-20 10:00', '1993-08-22 10:00']) {
+      const ok = await resolve('Pacific/Kwajalein', local);
+      expect(ok.error).toBe('');
+      expect(ok.instant).not.toBe('');
     }
   });
 

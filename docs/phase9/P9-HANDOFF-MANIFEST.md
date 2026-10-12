@@ -34,6 +34,21 @@ Worktree: the session's primary checkout — no secondary worktree was created.
 Tree state at this SHA: clean apart from this manifest, which is committed immediately
 after it and names the SHA it describes rather than being backfilled into it.
 
+**Evidence subject vs head, reconciled (Mission V2).** The evidence in this handoff was
+produced against the subject SHA above; the branch head is one commit later because the
+head IS this manifest naming that subject. The two can never be the same string, and the
+whole difference between them is one file:
+
+```
+git diff --stat <subject> <head>
+ docs/phase9/P9-HANDOFF-MANIFEST.md | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+```
+
+No test file, no DDL and no other document differs between them, so a result measured at
+the subject is a result about the head's code. Per PART 16 that is stated as a verifiable
+relation, not as "the same commit".
+
 ## Artifacts
 
 All four are **committed** to the branch above. The copies under
@@ -47,6 +62,8 @@ not live in Git.
 | Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `1f4f850fbbda7c4bd38b930c70116b19a2f5d75629259b320dc71c11be0b9157` |
 | Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
 | Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `9114f9b2a981fcf6579181a7b49d64869b494176a4b4aaf26949ecfc6a5ab365` |
+| Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | RETENTION_SHA |
+| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | RUNLOG_SHA |
 | This manifest | `docs/phase9/P9-HANDOFF-MANIFEST.md` | yes (next commit) | — |
 
 No artifact is referenced by any of the above that does not exist. There are no
@@ -60,18 +77,21 @@ byte-identical duplicates to canonicalize (PART 14).
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 11 | no double booking under real concurrency |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 7 | each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 10 | the global lock order (PART 50), idempotent retries and the replay (PART 53) |
-| `tests/phase9-prep/p9-booking-time.test.ts` | 16 | the timezone / DST law (PART 51) and its soundness sweep |
+| `tests/phase9-prep/p9-booking-time.test.ts` | 18 | the timezone / DST law (PART 51), its soundness sweep, and the ±180 bound measured over every zone |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 10 | the schema attacked as the six real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | — | the spec loader and its non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | — | the race harness: `pg_blocking_pids`, never a sleep |
 
-**70 of 70 green**, on a live PostgreSQL 18.4 cluster, the spec applied in one
+**72 of 72 green**, on a live PostgreSQL 18.4 cluster, the spec applied in one
 transaction as the non-superuser deployment principal on top of the sealed Phase 3
 head. Run with `npx vitest run tests/phase9-prep`.
 
-There is **no stored evidence artifact** — no saved log is quoted as evidence anywhere,
-so there is none to hash. A run is reproduced by the command above, at the SHA above.
+The run's own output is stored as `/mnt/project-files/phase9/P9-RUN-LOG.txt` and hashed
+above, because Mission V2 asks for harness and logs to be retrieved rather than recreated.
+It is the verbose reporter's output for the whole set at the evidence SHA, with the
+PostgreSQL server's own log lines removed so that the artifact is the test record itself. A
+run is reproduced by the command above, at the SHA above.
 Per PART 16, a result at any other SHA does not prove this one, and per PART 15 a green
 local run is a record and not CI.
 
@@ -117,7 +137,14 @@ directory change is in this branch.
    decided is how long a booking is retained and whether a right-to-erasure path exists at
    all; it trades a customer's erasure right against an append-only history. The
    fail-closed default shipped here is **retain indefinitely, erase nothing** (prep report
-   §3c.6). This one IS an owner escalation.
+   §3c.6) — and Mission V2 is explicit that this default is a prep-time state, **not legal
+   approval for indefinite retention**. The separation of personal content from booking
+   facts and the policy options are prepared for review in
+   `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md`, with no invented window and no
+   guessed erasure; the booking record, the registry and the backlinks are never dropped to
+   solve retention. Policy-dependent activation is BLOCKED until the owner rules; the
+   command work continues around it. This one IS an owner escalation, and it has been put
+   to the owner.
 
 Items 1 and 3 are not owner-only escalations under PART 116; item 4 is.
 
@@ -147,7 +174,7 @@ step, and the Challenger and Coordinator signatures.
 * No timing or performance number from this container, anywhere (PART 20, PART 123).
 * No evidence class mixed: see §3b of the prep report.
 * No progress percentage, and no progress claim derived from the case count, the line
-  counts or the number of agents (Mission, cross-phase). 70 green cases say what was
+  counts or the number of agents (Mission, cross-phase). 72 green cases say what was
   measured, not how much of Phase 9 exists.
 * Business isolation of a registry read is enforced by `booking_replay_result` itself and
   not by row security — a different kind of guarantee from a policy, stated as limitation

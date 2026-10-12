@@ -21,13 +21,13 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 588 | 7 cases: each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
-| `tests/phase9-prep/p9-booking-time.test.ts` | 342 | 16 cases: the timezone / DST law (PART 51) and its soundness sweep |
+| `tests/phase9-prep/p9-booking-time.test.ts` | 471 | 18 cases: the timezone / DST law (PART 51), its soundness sweep, and the measured tz bound |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 350 | 10 cases: the schema attacked as the real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | 206 | the spec loader, the state contract parser, and the non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**70 of 70 cases green**, over six suites, on a live PostgreSQL 18.4 cluster. A case count is
+**72 of 72 cases green**, over six suites, on a live PostgreSQL 18.4 cluster. A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
 not how much of Phase 9 exists.
 
@@ -275,6 +275,18 @@ routine returns maps back through its zone to exactly the wall clock asked for, 
 oracle (the round trip) independent of the candidate counting the routine decides by — and
 a control shows PostgreSQL's own `AT TIME ZONE` failing that same sweep.
 
+### 3c.5a The bound itself, measured (Mission V2)
+
+V2 asked for the resolver's real bound against the lawful IANA transition, and for no claim
+left wider than its evidence. The ±180-minute scan is now measured over every one of the
+598 zones this server knows, in both directions separately, because they fail differently:
+2024–2030 (the window bookings live in) has a widest transition of 120 minutes either way,
+while 1970–2040 contains a 1440-minute date-line move and a 420-minute repeat. A gap wider
+than the bound is still refused — proved on Kwajalein's skipped day — but a repeat wider
+than it would be resolved silently, which is the one thing R-P9-13 exists to prevent.
+LIMITATION 12 now says exactly that, and the sentence it replaces was wider than its
+evidence.
+
 ### 3c.6 Retention — the rules that ARE approved, and the one that is not
 
 The rules the schema enforces today, which need no owner decision because they follow from
@@ -311,9 +323,35 @@ three are owed. The D11 PART 117 label for the same state is `PREPARED / NOT PRO
 two are the same claim, and this report uses both so neither vocabulary has to be guessed
 at.
 
+### 3c.9 Mission V2 — the four items it adds beyond V1
+
+1. **Evidence subject reconciled with the head.** V2 asks for `e077daa` (the subject the
+   evidence was produced against) to be reconciled with head `57ac451`. They differ by
+   exactly one file: `57ac451` is the handoff manifest written to name `e077daa`, which is
+   why it cannot be the same string as the SHA it describes. `git diff --stat e077daa
+   57ac451` is the whole reconciliation, and the manifest now states it rather than leaving
+   two SHAs to be noticed.
+2. **The internal GUC-only visibility was NOT narrowed.** V2 says not to reduce the
+   deliberate internal visibility without an exploit. No policy in §8 changed: the
+   `current_user = 'daftar_booking_internal'` read exemption stands exactly as it was. What
+   was added is a check inside one routine, against a hole the executed attack actually
+   returned — which is the exploit the instruction asks for, and it is recorded in §3c.4.
+3. **A run log is now a stored artifact.** V2 asks for harness and logs to be retrieved
+   rather than recreated. The suites' output at the evidence SHA is saved and hashed
+   alongside the documents, so a later reader can compare a run instead of taking this
+   report's word for the counts. Per PART 16 it proves only the SHA it names.
+4. **Retention is reframed, not answered.** V2 is explicit that the current absence of a
+   DELETE path protects history in preparation but is **not legal approval for indefinite
+   retention**, and that the record, the registry and the backlinks may never be dropped to
+   solve retention. So the default stated in §3c.6 is a prep-time state, not a policy, and
+   the separation of personal content from booking facts plus the policy options are
+   prepared for review in `P9-RETENTION-AND-ERASURE-OPTIONS.md` with no invented window and
+   no guessed erasure. Policy-dependent activation stays blocked until the owner rules; the
+   command work continues around it.
+
 ### 3c.8 The prep cases are not a sealed phase
 
-70 green cases say that the invariants in this document hold on a live server. They do not
+72 green cases say that the invariants in this document hold on a live server. They do not
 say Phase 9 exists: there is no command layer, no surface, no migration number, and these
 suites are not in required CI. §4 states that in full, and nothing in this report may be
 read as a promotion claim (PART 83).
@@ -404,11 +442,21 @@ Stated as limitations rather than left to be discovered.
     this slice after the Phase 4 candidates, and when Phase 4 is sealed these suites can be
     re-run against that head unchanged to confirm it.
 
-12. **The local-time scan is bounded to ±180 minutes** around PostgreSQL's own
-    answer. Every transition in the IANA database is far inside that bound, but a zone
-    whose offset moved by more than three hours at once would resolve as "does not
-    exist" rather than being found. Refusing is the safe side of the bound, and that is
-    the side this lands on.
+12. **The local-time scan is bounded to ±180 minutes**, and that bound is now MEASURED
+    rather than asserted — V2 of the Mission asked for the real resolver bound against
+    the lawful IANA transition, and the measurement corrected the claim that used to
+    stand here. Across all 598 zones this server knows, sampled every twelve hours over
+    2024–2030, the widest transition in either direction is **120 minutes**
+    (Antarctica/Troll). Over 1970–2040 the historical record is **wider than the bound**:
+    a 1440-minute date-line move (Kwajalein, 1993) and a 420-minute repeat
+    (Antarctica/Vostok). The two directions fail differently and the claim is now stated
+    that way: a GAP wider than the bound is still refused (measured on Kwajalein's
+    skipped day — the safe side, and the same answer a wider scan would give), while a
+    REPEAT wider than the bound would be resolved as unambiguous instead of refused,
+    which is the silent choice R-P9-13 exists to prevent. No such repeat exists in
+    2024–2030, and a booking is a future appointment — so the law holds where bookings
+    live, and that sentence is the honest width of it. The old wording ("every transition
+    is far inside the bound") was wider than its evidence and is withdrawn.
 13. **The DST cases depend on the server's tz database**, so the suite asserts the
     occurrence counts of its four moments from the server before relying on them. A tz
     update that moved a rule reds the suite rather than silently making its proofs

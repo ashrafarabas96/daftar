@@ -740,11 +740,27 @@ REVOKE ALL ON FUNCTION booking_lock_resources(UUID, UUID[]) FROM PUBLIC;
 --   zone        any IANA name this server knows. Anything else:
 --               booking.timezone_unknown.
 --   wall clock  finite. ±infinity: booking.local_time_not_finite.
---   shift       up to ±180 minutes. The scan is bounded there, so a zone
---               whose offset moved by more than three hours in one
---               transition would be reported as "does not exist" rather
---               than found. Every transition in the IANA database is far
---               inside the bound, and refusing is its safe side.
+--   shift       up to ±180 minutes, and that bound is MEASURED against this
+--               server's whole tz database rather than asserted. Over all 598
+--               zones it knows, sampled every twelve hours across 2024-2030 —
+--               the window bookings are actually placed in — the widest
+--               transition in either direction is 120 minutes
+--               (Antarctica/Troll). Over 1970-2040 the record is wider than
+--               the bound: a 1440-minute date-line move (Kwajalein, 1993) and
+--               a 420-minute repeat (Antarctica/Vostok). So the claim is
+--               stated in the two directions, because they fail differently:
+--
+--                 a GAP wider than the bound  → still refused, because the
+--                 scan finds no candidate. The safe side, and the same answer
+--                 a wider scan would give. Measured on Kwajalein's skipped
+--                 day.
+--                 a REPEAT wider than the bound → the second occurrence is
+--                 outside the scan, so the time would be resolved as
+--                 unambiguous instead of refused — a silent choice, which is
+--                 exactly what this routine exists to prevent. No such repeat
+--                 exists in 2024-2030; one exists historically. A booking is
+--                 a future appointment, so the law holds where bookings live,
+--                 and this sentence is the honest width of the claim.
 --   offset      must be one the stated wall clock actually has, whether or
 --               not there is anything to disambiguate. Otherwise
 --               booking.local_time_offset_mismatch.
