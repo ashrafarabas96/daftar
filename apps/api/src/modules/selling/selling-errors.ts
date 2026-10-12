@@ -651,6 +651,29 @@ const INSTALLMENT_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
   'installment.plan_fact_blind',
   'installment.plan_fact_desynchronised',
   'installment.plan_active_conflict',
+  // `TL-P4-COORD-R50` ordered items 1, 2 and 3. Both are READ-REACHABLE
+  // through `customer_ar_aging` — `plan_active_unbounded` is also
+  // WRITE-reachable, from the sync and from the deferred verifier — and both
+  // join this set in the same commit as the measurement that reaches them,
+  // which is what the paragraph above requires of an entry here.
+  //
+  // `plan_active_unbounded`: an invoice carries more than one plan with
+  // status = 'active', which `installment_plans_one_active_per_invoice_uq`
+  // admits at most one of. The round-11 challenger reached it from TWO
+  // ORDINARY CONCURRENT plan creations with that index present but
+  // `indisvalid`/`indisready` false, and in that state the reader served the
+  // pre-installment figure silently instead of refusing.
+  //
+  // `plan_fact_untrusted`: one of the seven triggers that maintain
+  // `invoices.has_active_installment_plan` and judge section 3 obligation (a)
+  // is missing or is not enabled. It is OWNER-ONLY reachable — measured, not
+  // assumed: `session_replication_role` is a `superuser`-context GUC and
+  // `daftar_app` and `daftar_migrator` are both refused `42501` on it — so it
+  // is an estate defect and never something a merchant did, which is why it
+  // takes the 500-with-the-code-in-the-log contract like the rest of this set
+  // and gets no `SELLING_STATUS` entry.
+  'installment.plan_active_unbounded',
+  'installment.plan_fact_untrusted',
 ]);
 
 /** The installment invariant codes, in registry order — the list a contract test enumerates. */

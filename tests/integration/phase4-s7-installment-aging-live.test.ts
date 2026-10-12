@@ -265,7 +265,7 @@ beforeAll(async () => {
   }
   if (specError === null) {
     guardDefinition =
-      (await ownerPool().query<{ def: string }>(`SELECT pg_get_functiondef('installment_plan_fact_assert(bigint,bigint,bigint)'::regprocedure) AS def`)).rows[0]
+      (await ownerPool().query<{ def: string }>(`SELECT pg_get_functiondef('installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)'::regprocedure) AS def`)).rows[0]
         ?.def ?? '';
   }
   tenantId =
@@ -299,7 +299,7 @@ afterAll(async () => {
   await p.query('DROP FUNCTION IF EXISTS installment_schedule_verify()').catch(() => undefined);
   await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_sync()').catch(() => undefined);
   await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_verify()').catch(() => undefined);
-  await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_assert(bigint,bigint,bigint)').catch(() => undefined);
+  await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)').catch(() => undefined);
   // THE RESTORE IS ASSERTED, NOT HOPED FOR (challenger M8). A `LANGUAGE sql`
   // body supplied as a string literal records NO `pg_depend` edge on the
   // relations it names, so the DROPs above succeed and leave
@@ -1038,7 +1038,8 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
       // "p_unreadable_plan"`, and this stub omitted them. It was never
       // reached until this round, because every plan write in this file was
       // being refused upstream.
-      await p.query(`CREATE OR REPLACE FUNCTION installment_plan_fact_assert(p_unreadable_plan BIGINT, p_unflagged_plan BIGINT, p_unreadable_schedule BIGINT)
+      await p.query(`CREATE OR REPLACE FUNCTION installment_plan_fact_assert(p_unreadable_plan BIGINT, p_unflagged_plan BIGINT, p_unreadable_schedule BIGINT,
+                                                                             p_unbounded_plan BIGINT, p_untrusted_fact BIGINT)
                      RETURNS BOOLEAN LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS 'SELECT true'`);
       try {
         const open = await asRole<{ bucket_no: number; txn_minor: string }>('daftar_inventory_internal', {}, AGING, [
@@ -1050,11 +1051,11 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
         expect(open.error, `the unguarded read failed for an unrelated reason: ${open.error ?? ''}`).toBeNull();
         expect(open.rows.length, 'the unguarded arm served a number for an invoice whose plan it cannot see').toBe(0);
       } finally {
-        await p.query(`DROP FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT)`);
+        await p.query(`DROP FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT)`);
         await p.query(guardDefinition);
-        await p.query(`ALTER FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT) OWNER TO daftar_accounting_internal`);
-        await p.query(`REVOKE ALL ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT) FROM PUBLIC`);
-        await p.query(`GRANT EXECUTE ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT) TO daftar_app, daftar_inventory_internal`);
+        await p.query(`ALTER FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) OWNER TO daftar_accounting_internal`);
+        await p.query(`REVOKE ALL ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) FROM PUBLIC`);
+        await p.query(`GRANT EXECUTE ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) TO daftar_app, daftar_inventory_internal`);
       }
     } finally {
       await p.query(`CREATE POLICY inventory_internal_read ON installment_plans
@@ -1241,15 +1242,18 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     // supplied. `pronargs = 0` is replaced by a pin on the argument TYPES.
     const meta = await ownerPool().query<{ argtypes: string; nargs: number; secdef: boolean; vol: string; src: string }>(
       `SELECT p.proargtypes::text AS argtypes, p.pronargs AS nargs, p.prosecdef AS secdef, p.provolatile::text AS vol, p.prosrc AS src
-         FROM pg_proc p WHERE p.oid = 'installment_plan_fact_assert(bigint,bigint,bigint)'::regprocedure`,
+         FROM pg_proc p WHERE p.oid = 'installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)'::regprocedure`,
     );
-    // oid 20 is `bigint`. Three numbers name no row, no business and no tenant.
-    expect(meta.rows[0]?.argtypes, 'it can be asked about something other than three numbers').toBe('20 20 20');
-    expect(meta.rows[0]?.nargs).toBe(3);
+    // oid 20 is `bigint`. FIVE numbers name no row, no business and no tenant
+    // — it was three until `TL-P4-COORD-R50` added the bound the reader's own
+    // arithmetic is predicated on and the seven triggers that make the fact a
+    // fact, and the structural argument is unchanged by the arity.
+    expect(meta.rows[0]?.argtypes, 'it can be asked about something other than five numbers').toBe('20 20 20 20 20');
+    expect(meta.rows[0]?.nargs).toBe(5);
     expect(meta.rows[0]?.secdef, "it is a DEFINER, so it lends its owner's visibility to its callers").toBe(false);
     expect(meta.rows[0]?.vol).toBe('s');
     const src = meta.rows[0]?.src ?? '';
-    // IT READS NOTHING. That is what makes "three bigints" sufficient and not
+    // IT READS NOTHING. That is what makes "five bigints" sufficient and not
     // merely necessary, and it is the difference between this and every
     // previous version.
     expect(src, 'it reads a tenant relation').not.toMatch(/FROM\s+public\./);
@@ -1261,7 +1265,7 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     // MEASURED AS THE APPLICATION ROLE: the same three numbers give the same
     // answer with and without app context, because there is nothing in it that
     // depends on the session at all.
-    const ASK = `SELECT installment_plan_fact_assert(0::BIGINT, 0::BIGINT, 0::BIGINT) AS ok`;
+    const ASK = `SELECT installment_plan_fact_assert(0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT) AS ok`;
     const withCtx = await asRole<{ ok: boolean }>('daftar_app', { tenant: tenantId, business: w.shop.businessId }, ASK);
     const without = await asRole<{ ok: boolean }>('daftar_app', {}, ASK);
     expect(withCtx.error).toBeNull();
@@ -1270,7 +1274,7 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     expect(without.rows[0]?.ok).toBe(true);
     // ...and it refuses on a non-zero count it was TOLD, which is the only
     // input it has.
-    const told = await asRole<{ ok: boolean }>('daftar_app', {}, `SELECT installment_plan_fact_assert(1::BIGINT, 0::BIGINT, 0::BIGINT) AS ok`);
+    const told = await asRole<{ ok: boolean }>('daftar_app', {}, `SELECT installment_plan_fact_assert(1::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT) AS ok`);
     expect(told.error ?? '', 'it does not refuse the count it is told').toContain('installment.plan_fact_unreadable');
   });
 });
@@ -1329,7 +1333,7 @@ describe('§H "ONCE PER CALL" — the claim that reached TL-P4-COORD-R31 out of 
           // `TL-P4-COORD-R38` direction (d). Only the SUBJECT moves here —
           // round-6 F3's reasoning about WHY it is once per call is a LATER
           // round's and is deliberately left exactly as it was written.
-          `SELECT 'public.installment_plan_fact_assert(bigint,bigint,bigint)'::regprocedure::oid::text AS oid`,
+          `SELECT 'public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)'::regprocedure::oid::text AS oid`,
         )
       ).rows[0]?.oid ?? '';
     expect(guardOid, 'the guard has no oid, so there is nothing to count').not.toBe('');

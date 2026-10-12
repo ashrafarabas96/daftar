@@ -173,6 +173,58 @@ ${SYNC_TAIL.replace(
     END IF;`,
 )}`;
 
+/**
+ * `SYNC_R9_RENAMED` — ROUND 9's BODY ONE STEP PAST THE DISCLOSED `M4`
+ * (`TL-P4-COORD-R50` ordered item 4; the round-11 challenger's F-3).
+ *
+ * The apply-time text ratchet of round 11 stripped comments before matching,
+ * which closed the comment route and nothing else. This body defeats it with
+ * a VARIABLE RENAME: `v_asserted` is called `v_floor` and one LIVE
+ * `OLD.status` assignment is added. No comment. No dead code. It installed
+ * with the ratchet reporting OK and committed `{flag: false, active plan: 1}`
+ * which did not heal.
+ *
+ * `TL-P4-COORD-R46` ruled that a `prosrc LIKE` cannot establish a property of
+ * code because a COMMENT is a string; `TL-P4-COORD-R50` §5 added the
+ * complement — a `prosrc NOT LIKE` cannot establish an ABSENCE either,
+ * because an IDENTIFIER is also a string. Both substring ratchets are
+ * therefore GONE from the specification, replaced by a digest of
+ * `pg_proc.prosrc` (catalogue DATA, §6b) and by THIS, which is the execution
+ * proof the digest's own refusal message names.
+ *
+ * It is written out in full rather than derived from `SYNC_R9` by a regular
+ * expression, for the reason the header of this file gives: a counterfactual
+ * produced by rewriting is only a counterfactual while the rewrite still
+ * matches. `F6_renamed_is_renamed` is the check that it is what it claims.
+ */
+const SYNC_R9_RENAMED = `${SYNC_HEAD}
+  v_floor      UUID;
+  v_old_active BOOLEAN;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.invoice_id];
+    IF NEW.status = 'active' THEN v_floor := NEW.invoice_id; END IF;
+  ELSIF TG_OP = 'DELETE' THEN
+    v_business := OLD.business_id;
+    v_invoices := ARRAY[OLD.invoice_id];
+  ELSE
+    v_business := NEW.business_id;
+    v_invoices := ARRAY[NEW.invoice_id];
+    v_old_active := (OLD.status = 'active');
+    IF NEW.status = 'active' THEN v_floor := NEW.invoice_id; END IF;
+    IF OLD.invoice_id IS DISTINCT FROM NEW.invoice_id THEN
+      v_invoices := v_invoices || OLD.invoice_id;
+    END IF;
+  END IF;
+${SYNC_TAIL.replace(
+  '__FLOOR__',
+  `    IF v_floor IS NOT NULL AND v_invoice = v_floor AND NOT v_state THEN
+      RAISE EXCEPTION 'installment.plan_fact_blind: this transaction wrote an ACTIVE plan on invoice %/% and the recomputation over installment_plans then found none, so the recomputation is blinded rather than the plan absent, and writing false would commit a fact that can never heal',
+        v_business, v_invoice USING ERRCODE = 'P0001';
+    END IF;`,
+)}`;
+
 /** The restrictive read policy as the specification ships it. */
 const RESTORE_PLANS_READ_SQL = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
      USING (app_bypass() OR current_user IN ('daftar_inventory_internal','daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid)`;
@@ -978,7 +1030,21 @@ beforeAll(async () => {
   M['F1d_disable_ddl'] = await ddl(`ALTER TABLE invoices DISABLE TRIGGER invoices_installment_schedule_complete`);
   const dPlanA = await planOnDraft(draftWorld.a);
   M['F1d_plan_on_draft_commits'] = dPlanA.error;
+  // THE DRAFT-INVISIBILITY READING IS TAKEN WITH ALL SEVEN TRIGGERS ENABLED,
+  // which is a change this round had to make and which is a TRUE POSITIVE of
+  // the new read-time guard rather than a workaround for it
+  // (`TL-P4-COORD-R50` ordered item 3). `customer_ar_aging` now refuses
+  // `installment.plan_fact_untrusted` when any of the seven triggers is
+  // missing or not enabled, and this block has deliberately DISABLED one of
+  // them -- so a reading taken here measures the guard, not the claim. The
+  // claim is that a DRAFT invoice is invisible to the reader, which has
+  // nothing to do with the disabled trigger: the plan is already committed
+  // and its schedule is still lawful (the bump that breaks it comes next), so
+  // the trigger is re-enabled for the length of this one read and disabled
+  // again. One DDL statement each way, no row touched.
+  M['F1d_reenable_for_read'] = await ddl(`ALTER TABLE invoices ENABLE TRIGGER invoices_installment_schedule_complete`);
   M['F1d_pre_bump_aging'] = await draftAging();
+  M['F1d_redisable_after_read'] = await ddl(`ALTER TABLE invoices DISABLE TRIGGER invoices_installment_schedule_complete`);
   M['F1d_bump_without_trigger'] = await bumpMoney(draftWorld.a, 1000000);
   M['F1d_promote'] = await promote(draftWorld.a);
   M['F1d_state_after'] = (
@@ -1155,9 +1221,9 @@ beforeAll(async () => {
               (SELECT count(*)::text FROM pg_trigger t WHERE NOT t.tgisinternal
                 AND t.tgfoid='public.installment_plan_fact_sync()'::regprocedure) AS sync_triggers,
               (SELECT p.proargtypes::text FROM pg_proc p
-                WHERE p.oid='public.installment_plan_fact_assert(bigint,bigint,bigint)'::regprocedure) AS assert_argtypes,
+                WHERE p.oid='public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)'::regprocedure) AS assert_argtypes,
               (SELECT NOT p.prosecdef FROM pg_proc p
-                WHERE p.oid='public.installment_plan_fact_assert(bigint,bigint,bigint)'::regprocedure) AS assert_is_invoker`,
+                WHERE p.oid='public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)'::regprocedure) AS assert_is_invoker`,
     )
   ).rows[0] as Record<string, unknown>;
 
@@ -1301,6 +1367,67 @@ beforeAll(async () => {
   M['F5_new_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
   await rePolicy(RESTORE_PLANS_READ_SQL);
   M['F5_new_aging'] = await aging(app, APP_CTX());
+
+  // ══════════════════════════════════════════════════════════════════════
+  // §F6 F-3 ANSWERED BY EXECUTION: THE RENAMED ROUND-9 BODY
+  //     (`TL-P4-COORD-R50` ordered item 4)
+  //
+  // Identical construction to §F5, with round 9's body RENAMED — `v_asserted`
+  // to `v_floor`, plus one live `OLD.status` assignment, no comment and no
+  // dead code. Round 11's comment-stripping text ratchet reported OK on it and
+  // it then committed `{flag: false, active plan: 1}`. The specification's
+  // apply-time instrument is now a DIGEST of `pg_proc.prosrc`, which refuses
+  // it as catalogue data; this is the BEHAVIOURAL half, which is the only
+  // instrument that can establish what the body DOES.
+  // ══════════════════════════════════════════════════════════════════════
+  M['F6_renamed_is_renamed'] =
+    SYNC_R9_RENAMED !== SYNC_R9 &&
+    SYNC_R9_RENAMED !== SYNC_NEW &&
+    !SYNC_R9_RENAMED.includes('v_asserted') &&
+    SYNC_R9_RENAMED.includes('v_floor') &&
+    SYNC_R9_RENAMED.includes('OLD.status') &&
+    SYNC_R9_RENAMED.includes('NEW.status') &&
+    SYNC_R9_RENAMED.includes('plan_fact_blind');
+  // AND THE RATCHET ROUND 11 SHIPPED WOULD HAVE PASSED IT: comments stripped,
+  // every token it required is present and the token it forbade is absent.
+  // Asserted on the subject, so the claim «a rename defeats it» is a reading
+  // of this very string and not a quotation of the challenger's report.
+  M['F6_round11_ratchet_would_pass'] = ((): boolean => {
+    const code = SYNC_R9_RENAMED.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
+    return code.includes('plan_fact_blind') && code.includes('NEW.status') && code.includes('OLD.status') && !code.includes('v_asserted');
+  })();
+  // NO `resetInvoice()` HERE, and that is deliberate -- disclosed, because the
+  // first pass of this section called it and measured the wrong fixture. The
+  // F-3 construction needs an invoice that ALREADY carries an active plan with
+  // a lawful schedule and a `true` flag, which is exactly the state §F5 ends
+  // in; `resetInvoice()` returns the invoice to the base case of the induction
+  // (no plan, flag `false`), and against THAT state the renamed body has
+  // nothing to desynchronise, so the case passed its own insert and measured
+  // `{flag: false, truth: false, plans: 0}` -- a reading about nothing.
+  // `F6_pre` below is therefore asserted, not assumed.
+  M['F6_pre'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['F6_install'] = await installSync(SYNC_R9_RENAMED);
+  await rePolicy(STATUS_BLIND_WRITER_SQL);
+  const f6id = randomUUID();
+  M['F6_insert_cancelled'] = await commitBarePlan('cancelled', f6id);
+  M['F6_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(RESTORE_PLANS_READ_SQL);
+  M['F6_state_after_restore'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['F6_aging_after_restore'] = await aging(app, APP_CTX());
+  // and the shipped body put back, with the planted row removed and the flag
+  // returned to what the plan relation supports, so §F4 below is asked its
+  // question from a clean state.
+  M['F6_cleanup'] = (await inCtx(mig, APP_CTX(), [{ sql: `DELETE FROM installment_plans WHERE id = $1`, params: [f6id] }])).error;
+  M['F6_new_install'] = await installSync(SYNC_NEW);
+  M['F6_repair_flag'] = (
+    await inCtx(sup, APP_CTX(), [
+      {
+        sql: `UPDATE invoices SET has_active_installment_plan = EXISTS (SELECT 1 FROM installment_plans p WHERE p.business_id = invoices.business_id AND p.invoice_id = invoices.id AND p.status = 'active') WHERE id = $1`,
+        params: [world.invoiceId],
+      },
+    ])
+  ).error;
+  M['F6_state_after_shipped_restored'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
 
   // ══════════════════════════════════════════════════════════════════════
   // §F4 THE ONE-ACTIVE EXCLUSION: ONE NAME, BOTH HEAP ORDERS
@@ -1899,6 +2026,8 @@ describe("P4-S7 §F1-d obligation (a)'s RIGHT-HAND SIDE (TL-P4-COORD-R43, F1-d)"
     expect(M['F1d_plan_on_draft_commits'], 'a plan against a draft invoice was refused, so the exploit has no subject').toBeNull();
     // A draft is invisible to the reader — which is why the PROMOTION is what
     // makes the broken state visible, and why the bump alone looks harmless.
+    expect(M['F1d_reenable_for_read'], 'the read below must be taken with all seven triggers enabled').toBeNull();
+    expect(M['F1d_redisable_after_read']).toBeNull();
     expect(errOf(M['F1d_pre_bump_aging'])).toBe('');
     expect(rows(M['F1d_pre_bump_aging'])).toEqual([]);
   });
@@ -2024,6 +2153,28 @@ describe('P4-S7 §F5 the INSERT-branch derivation is load-bearing, and the case 
   it('and the CONTROL: with everything restored the reader ANSWERS, so this is a discrimination and not a reader that refuses this customer', () => {
     expect(errOf(M['F5_new_aging'])).toBe('');
     expect(rows(M['F5_new_aging']).length).toBeGreaterThan(0);
+  });
+});
+
+describe('P4-S7 §F6 F-3 by EXECUTION: round 9 renamed, no comment and no dead code', () => {
+  it('the planted body IS the rename, and round 11\u2019s comment-stripping ratchet would have passed it', () => {
+    expect(M['F6_renamed_is_renamed']).toBe(true);
+    expect(M['F6_round11_ratchet_would_pass']).toBe(true);
+    expect(M['F6_install']).toBeNull();
+  });
+
+  it('it COMMITS {flag: false, active plan: 1} and the state DOES NOT HEAL', () => {
+    expect(M['F6_pre']).toEqual({ flag: 'true', truth: 'true', plans: '2' });
+    expect(M['F6_insert_cancelled'], 'the renamed body was refused, so this is not the case F-3 names').toBeNull();
+    expect(M['F6_state']).toEqual({ flag: 'false', truth: 'true', plans: '3' });
+    expect(M['F6_state_after_restore'], 'restoring the policy healed it, which it must not').toEqual({ flag: 'false', truth: 'true', plans: '3' });
+    expect(errOf(M['F6_aging_after_restore'])).toContain('installment.plan_fact_unflagged');
+  });
+
+  it('and the shipped body is restored, so the next section is asked its question from a clean state', () => {
+    expect(M['F6_new_install']).toBeNull();
+    expect(M['F6_cleanup']).toBeNull();
+    expect(M['F6_state_after_shipped_restored']).toEqual({ flag: 'true', truth: 'true', plans: '2' });
   });
 });
 
@@ -2248,7 +2399,11 @@ describe('P4-S7 §G the end state, from the catalogue', () => {
     // name no row, no business and no tenant, so the routine cannot be asked a
     // question about any of them — the structural replacement for round 6's
     // `pronargs = 0`.
-    expect(g['assert_argtypes']).toBe('20 20 20');
+    // FIVE `bigint`s since `TL-P4-COORD-R50`: the three readings compared
+    // against each other, plus the bound the reader's own arithmetic names and
+    // the seven triggers that make the fact a fact. oid 20 is `bigint`, and
+    // five numbers name no row, no business and no tenant.
+    expect(g['assert_argtypes']).toBe('20 20 20 20 20');
     expect(g['assert_is_invoker']).toBe(true);
   });
 });

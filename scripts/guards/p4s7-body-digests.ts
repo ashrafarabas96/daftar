@@ -1,0 +1,133 @@
+/**
+ * P4-S7 — THE ROUTINE-BODY DIGESTS THE END-STATE BLOCK PINS
+ * (`TL-P4-COORD-R46`'s structural ruling; `TL-P4-COORD-R50` §5 and ordered
+ *  item 4).
+ *
+ * ── WHY A DIGEST AND NOT A PATTERN ────────────────────────────────────────
+ *
+ * The specification's end-state block carried two `prosrc` substring ratchets
+ * over `installment_plan_fact_sync()` and `customer_ar_aging()`, and two more
+ * over `customer_ar_aging()`'s rounding and `installment_schedule_verify()`'s
+ * retired obligation (e). All four were defeated, twice, by the two halves of
+ * one ruling:
+ *
+ *   * a `prosrc LIKE` cannot establish a property of code, because a COMMENT
+ *     is a string — round 10 satisfied four such tests with the tokens living
+ *     only inside comments of an otherwise round-9 body;
+ *   * a `prosrc NOT LIKE` cannot establish the ABSENCE of a property, because
+ *     an IDENTIFIER is also a string — round 11 renamed `v_asserted` to
+ *     `v_floor`, added one live `OLD.status` assignment, and installed round
+ *     9's body with the comment-stripping version of the ratchet reporting OK.
+ *
+ * A digest of `pg_proc.prosrc` is neither. It is catalogue DATA compared
+ * against the digest of the text the file ships, and it establishes exactly
+ * one thing: THE INSTALLED BODY IS THE BODY THAT WAS REVIEWED. It makes no
+ * claim that the body is correct — no apply-time instrument can — and the
+ * behavioural proofs stay where they have to be, in
+ * `tests/integration/phase4-s7-installment-fact-db.test.ts`, which plants the
+ * defective bodies and requires the refusals.
+ *
+ * ── THE COUPLING, AND WHY IT IS CHECKED IN BOTH DIRECTIONS ────────────────
+ *
+ * The constants live in the specification's own `DO $end$` block, so an edit
+ * to a body without an edit to its constant produces a migration that will not
+ * apply. That is the point of a ratchet and it is also a trap if the only
+ * thing that notices is a deployment. So this module is the ONE extractor,
+ * `packages/domain-core/test/phase4-s7-installment-aging.test.ts` asserts the
+ * constants in the file equal what it computes, and the CLI below prints the
+ * replacements when a body legitimately changes.
+ *
+ * ── THE SLICE IS THE DOLLAR-QUOTED BODY AND NOTHING ELSE ──────────────────
+ *
+ * `prosrc` holds exactly the characters between the opening `$fn$` and the
+ * closing `$fn$` — the leading newline included, the trailing one included,
+ * the `CREATE OR REPLACE` header excluded. The extractor below takes that
+ * slice literally rather than normalising it, because a normalisation is a
+ * second definition of the subject and the cluster applies none.
+ */
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+/** A routine whose installed body the end-state block pins, keyed by its `regprocedure` text. */
+export interface BodyDigest {
+  /** The `CREATE OR REPLACE FUNCTION <this>` head, as the specification writes it. */
+  readonly head: string;
+  /** The `regprocedure` spelling the end-state block casts, e.g. `public.customer_ar_aging(uuid,uuid,date,integer[])`. */
+  readonly signature: string;
+  /** `sha256` of the dollar-quoted body, hex. */
+  readonly sha256: string;
+  /** The body's length in characters, for a report that wants to say the slice was non-empty. */
+  readonly length: number;
+}
+
+/**
+ * The five routines, in the order the end-state block's `c_bodies` array
+ * declares them. The `head` is matched literally against the file: a routine
+ * whose head this list does not find is an error and never a silently skipped
+ * entry, because a digest list that quietly covers four of five routines is
+ * worse than none.
+ */
+export const P4S7_PINNED_BODIES: readonly { readonly head: string; readonly signature: string }[] = [
+  { head: 'CREATE OR REPLACE FUNCTION installment_plan_fact_sync() RETURNS TRIGGER', signature: 'public.installment_plan_fact_sync()' },
+  { head: 'CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER', signature: 'public.installment_plan_fact_verify()' },
+  { head: 'CREATE OR REPLACE FUNCTION installment_plan_active_exclusive() RETURNS TRIGGER', signature: 'public.installment_plan_active_exclusive()' },
+  { head: 'CREATE OR REPLACE FUNCTION installment_schedule_verify() RETURNS TRIGGER', signature: 'public.installment_schedule_verify()' },
+  {
+    head: 'CREATE OR REPLACE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])',
+    signature: 'public.customer_ar_aging(uuid,uuid,date,integer[])',
+  },
+];
+
+export const P4S7_SPEC_PATH = join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql');
+
+/** The characters between the `$fn$` quotes of the routine whose head starts at `from`. */
+export function dollarQuotedBody(spec: string, head: string): string {
+  const h = spec.indexOf(head);
+  if (h < 0) throw new Error(`p4s7-body-digests: no routine head ${JSON.stringify(head)} in the specification`);
+  const open = spec.indexOf('$fn$', h);
+  if (open < 0) throw new Error(`p4s7-body-digests: no opening $fn$ after ${JSON.stringify(head)}`);
+  const close = spec.indexOf('$fn$', open + 4);
+  if (close < 0) throw new Error(`p4s7-body-digests: no closing $fn$ after ${JSON.stringify(head)}`);
+  return spec.slice(open + 4, close);
+}
+
+/** Every pinned body's digest, computed from `spec`. */
+export function bodyDigests(spec: string): readonly BodyDigest[] {
+  return P4S7_PINNED_BODIES.map((r) => {
+    const body = dollarQuotedBody(spec, r.head);
+    if (body.length < 200) throw new Error(`p4s7-body-digests: the body of ${r.signature} sliced to ${body.length} characters, which is not a routine`);
+    return { head: r.head, signature: r.signature, sha256: createHash('sha256').update(body, 'utf8').digest('hex'), length: body.length };
+  });
+}
+
+/** Every pinned body's digest, computed from the specification on disk. */
+export function bodyDigestsOnDisk(): readonly BodyDigest[] {
+  return bodyDigests(readFileSync(P4S7_SPEC_PATH, 'utf8'));
+}
+
+/**
+ * The `c_bodies` rows the end-state block declares, read back out of the
+ * specification: `[signature, sha256]` per row, in declaration order. This is
+ * the other side of the coupling — what the file SAYS, against what the file
+ * IS.
+ */
+export function declaredBodyDigests(spec: string): readonly { readonly signature: string; readonly sha256: string }[] {
+  const start = spec.indexOf('c_bodies    CONSTANT TEXT[][] := ARRAY[');
+  if (start < 0) throw new Error('p4s7-body-digests: the end-state block declares no c_bodies array');
+  const end = spec.indexOf(']];', start);
+  if (end < 0) throw new Error('p4s7-body-digests: the c_bodies array is unterminated');
+  const rows: { signature: string; sha256: string }[] = [];
+  // `end` is the index of `]];`, whose FIRST `]` is the LAST ROW'S OWN closing
+  // bracket -- so slicing to `end` truncates the fifth row and the regex below
+  // matches four. That was this instrument's own defect, found by H7 going red
+  // on a four-element list, and it is the reason the slice is `end + 1`.
+  for (const m of spec.slice(start, end + 1).matchAll(/\['([^']+)',\s*'([0-9a-f]{64}|__SHA_[A-Z]+__)'\]/g)) {
+    rows.push({ signature: m[1] as string, sha256: m[2] as string });
+  }
+  return rows;
+}
+
+if (require.main === module) {
+  for (const d of bodyDigestsOnDisk()) process.stdout.write(`${d.signature}\t${d.sha256}\t${d.length}\n`);
+}

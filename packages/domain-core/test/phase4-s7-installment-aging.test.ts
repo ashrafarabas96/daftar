@@ -65,6 +65,7 @@ import {
   isAuthoritativeSalesColumn,
   isForbiddenSalesTable,
 } from '../../../scripts/guards/no-authoritative-balance';
+import { bodyDigests, declaredBodyDigests } from '../../../scripts/guards/p4s7-body-digests';
 import { agingBucketLabels } from '../src/invoice';
 import { apRelease } from '../../inventory/src/supplier-settlement';
 import {
@@ -173,12 +174,114 @@ const MIGRATIONS: readonly { readonly name: string; readonly sql: string }[] = O
  * already strips non-schema internally, which is why proof 7 was green from
  * the first run.)
  */
+function stripCommentsQuoteAware(s: string): string {
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === "'") {
+      // A single-quoted literal is DATA. A `--` inside it is two hyphens, not
+      // a comment, and the old stripper ate the rest of the line INCLUDING
+      // the closing quote -- which is the inversion this function exists to
+      // refuse. The literal is copied through, quote doubling and all.
+      let j = i + 1;
+      while (j < s.length) {
+        if (s[j] === "'" && s[j + 1] === "'") {
+          j += 2;
+          continue;
+        }
+        if (s[j] === "'") {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      out += s.slice(i, j);
+      i = j;
+      continue;
+    }
+    if (s[i] === '-' && s[i + 1] === '-') {
+      const nl = s.indexOf('\n', i);
+      i = nl === -1 ? s.length : nl; // the newline itself is kept
+      continue;
+    }
+    if (s[i] === '/' && s[i + 1] === '*') {
+      const end = s.indexOf('*/', i + 2);
+      out += ' ';
+      i = end === -1 ? s.length : end + 2;
+      continue;
+    }
+    out += s[i];
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * ONE LEXER, TWO SUBJECTS. Both extractors are projections of a SINGLE
+ * left-to-right pass that knows where it is, because round 11's challenger
+ * (F-8) showed that two independent regex passes cannot: `sqlSchemaOnly` used
+ * to strip `--.*$` over the RAW file, before anything knew about quoting, so a
+ * `--` planted inside a `COMMENT ... IS '...'` literal deleted that literal's
+ * CLOSING QUOTE, and from that character on every literal and every stretch of
+ * code in the file swapped places in `sqlCodeOnly`'s parse. The fault was not
+ * that the strippers blanked too much; it was that they INVERTED, which can
+ * turn a shipped law green over text that is not its subject.
+ *
+ * So quoting is decided first and comments second, never the other way round:
+ *   - a dollar-quoted body is executable SQL, so it is kept, with comments
+ *     stripped INSIDE it by the quote-aware stripper above;
+ *   - a top-level single-quoted literal is data: blanked to `''` for a code
+ *     law, passed through verbatim for a schema law;
+ *   - `--` and block comments are removed only where the lexer is in neither.
+ */
+function lexSql(sql: string, blankLiterals: boolean): string {
+  let out = '';
+  let i = 0;
+  while (i < sql.length) {
+    const tag = /^\$[A-Za-z_]*\$/.exec(sql.slice(i, i + 64));
+    if (tag !== null) {
+      const close = sql.indexOf(tag[0], i + tag[0].length);
+      const stop = close === -1 ? sql.length : close + tag[0].length;
+      out += stripCommentsQuoteAware(sql.slice(i, stop));
+      i = stop;
+      continue;
+    }
+    if (sql[i] === "'") {
+      let j = i + 1;
+      while (j < sql.length) {
+        if (sql[j] === "'" && sql[j + 1] === "'") {
+          j += 2;
+          continue;
+        }
+        if (sql[j] === "'") {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      out += blankLiterals ? "''" : sql.slice(i, j);
+      i = j;
+      continue;
+    }
+    if (sql[i] === '-' && sql[i + 1] === '-') {
+      const nl = sql.indexOf('\n', i);
+      i = nl === -1 ? sql.length : nl;
+      continue;
+    }
+    if (sql[i] === '/' && sql[i + 1] === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      out += ' ';
+      i = end === -1 ? sql.length : end + 2;
+      continue;
+    }
+    out += sql[i];
+    i += 1;
+  }
+  return out;
+}
+
 function sqlSchemaOnly(sql: string): string {
-  return sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .split('\n')
-    .map((l) => l.replace(/--.*$/, ''))
-    .join('\n');
+  return lexSql(sql, false);
 }
 
 /**
@@ -201,43 +304,7 @@ function sqlSchemaOnly(sql: string): string {
  * `meta_8` proves this function is not simply deleting everything.
  */
 function sqlCodeOnly(sql: string): string {
-  const src = sqlSchemaOnly(sql);
-  let out = '';
-  let i = 0;
-  while (i < src.length) {
-    const tag = /^\$[A-Za-z_]*\$/.exec(src.slice(i));
-    if (tag !== null) {
-      // A dollar-quoted body: executable SQL, kept verbatim, including its
-      // closing tag, so the projection is still judged in full.
-      const close = src.indexOf(tag[0], i + tag[0].length);
-      const stop = close === -1 ? src.length : close + tag[0].length;
-      out += src.slice(i, stop);
-      i = stop;
-      continue;
-    }
-    if (src[i] === "'") {
-      // A single-quoted literal, `''` doubling and all. Blanked to an empty
-      // literal so the statement's SHAPE survives and its prose does not.
-      let j = i + 1;
-      while (j < src.length) {
-        if (src[j] === "'" && src[j + 1] === "'") {
-          j += 2;
-          continue;
-        }
-        if (src[j] === "'") {
-          j += 1;
-          break;
-        }
-        j += 1;
-      }
-      out += "''";
-      i = j;
-      continue;
-    }
-    out += src[i];
-    i += 1;
-  }
-  return out;
+  return lexSql(sql, true);
 }
 
 /**
@@ -2645,6 +2712,43 @@ describe('META — the proofs are not vacuous', () => {
       'CREATE FUNCTION f() RETURNS BIGINT LANGUAGE sql AS $fn$ SELECT public.supplier_ap_release(1, 2, 0, 1) $fn$;',
     ].join('\n');
 
+    // ROUND 11 F-8, THE INVERSION, ANSWERED BY A FIXTURE WHOSE ANSWER IS
+    // KNOWN. One `--` inside a `COMMENT ... IS '...'` literal used to delete
+    // that literal's closing quote, and from there the quote parse was one
+    // literal out of step for the rest of the file: the `CREATE INDEX` below
+    // was read as the INSIDE of a string and blanked, so a law naming it went
+    // green over nothing. The hazard is a PARITY hazard, so it is measured as
+    // one: the statement AFTER the planted comment must survive both
+    // extractors, and the prose before it must survive neither.
+    const planted = [
+      "COMMENT ON TABLE t IS 'this literal contains -- two hyphens and then more prose';",
+      'CREATE UNIQUE INDEX t_live_uq ON t (id) WHERE status = 1;',
+      "COMMENT ON INDEX t_live_uq IS 'another literal -- with another pair';",
+      'CREATE INDEX t_other_ix ON t (created_at);',
+    ].join('\n');
+    const plantedCode = sqlCodeOnly(planted);
+    const plantedSchema = sqlSchemaOnly(planted);
+    for (const [name, projected] of [
+      ['sqlCodeOnly', plantedCode],
+      ['sqlSchemaOnly', plantedSchema],
+    ] as const) {
+      expect(projected, `${name} lost a statement to a -- inside a literal`).toContain(
+        'CREATE UNIQUE INDEX t_live_uq ON t (id) WHERE status = 1;',
+      );
+      expect(projected, `${name} lost the statement after the second literal`).toContain(
+        'CREATE INDEX t_other_ix ON t (created_at);',
+      );
+    }
+    // ...and the literal's prose is still DATA to a code law, which is the
+    // property the inversion silently took away.
+    expect(plantedCode).not.toMatch(/two hyphens and then more prose/);
+    expect(plantedCode).not.toMatch(/with another pair/);
+    expect(plantedCode).toMatch(/COMMENT ON TABLE t IS ''/);
+    expect(plantedCode).toMatch(/COMMENT ON INDEX t_live_uq IS ''/);
+    // A schema law keeps the literal, and keeps ALL of it -- the old stripper
+    // truncated it at the hyphens, which is how the closing quote went.
+    expect(plantedSchema).toContain("'this literal contains -- two hyphens and then more prose'");
+
     // `sqlSchemaOnly` drops the `--` comment and keeps both statements.
     const schema = sqlSchemaOnly(fixture);
     expect(schema).not.toMatch(/a comment naming/);
@@ -2795,22 +2899,57 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // explanation out of the file.
     expect(sketchCode).not.toMatch(/NOT EXISTS \(SELECT 1 FROM active_plan/);
 
-    // THE THREE REFUSALS THAT REMAIN, each with its own name — a law that
+    // THE FIVE REFUSALS THAT REMAIN, each with its own name — a law that
     // asserts "it refused" rather than "it refused THIS" is satisfied by a
     // routine that refuses everything.
+    //
+    // THREE OF THEM UNTIL `TL-P4-COORD-R50`, AND THREE WAS NOT ENOUGH. The
+    // fourth is the bound the reader's own arithmetic is predicated on — at
+    // most one active plan per invoice — measured as a COUNT over the rows
+    // the caller can see, because with the partial unique index present but
+    // `indisvalid`/`indisready` false two ORDINARY CONCURRENT plan creations
+    // committed two active plans and this reader then served the
+    // pre-installment figure byte-identical to the no-plan answer with no
+    // refusal at all. The fifth is `pg_trigger.tgenabled` over the seven
+    // triggers that maintain the fact and judge obligation (a): that column
+    // occurred ZERO times in this specification, so all seven could be
+    // disabled with the apply-time ratchet still reporting OK.
     expect(code).toContain('installment.plan_fact_unreadable');
     expect(code).toContain('installment.plan_fact_unflagged');
     expect(code).toContain('installment.plan_schedule_unreadable');
+    expect(code).toContain('installment.plan_active_unbounded');
+    expect(code).toContain('installment.plan_fact_untrusted');
     expect(sketch).toContain('installment_plan_fact_assert(');
 
-    // AND THE REFUSAL IS TOLD THREE NUMBERS, never asked about a row. Round 6
+    // AND THE REFUSAL IS TOLD FIVE NUMBERS, never asked about a row. Round 6
     // pinned `pronargs = 0` for that reason; this pins the TYPES instead,
-    // because three `bigint`s name no row, no business and no tenant.
+    // because five `bigint`s name no row, no business and no tenant.
     expect(code).toMatch(
-      /CREATE OR REPLACE FUNCTION installment_plan_fact_assert\(p_unreadable_plan BIGINT,\s*p_unflagged_plan BIGINT,\s*p_unreadable_schedule BIGINT\)\s*RETURNS BOOLEAN\s*LANGUAGE plpgsql STABLE SECURITY INVOKER/,
+      /CREATE OR REPLACE FUNCTION installment_plan_fact_assert\(p_unreadable_plan BIGINT,\s*p_unflagged_plan BIGINT,\s*p_unreadable_schedule BIGINT,\s*p_unbounded_plan BIGINT,\s*p_untrusted_fact BIGINT\)\s*RETURNS BOOLEAN\s*LANGUAGE plpgsql STABLE SECURITY INVOKER/,
     );
     expect(code).not.toMatch(/installment_plan_fact_assert\s*\([^)]*UUID/);
-    expect(code).toContain("p.proargtypes = ARRAY['bigint'::regtype, 'bigint'::regtype, 'bigint'::regtype]::oidvector");
+    expect(code).toContain(
+      "p.proargtypes = ARRAY['bigint'::regtype, 'bigint'::regtype, 'bigint'::regtype,\n                                 'bigint'::regtype, 'bigint'::regtype]::oidvector",
+    );
+
+    // THE FOURTH COUNT IS A `count(*)` GROUPED PER INVOICE AND NOT A `FILTER`
+    // OVER THE JOIN, because the join is exactly what multiplies in the state
+    // it measures: a `FILTER` would count the invoice once per active plan
+    // and the number in the refusal would be the harm's own doubling.
+    expect(sketchCode).toMatch(/GROUP BY v2\.invoice_id\s*HAVING pg_catalog\.count\(\*\) > 1/);
+    // AND THE FIFTH READS `tgenabled` FROM `pg_trigger`, joined through
+    // `pg_proc` BY NAME: a `::regprocedure` cast RAISES when the routine is
+    // absent, which would turn a missing routine into an unrelated 42883 from
+    // the middle of an arithmetic CTE.
+    expect(sketchCode).toContain("t.tgenabled = 'O'");
+    expect(sketchCode).toContain('pg_catalog.pg_trigger');
+    expect(sketchCode).not.toMatch(/installment_plan_fact_sync\(\)'::regprocedure[\s\S]{0,80}tgfoid/);
+    // `GREATEST` IS SYNTAX AND NOT A FUNCTION, exactly like `COALESCE`, so it
+    // may not be schema-qualified — the one trap this estate records about the
+    // pinned-search_path idiom, and the reason this law exists beside the one
+    // above it.
+    expect(sketchCode).not.toContain('pg_catalog.greatest');
+    expect(sketchCode).toContain('greatest(0, 7 -');
 
     // THE FACT IS MAINTAINED AND VERIFIED BY THIS SLICE, on both sides, and
     // the verifier is DEFERRED while the writer is NOT.
@@ -2859,28 +2998,28 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // holds comments too. Sixth occurrence of this file's oldest lesson.
     expect(sketchCode).not.toMatch(/NOT EXISTS \(SELECT 1 FROM public\.installments/);
 
-    // THE RATCHET, AND IT IS A PRESENCE-OF-STRING TEST AND SAYS SO
-    // (`TL-P4-COORD-R46`, F-1). It used to read `prosrc` raw, which the
-    // coordinator's structural ruling retired: «a `prosrc LIKE` test cannot
-    // establish a property of code. It establishes the presence of a string,
-    // and a comment is a string.» It now reads `prosrc` with its comments
-    // STRIPPED, which stops the measured defeat (the tokens placed in
-    // comments) and stops the measured FALSE REJECTION (a correct body
-    // mentioning a retired identifier in a comment) — and the behavioural
-    // proof of the property is the EXECUTION proof in
-    // `tests/integration/phase4-s7-installment-fact-db.test.ts`, not this.
+    // THE RATCHET IS NO LONGER A SUBSTRING TEST AT ALL, and this is where the
+    // change lands (`TL-P4-COORD-R46`, extended by `TL-P4-COORD-R50` ordered
+    // item 4). The previous version of this law pinned
+    // `c.code LIKE '%visible_schedule%'` and friends — a comment-stripped
+    // `prosrc` search — and the round-11 challenger defeated the stripped
+    // version too, with no comment and no dead code: a VARIABLE RENAME. The
+    // binding law is that a `LIKE` cannot establish a property of code and a
+    // `NOT LIKE` cannot establish the ABSENCE of one, because an identifier is
+    // also a string, and no amount of stripping repairs that.
     //
-    // THE STRIPPER MAY NOT CONTAIN `--`, `/*` OR `*/` IN A LITERAL, and that
-    // is not a style note: `sqlSchemaOnly` above is line-based and
-    // quote-blind, so one `--` inside a string literal of the specification
-    // truncates the line, unbalances the quote, and makes `sqlCodeOnly`
-    // return newlines for the whole file. Measured, on this very law. The
-    // character classes are what keep it honest in both directions.
-    expect(code).toContain("c.code LIKE '%visible_schedule%'");
-    expect(code).toContain("c.code LIKE '%declared_total%'");
-    expect(code).toContain("c.code NOT LIKE '%NOT EXISTS (SELECT 1 FROM public.installments%'");
-    expect(code).toContain("'[-][-][^\\n]*'");
-    expect(code).toContain("'[/][*].*?[*][/]'");
+    // So the apply-time instrument is now a BODY IDENTITY over catalogue DATA:
+    // `sha256(convert_to(p.prosrc, 'UTF8'))` compared against the digest this
+    // migration ships, for each of the five routines. A renamed body has a
+    // different digest whatever it is named, and the property the old ratchet
+    // was reaching for is proved BY EXECUTION in
+    // `tests/integration/phase4-s7-installment-fact-db.test.ts` §F6 and
+    // `tests/integration/phase4-s7-installment-concurrency-db.test.ts` §C.
+    // H7 below holds the digests current; this law holds the SHAPE present.
+    expect(code).toContain("pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8'))");
+    expect(code).toContain('c_bodies');
+    expect(code, 'a substring ratchet came back').not.toMatch(/\bcode\s+(NOT\s+)?LIKE\s+'%/);
+    expect(code, 'a raw prosrc substring law came back').not.toMatch(/\bprosrc\s+(NOT\s+)?LIKE\s+'/);
 
     // AND THE COMPLETENESS THE TEST RESTS ON IS DECLARED, not assumed: every
     // hidden row moves the sum only because no instalment may be worth zero.
@@ -2929,7 +3068,26 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // «derived true, recomputed false» is the blind one and keeps
     // `plan_fact_blind`. Asserted as the two branches, because a single
     // branch is exactly what this law is now against.
-    expect(syncBody).toMatch(/SELECT EXISTS \(SELECT 1 FROM public\.installment_plans p[\s\S]{0,200}INTO v_state;/);
+    // AND IT IS A `count(*)`, NOT AN `EXISTS` (`TL-P4-COORD-R50` ordered item
+    // 1). `EXISTS` collapses ONE active plan and TWO into one answer, and «at
+    // most one» is precisely the premise that makes the derivation above
+    // total — so for eleven rounds the writer could not tell the state its
+    // premise forbids from the state its premise asserts, and with the index
+    // not enforcing two concurrent writers committed and the reader served
+    // the no-plan figure in silence. The count can tell them apart, and it is
+    // taken AFTER the invoice row is locked, because a count taken before the
+    // lock is a count taken on the snapshot the statement started with.
+    expect(syncBody).toMatch(/SELECT pg_catalog\.count\(\*\) INTO v_active[\s\S]{0,300}AND p\.status = 'active';/);
+    expect(syncBody).toMatch(/v_state := \(v_active > 0\);/);
+    expect(syncBody, 'the blindable EXISTS came back').not.toMatch(
+      /SELECT EXISTS \(SELECT 1 FROM public\.installment_plans p[\s\S]{0,200}INTO v_state;/,
+    );
+    // THE LOCK PRECEDES THE COUNT, in this body, in this order.
+    const lockAt = syncBody.indexOf('FOR NO KEY UPDATE');
+    const countAt = syncBody.indexOf('SELECT pg_catalog.count(*) INTO v_active');
+    expect(lockAt, 'the sync takes no invoice row lock of its own').toBeGreaterThan(-1);
+    expect(lockAt, 'the count precedes the lock, so it reads the pre-wait snapshot').toBeLessThan(countAt);
+    expect(syncBody).toContain('installment.plan_active_unbounded');
     expect(syncBody, 'the two directions are back under one name').not.toMatch(/IF v_state IS DISTINCT FROM v_value THEN/);
     expect(syncBody).toMatch(/IF v_state AND NOT v_value THEN/);
     expect(syncBody).toMatch(/IF v_value AND NOT v_state THEN/);
@@ -2962,27 +3120,52 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(verifyBody).not.toContain('v_asserted');
     expect(verifyBody).toContain('installment.plan_fact_desynchronised');
 
-    // THE RATCHET for the write side, OVER COMMENT-STRIPPED CODE
-    // (`TL-P4-COORD-R46`, F-1). These four tests were the ones the round-10
-    // challenger satisfied with `NEW.status`, `OLD.status` and
-    // `plan_fact_blind` appearing only INSIDE COMMENTS of an otherwise round-9
-    // body — the law said OK and a blinded writer then committed a wrong fact
-    // — and they also false-rejected a correct body that merely mentioned
-    // `v_asserted` in a comment. Stripping the comments first closes both.
-    // It is still a presence-of-string test and the specification says so in
-    // terms; the law that actually establishes the property is the execution
-    // proof in `tests/integration/phase4-s7-installment-fact-db.test.ts`,
-    // whose §F1-b, §F1-c, §F1-c′ and §F5 plant the pre-repair bodies and
-    // require the refusal. A body with its tokens in comments IS round 9's
-    // body to that suite, because the suite RUNS it.
-    expect(code).toContain("c.code LIKE '%plan_fact_blind%'");
-    expect(code).toContain("c.code LIKE '%NEW.status%'");
-    expect(code).toContain("c.code LIKE '%OLD.status%'");
-    expect(code).toContain("c.code NOT LIKE '%v_asserted%'");
-    expect(code, 'a raw prosrc substring law is back on the write side').not.toContain("p.prosrc LIKE '%NEW.status%'");
-    // AND THE SPECIFICATION SAYS WHAT THE TEST IS, in the refusal a future
-    // applier reads, so the limit travels with the law.
-    expect(SPEC).toContain('This is a PRESENCE-OF-STRING test and nothing more');
+    // THE RATCHET FOR THE WRITE SIDE IS NO LONGER A SUBSTRING TEST
+    // (`TL-P4-COORD-R46` F-1, extended by `TL-P4-COORD-R50` ordered item 4).
+    //
+    // THE HISTORY, BECAUSE IT IS THE ARGUMENT. Round 10's challenger
+    // satisfied the raw version of these four tests with `NEW.status`,
+    // `OLD.status` and `plan_fact_blind` appearing only INSIDE COMMENTS of an
+    // otherwise round-9 body. Round 11 stripped the comments first — and was
+    // then defeated AGAIN, with no comment and no dead code at all: a
+    // VARIABLE RENAME (`v_asserted` to `v_floor`, plus one live `OLD.status`
+    // assignment) installs round 9's behaviour and satisfies every one of
+    // these four. That is not a gap to patch; it is the ruling: an identifier
+    // is a string, so a `LIKE` establishes nothing about code and a
+    // `NOT LIKE` establishes nothing about its absence, under any amount of
+    // stripping.
+    //
+    // THE TWO HONEST INSTRUMENTS REPLACE IT, and both are now in the tree:
+    //   * CATALOGUE DATA — `sha256(convert_to(p.prosrc, 'UTF8'))` against the
+    //     digest `c_bodies` ships, which no rename survives (§C1 of
+    //     `tests/integration/phase4-s7-installment-concurrency-db.test.ts`
+    //     plants the renamed body and measures the refusal);
+    //   * EXECUTION — §F1-b, §F1-c, §F1-c′, §F5 and the new §F6 of
+    //     `tests/integration/phase4-s7-installment-fact-db.test.ts`, which
+    //     INSTALL the pre-repair bodies, including the renamed one, and
+    //     require the refusal from the running database.
+    // So what this law now asserts is that the substring instrument is GONE
+    // and the digest instrument is present.
+    expect(code, 'a code-substring ratchet came back on the write side').not.toMatch(
+      /\bcode\s+(NOT\s+)?LIKE\s+'%/,
+    );
+    // SCOPED TO THE OPERATOR WITH ITS PATTERN, NOT TO THE WORDS -- the EIGHTH
+    // time in this slice that explaining a removal has tripped the test for
+    // the removal, and measured here rather than guessed: the digest law's own
+    // `RAISE` message explains, in prose inside a dollar-quoted body that
+    // `sqlCodeOnly` correctly passes through, that «a prosrc LIKE cannot
+    // establish a property of code». A bare `/prosrc LIKE/` therefore reds on
+    // the very statement that enforces the absence. A real substring test is
+    // `prosrc LIKE '...'` -- the operator followed by a LITERAL -- so that is
+    // what is forbidden, and the explanation may say the words.
+    expect(code, 'a raw prosrc substring law is back on the write side').not.toMatch(
+      /\bprosrc\s+(NOT\s+)?LIKE\s+'/,
+    );
+    expect(code).toContain("pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8'))");
+    expect(code).toContain("['public.installment_plan_fact_sync()',");
+    // AND THE SPECIFICATION SAYS WHAT THE INSTRUMENT IS AND WHAT IT COSTS, in
+    // the refusal a future applier reads, so the limit travels with the law.
+    expect(SPEC).toContain('THE DIGEST COUPLING');
 
     // AND THE ENUMERATION `R41` ORDERED IS IN THE FILE, with the one relation
     // whose invisibility is NOT observable named as such rather than given an
@@ -3031,8 +3214,17 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(verifierBody).not.toContain('(e) the plan tenant');
     expect(verifierBody).not.toContain('v_plan_tenant');
     expect(verifierBody).not.toContain('v_tenant_mismatch');
-    // ...and the apply-time block refuses a tree where any of them comes back.
-    expect(code).toContain("p.prosrc LIKE '%(e) the plan tenant%'");
+    // ...and the apply-time block refuses a tree where any of them comes back
+    // — BY BODY IDENTITY and no longer by `p.prosrc LIKE '%(e) the plan
+    // tenant%'`, which `TL-P4-COORD-R50` ordered item 4 retires: a `NOT LIKE`
+    // cannot establish the absence of a property, since the absent thing can
+    // be spelled another way, and a `LIKE` for the ratchet's own token can be
+    // satisfied by a body that does nothing. The digest of
+    // `installment_schedule_verify()` is pinned in `c_bodies`, so ANY body
+    // other than the one shipped here — including one that brings the retired
+    // guard back under any spelling — refuses the migration.
+    expect(code).toContain("['public.installment_schedule_verify()',");
+    expect(code).toContain("pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8'))");
   });
 
   it('H6 THE ORDER LAW IS EXECUTABLE — the verifier is DEFINED ABOVE the triggers that execute it', () => {
@@ -3208,5 +3400,117 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(dml.length).toBe(6);
     expect(dml.map((m) => m[1])).toContain('TRIGGER');
     expect(runtime.map((m) => m[1])).toContain('public');
+  });
+
+  /**
+   * ── THE BODY DIGESTS, CHECKED IN BOTH DIRECTIONS
+   *    (`TL-P4-COORD-R46`'s structural ruling; `TL-P4-COORD-R50` §5 and
+   *     ordered item 4) ─────────────────────────────────────────────────────
+   *
+   * The end-state block's `c_bodies` array pins `sha256` of each routine's
+   * dollar-quoted body. The CONSTANTS live in the file and the SUBJECT is
+   * what a cluster installs, which is what makes the comparison a law rather
+   * than the file agreeing with itself — but it is also a maintenance
+   * coupling, and a coupling whose only alarm is a failed deployment is a
+   * trap. This is the alarm. It computes the digests from the file and
+   * requires the declared constants to equal them, so a body edited without
+   * its constant reds HERE.
+   */
+  it('H7 THE FIVE BODY DIGESTS ARE CURRENT, and no prosrc substring test is left behind', () => {
+    const computed = bodyDigests(SPEC);
+    const declared = declaredBodyDigests(SPEC);
+    expect(declared.map((d) => d.signature)).toEqual(computed.map((d) => d.signature));
+    for (const [i, c] of computed.entries()) {
+      // A placeholder that was never filled is the failure mode this catches
+      // first, so it is named rather than left to a hex mismatch.
+      expect(declared[i]?.sha256, `${c.signature}: the end-state block still carries an unfilled placeholder`).toMatch(/^[0-9a-f]{64}$/);
+      expect(declared[i]?.sha256, `${c.signature}: the declared digest is stale — run scripts/guards/p4s7-body-digests.ts`).toBe(c.sha256);
+      // AND THE SLICE IS NON-EMPTY, so a digest of nothing cannot pass.
+      expect(c.length, `${c.signature}: the body sliced to ${c.length} characters`).toBeGreaterThan(1000);
+    }
+    expect(computed).toHaveLength(5);
+
+    // THE RULING'S OTHER HALF: the instruments it forbids are GONE from the
+    // end-state block. The subject is the block's SQL and not its prose — a
+    // line that is a comment is not a law, and the refusal messages quote the
+    // ruling by name — so comment lines and `RAISE` lines are removed before
+    // the search, and the search is for the TEST SYNTAX rather than for the
+    // words.
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    const sql = block
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('--'))
+      .filter((l) => !l.includes('RAISE EXCEPTION') && !l.trimStart().startsWith("'"))
+      .join('\n');
+    expect(sql).not.toMatch(/prosrc\s+(NOT\s+)?LIKE/i);
+    expect(sql).not.toMatch(/\bc?\.?code\s+(NOT\s+)?LIKE/i);
+    // and the digest instrument IS there, named.
+    expect(sql).toContain('pg_catalog.sha256');
+    expect(sql).toContain('c_bodies');
+  });
+
+  /**
+   * ── THE THREE ENFORCEMENT FLAGS AND `tgenabled`, AS CATALOGUE DATA
+   *    (`TL-P4-COORD-R50` ordered items 2 and 3) ──────────────────────────
+   *
+   * All four strings occurred ZERO times in this specification before this
+   * round. Part 9 read every property of the index's DEFINITION and none of
+   * its ENFORCEMENT, so an index left present-but-unenforcing satisfied it
+   * while bounding nothing; and nothing anywhere read whether a trigger
+   * FIRES, so all seven could be disabled with the block still reporting OK.
+   */
+  it('H8 THE END-STATE BLOCK READS THE ENFORCEMENT FLAGS IT NAMES, and the reader reads tgenabled too', () => {
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    const sql = block
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('--'))
+      .filter((l) => !l.includes('RAISE EXCEPTION') && !l.trimStart().startsWith("'"))
+      .join('\n');
+    // the index's three flags, in the SQL and not only in the prose
+    for (const flag of ['indisvalid', 'indisready', 'indislive']) {
+      expect(sql, `the end-state block never reads ${flag}`).toContain(`x.${flag}`);
+    }
+    // `tgenabled` pinned to the one value this file installs — not «not D»,
+    // because `R` (replica only) would make these triggers silent in every
+    // ordinary session, which is the harm with a different letter.
+    expect(sql).toContain("t.tgenabled <> 'O'");
+    expect(sql).not.toMatch(/tgenabled\s*<>\s*'D'/);
+    // and the READ-TIME half is in the projection, which is a different
+    // instrument in a different path: the apply-time block answers once.
+    const sketchCode = sqlCodeOnly(SPEC.slice(SPEC.indexOf('>>> P4S7 PROJECTION SKETCH BEGIN'), SPEC.indexOf('<<< P4S7 PROJECTION SKETCH END')));
+    expect(sketchCode).toContain("t.tgenabled = 'O'");
+    expect(sketchCode).toContain('untrusted_fact');
+    expect(sketchCode).toContain('unbounded_plan');
+  });
+
+  /**
+   * ── THE LOCK ORDER IS DECLARED, AND IT AGREES WITH `P4-AL-41`
+   *    (`TL-P4-COORD-R50` ordered item 5) ─────────────────────────────────
+   *
+   * The slice declared no lock order and took one — plan row, then index
+   * entry, then the invoice row from the sync's `UPDATE`. `P4-AL-41` ranks
+   * `invoices` THIRD and `installment_plans` SIXTH, so every plan write was
+   * taking rank 6 before rank 3, and two transactions creating plans on two
+   * invoices in opposite order deadlocked `40P01`. The order is now taken in
+   * the BEFORE trigger, which is the only point that runs before the plan row
+   * exists, and it is DECLARED in the file.
+   */
+  it('H9 THE LOCK ORDER IS DECLARED AND TAKEN, invoice row first, ascending by id', () => {
+    expect(SPEC).toContain('3a-ter');
+    expect(SPEC).toContain('P4-AL-41');
+    const code = sqlCodeOnly(SPEC);
+    // taken, in the BEFORE trigger's body, on `invoices`, with the ordering
+    expect(code).toMatch(/FROM public\.invoices i\s*\n\s*WHERE i\.business_id = NEW\.business_id AND i\.id = ANY \(v_locks\)\s*\n\s*ORDER BY i\.id\s*\n\s*FOR NO KEY UPDATE/);
+    // `FOR NO KEY UPDATE` and not `FOR UPDATE`: it is the strength a plain
+    // UPDATE of a non-key column takes and it does not block the `FOR KEY
+    // SHARE` an ordinary foreign-key check takes against the same invoice.
+    expect(code).not.toContain('FOR UPDATE;');
+    // and the DECLARED exceptions are declared rather than left to a twelfth
+    // challenger to re-measure: the DELETE arm takes no BEFORE trigger.
+    expect(SPEC).toContain('BEFORE DELETE');
+    // the determinism claim is SCOPED and names the three outcomes it is not
+    for (const token of ['40001', '40P01', 'REPEATABLE READ', 'SERIALIZABLE']) {
+      expect(SPEC, `section 3a-ter does not name ${token}`).toContain(token);
+    }
   });
 });
