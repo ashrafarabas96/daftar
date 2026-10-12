@@ -25,7 +25,7 @@ first (PART 4), a migration number must be allocated by the one Migration Owner
 ## Exact prep SHA
 
 ```
-8fc19042fa7a520006fb073edf0707f7f505aa9a
+e077daa18aba8819180134801ede6d2d16452af4
 ```
 
 Branch: `claude/project-thread-4i752q`
@@ -43,10 +43,10 @@ not live in Git.
 
 | artifact | location | committed | SHA256 |
 |---|---|---|---|
-| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `280cf7f182af34f7557b7aadf6a3ca933cca0f690dd9e5d461dab2c74548ce6c` |
-| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `b06811f15fb9a2da10c536c8c017a5345de45ec7c2a0844c7ae77363e10b6fca` |
-| Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `78d83059aa1014e9bb52f750a17ae59192ec83168a037e1db1dc85d72cae8c76` |
-| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `092e9ef6ae602780d61ed788e1c077b25c76e5bd96e8bb702e3ab783946b63e6` |
+| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `adfa340dcfd4e86eaa4638a39544413faa34da2ec6d66f30a7512b6b77e4a8ed` |
+| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `1f4f850fbbda7c4bd38b930c70116b19a2f5d75629259b320dc71c11be0b9157` |
+| Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
+| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `9114f9b2a981fcf6579181a7b49d64869b494176a4b4aaf26949ecfc6a5ab365` |
 | This manifest | `docs/phase9/P9-HANDOFF-MANIFEST.md` | yes (next commit) | — |
 
 No artifact is referenced by any of the above that does not exist. There are no
