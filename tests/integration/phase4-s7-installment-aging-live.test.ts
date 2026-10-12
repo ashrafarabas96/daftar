@@ -265,8 +265,11 @@ beforeAll(async () => {
   }
   if (specError === null) {
     guardDefinition =
-      (await ownerPool().query<{ def: string }>(`SELECT pg_get_functiondef('installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)'::regprocedure) AS def`)).rows[0]
-        ?.def ?? '';
+      (
+        await ownerPool().query<{ def: string }>(
+          `SELECT pg_get_functiondef('installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)'::regprocedure) AS def`,
+        )
+      ).rows[0]?.def ?? '';
   }
   tenantId =
     (await ownerPool().query<{ t: string }>(`SELECT tenant_id::text AS t FROM invoices WHERE business_id = $1 AND id = $2`, [w.shop.businessId, invoiceId]))
@@ -1132,7 +1135,9 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
         await p.query(guardDefinition);
         await p.query(`ALTER FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) OWNER TO daftar_accounting_internal`);
         await p.query(`REVOKE ALL ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) FROM PUBLIC`);
-        await p.query(`GRANT EXECUTE ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) TO daftar_app, daftar_inventory_internal`);
+        await p.query(
+          `GRANT EXECUTE ON FUNCTION installment_plan_fact_assert(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) TO daftar_app, daftar_inventory_internal`,
+        );
       }
     } finally {
       await p.query(`CREATE POLICY inventory_internal_read ON installment_plans
@@ -1351,7 +1356,11 @@ describe("§G ROW SECURITY, MEASURED AS A NON-SUPERUSER — and C1's negative co
     expect(without.rows[0]?.ok).toBe(true);
     // ...and it refuses on a non-zero count it was TOLD, which is the only
     // input it has.
-    const told = await asRole<{ ok: boolean }>('daftar_app', {}, `SELECT installment_plan_fact_assert(1::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT) AS ok`);
+    const told = await asRole<{ ok: boolean }>(
+      'daftar_app',
+      {},
+      `SELECT installment_plan_fact_assert(1::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT) AS ok`,
+    );
     expect(told.error ?? '', 'it does not refuse the count it is told').toContain('installment.plan_fact_unreadable');
   });
 });
