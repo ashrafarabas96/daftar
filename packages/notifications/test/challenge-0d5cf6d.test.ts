@@ -119,7 +119,11 @@ describe('N-8 — a stop says WHY it stopped, and the policy decides, not the re
 
   it('an ambiguous delivery that runs out of attempts says the limit, and never says it failed', () => {
     const out = classifySend({
-      result: { outcome: 'unknown', reason: 'timeout_after_send' },
+      // `code` is required on an unknown result too: the transport class is
+      // recorded even when the outcome is not known. `vitest` compiles this file
+      // without typechecking it, so the omission was green under `vitest run`
+      // and rc=2 under `tsc --noEmit` — which is why both gates run.
+      result: { outcome: 'unknown', code: 'PROVIDER_TIMEOUT', reason: 'timeout_after_send' },
       providerServerSideIdempotency: true,
       attemptsMade: MAX_ATTEMPTS,
       maxAttempts: MAX_ATTEMPTS,
