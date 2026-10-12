@@ -73,6 +73,35 @@ def main():
     ap.add_argument('--check')
     a = ap.parse_args()
 
+    # ROUND-8 CHALLENGE P2-02: the round-7 remedy tested path ANCESTRY and
+    # called it fixed. It is not the same property. `--repo /tmp` from a pack
+    # that lives UNDER /tmp -- a reviewer's `mktemp -d` clone, a CI runner's
+    # workspace -- has no leading `..`, so the ancestry refusal below cannot
+    # fire; and `git()` never read `returncode` on the `log`/`ls-tree` calls, so
+    # every git answer came back EMPTY and was treated as data. The table then
+    # printed 13 lines instead of 57 -- all 41 base-tree rows gone, including
+    # every frozen migration and the one `.json` whose difference changes a rule
+    # -- and `--check` called the committed block STALE and told the reader to
+    # `--write`, which would have committed the empty table. Word for word the
+    # defect the comment above says was removed: a LOCATION problem printed as a
+    # CONTENT verdict. So repository-ness is REQUIRED, by name, and so is the
+    # presence of both revisions, because a directory can be a git repository
+    # and still know nothing of this history (a decoy clone answers every
+    # `ls-tree` with nothing at all).
+    _gd = git(a.repo, 'rev-parse', '--git-dir')
+    if _gd.returncode != 0:
+        print('CONFIGURATION ERROR: --repo (%s) is not a git repository, so every'
+              ' git answer below would be EMPTY and would be read as "the file is'
+              ' absent". Pass --repo for the repository that contains the pack.'
+              % a.repo, file=sys.stderr)
+        return 2
+    for _rev in (a.base, a.other):
+        if git(a.repo, 'rev-parse', '--verify', '%s^{commit}' % _rev).returncode != 0:
+            print('CONFIGURATION ERROR: --repo (%s) is a git repository but does not'
+                  ' contain %s, so the two trees cannot be compared and every row'
+                  ' would read as absent.' % (a.repo, _rev), file=sys.stderr)
+            return 2
+
     # COORD-DIFF-REVIEW R1 P3-12: only TOP-LEVEL pack documents were scanned, so
     # `proofs/README.md` and every case header were outside the population while
     # the output said "cited files". The walk is recursive now, and the scanned
@@ -141,6 +170,34 @@ def main():
     uniq = lambda xs: sorted(set(xs))
     differ, identical, absent = uniq(differ), uniq(identical), uniq(absent)
     total = len(differ)+len(identical)+len(absent)
+
+    # ROUND-8 CHALLENGE P2-02, second remedy: the row count is GENERATED and was
+    # never MEASURED, which is this pack's own law applied to its own
+    # instrument. An empty or near-empty table is not a result; under any
+    # misconfiguration that survives the refusals above it is the LOUDEST
+    # symptom available, so it is asserted rather than printed.
+    # And a floor DERIVED FROM SOURCE rather than typed (coordinator relay,
+    # round 8): every cited token that exists as a file in the repository's own
+    # working tree MUST have resolved. A typed expected row count would be the
+    # hand-kept list again; the filesystem is an independent witness, and
+    # "the file is right there on disk but git answered nothing" is exactly the
+    # shape of the empty-table defect.
+    floor = [t for t in sorted(hits)
+             if not os.path.isabs(t) and os.path.exists(os.path.join(a.repo, t))]
+    lost = [t for t in floor if t not in resolved]
+    if lost:
+        print('MEASUREMENT INCOMPLETE: %d cited file(s) exist in the working tree of'
+              ' --repo (%s) but resolved to no row — %s. git answered nothing for'
+              ' paths that are present on disk, so the table below would be short'
+              ' and the shortfall would read as "absent at the other tree".'
+              % (len(lost), a.repo, ', '.join('`%s`' % x for x in lost[:6])), file=sys.stderr)
+        return 2
+    if total == 0 or not base_files:
+        print('MEASUREMENT EMPTY: %d cited file(s) resolved against `%s` (%d path(s) tracked'
+              ' there). A generated table with no rows is a misconfiguration, not a finding:'
+              ' it would be committed as the measurement and `--check` would then hold it'
+              ' stable forever.' % (total, a.base, len(base_files)), file=sys.stderr)
+        return 2
 
     import io, contextlib
     buf = io.StringIO()

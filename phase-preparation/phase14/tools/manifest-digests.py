@@ -28,8 +28,18 @@ def main():
     ap.add_argument('--check', action='store_true')
     a = ap.parse_args()
 
+    # ROUND-8 CHALLENGE P3-02: an absent --dir refused by FileNotFoundError
+    # TRACEBACK, and the shared folder is the one input most likely to be absent
+    # in CI -- where a traceback is read as a broken tool, not as a failed gate.
+    # Refuse by name, with the code the sweep expects.
+    for label, path in (('--manifest', a.manifest), ('--dir', a.dir)):
+        if not os.path.exists(path):
+            print('CONFIGURATION ERROR: %s (%s) does not exist, so no digest can be'
+                  ' compared. This is not a stale manifest and must not be read as one.'
+                  % (label, path), file=sys.stderr)
+            return 2
     lines = open(a.manifest, encoding='utf-8').read().split('\n')
-    listed, out, stale = [], [], []
+    listed, out, stale, refused = [], [], [], []
     for ln in lines:
         m = ROW.match(ln)
         if not m:
@@ -42,9 +52,27 @@ def main():
             out.append(ln); continue
         b = open(p,'rb').read()
         h = hashlib.sha256(b).hexdigest()
-        if h != dig or ('%d' % len(b)) != size.replace(',',''):
+        drifted = h != dig or ('%d' % len(b)) != size.replace(',','')
+        if drifted:
             stale.append('%s: row says %s/%s bytes, file is %s/%d bytes'
                          % (name, dig[:12], size, h[:12], len(b)))
+        # ROUND-8 CHALLENGE, pair-drop 4, and its own suggestion: --write
+        # already refuses to ADD a row for a challenge report, but it would
+        # happily RE-SIGN one whose file had been edited -- so tampering with a
+        # reviewer's report and re-running --write turned both prose gates
+        # green. (What caught it was that --manifest is pinned to the pack while
+        # --dir is not, so the shared folder contradicted the re-signed row.
+        # That construction is real protection, but it is a second witness, not
+        # a refusal.) A reviewer's digest is never rewritten here: it is
+        # evidence, and a digest that no longer matches means the FILE changed.
+        # An all-zero digest is an UNSIGNED placeholder for a row just added by
+        # hand -- the first signing of a reviewer's report is not a re-signing.
+        if a.write and drifted and name.startswith('P14-CHALLENGE-') and dig != '0'*64:
+            stale.append('%s: REFUSING to re-sign a challenge report\'s row — the file under'
+                         ' %s no longer matches the digest committed when it was received.'
+                         ' Restore the reviewer\'s file; do not update the row.' % (name, a.dir))
+            refused.append(name)
+            out.append(ln); continue
         out.append('| `%s` | %s | `%s` | %s |' % (name, desc, h, format(len(b),',')))
 
     on_disk = sorted(f for f in os.listdir(a.dir)
@@ -59,7 +87,7 @@ def main():
         open(a.manifest,'w',encoding='utf-8').write('\n'.join(out))
         for s in stale: print('  updated/flagged: %s' % s)
         if unlisted: print('  NOT ADDED (a row is a description, not a digest — write it): %s' % ', '.join(unlisted))
-        return 1 if (unlisted or missing) else 0
+        return 1 if (unlisted or missing or refused) else 0
     if a.check:
         for s in stale: print('  STALE: %s' % s, file=sys.stderr)
         if stale:

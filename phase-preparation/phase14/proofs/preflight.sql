@@ -7,7 +7,7 @@
 -- If any claim here is false the replay stops, so the evidence cannot be
 -- produced on a runtime it misdescribes.
 DO $$
-DECLARE v INT; enc TEXT; coll TEXT; ctype TEXT; r RECORD; bad INT := 0;
+DECLARE v INT; enc TEXT; coll TEXT; ctype TEXT; missing TEXT; r RECORD; bad INT := 0;
 BEGIN
   SELECT current_setting('server_version_num')::INT INTO v;
   IF v < 160000 OR v >= 170000 THEN
@@ -32,10 +32,17 @@ BEGIN
     IF r.rolbypassrls THEN
       RAISE WARNING 'PRINCIPAL CLAIM FALSE: % has BYPASSRLS', r.rolname; bad := bad + 1; END IF;
   END LOOP;
-  SELECT count(*) INTO v FROM pg_roles
-   WHERE rolname IN ('p14_owner','p14_merchant','p14_resolver','p14_worker');
-  IF v <> 4 THEN
-    RAISE EXCEPTION 'PRINCIPAL CLAIM FALSE: % of the 4 roles under test exist — run bootstrap.sql', v; END IF;
+  -- ROUND-8 CHALLENGE P3-04: this assertion counted, so its failure said
+  -- "3 of the 4 roles under test exist" and named NONE of them. The law was
+  -- unaffected -- any absence aborts -- but the red proof could not
+  -- discriminate (renaming p14_merchant satisfied the arm written to prove
+  -- p14_resolver), and the operator reading the refusal was not told which role
+  -- to create. It names them.
+  SELECT count(*), string_agg(m, ', ' ORDER BY m) INTO v, missing
+    FROM unnest(ARRAY['p14_owner','p14_merchant','p14_resolver','p14_worker']) AS m
+   WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = m);
+  IF v <> 0 THEN
+    RAISE EXCEPTION 'PRINCIPAL CLAIM FALSE: % of the 4 roles under test are ABSENT (%) — run bootstrap.sql', v, missing; END IF;
   IF bad > 0 THEN
     RAISE EXCEPTION 'PRINCIPAL CLAIM FALSE: % attribute(s) contradict the evidence — a superuser proves nothing about RLS', bad; END IF;
   RAISE NOTICE 'PRINCIPALS: all 4 roles under test exist, NOSUPERUSER and NOBYPASSRLS';

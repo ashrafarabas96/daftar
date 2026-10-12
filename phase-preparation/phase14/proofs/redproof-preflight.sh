@@ -33,9 +33,33 @@ arm() { # name | setup-sql-as-p14super | db to preflight | teardown | required m
   # Each arm now (1) requires its MUTATION to apply, (2) requires the preflight
   # to abort with the SPECIFIC claim this arm attacks, and (3) requires its
   # REVERT to apply.
+  # ROUND-8 ADDENDUM R8-P3-05, the remedy it proposes: run an IDEMPOTENT
+  # teardown as a PRECONDITION. The arm's own residue from an interrupted run is
+  # the likeliest reason its setup fails, and `DROP DATABASE IF EXISTS` costs
+  # one statement to make the arm re-runnable instead of merely self-reporting.
+  # Only an `IF EXISTS` teardown is safe to run first; a RENAME back is not.
+  case "$teardown" in
+    "DROP DATABASE IF EXISTS "*) psql_as p14super postgres "-c \"$teardown\"" >/dev/null 2>&1 ;;
+  esac
   if [ -n "$setup" ]; then
-    if ! psql_as p14super postgres "-c \"$setup\"" >/dev/null 2>&1; then
-      printf 'FAIL  %-12s the MUTATION did not apply, so nothing was proved (cluster down? role missing?)\n' "$name"
+    # ROUND-8 ADDENDUM: this refusal used to guess — "(cluster down? role
+    # missing?)" — and the ONE cause it is most likely to be met by was not in
+    # the list: a database this script created in an interrupted earlier run is
+    # still there, so CREATE DATABASE fails with "already exists". A message
+    # that suggests two wrong causes and omits the real one costs the reader the
+    # diagnosis the refusal exists to give. So the cluster's own error is
+    # printed, and the leftover is named with the command that clears it.
+    serr=$(psql_as p14super postgres "-c \"$setup\"" 2>&1); src=$?
+    if [ "$src" -ne 0 ]; then
+      printf 'FAIL  %-12s the MUTATION did not apply, so nothing was proved\n' "$name"
+      printf '      psql said: %s\n' "$(printf '%s' "$serr" | grep -m1 -E 'ERROR|FATAL|could not' | cut -c1-130)"
+      case "$serr" in
+        *"already exists"*)
+          printf '      CAUSE: an earlier interrupted run of THIS script left its object behind.\n'
+          printf '      Clear it and re-run: psql -U p14super -d postgres -c "DROP DATABASE IF EXISTS p14wrongcoll" -c "DROP DATABASE IF EXISTS p14wrongenc"\n' ;;
+        *"could not connect"*|*"No such file or directory"*)
+          printf '      CAUSE: no cluster is listening on %s:%s — start it before judging any proof.\n' "$SOCK" "$PORT" ;;
+      esac
       fail=$((fail+1)); return 0
     fi
   fi
@@ -92,12 +116,17 @@ arm superuser \
   "ALTER ROLE p14_merchant NOSUPERUSER" \
   "PRINCIPAL CLAIM FALSE: p14_merchant is SUPERUSER"
 
-# (5) PRINCIPAL — a role under test missing entirely.
+# (5) PRINCIPAL — a role under test missing entirely. ROUND-8 CHALLENGE P3-04:
+# the required message used to be the COUNT ("3 of the 4 roles under test
+# exist"), so renaming ANY of the four satisfied this arm — the challenger
+# renamed p14_merchant and it still printed ok. An arm that cannot tell which
+# role it removed is not a proof about that role. preflight.sql now names the
+# absent ones, and this arm requires its own role BY NAME.
 arm rolecount \
   "ALTER ROLE p14_resolver RENAME TO p14_resolver_x" \
   p14scratch \
   "ALTER ROLE p14_resolver_x RENAME TO p14_resolver" \
-  "PRINCIPAL CLAIM FALSE: 3 of the 4 roles under test exist"
+  "1 of the 4 roles under test are ABSENT (p14_resolver)"
 
 # The VERSION arm is NOT proved here and is not claimed to be: it needs a second
 # cluster of a different major version, which this container does not have. It

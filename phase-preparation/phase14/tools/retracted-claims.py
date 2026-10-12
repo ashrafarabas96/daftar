@@ -51,7 +51,7 @@ def main():
             if n.endswith(('.md', '.yaml')):
                 files.append(os.path.join(root, n))
 
-    bad = 0
+    bad = 0; exempt = 0
     for path in sorted(files):
         base = os.path.basename(path)
         text = open(path, encoding='utf-8', errors='replace').read().split('\n')
@@ -60,6 +60,7 @@ def main():
         # falsifying a review, so they are exempt in code rather than by being
         # listed one at a time.
         if base.startswith('P14-CHALLENGE-'):
+            exempt += 1          # ROUND-8 P3-01: counted separately, not as enforced
             continue
         for claim, allowed, why in claims:
             if base in allowed:
@@ -72,8 +73,14 @@ def main():
                           % (os.path.relpath(path, a.pack), i, claim, why,
                              ', '.join(allowed)), file=sys.stderr)
                     bad += 1
-    print('%d retracted claim(s) enforced across %d pack document(s).'
-          % (len(claims), len(files)))
+    # ROUND-8 CHALLENGE P3-01: this line said "enforced across N pack
+    # document(s)" while N counted the files it had just EXEMPTED -- a
+    # population figure that included what it did not measure, which is the
+    # defect round 6 found in the provenance generator, here in the tool written
+    # to fence prose. Enforced and exempt are counted separately.
+    print('%d retracted claim(s) enforced across %d pack document(s); %d challenge report(s)'
+          ' exempt in code (a reviewer\'s words are the record of what was claimed).'
+          % (len(claims), len(files) - exempt, exempt))
     if bad:
         print('%d occurrence(s) of a retracted claim survive outside the files that record the'
               ' retraction. Correct the prose, or add the file to the allowed list ONLY if it'
