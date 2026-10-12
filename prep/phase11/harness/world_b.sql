@@ -27,6 +27,13 @@ SET app.business_id='aaaaaaaa-0000-0000-0000-00000000000a';
 BEGIN;
 INSERT INTO branches (business_id,id,name) VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','7b000000-0000-0000-0000-00000000007b','BR-LOT') ON CONFLICT DO NOTHING;
 INSERT INTO warehouses (business_id,id,branch_id,name) VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','7c000000-0000-0000-0000-00000000007c','7b000000-0000-0000-0000-00000000007b','WH-LOT');
+-- A SECOND warehouse for the same lot-tracked variant, with its own stock
+-- key and NO per-lot cache row, ever. It exists so the scope of the
+-- movement-side conservation check (finding P1-01: a cache that EXISTS for a
+-- key must fold to it; a key with no cache is lawful until the writer
+-- integration lands) has a case of its own rather than resting on the order
+-- the suite happens to run its sections in.
+INSERT INTO warehouses (business_id,id,branch_id,name) VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','7c000000-0000-0000-0000-0000000000c2','7b000000-0000-0000-0000-00000000007b','WH-LOT-2');
 INSERT INTO products (business_id,id,sku,status,base_price_minor,price_currency) VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','7d000000-0000-0000-0000-00000000007d','LOT-P','active',0,'ILS');
 INSERT INTO product_translations (business_id,product_id,locale,name) VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','7d000000-0000-0000-0000-00000000007d','ar','دواء');
 INSERT INTO products (business_id,id,sku,status,base_price_minor,price_currency) VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','7e000000-0000-0000-0000-00000000007e','NOLOT-P','active',0,'ILS');

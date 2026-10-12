@@ -18,6 +18,7 @@ PSQL="/usr/lib/postgresql/16/bin/psql"
 A='aaaaaaaa-0000-0000-0000-00000000000a'; B='bbbbbbbb-0000-0000-0000-00000000000b'
 TA='11111111-1111-1111-1111-111111111111'; TB='22222222-2222-2222-2222-222222222222'
 WH='7c000000-0000-0000-0000-00000000007c'
+WH2='7c000000-0000-0000-0000-0000000000c2'   # the second key, which never gets a cache row
 P_LOT='7d000000-0000-0000-0000-00000000007d'; P_NOLOT='7e000000-0000-0000-0000-00000000007e'
 ACTOR='99999999-0000-0000-0000-000000000099'
 
@@ -53,11 +54,18 @@ INT="SET ROLE daftar_inventory_internal;\n"
 def lots_setup():
     rc,out,err=run(INT+f"""
       INSERT INTO stock_levels (tenant_id,business_id,warehouse_id,variant_id,on_hand,valuation_base_minor,last_stock_seq)
-        VALUES ('{TA}','{A}','{WH}','{V_LOT}',0,0,0),('{TA}','{A}','{WH}','{V_NOLOT}',0,0,0)
+        VALUES ('{TA}','{A}','{WH}','{V_LOT}',0,0,0),('{TA}','{A}','{WH}','{V_NOLOT}',0,0,0),
+               ('{TA}','{A}','{WH2}','{V_LOT}',0,0,0)
         ON CONFLICT DO NOTHING;   -- idempotence: see the note in proofs.py
       INSERT INTO stock_lots (tenant_id,business_id,id,variant_id,lot_code_norm,lot_code_input,expiry_date,received_seq)
         VALUES ('{TA}','{A}','a1000000-0000-0000-0000-0000000000a1','{V_LOT}',catalog_identifier_norm('sku','L-A'),'L-A','2027-01-31',1),
-               ('{TA}','{A}','a2000000-0000-0000-0000-0000000000a2','{V_LOT}',catalog_identifier_norm('sku','L-B'),'L-B','2026-12-31',2)
+               ('{TA}','{A}','a2000000-0000-0000-0000-0000000000a2','{V_LOT}',catalog_identifier_norm('sku','L-B'),'L-B','2026-12-31',2),
+               -- A third lot that NO movement ever names, so the P3 case about
+               -- a correctable receipt typo has a subject that exists in the
+               -- same shape on every run. It is in the setup rather than in
+               -- that case because a case that creates a row another section
+               -- counts makes the other section order-dependent.
+               ('{TA}','{A}','a8000000-0000-0000-0000-0000000000a8','{V_LOT}',catalog_identifier_norm('sku','L-G'),'L-G','2027-03-31',8)
         ON CONFLICT DO NOTHING;
     """)
     if rc!=0:
@@ -66,6 +74,9 @@ lots_setup()
 
 LA='a1000000-0000-0000-0000-0000000000a1'; LB='a2000000-0000-0000-0000-0000000000a2'
 M=lambda n: f"b{n}000000-0000-0000-0000-0000000000b{n}"
+# Two-digit document ids for the challenge-answer section, so the first group
+# stays eight hex characters (M() was written for one digit).
+D=lambda n: f"b{n}00000-0000-0000-0000-0000000000{n}"
 
 # ── The movement comes from the OFFICIAL COMMAND, not from this file ───────
 # The first version of these cases wrote `stock_source_bindings` and
@@ -228,8 +239,9 @@ case("the expiry policy admits exactly one value in this phase",
 case("as daftar_app in business B, business A's lots are invisible",
      f"SELECT count(*)::text FROM stock_lots;", "0", role="daftar_app",
      pre=f"SET app.tenant_id='{TB}'; SET app.business_id='{B}';\n", kind="value")
+# Three: L-A, L-B and the untouched L-G of the setup above.
 case("with business A's own context the same lots ARE visible",
-     f"SELECT count(*)::text FROM stock_lots;", "2", role="daftar_app", kind="value")
+     f"SELECT count(*)::text FROM stock_lots;", "3", role="daftar_app", kind="value")
 case("business A's context with the WRONG tenant sees nothing",
      f"SELECT count(*)::text FROM stock_lots;", "0", role="daftar_app",
      pre=f"SET app.tenant_id='{TB}'; SET app.business_id='{A}';\n", kind="value")
@@ -246,6 +258,136 @@ case("no monetary column exists on any overlay relation (L-P11-02)",
 case("the costing key is untouched: stock_levels still has no column below the variant",
      "SELECT count(*)::text FROM information_schema.columns WHERE table_name='stock_levels' AND column_name='lot_id';",
      "0", kind="value")
+
+# ── 10. THE FIRST INDEPENDENT CHALLENGE OF PACK B, ANSWERED ──────────────
+# Four findings and three notes, verdict REJECT, at b43871b. Each fix gets
+# the red proof the report asks for, and the two P1 cases are the
+# challenger's own attacks rather than restatements of them.
+
+# P1-01. The cache-versus-key comparison existed only on the side that WRITES
+# THE CACHE. The state below is exactly the challenger's: the two cache cases
+# above leave LA=6, LB=4 and the key at 10, every law of the pack satisfied.
+# One more lot-tracked movement through the OFFICIAL command, with its
+# allocation and no cache write, moved the key to 12 against a cache summing
+# to 10 and COMMITTED. It is now refused from the movement side, by the same
+# error name the cache-side trigger uses — one law, two reachable sites.
+case("P1-01 a movement that moves the key away from the per-lot cache is refused AT THE MOVEMENT",
+     txn(adjust(2,V_LOT,D(20))+ov(LA,2)),
+     "inventory.lot_level_conservation_violated")
+# And the scope, which is a limit and not a claim: a key that carries NO
+# cache row is still lawful, because the writer that maintains the cache is
+# the integration of patch request 3.6 and does not exist at this SHA. The
+# case runs on the SECOND warehouse key, which never gets a cache row, so it
+# does not depend on running before the cache cases.
+case("P1-01 and a key with no per-lot cache at all is still lawful (the half that waits for the writer)",
+     txn(adjust(3,V_LOT,D(21),cost=0)+ov(LA,3,var="m",idem=True))
+     .replace(f"'{WH}'", f"'{WH2}'")
+     +f"SELECT (sl.on_hand >= 3)::text FROM stock_levels sl WHERE sl.business_id='{A}' AND sl.warehouse_id='{WH2}' AND sl.variant_id='{V_LOT}';",
+     "true", kind="value")
+
+# And the same refusal evaluated by a NOSUPERUSER NOBYPASSRLS principal at
+# COMMIT, which is what the coordinator's relay requires of every fix in this
+# round: the minting stands in for the server (in production the API mints the
+# assertion out of band, and `daftar_app` holds no EXECUTE on the digest
+# helpers — measured: `permission denied for function inventory_fixed_text`,
+# and widening that grant to make a test pass is exactly what this project
+# forbids), so the command runs as the fixture always ran it and the session
+# then becomes `daftar_app` for the COMMIT, where the deferred law is actually
+# evaluated. Nothing about the law is taken on trust from the superuser run.
+case("P1-01 and the refusal is the same when the COMMIT is judged as daftar_app (NOSUPERUSER NOBYPASSRLS)",
+     f"""BEGIN;
+       DO $pf$ DECLARE m UUID; BEGIN
+         m := fixture_adjust('{D(23)}','{WH}','{V_LOT}',2,0);
+         INSERT INTO stock_lot_movements (tenant_id,business_id,stock_movement_id,warehouse_id,variant_id,lot_id,qty_delta)
+          VALUES ('{TA}','{A}',m,'{WH}','{V_LOT}','{LA}',2);
+       END $pf$;
+       SET LOCAL ROLE daftar_app;
+     COMMIT;""",
+     "inventory.lot_level_conservation_violated")
+
+# P1-02. The deferred check read the movement under RLS and returned silently
+# when it could not see it, so the whole law was skipped. The challenger's
+# attack: write the movement through the official command, then drop to
+# daftar_app and RESET both context settings before COMMIT. Measured at
+# b43871b: rc=0, a committed movement of 7 units belonging to no lot.
+case("P1-02 a COMMIT that cannot read its own movement is REFUSED, not passed",
+     f"""BEGIN;
+       DO $pf$ DECLARE m UUID; BEGIN
+         m := fixture_adjust('{D(22)}','{WH}','{V_LOT}',7,0);
+       END $pf$;
+       SET LOCAL ROLE daftar_app;
+       RESET app.business_id; RESET app.tenant_id;
+     COMMIT;""",
+     "inventory.lot_conservation_unverifiable")
+# The same arm must not fire on the lawful path, or it is a refusal of
+# everything: the happy path above is that case, and this one states it on
+# the committed state rather than on an error string.
+case("P1-02 and the lawful path still commits (the fail-closed arm is not a blanket refusal)",
+     f"SELECT (count(*) > 0)::text FROM stock_lot_movements WHERE business_id='{A}' AND lot_id='{LA}';",
+     "true", kind="value")
+
+# P2-03. The definer fold carried no grant, so EXECUTE was PUBLIC: a role
+# with no privilege of any kind on the overlay read real quantities through
+# it. daftar_reconciler (LOGIN, NOSUPERUSER, NOBYPASSRLS) is the role the
+# challenger used, so the proof is run with the same principal.
+case("P2-03 a role with no overlay privilege cannot read the table directly",
+     f"SELECT count(*) FROM stock_lot_movements;", "permission denied", role="daftar_reconciler")
+case("P2-03 nor through the SECURITY DEFINER fold, which is no longer PUBLIC-executable",
+     f"SELECT * FROM inventory_lot_fold('{A}','{WH}','{V_LOT}','{LA}');",
+     "permission denied", role="daftar_reconciler")
+case("P2-03 and the end state says so from the catalogue, not from this test",
+     "SELECT has_function_privilege('public','inventory_lot_fold(uuid,uuid,uuid,uuid)','EXECUTE')::text;",
+     "false", kind="value")
+
+# P2-04. The fold refused on the business and ANSWERED a confident 0 on the
+# tenant, against a lot that really held 3. Both halves of its scope refuse
+# now, and the positive case proves it still answers inside its scope.
+# As `daftar_app` (LOGIN NOSUPERUSER NOBYPASSRLS), so the answer is measured
+# where row-level security is live rather than where a superuser bypasses it.
+case("P2-04 the fold still answers inside its own scope",
+     f"SELECT (on_hand > 0)::text FROM inventory_lot_fold('{A}','{WH}','{V_LOT}','{LA}');",
+     "true", role="daftar_app", kind="value")
+case("P2-04 with the tenant context dropped it REFUSES instead of answering 0",
+     f"RESET app.tenant_id; SELECT * FROM inventory_lot_fold('{A}','{WH}','{V_LOT}','{LA}');",
+     "inventory.scope_mismatch", role="daftar_app")
+case("P2-04 and with a FOREIGN tenant it refuses too (the lot is not visible, which is not the same as empty)",
+     f"SELECT * FROM inventory_lot_fold('{A}','{WH}','{V_LOT}','{LA}');",
+     "inventory.scope_mismatch", role="daftar_app", pre=f"SET app.tenant_id='{TB}'; SET app.business_id='{A}';")
+
+# P3. A lot's dates and receipt order were freely rewritable, which makes a
+# refusal policy over an expiry date weaker than it reads.
+# These four run as the OWNER (`postgres` here, `daftar_migrator` in the
+# deploy line) and not as the inventory principal, and the reason is itself a
+# measurement: no runtime role holds UPDATE on `stock_lots` at this SHA —
+# the internal principal has SELECT and INSERT on the overlay and UPDATE only
+# on the cache's two columns — so an attempt as that role is refused by the
+# GRANT and never reaches the guard. The guard therefore has to bind whoever
+# CAN write, the owner included, exactly as the append-only law does. The
+# merchant-facing correction path needs a grant that does not exist yet, and
+# the guard is what that grant will be safe against.
+case("P3 a lot that movements name cannot have its expiry date rewritten (the guard binds the OWNER)",
+     f"UPDATE stock_lots SET expiry_date='2099-01-01' WHERE business_id='{A}' AND id='{LA}';",
+     "inventory.lot_facts_frozen")
+case("P3 nor its receipt order, which the picker's index orders by",
+     f"UPDATE stock_lots SET received_seq=99 WHERE business_id='{A}' AND id='{LA}';",
+     "inventory.lot_facts_frozen")
+case("P3 and the inventory principal cannot rewrite a lot fact at all, by the grant",
+     INT+f"UPDATE stock_lots SET expiry_date='2099-01-01' WHERE business_id='{A}' AND id='{LA}';",
+     "permission denied")
+# The lot this case corrects is created by `world_b.sql` and not here: a case
+# that CREATES a row another section counts makes that other section's
+# expected number depend on the order the suite runs in, which is the defect
+# the Pack A round paid for twice.
+case("P3 but a lot no movement names is still correctable, because a receipt typo is real",
+     f"UPDATE stock_lots SET expiry_date='2027-04-30' WHERE business_id='{A}' AND id='a8000000-0000-0000-0000-0000000000a8';"
+     +f"SELECT expiry_date::text FROM stock_lots WHERE business_id='{A}' AND id='a8000000-0000-0000-0000-0000000000a8';"
+     +f"UPDATE stock_lots SET expiry_date='2027-03-31' WHERE business_id='{A}' AND id='a8000000-0000-0000-0000-0000000000a8';",
+     "2027-04-30", kind="value")
+case("P3 and the status of a lot is NOT a fact of the goods: a quarantine is still allowed",
+     f"UPDATE stock_lots SET status='blocked' WHERE business_id='{A}' AND id='{LA}';"
+     +f"UPDATE stock_lots SET status='active' WHERE business_id='{A}' AND id='{LA}';"
+     +f"SELECT status FROM stock_lots WHERE business_id='{A}' AND id='{LA}';",
+     "active", kind="value")
 
 w=max(len(c[0]) for c in cases); v=max(len(c[1]) for c in cases)
 print(f"{'case':<{w}} {'verdict':<{v}} detail")

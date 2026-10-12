@@ -232,13 +232,17 @@ LANGUAGE plpgsql SECURITY INVOKER
 SET search_path = pg_catalog, public, pg_temp
 AS $$
 DECLARE
-  v_business UUID;
-  v_movement UUID;
-  v_tracked  BOOLEAN;
-  v_qty      NUMERIC;
-  v_sum      NUMERIC;
-  v_rows     BIGINT;
-  v_bad_sign BIGINT;
+  v_business  UUID;
+  v_movement  UUID;
+  v_warehouse UUID;
+  v_variant   UUID;
+  v_tracked   BOOLEAN;
+  v_qty       NUMERIC;
+  v_sum       NUMERIC;
+  v_key       NUMERIC;
+  v_cache     NUMERIC;
+  v_rows      BIGINT;
+  v_bad_sign  BIGINT;
 BEGIN
   -- One function for both installations: the subject is the movement, and
   -- which table fired decides only where its id is read from.
@@ -248,19 +252,65 @@ BEGIN
     v_business := NEW.business_id; v_movement := NEW.stock_movement_id;
   END IF;
 
+  -- ── FAIL CLOSED, and the comment this replaces was measurably wrong ──
+  -- Finding P1-02 of the first independent challenge. This read is
+  -- row-level-security filtered, and the arm below used to `RETURN NULL`:
+  -- so a COMMIT by a principal or in a context that cannot SEE the movement
+  -- skipped the whole law — missing allocation, sign disagreement and sum
+  -- mismatch alike. Measured: the official command wrote a movement of 7 for
+  -- a lot-tracked variant, the session then dropped to `daftar_app` and
+  -- RESET both context settings, and the COMMIT returned 0 with a committed
+  -- movement of 7 units belonging to no lot.
+  --
+  -- The justification written here was *"the movement was rolled back inside
+  -- this transaction"*, and the challenger measured that it cannot reach this
+  -- arm: PostgreSQL DISCARDS the queued after-trigger events of an aborted
+  -- subtransaction, so a rolled-back INSERT never fires its own constraint
+  -- trigger. Control measured on scratch objects: INSERT + COMMIT fires;
+  -- INSERT inside a savepoint, ROLLBACK TO SAVEPOINT, COMMIT does not fire.
+  -- The arm was therefore not a rollback accommodation — it was an RLS
+  -- escape hatch with a comment on it.
+  --
+  -- This is the project's twice-ruled class (Phase 5's "a deferred check that
+  -- reads under RLS fails open", Phase 13's case 11) and the remedy is the
+  -- settled one: a fail-closed branch, NOT `SECURITY DEFINER` — a definer
+  -- cannot satisfy the RESTRICTIVE `business_isolation` on these relations
+  -- anyway, which Pack A measured this same day. A read that comes back
+  -- empty no longer decides anything: it refuses, naming the fact that the
+  -- law could not be evaluated, which is a different statement from the law
+  -- being broken and says so.
+  --
+  -- No row lock is taken on the movement, and that is measured rather than
+  -- assumed: `SELECT … FOR SHARE` needs UPDATE-class privilege on the
+  -- relation, which every writer of `stock_movements` deliberately lacks
+  -- (the ledger is append-only), so a first version of this read with
+  -- `FOR SHARE` turned the fail-closed refusal into `permission denied for
+  -- table stock_movements` — a refusal from the grant instead of from the
+  -- law. Nothing is lost: the row was inserted by this same transaction and
+  -- the relation is append-only, so there is no concurrent writer to order
+  -- against. The cache side is a different question, answered in its own
+  -- comment below.
   SELECT m.qty_delta INTO v_qty FROM stock_movements m
    WHERE m.business_id = v_business AND m.id = v_movement;
   IF NOT FOUND THEN
-    -- The movement was rolled back inside this transaction; the overlay row
-    -- cannot outlive it, because the four-column FK is immediate.
-    RETURN NULL;
+    RAISE EXCEPTION 'inventory.lot_conservation_unverifiable: movement % cannot be read at COMMIT, so its lot allocation cannot be judged; the law refuses rather than passes', v_movement
+      USING ERRCODE = 'P0001';
   END IF;
 
-  SELECT p.track_lot INTO v_tracked
+  SELECT p.track_lot, m.warehouse_id, m.variant_id INTO v_tracked, v_warehouse, v_variant
     FROM stock_movements m
     JOIN product_variants v ON v.business_id = m.business_id AND v.id = m.variant_id
     JOIN products p ON p.business_id = v.business_id AND p.id = v.product_id
    WHERE m.business_id = v_business AND m.id = v_movement;
+  IF NOT FOUND THEN
+    -- The same fail-closed rule one join further: the movement is visible but
+    -- its product is not, so `track_lot` is unknown and `coalesce(…, false)`
+    -- below would read "not lot-tracked" from an invisible row — an absence
+    -- used as a negative answer, which is the defect class this round is
+    -- about. (The read above is the catalogue's, under the same RLS.)
+    RAISE EXCEPTION 'inventory.lot_conservation_unverifiable: the product of movement % cannot be read at COMMIT, so whether it is lot-tracked cannot be judged', v_movement
+      USING ERRCODE = 'P0001';
+  END IF;
 
   SELECT coalesce(sum(lm.qty_delta), 0), count(*),
          count(*) FILTER (WHERE sign(lm.qty_delta) <> sign(v_qty))
@@ -287,6 +337,62 @@ BEGIN
   IF v_sum <> v_qty THEN
     RAISE EXCEPTION 'inventory.lot_allocation_sum_mismatch: movement % moves % but its lot allocation sums to %', v_movement, v_qty, v_sum
       USING ERRCODE = 'P0001';
+  END IF;
+
+  -- ── C-LOT-03 from the side that MOVES the key (finding P1-01) ─────────
+  -- The cache-versus-key comparison existed only as a constraint trigger on
+  -- `stock_lot_levels`, so it fired only when the CACHE was written. The
+  -- quantity it is compared against lives in `stock_levels`, and nothing
+  -- fired when THAT side moved: a transaction that moved the key and wrote
+  -- no cache row was not a transaction the law examined at all. Measured
+  -- from a state every law in this pack accepts (key 8, cache 8): one more
+  -- lot-tracked movement through the official command, with its allocation
+  -- and no cache write, committed with **the key at 12 against a cache
+  -- summing to 8** — two quantity truths disagreeing by 4, under
+  -- `SET CONSTRAINTS ALL IMMEDIATE`. It was item 6 of this preparation's own
+  -- "what a challenger should attack" list, and it attacked successfully.
+  -- A guard on one write path is not a guard.
+  --
+  -- The comparison is therefore made HERE, where the movement is: this
+  -- trigger has the key in hand and fires on every movement. It raises the
+  -- SAME error as the cache-side trigger, deliberately — one law, one name,
+  -- two reachable sites, rather than a second truth about the same rule.
+  --
+  -- SCOPE, stated rather than widened: the law enforced is *a per-lot cache
+  -- that EXISTS for a key folds to that key's on-hand*. A key with NO cache
+  -- row is still lawful, because the writer that maintains the cache is the
+  -- integration of patch request §3.6 and does not exist at this SHA —
+  -- `C-LOT-03`'s other half ("every lot-tracked key HAS a cache") stays
+  -- `WAITING_FOR_INTEGRATED_SURFACE` and is not claimed. Enforcing it now
+  -- would make this pack demand a writer nothing has written yet, which is
+  -- how a preparation starts inventing the surface it is waiting for.
+  --
+  -- The `stock_levels` row is read WITHOUT a row lock, stated as a limit:
+  -- `FOR SHARE` needs UPDATE-class privilege there too, and the principal a
+  -- COMMIT runs as is not always the writer that holds it. In the official
+  -- path nothing is lost, because `inventory_adjust_stock` holds a stronger
+  -- lock on that very row in this same transaction — the lock is already
+  -- held by the time this trigger fires. What is NOT proved by that is the
+  -- case where the cache is written by one transaction while another moves
+  -- the key: the cache writer is the integration that does not exist yet, so
+  -- that race has no second party to run against at this SHA. It is carried
+  -- as `UNMEASURED` in the laws document rather than reasoned away here, and
+  -- the lock order belongs with the writer when it lands.
+  PERFORM 1 FROM stock_lot_levels ll
+   WHERE ll.business_id = v_business AND ll.warehouse_id = v_warehouse AND ll.variant_id = v_variant;
+  IF FOUND THEN
+    SELECT sl.on_hand INTO v_key FROM stock_levels sl
+     WHERE sl.business_id = v_business AND sl.warehouse_id = v_warehouse AND sl.variant_id = v_variant;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'inventory.lot_conservation_unverifiable: the stock key of movement % cannot be read at COMMIT, so the per-lot cache cannot be judged against it', v_movement
+        USING ERRCODE = 'P0001';
+    END IF;
+    SELECT coalesce(sum(ll.on_hand), 0) INTO v_cache FROM stock_lot_levels ll
+     WHERE ll.business_id = v_business AND ll.warehouse_id = v_warehouse AND ll.variant_id = v_variant;
+    IF v_cache <> v_key THEN
+      RAISE EXCEPTION 'inventory.lot_level_conservation_violated: per-lot on-hand sums to % but the stock key holds % after movement %', v_cache, v_key, v_movement
+        USING ERRCODE = 'P0001';
+    END IF;
   END IF;
   RETURN NULL;
 END; $$;
@@ -348,6 +454,33 @@ BEGIN
      OR p_business_id IS DISTINCT FROM nullif(current_setting('app.business_id', true), '')::uuid THEN
     RAISE EXCEPTION 'inventory.scope_mismatch: the stock key is not in the transaction''s business' USING ERRCODE = 'P0001';
   END IF;
+  -- Finding P2-04: the fold refused on the business and ANSWERED on the
+  -- tenant. With the right business and the tenant context dropped or
+  -- foreign, row-level security filtered every row and the fold returned a
+  -- confident `0` — measured against a lot that really held 3.0000. For a
+  -- picker or an availability page `0` means "this lot is empty", and this
+  -- project's standing lesson is that an RLS-hidden zero is never proof of
+  -- absence. A function that refuses on one half of its scope and answers on
+  -- the other is the inconsistency; the tenant half is now explicit, and it
+  -- is checked here rather than left to RLS precisely because RLS answers by
+  -- hiding rows and this function's answer is a NUMBER.
+  --
+  -- Measured by the challenger, and worth keeping: the frozen
+  -- `inventory_stock_fold` does NOT behave this way — it answers with the
+  -- tenant dropped, because the core relations carry a permissive
+  -- `*_internal_read` policy for the principal it is reached through. The
+  -- silent zero was this pack's own, not inherited.
+  IF nullif(current_setting('app.tenant_id', true), '') IS NULL THEN
+    RAISE EXCEPTION 'inventory.scope_mismatch: the transaction has no tenant context, so a per-lot quantity cannot be answered' USING ERRCODE = 'P0001';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM stock_lots l
+                  WHERE l.business_id = p_business_id AND l.id = p_lot_id AND l.variant_id = p_variant_id) THEN
+    -- The lot is not visible to this caller: either it does not exist or the
+    -- caller's tenant is not its tenant. Both are a refusal rather than a
+    -- zero, for the same reason — a sum over rows nobody can see is not a
+    -- measurement of anything.
+    RAISE EXCEPTION 'inventory.scope_mismatch: lot % of this variant is not visible in the transaction''s scope, so its quantity is not answered as zero', p_lot_id USING ERRCODE = 'P0001';
+  END IF;
 
   RETURN QUERY
   SELECT coalesce(sum(lm.qty_delta), 0)::NUMERIC,
@@ -358,6 +491,64 @@ BEGIN
    WHERE lm.business_id = p_business_id AND lm.warehouse_id = p_warehouse_id
      AND lm.variant_id = p_variant_id AND lm.lot_id = p_lot_id;
 END; $$;
+
+-- Finding P2-03: this function is `SECURITY DEFINER`, is owned by
+-- `daftar_migrator` (which owns every relation in the pack), and carried NO
+-- grant of its own — so `EXECUTE` was PUBLIC by default. Measured as
+-- `daftar_reconciler`, a role with no privilege of any kind on the overlay:
+-- a direct `SELECT` on `stock_lot_movements` was refused "permission denied",
+-- and the same quantity came back through this function. The frozen twin it
+-- is modelled on does not have that shape: `inventory_stock_fold` is owned by
+-- `daftar_inventory_internal` and its ACL names that role explicitly. Row-level
+-- security still scoped the read, so this was a GRANT boundary and not a
+-- tenant boundary — and a definer function owned by the tables' owner is
+-- exactly the object whose reach has to be stated. Stated here, and asserted
+-- over `proacl` in the end-state block so it cannot drift.
+REVOKE EXECUTE ON FUNCTION inventory_lot_fold(UUID, UUID, UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION inventory_lot_fold(UUID, UUID, UUID, UUID) TO daftar_inventory_internal;
+GRANT EXECUTE ON FUNCTION inventory_lot_fold(UUID, UUID, UUID, UUID) TO daftar_app;
+
+-- ─── 3.8 lot FACTS are not freely rewritable (P3 of the challenge) ────────
+-- `expiry_policy` admits only `refuse`, and a policy of refusal over a
+-- rewritable date is weaker than it reads: measured,
+-- `UPDATE stock_lots SET expiry_date = '2099-01-01'` on an expired lot
+-- returned rc=0, and `received_seq` — which the picker's index orders by —
+-- deserved the same question. Nothing in the pack CLAIMED these were
+-- immutable, so this is a gap in the law set rather than a broken law, and
+-- it is closed in the direction the pack already chose for a mistyped
+-- variant combination: correctable while nothing depends on it, frozen once
+-- history does. A receipt typo is real and must be fixable; a lot whose
+-- movements exist is a thing the ledger has already spoken about.
+CREATE FUNCTION stock_lots_10_facts_frozen_once_moved() RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+BEGIN
+  IF NEW.expiry_date IS NOT DISTINCT FROM OLD.expiry_date
+     AND NEW.produced_on IS NOT DISTINCT FROM OLD.produced_on
+     AND NEW.received_seq IS NOT DISTINCT FROM OLD.received_seq
+     AND NEW.lot_code_norm IS NOT DISTINCT FROM OLD.lot_code_norm THEN
+    RETURN NEW;
+  END IF;
+  -- The same fail-closed discipline as the conservation trigger: this read
+  -- is RLS-filtered, and an empty read here would license the rewrite. The
+  -- ledger is append-only, so a lot that any movement names is frozen; the
+  -- read is of the overlay the pack owns.
+  -- Plain read, for the same measured reason as the conservation trigger:
+  -- the overlay is append-only and no writer holds UPDATE-class privilege on
+  -- it, so `FOR SHARE` would answer `permission denied` instead of the law.
+  PERFORM 1 FROM stock_lot_movements lm
+   WHERE lm.business_id = OLD.business_id AND lm.lot_id = OLD.id;
+  IF FOUND THEN
+    RAISE EXCEPTION 'inventory.lot_facts_frozen: lot % is named by movements, so its code, dates and receipt order are facts the ledger has already recorded; quarantine it (status blocked) or receive a new lot', OLD.id
+      USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END; $$;
+
+CREATE TRIGGER stock_lots_10_facts_frozen_once_moved
+  BEFORE UPDATE OF expiry_date, produced_on, received_seq, lot_code_norm, lot_code_input ON stock_lots
+  FOR EACH ROW EXECUTE FUNCTION stock_lots_10_facts_frozen_once_moved();
 
 -- ─── RLS: the inventory family's shape, measured not assumed ───────────────
 -- `tenant_id` denormalized with the composite FK, the restrictive
@@ -477,5 +668,36 @@ BEGIN
      AND pg_get_expr(p.polqual, p.polrelid) = 'true';
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'P11 end-state: a blanket permissive policy applies to PUBLIC, which switches tenant isolation off for SELECT: %', bad; END IF;
 
-  RAISE NOTICE 'P11 PACK B end-state assertion passed: 12 checks';
+  -- Finding P2-03: the definer fold's own reach, asserted so it cannot drift
+  -- back to the default. PUBLIC must hold no EXECUTE on it, and the two
+  -- principals the convention names must hold one.
+  IF has_function_privilege('public', 'inventory_lot_fold(uuid,uuid,uuid,uuid)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'P11 end-state: PUBLIC may EXECUTE the SECURITY DEFINER fold, so a role with no privilege on the overlay reads quantities through it';
+  END IF;
+  IF NOT (has_function_privilege('daftar_inventory_internal', 'inventory_lot_fold(uuid,uuid,uuid,uuid)', 'EXECUTE')
+          AND has_function_privilege('daftar_app', 'inventory_lot_fold(uuid,uuid,uuid,uuid)', 'EXECUTE')) THEN
+    RAISE EXCEPTION 'P11 end-state: the fold is not executable by the principals that need it';
+  END IF;
+
+  -- Finding P1-01: the cache-versus-key comparison must be reachable from the
+  -- side that MOVES the key, not only from the side that writes the cache.
+  -- Asserted on the function's own text, because the defect was that one of
+  -- two sites existed: a future edit that removes the comparison from the
+  -- movement path would leave the other trigger in place and the hole open.
+  IF position('lot_level_conservation_violated' in
+              pg_get_functiondef('stock_lot_movement_conservation()'::regprocedure)) = 0 THEN
+    RAISE EXCEPTION 'P11 end-state: the movement-side conservation trigger no longer compares the per-lot cache with the stock key';
+  END IF;
+  -- Finding P1-02: and it must FAIL CLOSED when it cannot read the movement.
+  IF position('lot_conservation_unverifiable' in
+              pg_get_functiondef('stock_lot_movement_conservation()'::regprocedure)) = 0 THEN
+    RAISE EXCEPTION 'P11 end-state: the conservation trigger has no fail-closed arm, so a COMMIT that cannot see its movement would skip the law';
+  END IF;
+
+  -- P3: lot facts are frozen once the ledger names the lot
+  SELECT count(*) INTO n FROM pg_trigger
+   WHERE tgrelid='stock_lots'::regclass AND tgname='stock_lots_10_facts_frozen_once_moved';
+  IF n <> 1 THEN RAISE EXCEPTION 'P11 end-state: a lot''s dates and receipt order are rewritable after it has movements'; END IF;
+
+  RAISE NOTICE 'P11 PACK B end-state assertion passed: 17 checks';
 END $$;
