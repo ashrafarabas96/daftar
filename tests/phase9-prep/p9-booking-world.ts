@@ -15,7 +15,7 @@
  * A spec proven only as `postgres` is proven against a principal no
  * deployment uses.
  */
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { type ScratchDb, createScratchDb, scratchPool } from '../helpers/scratch-db';
 import { BASE_HEAD, BOOTSTRAP_PATCH, loadSpec } from './p9-booking-spec';
 
@@ -274,4 +274,45 @@ export function uuid(n: number): string {
 /** The SQLSTATE of a PostgreSQL error, or `''`. */
 export function sqlState(e: unknown): string {
   return typeof (e as { code?: unknown }).code === 'string' ? (e as { code: string }).code : '';
+}
+
+/**
+ * A LAWFUL RESCHEDULE: both halves, in ONE transaction.
+ *
+ * R-P9-17's deferred check asserts at COMMIT that the two links name each
+ * other, so a successor committed on its own — carrying a backlink nobody
+ * claims yet — is refused with booking.chain_asymmetric, and so is a
+ * predecessor closed on its own. That is the contract this spec's `bookings`
+ * comment and R-P9-08 already stated in prose ("a new row plus a transition
+ * on the old one, in one transaction"); until R-P9-17 nothing enforced it,
+ * and three cases in this suite were writing the halves under autocommit
+ * because nothing stopped them.
+ *
+ * The order inside the transaction does not matter and is NOT fixed here: the
+ * concurrency and multi-resource proofs close the predecessor first (the lock
+ * discipline makes them), these cases insert the successor first, and both
+ * commit. What matters is that the transaction ends with the pair agreeing.
+ */
+export async function reschedule(
+  db: ScratchDb,
+  world: BookingWorld,
+  move: { readonly from: string; readonly to: string; readonly startsAt: string; readonly endsAt: string; readonly reason?: string },
+): Promise<void> {
+  const client = new Client({ connectionString: db.url('postgres') });
+  await client.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(INSERT_BOOKING_WITH_BACKLINK, [
+      ...bookingParams({ world, id: move.to, startsAt: move.startsAt, endsAt: move.endsAt }),
+      move.from,
+    ]);
+    await client.query(
+      `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
+         settled_by_user_id = $2, settle_reason = $4 WHERE business_id = $1 AND id = $5`,
+      [world.businessId, world.userId, move.to, move.reason ?? 'moved', move.from],
+    );
+    await client.query('COMMIT');
+  } finally {
+    await client.end();
+  }
 }

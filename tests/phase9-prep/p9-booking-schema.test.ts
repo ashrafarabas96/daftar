@@ -150,29 +150,46 @@ describe('P9 booking schema — applies as the deployment principal', () => {
     expect(u.rows[0]?.ok).toBe(false);
   });
 
-  it('the one definer routine is owned by the internal principal with a pinned path, and the three raise-only guards are not definers', async () => {
+  it('both definer routines are owned by the internal principal with a pinned path, and the three raise-only guards are not definers', async () => {
     const r = await db.pool.query<{ proname: string; prosecdef: boolean; owner: string; proconfig: string[] | null }>(
       `SELECT p.proname, p.prosecdef, r.rolname AS owner, p.proconfig
          FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
         WHERE p.proname = ANY($1::text[]) ORDER BY p.proname COLLATE "C"`,
-      [['bookings_buffers_match_service', 'bookings_no_delete', 'bookings_transition', 'booking_operations_immutable']],
+      [['bookings_buffers_match_service', 'bookings_chain_symmetric', 'bookings_no_delete', 'bookings_transition', 'booking_operations_immutable']],
     );
     const by = new Map(r.rows.map((x) => [x.proname, x]));
-    expect([...by.keys()].sort()).toEqual(['booking_operations_immutable', 'bookings_buffers_match_service', 'bookings_no_delete', 'bookings_transition']);
-    const definer = by.get('bookings_buffers_match_service');
-    expect(definer?.prosecdef).toBe(true);
-    expect(definer?.owner).toBe('daftar_booking_internal');
-    expect(definer?.proconfig).toEqual(['search_path=pg_catalog, public, pg_temp']);
+    expect([...by.keys()].sort()).toEqual([
+      'booking_operations_immutable',
+      'bookings_buffers_match_service',
+      'bookings_chain_symmetric',
+      'bookings_no_delete',
+      'bookings_transition',
+    ]);
+    // Two definers now, and for the same reason: each READS a relation to
+    // decide, so row security that hid its subject would turn it into a guard
+    // that passes by seeing nothing. The chain guard pairs that with a named
+    // refusal for the counterpart it cannot read (R-P9-17), because the
+    // definer is what stops the blindness and the refusal is what happens if
+    // anything causes it anyway.
+    for (const name of ['bookings_buffers_match_service', 'bookings_chain_symmetric']) {
+      const definer = by.get(name);
+      expect({ name, definer: definer?.prosecdef }).toEqual({ name, definer: true });
+      expect({ name, owner: definer?.owner }).toEqual({ name, owner: 'daftar_booking_internal' });
+      expect({ name, path: definer?.proconfig }).toEqual({ name, path: ['search_path=pg_catalog, public, pg_temp'] });
+    }
     for (const name of ['bookings_no_delete', 'bookings_transition', 'booking_operations_immutable']) {
       expect({ name, definer: by.get(name)?.prosecdef }).toEqual({ name, definer: false });
       expect({ name, path: by.get(name)?.proconfig }).toEqual({ name, path: ['search_path=pg_catalog, public, pg_temp'] });
     }
   });
 
-  it('nobody but the owner may execute the buffer guard', async () => {
-    const r = await db.pool.query<{ role: string }>(
-      `SELECT role FROM unnest($1::text[]) role WHERE has_function_privilege(role, 'bookings_buffers_match_service()', 'EXECUTE')`,
-      [['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_identity', 'daftar_resolver', 'daftar_provisioner', 'daftar_reconciler', 'public']],
+  it('nobody but the owner may execute either definer guard', async () => {
+    const r = await db.pool.query<{ role: string; fn: string }>(
+      `SELECT role, fn FROM unnest($1::text[]) role, unnest($2::text[]) fn WHERE has_function_privilege(role, fn, 'EXECUTE')`,
+      [
+        ['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_identity', 'daftar_resolver', 'daftar_provisioner', 'daftar_reconciler', 'public'],
+        ['bookings_buffers_match_service()', 'bookings_chain_symmetric()'],
+      ],
     );
     expect(r.rows).toEqual([]);
   });
@@ -192,13 +209,22 @@ describe('P9 booking schema — applies as the deployment principal', () => {
     expect(r.rows).toEqual([]);
   });
 
-  it('the deferred buffer guard is a DEFERRABLE INITIALLY DEFERRED constraint trigger', async () => {
-    const r = await db.pool.query<{ tgdeferrable: boolean; tginitdeferred: boolean; tgconstraint: string }>(
-      `SELECT tgdeferrable, tginitdeferred, tgconstraint::text FROM pg_trigger WHERE tgname = 'bookings_buffers_are_the_service_s'`,
+  it('both deferred guards are DEFERRABLE INITIALLY DEFERRED constraint triggers', async () => {
+    // For the chain guard this is not bookkeeping: evaluated per statement it
+    // would refuse the lawful reschedule, whose two halves are symmetric only
+    // once both are written (R-P9-17). A deployment that landed it immediate
+    // would break every reschedule, so the deferral is asserted and not just
+    // the trigger's existence.
+    const r = await db.pool.query<{ tgname: string; tgdeferrable: boolean; tginitdeferred: boolean; tgconstraint: string }>(
+      `SELECT tgname, tgdeferrable, tginitdeferred, tgconstraint::text
+         FROM pg_trigger WHERE tgname = ANY($1::text[]) ORDER BY tgname COLLATE "C"`,
+      [['bookings_buffers_are_the_service_s', 'bookings_chain_agrees']],
     );
-    expect(r.rows[0]?.tgdeferrable).toBe(true);
-    expect(r.rows[0]?.tginitdeferred).toBe(true);
-    expect(r.rows[0]?.tgconstraint).not.toBe('0');
+    expect(r.rows.map((x) => x.tgname)).toEqual(['bookings_buffers_are_the_service_s', 'bookings_chain_agrees']);
+    for (const row of r.rows) {
+      expect({ t: row.tgname, deferrable: row.tgdeferrable, deferred: row.tginitdeferred }).toEqual({ t: row.tgname, deferrable: true, deferred: true });
+      expect({ t: row.tgname, constraint: row.tgconstraint === '0' }).toEqual({ t: row.tgname, constraint: false });
+    }
   });
 
   it('the state contract is CHECKED against the document, not trusted: four mutations each red it by name', () => {

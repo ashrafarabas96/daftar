@@ -347,4 +347,136 @@ describe('P9 bookings — attacked as the real runtime roles, with no superuser'
     ]);
     expect(alive.rows[0]?.n).toBe(1);
   });
+  it('the deferred chain check REFUSES a counterpart it cannot read, rather than passing by seeing nothing (R-P9-17)', async () => {
+    // The one real risk in R-P9-17's remedy, named by the challenger before it
+    // was landed: unlike every other guard on `bookings`, this one READS the
+    // relation it guards. A deferred check that reads a relation and treats "I
+    // found nothing" as "nothing is wrong" falls OPEN under row security — a
+    // principal that cannot see the counterpart row would satisfy the check by
+    // being blind to it. That is P11's ruling, where a trigger's
+    // `NOT FOUND -> RETURN NULL` branch admitted a 7.0000 against a zero
+    // allocation and the rollback justification turned out to be measurably
+    // false; and it is why SECURITY DEFINER is not by itself the answer here.
+    //
+    // So the check names the blindness: `booking.chain_unreadable`. This case
+    // proves it under FORCE row security, as `daftar_booking_internal`, which
+    // is NOBYPASSRLS and is the only principal that holds the DML at all.
+    const window = (h: number): readonly [string, string] => [at(`${h}:00`), at(`${h}:30`)];
+
+    /** The lawful two-statement reschedule, in ONE transaction, as the internal authority. */
+    const rescheduleAsInternal = async (from: string, to: string, h: number): Promise<string> => {
+      const c = new Client({ connectionString: db.url('daftar_migrator') });
+      await c.connect();
+      try {
+        await c.query(`SET ROLE daftar_booking_internal`);
+        await c.query('BEGIN');
+        await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true), set_config('app.bypass_rls', 'false', true)`, [
+          world.tenantId,
+          world.businessId,
+        ]);
+        const [starts, ends] = window(h);
+        try {
+          await c.query(
+            `INSERT INTO bookings (tenant_id, business_id, branch_id, id, kind, resource_id, service_id, customer_id,
+                                   starts_at, ends_at, lead_buffer_minutes, trail_buffer_minutes, blocking_window,
+                                   state, intent_sha256, created_by_user_id, rescheduled_from_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::timestamptz, $11::int, $12::int,
+                     tstzrange($9::timestamptz, $10::timestamptz, '[)'), $13, $14, $15, $16)`,
+            [...bookingParams({ world, id: to, startsAt: starts, endsAt: ends }), from],
+          );
+          await c.query(
+            `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
+               settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
+            [world.businessId, world.userId, to, from],
+          );
+          await c.query('COMMIT');
+          return '';
+        } catch (e) {
+          await c.query('ROLLBACK').catch(() => undefined);
+          return e instanceof Error ? e.message : '';
+        }
+      } finally {
+        await c.end().catch(() => undefined);
+      }
+    };
+
+    /** A standing booking to be rescheduled. Seeded by the superuser, never proven by it. */
+    const seed = async (id: string, h: number): Promise<void> => {
+      const [starts, ends] = window(h);
+      await db.pool.query(
+        `INSERT INTO bookings (tenant_id, business_id, branch_id, id, kind, resource_id, service_id, customer_id,
+                               starts_at, ends_at, lead_buffer_minutes, trail_buffer_minutes, blocking_window,
+                               state, intent_sha256, created_by_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::timestamptz, $11::int, $12::int,
+                 tstzrange($9::timestamptz, $10::timestamptz, '[)'), $13, $14, $15)`,
+        bookingParams({ world, id, startsAt: starts, endsAt: ends }),
+      );
+    };
+
+    const policy = async (): Promise<string> => {
+      const r = await db.pool.query<{ q: string }>(
+        `SELECT qual AS q FROM pg_policies WHERE tablename = 'bookings' AND policyname = 'business_isolation_read'`,
+      );
+      const q = r.rows[0]?.q;
+      if (q === undefined) throw new Error('business_isolation_read is not on bookings');
+      return q;
+    };
+    const original = await policy();
+
+    // CONTROL, first: the internal authority performs a lawful reschedule and
+    // the definer read finds its counterpart. Without this line, the refusal
+    // below would be consistent with the whole mechanism never working.
+    await seed(uuid(3400), 20);
+    expect(await rescheduleAsInternal(uuid(3400), uuid(3401), 21)).toBe('');
+
+    // Now blind the check to ONE row — the successor of the next reschedule —
+    // by narrowing the RESTRICTIVE read policy. Restrictive policies are ANDed,
+    // so this hides the row from every principal including the definer, while
+    // leaving the predecessor's own UPDATE untouched: the write is lawful, the
+    // row is there, and only the check's eyes are gone.
+    const blind = uuid(3403);
+    await seed(uuid(3402), 22);
+    // `ALTER POLICY` is DDL and takes no bind parameters, so the id is
+    // interpolated — and checked against a UUID shape first, because an
+    // unchecked interpolation into a policy expression is how a fixture
+    // quietly rewrites the thing it is measuring.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(blind)) throw new Error(`not a uuid: ${blind}`);
+    await db.pool.query(`ALTER POLICY business_isolation_read ON bookings USING (('${blind}'::uuid IS DISTINCT FROM id) AND (${original}))`);
+    let said = '';
+    let probe: unknown = null;
+    try {
+      said = await rescheduleAsInternal(uuid(3402), blind, 23);
+    } catch (e) {
+      probe = e;
+    }
+    let restoreFailure: unknown = null;
+    try {
+      await db.pool.query(`ALTER POLICY business_isolation_read ON bookings USING (${original})`);
+    } catch (e) {
+      restoreFailure = e;
+    }
+    if (probe !== null) throw probe;
+    if (restoreFailure !== null) throw restoreFailure;
+
+    // The refusal is the BLINDNESS, named — not chain_asymmetric, because the
+    // chain was in fact symmetric; the check simply could not see that it was.
+    expect(said).toContain('booking.chain_unreadable');
+    expect(said).not.toContain('booking.chain_asymmetric');
+    expect(await policy()).toBe(original);
+
+    // Nothing was committed on the blind path, and with its sight restored the
+    // identical reschedule succeeds — so the mutation was the whole cause.
+    const left = await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1 AND id = $2`, [world.businessId, blind]);
+    expect(left.rows[0]?.n).toBe(0);
+    expect(await rescheduleAsInternal(uuid(3402), blind, 23)).toBe('');
+
+    // And no row in this database disagrees with its own chain.
+    const broken = await db.pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM bookings a
+        WHERE a.rescheduled_to_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM bookings c
+                           WHERE c.business_id = a.business_id AND c.id = a.rescheduled_to_id AND c.rescheduled_from_id = a.id)`,
+    );
+    expect(broken.rows[0]?.n).toBe(0);
+  });
 });

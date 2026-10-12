@@ -29,8 +29,9 @@
  * guard is not merely refusing everything.
  */
 import { describe, expect, it } from 'vitest';
+import { Client } from 'pg';
 import type { ScratchDb } from '../helpers/scratch-db';
-import { CUSTOMER, INSERT_BOOKING, INSERT_BOOKING_WITH_BACKLINK, INTENT, type BookingWorld, bookingParams, uuid, withBookingDb } from './p9-booking-world';
+import { CUSTOMER, INSERT_BOOKING, INSERT_BOOKING_WITH_BACKLINK, INTENT, type BookingWorld, bookingParams, reschedule, uuid, withBookingDb } from './p9-booking-world';
 
 /** A quiet June day, far from any transition: this file is not about clocks. */
 const AT = (h: string): string => `2026-06-10T${h}:00:00+00`;
@@ -101,15 +102,11 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
   it('a rescheduled booking’s successor cannot be REPOINTED at a different booking', async () => {
     await withBookingDb('daftar_p9_integrity_2', async (db, world) => {
       await book(db, world, 1, '09', '10');
-      // The real successor, carrying the backlink that makes the pair a chain.
-      await db.pool.query(INSERT_BOOKING_WITH_BACKLINK, [...bookingParams({ world, id: uuid(2), startsAt: AT('11'), endsAt: AT('12') }), uuid(1)]);
+      // The real chain: successor with its backlink, predecessor closed on it,
+      // both in ONE transaction, which is what R-P9-17 requires of a lawful
+      // reschedule and what `reschedule` is for.
+      await reschedule(db, world, { from: uuid(1), to: uuid(2), startsAt: AT('11'), endsAt: AT('12') });
       await book(db, world, 3, '13', '14');
-
-      await db.pool.query(
-        `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
-           settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
-        [world.businessId, world.userId, uuid(2), uuid(1)],
-      );
 
       // AT 51626e1 THIS SUCCEEDED. The challenger's measured output was
       //   [C2] refusal=(none)  successor now = …900000000003  (was …900000000002)
@@ -329,7 +326,7 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       expect(await defOf('bookings_settled_shape_ck')).toBe(settled);
 
       // PROBE 3 — the forward link, behind `bookings_reschedule_shape_ck`.
-      const reschedule = await defOf('bookings_reschedule_shape_ck');
+      const rescheduleDef = await defOf('bookings_reschedule_shape_ck');
       let probe3: unknown = null;
       try {
         await db.pool.query(`ALTER TABLE bookings DROP CONSTRAINT bookings_reschedule_shape_ck`);
@@ -351,8 +348,8 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       } catch (e) {
         probe3 = e;
       }
-      settle(probe3, await restore('bookings_reschedule_shape_ck', reschedule, [uuid(21), uuid(22)]));
-      expect(await defOf('bookings_reschedule_shape_ck')).toBe(reschedule);
+      settle(probe3, await restore('bookings_reschedule_shape_ck', rescheduleDef, [uuid(21), uuid(22)]));
+      expect(await defOf('bookings_reschedule_shape_ck')).toBe(rescheduleDef);
     });
   });
 
@@ -433,12 +430,7 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       );
 
       await book(db, world, 3, '13', '14');
-      await db.pool.query(INSERT_BOOKING_WITH_BACKLINK, [...bookingParams({ world, id: uuid(4), startsAt: AT('15'), endsAt: AT('16') }), uuid(3)]);
-      await db.pool.query(
-        `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
-           settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
-        [world.businessId, world.userId, uuid(4), uuid(3)],
-      );
+      await reschedule(db, world, { from: uuid(3), to: uuid(4), startsAt: AT('15'), endsAt: AT('16') });
 
       const states = await db.pool.query<{ state: string }>(`SELECT state FROM bookings WHERE business_id = $1 AND id = ANY($2::uuid[]) ORDER BY id`, [
         world.businessId,
@@ -553,8 +545,13 @@ describe('P9 — a booking is born standing (R-P9-16, C4-P9-01)', () => {
       // 'booked' with only ONE of them set both sides are false and the CHECK
       // passes — the same measurement that corrected the comment in the (a3)
       // case above (C4-P9-02). Nothing but R-P9-16 refuses this.
+      //
+      // All THREE fields alone, not two: `settled_by_user_id` alone is the
+      // exact shape C4-P9-02's measurement was about, and the fifth pass
+      // noticed it was the one the case set left out (C5-P9-03).
       for (const [at, by, reason] of [
         ['2026-06-10T09:30:00+00', null, null],
+        [null, world.userId, null],
         [null, null, 'born with a reason'],
       ] as const) {
         const said = await refused(db, INSERT_WITH_STATE, [
@@ -583,6 +580,76 @@ describe('P9 — a booking is born standing (R-P9-16, C4-P9-01)', () => {
     });
   });
 
+  it('the STATE clause is load-bearing on its own: a born-terminal row with an EMPTY settlement record (C5-P9-02)', async () => {
+    await withBookingDb('daftar_p9_born_5', async (db, world) => {
+      // The fifth pass measured that deleting the guard's state clause reds
+      // NOTHING in the four cases above: every attack they assert carries a
+      // settlement field or a forward link, so the fields clause refuses them
+      // anyway. The clause is not dead — it is simply unheld, which is the
+      // same thing to a mutation sweep, and the lesson this project has twice
+      // paid for (P5's masking pair, P15's pair-drop).
+      //
+      // The shape it alone refuses is a row born 'completed' carrying no
+      // settlement record at all. `bookings_settled_shape_ck` also refuses it
+      // — for the unrelated reason that the shape disagrees with the state —
+      // so the CHECK is dropped for the duration, exactly as the promoted
+      // probes above do it. That is the only way to see one defence past the
+      // other; a one-at-a-time sweep cannot.
+      const defOf = async (): Promise<string> => {
+        const r = await db.pool.query<{ def: string }>(
+          `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'bookings_settled_shape_ck'`,
+        );
+        const def = r.rows[0]?.def;
+        if (def === undefined) throw new Error('bookings_settled_shape_ck is not on the table');
+        return def;
+      };
+      const def = await defOf();
+
+      let probe: unknown = null;
+      let said = '';
+      try {
+        await db.pool.query(`ALTER TABLE bookings DROP CONSTRAINT bookings_settled_shape_ck`);
+        said = await refused(db, INSERT_WITH_STATE, [
+          world.tenantId,
+          world.businessId,
+          world.branchId,
+          uuid(7),
+          'appointment',
+          world.resourceAId,
+          world.plainServiceId,
+          CUSTOMER,
+          AT('09'),
+          AT('10'),
+          0,
+          0,
+          'completed',
+          INTENT,
+          world.userId,
+          null,
+          null,
+          null,
+          null,
+        ]);
+      } catch (e) {
+        probe = e;
+      }
+      let restoreFailure: unknown = null;
+      try {
+        await db.pool.query(`ALTER TABLE bookings ADD CONSTRAINT bookings_settled_shape_ck ${def}`);
+      } catch (e) {
+        restoreFailure = e;
+      }
+      if (probe !== null) throw probe;
+      if (restoreFailure !== null) throw restoreFailure;
+
+      expect(said).toMatch(/booking\.not_born_closed/);
+      // Nothing was created, and the CHECK is back exactly as it was.
+      const none = await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1`, [world.businessId]);
+      expect(none.rows[0]?.n).toBe(0);
+      expect(await defOf()).toBe(def);
+    });
+  });
+
   it('and a successor is still born carrying its BACKLINK: the guard does not break how a reschedule is recorded', async () => {
     await withBookingDb('daftar_p9_born_4', async (db, world) => {
       // NON-VACUITY, and the one exception R-P9-16 names: `rescheduled_from_id`
@@ -591,12 +658,7 @@ describe('P9 — a booking is born standing (R-P9-16, C4-P9-01)', () => {
       // the INSERT guard refused it too, a reschedule could not be recorded at
       // all. This is the full lawful sequence, end to end.
       await book(db, world, 5, '09', '10');
-      await db.pool.query(INSERT_BOOKING_WITH_BACKLINK, [...bookingParams({ world, id: uuid(6), startsAt: AT('11'), endsAt: AT('12') }), uuid(5)]);
-      await db.pool.query(
-        `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
-           settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
-        [world.businessId, world.userId, uuid(6), uuid(5)],
-      );
+      await reschedule(db, world, { from: uuid(5), to: uuid(6), startsAt: AT('11'), endsAt: AT('12') });
 
       const chain = await db.pool.query<{ fwd: string; back: string; state: string }>(
         `SELECT a.rescheduled_to_id::text AS fwd, b.rescheduled_from_id::text AS back, a.state
@@ -605,6 +667,170 @@ describe('P9 — a booking is born standing (R-P9-16, C4-P9-01)', () => {
         [world.businessId, uuid(5)],
       );
       expect(chain.rows[0]).toEqual({ fwd: uuid(6), back: uuid(5), state: 'rescheduled' });
+    });
+  });
+});
+
+/**
+ * THE RESCHEDULE CHAIN AGREES WITH ITSELF (R-P9-17).
+ *
+ * The fifth independent pass committed four disagreeing chains at `6e339bf`
+ * (C5-P9-01) and the route was the one nothing had looked at. R-P9-15 shut the
+ * REWRITE of the forward link and R-P9-16 shut a row BORN with one; the FIRST
+ * write of that link is the close, and it was never checked for agreement with
+ * the backlink it is supposed to mirror. The challenger's measured output,
+ * before this guard:
+ *
+ *   [H4b] close pointing at a booking with NO backlink: ** NO REFUSAL **
+ *   [H4c] close pointing at a successor whose backlink names a THIRD booking: ** NO REFUSAL **
+ *   [H4]  committed rows — backlink with no forward link: 2 | forward link not matched by a backlink: 2
+ *
+ * These cases are those shapes. They assert the refusal BY NAME — the shape
+ * CHECKs would refuse some neighbouring shapes for an unrelated reason, and a
+ * case asserting only "it failed" would have passed on the wrong mechanism.
+ * The last two prove the law is not simply refusing reschedules: the lawful
+ * pair commits in either internal order, which is also what makes this check
+ * necessarily DEFERRED.
+ */
+describe('P9 — the reschedule chain agrees with itself (R-P9-17, C5-P9-01)', () => {
+  it('a close naming a successor that does not name it back is REFUSED, and nothing commits', async () => {
+    await withBookingDb('daftar_p9_chain_1', async (db, world) => {
+      await book(db, world, 11, '09', '10');
+      await book(db, world, 12, '11', '12');
+
+      // H4b. uuid(12) exists, is standing, and knows nothing about uuid(11):
+      // every shape CHECK is satisfied — state 'rescheduled' with a non-NULL
+      // forward link, a full settlement record, a real booking at the other
+      // end of a real composite FK. Only agreement is missing.
+      const said = await refused(
+        db,
+        `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
+           settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
+        [world.businessId, world.userId, uuid(12), uuid(11)],
+      );
+      expect(said).toMatch(/booking\.chain_asymmetric/);
+
+      // The customer's hour was not given away: uuid(11) is still standing and
+      // uuid(12) is still nobody's successor.
+      const rows = await db.pool.query<{ id: string; state: string; fwd: string | null; back: string | null }>(
+        `SELECT id::text AS id, state, rescheduled_to_id::text AS fwd, rescheduled_from_id::text AS back
+           FROM bookings WHERE business_id = $1 ORDER BY id`,
+        [world.businessId],
+      );
+      expect(rows.rows).toEqual([
+        { id: uuid(11), state: 'booked', fwd: null, back: null },
+        { id: uuid(12), state: 'booked', fwd: null, back: null },
+      ]);
+    });
+  });
+
+  it('a second booking cannot claim a successor that already names its own predecessor', async () => {
+    await withBookingDb('daftar_p9_chain_2', async (db, world) => {
+      // A real chain first: uuid(21) was rescheduled to uuid(22), lawfully.
+      await book(db, world, 21, '09', '10');
+      await reschedule(db, world, { from: uuid(21), to: uuid(22), startsAt: AT('11'), endsAt: AT('12') });
+      await book(db, world, 20, '13', '14');
+
+      // H4c, in the form this schema can actually reach: uuid(20) closes
+      // itself claiming uuid(22) replaced it, while uuid(22) says it replaced
+      // uuid(21). Three rows, two stories. The challenger committed this.
+      const said = await refused(
+        db,
+        `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
+           settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
+        [world.businessId, world.userId, uuid(22), uuid(20)],
+      );
+      expect(said).toMatch(/booking\.chain_asymmetric/);
+
+      // The true chain is untouched and uuid(20) still holds its hour.
+      const chain = await db.pool.query<{ fwd: string | null; back: string | null; state: string }>(
+        `SELECT a.rescheduled_to_id::text AS fwd, a.state, b.rescheduled_from_id::text AS back
+           FROM bookings a LEFT JOIN bookings b ON b.business_id = a.business_id AND b.id = $3
+          WHERE a.business_id = $1 AND a.id = $2`,
+        [world.businessId, uuid(20), uuid(22)],
+      );
+      expect(chain.rows[0]).toEqual({ fwd: null, state: 'booked', back: uuid(21) });
+    });
+  });
+
+  it('a successor committed ALONE, carrying a backlink nobody claims, is REFUSED', async () => {
+    await withBookingDb('daftar_p9_chain_3', async (db, world) => {
+      await book(db, world, 31, '09', '10');
+
+      // The other direction, and the one that makes the pair atomic. Before
+      // R-P9-17 this committed: a row asserting it replaced a booking that is
+      // still standing and will itself be kept — the challenger's [H4a].
+      // R-P9-16 deliberately permits `rescheduled_from_id` at INSERT, because
+      // a successor's identity includes which booking it replaces; what it
+      // cannot do is check the claim, because at the moment of the INSERT the
+      // predecessor has not been closed yet. Only a deferred check can.
+      const said = await refused(db, INSERT_BOOKING_WITH_BACKLINK, [
+        ...bookingParams({ world, id: uuid(32), startsAt: AT('11'), endsAt: AT('12') }),
+        uuid(31),
+      ]);
+      expect(said).toMatch(/booking\.chain_asymmetric/);
+
+      const n = await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1`, [world.businessId]);
+      expect(n.rows[0]?.n).toBe(1);
+    });
+  });
+
+  it('NON-VACUITY: the lawful pair commits in EITHER internal order, which is why the check is deferred', async () => {
+    await withBookingDb('daftar_p9_chain_4', async (db, world) => {
+      // Order one: successor first, then the close. (`reschedule`.)
+      await book(db, world, 41, '09', '10');
+      await reschedule(db, world, { from: uuid(41), to: uuid(42), startsAt: AT('11'), endsAt: AT('12') });
+
+      // Order two: the CLOSE first, naming a successor that does not exist
+      // yet, then the INSERT. This is the order the concurrency and
+      // multi-resource proofs use, because the lock discipline makes them
+      // release the hour before taking it. It reaches the second statement at
+      // all only because both the composite FK and this check are deferred —
+      // mid-statement, either one would refuse the lawful act.
+      const client = new Client({ connectionString: db.url('postgres') });
+      await client.connect();
+      try {
+        await book(db, world, 43, '13', '14');
+        await client.query('BEGIN');
+        await client.query(
+          `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
+             settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
+          [world.businessId, world.userId, uuid(44), uuid(43)],
+        );
+        await client.query(INSERT_BOOKING_WITH_BACKLINK, [
+          ...bookingParams({ world, id: uuid(44), startsAt: AT('15'), endsAt: AT('16') }),
+          uuid(43),
+        ]);
+        await client.query('COMMIT');
+      } finally {
+        await client.end();
+      }
+
+      // Both chains closed on themselves, in both directions, and not one row
+      // in this database disagrees with its own chain.
+      const chains = await db.pool.query<{ a: string; b: string }>(
+        `SELECT a.id::text AS a, b.id::text AS b
+           FROM bookings a JOIN bookings b ON b.business_id = a.business_id AND b.id = a.rescheduled_to_id
+          WHERE a.business_id = $1 AND b.rescheduled_from_id = a.id ORDER BY a.id`,
+        [world.businessId],
+      );
+      expect(chains.rows).toEqual([
+        { a: uuid(41), b: uuid(42) },
+        { a: uuid(43), b: uuid(44) },
+      ]);
+      const broken = await db.pool.query<{ fwd: number; back: number }>(
+        `SELECT count(*) FILTER (WHERE a.rescheduled_to_id IS NOT NULL
+                                   AND NOT EXISTS (SELECT 1 FROM bookings c
+                                                    WHERE c.business_id = a.business_id AND c.id = a.rescheduled_to_id
+                                                      AND c.rescheduled_from_id = a.id))::int AS fwd,
+                count(*) FILTER (WHERE a.rescheduled_from_id IS NOT NULL
+                                   AND NOT EXISTS (SELECT 1 FROM bookings c
+                                                    WHERE c.business_id = a.business_id AND c.id = a.rescheduled_from_id
+                                                      AND c.rescheduled_to_id = a.id))::int AS back
+           FROM bookings a WHERE a.business_id = $1`,
+        [world.businessId],
+      );
+      expect(broken.rows[0]).toEqual({ fwd: 0, back: 0 });
     });
   });
 });

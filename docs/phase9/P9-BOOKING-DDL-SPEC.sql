@@ -237,6 +237,37 @@
 --          authority and audit, not a side effect of INSERT privilege, and it
 --          stays an open design item (limitation 19) rather than a guess here.
 --
+-- R-P9-17  THE RESCHEDULE CHAIN AGREES WITH ITSELF, AT COMMIT.
+--
+--          `rescheduled_to_id` and `rescheduled_from_id` are two records of
+--          ONE fact. R-P9-08 freezes each of them once written, R-P9-15 made
+--          the forward link unrewritable and R-P9-16 refused a row born
+--          carrying one — and none of those three makes the two records
+--          AGREE. The fifth independent pass committed four chains that
+--          disagree, all of them through the close (C5-P9-01): a booking
+--          closed as `'rescheduled'` naming a successor that is still
+--          standing and carries no backlink, and three rows telling two
+--          stories at once (40 says 42 replaced it, 42 says it replaced 41,
+--          41 says nothing). The FIRST write of the forward link is the
+--          close, and the close is the one verb an ordinary caller performs:
+--          no attack is needed, one wrong successor id corrupts the chain
+--          silently. So, at COMMIT: a row that names a successor is named
+--          back by it, and a row that names a predecessor is named forward by
+--          it, or the write is refused (`booking.chain_asymmetric`).
+--
+--          A counterpart the check cannot READ is a refusal of its own
+--          (`booking.chain_unreadable`), never a pass. That branch is the
+--          whole of the mechanism's honesty: a deferred check that reads a
+--          relation and treats "I found nothing" as "nothing is wrong" falls
+--          OPEN under row security, which is the P11 ruling and the reason
+--          SECURITY DEFINER is not by itself an answer anywhere in this file.
+--
+--          Being deferred, the check requires the pair to be written in one
+--          transaction. That is not a new contract: the `bookings` table
+--          comment and R-P9-08 already state that a reschedule is a new row
+--          plus a transition on the old one, in one transaction. What is new
+--          is that the schema now refuses the halves.
+--
 -- R-P9-10  Every refusal is `'<domain>.<snake_case_condition>: sentence'`
 --          with `ERRCODE = 'P0001'`, the convention of every migration from
 --          0053 on. Domain prefix `booking.`.
@@ -968,7 +999,9 @@ CREATE TRIGGER bookings_no_deletion
 -- fourth pass measured what that left open at INSERT (C4-P9-01): a row could
 -- be inserted already `'rescheduled'`, its forward link naming a booking that
 -- is still `'booked'` and carries no backlink — the asymmetric chain R-P9-08
--- exists to forbid, reached by the one verb nothing checked. The same INSERT
+-- exists to forbid, reached by the one verb nothing checked. What this guard
+-- forbids is a link that ARRIVES with the row; whether a chain's two halves
+-- agree is R-P9-17, which is a different question and was answered later. The same INSERT
 -- could be born `'completed'` with `settled_at` twenty-seven years before the
 -- booking. Both rows satisfy every shape CHECK, so nothing downstream would
 -- ever flag them: the CHECKs make such a row internally consistent, which is
@@ -999,7 +1032,7 @@ BEGIN
   RETURN NEW;
 END $$;
 COMMENT ON FUNCTION bookings_born_booked() IS
-  'P9-S1, R-P9-16. BEFORE INSERT guard on `bookings`: refuses a row born in any state but ''booked'', and refuses one born carrying a settlement record or a forward reschedule link (booking.not_born_closed). It exists because R-P9-08 and R-P9-15 are UPDATE laws, and an executed attack inserted an asymmetric reschedule chain and a booking settled 27 years before it was booked, both satisfying every shape CHECK. `rescheduled_from_id` is NOT refused: a successor is born carrying its backlink, which is how a reschedule is recorded. SECURITY INVOKER — it reads no relation.';
+  'P9-S1, R-P9-16. BEFORE INSERT guard on `bookings`: refuses a row born in any state but ''booked'', and refuses one born carrying a settlement record or a forward reschedule link (booking.not_born_closed). It exists because R-P9-08 and R-P9-15 are UPDATE laws, and an executed attack inserted an asymmetric reschedule chain and a booking settled 27 years before it was booked, both satisfying every shape CHECK. `rescheduled_from_id` is NOT refused: a successor is born carrying its backlink, which is how a reschedule is recorded. It refuses a link''s PRESENCE at birth and says nothing about whether the two halves of a chain AGREE — that is R-P9-17''s deferred check, added after a later pass showed agreement was still unchecked at the close (C5-P9-01). SECURITY INVOKER — it reads no relation.';
 REVOKE ALL ON FUNCTION bookings_born_booked() FROM PUBLIC;
 
 CREATE TRIGGER bookings_born_booked_only
@@ -1158,6 +1191,75 @@ CREATE CONSTRAINT TRIGGER bookings_buffers_are_the_service_s
   AFTER INSERT ON bookings DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW WHEN (NEW.kind = 'appointment')
   EXECUTE FUNCTION bookings_buffers_match_service();
+
+-- R-P9-17. The reschedule chain agrees with itself. Checked at COMMIT, as a
+-- CONSTRAINT TRIGGER, because the two halves of one reschedule are two
+-- statements: the successor is inserted carrying its backlink and the
+-- predecessor is then closed carrying the forward link, and neither statement
+-- can see a complete chain at the moment it runs. Mid-statement this check
+-- would refuse the lawful sequence; at commit it refuses only the halves.
+--
+-- It is SECURITY DEFINER for the same reason the buffer guard is: it must
+-- read `bookings` whatever the writer can see. The read is NOT how the chain
+-- is kept inside one business — the composite FKs on both links already carry
+-- `business_id`, so a counterpart in another business is unreachable before
+-- this trigger fires. What the definer buys is that a row-security rule
+-- cannot turn the check into one that passes by seeing nothing.
+--
+-- And because SECURITY DEFINER is not by itself an answer to that (P11: a
+-- deferred check whose `NOT FOUND` branch returns quietly falls OPEN under
+-- row security, and its rollback justification was measurably false), the
+-- unreadable counterpart is a NAMED refusal here. Note the branch tests
+-- `FOUND` and not a NULL value: `rescheduled_from_id` is nullable, so an
+-- absent row and a row whose counterpart link is NULL are two different
+-- facts, and only one of them is a confinement failure. The buffer guard can
+-- test its value for NULL because the column it reads is NOT NULL; this one
+-- cannot, and conflating them would have been exactly the fall-open.
+CREATE OR REPLACE FUNCTION bookings_chain_symmetric() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+  v_counterpart UUID;
+BEGIN
+  -- (a) This row names a successor. That successor names this row back.
+  IF NEW.rescheduled_to_id IS NOT NULL THEN
+    SELECT b.rescheduled_from_id INTO v_counterpart
+      FROM public.bookings b
+     WHERE b.business_id = NEW.business_id AND b.id = NEW.rescheduled_to_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'booking.chain_unreadable: booking % names % as its successor and that booking could not be read, so the chain cannot be checked', NEW.id, NEW.rescheduled_to_id USING ERRCODE = 'P0001';
+    END IF;
+    IF v_counterpart IS DISTINCT FROM NEW.id THEN
+      RAISE EXCEPTION 'booking.chain_asymmetric: booking % says % replaced it, and % does not say it replaced %', NEW.id, NEW.rescheduled_to_id, NEW.rescheduled_to_id, NEW.id USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+
+  -- (b) This row names a predecessor. That predecessor names this row
+  --     forward. This is the direction that makes the pair atomic: a
+  --     successor committed alone has nothing pointing at it yet, and a
+  --     backlink nobody claims is the same false record read the other way
+  --     round.
+  IF NEW.rescheduled_from_id IS NOT NULL THEN
+    SELECT b.rescheduled_to_id INTO v_counterpart
+      FROM public.bookings b
+     WHERE b.business_id = NEW.business_id AND b.id = NEW.rescheduled_from_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'booking.chain_unreadable: booking % says it replaced % and that booking could not be read, so the chain cannot be checked', NEW.id, NEW.rescheduled_from_id USING ERRCODE = 'P0001';
+    END IF;
+    IF v_counterpart IS DISTINCT FROM NEW.id THEN
+      RAISE EXCEPTION 'booking.chain_asymmetric: booking % says it replaced %, and % does not say % replaced it', NEW.id, NEW.rescheduled_from_id, NEW.rescheduled_from_id, NEW.id USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+
+  RETURN NULL;
+END $$;
+COMMENT ON FUNCTION bookings_chain_symmetric() IS
+  'P9-S1, R-P9-17. Deferred constraint trigger on `bookings` INSERT and UPDATE: at COMMIT the two halves of a reschedule name each other, or the write is refused (booking.chain_asymmetric); a counterpart the check cannot read is a refusal of its own (booking.chain_unreadable), never a pass. It exists because R-P9-08, R-P9-15 and R-P9-16 all leave the FIRST write of the forward link — the close — unchecked for agreement, which an executed attack used to commit four disagreeing chains (C5-P9-01). Being deferred it requires the pair in one transaction, the contract the table comment and R-P9-08 already state. SECURITY DEFINER, owned by daftar_booking_internal, so row security cannot make it blind to its own subject; tenancy is carried by the composite FKs, not by this read.';
+REVOKE ALL ON FUNCTION bookings_chain_symmetric() FROM PUBLIC;
+
+CREATE CONSTRAINT TRIGGER bookings_chain_agrees
+  AFTER INSERT OR UPDATE ON bookings DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (NEW.rescheduled_to_id IS NOT NULL OR NEW.rescheduled_from_id IS NOT NULL)
+  EXECUTE FUNCTION bookings_chain_symmetric();
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 7. `booking_operations` — durable command identity.
@@ -1463,6 +1565,7 @@ GRANT SELECT, INSERT ON booking_operations TO daftar_booking_internal;
 -- (0069:218-222).
 -- ─────────────────────────────────────────────────────────────────────────
 ALTER FUNCTION bookings_buffers_match_service() OWNER TO daftar_booking_internal;
+ALTER FUNCTION bookings_chain_symmetric() OWNER TO daftar_booking_internal;
 -- The lock key is called BY NAME from the command routines the next slice
 -- adds, which run as this principal, so it is OWNED by it rather than granted
 -- to it — 0045's, 0048's and 0049's pattern, for the same reason: an EXECUTE
@@ -1581,9 +1684,12 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- (g) The one definer routine is a definer, has its path pinned in the
-  --     project's exact spelling, is owned by the internal principal, and is
-  --     callable by nobody. The three raise-only guards are NOT definers.
+  -- (g) The two definer routines are definers, have their paths pinned in
+  --     the project's exact spelling, are owned by the internal principal,
+  --     and are callable by nobody. The three raise-only guards are NOT
+  --     definers. Both definers are definers for one reason: they read a
+  --     relation to decide, and a row-security rule that hid their subject
+  --     would otherwise turn them into guards that pass by seeing nothing.
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
      WHERE p.proname = 'bookings_buffers_match_service' AND p.prosecdef
@@ -1591,10 +1697,20 @@ BEGIN
        AND p.proconfig = ARRAY['search_path=pg_catalog, public, pg_temp']) THEN
     RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_buffers_match_service is not a definer owned by daftar_booking_internal with a pinned search_path' USING ERRCODE = 'P0001';
   END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+     WHERE p.proname = 'bookings_chain_symmetric' AND p.prosecdef
+       AND r.rolname = 'daftar_booking_internal'
+       AND p.proconfig = ARRAY['search_path=pg_catalog, public, pg_temp']) THEN
+    RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_chain_symmetric is not a definer owned by daftar_booking_internal with a pinned search_path (R-P9-17)' USING ERRCODE = 'P0001';
+  END IF;
   FOR v_role IN SELECT unnest(ARRAY['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_identity', 'daftar_resolver', 'daftar_provisioner', 'daftar_reconciler', 'public'])
   LOOP
     IF has_function_privilege(v_role, 'bookings_buffers_match_service()', 'EXECUTE') THEN
       RAISE EXCEPTION 'booking.registry_exposed: % may execute the buffer guard directly', v_role USING ERRCODE = 'P0001';
+    END IF;
+    IF has_function_privilege(v_role, 'bookings_chain_symmetric()', 'EXECUTE') THEN
+      RAISE EXCEPTION 'booking.registry_exposed: % may execute the chain guard directly', v_role USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
   FOR v_tbl IN SELECT unnest(ARRAY['bookings_no_delete', 'bookings_transition', 'bookings_born_booked', 'booking_operations_immutable'])
@@ -1679,6 +1795,16 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_trigger WHERE tgname = 'bookings_buffers_are_the_service_s' AND tgdeferrable AND tginitdeferred) THEN
     RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_buffers_are_the_service_s is not a DEFERRABLE INITIALLY DEFERRED constraint trigger' USING ERRCODE = 'P0001';
+  END IF;
+  -- (h2) So is the deferred chain guard — and this one has to be deferred to
+  --      be correct at all: evaluated per statement it would refuse the
+  --      lawful reschedule, whose halves are symmetric only once both are
+  --      written (R-P9-17). A migration that landed it as a plain AFTER
+  --      trigger would break every reschedule, so the assertion is on the
+  --      deferral and not merely on the trigger's existence.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'bookings_chain_agrees' AND tgdeferrable AND tginitdeferred) THEN
+    RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_chain_agrees is not a DEFERRABLE INITIALLY DEFERRED constraint trigger (R-P9-17)' USING ERRCODE = 'P0001';
   END IF;
 
   -- (i) The ownership-transfer authority of §0 did not survive.

@@ -2,7 +2,9 @@
 
 **Status: `PREPARED / NOT PROMOTED`** (master directive Part 9). On the Mission's ladder the
 rung is **`CHALLENGED`** — an independent challenger passed the work at `9a64289` with no
-open finding (§3c.14) — and a challenger PASS is not a promotion; see §3c.7.
+open finding (§3c.14), rejected it at `6e339bf` on one P1 (§3c.17), and that P1 is answered
+here — and a challenger PASS is not a promotion; see §3c.7. **No signature names this
+subject**: the round-5 REJECT stands against `6e339bf` until the round-6 pass reports.
 
 Nothing here is promoted, merged, or in required CI. No migration number is allocated and
 no frozen migration is edited (Part 10). No Phase 4 file is touched and no Phase 4 branch is
@@ -30,7 +32,7 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**87 of 87 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
+**93 of 93 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
 — over seven suites, and again on PostgreSQL 18.4 at `C` as the comparison the mission permits.
 A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
@@ -340,6 +342,122 @@ this phase's own container is owed, and one signature of the three — the coord
 actual-diff review — is still owed. The D11 PART 117 label for the same state is
 `PREPARED / NOT PROMOTED`; it names the promotion state, not the ladder rung, and this
 report uses both so neither vocabulary has to be guessed at.
+
+### 3c.17 The challenger's FIFTH pass at `6e339bf` — REJECT, and the third verb of one defect
+
+**Verdict REJECT**, on one P1 and two P3s. Report:
+`/mnt/project-files/phase9/P9-CHALLENGE-6e339bf.md`, digest
+`142f861726e3456d198433ab57d8aac4785802862645dac962bdae426fe9ced4`. Nothing in rounds 1–4
+reopened, and the round-4 signature does not extend to `6e339bf`.
+
+**What the round established, and a later round need not redo.** R-P9-16 is sound: eight
+births, each a row the constraints alone accept, all eight refused by name, and seven of the
+eight accepted once the guard is removed — so those cases prove the guard and not a CHECK.
+No masking between the guard and the shape CHECKs in either direction, pair-dropped. The
+tokenised comparison I asked for was repeated and showed a real executable difference this
+time, 50 541 → 52 284 normalised characters and 131 → 135 statements, the whole of it the
+four new statements, the `bookings_transition` COMMENT and the end-of-spec self-check gaining
+one element. The suite reproduced at 87 of 87 with exit code 0 on its own fresh PG 16.15 at
+`en_US.utf8` under Node v24.12.0, and 11 of 11 digests verified.
+
+**C5-P9-01 (P1) — the asymmetric reschedule chain was still reachable, through the close.**
+This is the third verb of one defect. C-P9-03 was *repointing* the forward link after the
+fact, closed by R-P9-15's immutability. C4-P9-01 was a row *arriving* with one already set,
+closed by R-P9-16. Neither looked at the **first** write of that link, which happens at the
+close — and the close is the only one of the three verbs an ordinary caller performs. Four
+disagreeing chains were committed at the subject:
+
+```
+[H4a] successor born with a backlink to a STANDING booking: ** NO REFUSAL **
+[H4b] close pointing at a booking with NO backlink: ** NO REFUSAL **
+[H4c] close pointing at a successor whose backlink names a THIRD booking: ** NO REFUSAL **
+[H4]  committed — backlink with no forward link: 2 | forward link not matched by a backlink: 2
+```
+
+H4b in words: a booking is closed, its record says another booking replaced it, and that
+other booking is still standing and will itself be kept — a customer's hour given away to a
+booking that does not know it replaced anything. No attack is needed for any of these: one
+wrong successor id in a correct command corrupts the chain silently.
+
+**I accept the finding and I accept the P1.** The challenger offered the privilege yardstick
+that made the other two P2 — only `daftar_booking_internal` holds `UPDATE` — and said it
+would not re-litigate the number. I am not taking that argument, because it is the wrong
+yardstick for this one: the other two needed someone to do what no correct caller does, and
+this one is what a correct caller produces with one argument wrong. A defect reachable
+without an attacker is not mitigated by who holds the privilege.
+
+Closed as **R-P9-17, the reschedule chain agrees with itself, at commit**:
+`bookings_chain_symmetric()` on a `DEFERRABLE INITIALLY DEFERRED` constraint trigger
+(`bookings_chain_agrees`, AFTER INSERT OR UPDATE, `WHEN` either link is non-NULL). At commit,
+a row that names a successor is named back by it and a row that names a predecessor is named
+forward by it, or the write is refused with `booking.chain_asymmetric`.
+
+Three things about the remedy are worth stating because they were the hard part, not the
+trigger:
+
+1. **It must be deferred to be correct at all.** The two halves of a reschedule are two
+   statements and neither can see a complete chain at the moment it runs. Evaluated per
+   statement this check would refuse the lawful act; at commit it refuses only the halves.
+   The end-state self-check therefore asserts the *deferral*, not merely the trigger's
+   existence (`(h2)`): a migration that landed it as a plain `AFTER` trigger would break
+   every reschedule.
+2. **It reads `bookings`, which no other guard here does — so the unreadable counterpart is
+   a NAMED refusal, `booking.chain_unreadable`.** The challenger flagged this before it was
+   landed and was right to: a deferred check that reads a relation and treats "I found
+   nothing" as "nothing is wrong" falls OPEN under row security, which is P11's ruling, where
+   exactly such a `NOT FOUND -> RETURN NULL` branch admitted an allocation against nothing
+   and its rollback justification proved measurably false. `SECURITY DEFINER` is not the
+   answer by itself and is not used as one: the definer, owned by `daftar_booking_internal`
+   as the buffer guard is, stops row security from blinding the check in the ordinary case,
+   and the fail-closed branch is what happens if anything ever blinds it anyway. The branch
+   tests `FOUND` rather than a NULL value, because `rescheduled_from_id` is nullable and an
+   absent row and a row whose link is NULL are two different facts; conflating them would
+   have rebuilt the fall-open one layer down. Proved under `FORCE` row security as
+   `daftar_booking_internal`, which is `NOBYPASSRLS`: with the restrictive read policy
+   narrowed to hide exactly the counterpart row, the lawful reschedule is refused by
+   `booking.chain_unreadable`, nothing commits, and with sight restored the identical
+   reschedule succeeds.
+3. **It requires the pair in one transaction, and that is not a new contract.** The
+   `bookings` table comment and R-P9-08 already say a reschedule is a new row plus a
+   transition on the old one, in one transaction; what is new is that the schema now refuses
+   the halves. The concurrency and multi-resource proofs already wrote it that way, because
+   the lock discipline made them. Three cases in the integrity suite were writing the halves
+   under autocommit purely because nothing stopped them, and they now go through one
+   `reschedule` helper that states the contract once. The internal order inside the
+   transaction is deliberately NOT fixed: the lawful pair commits with the successor first
+   and with the close first, and a case proves both.
+
+**C5-P9-02 (P3) — the guard's state clause was load-bearing but unheld.** Removing it reds
+nothing in R-P9-16's four cases, because every attack they assert carries a settlement field
+or a forward link and the fields clause refuses those anyway. Unheld is what a mutation sweep
+cannot distinguish from dead, and this project has paid for the difference twice (P5's masking
+pair, P15's pair-drop). Closed with one case whose shape only the state clause refuses — born
+`'completed'` carrying no settlement record at all — with `bookings_settled_shape_ck` dropped
+for the duration exactly as the promoted (a4) probes do it, and restored and re-read after.
+
+**C5-P9-03 (P3) — the third lone settlement field was missing from the case set.** The loop
+covered `settled_at` alone and `settle_reason` alone; `settled_by_user_id` alone is the
+precise shape C4-P9-02's measurement was about and it was the one left out. Added.
+**Two stale counts corrected while here, stated rather than quietly fixed.** §3c.8 of this
+report still said "76 green cases" and §9 of the migration patch request still said "83
+cases"; both were left behind by later rounds and are now the current figure. The per-round
+counts in §3c.11 through §3c.16 are NOT touched — each of those is a claim about the run of
+its own round and is correct as written.
+
+**The run after these items.** `tests/phase9-prep`, 7 files, **93 of 93 cases, exit code 0**,
+on PostgreSQL 16.15 at `en_US.utf8` under Node v24.21.0. The six new cases are the four chain
+shapes (the three the challenger committed, plus the lawful pair in both internal orders),
+the state-clause case for C5-P9-02 and the row-security fail-closed case; C5-P9-03 adds a
+shape to an existing loop and so adds no case. Three existing cases changed, and only in how
+they write a lawful reschedule.
+
+**One defect of my own, found by the run and recorded.** The row-security case first wrote
+`ALTER POLICY … USING (($1::uuid IS DISTINCT FROM id) AND …)`: `ALTER POLICY` is DDL and
+takes no bind parameters, so PostgreSQL answered `bind message supplies 1 parameters, but
+prepared statement "" requires 0` and the case failed. The id is now interpolated, and
+checked against a UUID shape before it is — an unchecked interpolation into a policy
+expression is how a fixture rewrites the thing it is measuring.
+
 
 ### 3c.16 The challenger's FOURTH pass at `903e1f4` — PASS-WITH-SCOPE, and the INSERT hole
 
@@ -757,7 +875,7 @@ declared version is owed at promotion, and that is stated rather than left to be
 
 ### 3c.8 The prep cases are not a sealed phase
 
-76 green cases say that the invariants in this document hold on a live server. They do not
+93 green cases say that the invariants in this document hold on a live server. They do not
 say Phase 9 exists: there is no command layer, no surface, no migration number, and these
 suites are not in required CI. §4 states that in full, and nothing in this report may be
 read as a promotion claim (PART 83).
@@ -919,6 +1037,27 @@ Stated as limitations rather than left to be discovered.
     and its own audit, not a side effect of INSERT privilege, and the schema does not grant
     it here. The backlink `rescheduled_from_id` IS writable at INSERT, because a successor
     is born carrying it.
+20. **R-P9-17 is proved by single-connection execution; the chain under CONCURRENCY is
+    reasoned, not measured.** Every case that lands it writes its halves from one
+    connection. The interleaving a reader will ask about is two transactions each closing a
+    different predecessor onto the same successor: the deferred read happens at COMMIT, so
+    the second either sees the first's committed successor and is refused by
+    `booking.chain_asymmetric`, or cannot see it and is refused by
+    `booking.chain_unreadable` — refused either way, and the primary key makes the
+    successors themselves distinct. That is an argument from where the check runs, and it
+    is written here as an argument. No fixture constructs it, and the phase's own standard
+    (PART 15) is that a race is proved by `pg_blocking_pids` and a committed outcome, not
+    by reasoning about isolation levels.
+21. **The one-transaction reschedule is now a SCHEMA-ENFORCED contract on the command
+    slice, which is a narrowing — recorded, not decided.** Before R-P9-17 a command could
+    have written the successor in one request and closed the predecessor in another; the
+    deferred check refuses that, because at the first commit the backlink names a booking
+    that does not name it back. Every proof in this phase already wrote the pair in one
+    transaction, the spec's own `bookings` comment and R-P9-08 already said a reschedule is
+    one act, and a two-request reschedule would leave a half-chain readable in between — so
+    the narrowing is the contract the document always stated. What is recorded rather than
+    settled is that a command slice wanting a genuinely two-phase reschedule (a hold, then
+    a confirmation) would now have to say so and be designed for, not merely written.
 17. **The lock-set collision case is reasoned, not measured.** Two distinct resources
     hashing to one key would merge their locks, which broadens exclusion and cannot
     narrow it; no fixture constructs such a collision, because constructing one against

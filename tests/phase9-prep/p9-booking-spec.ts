@@ -48,6 +48,8 @@ export const P9_NAMED_OBJECTS = [
   'bookings_transition',
   'bookings_born_booked',
   'bookings_buffers_match_service',
+  'bookings_chain_symmetric',
+  'bookings_chain_agrees',
   'booking_operations_immutable',
   'booking_resource_lock_key',
   'booking_lock_resources',

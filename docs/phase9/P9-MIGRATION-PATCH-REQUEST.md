@@ -243,6 +243,7 @@ read it (end-state check (f)).
 | `bookings_no_delete()` | raise-only, not a definer | `bookings_no_deletion` BEFORE DELETE | `booking.not_deletable` |
 | `bookings_transition()` | raise-only, not a definer | `bookings_transition_only` BEFORE UPDATE | `booking.immutable`, `booking.immutable_settlement`, `booking.settlement_without_close`, `booking.settlement_after_close`, `booking.state_terminal`, `booking.state_not_reopenable` (unreachable as shipped — limitation 18) |
 | `bookings_born_booked()` | raise-only, not a definer | `bookings_born_booked_only` BEFORE INSERT | `booking.not_born_closed` |
+| `bookings_chain_symmetric()` | `SECURITY DEFINER`, owned by `daftar_booking_internal`, pinned path | `bookings_chain_agrees` — CONSTRAINT trigger, `DEFERRABLE INITIALLY DEFERRED`, AFTER INSERT OR UPDATE, `WHEN` either reschedule link is non-NULL | `booking.chain_asymmetric`, `booking.chain_unreadable` |
 | `bookings_buffers_match_service()` | `SECURITY DEFINER`, owned by `daftar_booking_internal`, pinned path | `bookings_buffers_are_the_service_s` — CONSTRAINT trigger, `DEFERRABLE INITIALLY DEFERRED`, `WHEN (kind = 'appointment')` | `booking.service_unreadable`, `booking.buffers_not_the_service_s` |
 | `booking_operations_immutable()` | raise-only, not a definer | `booking_operations_no_mutation` | per spec §7 |
 
@@ -260,7 +261,12 @@ born carrying a settlement record or a forward link (R-P9-16) — so the settlem
 has exactly one writer, the statement that closes the booking. A reschedule is a new row
 plus a transition on the old one, in one transaction (R-P9-08); the successor's backlink
 `rescheduled_from_id` is written at INSERT and is the one closure-adjacent column an INSERT
-may set.
+may set. That one-transaction sentence is now ENFORCED and not merely stated:
+`bookings_chain_symmetric()` asserts at COMMIT that the forward link and the backlink name
+each other (R-P9-17), so a half-written chain is refused. The deployment must therefore keep
+`bookings_chain_agrees` `DEFERRABLE INITIALLY DEFERRED` — the end-state block refuses the
+migration otherwise, because evaluated per statement this check would refuse every lawful
+reschedule.
 
 ### 4.1 R-P9-11 — the per-resource serialization key, and why it is requested
 
@@ -520,7 +526,7 @@ money-shaped column reached the schema.
 
 ## 9. EVIDENCE
 
-**83 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
+**93 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
 PostgreSQL 16.15 cluster at `en_US.utf8` under Node v24.21.0** (and again on 18.4 at `C` as a comparison), with the
 spec applied in one transaction as the non-superuser deployment principal
 `daftar_migrator` on top of the sealed Phase 3 head.
