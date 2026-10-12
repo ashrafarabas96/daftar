@@ -165,8 +165,19 @@ export class BillingError extends Error {
   }
 }
 
-export const billingError = (code: BillingErrorCode, message: string, context: BillingErrorContext = {}): BillingError =>
-  new BillingError(code, message, context);
+/*
+ * There is deliberately no `billingError` factory beside `refuse`.
+ *
+ * One existed until round 4 and had ZERO callers — not in `src`, not in
+ * `test`, not anywhere in the repository. Nothing constructs a billing
+ * error without throwing it, which is what `refuse` is for, and
+ * `BillingError` is exported and directly constructible for the one case
+ * that genuinely needs a value. It was found by
+ * `test/coverage-truth.test.ts`'s law that every exported value is named
+ * by some test, and it is the same class of defect as the refusal code
+ * round 3 removed: a public symbol declared for a layer that never
+ * arrived. PART 17.
+ */
 
 /** Throwing helper, so a guard reads as one expression at the point of refusal. */
 export function refuse(code: BillingErrorCode, message: string, context: BillingErrorContext = {}): never {
