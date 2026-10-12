@@ -18,6 +18,8 @@ import {
 
 function preview(overrides: Partial<Preview> = {}): Preview {
   return {
+    tenantId: 't1',
+    businessId: 'b1',
     intent: 'sale.create',
     draftId: 'd1',
     draftVersion: 1,
@@ -25,9 +27,12 @@ function preview(overrides: Partial<Preview> = {}): Preview {
     customerId: 'c1',
     branchId: 'br1',
     warehouseId: 'w1',
+    documentDate: '2026-10-12',
+    dueDate: '2026-11-12',
+    requestedDiscountMinor: 0n,
     lines: [
-      { lineNo: 1, productId: 'p1', quantity: '3', unitPriceMinor: 12000n, lineTotalMinor: 36000n },
-      { lineNo: 2, productId: 'p2', quantity: '1', unitPriceMinor: 5000n, lineTotalMinor: 5000n },
+      { lineNo: 1, productId: 'p1', variantId: 'v1', quantity: '3', unitPriceMinor: 12000n, lineTotalMinor: 36000n },
+      { lineNo: 2, productId: 'p2', variantId: null, quantity: '1', unitPriceMinor: 5000n, lineTotalMinor: 5000n },
     ],
     subtotalMinor: 41000n,
     taxMinor: 0n,
@@ -40,6 +45,11 @@ function preview(overrides: Partial<Preview> = {}): Preview {
 
 /** One tampering per digest-covered field. Keyed so a new field without a tamper case reds below. */
 const TAMPERINGS: Readonly<Record<string, Partial<Preview>>> = {
+  tenantId: { tenantId: 't2' },
+  businessId: { businessId: 'b2' },
+  documentDate: { documentDate: '2026-10-13' },
+  dueDate: { dueDate: '2026-11-13' },
+  requestedDiscountMinor: { requestedDiscountMinor: 1n },
   intent: { intent: 'return.create' },
   draftId: { draftId: 'd2' },
   draftVersion: { draftVersion: 2 },
@@ -47,7 +57,7 @@ const TAMPERINGS: Readonly<Record<string, Partial<Preview>>> = {
   customerId: { customerId: 'c2' },
   branchId: { branchId: 'br2' },
   warehouseId: { warehouseId: 'w2' },
-  lines: { lines: [{ lineNo: 1, productId: 'p1', quantity: '4', unitPriceMinor: 12000n, lineTotalMinor: 48000n }] },
+  lines: { lines: [{ lineNo: 1, productId: 'p1', variantId: 'v1', quantity: '4', unitPriceMinor: 12000n, lineTotalMinor: 48000n }] },
   subtotalMinor: { subtotalMinor: 41001n },
   taxMinor: { taxMinor: 1n },
   totalMinor: { totalMinor: 41001n },
@@ -146,8 +156,8 @@ describe('recomputation divergence names the diverging field (§5.3)', () => {
   it('refuses a changed unit price and names the line and field', () => {
     const moved = preview({
       lines: [
-        { lineNo: 1, productId: 'p1', quantity: '3', unitPriceMinor: 13000n, lineTotalMinor: 39000n },
-        { lineNo: 2, productId: 'p2', quantity: '1', unitPriceMinor: 5000n, lineTotalMinor: 5000n },
+        { lineNo: 1, productId: 'p1', variantId: 'v1', quantity: '3', unitPriceMinor: 13000n, lineTotalMinor: 39000n },
+        { lineNo: 2, productId: 'p2', variantId: null, quantity: '1', unitPriceMinor: 5000n, lineTotalMinor: 5000n },
       ],
     });
     const decision = checkRecomputation(preview(), moved);
@@ -159,7 +169,9 @@ describe('recomputation divergence names the diverging field (§5.3)', () => {
   });
 
   it('refuses a dropped line', () => {
-    const fewer = preview({ lines: [preview().lines[0] ?? { lineNo: 1, productId: 'p1', quantity: '3', unitPriceMinor: 12000n, lineTotalMinor: 36000n }] });
+    const fewer = preview({
+      lines: [preview().lines[0] ?? { lineNo: 1, productId: 'p1', variantId: 'v1', quantity: '3', unitPriceMinor: 12000n, lineTotalMinor: 36000n }],
+    });
     const decision = checkRecomputation(preview(), fewer);
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.refusal.field).toBe('lines.length');
@@ -168,13 +180,37 @@ describe('recomputation divergence names the diverging field (§5.3)', () => {
   it('refuses a substituted product on an otherwise identical line', () => {
     const swapped = preview({
       lines: [
-        { lineNo: 1, productId: 'p9', quantity: '3', unitPriceMinor: 12000n, lineTotalMinor: 36000n },
-        { lineNo: 2, productId: 'p2', quantity: '1', unitPriceMinor: 5000n, lineTotalMinor: 5000n },
+        { lineNo: 1, productId: 'p9', variantId: 'v1', quantity: '3', unitPriceMinor: 12000n, lineTotalMinor: 36000n },
+        { lineNo: 2, productId: 'p2', variantId: null, quantity: '1', unitPriceMinor: 5000n, lineTotalMinor: 5000n },
       ],
     });
     const decision = checkRecomputation(preview(), swapped);
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.refusal.field).toBe('lines[0].productId');
+  });
+
+  it('refuses a substituted VARIANT on an otherwise identical line (PART 76)', () => {
+    const swapped = preview({
+      lines: [
+        { lineNo: 1, productId: 'p1', variantId: 'v9', quantity: '3', unitPriceMinor: 12000n, lineTotalMinor: 36000n },
+        { lineNo: 2, productId: 'p2', variantId: null, quantity: '1', unitPriceMinor: 5000n, lineTotalMinor: 5000n },
+      ],
+    });
+    const decision = checkRecomputation(preview(), swapped);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.field).toBe('lines[0].variantId');
+  });
+
+  it.each([
+    ['tenantId', { tenantId: 't2' }],
+    ['businessId', { businessId: 'b2' }],
+    ['documentDate', { documentDate: '2026-10-13' }],
+    ['dueDate', { dueDate: null }],
+    ['requestedDiscountMinor', { requestedDiscountMinor: 500n }],
+  ] as const)('refuses on %s and names it (PART 76 fields)', (field, overrides) => {
+    const decision = checkRecomputation(preview(), preview(overrides));
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.field).toBe(field);
   });
 
   it('does NOT return the recomputed figure for execution — divergence is a refusal, not a correction', () => {

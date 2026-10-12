@@ -10,7 +10,10 @@ import { describe, expect, it } from 'vitest';
 import {
   APPROVED_PROVIDERS,
   DEFAULT_RETENTION,
+  evaluateRedirect,
+  FORWARD_NOTHING,
   isApprovedHost,
+  refuseRedirect,
   minimizeForAudit,
   resolveHost,
   retentionReadiness,
@@ -160,5 +163,77 @@ describe('retention (§72)', () => {
   it('invents no jurisdiction-specific period', () => {
     expect(DEFAULT_RETENTION.transcriptDays).toBeUndefined();
     expect(DEFAULT_RETENTION.audioDays).toBeUndefined();
+  });
+});
+
+describe('provider redirects are REFUSED (PART 75)', () => {
+  const REDIRECT_STATUSES = [301, 302, 303, 307, 308] as const;
+
+  it.each(REDIRECT_STATUSES)('refuses a %i from an approved host by default', (status) => {
+    const decision = evaluateRedirect({ fromHost: 'fake.invalid', status, locationHost: 'evil.test' });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.code).toBe('ai_provider.redirect_refused');
+  });
+
+  it('refuses WITHOUT being asked to — the permissive path is not the default', () => {
+    // The hazard PART 75 names: most HTTP clients follow redirects unless told not to, which turns an
+    // exact-host allowlist into an allowlist on the first hop only. Here the omitted option refuses.
+    const decision = evaluateRedirect({ fromHost: 'fake.invalid', status: 302, locationHost: 'fake.invalid' });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.code).toBe('ai_provider.redirect_refused');
+  });
+
+  it('refuses a redirect to an APPROVED host too, when redirects are not permitted', () => {
+    // The refusal is about redirecting, not about the destination. An approved destination does not
+    // make the hop acceptable.
+    expect(evaluateRedirect({ fromHost: 'fake.invalid', status: 307, locationHost: 'fake.invalid' }).ok).toBe(false);
+  });
+
+  it('names both hosts and the status, so infrastructure movement is distinguishable from an attempt', () => {
+    const decision = refuseRedirect({ fromHost: 'fake.invalid', status: 302, locationHost: 'evil.test' });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.refusal.field).toBe('fake.invalid');
+      expect(decision.refusal.detail).toBe('302 -> evil.test');
+    }
+  });
+
+  it('REVALIDATES the destination against the exact allowlist even on the permitted path', () => {
+    const decision = evaluateRedirect({ fromHost: 'fake.invalid', status: 307, locationHost: 'evil.test' }, { allowRedirects: true });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.code).toBe('ai_provider.redirect_refused');
+  });
+
+  it.each(['sub.fake.invalid', 'evil-fake.invalid', 'fake.invalid.evil.test', 'FAKE.INVALID'])(
+    'refuses the near-miss destination %s on the permitted path — revalidation is exact',
+    (locationHost) => {
+      const decision = evaluateRedirect({ fromHost: 'fake.invalid', status: 308, locationHost }, { allowRedirects: true });
+      expect(decision.ok).toBe(false);
+    },
+  );
+
+  it('forwards NOTHING even when the destination revalidates', () => {
+    // PART 75: no authorization header or token reaches a redirected origin. The permitted path
+    // returns a forwarding decision, not a destination to call, and that decision carries nothing.
+    const decision = evaluateRedirect({ fromHost: 'fake.invalid', status: 307, locationHost: 'fake.invalid' }, { allowRedirects: true });
+    expect(decision.ok).toBe(true);
+    if (decision.ok) {
+      expect(decision.value.authorization).toBe(false);
+      expect(decision.value.body).toBe(false);
+      expect(decision.value).toEqual(FORWARD_NOTHING);
+    }
+  });
+
+  it('FORWARD_NOTHING carries no true field — the constant cannot be the source of a credential leak', () => {
+    expect(Object.values(FORWARD_NOTHING).some((v) => v === true)).toBe(false);
+  });
+
+  it('NON-VACUITY: revalidation uses the allowlist it is given, not a hard-coded host', () => {
+    const other: readonly ProviderSpec[] = [{ id: 'o', kind: 'model', host: 'other.invalid', scheme: 'https', state: 'fake' }];
+    const toOther = evaluateRedirect({ fromHost: 'fake.invalid', status: 307, locationHost: 'other.invalid' }, { allowRedirects: true, allowlist: other });
+    expect(toOther.ok).toBe(true);
+    // And the default-allowlist host is NOT approved under that list, so the check really consulted it.
+    const toDefault = evaluateRedirect({ fromHost: 'other.invalid', status: 307, locationHost: 'fake.invalid' }, { allowRedirects: true, allowlist: other });
+    expect(toDefault.ok).toBe(false);
   });
 });

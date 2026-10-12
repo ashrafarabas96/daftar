@@ -35,6 +35,12 @@ export const REFUSAL_CODES = [
   'ai_draft.authority_revoked',
   'ai_draft.already_executed',
   'ai_draft.tax_non_zero_refused',
+  // PART 76: an execution-affecting field that is neither digest-covered nor server-recomputed. The
+  // dangerous field is not the one classified wrongly — it is the one nobody classified.
+  'ai_draft.field_unclassified',
+  // PART 75: a redirect away from an approved host. Refused; never followed, and no credential is
+  // forwarded to the redirected origin.
+  'ai_provider.redirect_refused',
   // Provider boundary (TL §70 / TL-P12-R2). Four codes, not one: an auditor must be able to tell an
   // attempt to CHOOSE a provider from merely naming an unapproved one.
   'ai_provider.selection_not_server_controlled',
@@ -43,6 +49,10 @@ export const REFUSAL_CODES = [
   'ai_provider.insecure_transport',
   // Retention is unconfigured (TL §72). UNCONFIGURED blocks activation; it never means "forever".
   'ai.retention_unconfigured',
+  // PART 77: a purge whose scope is not exactly one tenant and business, or which would remove an
+  // audit identity the audit trail needs. A purge is the one assistant-adjacent operation that
+  // destroys data, so its scope is checked before it runs and not described afterwards.
+  'ai.purge_scope_unsafe',
   'ai.injection_suspected',
   'ai.provider_timeout',
 ] as const;

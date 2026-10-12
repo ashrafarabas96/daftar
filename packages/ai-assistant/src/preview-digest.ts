@@ -18,12 +18,26 @@ import { allow, deny, refuse, type Decision } from './refusals';
 export interface PreviewLine {
   readonly lineNo: number;
   readonly productId: string;
+  /** PART 76 names variant ids explicitly; `null` where the product has no variant dimension. */
+  readonly variantId: string | null;
   readonly quantity: string;
   readonly unitPriceMinor: bigint;
   readonly lineTotalMinor: bigint;
 }
 
+/**
+ * Every field here is digest-covered, and `field-classification.ts` proves that set is exactly the A
+ * half of the PART 76 partition. Fields the server recomputes (cost, FX, document number, …) are
+ * deliberately absent: a digest over a cost would be the assistant asserting a number that belongs to
+ * another authority.
+ *
+ * The first draft of this type was missing the tenant/business context, variant ids, stated dates and
+ * requested discounts that PART 76 enumerates.
+ */
 export interface Preview {
+  /** PART 76 lists tenant/business context first. Omitting it left the digest silent about scope. */
+  readonly tenantId: string;
+  readonly businessId: string;
   readonly intent: string;
   readonly draftId: string;
   readonly draftVersion: number;
@@ -31,6 +45,11 @@ export interface Preview {
   readonly customerId: string | null;
   readonly branchId: string | null;
   readonly warehouseId: string | null;
+  /** Stated dates: supplied values, never read from a machine clock. ISO `YYYY-MM-DD`. */
+  readonly documentDate: string;
+  readonly dueDate: string | null;
+  /** A discount the member asked for — selectable, therefore digest-covered, in minor units. */
+  readonly requestedDiscountMinor: bigint;
   readonly lines: readonly PreviewLine[];
   readonly subtotalMinor: bigint;
   readonly taxMinor: bigint;
@@ -46,6 +65,8 @@ export interface Preview {
  * while a field sat outside the digest — a narrow result carried under a broad name.
  */
 export const DIGEST_COVERED_FIELDS: readonly string[] = [
+  'tenantId',
+  'businessId',
   'intent',
   'draftId',
   'draftVersion',
@@ -53,6 +74,9 @@ export const DIGEST_COVERED_FIELDS: readonly string[] = [
   'customerId',
   'branchId',
   'warehouseId',
+  'documentDate',
+  'dueDate',
+  'requestedDiscountMinor',
   'lines',
   'subtotalMinor',
   'taxMinor',
@@ -65,6 +89,7 @@ function canonicalLine(line: PreviewLine): string {
   return [
     `lineNo=${String(line.lineNo)}`,
     `productId=${line.productId}`,
+    `variantId=${line.variantId ?? ''}`,
     `quantity=${line.quantity}`,
     `unitPriceMinor=${line.unitPriceMinor.toString()}`,
     `lineTotalMinor=${line.lineTotalMinor.toString()}`,
@@ -82,6 +107,8 @@ export function canonicalizePreview(preview: Preview): string {
     .map(canonicalLine)
     .join('|');
   return [
+    `tenantId=${preview.tenantId}`,
+    `businessId=${preview.businessId}`,
     `intent=${preview.intent}`,
     `draftId=${preview.draftId}`,
     `draftVersion=${String(preview.draftVersion)}`,
@@ -89,6 +116,9 @@ export function canonicalizePreview(preview: Preview): string {
     `customerId=${preview.customerId ?? ''}`,
     `branchId=${preview.branchId ?? ''}`,
     `warehouseId=${preview.warehouseId ?? ''}`,
+    `documentDate=${preview.documentDate}`,
+    `dueDate=${preview.dueDate ?? ''}`,
+    `requestedDiscountMinor=${preview.requestedDiscountMinor.toString()}`,
     `subtotalMinor=${preview.subtotalMinor.toString()}`,
     `taxMinor=${preview.taxMinor.toString()}`,
     `totalMinor=${preview.totalMinor.toString()}`,
@@ -135,8 +165,15 @@ export function checkRecomputation(confirmed: Preview, recomputed: Preview): Dec
   for (const [field, a, b] of scalar) {
     if (a !== b) return deny(refuse('ai_draft.recomputation_diverged', { field }));
   }
+  if (confirmed.requestedDiscountMinor !== recomputed.requestedDiscountMinor) {
+    return deny(refuse('ai_draft.recomputation_diverged', { field: 'requestedDiscountMinor' }));
+  }
   if (confirmed.currencyCode !== recomputed.currencyCode) return deny(refuse('ai_draft.recomputation_diverged', { field: 'currencyCode' }));
   if (confirmed.customerId !== recomputed.customerId) return deny(refuse('ai_draft.recomputation_diverged', { field: 'customerId' }));
+  if (confirmed.tenantId !== recomputed.tenantId) return deny(refuse('ai_draft.recomputation_diverged', { field: 'tenantId' }));
+  if (confirmed.businessId !== recomputed.businessId) return deny(refuse('ai_draft.recomputation_diverged', { field: 'businessId' }));
+  if (confirmed.documentDate !== recomputed.documentDate) return deny(refuse('ai_draft.recomputation_diverged', { field: 'documentDate' }));
+  if (confirmed.dueDate !== recomputed.dueDate) return deny(refuse('ai_draft.recomputation_diverged', { field: 'dueDate' }));
   if (confirmed.lines.length !== recomputed.lines.length) return deny(refuse('ai_draft.recomputation_diverged', { field: 'lines.length' }));
   const sortedConfirmed = [...confirmed.lines].sort((a, b) => a.lineNo - b.lineNo);
   const sortedRecomputed = [...recomputed.lines].sort((a, b) => a.lineNo - b.lineNo);
@@ -148,6 +185,7 @@ export function checkRecomputation(confirmed: Preview, recomputed: Preview): Dec
     if (c === undefined || r === undefined) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}]` }));
     if (c.lineNo !== r.lineNo) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].lineNo` }));
     if (c.productId !== r.productId) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].productId` }));
+    if (c.variantId !== r.variantId) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].variantId` }));
     if (c.quantity !== r.quantity) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].quantity` }));
     if (c.unitPriceMinor !== r.unitPriceMinor) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].unitPriceMinor` }));
     if (c.lineTotalMinor !== r.lineTotalMinor) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].lineTotalMinor` }));

@@ -168,3 +168,74 @@ export function retentionReadiness(policy: RetentionPolicy): RetentionReadiness 
   if (unconfigured.length > 0) return { ready: false, unconfigured };
   return { ready: true };
 }
+
+// ---------------------------------------------------------------------------
+// Redirects — PART 75 of the 2026-10-12 directive
+// ---------------------------------------------------------------------------
+
+/**
+ * A redirect response from an approved provider host.
+ *
+ * PART 75: **PROVIDER HTTP REDIRECTS ARE REFUSED.** A redirect is not followed automatically from an
+ * approved host to another destination, and the preferred posture is no redirects at all.
+ *
+ * Why this is a boundary rule and not a transport detail: a redirect is the one mechanism by which an
+ * *approved* host can hand the request to an unapproved one — the allowlist was satisfied on the first
+ * hop, and every check already passed. An HTTP client that follows redirects by default (most do)
+ * turns an exact-host allowlist into an allowlist on the first hop only.
+ */
+export interface RedirectResponse {
+  readonly fromHost: string;
+  readonly status: 301 | 302 | 303 | 307 | 308;
+  readonly locationHost: string;
+}
+
+/**
+ * The default and preferred behaviour: refuse, naming both hosts.
+ *
+ * The refusal names where it was going as well as where it came from, because "a redirect was
+ * refused" does not tell an auditor whether infrastructure moved or something tried to redirect the
+ * request at a destination of its choosing.
+ */
+export function refuseRedirect(redirect: RedirectResponse): Decision<never> {
+  return deny(
+    refuse('ai_provider.redirect_refused', {
+      field: redirect.fromHost,
+      detail: `${String(redirect.status)} -> ${redirect.locationHost}`,
+    }),
+  );
+}
+
+/** What may be carried to a redirect destination, if a redirect is ever permitted at all. */
+export interface RedirectForwarding {
+  readonly body: boolean;
+  readonly authorization: boolean;
+}
+
+export const FORWARD_NOTHING: RedirectForwarding = { body: false, authorization: false };
+
+/**
+ * The conditional path PART 75 allows only "if infrastructure ever requires redirect": the destination
+ * is revalidated against the exact allowlist BEFORE any body or credential is forwarded, and an
+ * authorization header is never forwarded to an unapproved redirected origin.
+ *
+ * `allowRedirects` defaults to false, so the ordinary call refuses — the permissive path must be asked
+ * for explicitly at a call site a reviewer can find, rather than being the behaviour you get by not
+ * thinking about it.
+ *
+ * Note what this returns when it does permit: a forwarding decision, not a destination to call. Even a
+ * revalidated redirect to an approved host forwards nothing by default, and the caller must still have
+ * a reason for each thing it carries.
+ */
+export function evaluateRedirect(
+  redirect: RedirectResponse,
+  options: { readonly allowRedirects?: boolean; readonly allowlist?: readonly ProviderSpec[] } = {},
+): Decision<RedirectForwarding> {
+  const allowRedirects = options.allowRedirects ?? false;
+  if (!allowRedirects) return refuseRedirect(redirect);
+  const allowlist = options.allowlist ?? APPROVED_PROVIDERS;
+  // Revalidation happens here, before anything is forwarded. An unapproved origin gets neither the
+  // body nor the credential, and the request does not proceed at all.
+  if (!isApprovedHost(redirect.locationHost, allowlist)) return refuseRedirect(redirect);
+  return allow(FORWARD_NOTHING);
+}
