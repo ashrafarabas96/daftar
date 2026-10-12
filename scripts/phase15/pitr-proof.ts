@@ -248,11 +248,66 @@ function waitForRecovery(port: number, timeoutMs: number): { readonly ok: boolea
   return { ok: false, detail: `still in recovery (or unreachable) after ${timeoutMs}ms: ${last}` };
 }
 
+/**
+ * The five domains the Master Continuous Mission requires a PITR restore to be
+ * checked across — journal, AR, stock, tenants and files — mapped to the tables
+ * that carry them ON THIS BRANCH.
+ *
+ * `main` predates Phase 4's sales and receivables, so `customers` and
+ * `invoices` do not exist here: the AR domain has no table to check and is
+ * `WAITING_FOR_INTEGRATED_SURFACE`, not `PASS` and not `FAIL`. Saying so is the
+ * point — a domain silently omitted from a breadth check reads as a domain that
+ * passed it.
+ */
+const DOMAINS: readonly { readonly domain: string; readonly tables: readonly string[] }[] = [
+  { domain: 'journal', tables: ['journal_entries', 'journal_lines'] },
+  { domain: 'tenants', tables: ['tenants', 'businesses', 'branches', 'warehouses', 'users'] },
+  { domain: 'stock', tables: ['stock_levels', 'stock_movements'] },
+  { domain: 'files', tables: ['media', 'product_media'] },
+  // AR: intentionally empty on this branch. See the comment above.
+  { domain: 'receivables (AR)', tables: [] },
+];
+
 interface EntryProbe {
   readonly present: boolean;
   readonly entries: number;
   readonly unbalanced: number;
 }
+
+/**
+ * Per-table `count:md5` for every ordinary table in `public`, read over psql.
+ *
+ * `psqlScalar` rather than a pool, because this has to run against the
+ * RECOVERED cluster, which comes up after the primary and its pool are gone.
+ * Same digest shape the DR drill uses: the count makes an empty table
+ * distinguishable from a matching one, which matters because two empty tables
+ * agree on everything.
+ */
+function tableDigests(port: number): Readonly<Record<string, string>> {
+  const list = psqlScalar(
+    port,
+    DB,
+    `SELECT string_agg(c.relname, ',' ORDER BY c.relname)
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r'`,
+  );
+  if (!list.ok) throw new Error(`could not list tables on :${port}: ${list.detail}`);
+  const names = list.value.split(',').filter((t) => /^[a-z_][a-z0-9_]*$/.test(t));
+  if (names.length === 0) throw new Error(`no ordinary tables found on :${port}; a breadth comparison over an empty table set would prove nothing`);
+  const out: Record<string, string> = {};
+  for (const t of names) {
+    const r = psqlScalar(
+      port,
+      DB,
+      `SELECT count(*)::text || ':' || md5(coalesce(string_agg(to_jsonb(x)::text, chr(10) ORDER BY to_jsonb(x)::text), '')) FROM public.${t} x`,
+    );
+    if (!r.ok) throw new Error(`digest of ${t} on :${port} failed: ${r.detail}`);
+    out[t] = r.value;
+  }
+  return out;
+}
+
+const digestRows = (d: string): number => Number(d.slice(0, d.indexOf(':')));
 
 /** Is a given entry id present on the recovered cluster, and are its journals balanced? */
 function probeEntry(port: number, entryId: string): EntryProbe {
@@ -337,6 +392,11 @@ async function main(): Promise<void> {
   const vBalanced = record('P5', 'Every journal entry on the recovered cluster is balanced');
   const vMonitor = record('P6', 'The archive-failure monitor reads pg_stat_archiver and reports a healthy archive');
   record('P7', 'The retention command removes only segments older than the base backup it is given');
+  const vBreadth = record('P8', 'The recovered cluster reproduces the ENTIRE per-table state as it stood at the target, not merely the journal');
+  const vDomains = record(
+    'P9',
+    'Every named domain — journal, AR, stock, tenants, files — is accounted for after the restore, each as measured or explicitly not measurable here',
+  );
 
   let primaryUp = false;
   let pool: Pool | undefined;
@@ -406,6 +466,13 @@ async function main(): Promise<void> {
     // ── 3. entry A, then the target, then entry B ─────────────────────────
     const tenantA = await seedOneTenant(pool, appUrl, { label: 'PITR A', slug: `p15pitr-a-${stamp}`, amountMinor: 150000n, entryDate });
     await flushWalToArchive(pool, 'entry A');
+
+    // The expected state AT THE TARGET, captured here rather than reconstructed
+    // later: the target falls after A and before B, so the database as it
+    // stands right now IS what a correct recovery must reproduce. Captured
+    // before B exists, because afterwards the primary can no longer show it —
+    // and the primary is about to be destroyed either way.
+    const expectedAtTarget = tableDigests(PRIMARY.port);
     // A distinct second, so `recovery_target_time` can fall strictly between
     // A and B. PostgreSQL resolves a target time against commit timestamps, so
     // two commits inside the same second cannot be separated by one.
@@ -509,6 +576,63 @@ async function main(): Promise<void> {
         );
       if (a.unbalanced === 0) pass(vBalanced, a.entries, `0 unbalanced entries among ${a.entries} on the recovered cluster`);
       else fail(vBalanced, a.entries, `${a.unbalanced} unbalanced entries survived recovery`);
+
+      // ── P8 — the WHOLE database, not just the journal ──────────────────
+      //
+      // "entry A is present" is a claim about two tables. A recovery that got
+      // the journal right and silently lost a branch, a warehouse or a unit of
+      // reference data would satisfy every validator above it.
+      const recoveredState = tableDigests(recovered.port);
+      const expectedTables = Object.keys(expectedAtTarget).sort();
+      const recoveredTables = Object.keys(recoveredState).sort();
+      const onlyExpected = expectedTables.filter((t) => !recoveredTables.includes(t));
+      const onlyRecovered = recoveredTables.filter((t) => !expectedTables.includes(t));
+      const drifted = expectedTables.filter((t) => recoveredTables.includes(t) && expectedAtTarget[t] !== recoveredState[t]);
+      const withRows = expectedTables.filter((t) => digestRows(expectedAtTarget[t] ?? '0:') > 0);
+      if (onlyExpected.length === 0 && onlyRecovered.length === 0 && drifted.length === 0) {
+        pass(
+          vBreadth,
+          expectedTables.length,
+          `all ${expectedTables.length} tables in public match the state captured at the target byte-for-byte by whole-row digest, ${withRows.length} of them non-empty`,
+        );
+      } else {
+        fail(
+          vBreadth,
+          expectedTables.length,
+          `${drifted.length} table(s) drifted (${drifted.slice(0, 8).join(', ')}${drifted.length > 8 ? ', …' : ''}), ${onlyExpected.length} missing after recovery, ${onlyRecovered.length} unexpected`,
+        );
+      }
+
+      // ── P9 — each named domain accounted for, by name ──────────────────
+      const lines: string[] = [];
+      let measuredDomains = 0;
+      let brokenDomains = 0;
+      for (const { domain, tables } of DOMAINS) {
+        if (tables.length === 0) {
+          lines.push(
+            `${domain}: WAITING_FOR_INTEGRATED_SURFACE — no table carries it on this branch (it arrives with Phase 4), so it is NOT claimed as checked`,
+          );
+          continue;
+        }
+        const present = tables.filter((t) => expectedTables.includes(t));
+        const absent = tables.filter((t) => !expectedTables.includes(t));
+        const rows = present.reduce((n, t) => n + digestRows(expectedAtTarget[t] ?? '0:'), 0);
+        const bad = present.filter((t) => expectedAtTarget[t] !== recoveredState[t]);
+        if (bad.length > 0) {
+          brokenDomains++;
+          lines.push(`${domain}: FAIL — ${bad.join(', ')} differ after recovery`);
+        } else if (rows > 0) {
+          measuredDomains++;
+          lines.push(
+            `${domain}: MEASURED — ${rows} row(s) across ${present.length} table(s), all matching${absent.length > 0 ? ` (absent here: ${absent.join(', ')})` : ''}`,
+          );
+        } else {
+          lines.push(`${domain}: UNMEASURED — ${present.length} table(s) exist but hold 0 rows at the target, so a match proves nothing about this domain`);
+        }
+      }
+      if (brokenDomains > 0) fail(vDomains, DOMAINS.length, lines.join(' | '));
+      else if (measuredDomains === 0) fail(vDomains, 0, `no domain had any row to compare: ${lines.join(' | ')}`);
+      else pass(vDomains, DOMAINS.length, `${measuredDomains} of ${DOMAINS.length} domain(s) measured, 0 broken — ${lines.join(' | ')}`);
     }
 
     // ── 8. P7 — retention ─────────────────────────────────────────────────
