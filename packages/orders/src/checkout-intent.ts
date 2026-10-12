@@ -223,13 +223,6 @@ export interface OrderCheckoutFacts {
   notes: string | null;
   /** Stock key → merchant-granted discount request, integer minor units. Absent means `"0"`. */
   discountMinorByStockKey?: ReadonlyMap<string, string>;
-  /**
-   * Stock key → the product's frozen unit precision — the SAME map
-   * `summariseBasket` was given. Supplying it here is what makes the quote
-   * gate's representability leg have a caller; where it is absent that one law
-   * is not claimed, rather than being assumed to be 4.
-   */
-  unitDecimalsByStockKey?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -330,16 +323,32 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
   // recomputed total is refused HERE under PART 33's zero tolerance, rather
   // than rebuilding an intent for a total the shopper never agreed to.
   const approval = facts.quoteApproval;
-  // The precision map is passed, not omitted: the representability leg of the
-  // builder's laws is claimed only where a caller supplies the precisions, and
-  // this is the caller that has them.
-  // Read off the FACTS only, never off `approval`, which may be absent: the
-  // runtime presence guard lives inside `assertQuoteApproved`, and reading a
-  // property of the thing being checked before it is checked is how a refusal
-  // becomes a TypeError. Where the facts carry no map, the approval's own
-  // `checks` is used by that function instead.
-  const quoteChecks = facts.unitDecimalsByStockKey === undefined ? undefined : { unitDecimalsByStockKey: facts.unitDecimalsByStockKey };
-  assertQuoteApproved(approval, facts.orderId, quoteChecks);
+  // The precision map is BUILT FROM THE POSITIONS, not accepted beside them.
+  // It used to be an optional field on the facts, which left two holes that
+  // documentation cannot close: a caller could omit it, and the gate's
+  // representability law would then be silently not claimed; or a caller could
+  // supply a DIFFERENT map from the one `summariseBasket` checked, and the law
+  // would be claimed against a precision no product declared. Reading it off
+  // `positions` removes both — `summariseBasket` demands a precision per stock
+  // key and records the one it used, so the gate's map IS the basket's map by
+  // construction, and there is no second place for it to come from.
+  //
+  // Read off the POSITIONS and the FACTS only, never off `approval`, which may
+  // be absent: the runtime presence guard lives inside `assertQuoteApproved`,
+  // and reading a property of the thing being checked before it is checked is
+  // how a refusal becomes a TypeError.
+  const unitDecimalsByStockKey = new Map<string, number>();
+  for (const position of positions) {
+    // A type-only requirement has no runtime existence, and this one decides
+    // whether a law is claimed at all: a hand-built position whose precision is
+    // missing would produce a map that answers `undefined` for its key, and the
+    // representability check would then skip that line in silence.
+    if (typeof position.unitDecimals !== 'number') {
+      throw new OrderError('order.checkout_field_forbidden', 'a checkout position carries no unit precision', { stockKey: position.stockKey });
+    }
+    unitDecimalsByStockKey.set(position.stockKey, position.unitDecimals);
+  }
+  assertQuoteApproved(approval, facts.orderId, { unitDecimalsByStockKey });
   if (approval.priorRecomputedTotalMinor !== undefined) {
     assertCommitWithinConfirmedQuote(approval, facts.orderId, approval.priorRecomputedTotalMinor);
   }

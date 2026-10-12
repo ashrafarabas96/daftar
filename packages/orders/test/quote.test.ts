@@ -728,6 +728,26 @@ describe('the representability leg of the gate has a caller (round-3 challenge P
     const halfQuote = buildCommercialQuote(HALF);
     expect(() => assertQuoteApproved(approve(halfQuote), ORDER)).not.toThrow();
   });
+
+  // Round-4 challenge P3-01: a SURVIVING mutation. Inverting
+  // `checks ?? approval.checks` to `approval.checks ?? checks` left all cases
+  // green, because no case made the two maps DISAGREE — so the documented
+  // precedence was a comment with nothing behind it, and which map wins decides
+  // whether a law is claimed. The explicit argument wins: an approval cannot
+  // weaken a check its call site stated.
+  it('lets the explicit argument win over the approval own checks when they disagree', () => {
+    const forged = buildCommercialQuote(HALF);
+    const atQ4 = { unitDecimalsByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, 4]]) };
+    // The approval says four decimals, the call site says whole units. The call
+    // site decides, so the half unit is REFUSED.
+    const lenientApproval: ConfirmedQuoteApproval = { ...approve(forged), checks: atQ4 };
+    expect(() => assertQuoteApproved(lenientApproval, ORDER, WHOLE_UNITS)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+    // And the other direction, so the case cannot pass by refusing everything:
+    // the approval says whole units, the call site says four decimals, and the
+    // call site decides again — admitted.
+    const strictApproval: ConfirmedQuoteApproval = { ...approve(forged), checks: WHOLE_UNITS };
+    expect(() => assertQuoteApproved(strictApproval, ORDER, atQ4)).not.toThrow();
+  });
 });
 
 describe('confirmedByUserId is an id or it is nothing (round-3 challenge P3-01)', () => {

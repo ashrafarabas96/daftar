@@ -57,6 +57,15 @@ export interface BasketPosition {
   lineIds: readonly string[];
   /** The FIRST contributing row — the id the merged sale line will carry. */
   representativeLineId: string;
+  /**
+   * The product's frozen unit precision, as the caller declared it for this
+   * stock key and as this function CHECKED the quantity against. It is carried
+   * on the position rather than left to be supplied a second time downstream:
+   * a precision the hand-off has to be given again is a precision it can be
+   * given differently, and then a law is claimed against the wrong figure or
+   * silently not claimed at all.
+   */
+  unitDecimals: number;
 }
 
 /**
@@ -76,7 +85,7 @@ export function summariseBasket(lines: readonly CartLine[], unitDecimalsByStockK
   }
 
   const seenLineIds = new Set<string>();
-  const byKey = new Map<string, { productId: string; variantId: string | null; total: bigint; lineIds: string[] }>();
+  const byKey = new Map<string, { productId: string; variantId: string | null; total: bigint; lineIds: string[]; unitDecimals: number }>();
 
   for (const line of lines) {
     assertCanonicalId(line.lineId, 'lineId');
@@ -113,7 +122,7 @@ export function summariseBasket(lines: readonly CartLine[], unitDecimalsByStockK
 
     const existing = byKey.get(key);
     if (existing === undefined) {
-      byKey.set(key, { productId: line.productId, variantId: line.variantId, total: q4, lineIds: [line.lineId] });
+      byKey.set(key, { productId: line.productId, variantId: line.variantId, total: q4, lineIds: [line.lineId], unitDecimals });
     } else {
       existing.total += q4;
       existing.lineIds.push(line.lineId);
@@ -137,6 +146,7 @@ export function summariseBasket(lines: readonly CartLine[], unitDecimalsByStockK
       totalQuantityQ4: acc.total,
       lineIds: Object.freeze([...acc.lineIds]),
       representativeLineId,
+      unitDecimals: acc.unitDecimals,
     });
   }
   return Object.freeze(positions);

@@ -617,12 +617,51 @@ describe('the hand-off supplies the precisions it validated the basket with (rou
       buildSaleCommitIntent(snapshot('fulfilling'), POSITIONS, {
         ...CASH,
         quoteApproval: approve(halfUnitQuote),
-        unitDecimalsByStockKey: PRECISION,
       }),
     ).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
   });
 
-  it('still builds the honest checkout with the precisions supplied', () => {
-    expect(buildSaleCommitIntent(snapshot('fulfilling'), POSITIONS, { ...CASH, unitDecimalsByStockKey: PRECISION }).saleId).toBe(SALE);
+  it('still builds the honest checkout, with no precision field to supply', () => {
+    expect(buildSaleCommitIntent(snapshot('fulfilling'), POSITIONS, CASH).saleId).toBe(SALE);
+  });
+
+  // Round-4 challenge R4-B: the obligation was POSSIBLE at the real entry point
+  // but still OPTIONAL there, and nothing required the gate's map to BE the
+  // basket's. The precisions are now read off the positions, so neither hole
+  // has a shape left: there is no field to omit, and no second map to differ.
+  it('reads the precision off the position, so no caller can substitute a different one', () => {
+    const halfUnitQuote = buildCommercialQuote({
+      quoteId: QUOTE_ID,
+      orderId: ORDER,
+      version: 1,
+      currency: 'ILS',
+      lines: [
+        { stockKey: KEY, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '5500' },
+      ],
+      displayedTotalMinor: '5500',
+      issuedAt: '2026-10-01T09:00:00Z',
+      expiresAt: '2026-10-01T10:00:00Z',
+    });
+    // The position says whole units, and that is the only statement there is.
+    expect(POSITIONS[0]?.unitDecimals).toBe(0);
+    expect(() => buildSaleCommitIntent(snapshot('fulfilling'), POSITIONS, { ...CASH, quoteApproval: approve(halfUnitQuote) })).toThrowError(
+      expect.objectContaining({ code: 'order.quote_quantity_invalid' }),
+    );
+    // A position that declares four decimals admits the same quantity. The law
+    // follows the basket, not a field beside it.
+    const atQ4 = summariseBasket([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000' }], new Map([[KEY, 4]]));
+    expect(atQ4[0]?.unitDecimals).toBe(4);
+    expect(() => buildSaleCommitIntent(snapshot('fulfilling'), atQ4, { ...CASH, quoteApproval: approve(halfUnitQuote) })).not.toThrow();
+  });
+
+  it('refuses a hand-built position that carries no precision at all', () => {
+    // A type-only requirement has no runtime existence: without this guard the
+    // derived map answers `undefined` for that key and the representability
+    // check skips the line in silence, which is the defect class R4-B names.
+    const noPrecision = [{ ...(POSITIONS[0] as (typeof POSITIONS)[number]) }] as unknown as typeof POSITIONS;
+    delete (noPrecision[0] as { unitDecimals?: number }).unitDecimals;
+    expect(() => buildSaleCommitIntent(snapshot('fulfilling'), noPrecision, CASH)).toThrowError(
+      expect.objectContaining({ code: 'order.checkout_field_forbidden' }),
+    );
   });
 });

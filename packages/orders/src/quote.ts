@@ -535,6 +535,14 @@ export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: s
 
   // The window and the version, last, so a mismatch of IDENTITY is reported as
   // one rather than as a stale version of a quote that was never this order's.
+  // PRECEDENCE, and it is a law rather than a convenience: the EXPLICIT
+  // argument wins over `approval.checks`. A caller that names the precisions at
+  // the call site is the one holding the products, and the approval travelled
+  // with the quote. Where the two disagree the call site decides, so an
+  // approval cannot weaken a check its caller stated. The fallback exists only
+  // for a caller that has no precisions of its own (`assessQuoteDivergence`),
+  // and the direction is proved by a case in which the two disagree — a
+  // precedence with no such case is a comment, not a law.
   assertQuoteConfirmable(quote, approval.asOf, confirmation.confirmedVersion, checks ?? approval.checks);
 }
 
