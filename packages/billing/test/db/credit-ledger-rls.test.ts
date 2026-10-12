@@ -208,7 +208,7 @@ describe('default-deny: no context, no rows', () => {
     const s = await freshScope();
     const outsider = await connectWithoutContext(appUrl());
     try {
-      await setRequestContext(outsider, { tenantId: OTHER_TENANT, businessId: s.businessId });
+      await setRequestContext(outsider, { tenantId: OTHER_TENANT, businessId: s.businessId }, 'session');
       const code = await outsider
         .query(
           `INSERT INTO p5scratch.subscription_invoices
@@ -237,7 +237,7 @@ describe('default-deny: no context, no rows', () => {
     await insertGrant(owner, 'p5scratch', mine, 100n, T1);
     const app = await connectWithoutContext(appUrl());
     try {
-      await setRequestContext(app, mine);
+      await setRequestContext(app, mine, 'session');
       const seen = await app.query<{ business: string }>(
         `SELECT DISTINCT business_id AS business FROM p5scratch.platform_credit_adjustments`,
       );
@@ -316,6 +316,126 @@ describe('default-deny: no context, no rows', () => {
   });
 });
 
+describe('a definer routine trusts the context, not its caller', () => {
+  // ROUND 14, THE COORDINATOR'S DIFF-REVIEW R-1. `lock_grants_in_order` is
+  // `SECURITY DEFINER`, runs as a principal every policy admits, and took
+  // its tenant and business ids FROM ITS CALLER with no check against the
+  // transaction context, while `EXECUTE` was granted to the application
+  // role. An application session could therefore name another tenant's
+  // business, hold that business's grant-row locks for the length of its own
+  // transaction, and read back how many grant rows it has. The remedy is a
+  // fail-closed context check, and these are the cases that make it
+  // load-bearing rather than present.
+
+  it('refuses, BY NAME, a call naming a business the session has no context for', async () => {
+    const mine = await freshScope();
+    const victim = await freshScope(OTHER_TENANT);
+    await insertGrant(owner, 'p5scratch', victim, 5000n, T1);
+    const app = await connectWithoutContext(appUrl());
+    try {
+      await setRequestContext(app, mine, 'session');
+      const refusal = await app
+        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD'])
+        .then(() => '', (e: unknown) => refusedBy(e));
+      expect(refusal, "a session locked and counted another tenant's grant rows through a definer routine").toBe(
+        '23000/lgo_scope_is_the_callers_own',
+      );
+    } finally {
+      await app.end();
+    }
+  });
+
+  it('refuses a call naming a SIBLING business of the session own tenant', async () => {
+    // The tenant matches and the business does not, which is the half a
+    // tenant-only check would let through — the same shape as the sibling
+    // case for the restrictive policy layer.
+    const mine = await freshScope();
+    const sibling = await freshScope();
+    await insertGrant(owner, 'p5scratch', sibling, 700n, T1);
+    const app = await connectWithoutContext(appUrl());
+    try {
+      await setRequestContext(app, mine, 'session');
+      const refusal = await app
+        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [sibling.tenantId, sibling.businessId, 'USD'])
+        .then(() => '', (e: unknown) => refusedBy(e));
+      expect(refusal, 'a session reached a sibling business through the definer routine').toBe(
+        '23000/lgo_scope_is_the_callers_own',
+      );
+    } finally {
+      await app.end();
+    }
+  });
+
+  it('refuses a call from a session with NO context at all, rather than treating absent as permitted', async () => {
+    const s = await freshScope();
+    await insertGrant(owner, 'p5scratch', s, 300n, T1);
+    const blind = await connectWithoutContext(appUrl());
+    try {
+      const refusal = await blind
+        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, 'USD'])
+        .then(() => '', (e: unknown) => refusedBy(e));
+      expect(refusal, 'a context-less session called the definer routine successfully').toBe(
+        '23000/lgo_scope_is_the_callers_own',
+      );
+    } finally {
+      await blind.end();
+    }
+  });
+
+  it('still serves the session its OWN scope, and the platform principal with no context', async () => {
+    // The check is a refusal, not a wall: the legitimate caller is unaffected
+    // and the bypass principal keeps the context-free path the policies
+    // already grant it. Without this case the three above could be passed by
+    // a routine that refuses everything.
+    const s = await freshScope();
+    await insertGrant(owner, 'p5scratch', s, 100n, T1);
+    await insertGrant(owner, 'p5scratch', s, 200n, T1);
+    const app = await connectWithoutContext(appUrl());
+    try {
+      await setRequestContext(app, s, 'session');
+      const r = await app.query<{ locked: number }>(`SELECT p5scratch.lock_grants_in_order($1, $2, $3) AS locked`, [
+        s.tenantId,
+        s.businessId,
+        'USD',
+      ]);
+      expect(r.rows[0]?.locked, 'the legitimate caller was refused its own scope').toBe(2);
+    } finally {
+      await app.end();
+    }
+    const asPlatform = await connectWithoutContext(ownerUrl());
+    try {
+      const r = await asPlatform.query<{ locked: number }>(
+        `SELECT p5scratch.lock_grants_in_order($1, $2, $3) AS locked`,
+        [s.tenantId, s.businessId, 'USD'],
+      );
+      expect(r.rows[0]?.locked, 'the platform principal lost its context-free path').toBe(2);
+    } finally {
+      await asPlatform.end();
+    }
+  });
+
+  it('grants EXECUTE on no definer routine to PUBLIC', async () => {
+    // R-3: the requested DDL carried three `SECURITY DEFINER` routines and
+    // ZERO `REVOKE` statements, so all three were executable by PUBLIC — the
+    // default on a new function. Read from the catalogue, not from the file,
+    // because the file is applied in two lanes and a grant can also come
+    // from elsewhere.
+    const r = await owner.query<{ proname: string; acl: string | null }>(
+      `SELECT p.proname, array_to_string(p.proacl, ' ') AS acl
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'p5scratch' AND p.prosecdef
+        ORDER BY p.proname`,
+    );
+    expect(r.rows.length, 'no SECURITY DEFINER routine was found at all, so this law is vacuous').toBeGreaterThanOrEqual(3);
+    for (const row of r.rows) {
+      // An ACL entry whose grantee is empty (`=X/owner`) is PUBLIC.
+      const toPublic = (row.acl ?? '').split(' ').filter((entry) => entry.startsWith('='));
+      expect(toPublic, `${row.proname} is EXECUTE-able by PUBLIC`).toStrictEqual([]);
+      expect(row.acl, `${row.proname} has a NULL ACL, which means the default grant to PUBLIC`).toBeTruthy();
+    }
+  });
+});
+
 describe('the context is transaction-local, as the frozen discipline requires', () => {
   it('loses the context at COMMIT, so a pooled connection cannot carry a stale one', async () => {
     const s = await freshScope();
@@ -323,7 +443,7 @@ describe('the context is transaction-local, as the frozen discipline requires', 
     const pooled = await connectWithoutContext(appUrl());
     try {
       await pooled.query('BEGIN');
-      await setRequestContext(pooled, s, true);
+      await setRequestContext(pooled, s, 'transaction');
       const inside = await pooled.query<{ n: number }>(
         `SELECT count(*)::int AS n FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`,
         [s.businessId],

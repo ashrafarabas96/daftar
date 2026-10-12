@@ -15,9 +15,13 @@ GRANT SELECT, INSERT ON p5scratch.platform_credit_adjustments TO p5_app;
 -- (fixture lane) and to the lane script (real-schema lane), because a
 -- privilege on a BORROWED relation can only be granted by whoever owns it,
 -- and in the real-schema lane that is `daftar_migrator`, not `p5owner`.
--- The application role needs SELECT on it either way: the house
--- tenant-membership policy is an EXISTS over `businesses`, and a policy's
--- subquery runs as the invoking role.
+-- The application role needs SELECT on it either way, though NOT for the
+-- reason this comment gave until round 14 (the coordinator's diff review
+-- R-13): the LIVE tenant-membership policy on a relation that carries its
+-- own `tenant_id` compares it DIRECTLY, with no subquery, so no policy of
+-- this slice reads `businesses` at all. What needs the read is the lane's
+-- own fixture work and the FK target, and a policy's subquery would run as
+-- the invoking role if there were one.
 -- ROUND 5: the invoice relation. SELECT, INSERT and UPDATE — an invoice is
 -- NOT append-only (a draft becomes finalized), which is exactly why it is a
 -- different relation from the ledger and not a column on it. No DELETE.
@@ -88,6 +92,36 @@ CREATE POLICY pca_invariant_read ON p5scratch.platform_credit_adjustments
 -- asserted here.
 GRANT CREATE ON SCHEMA p5scratch TO p5_invariants;
 ALTER FUNCTION p5scratch.assert_invoice_credit_agrees(uuid) OWNER TO p5_invariants;
+
+-- ROUND 14, and the measurement that goes with the coordinator's R-1/R-3:
+-- the requested DDL now REVOKEs EXECUTE on all three definer routines from
+-- PUBLIC, which is right, and the first run after it failed four cases with
+-- `42501` — because the agreement invariant is PERFORMed from the two
+-- CONSTRAINT TRIGGER functions, which are plain `SECURITY INVOKER`, so at
+-- finalization time they run AS THE APPLICATION ROLE and need EXECUTE of
+-- their own. PUBLIC had been supplying it silently.
+--
+-- So the grant is explicit, and the pair is the point: a revoke from PUBLIC
+-- without the compensating grant is not a security fix, it is an outage, and
+-- `P5-MIGRATION-PATCH-REQUEST.md` §16 now asks for both halves together.
+-- The grant is made BY THE FUNCTION'S OWNER, which by this line is
+-- `p5_invariants` and not the role running this file: ownership moved one
+-- statement ago, and only an owner (or a superuser) may grant on an object.
+-- The real-schema lane found this by failing — `permission denied for
+-- function assert_invoice_credit_agrees` — because there the role applying
+-- this file is `daftar_platform`, whose membership in `p5_invariants` is
+-- `INHERIT FALSE, SET TRUE`: it may BECOME the role but does not hold its
+-- rights passively. `SET ROLE` is how that membership is spent.
+SET ROLE p5_invariants;
+GRANT EXECUTE ON FUNCTION p5scratch.assert_invoice_credit_agrees(uuid) TO p5_app;
+-- And to the admin principal applying this file, named as `SESSION_USER` so
+-- that neither lane's role name appears here. It is not implied: in the
+-- fixture lane that role INHERITS `p5_invariants` and had EXECUTE anyway,
+-- while in the real lane its membership is `INHERIT FALSE`, so after the
+-- revoke from PUBLIC it lost the invariant with 73 of 118 cases — measured,
+-- and the clearest demonstration that a revoke needs its grant named.
+GRANT EXECUTE ON FUNCTION p5scratch.assert_invoice_credit_agrees(uuid) TO SESSION_USER;
+RESET ROLE;
 REVOKE CREATE ON SCHEMA p5scratch FROM p5_invariants;
 
 -- ROUND 8, the independent challenger's F-08. `createDraftInvoice` takes its

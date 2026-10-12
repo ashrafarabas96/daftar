@@ -726,7 +726,7 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
     await insertGrant(owner, 'p5scratch', s, 100n, T0);
     const app = await connect(appUrl());
     try {
-      await setRequestContext(app, s);
+      await setRequestContext(app, s, 'session');
       const upd = await app
         .query(`UPDATE p5scratch.platform_credit_adjustments SET reason = 'x' WHERE business_id = $1`, [s.businessId])
         .then(() => '', (e: unknown) => refusedBy(e));
@@ -760,7 +760,7 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
 
     const app = await connect(appUrl());
     try {
-      await setRequestContext(app, mine);
+      await setRequestContext(app, mine, 'session');
       const seen = await app.query<{ n: string }>(
         `SELECT count(*)::text AS n FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`,
         [theirs.businessId],

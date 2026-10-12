@@ -521,7 +521,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
     const theirInvoice = await createDraftInvoice(owner, 'p5scratch', theirs, 100n);
     const app = await connect(appUrl());
     try {
-      await setRequestContext(app, mine);
+      await setRequestContext(app, mine, 'session');
       const seen = await app.query<{ n: string }>(
         `SELECT count(*)::text AS n FROM p5scratch.subscription_invoices WHERE id = $1`,
         [theirInvoice],
@@ -547,9 +547,9 @@ describe('the invoice and the ledger commit together, or not at all', () => {
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 200n);
     const app = await connect(appUrl());
     try {
-      await setRequestContext(app, s);
+      await setRequestContext(app, s, 'session');
       await app.query('BEGIN');
-      await setRequestContext(app, s);
+      await setRequestContext(app, s, 'session');
       await finalizeInvoice(app, 'p5scratch', s, invoiceId, 200n, 'inv-own', T1, {
         withLock: true,
         withGrantLocks: true,
@@ -587,7 +587,7 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
 
   async function underfundedFinalization(c: Client, s: Scope, invoiceId: string, grant: string, moveContextTo?: string): Promise<string> {
     await c.query('BEGIN');
-    await setRequestContext(c, s);
+    await setRequestContext(c, s, 'session');
     // 300 of consumption rows against an invoice that will claim 500.
     await insertConsumption(c, 'p5scratch', s, grant, 300n, invoiceId, 'inv-underfunded', T1);
     await c.query(
@@ -599,7 +599,7 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
     if (moveContextTo !== undefined) {
       // The attack, and the whole of it: the session's business context moves
       // on before COMMIT. No privilege is needed that the role does not hold.
-      await setRequestContext(c, { tenantId: TENANT, businessId: moveContextTo });
+      await setRequestContext(c, { tenantId: TENANT, businessId: moveContextTo }, 'session');
     }
     const refusal = await c.query('COMMIT').then(
       () => '',
@@ -670,7 +670,7 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
     const s = await freshScope();
     const app = await connect(appUrl());
     try {
-      await setRequestContext(app, s);
+      await setRequestContext(app, s, 'session');
       const invoiceId = await createDraftInvoice(app, 'p5scratch', s, 400n);
       expect(await invoiceRow(owner, invoiceId)).toEqual({ state: 'draft', credit: 0n, payable: 400n });
     } finally {

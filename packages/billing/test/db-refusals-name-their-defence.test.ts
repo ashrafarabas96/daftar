@@ -79,6 +79,12 @@ const MASKED: ReadonlyMap<string, string> = new Map([
   ],
 ]);
 
+/** Every `.test.ts` under `test/db/`, by absolute path. */
+const dbTestPaths = (): string[] =>
+  readdirSync(DB_DIR)
+    .filter((f) => f.endsWith('.test.ts'))
+    .map((f) => join(DB_DIR, f));
+
 /** Every `.test.ts` under `test/db/`, read once. */
 const dbTests = readdirSync(DB_DIR)
   .filter((f) => f.endsWith('.test.ts'))
@@ -159,5 +165,74 @@ describe('a refusal in the DB lane names the defence that refused, not its class
     for (const [name, reason] of MASKED) {
       expect(reason.length, `the exemption for ${name} carries no reason`).toBeGreaterThan(80);
     }
+  });
+  // ── ROUND 14, the coordinator's diff-review R-4 and R-2 ─────────────
+  //
+  // Two laws about shapes this gate could NOT see when it was written, both
+  // found by a reviewer reading the lane rather than by the gate reading
+  // itself. A gate that only bans the forms somebody already thought of is
+  // a gate over a list, so each of these also carries its own witness.
+
+  it('bans an ANY-ERROR assertion on a refusal, which a bare SQLSTATE ban cannot see', () => {
+    // `.not.toBe('')` accepts every failure there is, a lost connection and
+    // a typo in the SQL included, so it is weaker than the bare-class
+    // assertion this gate was built to ban — and it names no class, so the
+    // bare-class law never looked at it. One such assertion stood in
+    // `credit-ledger-attempts.test.ts` for four rounds.
+    const offences: string[] = [];
+    for (const file of dbTestPaths()) {
+      // Comments are stripped first. The comment explaining this law quotes
+      // the very form it bans, and a law that cannot tell code from the
+      // sentence describing it reports its own documentation as a defect —
+      // which is what happened on the first run of this law.
+      const code = readFileSync(file, 'utf8')
+        .split('\n')
+        .map((line) => line.replace(/\/\/.*$/, ''))
+        .join('\n');
+      for (const m of code.matchAll(/\.not\.toBe\(\s*''\s*\)/g)) {
+        offences.push(`${file.split('/').pop()}: ${m[0]} — assert the defence, not the existence of an error`);
+      }
+      for (const m of code.matchAll(/expect\(\s*(?:code|refusal|refusedBy[^)]*)\s*[,)][^;]*?\.toBeTruthy\(\)/g)) {
+        offences.push(`${file.split('/').pop()}: ${m[0].slice(0, 60)} — toBeTruthy() on a refusal is an any-error assertion`);
+      }
+    }
+    expect(offences, 'a refusal is asserted as "some error happened"').toStrictEqual([]);
+
+    // The witness: the law is over a shape that EXISTS in the corpus, so a
+    // typo in the pattern would show up here rather than passing silently.
+    const planted = `const code = ''; expect(code).not.toBe('');`;
+    expect(/\.not\.toBe\(\s*''\s*\)/.test(planted), 'the pattern no longer matches the form it bans').toBe(true);
+  });
+
+  it('pins how many call sites set the request context per SESSION rather than per transaction', () => {
+    // R-2: the helper's scope argument used to DEFAULT to session-level and
+    // 12 of 13 sites took the default, while the pack claimed the lane set
+    // the context per transaction. The default is gone — every site names
+    // its scope — and this law pins the count so the divergence cannot grow
+    // back silently. Raising it is allowed; raising it without changing
+    // this number and `P5-CHECKPOINT.md` §9.3 is not.
+    const sites: string[] = [];
+    for (const file of dbTestPaths()) {
+      const code = readFileSync(file, 'utf8')
+        .split('\n')
+        .map((line) => line.replace(/\/\/.*$/, ''))
+        .join('\n');
+      for (const m of code.matchAll(/setRequestContext\([^;]*?'(session|transaction)'\s*\)/g)) {
+        sites.push(`${file.split('/').pop()}:${m[1]}`);
+      }
+      // A site that names no scope cannot compile any more, but a literal
+      // `set_config('app.…', …, false)` can still be written by hand.
+      for (const _ of code.matchAll(/set_config\('app\.[a-z_]+'[^)]*,\s*false\s*\)/g)) {
+        sites.push(`${file.split('/').pop()}:literal-session`);
+      }
+    }
+    const session = sites.filter((s) => s.endsWith(':session') || s.endsWith(':literal-session'));
+    const transaction = sites.filter((s) => s.endsWith(':transaction'));
+    expect(transaction.length, 'no site sets the context per transaction, so the frozen discipline is unproved').toBeGreaterThanOrEqual(1);
+    // Measured at round 14: fifteen helper sites plus two literal
+    // `set_config(…, false)` calls in the RLS suite. The coordinator counted
+    // the same thing before this round's four new definer-scope cases, as
+    // "12 of 13" plus two literals.
+    expect(session.length, 'the session-scoped site count changed; update this law and CHECKPOINT §9.3 together').toBe(17);
   });
 });

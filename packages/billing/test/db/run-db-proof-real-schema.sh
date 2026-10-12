@@ -35,7 +35,7 @@ CLUSTER=${P5_CLUSTER_DIR:-/home/p5pg/p5cluster-mig}
 P5_LOCALE=${P5_LOCALE:-en_US.utf8}
 SQLDIR="$(cd "$(dirname "$0")/sql" && pwd)"
 REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
-W=${P5_WORK_DIR:-/tmp/claude-0/mig}
+W=${P5_WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/p5-real-lane-XXXXXX")}
 mkdir -p "$W"
 
 if ! id p5pg >/dev/null 2>&1; then useradd -m -s /bin/bash p5pg || exit 1; fi
@@ -68,7 +68,12 @@ if grep -q "__[A-Z_]*__" "$W/bootstrap.sql"; then
   echo "a placeholder survived the substitution; refusing to apply a half-substituted bootstrap"; exit 1
 fi
 psql -v ON_ERROR_STOP=1 "$DAFTAR_SUPER" -f "$W/bootstrap.sql" > "$W/bootstrap.log" 2>&1 \
-  || { echo "bootstrap failed"; tail -5 "$W/bootstrap.log"; exit 1; }
+  || { echo "bootstrap failed"; tail -5 "$W/bootstrap.log"; rm -f "$W/bootstrap.sql"; exit 1; }
+# The substituted copy carries the scratch password; it has served its
+# purpose by now and is not left lying in the work directory (R-14). The
+# password is a scratch-cluster literal on localhost either way, and the
+# cluster's `--auth=trust` is the reason it carries no weight at all.
+rm -f "$W/bootstrap.sql"
 
 # The history, through the project's own runner, as the deployment principal.
 APPLIED_BEFORE=$(psql -tA "$DAFTAR_SUPER" -c "SELECT count(*) FROM schema_migrations" 2>/dev/null | tr -d '[:space:]')
@@ -77,8 +82,19 @@ APPLIED_BEFORE=$(psql -tA "$DAFTAR_SUPER" -c "SELECT count(*) FROM schema_migrat
 MIGRATE_RC=$?
 echo "MIGRATE_RC=$MIGRATE_RC (applied before this run: ${APPLIED_BEFORE:-0})"
 [ "$MIGRATE_RC" = "0" ] || { tail -15 "$W/migrate.log"; exit 1; }
+APPLIED=$(psql -tA "$DAFTAR_SUPER" -c "SELECT count(*) FROM schema_migrations" | tr -d '[:space:]')
+ON_DISK=$(ls -1 "$REPO"/infrastructure/database/migrations/*.sql 2>/dev/null | wc -l | tr -d '[:space:]')
+# ROUND 14, the coordinator's R-14: the lane PRINTED the applied count and
+# asserted nothing about it, so a history that stopped half way would have
+# produced a green lane on a short schema. Now it is a gate.
+if [ "$APPLIED" != "$ON_DISK" ]; then
+  echo "MIGRATION COUNT MISMATCH: $APPLIED rows in schema_migrations, $ON_DISK files on disk."
+  echo "This lane's whole claim is that the REAL history is underneath it; a partial history is not that claim."
+  exit 1
+fi
+echo "MIGRATIONS=$APPLIED (equal to the $ON_DISK files in infrastructure/database/migrations, asserted not printed)"
 psql -tA "$DAFTAR_SUPER" -c \
-  "SELECT 'MIGRATIONS=' || count(*) || ' TABLES=' || (SELECT count(*) FROM information_schema.tables WHERE table_schema='public') || ' (information_schema.tables, schema public, INCLUDING views and schema_migrations)' FROM schema_migrations"
+  "SELECT 'TABLES=' || count(*) || ' (information_schema.tables, schema public, INCLUDING views and schema_migrations)' FROM information_schema.tables WHERE table_schema='public'"
 
 export P5_DB_BOOTSTRAP_URL="postgresql://postgres@localhost:$PGPORT_P5/daftar"
 # THE PLATFORM PRINCIPAL IS A ROLE, SO THE REAL LANE MUST BE THAT ROLE.

@@ -356,6 +356,56 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, public, pg_temp A
 DECLARE
   locked integer;
 BEGIN
+  -- ROUND 14, THE COORDINATOR'S DIFF-REVIEW R-1, AND IT IS THE RIGHT
+  -- FINDING: this function is `SECURITY DEFINER`, it runs as a principal
+  -- every policy admits, and until this round it took the tenant and
+  -- business ids FROM THE CALLER and never compared them with the
+  -- transaction's own context. `EXECUTE` is granted to the application
+  -- role. So an application session could name ANOTHER tenant's business,
+  -- hold that business's grant-row locks until its own transaction ended,
+  -- and read back how many grant rows that business has. Definer rights
+  -- are not an RLS remedy — the cross-phase lesson — and a definer that
+  -- trusts its arguments is the shape of that mistake.
+  --
+  -- The check is FAIL-CLOSED and it refuses BY NAME. `NULLIF(…, '')` is the
+  -- house spelling, so an unset context is NULL and the comparison is NULL,
+  -- not TRUE: no context is a refusal, not a pass.
+  --
+  -- `app_bypass()` MUST NOT BE THE EXEMPTION HERE, AND THIS WAS MEASURED,
+  -- NOT REASONED. The first fix written for R-1 was
+  -- `IF NOT app_bypass() THEN … END IF`, and all three cross-tenant cases
+  -- came back GREEN — the hole still open. The reason is general and worth
+  -- more than this function: the house `app_bypass()` is a CURRENT_USER
+  -- test, and inside a `SECURITY DEFINER` routine CURRENT_USER IS THE
+  -- ROUTINE'S OWNER. So the house bypass is UNCONDITIONALLY TRUE inside
+  -- any definer routine, whoever called it, and it cannot identify a
+  -- caller there. A `SECURITY INVOKER` helper does not rescue it either:
+  -- current_user is inherited from the calling context, which is already
+  -- the definer's.
+  --
+  -- `SESSION_USER` is what a definer cannot overwrite: it is the role the
+  -- session authenticated as, and `SECURITY DEFINER` does not touch it. So
+  -- the exemption is "the session connected as this routine's own owner",
+  -- written as a comparison against CURRENT_USER, which inside this body IS
+  -- the owner. That is lane-independent on purpose: the fixture lane's
+  -- platform principal is `p5owner` and the real lane's is
+  -- `daftar_platform`, and this spelling names neither.
+  --
+  -- Why `integrity_constraint_violation` and not `insufficient_privilege`,
+  -- which reads closer to the offence: 42501 is a class this lane asserts
+  -- BARE in cases where PostgreSQL itself raises it with no constraint
+  -- name, and the F-11 gate allows that because 42501 has a single source.
+  -- Adding a named 42501 here would make those bare assertions ambiguous —
+  -- two defences behind one class, which is exactly what F-11 was about.
+  IF SESSION_USER OPERATOR(pg_catalog.<>) CURRENT_USER THEN
+    IF p_tenant IS DISTINCT FROM NULLIF(app_tenant(), '')::uuid
+       OR p_business IS DISTINCT FROM NULLIF(app_business(), '')::uuid THEN
+      RAISE EXCEPTION 'lock_grants_in_order was called for tenant %/business % by a session whose context is %/%',
+        p_tenant, p_business, NULLIF(app_tenant(), ''), NULLIF(app_business(), '')
+        USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'lgo_scope_is_the_callers_own';
+    END IF;
+  END IF;
+
   -- ROUND 9, the independent challenger's F-10, a P2 found on round 8's own
   -- fix. Round 8 closed the chronology race by taking the per-business
   -- advisory lock inside `pca_chronology()`, which is an AFTER INSERT
@@ -538,9 +588,13 @@ CREATE TRIGGER si_immutable_trg
   FOR EACH ROW EXECUTE FUNCTION p5scratch.si_immutable();
 
 -- A consumption's invoice must exist, in the same business and currency.
--- DEFERRABLE, so the two writes may happen in either order inside one
--- transaction — and NOT INITIALLY DEFERRED, so a transaction that never
--- writes the invoice still fails, at commit.
+-- DEFERRABLE INITIALLY DEFERRED, so the two writes may happen in either
+-- order inside one transaction, and the check happens at COMMIT: a
+-- transaction that never writes the invoice still fails, there rather than
+-- at the INSERT. The comment here said "NOT INITIALLY DEFERRED" while the
+-- statement two lines below said the opposite — the coordinator's diff
+-- review R-13. The statement is the behaviour; this comment now describes
+-- it.
 ALTER TABLE p5scratch.platform_credit_adjustments
   ADD CONSTRAINT pca_invoice_fk
   FOREIGN KEY (tenant_id, business_id, currency, invoice_id)
@@ -832,3 +886,22 @@ CREATE POLICY sca_tenant_membership ON p5scratch.subscription_charge_attempts
 CREATE POLICY sca_business_isolation ON p5scratch.subscription_charge_attempts AS RESTRICTIVE
   USING (app_bypass() OR CURRENT_USER = 'p5_invariants'::name OR business_id = NULLIF(app_business(), '')::uuid)
   WITH CHECK (app_bypass() OR CURRENT_USER = 'p5_invariants'::name OR business_id = NULLIF(app_business(), '')::uuid);
+
+-- ── ROUND 14: no definer routine is EXECUTE-able by PUBLIC ───────────
+-- The coordinator's diff review R-1 and R-3: this file declared three
+-- `SECURITY DEFINER` routines and contained ZERO `REVOKE` statements, so
+-- all three were executable by `PUBLIC` — the default PostgreSQL grants on
+-- a new function. For the two that are reachable by argument that is a
+-- capability; for the trigger function it is tidiness. The grants the
+-- application role actually needs are in `credit-ledger-roles.sql`, which
+-- is applied after this file, so the revoke here does not take anything
+-- the lane relies on — proved by the lane, not asserted: every case that
+-- calls `lock_grants_in_order` as the application role still passes.
+--
+-- A trigger function does not need `EXECUTE` at firing time, only at
+-- `CREATE TRIGGER` time, which has already happened above in this same
+-- file as the owner. That is why the two trigger functions can be revoked
+-- outright with no compensating grant.
+REVOKE ALL ON FUNCTION p5scratch.pca_maintain_remainder() FROM PUBLIC;
+REVOKE ALL ON FUNCTION p5scratch.lock_grants_in_order(uuid, uuid, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION p5scratch.assert_invoice_credit_agrees(uuid) FROM PUBLIC;

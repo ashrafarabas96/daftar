@@ -157,7 +157,14 @@ describe('the measured set, read from the live entitlement engine', () => {
       "INSERT INTO features (key) VALUES ('MAX_NOT_A_LIMIT');",
       '',
     ].join('\n');
-    writeFileSync(join(dir, '0021_fixture.sql'), fixture, 'utf8');
+    // ROUND 14, the coordinator's diff review R-15: this wrote
+    // `0021_fixture.sql` into a temporary directory. It allocated nothing
+    // and reused a number that already exists, but a migration-filename
+    // shaped literal in this package is exactly what the standing rule says
+    // must not appear — a reader grepping for one finds it and has to work
+    // out that it is harmless. The extractor only cares that the name ends
+    // in `.sql`, so the name carries no digits at all now.
+    writeFileSync(join(dir, 'limit-registry-fixture.sql'), fixture, 'utf8');
     const found = registeredLimitKeys(dir);
     expect(found).toContain('MAX_SMS_USAGE');
     expect(found).toContain('MAX_USERS');

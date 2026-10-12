@@ -60,30 +60,48 @@ export async function connectWithoutContext(url: string): Promise<Client> {
 /**
  * The REQUEST CONTEXT, set the way the frozen schema expects it.
  *
- * ROUND 12, the challenger's F-13. `0006_rls.sql` scopes a business-scoped
- * table with TWO policies: a permissive tenant-membership policy, which is
- * an EXISTS over `businesses` comparing `b.tenant_id` to `app_tenant()`,
- * and a restrictive business-scoping policy comparing `business_id` to
- * `app_business()`. A session that sets only `app.business_id` therefore
- * satisfies the restrictive half and FAILS the permissive one — which is
- * what this lane did until this round, and what made its isolation claims
- * incomparable with the frozen schema's.
+ * ROUND 12, the challenger's F-13: a business-scoped relation is guarded by
+ * TWO policies, a permissive tenant one and a restrictive business one, so a
+ * session that sets only `app.business_id` satisfies the restrictive half,
+ * fails the permissive one, and can do nothing at all. The context is set as
+ * a PAIR, always, which is what this helper exists for.
  *
- * `transactionLocal` is the frozen discipline: `set_config(..., true)` has
- * SET LOCAL semantics, so the context dies with the transaction and a
- * pooled connection cannot carry a stale one. It is passed `true` wherever
- * the case owns a transaction, and the sites that do not are the lane's
- * own divergence, recorded in `P5-CHECKPOINT.md` §9 item 3.
+ * ROUND 14, THE COORDINATOR'S DIFF-REVIEW R-2, AND IT IS A FAIR HIT: the
+ * scope used to be an OPTIONAL argument defaulting to session-level, 12 of
+ * 13 call sites took the default, and the pack claimed the lane set the
+ * context "per transaction". The claim was false and the default is what
+ * made it easy to be false — a reader of a call site could not see which
+ * discipline it had chosen.
+ *
+ * So there is NO DEFAULT any more. Every caller names its scope:
+ *
+ *   'transaction'  `set_config(…, true)`, SET LOCAL semantics — the frozen
+ *                  discipline. The context dies with the transaction, so a
+ *                  pooled connection cannot carry a stale one. Only
+ *                  meaningful inside an explicit transaction: outside one,
+ *                  every statement is its own transaction and the context
+ *                  would be gone before the next query.
+ *   'session'      `set_config(…, false)` — this lane's divergence, for the
+ *                  many cases that are a single statement with no
+ *                  transaction of their own. It is a property of the TEST,
+ *                  not of the requested DDL: no policy reads a GUC directly
+ *                  and the DDL sets no context at all.
+ *
+ * The count of 'session' sites is pinned by a law in
+ * `test/db-refusals-name-their-defence.test.ts`, so it cannot drift back up
+ * silently, and `P5-CHECKPOINT.md` §9.3 records the divergence.
  */
+export type ContextScope = 'transaction' | 'session';
+
 export async function setRequestContext(
   c: Client,
   scope: { readonly tenantId: string; readonly businessId: string },
-  transactionLocal = false,
+  contextScope: ContextScope,
 ): Promise<void> {
   await c.query(`SELECT set_config('app.tenant_id', $1, $3), set_config('app.business_id', $2, $3)`, [
     scope.tenantId,
     scope.businessId,
-    transactionLocal,
+    contextScope === 'transaction',
   ]);
 }
 

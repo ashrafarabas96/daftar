@@ -101,9 +101,11 @@ CREATE OR REPLACE FUNCTION p5scratch.app_business() RETURNS TEXT LANGUAGE sql ST
 CREATE OR REPLACE FUNCTION p5scratch.app_bypass() RETURNS BOOLEAN LANGUAGE sql STABLE PARALLEL SAFE
   RETURN CURRENT_USER OPERATOR(pg_catalog.=) 'p5owner'::pg_catalog.name;
 
--- The application role reads `businesses` because the house
--- tenant-membership policy is an EXISTS over it, evaluated as the invoking
--- role. In the real-schema lane the same grant is issued by the lane
--- script as the relation's real owner.
+-- The application role reads `businesses` for the FK target and the lane's
+-- own fixtures, NOT because a policy needs it: the live tenant-membership
+-- policy on a relation carrying its own `tenant_id` compares it directly
+-- and runs no subquery (corrected at round 14, the coordinator's R-13; this
+-- comment described the pre-round-12 shape). In the real-schema lane the
+-- same grant is issued by the lane script as the relation's real owner.
 GRANT SELECT ON p5scratch.businesses TO p5_app;
 GRANT EXECUTE ON FUNCTION p5scratch.app_tenant(), p5scratch.app_business(), p5scratch.app_bypass() TO p5_app, p5_invariants;

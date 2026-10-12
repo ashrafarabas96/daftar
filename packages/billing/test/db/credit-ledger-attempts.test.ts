@@ -168,7 +168,17 @@ describe('no attempt while one has no verdict', () => {
     await attemptInsert(owner, s, invoiceId, 1);
     for (const attemptNo of [1, 2, 9]) {
       const code = await failed(owner, s, invoiceId, attemptNo).then(() => '', (e: unknown) => refusedBy(e));
-      expect(code, `an attempt numbered ${attemptNo} was recorded while attempt 1 had no verdict`).not.toBe('');
+      // ROUND 14, the coordinator's diff-review R-4. This asserted
+      // `.not.toBe('')` — any error at all, a lost connection included —
+      // which is the very defect F-11 closed everywhere else, and the F-11
+      // gate could not see it because it bans only a bare SQLSTATE literal
+      // and this named no SQLSTATE at all. The gate now bans the any-error
+      // shape too. Measured: all three ordinals are refused by the same
+      // named guard, because the defence is "no new attempt while one is
+      // unresolved", not "not this ordinal".
+      expect(code, `an attempt numbered ${attemptNo} was recorded while attempt 1 had no verdict`).toBe(
+        '23000/sca_no_attempt_while_unresolved',
+      );
     }
   });
 
@@ -299,7 +309,7 @@ describe('the application role can do exactly this and no more', () => {
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     const app = await connect(appUrl());
     try {
-      await setRequestContext(app, s);
+      await setRequestContext(app, s, 'session');
       await attemptInsert(app, s, invoiceId, 1);
       await app.query(`UPDATE p5scratch.subscription_charge_attempts SET outcome = 'declined', provider_code = 'fake_card_declined' WHERE invoice_id = $1`, [invoiceId]);
       const r = await app.query<{ outcome: string }>(`SELECT outcome FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [invoiceId]);
@@ -326,7 +336,7 @@ describe('the application role can do exactly this and no more', () => {
     await attemptInsert(owner, theirs, theirInvoice, 1, { outcome: 'failed' });
     const app = await connect(appUrl());
     try {
-      await setRequestContext(app, mine);
+      await setRequestContext(app, mine, 'session');
       const seen = await app.query<{ n: string }>(`SELECT count(*)::text AS n FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [theirInvoice]);
       expect(seen.rows[0]?.n, 'another business’s attempt was visible').toBe('0');
       const wrote = await attemptInsert(app, theirs, theirInvoice, 2).then(() => '', (e: unknown) => refusedBy(e));
