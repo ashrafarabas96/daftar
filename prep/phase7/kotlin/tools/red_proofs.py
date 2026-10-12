@@ -63,8 +63,8 @@ PROOFS: list[Proof] = [
     Proof(
         law="P7-L2-KEY-MINTED-AT-CAPTURE-AND-IMMUTABLE",
         path="src/app/daftar/offline/Queue.kt",
-        find="                    listOf(SideEffect.SendAttempt(id, payloadDigest, attempts + 1)),",
-        replace='                    listOf(SideEffect.SendAttempt(id + "-" + (attempts + 1), payloadDigest, attempts + 1)),',
+        find="                    listOf(SideEffect.SendAttempt(id, payloadDigest, attempts + 1, scope)),",
+        replace='                    listOf(SideEffect.SendAttempt(id + "-" + (attempts + 1), payloadDigest, attempts + 1, scope)),',
         expect_red="a sale committed by the server and lost in transit is not sold twice",
         why="every attempt carries a fresh key, so a retry after a lost answer posts the sale a second time",
     ),
@@ -189,8 +189,8 @@ PROOFS: list[Proof] = [
         # refuses — and it did refuse it, by name, when that was tried. The
         # mutation below keeps the `is` check, so the smart cast survives, and
         # neutralises only the comparison.
-        find="        if (event is QueueEvent.ByScope && event.actingScope != scope) {",
-        replace="        if (event is QueueEvent.ByScope && event.actingScope != event.actingScope) {",
+        find="        if (event is QueueEvent.ByScope && !event.actingScope.mayAct(scope, event)) {",
+        replace="        if (event is QueueEvent.ByScope && !event.actingScope.mayAct(event.actingScope, event)) {",
         expect_red="a sale captured in one business is not sent under another",
         why="the scope gate is disabled, so a sale captured in business A is sent under business B's header with A's key and is committed into B's ledger, which the server cannot detect because both halves of the identity it is handed are consistent",
     ),
@@ -205,10 +205,18 @@ PROOFS: list[Proof] = [
     Proof(
         law="HARNESS-THE-SCOPE-SEARCH-CANNOT-STOP-OFFERING-A-FOREIGN-SESSION",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
-        find="        for (acting in listOf(scope, foreignScope)) {",
+        find="        for (acting in listOf(scope, foreignScope, nextShiftScope)) {",
         replace="        for (acting in listOf(scope)) {",
         expect_red="every reachable configuration honours every invariant",
         why="the model check stops offering the kernel another account's session; every invariant still passes, so only the non-vacuity count distinguishes a search that proved INV-9 from one that never tested it",
+    ),
+    Proof(
+        law="HARNESS-THE-SCOPE-SEARCH-CANNOT-STOP-OFFERING-THE-NEXT-SHIFT",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="        for (acting in listOf(scope, foreignScope, nextShiftScope)) {",
+        replace="        for (acting in listOf(scope, foreignScope)) {",
+        expect_red="every reachable configuration honours every invariant",
+        why="the search stops offering the one configuration F-05 made legal: another member of the SAME business. Every invariant still passes, because no permitted event then ever acts under a scope other than the row's — which is exactly the blindness that let the send effect take its business from the event rather than the row and move nothing here. Only the non-vacuity count distinguishes the two searches",
     ),
     Proof(
         law="P7-L15-NO-REENTRY-UNDER-A-NEW-KEY-BEFORE-THE-ORIGINAL-IS-SETTLED",
@@ -347,9 +355,15 @@ PROOFS: list[Proof] = [
         law="P7-L19-UNDETERMINED-IS-NOT-ROUTED-TO-A-REFUSAL",
         path="src/app/daftar/offline/Reconciliation.kt",
         find="""            Provenance.ORIGINAL_LOST -> Reentry.Refused(
-                "offline.prior_state_undetermined",""",
+                "offline.prior_state_undetermined",
+                P7Laws.AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE.id,
+                "this install cannot tell an empty queue from a destroyed one, so it cannot " +
+                    "establish that nothing was captured; a new key here would commit a second " +
+                    "time if the earlier operation landed",
+            )""",
         replace="""            Provenance.ORIGINAL_LOST -> Reentry.Permitted(
-                "offline.prior_state_undetermined",""",
+                "the store cannot be vouched for, but an empty read is good enough",
+            )""",
         expect_red="every prior outcome, receipt answer and provenance has a stated verdict",
         why="the classification correctly reports that it cannot vouch for the store, and the decision then permits a new key anyway: F-01 reintroduced one level further in, where the new enum value exists but decides nothing",
     ),
@@ -364,10 +378,10 @@ PROOFS: list[Proof] = [
     Proof(
         law="HARNESS-THE-STATE-COVERAGE-GUARD-CAN-FAIL-ON-SYNCED",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
-        find="                        val print = fingerprint(next, nextHistory)",
-        replace="                        val print = if (next.state == OperationState.SYNCED) \"skip\" else fingerprint(next, nextHistory)",
+        find="                                if (visited.add(print)) frontier.addLast(next to nextHistory)",
+        replace="                                if (next.state != OperationState.SYNCED && visited.add(print)) frontier.addLast(next to nextHistory)",
         expect_red="every reachable configuration honours every invariant",
-        why="challenger finding F-03, as its probe 3: a plausible do-not-explore-from-a-terminal-state optimization. The search stops dequeuing SYNCED nodes, so INV-1 — the invariant the whole model check exists for — becomes vacuous. Before the union was removed this stayed 72/72 green; the guard that is supposed to notice could not",
+        why="challenger finding F-03, as its probe 3 exactly: a plausible do-not-explore-from-a-terminal-state optimization. SYNCED nodes are never enqueued, so the search never dequeues one, never records the state, and INV-1 — the invariant the whole model check exists for — becomes vacuous. With the union the challenger found still in place this stayed green; the first attempt at this plant, a fingerprint collapsed to a constant for SYNCED, ALSO stayed green, because the first such node is still visited and the state is still recorded. A plant that does not reproduce the finding measures nothing, which is why this one is written the way the finding was found",
     ),
     Proof(
         law="P7-L13-THE-BUSINESS-IS-NEVER-RELAXED",

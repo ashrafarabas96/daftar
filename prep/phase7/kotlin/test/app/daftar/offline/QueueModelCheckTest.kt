@@ -39,6 +39,30 @@ class QueueModelCheckTest {
      */
     private val foreignScope = OwnerScope("tenant-1", "business-2", "member-1")
 
+    /**
+     * The same till, same business, after the shift changed — the one
+     * configuration challenger finding F-05 made legal. Enumerating it is what
+     * makes INV-2's claim about the send's scope falsifiable: before it existed
+     * no permitted event ever acted under a scope other than the row's, so an
+     * effect that took its business from the EVENT instead of the ROW moved
+     * nothing in this search and nothing here could see it.
+     */
+    private val nextShiftScope = OwnerScope("tenant-1", "business-1", "member-2")
+
+    /**
+     * What L13 permits, written out here rather than asked of the kernel.
+     *
+     * Calling `mayAct` would make this test agree with whatever the gate says,
+     * which is not a check. Tenant and business are the half of the source
+     * identity the server cannot validate, so they are required for every
+     * event; the member is a decision boundary, so it is required for the
+     * events where a person decides something and not for a transmission.
+     */
+    private fun permittedToAct(acting: OwnerScope, owner: OwnerScope, event: QueueEvent.ByScope): Boolean =
+        acting.tenantId == owner.tenantId &&
+            acting.businessId == owner.businessId &&
+            (event is QueueEvent.Send || acting.memberId == owner.memberId)
+
     /** One representative answer per branch of the classifier. */
     private val answers: List<AttemptResult> = listOf(
         AttemptResult.Answered(200, null, true, null), // synced, replayed
@@ -52,7 +76,7 @@ class QueueModelCheckTest {
     )
 
     private fun events(): List<QueueEvent> = buildList {
-        for (acting in listOf(scope, foreignScope)) {
+        for (acting in listOf(scope, foreignScope, nextShiftScope)) {
             add(QueueEvent.Release(acting))
             add(QueueEvent.CancelByMerchant(acting))
             add(QueueEvent.Send(digest, acting))
@@ -85,6 +109,7 @@ class QueueModelCheckTest {
         var refusals = 0
         val statesSeen = mutableSetOf<OperationState>()
         var foreignScopeRefusals = 0
+        var nextShiftSends = 0
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
 
@@ -101,7 +126,9 @@ class QueueModelCheckTest {
                     when (val step = op.step(event)) {
                         is Step.Refused -> {
                             refusals++
-                            if (event is QueueEvent.ByScope && event.actingScope != op.scope) {
+                            if (event is QueueEvent.ByScope &&
+                                !permittedToAct(event.actingScope, op.scope, event)
+                            ) {
                                 foreignScopeRefusals++
                                 // INV-9a: a foreign scope is refused AS a scope
                                 // problem, never as a payload or a sequencing
@@ -146,11 +173,12 @@ class QueueModelCheckTest {
                                     "(${P7Laws.QUEUE_SCOPED_BY_OWNER.id})",
                             )
                             if (event is QueueEvent.ByScope) {
-                                assertEquals(
-                                    op.scope, event.actingScope,
-                                    "a foreign session moved this row: $op -> $next on $event " +
-                                        "(${P7Laws.NO_CROSS_ACCOUNT_SEND.id})",
+                                assertTrue(
+                                    permittedToAct(event.actingScope, op.scope, event),
+                                    "a session L13 does not permit moved this row: $op -> $next " +
+                                        "on $event (${P7Laws.NO_CROSS_ACCOUNT_SEND.id})",
                                 )
+                                if (event.actingScope != op.scope) nextShiftSends++
                             }
                             assertEquals(
                                 QueueSchema.CURRENT, next.schemaVersion,
@@ -325,6 +353,11 @@ class QueueModelCheckTest {
             foreignScopeRefusals > 0,
             "no foreign-scope event was ever refused, so INV-9 is vacuous: the search never " +
                 "offered the kernel another account's session",
+        )
+        assertTrue(
+            nextShiftSends > 0,
+            "no event under another member of the same business ever moved anything, so INV-2's " +
+                "claim that a send carries the ROW's scope rather than the sender's is vacuous",
         )
         assertTrue(edges > 1_000, "only $edges edges were explored")
     }
