@@ -69,6 +69,36 @@ removed: **a LOCATION problem printed as a CONTENT verdict.**
 | **the absolute directory is printed beside every exit code** (coordinator relay) | same | so this class cannot be recorded away again |
 | **a fifth lane in which the PACK ITSELF is under `/tmp`** (coordinator relay) | same | running the gates *from* `/tmp` was never the same property: every command named the pack by absolute path, so the pack stayed outside `/tmp` in all four lanes and the failing case could not appear |
 
+### Measured, with the path beside every code
+
+Run `P14-R8-20261012T164848Z`, host `vm`, 2026-10-12T16:48:48Z,
+PostgreSQL 16.15 `datcollate=en_US.utf8`, four roles `NOSUPERUSER NOBYPASSRLS`.
+
+| command | measured from | rc |
+|---|---|---|
+| `tools/gate-sweep.sh` | `/home/user/daftar` | **0** |
+| each static gate | `/home/user/daftar/phase-preparation/phase14`, `/home/user/daftar`, `/tmp`, `/tmp/tmp.dZHD7PuRAn/wt` | **0** identical ×4 |
+| the same three gates **with the pack under `/tmp`** | `/tmp/tmp.dZHD7PuRAn/wt/phase-preparation/phase14` | **0** each |
+| `proofs/replay.sh` | all four | **0** (46 cases, 0 off their required code) |
+| `proofs/redproof-preflight.sh` | all four | **0** (5 arms, 0 not red; the version arm UNFENCED) |
+| red proofs | `/tmp` | `provenance-stale` 1, `provenance-foreign-repo` 2, `provenance-nonrepo-ancestor` 2, `provenance-empty-table` 2, `provenance-floor` 2, `manifest-digest-corrupt` 1, `retracted-claim-planted` 1, `no-cluster` 1, `rolecount-discriminates` 1, `no-cluster-revert` 0 |
+| `tools/manifest-digests.py --check` | pack and `/mnt/project-files/phase14` | **0**, 32/32 rows both |
+
+**Two of those red proofs are required by their MESSAGE and not by their exit
+code** (`MEASUREMENT EMPTY`, `MEASUREMENT INCOMPLETE`), because both refusals
+answer `2` and an exit code cannot tell one from another. That is `COORD P3-07`
+applied here rather than only recorded; it remains open for the SQL red proofs,
+where it changes every line of `ORDER`.
+
+**And the sweep caught my own bad proof.** My first `provenance-empty-table`
+mutation used the repository's own root commit as `--base`, assuming it would
+be empty of the cited files. It carries **972** files, so the gate answered `1`
+(stale) instead of `2` (refused) and the sweep failed. The proof now
+**constructs** the world it needs: a real repository, with the pack inside it so
+the ancestry refusal cannot fire instead, and a committed tree that knows
+nothing of the cited files — then one cited file is placed on disk there and
+left untracked, which is the exact shape of the defect.
+
 ---
 
 ## 2 — THE SMALLER FINDINGS

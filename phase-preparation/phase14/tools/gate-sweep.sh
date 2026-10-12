@@ -160,13 +160,40 @@ red provenance-nonrepo-ancestor \
   "true" \
   "python3 -I $HERE/citation-provenance.py --pack $NR/inner/phase14 --repo $NR --check $NR/inner/phase14/P14-MIGRATION-PATCH-REQUEST.md" 2 \
   "true"
-# And the source-derived floor: a base tree that does not contain the cited
-# files at all. The table would be empty while every cited file sits on disk.
-ROOTC=$(git -C "$REPO" rev-list --max-parents=0 HEAD 2>/dev/null | head -1)
-red provenance-empty-table \
-  "true" \
-  "python3 -I $HERE/citation-provenance.py --check $DOC --base ${ROOTC:-HEAD}" 2 \
-  "true"
+# The two refusals R8-P2-02 added are required BY THEIR OWN MESSAGE, not by
+# their exit code: both answer 2, and an exit code alone cannot tell one
+# refusal from another -- which is COORD P3-07's point, applied here rather
+# than only recorded. The world they need is CONSTRUCTED: a real repository,
+# with the pack inside it (so the ancestry refusal cannot fire instead) and a
+# committed tree that knows nothing of the cited files. My first attempt at
+# this proof used the repository's own root commit, which already carries 972
+# files: it answered 1, the proof was wrong, and the sweep caught it.
+ER=$(mktemp -d); git -C "$ER" init -q
+mkdir -p "$ER/phase-preparation"; cp -r "$PACK" "$ER/phase-preparation/phase14"
+echo scaffolding > "$ER/unrelated.txt"; git -C "$ER" add unrelated.txt
+git -C "$ER" -c user.email=p14@local -c user.name=p14 commit -q -m 'a tree that knows nothing of the cited files'
+EP="$ER/phase-preparation/phase14"
+named() { # name | expected-rc | required message | command
+  local nm="$1" want="$2" msg="$3"; shift 3
+  local out rc
+  out=$( cd /tmp && eval "$@" 2>&1 ); rc=$?
+  if [ "$rc" = "$want" ] && printf '%s' "$out" | grep -q "$msg"; then
+    printf 'ok    %-26s rc=%s, refused with %s\n' "$nm" "$rc" "$msg"
+  else
+    printf 'FAIL  %-26s rc=%s (required %s), and the message was not %s: %s\n' \
+           "$nm" "$rc" "$want" "$msg" "$(printf '%s' "$out" | head -1 | cut -c1-90)"
+    fail=$((fail+1))
+  fi
+}
+named provenance-empty-table 2 "MEASUREMENT EMPTY" \
+  "python3 -I $HERE/citation-provenance.py --pack $EP --repo $ER --base HEAD --other HEAD --check $EP/P14-MIGRATION-PATCH-REQUEST.md"
+# ...and now one cited file is PRESENT on disk in that repository but unknown to
+# git, which is the exact shape of the defect: the table would be short and the
+# shortfall would read as "absent at the other tree".
+mkdir -p "$ER/infrastructure/database"
+cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$ER/infrastructure/database/"
+named provenance-floor 2 "MEASUREMENT INCOMPLETE" \
+  "python3 -I $HERE/citation-provenance.py --pack $EP --repo $ER --base HEAD --other HEAD --check $EP/P14-MIGRATION-PATCH-REQUEST.md"
 red manifest-digest-corrupt \
   "sed -i '0,/| \`[0-9a-f]\{64\}\` |/s/| \`\([0-9a-f]\{64\}\)\` |/| \`0\{64\}\` |/' '$PACK/P14-HANDOFF-MANIFEST.md'" \
   "python3 -I $HERE/manifest-digests.py --dir $PACK --check" 1 \
@@ -175,7 +202,7 @@ red retracted-claim-planted \
   "printf '\n\nthe three absent ones are cited only for Phase 4 surface facts\n' >> '$PACK/README-AR.md'" \
   "python3 -I $HERE/retracted-claims.py --pack $PACK --check" 1 \
   "cp '$T/ar.bak' '$PACK/README-AR.md'" "$PACK/README-AR.md"
-rm -rf "$T" "$FR" "$NR"
+rm -rf "$T" "$FR" "$NR" "$ER"
 
 # ---- the no-cluster red proof (COORD-DIFF-REVIEW R1 P2-05, confirmed by
 # execution in P14-CHALLENGE-583a4a0-ADDENDUM-01). The preflight red proofs used
