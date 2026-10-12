@@ -1934,6 +1934,47 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // built, because §4.1's dates are civil dates and carry no time of day.
     expect(buildReversalMovement(ledger, { ...request, points: 40n, asOf: '2026-01-02' }).pointsDelta).toBe(40n);
 
+    // AND THE HARM THE GUARD STOPS, hand-built because the writer now refuses
+    // it and the DDL still permits it. The challenge measured a consumption
+    // dated after its own reversal: at a date where the reversal is visible and
+    // the consumption is not, the ledger reports a balance of 140 for a
+    // customer who has earned 100. Redemption is not over-offered — the lot
+    // backs 100 — so this is a reporting and attribution defect, and it heals
+    // once the target becomes visible. It is asserted here so the figure in
+    // §A.3c.3 of the patch request is a measurement and not a recollection.
+    const outOfOrder: LoyaltyLedger = {
+      movements: [
+        {
+          id: 'e9', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
+          movementKind: 'earn', sourceType: 'sale', sourceId: 'sale-e9',
+          pointsDelta: 100n, expiresOn: '2027-01-01', effectiveOn: '2026-01-01',
+          reason: null, correctsId: null,
+        },
+        {
+          id: 'c9', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 2n,
+          movementKind: 'consume', sourceType: 'sale', sourceId: 'sale-c9',
+          pointsDelta: -40n, expiresOn: null, effectiveOn: '2026-09-01',
+          reason: null, correctsId: null,
+        },
+        {
+          id: 'r9', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
+          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-r9',
+          pointsDelta: 40n, expiresOn: null, effectiveOn: '2026-03-01',
+          reason: 'sale fully reversed', correctsId: 'c9',
+        },
+      ],
+    };
+    const early = foldExpiry(outOfOrder, BUSINESS, CUSTOMER, '2026-05-01');
+    expect(early.balancePoints).toBe(140n);
+    expect(early.unattributablePoints).toBe(40n);
+    expect(early.spendablePoints).toBe(100n);
+    expect(eligiblePoints(outOfOrder, BUSINESS, CUSTOMER, '2026-05-01')).toBe(100n);
+    // And once the target is visible the figures are the ordinary ones again.
+    const later = foldExpiry(outOfOrder, BUSINESS, CUSTOMER, '2026-12-01');
+    expect(later.balancePoints).toBe(100n);
+    expect(later.spendablePoints).toBe(60n);
+    expect(eligiblePoints(outOfOrder, BUSINESS, CUSTOMER, '2026-12-01')).toBe(60n);
+
     // And the bound counts what earlier corrections already gave back, so two
     // partial restorations cannot together exceed the whole.
     const half = appendMovement(
