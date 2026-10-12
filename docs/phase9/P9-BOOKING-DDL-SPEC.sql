@@ -268,6 +268,38 @@
 --          plus a transition on the old one, in one transaction. What is new
 --          is that the schema now refuses the halves.
 --
+-- R-P9-18  A RESCHEDULE CHAIN ENDS IN A BOOKING THAT IS KEPT.
+--
+--          R-P9-17 asks each row about its immediate counterpart, and a
+--          PAIRWISE law cannot see a RING. The sixth independent pass
+--          committed a 2-ring and a 3-ring in one transaction (C6-P9-01):
+--          five rows, every pairwise check satisfied, and no chain among them
+--          reaching a booking anybody keeps — an hour rescheduled into a
+--          circle. It is the asymmetric pair's mistake one level up, and the
+--          lesson is the same one twice: a check sees exactly as far as it
+--          walks.
+--
+--          So: following the forward links from a row must END on a row that
+--          is not `'rescheduled'` (`booking.chain_is_a_ring`). What that end
+--          row is — kept, cancelled, completed or a no-show — is somebody's
+--          decision; a ring is nobody's.
+--
+--          The same pass also measured what NOT to do. Requiring the
+--          successor named at a close to be `'booked'` at that moment would
+--          kill every ring, since a ring's last link closes onto an
+--          already-`'rescheduled'` row — and it would refuse the lawful
+--          `A -> B` then `B -> C`, whose middle row is legitimately
+--          `'rescheduled'` at commit, both sequentially and in one
+--          transaction. The law is about termination, not about the next
+--          row's state, and that is a measured distinction rather than a
+--          preference.
+--
+--          The walk needs no bound to terminate — each iteration exits,
+--          raises, or appends an id never seen, over a finite relation — so
+--          `booking.chain_too_long` is defence in depth and is set far above
+--          any chain a business produces. Nothing here decides how many times
+--          a booking may be moved; that is not the schema's to choose.
+--
 -- R-P9-10  Every refusal is `'<domain>.<snake_case_condition>: sentence'`
 --          with `ERRCODE = 'P0001'`, the convention of every migration from
 --          0053 on. Domain prefix `booking.`.
@@ -1219,6 +1251,10 @@ CREATE OR REPLACE FUNCTION bookings_chain_symmetric() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_counterpart UUID;
+  v_walk        UUID;
+  v_state       TEXT;
+  v_seen        UUID[] := ARRAY[]::UUID[];
+  v_guard       CONSTANT INTEGER := 4096;
 BEGIN
   -- (a) This row names a successor. That successor names this row back.
   IF NEW.rescheduled_to_id IS NOT NULL THEN
@@ -1250,10 +1286,79 @@ BEGIN
     END IF;
   END IF;
 
+  -- (c) R-P9-18. THE CHAIN TERMINATES IN A BOOKING THAT WILL BE KEPT.
+  --
+  -- (a) and (b) ask each row about its immediate counterpart, and a pairwise
+  -- law cannot see a RING. The sixth independent pass committed a 2-ring and a
+  -- 3-ring at the previous subject (C6-P9-01): five rows, every pairwise check
+  -- satisfied, and not one of them leading to a booking anybody keeps — an
+  -- hour rescheduled into a circle. That is the same shape of mistake as the
+  -- asymmetric pair the shape CHECKs could not see, one level up.
+  --
+  -- The law is therefore global, not pairwise: follow the forward links and the
+  -- walk must end on a row that is not 'rescheduled'. The same pass measured
+  -- what NOT to do: a cheap guard requiring the successor named at a close to
+  -- be 'booked' at that moment would kill every ring, because a ring's last
+  -- link closes onto an already-'rescheduled' row — and it would also refuse
+  -- the lawful A -> B then B -> C, whose middle row is legitimately
+  -- 'rescheduled' at commit. Measured, not assumed, and that is why the law is
+  -- about termination rather than about the next row's state.
+  --
+  -- The walk TERMINATES without needing a bound: every iteration either exits,
+  -- raises, or appends an id it has never seen, and the relation is finite.
+  -- v_guard is therefore defence in depth and not the mechanism — it is set
+  -- far above any chain a business could produce, and if it ever fires the
+  -- data is already wrong, so it refuses rather than passes. Nothing here
+  -- decides a policy limit on how many times a booking may be moved.
+  v_walk := NEW.id;
+  LOOP
+    IF v_walk = ANY(v_seen) THEN
+      RAISE EXCEPTION 'booking.chain_is_a_ring: the reschedule chain through booking % returns to % and never reaches a booking that is kept', NEW.id, v_walk USING ERRCODE = 'P0001';
+    END IF;
+    v_seen := v_seen || v_walk;
+
+    SELECT b.state, b.rescheduled_to_id INTO v_state, v_counterpart
+      FROM public.bookings b
+     WHERE b.business_id = NEW.business_id AND b.id = v_walk;
+    -- Same discipline as (a) and (b). One honest qualification, because it is
+    -- the difference between a proof and a story: in THIS schema the branch is
+    -- defence in depth rather than independently reachable. A chain can only
+    -- ever be extended at its tail — a successor is born carrying its
+    -- backlink, and R-P9-15 freezes that backlink, so no row can be grafted
+    -- onto the middle of an existing chain — which means every row this walk
+    -- reads is also the immediate counterpart of some row written in the same
+    -- transaction, and (a) reads it too. The branch is here because the walk
+    -- is the mechanism that would have to carry the refusal if that ever
+    -- stopped being true, and because a walk that ends early on an invisible
+    -- row would report a ring as terminated, which is the worst possible
+    -- failure for a reachability law.
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'booking.chain_unreadable: the reschedule chain through booking % reaches % and that booking could not be read, so the chain cannot be checked', NEW.id, v_walk USING ERRCODE = 'P0001';
+    END IF;
+
+    -- A row that is not 'rescheduled' is the end of the chain: it is the
+    -- booking that is actually kept, or a cancellation, a completion or a
+    -- no-show, each of which is an ending somebody decided.
+    EXIT WHEN v_state <> 'rescheduled';
+
+    -- `bookings_reschedule_shape_ck` makes this unreachable. It is named
+    -- rather than trusted, for the reason the buffer guard names an absent
+    -- service: a walk that cannot continue must refuse, not stop and call the
+    -- chain terminated.
+    IF v_counterpart IS NULL THEN
+      RAISE EXCEPTION 'booking.chain_unterminated: booking % is rescheduled and names no successor, so the chain through % ends nowhere', v_walk, NEW.id USING ERRCODE = 'P0001';
+    END IF;
+
+    IF array_length(v_seen, 1) > v_guard THEN
+      RAISE EXCEPTION 'booking.chain_too_long: the reschedule chain through booking % passed % bookings without ending, which no business produces and no walk should follow further', NEW.id, v_guard USING ERRCODE = 'P0001';
+    END IF;
+    v_walk := v_counterpart;
+  END LOOP;
+
   RETURN NULL;
 END $$;
 COMMENT ON FUNCTION bookings_chain_symmetric() IS
-  'P9-S1, R-P9-17. Deferred constraint trigger on `bookings` INSERT and UPDATE: at COMMIT the two halves of a reschedule name each other, or the write is refused (booking.chain_asymmetric); a counterpart the check cannot read is a refusal of its own (booking.chain_unreadable), never a pass. It exists because R-P9-08, R-P9-15 and R-P9-16 all leave the FIRST write of the forward link — the close — unchecked for agreement, which an executed attack used to commit four disagreeing chains (C5-P9-01). Being deferred it requires the pair in one transaction, the contract the table comment and R-P9-08 already state. SECURITY DEFINER, owned by daftar_booking_internal, so row security cannot make it blind to its own subject; tenancy is carried by the composite FKs, not by this read.';
+  'P9-S1, R-P9-17. Deferred constraint trigger on `bookings` INSERT and UPDATE: at COMMIT the two halves of a reschedule name each other, or the write is refused (booking.chain_asymmetric); a counterpart the check cannot read is a refusal of its own (booking.chain_unreadable), never a pass. It exists because R-P9-08, R-P9-15 and R-P9-16 all leave the FIRST write of the forward link — the close — unchecked for agreement, which an executed attack used to commit four disagreeing chains (C5-P9-01). Being deferred it requires the pair in one transaction, the contract the table comment and R-P9-08 already state. It also carries R-P9-18: following the forward links from this row must END on a row that is not ''rescheduled'' (booking.chain_is_a_ring), because a pairwise law cannot see a ring and an executed attack committed a 2-ring and a 3-ring whose every pairwise check held (C6-P9-01). The walk terminates on its own visited set, so booking.chain_too_long is defence in depth and not the mechanism, and booking.chain_unterminated names a shape bookings_reschedule_shape_ck already forbids rather than trusting it. SECURITY DEFINER, owned by daftar_booking_internal, so row security cannot make it blind to its own subject — which matters more for the walk than for the pair, since it reads further than one row; tenancy is carried by the composite FKs, not by these reads.';
 REVOKE ALL ON FUNCTION bookings_chain_symmetric() FROM PUBLIC;
 
 CREATE CONSTRAINT TRIGGER bookings_chain_agrees

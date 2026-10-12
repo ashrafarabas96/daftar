@@ -243,7 +243,7 @@ read it (end-state check (f)).
 | `bookings_no_delete()` | raise-only, not a definer | `bookings_no_deletion` BEFORE DELETE | `booking.not_deletable` |
 | `bookings_transition()` | raise-only, not a definer | `bookings_transition_only` BEFORE UPDATE | `booking.immutable`, `booking.immutable_settlement`, `booking.settlement_without_close`, `booking.settlement_after_close`, `booking.state_terminal`, `booking.state_not_reopenable` (unreachable as shipped — limitation 18) |
 | `bookings_born_booked()` | raise-only, not a definer | `bookings_born_booked_only` BEFORE INSERT | `booking.not_born_closed` |
-| `bookings_chain_symmetric()` | `SECURITY DEFINER`, owned by `daftar_booking_internal`, pinned path | `bookings_chain_agrees` — CONSTRAINT trigger, `DEFERRABLE INITIALLY DEFERRED`, AFTER INSERT OR UPDATE, `WHEN` either reschedule link is non-NULL | `booking.chain_asymmetric`, `booking.chain_unreadable` |
+| `bookings_chain_symmetric()` | `SECURITY DEFINER`, owned by `daftar_booking_internal`, pinned path | `bookings_chain_agrees` — CONSTRAINT trigger, `DEFERRABLE INITIALLY DEFERRED`, AFTER INSERT OR UPDATE, `WHEN` either reschedule link is non-NULL | `booking.chain_asymmetric`, `booking.chain_unreadable`, `booking.chain_is_a_ring`, `booking.chain_unterminated`, `booking.chain_too_long` |
 | `bookings_buffers_match_service()` | `SECURITY DEFINER`, owned by `daftar_booking_internal`, pinned path | `bookings_buffers_are_the_service_s` — CONSTRAINT trigger, `DEFERRABLE INITIALLY DEFERRED`, `WHEN (kind = 'appointment')` | `booking.service_unreadable`, `booking.buffers_not_the_service_s` |
 | `booking_operations_immutable()` | raise-only, not a definer | `booking_operations_no_mutation` | per spec §7 |
 
@@ -266,7 +266,11 @@ may set. That one-transaction sentence is now ENFORCED and not merely stated:
 each other (R-P9-17), so a half-written chain is refused. The deployment must therefore keep
 `bookings_chain_agrees` `DEFERRABLE INITIALLY DEFERRED` — the end-state block refuses the
 migration otherwise, because evaluated per statement this check would refuse every lawful
-reschedule.
+reschedule. The same routine carries R-P9-18: following the forward links from a written row
+must END on a row that is not `'rescheduled'` (`booking.chain_is_a_ring`), because a pairwise
+check cannot see a ring and an executed attack committed a 2-ring and a 3-ring whose every
+pairwise check held. Its walk terminates on its own visited set, so `booking.chain_too_long`
+is defence in depth at 4096 and not a policy limit on how often a booking may be moved.
 
 ### 4.1 R-P9-11 — the per-resource serialization key, and why it is requested
 
@@ -526,7 +530,7 @@ money-shaped column reached the schema.
 
 ## 9. EVIDENCE
 
-**93 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
+**97 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
 PostgreSQL 16.15 cluster at `en_US.utf8` under Node v24.21.0** (and again on 18.4 at `C` as a comparison), with the
 spec applied in one transaction as the non-superuser deployment principal
 `daftar_migrator` on top of the sealed Phase 3 head.

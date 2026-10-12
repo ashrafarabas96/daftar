@@ -834,3 +834,217 @@ describe('P9 — the reschedule chain agrees with itself (R-P9-17, C5-P9-01)', (
     });
   });
 });
+
+/**
+ * A RESCHEDULE CHAIN ENDS IN A BOOKING THAT IS KEPT (R-P9-18).
+ *
+ * R-P9-17 made each pair of links agree, and the sixth independent pass then
+ * committed rows where every pair agrees and the whole says nothing: a 2-ring
+ * and a 3-ring, five rows in all, not one of whose chains reaches a booking
+ * anybody keeps (C6-P9-01). Its measured output at `0f4f0e4`:
+ *
+ *   [J1] a 2-ring (A says B replaced it, B says A replaced it): ** NO REFUSAL **
+ *   [J1] a 3-ring:                                              ** NO REFUSAL **
+ *   [J1] committed 'rescheduled' bookings whose chain reaches NO standing booking: 5
+ *
+ * The same pass measured the fix NOT to take, which is why these cases also
+ * assert the lawful two-hop chain in both shapes: requiring the successor
+ * named at a close to be `'booked'` would kill every ring and also refuse
+ * `A -> B` then `B -> C`, whose middle row is legitimately `'rescheduled'`.
+ *
+ * `CHAIN_ENDS_NOWHERE` below is the challenger's own J1 assertion, kept as the
+ * law's independent statement: it is not the trigger's code read back, so it
+ * can disagree with the trigger, which is the only way a case about a global
+ * property is worth anything.
+ */
+const CHAIN_ENDS_NOWHERE = `
+  WITH RECURSIVE walk(root, id, state, next_id, seen) AS (
+    SELECT b.id, b.id, b.state, b.rescheduled_to_id, ARRAY[b.id]
+      FROM bookings b WHERE b.business_id = $1 AND b.state = 'rescheduled'
+    UNION ALL
+    SELECT w.root, b.id, b.state, b.rescheduled_to_id, w.seen || b.id
+      FROM walk w JOIN bookings b ON b.business_id = $1 AND b.id = w.next_id
+     WHERE w.state = 'rescheduled' AND NOT (b.id = ANY(w.seen))
+  )
+  SELECT count(*)::int AS n FROM (
+    SELECT root FROM walk GROUP BY root HAVING bool_or(state <> 'rescheduled') IS NOT TRUE
+  ) ends_nowhere`;
+
+describe('P9 — a reschedule chain ends in a booking that is kept (R-P9-18, C6-P9-01)', () => {
+  /** A row born standing and carrying a backlink, which R-P9-16 permits. */
+  const bornWithBacklink = async (db: ScratchDb, world: BookingWorld, client: Client, id: string, back: string, from: string, to: string): Promise<void> => {
+    await client.query(INSERT_BOOKING_WITH_BACKLINK, [...bookingParams({ world, id, startsAt: AT(from), endsAt: AT(to) }), back]);
+  };
+  const close = async (client: Client, world: BookingWorld, id: string, onto: string): Promise<void> => {
+    await client.query(
+      `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
+         settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
+      [world.businessId, world.userId, onto, id],
+    );
+  };
+
+  /**
+   * Build a ring of `ids` in ONE transaction and return the refusal, or `''`.
+   *
+   * It has to be one transaction and it has to be built this way: R-P9-16
+   * refuses a row born `'rescheduled'` or born with a forward link, so each
+   * row is born standing with its BACKLINK (which R-P9-16 permits and the
+   * deferred composite FK allows to name a row inserted later), and every row
+   * is then closed onto the next. At commit each pair agrees — which is the
+   * whole point of the case.
+   */
+  const ring = async (db: ScratchDb, world: BookingWorld, ids: readonly string[], hour: number): Promise<string> => {
+    const client = new Client({ connectionString: db.url('postgres') });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      for (const [i, id] of ids.entries()) {
+        const back = ids[(i + ids.length - 1) % ids.length] as string;
+        const h = hour + i;
+        await bornWithBacklink(db, world, client, id, back, String(h).padStart(2, '0'), String(h + 1).padStart(2, '0'));
+      }
+      for (const [i, id] of ids.entries()) await close(client, world, id, ids[(i + 1) % ids.length] as string);
+      await client.query('COMMIT');
+      return '';
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      return refusal(e);
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+  };
+
+  const endsNowhere = async (db: ScratchDb, world: BookingWorld): Promise<number> => {
+    const r = await db.pool.query<{ n: number }>(CHAIN_ENDS_NOWHERE, [world.businessId]);
+    return r.rows[0]?.n ?? -1;
+  };
+
+  it('a 2-ring is REFUSED, and nothing commits', async () => {
+    await withBookingDb('daftar_p9_ring_2', async (db, world) => {
+      const said = await ring(db, world, [uuid(51), uuid(52)], 9);
+      expect(said).toMatch(/booking\.chain_is_a_ring/);
+      const n = await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1`, [world.businessId]);
+      expect(n.rows[0]?.n).toBe(0);
+      expect(await endsNowhere(db, world)).toBe(0);
+    });
+  });
+
+  it('a 3-ring is REFUSED too: the pairwise checks all hold and the whole still says nothing', async () => {
+    await withBookingDb('daftar_p9_ring_3', async (db, world) => {
+      const said = await ring(db, world, [uuid(61), uuid(62), uuid(63)], 9);
+      expect(said).toMatch(/booking\.chain_is_a_ring/);
+      // Not chain_asymmetric: every pair in a ring agrees. If this case ever
+      // passed on that refusal it would be proving R-P9-17 again and saying
+      // nothing about R-P9-18.
+      expect(said).not.toMatch(/booking\.chain_asymmetric/);
+      const n = await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1`, [world.businessId]);
+      expect(n.rows[0]?.n).toBe(0);
+      expect(await endsNowhere(db, world)).toBe(0);
+    });
+  });
+
+  it('NON-VACUITY: a two-hop chain commits, in separate transactions AND in one, with a middle row that is rescheduled', async () => {
+    await withBookingDb('daftar_p9_ring_4', async (db, world) => {
+      // The shape the cheap fix would have broken. A -> B, then B -> C, so at
+      // the second commit B is itself 'rescheduled' and is the successor named
+      // by A. Sequentially first.
+      await book(db, world, 71, '09', '10');
+      await reschedule(db, world, { from: uuid(71), to: uuid(72), startsAt: AT('11'), endsAt: AT('12') });
+      await reschedule(db, world, { from: uuid(72), to: uuid(73), startsAt: AT('13'), endsAt: AT('14') });
+
+      // And both hops inside ONE transaction, which is the harder case for a
+      // deferred walk: at commit the middle row is 'rescheduled' and the walk
+      // has to pass through it to reach the end.
+      const client = new Client({ connectionString: db.url('postgres') });
+      await client.connect();
+      try {
+        await book(db, world, 81, '15', '16');
+        await client.query('BEGIN');
+        await bornWithBacklink(db, world, client, uuid(82), uuid(81), '17', '18');
+        await bornWithBacklink(db, world, client, uuid(83), uuid(82), '19', '20');
+        await close(client, world, uuid(81), uuid(82));
+        await close(client, world, uuid(82), uuid(83));
+        await client.query('COMMIT');
+      } finally {
+        await client.end().catch(() => undefined);
+      }
+
+      const states = await db.pool.query<{ id: string; state: string }>(
+        `SELECT id::text AS id, state FROM bookings WHERE business_id = $1 ORDER BY id`,
+        [world.businessId],
+      );
+      expect(states.rows).toEqual([
+        { id: uuid(71), state: 'rescheduled' },
+        { id: uuid(72), state: 'rescheduled' },
+        { id: uuid(73), state: 'booked' },
+        { id: uuid(81), state: 'rescheduled' },
+        { id: uuid(82), state: 'rescheduled' },
+        { id: uuid(83), state: 'booked' },
+      ]);
+      // Every chain reaches a booking that is kept — asserted by the
+      // challenger's own recursive query, not by the trigger's code read back.
+      expect(await endsNowhere(db, world)).toBe(0);
+    });
+  });
+
+  it('the ring walk is LOAD-BEARING: with block (c) removed, the 2-ring commits and five rows lead nowhere', async () => {
+    await withBookingDb('daftar_p9_ring_5', async (db, world) => {
+      // The red proof for the new law, planted the way the challenger plants
+      // them: the whole `(c)` block is cut out of the shipped function body
+      // and the mutation is asserted to have APPLIED before any scenario runs
+      // — a mutation that silently fails to apply reports a guard as proved
+      // when it was never tested.
+      const src = await db.pool.query<{ body: string }>(`SELECT prosrc AS body FROM pg_proc WHERE proname = 'bookings_chain_symmetric'`);
+      const body = src.rows[0]?.body;
+      if (body === undefined) throw new Error('bookings_chain_symmetric is not on the server');
+      const start = body.indexOf('  -- (c) R-P9-18.');
+      const end = body.indexOf('  RETURN NULL;');
+      if (start < 0 || end < 0 || end < start) throw new Error('could not locate block (c) in the live function body');
+      const cut = body.slice(0, start) + body.slice(end);
+      if (cut.includes('chain_is_a_ring')) throw new Error('the mutation did not remove block (c)');
+
+      let probe: unknown = null;
+      let said = 'the mutation never ran';
+      let nowhere = -1;
+      let rows = -1;
+      try {
+        await db.pool.query(
+          `CREATE OR REPLACE FUNCTION bookings_chain_symmetric() RETURNS trigger
+           LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $mutant$${cut}$mutant$`,
+        );
+        const live = await db.pool.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_proc WHERE proname = 'bookings_chain_symmetric' AND prosrc LIKE '%chain_is_a_ring%'`,
+        );
+        expect(live.rows[0]?.n).toBe(0);
+
+        said = await ring(db, world, [uuid(91), uuid(92)], 9);
+        rows = (await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1`, [world.businessId])).rows[0]?.n ?? -1;
+        nowhere = await endsNowhere(db, world);
+      } catch (e) {
+        probe = e;
+      }
+      let restoreFailure: unknown = null;
+      try {
+        await db.pool.query(
+          `CREATE OR REPLACE FUNCTION bookings_chain_symmetric() RETURNS trigger
+           LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $orig$${body}$orig$`,
+        );
+      } catch (e) {
+        restoreFailure = e;
+      }
+      if (probe !== null) throw probe;
+      if (restoreFailure !== null) throw restoreFailure;
+
+      // With (c) gone the ring COMMITS — no refusal at all, not a refusal from
+      // some other constraint — and the pairwise laws are satisfied by it.
+      expect(said).toBe('');
+      expect(rows).toBe(2);
+      expect(nowhere).toBe(2);
+
+      // The function is back, byte for byte, and refuses the same ring again.
+      const back = await db.pool.query<{ body: string }>(`SELECT prosrc AS body FROM pg_proc WHERE proname = 'bookings_chain_symmetric'`);
+      expect(back.rows[0]?.body).toBe(body);
+      expect(await ring(db, world, [uuid(93), uuid(94)], 13)).toMatch(/booking\.chain_is_a_ring/);
+    });
+  });
+});

@@ -400,6 +400,53 @@ describe('P9 bookings — attacked as the real runtime roles, with no superuser'
       }
     };
 
+    /** A THREE-LINK chain (a -> b -> c) written in ONE transaction, as the internal authority. */
+    const chainAsInternal = async (a: string, b: string, c: string, h: number): Promise<string> => {
+      const client = new Client({ connectionString: db.url('daftar_migrator') });
+      await client.connect();
+      try {
+        await client.query(`SET ROLE daftar_booking_internal`);
+        await client.query('BEGIN');
+        await client.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true), set_config('app.bypass_rls', 'false', true)`, [
+          world.tenantId,
+          world.businessId,
+        ]);
+        try {
+          for (const [id, back, hour] of [
+            [b, a, h],
+            [c, b, h + 1],
+          ] as const) {
+            const [starts, ends] = window(hour);
+            await client.query(
+              `INSERT INTO bookings (tenant_id, business_id, branch_id, id, kind, resource_id, service_id, customer_id,
+                                     starts_at, ends_at, lead_buffer_minutes, trail_buffer_minutes, blocking_window,
+                                     state, intent_sha256, created_by_user_id, rescheduled_from_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::timestamptz, $11::int, $12::int,
+                       tstzrange($9::timestamptz, $10::timestamptz, '[)'), $13, $14, $15, $16)`,
+              [...bookingParams({ world, id, startsAt: starts, endsAt: ends }), back],
+            );
+          }
+          for (const [id, onto] of [
+            [a, b],
+            [b, c],
+          ] as const) {
+            await client.query(
+              `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
+                 settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
+              [world.businessId, world.userId, onto, id],
+            );
+          }
+          await client.query('COMMIT');
+          return '';
+        } catch (e) {
+          await client.query('ROLLBACK').catch(() => undefined);
+          return e instanceof Error ? e.message : '';
+        }
+      } finally {
+        await client.end().catch(() => undefined);
+      }
+    };
+
     /** A standing booking to be rescheduled. Seeded by the superuser, never proven by it. */
     const seed = async (id: string, h: number): Promise<void> => {
       const [starts, ends] = window(h);
@@ -469,6 +516,50 @@ describe('P9 bookings — attacked as the real runtime roles, with no superuser'
     const left = await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1 AND id = $2`, [world.businessId, blind]);
     expect(left.rows[0]?.n).toBe(0);
     expect(await rescheduleAsInternal(uuid(3402), blind, 23)).toBe('');
+
+    // And the WALK's reads, one level further out (R-P9-18). A three-link
+    // chain written in one transaction makes the walk pass through a middle
+    // row; hiding the END of it must refuse, not terminate the walk early and
+    // report the chain as ended.
+    //
+    // Stated precisely, because the measurement does not isolate as much as it
+    // looks: in this schema a chain can only be extended at its TAIL — a
+    // successor is born with its backlink and R-P9-15 freezes it, so nothing
+    // can be grafted onto a chain's middle — and therefore every row the walk
+    // reads is also the immediate counterpart of a row written in the same
+    // transaction, which block (a) reads too. So this refusal may come from
+    // (a) of the middle row rather than from the walk. What it does establish
+    // is that an invisible row anywhere in a chain being written is a REFUSAL
+    // and not a silent termination, and that is the claim that matters.
+    const tail = uuid(3405);
+    await seed(uuid(3404), 18);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(tail)) throw new Error(`not a uuid: ${tail}`);
+    await db.pool.query(`ALTER POLICY business_isolation_read ON bookings USING (('${tail}'::uuid IS DISTINCT FROM id) AND (${original}))`);
+    let walked = '';
+    let walkProbe: unknown = null;
+    try {
+      walked = await chainAsInternal(uuid(3404), uuid(3406), tail, 19);
+    } catch (e) {
+      walkProbe = e;
+    }
+    let restoreTwo: unknown = null;
+    try {
+      await db.pool.query(`ALTER POLICY business_isolation_read ON bookings USING (${original})`);
+    } catch (e) {
+      restoreTwo = e;
+    }
+    if (walkProbe !== null) throw walkProbe;
+    if (restoreTwo !== null) throw restoreTwo;
+
+    expect(walked).toContain('booking.chain_unreadable');
+    expect(await policy()).toBe(original);
+    const none = await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1 AND id = ANY($2::uuid[])`, [
+      world.businessId,
+      [uuid(3406), tail],
+    ]);
+    expect(none.rows[0]?.n).toBe(0);
+    // With sight restored the same three-link chain commits.
+    expect(await chainAsInternal(uuid(3404), uuid(3406), tail, 19)).toBe('');
 
     // And no row in this database disagrees with its own chain.
     const broken = await db.pool.query<{ n: number }>(

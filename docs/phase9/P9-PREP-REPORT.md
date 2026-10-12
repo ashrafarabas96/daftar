@@ -32,7 +32,7 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**93 of 93 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
+**97 of 97 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
 — over seven suites, and again on PostgreSQL 18.4 at `C` as the comparison the mission permits.
 A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
@@ -342,6 +342,102 @@ this phase's own container is owed, and one signature of the three — the coord
 actual-diff review — is still owed. The D11 PART 117 label for the same state is
 `PREPARED / NOT PROMOTED`; it names the promotion state, not the ladder rung, and this
 report uses both so neither vocabulary has to be guessed at.
+
+### 3c.18 The challenger's SIXTH pass at `0f4f0e4` — PASS-WITH-SCOPE, and the ring
+
+**Verdict PASS-WITH-SCOPE, and the signature extends to `0f4f0e4`: C5-P9-01 is closed.**
+Report: `/mnt/project-files/phase9/P9-CHALLENGE-0f4f0e4.md`, digest
+`44aad5193b4c22b3cb8ff24f8f25b5d1196de496ab6d7ffe930d4abc0ca66371`. Run
+`P9-CHALLENGE-R6-20261012T173352Z`, Node v24.12.0, PostgreSQL 16.15 at `en_US.utf8`, fresh
+`initdb` with zero recovery events, non-superuser applier: **93 of 93, exit code 0**, 12 of 12
+digests verified, and the normalised spec delta `135 → 140` statements, all of it R-P9-17.
+
+**What it established about R-P9-17.** Both clauses load-bearing and orthogonal — each
+direction refused by exactly one clause with nothing behind it, and the lawful pair passing in
+all four mutants. Pair-dropped against the born guard and against immutability in six
+combinations: the guards overlap usefully, none rests on another, and removing two opens
+exactly two cases. The narrowed-read refusal reproduced under its own restrictive policy. And
+the deferral measured as load-bearing: set the constraint `IMMEDIATE` and the **lawful**
+reschedule is refused at the successor's INSERT, so a deployment that landed the trigger
+immediate would pass an existence check and break every booking move.
+
+**It also found the `FOUND`-versus-NULL choice worth more than the line it took**, by planting
+the idiom I had rejected: with `IF v_counterpart IS NULL THEN RETURN NULL`, H4b commits with no
+refusal at all, leaving `fwd` set and `back` NULL. Treating an unreadable counterpart as "cannot
+tell, so permit" permits *exactly* the defect, because in the asymmetric case the counterpart's
+link **is** NULL. That is the P11 fall-open rebuilt one level down, and it is now measured
+rather than reasoned.
+
+**One measurement I should not claim as my own argument vindicated.** Limitation 20 said the
+chain under concurrency was reasoned, not measured, and gave the mechanism: the second writer
+either sees the committed counterpart and gets `chain_asymmetric`, or cannot see it and gets
+`chain_unreadable`. The challenger measured both races with `pg_blocking_pids` and the
+**conclusion held — nothing asymmetric commits, no successor is claimed twice — while my
+mechanism was wrong for one of them.** In race A (two transactions each building their own
+successor for one predecessor) the second close is refused by `booking.immutable_settlement`,
+because the row-level re-evaluation reaches R-P9-15 before the chain check is reached at all.
+Race B is as I argued, including that the statement succeeds and the refusal lands at COMMIT.
+Its own framing is the right one and I have adopted it verbatim in limitation 20: *conclusion
+measured, mechanism revised* — because someone changing R-P9-15 could change race A's answer
+without touching the chain check. `chain_unreadable` arose in neither race; it needs a blinded
+reader, not an early transaction.
+
+**C6-P9-01 (P2) — a pairwise check cannot see a ring.** Two committed at that subject, in one
+transaction:
+
+```
+[J1] a 2-ring (A says B replaced it, B says A replaced it): ** NO REFUSAL **
+[J1] a 3-ring:                                              ** NO REFUSAL **
+[J1] committed 'rescheduled' bookings whose chain reaches NO standing booking: 5
+```
+
+Five rows, every pairwise check satisfied, and not one of them leading to a booking anybody
+keeps — an hour rescheduled into a circle. R-P9-17 asks each row about its immediate
+counterpart, so it is structurally unable to see this: it is the asymmetric pair's mistake one
+level up, and the same lesson twice over — **a check sees exactly as far as it walks.**
+
+Closed as **R-P9-18, a reschedule chain ends in a booking that is kept**: block (c) of
+`bookings_chain_symmetric()` follows the forward links from the written row and the walk must
+end on a row that is not `'rescheduled'`, or `booking.chain_is_a_ring`.
+
+Three things about the shape of that law, two of them the challenger's measurements rather than
+my choices:
+
+1. **The cheap fix is measurably wrong, and the report records why rather than just rejecting
+   it.** Requiring the successor named at a close to be `'booked'` at that moment would kill
+   every ring — a ring's last link closes onto an already-`'rescheduled'` row — and it would
+   also refuse the lawful `A -> B` then `B -> C`, whose middle row is legitimately
+   `'rescheduled'` at commit, sequentially and in one transaction both. The challenger measured
+   that before proposing anything, which is why the law is about termination and not about the
+   next row's state. A case asserts the lawful two-hop chain in both shapes.
+2. **The walk terminates without a bound**, because each iteration exits, raises, or appends an
+   id never seen, over a finite relation. `booking.chain_too_long` is therefore defence in depth
+   set far above any chain a business produces, and it refuses rather than passes if it ever
+   fires. Nothing here decides a policy limit on how many times a booking may be moved — that is
+   not the schema's to choose.
+3. **The walk's own unreadable branch is defence in depth, not independently reachable, and the
+   spec says so.** A chain can only be extended at its TAIL: a successor is born carrying its
+   backlink and R-P9-15 freezes that backlink, so no row can be grafted onto the middle of an
+   existing chain. Every row the walk reads is therefore also the immediate counterpart of a row
+   written in the same transaction, which block (a) reads too. The branch exists because a walk
+   that ended early on an invisible row would report a ring as terminated — the worst possible
+   failure for a reachability law — and because it is the mechanism that would have to carry the
+   refusal if grafting ever became possible. The row-security case measures that an invisible row
+   anywhere in a three-link chain being written is a refusal and not a silent termination, and
+   says plainly that it does not isolate which block raised it. Recorded as limitation 22.
+
+**The red proof for the new law** cuts block (c) out of the live function body, asserts the
+mutation applied (`prosrc` no longer mentions `chain_is_a_ring`) before any scenario runs,
+measures the 2-ring committing with **no refusal at all** and two rows whose chains lead
+nowhere, then restores the body and asserts it is byte-identical and refuses the same ring
+again. The law's own statement in the suite is the challenger's recursive J1 query, kept
+deliberately as an independent formulation rather than the trigger's logic read back: it can
+disagree with the trigger, which is the only way a case about a global property is worth
+anything.
+
+**The run after these items.** `tests/phase9-prep`, 7 files, **97 of 97 cases, exit code 0**, on
+PostgreSQL 16.15 at `en_US.utf8` under Node v24.21.0. Four new cases; the row-security case
+gained the three-link measurement without adding one.
 
 ### 3c.17 The challenger's FIFTH pass at `6e339bf` — REJECT, and the third verb of one defect
 
@@ -875,7 +971,7 @@ declared version is owed at promotion, and that is stated rather than left to be
 
 ### 3c.8 The prep cases are not a sealed phase
 
-93 green cases say that the invariants in this document hold on a live server. They do not
+97 green cases say that the invariants in this document hold on a live server. They do not
 say Phase 9 exists: there is no command layer, no surface, no migration number, and these
 suites are not in required CI. §4 states that in full, and nothing in this report may be
 read as a promotion claim (PART 83).
@@ -1037,17 +1133,22 @@ Stated as limitations rather than left to be discovered.
     and its own audit, not a side effect of INSERT privilege, and the schema does not grant
     it here. The backlink `rescheduled_from_id` IS writable at INSERT, because a successor
     is born carrying it.
-20. **R-P9-17 is proved by single-connection execution; the chain under CONCURRENCY is
-    reasoned, not measured.** Every case that lands it writes its halves from one
-    connection. The interleaving a reader will ask about is two transactions each closing a
-    different predecessor onto the same successor: the deferred read happens at COMMIT, so
-    the second either sees the first's committed successor and is refused by
-    `booking.chain_asymmetric`, or cannot see it and is refused by
-    `booking.chain_unreadable` — refused either way, and the primary key makes the
-    successors themselves distinct. That is an argument from where the check runs, and it
-    is written here as an argument. No fixture constructs it, and the phase's own standard
-    (PART 15) is that a race is proved by `pg_blocking_pids` and a committed outcome, not
-    by reasoning about isolation levels.
+20. **~~R-P9-17 is proved by single-connection execution; the chain under CONCURRENCY is
+    reasoned, not measured.~~ MEASURED by the sixth independent pass — conclusion confirmed,
+    mechanism REVISED.** The original entry reasoned that a second writer either sees the
+    committed counterpart and is refused by `booking.chain_asymmetric`, or cannot see it and is
+    refused by `booking.chain_unreadable`. Both races were then measured with
+    `pg_blocking_pids` rather than timing, and the conclusion held — nothing asymmetric
+    commits, no successor is claimed twice, zero rows disagree with their own chain — while the
+    mechanism was wrong for one of them. In **race A** (two transactions each building their
+    own successor for one predecessor) the block is observed and the second close is refused by
+    **`booking.immutable_settlement`**, because the row-level re-evaluation reaches R-P9-15
+    before the chain check is reached at all. **Race B** (a second predecessor claiming a
+    successor it cannot see) is as argued, the statement succeeding and the refusal landing at
+    COMMIT. `chain_unreadable` arose in neither: it needs a blinded reader, not an early
+    transaction. Recorded in the challenger's own framing, which is the right one: **a change
+    to R-P9-15 could change race A's answer without touching the chain check**, so the
+    concurrency safety of the chain is not a property of the chain check alone.
 21. **The one-transaction reschedule is now a SCHEMA-ENFORCED contract on the command
     slice, which is a narrowing — recorded, not decided.** Before R-P9-17 a command could
     have written the successor in one request and closed the predecessor in another; the
@@ -1058,6 +1159,22 @@ Stated as limitations rather than left to be discovered.
     the narrowing is the contract the document always stated. What is recorded rather than
     settled is that a command slice wanting a genuinely two-phase reschedule (a hold, then
     a confirmation) would now have to say so and be designed for, not merely written.
+22. **R-P9-18's unreadable branch is DEFENCE IN DEPTH, not independently reachable.** A chain
+    can only be extended at its tail — a successor is born carrying its backlink and R-P9-15
+    freezes that backlink, so nothing can be grafted onto the middle of an existing chain — so
+    every row the walk reads is also the immediate counterpart of a row written in the same
+    transaction, which block (a) reads too. The row-security case measures that an invisible row
+    anywhere in a three-link chain being written is a REFUSAL and not a silent termination,
+    which is the claim that matters, and it states plainly that it does not isolate which block
+    raised it. The branch stays because a walk that ended early on an invisible row would report
+    a ring as terminated, and because it is what would carry the refusal if grafting ever became
+    possible.
+23. **The ring walk's COST is not measured, and this container may not measure it.** Appending a
+    link walks the chain from the written row, so a chain of length N costs O(N) reads per
+    append. `booking.chain_too_long` bounds it at 4096 as defence in depth, not as a policy, and
+    no chain a business produces approaches that. PART 20 and PART 123 forbid a timing claim
+    from this container, so none is made: what is recorded is the shape of the cost and that a
+    deployment with genuinely long chains should measure it before promotion.
 17. **The lock-set collision case is reasoned, not measured.** Two distinct resources
     hashing to one key would merge their locks, which broadens exclusion and cannot
     narrow it; no fixture constructs such a collision, because constructing one against

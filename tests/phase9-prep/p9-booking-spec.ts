@@ -49,6 +49,7 @@ export const P9_NAMED_OBJECTS = [
   'bookings_born_booked',
   'bookings_buffers_match_service',
   'bookings_chain_symmetric',
+  'chain_is_a_ring',
   'bookings_chain_agrees',
   'booking_operations_immutable',
   'booking_resource_lock_key',
