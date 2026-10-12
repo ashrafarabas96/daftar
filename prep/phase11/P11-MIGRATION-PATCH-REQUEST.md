@@ -545,3 +545,91 @@ owner's). **Concurrency for Pack B is `UNMEASURED`** and the lock order
 belongs with §3.6's cache writer when it lands — no document may read it as
 cleared. **No migration number exists**, and a second challenge round for Pack
 B is owed.
+
+---
+
+## 15. The third challenge round, and what it owes whom
+
+Pack A `REJECT` at `0db9450`, Pack B `PASS-WITH-SCOPE` at `b7ee445`
+(`P11-LIVE-DDL-PROOF.md` §11). Answered at `22e8e2d`.
+
+### 15.1 What changed inside the packs
+
+Nothing outside Phase 11's own relations and functions, and no grant or policy
+on another phase's relation. Pack A: the validator's `'{}'` path now reads
+`product_matrix_axes` before it returns (refusing
+`catalog.variant_axis_set_incomplete` on a matrix product), the freeze guard's
+read excludes archived variants, every catalogue lookup in the end-state
+assertion is namespace-qualified, and the tautology test became the function
+`catalog_policy_qual_is_tautology(text,text)` — **one new function, owner-only
+EXECUTE, `REVOKE … FROM PUBLIC` in the file.** Pack B: the cache-side
+conservation trigger gained the fail-closed arm its twin already had, and the
+end-state assertion went from 17 to 19 checks.
+
+### 15.2 Owed to the inventory authority — `MPR-09`, and it is a caller obligation
+
+**`MPR-09`. A stock movement, and a stock key, must not be posted onto an
+ARCHIVED variant.** Measured at this SHA: a `stock_levels` row with
+`on_hand 5.0000` on an archived variant is accepted, and **no trigger on
+`stock_levels` or `stock_movements` reads `product_variants.status`**
+(`triggers_reading_variant_status = 0`).
+
+Why it is owed to that authority rather than fixed here. Pack A's freeze guard
+now treats an archived non-base variant as outside the grid, on the premise that
+`product_variants_30_archive_requires_zero_stock` (0061) refuses archiving while
+the variant holds stock or its movements do not net to zero. That premise is
+about the moment of archiving, and nothing re-establishes it afterwards. Pack A
+cannot close the gap in its own guard: a cross-table read of an **absent**
+`stock_levels` row cannot be locked (the race C measurement in
+`P11-LIVE-DDL-PROOF.md` §7), and taking a row lock on another phase's ledger is
+what §10.2's `FOR SHARE` measurement warns against — a refusal from the grant
+instead of from the law. So the obligation is stated where the writer is, as
+`TL-P4-COORD-R62` states the DELETE-path lock order: **a caller obligation,
+disclosed as a limit of Pack A's fix rather than claimed as covered.** If the
+authority declines it, the alternative is the strict reading — archived variants
+freeze the axis set too — and then the pack owes the merchant a different
+recovery path, which is a design decision and not this document's to take.
+
+### 15.3 Owed to the Migration Owner — `MPR-10`
+
+**`MPR-10`. At assembly, the two packs should share ONE implementation of the
+PUBLIC-policy arm.** Pack A's is now the three-form function
+`catalog_policy_qual_is_tautology`; Pack B's is still the narrow form
+(`polroles = '{0}' AND polpermissive AND pg_get_expr(polqual,…) = 'true'`),
+because a pack must not require a function another pack creates, and at
+preparation time the two files are applied independently. When the Owner
+allocates the numbers and the files are ordered, the catalog pack's function
+exists before the inventory pack runs, and Pack B's arm should call it. The
+Owner is asked only to confirm the ORDER (catalog first, which `MPR-04` already
+recommends); the edit itself is one line and belongs to whoever owns the
+assembled file. **Pack B's expected policy set is three names, not two** —
+`business_isolation`, `inventory_internal_read`, `tenant_membership` — because
+the overlay copies the live `stock_levels`' role-scoped read policy, whose
+qualifier is a deliberate `USING (true)` applied TO
+`daftar_inventory_internal`; a tautology arm that ignored the role clause would
+refuse the pack on a policy it installed on purpose.
+
+### 15.4 Owed to the Security Authority — `PR-SEC-P11-01`, unchanged in substance, narrower in residual
+
+The pin asked for there is unchanged. What changed is the size of what it has to
+cover: the three sound forms now catch the literal spellings, any qualifier that
+names no column (by evaluating it), and `(col IS NOT NULL)` over a `NOT NULL`
+column. The residual handed to the standing RLS invariant check is a qualifier
+true of every row that is none of those — and the two limits of the evaluation
+form, written into the DDL: it runs under the installing session's settings, so
+`app_bypass()` alone reads false at install, and a volatile function in a
+qualifier is called once there rather than per row.
+
+### 15.5 Still owed, unchanged
+
+The Pack B grants and the registered operation code for lot configuration
+(inventory authority); `MPR-07` (five Pack A trigger positions, now **six**:
+`catalog_policy_qual_is_tautology` is a function and not a trigger, so the
+positions are unchanged, and this line says so rather than leaving the Owner to
+check); `MPR-08` (`stock_lots._10_`); `OD-P11-07` (the owner's). **Pack B's
+concurrency is now measured for the writers that exist** — four races, both
+arrival orders, 0 findings, in this pack's own harness — and what remains
+`UNMEASURED` is a lawful cache writer that moves the cache without moving the
+key, which no principal can be today; the lock order still belongs with §3.6's
+writer. **No migration number exists**, and a FOURTH challenge round is owed on
+both packs.

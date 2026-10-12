@@ -549,3 +549,75 @@ holds this invariant under concurrency"*, which is false in one of the two order
 silent and a guard being absent produce the same green, and only the order that makes it
 speak distinguishes them. This is `race-estate`'s both-orders arm, sharpened: not only
 *run both orders*, but *say what did the work in each*.
+
+### `P11-AL-32` — derive the guard from the forbidden STATE, not from the reported statement
+
+**The measurement.** `C-APP-01`'s first clause was defeated three rounds running, by
+three different statements reaching one state. Round 1: `UPDATE … SET attributes = '{}'`
+on a committed cell. Round 2: `INSERT INTO product_matrix_axes` under a populated matrix.
+Round 3: `INSERT` a non-base variant with `attributes = '{}'` on a product that already
+has a matrix. Each round's fix guarded the statement that had been reported, and the
+third round's defect was named, in the author's own words, in the comment two paragraphs
+above the code that allowed it — the guard reasoned about `'{}'`-then-axis and refused
+it, while axis-then-`'{}'` was accepted.
+
+**The decision.** A closure law is written as a forbidden STATE, in one sentence, and the
+pack then enumerates every statement that can reach that state across every relation the
+state can be written from, with the named refusal each one gets. The enumeration goes in
+the law document as a table, and the pack carries a **committed-state case** that
+measures the state itself rather than any one door — *no live non-base variant of a
+matrix product names other than exactly its product's registered set*. That case would
+have caught all three rounds, and it is the case a later pack should write first. A guard
+derived from an attack list is only ever as complete as the attacker's imagination; a
+guard derived from the state is complete over the statements the schema admits.
+
+### `P11-AL-33` — a remedy offered in a message is a claim, and claims get measured
+
+**The measurement.** The freeze guard's refusal told the merchant to *archive the
+variants at zero stock and regenerate the grid*. The guard's own read had no `status`
+filter, so archiving changed nothing and the next step was refused with the same error —
+the pack permitted a recovery that could not be completed, while the error message
+promised it. The pack's own partial unique index had excluded archived cells since round
+0, so the guard was the only place in the pack that read the grid the other way.
+
+**The decision.** Every remedy named in an error message, a comment or a document is a
+testable claim, and it ships with a case that performs the whole remedy END TO END and
+asserts the state it reaches — not the first step, and not a comment saying the step
+exists. Where the remedy rests on a premise owned by another phase (here: archiving
+requires net-zero stock, 0061), the premise is cited by name and the part of it that
+nothing re-establishes afterwards is disclosed as a residual and routed to whoever can
+close it. A refusal that tells the user what to do instead has taken on an obligation.
+
+### `P11-AL-34` — a mutation is applied before the first proof runs, not after
+
+**The measurement.** Removing the `status` filter from the freeze guard — the exact
+defect the round had just fixed — red NOTHING when the mutation was applied to a
+database the suite had already run against: every write the recovery case needs was
+already in place, and its statements are conditional precisely so a re-run is quiet. The
+suite's idempotence, which an earlier round added as a virtue, is what made the mutation
+unmeasurable.
+
+**The decision.** A harness exposes a documented, in-repository way to apply a mutation
+on a fresh fixture, after the schema and the worlds and **before any proof runs**
+(`P11_MUTATION_SQL`), prints the mutation in full, and states in its own log that the
+suites below are expected to fail. A mutation record names the fixture state it ran on,
+and a mutation run whose suites PASS is reported as a gap in the suite rather than as a
+pass. The companion of "a mutation is only measurable on a state that can be restored" is
+"a mutation applied after the suite has run measures the re-run".
+
+### `P11-AL-35` — the author carries the measurement, not the challenger's directory
+
+**The measurement.** Pack B's overlay concurrency was handed over as `UNMEASURED` on the
+ground that the second party — the cache writer of patch request §3.6 — does not exist.
+It exists as a **principal**: the pack's own end state grants
+`UPDATE (on_hand, last_movement_seq) ON stock_lot_levels TO
+daftar_inventory_internal`. The independent challenge measured four races through that
+grant and found nothing, which is a better answer than the author's `UNMEASURED` and
+arrived in the challenger's evidence directory.
+
+**The decision.** "The writer does not exist" is a statement about the code; a law is
+about whoever holds the grant, so the principals in the pack's own end state are the
+parties a race must use. And a measurement that settles one of the pack's own laws is
+ported into the pack's harness, credited to where it came from, so the law can be
+re-proved when the missing writer lands. A law whose concurrency is proved only by
+somebody else's script is a law the author cannot re-prove.

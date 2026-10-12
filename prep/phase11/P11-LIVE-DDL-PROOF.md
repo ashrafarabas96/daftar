@@ -856,3 +856,307 @@ measurable on a state that can be restored.**
   code in the pack.
 - `READY_TO_PROMOTE` = **NO**, no migration number exists, and no CI has
   executed any of it.
+
+---
+
+## 11. The THIRD independent challenge: Pack A `REJECT`, Pack B `PASS-WITH-SCOPE` — defects 32–37
+
+Reports: `/mnt/project-files/phase11/P11-CHALLENGE-0db9450.md` (Pack A) and
+`P11-CHALLENGE-b7ee445.md` (Pack B), evidence in `challenge-b7ee445/` — one
+directory, because one run proves both packs. The challenger reproduced this
+harness from zero at the head: the renderer's selftest red, 87/87 as
+`daftar_migrator`, both packs in one transaction each, **46 + 47 cases 0 failed
+twice on one database**, 9 races 0 findings, every exit code 0, PG 16.15 at
+`en_US.utf8`, clean frozen tree, and the pair-drop clean across the two packs.
+Because one run proves both and Pack A was rejected, **nothing in the phase was
+promotable at that head**, and nothing is at this one either.
+
+### 11.1 Defect 32 (`PA-01`, the P1) — the third door of `C-APP-01`
+
+`product_variants_40_matrix_canonical()` opened, after the immutability check
+and the advisory lock, with `IF NEW.is_base OR NEW.attributes = '{}'::jsonb
+THEN RETURN NEW; END IF;`. The `'{}'` half asked nothing about the **product**.
+Measured at `0db9450` on the world's TSHIRT, which registers two axes and holds
+one committed cell:
+
+```
+INSERT INTO product_variants (… is_base=false, attributes='{}') -> rc=0 (NOT REFUSED)
+non-base '{}' variants on this MATRIX product: 1
+its own stock key: 5.0000
+```
+
+One matrix cell set, one row outside it, both holding stock, and under Option B
+the variant **is** the costing key. The same state round 1 reached by blanking a
+combination and round 2 reached by adding an axis, reached this time with a
+single INSERT — **and the freeze guard's own comment, two paragraphs above the
+code that let it through, names exactly this harm for the mirror-image order.**
+The guard reasoned about `'{}'`-then-axis and refused it; axis-then-`'{}'` was
+accepted.
+
+**What was wrong was not the guard, it was where the guard came from.** Rounds 1
+and 2 each guarded the statement that had been reported. Round 3's fix is
+derived from the STATE the comment describes — *a live matrix cell set plus a
+live non-base row outside it, both able to hold stock* — and then asks which
+statements can reach it. The table of six statements and their six named
+refusals is in `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` under `C-APP-01`, and
+the committed-state case that measures the state rather than any one door is the
+case that would have caught all three rounds. The fix itself: the early return
+splits, and the `'{}'` path reads `product_matrix_axes` under the same lock
+discipline as the completeness count; if the product registers any axis the
+refusal is the completeness law's own name — `catalog.variant_axis_set_incomplete`,
+because the empty set names zero of the product's registered axes. One law, one
+name. `'{}'` stays lawful for a product that registers no axes, which is every
+non-apparel product in the catalogue and the reason the structural CHECK the
+first round proposed is still unavailable.
+
+### 11.2 Defect 33 (`PA-02`, the P2) — the recovery path the guard offered did not exist
+
+The freeze guard told the merchant: *archive the variants at zero stock and
+regenerate the grid.* Measured at `0db9450` — two cells at zero stock, both
+archived (the pack permits it: 2 archived, 0 live), then the documented next
+step:
+
+```
+INSERT INTO product_matrix_axes (… 'material', 3) -> rc=3 catalog.matrix_axis_set_frozen
+```
+
+The read was `WHERE NOT v.is_base` with no `status` filter, so an archived
+variant froze the grid exactly as a live one did. A wrongly registered grid
+could therefore **never** be corrected: archiving was permitted and useless, the
+variant cannot be deleted once movements name it, and the axis could not be
+added. **A recovery path stated in a comment is a claim, and a claim here gets
+measured.**
+
+The filter is added. The premise is stated rather than assumed —
+`product_variants_30_archive_requires_zero_stock` (0061) refuses the transition
+to `archived` while the key holds stock or the movements net to anything but
+zero per warehouse — and the pack's own `product_variants_matrix_uq` has
+excluded archived cells since round 0, so the guard was the only place in the
+pack that counted an archived variant as part of the matrix. `C-APP-01` is now
+stated over LIVE non-base variants, in the law and in the committed-state case,
+rather than left ambiguous; the case that counts archived cells asserts how many
+there are instead of ignoring them. The whole recovery runs end to end as one
+case: two cells, archived, a third axis registered, a 3-axis cell accepted, and
+the axis set frozen again the moment the regenerated grid is live.
+
+**The residual, measured and routed (`MPR-09`).** Nothing in the frozen core
+refuses a stock key on an ARCHIVED variant. Measured here:
+`archived_variant_on_hand = 5.0000`, and
+`triggers_reading_variant_status = 0` on `stock_levels` and `stock_movements`.
+So *archive the cells, add an axis, then post stock onto an archived cell*
+reaches the unaddressable state one authority further on. Pack A cannot close it
+here: reading `stock_levels` from the matrix guard is a cross-table read of an
+ABSENT row, which cannot be locked (§7's race C measurement), and taking a row
+lock on another phase's ledger is what §10.2's `FOR SHARE` measurement warns
+against. It is a caller obligation on the inventory authority, and it is a
+declared limit of the fix, not a hole the pack is unaware of.
+
+### 11.3 Defects 34 and 35 (the two `P3`s of the end-state assertion)
+
+**Defect 34 (`PA-03`) — an unqualified catalogue lookup, for the second round
+running.** The policy-set pin joined `pg_class` on `relname` with no namespace
+filter; with a `chal_other.product_matrix_axes` carrying one wide policy the
+pin's own query returned `{business_isolation,tenant_membership,zzz_wide}` —
+three policies of two relations in one array. It fails CLOSED, so it was
+diagnosability rather than a hole, and it is the same shape fixed for
+`pg_proc.proname` one round earlier, found again where the fix had not looked.
+**The class is closed rather than the instance**: every lookup in the block now
+carries `c.relnamespace = 'public'::regnamespace` or `table_schema = 'public'`,
+not only the one that was reported, and a case measures both query forms side by
+side — `qualified=business_isolation,tenant_membership` against
+`unqualified_was=business_isolation,tenant_membership,zzz_wide`. The mutation is
+inside that case, because the arm lives in a `DO` block and a `DO` block cannot
+be replaced after install; stated so rather than left as an apparent omission.
+
+**Defect 35 (`PA-04`) — the tautology list, attacked as the author asked.** Two
+spellings went through the list of four: `(2 > 1)` and
+`(business_id IS NOT NULL)`, both stored as qualifiers, both true of every row.
+"True of every row" is not decidable in SQL and the retreat to the policy SET
+was right, but the list was the weakest of the sound forms, and the challenge
+named two stronger ones. Both are taken. The test is now a FUNCTION,
+`catalog_policy_qual_is_tautology(relname, qual)`, with three forms: the list,
+kept for the spellings a reviewer recognises; **evaluation** — a qualifier that
+parses with no relation in scope names no column of the relation, so the
+engine's own parser decides the class and the expression is evaluated, which
+catches `2 > 1` and any arithmetic constant; and **`(col IS NOT NULL)` over a
+column the catalogue marks `attnotnull`**. Sound, still incomplete, and the
+residual stays routed to `PR-SEC-P11-01`. Two limits of the evaluation form are
+written into the file because they are real: it is evaluated under the
+installing session's settings, so `app_bypass()` alone reads false at install
+and could read true later; and a volatile function inside a qualifier is called
+once there rather than per row. Its input is never user text — it is
+`pg_get_expr` of a policy already stored on one of this pack's five relations.
+
+Making it a function is what makes it testable: the end-state assertion and the
+proof suite call ONE implementation. The assertion also pins the function's own
+reach in both directions — the four spellings it must catch, this pack's real
+tenant qualifier that it must NOT, and no `EXECUTE` for `PUBLIC` — so a function
+that answered `false` to everything would refuse to install, which the mutation
+below measures. The WITH CHECK half of every permissive policy is now tested
+too, and it was not asserted at all before this round: a policy whose `USING` is
+sound and whose `WITH CHECK` is a tautology accepts another tenant's INSERT.
+
+### 11.4 Pack B: `PASS-WITH-SCOPE`, one new finding, one note, and one defect found here
+
+All four round-1 findings were re-attacked unchanged and every one is refused by
+its own named error (`inventory.lot_level_conservation_violated` from both
+sites, `inventory.lot_conservation_unverifiable`, `permission denied for
+function inventory_lot_fold`, `inventory.scope_mismatch` on four arms including
+two the challenge had not asked for). The challenge singled out the second
+fail-closed arm — the movement visible but its product not, where
+`coalesce(track_lot, false)` would have read "not lot-tracked" off an invisible
+row — as the author's own find, and recorded that `SECURITY DEFINER` was
+correctly refused by measurement for the second time in this phase.
+
+**Defect 36 (`PB-17`, the new P2) — the path the law is not enforced on.** A
+bare `UPDATE stock_levels SET on_hand = on_hand + 5` is neither a movement nor a
+cache write, so it fires neither conservation trigger: measured at `b7ee445`,
+the key committed at 13.0000 against a cache of 3.0000, as `daftar_migrator` and
+as `daftar_inventory_internal`. The challenge explicitly did **not** ask for a
+trigger on `stock_levels` — that would be Phase 11 guarding a frozen relation,
+and the frozen core makes the same bargain for its own law, checking totals
+against `stock_movements` in the ROUTINE `inventory_stock_verify`. What it asked
+for was a sentence and a case, and both are delivered: `C-LOT-03` now carries
+the three-row table of paths it is and is not enforced on, with
+`inventory_lot_verify` named as where the gap closes, and a case measures the
+exposure as a GRANT at both granularities — table-level `UPDATE` on
+`stock_levels` is `daftar_migrator` only, `UPDATE (on_hand)` is
+`daftar_inventory_internal` as well. It does not read as well as `C-LOT-06`'s
+*no runtime role holds UPDATE on `stock_lots` at all*, which is the point.
+
+**Defect 37 (the P3) — a constraint firing first, hiding the one under test.**
+Rewriting `lot_code_input` alone is refused by
+`stock_lots_code_canonical_ck`, not by the freeze guard. The case that proves
+the code is frozen now moves BOTH columns together, and the masking is measured
+in its own case that names the constraint — the third time this phase has paid
+for that shape.
+
+**`D-32`, not reported by either round.** Re-reading
+`stock_lot_level_conservation()` against the fix the challenge forced on its
+twin showed the same `IF NOT FOUND THEN RETURN NULL`: the read runs under the
+invoker's row-level security, so a cache row written against a key the writer
+cannot see at COMMIT committed with no comparison at all. One correction to the
+first draft of that comment, made here rather than quietly: **the key cannot be
+genuinely absent.** `stock_lot_levels_level_fk` references `stock_levels`, and a
+foreign-key check runs as the referenced table's owner and ignores RLS — so the
+FK, not the trigger, guarantees a cache row has a key behind it, and `NOT FOUND`
+means exactly one thing: the row exists and this transaction cannot read it.
+Hence the red proof is an invisibility case, the refusal carries the name the
+movement side uses for the same condition, and the end-state assertion pins the
+arm's presence in **both** functions' text — because the defect both times was
+that one of two sites had it.
+
+### 11.5 The concurrency this handoff carried as `UNMEASURED`, and why that was wrong
+
+The handoff said the second party to an overlay race — §3.6's cache writer —
+does not exist. The challenge answered that it exists as a **principal**,
+because this pack's own end state grants `UPDATE (on_hand, last_movement_seq)
+ON stock_lot_levels TO daftar_inventory_internal`. *"The writer does not exist"*
+was a statement about the code; the law is about whoever holds the grant. That
+is the correct reading and it is adopted.
+
+The four races are now in this pack's own harness —
+`prep/phase11/harness/races_b.py`, modelled on and credited to
+`challenge-b7ee445/pb3race.py`, with one method fix: a sentinel of either
+session is dropped from the captured output, which is the leak that made one row
+of the challenger's own log read `__S23__` instead of `ok`. **An author who
+leaves a measurement in the challenger's evidence directory has a law whose
+concurrency is proved by somebody else's script**, and cannot re-prove it when
+§3.6's writer lands. Measured in the authoritative run, 4 races, 0 findings:
+
+| race | what it shows |
+|---|---|
+| `R1` / `R1b` | a key-mover against a cache-writer, each unlawful alone and their combination consistent-looking: **both refused in both arrival orders**, each naming the sum it could see, committed state untouched. Neither is rescued by the other's uncommitted work |
+| `R2` / `R2b` | two lawful movements on one key through different lots: both commit with key = cache in both orders, the later transaction visibly `[BLOCKED]` on the key row, which is the mechanism the comment claims |
+
+What remains `UNMEASURED` is narrower and is stated as such in the file's own
+last three lines: a cache writer that moves the cache WITHOUT moving the key and
+is lawful doing it, which no principal can be today because any one-sided change
+is refused on its own. `SERIALIZABLE` and deadlock remain `UNMEASURED` for both
+packs.
+
+### 11.6 Run identity of this round
+
+```
+RUN_ID            : p11-20261012T173927Z-20219
+SOURCE_SHA        : 22e8e2dce8ee0456f103f82ec436bf6d4b11309e
+SOURCE_TREE_DIRTY : no
+PG_VERSION        : 16.15      DB_COLLATION : en_US.utf8 / en_US.utf8 / UTF8
+PACK_A_DDL_SHA256 : 53e18ed66478962be784bceaca9c7ab66cf07209be412bf52e1f0969a553bd96
+PACK_B_DDL_SHA256 : a94b2549b8f920bea3608a8b8517987581ed00dfdf5595994e8e7cfd688e6092
+HARNESS_SHA256    : ebe9928553b6bd0560338eda1effb7a175d8eeb2044a4934c67778452a23cf2a
+migrations        : APPLIED 87/87 as daftar_migrator (NOT superuser)
+Pack A            : applied unnumbered in ONE transaction, end-state assertion passed
+Pack B            : applied unnumbered in ONE transaction, end-state assertion passed: 19 checks
+TOTAL 58 cases, 0 failed          PACK B TOTAL 53 cases, 0 failed
+TOTAL 58 cases, 0 failed (run 2)  PACK B TOTAL 53 cases, 0 failed (run 2)
+9 races run; 0 finding(s).        4 Pack B races run; 0 finding(s).
+EXIT_PROOFS_A 0  EXIT_PROOFS_B 0  EXIT_PROOFS_A_RUN2 0  EXIT_PROOFS_B_RUN2 0
+EXIT_RACES 0     EXIT_RACES_B 0   EXIT_SCRIPT 0
+frozenThrough 0079 | 80 frozen entries | digest mismatches []
+```
+
+Log: `/mnt/project-files/phase11/RUN-EVIDENCE-AUTHORITATIVE-22e8e2d.txt`. The
+Pack B end-state assertion is **19** checks, not 17: the cache-side fail-closed
+arm and the three overlay relations' policy sets were added. That assertion
+refused its own first run with
+`stock_lots carries a policy set this pack did not install
+(business_isolation,inventory_internal_read,tenant_membership)` — a pin getting
+its expected value from the catalogue rather than from the author's memory, which
+is how it should be found. The third name is deliberate: a permissive
+`USING (true)` applied TO `daftar_inventory_internal`, copied from the live
+`stock_levels`, which is why the PUBLIC-tautology arm beside it is scoped to
+PUBLIC. The qualifier being a tautology is the POINT of a role-scoped read
+policy; what must never be a tautology is one applied to PUBLIC.
+
+### 11.7 The mutations, and a method failure of this round's own
+
+Log: `/mnt/project-files/phase11/RUN-EVIDENCE-MUTATIONS-ROUND3-da106b7.txt`,
+whose runs are at `da106b7` — byte-identical to the head in both DDL files,
+both proof suites and both worlds (`git diff --stat da106b7 22e8e2d` over those
+paths is empty; the two later commits add `races_b.py` and the documents).
+
+| mutation | what it changes | result |
+|---|---|---|
+| `M1` | restore `IF NEW.is_base OR NEW.attributes = '{}'` in the validator | **4 Pack A cases red** (both `PA-01` refusals, the committed-state count reading 2, and one knock-on: the row the mutation admits populates the variant-free fixture product, so the matrix-lifecycle case on it is then refused by the freeze guard rather than by the guard under test). 6 red on the second run. **No Pack B case red** |
+| `M2` | remove `AND v.status <> 'archived'` from the freeze guard | **1 Pack A case red** — the end-to-end recovery. No Pack B case red |
+| `M4` | reduce the tautology test to the literal list | **2 Pack A cases red**, and the pack's own end-state assertion, re-executed under the mutation, **refuses the install**: *the tautology test does not catch the spellings it is documented to catch* |
+| `M5` | restore `IF NOT FOUND THEN RETURN NULL` on the cache side | **1 Pack B case red** — `D-32`'s invisibility case commits. No Pack A case red |
+| `M6` | `GRANT UPDATE ON stock_levels TO daftar_reconciler` | **1 Pack B case red** — `PB-17`'s grant list, so the scope sentence is watched by a case and not only written down |
+
+Every mutation reds only its own pack's cases, which is the pair-drop property
+the coordinator asked for, measured one mutation at a time.
+
+**The method failure, because it is the finding of this round the author owns.**
+`M2` was first applied to a database the suite had already run against, and it
+red **nothing**: every write the recovery case needs was already in place, and
+its statements are conditional precisely so a second run is quiet. *A mutation
+applied after the suite has run measures the re-run* — the other half of §10.5's
+"a mutation is only measurable on a state that can be restored". So
+`P11_MUTATION_SQL` was added to `rebuild_and_prove.sh`: it applies a mutation on
+a fresh database, after the packs and the worlds and before any proof runs,
+prints the mutation in full, and says in the log that the suites below are
+expected to fail. It is in the repository rather than in the author's shell so
+that a mutation run can be reproduced by name, and all five mutations above were
+re-measured through it.
+
+### 11.8 What remains unsigned after this round
+
+- **A FOURTH challenge round is owed on both packs.** The answered head is not
+  the reviewed head, and the newest and least reviewed code in the phase is
+  exactly the code this round added: the `'{}'` matrix-presence test, the
+  archived-variant filter, the tautology function, the cache-side fail-closed
+  arm and `races_b.py`. **Nothing here is self-signed.**
+- `PA-02`'s residual (`MPR-09`) is open: a stock key on an archived variant is
+  accepted today, and the obligation belongs to the inventory authority.
+- `PB-17` is answered as a scope statement and a case, **not closed as a law**:
+  a direct write to the stock key still fires nothing, and
+  `inventory_lot_verify` is `SPEC ONLY`.
+- The tautology test's residual (a qualifier true of every row that none of the
+  three forms sees) stays routed to `PR-SEC-P11-01`; the two packs still carry
+  two implementations of the PUBLIC-policy arm, which is `MPR-10`.
+- Everything §9.6 and §10.6 left open stays open: `PR-SEC-P11-01`, `MPR-07`,
+  `MPR-08`, the Pack B grants and the registered op code, `OD-P11-07`, Packs C
+  and D as `SPEC ONLY`.
+- `READY_TO_PROMOTE` = **NO** for both packs, no migration number exists, and no
+  CI has executed any of it.
