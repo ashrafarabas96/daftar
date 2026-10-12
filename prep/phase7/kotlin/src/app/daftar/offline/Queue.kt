@@ -66,6 +66,31 @@ sealed interface SideEffect {
     /** Raise an operational signal; `code` is for the observability pipeline. */
     data class Alert(val code: String, val law: String) : SideEffect
 
+    /**
+     * Someone other than the capturer moved this row, and this records who.
+     *
+     * Challenger finding H-01's second half. `Scope.kt` justifies storing the
+     * member at all on the ground that "an audit of 'who captured this' has no
+     * other source once the row is the only record" — and the moment the design
+     * lets a second person act on the row, that argument applies to them too.
+     * The row names the capturer and has nowhere to name anybody else, so the
+     * actor is recorded as an effect at the moment it happens, which is also
+     * the only moment it is known: a cancel clears the row immediately
+     * afterwards, so a field on the row could not survive the very action most
+     * worth recording.
+     *
+     * `event` is the kind of action, not a message: what it reads like to a
+     * person is the message layer's business and never this file's.
+     */
+    data class RecordCustodyAction(
+        val idempotencyKey: String,
+        /** The scope the row was captured under. */
+        val capturedBy: OwnerScope,
+        /** The scope that acted on it, which is not the one above. */
+        val actedBy: OwnerScope,
+        val event: String,
+    ) : SideEffect
+
     /** The local row may now be removed. Emitted only alongside SYNCED (L5). */
     data object ClearLocalRow : SideEffect
 
@@ -280,7 +305,22 @@ class Operation private constructor(
         if (event is QueueEvent.ByScope && !event.actingScope.mayAct(scope, event)) {
             return Step.Refused("offline.scope_switched", P7Laws.NO_CROSS_ACCOUNT_SEND.id)
         }
-        return stepWithinScope(event)
+        val step = stepWithinScope(event)
+
+        // ONE place for the custody record too, for the same reason the gate is
+        // one place: a per-arm record is the law restated, and the arm added
+        // later is the one that forgets it. A refusal moves nothing, so there is
+        // nothing to record; what is recorded is every MOVE caused by a session
+        // that is not the row's own (H-01).
+        if (event is QueueEvent.ByScope && event.actingScope != scope && step is Step.Moved) {
+            return Step.Moved(
+                step.operation,
+                step.effects + SideEffect.RecordCustodyAction(
+                    id, scope, event.actingScope, event::class.simpleName.orEmpty(),
+                ),
+            )
+        }
+        return step
     }
 
     private fun stepWithinScope(event: QueueEvent): Step = when (event) {

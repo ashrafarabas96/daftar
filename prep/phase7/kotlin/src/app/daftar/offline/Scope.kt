@@ -64,50 +64,70 @@ data class OwnerScope(
      *
      * The member is different, by this file's own header: "the server resolves
      * membership itself and is the authority on it, so the member is not a
-     * security boundary here". It is compared for the three events that DECIDE
-     * something about money — cancelling a capture, resolving a refusal on one,
-     * restoring the bytes behind one — because one cashier must not settle
-     * another's sale. It is not compared for the two that only move the
-     * operation along the path it was already on: a send asserts nothing about
-     * who the actor is, since the server authorizes the sending session itself,
-     * and a release of an unsent capture asserts nothing about who took the
-     * money. The row names its capturer for the audit either way.
+     * security boundary here". It is compared for the three events that COMMIT
+     * something or settle it — confirming a capture for sending, resolving a
+     * material refusal, restoring the bytes behind one — and not for the two
+     * whose worst case is recoverable: a send, which carries the capturer's own
+     * scope and so changes nothing about whose sale it is, and a cancel of a
+     * capture nothing was ever sent from, which loses a local record that the
+     * person at the till can capture again.
      *
-     * So a till can finish Alice's sale after Alice has gone home — including
-     * a sale she captured and never released, which is finding G-02 and the
-     * state this comment described before the code reached it — into the same
-     * business, under the same key, with the same bytes. It still cannot touch
-     * the row from the wrong business, and it still cannot let Bob cancel or
-     * settle what Alice captured.
+     * So a till is never stuck with Alice's row after Alice has gone home: it
+     * can send what she confirmed, and it can abandon what she did not. It
+     * cannot confirm it for her, it cannot touch the row from another business,
+     * and whatever it does to a row that is not its own is recorded as a
+     * custody action with the acting member on it — because the row names only
+     * the capturer, and a second actor the design introduces is a second actor
+     * the audit needs.
      */
     fun mayAct(owner: OwnerScope, event: QueueEvent.ByScope): Boolean {
         // Never relaxed, for any event: this is the half the server cannot check.
         if (tenantId != owner.tenantId || businessId != owner.businessId) return false
         return when (event) {
-            // A transmission. Authorized by the server, not by the row.
+            // A transmission. Authorized by the server, not by the row, and it
+            // changes nothing about the row: the attempt carries the capturer's
+            // own scope, so what reaches the ledger is the same sale either way.
             is QueueEvent.Send,
 
-            // Handing an unsent capture to the network is not a decision about
-            // it. G-02: gating this on the member left the case this comment
-            // describes stranded one state earlier than the send — a capture
-            // Alice never released is unsendable (not in a sendable state),
-            // unreleasable, uncancellable and unresolvable once her session is
-            // gone, while L4 and L5 forbid dropping it. A release asserts
-            // nothing about who took the money: it cannot be the step that
-            // loses a sale, because nothing has left the device yet. The
-            // reducer permits a release only from CAPTURED, so `attempts` is
-            // necessarily 0 here — asserted as INV-13 rather than argued — and
-            // the row goes on naming Alice, so the attempt still leaves under
-            // her scope and the ledger still records her sale.
-            is QueueEvent.Release,
+            // Abandoning a capture nothing was ever sent from. Finding H-01 is
+            // why this one and not the release.
+            //
+            // G-02's dead end is real — a capture Alice never released is not
+            // in a sendable state, so with every session event gated on the
+            // member the row could never leave the device or the till. But of
+            // the two ways to open it, the first fix chose the RISKIER one.
+            // `Release` is the merchant's confirmation: it is the step that
+            // turns a capture into a ledger entry, and an unconfirmed capture
+            // may be a sale Alice took cash for and did not tap, or a basket
+            // the customer walked away from. The kernel cannot tell those
+            // apart, so a release by someone who cannot be established to have
+            // witnessed the transaction resolves that ambiguity in the
+            // COMMITTING direction. A cancel resolves it in the direction that
+            // can be undone by the person standing at the till: nothing left
+            // the device, so there is no server truth to contradict (L5's own
+            // gate is `attempts == 0`, not the state), and a sale that was real
+            // is captured again by whoever is there.
+            //
+            // So the asymmetry is deliberate: a member of the same business may
+            // abandon another's unsent capture and may NOT confirm it. Between
+            // losing a local record that can be re-entered and committing a
+            // sale nobody confirmed, only the second reaches the ledger.
+            is QueueEvent.CancelByMerchant,
             -> true
 
-            // A person deciding something about someone else's capture. These
-            // stay the capturer's: cancelling, resolving a material refusal and
-            // restoring the bytes behind one are decisions about money, and a
-            // refusal that needs a decision Bob cannot make is escalated to a
-            // supervisor by `Recovery`, not quietly reassigned here.
-            is QueueEvent.CancelByMerchant,
+            // The capturer's own, because each of these is a decision about
+            // money that cannot be taken back by the next person at the till:
+            // confirming a capture for sending, settling a material refusal,
+            // and restoring the bytes behind one.
+            //
+            // The clean answer to H-01 is neither cashier but a supervisor, and
+            // `OwnerScope` has no role dimension to express one — `Recovery`
+            // names `ESCALATE_TO_A_SUPERVISOR` five times and the kernel cannot
+            // represent the authority it points at. That role belongs to Phase
+            // 4's authority model, and inventing a second one here is exactly
+            // the duplicated authority the mission forbids, so it is recorded
+            // as owed (OD-P7-08) rather than guessed at.
+            is QueueEvent.Release,
             is QueueEvent.ResolveByMerchant,
             is QueueEvent.RestorePayload,
             -> memberId == owner.memberId

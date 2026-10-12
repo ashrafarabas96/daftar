@@ -396,7 +396,7 @@ PROOFS: list[Proof] = [
         path="src/app/daftar/offline/Scope.kt",
         find="            -> memberId == owner.memberId",
         replace="            -> true",
-        expect_red="another member on the same till cannot cancel or resolve another member's capture",
+        expect_red="another member on the same till cannot confirm or settle another member's capture",
         why="the F-05 and G-02 splits collapse entirely and the member stops being compared for anything: Bob can cancel and clear the local row of a sale Alice captured, which is the shared-till case PART 40 item 2 names. G-02 narrowed this proof's subject rather than weakening it: a release is now business-gated by design, so what is left to defend is the three events where a person decides something about money",
     ),
     Proof(
@@ -416,18 +416,18 @@ PROOFS: list[Proof] = [
         why="challenger finding G-01, restored: the fix for F-01 distinguished presence from absence and not presence from CURRENCY. A row restored from a backup reads attempts == 0, which is the one held value that permits, and attempts only ever increases \u2014 so the sale released, sent and committed after the backup was taken is re-entered under a new key and the customer pays twice, from a store that has already declared it cannot vouch for itself",
     ),
     Proof(
-        law="P7-L13-THE-NEXT-SHIFT-CAN-FINISH-AN-UNRELEASED-CAPTURE",
+        law="P7-L13-AN-UNRELEASED-CAPTURE-HAS-AN-EXIT",
         path="src/app/daftar/offline/Scope.kt",
         find=(
-            "            is QueueEvent.Release,\n"
+            "            is QueueEvent.CancelByMerchant,\n"
             "            -> true\n"
         ),
         replace=(
             "            -> true\n"
-            "            is QueueEvent.Release,\n"
+            "            is QueueEvent.CancelByMerchant,\n"
         ),
-        expect_red="a capture the previous shift never released can still be finished by the next one",
-        why="challenger finding G-02, restored: the release goes back under the member gate, so a sale Alice captured while the till was offline and never released is unsendable (CAPTURED is not a sendable state), unreleasable, uncancellable, unresolvable and unminimizable once her session is revoked \u2014 seven refusals and a material row that can never settle, which L4 and L5 forbid dropping",
+        expect_red="a capture the previous shift never released can be abandoned by the next one, never confirmed",
+        why="challenger finding G-02, restored: the one open exit closes, so a sale Alice captured while the till was offline and never released is unsendable (CAPTURED is not a sendable state), unreleasable, uncancellable, unresolvable and unminimizable once her session is revoked \u2014 seven refusals and a material row that can never settle, which L4 and L5 forbid dropping",
     ),
     Proof(
         law="INV-13-A-RELEASE-ONLY-EVER-MOVES-AN-UNSENT-ROW",
@@ -444,6 +444,37 @@ PROOFS: list[Proof] = [
         replace='        "offline.absence_not_fenced_typo" ->',
         expect_red="every refusal code the kernel can produce has a stated merchant view",
         why="challenger finding G-03's practical risk: a real refusal loses its view and falls through to the generic device-software message. The named allow-list must not be able to swallow it \u2014 the merchant would be told the till is broken instead of that the original sale is still being confirmed, and would key the sale in again",
+    ),
+    Proof(
+        law="P7-L13-ONLY-THE-CAPTURER-CONFIRMS-A-CAPTURE",
+        path="src/app/daftar/offline/Queue.kt",
+        # Exempting one event from the gate, which is how a special case
+        # actually gets written: not by editing the rule, by stepping around
+        # it. Keeps the `is` check so the smart cast survives and it compiles.
+        find="        if (event is QueueEvent.ByScope && !event.actingScope.mayAct(scope, event)) {",
+        replace=(
+            "        if (event is QueueEvent.ByScope && event !is QueueEvent.Release &&\n"
+            "            !event.actingScope.mayAct(scope, event)\n"
+            "        ) {"
+        ),
+        expect_red="a capture the previous shift never released can be abandoned by the next one, never confirmed",
+        why="challenger finding H-01, restored exactly: the release moves back into the ungated arm, so any member of the business may CONFIRM a capture they cannot be shown to have witnessed. A release is the step that turns a capture into a ledger entry, and an unconfirmed capture may equally be a basket the customer walked away from \u2014 so this is the one unlock of the two that can invent a sale, which is why the cancel is the one that is open",
+    ),
+    Proof(
+        law="INV-14-A-FOREIGN-SESSION-NEVER-ACTS-UNRECORDED",
+        path="src/app/daftar/offline/Queue.kt",
+        find="        if (event is QueueEvent.ByScope && event.actingScope != scope && step is Step.Moved) {",
+        replace="        if (event is QueueEvent.ByScope && event.actingScope == scope && step is Step.Moved) {",
+        expect_red="every reachable configuration honours every invariant",
+        why="H-01's second half: the custody record is emitted for the row's OWN session and not for the foreign one, which is the exact inversion that leaves the second actor the design introduced unrecorded while the effect still appears in every trace a reader is likely to look at. The row names only the capturer and a cancel clears it at once, so there is no later moment from which the actor could be recovered",
+    ),
+    Proof(
+        law="INV-14-THE-RECORD-NAMES-THE-ACTOR-NOT-THE-ROW",
+        path="src/app/daftar/offline/Queue.kt",
+        find="                    id, scope, event.actingScope, event::class.simpleName.orEmpty(),",
+        replace="                    id, scope, scope, event::class.simpleName.orEmpty(),",
+        expect_red="every reachable configuration honours every invariant",
+        why="the plausible version of the same defect: the record is emitted, in the right places and with the right shape, and names the capturer twice. An audit trail that records every custody action and attributes all of them to the person who did not perform them is worse than none, because it reads as evidence",
     ),
 ]
 

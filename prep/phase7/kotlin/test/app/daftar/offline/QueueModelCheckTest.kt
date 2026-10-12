@@ -63,7 +63,7 @@ class QueueModelCheckTest {
             acting.businessId == owner.businessId &&
             (
                 event is QueueEvent.Send ||
-                    event is QueueEvent.Release ||
+                    event is QueueEvent.CancelByMerchant ||
                     acting.memberId == owner.memberId
                 )
 
@@ -115,6 +115,7 @@ class QueueModelCheckTest {
         var foreignScopeRefusals = 0
         var nextShiftSends = 0
         var releasesOfAnUnsentRow = 0
+        var custodyRecords = 0
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
 
@@ -195,21 +196,50 @@ class QueueModelCheckTest {
                             )
 
                             // INV-13: a release only ever moves a row nothing
-                            // has been sent from. G-02 relaxed the member check
-                            // for a release on exactly that ground, so the
-                            // ground is asserted over the whole reachable space
-                            // instead of read off the reducer's `Release` arm —
-                            // if a later edit made a release legal from a state
-                            // reachable after a send, the relaxation would hand
-                            // another member a row that may already be at the
-                            // server.
-                            if (event is QueueEvent.Release) {
+                            // has been sent from, and so does a cancel. H-01
+                            // moved the relaxed event from the release to the
+                            // cancel, and the ground is the same one: nothing
+                            // left the device, so there is no server truth to
+                            // contradict. It is asserted over the whole
+                            // reachable space instead of read off the reducer's
+                            // arms — if a later edit made either legal from a
+                            // state reachable after a send, the relaxation
+                            // would hand another member a row the server may
+                            // already hold.
+                            if (event is QueueEvent.Release || event is QueueEvent.CancelByMerchant) {
                                 assertEquals(
                                     0, op.attempts,
-                                    "a release moved a row that had already been sent: $op on $event " +
+                                    "a $event moved a row that had already been sent: $op " +
                                         "(${P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id})",
                                 )
-                                releasesOfAnUnsentRow++
+                                if (event is QueueEvent.Release) releasesOfAnUnsentRow++
+                            }
+
+                            // INV-14: whatever a session that is not the row's
+                            // own manages to do to it is recorded, with the
+                            // acting scope on it, exactly once. The row names
+                            // only the capturer, so without this the second
+                            // actor H-01 introduced would act unrecorded — and
+                            // a cancel clears the row immediately, so there is
+                            // no later moment at which it could be recovered.
+                            if (event is QueueEvent.ByScope && event.actingScope != op.scope) {
+                                val records = step.effects.filterIsInstance<SideEffect.RecordCustodyAction>()
+                                assertEquals(
+                                    1, records.size,
+                                    "a foreign-session move produced ${records.size} custody records: " +
+                                        "$op on $event (${P7Laws.QUEUE_SCOPED_BY_OWNER.id})",
+                                )
+                                val record = records.single()
+                                assertEquals(op.scope, record.capturedBy, "the record names the wrong capturer")
+                                assertEquals(event.actingScope, record.actedBy, "the record names the wrong actor")
+                                assertEquals(op.id, record.idempotencyKey)
+                                custodyRecords++
+                            } else {
+                                assertTrue(
+                                    step.effects.none { it is SideEffect.RecordCustodyAction },
+                                    "a move by the row's own session was recorded as a custody action: " +
+                                        "$op on $event",
+                                )
                             }
 
                             // INV-5: at most one attempt is ever in flight.
@@ -368,7 +398,8 @@ class QueueModelCheckTest {
             "some event never moved anything, so its transitions were never checked",
         )
         assertEquals(
-            setOf("SendAttempt", "Alert", "ClearLocalRow", "MinimizePayload"), effectsSeen,
+            setOf("SendAttempt", "Alert", "ClearLocalRow", "MinimizePayload", "RecordCustodyAction"),
+            effectsSeen,
             "some side effect was never produced, so its invariant was never exercised",
         )
         assertTrue(refusals > 0, "no event was ever refused, so the refusal invariant is vacuous")
@@ -384,8 +415,13 @@ class QueueModelCheckTest {
         )
         assertTrue(
             releasesOfAnUnsentRow > 0,
-            "no release ever moved anything, so INV-13 — the ground G-02's relaxation stands on " +
+            "no release ever moved anything, so INV-13 — the ground the relaxation stands on " +
                 "— is vacuous",
+        )
+        assertTrue(
+            custodyRecords > 0,
+            "no session but the row's own ever moved it, so INV-14 is vacuous: the search never " +
+                "offered the kernel the shared till H-01 is about",
         )
         assertTrue(edges > 1_000, "only $edges edges were explored")
     }

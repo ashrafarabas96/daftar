@@ -126,21 +126,21 @@ class ScopeAndSchemaTest {
 
     /**
      * The quieter half of the same law: two staff logins on one till. Bob must
-     * not be able to cancel, release or resolve Alice's captures — not because
+     * not be able to confirm, settle or restore Alice's captures — not because
      * Bob is hostile, but because a till is a shared device and the row is the
      * only record of who took the money.
      */
     @Test
-    fun `another member on the same till cannot cancel or resolve another member's capture`() {
+    fun `another member on the same till cannot confirm or settle another member's capture`() {
         val captured = sale(alice)
-        // Challenger finding F-05 removed `Send` from this list and G-02
-        // removed `Release`, and the two tests below are the reasons. What a
-        // PERSON decides about someone else's capture is still refused —
-        // cancelling it, resolving a refusal on it, restoring the bytes behind
-        // one — which is what this half of L13 was always about. Handing an
-        // unsent capture to the network decides nothing about it.
+        // F-05 removed `Send` from this list, G-02 removed `Release`, and H-01
+        // put `Release` back and removed `CancelByMerchant` instead. The tests
+        // below are the reasons. What is left is the set of events that COMMIT
+        // something or settle it: a release is the merchant's confirmation and
+        // the step that turns a capture into a ledger entry, and resolving or
+        // restoring decides what happens to money the server has refused.
         val attempted: List<QueueEvent> = listOf(
-            QueueEvent.CancelByMerchant(bob),
+            QueueEvent.Release(bob),
             QueueEvent.ResolveByMerchant(true, bob),
             QueueEvent.ResolveByMerchant(false, bob),
             QueueEvent.RestorePayload(digest, bob),
@@ -221,54 +221,74 @@ class ScopeAndSchemaTest {
         assertEquals(alice, attempt.scope, "the attempt would have been sent under the wrong business")
         assertEquals(op.id, attempt.idempotencyKey)
 
-        // Everything a person decides is still Alice's alone.
-        for (event in listOf(QueueEvent.CancelByMerchant(bob), QueueEvent.ResolveByMerchant(true, bob))) {
+        // Everything that commits or settles is still Alice's alone.
+        for (event in listOf(QueueEvent.ResolveByMerchant(true, bob), QueueEvent.RestorePayload(digest, bob))) {
             val refused = assertIs<Step.Refused>(op.step(event), "$event by the next shift was allowed")
             assertEquals("offline.scope_switched", refused.code)
         }
     }
 
     /**
-     * Challenger finding G-02, as the test that would have caught it.
+     * Challenger findings G-02 and H-01 together, which is the only way either
+     * makes sense.
      *
-     * The same shift change one state earlier, which is the state the comment
-     * above actually describes: a sale Alice captured while the till was
-     * offline and never released. The send cannot rescue it — `CAPTURED` is
-     * not a sendable state — so with the release gated on the member too, all
-     * seven session-originated events were refused and the row could never
-     * settle. A permanently closed state is not fail-closed.
+     * G-02: a sale Alice captured while the till was offline and never released
+     * is not in a sendable state, so with every session event gated on the
+     * member the row could never leave the device or the till — and L4 and L5
+     * forbid dropping it. A permanently closed state is not fail-closed.
      *
-     * The release is permitted, and nothing else about the row changes: the
-     * owner still names Alice, the key and the bytes are hers, and the attempt
-     * leaves under her scope. What a person decides is still refused.
+     * H-01: of the two ways to open that, the first fix chose the riskier one.
+     * A release is the merchant's confirmation, so a release by Bob commits a
+     * sale nobody can establish was ever made; a cancel at zero attempts only
+     * destroys a local record, and the person at the till captures it again if
+     * it was real. So the cancel is open and the release is not, and whichever
+     * Bob does is recorded against his name.
      */
     @Test
-    fun `a capture the previous shift never released can still be finished by the next one`() {
+    fun `a capture the previous shift never released can be abandoned by the next one, never confirmed`() {
         val captured = sale(alice)
         assertEquals(OperationState.CAPTURED, captured.state)
         assertEquals(0, captured.attempts, "the premise of the relaxation is that nothing was sent")
 
-        val released = assertIs<Step.Moved>(
+        // Confirming it is Alice's, and nobody else's.
+        val refused = assertIs<Step.Refused>(
             captured.step(QueueEvent.Release(bob)),
-            "a capture left behind by a shift change could never be released by anyone",
-        ).operation
-        assertEquals(OperationState.QUEUED, released.state)
-        assertEquals(alice, released.scope, "the release reassigned the row's owner")
-        assertEquals(captured.id, released.id)
-        assertEquals(captured.payloadDigest, released.payloadDigest)
+            "another member confirmed a capture they cannot be shown to have witnessed",
+        )
+        assertEquals("offline.scope_switched", refused.code)
 
-        val attempt = assertIs<Step.Moved>(released.step(QueueEvent.Send(digest, bob)))
-            .effects.filterIsInstance<SideEffect.SendAttempt>().single()
-        assertEquals(alice, attempt.scope, "the sale would have been recorded against the wrong member")
+        // Abandoning it is open, so the row is not stranded.
+        val cancelled = assertIs<Step.Moved>(
+            captured.step(QueueEvent.CancelByMerchant(bob)),
+            "a capture left behind by a shift change had no exit at all",
+        )
+        assertEquals(OperationState.DISCARDED, cancelled.operation.state)
+        assertEquals(alice, cancelled.operation.scope, "the cancel reassigned the row's owner")
 
-        // And the decisions are still not Bob's to make.
-        for (event in listOf<QueueEvent>(
-            QueueEvent.CancelByMerchant(bob),
-            QueueEvent.ResolveByMerchant(false, bob),
-            QueueEvent.RestorePayload(digest, bob),
-        )) {
-            val refused = assertIs<Step.Refused>(captured.step(event), "$event by the next shift was allowed")
-            assertEquals("offline.scope_switched", refused.code, "$event was refused for the wrong reason")
+        // And it is recorded against Bob, because the row names only Alice and
+        // is about to be cleared — this is the one moment the actor is known.
+        val record = cancelled.effects.filterIsInstance<SideEffect.RecordCustodyAction>().single()
+        assertEquals(alice, record.capturedBy)
+        assertEquals(bob, record.actedBy)
+        assertEquals(captured.id, record.idempotencyKey)
+        assertEquals("CancelByMerchant", record.event)
+
+        // Alice's own cancel is not a custody action: she is the row.
+        val byAlice = assertIs<Step.Moved>(captured.step(QueueEvent.CancelByMerchant(alice)))
+        assertTrue(byAlice.effects.none { it is SideEffect.RecordCustodyAction })
+
+        // And the exit closes the moment anything has left the device: after a
+        // send there is a server truth that a local cancel could contradict,
+        // and L5 refuses it for ANY member, by the counter and not the state.
+        var sent = (captured.step(QueueEvent.Release(alice)) as Step.Moved).operation
+        sent = (sent.step(QueueEvent.Send(digest, bob)) as Step.Moved).operation
+        for (who in listOf(alice, bob)) {
+            val no = assertIs<Step.Refused>(
+                sent.step(QueueEvent.CancelByMerchant(who)),
+                "a sale the server may already hold was cancelled by $who",
+            )
+            assertEquals("offline.cancel_after_send", no.code)
+            assertEquals(P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id, no.law)
         }
     }
 
