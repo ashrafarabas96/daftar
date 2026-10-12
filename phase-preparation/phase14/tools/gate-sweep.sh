@@ -354,6 +354,24 @@ if [ "$NODB" = 0 ] && [ -d /tmp/p14pg/data ]; then
     fi
     fail=$((fail+1))
   fi
+  # ROUND-10 ADDENDUM: the challenger diagnosed R10-RESIDUAL-AUTHOR-01 as
+  # CONTENTION -- two concurrent runs colliding over CREATE DATABASE, with the
+  # loser blaming residue. The remedy is per-run database names plus a lock, so
+  # the LOCK itself is red-proofed: hold it, require the script to refuse by
+  # name rather than measure a world another run is editing.
+  ( exec 9>/tmp/p14pg/redproof.lock; flock 9; sleep 8 ) &
+  LOCKER=$!
+  sleep 1
+  out=$( "$PACK/proofs/redproof-preflight.sh" 2>&1 ); rc=$?
+  if [ "$rc" = 4 ] && printf '%s' "$out" | grep -q 'REFUSING TO MEASURE'; then
+    printf 'ok    %-26s rc=4, refused while another run holds the lock\n' concurrent-run-refused
+  else
+    printf 'FAIL  %-26s rc=%s — a second run measured a world another run is editing: %s\n' \
+           concurrent-run-refused "$rc" "$(printf '%s' "$out" | grep -m1 . | cut -c1-80)"
+    fail=$((fail+1))
+  fi
+  wait $LOCKER 2>/dev/null
+
   # ROUND-9 CHALLENGE P3-02, offered as a remedy and taken: the VERSION arm
   # cannot be proved against a real PG 17 cluster here, but its purpose is to
   # prove the assertion FIRES. The bound is mutated in a COPY of preflight.sql

@@ -18,6 +18,29 @@ SOCK=/tmp/p14pg/sock; PORT=54314
 HERE=$(cd "$(dirname "$0")" && pwd)
 WANT="${1:-all}"
 fail=0; n=0
+# ROUND-10 ADDENDUM: the author's unexplained intermittent failure
+# (R10-RESIDUAL-AUTHOR-01) was CONTENTION, and the challenger reproduced it:
+# two of these runs at once collide over `CREATE DATABASE p14wrongcoll`, and
+# the loser reported "the MUTATION did not apply" while naming RESIDUE -- the
+# one explanation that was already fixed. Two remedies.
+#
+# (1) each run's own databases, so two runs cannot collide over a database.
+RT=$$
+# (2) the arms that mutate ROLES cannot be renamed: two runs flipping BYPASSRLS
+# on the same role would each red on the other's mutation. So a run takes an
+# exclusive lock and REFUSES to measure rather than measuring a world another
+# run is editing. `flock` and not a PostgreSQL advisory lock, because every
+# psql invocation here is its own session and a session lock would be released
+# the moment the statement taking it returned.
+mkdir -p /tmp/p14pg 2>/dev/null
+LOCK=/tmp/p14pg/redproof.lock
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "REFUSING TO MEASURE: another red-proof run holds $LOCK. These arms mutate the"
+  echo "same roles, so concurrent runs would each red on the other's mutation and the"
+  echo "loser would report that nothing was proved. Re-run when the other finishes."
+  exit 4
+fi
 
 psql_as() { su claude -s /bin/bash -c "$BIN/psql -h $SOCK -p $PORT -U $1 -d $2 -v ON_ERROR_STOP=1 -q $3" 2>&1; }
 
@@ -54,9 +77,18 @@ arm() { # name | setup-sql-as-p14super | db to preflight | teardown | required m
       printf 'FAIL  %-12s the MUTATION did not apply, so nothing was proved\n' "$name"
       printf '      psql said: %s\n' "$(printf '%s' "$serr" | grep -m1 -E 'ERROR|FATAL|could not' | cut -c1-130)"
       case "$serr" in
+        *pg_database_datname_index*|*"unique constraint"*)
+          # The discriminator the ROUND-10 ADDENDUM measured: residue gives
+          # 42P04 "database ... already exists", while a genuine CONCURRENT
+          # create gives the raw unique-constraint violation, which residue
+          # cannot produce. Naming residue for a collision sent the reader to
+          # measure a cause that was not the cause.
+          printf '      CAUSE: another run created this database at the same moment — concurrency,\n'
+          printf '      not residue. The per-run suffix _%s is meant to make that impossible, so if\n' "$RT"
+          printf '      you see this, two runs are sharing one suffix. Re-run alone.\n' ;;
         *"already exists"*)
           printf '      CAUSE: an earlier interrupted run of THIS script left its object behind.\n'
-          printf '      Clear it and re-run: psql -U p14super -d postgres -c "DROP DATABASE IF EXISTS p14wrongcoll" -c "DROP DATABASE IF EXISTS p14wrongenc"\n' ;;
+          printf '      Clear it and re-run: psql -U p14super -d postgres -c "DROP DATABASE IF EXISTS p14wrongcoll_%s" -c "DROP DATABASE IF EXISTS p14wrongenc_%s"\n' "$RT" "$RT" ;;
         *"could not connect"*|*"No such file or directory"*)
           printf '      CAUSE: no cluster is listening on %s:%s — start it before judging any proof.\n' "$SOCK" "$PORT" ;;
       esac
@@ -87,18 +119,18 @@ arm() { # name | setup-sql-as-p14super | db to preflight | teardown | required m
 # arm that guards the settled deploy target: a result measured on the wrong
 # collation is OFF-TARGET, which is exactly how Phase 9's 75-case base was lost.
 arm collation \
-  "CREATE DATABASE p14wrongcoll OWNER p14_owner TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C' ENCODING 'UTF8'" \
-  p14wrongcoll \
-  "DROP DATABASE IF EXISTS p14wrongcoll" \
+  "CREATE DATABASE p14wrongcoll_$RT OWNER p14_owner TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C' ENCODING 'UTF8'" \
+  p14wrongcoll_$RT \
+  "DROP DATABASE IF EXISTS p14wrongcoll_$RT" \
   "RUNTIME CLAIM FALSE: collation is C/C"
 
 # (2) ENCODING — SQL_ASCII, which is not UTF8. Needs LC_COLLATE C as well,
 # because PostgreSQL refuses SQL_ASCII with an en_US.utf8 collation; the
 # encoding arm is reached first, so it is the one that fires.
 arm encoding \
-  "CREATE DATABASE p14wrongenc OWNER p14_owner TEMPLATE template0 ENCODING 'SQL_ASCII' LC_COLLATE 'C' LC_CTYPE 'C'" \
-  p14wrongenc \
-  "DROP DATABASE IF EXISTS p14wrongenc" \
+  "CREATE DATABASE p14wrongenc_$RT OWNER p14_owner TEMPLATE template0 ENCODING 'SQL_ASCII' LC_COLLATE 'C' LC_CTYPE 'C'" \
+  p14wrongenc_$RT \
+  "DROP DATABASE IF EXISTS p14wrongenc_$RT" \
   "RUNTIME CLAIM FALSE: encoding is SQL_ASCII"
 
 # (3) PRINCIPAL — a role under test given BYPASSRLS. Every privilege and RLS
