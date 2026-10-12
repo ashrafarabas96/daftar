@@ -87,9 +87,9 @@ export interface Heard {
  * security boundary**: in-process code can still read the symbol with
  * `Object.getOwnPropertySymbols` and attach it deliberately. That costs an attacker nothing they
  * did not already have — such code can call `afterListen` itself — so it is a bound on the claim,
- * not a defect. The claim is "only `afterListen` mints one, and no copy of one carries the mark by
- * accident"; it is **not** "no adversary can forge one". If this comment is ever widened into the
- * second sentence, that is the first thing to re-check.
+ * not a defect. The claim is "only `afterListen` mints one, and no copy **or mutation** of one
+ * carries the mark by accident"; it is **not** "no adversary can forge one". If this comment is ever
+ * widened into the second sentence, that is the first thing to re-check.
  *
  * `Symbol()` rather than `Symbol.for()` is load-bearing: a registry symbol would be reachable by
  * description from anywhere, which is the one route that would make the type satisfiable again.
@@ -111,7 +111,13 @@ export interface ReviewPresentation {
 function mintReview(intent: string, resolvedEntityId: string): ReviewPresentation {
   const review = { step: 'review' as const, intent, resolvedEntityId };
   Object.defineProperty(review, MINTED_BY_AFTER_LISTEN, { value: true, enumerable: false, writable: false, configurable: false });
-  return review as ReviewPresentation;
+  // Frozen — CHALLENGE F-11. The copy routes failed safe while the MUTATION route did not: changing
+  // `resolvedEntityId` in place on a genuine artefact kept the mark, because `readonly` is a
+  // compile-time annotation and only the mark itself had been made non-writable. A refactor that
+  // reuses the artefact instead of copying it lands exactly there, which is the same accident class
+  // the non-enumerable mark exists for. Freezing also makes the `readonly` annotations true at
+  // runtime, which they were not.
+  return Object.freeze(review) as ReviewPresentation;
 }
 
 /** A question put back to the member. It carries the candidates, so the member picks — not the model. */

@@ -174,6 +174,21 @@ describe('a result is never presented as committed before the server committed',
     expect(afterReview(roundTripped, { committed: true, businessTransactionId: 'tx1' }).ok).toBe(false);
   });
 
+  it('F-11: a genuine review cannot be MUTATED in place — the artefact is frozen', () => {
+    // The copy routes failed safe while this one did not: readonly is compile-time only, so a
+    // refactor that reuses the artefact rather than copying it kept the mark and changed the
+    // entity. A case has to step outside the type to reach it, which is why it went unexercised.
+    const mutable = REVIEWED as { resolvedEntityId: string; intent: string };
+    expect(() => {
+      mutable.resolvedEntityId = 'somebody-else';
+    }).toThrow(TypeError);
+    expect(() => {
+      mutable.intent = 'return.create';
+    }).toThrow(TypeError);
+    expect(REVIEWED.resolvedEntityId).toBe('cust-1');
+    expect(Object.isFrozen(REVIEWED)).toBe(true);
+  });
+
   it('C-5: the genuine artefact itself still passes, so the two cases above fail for their own reason', () => {
     expect(afterReview(REVIEWED, { committed: true, businessTransactionId: 'tx1' }).ok).toBe(true);
   });
