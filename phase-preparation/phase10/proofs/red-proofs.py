@@ -830,8 +830,11 @@ def main() -> int:
             original = path.read_text()
             mutated = original.replace(find, replace, 1)
             if mutated == original:
-                failures.append(f"{law}: the mutation MATCHED NOTHING in {rel} — the proof is vacuous")
-                print(f"FAIL {law}\n     the mutation text was not found in {rel}")
+                # Two causes, one guard: the text was not found, OR the
+                # replacement is identical to it. Naming only the first sends
+                # a reader looking for a typo in a string that is present.
+                failures.append(f"{law}: the mutation left {rel} UNCHANGED — either the text was not found, or the replacement is identical to it; the proof is vacuous")
+                print(f"FAIL {law}\n     the mutation changed nothing in {rel}: the text is absent, or the replacement equals it")
                 continue
             path.write_text(mutated)
             try:

@@ -155,9 +155,15 @@ export function expectedWasteMovements(line: CancelledLine, lookup: RecipeVersio
   } catch (error) {
     // Only the binding's OWN mismatch is re-worded here. Catching every error
     // and reporting it as a version mismatch would relabel an unrelated
-    // failure — a reader that is not permitted, a lookup that threw — as a
-    // fact about the recipe, which is a false diagnosis in the one place a
-    // reader looks for the true one.
+    // failure as a fact about the recipe, which is a false diagnosis in the
+    // one place a reader looks for the true one.
+    //
+    // No example is offered, because from this call graph there is none: the
+    // binding is non-null here and `assertBindingGoverns` raises only its own
+    // two mismatch refusals, so the rethrow is unreachable and defensive. An
+    // earlier version of this comment cited "a lookup that threw", which
+    // cannot reach here — `lookup(binding)` is called before the `try`. A
+    // comment that invents its own motivating case is a claim like any other.
     if (!(error instanceof RecipeBindingRefusal)) throw error;
     if (error.code !== 'restaurant_recipe_binding.recipe_mismatch' && error.code !== 'restaurant_recipe_binding.version_mismatch') throw error;
     throw new WasteRefusal(

@@ -131,7 +131,14 @@ def derive(log_path: pathlib.Path) -> dict[str, str]:
     exits = {cmd[0]: None for cmd in GATES}
     for label, cmd in GATES:
         joined = re.escape(" ".join(cmd))
-        m = re.search(rf"^=== command: {joined}$.*?^--- exit code: (-?\d+)$", text, re.M | re.S)
+        # The search must STOP at the next command header. Without the
+        # tempered pattern below, `re.S` let it run past a gate whose own
+        # `--- exit code:` line was missing and return the NEXT gate's code —
+        # so a hand-edited log could show `proofs 0` with no such value in it
+        # anywhere, and `--check`, regenerated from that same log, certified
+        # the run. A partial log failed open on the one cell the pack's
+        # strongest evidence hangs from. Found by the round-5 challenger.
+        m = re.search(rf"^=== command: {joined}$(?:(?!^=== command: ).)*?^--- exit code: (-?\d+)$", text, re.M | re.S)
         exits[label] = m.group(1) if m else "ABSENT"
     files = re.search(r"^\s*Test Files\s+(\d+) passed \(\d+\)", text, re.M)
     cases = re.search(r"^\s*Tests\s+(\d+) passed \(\d+\)", text, re.M)
@@ -546,13 +553,46 @@ def self_test() -> int:
             if rc == 0:
                 failures.append(why)
 
+        # One gate's own exit line removed, and the table regenerated from
+        # that same edited log so the two agree perfectly. Before the
+        # tempered pattern in `derive()`, this printed the NEXT gate's code
+        # and `--check` certified the run.
+        partial = runs / "P10-SELFTEST-PARTIAL.log"
+        partial.write_text(green.read_text().replace("--- exit code: 0\n\n=== command: python3 " + PKG + "/proofs/record-run.py --self-test", "\n=== command: python3 " + PKG + "/proofs/record-run.py --self-test", 1))
+        if "ABSENT" not in table(derive(partial)):
+            failures.append("a gate with no exit code of its own borrowed the next gate's")
+        partial_manifest = folder / "run-partial.md"
+        partial_manifest.write_text("# r\n\n" + table(derive(partial)) + "\n")
+        rc, _ = silently(lambda: check_run(partial, partial_manifest))
+        if rc == 0:
+            failures.append("a log missing one gate's exit code was accepted as evidence")
+
         drifted = folder / "run-drift.md"
         drifted.write_text(green_manifest.read_text().replace("v24.0.0", "v24.99.0"))
         rc, _ = silently(lambda: check_run(green, drifted))
         if rc == 0:
             failures.append("a table stating a runtime its log contradicts was accepted")
 
-    # ---- 4. git fails closed ----------------------------------------------
+    # ---- 4. the two hashers are two ---------------------------------------
+    # The design rests on their independence, and nothing asserted it: making
+    # `sha256_independent` return `hashlib`'s value left every gate green,
+    # because one implementation was answering twice and the published
+    # vectors were still satisfied. The literals remain the real gate; this
+    # keeps a later refactor from quietly collapsing the pair.
+    import ast
+    import inspect
+
+    if sha256_independent is hashlib.sha256:
+        failures.append("the second hash implementation IS the first")
+    tree = ast.parse(inspect.getsource(sha256_independent).lstrip())
+    body = tree.body[0].body
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+        body = body[1:]  # the docstring NAMES hashlib; the code must not use it
+    code = "\n".join(ast.unparse(node) for node in body)
+    if "hashlib" in code:
+        failures.append("the written-out SHA-256 delegates to hashlib, so the two sides are one implementation answering twice")
+
+    # ---- 5. git fails closed ----------------------------------------------
     try:
         _, out = silently(lambda: git("rev-parse", "--verify", "refs/heads/__p10-self-test-no-such-ref__"))
         failures.append("a failing git command returned a value instead of stopping the run")
@@ -563,7 +603,9 @@ def self_test() -> int:
         print(f"FAIL self-test: {f}")
     if failures:
         return 1
-    print(f"ok   self-test: hashing matches published digests; the digest gate hashes by path and catches UNLISTED, CHANGED, MISSING and AWAITING; a failed, dirty or runtime-less run is refused as evidence; git fails closed ({negatives} negative cases, output captured)")
+    print(
+        f"ok   self-test: hashing matches published digests and the two implementations are two; the digest gate hashes by path and catches UNLISTED, CHANGED, MISSING and AWAITING; a failed, dirty, runtime-less or partially logged run is refused as evidence; git fails closed ({negatives} negative cases, output captured)"
+    )
     return 0
 
 
