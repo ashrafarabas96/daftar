@@ -58,7 +58,7 @@ echo "MANIFEST_SHA256   : $(sha256sum $REPO/infrastructure/database/MIGRATION_MA
 echo "BOOTSTRAP_SHA256  : $(sha256sum $REPO/infrastructure/database/bootstrap.sql | cut -d' ' -f1)"
 echo "PACK_A_DDL_SHA256 : $(sha256sum $REPO/prep/phase11/ddl/p11-pack-a-apparel.sql | cut -d' ' -f1)"
 echo "PACK_B_DDL_SHA256 : $(test -f $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry.sql && sha256sum $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry.sql | cut -d' ' -f1 || echo 'absent at this SHA — Pack B is not on the branch yet, and the run below skips it by name rather than silently')"
-echo "HARNESS_SHA256    : $(cat $(ls $H/proofs.py $H/proofs_b.py $H/races.py $H/run_migrations.py $H/world.sql $H/world_b.sql $H/rebuild_and_prove.sh 2>/dev/null) | sha256sum | cut -d' ' -f1)"
+echo "HARNESS_SHA256    : $(cat $(ls $H/proofs.py $H/proofs_b.py $H/races.py $H/run_migrations.py $H/render_bootstrap.py $H/world.sql $H/world_b.sql $H/rebuild_and_prove.sh 2>/dev/null) | sha256sum | cut -d' ' -f1)"
 echo "PG_VERSION        : $($PG/postgres --version)"
 echo "PG_CLUSTER_DIR    : $S/data (port $PORT, socket $SOCK)"
 echo "NODE_VERSION      : $(node -v) (repository engines: $(node -e "process.stdout.write(require('$REPO/package.json').engines.node)")) -- NO npm suite is run here"
@@ -80,17 +80,15 @@ case "$COLL" in
 esac
 echo "=== 2. bootstrap.sql (the runtime roles + extensions), as the deployment administrator ==="
 # The repository's bootstrap carries eight password placeholders. Rendering
-# them is part of the setup, so it is here rather than in a file nobody can
-# see; the values are scratch-only and the cluster takes no TCP connection.
-python3 -I - "$REPO/infrastructure/database/bootstrap.sql" "$S/sql/bootstrap.rendered.sql" <<'PY' || exit 1
-import re,sys
-src,dst=sys.argv[1],sys.argv[2]
-s=open(src).read()
-s=re.sub(r"__([A-Z_]+)_DB_PASSWORD__", lambda m: "p11_scratch_"+m.group(1).lower()+"_pw", s)
-assert "__" not in re.sub(r"--[^\n]*","",s).replace("__","") or True
-open(dst,"w").write(s)
-print("bootstrap rendered: %d placeholders substituted" % len(re.findall(r"p11_scratch_", s)))
-PY
+# them is part of the setup, so it lives in the repository rather than in a
+# file nobody can see; the values are scratch-only and the cluster takes no
+# TCP connection. The renderer moved OUT of this script in answer to finding
+# P3-N03.1 — its completeness check was inert twice over and let an
+# unmatched placeholder through unrendered — and the check now has a case
+# that fails it, run here BEFORE anything is rendered or applied.
+echo "--- 2a. the renderer's own check, proved red before it is trusted ---"
+python3 -I $H/render_bootstrap.py --selftest || { echo "the bootstrap renderer's completeness check is inert; refusing to run"; exit 1; }
+python3 -I $H/render_bootstrap.py "$REPO/infrastructure/database/bootstrap.sql" "$S/sql/bootstrap.rendered.sql" || exit 1
 chmod 644 "$S/sql/bootstrap.rendered.sql"
 $Q "$PSQL_P -U postgres -d daftar -X -q -v ON_ERROR_STOP=1 -f $S/sql/bootstrap.rendered.sql" || exit 1
 echo "=== 3. migrations 0000..0086 as daftar_migrator (NOT superuser) ==="
@@ -134,6 +132,25 @@ if [ -f "$H/proofs_b.py" ]; then
 else
   RC_B="n/a (Pack B is not on the branch at this SHA)"
 fi
+# ── IDEMPOTENCE, measured rather than claimed ────────────────────────────
+# The second independent challenger measured that proofs.py was NOT
+# idempotent: a second run failed seven cases with no mutation at all,
+# because its own writes persisted. This harness always rebuilds, so the
+# defect never bit the author — it cost the challenger a run, and it is a
+# real hazard for anyone measuring coverage by mutation, because a mutation
+# run against a dirty database measures the dirt. Fixed in both suites, and
+# proved by running each one AGAIN here, on the database the first run just
+# wrote. The second green is not a second proof of the laws; it is the proof
+# that the first green was about the schema and not about the sequence.
+echo "=== 6c. the same suites, a SECOND time on the same database (idempotence) ==="
+python3 -I $H/proofs.py | tail -2
+RC_PROOFS2=${PIPESTATUS[0]}; [ $RC_PROOFS2 -ne 0 ] && RC=$RC_PROOFS2
+if [ -f "$H/proofs_b.py" ]; then
+  python3 -I $H/proofs_b.py | tail -2
+  RC_B2=${PIPESTATUS[0]}; [ $RC_B2 -ne 0 ] && RC=$RC_B2
+else
+  RC_B2="n/a"
+fi
 echo "=== 6b. real concurrency: the races, two live backends, no sleep() ==="
 python3 -I $H/races.py
 RCR=$?; [ $RCR -ne 0 ] && RC=$RCR
@@ -153,6 +170,8 @@ echo "RUN_ID            : $RUN_ID"
 echo "RUN_AT_UTC_END    : $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "EXIT_PROOFS_A     : $RC_PROOFS  (prep/phase11/harness/proofs.py)"
 echo "EXIT_PROOFS_B     : $RC_B  (prep/phase11/harness/proofs_b.py)"
+echo "EXIT_PROOFS_A_RUN2: $RC_PROOFS2  (the same file, the same database -- idempotence)"
+echo "EXIT_PROOFS_B_RUN2: $RC_B2  (the same file, the same database -- idempotence)"
 echo "EXIT_RACES        : $RCR  (prep/phase11/harness/races.py)"
 echo "EXIT_SCRIPT       : $RC  (0 means every step above returned 0)"
 exit $RC

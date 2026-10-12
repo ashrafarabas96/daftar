@@ -25,11 +25,31 @@ def case(name, sql, expect, role="postgres", pre="", kind="refusal"):
     cases.append((name, "RED (refused as required)" if (ok and kind=="refusal") else ("GREEN" if ok else "**PROOF FAILED**"), detail))
     return ok
 
+PE='dddddddd-0000-0000-0000-00000000000e'   # the variant-free apparel product
 V=lambda vid,attrs,base='false': f"INSERT INTO product_variants (business_id,id,product_id,attributes,is_base) VALUES ('{A}','{vid}','{PA}','{attrs}'::jsonb,{base});"
+
+# ── IDEMPOTENCE, which is finding P3-N03's companion ──────────────────────
+# The second independent challenger measured that this suite was NOT
+# idempotent: a second run against the same database failed seven cases with
+# no mutation at all, because its own writes persisted — the happy-path
+# variant, the plain-product variant and the registry rows it adds. The
+# harness always rebuilds from zero, so it never bit the author; it cost the
+# challenger a run and would mislead any reviewer who re-ran the suite for a
+# quick check. It is also a correctness risk in the direction that matters:
+# a mutation measured on a re-run measures the re-run.
+#
+# So every write this suite makes that OUTLIVES its case is written
+# conflict-tolerantly (`ON CONFLICT DO NOTHING`, or a normalizing UPDATE
+# before the case's own transition), and the cases assert the COMMITTED
+# STATE afterwards rather than the fact of an insert — which is the shape
+# this phase already uses everywhere else. The claim is proved rather than
+# asserted: the harness runs this file TWICE on the same database and
+# requires exit 0 both times (step 6a2 of rebuild_and_prove.sh).
+IDEM = " ON CONFLICT DO NOTHING;"
 
 # 1 happy path, and WHERE the canonical form actually comes from
 case("happy path: a registered combination is accepted",
-     V('f0000001-0000-0000-0000-000000000001','{"size":"s","color":"red"}')+
+     V('f0000001-0000-0000-0000-000000000001','{"size":"s","color":"red"}').replace(";",IDEM)+
      f"SELECT attributes::text FROM product_variants WHERE id='f0000001-0000-0000-0000-000000000001';",
      '{"size": "s", "color": "red"}', kind="value")
 case("jsonb itself canonicalizes key order, which is what makes the index work",
@@ -109,7 +129,7 @@ case("P0-01 and the cell therefore still has exactly ONE stock identity",
 # combination, which is why the structural CHECK the challenge proposed
 # (`is_base OR attributes <> '{}'`) is not available.
 case("a plain product's non-base variant may carry no combination at all (why the CHECK is unavailable)",
-     f"INSERT INTO product_variants (business_id,id,product_id,attributes) VALUES ('{B}','f0000010-0000-0000-0000-000000000010','eeeeeeee-0000-0000-0000-00000000000e','{{}}'::jsonb);"
+     f"INSERT INTO product_variants (business_id,id,product_id,attributes) VALUES ('{B}','f0000010-0000-0000-0000-000000000010','eeeeeeee-0000-0000-0000-00000000000e','{{}}'::jsonb) ON CONFLICT DO NOTHING;"
      f"SELECT count(*)::text FROM product_variants WHERE id='f0000010-0000-0000-0000-000000000010';",
      "1", kind="value")
 case("and ITS combination is immutable in the other direction too",
@@ -127,14 +147,22 @@ case("P1-03 nor REPOINTED to another code, which is the same removal",
      f"UPDATE product_attribute_values SET value_code='crimson' WHERE business_id='{A}' AND axis_code='color' AND value_code='red';",
      "catalog.attribute_value_in_use")
 # The guard is a guard and not a blanket refusal: an UNUSED value is still
-# archivable, which is the lifecycle the registry exists for.
+# archivable, which is the lifecycle the registry exists for. The pair runs
+# on a value this file REGISTERS for the purpose, not on the world's `l`:
+# `l` is a size race B2 names in a committed variant, so "no variant names
+# it" was true only while proofs.py ran before races.py — a case whose
+# verdict depended on the order the harness happens to call its files in,
+# which is the same defect class as the suite's non-idempotence and was
+# found by the same measurement (a third run, after the races).
+ARCHIVABLE = "archivable_probe"
 case("a value no variant names is still archivable (the guard refuses removal, not administration)",
-     f"UPDATE product_attribute_values SET status='archived' WHERE business_id='{A}' AND axis_code='size' AND value_code='l';"
-     f"SELECT status FROM product_attribute_values WHERE business_id='{A}' AND axis_code='size' AND value_code='l';",
+     f"INSERT INTO product_attribute_values (business_id,axis_code,value_code,sort_order) VALUES ('{A}','size','{ARCHIVABLE}',90) ON CONFLICT DO NOTHING;"
+     f"UPDATE product_attribute_values SET status='archived' WHERE business_id='{A}' AND axis_code='size' AND value_code='{ARCHIVABLE}';"
+     f"SELECT status FROM product_attribute_values WHERE business_id='{A}' AND axis_code='size' AND value_code='{ARCHIVABLE}';",
      "archived", kind="value")
 case("and un-archiving it is not a removal either",
-     f"UPDATE product_attribute_values SET status='active' WHERE business_id='{A}' AND axis_code='size' AND value_code='l';"
-     f"SELECT status FROM product_attribute_values WHERE business_id='{A}' AND axis_code='size' AND value_code='l';",
+     f"UPDATE product_attribute_values SET status='active' WHERE business_id='{A}' AND axis_code='size' AND value_code='{ARCHIVABLE}';"
+     f"SELECT status FROM product_attribute_values WHERE business_id='{A}' AND axis_code='size' AND value_code='{ARCHIVABLE}';",
      "active", kind="value")
 
 # P1-04. The axis-in-use guard was BEFORE DELETE only.
@@ -149,22 +177,87 @@ case("an axis named by existing variants can be neither renamed nor archived in 
      "catalog.attribute_axis_in_use")
 
 # P2-06. `status` on the axis registry was decoration.
+# Both cases run on the VARIANT-FREE product (TSHIRT-EMPTY): since P1-N01's
+# fix freezes the axis set of a populated matrix, a matrix write on TSHIRT
+# would be refused by the freeze guard and the guard under test would never
+# be reached. A constraint that fires first hides the one you are proving.
 case("P2-06 an ARCHIVED axis cannot be added to a product's matrix",
-     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order,status) VALUES ('{A}','fit',9,'archived');"
-     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PA}','fit',3);",
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order,status) VALUES ('{A}','fit',9,'archived') ON CONFLICT DO NOTHING;"
+     f"UPDATE product_attribute_axes SET status='archived' WHERE business_id='{A}' AND axis_code='fit';"
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PE}','fit',3);",
      "catalog.variant_axis_archived")
-case("P2-06 nor can a variant name an archived axis, even one its matrix registers",
-     # The axis is archived while nothing names it (which the guard allows),
-     # the matrix row is created first, and only then is the variant tried:
-     # otherwise the matrix guard refuses first and the validator's own read
-     # is never reached. A constraint that fires first hides the one under
-     # test — this phase has paid for that lesson once already.
-     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','cut',10);"
-     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PA}','cut',3);"
-     f"INSERT INTO product_attribute_values (business_id,axis_code,value_code,sort_order) VALUES ('{A}','cut','slim',1);"
-     f"UPDATE product_attribute_axes SET status='archived' WHERE business_id='{A}' AND axis_code='cut';"
-     + V('f0000011-0000-0000-0000-000000000011','{"size":"s","color":"blue","cut":"slim"}'),
-     "catalog.variant_axis_archived")
+
+# ── P1-N01. THE ADD DIRECTION, the finding that held the scope back ───────
+# C-APP-01's first clause is "a matrix product's variant attributes name
+# exactly its registered axis set". Round 1 found it enforced on the VARIANT
+# insert only; this round added every removal path on both registries. The
+# remaining direction was adding an axis to a matrix that already has
+# variants, and nothing refused it: measured at 23a7139, the INSERT returned
+# rc=0, the matrix registered three axes, and a committed 2-axis variant
+# became unaddressable through the matrix while keeping its own stock key.
+case("P1-N01 an axis cannot be ADDED to a matrix that already has variants",
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','material',12) ON CONFLICT DO NOTHING;"
+     f"UPDATE product_attribute_axes SET status='active' WHERE business_id='{A}' AND axis_code='material';"
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PA}','material',3);",
+     "catalog.matrix_axis_set_frozen")
+case("P1-N01 and the populated product still registers exactly its two axes",
+     f"SELECT string_agg(axis_code,',' ORDER BY axis_position)::text FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PA}';",
+     "size,color", kind="value")
+# The challenger's own committed-state measurement, run as a case: no
+# non-base variant of a matrix product names anything but exactly the set
+# its product registers — neither a subset nor a superset nor an axis the
+# matrix does not carry.
+case("P1-N01 and no committed variant of this business names other than exactly its product's registered set",
+     f"""SELECT count(*)::text FROM product_variants v
+          WHERE v.business_id='{A}' AND NOT v.is_base
+            AND EXISTS (SELECT 1 FROM product_matrix_axes ma
+                         WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id)
+            AND ( (SELECT count(*) FROM product_matrix_axes ma
+                    WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id)
+                  <> (SELECT count(*) FROM jsonb_each(v.attributes))
+               OR EXISTS (SELECT 1 FROM jsonb_each(v.attributes) e
+                           WHERE NOT EXISTS (SELECT 1 FROM product_matrix_axes ma
+                                              WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id
+                                                AND ma.axis_code=e.key)) );""",
+     "0", kind="value")
+# And it is a freeze, not a ban: a grid nobody has populated is still the
+# merchant's to build. The row is removed again so the suite leaves the
+# product as it found it (idempotence).
+case("P1-N01 the freeze is on POPULATED matrices only: an empty grid can still be extended",
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PE}','material',3) ON CONFLICT DO NOTHING;"
+     f"SELECT count(*)::text FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PE}';"
+     f"DELETE FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PE}' AND axis_code='material';",
+     "3", kind="value")
+
+# ── P2-N02. An axis a MATRIX registers, archived, freezes that product ────
+# The guard's own comment gives this outcome as its reason; it read "in use"
+# as "named by a variant" only. Measured at 23a7139: the archive succeeded,
+# the product's first variant insert was then refused, and the product could
+# not get a variant at all.
+case("P2-N02 an axis a product's matrix registers cannot be archived either",
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','freeable',13) ON CONFLICT DO NOTHING;"
+     f"UPDATE product_attribute_axes SET status='active' WHERE business_id='{A}' AND axis_code='freeable';"
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PE}','freeable',4) ON CONFLICT DO NOTHING;"
+     f"UPDATE product_attribute_axes SET status='archived' WHERE business_id='{A}' AND axis_code='freeable';",
+     "catalog.attribute_axis_in_use")
+case("P2-N02 and once no matrix registers it, archiving the same axis is allowed (a guard, not a blanket refusal)",
+     f"DELETE FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PE}' AND axis_code='freeable';"
+     f"UPDATE product_attribute_axes SET status='archived' WHERE business_id='{A}' AND axis_code='freeable';"
+     f"SELECT status FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='freeable';"
+     f"UPDATE product_attribute_axes SET status='active' WHERE business_id='{A}' AND axis_code='freeable';",
+     "archived", kind="value")
+# P2-06's other half, which is now a STRUCTURAL case and says so. The
+# validator's own `catalog.variant_axis_archived` branch was proved live at
+# 2da2000 by archiving an axis a matrix registered — the very transition
+# P2-N02 now refuses. With both writers of that state refused (an archived
+# axis cannot be registered, by the case above; a registered axis cannot be
+# archived, by P2-N02), the state is UNREACHABLE from any committed state,
+# so the branch cannot be reached by a live case any more. It is kept as
+# defence in depth and asserted structurally — stated as a weaker evidence
+# class rather than left as a case that passes for a changed reason.
+case("P2-06 the validator still carries its archived-axis branch, now unreachable from a committed state (defence in depth, STRUCTURAL)",
+     "SELECT (position('catalog.variant_axis_archived' in pg_get_functiondef(p.oid)) > 0)::text "
+     "FROM pg_proc p WHERE p.proname='product_variants_40_matrix_canonical';", "t", kind="value")
 
 # P2-07. The guards' absence conclusion, exercised where RLS is LIVE.
 # Every case above runs as `postgres`, where row-level security is bypassed
@@ -184,19 +277,29 @@ case("P2-07 nor can it delete an in-use VALUE",
 # — so every removal case above reported "no error", including the axis case
 # that was green before the change. These two cases pin the answer.
 case("P2-07 the guards are SECURITY INVOKER, because a DEFINER one cannot satisfy the restrictive policy",
-     "SELECT count(*)::text FROM pg_proc WHERE proname IN "
-     "('product_matrix_axes_10_axis_in_use','product_attribute_values_10_value_in_use','product_attribute_axes_10_axis_in_use') "
-     "AND prosecdef;", "0", kind="value")
+     # Read through pg_trigger.tgfoid, so the function measured is the one
+     # the trigger actually calls and not a same-named function in another
+     # schema (the challenger's second note on the end-state assertion).
+     "SELECT count(*)::text FROM pg_trigger g JOIN pg_proc pr ON pr.oid=g.tgfoid "
+     "WHERE NOT g.tgisinternal AND pr.prosecdef AND g.tgname IN "
+     "('product_matrix_axes_10_axis_in_use','product_attribute_values_10_value_in_use',"
+     "'product_attribute_axes_10_axis_in_use','product_matrix_axes_30_set_frozen');", "0", kind="value")
 # The read is given the privilege it would have had, so what is measured is
-# the POLICY and not a missing grant; the grant is withdrawn in the second
-# case, so the database ends as the pack left it.
-case("P2-07 the measurement itself: that role reads NOTHING without a session context",
-     "SET ROLE daftar_catalog_internal; SELECT count(*)::text FROM product_variants; RESET ROLE;",
-     "0", pre="GRANT SELECT ON product_variants TO daftar_catalog_internal;", kind="value")
-case("P2-07 and the same read WITH a context sees the business's variants, so it is the policy and not the grant",
-     "SET ROLE daftar_catalog_internal; SELECT (count(*) > 0)::text FROM product_variants; RESET ROLE;"
-     " REVOKE SELECT ON product_variants FROM daftar_catalog_internal;",
-     "t", pre=f"SET app.tenant_id='{TA}'; SET app.business_id='{A}';", kind="value")
+# the POLICY and not a missing grant. The challenger's fourth minor finding:
+# the GRANT and the REVOKE used to be in two different cases, so a failure
+# of the first left the grant behind — a test that can leave a privilege on
+# a relation of another phase. Both reads and the REVOKE are now ONE case,
+# whose last statement withdraws the grant whatever the reads said, and the
+# case asserts afterwards that the grant is gone.
+case("P2-07 the measurement itself: that role reads NOTHING without a session context, and WITH one it reads the business's variants",
+     "GRANT SELECT ON product_variants TO daftar_catalog_internal;\n"
+     "SET ROLE daftar_catalog_internal; SELECT 'no-context=' || count(*)::text FROM product_variants; RESET ROLE;\n"
+     f"SET app.tenant_id='{TA}'; SET app.business_id='{A}';\n"
+     "SET ROLE daftar_catalog_internal; SELECT 'with-context=' || (count(*) > 0)::text FROM product_variants; RESET ROLE;\n"
+     "REVOKE SELECT ON product_variants FROM daftar_catalog_internal;\n"
+     "SELECT 'grant_left_behind=' || EXISTS (SELECT 1 FROM information_schema.role_table_grants "
+     "WHERE table_name='product_variants' AND grantee='daftar_catalog_internal')::text;",
+     "no-context=0\nwith-context=true\ngrant_left_behind=false", kind="value")
 case("P2-07 and Pack A leaves product_variants' policy set exactly as it found it",
      "SELECT string_agg(p.polname,',' ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid "
      "WHERE c.relname='product_variants';", "business_isolation,tenant_membership", kind="value")
@@ -212,14 +315,16 @@ case("as daftar_app in business B, inserting an axis FOR business A is refused",
 case("as daftar_app in business B, business A's matrix rows are invisible",
      f"SELECT count(*)::text FROM product_matrix_axes WHERE business_id='{A}';",
      "0", role="daftar_app", pre=rls_pre, kind="value")
-# Four, not the world's two: the removal-direction section above registers
-# `fit` (archived) and `cut` in business A. The number is read from the
-# section that created it rather than from the world file, because a case
+# Five, not the world's two: the sections above register `fit` (archived),
+# `material` and `freeable` in business A — and `cut` is gone, because the
+# case that needed it is now the structural one. The number is read from the
+# sections that created it rather than from the world file, because a case
 # whose expected count silently tracks another section's writes is a case
-# that will pass for the wrong reason one day.
+# that will pass for the wrong reason one day; this one has had to be
+# re-derived twice now, which is the cost of that honesty and worth paying.
 case("with business A's own context the same rows ARE visible (the read is not broken, it is scoped)",
      f"SELECT count(*)::text FROM product_attribute_axes WHERE business_id='{A}';",
-     "4", role="daftar_app", pre=f"SET app.tenant_id='{TA}'; SET app.business_id='{A}';", kind="value")
+     "5", role="daftar_app", pre=f"SET app.tenant_id='{TA}'; SET app.business_id='{A}';", kind="value")
 case("business A's context with the WRONG tenant sees nothing (tenant_membership, not only business_isolation)",
      f"SELECT count(*)::text FROM product_attribute_axes WHERE business_id='{A}';",
      "0", role="daftar_app", pre=f"SET app.tenant_id='{TB}'; SET app.business_id='{A}';", kind="value")

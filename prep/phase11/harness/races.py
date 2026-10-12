@@ -22,7 +22,7 @@ its setup failed silently, and two of the three races then measured
 something other than what they claimed. Hence: append-only world, and every
 setup statement is checked.
 """
-import subprocess, sys, threading, queue, time
+import subprocess, sys, threading, queue, time, random
 
 import os
 # The cluster is named by the environment so the harness can create its own
@@ -31,10 +31,26 @@ SOCK=os.environ.get("P11_SOCK","/var/tmp/p11u/run"); PORT=os.environ.get("P11_PO
 PSQL="/usr/lib/postgresql/16/bin/psql"
 A='aaaaaaaa-0000-0000-0000-00000000000a'
 TA='11111111-1111-1111-1111-111111111111'
-PR='4a000000-0000-0000-0000-00000000004a'  # race A product
-PB='4b000000-0000-0000-0000-00000000004b'  # race B product
-PC='4c000000-0000-0000-0000-00000000004c'  # race C product
-PD='4d000000-0000-0000-0000-00000000004d'  # race B2 product (the reverse arrival order)
+
+# ── A PER-RUN NAMESPACE ───────────────────────────────────────────────────
+# The docstring above explains why this file is append-only WITHIN one
+# database: `stock_levels_retain()` refuses to delete a stock key at all, so
+# a clean slate is not available and a race that deletes its way back to one
+# measures something else. The second independent challenger then measured
+# the price of that design on the sibling file: `proofs.py` was not
+# idempotent, and a re-run failed seven cases with no mutation at all.
+# Append-only and re-runnable are not in conflict — they only need the run
+# to own its own names. So every product, variant, branch, warehouse, SKU
+# and value code below carries a tag drawn once per run: a second run adds a
+# second generation beside the first and measures its own, and the setup
+# assertions keep their teeth instead of failing on a duplicate key. The tag
+# can be pinned (P11_RUN_TAG) when a run has to be re-read afterwards.
+RUN=os.environ.get("P11_RUN_TAG") or "%06x" % random.randrange(16**6)
+def U(tag, n): return f"{tag}{RUN}-0000-0000-0000-{n:012d}"
+PR=U('4a',1)   # race A product
+PB=U('4b',1)   # race B product
+PC=U('4c',1)   # race C product
+PD=U('4d',1)   # race B2 product (the reverse arrival order)
 
 class Session:
     def __init__(self, name, role="postgres"):
@@ -95,11 +111,11 @@ rows=[]
 def record(*r): rows.append(r)
 
 # ── RACE A ──────────────────────────────────────────────────────────────────
-product(PR,'RACE-A')
+product(PR,f'RACE-A-{RUN}')
 s1,s2=Session("1"),Session("2")
 s1.send("BEGIN;"); s2.send("BEGIN;")
-s1.send(V(PR,'c1000000-0000-0000-0000-00000000000a','{"size":"s","color":"red"}'))
-o2,blocked=s2.send(V(PR,'c2000000-0000-0000-0000-00000000000a','{"size":"s","color":"red"}'))
+s1.send(V(PR,U('4a',2),'{"size":"s","color":"red"}'))
+o2,blocked=s2.send(V(PR,U('4a',3),'{"size":"s","color":"red"}'))
 s1.send("COMMIT;")
 o2b,_=s2.send(""); c2,_=s2.send("COMMIT;")
 s1.close(); s2.close()
@@ -114,11 +130,11 @@ record("A  duplicate combination",
        "PASS — exactly one commits; the index refuses the other, and it BLOCKS rather than racing" if ok else "**FINDING**")
 
 # ── RACE B ──────────────────────────────────────────────────────────────────
-product(PB,'RACE-B')
+product(PB,f'RACE-B-{RUN}')
 s1,s2=Session("1"),Session("2")
 s1.send("BEGIN;"); s2.send("BEGIN;")
 d1,_=s1.send(f"DELETE FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PB}' AND axis_code='color';")
-i2,b2=s2.send(V(PB,'c1000000-0000-0000-0000-00000000000b','{"size":"m","color":"blue"}'))
+i2,b2=s2.send(V(PB,U('4b',2),'{"size":"m","color":"blue"}'))
 cm1,_=s1.send("COMMIT;"); cm2,_=s2.send("COMMIT;")
 s1.close(); s2.close()
 _,orphan,_=admin("""SELECT count(*) FROM product_variants v
@@ -139,20 +155,20 @@ record("B  axis removed vs variant inserted",
 # executor produces OLD through GetTupleForTrigger, which LOCKS that tuple
 # before the trigger body is called. So `product_matrix_axes_10_axis_in_use`
 # is a REFUSAL guard and never a lock-order device, and the ordering in race
-# B comes from the INSERT side's `FOR KEY SHARE` meeting that executor lock.
+# B comes from the INSERT side's row SHARE lock meeting that executor lock.
 #
 # Which exposes a gap in race B: it only ran DELETE-first. The reverse order
 # is the one where the trigger body matters — the deleter waits on the
-# inserter's key-share lock, and then the guard must SEE the now-committed
+# inserter's share lock, and then the guard must SEE the now-committed
 # variant. R62's mechanism is exactly why it does (the lock is taken before
 # the body runs), and one arrival order is half a proof; Phase 9's deadlock
 # test runs both orders for the same reason.
-product(PD,'RACE-B2')
+product(PD,f'RACE-B2-{RUN}')
 s1,s2=Session("1"),Session("2")
 s1.send("BEGIN;"); s2.send("BEGIN;")
-i1,_=s1.send(V(PD,'c1000000-0000-0000-0000-0000000000b2','{"size":"l","color":"blue"}'))
+i1,_=s1.send(V(PD,U('4d',2),'{"size":"l","color":"blue"}'))
 # T1's own arm is setup for this race: if it is refused, nothing holds the
-# key-share lock and the race measures nothing. The first run of this race
+# share lock and the race measures nothing. The first run of this race
 # used 'green', which `product_attribute_values` does not register, so T1
 # was refused `catalog.variant_axis_value_unregistered`, never took the
 # lock, and the harness duly reported a FINDING that was its own. The
@@ -175,11 +191,11 @@ record("B2 variant inserted vs axis removed (reverse order)",
        "INSERT a variant naming 'color', then COMMIT",
        "DELETE the 'color' axis, concurrently",
        f"T2 blocked: {b2d}. T2: {('refused on catalog.matrix_axis_in_use' if 'matrix_axis_in_use' in derr else (derr[:50] or 'committed'))}. Axis rows after both: {axes}; variants naming it: {vars_}",
-       "PASS — the deleter waits on the inserter's key-share lock and the guard then SEES the committed variant (R62's mechanism: the executor locks OLD before the trigger body)" if ok_b2 else "**FINDING — the closure invariant depends on arrival order**")
+       "PASS — the deleter waits on the inserter's FOR SHARE row lock and the guard then SEES the committed variant (R62's mechanism: the executor locks OLD before the trigger body)" if ok_b2 else "**FINDING — the closure invariant depends on arrival order**")
 
 # ── RACE C ──────────────────────────────────────────────────────────────────
-product(PC,'RACE-C')
-VC='c1000000-0000-0000-0000-00000000000c'
+product(PC,f'RACE-C-{RUN}')
+VC=U('4c',2)
 admin(V(PC,VC,'{"size":"s","color":"red"}'))
 admin(f"INSERT INTO branches (business_id,id,name) VALUES ('{A}','{PC}','BR-C') ON CONFLICT DO NOTHING;")
 admin(f"INSERT INTO warehouses (business_id,id,branch_id,name) VALUES ('{A}','{PC}','{PC}','WH-C');")
@@ -209,9 +225,15 @@ record("C  attributes changed vs first stock movement",
 # which does not conflict with the non-key UPDATE that archives a value row.
 # So the same two arrival orders are run here against the value registry,
 # each on its own value code so the count belongs to its own race.
-PE='4e000000-0000-0000-0000-00000000004e'
-PF='4f000000-0000-0000-0000-00000000004f'
-PG_='40000000-0000-0000-0000-000000000040'
+PE=U('4e',1)
+PF=U('4f',1)
+PG_=U('40',1)
+
+RD1=f"rd1_{RUN}"; RD2=f"rd2_{RUN}"; RD3=f"rd3_{RUN}"
+# `product_attribute_values_sort_uq` is UNIQUE (business, axis, sort_order),
+# so the sort order is part of the per-run namespace too: a fixed 11/12/13
+# collides on a second run exactly as a fixed value code does.
+SORT=1000 + int(RUN,16) % 100000
 
 def value(code, sort):
     admin(f"INSERT INTO product_attribute_values (business_id,axis_code,value_code,sort_order) VALUES ('{A}','color','{code}',{sort});")
@@ -229,37 +251,37 @@ def orphans(pid):
     return n
 
 # ── RACE D — a value ARCHIVED while a variant naming it is inserted ────────
-product(PE,'RACE-D'); value('rd1',11)
+product(PE,f'RACE-D-{RUN}'); value(RD1,SORT)
 s1,s2=Session("1"),Session("2")
 s1.send("BEGIN;"); s2.send("BEGIN;")
-i1,_=s1.send(V(PE,'c1000000-0000-0000-0000-0000000000d1','{"size":"s","color":"rd1"}'))
+i1,_=s1.send(V(PE,U('4e',2),'{"size":"s","color":"'+RD1+'"}'))
 if any("ERROR" in l for l in i1):
     print("HARNESS SETUP FAILED — race D's T1 arm was refused, so nothing held the lock:"); print("  "," ".join(i1)[:200]); sys.exit(2)
-u2,bd=s2.send(f"UPDATE product_attribute_values SET status='archived' WHERE business_id='{A}' AND axis_code='color' AND value_code='rd1';")
+u2,bd=s2.send(f"UPDATE product_attribute_values SET status='archived' WHERE business_id='{A}' AND axis_code='color' AND value_code='{RD1}';")
 s1.send("COMMIT;")
 u2b,_=s2.send(""); cm2,_=s2.send("COMMIT;")
 s1.close(); s2.close()
 derr=" ".join(u2+u2b+cm2); od=orphans(PE)
 record("D  value archived vs variant inserted",
-       "INSERT a variant naming value 'rd1', then COMMIT",
+       "INSERT a variant naming the value row of this run, then COMMIT",
        "UPDATE that value row to status='archived', concurrently",
        f"T2 blocked: {bd}. T2: {('refused on catalog.attribute_value_in_use' if 'attribute_value_in_use' in derr else (derr[:50] or 'committed'))}. Variants naming a non-active value after both: {od}",
        "PASS — FOR SHARE makes the non-key UPDATE wait, and the new in-use guard then refuses it" if (bd and od=="0") else "**FINDING — a committed variant names an archived value**")
 
 # ── RACE E — a value DELETED while a variant naming it is inserted ─────────
-product(PF,'RACE-E'); value('rd2',12)
+product(PF,f'RACE-E-{RUN}'); value(RD2,SORT+1)
 s1,s2=Session("1"),Session("2")
 s1.send("BEGIN;"); s2.send("BEGIN;")
-i1,_=s1.send(V(PF,'c1000000-0000-0000-0000-0000000000e1','{"size":"s","color":"rd2"}'))
+i1,_=s1.send(V(PF,U('4f',2),'{"size":"s","color":"'+RD2+'"}'))
 if any("ERROR" in l for l in i1):
     print("HARNESS SETUP FAILED — race E's T1 arm was refused, so nothing held the lock:"); print("  "," ".join(i1)[:200]); sys.exit(2)
-d2,be=s2.send(f"DELETE FROM product_attribute_values WHERE business_id='{A}' AND axis_code='color' AND value_code='rd2';")
+d2,be=s2.send(f"DELETE FROM product_attribute_values WHERE business_id='{A}' AND axis_code='color' AND value_code='{RD2}';")
 s1.send("COMMIT;")
 d2b,_=s2.send(""); cm2,_=s2.send("COMMIT;")
 s1.close(); s2.close()
 eerr=" ".join(d2+d2b+cm2); oe=orphans(PF)
 record("E  value deleted vs variant inserted",
-       "INSERT a variant naming value 'rd2', then COMMIT",
+       "INSERT a variant naming the value row of this run, then COMMIT",
        "DELETE that value row, concurrently",
        f"T2 blocked: {be}. T2: {('refused on catalog.attribute_value_in_use' if 'attribute_value_in_use' in eerr else (eerr[:50] or 'committed'))}. Variants naming a value that no longer exists: {oe}",
        "PASS — the deleter waits, then the guard sees the committed variant and refuses" if (be and oe=="0") else "**FINDING — an unguarded value delete orphans a committed variant**")
@@ -269,22 +291,99 @@ record("E  value deleted vs variant inserted",
 # refused the deleter, and the INSERTER was refused afterwards by its own
 # registry read. It is run here so the pair is complete and so the guard
 # cannot be credited for what the validator does.
-product(PG_,'RACE-F'); value('rd3',13)
+product(PG_,f'RACE-F-{RUN}'); value(RD3,SORT+2)
 s1,s2=Session("1"),Session("2")
 s1.send("BEGIN;"); s2.send("BEGIN;")
-d1,_=s1.send(f"DELETE FROM product_attribute_values WHERE business_id='{A}' AND axis_code='color' AND value_code='rd3';")
+d1,_=s1.send(f"DELETE FROM product_attribute_values WHERE business_id='{A}' AND axis_code='color' AND value_code='{RD3}';")
 if any("ERROR" in l for l in d1):
     print("HARNESS SETUP FAILED — race F's T1 delete was refused although no variant names the value:"); print("  "," ".join(d1)[:200]); sys.exit(2)
-i2,bf=s2.send(V(PG_,'c1000000-0000-0000-0000-0000000000f1','{"size":"s","color":"rd3"}'))
+i2,bf=s2.send(V(PG_,U('40',2),'{"size":"s","color":"'+RD3+'"}'))
 s1.send("COMMIT;")
 i2b,_=s2.send(""); cm2,_=s2.send("COMMIT;")
 s1.close(); s2.close()
 ferr=" ".join(i2+i2b+cm2); of=orphans(PG_)
 record("F  value deleted vs variant inserted (reverse order)",
-       "DELETE the value row 'rd3', then COMMIT",
-       "INSERT a variant naming 'rd3', concurrently",
+       "DELETE this run's value row, then COMMIT",
+       "INSERT a variant naming this run's value row, concurrently",
        f"T2 blocked: {bf}. T2: {('refused on catalog.variant_axis_value_unregistered' if 'value_unregistered' in ferr else (ferr[:50] or 'committed'))}. Orphan variants: {of}",
        "PASS — the inserter waits on the deleted row and is then refused by its own registry read" if of=="0" else "**FINDING — the closure invariant depends on arrival order**")
+
+# ── RACES G and H — the ADD direction, which P1-N01 found unguarded ───────
+# The second challenge round found that an axis could be ADDED to a matrix
+# that already had variants, leaving a committed variant no cell can address.
+# The fix is product_matrix_axes_30_set_frozen, and it reads product_variants
+# — so it is exactly the shape every race in this file attacks: a guard that
+# concludes from a read. Row locks cannot order these two writes (the
+# validator can only lock matrix rows that already exist; the freeze guard
+# cannot see an uncommitted variant), so both paths take a transaction
+# advisory lock on (business_id, product_id): SHARED on the variant side,
+# EXCLUSIVE on the matrix side. Both arrival orders are run, because one
+# order is half a proof — the lesson race B2 was added for.
+PGG=U('41',1)
+PHH=U('42',1)
+admin(f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','material',{SORT+3}) ON CONFLICT DO NOTHING;")
+admin(f"UPDATE product_attribute_axes SET status='active' WHERE business_id='{A}' AND axis_code='material';")
+
+def nonconforming(pid):
+    """Committed non-base variants of this product whose attributes are not
+    EXACTLY its product's registered axis set — the challenger's own
+    measurement of P1-N01, read from the committed state."""
+    _,n,_=admin("""SELECT count(*) FROM product_variants v
+     WHERE v.business_id='%s' AND v.product_id='%s' AND NOT v.is_base
+       AND ( (SELECT count(*) FROM product_matrix_axes ma
+               WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id)
+             <> (SELECT count(*) FROM jsonb_each(v.attributes))
+          OR EXISTS (SELECT 1 FROM jsonb_each(v.attributes) e
+                      WHERE NOT EXISTS (SELECT 1 FROM product_matrix_axes ma
+                                         WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id
+                                           AND ma.axis_code=e.key)) );"""%(A,pid))
+    return n
+
+# ── RACE G — the product's FIRST variant vs a third axis ──────────────────
+product(PGG,f'RACE-G-{RUN}')
+s1,s2=Session("1"),Session("2")
+s1.send("BEGIN;"); s2.send("BEGIN;")
+i1,_=s1.send(V(PGG,U('41',2),'{"size":"s","color":"red"}'))
+if any("ERROR" in l for l in i1):
+    print("HARNESS SETUP FAILED — race G's T1 arm was refused, so nothing held the lock:"); print("  "," ".join(i1)[:200]); sys.exit(2)
+a2,bg=s2.send(f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PGG}','material',3);")
+s1.send("COMMIT;")
+a2b,_=s2.send(""); cm2,_=s2.send("COMMIT;")
+s1.close(); s2.close()
+gerr=" ".join(a2+a2b+cm2); ng=nonconforming(PGG)
+_,gax,_=admin(f"SELECT count(*) FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PGG}';")
+record("G  first variant inserted vs a third axis added",
+       "INSERT the product's first variant {size:s,color:red}, then COMMIT",
+       "INSERT a third axis into the same matrix, concurrently",
+       f"T2 blocked: {bg}. T2: {('refused on catalog.matrix_axis_set_frozen' if 'matrix_axis_set_frozen' in gerr else (gerr[:50] or 'committed'))}. Axes after both: {gax}; variants not naming exactly the registered set: {ng}",
+       "PASS — the axis write waits on the variant's shared advisory lock and the freeze guard then SEES the committed variant" if (ng=="0" and gax=="2") else "**FINDING — an axis was added under a committed variant**")
+
+# ── RACE H — THE REVERSE ARRIVAL ORDER ───────────────────────────────────
+# Here the freeze guard is NOT the defence: when T1 adds the axis the
+# product has no variants at all, so the add is lawful and commits. The
+# invariant has to be held by the VARIANT side instead — T2's completeness
+# count must see the third axis. In READ COMMITTED a plpgsql trigger's
+# queries take a fresh snapshot per statement, so once T2 stops waiting on
+# the advisory lock its count reads 3 registered against 2 supplied. That is
+# the claim; the verdict below is what was measured.
+product(PHH,f'RACE-H-{RUN}')
+s1,s2=Session("1"),Session("2")
+s1.send("BEGIN;"); s2.send("BEGIN;")
+a1,_=s1.send(f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PHH}','material',3);")
+if any("ERROR" in l for l in a1):
+    print("HARNESS SETUP FAILED — race H's T1 axis insert was refused although the product has no variants:"); print("  "," ".join(a1)[:200]); sys.exit(2)
+i2,bh=s2.send(V(PHH,U('42',2),'{"size":"s","color":"red"}'))
+s1.send("COMMIT;")
+i2b,_=s2.send(""); cm2,_=s2.send("COMMIT;")
+s1.close(); s2.close()
+herr=" ".join(i2+i2b+cm2); nh=nonconforming(PHH)
+_,hax,_=admin(f"SELECT count(*) FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PHH}';")
+_,hvar,_=admin(f"SELECT count(*) FROM product_variants WHERE business_id='{A}' AND product_id='{PHH}' AND NOT is_base;")
+record("H  a third axis added vs the first variant (reverse order)",
+       "INSERT a third axis while the product has no variants, then COMMIT",
+       "INSERT a 2-axis variant, concurrently",
+       f"T2 blocked: {bh}. T2: {('refused on catalog.variant_axis_set_incomplete' if 'variant_axis_set_incomplete' in herr else (herr[:50] or 'committed'))}. Axes after both: {hax}; non-base variants: {hvar}; not naming exactly the registered set: {nh}",
+       "PASS — the variant write waits, then its completeness count sees the third axis and refuses the partial combination" if nh=="0" else "**FINDING — the closure invariant depends on arrival order**")
 
 w=max(len(r[0]) for r in rows)
 print(f"## RESULT MATRIX — {len(rows)} races, real backends, no sleep()\n")

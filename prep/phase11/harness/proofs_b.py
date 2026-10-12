@@ -53,10 +53,12 @@ INT="SET ROLE daftar_inventory_internal;\n"
 def lots_setup():
     rc,out,err=run(INT+f"""
       INSERT INTO stock_levels (tenant_id,business_id,warehouse_id,variant_id,on_hand,valuation_base_minor,last_stock_seq)
-        VALUES ('{TA}','{A}','{WH}','{V_LOT}',0,0,0),('{TA}','{A}','{WH}','{V_NOLOT}',0,0,0);
+        VALUES ('{TA}','{A}','{WH}','{V_LOT}',0,0,0),('{TA}','{A}','{WH}','{V_NOLOT}',0,0,0)
+        ON CONFLICT DO NOTHING;   -- idempotence: see the note in proofs.py
       INSERT INTO stock_lots (tenant_id,business_id,id,variant_id,lot_code_norm,lot_code_input,expiry_date,received_seq)
         VALUES ('{TA}','{A}','a1000000-0000-0000-0000-0000000000a1','{V_LOT}',catalog_identifier_norm('sku','L-A'),'L-A','2027-01-31',1),
-               ('{TA}','{A}','a2000000-0000-0000-0000-0000000000a2','{V_LOT}',catalog_identifier_norm('sku','L-B'),'L-B','2026-12-31',2);
+               ('{TA}','{A}','a2000000-0000-0000-0000-0000000000a2','{V_LOT}',catalog_identifier_norm('sku','L-B'),'L-B','2026-12-31',2)
+        ON CONFLICT DO NOTHING;
     """)
     if rc!=0:
         print("HARNESS SETUP FAILED — refusing to report proofs it did not run:"); print(" ", err.splitlines()[0] if err else out); sys.exit(2)
@@ -93,9 +95,15 @@ def txn(body, mid_var="m"):
 def adjust(qty, variant, doc, var="m", cost=0):
     return f"  {var} := fixture_adjust('{doc}','{WH}','{variant}',{qty},{cost});\n"
 
-def ov(lot, qty, variant=None, var="m"):
+def ov(lot, qty, variant=None, var="m", idem=False):
+    # `idem=True` only where the case's movement COMMITS: the official
+    # command replays on its own document, so a second run of this file gets
+    # the SAME movement id back and the overlay row is already there. The
+    # cases whose transaction is meant to abort keep the plain insert, so a
+    # duplicate there would still be reported rather than swallowed.
     return (f"  INSERT INTO stock_lot_movements (tenant_id,business_id,stock_movement_id,warehouse_id,variant_id,lot_id,qty_delta)"
-            f" VALUES ('{TA}','{A}',{var},'{WH}','{variant or V_LOT}','{lot}',{qty});\n")
+            f" VALUES ('{TA}','{A}',{var},'{WH}','{variant or V_LOT}','{lot}',{qty})"
+            + (" ON CONFLICT DO NOTHING" if idem else "") + ";\n")
 
 # ── 1. the overlay's own structure ─────────────────────────────────────────
 case("a lot code must be the catalogue's canonical form, not a second normalization",
@@ -127,7 +135,7 @@ case("a zero overlay delta", txn(adjust(5,V_LOT,M(3))+ov(LA,0)),
 
 # ── 3. conservation, at COMMIT (C-LOT-01) ─────────────────────────────────
 case("the happy path: a lot-tracked movement whose allocation sums exactly",
-     txn(adjust(10,V_LOT,M(4))+ov(LA,6)+ov(LB,4))
+     txn(adjust(10,V_LOT,M(4))+ov(LA,6,idem=True)+ov(LB,4,idem=True))
      +f"SELECT count(*)::text FROM stock_lot_movements lm JOIN stock_movements m ON m.business_id=lm.business_id AND m.id=lm.stock_movement_id"
       f" WHERE lm.business_id='{A}' AND m.source_id='{M(4)}';",
      "2", kind="value")
@@ -164,18 +172,28 @@ case("nor deleted", f"DELETE FROM stock_lot_movements WHERE business_id='{A}' AN
      "inventory.ledger_immutable", role="daftar_migrator")
 
 # ── 5. the per-lot cache folds to the key (C-LOT-03) ─────────────────────
+# Both cache cases write EVERY lot row of the key, not only the one under
+# test, so the sum they measure is theirs: the second of them commits, and a
+# re-run of this file would otherwise find LB already at 4 and make the
+# first case's 6-against-10 mismatch into a lawful 10-against-10. The law is
+# about the SUM, so a case that does not state the whole sum is a case whose
+# verdict depends on what ran before it.
 case("the per-lot cache cannot disagree with the stock key's on-hand",
      INT+f"""BEGIN;
        UPDATE stock_levels SET on_hand=10 WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}';
        INSERT INTO stock_lot_levels (tenant_id,business_id,warehouse_id,variant_id,lot_id,on_hand,last_movement_seq)
-         VALUES ('{TA}','{A}','{WH}','{V_LOT}','{LA}',6,101);
+         VALUES ('{TA}','{A}','{WH}','{V_LOT}','{LA}',6,101),('{TA}','{A}','{WH}','{V_LOT}','{LB}',0,101)
+         ON CONFLICT (business_id,warehouse_id,variant_id,lot_id) DO UPDATE
+           SET on_hand=EXCLUDED.on_hand, last_movement_seq=EXCLUDED.last_movement_seq;
        COMMIT;""",
      "inventory.lot_level_conservation_violated")
 case("and it commits when it does agree",
      INT+f"""BEGIN;
        UPDATE stock_levels SET on_hand=10 WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}';
        INSERT INTO stock_lot_levels (tenant_id,business_id,warehouse_id,variant_id,lot_id,on_hand,last_movement_seq)
-         VALUES ('{TA}','{A}','{WH}','{V_LOT}','{LA}',6,101),('{TA}','{A}','{WH}','{V_LOT}','{LB}',4,101);
+         VALUES ('{TA}','{A}','{WH}','{V_LOT}','{LA}',6,101),('{TA}','{A}','{WH}','{V_LOT}','{LB}',4,101)
+         ON CONFLICT (business_id,warehouse_id,variant_id,lot_id) DO UPDATE
+           SET on_hand=EXCLUDED.on_hand, last_movement_seq=EXCLUDED.last_movement_seq;
        COMMIT;
        SELECT sum(on_hand)::text FROM stock_lot_levels WHERE business_id='{A}' AND variant_id='{V_LOT}';""",
      "10", kind="value")

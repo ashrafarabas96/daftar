@@ -219,6 +219,28 @@ BEGIN
       USING ERRCODE = 'P0001';
   END IF;
 
+  -- ── The matrix of THIS product is held for the length of the write ─────
+  -- Finding P1-N01 of the second challenge round added a guard on the ADD
+  -- direction (product_matrix_axes_30_set_frozen below). Row locks cannot
+  -- order a variant insert against an axis INSERT: the validator can lock
+  -- every matrix row that exists, and the row the other transaction is
+  -- about to add is not among them, while the freeze guard's read of
+  -- product_variants cannot see an uncommitted variant either. Mutual
+  -- invisibility, so neither side's lock serializes them — the same shape
+  -- as the registry races, one relation up.
+  --
+  -- A transaction advisory lock keyed on (business_id, product_id) orders
+  -- them without touching another phase's relation and without locking a
+  -- row anything else contends for: the variant side takes it SHARED, so
+  -- generating a grid of fifty cells in parallel is unaffected, and the
+  -- matrix side takes it EXCLUSIVE, so an axis write waits for the variant
+  -- writes in flight and then reads a state it can conclude from. It is
+  -- taken on the INSERT path only; a DELETE-path lock order is a caller
+  -- obligation (TL-P4-COORD-R62), and taking it after the executor's own
+  -- lock on OLD is how a deadlock is built.
+  PERFORM pg_advisory_xact_lock_shared(
+            hashtextextended(NEW.business_id::text || '/' || NEW.product_id::text, 0));
+
   IF NEW.is_base OR NEW.attributes = '{}'::jsonb THEN
     RETURN NEW;
   END IF;
@@ -371,7 +393,12 @@ CREATE TRIGGER product_variants_40_matrix_canonical
 -- Under SECURITY INVOKER the three principals that can reach these rows all
 -- behave correctly, because FORCE row-level security makes visibility of the
 -- registry row and visibility of the variants the SAME scope:
---   · a bypassrls principal sees both, so the guard fires;
+--   · a principal that bypasses row-level security sees both, so the guard
+--     fires — which at this head means a SUPERUSER or a role `app_bypass()`
+--     names (`daftar_platform`), and NOT a role carrying BYPASSRLS, which
+--     the first version of this comment said: `rolbypassrls` turns off the
+--     policy machinery, while `app_bypass()` is a clause INSIDE the policy,
+--     and they are different mechanisms reaching the same row;
 --   · `daftar_app` with its own context sees its business's variants, so the
 --     guard fires — measured, as `daftar_app`, in proofs.py;
 --   · a principal with no context cannot see or delete the registry row at
@@ -487,6 +514,23 @@ BEGIN
     RAISE EXCEPTION 'catalog.attribute_axis_in_use: axis % is named by existing variants and can be neither renamed nor archived', OLD.axis_code
       USING ERRCODE = 'P0001';
   END IF;
+  -- Finding P2-N02: "in use" was read as "named by a variant", and the
+  -- comment above this function states the outcome it was written to
+  -- prevent — "it leaves the row in place while the validator above stops
+  -- treating it as an axis, which would freeze every matrix product that
+  -- names it". A matrix that registers the axis with no variants yet is
+  -- exactly that case, and it was not refused: measured, the archive
+  -- succeeded, the product's FIRST variant insert was then refused
+  -- catalog.variant_axis_archived, and the product could not get a variant
+  -- at all. Recoverable (the matrix row can still be deleted while no
+  -- variant names it) and therefore a trap rather than a corruption — but
+  -- the guard's own reason covers it, so the guard covers it now.
+  IF EXISTS (SELECT 1 FROM product_matrix_axes ma
+              WHERE ma.business_id = OLD.business_id
+                AND ma.axis_code   = OLD.axis_code) THEN
+    RAISE EXCEPTION 'catalog.attribute_axis_in_use: axis % is registered by a product matrix and can be neither renamed nor archived while it is; take it off those products'' matrices first', OLD.axis_code
+      USING ERRCODE = 'P0001';
+  END IF;
   RETURN NEW;
 END;
 $$;
@@ -522,6 +566,71 @@ $$;
 CREATE TRIGGER product_matrix_axes_20_axis_active
   BEFORE INSERT OR UPDATE OF axis_code ON product_matrix_axes
   FOR EACH ROW EXECUTE FUNCTION product_matrix_axes_20_axis_active();
+
+-- ── A POPULATED matrix's axis set is frozen (the ADD direction) ───────────
+-- Finding P1-N01 of the second independent challenge, and it is the same
+-- clause of C-APP-01 as P0-01 with the arrow reversed. Round 1 found the
+-- clause "a matrix product's variant attributes name exactly its registered
+-- axis set" enforced in the INSERT direction of the VARIANT only; this round
+-- added every REMOVAL path on both registries. What was left is ADDING an
+-- axis to a matrix that already has variants, and nothing refused it:
+-- `_20_axis_active` only asks whether the axis is active, `_10_axis_in_use`
+-- is about removal, and the completeness count (`v_supplied <> v_registered`)
+-- runs on a VARIANT write and so never sees a matrix write at all.
+--
+-- Measured at 23a7139 on a product holding one committed `{size:m,color:blue}`:
+-- `INSERT INTO product_matrix_axes … 'material',3` returned rc=0, the matrix
+-- then registered three axes, and the committed 2-axis variant named exactly
+-- two of them. The cost is not a duplicate cell this time; it is a variant
+-- that NOTHING can address through the matrix (no 2-axis cell exists on a
+-- 3-axis product) while it keeps its own stock key and its whole movement
+-- history. The same split identity P0-01 produced, reached by the door a
+-- merchant walks through on purpose: "add a material axis to this shirt".
+--
+-- So the axis set of a populated matrix is as immutable as a variant's
+-- combination, and for the same reason: under Option B the variant IS the
+-- costing key, so the set of axes that addresses it cannot change underneath
+-- it. The merchant's path is the one the pack already chose for a mistyped
+-- combination — archive the variants at zero stock (which
+-- product_variants_30_archive_requires_zero_stock already permits) and
+-- regenerate the grid. C-APP-01 now states the clause in both directions.
+--
+-- ANY non-base variant freezes the set, including one whose attributes are
+-- '{}': that is a plain product's single variant, it holds the product's
+-- stock, and registering a first axis under it would leave it exactly as
+-- unaddressable as the 2-axis row above. A product with no non-base variants
+-- can still be given, re-ordered and taken off axes freely, which is the
+-- whole lifecycle a merchant building a grid needs.
+--
+-- SECURITY INVOKER, for the reason measured on the first guard: a DEFINER
+-- variant owned by daftar_catalog_internal reads nothing through
+-- product_variants' RESTRICTIVE policy. The advisory lock is what makes the
+-- read conclusive against a CONCURRENT variant insert; see the matching
+-- comment in product_variants_40_matrix_canonical().
+CREATE FUNCTION product_matrix_axes_30_set_frozen()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(
+            hashtextextended(NEW.business_id::text || '/' || NEW.product_id::text, 0));
+  PERFORM 1 FROM product_variants v
+    WHERE v.business_id = NEW.business_id
+      AND v.product_id  = NEW.product_id
+      AND NOT v.is_base
+    FOR SHARE;
+  IF FOUND THEN
+    RAISE EXCEPTION 'catalog.matrix_axis_set_frozen: this product already has variants, so its axis set is frozen; archive the variants at zero stock and regenerate the grid'
+      USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER product_matrix_axes_30_set_frozen
+  BEFORE INSERT ON product_matrix_axes
+  FOR EACH ROW EXECUTE FUNCTION product_matrix_axes_30_set_frozen();
 
 -- One variant per combination. The trigger has already rewritten
 -- `attributes` into canonical form, so the expression is a canonicalization
@@ -658,10 +767,46 @@ BEGIN
     -- names. Measured in this phase's Pack B round, where a wrong-tenant
     -- read returned another business's rows. Asserted here for every
     -- relation of this pack, so the mistake cannot be made silently later.
+    -- ── The PUBLIC-policy pin, and what it can actually assert ──────────
+    -- Finding P2-07's other half: a permissive policy applied to PUBLIC ORs
+    -- with tenant_membership and switches isolation off for the commands it
+    -- names. Measured in this phase's Pack B round, where a wrong-tenant
+    -- read returned another business's rows.
+    --
+    -- Finding P3-N03.3 is right that the first form of this assertion was
+    -- narrow: it added `coalesce(pg_get_expr(polqual,polrelid),'true') =
+    -- 'true'`, so a permissive PUBLIC policy qualified `1=1`, or
+    -- `business_id IS NOT NULL`, passed an assertion whose message claims
+    -- the general case. The recommended form — pin on
+    -- `polroles = '{0}' AND polpermissive` alone, since these relations own
+    -- no legitimate PUBLIC policy at all — was implemented and MEASURED,
+    -- and it is false: it refused the pack on its own `tenant_membership`,
+    -- which is permissive and carries no TO clause, so `polroles = '{0}'`.
+    -- Every relation of this pack owns exactly one such policy by design.
+    --
+    -- The thing the assertion is actually about — "a qualifier that is true
+    -- of every row" — is not decidable in SQL, so no form of it can be both
+    -- sound and complete. What IS decidable is the policy SET: the pack
+    -- refuses to install unless each of its relations carries exactly the
+    -- two policies it reasoned about, which catches an added PUBLIC policy
+    -- whatever its qualifier, and catches a removed one too. The qualifier
+    -- test is kept beside it for the one case the set pin cannot see — the
+    -- two policies themselves rewritten to a tautology — against a NAMED
+    -- list of tautology spellings, stated as a list and not as a decision
+    -- procedure. The residual (a qualifier true of every row that is not on
+    -- the list) is answered by PR-SEC-P11-01, not pretended away here.
+    IF (SELECT array_agg(p.polname::TEXT ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+         WHERE c.relname = v_name)
+       IS DISTINCT FROM ARRAY['business_isolation','tenant_membership']::TEXT[] THEN
+      RAISE EXCEPTION 'catalog.migration_end_state_invalid: % carries a policy set this pack did not install (%)', v_name,
+        coalesce((SELECT string_agg(p.polname, ',' ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid WHERE c.relname = v_name), 'none')
+        USING ERRCODE='P0001';
+    END IF;
     IF EXISTS (SELECT 1 FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
-                WHERE c.relname = v_name AND p.polpermissive AND p.polroles = '{0}'
-                  AND coalesce(pg_get_expr(p.polqual, p.polrelid), 'true') = 'true') THEN
-      RAISE EXCEPTION 'catalog.migration_end_state_invalid: % carries a permissive policy applied to PUBLIC with no qualifier', v_name USING ERRCODE='P0001';
+                WHERE c.relname = v_name AND p.polpermissive
+                  AND coalesce(pg_get_expr(p.polqual, p.polrelid), 'true')
+                      IN ('true', '(1 = 1)', 'true::boolean', '(true)')) THEN
+      RAISE EXCEPTION 'catalog.migration_end_state_invalid: %''s permissive policy is qualified by a tautology, which switches tenant isolation off for the commands it names', v_name USING ERRCODE='P0001';
     END IF;
   END LOOP;
 
@@ -676,14 +821,19 @@ BEGIN
   -- 4 = DELETE, 5 = UPDATE (pg_trigger).
   FOR r IN
     SELECT * FROM (VALUES
-      ('product_matrix_axes_10_axis_in_use',       'product_matrix_axes',      true,  true),
-      ('product_attribute_values_10_value_in_use', 'product_attribute_values', true,  true),
-      ('product_attribute_axes_10_axis_in_use',    'product_attribute_axes',   false, true),
-      ('product_matrix_axes_20_axis_active',       'product_matrix_axes',      false, true)
-    ) AS t(tg, rel, needs_delete, needs_update)
+      ('product_matrix_axes_10_axis_in_use',       'product_matrix_axes',      false, true,  true),
+      ('product_attribute_values_10_value_in_use', 'product_attribute_values', false, true,  true),
+      ('product_attribute_axes_10_axis_in_use',    'product_attribute_axes',   false, false, true),
+      ('product_matrix_axes_20_axis_active',       'product_matrix_axes',      true,  false, true),
+      -- Finding P1-N01: the ADD direction. INSERT only, and the assertion
+      -- says INSERT only, because a guard that also fired on UPDATE OF
+      -- axis_position would refuse re-ordering a grid nobody has populated.
+      ('product_matrix_axes_30_set_frozen',        'product_matrix_axes',      true,  false, false)
+    ) AS t(tg, rel, needs_insert, needs_delete, needs_update)
   LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid
                     WHERE g.tgname = r.tg AND c.relname = r.rel AND NOT g.tgisinternal
+                      AND (g.tgtype & 4)  = CASE WHEN r.needs_insert THEN 4  ELSE 0 END
                       AND (g.tgtype & 8)  = CASE WHEN r.needs_delete THEN 8  ELSE 0 END
                       AND (g.tgtype & 16) = CASE WHEN r.needs_update THEN 16 ELSE 0 END) THEN
       RAISE EXCEPTION 'catalog.migration_end_state_invalid: trigger % on % is absent or does not cover the statement kinds it must', r.tg, r.rel USING ERRCODE='P0001';
@@ -693,7 +843,15 @@ BEGIN
     -- without a session context, and silently allowed every removal (see the
     -- comment above the first guard). Asserted so the "fix" cannot be
     -- re-applied later without this assertion refusing it.
-    IF EXISTS (SELECT 1 FROM pg_proc pr WHERE pr.proname = r.tg AND pr.prosecdef) THEN
+    -- The challenger's second note: this matched `pg_proc.proname` with no
+    -- schema, so a same-named function in another schema would have
+    -- answered for the one actually attached to the trigger. The function
+    -- under test is the one the trigger calls, so it is read through
+    -- pg_trigger.tgfoid.
+    IF EXISTS (SELECT 1 FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid
+                JOIN pg_proc pr ON pr.oid = g.tgfoid
+                WHERE g.tgname = r.tg AND c.relname = r.rel AND NOT g.tgisinternal
+                  AND pr.prosecdef) THEN
       RAISE EXCEPTION 'catalog.migration_end_state_invalid: % is SECURITY DEFINER; these guards conclude from a read of product_variants and a definer cannot satisfy its restrictive policy without a session context', r.tg USING ERRCODE='P0001';
     END IF;
   END LOOP;
