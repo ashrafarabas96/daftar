@@ -1,6 +1,8 @@
 # P9 — PREPARATION REPORT
 
-**Status: `PREPARED / NOT PROMOTED`** (master directive Part 9).
+**Status: `PREPARED / NOT PROMOTED`** (master directive Part 9). On the Mission's ladder the
+rung is **`CHALLENGED`** — an independent challenger passed the work at `9a64289` with no
+open finding (§3c.14) — and a challenger PASS is not a promotion; see §3c.7.
 
 Nothing here is promoted, merged, or in required CI. No migration number is allocated and
 no frozen migration is edited (Part 10). No Phase 4 file is touched and no Phase 4 branch is
@@ -326,13 +328,61 @@ manifest; Phase 9 proposes no retention window of its own.
 ### 3c.7 The status ladder
 
 The Mission's ladder is `PREPARED → CHALLENGED → READY_TO_PROMOTE → PROMOTION_IN_PROGRESS →
-ACCEPTED / SEALED`. Phase 9 stands at **`PREPARED`**, and not one rung further: the next rung
-needs an INDEPENDENT challenger pass, and no challenger has run — every case in this report
-was written by the author of the thing it tests. `READY_TO_PROMOTE = NO`, because the
-roadmap predecessor is not sealed, no migration number exists, and two signatures of the
-three are owed. The D11 PART 117 label for the same state is `PREPARED / NOT PROMOTED`; the
-two are the same claim, and this report uses both so neither vocabulary has to be guessed
-at.
+ACCEPTED / SEALED`. Phase 9 stands at **`CHALLENGED`**, and not one rung further. That rung
+was granted rather than claimed: an independent challenger ran three times and passed the
+work at `9a64289` with no open finding (§3c.14), after seven findings across three rounds.
+It remains true, and worth repeating, that every case in this report was written by the
+author of the thing it tests — the challenger's own probes are its own, and its report says
+which numbers are the author's. `READY_TO_PROMOTE = NO`, because the roadmap predecessor is
+not sealed, no migration number exists, the `customers` FK and the `bootstrap.sql` patch are
+owed to their owners, the retention period is the owner's, PART 7.6's Node 24 rerun from
+this phase's own container is owed, and one signature of the three — the coordinator
+actual-diff review — is still owed. The D11 PART 117 label for the same state is
+`PREPARED / NOT PROMOTED`; it names the promotion state, not the ladder rung, and this
+report uses both so neither vocabulary has to be guessed at.
+
+### 3c.14 The challenger's THIRD pass at `9a64289` — PASS, and what a PASS is not
+
+The independent challenger re-ran the work a third time, at `9a64289` (code `e1b201e`; it
+verified for itself that the diff between them touches only the manifest, so its run
+exercises the stated subject). Verdict: **PASS, no open finding.** Report:
+`/mnt/project-files/phase9/P9-CHALLENGE-9a64289.md`, digest
+`9fe72d8f3f0337732cf32e251a5365a4a35eda7959fb8c42c00d20d19c3611d9`.
+
+Its run, which is now also **this subject's Node 24 evidence**: run id
+`P9-CHALLENGE-R3-20261012T152915Z`, Node **v24.12.0**, PostgreSQL **16.15** at
+`en_US.utf8`, the spec applied by the non-superuser `daftar_migrator`, one vitest process
+against a cluster it `initdb`-ed fresh at port 54401 — whose log shows **zero recovery
+events**, which also answers this phase's disclosure that its own PG 16 cluster had crashed
+and WAL-recovered between rounds. **82 of 82, exit code 0**, with the same tz numbers this
+phase measures (gap 1440, repeat 420 at Antarctica/Vostok, 499 zones × 47 483 samples) and
+all **eight** manifest digests verified byte-exact.
+
+**It did not read (a2)/(a3)/(a4) — it dropped the constraints that hide them.** A refusal
+test that passes on whichever constraint fires first proves nothing, so each probe removed
+the masking CHECK before reaching the guard beneath it. With `bookings_settled_shape_ck`
+dropped, a booking closes with an **empty** settlement record, and a later write to
+`settled_at` or `settled_by_user_id` is still refused by name; with
+`bookings_reschedule_shape_ck` dropped, a booking closes as `'rescheduled'` with a NULL
+forward link, and the late link is still refused. So (a4) is a real guard and not a shadow of
+the CHECKs — which is the one thing the author could not establish about their own fix, since
+the author wrote the fix and the CHECKs both.
+
+**Seven findings across three rounds, all discharged.** One P1 and two P2s in round 1, a P2
+and a provenance item in round 2, nothing in round 3. On the Mission's ladder this moves the
+work from `PREPARED` to **`CHALLENGED`**, which is the only rung a challenger can grant.
+
+**PASS IS NOT PROMOTE, and the challenger says so in its own words.**
+`READY_TO_PROMOTE` remains **NO**, for reasons that were never the challenge's business and
+have not moved: the roadmap predecessor is unsealed, there is no migration number, the
+`customers` foreign key and the `bootstrap.sql` role patch are owed to their owners, the
+retention period is the owner's decision, and PART 7.6's Node 24 rerun **from this phase's
+own container** is owed at final integration — an independent challenger's Node 24 run
+satisfies the evidence question, not the process one. The signature covers the schema, the
+triggers, the replay path, the DST resolver, tenant isolation without superuser, and the
+suite's execution at this SHA on the deploy-target runtime. It does not cover CI, the API
+layer, or parallel confirm, and PART 114's coordinator actual-diff review is still not given:
+two of three signatures, not three.
 
 ### 3c.13 The challenger's SECOND pass at `76ab277` — PASS-WITH-SCOPE, and the residual closed
 
@@ -448,7 +498,9 @@ reproduces the challenger's numbers exactly on the target: gap 1440, repeat 420
 **What is still owed and is NOT claimed.** Node 24 (the container ships 22.22.0 — the
 challenger's run was on 24.12.0, but it was a run of `51626e1`, not of this round). No
 challenger signature on this round, and no coordinator actual-diff review: PART 15 forbids
-the author signing their own work, so this stays `PREPARED`. The retention decision is the
+the author signing their own work. (Superseded by §3c.13 and §3c.14: the challenger passed
+the work two rounds later, at `9a64289`. This paragraph is left as it was written, because a
+round's record should say what was true when it was written.) The retention decision is the
 owner's.
 
 ### 3c.11 HIGH-VELOCITY V1 — measured on the APPROVED TARGET, PostgreSQL 16 / `en_US.utf8`

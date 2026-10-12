@@ -14,11 +14,11 @@ the Master Continuous Mission's Phase 9 items).
 
 `PREPARED / NOT PROMOTED` (PART 49, PART 117). On the Mission's ladder
 (`PREPARED → CHALLENGED → READY_TO_PROMOTE → PROMOTION_IN_PROGRESS → ACCEPTED / SEALED`)
-this work stands at **`PREPARED`** and not one rung further. An independent challenger HAS
-now run, against `51626e1`, and its verdict was **REJECT** with six findings — so the
-`CHALLENGED` rung is not reached by having been challenged; it is reached by a challenger
-PASS. This round answers all six, and the rung it earns is the one a challenger says it
-earns, not the one the author claims.
+this work stands at **`CHALLENGED`** and not one rung further. That rung was granted, not
+claimed: the same independent challenger ran three times — REJECT at `51626e1`,
+PASS-WITH-SCOPE at `76ab277`, and **PASS at `9a64289`** with no open finding, seven findings
+raised and all discharged. `READY_TO_PROMOTE` is the next rung and its gates are external,
+below. A challenger's PASS is not a promotion and the challenger says so in its own report.
 
 `READY_TO_PROMOTE` = **NO**. Its gates are external: the roadmap predecessor must seal
 first (PART 4), a migration number must be allocated by the one Migration Owner
@@ -37,8 +37,11 @@ Tree state at this SHA: clean apart from this manifest, which is committed immed
 after it and names the SHA it describes rather than being backfilled into it.
 
 **Evidence subject vs head, reconciled (Mission V2).** The evidence in this handoff was
-produced against the subject SHA above; the branch head is one commit later because the
-head IS this manifest naming that subject. The two can never be the same string, and the
+produced against the subject SHA above; the branch head is later because the head IS this
+manifest naming that subject. The challenger signed `9a64289`, the first manifest commit on
+this subject, and verified for itself that `git diff --stat e1b201e 9a64289` touches only
+this file; the commit carrying this paragraph is a second manifest commit recording that
+PASS, and it changes no code either. The two can never be the same string, and the
 whole difference between them is one file:
 
 ```
@@ -55,7 +58,7 @@ relation, not as "the same commit".
 
 ## Artifacts
 
-All seven are **committed** to the branch above. The copies under
+All eight are **committed** to the branch above. The copies under
 `/mnt/project-files/phase9/` are off-Git and carry the same bytes; their hashes are
 the same values, recorded here because PART 13 asks for a hash on anything that does
 not live in Git.
@@ -65,9 +68,10 @@ not live in Git.
 | DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `80e654ce944a9fac64e9052bb187eca55668b50730b288c3c4ebaf9b05a1ccb4` |
 | Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `0a0634709734469d488e960785fc7a76d2165d29086e3be4c4ce04409190f2e9` |
 | Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
-| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `e1af7bbc61cf735d1ec0aabcf4a4224ca3c05581152ea259e3246b92609553e5` |
+| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `ab0354c5bf499807234e20085db274cf8ae2268a994afc483e5ed7046b1978e4` |
 | Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
 | Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `e5f2367037806a305c997086e0577a6694a6fa99bc451501775d11dd07649336` |
+| Independent challenger's PASS at `9a64289` | `/mnt/project-files/phase9/P9-CHALLENGE-9a64289.md` | **no — off-Git** | `9fe72d8f3f0337732cf32e251a5365a4a35eda7959fb8c42c00d20d19c3611d9` |
 | Independent challenger's PASS-WITH-SCOPE at `76ab277` | `/mnt/project-files/phase9/P9-CHALLENGE-76ab277.md` | **no — off-Git** | `67742ec1c85916505af86f1bb3a9699833af604e77e899ef9ca8bd653ac532a6` |
 | Independent challenger's REJECT at `51626e1` | `/mnt/project-files/phase9/P9-CHALLENGE-51626e1.md` | **no — off-Git** | `d5b751c6a6da094d9ccb428414ec886d27c45b2a0a2011351e17bb9f50c8d577` |
 | This manifest | `docs/phase9/P9-HANDOFF-MANIFEST.md` | yes (next commit) | — |
@@ -172,9 +176,31 @@ Items 1 and 3 are not owner-only escalations under PART 116; item 4 is.
 
 ## Challenger state
 
-**RUN TWICE. Round 1 REJECT; round 2 PASS-WITH-SCOPE; this round's fix NOT yet re-challenged.**
+**RUN THREE TIMES. Round 3 at `9a64289`: PASS, no open finding.**
 
-Round 2, at `76ab277`: the same independent challenger re-ran the suite in its own container
+Round 3 is the signature this handoff rests on. The challenger confirmed for itself that
+`git diff --stat e1b201e 9a64289` touches only this manifest, so its run exercises the stated
+code. Run id `P9-CHALLENGE-R3-20261012T152915Z`, **Node v24.12.0**, PostgreSQL **16.15** at
+`en_US.utf8`, spec applied by the non-superuser `daftar_migrator`, one vitest process against
+a cluster it `initdb`-ed fresh (zero recovery events in its log, which also answers this
+phase's disclosure about its own crashed-and-recovered cluster). **82 of 82, exit code 0**;
+all eight manifest digests verified byte-exact; its own four probes 4/4, exit 0. Report:
+`/mnt/project-files/phase9/P9-CHALLENGE-9a64289.md`.
+
+It proved (a2)/(a3)/(a4) by **dropping the CHECKs that hide them** rather than by reading
+them: with `bookings_settled_shape_ck` gone a booking closes with an empty settlement record
+and the late writes are still refused by name, and with `bookings_reschedule_shape_ck` gone
+the late forward link is still refused. That is the one thing the author could not establish
+about their own fix, having written the fix and the CHECKs both.
+
+**Seven findings across three rounds, none outstanding** — one P1 and two P2s in round 1, one
+P2 and a provenance item in round 2, nothing in round 3. PART 114's signatures now stand at
+**two of three**: author and challenger. The coordinator actual-diff review is the third and
+is not given.
+
+Round 1, at `51626e1`: **REJECT.**
+
+Round 2, at `76ab277`: the challenger re-ran the suite in its own container
 on PostgreSQL 16.15 at `en_US.utf8` under **Node 24.12.0** — 81 of 81, exit code 0 — and
 re-planted every mutation rather than reading the answers. All six round-1 findings confirmed
 fixed. It verified this round's NEW premise instead of accepting it (41 999 one-day windows
@@ -185,9 +211,10 @@ after close. That is closed at the subject SHA above as block (a4),
 `booking.settlement_after_close`, with a red proof per state — and **this round has not been
 challenged**. Report: `/mnt/project-files/phase9/P9-CHALLENGE-76ab277.md`.
 
-The challenger's round-2 run is also the only Node 24 measurement in existence for this work.
-It is cited as the CHALLENGER's measurement, at `76ab277`, not as this phase's: PART 7.6 asks
-for a rerun from this phase's own container, and that container ships 22.22.0.
+Node 24 now has an independent measurement **at this subject SHA**, from round 3. It is cited
+as the CHALLENGER's measurement in the CHALLENGER's container, which settles the evidence
+question and not the process one: PART 7.6 asks for a rerun from this phase's own container,
+and that container ships 22.22.0, so the rerun is still owed at final integration.
 
 Round 1, at `51626e1`: **RUN ONCE, VERDICT REJECT.** An independent challenger
 reviewed `51626e1` in its own container on PostgreSQL 16.15 at `en_US.utf8` under Node
@@ -200,11 +227,8 @@ schema defects it proved by execution.
 All six were answered at `5f15601` / `76ab277` and each answer is recorded in §3c.12 of the
 prep report; the challenger then confirmed all six fixed in round 2.
 
-**No signature stands on the SUBJECT SHA of this handoff.** Round 2 passed-with-scope at
-`76ab277`, and `e1b201e` is the commit that closes its residual, which the challenger has not
-seen. PART 15 forbids the author signing their own work as challenger, so PART 114's three
-signatures stand at **one of three**: author only. That, and PART 7.6's Node 24 run from this
-container, are the two gaps in this handoff, stated here rather than implied by silence.
+All six were confirmed closed in round 2, each by re-execution rather than by reading the
+answer.
 
 What the challenger recorded as SOUND is listed in its own report and is not re-litigated
 here: the no-double-booking invariant, the multi-resource lock order, the CHECK-pinned
@@ -223,9 +247,11 @@ is owed at promotion, not now.
 
 ## Unresolved blockers
 
-None internal. Every remaining item is external and named above: the predecessor seal,
-the migration number, the `bootstrap.sql` patch, the `customers` foreign key, the CI
-step, and the Challenger and Coordinator signatures.
+None internal, and none from the challenge: seven findings across three rounds, all
+discharged. Every remaining item is external and named above: the predecessor seal, the
+migration number, the `bootstrap.sql` patch, the `customers` foreign key, the CI step, the
+Coordinator signature, PART 7.6's Node 24 rerun from this container, and the owner's
+retention decision.
 
 ## What this handoff explicitly does not claim
 
@@ -236,11 +262,13 @@ step, and the Challenger and Coordinator signatures.
 * No progress percentage, and no progress claim derived from the case count, the line
   counts or the number of agents (Mission, cross-phase). 82 green cases say what was
   measured, not how much of Phase 9 exists.
-* **Not Node 24.** The container ships v22.22.0 against an `engines` of `>=24 <25`. PART
-  7.6's rerun on Node 24 is UNMEASURED and owed at final integration. The challenger's run
-  was on v24.12.0, but of `51626e1` — it is not this round's Node 24 evidence.
-* **Not a challenger pass ON THIS SHA.** Round 2 passed-with-scope at the parent commit; the
-  commit that closes its residual has not been challenged. See the Challenger state above.
+* **Not Node 24 FROM THIS CONTAINER.** It ships v22.22.0 against an `engines` of
+  `>=24 <25`. Node 24 behaviour at this SHA is measured — by the challenger, in its own
+  container, round 3 — but PART 7.6 asks this phase to produce its own, and that is owed at
+  final integration.
+* **Not three signatures.** Author and challenger, not the coordinator actual-diff review.
+* **Not a promotion.** A challenger PASS moves the rung to `CHALLENGED` and nothing further;
+  every `READY_TO_PROMOTE` gate below is external and open.
 * Business isolation of a registry read is enforced by `booking_replay_result` itself and
   not by row security — a different kind of guarantee from a policy, stated as limitation
   15 of the prep report because the executed attack is what revealed it.
