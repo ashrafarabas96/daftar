@@ -964,8 +964,26 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
       // invoice row, so by the time B resumes, A's COMMIT has already moved
       // the invoice out of `draft`, and the STATE MACHINE refuses before any
       // grant is consumed. That is the earlier of the two defences and the
-      // better answer; the index's own refusal is held by line 407, which
-      // reaches it through a second invoice.
+      // better answer.
+      //
+      // ROUND 20, AND THE FALLBACK IS NOT THE ONE I NAMED. I asked the
+      // challenger to plant the obvious single-guard test — replace
+      // `si_transition_allowed`'s `RAISE` with `RETURN NEW`, so the state
+      // machine admits every transition — expecting this case to go green
+      // and prove it rests on one defence. It did not go green. It failed
+      // with `23505/pca_one_consumption_per_grant_per_invoice`, the PARTIAL
+      // UNIQUE INDEX on `(business_id, invoice_id, applies_to_grant_id)
+      // WHERE kind = 'consumption'`: two finalizations of one invoice write
+      // the same consumption row, and the index refuses the second.
+      //
+      // So the fallback is on the CONSUMPTION side, not the invoice side,
+      // and this case is backed by two independent defences rather than one.
+      // The order is worth stating because the pack named only the outer
+      // one: `si_transition_allowed` answers first on the shipped path,
+      // and the index refuses the same duplicate if the state machine ever
+      // admits it. That is a masking pair in the F-11 sense — two defences
+      // for one scenario — though not an invisible one, since the
+      // one-at-a-time plant above exposed the inner one immediately.
       expect(second, 'the same invoice was finalized twice by two application sessions').toBe(
         '23000/si_transition_allowed',
       );
