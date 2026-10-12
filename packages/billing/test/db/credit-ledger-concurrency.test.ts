@@ -981,7 +981,44 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
     expect(await consumedMinor(owner, 'p5scratch', s)).toBe(400n);
   });
 
-  it('two application-role finalizations across the same two grants in FIFO order do not deadlock', async () => {
+  it('two application-role allocators over the same two grants are serialised, and the ordering defence is MASKED by the advisory lock', async () => {
+    // ROUND 19, THE CHALLENGER'S BLOCKER ON ROUND 18, AND IT WAS RIGHT.
+    // The leg that stood here was not a race at all: A committed before B
+    // took any lock, so `40P01` was unreachable whatever the lock order
+    // was, and it passed `withLock: true`, which serialises two
+    // finalizations before either reaches a grant row. The challenger then
+    // measured the consequence — it made `lock_grants_in_order`'s order
+    // session-dependent and the whole file stayed 26/26 green — and proved
+    // the hazard is real by taking the same two remainder rows in opposite
+    // orders from two hand-written sessions: `A 40P01 | B ok`.
+    //
+    // This leg is the race the old one claimed to be: `withLock: false`,
+    // both sessions genuinely in flight, the same barrier and settle-first
+    // detection the other two legs use.
+    //
+    // AND IT MEASURES SOMETHING DIFFERENT FROM WHAT THE REVIEW ASKED FOR,
+    // which is the point of running it rather than adopting the sentence.
+    // `withLock: false, withGrantLocks: true` does NOT leave the grant
+    // order as "the only thing preventing a cycle", because
+    // `lock_grants_in_order` takes the per-business ADVISORY lock itself
+    // before it takes any row lock — that is round 9's F-10 fix and the
+    // schema-wide invariant stated at that `PERFORM`. So on every path this
+    // slice has, two allocators are serialised on the advisory key BEFORE
+    // the ordering can matter, and the deterministic order is a SECOND line
+    // of defence that nothing reaching it can exercise.
+    //
+    // That is why the challenger's one-at-a-time plant stayed green, and it
+    // is this phase's own round-9 lesson (P5 R9): a one-at-a-time mutation
+    // sweep cannot see two defences that mask each other. The pair-drop is
+    // in `P5-CHECKPOINT.md` §3 as M63/M64/M65 — order inverted alone:
+    // green; advisory removed with the order correct: green; BOTH: `40P01`,
+    // which reds this leg. So the order's contribution is measured, by the
+    // only plant that can see it.
+    //
+    // What this case therefore asserts, and says so in its name: the two
+    // allocators are serialised, B waits on the ADVISORY key and not on a
+    // remainder row (read from `pg_locks`, so the claim is about the lock
+    // that actually held it), and neither session deadlocks.
     const s = await freshScope('p5scratch');
     await insertGrant(owner, 'p5scratch', s, 300n, T0);
     await insertGrant(owner, 'p5scratch', s, 300n, T1);
@@ -995,18 +1032,55 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
       await b.query('BEGIN');
       await setRequestContext(a, s, 'transaction');
       await setRequestContext(b, s, 'transaction');
+      const bPid = await pidOf(b);
 
-      // A draws across both grants; B then draws what is left. With one lock
-      // order there is no cycle to find, and a `40P01` here would be the
-      // deadlock this design exists to prevent — asserted by SQLSTATE, so a
-      // privilege failure could not be mistaken for a clean run.
-      await finalizeInvoice(a, 'p5scratch', s, invA, 400n, 'inv-fifo-a', T2, { withLock: true, withGrantLocks: true });
-      await a.query('COMMIT');
-      const bResult = await finalizeInvoice(b, 'p5scratch', s, invB, 200n, 'inv-fifo-b', T2, {
-        withLock: true,
+      // A draws across both grants and STAYS OPEN.
+      await finalizeInvoice(a, 'p5scratch', s, invA, 400n, 'inv-fifo-a', T2, {
+        withLock: false,
         withGrantLocks: true,
-      }).then(() => '', (e: unknown) => refusedBy(e));
-      expect(bResult, 'the second application-role allocator was refused or deadlocked').toBe('');
+      });
+
+      // B is in flight while A holds everything. Its outcome is captured the
+      // moment it settles, so a B that deadlocked or was refused reports
+      // that instead of the barrier's silence.
+      let bSettled: string | null = null;
+      const bRun = finalizeInvoice(b, 'p5scratch', s, invB, 200n, 'inv-fifo-b', T2, {
+        withLock: false,
+        withGrantLocks: true,
+      }).then(
+        (v) => { bSettled = ''; return v; },
+        (e: unknown) => { bSettled = refusedBy(e) || String(e); throw e; },
+      );
+      bRun.catch(() => undefined);
+      try {
+        await waitUntilBlocked(observer, bPid, 'second allocator, as the application role');
+      } catch (barrier) {
+        throw new Error(
+          bSettled === null
+            ? `${String(barrier)}; and B had not settled either`
+            : `B did not block, it settled first with: ${bSettled}`,
+        );
+      }
+
+      // WHICH lock held B. `advisory` is the lock the F-10 invariant says
+      // comes first; if a future change removed that `PERFORM`, B would be
+      // held by a remainder TUPLE lock instead and this assertion would
+      // fail, which is how the case notices that the thing it is describing
+      // has changed underneath it.
+      const held = await observer.query<{ locktype: string }>(
+        `SELECT locktype FROM pg_locks WHERE pid = $1 AND NOT granted`,
+        [bPid],
+      );
+      expect(
+        held.rows.map((r) => r.locktype),
+        'B was not waiting on the per-business advisory key, so the F-10 invariant no longer holds on this path',
+      ).toStrictEqual(['advisory']);
+
+      await a.query('COMMIT');
+
+      // No deadlock, and B is not refused: it allocates what A left.
+      const bOutcome = await bRun.then(() => '', (e: unknown) => refusedBy(e));
+      expect(bOutcome, 'the second application-role allocator deadlocked or was refused').toBe('');
       await b.query('COMMIT');
     } finally {
       await a.end();

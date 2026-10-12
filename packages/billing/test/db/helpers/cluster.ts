@@ -152,6 +152,16 @@ export async function pidOf(c: Client): Promise<number> {
  * observer loses that membership fails loudly instead of quietly confirming
  * every negative. `visible` is the discriminator: a row the observer may not
  * read still appears, with `state` NULL.
+ *
+ * ONE APPROXIMATION, NAMED (the challenger's round-13 P3). `state IS NULL` is
+ * read as "I may not see this backend", and that is not the only way a NULL
+ * gets there: a background worker, or an autovacuum backend, also reports a
+ * NULL `state` to anyone. The direction of the error is what makes it
+ * acceptable — such a row is reported as unreadable rather than as "it did
+ * not wait", so the mistake is a loud failure and never a silent pass. The
+ * precise test would be `pg_has_role(usename, 'USAGE')` plus
+ * `pg_read_all_stats` membership, which is more machinery than a barrier over
+ * backends this suite itself opened needs.
  */
 async function observe(
   observer: Client,
