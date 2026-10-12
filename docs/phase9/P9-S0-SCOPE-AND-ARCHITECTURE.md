@@ -113,24 +113,55 @@ service, the customer, the buffers, the creator and the creation time are immuta
 INSERT. A booking's history is the record; the four settlement states are terminal and none
 of them reopens.
 
-### 2.9 Serialization: a refusal a human can read (R-P9-11)
+### 2.9 Serialization: a refusal a human can read (R-P9-11, R-P9-12)
 
-Two bookers racing on the same slot *without* a lock each insert their own entry into the
-exclusion index, then each find the other's and wait. The pair deadlocks, and PostgreSQL
-resolves it with `40P01 deadlock_detected`.
+Two bookers racing on the same slot *without* a lock each insert their own entry into
+the exclusion index, then each find the other's and wait. The pair deadlocks, and
+PostgreSQL resolves it with `40P01 deadlock_detected`.
 
-The data stays correct — exactly one booking exists either way — but a deadlock is not a
-refusal a UI can translate into "that time has just been taken". So the command layer takes
-`pg_advisory_xact_lock(booking_resource_lock_key(business, resource))` as the first act of
-any transaction that will occupy a resource, in the project's own advisory-lock idiom. The
-second transaction then queues, and is refused with `23P01`.
+The data stays correct — exactly one booking exists either way — but a deadlock is not
+a refusal a UI can translate into "that time has just been taken". So the command layer
+takes the resource's advisory lock as the first act of any transaction that will occupy
+it, in the project's own idiom. The second transaction then queues, and is refused with
+`23P01`.
 
-The key is per `(business, resource)`: chair A never waits on chair B, and a booking in one
-business never waits on another business at all.
+A reschedule that **moves** a booking touches two resources, and there one lock is not
+enough: two transactions crossing — A→B against B→A — each hold what the other wants
+next, and per-resource locking deadlocks for the same reason the bare index did, one
+level up. `booking_lock_resources` takes the whole set at once, sorted ascending by key
+and deduplicated, so any two transactions acquire their shared locks in the same
+relative order and no cycle can form.
 
-**This is a convenience, and the model does not depend on it.** That is the point of the
-separation: the constraint is correct whether or not any writer remembers the lock. The
-lock only decides *which error* the loser sees.
+Three measured consequences shape the model here:
+
+* A **true swap** of two occupied slots is not two independent reschedules. Both sides
+  are correctly refused, because each wants an hour the other has not released. A swap
+  is one transaction that performs both transitions before either insert.
+* Two cross-resource reschedules that do **not** contend both commit under the one lock
+  set, so the order costs nothing that was legal.
+* The keys are sorted, not the uuids, because the key is what the lock manager orders
+  on. A hash collision merges two locks, which broadens exclusion and never narrows it.
+
+**The locks are a convenience, and the model does not depend on them.** That is the
+point of the separation: the constraint is correct whether or not any writer remembers
+a lock. The lock only decides *which error* the loser sees.
+
+### 2.9a A local time is resolved or refused, never guessed (R-P9-13)
+
+Storage is canonical instants, which is why the invariant holds across every timezone.
+But a merchant says "Tuesday at 9" in the resource's own zone, and twice a year that
+sentence is either meaningless (a spring-forward skipped the hour) or ambiguous (a
+fall-back repeated it).
+
+PostgreSQL's `AT TIME ZONE` answers both silently — measured, not assumed. So
+`booking_resolve_local` counts the instants that map back to the stated wall clock:
+none means refuse, one resolves, more than one means refuse unless the caller states
+which offset it means. Never the first occurrence by default, because "first" is not
+something the caller said.
+
+It is `STABLE`, not `IMMUTABLE`, because the tz database is data — and PostgreSQL
+itself therefore refuses to build an index over it, which is the guard that stops a
+resolved value outliving the next tz update.
 
 ### 2.10 No money, anywhere
 
@@ -177,4 +208,5 @@ routine, and no runtime role may execute the definer guard or the lock-key routi
 | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | the schema and its invariants — executable, executed, carrying no migration number |
 | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | what the Migration Owner is asked to allocate, naming no number |
 | `docs/phase9/P9-PREP-REPORT.md` | what was measured, what was found by execution, and the limitations |
-| `tests/phase9-prep/` | 33 cases over three suites: schema, real concurrency, negative controls |
+| `docs/phase9/P9-HANDOFF-MANIFEST.md` | the PART 13 handoff gate: every artifact, its location, its hash |
+| `tests/phase9-prep/` | 54 cases over five suites: schema, real concurrency, negative controls, lock order and idempotency, time |

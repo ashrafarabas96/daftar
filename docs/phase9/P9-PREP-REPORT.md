@@ -19,11 +19,13 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-schema.test.ts` | — | 15 cases: shape, security, grants, end state |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | — | 11 proofs against real concurrent transactions |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | — | 7 cases: each invariant removed, and the damage measured |
+| `tests/phase9-prep/p9-booking-multi-resource.test.ts` | — | 8 cases: the global lock order (PART 50) and idempotent retries (PART 53) |
+| `tests/phase9-prep/p9-booking-time.test.ts` | — | 13 cases: the timezone / DST law (PART 51) |
 | `tests/phase9-prep/p9-booking-spec.ts` | — | the spec loader and its non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | — | the race harness: `pg_blocking_pids`, never a sleep |
 
-**33 of 33 cases green**, over three suites, on a live PostgreSQL cluster.
+**54 of 54 cases green**, over five suites, on a live PostgreSQL 18.4 cluster.
 
 The DDL spec is executable and **is executed**: the suites read it from its path, apply it
 in one transaction as the non-superuser deployment principal `daftar_migrator` on top of the
@@ -124,6 +126,98 @@ error the loser sees; the constraint decides whether a double booking can exist.
 
 ---
 
+## 3a. Directive #11 (PARTs 49–53), applied
+
+PART 49 is the status this report already carries, unchanged: `PREPARED / NOT
+PROMOTED`, no promotion before the roadmap predecessor, no migration number, and no
+canonical CI claim. PARTs 50, 51 and 53 asked for work that did not exist; PART 52
+asked for a property the model already had.
+
+### PART 50 — the global lock order, and a premise measurement refuted
+
+`booking_lock_resources(business, resources[])` takes a transaction's whole lock set
+at once, sorted ascending by key and deduplicated, before any mutation. R-P9-11
+serialized one resource, which a reschedule that *moves* a booking is not: that
+touches two, and A→B crossing B→A deadlocks under per-resource locking for the same
+reason the bare index did.
+
+Three things were measured, and the first corrected the proof twice:
+
+1. **A true swap of two occupied slots cannot be two independent reschedules.** Both
+   sides are refused `23P01`, because each wants an hour the other has not released
+   and neither can see the other's uncommitted release. The first version of the proof
+   expected both to commit; the second expected one survivor; the server's answer was
+   neither. That is a correct refusal, and the final state is the one already true —
+   which is exactly PART 50's "no deadlock, one valid final state".
+2. **A swap IS expressible, as one transaction** that performs both transitions before
+   either insert. Proven to commit, with each hour held once.
+3. **Under per-resource locking the same crossing gives `40P01`** — the negative
+   control, with the cycle constructed rather than hoped for.
+
+And two cross-resource reschedules that do not contend both commit under the one lock
+set, which is what shows it serializes without refusing legal work.
+
+### PART 51 — the timezone / DST law
+
+`booking_resolve_local(zone, local, offset)` counts the instants that map back to the
+stated wall clock: none means REFUSE, one resolves, more than one means REFUSE unless
+the caller states which offset it means. Never the first occurrence by default.
+
+**It exists because PostgreSQL's own `AT TIME ZONE` answers both broken cases
+silently, and that was measured before any law was written.** An hour a
+spring-forward skipped comes back as an instant an hour away from what was asked; an
+hour a fall-back repeated comes back as one of the two with nothing to say it chose.
+Both are negative controls.
+
+Proven on both shift sizes that exist — `America/New_York`'s hour and
+`Australia/Lord_Howe`'s thirty minutes — which is why the scan steps by one minute.
+The resolver is `STABLE`, and the suite asserts both the volatility and that
+PostgreSQL itself refuses to index the routine, so it can never be folded into an
+index that would outlive the next tz database update.
+
+### PART 52 — capacity
+
+Already satisfied, and recorded here rather than changed: capacity greater than one is
+multiple resource units, and there is deliberately no `capacity` integer, because an
+exclusion constraint cannot express "at most N overlapping" and a column the physical
+invariant cannot see is worse than no column. Aggregate capacity would need a new
+architecture and its own concurrency proof.
+
+### PART 53 — audit and idempotency
+
+The command identity is the caller's `operation_id`, derived from no clock and no
+sequence. Two concurrent transactions carrying the same `operation_id` produce exactly
+one booking and one registry row; the loser is refused by the registry's primary key
+(`23505`) or by the invariant (`23P01`). The registry is append-only in the trigger as
+well as the grant. Cancellation and reschedule retain history, and the reschedule
+proofs assert that no predecessor is left released with no successor.
+
+Answering a replay **from the recorded row** rather than returning the duplicate-key
+error is the command layer's obligation and is not built.
+
+---
+
+## 3b. Evidence classes (PART 15)
+
+Stated in the only classes the directive allows, with nothing mixed and nothing
+claimed in a stronger class than it was measured in.
+
+| claim | class |
+|---|---|
+| the seven relations, their constraints, RLS, grants, ownership, end state | PROVEN BY DATABASE CATALOGUE |
+| no double booking under race; the lock orders; DST refusals; idempotent retries | PROVEN BY TEST |
+| each invariant is load-bearing (six red proofs, restored character-identical) | PROVEN BY TEST |
+| the DDL spec as a deployable migration | **SPEC ONLY** — no number allocated |
+| the command layer, schedule containment | **SPEC ONLY** — not written |
+| these suites in required CI | **UNMEASURED** — owner-only (TD-08) |
+| browser, UX, localization (PART 111) | **UNMEASURED** — no surface exists |
+| performance | **UNMEASURED** — and no number from this container may be quoted |
+
+A green run of `tests/phase9-prep` is a **record**, not a gate: the suites are not in
+required CI, and a branch push is not CI (PART 15).
+
+---
+
 ## 4. LIMITATIONS — what this work does not establish
 
 Stated as limitations rather than left to be discovered.
@@ -135,15 +229,20 @@ Stated as limitations rather than left to be discovered.
    allocates one, nothing in `docs/phase9/` is deployable. The DDL spec lives outside the
    migrations directory and is absent from the migration manifest by design.
 3. **There is no command layer.** `booking_create`, `booking_cancel` and
-   `booking_reschedule` are not written. The proofs drive the model through direct `INSERT`
-   and `UPDATE` statements in the exact shape a command would use, including the advisory
-   lock — which means **R-P9-11 is proven as an obligation the command layer must honour,
-   not as something the schema can enforce**. A future writer that forgets the lock gets
-   `40P01` instead of `23P01`; it does not get a double booking.
-4. **Schedule containment is not enforced.** Whether a booking falls inside the resource's
-   working hours, on that resource's own civil day, is a validation and belongs to the
-   command slice. The input exists (`businesses.timezone`, IANA-validated at the database
-   boundary), so this is a deferral and not a missing input.
+   `booking_reschedule` are not written. The proofs drive the model through direct
+   `INSERT` and `UPDATE` statements in the exact shape a command would use, including
+   the advisory locks — which means **R-P9-11 and R-P9-12 are proven as obligations the
+   command layer must honour, not as something the schema can enforce**. A future
+   writer that forgets a lock gets `40P01` instead of a readable refusal; it does not
+   get a double booking. Likewise, answering an idempotent replay from the recorded
+   registry row, rather than returning the duplicate-key error, is the command layer's
+   job (PART 53) and is not built.
+4. **Schedule containment is not enforced.** Whether a booking falls inside the
+   resource's working hours, on that resource's own civil day, is a validation and
+   belongs to the command slice. `booking_resolve_local` now settles the harder half —
+   that resolving the merchant's wall clock is never a guess — but the comparison
+   against `booking_resource_schedules` and `booking_resource_exceptions` is not
+   written.
 5. **Resource capacity greater than one is not modelled.** An exclusion constraint expresses
    "no two overlapping rows", not "at most N overlapping rows", and there is no declarative
    way to say the second. A room for six is six resources. There is deliberately **no**
@@ -177,6 +276,20 @@ Stated as limitations rather than left to be discovered.
     already deferred to promotion (§2 of the patch request). The Migration Owner will apply
     this slice after the Phase 4 candidates, and when Phase 4 is sealed these suites can be
     re-run against that head unchanged to confirm it.
+
+12. **The local-time scan is bounded to ±180 minutes** around PostgreSQL's own
+    answer. Every transition in the IANA database is far inside that bound, but a zone
+    whose offset moved by more than three hours at once would resolve as "does not
+    exist" rather than being found. Refusing is the safe side of the bound, and that is
+    the side this lands on.
+13. **The DST cases depend on the server's tz database**, so the suite asserts the
+    occurrence counts of its four moments from the server before relying on them. A tz
+    update that moved a rule reds the suite rather than silently making its proofs
+    vacuous — but it does red it, and that is maintenance this work hands forward.
+14. **The lock-set collision case is reasoned, not measured.** Two distinct resources
+    hashing to one key would merge their locks, which broadens exclusion and cannot
+    narrow it; no fixture constructs such a collision, because constructing one against
+    `hashtextextended` is not something a proof can do honestly at this size.
 
 ---
 

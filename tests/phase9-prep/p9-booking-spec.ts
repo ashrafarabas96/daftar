@@ -49,6 +49,8 @@ export const P9_NAMED_OBJECTS = [
   'bookings_buffers_match_service',
   'booking_operations_immutable',
   'booking_resource_lock_key',
+  'booking_lock_resources',
+  'booking_resolve_local',
 ] as const;
 
 /** The states the invariant must treat as occupying the resource. */

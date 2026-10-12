@@ -178,28 +178,89 @@ describe('P9 bookings — negative controls: the invariant is what is doing the 
       }
       expect(serial).toContain('booking.slot_taken');
 
-      // (b) Concurrently, WITH the lock, the trigger also refuses correctly —
-      //     the correction this control exists to record.
+      // (b1) Concurrently, with the lock taken IN A STATEMENT OF ITS OWN
+      //      before the write, the trigger refuses correctly. The loser waits
+      //      on the lock, the winner commits, and the loser's INSERT — a
+      //      later statement — takes a fresh snapshot under READ COMMITTED
+      //      that can see the winner's row.
       const disciplined = await openRacers(db.url('postgres'), 2);
       try {
-        const attempts = issue(disciplined, INSERT_BOOKING_LOCKED, (i) =>
-          bookingParams({ world, id: uuid(2110 + i), startsAt: at(`${h}:45`), endsAt: at(`${h}:50`) }),
-        );
-        const blocked = await awaitBlocked(
-          observer,
-          disciplined.map((r) => r.pid),
-          1,
-        );
-        await commitAll(disciplined);
-        const outcome = summarise(await Promise.all(attempts), blocked.length);
-        expect(outcome.committed).toBe(1);
-        expect(outcome.refused).toBe(1);
+        const [one, two] = disciplined;
+        if (one === undefined || two === undefined) throw new Error('two racers were asked for');
+        const lock = `SELECT pg_advisory_xact_lock(booking_resource_lock_key($1, $2))`;
+        await one.client.query(lock, [world.businessId, world.resourceAId]);
+        await one.client.query(INSERT_BOOKING, bookingParams({ world, id: uuid(2110), startsAt: at(`${h}:45`), endsAt: at(`${h}:50`) }));
+        const loser = (async (): Promise<string> => {
+          await two.client.query(lock, [world.businessId, world.resourceAId]);
+          try {
+            await two.client.query(INSERT_BOOKING, bookingParams({ world, id: uuid(2111), startsAt: at(`${h}:46`), endsAt: at(`${h}:49`) }));
+            return '';
+          } catch (e) {
+            return (e as Error).message;
+          }
+        })();
+        // The wait is on the LOCK, observed before the winner commits, so the
+        // loser's INSERT provably runs after it.
+        await awaitBlocked(observer, [two.pid], 1);
+        await one.client.query('COMMIT');
+        expect(await loser).toContain('booking.slot_taken');
+        await two.client.query('ROLLBACK');
       } finally {
         await closeRacers(disciplined);
       }
 
-      // (c) Concurrently, with ONE writer that forgot the lock, the same
-      //     trigger commits a double booking. Nothing else changed.
+      // (b2) And the same, with the lock taken in the SAME statement as the
+      //      write — the `WITH lock_taken AS (…) INSERT … SELECT` form the
+      //      other suites use. A HYPOTHESIS WAS MEASURED AND REFUTED HERE:
+      //      the statement's own snapshot is taken before the CTE acquires
+      //      the lock, so it looked as though the loser's trigger would
+      //      consult a snapshot from before the winner committed and let a
+      //      double booking through. It does not. Measured three runs in
+      //      three: the loser is refused. The trigger's EXISTS runs inside a
+      //      volatile plpgsql function, which takes its own snapshot when it
+      //      runs, and that is after the lock.
+      //
+      //      What the hypothesis came from is worth keeping: an EARLIER run
+      //      of this control, before the barrier below existed, did record
+      //      two commits once. That harness could not say WHICH backend
+      //      blocked or on what — `awaitBlocked` answers "one of these is
+      //      waiting", not "the loser is waiting on the lock" — so one
+      //      commit or two depended on which side won the lock and whether
+      //      the wait it saw was the one it meant. With the roles fixed
+      //      below, the result is stable.
+      //
+      //      And that is the argument of this whole control, from a
+      //      different direction: after measurement, three runs and a
+      //      refuted hypothesis, the exact conditions under which the
+      //      trigger is correct are still subtle enough that I got them
+      //      wrong in writing. The exclusion constraint is checked against
+      //      the physical index at insertion time, under no snapshot and
+      //      under no discipline, and there is nothing here to get wrong.
+      const sameStatement = await openRacers(db.url('postgres'), 2);
+      try {
+        const [winner, loser] = sameStatement;
+        if (winner === undefined || loser === undefined) throw new Error('two racers were asked for');
+        const row = (id: number, from: string, to: string): unknown[] => bookingParams({ world, id: uuid(id), startsAt: at(from), endsAt: at(to) });
+        // The winner takes the lock and writes first, so the loser's role is
+        // known rather than drawn by lot.
+        await winner.client.query(INSERT_BOOKING_LOCKED, row(2115, `${h}:51`, `${h}:52`));
+        const second = loser.client.query(INSERT_BOOKING_LOCKED, row(2116, `${h}:51`, `${h}:52`)).then(
+          () => '',
+          (e: unknown) => (e as Error).message,
+        );
+        // It is waiting inside the CTE, on the lock the winner holds, before
+        // the winner commits — so its INSERT provably runs afterwards.
+        await awaitBlocked(observer, [loser.pid], 1);
+        await winner.client.query('COMMIT');
+        expect(await second).toContain('booking.slot_taken');
+        await loser.client.query('ROLLBACK');
+      } finally {
+        await closeRacers(sameStatement);
+      }
+      expect(await occupying(db, world.resourceAId, at(`${h}:51`), at(`${h}:52`))).toBe(1);
+
+      // (c) Concurrently, with ONE writer that forgot the lock entirely, the
+      //     same trigger commits a double booking. Nothing else changed.
       const careless = await openRacers(db.url('postgres'), 2);
       try {
         const attempts = issue(careless, INSERT_BOOKING, (i) => bookingParams({ world, id: uuid(2120 + i), startsAt: at(`${h}:52`), endsAt: at(`${h}:57`) }));

@@ -25,7 +25,10 @@
 --   booking_resource_exceptions  dated availability overrides (open/closed)
 --   bookings                     appointments AND resource blocks, one table
 --   booking_operations           durable command identity (idempotency)
---   five trigger functions + their triggers
+--   four trigger functions + their triggers
+--   booking_resource_lock_key       one lock per (business, resource)
+--   booking_lock_resources          the whole lock set, in one global order
+--   booking_resolve_local           a local time resolved, or refused
 --   row security on all seven relations, and the grant model
 --   the end-state block (P9-E)
 --
@@ -43,9 +46,11 @@
 --   * It does not enforce schedule CONTAINMENT — does this booking fall
 --     inside the resource's working hours, on that resource's own civil day?
 --     The input exists (`businesses.timezone`, an IANA name validated at the
---     database boundary since 0023), so this is a deferral, not a gap: the
---     rule is stated in §4 and belongs to the command slice, because
---     containment is a VALIDATION, not a concurrency invariant. Two
+--     database boundary since 0023) and §5c now resolves a local time to an
+--     instant or refuses, so this is a deferral, not a gap: the rule is
+--     stated in §4 and belongs to the command slice, because containment is
+--     a VALIDATION, not a concurrency invariant. What §5c settles is the
+--     harder half — that the resolution itself is never a guess (R-P9-13). Two
 --     concurrent bookings both outside working hours are two independently
 --     wrong rows, not a corrupted one; two concurrent bookings on the same
 --     hour are one corrupted resource, and that is what §5 makes
@@ -132,6 +137,32 @@
 --          §7 of the proof suite shows the deadlock happening without the
 --          lock and not happening with it; that negative control is the only
 --          reason to believe the lock is load-bearing rather than decorative.
+--
+-- R-P9-12  A TRANSACTION THAT TOUCHES SEVERAL RESOURCES LOCKS THEM ALL,
+--          IN ONE GLOBAL ORDER, BEFORE IT MUTATES ANYTHING.
+--          R-P9-11 serializes one resource and is not enough for a
+--          reschedule that MOVES a booking: that touches two, and two
+--          transactions crossing — A→B against B→A — each hold what the
+--          other wants next. Per-resource locking deadlocks there for the
+--          same reason the bare index did, one level up.
+--          `booking_lock_resources` (§5b) takes the whole set at once,
+--          sorted ascending by key and deduplicated, so any two
+--          transactions acquire their shared locks in the same relative
+--          order and no cycle can form. §7 of the proof suite races A→B
+--          against B→A both ways, and its negative control shows the same
+--          pair of reschedules deadlocking under per-resource locking.
+--
+-- R-P9-13  A LOCAL TIME IS RESOLVED OR REFUSED, NEVER GUESSED.
+--          Storage is canonical instants. Input is a merchant saying
+--          "Tuesday at 9" in a zone, and twice a year that is either an
+--          hour that never happened or an hour that happened twice.
+--          PostgreSQL's `AT TIME ZONE` answers both silently — measured,
+--          §5c records the two answers it gave. `booking_resolve_local`
+--          counts the instants that map back to the stated wall clock:
+--          none means REFUSE, one resolves, more than one means REFUSE
+--          unless the caller states the offset it means. Never the first
+--          occurrence by default, because "first" is not a thing the
+--          caller said.
 --
 -- R-P9-10  Every refusal is `'<domain>.<snake_case_condition>: sentence'`
 --          with `ERRCODE = 'P0001'`, the convention of every migration from
@@ -571,6 +602,175 @@ COMMENT ON FUNCTION booking_resource_lock_key(UUID, UUID) IS
 REVOKE ALL ON FUNCTION booking_resource_lock_key(UUID, UUID) FROM PUBLIC;
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- 5b. The MULTI-resource lock set, in one global order (R-P9-12).
+--
+-- §5a serializes one resource. A reschedule that MOVES a booking from one
+-- resource to another touches two, and two transactions crossing — one
+-- moving A→B while the other moves B→A — are the textbook deadlock: each
+-- holds what the other wants next.
+--
+-- The answer is a total order. Every transaction that will touch a SET of
+-- resources takes the whole set's locks before mutating anything, sorted
+-- ascending by key and deduplicated. Two transactions over any two sets then
+-- acquire their shared locks in the same relative order, so no cycle can
+-- form — the standard total-order argument, and the reason this is a
+-- function rather than a note telling each caller to remember.
+--
+-- The sort is over the KEYS, not the uuids, because the key is what the lock
+-- manager actually orders on. Where two distinct resources hash to one key
+-- the dedupe collapses them into a single lock: that BROADENS the exclusion
+-- (one of the two waits when it need not have) and can never narrow it, so
+-- a collision costs concurrency and never correctness.
+--
+-- The loop is explicit, over an array sorted once, rather than a SELECT with
+-- an ORDER BY and a volatile function in its target list. Both acquire in
+-- order today; only one of them says so in a way a reader can check and a
+-- planner cannot change.
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION booking_lock_resources(p_business UUID, p_resources UUID[]) RETURNS BIGINT[]
+LANGUAGE plpgsql VOLATILE SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_keys BIGINT[];
+  v_key  BIGINT;
+BEGIN
+  IF p_business IS NULL THEN
+    RAISE EXCEPTION 'booking.lock_set_invalid: a lock set needs a business' USING ERRCODE = 'P0001';
+  END IF;
+  -- An empty or holed set is refused rather than silently locking nothing:
+  -- a caller that computed no resources has a bug, and returning quietly
+  -- would let it mutate unserialized.
+  IF p_resources IS NULL OR cardinality(p_resources) = 0 THEN
+    RAISE EXCEPTION 'booking.lock_set_invalid: a lock set names at least one resource' USING ERRCODE = 'P0001';
+  END IF;
+  IF array_position(p_resources, NULL) IS NOT NULL THEN
+    RAISE EXCEPTION 'booking.lock_set_invalid: a lock set contains a NULL resource' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT array_agg(k ORDER BY k) INTO v_keys
+    FROM (SELECT DISTINCT booking_resource_lock_key(p_business, r) AS k FROM unnest(p_resources) AS r) AS d;
+
+  FOREACH v_key IN ARRAY v_keys LOOP
+    PERFORM pg_advisory_xact_lock(v_key);
+  END LOOP;
+
+  -- Returned so a proof can assert the ORDER the locks were taken in, not
+  -- merely that the call happened.
+  RETURN v_keys;
+END $fn$;
+COMMENT ON FUNCTION booking_lock_resources(UUID, UUID[]) IS
+  'P9-S1, R-P9-12. Takes every advisory lock a transaction will need, over the whole resource set at once, sorted ascending by key and deduplicated, BEFORE anything is mutated. A reschedule across two resources must call this and not two separate booking_resource_lock_key locks: two transactions crossing (A→B against B→A) deadlock with 40P01 under per-resource locking and queue under this one. Returns the keys in acquisition order so a proof can assert the order itself. VOLATILE: it takes locks.';
+REVOKE ALL ON FUNCTION booking_lock_resources(UUID, UUID[]) FROM PUBLIC;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 5c. Resolving a LOCAL time to an instant, or refusing (R-P9-13).
+--
+-- Storage is canonical instants — `starts_at` and `ends_at` are TIMESTAMPTZ
+-- and the invariant compares instants, which is why PROOF 11 holds across
+-- five zones. But a merchant does not think in instants. They say "Tuesday
+-- at 9" in the resource's own timezone, and twice a year that sentence is
+-- either MEANINGLESS or AMBIGUOUS:
+--
+--   * the hour a spring-forward skipped never happened;
+--   * the hour an autumn fall-back repeated happened twice.
+--
+-- PostgreSQL's `AT TIME ZONE` answers both silently. MEASURED on
+-- PostgreSQL 18.4: America/New_York 2026-03-08 02:30, which does not exist,
+-- comes back as 07:30Z — which is 03:30 local, an hour the caller did not
+-- ask for; and 2026-11-01 01:30, which happens twice, comes back as 06:30Z,
+-- one of the two with nothing to say it chose. A booking system that accepts
+-- either answer has silently moved or double-sold an appointment.
+--
+-- So the resolver COUNTS. For a candidate instant to be the answer, mapping
+-- it back into the zone must give exactly the local time asked for; the
+-- number of instants that do is the whole decision:
+--
+--   0  → the local time does not exist      → REFUSE
+--   1  → unambiguous                        → resolve
+--   >1 → the local time repeats             → REFUSE unless the caller
+--                                             states which offset it means
+--
+-- MEASURED for all three branches, on a one-hour zone and on
+-- Australia/Lord_Howe's thirty-minute shift, which is why the scan steps by
+-- one minute and not by thirty.
+--
+-- STABLE, not IMMUTABLE: the answer depends on the tz database, which is
+-- data and gets updated. That is also why no generated column and no index
+-- may ever be built on this — see R-P9-03 for the same lesson learned the
+-- expensive way.
+--
+-- LIMITATION, stated rather than discovered: the scan is bounded to ±180
+-- minutes around PostgreSQL's own answer. Every DST transition in the IANA
+-- database is far inside that, but a zone whose offset moved by more than
+-- three hours at once would resolve as "does not exist" rather than being
+-- found. Refusing is the safe side of that bound, and it is the side this
+-- lands on.
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION booking_resolve_local(
+  p_zone TEXT,
+  p_local TIMESTAMP,
+  p_offset INTERVAL DEFAULT NULL
+) RETURNS TIMESTAMPTZ
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_naive  TIMESTAMPTZ;
+  v_cands  TIMESTAMPTZ[];
+  v_n      INTEGER;
+  v_pick   TIMESTAMPTZ;
+  v_offs   TEXT;
+BEGIN
+  IF p_zone IS NULL OR p_local IS NULL THEN
+    RAISE EXCEPTION 'booking.local_time_unresolvable: a local time needs both a zone and a wall-clock time' USING ERRCODE = 'P0001';
+  END IF;
+
+  -- An unknown zone is refused by name, not by whatever 22023 happens to
+  -- say. businesses.timezone has been a validated IANA name since 0023, so
+  -- this fires for a caller that passed something else.
+  BEGIN
+    v_naive := p_local AT TIME ZONE p_zone;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION 'booking.timezone_unknown: % is not a timezone this server knows', p_zone USING ERRCODE = 'P0001';
+  END;
+
+  SELECT array_agg(c ORDER BY c) INTO v_cands
+    FROM (SELECT (v_naive + make_interval(mins => k)) AS c
+            FROM generate_series(-180, 180, 1) AS k
+           WHERE ((v_naive + make_interval(mins => k)) AT TIME ZONE p_zone) = p_local) AS s;
+  v_n := coalesce(cardinality(v_cands), 0);
+
+  IF v_n = 0 THEN
+    RAISE EXCEPTION 'booking.local_time_nonexistent: % does not exist in % — the clock skipped it', p_local, p_zone USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_n = 1 THEN
+    -- A stated offset is still CHECKED when there is nothing to disambiguate:
+    -- a caller that believes the wrong offset has a different booking in mind.
+    IF p_offset IS NOT NULL AND (p_local - (v_cands[1] AT TIME ZONE 'UTC')) <> p_offset THEN
+      RAISE EXCEPTION 'booking.local_time_offset_mismatch: % in % is at offset %, not %',
+        p_local, p_zone, (p_local - (v_cands[1] AT TIME ZONE 'UTC')), p_offset USING ERRCODE = 'P0001';
+    END IF;
+    RETURN v_cands[1];
+  END IF;
+
+  IF p_offset IS NULL THEN
+    SELECT string_agg((p_local - (c AT TIME ZONE 'UTC'))::text, ', ' ORDER BY c) INTO v_offs FROM unnest(v_cands) AS c;
+    RAISE EXCEPTION 'booking.local_time_ambiguous: % occurs % times in % (offsets %) — state which offset is meant',
+      p_local, v_n, p_zone, v_offs USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT c INTO v_pick FROM unnest(v_cands) AS c
+   WHERE (p_local - (c AT TIME ZONE 'UTC')) = p_offset;
+  IF v_pick IS NULL THEN
+    SELECT string_agg((p_local - (c AT TIME ZONE 'UTC'))::text, ', ' ORDER BY c) INTO v_offs FROM unnest(v_cands) AS c;
+    RAISE EXCEPTION 'booking.local_time_offset_mismatch: % in % occurs at offsets %, not %',
+      p_local, p_zone, v_offs, p_offset USING ERRCODE = 'P0001';
+  END IF;
+  RETURN v_pick;
+END $fn$;
+COMMENT ON FUNCTION booking_resolve_local(TEXT, TIMESTAMP, INTERVAL) IS
+  'P9-S1, R-P9-13. Resolves a wall-clock time in an IANA zone to the instant the booking is stored at, and REFUSES rather than guessing where the clock makes the question unanswerable: booking.local_time_nonexistent for an hour a spring-forward skipped, booking.local_time_ambiguous for one an autumn fall-back repeated unless the caller states the offset it means. PostgreSQL''s own AT TIME ZONE answers both silently, which is the defect this exists to prevent. STABLE, because the tz database is data: never put this in a generated column or an index.';
+REVOKE ALL ON FUNCTION booking_resolve_local(TEXT, TIMESTAMP, INTERVAL) FROM PUBLIC;
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- 6. Append-only, and the state machine.
 --
 -- The exclusion constraint makes double booking impossible. These triggers
@@ -895,6 +1095,8 @@ ALTER FUNCTION bookings_buffers_match_service() OWNER TO daftar_booking_internal
 -- grant would be an ACL entry on an internal routine, and the rule is stated
 -- as an empty ACL.
 ALTER FUNCTION booking_resource_lock_key(UUID, UUID) OWNER TO daftar_booking_internal;
+ALTER FUNCTION booking_lock_resources(UUID, UUID[]) OWNER TO daftar_booking_internal;
+ALTER FUNCTION booking_resolve_local(TEXT, TIMESTAMP, INTERVAL) OWNER TO daftar_booking_internal;
 
 REVOKE CREATE ON SCHEMA public FROM daftar_booking_internal;
 
@@ -1043,6 +1245,39 @@ BEGIN
   LOOP
     IF has_function_privilege(v_role, 'booking_resource_lock_key(uuid,uuid)', 'EXECUTE') THEN
       RAISE EXCEPTION 'booking.registry_exposed: % may compute booking advisory-lock keys', v_role USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+
+  -- (g3) The multi-resource lock set and the local-time resolver exist, are
+  --      owned by the internal principal, have their paths pinned, carry the
+  --      volatility each one's correctness depends on, and are callable by no
+  --      runtime role. VOLATILE for the lock set because it takes locks;
+  --      STABLE for the resolver because the tz database is data — an
+  --      IMMUTABLE resolver could be folded into an index and then outlive
+  --      the next tz update (R-P9-13).
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+     WHERE p.proname = 'booking_lock_resources'
+       AND p.provolatile = 'v'
+       AND r.rolname = 'daftar_booking_internal'
+       AND p.proconfig = ARRAY['search_path=pg_catalog, public, pg_temp']) THEN
+    RAISE EXCEPTION 'booking.migration_end_state_invalid: booking_lock_resources is not a VOLATILE routine owned by daftar_booking_internal with a pinned search_path (R-P9-12)' USING ERRCODE = 'P0001';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+     WHERE p.proname = 'booking_resolve_local'
+       AND p.provolatile = 's'
+       AND r.rolname = 'daftar_booking_internal'
+       AND p.proconfig = ARRAY['search_path=pg_catalog, public, pg_temp']) THEN
+    RAISE EXCEPTION 'booking.migration_end_state_invalid: booking_resolve_local is not a STABLE routine owned by daftar_booking_internal with a pinned search_path (R-P9-13)' USING ERRCODE = 'P0001';
+  END IF;
+  FOR v_role IN SELECT unnest(ARRAY['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_identity', 'daftar_resolver', 'daftar_provisioner', 'daftar_reconciler', 'public'])
+  LOOP
+    IF has_function_privilege(v_role, 'booking_lock_resources(uuid,uuid[])', 'EXECUTE') THEN
+      RAISE EXCEPTION 'booking.registry_exposed: % may take booking resource locks', v_role USING ERRCODE = 'P0001';
+    END IF;
+    IF has_function_privilege(v_role, 'booking_resolve_local(text,timestamp,interval)', 'EXECUTE') THEN
+      RAISE EXCEPTION 'booking.registry_exposed: % may resolve booking local times', v_role USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
 

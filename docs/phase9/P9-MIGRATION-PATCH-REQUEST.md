@@ -229,6 +229,8 @@ read it (end-state check (f)).
 | routine | kind | trigger | refusal |
 |---|---|---|---|
 | `booking_resource_lock_key(UUID, UUID)` | `sql IMMUTABLE STRICT`, owned by `daftar_booking_internal`, pinned path | — | — |
+| `booking_lock_resources(UUID, UUID[])` | `plpgsql VOLATILE`, owned, pinned path | — | `booking.lock_set_invalid` |
+| `booking_resolve_local(TEXT, TIMESTAMP, INTERVAL)` | `plpgsql STABLE`, owned, pinned path | — | `booking.local_time_nonexistent`, `booking.local_time_ambiguous`, `booking.local_time_offset_mismatch`, `booking.timezone_unknown`, `booking.local_time_unresolvable` |
 | `bookings_no_delete()` | raise-only, not a definer | `bookings_no_deletion` BEFORE DELETE | `booking.not_deletable` |
 | `bookings_transition()` | raise-only, not a definer | `bookings_transition_only` BEFORE UPDATE | `booking.immutable`, `booking.state_terminal`, `booking.state_not_reopenable` |
 | `bookings_buffers_match_service()` | `SECURITY DEFINER`, owned by `daftar_booking_internal`, pinned path | `bookings_buffers_are_the_service_s` — CONSTRAINT trigger, `DEFERRABLE INITIALLY DEFERRED`, `WHEN (kind = 'appointment')` | `booking.service_unreadable`, `booking.buffers_not_the_service_s` |
@@ -266,6 +268,89 @@ booking in one business never waits on another business at all.
 CONTROL 6 constructs the mutual wait deterministically (each transaction plants a row the
 other will conflict with, then crosses), measures `40P01`, and then shows the locked form
 giving one commit, one `23P01`, and one observed wait.
+
+### 4.2 R-P9-12 — the multi-resource lock set, in one global order
+
+`booking_lock_resources(business, resources[])` takes every advisory lock a
+transaction will need, over the whole set at once, **sorted ascending by key and
+deduplicated**, before anything is mutated. It returns the keys in acquisition
+order so a proof can assert the order itself rather than trust a comment.
+
+R-P9-11 serializes one resource and is not enough for a reschedule that *moves* a
+booking: that touches two, and two transactions crossing — A→B against B→A — each
+hold what the other wants next. Per-resource locking deadlocks there for the same
+reason the bare index did, one level up. A total order over the whole set means
+any two transactions acquire their shared locks in the same relative order, so no
+cycle can form.
+
+The sort is over the **keys**, not the uuids, because the key is what the lock
+manager orders on. Where two distinct resources hash to one key, the dedupe
+collapses them into a single lock: that broadens the exclusion and can never
+narrow it, so a collision costs concurrency and never correctness.
+
+An empty set, a set containing NULL, or a missing business is refused with
+`booking.lock_set_invalid` rather than silently locking nothing — a caller that
+computed no resources has a bug, and returning quietly would let it mutate
+unserialized.
+
+Three things were measured here and are worth the Migration Owner's attention:
+
+1. **A true swap of two occupied slots cannot be expressed as two independent
+   reschedules at all.** Both sides are refused with `23P01`, because each wants
+   an hour the other has not released and neither can see the other's uncommitted
+   release. That is a correct refusal and the final state is the one that was
+   already true. A swap must be **one transaction** that performs both transitions
+   before either insert; that shape is proven to commit.
+2. **Under per-resource locking the same crossing deadlocks with `40P01`** — the
+   negative control, with the cycle constructed rather than hoped for.
+3. **Two cross-resource reschedules that do not contend both commit** under the
+   same single lock set, which is what shows it serializes without refusing work
+   that was always legal.
+
+### 4.3 R-P9-13 — a local time is resolved or refused, never guessed
+
+`booking_resolve_local(zone, local, offset DEFAULT NULL)` resolves a wall-clock
+time in an IANA zone to the instant a booking is stored at. Storage stays
+canonical instants; this is the step before storage.
+
+It counts. For a candidate instant to be the answer, mapping it back into the zone
+must give exactly the wall clock asked for, and the number of instants that do is
+the whole decision:
+
+| occurrences | meaning | behaviour |
+|---|---|---|
+| 0 | a spring-forward skipped this hour | **REFUSE** `booking.local_time_nonexistent` |
+| 1 | unambiguous | resolve (a stated offset is still checked) |
+| >1 | a fall-back repeated this hour | **REFUSE** `booking.local_time_ambiguous` unless the caller states which offset it means |
+
+**This exists because PostgreSQL's own `AT TIME ZONE` answers both broken cases
+silently, and that is measured, not assumed.** On PostgreSQL 18.4,
+`America/New_York 2026-03-08 02:30` — an hour that does not exist — comes back as
+an instant whose local time is `03:30`, an hour the caller never asked for; and
+`2026-11-01 01:30`, which happens twice, comes back as one of the two with nothing
+to say that it chose. A booking accepted from either answer has silently been
+moved or double-sold. Both are negative controls in the time suite.
+
+The scan steps by **one minute** over ±180 minutes, not by thirty, because
+`Australia/Lord_Howe` shifts by thirty and a law proven only on hour-shifting
+zones would have a hole in it. All three branches are proven on both shift sizes.
+
+`STABLE`, not `IMMUTABLE`: the answer depends on the tz database, which is data and
+gets updated. The suite asserts the volatility *and* that PostgreSQL itself refuses
+to build an index over the routine — so it can never be folded into an index or a
+generated column that would outlive the next tz update. This is R-P9-03's lesson in
+a second place.
+
+**LIMITATION, stated rather than discovered:** the ±180-minute bound means a zone
+whose offset moved by more than three hours in one transition would resolve as
+"does not exist" rather than being found. Every transition in the IANA database is
+far inside that bound, and refusing is the safe side of it.
+
+**Still owed to the command slice, not to this request:** containment — is this
+booking inside the resource's working hours, on that resource's own civil day? The
+resolver settles the harder half, that the resolution is never a guess; the
+comparison against `booking_resource_schedules` is a validation and belongs with
+the commands.
 
 ---
 
@@ -308,6 +393,29 @@ the functions exist and after their own `REVOKE`/`COMMENT` have been issued, the
 CREATE ON SCHEMA public FROM daftar_booking_internal`. The end-state block fails the
 deployment if that authority survives (check (i), `booking.authority_leak`).
 
+### 4.4 PART 53 — audit and idempotency
+
+The identity of a booking command is the caller's `operation_id`, the primary key
+of `booking_operations` together with `business_id`. It is **supplied by the
+caller and derived from no clock and no sequence**, because a clock-derived
+identity would make a retry a different operation.
+
+Measured: two concurrent transactions carrying the **same** `operation_id`, each
+inserting a booking and its registry row in one transaction, produce exactly one
+booking and one registry row. The loser is refused by the registry's own primary
+key (`23505`) or by the invariant (`23P01`); neither is a second booking. The
+registry is append-only in the trigger as well as the grant, and an attempt to
+rewrite or remove a recorded operation is refused with
+`booking.operation_registry_immutable`.
+
+Cancellation and reschedule do not delete history: a cancelled booking is a state
+transition on a retained row, and a reschedule retains its predecessor pointing at
+its successor. The reschedule proofs assert that no predecessor is ever left
+released with no successor.
+
+The command layer's own obligation, not this request's: answering a replay **from
+the recorded row** rather than returning the duplicate-key error to the caller.
+
 ---
 
 ## 7. END-STATE BLOCK
@@ -321,7 +429,9 @@ holds write privilege and PUBLIC holds nothing; (e) the internal principal holds
 runtime role can read anything, and nobody reads the registry; (g) the one definer is a
 definer with the pinned path, owned by the internal principal, callable by nobody, and the
 three raise-only guards are not definers; (g2) the lock-key routine is `IMMUTABLE STRICT`,
-owned, pinned and callable by no runtime role; (h) the buffer guard is genuinely
+owned, pinned and callable by no runtime role; (g3) the multi-resource lock set is
+`VOLATILE` and the local-time resolver is `STABLE`, both owned, pinned and callable
+by no runtime role; (h) the buffer guard is genuinely
 `tgdeferrable AND tginitdeferred`; (i) the ownership authority did not survive; (j) no
 money-shaped column reached the schema.
 
@@ -355,30 +465,57 @@ money-shaped column reached the schema.
 
 ## 9. EVIDENCE
 
-33 cases over three suites, all green, on a live PostgreSQL cluster, applied as
-`daftar_migrator`:
+**54 cases over five suites, all green, on a live PostgreSQL 18.4 cluster**, with the
+spec applied in one transaction as the non-superuser deployment principal
+`daftar_migrator` on top of the sealed Phase 3 head.
 
-* `tests/phase9-prep/p9-booking-schema.test.ts` — 15 cases: the seven relations, the
-  frozen history untouched, exactly two exclusion constraints cluster-wide, re-application
-  refused atomically, the invariant's shape from `pg_constraint`, row security enabled and
-  forced, the whole grant model, the definer's ownership and pinned path, the deferred
-  constraint trigger's flags, and no money-shaped column.
-* `tests/phase9-prep/p9-booking-concurrency.test.ts` — 11 proofs with **real concurrent
-  transactions** (Part 39): overlap refused `23P01`, eight racers giving one commit and
-  seven refusals, a rolled-back winner freeing the slot, adjacency committing
-  concurrently, buffers inside the invariant under race, per-resource independence, a
-  resource block against an appointment, cancellation releasing, reschedule in one
-  transaction, two businesses of one tenant on the same clock hour, and timezone
-  independence across five zones including a 30- and a 45-minute offset.
-* `tests/phase9-prep/p9-booking-negative-controls.test.ts` — 7 cases (Part 40): six
-  controls that each remove exactly one invariant, record
-  `pg_get_constraintdef` first, show the attack committing, restore, assert the restored
-  definition is **character-identical**, and re-run the attack expecting the refusal — plus
-  a closing case that the invariant survived every control character for character.
+Classified in the only evidence classes the directive allows (PART 15). Nothing below
+is mixed, and nothing is claimed in a stronger class than it was measured in.
 
-Waits are observed through `pg_blocking_pids`, never slept for. No timing or performance
+| suite | cases | class |
+|---|---|---|
+| `p9-booking-schema.test.ts` | 15 | PROVEN BY DATABASE CATALOGUE |
+| `p9-booking-concurrency.test.ts` | 11 | PROVEN BY TEST (real concurrency) |
+| `p9-booking-negative-controls.test.ts` | 7 | PROVEN BY TEST (red proofs) |
+| `p9-booking-multi-resource.test.ts` | 8 | PROVEN BY TEST (real concurrency) |
+| `p9-booking-time.test.ts` | 13 | PROVEN BY TEST |
+| the command layer | — | **SPEC ONLY** — not written |
+| schedule containment | — | **SPEC ONLY** — deferred to the command slice |
+| required CI for these suites | — | **UNMEASURED** — owner-only (TD-08) |
+| browser, UX, localization | — | **UNMEASURED** — no surface exists |
+
+* **Schema** — the seven relations; the frozen history with no object dropped or
+  replaced; exactly two exclusion constraints in the whole cluster; re-application
+  refused atomically; the invariant's shape read from `pg_constraint`; row security
+  enabled **and** forced; the whole grant model; the definer's ownership and pinned
+  path; the deferred constraint trigger's flags; no money-shaped column.
+* **Concurrency** — overlap refused `23P01`; eight racers giving one commit and seven
+  refusals; a rolled-back winner freeing the slot; adjacency committing concurrently;
+  buffers inside the invariant under race; per-resource independence; a resource block
+  against an appointment; cancellation releasing; reschedule in one transaction; two
+  businesses of one tenant on the same clock hour; timezone independence across five
+  zones including a 30- and a 45-minute offset.
+* **Negative controls** — six controls that each remove exactly one invariant, record
+  `pg_get_constraintdef` first, show the attack committing, restore, assert the
+  restored definition is **character-identical**, and re-run the attack expecting the
+  refusal; plus a closing case that the invariant survived every control character for
+  character.
+* **Multi-resource (PART 50) and idempotency (PART 53)** — the lock set's order asserted
+  from the routine's own return value; its three refusals asserted by name; the A→B
+  against B→A crossing both ways; the single-transaction swap that commits; the
+  per-resource deadlock control; two concurrent retries of one operation id; the
+  registry's append-only refusals.
+* **Time (PART 51)** — the two negative controls measuring that `AT TIME ZONE` answers
+  silently; nonexistent and ambiguous refused on both shift sizes; either occurrence
+  reachable by stated offset; a wrong offset refused rather than rounded; an offset
+  checked even when unambiguous; cross-midnight explicit; an unknown zone refused by
+  name; the resolver's `STABLE` volatility asserted and PostgreSQL's own refusal to
+  index it.
+
+Waits are observed through `pg_blocking_pids` against a separate observer connection,
+never slept for, and every barrier is explicit (PART 18). No timing or performance
 number from the preparation container appears anywhere in this request.
 
-These suites are **not in required CI**: adding a workflow step is owner-only (TD-08), and
-the work is `PREPARED / NOT PROMOTED`. They are run with
+These suites are **not in required CI**: adding a workflow step is owner-only (TD-08),
+and the work is `PREPARED / NOT PROMOTED`. They are run with
 `npx vitest run tests/phase9-prep`.
