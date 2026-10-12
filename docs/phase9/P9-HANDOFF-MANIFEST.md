@@ -27,7 +27,7 @@ first (PART 4), a migration number must be allocated by the one Migration Owner
 ## Exact prep SHA
 
 ```
-0f4f0e48820b303ec6fd69c44806dc7b03773f7b
+01f7c2ddfe308ca7597be64998b36d477db1c050
 ```
 
 Branch: `claude/project-thread-4i752q`
@@ -38,14 +38,14 @@ after it and names the SHA it describes rather than being backfilled into it.
 
 **Evidence subject vs head, reconciled (Mission V2).** The evidence in this handoff was
 produced against the subject SHA above; the branch head is later because the head IS this
-manifest naming that subject. The challenger signed `9a64289`, REJECTED `6e339bf`, and the coordinator reviewed
-`51626e1..9a64289`; the subject above is later than all three, because it carries R-P9-17
-and the two P3 cases that answer the round-5 REJECT. No signature has seen it, and the
-Challenger and Coordinator states below say so. The two can never be the same string, and the
+manifest naming that subject. The challenger's signature now reaches `0f4f0e4` (round 6, PASS-WITH-SCOPE) and the
+coordinator reviewed `51626e1..9a64289`; the subject above is later, because it carries
+R-P9-18, which answers that round's own P2. No signature has seen it, and the Challenger
+and Coordinator states below say so. The two can never be the same string, and the
 whole difference between them is one file:
 
 ```
-git diff --stat 0f4f0e4 <head>
+git diff --stat 01f7c2d <head>
  docs/phase9/P9-HANDOFF-MANIFEST.md | (this manifest only)
  1 file changed
 ```
@@ -65,12 +65,13 @@ not live in Git.
 
 | artifact | location | committed | SHA256 |
 |---|---|---|---|
-| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `7adb08fcbec7e84ca11e4be89a5b20702a6e7392b70de4c18019bd88a656154f` |
-| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `8e68bbe5743b57d3f6344f6ba46e200ce5e3b9955e839bff59221027494ae7ca` |
+| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `85ad43470c0b6583da5c12f0b9a2b47f942edd3667b8a5001412257e6f328ca7` |
+| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `6f4a6cfb935836abf8ed8c201e51ff3808c2da1dd2c5f479803d7bbf350b0e47` |
 | Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
-| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `232e44d8fa00ea68f992683ccdcd240f1074e924d9c46527e19c0b763a03f506` |
+| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `294ef55cb78ba9b33869b5b50fe26dfc17028f801b1ea274c35890a1cd7c764e` |
 | Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
-| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `d5212b1db4095fdfab92bce86072649d7d7423ffbbdfd7a330f10b65c20d9a27` |
+| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `92dea85ad38b47ae3be0eff1c2fd26409c3289e9a4c47d3a8f069d6079642147` |
+| Independent challenger's PASS-WITH-SCOPE at `0f4f0e4` | `/mnt/project-files/phase9/P9-CHALLENGE-0f4f0e4.md` | **no — off-Git** | `44aad5193b4c22b3cb8ff24f8f25b5d1196de496ab6d7ffe930d4abc0ca66371` |
 | Independent challenger's REJECT at `6e339bf` | `/mnt/project-files/phase9/P9-CHALLENGE-6e339bf.md` | **no — off-Git** | `142f861726e3456d198433ab57d8aac4785802862645dac962bdae426fe9ced4` |
 | Independent challenger's PASS-WITH-SCOPE at `903e1f4` | `/mnt/project-files/phase9/P9-CHALLENGE-903e1f4.md` | **no — off-Git** | `54b8f4d24cc087f6b3757b789c6eed4012265e792f0cefd79ae72e38fb06dbb3` |
 | Coordinator actual-diff review at `9a64289` | `/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-9a64289.md` | **no — off-Git** | `bc8fcfa4f13545c92036dc864e2bacb9175fe8e4783aaa6a21afe66c6286443c` |
@@ -91,24 +92,24 @@ byte-identical duplicates to canonicalize (PART 14).
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 7 | each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 10 | the global lock order (PART 50), idempotent retries and the replay (PART 53) |
 | `tests/phase9-prep/p9-booking-time.test.ts` | 21 | the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan at one-day granularity, and the two defects V3 named |
-| `tests/phase9-prep/p9-booking-integrity.test.ts` | 16 | the closure record is write-once (R-P9-15), a booking is born standing (R-P9-16) and the reschedule chain agrees with itself (R-P9-17) — the defects four independent rounds found, and the non-vacuity that keeps each guard honest |
+| `tests/phase9-prep/p9-booking-integrity.test.ts` | 20 | the closure record is write-once (R-P9-15), a booking is born standing (R-P9-16) and the reschedule chain agrees with itself (R-P9-17) and ends in a booking that is kept (R-P9-18) — the defects five independent rounds found, and the non-vacuity that keeps each guard honest |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 11 | the schema attacked as the six real runtime roles, no superuser, and the deferred chain check proved to fail CLOSED when row security blinds it |
 | `tests/phase9-prep/p9-booking-spec.ts` | — | the spec loader and its non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | — | the race harness: `pg_blocking_pids`, never a sleep |
 
-**93 of 93 green, EXIT CODE 0**, on the APPROVED TARGET — a live PostgreSQL **16.15**
+**97 of 97 green, EXIT CODE 0**, on the APPROVED TARGET — a live PostgreSQL **16.15**
 cluster whose `datcollate` and `datctype` are both **`en_US.utf8`** (HIGH-VELOCITY V1 PART
 1.3; PART 19 requires the version and the collation) — with the spec applied in one
 transaction as the non-superuser deployment principal `daftar_migrator` on top of the sealed
 Phase 3 head. Run with `node ./node_modules/vitest/vitest.mjs run tests/phase9-prep --reporter=verbose`,
-`PG_DIR=/tmp/daftar-pg16 PG_PORT=55433`, started 2026-10-12T17:19:52Z, finished 17:22:48Z,
+`PG_DIR=/tmp/daftar-pg16 PG_PORT=55433`, started 2026-10-12T17:52:57Z, finished 17:55:54Z,
 under **Node v24.21.0** — this phase's own Node 24 run, which PART 7.6 asked for. The tree
 was clean at the subject SHA when the run started and still clean when the third run
 finished, both measured.
 
-The same set was then run under Node v22.22.0 on PostgreSQL 16.15 (17:22:48Z to 17:25:46Z)
-and on PostgreSQL 18.4 at collation `C` (17:25:46Z to 17:29:40Z) — **93 of 93, EXIT CODE 0**
+The same set was then run under Node v22.22.0 on PostgreSQL 16.15 (17:55:54Z to 17:58:53Z)
+and on PostgreSQL 18.4 at collation `C` (17:58:53Z to 18:02:50Z) — **97 of 97, EXIT CODE 0**
 on both. The 18.4 run is a comparison — and that run is a COMPARISON and nothing more, which is all PART
 1.3 permits it to be. No schema, invariant, routine or policy behaved differently between
 the two; the one case that ever did was a harness defect in the suite's own text ordering,
@@ -196,7 +197,39 @@ open design items and not fixed under a review's scope.
 
 ## Challenger state
 
-**RUN FIVE TIMES. Round 5 at `6e339bf`: REJECT. No signature names this subject.**
+**RUN SIX TIMES. Round 6 at `0f4f0e4`: PASS-WITH-SCOPE, and the signature extends there.
+No signature names THIS subject, which answers round 6's own P2.**
+
+Round 6 reviewed `0f4f0e4` and re-ran the suite on its own fresh PG 16.15 at `en_US.utf8`
+under Node v24.12.0: **93 of 93, exit code 0**, 12 of 12 digests, normalised spec delta
+`135 → 140` statements and all of it R-P9-17. Run id
+`P9-CHALLENGE-R6-20261012T173352Z`. Report:
+`/mnt/project-files/phase9/P9-CHALLENGE-0f4f0e4.md`, hashed below.
+
+**C5-P9-01 is closed.** Both of R-P9-17's clauses load-bearing and orthogonal, six pair-drop
+combinations against the born guard and immutability with no masking in any direction, the
+`chain_unreadable` refusal reproduced under the challenger's own restrictive policy, and the
+**deferral measured as load-bearing**: set the constraint `IMMEDIATE` and the LAWFUL
+reschedule is refused at the successor's INSERT. It also planted the `IS NULL` idiom this
+author had rejected and measured that it commits the defect, because in the asymmetric case
+the counterpart's link is itself NULL.
+
+**Concurrency is now MEASURED, and limitation 20 is rewritten against the author.** Both
+races with `pg_blocking_pids`: the conclusion held, and the mechanism this author predicted
+was wrong for race A, which is refused by `booking.immutable_settlement` because the
+row-level re-evaluation reaches R-P9-15 first. Recorded as conclusion measured, mechanism
+revised.
+
+**Its one P2 is C6-P9-01: a pairwise check cannot see a ring.** A 2-ring and a 3-ring
+committed in one transaction, five rows whose every pairwise check holds and whose chains
+reach no booking anybody keeps. Closed at the subject SHA above as **R-P9-18**
+(`booking.chain_is_a_ring`, with `chain_unterminated` and `chain_too_long` as defence in
+depth), with four cases including a red proof that cuts the block out of the live function
+body and restores it byte-identical, §3c.18 of the prep report. The challenger had also
+measured which fix NOT to take, and that measurement is why the law is about termination
+rather than about the next row's state.
+
+**Round 5 at `6e339bf`: REJECT.**
 
 Round 5 re-measured the whole of R-P9-16 and passed it — eight births each refused by name,
 seven of the eight accepted once the guard is removed, no masking against the shape CHECKs
@@ -335,10 +368,10 @@ carries no code.
 
 ## Unresolved blockers
 
-**One internal, in the only sense that matters: the round-5 REJECT is answered but not
-signed.** Ten findings across five rounds, all discharged in code — the three of round 5 at
-the subject SHA above — and the author does not sign their own fix (PART 15). Until a round
-reports on this subject, the standing verdict on this line is round 5's REJECT.
+**One internal, in the only sense that matters: round 6's P2 is answered but not signed.**
+Eleven findings across six rounds, all discharged in code — C6-P9-01 at the subject SHA
+above — and the author does not sign their own fix (PART 15). The last signed commit on this
+line is `0f4f0e4`; this subject is one schema change beyond it.
 
 Every other remaining item is external and named above: the predecessor seal, the migration
 number, the `bootstrap.sql` patch, the `customers` foreign key, the CI step, the Coordinator
@@ -352,18 +385,17 @@ closed and was redone at this subject.
 * No timing or performance number from this container, anywhere (PART 20, PART 123).
 * No evidence class mixed: see §3b of the prep report.
 * No progress percentage, and no progress claim derived from the case count, the line
-  counts or the number of agents (Mission, cross-phase). 93 green cases say what was
+  counts or the number of agents (Mission, cross-phase). 97 green cases say what was
   measured, not how much of Phase 9 exists.
 * **CLOSED: Node 24 from this container.** It ships v22.22.0 against an `engines` of
   `>=24 <25`, so **Node v24.21.0 was fetched from nodejs.org into the session scratch
-  directory** and the suite was run under it on the approved target — 93 of 93, exit code 0.
+  directory** and the suite was run under it on the approved target — 97 of 97, exit code 0.
   PART 7.6's rerun is no longer owed. What this does NOT establish: the container's own
   toolchain still resolves `node` to v22.22.0, so a CI or deployment runner that honours
   `engines` is a different environment from either run here.
-* **Not one review of THIS SHA, and the latest verdict on this line is a REJECT.** The
-  challenger's signature reaches `903e1f4`, its round 5 REJECTED `6e339bf` on C5-P9-01, and
-  the coordinator's review names `9a64289`. This subject carries R-P9-17, which closes that
-  P1, plus the two P3s — an executable schema change that no round has seen. A fix is not a
+* **Not one review of THIS SHA.** The challenger's signature reaches `0f4f0e4` (round 6)
+  and the coordinator's review names `9a64289`. This subject carries R-P9-18, which closes
+  round 6's own P2 — an executable schema change that no round has seen. A fix is not a
   signature.
 * **Not a promotion.** A challenger PASS moves the rung to `CHALLENGED` and nothing further;
   every `READY_TO_PROMOTE` gate below is external and open.
