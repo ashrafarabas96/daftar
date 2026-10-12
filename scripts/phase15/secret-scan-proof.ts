@@ -9,6 +9,13 @@
  * for a path with no OID was unreachable. A law with no reachable failure is
  * not a law, and the only way to know is to plant the condition.
  *
+ * Round 7 (F-01) then asked the same question of the third law and found the
+ * same answer in a different place: INDEPENDENT NON-VACUITY, which the scan's
+ * own header calls "the only defence" against a run that read nothing and
+ * printed "0 findings", had a live guard and no case protecting it. S5 and S6
+ * are that case. The harness's printed list of cases is what made the gap
+ * visible — which is an argument for printing the list.
+ *
  * DISCIPLINE
  *   · Every case runs in a CLONE made with `--no-hardlinks`, so nothing here
  *     can write through to this repository's objects, index or working tree.
@@ -34,6 +41,13 @@ interface Case {
   readonly what: string;
   readonly plant: (clone: string) => void;
   readonly expect: RegExp;
+  /**
+   * Text that must NOT appear. A plant for one law that also trips another
+   * produces a red nobody can attribute: the challenger's own first attempt at
+   * the non-vacuity case dirtied the tree and fired the binding arm instead,
+   * and it reported the run as confounded rather than as evidence.
+   */
+  readonly refuse?: RegExp;
 }
 
 function sh(cwd: string, cmd: string, args: readonly string[]): { status: number | null; out: string } {
@@ -93,6 +107,58 @@ const CASES: readonly Case[] = [
     },
     expect: /is a \.gitleaksignore below the root/,
   },
+  {
+    id: 'S5',
+    what:
+      'challenge round 7, F-01: the scan reads NOTHING and reports no findings. The scan\u2019s own header calls ' +
+      'independent non-vacuity "the only defence" against exactly that, and it was the one law of the three with ' +
+      'no red proof behind it. Every tracked file is removed AND COMMITTED inside the clone, so the inventory is ' +
+      'empty while the tree stays clean',
+    plant: (clone) => {
+      // COMMITTED, and that is the whole design of this case. The challenger's
+      // first attempt mutated the scan's SOURCE to disable the guard, which
+      // dirties the tree and trips the law-2 dirty-tree finding — so the red it
+      // produced was not attributable to the vacuity arm, and it said so. A
+      // plant for one law must not trip another, or the exit code stops being
+      // evidence about either. Committing the removal leaves `git status`
+      // clean, so nothing but non-vacuity can speak.
+      const rm = sh(clone, 'git', ['rm', '-r', '-q', '--ignore-unmatch', '.']);
+      if (rm.status !== 0) throw new Error(`could not empty the clone's tree: ${rm.out.slice(0, 200)}`);
+      sh(clone, 'git', ['config', 'user.email', 'proof@localhost']);
+      sh(clone, 'git', ['config', 'user.name', 'p15 proof']);
+      const ci = sh(clone, 'git', ['commit', '-q', '-m', 'empty the tree, so the inventory is empty and the tree is clean']);
+      if (ci.status !== 0) throw new Error(`could not commit the emptied tree: ${ci.out.slice(0, 200)}`);
+      const left = sh(clone, 'git', ['ls-files']).out.trim();
+      if (left.length !== 0) throw new Error(`the clone still tracks ${left.split('\n').length} file(s), so this plant is not the empty-inventory case`);
+    },
+    expect: /lists 0 files/,
+    refuse: /\[source-binding\]/,
+  },
+  {
+    id: 'S6',
+    what:
+      'the other half of the same law: a tree far too small to be a release. The inventory is non-empty, so the ' +
+      '0-file arm cannot be what speaks, and the floor must',
+    plant: (clone) => {
+      const keep = new Set(['package.json', 'tsconfig.json', 'README.md']);
+      const all = sh(clone, 'git', ['ls-files']).out.trim().split('\n').filter((f) => f.length > 0);
+      const drop = all.filter((f) => !keep.has(f));
+      if (all.length - drop.length === 0) throw new Error('nothing would be left, so this would be the S5 case rather than the floor case');
+      // argv has a length limit, so the removal goes in through stdin.
+      const r = spawnSync('git', ['rm', '-r', '-q', '--pathspec-from-file=-', '--pathspec-file-nul'], {
+        cwd: clone,
+        input: `${drop.join('\0')}\0`,
+        encoding: 'utf8',
+      });
+      if (r.status !== 0) throw new Error(`could not shrink the clone's tree: ${(r.stderr ?? '').slice(0, 200)}`);
+      sh(clone, 'git', ['config', 'user.email', 'proof@localhost']);
+      sh(clone, 'git', ['config', 'user.name', 'p15 proof']);
+      const ci = sh(clone, 'git', ['commit', '-q', '-m', 'shrink the tree below any plausible release size']);
+      if (ci.status !== 0) throw new Error(`could not commit the shrunken tree: ${ci.out.slice(0, 200)}`);
+    },
+    expect: /below the MIN_RELEASE_FILES floor/,
+    refuse: /\[source-binding\]/,
+  },
 ];
 
 function freshClone(): string {
@@ -150,15 +216,19 @@ function main(): number {
     const got = runScan(clone);
     const red = got.status !== 0;
     const named = c.expect.test(got.out);
-    console.log(`${c.id} ${red && named ? 'RED AS REQUIRED' : 'DID NOT PROVE ITS LAW'}  exit ${String(got.status)}`);
+    const unconfounded = c.refuse === undefined ? true : !c.refuse.test(got.out);
+    console.log(`${c.id} ${red && named && unconfounded ? 'RED AS REQUIRED' : 'DID NOT PROVE ITS LAW'}  exit ${String(got.status)}`);
     console.log(`   planted : ${c.what}`);
     console.log(`   expected: the scan names it — /${c.expect.source}/`);
-    if (red && named) {
+    if (c.refuse !== undefined) console.log(`   and NOT : /${c.refuse.source}/ — another law speaking here would make this red unattributable`);
+    if (red && named && unconfounded) {
       const line = got.out.split('\n').find((l) => c.expect.test(l));
       console.log(`   said    : ${(line ?? '').trim().slice(0, 160)}`);
     } else {
       failures += 1;
-      console.log(`   PROBLEM : ${red ? 'red, but it never named the defect, so the red is unattributed' : 'it stayed GREEN with the defect planted'}`);
+      console.log(
+        `   PROBLEM : ${!red ? 'it stayed GREEN with the defect planted' : !named ? 'red, but it never named the defect, so the red is unattributed' : 'red and named, but ANOTHER law also fired, so this run is confounded and proves neither'}`,
+      );
       for (const l of got.out.trim().split('\n').slice(-14)) console.log(`     ${l}`);
     }
     rmSync(join(clone, '..'), { recursive: true, force: true });
@@ -172,7 +242,13 @@ function main(): number {
     return 1;
   }
   console.log(`ALL ${CASES.length} RED PROOFS TURNED THE SCAN RED, EACH NAMING ITS OWN DEFECT.`);
-  console.log('  So the source-binding count is a comparison that can fail, not an N-of-N.');
+  console.log('  All THREE of the laws the scan declares now have one: binding (S1, S2), rule integrity');
+  console.log('  (S3, S4) and independent non-vacuity (S5, S6). The last of those is the one the scan\u2019s own');
+  console.log('  header calls its only defence against reading nothing and printing a clean nothing, and it');
+  console.log('  was the one with no proof behind it until round 7 asked — a guard nobody can delete by');
+  console.log('  accident is a guard with a case protecting it, not a guard with a comment.');
+  console.log('  So the source-binding count is a comparison that can fail, not an N-of-N, AND a scan');
+  console.log('  pointed at an empty or implausibly small tree is a failure rather than a clean result.');
   return 0;
 }
 
