@@ -328,6 +328,22 @@ Every surface the packs add — the apparel matrix builder, the variant grid, lo
 
 ---
 
+### P11-AL-28 — "no locks, therefore no concurrency" is not a proof
+*New, on V2 of the Master Continuous Mission, which refused this preparation's own sentence. It is the only decision in this document that exists because execution contradicted it.*
+
+This preparation wrote, of apparel: *"it has no concurrency case to prove; it adds no deferred conservation trigger and no lock order."* The reasoning was that concurrency risk comes from locks and deferred triggers, and apparel has neither. **V2 refused the inference.** Running the three races it required found two real defects that every single-transaction test passed over (`P11-LIVE-DDL-PROOF.md`, defects 7 and 8).
+
+The law, stated so it binds the overlay packs too:
+
+- **Every invariant that spans two rows or two tables owes a race**, whether or not the design takes a lock. The absence of a lock is what makes a race possible, not what makes it impossible.
+- **A row that is read but not locked is not protected.** A closure check implemented as a bare `SELECT` is a race; the registry read takes `FOR KEY SHARE` so the two transactions serialize.
+- **A guard whose condition is the absence of a row cannot be fixed by locking.** There is nothing to lock, and only `SERIALIZABLE` gives a predicate lock. The fix is to remove the class of failure — unconditional immutability, owned entirely by the phase's own table — rather than to borrow a lock from another authority. **The cheaper fix was a lock on a row that does not exist; the correct fix was to make the question unaskable.**
+- **A race is interleaved by sentinel, never by `sleep()`**: a sleep proves that one ordering happened once. And **a race harness whose setup can fail quietly produces green that means nothing** — two of these three races were silently invalidated once, by a setup helper that ignored return codes while `inventory.stock_level_not_deletable` refused its cleanup. It exits non-zero on any failed setup statement now.
+
+Two gate arms carry it: `race-estate` and `unlocked-closure-read`.
+
+---
+
 ## 3. The laws this phase lives or dies by
 
 Stated here, specified with their red proofs in `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md`.
@@ -455,12 +471,12 @@ Asked before promotion, not after. Ten questions, each answered with the structu
 | **silently drop rows?** | The aging-bucket off-by-one in Phase 4's `aging()` is the house precedent: a silent `continue` on an impossible value. Every Phase 11 fold and chain **fails loudly** — gap-free `event_seq` checked rather than assumed, an unknown transition refused rather than ignored, and no `continue` on an unexpected row anywhere. |
 | **create cross-container false evidence?** | This container is not the authoritative box. No timing or performance number appears in any Phase 11 document, and none was measured; the budget *lane* is owed from the Performance Owner on the exclusive box. A finding from here about another thread's tree is a **lead**, never a verdict (`TL-P4-COORD-R39`), and every claim in these six documents is labelled with one evidence class and never two. |
 
-Promotion waits for closure of these, not for their enumeration.
+Promotion waits for closure of these, not for their enumeration. **Eight of them were closed by running the thing rather than by writing about it, and two of those eight — the races — only because V2 refused the sentence that said they did not exist.**
 
 ---
 
 ## 8. Honest limits of this document
 
-- It is written from a **read** of the tree at `93084f8`. No DDL here has been applied to a cluster, no suite has been run, no gate exists yet. Every verdict in this phase is therefore `SPEC ONLY` or `UNMEASURED`, never combined with another class (§82 classes: `PROVEN IN LIVE CODE` / `PROVEN BY TEST` / `PROVEN BY DATABASE CATALOGUE` / `DESIGN ONLY` / `SPEC ONLY` / `UNMEASURED` / `BLOCKED` / `WAITING_FOR_INTEGRATED_SURFACE`), and this document says so rather than implying design equals proof. The S7 lesson is the standing one: **a spec is design until a parser has had an opinion, and still design until the principal that will apply it has had one.**
+- It was written from a **read** of the tree at `93084f8`, and that is no longer the whole story: **Pack A (apparel) has since been applied, unnumbered, to a scratch cluster at `d813de2`**, with 21 serial cases and 3 real-concurrency races green over the frozen prefix applied **as `daftar_migrator`** (`P11-LIVE-DDL-PROOF.md`, raw log `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-d813de2.txt`). So `C-APP-01` and `C-APP-02` are `PROVEN BY TEST` and the live RLS shape on `stock_levels` is `PROVEN BY DATABASE CATALOGUE`. **That is not CI**, no npm suite ran (this container is Node 22.22.0 against `engines.node >=24 <25`), no gate exists yet, and lot, serial and repair remain untouched by any run. Every verdict outside those is therefore still `SPEC ONLY` or `UNMEASURED`, never combined with another class (§82 classes: `PROVEN IN LIVE CODE` / `PROVEN BY TEST` / `PROVEN BY DATABASE CATALOGUE` / `DESIGN ONLY` / `SPEC ONLY` / `UNMEASURED` / `BLOCKED` / `WAITING_FOR_INTEGRATED_SURFACE`), and this document says so rather than implying design equals proof. The S7 lesson is the standing one: **a spec is design until a parser has had an opinion, and still design until the principal that will apply it has had one.**
 - `0080`–`0086` are unfrozen. Any citation into them describes a candidate, not frozen law, and the patch request re-reads the live effective definition at allocation time instead of pinning a number.
 - `PROJECT_STATUS.md` at this head still describes the S4 candidates as `0080`–`0082`, while the tree carries `0080`–`0086`. That is documentation drift, recorded here and not silently corrected: the live code is the fact (Master Part 1), and the canonical status page belongs to the coordinator, not to this preparation.

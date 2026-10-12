@@ -9,12 +9,13 @@
 | field | value |
 |---|---|
 | **phase** | 11 — Apparel · Electronics · Repair · Lot/Expiry vertical packs (Master Part 31) |
-| **status** | **`PREPARED / NOT PROMOTED`**, and on the Master Continuous Mission's ladder (`PREPARED → CHALLENGED → READY_TO_PROMOTE → PROMOTION_IN_PROGRESS → ACCEPTED / SEALED`) at **`PREPARED`** — no independent challenger has read it. **Pack A (apparel) now has an executed scratch proof** (see §3) — `DESIGN / SPEC ONLY`. One subfeature is separately `BLOCKED` (repair-part accounting, PART 68) and two are `WAITING_FOR_INTEGRATED_SURFACE` (the preconsumed billing binding and the repair deposit, both on unsealed Phase 4 surfaces). PART 117 states the law this obeys: never call `PREPARED` complete, never call a local test CI, never call a spec a DB proof. |
+| **status** | **`PREPARED / NOT PROMOTED`**, and on the Master Continuous Mission's ladder (`PREPARED → CHALLENGED → READY_TO_PROMOTE → PROMOTION_IN_PROGRESS → ACCEPTED / SEALED`) at **`PREPARED`** — no independent challenger has read it. **Pack A (apparel) now has an executed scratch proof, serial and concurrent** (see §3); everything else in the phase is `DESIGN / SPEC ONLY`. One subfeature is separately `BLOCKED` (repair-part accounting, PART 68) and two are `WAITING_FOR_INTEGRATED_SURFACE` (the preconsumed billing binding and the repair deposit, both on unsealed Phase 4 surfaces). PART 117 states the law this obeys: never call `PREPARED` complete, never call a local test CI, never call a spec a DB proof. |
 | **base read** | `93084f8` on `phase/4-sales-pos-customers-receivables` (`fix(p4s1-gate): a delegator may not also compute`) |
 | **own branch** | `claude/phase11-prep-re0epv`, cut from that head. Nothing has been pushed to `phase/4-sales-pos-customers-receivables` or to `main`, and no pull request exists. |
 | **worktree** | the session's primary checkout at `/home/user/daftar`; no separate git worktree was created |
 | **preparation SHA — the six documents of 2026-10-08** | `6958b886aba8fb918bf18e6e0eac451438910ec1` (parent `188dcb076c16035ab2db9a138b2b2c4dc84bcc2b`) |
 | **preparation SHA — this revision (2026-10-12, the per-phase directive applied)** | the commit that adds this manifest and the seven revised documents under `prep/phase11/`. It is **`d45019fa231e8170dff9d5c17160ed752655ea34`**, the child of `6958b88` on this branch, recorded here by the commit that follows it — because a file cannot contain the hash of the commit that creates it, and inventing one would be exactly the kind of unverifiable number this project refuses. The push was a fast-forward `6958b88..d45019f`, **verified by `git ls-remote origin claude/phase11-prep-re0epv`**, not by the push log. |
+| **preparation SHA — the concurrency revision (2026-10-12, V2 applied)** | the DDL and harness fixes for defects 7 and 8 are **`d813de2b76b8fdf4667686dd1f0de1a48436b222`**, and that is the SHA the authoritative evidence run names as its own input (`SOURCE_TREE_DIRTY : no`). The documentation of that round is the commit that follows it on this branch; as above, a file cannot contain the hash of the commit that creates it. |
 | **push authority** | `TL-MASS-PRESERVE-01` (§9 of the 2026-10-08 directive): a PREPARED / NOT PROMOTED prep thread may fast-forward push **its own isolated prep branch** for preservation — non-canonical, not `main`, not the Phase 4 branch, no PR, no force, no rewrite, not integration, exact SHA recorded. **Preservation, not promotion.** This branch never merges itself. |
 | **migration numbers** | **none allocated, none reserved, none examined, none exampled, none in a filename and none in a comment.** Every number appearing in any Phase 11 document is a citation to a file already on disk. One Migration Owner, at promotion (PART 6). |
 | **frozen prefix** | `0000`–`0079` are byte-immutable and **were not modified, not even temporarily, and not by any test** — no Phase 11 proof targets them (see `P11-AL-25` and §0a of the laws document). `0080`–`0086` are Phase 4's unfrozen S4 candidates and were likewise not touched. |
@@ -24,17 +25,17 @@
 
 ## 2. Artifacts
 
-Each document exists in **two places**: the shared project-files location (the canonical working copy) and `prep/phase11/` in Git on the prep branch. The SHA256 is of the shared copy as of this revision (2026-10-12, after the Pack A proof run); the Git copies are byte-identical, which is what the commit proves.
+Each document exists in **two places**: the shared project-files location (the canonical working copy) and `prep/phase11/` in Git on the prep branch. The SHA256 is of the shared copy as of this revision (2026-10-12, after the Pack A proof run **and** after V2 of the Master Continuous Mission was applied — the concurrency round); the Git copies are byte-identical, which is what the commit proves.
 
 | artifact | shared location | in Git | SHA256 (shared copy) |
 |---|---|---|---|
-| `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `390ce7f6e6e31a52d08ff7978dbc1d02eeeacba61ca9e661be49386d9e4bfca1` |
-| `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `487811213a39b7ce5c4cf1d604e6089e5a221aab93038bb27cd196e1cc21cefc` |
-| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `9c712442a421bdfc8de32bb9a529cde06f800f31f184d9e305eac9c1a0f9c56b` |
-| `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `13bd80fd3f912271d205b499c075a42f999e8c95fc70543855fb54e179f19994` |
+| `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8c9b7625e789d11c114cc6c28dbed1a74dafa1f3740a257060fa98bce0d0e23b` |
+| `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `cb4260068a136cf6e05129745b053db1dbd975f2187f82f6663d675223a3a9f9` |
+| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8631716c62210d6ee529f49ea1609c0d6ab1ad6c5d746a64725504daf543fef8` |
+| `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `2b732ec1523d07c0b6d5ce9a8b6473f77caf4a67253623e30b63d0f81b5a549b` |
 | `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `4f34ccc48036aee0270beac7545428fce844811c6746f3973d665dc9f795f6bf` |
-| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `5a7f67904df76065249679fbd513f9261eaef6d85486c16e9dd0d63051e3d6ec` |
-| `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `2b9920c78598ea596213b180f9debbcea879d65e31d1aabe37b633887e640df5`|
+| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `33c4bf495a03580970000145cf6bc2d94a858f82845b3dde4e86133dc84e8902` |
+| `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `3ced71c19586f6575c8c5804ec9d562c112ca5f0825b19bcdf56784ddc626311`|
 | `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
 | `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
 
@@ -50,14 +51,30 @@ Each document exists in **two places**: the shared project-files location (the c
 
 | artifact | what it is |
 |---|---|
-| `P11-LIVE-DDL-PROOF.md` | the proof's report, and the **six defects** it found — four of them in this preparation's own specification |
+| `P11-LIVE-DDL-PROOF.md` | the proof's report, its run identity, and the **eight defects** it found — six of them in this preparation's own specification or its own proof, two of those found only after V2 refused the sentence *"apparel has no concurrency to prove"* |
 | `prep/phase11/ddl/p11-pack-a-apparel.sql` | the **unnumbered** Pack A DDL, as applied |
 | `prep/phase11/harness/rebuild_and_prove.sh` | the one script that does every step from zero on every run |
 | `prep/phase11/harness/run_migrations.py` | a faithful reproduction of the house runner's contract (per-file transaction, ownership-handover bracket, checksum history) for a container with no `node_modules` |
-| `prep/phase11/harness/world.sql`, `proofs.py` | the world and the 20 cases |
-| `prep/phase11/harness/RUN-EVIDENCE-2026-10-12.txt` | the captured output of a run |
+| `prep/phase11/harness/world.sql`, `proofs.py` | the world and the **21** serial cases |
+| `prep/phase11/harness/races.py` | **three real-concurrency races** — two live backends, sentinel-awaited interleaving, **no `sleep()`**; exits non-zero on any failed setup statement, because an earlier version failed its setup silently and invalidated two races |
+| `prep/phase11/harness/RUN-EVIDENCE-2026-10-12.txt` | the first green run, **before** the concurrency work |
+| `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-d813de2.txt` | **the authoritative raw log**, run on a clean tree; its first lines are the run identity below |
 
-**Measured, in the form it ran in:** PostgreSQL 16.15 scratch cluster; `bootstrap.sql` as the deployment administrator; **migrations 0000→0086, 87/87, as `daftar_migrator` and not as a superuser**; Pack A applied unnumbered with its end-state assertion passing; **20 proof cases, 0 failed, twice consecutively**; and after the run, **0 tracked changes under `infrastructure/database`, `frozenThrough = 0079`, 80 frozen entries, 0 digest mismatches**.
+**Measured, in the form it ran in:** PostgreSQL 16.15 scratch cluster; `bootstrap.sql` as the deployment administrator; **migrations 0000→0086, 87/87, as `daftar_migrator` and not as a superuser**; Pack A applied unnumbered with its end-state assertion passing; **21 proof cases, 0 failed**; **3 real-concurrency races, 0 findings**; and after the run, **0 tracked changes under `infrastructure/database`, `frozenThrough = 0079`, 80 frozen entries, 0 digest mismatches**.
+
+**Run identity of the authoritative log** — V2 §18 requires the exact source rather than a guess at the remote head:
+
+| field | value |
+|---|---|
+| `RUN_ID` / `RUN_AT_UTC` | `p11-packA-20261012T115215Z-1834` / `2026-10-12T11:52:15Z` |
+| `SOURCE_BRANCH` / `SOURCE_SHA` | `claude/phase11-prep-re0epv` / **`d813de2b76b8fdf4667686dd1f0de1a48436b222`** |
+| `SOURCE_TREE_DIRTY` | **`no`** |
+| `MIGRATIONS_SHA` | `b128c7033a3381bd2237d0a1405f0676ac509960` |
+| `MANIFEST_SHA256` | `4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804` |
+| `PACK_A_DDL_SHA256` | `7561f8f859d2007643c8ec78992d739d1aa137fa6733ba76bc5a8dcf7af1d3a8` |
+| `PG_VERSION` / `NODE_VERSION` | PostgreSQL 16.15 / v22.22.0 against `engines.node >=24 <25`, so **no npm suite ran** |
+
+A trial run that printed `SOURCE_TREE_DIRTY : YES` is deliberately **not** reported as evidence: its input had no name.
 
 **What is NOT evidence, stated so no reader promotes it:** no npm workspace suite ran at all — this container has **Node 22.22.0 while the repository requires `>=24 <25`** and has no `node_modules`, so `format`, `lint`, `typecheck` and every Vitest suite are `UNMEASURED`. There is **no CI run** for any of this and a local green is never reported as CI. There is **no timing or performance number**, measured or claimed. Lot, serial and repair remain `SPEC ONLY`. There is **no challenger signature**.
 
