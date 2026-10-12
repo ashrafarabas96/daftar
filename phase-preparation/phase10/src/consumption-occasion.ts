@@ -108,6 +108,8 @@ export type ConsumptionRefusalCode =
   | 'restaurant.consumption.valuation_present'
   /** The record carried a field this contract does not define at all. */
   | 'restaurant.consumption.record_field_unknown'
+  /** A declared field is there but is not the shape the contract declares. */
+  | 'restaurant.consumption.record_field_not_well_typed'
   /** A refund of a composed line asked to put cooked food back on the shelf. */
   | 'restaurant.consumption.refund_restocks_composed'
   /** A cancellation record did not say what state the line was cancelled in. */
@@ -285,20 +287,52 @@ export class ConsumptionLedger {
  */
 export function assertNoLocalValuation(record: ConsumptionRecord): void {
   const unexpected = Object.keys(record).filter((k) => !CONSUMPTION_RECORD_KEYS.includes(k));
-  if (unexpected.length === 0) return;
-  const valuation = unexpected.filter((k) => VALUATION_SPELLING.test(k));
-  if (valuation.length > 0) {
+  if (unexpected.length > 0) {
+    const valuation = unexpected.filter((k) => VALUATION_SPELLING.test(k));
+    if (valuation.length > 0) {
+      throw new ConsumptionRefusal(
+        'restaurant.consumption.valuation_present',
+        `Line ${record.orderLineId} carried ${valuation.join(', ')}; the restaurant pack states quantities, and the inventory authority states what they are worth`,
+        { orderLineId: record.orderLineId, carriedKeys: valuation },
+      );
+    }
     throw new ConsumptionRefusal(
-      'restaurant.consumption.valuation_present',
-      `Line ${record.orderLineId} carried ${valuation.join(', ')}; the restaurant pack states quantities, and the inventory authority states what they are worth`,
-      { orderLineId: record.orderLineId, carriedKeys: valuation },
+      'restaurant.consumption.record_field_unknown',
+      `Line ${record.orderLineId} carried ${unexpected.join(', ')}, which this contract does not define; an unrecognised field is refused rather than ignored, because what it would have meant is unknown`,
+      { orderLineId: record.orderLineId, carriedKeys: unexpected },
     );
   }
-  throw new ConsumptionRefusal(
-    'restaurant.consumption.record_field_unknown',
-    `Line ${record.orderLineId} carried ${unexpected.join(', ')}, which this contract does not define; an unrecognised field is refused rather than ignored, because what it would have meant is unknown`,
-    { orderLineId: record.orderLineId, carriedKeys: unexpected },
-  );
+
+  // The keys are the five the contract declares. Now their SHAPES, because
+  // `Object.keys` governs names and a valuation hides just as well inside a
+  // value: `movementCount: { value: 3, costMinor: 500n }` has an allowed key
+  // and smuggles the same cost past the allow-list, and so does an
+  // orderLineId of `'o1|costMinor=500'` if anything downstream splits it. The
+  // reason this check exists at runtime at all is that an excess property
+  // survives the crossing from a bridge — and a wrong-SHAPED property survives
+  // it in exactly the same way.
+  //
+  // Only the five declared fields are checked, and only against the contract's
+  // own types. This is not a schema validator and does not try to be one; a
+  // bridge with a real validator makes it redundant, which costs nothing.
+  const badly: string[] = [];
+  const typeOf = (v: unknown): string => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+  if (typeof record.orderLineId !== 'string') badly.push(`orderLineId (${typeOf(record.orderLineId)}, expected string)`);
+  if (typeof record.commandId !== 'string') badly.push(`commandId (${typeOf(record.commandId)}, expected string)`);
+  if (typeof record.authority !== 'string') badly.push(`authority (${typeOf(record.authority)}, expected string)`);
+  if (typeof record.movementCount !== 'number' || !Number.isInteger(record.movementCount) || record.movementCount < 0) {
+    badly.push(`movementCount (${typeOf(record.movementCount)}, expected a non-negative integer)`);
+  }
+  if (typeof record.occasion !== 'string' || !CONSUMPTION_OCCASIONS.includes(record.occasion)) {
+    badly.push(`occasion (${typeOf(record.occasion)}, expected one of ${CONSUMPTION_OCCASIONS.join(', ')})`);
+  }
+  if (badly.length > 0) {
+    throw new ConsumptionRefusal(
+      'restaurant.consumption.record_field_not_well_typed',
+      `Line ${String(record.orderLineId)} carried ${badly.join('; ')}; a field of the wrong shape can hold anything, including the valuation the key check just refused`,
+      { carriedFields: badly },
+    );
+  }
 }
 
 /**

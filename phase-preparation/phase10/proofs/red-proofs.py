@@ -652,6 +652,27 @@ MUTATIONS = [
         "    if (false) {",
         "lets a fractional modifier through aggregation and refuses it at the stock grain, before service",
     ),
+    (
+        "P3-11 — a valuation nested inside an allowed field is refused",
+        "src/consumption-occasion.ts",
+        "  if (typeof record.movementCount !== 'number' || !Number.isInteger(record.movementCount) || record.movementCount < 0) {",
+        "  if (false) {",
+        "refuses a valuation nested inside an allowed field, which the key check cannot see",
+    ),
+    (
+        "P3-11 — the declared fields are checked for shape, not only for presence",
+        "src/consumption-occasion.ts",
+        "  if (badly.length > 0) {",
+        "  if (false) {",
+        "refuses every declared field presented in the wrong shape",
+    ),
+    (
+        "P3-11 — the shape check refuses the wrong shapes and accepts the right ones",
+        "src/consumption-occasion.ts",
+        "  if (typeof record.orderLineId !== 'string') badly.push(`orderLineId (${typeOf(record.orderLineId)}, expected string)`);",
+        "  if (true) badly.push(`orderLineId (${typeOf(record.orderLineId)}, expected string)`);",
+        "accepts the five fields in their declared shapes, so the check is not a blanket refusal",
+    ),
 ]
 
 

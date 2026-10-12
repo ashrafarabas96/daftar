@@ -242,6 +242,42 @@ describe('PART 8 — one writer, and no second valuation', () => {
     }
   });
 
+  it('refuses a valuation nested inside an allowed field, which the key check cannot see', () => {
+    // `Object.keys` governs names; a valuation hides just as well inside a
+    // value. The key is allowed and the cost rides in on its value.
+    const nested = { ...sale('ol-1', 'cmd-a'), movementCount: { value: 3, costMinor: 500n } } as unknown as ConsumptionRecord;
+    expect(codeOf(() => assertNoLocalValuation(nested))).toBe('restaurant.consumption.record_field_not_well_typed');
+    const ledger = new ConsumptionLedger();
+    expect(codeOf(() => ledger.record(COMPOSED_SOLD, nested))).toBe('restaurant.consumption.record_field_not_well_typed');
+    expect(ledger.hasConsumed('ol-1')).toBe(false);
+  });
+
+  it('refuses every declared field presented in the wrong shape', () => {
+    const base = sale('ol-1', 'cmd-a');
+    const wrong: readonly [string, unknown][] = [
+      ['orderLineId', 42],
+      ['orderLineId', { id: 'o1', costMinor: 5n }],
+      ['commandId', null],
+      ['authority', { name: INVENTORY_AUTHORITY }],
+      ['movementCount', '3'],
+      ['movementCount', 1.5],
+      ['movementCount', -1],
+      ['movementCount', [3]],
+      ['occasion', 'sale_commit_but_not_really'],
+      ['occasion', 7],
+    ];
+    for (const [field, value] of wrong) {
+      const record = { ...base, [field]: value } as unknown as ConsumptionRecord;
+      expect(codeOf(() => assertNoLocalValuation(record))).toBe('restaurant.consumption.record_field_not_well_typed');
+    }
+  });
+
+  it('accepts the five fields in their declared shapes, so the check is not a blanket refusal', () => {
+    expect(() => assertNoLocalValuation(sale('ol-1', 'cmd-a'))).not.toThrow();
+    expect(() => assertNoLocalValuation({ ...sale('ol-1', 'cmd-a'), movementCount: 0 })).not.toThrow();
+    expect(() => assertNoLocalValuation(waste('ol-2', 'cmd-b'))).not.toThrow();
+  });
+
   it('refuses a field the contract does not define, even when it is not a valuation', () => {
     // Admission is decided by the allow-list, not by recognising a cost. An
     // unrecognised field is refused rather than ignored, because what it would
