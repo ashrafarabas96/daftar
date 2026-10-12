@@ -25,8 +25,9 @@ data class OfflineLaw(
 /**
  * The absolute law of the Tech Lead's directive — an offline device is never
  * canonical financial authority, and there is no silent conflict resolution
- * for money or stock — together with the nine laws it implies once the LIVE
- * server contract is read rather than assumed.
+ * for money or stock — together with the thirteen laws it implies once the LIVE
+ * server contract is read rather than assumed and the Tech Lead's rulings on
+ * effect classification (§34) and local data security (PART 40) are applied.
  *
  * The live contract that shapes these: the merchant API derives a command's
  * source identity from `(business, Idempotency-Key)`
@@ -104,6 +105,26 @@ object P7Laws {
         "Timestamp ordering, vector clocks, last-write-wins and every other automatic merge are forbidden for financial and inventory state in both directions; an automatic strategy is legitimate only for a read projection, which has no authority to lose.",
     )
 
+    /**
+     * The Tech Lead's directive PART 40 — local data security — which requires,
+     * before promotion, that the queue be scoped by tenant, business and member
+     * and that an account switch cannot replay another account's entries.
+     */
+    val QUEUE_SCOPED_BY_OWNER = OfflineLaw(
+        "P7-L12-QUEUE-ROW-CARRIES-ITS-OWNER",
+        "Every captured operation records the tenant, business and member it was captured under as part of the row itself, never as ambient session state, so the row's owner survives a sign-out, an account switch, a process death and a reinstall-time restore.",
+    )
+
+    val NO_CROSS_ACCOUNT_SEND = OfflineLaw(
+        "P7-L13-NO-SEND-UNDER-A-SCOPE-IT-WAS-NOT-CAPTURED-UNDER",
+        "An attempt is made only under the exact scope the operation was captured under: the sender states the scope it holds, a mismatch is refused rather than adapted, and no signed-in session may send, cancel or resolve another account's captured entries.",
+    )
+
+    val UNKNOWN_QUEUE_SCHEMA_REFUSED = OfflineLaw(
+        "P7-L14-AN-UNREADABLE-QUEUE-ROW-IS-REFUSED",
+        "A persisted queue row carries the schema version it was written under, and a build that does not understand that version refuses the row and leaves it on disk rather than reinterpreting its fields under the current meanings.",
+    )
+
     /** Every stated law, for the completeness proof. */
     val ALL: List<OfflineLaw> = listOf(
         DEVICE_NOT_AUTHORITY,
@@ -117,5 +138,8 @@ object P7Laws {
         READ_CACHE_IS_A_PROJECTION,
         NO_LAST_WRITE_WINS_ON_MATERIAL_STATE,
         NO_DEFAULT_EFFECT_CLASS,
+        QUEUE_SCOPED_BY_OWNER,
+        NO_CROSS_ACCOUNT_SEND,
+        UNKNOWN_QUEUE_SCHEMA_REFUSED,
     )
 }

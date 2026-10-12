@@ -164,6 +164,45 @@ PROOFS: list[Proof] = [
         expect_red="no answer outside 2xx can ever produce Synced",
         why="the sweep is narrowed to the statuses that pass; the counted subject set is what makes an exhaustive claim falsifiable",
     ),
+    Proof(
+        law="P7-L12-QUEUE-ROW-CARRIES-ITS-OWNER",
+        path="src/app/daftar/offline/Scope.kt",
+        find='        require(businessId.isNotBlank()) { "a queue row must record the business it was captured under" }',
+        replace="        // require(businessId.isNotBlank())",
+        expect_red="a scope with a blank tenant, business or member cannot be constructed",
+        why="a row can be captured with no business, so the one field the server derives source identity from is absent and the row's owner is whoever is signed in at send time",
+    ),
+    Proof(
+        law="P7-L13-NO-SEND-UNDER-A-SCOPE-IT-WAS-NOT-CAPTURED-UNDER",
+        path="src/app/daftar/offline/Queue.kt",
+        # NOT `if (false && event is ...)`: putting the constant first kills
+        # Kotlin's smart cast, so `event.actingScope` stops resolving and the
+        # mutation fails to COMPILE. A compile failure reddens the suite while
+        # proving nothing about the law, which is the exact trap this harness
+        # refuses — and it did refuse it, by name, when that was tried. The
+        # mutation below keeps the `is` check, so the smart cast survives, and
+        # neutralises only the comparison.
+        find="        if (event is QueueEvent.ByScope && event.actingScope != scope) {",
+        replace="        if (event is QueueEvent.ByScope && event.actingScope != event.actingScope) {",
+        expect_red="a sale captured in one business is not sent under another",
+        why="the scope gate is disabled, so a sale captured in business A is sent under business B's header with A's key and is committed into B's ledger, which the server cannot detect because both halves of the identity it is handed are consistent",
+    ),
+    Proof(
+        law="P7-L14-AN-UNREADABLE-QUEUE-ROW-IS-REFUSED",
+        path="src/app/daftar/offline/Scope.kt",
+        find="        if (!isReadable(version)) throw UnreadableQueueRow(version, CURRENT)",
+        replace="        if (false) throw UnreadableQueueRow(version, CURRENT)",
+        expect_red="a row from a schema version this build does not know is refused, not reinterpreted",
+        why="a row written by a newer build is read under the current field meanings, so a downgraded app sends bytes that are not the bytes that were frozen, under a key that can never be reused",
+    ),
+    Proof(
+        law="HARNESS-THE-SCOPE-SEARCH-CANNOT-STOP-OFFERING-A-FOREIGN-SESSION",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="        for (acting in listOf(scope, foreignScope)) {",
+        replace="        for (acting in listOf(scope)) {",
+        expect_red="every reachable configuration honours every invariant",
+        why="the model check stops offering the kernel another account's session; every invariant still passes, so only the non-vacuity count distinguishes a search that proved INV-9 from one that never tested it",
+    ),
 ]
 
 FAILURE_LINE = re.compile(r"^\s+JUnit Jupiter:(\S+):(.+)\(\)\s*$")

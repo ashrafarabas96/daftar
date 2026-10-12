@@ -29,6 +29,15 @@ class QueueModelCheckTest {
     private val key = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
     private val digest = "sha256:0d5f1f2b"
     private val wrongDigest = "sha256:deadbeef"
+    private val scope = OwnerScope("tenant-1", "business-1", "member-1")
+
+    /**
+     * The same till after the staff member switched to the other business they
+     * are a member of. Every session-originated event is enumerated under BOTH
+     * scopes, so the search decides whether a foreign scope can move anything
+     * rather than taking L13's word for it.
+     */
+    private val foreignScope = OwnerScope("tenant-1", "business-2", "member-1")
 
     /** One representative answer per branch of the classifier. */
     private val answers: List<AttemptResult> = listOf(
@@ -43,13 +52,15 @@ class QueueModelCheckTest {
     )
 
     private fun events(): List<QueueEvent> = buildList {
-        add(QueueEvent.Release)
-        add(QueueEvent.CancelByMerchant)
-        add(QueueEvent.Send(digest))
-        add(QueueEvent.Send(wrongDigest))
+        for (acting in listOf(scope, foreignScope)) {
+            add(QueueEvent.Release(acting))
+            add(QueueEvent.CancelByMerchant(acting))
+            add(QueueEvent.Send(digest, acting))
+            add(QueueEvent.Send(wrongDigest, acting))
+            add(QueueEvent.ResolveByMerchant(true, acting))
+            add(QueueEvent.ResolveByMerchant(false, acting))
+        }
         add(QueueEvent.ProcessDeath)
-        add(QueueEvent.ResolveByMerchant(true))
-        add(QueueEvent.ResolveByMerchant(false))
         answers.forEach { add(QueueEvent.Observe(it)) }
     }
 
@@ -57,7 +68,7 @@ class QueueModelCheckTest {
     private data class History(val serverCommitted: Boolean, val everSent: Boolean)
 
     private fun fingerprint(op: Operation, h: History): String =
-        "${op.id}|${op.effect}|${op.payloadDigest}|${op.state}|${op.attempts}|${op.lastCode}|" +
+        "${op.id}|${op.scope}|${op.effect}|${op.payloadDigest}|${op.state}|${op.attempts}|${op.lastCode}|" +
             "${op.replayed}|${h.serverCommitted}|${h.everSent}"
 
     @Test
@@ -70,11 +81,12 @@ class QueueModelCheckTest {
         var edges = 0
         var refusals = 0
         val statesSeen = mutableSetOf<OperationState>()
+        var foreignScopeRefusals = 0
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
 
         for (effect in EffectClass.entries) {
-            val start = Operation.capture(key, effect, digest) to History(false, false)
+            val start = Operation.capture(key, scope, effect, digest) to History(false, false)
             val visited = mutableSetOf(fingerprint(start.first, start.second))
             val frontier = ArrayDeque(listOf(start))
 
@@ -86,6 +98,19 @@ class QueueModelCheckTest {
                     when (val step = op.step(event)) {
                         is Step.Refused -> {
                             refusals++
+                            if (event is QueueEvent.ByScope && event.actingScope != op.scope) {
+                                foreignScopeRefusals++
+                                // INV-9a: a foreign scope is refused AS a scope
+                                // problem, never as a payload or a sequencing
+                                // one, so the merchant is not told their sale
+                                // is corrupt when they are simply signed into
+                                // the wrong business.
+                                assertEquals(
+                                    "offline.scope_switched", step.code,
+                                    "a foreign-scope $event was refused as ${step.code}",
+                                )
+                                assertEquals(P7Laws.NO_CROSS_ACCOUNT_SEND.id, step.law)
+                            }
                             // INV-7: a refusal moves nothing and cites a law.
                             assertTrue(
                                 step.law in P7Laws.ALL.map { it.id }.toSet(),
@@ -106,6 +131,28 @@ class QueueModelCheckTest {
                                 "the captured payload digest changed: $op -> $next on $event",
                             )
                             assertEquals(op.effect, next.effect, "the effect class changed: $op -> $next")
+
+                            // INV-9: nothing a foreign session asked for ever
+                            // moved, and the row's owner is as immutable as its
+                            // key. This is the invariant PART 40 item 2 asks
+                            // for, asserted over the whole reachable space
+                            // rather than in one scenario.
+                            assertEquals(
+                                op.scope, next.scope,
+                                "the row's owner changed: $op -> $next on $event " +
+                                    "(${P7Laws.QUEUE_SCOPED_BY_OWNER.id})",
+                            )
+                            if (event is QueueEvent.ByScope) {
+                                assertEquals(
+                                    op.scope, event.actingScope,
+                                    "a foreign session moved this row: $op -> $next on $event " +
+                                        "(${P7Laws.NO_CROSS_ACCOUNT_SEND.id})",
+                                )
+                            }
+                            assertEquals(
+                                QueueSchema.CURRENT, next.schemaVersion,
+                                "the row's schema version drifted: $op -> $next on $event",
+                            )
                             assertTrue(
                                 next.attempts >= op.attempts,
                                 "attempts went backwards: $op -> $next on $event",
@@ -193,6 +240,11 @@ class QueueModelCheckTest {
             "some side effect was never produced, so its invariant was never exercised",
         )
         assertTrue(refusals > 0, "no event was ever refused, so the refusal invariant is vacuous")
+        assertTrue(
+            foreignScopeRefusals > 0,
+            "no foreign-scope event was ever refused, so INV-9 is vacuous: the search never " +
+                "offered the kernel another account's session",
+        )
         assertTrue(edges > 1_000, "only $edges edges were explored")
     }
 

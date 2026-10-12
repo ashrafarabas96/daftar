@@ -49,13 +49,28 @@ sealed interface SideEffect {
     data object ClearLocalRow : SideEffect
 }
 
-/** What may happen to an operation. */
+/**
+ * What may happen to an operation.
+ *
+ * Every event a signed-in human or session originates carries the scope it is
+ * acting under, and `step` refuses any of them whose scope is not the row's
+ * own (L13). `Observe` and `ProcessDeath` do not, because neither originates
+ * with a session: one is the server's answer to an attempt this row already
+ * made, the other is the operating system. Asking the kernel to authorize a
+ * process death would be theatre, and would create a path on which a crash
+ * could be "refused".
+ */
 sealed interface QueueEvent {
+    /** An event a signed-in session originates, and must therefore be entitled to. */
+    sealed interface ByScope : QueueEvent {
+        val actingScope: OwnerScope
+    }
+
     /** The merchant confirmed the capture and released it for sending. */
-    data object Release : QueueEvent
+    data class Release(override val actingScope: OwnerScope) : ByScope
 
     /** The merchant abandoned it. Legal only before anything was sent. */
-    data object CancelByMerchant : QueueEvent
+    data class CancelByMerchant(override val actingScope: OwnerScope) : ByScope
 
     /**
      * The sender is about to transmit.
@@ -66,8 +81,14 @@ sealed interface QueueEvent {
      * locale, a clock-derived date — produces a different digest, and the
      * kernel refuses the send rather than letting the server discover the
      * divergence and refuse the key forever.
+     *
+     * `actingScope` is the scope the signed-in session actually holds, and it
+     * is a required argument for the same reason the digest is: L13 is only
+     * worth stating if something checks it. A sender that has switched account
+     * cannot omit it and inherit the row's own scope, because there is no
+     * overload that lets it.
      */
-    data class Send(val digestNow: String) : QueueEvent
+    data class Send(val digestNow: String, override val actingScope: OwnerScope) : ByScope
 
     /** A result came back (or conclusively did not). */
     data class Observe(val result: AttemptResult) : QueueEvent
@@ -79,7 +100,7 @@ sealed interface QueueEvent {
     data object ProcessDeath : QueueEvent
 
     /** A human looked at a NEEDS_ATTENTION operation and chose. */
-    data class ResolveByMerchant(val keep: Boolean) : QueueEvent
+    data class ResolveByMerchant(val keep: Boolean, override val actingScope: OwnerScope) : ByScope
 }
 
 /** The outcome of applying one event. */
@@ -110,6 +131,8 @@ sealed interface Step {
 class Operation private constructor(
     /** The local operation id, which IS the idempotency key sent to the server. */
     val id: String,
+    /** The tenant, business and member this row was captured under (L12). */
+    val scope: OwnerScope,
     val effect: EffectClass,
     /** The digest of the payload exactly as it was persisted at capture. */
     val payloadDigest: String,
@@ -120,6 +143,8 @@ class Operation private constructor(
     val lastCode: String?,
     /** Whether the server reported the effect as already applied. */
     val replayed: Boolean,
+    /** The row layout this operation was written under (L14). */
+    val schemaVersion: Int = QueueSchema.CURRENT,
 ) {
     companion object {
         /**
@@ -127,12 +152,17 @@ class Operation private constructor(
          * in ONE local transaction with this row; a key that exists before the
          * payload, or after it, is not a key minted at capture.
          */
-        fun capture(key: String, effect: EffectClass, payloadDigest: String): Operation {
+        fun capture(
+            key: String,
+            scope: OwnerScope,
+            effect: EffectClass,
+            payloadDigest: String,
+        ): Operation {
             require(key.length in 8..200 && key.all { it.code in 0x20..0x7e }) {
                 "an idempotency key must be 8 to 200 printable ASCII characters, as the merchant API requires"
             }
             require(payloadDigest.isNotEmpty()) { "a captured payload must have a digest" }
-            return Operation(key, effect, payloadDigest, OperationState.CAPTURED, 0, null, false)
+            return Operation(key, scope, effect, payloadDigest, OperationState.CAPTURED, 0, null, false)
         }
     }
 
@@ -141,7 +171,7 @@ class Operation private constructor(
         attempts: Int = this.attempts,
         lastCode: String? = this.lastCode,
         replayed: Boolean = this.replayed,
-    ): Operation = Operation(id, effect, payloadDigest, state, attempts, lastCode, replayed)
+    ): Operation = Operation(id, scope, effect, payloadDigest, state, attempts, lastCode, replayed, schemaVersion)
 
     val isTerminal: Boolean
         get() = state == OperationState.SYNCED || state == OperationState.DISCARDED
@@ -158,7 +188,18 @@ class Operation private constructor(
      * attempt that never left the device is not an attempt and counting it
      * would advance the backoff schedule for a failure the server never saw.
      */
-    fun step(event: QueueEvent): Step = when (event) {
+    fun step(event: QueueEvent): Step {
+        // ONE gate, ahead of every arm, rather than a check repeated inside
+        // each one. L13 is about every session-originated event, so a
+        // per-arm test would be a law restated four times, and the fifth arm
+        // added later is the one that would omit it.
+        if (event is QueueEvent.ByScope && event.actingScope != scope) {
+            return Step.Refused("offline.scope_switched", P7Laws.NO_CROSS_ACCOUNT_SEND.id)
+        }
+        return stepWithinScope(event)
+    }
+
+    private fun stepWithinScope(event: QueueEvent): Step = when (event) {
         is QueueEvent.Release ->
             if (state == OperationState.CAPTURED) {
                 Step.Moved(moved(OperationState.QUEUED), emptyList())
@@ -260,5 +301,6 @@ class Operation private constructor(
     }
 
     override fun toString(): String =
-        "Operation(id=$id, effect=$effect, state=$state, attempts=$attempts, lastCode=$lastCode, replayed=$replayed)"
+        "Operation(id=$id, scope=$scope, effect=$effect, state=$state, attempts=$attempts, " +
+            "lastCode=$lastCode, replayed=$replayed, schema=$schemaVersion)"
 }

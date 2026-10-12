@@ -13,8 +13,9 @@ import kotlin.test.assertTrue
 class CrashSafetyTest {
     private val key = "9f8e7d6c-5b4a-4938-8271-615243f5e6d7"
     private val digest = "sha256:a1b2c3d4"
+    private val scope = OwnerScope("tenant-1", "business-1", "member-1")
 
-    private fun captureSale() = Operation.capture(key, EffectClass.FINANCIAL, digest)
+    private fun captureSale() = Operation.capture(key, scope, EffectClass.FINANCIAL, digest)
 
     private fun moved(op: Operation, event: QueueEvent): Pair<Operation, List<SideEffect>> {
         val step = op.step(event)
@@ -30,8 +31,8 @@ class CrashSafetyTest {
      */
     @Test
     fun `a sale committed by the server and lost in transit is not sold twice`() {
-        var (op, _) = moved(captureSale(), QueueEvent.Release)
-        val (sent, effects) = moved(op, QueueEvent.Send(digest))
+        var (op, _) = moved(captureSale(), QueueEvent.Release(scope))
+        val (sent, effects) = moved(op, QueueEvent.Send(digest, scope))
         op = sent
         val firstSend = effects.filterIsInstance<SideEffect.SendAttempt>().single()
         assertEquals(key, firstSend.idempotencyKey)
@@ -46,7 +47,7 @@ class CrashSafetyTest {
         // It restarts and sends again. Same key, same payload — which is the
         // entire reason this is safe: the server's source identity is derived
         // from the key, so the second send lands on the row the first created.
-        val (resent, resendEffects) = moved(op, QueueEvent.Send(digest))
+        val (resent, resendEffects) = moved(op, QueueEvent.Send(digest, scope))
         op = resent
         val secondSend = resendEffects.filterIsInstance<SideEffect.SendAttempt>().single()
         assertEquals(firstSend.idempotencyKey, secondSend.idempotencyKey, "the key was re-minted after a crash")
@@ -64,9 +65,9 @@ class CrashSafetyTest {
 
     @Test
     fun `a sale whose answer never comes is never shown as failed and never as done`() {
-        var (op, _) = moved(captureSale(), QueueEvent.Release)
+        var (op, _) = moved(captureSale(), QueueEvent.Release(scope))
         repeat(5) {
-            op = moved(op, QueueEvent.Send(digest)).first
+            op = moved(op, QueueEvent.Send(digest, scope)).first
             op = moved(op, QueueEvent.Observe(AttemptResult.NoAnswer)).first
             assertEquals(OperationState.UNKNOWN_OUTCOME, op.state)
         }
@@ -80,9 +81,9 @@ class CrashSafetyTest {
 
     @Test
     fun `the merchant cannot cancel a sale that may already exist on the server`() {
-        var (op, _) = moved(captureSale(), QueueEvent.Release)
-        op = moved(op, QueueEvent.Send(digest)).first
-        val step = op.step(QueueEvent.CancelByMerchant)
+        var (op, _) = moved(captureSale(), QueueEvent.Release(scope))
+        op = moved(op, QueueEvent.Send(digest, scope)).first
+        val step = op.step(QueueEvent.CancelByMerchant(scope))
         assertIs<Step.Refused>(step)
         assertEquals("offline.cancel_after_send", step.code)
         assertEquals(P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id, step.law)
@@ -99,15 +100,15 @@ class CrashSafetyTest {
      */
     @Test
     fun `a sale told to wait is back in the queue and still cannot be cancelled`() {
-        var (op, _) = moved(captureSale(), QueueEvent.Release)
-        op = moved(op, QueueEvent.Send(digest)).first
+        var (op, _) = moved(captureSale(), QueueEvent.Release(scope))
+        op = moved(op, QueueEvent.Send(digest, scope)).first
         op = moved(op, QueueEvent.Observe(AttemptResult.Answered(429, null, null, 30))).first
         // Back in the queue, indistinguishable by STATE from a sale that was
         // never sent — and entirely different in fact.
         assertEquals(OperationState.QUEUED, op.state)
         assertEquals(1, op.attempts)
 
-        val step = op.step(QueueEvent.CancelByMerchant)
+        val step = op.step(QueueEvent.CancelByMerchant(scope))
         assertIs<Step.Refused>(step, "a sent sale was cancellable because it had returned to QUEUED")
         assertEquals("offline.cancel_after_send", step.code)
         assertEquals(P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id, step.law)
@@ -115,7 +116,7 @@ class CrashSafetyTest {
 
     @Test
     fun `a sale not yet sent can be cancelled, and that is the only window`() {
-        val (discarded, effects) = moved(captureSale(), QueueEvent.CancelByMerchant)
+        val (discarded, effects) = moved(captureSale(), QueueEvent.CancelByMerchant(scope))
         assertEquals(OperationState.DISCARDED, discarded.state)
         assertTrue(effects.any { it is SideEffect.ClearLocalRow })
         assertEquals(0, discarded.attempts, "nothing was ever sent, so nothing can exist on the server")
@@ -123,12 +124,12 @@ class CrashSafetyTest {
 
     @Test
     fun `a payload recomputed at send time is refused here, not by the server`() {
-        val (op, _) = moved(captureSale(), QueueEvent.Release)
+        val (op, _) = moved(captureSale(), QueueEvent.Release(scope))
         // The shape of the real bug: a total re-derived at send time, a locale
         // re-resolved, a date taken from the clock. The bytes differ, so the
         // server would bind this key to a different payload and refuse it
         // permanently — and the sale would be unsendable forever.
-        val step = op.step(QueueEvent.Send("sha256:recomputed"))
+        val step = op.step(QueueEvent.Send("sha256:recomputed", scope))
         assertIs<Step.Refused>(step)
         assertEquals("offline.payload_changed_after_capture", step.code)
         assertEquals(P7Laws.PAYLOAD_FROZEN_AT_CAPTURE.id, step.law)
@@ -137,8 +138,8 @@ class CrashSafetyTest {
 
     @Test
     fun `a stock conflict waits for a person and keeps the server's own words`() {
-        var (op, _) = moved(Operation.capture(key, EffectClass.INVENTORY, digest), QueueEvent.Release)
-        op = moved(op, QueueEvent.Send(digest)).first
+        var (op, _) = moved(Operation.capture(key, scope, EffectClass.INVENTORY, digest), QueueEvent.Release(scope))
+        op = moved(op, QueueEvent.Send(digest, scope)).first
         val (refused, effects) = moved(
             op, QueueEvent.Observe(AttemptResult.Answered(409, "inventory.insufficient_stock", null, null)),
         )
@@ -147,19 +148,19 @@ class CrashSafetyTest {
         assertTrue(effects.isEmpty(), "a business refusal is not an operational alert")
 
         // The merchant may not make it go away.
-        val abandon = refused.step(QueueEvent.ResolveByMerchant(keep = false))
+        val abandon = refused.step(QueueEvent.ResolveByMerchant(keep = false, scope))
         assertIs<Step.Refused>(abandon)
         assertEquals("offline.material_cannot_be_abandoned", abandon.code)
 
         // They may count the stock and try the same operation again.
-        val (requeued, _) = moved(refused, QueueEvent.ResolveByMerchant(keep = true))
+        val (requeued, _) = moved(refused, QueueEvent.ResolveByMerchant(keep = true, scope))
         assertEquals(OperationState.QUEUED, requeued.state, "a stated refusal means nothing was committed")
     }
 
     @Test
     fun `a reused key with a changed payload alerts as a defect and offers no retry`() {
-        var (op, _) = moved(captureSale(), QueueEvent.Release)
-        op = moved(op, QueueEvent.Send(digest)).first
+        var (op, _) = moved(captureSale(), QueueEvent.Release(scope))
+        op = moved(op, QueueEvent.Send(digest, scope)).first
         val (diverged, effects) = moved(
             op, QueueEvent.Observe(AttemptResult.Answered(409, "IDEMPOTENCY_KEY_REUSED", null, null)),
         )
@@ -170,18 +171,18 @@ class CrashSafetyTest {
 
         // Retrying cannot work: the server will refuse the same key the same
         // way forever. Offering the merchant that button would be a lie.
-        val retry = diverged.step(QueueEvent.ResolveByMerchant(keep = true))
+        val retry = diverged.step(QueueEvent.ResolveByMerchant(keep = true, scope))
         assertIs<Step.Refused>(retry)
         assertEquals("offline.divergence_needs_a_fix", retry.code)
     }
 
     @Test
     fun `a benign refusal may be let go, and only a benign one`() {
-        var (op, _) = moved(Operation.capture(key, EffectClass.BENIGN, digest), QueueEvent.Release)
-        op = moved(op, QueueEvent.Send(digest)).first
+        var (op, _) = moved(Operation.capture(key, scope, EffectClass.BENIGN, digest), QueueEvent.Release(scope))
+        op = moved(op, QueueEvent.Send(digest, scope)).first
         op = moved(op, QueueEvent.Observe(AttemptResult.Answered(422, "VALIDATION_FAILED", null, null))).first
         assertEquals(OperationState.NEEDS_ATTENTION, op.state)
-        val (gone, effects) = moved(op, QueueEvent.ResolveByMerchant(keep = false))
+        val (gone, effects) = moved(op, QueueEvent.ResolveByMerchant(keep = false, scope))
         assertEquals(OperationState.DISCARDED, gone.state)
         assertTrue(effects.any { it is SideEffect.ClearLocalRow })
     }
@@ -211,11 +212,11 @@ class CrashSafetyTest {
         // operation can still be re-captured, rather than after an outage when
         // the sale is already made.
         for (bad in listOf("", "short", "a".repeat(201), "has\u0000nul", "عربي")) {
-            val threw = runCatching { Operation.capture(bad, EffectClass.FINANCIAL, digest) }.isFailure
+            val threw = runCatching { Operation.capture(bad, scope, EffectClass.FINANCIAL, digest) }.isFailure
             assertTrue(threw, "capture accepted the key '$bad', which the merchant API would refuse")
         }
         for (good in listOf("12345678", "a".repeat(200), key)) {
-            Operation.capture(good, EffectClass.FINANCIAL, digest)
+            Operation.capture(good, scope, EffectClass.FINANCIAL, digest)
         }
     }
 }
