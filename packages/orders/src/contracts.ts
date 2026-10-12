@@ -272,9 +272,37 @@ export interface OrderQuoteConfirmationDto {
   /** The version agreed to; it must equal the named quote's own version. */
   confirmedVersion: number;
   confirmedAt: string;
+  /**
+   * The digest of the exact snapshot that was agreed to — the Master Continuous Mission V2's
+   * «intent digest». It is NOT a second copy of the quote's own digest: it is the value the
+   * confirming side saw, carried so that a confirmation of a snapshot the server no longer
+   * holds is REFUSED rather than silently accepted against whatever the quote says now.
+   * R6a.7 makes a disagreeing row unrepresentable by putting the digest inside the composite
+   * foreign key, so the stored value cannot drift from its source.
+   */
+  confirmedQuoteDigest: string;
   /** Null when the shopper confirmed on the storefront; a member when they confirmed on their behalf. */
   confirmedByUserId: string | null;
 }
+
+/**
+ * The confirmation fact's field names as a RUNTIME value.
+ *
+ * `OrderQuoteConfirmationDto` is type-only, so dropping a field from it is
+ * caught by `npm run typecheck` and NOT by the test run — measured: the suite
+ * stays green at 296 while tsc reds. A law that only the compiler enforces is
+ * invisible to the evidence class that gets counted, so the field list is also
+ * carried as a value and compared against the interface in the suite.
+ */
+export const ORDER_QUOTE_CONFIRMATION_FIELDS: readonly (keyof OrderQuoteConfirmationDto)[] = Object.freeze([
+  'confirmationId',
+  'quoteId',
+  'orderId',
+  'confirmedVersion',
+  'confirmedAt',
+  'confirmedQuoteDigest',
+  'confirmedByUserId',
+] as const);
 
 export interface OrderQuoteReconfirmationRequiredDto {
   orderId: string;

@@ -18,11 +18,13 @@ import {
   ORDER_CHANNELS,
   ORDER_CLIENT_ERROR_CODES,
   ORDER_EDGES,
+  ORDER_QUOTE_CONFIRMATION_FIELDS,
   ORDER_SETTLEMENT_EVIDENCE_KINDS,
   SETTLEMENT_MODE_BY_EVIDENCE,
   TERMINAL_ORDER_STATES,
   type OrderChannelDto,
   type OrderSettlementEvidenceKindDto,
+  type OrderQuoteConfirmationDto,
   type OrderStateDto,
 } from '../src';
 
@@ -104,5 +106,72 @@ describe('the client error codes', () => {
     for (const code of ['order.quote_expired', 'order.quote_version_stale', 'order.settlement_mode_unsupported', 'order.payment_surface_not_integrated']) {
       expect(ORDER_CLIENT_ERROR_CODES).toContain(code);
     }
+  });
+});
+
+describe('the quote-confirmation fact carries the intent digest (Master Continuous Mission V2, 12 Oct 2026)', () => {
+  // V2 settles R6a and names its parts: «مع نسخة العرض المختارة وبصمة القصد» —
+  // the chosen quote version AND the intent digest. Revision 4 had the version
+  // and not the digest.
+  //
+  // Why the digest is not the duplicate-truth defect revision 4 removed: the
+  // version says WHICH row was agreed to, the digest says WHAT that row held.
+  // Those are different questions, and the second one is the only one that can
+  // still be answered after the row is gone or recomputed. `I6a.7` keeps the
+  // stored digest from ever disagreeing with its source by admitting only the
+  // source's own values — it extends the composite FK rather than copying a
+  // value beside it.
+  //
+  // An interface is type-only, so the subject here is a VALUE typed as the DTO:
+  // a field added to the interface and not to the hand-written list reds the
+  // typecheck, and a field removed from the interface reds this case.
+  const CONFIRMATION: OrderQuoteConfirmationDto = {
+    confirmationId: '6b1f0a2c-0000-4000-8000-000000000001',
+    quoteId: '6b1f0a2c-0000-4000-8000-000000000002',
+    orderId: '6b1f0a2c-0000-4000-8000-000000000003',
+    confirmedVersion: 3,
+    confirmedAt: '2026-10-01T09:30:00.000Z',
+    confirmedQuoteDigest: 'c2a0ffb4e1d9',
+    confirmedByUserId: null,
+  };
+
+  /** Hand-written from `OrderQuoteConfirmationDto`. Edited only when that interface is edited. */
+  const DTO_KEYS: readonly string[] = ['confirmationId', 'quoteId', 'orderId', 'confirmedVersion', 'confirmedAt', 'confirmedQuoteDigest', 'confirmedByUserId'];
+
+  it('names the digest of the snapshot that was agreed to, not only its version', () => {
+    expect(Object.keys(CONFIRMATION).sort()).toEqual([...DTO_KEYS].sort());
+    expect(DTO_KEYS).toContain('confirmedQuoteDigest');
+    expect(DTO_KEYS).toContain('confirmedVersion');
+  });
+
+  it('carries the same field list as a runtime value, so the law is executed and not only compiled', () => {
+    // MEASURED: dropping `confirmedQuoteDigest` from the interface reds
+    // `npm run typecheck` (TS2353) and leaves this suite green at 296, because
+    // vitest transpiles without typechecking. The exported value closes that
+    // gap — dropping the field from it reds HERE.
+    expect([...ORDER_QUOTE_CONFIRMATION_FIELDS].sort()).toEqual([...DTO_KEYS].sort());
+    expect([...ORDER_QUOTE_CONFIRMATION_FIELDS].sort()).toEqual(Object.keys(CONFIRMATION).sort());
+    expect(Object.isFrozen(ORDER_QUOTE_CONFIRMATION_FIELDS)).toBe(true);
+  });
+
+  it('keeps the digest a required field, so a confirmation of an unidentified snapshot is unrepresentable', () => {
+    // `confirmedByUserId` is the one nullable field — a shopper confirming on
+    // the storefront is not a member. The digest is not among the nullable
+    // ones: a confirmation that cannot say what it confirmed is not a
+    // confirmation.
+    const nullable = Object.entries(CONFIRMATION)
+      .filter(([, v]) => v === null)
+      .map(([k]) => k);
+    expect(nullable).toEqual(['confirmedByUserId']);
+  });
+
+  it('is not a settlement and carries no amount (I6a.6)', () => {
+    // The fact that the shopper agreed is not the fact that money moved. A
+    // money-shaped key here would make this relation a second answer to "what
+    // was charged", which R6a exists to avoid.
+    const moneyish = Object.keys(CONFIRMATION).filter((k) => /minor|amount|total|paid|settle|tender/i.test(k));
+    expect(moneyish).toEqual([]);
+    // The planted control, so the empty result above is a measurement.
+    expect(Object.keys({ ...CONFIRMATION, paidTotalMinor: '1' }).filter((k) => /minor|amount|total|paid|settle|tender/i.test(k))).toEqual(['paidTotalMinor']);
   });
 });
