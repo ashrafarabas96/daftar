@@ -25,17 +25,17 @@
 
 ## 2. Artifacts
 
-Each document exists in **two places**: the shared project-files location (the canonical working copy) and `prep/phase11/` in Git on the prep branch. The SHA256 is of the shared copy as of this revision (2026-10-12, after the Pack A proof run **and** after V2 of the Master Continuous Mission was applied — the concurrency round); the Git copies are byte-identical, which is what the commit proves.
+Each document exists in **two places**: the shared project-files location (the canonical working copy) and `prep/phase11/` in Git on the prep branch. The SHA256 is of the shared copy as of this revision (2026-10-12, after the Pack A proof run, after V2's concurrency round, **and after V3 was applied** — exit codes, PG16 settled, and the §7 fact correction); the Git copies are byte-identical, which is what the commit proves.
 
 | artifact | shared location | in Git | SHA256 (shared copy) |
 |---|---|---|---|
-| `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8c9b7625e789d11c114cc6c28dbed1a74dafa1f3740a257060fa98bce0d0e23b` |
+| `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `f3dfa42cb4a8188493fda75d5587a3a99f34bcca4e6c80c4116befc02098cd53` |
 | `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `cb4260068a136cf6e05129745b053db1dbd975f2187f82f6663d675223a3a9f9` |
 | `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8631716c62210d6ee529f49ea1609c0d6ab1ad6c5d746a64725504daf543fef8` |
 | `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `2b732ec1523d07c0b6d5ce9a8b6473f77caf4a67253623e30b63d0f81b5a549b` |
-| `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `4f34ccc48036aee0270beac7545428fce844811c6746f3973d665dc9f795f6bf` |
-| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `33c4bf495a03580970000145cf6bc2d94a858f82845b3dde4e86133dc84e8902` |
-| `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `3ced71c19586f6575c8c5804ec9d562c112ca5f0825b19bcdf56784ddc626311`|
+| `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `95500acbc9d5cfdef133c64179bec89c224ae837752e956beb96a99caec7ed07` |
+| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `3bbb3c05554cd2288452e274eff2f6cccd7c1a0b2879de826ec69d51fb2c6d2b` |
+| `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `5816bb00ae95686ac0545b9755ab314decedb62d36579bc726ca1ce9075b1f30`|
 | `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
 | `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
 
@@ -58,7 +58,8 @@ Each document exists in **two places**: the shared project-files location (the c
 | `prep/phase11/harness/world.sql`, `proofs.py` | the world and the **21** serial cases |
 | `prep/phase11/harness/races.py` | **three real-concurrency races** — two live backends, sentinel-awaited interleaving, **no `sleep()`**; exits non-zero on any failed setup statement, because an earlier version failed its setup silently and invalidated two races |
 | `prep/phase11/harness/RUN-EVIDENCE-2026-10-12.txt` | the first green run, **before** the concurrency work |
-| `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-d813de2.txt` | **the authoritative raw log**, run on a clean tree; its first lines are the run identity below |
+| `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-d813de2.txt` | the first clean-tree raw log, kept rather than replaced |
+| `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-99dbbe7.txt` | **the authoritative raw log** — the same run with **exit codes in the log** (V3 §9): `EXIT_PROOFS 0`, `EXIT_RACES 0`, `EXIT_SCRIPT 0` |
 
 **Measured, in the form it ran in:** PostgreSQL 16.15 scratch cluster; `bootstrap.sql` as the deployment administrator; **migrations 0000→0086, 87/87, as `daftar_migrator` and not as a superuser**; Pack A applied unnumbered with its end-state assertion passing; **21 proof cases, 0 failed**; **3 real-concurrency races, 0 findings**; and after the run, **0 tracked changes under `infrastructure/database`, `frozenThrough = 0079`, 80 frozen entries, 0 digest mismatches**.
 
@@ -67,12 +68,13 @@ Each document exists in **two places**: the shared project-files location (the c
 | field | value |
 |---|---|
 | `RUN_ID` / `RUN_AT_UTC` | `p11-packA-20261012T115215Z-1834` / `2026-10-12T11:52:15Z` |
-| `SOURCE_BRANCH` / `SOURCE_SHA` | `claude/phase11-prep-re0epv` / **`d813de2b76b8fdf4667686dd1f0de1a48436b222`** |
+| `SOURCE_BRANCH` / `SOURCE_SHA` | `claude/phase11-prep-re0epv` / **`99dbbe729d65450d3b70c54dd2b1ad395f58891b`** (earlier log: `d813de2…`; identical DDL and proofs) |
 | `SOURCE_TREE_DIRTY` | **`no`** |
 | `MIGRATIONS_SHA` | `b128c7033a3381bd2237d0a1405f0676ac509960` |
 | `MANIFEST_SHA256` | `4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804` |
 | `PACK_A_DDL_SHA256` | `7561f8f859d2007643c8ec78992d739d1aa137fa6733ba76bc5a8dcf7af1d3a8` |
-| `PG_VERSION` / `NODE_VERSION` | PostgreSQL 16.15 / v22.22.0 against `engines.node >=24 <25`, so **no npm suite ran** |
+| `PG_VERSION` / `NODE_VERSION` | PostgreSQL **16.15**, the PG16 family V3 settles as the deploy target / v22.22.0 against `engines.node >=24 <25`, so **no npm suite ran** |
+| `EXIT_PROOFS` / `EXIT_RACES` / `EXIT_SCRIPT` | **0 / 0 / 0** |
 
 A trial run that printed `SOURCE_TREE_DIRTY : YES` is deliberately **not** reported as evidence: its input had no name.
 
@@ -145,5 +147,6 @@ Phase 11 writes nothing outside its own prefix. Four changes it needs in files o
 | `OD-P11-07` customer-device liability | owner-only | **Tech Lead / legal** | nothing. Recorded so it is not mistaken for an engineering gap |
 | capability↔feature vocabulary unmapped | shared-file patch request | Domain-core owner | every pack screen's gating. Startable now (`P11-CAP-002`) |
 | the Phase 11 gate is not a required CI step | shared-file patch request | CI Owner | the gate's own authority. A gate CI does not run is `UNMEASURED`, never green |
+| **V3 §7's install contract contradicts `check:deployment-authority`** | fact correction / contract question | **Migration Owner** (with Phase 15's deployment line) | nothing in Phase 11 today, and it is raised rather than answered: §7 says `0000–0039` apply as the **administrator** and `0040+` as the migrator, while `DEPLOYER = 'daftar_migrator'`, Case A applies **every** migration as it from an empty database, Case B applies `0000–0039` as it, and `phase2-rollback-rehearsal.ts:462` **withdraws** the contrary reading (RB-P2-01, closed in P2-S9). The administrator appears only on the **restore** path (`--no-owner`). `0039` is the Phase 1 freeze boundary, not a role boundary. Phase 11's proof measured Case A's configuration and claims no admin/migrator rehearsal. Citations: `P11-LIVE-DDL-PROOF.md` §6 |
 
 **Not a blocker, recorded so it is not silently corrected by the wrong hand:** the canonical status page at this head still describes the S4 candidates as three while the tree carries seven. The live code is the fact; that page belongs to the coordinator.

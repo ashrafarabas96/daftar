@@ -1,0 +1,74 @@
+RUN_ID            : p11-packA-20261012T125018Z-397
+RUN_AT_UTC        : 2026-10-12T12:50:18Z
+HOST_KERNEL       : Linux 6.18.44-fc-v114
+SOURCE_REPO       : https://github.com/ashrafarabas96/daftar
+SOURCE_BRANCH     : claude/phase11-prep-re0epv
+SOURCE_SHA        : 99dbbe729d65450d3b70c54dd2b1ad395f58891b
+SOURCE_TREE_DIRTY : no
+MIGRATIONS_SHA    : b128c7033a3381bd2237d0a1405f0676ac509960
+MANIFEST_SHA256   : 4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804
+PACK_A_DDL_SHA256 : 7561f8f859d2007643c8ec78992d739d1aa137fa6733ba76bc5a8dcf7af1d3a8
+PG_VERSION        : postgres (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+NODE_VERSION      : v22.22.0 (repository engines: >=24 <25) -- NO npm suite is run here
+
+=== 1. drop and recreate the database ===
+=== 2. bootstrap.sql (six runtime roles + extensions), as the deployment administrator ===
+psql:/var/tmp/p11s/sql/bootstrap.rendered.sql:297: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_accounting_internal" by role "postgres"
+psql:/var/tmp/p11s/sql/bootstrap.rendered.sql:298: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_platform" by role "postgres"
+psql:/var/tmp/p11s/sql/bootstrap.rendered.sql:304: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_inventory_internal" by role "postgres"
+psql:/var/tmp/p11s/sql/bootstrap.rendered.sql:314: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_catalog_internal" by role "postgres"
+psql:/var/tmp/p11s/sql/bootstrap.rendered.sql:315: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_provisioning_internal" by role "postgres"
+=== 3. migrations 0000..0086 as daftar_migrator (NOT superuser) ===
+APPLIED 87/87 as daftar_migrator
+LAST: 0086_phase4_rls_quals_once_per_query.sql
+=== 4. Pack A, unnumbered, as daftar_migrator ===
+PACK A APPLIED, end-state assertion passed
+=== 5. the world ===
+    step     
+-------------
+ WORLD BUILT
+(1 row)
+
+=== 6. proofs ===
+case                                                                     verdict                      detail
+--------------------------------------------------------------------------------------------------------------------------------------------
+happy path: a registered combination is accepted                         GREEN                        {"size": "s", "color": "red"}
+jsonb itself canonicalizes key order, which is what makes the index work GREEN                        t
+attributes is an array, not an object                                    RED (refused as required)    catalog.variant_attributes_shape_invalid
+attributes has a nested value                                            RED (refused as required)    catalog.variant_attributes_shape_invalid
+attributes has a non-text value                                          RED (refused as required)    catalog.variant_attributes_shape_invalid
+an axis the product's matrix does not register                           RED (refused as required)    catalog.variant_axis_unregistered
+a value that exists but is archived                                      RED (refused as required)    catalog.variant_axis_value_unregistered
+a value that does not exist at all                                       RED (refused as required)    catalog.variant_axis_value_unregistered
+a partial combination (one of two registered axes)                       RED (refused as required)    catalog.variant_axis_set_incomplete
+a product with no registered axes cannot carry attributes                RED (refused as required)    catalog.variant_axis_unregistered
+a base variant write is refused by the pre-existing authority, not by Pack A RED (refused as required)    catalog.base_variant_not_mutable
+the same combination twice                                               RED (refused as required)    product_variants_matrix_uq
+the same combination with the keys written in the other order            RED (refused as required)    product_variants_matrix_uq
+attributes changed at all (the combination is the identity)              RED (refused as required)    catalog.variant_matrix_immutable
+an axis named by existing variants cannot be removed                     RED (refused as required)    catalog.matrix_axis_in_use
+as daftar_app in business B, business A's axes are invisible             GREEN                        0
+as daftar_app in business B, inserting an axis FOR business A is refused RED (refused as required)    row-level security
+as daftar_app in business B, business A's matrix rows are invisible      GREEN                        0
+with business A's own context the same rows ARE visible (the read is not broken, it is scoped) GREEN                        2
+business A's context with the WRONG tenant sees nothing (tenant_membership, not only business_isolation) GREEN                        0
+daftar_app does not bypass RLS                                           GREEN                        f
+
+TOTAL 21 cases, 0 failed
+=== 6b. real concurrency: three races, two live backends, no sleep() ===
+## RESULT MATRIX — three races, real backends, no sleep()
+
+| race                                          | T1 | T2 | observed | verdict |
+|-----------------------------------------------|---|---|---|---|
+| A  duplicate combination                      | INSERT {size:s,color:red}, then COMMIT | INSERT the same combination, concurrently | T2 blocked while T1 held the speculative insert: True. Rows after both: 1. T2: refused on product_variants_matrix_uq | PASS — exactly one commits; the index refuses the other, and it BLOCKS rather than racing |
+| B  axis removed vs variant inserted           | DELETE the 'color' axis of this product, then COMMIT | INSERT a variant naming 'color', concurrently | T2 blocked: True. T2: ERROR:  catalog.variant_axis_unregistered: axis co. Variants naming an unregistered axis after both commit: 0 | PASS — the closure invariant holds after both commit |
+| C  attributes changed vs first stock movement | UPDATE attributes while no stock exists yet, then COMMIT | INSERT the variant's FIRST stock_levels row, concurrently | T1: ERROR:  catalog.variant_matrix_immutable. T2 blocked: False. T2: committed. Final: {"size": "s", "color": "red"} | stock rows: 1 | PASS — the interleaving does not produce a changed-attributes-with-stock row |
+
+3 races run; 0 finding(s).
+=== 7. the frozen tree, after the run ===
+tracked changes under infrastructure/database: 0
+frozenThrough: 0079_phase4_pos_till_sessions_cart.sql | frozen entries: 80 | digest mismatches: []
+
+EXIT_PROOFS       : 0  (prep/phase11/harness/proofs.py)
+EXIT_RACES        : 0  (prep/phase11/harness/races.py)
+EXIT_SCRIPT       : 0  (0 means every step above returned 0)

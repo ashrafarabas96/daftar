@@ -328,6 +328,8 @@ Every surface the packs add — the apparel matrix builder, the variant grid, lo
 
 ---
 
+**V3 of the Master Continuous Mission (2026-10-12) records this phase's races as exercised and rewords the demand as preserve-and-verify.** It changes nothing in the decisions below. Three things in it touch this preparation: PostgreSQL is **settled as the PG16 family with `en_US.utf8`**, which is the family the Pack A proof ran on; **exit codes are required in every handoff**, now printed in the evidence log; and **§7 states an install contract — `0000–0039` as administrator, `0040+` as migrator — that this repository's own `check:deployment-authority` contradicts.** That last one is recorded as a fact correction with citations in `P11-LIVE-DDL-PROOF.md` §6 and raised to the Migration Owner rather than settled here, because a directive disagreeing with the tree is a question, and the house law is that the live code is the fact.
+
 ### P11-AL-28 — "no locks, therefore no concurrency" is not a proof
 *New, on V2 of the Master Continuous Mission, which refused this preparation's own sentence. It is the only decision in this document that exists because execution contradicted it.*
 

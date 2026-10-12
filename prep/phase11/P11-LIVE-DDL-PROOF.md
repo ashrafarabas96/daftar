@@ -26,23 +26,25 @@ One script, `prep/phase11/harness/rebuild_and_prove.sh`, which does every step f
 **Run repeatedly from zero, green each time.** Two raw logs are kept:
 
 - `prep/phase11/harness/RUN-EVIDENCE-2026-10-12.txt` — the first green run, before the concurrency work.
-- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-d813de2.txt` — **the authoritative log**, the one this document reports, run on a clean working tree so the evidence names its own subject.
+- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-d813de2.txt` — the first clean-tree run, kept because evidence is preserved rather than replaced.
+- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-99dbbe7.txt` — **the authoritative log**, the same run with **exit codes printed in the log itself**, which V3 §9 requires of every handoff. Same results, re-run from zero.
 
 **Run identity of the authoritative log**, printed by the script itself as its first lines, because V2 §18 says not to bind the proof to the remote head by guesswork:
 
 | field | value |
 |---|---|
-| `RUN_ID` | `p11-packA-20261012T115215Z-1834` |
-| `RUN_AT_UTC` | `2026-10-12T11:52:15Z` |
+| `RUN_ID` | `p11-packA-20261012T125*Z` (the exit-code run; the earlier log names its own) |
+| `RUN_AT_UTC` | `2026-10-12`, both runs |
 | `SOURCE_REPO` | `https://github.com/ashrafarabas96/daftar` |
 | `SOURCE_BRANCH` | `claude/phase11-prep-re0epv` |
-| `SOURCE_SHA` | **`d813de2b76b8fdf4667686dd1f0de1a48436b222`** |
+| `SOURCE_SHA` | **`99dbbe729d65450d3b70c54dd2b1ad395f58891b`** (the earlier log names `d813de2b76b8fdf4667686dd1f0de1a48436b222`; the DDL and the proofs are identical in both, the difference is the exit-code trailer) |
 | `SOURCE_TREE_DIRTY` | **`no`** — nothing uncommitted; the SHA is the whole input |
 | `MIGRATIONS_SHA` (tree of `infrastructure/database/migrations`) | `b128c7033a3381bd2237d0a1405f0676ac509960` |
 | `MANIFEST_SHA256` | `4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804` |
 | `PACK_A_DDL_SHA256` | `7561f8f859d2007643c8ec78992d739d1aa137fa6733ba76bc5a8dcf7af1d3a8` |
-| `PG_VERSION` | PostgreSQL 16.15 |
+| `PG_VERSION` | PostgreSQL **16.15** — and as of V3 the **PG16 family with `en_US.utf8` is the settled deploy target** (`TL-P4-S3-R4`), so this proof ran on the target family rather than on an arbitrary version. It is still a scratch cluster in this container, not the deployment. |
 | `NODE_VERSION` | v22.22.0, against repository `engines.node >=24 <25` — **no npm suite was run** |
+| `EXIT_PROOFS` / `EXIT_RACES` / `EXIT_SCRIPT` | **`0` / `0` / `0`** — read from the process statuses, not from the prose above them |
 
 A reader can therefore check out that exact SHA, hash those two files, and get the same digests, or know at once that they are reading a different subject. The dirty-tree flag is part of the record on purpose: an earlier trial run printed `SOURCE_TREE_DIRTY : YES`, and that run is not reported here because its input had no name.
 
@@ -171,3 +173,26 @@ The harness itself had to be fixed twice before these results could be believed,
 - `P11-MIGRATION-PATCH-REQUEST.md` §2.4 is superseded again by defects 7 and 8: the variant validator reads its axis row `FOR KEY SHARE`, the stock-conditional lock guard is replaced by **unconditional immutability**, and a new `BEFORE DELETE` guard on the axis table (`catalog.matrix_axis_in_use`) refuses removing an axis that existing variants name.
 - `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md`: **apparel now carries concurrency cases.** `C-APP-01` (matrix closure) gains race B, and `C-APP-02` (one combination per product) gains race A; the immutability law is unconditional and gains race C.
 - The sentence *"apparel has no concurrency to prove"* is **withdrawn** wherever it appears, and is kept here only as the record of a refuted claim.
+
+---
+
+## 6. A conflict with V3 §7, recorded rather than absorbed
+
+V3 adds a rule about how the migration history is applied, and **it contradicts this repository's live code.** It is recorded here, with citations, because the correct response to a directive that disagrees with the tree is a fact correction, not a silent edit to the evidence — and because this is not Phase 11's question to settle: it belongs to the Migration Owner and to Phase 15's deployment line.
+
+**What V3 §7 says** (and repeats in its Phase 11 and Phase 15 sections): *the approved historical install exception is that `0000–0039` are applied under the **administrator** role and `0040+` under the **migrator** role; do not extend the exception to new migrations, and **do not describe running all 87 migrations as the migrator alone as the project's real path.***
+
+**What the live code says.** `scripts/phase2-deployment-authority.ts` is the project's own deployment-authority proof, run by `npm run check:deployment-authority`:
+
+- `const DEPLOYER = 'daftar_migrator';` (`scripts/phase2-deployment-authority.ts:124`)
+- **Case A** — *"empty database → bootstrap → every migration on disk"* — asserts *"the deployment principal applied every migration"*, `applied.length === expected`, reported as *"N of N applied as `daftar_migrator`"* (`:860-865`).
+- **Case B** — a database at the Phase 1 boundary — applies `0000–0039` and asserts **"4.1 Phase 1 applies as the deployment principal"** (`:868-879`).
+- And the earlier contrary reading is explicitly **withdrawn** in the rollback rehearsal: *"The earlier reading recorded here — that the accepted history cannot be applied by `daftar_migrator` — is **WITHDRAWN**: `check:deployment-authority` applies 0000-0052 as `daftar_migrator` from an empty database, and carries 0039 and 0050 forward the same way (RB-P2-01, closed in P2-S9)"* (`scripts/phase2-rollback-rehearsal.ts:462`).
+
+**Where the two can be reconciled, and where they cannot.** `0039` is real, but it is the **Phase 1 freeze boundary and the rollback checkpoint**, not a role boundary. The same rehearsal line names the one case where the administrator does own the objects: **a copy restored by the administrator with `--no-owner`**, where the refusal is that restored ownership and not the migration history. So the administrator appears on the **restore/recovery** path, not on the fresh-install path — and V3's §7 reads like that restore observation generalized into the install contract.
+
+The handover privilege is the mechanism that makes the migrator-only path work, and it is in the runner rather than in the old files: `0032`, `0033` and `0038` do not grant themselves `CREATE ON SCHEMA public`, *"because nothing ever applied them as a non-superuser"*, so `apps/api/src/infra/migrate.ts` issues the grant and the revoke **from outside the file, inside the migration's own transaction** (`apps/api/src/infra/migrate.ts:28-37`). The runner takes **one** connection and applies every file through it; there is no role switch at `0040` anywhere in it.
+
+**What this means for this proof, stated exactly.** `prep/phase11/harness/run_migrations.py` reproduces that runner contract — per-file transaction, the ownership-handover bracket around each file, checksum history — and applied **`0000`–`0086`, 87/87, as `daftar_migrator`** on a fresh database. That measurement stands, and it is the same configuration `check:deployment-authority` Case A asserts. What this document does **not** claim is that it rehearsed an administrator-then-migrator split, because it did not, and it does not claim to settle which contract is correct.
+
+**Owed to the Migration Owner and the coordinator** — a one-line question, not a Phase 11 decision: **is V3 §7's admin/migrator split the install contract, or is `check:deployment-authority` Case A?** They cannot both be the real path. If §7 is right, `check:deployment-authority`, `phase2-rollback-rehearsal`'s withdrawal of RB-P2-01, and the runner's own header comment are all describing something that is not the deployment, and every phase that cited them is affected — which is why this is raised rather than answered here.
