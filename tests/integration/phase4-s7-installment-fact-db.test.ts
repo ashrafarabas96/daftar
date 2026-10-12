@@ -445,10 +445,35 @@ async function visiblePlans(pool: Pool, ctx: Record<string, string>): Promise<Ou
   return inCtx(pool, ctx, [{ sql: `SELECT count(*)::text AS n FROM public.installment_plans WHERE invoice_id = $1`, params: [world.invoiceId] }]);
 }
 
-/** Write a plan and a two-row schedule in ONE transaction and try to commit. */
-async function commitPlan(ctx: Record<string, string>, o: { planId?: string; status?: string; tenantId?: string } = {}): Promise<Outcome & { planId: string }> {
+/**
+ * Write a plan and a two-row schedule in ONE transaction and try to commit.
+ *
+ * ── `knobs`: THE ACCESS PATH, FORCED RATHER THAN HOPED FOR
+ *    (`TL-P4-COORD-R84` §4, ordered item 2) ──────────────────────────────────
+ *
+ * Each statement in `knobs` is issued inside the write transaction, after the
+ * session context and before the two INSERTs, so a planner setting given here
+ * is in force for every plan this transaction builds — including the plans of
+ * the statements inside the `SECURITY DEFINER` trigger functions, which carry
+ * `SET search_path` and no cost settings of their own.
+ *
+ * `freshPool` goes with it and is not decoration. Those trigger bodies are
+ * plpgsql, so their statements are CACHED PLANS: a backend that has already
+ * settled on a GENERIC plan for one of them does not rebuild it because a cost
+ * setting changed. A caller that needs the path it asks for therefore asks on
+ * a backend that has never planned these statements, where `knobs` lands on a
+ * CUSTOM plan built under it. Neither option changes any default: every
+ * existing call site passes neither and keeps the pooled connection and the
+ * planner's free choice.
+ */
+async function commitPlan(
+  ctx: Record<string, string>,
+  o: { planId?: string; status?: string; tenantId?: string; knobs?: readonly string[]; freshPool?: boolean } = {},
+): Promise<Outcome & { planId: string }> {
   const planId = o.planId ?? randomUUID();
-  const r = await inCtx(mig, ctx, [
+  const pool = o.freshPool === true ? new Pool({ connectionString: urlOf(DB, 'daftar_migrator'), max: 1 }) : mig;
+  const r = await inCtx(pool, ctx, [
+    ...(o.knobs ?? []).map((sql) => ({ sql })),
     {
       sql: `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
             VALUES ($1,$2,$3,$4,$5,$6,100000,'2026-01-02'::DATE,$7,gen_random_uuid())`,
@@ -461,6 +486,7 @@ async function commitPlan(ctx: Record<string, string>, o: { planId?: string; sta
       params: [world.tenantId, world.businessId, planId],
     },
   ]);
+  if (pool !== mig) await pool.end().catch(() => undefined);
   return { ...r, planId };
 }
 
@@ -2080,6 +2106,44 @@ beforeAll(async () => {
       c.release();
     }
   };
+  /**
+   * ── §R2's OWN COST INPUTS. RECORDED, NEVER ASSERTED
+   *    (`TL-P4-COORD-R84` §4, ordered item 2) ─────────────────────────────────
+   *
+   * Round 24 ran this file 30 times at `34d3d77` and got one red in which
+   * every `*_default` reading below — the planner-left-alone variants — flipped
+   * to `Seq Scan` while every `*_noseq` reading stayed index-served. It could
+   * name NO trigger for that flip, and the reason it could not is this
+   * section: `R2_cost_inputs` occurred ZERO times in this file, so the inputs
+   * that chose §R2's path were recorded nowhere and were unrecoverable. §R7's
+   * cost inputs were identical across the two runs, which excludes the
+   * statistics premise AT §R7's POINT in the file — and §R7 runs LATER than
+   * this.
+   *
+   * So the same inputs are read HERE, on both sides of the plan readings, and
+   * a future flip of the free readings becomes attributable to a number
+   * instead of mysterious. NOTHING ASSERTS THEIR VALUES: the case below checks
+   * only that the capture happened and names this relation. A cost input that
+   * moved is evidence for the next reader, not a verdict for this one.
+   */
+  const costInputs = async (): Promise<Record<string, unknown>> =>
+    (
+      await sup.query(
+        `SELECT c.relname::text AS rel, c.relpages::int AS relpages, c.reltuples::text AS reltuples,
+                pg_relation_size(c.oid)::text AS bytes,
+                (SELECT count(*)::int FROM installment_plans) AS plan_rows,
+                (SELECT count(*)::int FROM pg_stats WHERE schemaname = 'public' AND tablename = c.relname) AS stats_rows,
+                (SELECT string_agg(ic.relname || '=' || ic.relpages::text || '/' || x.indisvalid::text || x.indisready::text || x.indislive::text, ',' ORDER BY ic.relname)
+                   FROM pg_index x JOIN pg_class ic ON ic.oid = x.indexrelid WHERE x.indrelid = c.oid) AS indexes,
+                current_setting('enable_seqscan') AS enable_seqscan,
+                current_setting('seq_page_cost') AS seq_page_cost,
+                current_setting('random_page_cost') AS random_page_cost,
+                current_setting('cpu_tuple_cost') AS cpu_tuple_cost,
+                current_setting('transaction_isolation') AS iso
+           FROM pg_class c WHERE c.oid = 'public.installment_plans'::regclass`,
+      )
+    ).rows[0] as Record<string, unknown>;
+  const r2Before = await costInputs();
   M['R2_plans'] = {} as Record<string, string>;
   for (const [label, sql] of [
     ['ix', COUNT_IX],
@@ -2090,6 +2154,7 @@ beforeAll(async () => {
       (M['R2_plans'] as Record<string, string>)[`${label}_${role}_noseq`] = await explainAs(role, sql, 'SET LOCAL enable_seqscan = off');
     }
   }
+  M['R2_cost_inputs'] = { before: r2Before, after: await costInputs() };
 
   // ── §R3 `indisready = false` ALONE, which is the variant the previous
   //    round's own evidence never exercised: setting `indisvalid = false` too
@@ -2115,7 +2180,24 @@ beforeAll(async () => {
   M['R3_second_with_trigger'] = (await commitPlan(APP_CTX())).error;
   M['R3_drop_excl'] = await ddl('DROP TRIGGER installment_plans_active_exclusive ON installment_plans');
   //    AND NOW THE ROUND-11 HARM'S OWN ROUTE. At `6acd17b` this COMMITTED.
-  M['R3_second_no_trigger'] = (await commitPlan(APP_CTX())).error;
+  //
+  //    THE WRITE IS TAKEN WITH THE ACCESS PATH FORCED, AND THAT IS WHAT MAKES
+  //    THIS CASE AN INSTRUMENT (`TL-P4-COORD-R84` §4, ordered item 2).
+  //    `installment.plan_index_disagrees` fires when the two countings of the
+  //    same rows DISAGREE, which needs one of them to be served by the
+  //    partial unique index — the index that, at `indisready = false`, holds
+  //    no entry for the row this statement just wrote. Left to the planner,
+  //    whether that reading is index-served is UNDETERMINED on a one-page
+  //    relation: round 24 measured one run in thirty where it was a `Seq Scan`
+  //    instead, both countings then agreed, and the OTHER arm —
+  //    `installment.plan_active_unbounded` — refused the write, so this case
+  //    red while the mechanism it tests was working exactly as specified.
+  //    Forcing does not weaken what §R3 is about. §R3 is about the refusal
+  //    firing when the two countings disagree; forcing the index-served path
+  //    CONSTRUCTS that disagreement instead of hoping the planner constructs
+  //    it. What is no longer left to chance is the construction of the state,
+  //    not the refusal, which is still the thing asserted.
+  M['R3_second_no_trigger'] = (await commitPlan(APP_CTX(), { knobs: ['SET LOCAL enable_seqscan = off'], freshPool: true })).error;
   M['R3_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
   M['R3_counts'] = (
     await sup.query(
@@ -3835,37 +3917,98 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
    * F-2. The guard built not to presuppose the index was ANSWERED FROM IT.
    * This is the plan, read from the live planner — the control half that a
    * migration cannot carry, because it depends on the planner choosing
-   * between usable indexes.
+   * between usable indexes. **AND BECAUSE IT DEPENDS ON THAT CHOICE, IT IS
+   * ASSERTED ONLY WHERE THE CHOICE IS FORCED** (`TL-P4-COORD-R84` §4, ordered
+   * item 2).
+   *
+   * WHAT IS NO LONGER CLAIMED HERE. Until this round all EIGHT readings were
+   * asserted — the four taken with `enable_seqscan = off` and the four taken
+   * with the planner LEFT ALONE. The sentence above declares the dependence on
+   * a free planner choice and the case then required the outcome of it, which
+   * on a one-page relation is UNDETERMINED: either path is cheap. Round 24 ran
+   * this file 30 times at `34d3d77` and one run red here, at the `*_default`
+   * non-vacuity control, on `Aggregate -> Seq Scan on installment_plans p` —
+   * with the §R7 cost inputs IDENTICAL to the green runs, so no statistics
+   * premise had moved. **It is therefore no longer claimed that the planner
+   * WOULD choose the index unforced.** That claim is RECORDED — `R2_plans`'
+   * four `*_default` keys and the new `R2_cost_inputs`, both in this suite's
+   * measurements file — and it is NOT asserted.
+   *
+   * AND THE LAW HALF IS NOT WEAKENED BY THAT, IT IS NARROWED TO ITS STRICTEST
+   * VARIANT. `enable_seqscan = off` PUSHES the planner at the index, so a
+   * shipped count that cannot name the partial unique index EVEN WHEN PUSHED
+   * AT IT is a stronger reading than one taken with the planner free to prefer
+   * a scan for its own reasons. The dropped `*_default` readings of the law
+   * half were the weaker two of the four, and the predicate-implication rule
+   * the spec relies on is a rule about what any planner MAY do, which is
+   * exactly what the forced reading interrogates.
    */
-  it('R2 THE SHIPPED COUNT IS NEVER PLANNED ON THE PARTIAL UNIQUE INDEX, and the retired spelling ALWAYS IS', () => {
+  it('R2 THE SHIPPED COUNT IS NEVER PLANNED ON THE PARTIAL UNIQUE INDEX WITH THE PLANNER PUSHED AT IT, and the retired spelling ALWAYS IS THERE', () => {
     const plans = M['R2_plans'] as Record<string, string>;
     const IX = 'installment_plans_one_active_per_invoice_uq';
-    // NON-VACUITY: the retired spelling is planned on that index in both
-    // roles and with the planner left alone AND pushed at it.
-    for (const k of ['ix_daftar_accounting_internal_default', 'ix_daftar_accounting_internal_noseq', 'ix_daftar_app_default', 'ix_daftar_app_noseq']) {
+    // NON-VACUITY, OVER THE FORCED PATH: the retired spelling is planned on
+    // that index in both roles with the planner pushed at it.
+    for (const k of ['ix_daftar_accounting_internal_noseq', 'ix_daftar_app_noseq']) {
       expect(plans[k], `${k}: the control is not index-served, so this reading proves nothing`).toContain(IX);
       expect(plans[k]).toMatch(/Index (Only )?Scan using/);
     }
-    // THE LAW: the shipped spelling names it nowhere.
-    for (const k of ['heap_daftar_accounting_internal_default', 'heap_daftar_accounting_internal_noseq', 'heap_daftar_app_default', 'heap_daftar_app_noseq']) {
+    // THE LAW, OVER THE SAME FORCED PATH: the shipped spelling names it
+    // nowhere even when the planner is pushed straight at it.
+    for (const k of ['heap_daftar_accounting_internal_noseq', 'heap_daftar_app_noseq']) {
       expect(plans[k], `${k}: the shipped count is answered from the index it measures`).not.toContain(IX);
       expect(plans[k], `${k}: EXPLAIN did not answer`).toContain('installment_plans');
     }
+    // RECORDED AND NOT ASSERTED: the four planner-left-alone readings. The
+    // only thing asked of them is that EXPLAIN ANSWERED AT ALL — true of a
+    // `Seq Scan` and of an `Index Only Scan` alike, so it is not a claim about
+    // the path. Their values are in the measurements file for whoever reads
+    // the next flip.
+    for (const k of ['ix_daftar_accounting_internal_default', 'ix_daftar_app_default', 'heap_daftar_accounting_internal_default', 'heap_daftar_app_default']) {
+      expect(plans[k], `${k}: EXPLAIN did not answer`).toContain('installment_plans');
+    }
+    // AND THE RECORDING ITSELF IS NON-VACUOUS: §R2 now carries the cost inputs
+    // on both sides of its plan readings. Their VALUES are not asserted.
+    const ci = M['R2_cost_inputs'] as { before?: Record<string, unknown>; after?: Record<string, unknown> };
+    expect(ci.before, "§R2's cost inputs were not recorded before the plan readings").toMatchObject({ rel: 'installment_plans' });
+    expect(ci.after, "§R2's cost inputs were not recorded after the plan readings").toMatchObject({ rel: 'installment_plans' });
   });
 
   it('R3 WITH indisready=false ALONE AND THE BEFORE TRIGGER DROPPED, the second active plan is REFUSED and nothing commits', () => {
     expect(M['R3_first'], 'the first plan was refused').toBeNull();
     expect(M['R3_unready']).toBeNull();
     // THE VARIANT THAT DISTINGUISHES A GUARD FROM AN ARTIFACT: `indisvalid`
-    // stays TRUE, which is what keeps the planner on the index.
+    // stays TRUE, which is what leaves the index USABLE by the planner at all
+    // — setting it false is what forced the planner off the index in the
+    // previous round's evidence and made its green readings an artifact.
+    //
+    // IT IS NOT WHAT PUTS THE PLANNER ON THE INDEX, AND THIS CASE USED TO READ
+    // AS THOUGH IT WERE (`TL-P4-COORD-R84` §4, ordered item 2). Round 24
+    // measured a run in which `indisvalid` was true and the free planner chose
+    // a `Seq Scan` anyway, both countings then agreed, and this case received
+    // `installment.plan_active_unbounded` instead. Usable is not chosen. The
+    // write below is therefore taken with `enable_seqscan = off` on a backend
+    // that has not cached a plan for the trigger bodies, which CONSTRUCTS the
+    // disagreement rather than hoping for it; the capture site says why at
+    // length.
     expect(M['R3_flags']).toMatchObject({ indisvalid: true, indisready: false, indislive: true });
     // the round-12 bound, re-measured: with the BEFORE trigger present the
     // recheck answers.
     expect(String(M['R3_second_with_trigger'])).toContain('installment.plan_active_conflict');
     expect(M['R3_drop_excl']).toBeNull();
     // AND THE ROUND-11 HARM'S OWN ROUTE, WHICH COMMITTED AT `6acd17b`.
+    //
+    // THE MESSAGE NAMES WHAT THIS ARM ACTUALLY FINDS (`TL-P4-COORD-R84` §3,
+    // ordered item 1). It used to read "the second active plan committed
+    // again", which is FALSE of the path that produces this failure: on the
+    // one red that produced it the write WAS refused — by the other arm,
+    // `installment.plan_active_unbounded` — and `R3_state` two lines below
+    // asserts `plans: '1'`, so the same case asserts that nothing committed.
+    // A maintainer reading the old text would hunt a commit that never
+    // happened. What this arm detects is that the refusal did not come from
+    // the index-disagreement arm; whether anything committed is the business
+    // of the `R3_state` assertion below.
     const e = String(M['R3_second_no_trigger']);
-    expect(e, 'the second active plan committed again').toContain('installment.plan_index_disagrees');
+    expect(e, 'the second active plan was not refused by the index-disagreement arm').toContain('installment.plan_index_disagrees');
     expect(e).toContain('PRESENT AND NOT ENFORCING');
     expect(M['R3_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
     // and the two readings of the heap really did disagree in that state,
