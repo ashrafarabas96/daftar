@@ -160,6 +160,71 @@ function checkCurrency(manifest: string, root: string): Currency {
   return { headSha, commits, newFiles, scriptsAdded, problems };
 }
 
+/**
+ * DIRECTION 4: does the manifest's PROSE agree with the challenge reports on disk?
+ *
+ * The coordinator's F-14 was not a stale digest and not a stale count. It was a
+ * SENTENCE: §8 said «Independent Challenger: NOT RUN on any Phase 15 artifact»
+ * while six challenge reports sat in this very directory, each one listed in the
+ * digest table the gate had just verified byte for byte. The gate checked the
+ * index and never read the claim the index contradicted.
+ *
+ * So this direction reads the reports themselves — `P15-CHALLENGE-<sha>.md` — and
+ * checks the file against them in BOTH directions, because a one-sided check is
+ * half a ratchet here too:
+ *
+ *   · a report on disk whose SHA the manifest never names — a round that happened
+ *     and went unrecorded, which is how «NOT RUN» survived six rounds;
+ *   · a round named in the manifest with no report behind it — the ABSENCE case,
+ *     which matters more: a claimed review nobody can read is worse than an
+ *     unclaimed one, and a check that only catches drift passes happily when the
+ *     evidence is simply gone (the round-4 lesson);
+ *   · and the phrase itself: any sentence still asserting the challenger has not
+ *     run, while a report exists, is a contradiction the gate names.
+ *
+ * What it does NOT decide: whether a round PASSED. The verdict in a challenger's
+ * report is the challenger's to state and this author's to quote, never to grade.
+ */
+interface Challenge {
+  readonly problems: readonly string[];
+  readonly onDisk: readonly string[];
+  readonly named: readonly string[];
+}
+
+function checkChallenges(manifest: string, dir: string): Challenge {
+  const problems: string[] = [];
+  const onDisk = artifactsOnDisk(dir)
+    .map((f) => /^P15-CHALLENGE-([0-9a-f]{7,40})\.md$/.exec(f)?.[1])
+    .filter((x): x is string => x !== undefined)
+    .sort();
+  const named = [...manifest.matchAll(/P15-CHALLENGE-([0-9a-f]{7,40})\.md/g)].map((m) => m[1] ?? '');
+  // Two things are removed before the phrase test, and for different reasons.
+  // The digest-table filenames are an index, not a claim about rounds. And text
+  // inside guillemets is a QUOTATION: this file records the sentence «NOT RUN on
+  // any Phase 15 artifact» as the claim that was wrong, and a check that cannot
+  // tell a correction from a repetition fails the document for admitting its own
+  // error — the same trap a red proof in this pack fell into when its refusal
+  // pattern matched the fix's own disclaimer. A quotation is still visible to the
+  // reader; it is simply not an assertion.
+  const body = manifest.replace(/P15-CHALLENGE-[0-9a-f]{7,40}\.md/g, '').replace(/\u00ab[^\u00bb]*\u00bb/g, '');
+
+  for (const sha of onDisk)
+    if (!named.includes(sha))
+      problems.push(
+        `a challenge report for ${sha} is on disk and this file never names it — a round that happened and went unrecorded is how "NOT RUN" survived six of them`,
+      );
+  for (const sha of new Set(named))
+    if (!onDisk.includes(sha))
+      problems.push(
+        `this file names P15-CHALLENGE-${sha}.md and no such report is on disk — a claimed review nobody can read is worse than an unclaimed one, so this is a FAIL and not a note`,
+      );
+  if (onDisk.length > 0)
+    for (const phrase of ['Independent Challenger\u2060? *\\| *\\*\\*NOT RUN', 'NOT RUN on any Phase 15 artifact', 'No second party has inspected'])
+      if (new RegExp(phrase).test(body))
+        problems.push(`${onDisk.length} challenge report(s) are on disk, yet this file still asserts the challenger has not run ("${phrase.replace(/\\\\/g, '')}")`);
+  return { problems, onDisk, named: [...new Set(named)].sort() };
+}
+
 function main(): void {
   console.log('P15 HANDOFF MANIFEST VERIFIER — PART 13');
   console.log(`  directory ${DIR}`);
@@ -255,14 +320,25 @@ function main(): void {
     for (const pr of cur.problems) console.log(`  STALE ${pr}`);
   }
 
-  const problems = stale.length + missing.length + unlisted.length + cur.problems.length;
+  // ── direction 4: does the prose agree with the challenge reports? ──────
+  const ch = checkChallenges(manifest, DIR);
+  console.log('');
+  console.log('DIRECTION 4 — DOES THE PROSE AGREE WITH THE CHALLENGE REPORTS ON DISK?');
+  console.log(`  ${ch.onDisk.length} report(s) on disk: ${ch.onDisk.join(', ') || 'none'}`);
+  console.log(`  ${ch.named.length} SHA(s) named in this file: ${ch.named.join(', ') || 'none'}`);
+  if (ch.problems.length === 0) console.log('  every round on disk is named here, and every round named here has a report behind it.');
+  else for (const pr of ch.problems) console.log(`  CONTRADICTED ${pr}`);
+
+  const problems = stale.length + missing.length + unlisted.length + cur.problems.length + ch.problems.length;
   console.log('');
   if (problems === 0) {
-    console.log(`PHASE 15 HANDOFF MANIFEST: VERIFIED — ${rows.length} digest(s) match, ${onDisk.length} artifact(s) all listed, none missing, header current at ${cur.headSha.slice(0, 12)}`);
+    console.log(
+      `PHASE 15 HANDOFF MANIFEST: VERIFIED — ${rows.length} digest(s) match, ${onDisk.length} artifact(s) all listed, none missing, header current at ${cur.headSha.slice(0, 12)}, ${ch.onDisk.length} challenge round(s) recorded`,
+    );
     return;
   }
   console.error(
-    `PHASE 15 HANDOFF MANIFEST: FAIL — ${stale.length} stale digest(s), ${missing.length} missing file(s), ${unlisted.length} unlisted artifact(s), ${cur.problems.length} stale header claim(s).`,
+    `PHASE 15 HANDOFF MANIFEST: FAIL — ${stale.length} stale digest(s), ${missing.length} missing file(s), ${unlisted.length} unlisted artifact(s), ${cur.problems.length} stale header claim(s), ${ch.problems.length} contradicted challenge claim(s).`,
   );
   console.error('  A stale digest is not a cosmetic defect: it is an evidence index asserting a byte state that is not the one on disk.');
   console.error(

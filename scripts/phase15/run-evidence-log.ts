@@ -255,15 +255,37 @@ const INSTRUMENTS: readonly Instrument[] = [
   },
   {
     script: 'verify:alert-signals:prove',
-    what: 'the nine planted defects the alert check must redden on, including the challenger’s nested destination',
+    // The COUNT is not written here. It was "nine" while the harness carried
+    // ten, and a number in one file about another file's contents goes stale
+    // the first time the other file grows (coordinator F-12). The instrument's
+    // own output states its count; this says what it measures.
+    what: 'every planted defect the alert check must redden on — the count is the harness\u2019s to state, not this inventory\u2019s',
     cluster: false,
     nonZeroMeans: 'a planted defect did NOT redden the check, so the check’s laws are unproved',
+  },
+  {
+    script: 'verify:exit-codes:phase15',
+    what: 'every command the pack runs, and whether its exit code is read at all',
+    cluster: false,
+    nonZeroMeans: 'a tool in the pack can read the empty output of a command that did not run as an answer',
+  },
+  {
+    script: 'verify:exit-codes:phase15:prove',
+    what: 'the planted defects the sweep must redden on, its wrapper exemptions among them',
+    cluster: false,
+    nonZeroMeans: 'the sweep did not notice a reintroduced discarded exit code, so its green verdict is worthless',
   },
   {
     script: 'verify:handoff-manifest',
     what: "this pack's digests, both directions, and whether its header is current",
     cluster: false,
     nonZeroMeans: 'a digest is stale, an artifact is unlisted, or a header claim no longer matches the branch',
+  },
+  {
+    script: 'verify:handoff-manifest:prove',
+    what: "the ways the manifest's prose and the challenge reports on disk can disagree, and the one way they only appear to",
+    cluster: false,
+    nonZeroMeans: "direction 4 did not redden on a planted contradiction, or it failed a correction for quoting the claim it retracts",
   },
   {
     script: 'checkpoint:phase15',
@@ -273,7 +295,7 @@ const INSTRUMENTS: readonly Instrument[] = [
   },
   {
     script: 'checkpoint:phase15:prove',
-    what: 'the five planted defects the checkpoint currency check must redden on, including the deleted pack',
+    what: 'every planted defect the checkpoint currency check must redden on, the deleted pack among them',
     cluster: false,
     nonZeroMeans: '1 = a planted defect did not redden the check; 2 = the proof could not be set up, which is not a failure',
   },
@@ -388,16 +410,26 @@ const INSTRUMENTS: readonly Instrument[] = [
  * list does not name. A coverage claim that cannot notice a new instrument is
  * the same defect as a count nobody measured.
  */
-function checkCoverage(): { readonly total: number; readonly missing: readonly string[] } {
+function checkCoverage(): { readonly total: number; readonly missing: readonly string[]; readonly readFailed: boolean } {
   try {
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
     const scripts = pkg.scripts ?? {};
-    const phase15 = Object.keys(scripts).filter(
-      (k) => /scripts\/phase15\//.test(scripts[k] ?? '') && k !== 'verify:evidence-log' && k !== 'load:profiles',
-    );
-    return { total: phase15.length, missing: phase15.filter((k) => !INSTRUMENTS.some((i) => i.script === k)) };
-  } catch {
-    return { total: -1, missing: ['package.json could not be read, so coverage is UNKNOWN'] };
+    // TWO families, counted separately, because counting one of them was how
+    // "drives all 19" came to sit beside "20 instruments" in the handoff
+    // (coordinator F-3). A Phase 15 instrument is a script that RUNS
+    // scripts/phase15/, or a vitest suite over this phase's own tests; the
+    // runner itself cannot run itself, and `load:profiles` is a listing.
+    const phase15 = Object.keys(scripts).filter((k) => {
+      const cmd = scripts[k] ?? '';
+      if (k === 'verify:evidence-log' || k === 'load:profiles') return false;
+      return /scripts\/phase15\//.test(cmd) || /tests\/.*p15-/.test(cmd);
+    });
+    return { total: phase15.length, missing: phase15.filter((k) => !INSTRUMENTS.some((i) => i.script === k)), readFailed: false };
+  } catch (e) {
+    // A coverage figure this function could not compute is not a coverage
+    // figure. It used to return -1 and a prose line, which the exit code then
+    // ignored — so an unreadable package.json read as full coverage.
+    return { total: -1, missing: [`package.json could not be read (${e instanceof Error ? e.message : String(e)}), so COVERAGE IS UNKNOWN`], readFailed: true };
   }
 }
 
@@ -598,13 +630,65 @@ function run(inst: Instrument, src: ReturnType<typeof sourceIdentity>, i: number
   // claim about a code path nobody has seen taken. The variable only ever adds
   // a NODE_OPTIONS that cannot resolve; it changes no instrument's arguments
   // and is printed below when it is in effect.
-  const poison = process.env['P15_PROVE_CRASH'] === inst.script;
-  if (poison) console.log('  ! P15_PROVE_CRASH is set for this instrument: it runs with an unresolvable --import, on purpose');
-  const r = spawnSync('npm', ['run', '-s', inst.script], {
+  // P15_PROVE_CRASH=<script>[:loader|:late] makes the classifier's crash arms
+  // provable with a REAL failure instead of a hand-written Result. B-21's law
+  // is that a crash and a measured-but-adverse run must not print the same way,
+  // and until this existed that law was a claim about a path nobody had taken.
+  //
+  // The coordinator's F-6 was right about the first version: a poisoned
+  // NODE_OPTIONS crashes NPM, not the instrument, so what it proved was the
+  // spawn arm wearing the crash arm's label. The poison is now delivered to the
+  // INSTRUMENT'S OWN node process, by running the command `package.json`
+  // records for it with an injected `--import`:
+  //
+  //   :loader  a module that throws on import — the instrument dies before its
+  //            own first line, which is the MODULE_NOT_FOUND case B-21 names.
+  //   :late    a module that lets the instrument run to completion and then
+  //            throws from a `beforeExit` hook — so its totals print and the
+  //            process still dies. That is the MEASURED-THEN-THREW arm, which
+  //            F-6 showed was being classified as a verdict.
+  //
+  // Both are recorded like any other run: same run id, same log, same digest.
+  const poisonSpec = process.env['P15_PROVE_CRASH'] ?? '';
+  // Parsed from the END, because every instrument name in this pack contains
+  // colons (`verify:alert-signals`) and a leading split shredded it — the
+  // poison then matched nothing and both arms printed as ordinary runs, which
+  // is exactly the kind of silently-vacuous proof this file keeps catching.
+  const poisonMode = /:(loader|late)$/.exec(poisonSpec)?.[1] ?? 'loader';
+  const poisonScript = poisonSpec.replace(/:(loader|late)$/, '');
+  const poison = poisonSpec !== '' && poisonScript === inst.script;
+  let argv: readonly string[] = ['run', '-s', inst.script];
+  let bin = 'npm';
+  if (poison) {
+    const cmd = ((): string | null => {
+      try {
+        const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+        return pkg.scripts?.[inst.script] ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    const target = cmd === null ? null : /(?:^|\s)(scripts\/phase15\/[A-Za-z0-9_.\-]+\.ts)/.exec(cmd)?.[1] ?? null;
+    if (target === null) {
+      console.log(`  ! P15_PROVE_CRASH names ${inst.script}, but its command is not a single scripts/phase15 entry point, so it cannot be poisoned in its own process. NOT POISONED.`);
+    } else {
+      const hook = join(LOG_DIR, poisonMode === 'late' ? 'p15-poison-late.mjs' : 'p15-poison-loader.mjs');
+      mkdirSync(LOG_DIR, { recursive: true });
+      writeFileSync(
+        hook,
+        poisonMode === 'late'
+          ? "process.on('beforeExit', () => { throw new TypeError('P15_PROVE_CRASH: an uncaught runtime error AFTER the summary line'); });\n"
+          : "throw new Error('P15_PROVE_CRASH: Cannot find module — the instrument dies before its own first line');\n",
+      );
+      bin = 'npx';
+      argv = ['tsx', `--import=${hook}`, join(ROOT, target)];
+      console.log(`  ! P15_PROVE_CRASH (${poisonMode}) is injected into THIS INSTRUMENT'S own process, on purpose: ${target}`);
+    }
+  }
+  const r = spawnSync(bin, [...argv], {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
-    env: poison ? { ...process.env, NODE_OPTIONS: `${process.env['NODE_OPTIONS'] ?? ''} --import=./p15-no-such-module.mjs`.trim() } : process.env,
   });
   const ms = Date.now() - started;
   const endedAt = new Date();
@@ -648,14 +732,18 @@ function run(inst: Instrument, src: ReturnType<typeof sourceIdentity>, i: number
  * it is clean" must never print the same way.
  */
 function notRun(inst: Instrument, reason: string): Result {
-  const now = new Date().toISOString();
+  // NO TIMESTAMPS. The first version stamped `new Date()` on both ends, which
+  // put a UTC window in the record for a run that never happened, and the
+  // printed exit then read "KILLED by null" because the fields it formats were
+  // empty (coordinator F-10). A record of a non-run carries no window, no
+  // signal and no log, and says so in each field.
   return {
     instrument: inst,
     runId: 'NOT RUN',
     notRunReason: reason,
     output: '',
-    startedUtc: now,
-    endedUtc: now,
+    startedUtc: 'none — nothing started',
+    endedUtc: 'none — nothing ran',
     counts: { measured: null, unmeasured: null, findings: null, skips: null, dirtyTreeDeclared: false, readFrom: null },
     subject: { servers: [], principal: null, declaresFixture: false },
     exitCode: null,
@@ -683,7 +771,22 @@ function notRun(inst: Instrument, reason: string): Result {
  * no summary line this runner recognises. Calling that "measured" would be a
  * guess, so it is named as unclassified and the log is the only recourse.
  */
-const CRASH_MARKERS = /ERR_MODULE_NOT_FOUND|Cannot find module|ERR_UNKNOWN_FILE_EXTENSION|ERR_REQUIRE_ESM|SyntaxError:|ERR_INVALID_ARG|MODULE_NOT_FOUND/;
+/** A loader or parse failure: the instrument never began its own work. */
+const LOADER_MARKERS = /ERR_MODULE_NOT_FOUND|Cannot find module|ERR_UNKNOWN_FILE_EXTENSION|ERR_REQUIRE_ESM|SyntaxError:|ERR_INVALID_ARG|MODULE_NOT_FOUND/;
+
+/**
+ * An UNCAUGHT RUNTIME failure, which can happen at any point — including
+ * after the summary line has already printed.
+ *
+ * The coordinator's F-6: the classifier recognised loader errors only, so a
+ * `TypeError` thrown after an instrument printed its totals was classified
+ * "MEASURED, THEN EXITED NON-ZERO — the code is its verdict". It is not a
+ * verdict: the process died, and whatever it had printed describes an
+ * incomplete run. A crash that happens LATE is still a crash, and the record
+ * has to be able to say "it measured, and then it threw", which is a third
+ * thing.
+ */
+const RUNTIME_MARKERS = /(?:^|\n)\s*(?:Uncaught )?(?:TypeError|RangeError|ReferenceError|AssertionError|Error):|\n\s+at [^\n]*\(?[^\n]*:\d+:\d+\)?|UnhandledPromiseRejection|FATAL ERROR:|Segmentation fault/;
 
 /**
  * An instrument's own closing VERDICT line, which is evidence that it reached
@@ -713,10 +816,15 @@ function outcomeClass(r: Result): string {
   if (r.notRunReason !== null) return `NOT RUN — ${r.notRunReason}`;
   if (!r.ran) return 'NO RESULT — the process returned no exit code of its own';
   if (r.exitCode === 0) return 'COMPLETED, exit 0';
-  const crashed = CRASH_MARKERS.test(r.output);
-  if (crashed && r.counts.readFrom === null)
+  const loader = LOADER_MARKERS.test(r.output);
+  const threw = RUNTIME_MARKERS.test(r.output);
+  const reached = r.counts.readFrom !== null || reachedVerdict(r) !== null;
+  if (loader && !reached)
     return 'CRASHED BEFORE MEASURING — a loader/parse error and no summary line, so this exit code is NOT a verdict about the subject';
-  if (crashed) return 'REACHED ITS SUMMARY BUT ALSO EMITTED A LOADER/PARSE ERROR — read the log before trusting either';
+  if (threw && !reached)
+    return 'CRASHED BEFORE MEASURING — an uncaught runtime error with no summary line, so this exit code is NOT a verdict about the subject';
+  if (loader || threw)
+    return 'MEASURED, THEN THREW — it reached its own summary AND died on an uncaught error, so its totals describe an INCOMPLETE run and the exit code is not a verdict either';
   if (r.counts.readFrom !== null) return 'MEASURED, THEN EXITED NON-ZERO — the instrument reached its own summary line, so the code is its verdict';
   const verdict = reachedVerdict(r);
   if (verdict !== null) return `MEASURED, THEN EXITED NON-ZERO — it printed its own verdict line (“${verdict}”), so the code is its verdict`;
@@ -851,8 +959,8 @@ function main(): number {
     console.log(`  \u2500\u2500 npm run ${r.instrument.script}`);
     console.log(`     measures : ${r.instrument.what}`);
     console.log(`     run id   : ${r.runId}`);
-    console.log(`     utc      : ${r.startedUtc} \u2192 ${r.endedUtc}  (${(r.ms / 1000).toFixed(1)}s)`);
-    console.log(`     exit     : ${r.exitCode === null ? `KILLED by ${String(r.signal)}` : String(r.exitCode)}`);
+    console.log(`     utc      : ${r.notRunReason !== null ? 'none — no run, so no window' : `${r.startedUtc} \u2192 ${r.endedUtc}  (${(r.ms / 1000).toFixed(1)}s)`}`);
+    console.log(`     exit     : ${r.notRunReason !== null ? 'none — this instrument was not run' : r.exitCode === null ? `KILLED by ${String(r.signal)}` : String(r.exitCode)}`);
     console.log(`     database : ${r.subject.servers.length === 0 ? (r.instrument.cluster ? 'NOT STATED BY THE INSTRUMENT \u2014 and it starts a cluster, so this is a gap in its record' : 'none \u2014 this instrument reads the tree and starts no cluster') : r.subject.servers.join('; ')}`);
     console.log(`     role     : ${r.subject.principal ?? (r.instrument.cluster ? 'NOT STATED BY THE INSTRUMENT' : 'none \u2014 no SQL is executed')}`);
     console.log(`     fixture  : ${r.subject.declaresFixture ? 'the instrument declares its subject a FIXTURE, not a real database' : 'no fixture declared in the output'}`);
@@ -870,11 +978,15 @@ function main(): number {
   // several different facts. Worst first.
   //   1 = an instrument that was run returned no exit code of its own
   //   3 = an instrument crashed BEFORE measuring, so its code is not a verdict
+  //   4 = the coverage claim is incomplete or could not be computed
   //   2 = an environment precondition was unmet, so an instrument was not run
   //   0 = every instrument either ran and returned its own code, or was not
   //       run for a caller-supplied precondition it correctly refused to invent
   const noResult = results.filter((r) => r.notRunReason === null && !r.ran);
-  const crashed = results.filter((r) => outcomeClass(r).startsWith('CRASHED BEFORE MEASURING'));
+  const crashed = results.filter((r) => {
+    const c = outcomeClass(r);
+    return c.startsWith('CRASHED BEFORE MEASURING') || c.startsWith('MEASURED, THEN THREW');
+  });
   const skipped = results.filter((r) => r.notRunReason !== null);
 
   if (skipped.length > 0) {
@@ -889,11 +1001,20 @@ function main(): number {
     return 1;
   }
   if (crashed.length > 0) {
-    console.log(`EXIT 3: ${crashed.length} instrument(s) CRASHED BEFORE MEASURING, so their exit codes are not verdicts:`);
-    for (const r of crashed) console.log(`  ${r.instrument.script} — exit ${String(r.exitCode)}, no summary line, loader/parse error in the output`);
+    console.log(`EXIT 3: ${crashed.length} instrument(s) died rather than returned a verdict:`);
+    for (const r of crashed) console.log(`  ${r.instrument.script} — exit ${String(r.exitCode)}: ${outcomeClass(r)}`);
     console.log('  This is the collision B-21 named: the same exit 1 means "I measured and found a gap"');
     console.log('  and "I never started". A record that cannot tell them apart is not evidence.');
     return 3;
+  }
+  if (coverage.missing.length > 0) {
+    console.log(`EXIT 4: the coverage claim is INCOMPLETE — ${coverage.missing.length} item(s):`);
+    for (const m of coverage.missing) console.log(`  ${m}`);
+    console.log('  V3 §9 makes the EXIT CODE the thing a handoff carries, and a handoff reader does not');
+    console.log('  have this body. So an omission printed over an exit 0 is an omission the handoff loses:');
+    console.log('  it recorded B-20 as closed while the gap was open in the record (coordinator F-3). A');
+    console.log('  coverage figure this runner could not compute reaches the exit code the same way.');
+    return 4;
   }
   if (blockedByEnvironment > 0) {
     console.log(`EXIT 2: ${blockedByEnvironment} instrument(s) were not run because an ENVIRONMENT precondition was unmet.`);

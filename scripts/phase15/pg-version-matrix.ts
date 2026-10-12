@@ -63,6 +63,25 @@ import { Client } from 'pg';
 import { runMigrations } from '../../apps/api/src/infra/migrate';
 
 const ROOT = resolve(__dirname, '../..');
+
+/**
+ * A command whose EXIT CODE was read, swept in after the coordinator's review.
+ *
+ * Several probes here read `.stdout` and discarded `.status`, so a failed
+ * `git rev-parse`, `ls-tree`, `cat-file` or `grep` contributed an EMPTY result
+ * that then read as a measurement: zero migration files at the candidate ref,
+ * zero `server_version_num` sites in the tree, an empty bootstrap blob staged
+ * for a real apply. Each of those is an answer this matrix prints. A command
+ * that failed yields `null` here, and every caller says UNMEASURED rather than
+ * reporting the emptiness it was handed.
+ */
+function outOf(r: ReturnType<typeof spawnSync>, allowNoMatch = false): string | null {
+  if (r.error !== undefined) return null;
+  if (r.status === 0) return (r.stdout ?? '').toString();
+  if (allowNoMatch && r.status === 1) return (r.stdout ?? '').toString();
+  return null;
+}
+
 const SERVER_OS_USER = 'postgres';
 const SUPERPASS = `p15_matrix_${randomBytes(18).toString('base64url')}`;
 
@@ -123,9 +142,16 @@ function sh(script: string): { status: number | null; stdout: string; stderr: st
 
 function chownToServer(path: string): void {
   if (userInfo().username === SERVER_OS_USER) return;
-  const uid = Number(spawnSync('id', ['-u', SERVER_OS_USER], { encoding: 'utf8' }).stdout.trim());
-  const gid = Number(spawnSync('id', ['-g', SERVER_OS_USER], { encoding: 'utf8' }).stdout.trim());
-  chownSync(path, uid, gid);
+  // A failed `id` would make Number('') NaN and chownSync would then fail with
+  // a type error naming neither the account nor the command. Read the exit code
+  // and say which lookup failed, so the cluster never starts half-owned.
+  const idOf = (flag: '-u' | '-g'): number => {
+    const r = spawnSync('id', [flag, SERVER_OS_USER], { encoding: 'utf8' });
+    if (r.status !== 0 || !/^[0-9]+$/.test((r.stdout ?? '').trim()))
+      throw new Error(`id ${flag} ${SERVER_OS_USER} exited ${String(r.status)}: ${(r.stderr ?? '').trim().slice(0, 200)}`);
+    return Number(r.stdout.trim());
+  };
+  chownSync(path, idOf('-u'), idOf('-g'));
 }
 
 function start(line: Line): void {
@@ -152,9 +178,19 @@ function start(line: Line): void {
   }
 }
 
+const teardownFailures: string[] = [];
+
 function stop(line: Line): void {
   const data = join(line.dir, 'data');
-  if (existsSync(join(data, 'PG_VERSION'))) sh(`${line.bin}/pg_ctl -D ${data} -m immediate -w stop`);
+  if (existsSync(join(data, 'PG_VERSION'))) {
+    const down = sh(`${line.bin}/pg_ctl -D ${data} -m immediate -w stop`);
+    // Removing the data directory under a postmaster that did not stop leaves a
+    // live server holding this line's port, and the NEXT line on that port would
+    // then be measured against the previous cluster. Say so rather than deleting
+    // silently: teardown is not a measurement, but a failed teardown invalidates
+    // what comes after it.
+    if (down.status !== 0) teardownFailures.push(`${line.name}: pg_ctl stop exited ${String(down.status)}: ${down.stderr.trim().slice(0, 200)}`);
+  }
   rmSync(line.dir, { recursive: true, force: true });
 }
 
@@ -213,8 +249,12 @@ function v2(): void {
   const walk = (rel: string): void => {
     const full = join(ROOT, rel);
     if (!existsSync(full)) return;
-    const out = spawnSync('grep', ['-rn', '--include=*.ts', '--include=*.sql', 'server_version_num', full], { encoding: 'utf8' });
-    for (const line of (out.stdout ?? '').split('\n')) {
+    const searched = outOf(spawnSync('grep', ['-rn', '--include=*.ts', '--include=*.sql', 'server_version_num', full], { encoding: 'utf8' }), true);
+    if (searched === null) {
+      hits.push(`SEARCH FAILED under ${rel} — grep did not complete, so the sites below are an INCOMPLETE list and "none here" is not established`);
+      return;
+    }
+    for (const line of searched.split('\n')) {
       if (line.trim().length === 0) continue;
       const rel2 = line.replace(`${ROOT}/`, '');
       // THIS FILE is excluded. A probe that counts its own prose among its
@@ -260,9 +300,20 @@ async function v3(): Promise<void> {
     r.status = 'UNMEASURED';
     return;
   }
-  const sha = spawnSync('git', ['rev-parse', ref], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
-  const names = spawnSync('git', ['ls-tree', '-r', '--name-only', ref, '--', 'infrastructure/database/migrations'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-    .stdout.split('\n')
+  const shaOut = outOf(spawnSync('git', ['rev-parse', ref], { cwd: ROOT, encoding: 'utf8' }));
+  const treeOut = outOf(
+    spawnSync('git', ['ls-tree', '-r', '--name-only', ref, '--', 'infrastructure/database/migrations'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
+  );
+  if (shaOut === null || treeOut === null) {
+    // An empty migration list from a FAILED ls-tree would print as "the
+    // candidate carries 0 migrations", which is a statement about the frozen
+    // set and must never come from a command that did not run.
+    r.note.push(`UNMEASURED: the candidate at ${ref} could not be read (git rev-parse ${shaOut === null ? 'FAILED' : 'ok'}, git ls-tree ${treeOut === null ? 'FAILED' : 'ok'}). No count is claimed.`);
+    return;
+  }
+  const sha = shaOut.trim();
+  const names = treeOut
+    .split('\n')
     .filter((n: string) => n.endsWith('.sql'))
     .sort();
   const prepCount = readdirSync(join(ROOT, 'infrastructure/database/migrations')).filter((n: string) => n.endsWith('.sql')).length;
@@ -286,8 +337,15 @@ async function v3(): Promise<void> {
   rmSync(stage, { recursive: true, force: true });
   mkdirSync(join(stage, 'sql'), { recursive: true });
   mkdirSync(join(stage, 'boot'), { recursive: true });
-  const blob = (path: string): string =>
-    spawnSync('git', ['cat-file', 'blob', `${ref}:${path}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }).stdout;
+  const blob = (path: string): string => {
+    // A failed cat-file used to yield an EMPTY STRING, which was then written
+    // to disk and applied: an empty bootstrap or an empty migration applies
+    // cleanly and proves nothing, which is the worst possible shape for this
+    // failure to take.
+    const out = outOf(spawnSync('git', ['cat-file', 'blob', `${ref}:${path}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }));
+    if (out === null || out.length === 0) throw new Error(`git cat-file blob ${ref}:${path} produced nothing — refusing to stage an empty file and apply it as if it were the candidate's`);
+    return out;
+  };
   const bootPath = join(stage, 'boot', 'bootstrap.sql');
   writeFileSync(bootPath, blob('infrastructure/database/bootstrap.sql').replace(/__([A-Z_]+)_PASSWORD__/g, () => `p15_${randomBytes(18).toString('base64url')}`), { mode: 0o644 });
   for (const n of names) writeFileSync(join(stage, 'sql', n.split('/').pop() as string), blob(n), { mode: 0o644 });
@@ -481,7 +539,7 @@ async function main(): Promise<number> {
       line.version = got0?.version ?? 'UNKNOWN';
       line.versionNum = Number(got0?.num ?? 0);
       line.collate = got0?.collate ?? 'UNKNOWN';
-      const initdbV = spawnSync(`${line.bin}/initdb`, ['--version'], { encoding: 'utf8' }).stdout?.trim() ?? 'unknown';
+      const initdbV = outOf(spawnSync(`${line.bin}/initdb`, ['--version'], { encoding: 'utf8' }))?.trim() ?? 'UNMEASURED — initdb --version did not complete';
       v1.answers[line.name] =
         `${line.version} (server_version_num ${line.versionNum}), collate ${line.collate}, ctype ${got0?.ctype ?? '?'}, encoding ${got0?.encoding ?? '?'}`;
       v1.note.push(`${line.name}: port ${line.port}, binaries ${line.bin} (${initdbV})`);
@@ -556,6 +614,15 @@ async function main(): Promise<number> {
   console.log('  daftar_migrator over the whole history (TL-P4-COORD-R61; the administrator');
   console.log('  reading was withdrawn in P2-S9), and the instrument for it is');
   console.log('  `npm run check:deployment-authority`, not this matrix.');
+  if (teardownFailures.length > 0) {
+    console.log('');
+    console.log('EXIT 1 — A CLUSTER DID NOT STOP, SO EVERY LATER CONTEXT ON ITS PORT IS SUSPECT:');
+    for (const f of teardownFailures) console.log(`  · ${f}`);
+    console.log('  The data directory was removed, so a surviving postmaster would be serving a');
+    console.log('  deleted directory on this line\'s port. Nothing above is claimed for the');
+    console.log('  contexts measured after that point. Kill the stray server and re-run.');
+    return 1;
+  }
   if (unaccounted.length > 0) {
     console.log('');
     console.log(`EXIT 2: ${unaccounted.map((r) => r.id).join(', ')} diverged between the measured contexts and the tree has no version-conditional branch for it.`);

@@ -143,6 +143,58 @@ const CASES: readonly Case[] = [
     expect: /notification_policy/i,
   },
   {
+    id: 'R2g',
+    what:
+      'the PAIR-DROP (challenger G-01, coordinator F-1): a destination as the VALUE of an ACCOUNTED key, on ' +
+      'all 23 rules. No unaccounted key, so the key walk sees nothing; the rule file is not in Git, so the tree ' +
+      'grep never reads it. Two sound checks, one false conclusion, reachable by no single-check mutation',
+    plant: (doc) => {
+      let n = 0;
+      for (const r of doc.rules) {
+        const res = r['resolution'];
+        if (res === null || typeof res !== 'object' || Array.isArray(res)) continue;
+        const o = res as Record<string, unknown>;
+        if (typeof o['closure_requirement'] !== 'string') continue;
+        o['closure_requirement'] = `${o['closure_requirement'] as string} Page pagerduty://daftar-oncall on breach.`;
+        n += 1;
+      }
+      if (n !== doc.rules.length) throw new Error(`planted into ${n} of ${doc.rules.length} rules; a set-wide proof that is not set-wide proves something else`);
+    },
+    expect: /PagerDuty in key `closure_requirement`/,
+  },
+  {
+    id: 'R2h',
+    what: 'the same shape with a Slack webhook URL as the value, because one pattern passing is not six passing',
+    plant: (doc) => {
+      for (const r of doc.rules) r['false_positive_notes'] = `${String(r['false_positive_notes'] ?? '')} See https://hooks.slack.com/services/T000/B000/xxxx`.trim();
+    },
+    expect: /a Slack webhook in key `false_positive_notes`/,
+  },
+  {
+    id: 'R2i',
+    what:
+      "coordinator F-1's third variant: an Alertmanager-style `receivers`/`route` block BESIDE the rules list. " +
+      'Every rule-shaped walk misses it by construction, because it never leaves the rules',
+    plant: (doc) => {
+      const d = doc as unknown as Record<string, unknown>;
+      d['receivers'] = [{ name: 'ops-primary', pagerduty_configs: [{ routing_key: 'REDACTED' }] }];
+      d['route'] = { receiver: 'ops-primary', group_by: ['alertname'] };
+    },
+    expect: /PagerDuty in key `(pagerduty_configs|routing_key)`/,
+  },
+  {
+    id: 'R2j',
+    what:
+      'a key named `constructor` (coordinator F-7). The level lookup used a bare index, so this read ' +
+      "Object.prototype's own property as the declared list and crashed on `.includes` — a check that throws " +
+      'is not a check that passes, but it is not a check that reds for its own reason either',
+    plant: (doc) => {
+      const r = doc.rules[5];
+      if (r !== undefined) r['constructor'] = 'a key that is also a prototype property';
+    },
+    expect: /constructor/,
+  },
+  {
     id: 'R3',
     what: 'one rule loses its `resolution` object entirely',
     plant: (doc) => {

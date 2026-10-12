@@ -49,12 +49,53 @@ const PACK = process.env['P15_PACK_DIR'] ?? '/mnt/project-files/phase15';
 const DEFAULT_PACK = '/mnt/project-files/phase15';
 const OUT = join(PACK, 'P15-RESUME-CHECKPOINT.md');
 const BRANCH = 'claude/project-thread-n5qrtj';
-const BASE = 'origin/main';
+/**
+ * The base ref. Overridable ONLY so the red proof can point it at a ref that
+ * does not exist, which is the condition coordinator F-5 was found in. No
+ * proof needs to delete a real remote-tracking ref to establish it, and a
+ * proof that mutates the repository to make its point is not one this pack
+ * will run. A non-default base is announced in the output.
+ */
+const BASE = process.env['P15_BASE_REF'] ?? 'origin/main';
+const DEFAULT_BASE = 'origin/main';
 
-const git = (args: readonly string[]): { ok: boolean; out: string } => {
+/**
+ * FAIL CLOSED ON A FAILED GIT COMMAND — coordinator F-5, challenger round 6.
+ *
+ * This returned `{ ok, out }` and most callers read `.out` and ignored `.ok`.
+ * `git rev-parse origin/main` prints its UNRESOLVED ARGUMENT to stdout and
+ * exits 128 when the ref is missing, so with `origin/main` absent the
+ * checkpoint wrote the literal string **"origin/main"** into a shared project
+ * file as the last known-good release SHA, and exited 0. The migrations fact
+ * was worse: `git diff` exited 128, the empty output filtered to nothing, and
+ * the file recorded "NONE — the frozen set is untouched" — a reassurance
+ * manufactured out of a failure, about the one thing in this repository that
+ * must never move unnoticed.
+ *
+ * So `git()` now carries the exit code and stderr, and `measured()` is the only
+ * way a value reaches the document: a failed command yields an UNMEASURED
+ * string naming the command and the code. "I could not look" and "I looked and
+ * it is clean" must not print the same way, and a ref name is not a SHA.
+ */
+const git = (args: readonly string[]): { ok: boolean; out: string; code: number | null; err: string } => {
   const r = spawnSync('git', [...args], { cwd: ROOT, encoding: 'utf8' });
-  return { ok: r.status === 0, out: (r.stdout ?? '').trim() };
+  return { ok: r.status === 0, out: (r.stdout ?? '').trim(), code: r.status, err: (r.stderr ?? '').trim().split('\n')[0] ?? '' };
 };
+
+/**
+ * A git-measured value, or an explicit statement that it could not be measured.
+ * `shape` is an optional sanity check on the VALUE itself: a command can exit 0
+ * and still hand back something that is not what the caller asked for.
+ */
+const measured = (args: readonly string[], shape?: RegExp): string => {
+  const r = git(args);
+  if (!r.ok) return `UNMEASURED — \`git ${args.join(' ')}\` exited ${String(r.code)}${r.err === '' ? '' : `: ${r.err}`}`;
+  if (shape !== undefined && !shape.test(r.out))
+    return `UNMEASURED — \`git ${args.join(' ')}\` exited 0 but its output is not the expected shape (${r.out.slice(0, 60)})`;
+  return r.out;
+};
+
+const SHA = /^[0-9a-f]{40}$/;
 
 /** A fact that was measured, with the command that measured it. */
 interface Fact {
@@ -64,21 +105,59 @@ interface Fact {
 }
 
 function measure(): readonly Fact[] {
-  const head = git(['rev-parse', 'HEAD']).out;
-  const status = git(['status', '--porcelain']).out;
+  const headR = git(['rev-parse', 'HEAD']);
+  const statusR = git(['status', '--porcelain']);
+  const pushed = measured(['rev-parse', `origin/${BRANCH}`], SHA);
   const facts: Fact[] = [
-    { what: 'branch', value: git(['rev-parse', '--abbrev-ref', 'HEAD']).out, how: 'git rev-parse --abbrev-ref HEAD' },
-    { what: 'HEAD (the current candidate for this pack)', value: head, how: 'git rev-parse HEAD' },
-    { what: 'pushed head on the remote', value: git(['rev-parse', `origin/${BRANCH}`]).ok ? git(['rev-parse', `origin/${BRANCH}`]).out : 'NOT PUSHED or not fetched — a local head nobody else can read is not a checkpoint', how: `git rev-parse origin/${BRANCH}` },
-    { what: 'base', value: `${git(['merge-base', 'HEAD', BASE]).out} (merge-base with ${BASE})`, how: `git merge-base HEAD ${BASE}` },
-    { what: 'last known good SHA on the base', value: git(['rev-parse', BASE]).out, how: `git rev-parse ${BASE}` },
-    { what: 'tree state', value: status.length === 0 ? 'clean' : `${status.split('\n').length} path(s) uncommitted — any evidence produced now is PREPARATION ONLY`, how: 'git status --porcelain' },
-    { what: 'commits ahead of the base', value: git(['rev-list', '--count', `${BASE}..HEAD`]).out, how: `git rev-list --count ${BASE}..HEAD` },
-    { what: 'migrations allocated or edited by this branch', value: ((): string => {
-        const d = git(['diff', '--name-only', `${BASE}...HEAD`]).out.split('\n').filter((f) => /migrations\//.test(f));
-        return d.length === 0 ? 'NONE — the frozen set is untouched, which is the precondition for this pack existing' : `${d.length}: ${d.join(', ')} — THIS NEEDS THE MIGRATION OWNER BEFORE ANYTHING ELSE`;
-      })(), how: `git diff --name-only ${BASE}...HEAD | grep migrations/` },
+    { what: 'branch', value: measured(['rev-parse', '--abbrev-ref', 'HEAD']), how: 'git rev-parse --abbrev-ref HEAD' },
+    { what: 'HEAD (the current candidate for this pack)', value: measured(['rev-parse', 'HEAD'], SHA), how: 'git rev-parse HEAD' },
+    {
+      what: 'pushed head on the remote',
+      value: pushed.startsWith('UNMEASURED')
+        ? `NOT PUSHED or not fetched — a local head nobody else can read is not a checkpoint (${pushed})`
+        : pushed,
+      how: `git rev-parse origin/${BRANCH}`,
+    },
+    {
+      what: 'base',
+      value: ((): string => {
+        const mb = measured(['merge-base', 'HEAD', BASE], SHA);
+        return mb.startsWith('UNMEASURED') ? mb : `${mb} (merge-base with ${BASE})`;
+      })(),
+      how: `git merge-base HEAD ${BASE}`,
+    },
+    // The shape check matters most here: `git rev-parse <missing ref>` exits
+    // 128 having echoed the REF NAME to stdout, so without it this field read
+    // "origin/main" and looked like an answer.
+    { what: 'last known good SHA on the base', value: measured(['rev-parse', BASE], SHA), how: `git rev-parse ${BASE}` },
+    {
+      what: 'tree state',
+      value: !statusR.ok
+        ? `UNMEASURED — \`git status --porcelain\` exited ${String(statusR.code)}`
+        : statusR.out.length === 0
+          ? 'clean'
+          : `${statusR.out.split('\n').length} path(s) uncommitted — any evidence produced now is PREPARATION ONLY`,
+      how: 'git status --porcelain',
+    },
+    { what: 'commits ahead of the base', value: measured(['rev-list', '--count', `${BASE}..HEAD`], /^\d+$/), how: `git rev-list --count ${BASE}..HEAD` },
+    {
+      what: 'migrations allocated or edited by this branch',
+      value: ((): string => {
+        const r = git(['diff', '--name-only', `${BASE}...HEAD`]);
+        // A failed diff must NEVER read as "the frozen set is untouched". That
+        // is the single most load-bearing reassurance in this pack, and it was
+        // being manufactured out of an exit 128.
+        if (!r.ok)
+          return `UNMEASURED — \`git diff --name-only ${BASE}...HEAD\` exited ${String(r.code)}${r.err === '' ? '' : `: ${r.err}`}. This is NOT a statement that the frozen set is untouched.`;
+        const d = r.out.split('\n').filter((f) => /migrations\//.test(f));
+        return d.length === 0
+          ? 'NONE — the frozen set is untouched, which is the precondition for this pack existing'
+          : `${d.length}: ${d.join(', ')} — THIS NEEDS THE MIGRATION OWNER BEFORE ANYTHING ELSE`;
+      })(),
+      how: `git diff --name-only ${BASE}...HEAD | grep migrations/`,
+    },
   ];
+  if (!headR.ok) facts.unshift({ what: '! THIS CHECKPOINT IS NOT TRUSTWORTHY', value: `git rev-parse HEAD exited ${String(headR.code)} — nothing below is anchored to a commit`, how: 'git rev-parse HEAD' });
   return facts;
 }
 
@@ -90,7 +169,16 @@ function measure(): readonly Fact[] {
  */
 function packState(): readonly { readonly file: string; readonly bytes: number; readonly sha: string }[] {
   if (!existsSync(PACK)) return [];
+  // `ls` can fail — a permission change, an unmounted share — and an empty
+  // listing from a failed command would mean "the pack has no documents",
+  // which is the exact false reading the currency check now exists to stop.
+  // Returning an empty array here is safe BECAUSE that check treats an empty
+  // table as a refusal; this makes the cause visible rather than inferred.
   const names = spawnSync('ls', ['-1', PACK], { encoding: 'utf8' });
+  if (names.error !== undefined || names.status !== 0) {
+    console.error(`! could not list ${PACK} (ls exited ${String(names.status)}): the pack state below is UNMEASURED, not empty`);
+    return [];
+  }
   return (names.stdout ?? '')
     .split('\n')
     // The handoff manifest is EXCLUDED, and its own gate is cited instead.
@@ -128,10 +216,20 @@ function checkMode(): number {
     return 1;
   }
   const text = readFileSync(OUT, 'utf8');
-  const head = git(['rev-parse', 'HEAD']).out;
+  // The comparison's OWN side can fail too. If HEAD cannot be read there is no
+  // head to compare against, and reporting STALE would be as wrong as
+  // reporting CURRENT: neither was measured.
+  const headR = git(['rev-parse', 'HEAD']);
+  const head = headR.ok && SHA.test(headR.out) ? headR.out : null;
   const stated = /checkpoint HEAD\s*\|\s*`([0-9a-f]{40})`/.exec(text);
   console.log('P15 RESUME CHECKPOINT — CURRENCY CHECK');
+  if (head === null) {
+    console.log(`  EXIT 2 — NOT MEASURED: \`git rev-parse HEAD\` exited ${String(headR.code)}, so there is no head to`);
+    console.log('  compare the checkpoint against. This is not STALE and not CURRENT.');
+    return 2;
+  }
   if (PACK !== DEFAULT_PACK) console.log(`  ! NOT THE DEFAULT PACK: ${PACK}`);
+  if (BASE !== DEFAULT_BASE) console.log(`  ! NOT THE DEFAULT BASE REF: ${BASE}`);
   console.log(`  checkpoint says : ${stated?.[1] ?? 'NO HEAD RECORDED'}`);
   console.log(`  HEAD is now     : ${head}`);
   // A HEAD MATCH IS NOT CURRENCY — the challenger's round-4 finding.
@@ -239,8 +337,11 @@ function main(): number {
   // its content should change when the HEAD changes and at no other time.
   // Regenerating at an unchanged head is now byte-identical, which is what
   // makes the digest meaningful.
-  const commitDate = git(['show', '-s', '--format=%cI', 'HEAD']).out;
-  const now = commitDate.length > 0 ? `${commitDate}  (the HEAD commit's date — this file is deterministic at a given head, by design)` : 'UNKNOWN — the commit date could not be read';
+  const dateR = git(['show', '-s', '--format=%cI', 'HEAD']);
+  const now =
+    dateR.ok && dateR.out.length > 0
+      ? `${dateR.out}  (the HEAD commit's date — this file is deterministic at a given head, by design)`
+      : `UNMEASURED — \`git show -s --format=%cI HEAD\` exited ${String(dateR.code)}, so this file carries no timestamp it measured`;
 
   const lines: string[] = [];
   lines.push('# P15 — RESUMABLE CHECKPOINT (PART 22)');

@@ -188,29 +188,47 @@ function independentInventory(root: string): { readonly source: string; readonly
     });
     return { source: 'DELIVERY_MANIFEST.json', paths, withDigest, head: manifest.sourceCommit ?? null };
   }
-  // No delivery manifest: the inventory is the index, and the binding is the
-  // blob OID the index records rather than a SHA-256 somebody wrote down.
-  // `ls-files -s` gives both in one command: "<mode> <oid> <stage>\t<path>".
-  const staged = git(root, ['ls-files', '-s', '-z'])
+  // No delivery manifest: the inventory is the WORKING TREE's tracked paths,
+  // and the binding is the blob OID the index records for each.
+  //
+  // THE COMPARISON HAS TO BE ABLE TO FAIL — challenger G-02, coordinator F-4.
+  // The first version built `listed` from `oidOf.keys()`, so `oidOf.has(f)`
+  // was true for every element and `bound === listed.length` held for ANY
+  // repository state. "1045 files, 1045 bound" was an N-of-N that could not
+  // differ, and the fail arm for a path with no OID was unreachable code: the
+  // zero this was meant to replace had become a tautology instead of a
+  // measurement. The dirty-tree arm below was and is live; this is the other
+  // half.
+  //
+  // So the two sides come from two commands. The inventory is `ls-files -z`,
+  // which lists every tracked path including one that is UNMERGED (a conflicted
+  // file has stages 1/2/3 and no stage 0). The OIDs come from `ls-files -s`,
+  // stage 0 only. An unmerged path therefore appears in the inventory with no
+  // OID, the arm catches it, and a release scan refuses a conflicted tree —
+  // which is the right answer anyway: the bytes it read belong to no commit.
+  const stageZero = git(root, ['ls-files', '-s', '-z'])
     .split('\0')
     .filter((line) => line.length > 0);
   const oidOf = new Map<string, string>();
-  for (const line of staged) {
+  for (const line of stageZero) {
     const tab = line.indexOf('\t');
     if (tab < 0) continue;
-    const oid = line.slice(0, tab).split(' ')[1] ?? '';
+    const fields = line.slice(0, tab).split(' ');
+    const oid = fields[1] ?? '';
+    const stage = fields[2] ?? '';
     const path = line.slice(tab + 1);
-    if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(oid)) oidOf.set(path, oid);
+    if (stage === '0' && /^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(oid)) oidOf.set(path, oid);
   }
-  const listed = [...oidOf.keys()].filter((f) => existsSync(join(root, f)));
+  const listed = [...new Set(git(root, ['ls-files', '-z']).split('\0').filter((f) => f.length > 0))].filter((f) => existsSync(join(root, f)));
   let bound = 0;
-  for (const f of listed) if (oidOf.has(f)) bound += 1;
-  for (const f of listed)
-    if (!oidOf.has(f))
+  for (const f of listed) {
+    if (oidOf.has(f)) bound += 1;
+    else
       fail(
         'source-binding',
-        `${f} is in the inventory with no blob OID in the index, so nothing binds the bytes this scan read to any commit.`,
+        `${f} is tracked and on disk but has no stage-0 blob OID in the index (an unmerged or conflicted path). Nothing binds the bytes this scan read to any commit, so the scan cannot say what it certified.`,
       );
+  }
 
   // A tracked file whose working-tree content differs from the committed blob
   // was READ BY THE SCAN in its modified form. The scan's verdict then
@@ -225,7 +243,7 @@ function independentInventory(root: string): { readonly source: string; readonly
         `The scan read the working-tree bytes, so its verdict is about content no commit holds — a release scan has to be run on a clean tree or it certifies something that will not ship.`,
     );
 
-  return { source: 'git ls-files -s -z (binding: index blob OID)', paths: listed, withDigest: bound, head: git(root, ['rev-parse', 'HEAD']) };
+  return { source: 'git ls-files -z for the inventory, ls-files -s stage 0 for the binding', paths: listed, withDigest: bound, head: git(root, ['rev-parse', 'HEAD']) };
 }
 
 /**

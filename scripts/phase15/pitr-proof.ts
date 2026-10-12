@@ -272,8 +272,14 @@ function waitForRecovery(port: number, timeoutMs: number): { readonly ok: boolea
     const r = psqlScalar(port, 'postgres', 'SELECT pg_is_in_recovery()');
     last = r.detail;
     if (r.ok && r.value === 'f') return { ok: true, detail: 'pg_is_in_recovery() = false' };
+    // The sleep's own exit code matters: if it cannot run, this becomes a busy
+    // loop that burns the deadline it is measuring against, and the RTO figure
+    // printed afterwards would be about a machine under load from this poll
+    // rather than about recovery. Swept in with the pack's other discarded
+    // exit codes.
     const sleeper = spawnSync('/bin/bash', ['-c', 'sleep 0.3']);
-    void sleeper;
+    if (sleeper.error !== undefined || sleeper.status !== 0)
+      return { ok: false, detail: `the recovery poll could not pace itself (sleep exited ${String(sleeper.status)}), so no recovery timing measured here is valid` };
   }
   return { ok: false, detail: `still in recovery (or unreachable) after ${timeoutMs}ms: ${last}` };
 }

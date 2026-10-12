@@ -41,6 +41,13 @@ interface Case {
   /** mutate the COPY in place. */
   readonly plant: (dir: string) => void;
   readonly expect: RegExp;
+  /**
+   * When set, the case is about the GENERATOR rather than the check: the copy
+   * is written with this extra environment, and `expect` is matched against
+   * the WRITTEN DOCUMENT, with `refuse` naming text that must NOT appear in it.
+   */
+  readonly writeEnv?: Record<string, string>;
+  readonly refuse?: RegExp;
 }
 
 const CASES: readonly Case[] = [
@@ -85,6 +92,25 @@ const CASES: readonly Case[] = [
       writeFileSync(join(dir, 'P15-NOT-IN-THE-TABLE.md'), 'A document written after the checkpoint was generated.\n');
     },
     expect: /UNRECORDED P15-NOT-IN-THE-TABLE\.md/,
+  },
+  {
+    id: 'C6',
+    what:
+      'coordinator F-5 / challenger round 6: with the base ref ABSENT, `git rev-parse` exits 128 having echoed ' +
+      'the REF NAME to stdout, and the generator wrote the literal string "origin/main" into a shared project ' +
+      'file as the last known-good release SHA — and exited 0. The migrations fact was worse: a `git diff` that ' +
+      'exited 128 filtered to nothing and the file recorded "the frozen set is untouched"',
+    writeEnv: { P15_BASE_REF: 'refs/p15-proof/does-not-exist' },
+    plant: () => {
+      /* nothing to plant: the defect is in what the GENERATOR writes */
+    },
+    expect: /UNMEASURED — `git rev-parse refs\/p15-proof\/does-not-exist` exited/,
+    // Anchored to the AFFIRMATIVE claim. A first version of this pattern was
+    // just "the frozen set is untouched", and it matched the fix's own
+    // disclaimer — "This is NOT a statement that the frozen set is untouched" —
+    // so a correct document failed its own proof. A refusal pattern has to
+    // name the sentence it refuses, not a phrase inside it.
+    refuse: /NONE — the frozen set is untouched|`refs\/p15-proof\/does-not-exist`\s*\|/,
   },
   {
     id: 'C5',
@@ -166,6 +192,33 @@ function main(): number {
       continue;
     }
     c.plant(dir);
+    if (c.writeEnv !== undefined) {
+      // A GENERATOR case: rewrite the copy with the extra environment, then
+      // read the DOCUMENT rather than the check's verdict, because the defect
+      // is a false value written into a file.
+      const w = spawnSync('npx', ['tsx', join(ROOT, 'scripts/phase15/resume-checkpoint.ts'), '--write'], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, P15_PACK_DIR: dir, ...c.writeEnv },
+      });
+      const doc = readFileSync(join(dir, 'P15-RESUME-CHECKPOINT.md'), 'utf8');
+      const named = c.expect.test(doc);
+      const refused = c.refuse === undefined ? true : !c.refuse.test(doc);
+      console.log(`${c.id} ${named && refused ? 'PROVED' : 'DID NOT PROVE ITS LAW'}  generator exit ${String(w.status)}`);
+      console.log(`   planted : ${c.what}`);
+      console.log(`   expected: the document says it could not measure — /${c.expect.source}/`);
+      console.log(`   and NOT : /${c.refuse?.source ?? '(nothing)'}/`);
+      if (named && refused) {
+        const line = doc.split('\n').find((l) => c.expect.test(l));
+        console.log(`   said    : ${(line ?? '').trim().slice(0, 150)}`);
+      } else {
+        failures += 1;
+        console.log(`   PROBLEM : ${named ? 'it also wrote text it must refuse to write' : 'the document does not say the value was unmeasured'}`);
+      }
+      rmSync(dir, { recursive: true, force: true });
+      console.log('');
+      continue;
+    }
     const got = runCheck(dir);
     const red = got.status !== 0;
     const named = c.expect.test(got.out);

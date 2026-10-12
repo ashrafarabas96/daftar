@@ -136,7 +136,13 @@ const NESTED_SCHEMA_KEYS: Readonly<Record<string, readonly string[]>> = {
 function keyPaths(value: unknown, prefix: string): { readonly path: string; readonly accounted: boolean; readonly value: unknown }[] {
   if (Array.isArray(value)) return value.flatMap((v) => keyPaths(v, `${prefix}[]`));
   if (value === null || typeof value !== 'object') return [];
-  const declared: readonly string[] | undefined = prefix === '' ? SCHEMA_KEYS : NESTED_SCHEMA_KEYS[prefix];
+  // `Object.hasOwn`, not a bare index: a rule carrying a key named
+  // `constructor` or `__proto__` would otherwise read Object.prototype's own
+  // property as this level's "declared" list and crash on `.includes`
+  // (coordinator F-7). A hostile or merely odd key must be UNACCOUNTED, which
+  // is what the fail-closed arm already does once the lookup is safe.
+  const declared: readonly string[] | undefined =
+    prefix === '' ? SCHEMA_KEYS : Object.hasOwn(NESTED_SCHEMA_KEYS, prefix) ? NESTED_SCHEMA_KEYS[prefix] : undefined;
   const out: { path: string; accounted: boolean; value: unknown }[] = [];
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     const path = prefix === '' ? k : `${prefix}.${k}`;
@@ -208,6 +214,30 @@ function receiverOf(r: Rule): { readonly value: string; readonly unrecognised: r
  * "nothing anywhere" is no longer true and a human has to look.
  */
 /**
+ * A grep whose EXIT CODE was read. 0 = matched, 1 = no match, >=2 = the search
+ * failed, and the third is the one that matters: this instrument's whole
+ * output is a set of statements about what the tree does and does not contain,
+ * so a search that could not run must never contribute an absence. The
+ * coordinator swept the pack for this class (F-11 and its siblings) after
+ * finding it in `exporter()`.
+ */
+function searched(r: ReturnType<typeof spawnSync>, what: string): { readonly out: string; readonly failure: string | null } {
+  if (r.error !== undefined || (r.status !== 0 && r.status !== 1))
+    return {
+      out: '',
+      failure: `SEARCH FAILED for ${what} — exited ${String(r.status)}${(r.stderr ?? '').toString().trim() === '' ? '' : `: ${(r.stderr ?? '').toString().trim().slice(0, 120)}`}. This is NOT a statement of absence.`,
+    };
+  return { out: (r.stdout ?? '').toString(), failure: null };
+}
+
+/**
+ * Failed searches collected across the run. They are reported and they change
+ * the exit code: an instrument that could not look has not established the
+ * absence its table prints.
+ */
+const searchFailures: string[] = [];
+
+/**
  * Search the tracked tree for a pattern, returning the first match's location
  * or null. `git grep` is used rather than a filesystem walk so the search
  * covers exactly what the branch carries — an untracked scratch file left in
@@ -233,7 +263,13 @@ function grepTree(re: RegExp): string | null {
   // the only exemption: a destination anywhere else in the tracked tree,
   // including in any other test, still reddens this check. An apparatus
   // exemption that grew would be a way to hide a real destination.
-  const r = spawnSync('git', ['grep', '-nIE', '--', re.source, ...APPARATUS.map((f) => `:(exclude)${f}`)], { cwd: ROOT, encoding: 'utf8' });
+  const r = spawnSync('git', ['grep', '-nIE', '-i', '--', re.source, ...APPARATUS.map((f) => `:(exclude)${f}`)], { cwd: ROOT, encoding: 'utf8' });
+  // `-i` is not cosmetic. Without it the patterns are case-sensitive, and the
+  // coordinator's F-2 showed what that costs: `PAGERDUTY_ROUTING_KEY` and
+  // `SLACK_WEBHOOK_URL` in a tracked file both gave exit 0 and `NONE FOUND`.
+  // Environment-variable names are the most likely spelling of a real
+  // destination in a repository, and they are conventionally upper case.
+  //
   // git grep exits 1 for "no match", which is the expected answer here; any
   // other non-zero is a failed search, and a failed search must not read as a
   // clean one.
@@ -251,6 +287,67 @@ function grepTree(re: RegExp): string | null {
  * output, and deliberately short.
  */
 const APPARATUS = ['scripts/phase15/verify-alert-signals.ts', 'scripts/phase15/alert-signals-proof.ts'] as const;
+
+/**
+ * THE PAIR-DROP — G-01, and the finding neither check could have caught alone.
+ *
+ * Two checks jointly support one conclusion, "no destination exists": the key
+ * walk, which reads a rule's key PATHS, and the tree grep, which reads TRACKED
+ * FILES. The challenger found a shape that defeats both at once — a destination
+ * written as the VALUE of an ACCOUNTED key, in the rule file:
+ *
+ *     "closure_requirement": "… Page pagerduty://daftar-oncall on breach."
+ *
+ * on all 23 rules. The key walk sees only `resolution.closure_requirement`,
+ * which is accounted for, and `git grep` never sees the rule file at all,
+ * because it lives outside the repository. Exit 0, `RECEIVER UNSET` 23 times,
+ * and the word pagerduty absent from the output. Neither check is defective;
+ * the CONCLUSION they jointly support was false, and no single-check mutation
+ * can reach it — which is why a fully green red-proof harness and a false claim
+ * sat side by side.
+ *
+ * So the same six patterns are run over the rule file's own text. It is the one
+ * subject the tree search structurally cannot reach, and it is the subject this
+ * instrument is about.
+ *
+ * The VALUE IS NEVER PRINTED. A routing value may be a credential — a webhook
+ * URL with a token in its path, a pager key — and this check runs in logs that
+ * go into a handoff. The rule id, the key path and the pattern that matched are
+ * enough for a reader to find it, and they leak nothing.
+ */
+function destinationsInRuleFile(raw: string): readonly string[] {
+  const hits: string[] = [];
+  // The WHOLE DOCUMENT, not the rules array. The coordinator's F-1 added a
+  // third variant to the challenger's two: an Alertmanager-style
+  // `receivers:`/`route:` block sitting BESIDE the rules list, which every
+  // rule-shaped walk misses by construction because it never leaves the rules.
+  // Searching the file's own text covers the rules, anything beside them, and
+  // any shape nobody has thought of — including a key this schema does not
+  // know and a value inside an accounted key.
+  const grouped = new Map<string, number[]>();
+  const lines = raw.split('\n');
+  for (const d of DESTINATION_PATTERNS) {
+    for (const [n, line] of lines.entries()) {
+      if (!d.re.test(line)) continue;
+      // Neither the line nor the value is printed: a routing value may be a
+      // credential — a webhook URL with a token in its path, a pager key — and
+      // this output goes into a handoff. The pattern, the key name and the line
+      // numbers are enough to find it and leak nothing. The key is printed only
+      // when the line actually names one.
+      const key = /"([A-Za-z0-9_.\-]{1,60})"\s*:/.exec(line);
+      const label = `${d.what} in ${key === null ? 'a line naming no key' : `key \`${key[1] ?? '?'}\``}`;
+      grouped.set(label, [...(grouped.get(label) ?? []), n + 1]);
+    }
+  }
+  // GROUPED. A destination planted uniformly across every rule first produced
+  // 23 near-identical sentences on one output line and buried its own finding.
+  // One row per (pattern, key) with the count and the first line numbers says
+  // the same thing and can be read.
+  for (const [label, at] of grouped) {
+    hits.push(`${label} — ${at.length} line(s): ${at.slice(0, 3).join(', ')}${at.length > 3 ? `, +${at.length - 3} more` : ''}`);
+  }
+  return hits;
+}
 
 const DESTINATION_PATTERNS: readonly { readonly what: string; readonly re: RegExp }[] = [
   { what: 'alertmanager configuration', re: /alertmanager|alert_manager/i },
@@ -308,8 +405,12 @@ function emitted(names: ReadonlyMap<string, number>): { readonly sites: Readonly
     if (m?.[1] && m[2]) keyOf.set(m[1], m[2]);
   }
   const sites = new Map<string, string>();
-  const grep = spawnSync('grep', ['-rn', '--include=*.ts', '-E', '\\.(increment|observe)\\(', join(ROOT, 'apps'), join(ROOT, 'packages')], { encoding: 'utf8' });
-  for (const line of (grep.stdout ?? '').split('\n')) {
+  const grep = searched(
+    spawnSync('grep', ['-rn', '--include=*.ts', '-E', '\\.(increment|observe)\\(', join(ROOT, 'apps'), join(ROOT, 'packages')], { encoding: 'utf8' }),
+    'metric emit sites',
+  );
+  if (grep.failure !== null) searchFailures.push(grep.failure);
+  for (const line of grep.out.split('\n')) {
     if (line.trim().length === 0) continue;
     const rel = line.replace(`${ROOT}/`, '');
     if (rel.startsWith(METRICS)) continue; // the port's own implementation
@@ -331,8 +432,12 @@ function emitted(names: ReadonlyMap<string, number>): { readonly sites: Readonly
       }
     }
   }
-  const dyn = spawnSync('grep', ['-rn', '--include=*.ts', '-E', 'METRICS\\[', join(ROOT, 'apps'), join(ROOT, 'packages')], { encoding: 'utf8' });
-  const dynamic = (dyn.stdout ?? '')
+  const dyn = searched(
+    spawnSync('grep', ['-rn', '--include=*.ts', '-E', 'METRICS\\[', join(ROOT, 'apps'), join(ROOT, 'packages')], { encoding: 'utf8' }),
+    'dynamic metric indexing',
+  );
+  if (dyn.failure !== null) searchFailures.push(dyn.failure);
+  const dynamic = dyn.out
     .split('\n')
     .filter((l) => l.trim().length > 0)
     .map((l) => l.replace(`${ROOT}/`, '').slice(0, 160));
@@ -366,6 +471,17 @@ function exporter(): { readonly present: boolean; readonly evidence: string } {
       ['-rn', '--include=*.ts', '--exclude-dir=node_modules', '--exclude-dir=dist', '--exclude-dir=.next', '-F', pattern, join(ROOT, 'apps'), join(ROOT, 'packages')],
       { encoding: 'utf8' },
     );
+    // grep exits 0 for a match, 1 for none, and >=2 for a FAILED SEARCH.
+    // Reading stdout without the code (coordinator F-11) means an unreadable
+    // directory, a bad option or a killed grep all read as "no exporter
+    // exists" — the exact conclusion this function feeds into §22.2. A search
+    // that could not run is not a finding of absence.
+    if (r.error !== undefined || (r.status !== 0 && r.status !== 1)) {
+      found.push(
+        `SEARCH FAILED for ${what} — grep exited ${String(r.status)}${(r.stderr ?? '').trim() === '' ? '' : `: ${(r.stderr ?? '').trim().slice(0, 100)}`}. This is NOT a statement that no exporter exists.`,
+      );
+      continue;
+    }
     for (const line of (r.stdout ?? '').split('\n')) {
       if (line.trim().length === 0) continue;
       const rel = line.replace(`${ROOT}/`, '');
@@ -535,8 +651,23 @@ function main(): number {
     const hit = grepTree(d.re);
     if (hit !== null) destinations.push(`${d.what} — ${hit}`);
   }
+  // THE THIRD SUBJECT, and the one the other two structurally cannot reach.
+  // `git grep` reads the tracked tree; the key walk reads key PATHS. The rule
+  // file is neither: it lives outside the repository, so the grep never sees
+  // it, and a destination written as a VALUE — or in a block beside the rules
+  // list — carries no unaccounted key, so the walk never sees it either. Two
+  // sound checks, one false conclusion, reachable by no single-check mutation.
+  const inFile = destinationsInRuleFile(rulesBytes.toString('utf8'));
+  destinations.push(...inFile);
   console.log(`  destination configuration in the repository: ${destinations.length === 0 ? `NONE FOUND \u2014 ${DESTINATION_PATTERNS.length} patterns searched over the TRACKED tree (${DESTINATION_PATTERNS.map((d) => d.what).join(', ')}), excluding only the ${APPARATUS.length} apparatus file(s) that contain destination literals by necessity (${APPARATUS.join(', ')})` : destinations.join('; ')}`);
-  console.log('  Two bounds on that search, stated because they are the ways it can be wrong:');
+  console.log(`  destination patterns over the RULE FILE'S OWN TEXT (${RULES}): ${inFile.length === 0 ? 'NONE FOUND' : `${inFile.length} match(es) — ${inFile.join('; ')}`}`);
+  console.log('    This subject is searched separately because neither other check can reach it: the');
+  console.log('    tree grep reads TRACKED files and the rule file is not in Git, and the key walk reads');
+  console.log('    key PATHS, so a destination written as the VALUE of an accounted key — or in a block');
+  console.log('    beside the rules list — is invisible to both. Two sound checks, one false conclusion,');
+  console.log('    and no single-check mutation can reach it. Values and whole lines are never printed:');
+  console.log('    a routing value may carry a credential and this output goes into a handoff.');
+  console.log('  Bounds on these searches, stated because they are the ways they can be wrong:');
   console.log('    \u00b7 `git grep` reads TRACKED files only, so an uncommitted destination is invisible to it;');
   console.log('    \u00b7 the six patterns are a list, and a destination configured some other way is not in it;');
   console.log('    \u00b7 the apparatus exemption above is the only one. It covers this checker, which writes the');
@@ -556,6 +687,15 @@ function main(): number {
   // The claim is now falsifiable in both directions, which is what makes it a
   // measurement. Routing that appears without the owner's decision being
   // recorded is a change this instrument must not pass over in silence.
+  // A FAILED SEARCH IS ITS OWN PROBLEM, before any conclusion is drawn from
+  // the searches. Reporting absence from a search that did not run is how this
+  // instrument would lie most quietly.
+  if (searchFailures.length > 0) {
+    for (const f of searchFailures) resolutionProblems.push(f);
+    console.log('');
+    console.log(`  ! ${searchFailures.length} SEARCH(ES) FAILED. Every statement of absence in this run is unestablished:`);
+    for (const f of searchFailures) console.log(`    ${f}`);
+  }
   if (unexpected.length > 0 || destinations.length > 0) {
     const routing = unexpected.filter((u) => u.routing);
     resolutionProblems.push(

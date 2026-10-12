@@ -853,12 +853,28 @@ async function validateRolesRecovered(port: number): Promise<ValidatorResult> {
       await client.connect();
       await client.query('SELECT 1');
     } catch (e) {
+      // WHICH failure, by SQLSTATE — coordinator F-9.
+      //
+      // This reported every connection error as "cannot authenticate", so the
+      // red proof that plants a wrong password was satisfied by any fault at
+      // all: a stopped server, a dropped socket, a missing database. A proof
+      // whose expected message is produced by causes other than the planted
+      // one does not establish that the planted one is detected.
+      //
+      // 28P01 is invalid_password and 28000 is invalid_authorization_
+      // specification; those are authentication, and V8 owns them. Anything
+      // else is a different fault, and V8 says so rather than claiming a
+      // credential problem it did not observe.
+      const code = typeof (e as { code?: unknown }).code === 'string' ? (e as { code: string }).code : '';
+      const isAuth = code === '28P01' || code === '28000';
       return {
         id: 'V8',
         title: 'runtime roles recovered from the globals backup',
         verdict: 'FAIL',
         subjects: present.size,
-        message: `${APP_ROLE} exists but cannot authenticate after the restore`,
+        message: isAuth
+          ? `${APP_ROLE} exists but cannot authenticate after the restore (SQLSTATE ${code})`
+          : `${APP_ROLE} exists but the connection failed for a reason that is NOT authentication (SQLSTATE ${code === '' ? 'none reported' : code}) — this is a different fault and must not be read as a credential problem`,
         detail: e instanceof Error ? e.message : String(e),
       };
     } finally {
@@ -1105,7 +1121,10 @@ const RED_PROOFS: readonly RedProof[] = [
     landedExpected: '1',
     clusterMutate: `ALTER ROLE daftar_app PASSWORD 'p15-r11-wrong-password'`,
     clusterCleanup: `ALTER ROLE daftar_app PASSWORD '${APP_PASSWORD}'`,
-    expect: { validator: 'V8', messageContains: 'cannot authenticate' },
+    // Anchored to the SQLSTATE, not to the prose: the message "cannot
+    // authenticate" was produced by any connection fault, so the proof could
+    // pass without the planted password ever being the cause.
+    expect: { validator: 'V8', messageContains: 'cannot authenticate after the restore (SQLSTATE 28P01)' },
   },
   {
     id: 'R12',
@@ -1143,13 +1162,28 @@ interface Timings {
 
 async function main(): Promise<void> {
   const started = new Date();
-  const gitSha = (spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout ?? '').trim();
-  const gitDirty = (spawnSync('git', ['-C', ROOT, 'status', '--porcelain'], { encoding: 'utf8' }).stdout ?? '').trim().length > 0;
+  // Provenance is a claim like any other. A `git status` that did not run
+  // produces empty output, and empty output read as "no changes" would print a
+  // SHA with no dirty marker: a clean-tree claim from a command that failed.
+  // Read the exit code and say UNDETERMINED instead.
+  const gitRead = (args: readonly string[]): string | null => {
+    const r = spawnSync('git', ['-C', ROOT, ...args], { encoding: 'utf8' });
+    return r.status === 0 ? (r.stdout ?? '').trim() : null;
+  };
+  const shaOut = gitRead(['rev-parse', 'HEAD']);
+  const dirtyOut = gitRead(['status', '--porcelain']);
+  const gitSha = shaOut === null ? '' : shaOut;
+  const treeState =
+    shaOut === null || dirtyOut === null
+      ? ` — TREE STATE UNDETERMINED (git ${shaOut === null ? 'rev-parse' : 'status'} did not run; this run is not bound to a commit)`
+      : dirtyOut.length > 0
+        ? ' + UNCOMMITTED CHANGES'
+        : '';
 
   console.log('━'.repeat(78));
   console.log('PHASE 15 — BACKUP / RESTORE / DR PROOF   (PREPARED / NOT PROMOTED)');
   console.log('━'.repeat(78));
-  console.log(`  tree              ${gitSha || '(unknown)'}${gitDirty ? ' + UNCOMMITTED CHANGES' : ''}`);
+  console.log(`  tree              ${gitSha || '(unknown)'}${treeState}`);
   console.log(
     `  tools             ${Object.entries(toolVersions())
       .map(([k, v]) => `${k}=${v.split(' ')[2] ?? v}`)
@@ -1319,7 +1353,7 @@ async function main(): Promise<void> {
     const summary = {
       status: 'PREPARED / NOT PROMOTED',
       sha: gitSha,
-      dirty: gitDirty,
+      dirty: dirtyOut === null ? 'UNDETERMINED — git status did not run' : dirtyOut.length > 0,
       startedAt: started.toISOString(),
       validators: results.map((r) => ({ id: r.id, verdict: r.verdict, subjects: r.subjects })),
       redProofs: redResults.map((r) => ({ id: r.id, outcome: r.outcome })),

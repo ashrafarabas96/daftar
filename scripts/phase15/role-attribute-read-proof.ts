@@ -4,6 +4,7 @@
  * and a control proving a planted attribute is actually caught.
  */
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { prepareClusterDir, startCluster, stopCluster, PG_SUPERPASS, type ClusterSpec } from './pg-cluster';
 
@@ -21,6 +22,20 @@ import { prepareClusterDir, startCluster, stopCluster, PG_SUPERPASS, type Cluste
  * but one box, which is exactly where §79 requires it to run.
  */
 const ROOT = resolve(__dirname, '../..');
+
+/**
+ * PER-RUN fixture credentials — coordinator F-13.
+ *
+ * These were four hard-coded literals (`p15app`, `p15rec`, `p15mig`,
+ * `p15read`) while the handoff claimed "per-run fixture credentials" without
+ * qualification, and the DR proof's fixture really is per-run. A password in
+ * source is a password that outlives its run, gets copied into a second
+ * script, and is eventually the one somebody reuses outside a disposable
+ * cluster. The claim is the right one; the code was the half that was wrong,
+ * so the code changed rather than the sentence.
+ */
+const pw = (label: string): string => `p15_${label}_${randomBytes(12).toString('hex')}`;
+const PW = { app: pw('app'), rec: pw('rec'), mig: pw('mig'), read: pw('read') } as const;
 
 const DIR = '/tmp/daftar-p15-roleread';
 const PORT = 55487;
@@ -55,11 +70,11 @@ function main(): number {
   let failures = 0;
   let notRun = 0;
   try {
-    psqlRun("CREATE ROLE daftar_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'p15app'");
-    psqlRun("CREATE ROLE daftar_reconciler LOGIN NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'p15rec'");
-    psqlRun("CREATE ROLE daftar_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'p15mig'");
-    psqlRun("CREATE ROLE p15_reader LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'p15read'");
-    const readerUrl = `postgresql://p15_reader:p15read@127.0.0.1:${PORT}/postgres`;
+    psqlRun(`CREATE ROLE daftar_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '${PW.app}'`);
+    psqlRun(`CREATE ROLE daftar_reconciler LOGIN NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '${PW.rec}'`);
+    psqlRun(`CREATE ROLE daftar_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '${PW.mig}'`);
+    psqlRun(`CREATE ROLE p15_reader LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${PW.read}'`);
+    const readerUrl = `postgresql://p15_reader:${PW.read}@127.0.0.1:${PORT}/postgres`;
 
     console.log('='.repeat(78));
     console.log('CONTROL 1 (POSITIVE) — clean roles, read by a NON-SUPERUSER: expect exit 0');
@@ -121,13 +136,13 @@ function main(): number {
     // the negative half below would prove nothing.
     const allowed = spawnSync('/usr/lib/postgresql/16/bin/psql', ['-h', '127.0.0.1', '-p', String(PORT), '-U', 'p15_reader', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'CREATE TABLE p15_reader_owned.allowed_probe(x int)'], {
       encoding: 'utf8',
-      env: { ...process.env, PGPASSWORD: 'p15read' },
+      env: { ...process.env, PGPASSWORD: PW.read },
     });
     const canWriteWhenAllowed = allowed.status === 0;
     console.log(`  with writes allowed, the same role CAN create there: ${canWriteWhenAllowed ? 'yes' : 'NO — this control is invalid'}`);
     const w = spawnSync('/usr/lib/postgresql/16/bin/psql', ['-h', '127.0.0.1', '-p', String(PORT), '-U', 'p15_reader', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'CREATE TABLE p15_reader_owned.must_not_exist(x int)'], {
       encoding: 'utf8',
-      env: { ...process.env, PGPASSWORD: 'p15read', PGOPTIONS: '-c default_transaction_read_only=on' },
+      env: { ...process.env, PGPASSWORD: PW.read, PGOPTIONS: '-c default_transaction_read_only=on' },
     });
     const refusal = (w.stderr ?? '').trim().split('\n')[0] ?? '(nothing)';
     const refused = w.status !== 0 && /read-only transaction/i.test(`${w.stderr ?? ''}`);
@@ -139,6 +154,21 @@ function main(): number {
     stopCluster(spec);
   }
   console.log('='.repeat(78));
+  // A FAILURE OUTRANKS AN UNMEASURED CONTROL — coordinator F-8.
+  //
+  // This returned 2 as soon as any control could not START, before it looked
+  // at whether another control had FAILED. So a genuine failure travelled
+  // under a "not measured" exit code, and the louder fact was the weaker one.
+  // Both are now reported; the exit code carries the failure when there is
+  // one, because a control that failed is a measurement and an exit 2 would
+  // describe it as an absence of measurement.
+  if (failures > 0 && notRun > 0) {
+    console.log(`EXIT 1 — ${failures} CONTROL(S) FAILED, and separately ${notRun} control(s) could not be started.`);
+    console.log('  The failure decides the exit code: it is a measurement, and reporting it as NOT');
+    console.log('  MEASURED would hide a real defect behind an absence. The unstarted controls are');
+    console.log('  named above and remain unmeasured — neither fact is folded into the other.');
+    return 1;
+  }
   if (notRun > 0) {
     console.log(`EXIT 2 — NOT MEASURED: ${notRun} control(s) could not be started, so this proof says nothing`);
     console.log('  about whether the check works. An unrunnable proof and a failing proof are');

@@ -95,7 +95,11 @@
     "gate:browser": "tsx tests/browser/gate.ts",
     "verify:alert-signals:prove": "tsx scripts/phase15/alert-signals-proof.ts",
     "checkpoint:phase15": "tsx scripts/phase15/resume-checkpoint.ts",
-    "checkpoint:phase15:prove": "tsx scripts/phase15/checkpoint-proof.ts"
+    "checkpoint:phase15:prove": "tsx scripts/phase15/checkpoint-proof.ts",
+    "scan:secrets:release:prove": "tsx scripts/phase15/secret-scan-proof.ts",
+    "verify:exit-codes:phase15": "tsx scripts/phase15/exit-code-sweep.ts",
+    "verify:exit-codes:phase15:prove": "tsx scripts/phase15/exit-code-sweep.ts --prove",
+    "verify:handoff-manifest:prove": "tsx scripts/phase15/handoff-manifest-proof.ts"
   },
   "engines": {
     "node": ">=24 <25"
