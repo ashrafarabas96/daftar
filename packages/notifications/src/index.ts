@@ -21,6 +21,8 @@ export * from './eligibility';
 export * from './provider';
 export * from './limits';
 export * from './delivery';
+export * from './schedule';
+export * from './revocation';
 export * from './webhook';
 export * from './consumer';
 export * from './dispatch';

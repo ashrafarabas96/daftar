@@ -198,3 +198,11 @@ export function catalogEntry(kind: string): CatalogEntry | undefined {
 export function kindsForEventType(eventType: string): readonly NotificationKind[] {
   return CATALOG.filter((e) => e.trigger.source === 'outbox' && e.trigger.eventType === eventType).map((e) => e.kind);
 }
+
+/**
+ * Schedule id → the kinds it fires. The mirror of `kindsForEventType`, and the
+ * lookup the scheduled path needs: an id no kind is bound to fires nothing.
+ */
+export function scheduledKindsFor(scheduleId: string): readonly NotificationKind[] {
+  return CATALOG.filter((e) => e.trigger.source === 'schedule' && e.trigger.scheduleId === scheduleId).map((e) => e.kind);
+}
