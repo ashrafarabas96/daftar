@@ -2028,13 +2028,15 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     expect(refusalCodeOf(() => ask(withGrant, 'g1', 11n))).toBe('loyalty.corrects_more_than_target');
     expect(ask(withGrant, 'g1', 10n).pointsDelta).toBe(10n);
 
-    // AND IT COUNTS BOTH DIRECTIONS, which is the conservative reading and is
-    // deliberate. A negative hand correction naming the draw (A-16's own desk
-    // correction, admitted by `validateDraft`) has already moved that row's
-    // quantity, so this writer refuses a further movement against it rather
-    // than letting the same 40 be accounted for twice over; the lawful remedy
-    // there is a fresh grant. A mutation that counts only the positive
-    // direction is caught here and nowhere else.
+    // AND IT IS A NET BOUND OVER THE CHAIN, which round 9 made it (`F-25`).
+    // The reading here used to be "magnitudes in either direction on this one
+    // row", which refused a further point after a negative hand correction had
+    // moved the same row. Under the chain invariant the quantity a chain may
+    // move is its ROOT's magnitude, NET: a draw of 40 moved twice over by a
+    // desk correction has a net of -40, so restoring 1 is inside the root and
+    // is built, while anything that pushes the net past 40 in either direction
+    // is refused by name. The change is deliberate and the figures are here so
+    // the rule is read off the case rather than off a sentence.
     const twiceMoved: LoyaltyLedger = {
       movements: [
         ...base.movements,
@@ -2046,7 +2048,9 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
         },
       ],
     };
-    expect(refusalCodeOf(() => ask(twiceMoved, 'c1', 1n))).toBe('loyalty.corrects_more_than_target');
+    expect(ask(twiceMoved, 'c1', 1n).pointsDelta).toBe(1n);
+    expect(ask(twiceMoved, 'c1', 80n).pointsDelta).toBe(80n);
+    expect(refusalCodeOf(() => ask(twiceMoved, 'c1', 81n))).toBe('loyalty.corrects_more_than_target');
 
     // A ZERO target. `validateDraft` refuses a zero delta, so such a row exists
     // only past the writer — and a correction of a row that moved nothing is
@@ -2069,6 +2073,256 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       expiresOn: null, effectiveOn: '2026-01-02', reason: 'nothing', correctsId: null,
     }))).toBe('loyalty.movement_would_be_zero');
     expect(refusalCodeOf(() => ask(withZero, 'z1', 1n))).toBe('loyalty.corrects_more_than_target');
+  });
+
+  it('F-25 — the bound is one invariant over the whole chain, and the chain was unbounded', () => {
+    // An eighth round found the bound was per LINK: each link may name the
+    // PREVIOUS link, and for a freshly appended correction nothing has moved
+    // that row yet, so every link passed its own comparison and nothing bounded
+    // the sum. Reproduced before the fix, through this writer alone
+    // (`balance / spendable / withheld / eligible`):
+    //
+    //   20 links on a 100-point earn          2100 / 100 / 2000 / 100
+    //   2 links on a 1,000,000-point earn  3000000 / 1000000 / 2000000 / 1000000
+    //   5 links on a 40-point consume       260 /  60 /  200 /  60
+    //
+    // A balance of 2100 for a customer who has earned 100, and TWO desk
+    // corrections are enough. Redemption was never over-offered — the eligible
+    // figure is the truth at every length — so it is an over-report, the class
+    // `F-21` was accepted as a blocker on.
+    let ledger = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'));
+    ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-02', 'c1'))).ledger;
+    const link = (l: LoyaltyLedger, correctsId: string, id: string, points: bigint) =>
+      buildReversalMovement(l, {
+        businessId: BUSINESS, customerId: CUSTOMER, sourceId: `desk-${id}`, correctsId, points,
+        asOf: '2026-01-03', movementId: id, reason: 'desk correction',
+      });
+
+    // THE WHOLE CHAIN, AT ITS BOUND. The first link restores the draw's 40 and
+    // the second — naming the first — would take the chain's net to 80.
+    const first = appendMovement(ledger, link(ledger, 'c1', 'x0', 40n)).ledger;
+    expect(refusalCodeOf(() => link(first, 'x0', 'x1', 40n))).toBe('loyalty.corrects_more_than_target');
+    // Even one point, because the chain is already at its root's magnitude.
+    expect(refusalCodeOf(() => link(first, 'x0', 'x1', 1n))).toBe('loyalty.corrects_more_than_target');
+
+    // A DEEP CHAIN (four links), refused at the first step that crosses. Each
+    // link corrects the one before it, and the bound is the root's 40 net.
+    let deep = ledger;
+    let target = 'c1';
+    for (const [i, points] of [10n, 10n, 10n, 10n].entries()) {
+      deep = appendMovement(deep, link(deep, target, `k${i}`, points)).ledger;
+      target = `k${i}`;
+    }
+    expect(deep.movements.length).toBe(6);
+    expect(refusalCodeOf(() => link(deep, target, 'k9', 1n))).toBe('loyalty.corrects_more_than_target');
+
+    // AN ALTERNATING-SIGN CHAIN. `buildReversalMovement` builds only positive
+    // quantities, so the negative link is A-16's own desk correction, written
+    // past the writer — and once the chain's net falls back inside the root,
+    // the next positive correction is LAWFUL again. That is why the remedy is a
+    // net bound and not a refusal of corrections of corrections: "the cancel
+    // was itself wrong" is a real desk sequence.
+    const cancelled: LoyaltyLedger = {
+      movements: [
+        ...first.movements,
+        {
+          id: 'z0', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 4n,
+          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-z0',
+          pointsDelta: -40n, expiresOn: null, effectiveOn: '2026-01-03',
+          reason: 'the restoration was itself cancelled', correctsId: 'x0',
+        },
+      ],
+    };
+    expect(link(cancelled, 'z0', 'z1', 40n).pointsDelta).toBe(40n);
+    expect(refusalCodeOf(() => link(cancelled, 'z0', 'z1', 41n))).toBe('loyalty.corrects_more_than_target');
+
+    // A ROOT THAT MOVED NOTHING admits no correction: the ledger itself refuses
+    // a zero delta, so the row is hand-built, and the chain's bound is 0.
+    const zeroRoot: LoyaltyLedger = {
+      movements: [
+        ...ledger.movements,
+        {
+          id: 'q0', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
+          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-q0',
+          pointsDelta: 0n, expiresOn: null, effectiveOn: '2026-01-02',
+          reason: 'a row the ledger itself would refuse', correctsId: null,
+        },
+      ],
+    };
+    expect(refusalCodeOf(() => link(zeroRoot, 'q0', 'q1', 1n))).toBe('loyalty.corrects_more_than_target');
+
+    // A CHAIN THIS LEDGER CANNOT READ TO ITS ROOT is a named refusal and not a
+    // pass: a root the writer cannot see is not a bound. This is the shape a
+    // caller's filter or an RLS-narrowed read produces.
+    const blinded: LoyaltyLedger = {
+      movements: [
+        ...ledger.movements,
+        {
+          id: 'u0', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
+          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-u0',
+          pointsDelta: 40n, expiresOn: null, effectiveOn: '2026-01-03',
+          reason: 'a correction whose target is not in this read', correctsId: 'not-in-this-ledger',
+        },
+      ],
+    };
+    expect(refusalCodeOf(() => link(blinded, 'u0', 'u1', 1n))).toBe('loyalty.corrects_chain_unreadable');
+
+    // AND A CYCLE IS REFUSED RATHER THAN WALKED. No writer here can build one;
+    // the `LoyaltyLedger` type admits it, and a guard that hangs the till would
+    // be worse than the report it fixes.
+    const cyclic: LoyaltyLedger = {
+      movements: [
+        ...ledger.movements,
+        {
+          id: 'p1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
+          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-p1',
+          pointsDelta: 10n, expiresOn: null, effectiveOn: '2026-01-03', reason: 'p', correctsId: 'p2',
+        },
+        {
+          id: 'p2', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 4n,
+          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-p2',
+          pointsDelta: 10n, expiresOn: null, effectiveOn: '2026-01-03', reason: 'q', correctsId: 'p1',
+        },
+      ],
+    };
+    expect(refusalCodeOf(() => link(cyclic, 'p1', 'p3', 1n))).toBe('loyalty.corrects_cycle');
+    // And the fold itself still terminates on that ledger, because it never
+    // takes a second hop — measured, not assumed.
+    expect(foldExpiry(cyclic, BUSINESS, CUSTOMER, '2026-06-01').balancePoints).toBe(80n);
+
+    // WHAT THIS DOES NOT BIND, measured so the residual is not a sentence: a
+    // chain written past this writer is still admitted by the relation.
+    let byHand: LoyaltyLedger = ledger;
+    let handTarget = 'c1';
+    for (let i = 0; i < 20; i += 1) {
+      byHand = {
+        movements: [
+          ...byHand.movements,
+          {
+            id: `h${i}`, businessId: BUSINESS, customerId: CUSTOMER, pointSeq: BigInt(3 + i),
+            movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: `adj-h${i}`,
+            pointsDelta: 100n, expiresOn: null, effectiveOn: '2026-01-03',
+            reason: 'a desk chain', correctsId: handTarget,
+          },
+        ],
+      };
+      handTarget = `h${i}`;
+    }
+    const fold = foldExpiry(byHand, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(fold.balancePoints).toBe(2060n);
+    expect(fold.spendablePoints).toBe(60n);
+    expect(fold.unattributablePoints).toBe(2000n);
+    expect(eligiblePoints(byHand, BUSINESS, CUSTOMER, '2026-06-01')).toBe(60n);
+  });
+
+  it('F-25 RED PROOF — the per-link bound restored, and it accepts a chain of 1 000 100', () => {
+    // `P13-S0 §5`'s canary requirement. `perLink` is the bound exactly as it
+    // stood at `3f5a8d2`: the named row's own magnitude, less what corrections
+    // OF THAT ROW have already moved. Asked about a chain where each link names
+    // the one before it, it accepts every link — which is the finding.
+    const perLink = (movements: readonly LoyaltyMovement[], correctsId: string, points: bigint): string => {
+      const corrected = must(movements.find((m) => m.id === correctsId), 'the corrected row');
+      const moved = corrected.pointsDelta < 0n ? -corrected.pointsDelta : corrected.pointsDelta;
+      const alreadyMoved = movements
+        .filter((m) => m.correctsId === corrected.id)
+        .reduce((acc, m) => acc + (m.pointsDelta < 0n ? -m.pointsDelta : m.pointsDelta), 0n);
+      return alreadyMoved + points > moved ? 'loyalty.corrects_more_than_target' : '(accepted)';
+    };
+
+    // A 100-point earn and 10 000 links of 100, each correcting the one before.
+    const rows: LoyaltyMovement[] = [{
+      id: 'e1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
+      movementKind: 'earn', sourceType: 'sale', sourceId: 'sale-e1',
+      pointsDelta: 100n, expiresOn: '2027-01-01', effectiveOn: '2026-01-01',
+      reason: null, correctsId: null,
+    }];
+    let target = 'e1';
+    let accepted = 0;
+    for (let i = 0; i < 10000; i += 1) {
+      // The predicate is asked about the chain as it stands, link by link.
+      if (perLink(rows, target, 100n) === '(accepted)') accepted += 1;
+      rows.push({
+        id: `n${i}`, businessId: BUSINESS, customerId: CUSTOMER, pointSeq: BigInt(2 + i),
+        movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: `adj-n${i}`,
+        pointsDelta: 100n, expiresOn: null, effectiveOn: '2026-01-03',
+        reason: 'a desk chain', correctsId: target,
+      });
+      target = `n${i}`;
+    }
+    // EVERY ONE of them, and the balance the ledger then reports.
+    expect(accepted).toBe(10000);
+    expect(foldBalance({ movements: rows }, BUSINESS, CUSTOMER, '2026-06-01').balancePoints).toBe(1000100n);
+
+    // The chain invariant refuses the SECOND link of that same chain, by name.
+    const twoRows: LoyaltyLedger = { movements: [must(rows[0], 'the earn'), must(rows[1], 'the first link')] };
+    expect(refusalCodeOf(() => buildReversalMovement(twoRows, {
+      businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-2', correctsId: 'n0',
+      points: 1n, asOf: '2026-01-03', movementId: 'n1', reason: 'desk correction',
+    }))).toBe('loyalty.corrects_more_than_target');
+
+    // And the other figure the per-link bound produced: two links on a lawful
+    // 1,000,000-point earn, which is the one that needs no patience at all.
+    const bigEarn = ledgerOf(earn('e9', 1000000n, '2026-01-01', '2027-01-01'));
+    const one = appendMovement(bigEarn, buildReversalMovement(bigEarn, {
+      businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-b1', correctsId: 'e9',
+      points: 1000000n, asOf: '2026-01-03', movementId: 'b1', reason: 'desk correction',
+    })).ledger;
+    expect(perLink(one.movements, 'b1', 1000000n)).toBe('(accepted)');
+    expect(refusalCodeOf(() => buildReversalMovement(one, {
+      businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-b2', correctsId: 'b1',
+      points: 1000000n, asOf: '2026-01-03', movementId: 'b2', reason: 'desk correction',
+    }))).toBe('loyalty.corrects_more_than_target');
+  });
+
+  it('F-26 — the target is found by the DECLARED key, so one business cannot decide another\'s refusals', () => {
+    // `§1.3` keys the relation `(business_id, id)` and there is no global unique
+    // on `id`, so two businesses may hold one movement id — the case RLS case 9
+    // exists for. This writer matched on `id` alone, and both arms were
+    // measured: with the sibling business's row earlier in the ledger, a
+    // business's LAWFUL correction of its own row was refused
+    // `loyalty.corrects_unknown_movement`; and with the party check passing,
+    // the other business's corrections were counted into this one's bound, so
+    // it could not correct its own row by even 1 point. Both failed CLOSED,
+    // which is why this was a residual and not a blocker — and it is still one
+    // party's writes deciding another's refusals.
+    const row = (businessId: string, id: string, seq: bigint, delta: bigint, correctsId: string | null = null): LoyaltyMovement => ({
+      id, businessId, customerId: CUSTOMER, pointSeq: seq,
+      movementKind: delta < 0n ? 'consume' : 'adjust',
+      sourceType: delta < 0n ? 'sale' : 'manual_adjustment', sourceId: `src-${businessId}-${id}`,
+      pointsDelta: delta, expiresOn: null, effectiveOn: '2026-01-02',
+      reason: delta < 0n ? null : 'desk', correctsId,
+    });
+    const ask = (ledger: LoyaltyLedger, points: bigint) =>
+      buildReversalMovement(ledger, {
+        businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1', correctsId: 'm1', points,
+        asOf: '2026-01-03', movementId: 'r1', reason: 'desk correction',
+      });
+
+    // The sibling business's row comes FIRST, which is what made `find` pick it.
+    const shared: LoyaltyLedger = { movements: [row('biz-2', 'm1', 1n, -40n), row(BUSINESS, 'm1', 1n, -40n)] };
+    expect(ask(shared, 40n).pointsDelta).toBe(40n);
+
+    // And the other party's corrections are not counted into this bound.
+    const alsoCorrected: LoyaltyLedger = {
+      movements: [
+        row(BUSINESS, 'm1', 1n, -40n),
+        row('biz-2', 'm1', 1n, -40n),
+        row('biz-2', 'r9', 2n, 40n, 'm1'),
+      ],
+    };
+    expect(ask(alsoCorrected, 1n).pointsDelta).toBe(1n);
+    expect(ask(alsoCorrected, 40n).pointsDelta).toBe(40n);
+    expect(refusalCodeOf(() => ask(alsoCorrected, 41n))).toBe('loyalty.corrects_more_than_target');
+
+    // A target that belongs to another party is NOT FOUND, by name. This is the
+    // refusal the deleted party check used to give: with the lookup keyed it
+    // could never fire, and a guard that cannot fire is a comment.
+    const othersOnly: LoyaltyLedger = { movements: [row('biz-2', 'm1', 1n, -40n)] };
+    expect(refusalCodeOf(() => ask(othersOnly, 40n))).toBe('loyalty.corrects_unknown_movement');
+    const otherCustomer: LoyaltyLedger = {
+      movements: [{ ...row(BUSINESS, 'm1', 1n, -40n), customerId: 'cust-other' }],
+    };
+    expect(refusalCodeOf(() => ask(otherCustomer, 40n))).toBe('loyalty.corrects_unknown_movement');
   });
 
   it('F-23 RED PROOF — the sign gate restored, and the defect comes back to the digit', () => {

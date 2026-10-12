@@ -1339,15 +1339,37 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   if (request.correctsId === request.movementId) {
     refuseLoyalty('loyalty.corrects_self', 'a movement cannot correct itself', { movementId: request.movementId });
   }
-  const corrected = ledger.movements.find((m) => m.id === request.correctsId);
+  // `F-26` — THE TARGET IS FOUND BY THE DECLARED KEY, NOT BY `id` ALONE.
+  //
+  // `§1.3` keys the relation `(business_id, id)` and there is no global unique
+  // on `id`, so two businesses may hold one movement id — which is exactly what
+  // RLS case 9 exists to exercise. This lookup read `id` alone, and an eighth
+  // challenge round measured what that costs: with a sibling business's row
+  // earlier in the ledger, a business's LAWFUL correction of its OWN row was
+  // refused `loyalty.corrects_unknown_movement`, because the other party's row
+  // was found first and then failed the party check that used to sit here. And
+  // with that check passing, the bound's own filter was unkeyed too, so another
+  // business's corrections tightened this one's bound. Both arms failed CLOSED,
+  // which is why it was a residual and not a blocker — and it is still one
+  // party's writes deciding another's refusals. `validateDraft` in this same
+  // file already spells the key correctly.
+  //
+  // The party check is GONE rather than kept: with the lookup keyed, a target
+  // belonging to another party is simply not found, so the check could never
+  // fire, and a guard that cannot fire is a comment (`P13-AL-21`). The refusal
+  // a cross-party target gets is the same one, by name, and the suite asserts
+  // it for another business and for another customer.
+  const sameParty = (m: LoyaltyMovement): boolean =>
+    m.businessId === request.businessId && m.customerId === request.customerId;
+  const byDeclaredKey = (id: string): LoyaltyMovement | undefined =>
+    ledger.movements.find((m) => m.id === id && sameParty(m));
+
+  const corrected = byDeclaredKey(request.correctsId);
   if (corrected === undefined) {
-    refuseLoyalty('loyalty.corrects_unknown_movement', 'a reversal must name a movement this ledger holds', {
+    refuseLoyalty('loyalty.corrects_unknown_movement', 'a reversal must name a movement this ledger holds for this party', {
       correctsId: request.correctsId,
-    });
-  }
-  if (corrected.businessId !== request.businessId || corrected.customerId !== request.customerId) {
-    refuseLoyalty('loyalty.corrects_unknown_movement', 'a reversal and the movement it corrects belong to one party', {
-      correctsId: request.correctsId,
+      businessId: request.businessId,
+      customerId: request.customerId,
     });
   }
 
@@ -1410,24 +1432,113 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   // standing grant, a positive `manual_adjustment` with `correctsId === null`,
   // which this writer deliberately does not build.
   //
-  // So the bound is taken on the MAGNITUDE of the row named, whatever its sign,
-  // less what every earlier correction of that row has already moved **in
-  // either direction**. Counting both directions is the conservative reading
-  // and it is deliberate: a quantity taken, given back and taken again leaves
-  // this writer refusing a third movement against the same row, and the lawful
-  // remedy there is a fresh grant rather than another correction of a row whose
-  // own quantity is already accounted for twice over.
-  const moved = corrected.pointsDelta < 0n ? -corrected.pointsDelta : corrected.pointsDelta;
-  const alreadyMoved = ledger.movements
-    .filter((m) => m.correctsId === corrected.id)
-    .reduce((acc, m) => acc + (m.pointsDelta < 0n ? -m.pointsDelta : m.pointsDelta), 0n);
-  if (alreadyMoved + request.points > moved) {
-    refuseLoyalty('loyalty.corrects_more_than_target', 'a correction may not move more than the movement it corrects moved', {
+  // `F-25` — AND THE BOUND IS OVER THE WHOLE CHAIN, NOT OVER ONE LINK.
+  //
+  // Both fixes above bound ONE link, and an eighth challenge round measured
+  // that a chain of links had no bound at all. `§1.4` lets `correctsId` name
+  // any movement the ledger holds and `validateDraft` admits a correction of an
+  // `adjust`, so each link can name the PREVIOUS link — and for a freshly
+  // appended correction nothing has moved that row yet, so every link passed
+  // its own comparison and nothing bounded the sum. Measured through this
+  // function alone, and reproduced in the suite (`balance / spendable /
+  // withheld / eligible`):
+  //
+  //   20 links on a 100-point earn          2100 / 100 / 2000 / 100
+  //   10 000 links on a 100-point earn   1000100 / 100 / 1000000 / 100
+  //   2 links on a 1 000 000-point earn  3000000 / 1000000 / 2000000 / 1000000
+  //
+  // A balance of 2100 for a customer who has earned 100 — and TWO desk
+  // corrections are enough, so the harm `F-21` was raised for ("one hand
+  // correction could set it to any value") was closed for one hand and left
+  // open for two. Redemption was never over-offered: the eligible figure is the
+  // truth at every length, so this is an over-report, which is the class
+  // `F-21` was accepted as a blocker on.
+  //
+  // THE CONDITION ACTUALLY TESTED, stated so no handoff sentence can be wider
+  // than the code (`P13-AL-24`), and with NO branch around it:
+  //
+  //   let R be the ROOT of the chain the named row belongs to — follow
+  //   `correctsId` upward, by the declared key, to the row that corrects
+  //   nothing; let CHAIN be every movement of this party whose `correctsId`
+  //   leads back to R; then this request is REFUSED when
+  //
+  //       | (sum of CHAIN's deltas) + this request's points |  >  | R's delta |
+  //
+  // So what a chain may move is the ROOT's own magnitude, net, however many
+  // hands it passes through. The 20-link chain is refused at its second link; a
+  // chain that alternates sign becomes lawful again once its net falls back
+  // inside the root, which matters because `A-16`'s "the cancel was itself
+  // wrong" is a real desk sequence and refusing a correction of a correction
+  // outright would have refused it; and a root that moved nothing admits no
+  // correction at all. It is still NOT a partial-return rule: `§5.7.4` leaves
+  // the quantity of a partial return to configuration.
+  //
+  // TWO READS THAT COULD FAIL OPEN, AND BOTH ARE NAMED REFUSALS INSTEAD. The
+  // upward walk is a read, and a read can be blinded: a chain whose next row is
+  // not in this ledger for this party — hidden by RLS, filtered by a caller, or
+  // simply absent — is refused `loyalty.corrects_chain_unreadable` rather than
+  // treated as a root, because a root this function cannot see is not a bound.
+  // And a cycle of corrections naming each other is buildable in the
+  // `LoyaltyLedger` type (no writer here can build one, and `foldExpiry`
+  // terminates on one because it never takes a second hop): the walk carries a
+  // visited set and refuses `loyalty.corrects_cycle` rather than looping,
+  // because a guard that hangs the till is worse than the report it fixes. The
+  // downward collection cannot meet a cycle at all — it grows from a root, and
+  // a root has no incoming correction.
+  //
+  // What this does NOT bind is a chain written past this writer, which `A-16`'s
+  // desk correction can still do; the suite measures that figure rather than
+  // claiming the shape is impossible, and §A.3c.3 asks the Migration Owner for
+  // the half that can bind it, beside the direction and ordering items. A
+  // `CHECK` cannot express any of the three.
+  let root: LoyaltyMovement = corrected;
+  const walked = new Set<string>([corrected.id]);
+  while (root.correctsId !== null) {
+    const next = byDeclaredKey(root.correctsId);
+    if (next === undefined) {
+      refuseLoyalty('loyalty.corrects_chain_unreadable', 'the chain this correction would join cannot be read to its root in this ledger', {
+        correctsId: request.correctsId,
+        missing: root.correctsId,
+        readSoFar: String(walked.size),
+      });
+    }
+    if (walked.has(next.id)) {
+      refuseLoyalty('loyalty.corrects_cycle', 'the corrections this one would join form a cycle', {
+        correctsId: request.correctsId,
+        atRow: next.id,
+      });
+    }
+    walked.add(next.id);
+    root = next;
+  }
+
+  const chain = new Set<string>([root.id]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const m of ledger.movements) {
+      if (!sameParty(m) || m.correctsId === null || chain.has(m.id)) continue;
+      if (chain.has(m.correctsId)) {
+        chain.add(m.id);
+        grew = true;
+      }
+    }
+  }
+
+  const rootMagnitude = root.pointsDelta < 0n ? -root.pointsDelta : root.pointsDelta;
+  const movedByChain = ledger.movements
+    .filter((m) => sameParty(m) && m.correctsId !== null && chain.has(m.id))
+    .reduce((acc, m) => acc + m.pointsDelta, 0n);
+  const net = movedByChain + request.points;
+  const netMagnitude = net < 0n ? -net : net;
+  if (netMagnitude > rootMagnitude) {
+    refuseLoyalty('loyalty.corrects_more_than_target', 'the corrections of one movement may not move more than that movement did', {
       correctsId: request.correctsId,
-      correctedPointsDelta: String(corrected.pointsDelta),
-      moved: String(moved),
-      alreadyMoved: String(alreadyMoved),
+      rootId: root.id,
+      rootPointsDelta: String(root.pointsDelta),
+      rootMagnitude: String(rootMagnitude),
+      movedByChain: String(movedByChain),
       requested: String(request.points),
+      wouldBe: String(net),
     });
   }
 
