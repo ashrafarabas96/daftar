@@ -38,7 +38,7 @@ import type { Client } from 'pg';
 
 import { foldCreditBalance } from '../../src/credit';
 import { BillingError } from '../../src/errors';
-import { appUrl, connect, isBlocked, ownerUrl, pidOf, sqlstate, uuid, waitUntilBlocked } from './helpers/cluster';
+import { appUrl, connect, isBlocked, ownerUrl, pidOf, refusedBy, uuid, waitUntilBlocked } from './helpers/cluster';
 import {
   consumedMinor,
   createDraftInvoice,
@@ -184,10 +184,10 @@ describe('the constraint — the requested ledger cannot be overdrawn, even with
       // asserted as a SQLSTATE, never as a message substring.
       const refusal = await bInsert.then(
         () => ({ ok: true as const }),
-        (e: unknown) => ({ ok: false as const, code: sqlstate(e) }),
+        (e: unknown) => ({ ok: false as const, code: refusedBy(e) }),
       );
       expect(refusal.ok).toBe(false);
-      if (!refusal.ok) expect(refusal.code).toBe('23514');
+      if (!refusal.ok) expect(refusal.code).toBe('23514/pcgr_never_overdrawn');
       await b.query('ROLLBACK');
     } finally {
       await a.end();
@@ -209,8 +209,8 @@ describe('the constraint — the requested ledger cannot be overdrawn, even with
          VALUES ($1,$2,$3,'consumption',501,'USD',$4,'inv-raw','hand-written',$5,$6)`,
         [uuid(), s.tenantId, s.businessId, T1, grant, uuid()],
       )
-      .then(() => '', (e: unknown) => sqlstate(e));
-    expect(attempt).toBe('23514');
+      .then(() => '', (e: unknown) => refusedBy(e));
+    expect(attempt).toBe('23514/pcgr_never_overdrawn');
   });
 });
 
@@ -330,7 +330,7 @@ describe('rollback and retry', () => {
     await owner.query('BEGIN');
     const second = await finalizeInvoice(owner, 'p5scratch', s, invoiceId, 300n, 'inv-X', T1, { withLock: true }).then(
       () => '',
-      (e: unknown) => sqlstate(e),
+      (e: unknown) => refusedBy(e),
     );
     await owner.query('ROLLBACK');
     // ROUND 6: this used to be 23505, the partial unique index on
@@ -341,7 +341,7 @@ describe('rollback and retry', () => {
     // still proved, on its own, by the case below. Idempotency belongs to
     // the schema either way, because a retry is exactly the case where the
     // application's own bookkeeping is the thing that failed.
-    expect(second).toBe('23000');
+    expect(second).toBe('23000/si_transition_allowed');
     expect(await consumedMinor(owner, 'p5scratch', s)).toBe(300n);
   });
 
@@ -359,7 +359,7 @@ describe('rollback and retry', () => {
       await finalizeInvoice(a, 'p5scratch', s, invoiceId, 200n, 'inv-X', T1, { withLock: false });
       const bRun = finalizeInvoice(b, 'p5scratch', s, invoiceId, 200n, 'inv-X', T1, { withLock: false }).then(
         () => '',
-        (e: unknown) => sqlstate(e),
+        (e: unknown) => refusedBy(e),
       );
       // B blocks on the invoice ROW LOCK now, not on the ledger: its
       // UPDATE of a row A has already updated cannot proceed until A
@@ -367,7 +367,7 @@ describe('rollback and retry', () => {
       // refuses the transition.
       await waitUntilBlocked(observer, bPid, 'duplicate invoice finalization');
       await a.query('COMMIT');
-      expect(await bRun).toBe('23000');
+      expect(await bRun).toBe('23000/si_transition_allowed');
       await b.query('ROLLBACK');
     } finally {
       await a.end();
@@ -391,10 +391,10 @@ describe('rollback and retry', () => {
     await insertConsumption(owner, 'p5scratch', s, grant, 100n, invoiceId, 'inv-dup', T1);
     const again = await insertConsumption(owner, 'p5scratch', s, grant, 100n, invoiceId, 'inv-dup', T1).then(
       () => '',
-      (e: unknown) => sqlstate(e),
+      (e: unknown) => refusedBy(e),
     );
     await owner.query('ROLLBACK');
-    expect(again, 'one grant may be consumed once per invoice, and the index is what says so').toBe('23505');
+    expect(again, 'one grant may be consumed once per invoice, and the index is what says so').toBe('23505/pca_one_consumption_per_grant_per_invoice');
   });
 });
 
@@ -417,7 +417,7 @@ describe('FIFO is also the deadlock avoidance', () => {
       const bPid = await pidOf(b);
       const bRun = finalizeInvoice(b, 'p5scratch', s, invB, 150n, 'inv-B', T2, { withLock: false }).then(
         () => '',
-        (e: unknown) => sqlstate(e),
+        (e: unknown) => refusedBy(e),
       );
       await waitUntilBlocked(observer, bPid, 'second finalization on the older grant');
       await a.query('COMMIT');
@@ -425,7 +425,7 @@ describe('FIFO is also the deadlock avoidance', () => {
       // invoice) — but 40P01, a deadlock, is what must NOT happen.
       const code = await bRun;
       expect(code).not.toBe('40P01');
-      expect(code).toBe('23514');
+      expect(code).toBe('23514/pcgr_never_overdrawn');
       await b.query('ROLLBACK');
     } finally {
       await a.end();
@@ -480,7 +480,7 @@ describe('FIFO is also the deadlock avoidance', () => {
       await insertConsumption(a, 'p5scratch', s, older, 100n, invA, 'inv-A', T2);
       const bFirst = insertConsumption(b, 'p5scratch', s, newer, 100n, invB, 'inv-B', T2).then(
         () => '',
-        (e: unknown) => sqlstate(e),
+        (e: unknown) => refusedBy(e),
       );
 
       // B's first insert is already waiting: A took the business's advisory
@@ -499,7 +499,7 @@ describe('FIFO is also the deadlock avoidance', () => {
            VALUES ($1,$2,$3,'consumption',100,'USD',$4,'inv-A','row-by-row allocation',$5,$6)`,
           [uuid(), s.tenantId, s.businessId, T2, newer, invA],
         )
-        .then(() => '', (e: unknown) => sqlstate(e));
+        .then(() => '', (e: unknown) => refusedBy(e));
       expect(await aSecond, 'A could not finish its own allocation while holding the lock').toBe('');
       expect(aPid).toBeGreaterThan(0);
 
@@ -515,7 +515,7 @@ describe('FIFO is also the deadlock avoidance', () => {
            VALUES ($1,$2,$3,'consumption',100,'USD',$4,'inv-B','row-by-row allocation',$5,$6)`,
           [uuid(), s.tenantId, s.businessId, T2, older, invB],
         )
-        .then(() => '', (e: unknown) => sqlstate(e));
+        .then(() => '', (e: unknown) => refusedBy(e));
 
       // 40P01 is `deadlock_detected`, and its ABSENCE is the assertion. B
       // wrote the same two grants in the reverse of the pinned order and was
@@ -611,7 +611,7 @@ describe('one lock order for every path', () => {
       // T2 holds the advisory and then wants a row lock T1 holds.
       const bRun = insertConsumption(b, 'p5scratch', s, older, 100n, invB, 'inv-B', T2).then(
         () => '',
-        (e: unknown) => sqlstate(e),
+        (e: unknown) => refusedBy(e),
       );
       await waitUntilBlocked(observer, bPid, 'T2 reaching for the remainder row lock T1 holds');
 
@@ -620,7 +620,7 @@ describe('one lock order for every path', () => {
       // them; with it, T1 already holds the key and there is no cycle.
       const aRun = await insertConsumption(a, 'p5scratch', s, older, 100n, invA, 'inv-A', T2).then(
         () => '',
-        (e: unknown) => sqlstate(e),
+        (e: unknown) => refusedBy(e),
       );
 
       expect(aRun, 'the grant-lock path deadlocked against the trigger path').not.toBe('40P01');
@@ -667,13 +667,13 @@ describe('the ordering conflict, resolved at the write', () => {
       // waits — observed on B's own pid, and the bound is a FAILURE.
       const bRun = insertGrant(b, 'p5scratch', s, 100n, T0, 'concurrent-backdated').then(
         () => '',
-        (e: unknown) => sqlstate(e),
+        (e: unknown) => refusedBy(e),
       );
       await waitUntilBlocked(observer, bPid, 'B waiting for the chronology lock A holds');
       await a.query('COMMIT');
 
       // B now reads a committed world and sees what it could not see before.
-      expect(await bRun, 'a concurrent backdated grant was admitted into the ledger').toBe('23000');
+      expect(await bRun, 'a concurrent backdated grant was admitted into the ledger').toBe('23000/pca_chronology_monotonic');
       await b.query('ROLLBACK').catch(() => undefined);
     } finally {
       await a.end();
@@ -695,9 +695,9 @@ describe('the ordering conflict, resolved at the write', () => {
     await insertGrant(owner, 'p5scratch', s, 100n, T1);
     const backdated = await insertGrant(owner, 'p5scratch', s, 100n, T0, 'backdated-grant').then(
       () => '',
-      (e: unknown) => sqlstate(e),
+      (e: unknown) => refusedBy(e),
     );
-    expect(backdated).toBe('23000');
+    expect(backdated).toBe('23000/pca_chronology_monotonic');
   });
 
   it('so the ledger the database returns can never be one the balance authority refuses for order', async () => {
@@ -719,10 +719,10 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
       await app.query(`SELECT set_config('app.business_id', $1, false)`, [s.businessId]);
       const upd = await app
         .query(`UPDATE p5scratch.platform_credit_adjustments SET reason = 'x' WHERE business_id = $1`, [s.businessId])
-        .then(() => '', (e: unknown) => sqlstate(e));
+        .then(() => '', (e: unknown) => refusedBy(e));
       const del = await app
         .query(`DELETE FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`, [s.businessId])
-        .then(() => '', (e: unknown) => sqlstate(e));
+        .then(() => '', (e: unknown) => refusedBy(e));
       // 42501 is insufficient_privilege: the role has no UPDATE or DELETE
       // at all, so the append-only trigger is the SECOND line and not the
       // only one.
@@ -738,8 +738,8 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
     await insertGrant(owner, 'p5scratch', s, 100n, T0);
     const upd = await owner
       .query(`UPDATE p5scratch.platform_credit_adjustments SET reason = 'x' WHERE business_id = $1`, [s.businessId])
-      .then(() => '', (e: unknown) => sqlstate(e));
-    expect(upd).toBe('23000');
+      .then(() => '', (e: unknown) => refusedBy(e));
+    expect(upd).toBe('23000/pca_append_only');
   });
 
   it('the application role cannot read another business ledger, nor write one', async () => {
@@ -764,7 +764,7 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
            VALUES ($1,$2,$3,'grant',50,'USD',$4,'cross','cross-business write')`,
           [uuid(), theirs.tenantId, theirs.businessId, T2],
         )
-        .then(() => '', (e: unknown) => sqlstate(e));
+        .then(() => '', (e: unknown) => refusedBy(e));
       // 42501 — the RLS WITH CHECK refuses it. The role is NOBYPASSRLS
       // and not a superuser, so this is a real refusal and not a
       // tautology.
@@ -779,7 +779,7 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
     try {
       const read = await app
         .query(`SELECT 1 FROM p5scratch.platform_credit_grant_remainders LIMIT 1`)
-        .then(() => '', (e: unknown) => sqlstate(e));
+        .then(() => '', (e: unknown) => refusedBy(e));
       expect(read).toBe('42501');
     } finally {
       await app.end();
@@ -798,8 +798,8 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
          VALUES ($1,$2,$3,'consumption',50,'USD',$4,'inv','draws another business grant',$5,$6)`,
         [uuid(), mine.tenantId, mine.businessId, T1, theirGrant, uuid()],
       )
-      .then(() => '', (e: unknown) => sqlstate(e));
-    expect(cross).toBe('23503');
+      .then(() => '', (e: unknown) => refusedBy(e));
+    expect(cross).toBe('23503/pca_grant_same_owner_currency_kind');
 
     const myGrant = await insertGrant(owner, 'p5scratch', mine, 100n, T0);
     const otherCurrency = await owner
@@ -810,7 +810,7 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
          VALUES ($1,$2,$3,'consumption',50,'EUR',$4,'inv','draws a USD grant in EUR',$5,$6)`,
         [uuid(), mine.tenantId, mine.businessId, T1, myGrant, uuid()],
       )
-      .then(() => '', (e: unknown) => sqlstate(e));
-    expect(otherCurrency).toBe('23503');
+      .then(() => '', (e: unknown) => refusedBy(e));
+    expect(otherCurrency).toBe('23503/pca_grant_same_owner_currency_kind');
   });
 });

@@ -89,3 +89,30 @@ export function constraintOf(e: unknown): string {
     ? e.constraint
     : '';
 }
+
+/**
+ * The refusal a pg error represents: its SQLSTATE, and the NAME of the
+ * defence that produced it when the database gives one — `'23514/si_tax_structural_zero'`.
+ *
+ * ROUND 10, the independent challenger's F-11. `sqlstate` alone was asserted
+ * 38 times in this lane, and the challenger measured what those codes
+ * actually are on a clean run: `23514` comes from SIX distinct constraints
+ * and was asserted bare ten times, `23505` from four, `23503` from two, and
+ * `23000` from at least ten distinct `RAISE` sites and was asserted bare
+ * sixteen. So most refusal assertions here could be satisfied by a
+ * neighbouring defence, which is the hollowness `constraintOf`'s own
+ * round-7 docstring warned about — and which was then applied to six places
+ * out of the whole lane.
+ *
+ * Every `RAISE ... USING` in the schema now carries `CONSTRAINT = '<name>'`,
+ * so a plpgsql refusal names itself exactly as a CHECK or a key does, and
+ * this is the one function the lane asserts on. `sqlstate` remains for the
+ * few cases that are genuinely about the CLASS — a privilege refusal
+ * (`42501`) and a deadlock (`40P01`) have no constraint to name.
+ */
+export function refusedBy(e: unknown): string {
+  const code = sqlstate(e);
+  if (code === '') return '';
+  const constraint = constraintOf(e);
+  return constraint === '' ? code : `${code}/${constraint}`;
+}

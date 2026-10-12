@@ -149,7 +149,7 @@ BEGIN
   GET DIAGNOSTICS hit = ROW_COUNT;
   IF hit <> 1 THEN
     RAISE EXCEPTION 'credit consumption names a grant with no remainder row: %', NEW.applies_to_grant_id
-      USING ERRCODE = 'integrity_constraint_violation';
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'pca_grant_has_remainder_row';
   END IF;
   RETURN NEW;
 END;
@@ -169,7 +169,7 @@ CREATE FUNCTION p5scratch.pca_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $fn$
 BEGIN
   RAISE EXCEPTION 'platform_credit_adjustments is append-only: % refused', TG_OP
-    USING ERRCODE = 'integrity_constraint_violation';
+    USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'pca_append_only';
 END;
 $fn$;
 
@@ -240,7 +240,7 @@ BEGIN
      AND currency = NEW.currency AND id <> NEW.id;
   IF latest IS NOT NULL AND NEW.occurred_at < latest THEN
     RAISE EXCEPTION 'credit ledger would be out of order: occurred_at % precedes %', NEW.occurred_at, latest
-      USING ERRCODE = 'integrity_constraint_violation';
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'pca_chronology_monotonic';
   END IF;
   RETURN NEW;
 END;
@@ -444,7 +444,7 @@ LANGUAGE plpgsql AS $fn$
 BEGIN
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'a subscription invoice is never deleted: %', OLD.id
-      USING ERRCODE = 'integrity_constraint_violation';
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'si_never_deleted';
   END IF;
 
   IF NEW.id <> OLD.id
@@ -455,7 +455,7 @@ BEGIN
      OR NEW.charge_minor <> OLD.charge_minor
      OR NEW.tax_minor <> OLD.tax_minor THEN
     RAISE EXCEPTION 'a subscription invoice is fixed at composition: % may not change its identity, period, currency, charge or tax', OLD.id
-      USING ERRCODE = 'integrity_constraint_violation';
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'si_fixed_at_composition';
   END IF;
 
   IF OLD.state = 'draft' AND NEW.state = 'open' THEN
@@ -470,13 +470,13 @@ BEGIN
     IF NEW.credit_minor <> OLD.credit_minor OR NEW.total_minor <> OLD.total_minor
        OR NEW.issued_at IS DISTINCT FROM OLD.issued_at THEN
       RAISE EXCEPTION 'only the state may change once invoice % is past draft', OLD.id
-        USING ERRCODE = 'integrity_constraint_violation';
+        USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'si_only_state_after_draft';
     END IF;
     RETURN NEW;
   END IF;
 
   RAISE EXCEPTION 'the subscription invoice contract does not allow % -> % on %', OLD.state, NEW.state, OLD.id
-    USING ERRCODE = 'integrity_constraint_violation';
+    USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'si_transition_allowed';
 END;
 $fn$;
 
@@ -727,7 +727,7 @@ BEGIN
      WHERE invoice_id = NEW.invoice_id AND outcome = 'unknown'
   ) THEN
     RAISE EXCEPTION 'invoice % has an attempt with no verdict; reconcile it before attempting again', NEW.invoice_id
-      USING ERRCODE = 'integrity_constraint_violation';
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'sca_no_attempt_while_unresolved';
   END IF;
   RETURN NEW;
 END;
@@ -742,15 +742,15 @@ LANGUAGE plpgsql AS $fn$
 BEGIN
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'a collection attempt is never deleted: %', OLD.id
-      USING ERRCODE = 'integrity_constraint_violation';
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'sca_never_deleted';
   END IF;
   IF OLD.outcome <> 'unknown' THEN
     RAISE EXCEPTION 'a collection attempt with a verdict is immutable: %', OLD.id
-      USING ERRCODE = 'integrity_constraint_violation';
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'sca_verdict_immutable';
   END IF;
   IF NEW.outcome NOT IN ('succeeded', 'declined', 'failed') THEN
     RAISE EXCEPTION 'reconciliation records a verdict, and % is not one', NEW.outcome
-      USING ERRCODE = 'integrity_constraint_violation';
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'sca_reconciliation_records_a_verdict';
   END IF;
   IF NEW.id <> OLD.id
      OR NEW.tenant_id <> OLD.tenant_id
@@ -762,7 +762,7 @@ BEGIN
      OR NEW.currency <> OLD.currency
      OR NEW.attempted_at <> OLD.attempted_at THEN
     RAISE EXCEPTION 'reconciliation may record the verdict and the provider''s own fields, and nothing else: %', OLD.id
-      USING ERRCODE = 'integrity_constraint_violation';
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'sca_reconciliation_fields_only';
   END IF;
   RETURN NEW;
 END;

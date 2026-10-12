@@ -24,7 +24,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
-import { connect, constraintOf, ownerUrl, sqlstate, uuid } from './helpers/cluster';
+import { connect, constraintOf, ownerUrl, refusedBy, uuid } from './helpers/cluster';
 import { createDraftInvoice, finalizeInvoice, insertGrant, remainderOf, type Scope } from './helpers/finalize';
 import {
   canTransitionInvoice,
@@ -109,11 +109,11 @@ describe('the state set the database enforces is the state set the package expor
     const id = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     const code = await owner
       .query(`UPDATE p5scratch.subscription_invoices SET state = 'finalized' WHERE id = $1`, [id])
-      .then(() => '', (e: unknown) => sqlstate(e));
+      .then(() => '', (e: unknown) => refusedBy(e));
     // 23514 is the CHECK; 23000 would be the trigger. Either refuses, and
     // the assertion names both rather than pretending to know which fires
     // first — but it must not be empty.
-    expect(['23514', '23000']).toContain(code);
+    expect(['23514/si_state_known', '23000/si_transition_allowed']).toContain(code);
   });
 });
 
@@ -142,8 +142,8 @@ describe('the money vocabulary the Contract Diff settled', () => {
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,300,900,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       )
-      .then(() => '', (e: unknown) => sqlstate(e));
-    expect(code, 'the database accepted a total that is not charge minus credit').toBe('23514');
+      .then(() => '', (e: unknown) => refusedBy(e));
+    expect(code, 'the database accepted a total that is not charge minus credit').toBe('23514/si_total_is_charge_minus_credit');
   });
 
   it('keeps platform tax structurally unrepresentable rather than defaulted', async () => {
@@ -155,15 +155,15 @@ describe('the money vocabulary the Contract Diff settled', () => {
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,0,1,1001,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       )
-      .then(() => '', (e: unknown) => sqlstate(e));
-    expect(code).toBe('23514');
+      .then(() => '', (e: unknown) => refusedBy(e));
+    expect(code).toBe('23514/si_tax_structural_zero');
   });
 
   it('allows one invoice per business per period, and no second', async () => {
     const s = await freshScope();
     await createDraftInvoice(owner, 'p5scratch', s, 1000n, 7);
-    const code = await createDraftInvoice(owner, 'p5scratch', s, 1000n, 7).then(() => '', (e: unknown) => sqlstate(e));
-    expect(code, 'a second invoice for one period is the double renewal the unique index exists to refuse').toBe('23505');
+    const code = await createDraftInvoice(owner, 'p5scratch', s, 1000n, 7).then(() => '', (e: unknown) => refusedBy(e));
+    expect(code, 'a second invoice for one period is the double renewal the unique index exists to refuse').toBe('23505/si_one_per_period_uq');
   });
 });
 
@@ -189,7 +189,7 @@ describe('the transitions the database allows are the transitions the package al
               WHERE id = $1`,
             [id, to, T1],
           )
-          .then(() => '', (e: unknown) => sqlstate(e));
+          .then(() => '', (e: unknown) => refusedBy(e));
         await owner.query('ROLLBACK');
         const dbAllows = code === '';
         if (dbAllows !== canTransitionInvoice(from, to)) {
@@ -206,8 +206,8 @@ describe('the transitions the database allows are the transitions the package al
       const id = await invoiceIn(state, s);
       const code = await owner
         .query(`DELETE FROM p5scratch.subscription_invoices WHERE id = $1`, [id])
-        .then(() => '', (e: unknown) => sqlstate(e));
-      expect(code, `a ${state} invoice was deleted`).toBe('23000');
+        .then(() => '', (e: unknown) => refusedBy(e));
+      expect(code, `a ${state} invoice was deleted`).toBe('23000/si_never_deleted');
     }
   });
 });
@@ -243,13 +243,13 @@ describe('the currency boundary — a grant funds its own currency and no other'
       )
       .then(
         () => ({ code: '', constraint: '' }),
-        (e: unknown) => ({ code: sqlstate(e), constraint: constraintOf(e) }),
+        (e: unknown) => ({ code: refusedBy(e), constraint: constraintOf(e) }),
       );
     // 23503 is the self-FK: the referenced identity carries the currency,
     // so a EUR consumption resolves against no USD grant. The constraint is
     // named because 23503 is the code of every key in this schema.
     expect(refusal, 'a consumption spent a grant of another currency').toStrictEqual({
-      code: '23503',
+      code: '23503/pca_grant_same_owner_currency_kind',
       constraint: 'pca_grant_same_owner_currency_kind',
     });
   });
@@ -270,9 +270,9 @@ describe('the currency boundary — a grant funds its own currency and no other'
     // The invoice FK is DEFERRABLE INITIALLY DEFERRED, so the refusal is
     // due at COMMIT and not at the INSERT. Asserting it at the INSERT would
     // have reported this boundary as unenforced.
-    const code = await owner.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e));
+    const code = await owner.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e));
     await owner.query('ROLLBACK').catch(() => undefined);
-    expect(code, 'a consumption named an invoice in another currency').toBe('23503');
+    expect(code, 'a consumption named an invoice in another currency').toBe('23503/pca_invoice_fk');
   });
 
   it('spends only the currency being invoiced, leaving the other untouched', async () => {
@@ -342,17 +342,28 @@ describe('what finalization may write, and nothing else', () => {
             WHERE id = $1`,
           [id, T1],
         )
-        .then(() => '', (e: unknown) => sqlstate(e));
+        .then(() => '', (e: unknown) => refusedBy(e));
       await owner.query('ROLLBACK');
       if (code === '') survived.push(column);
-      if (code === '23000') refusedByTrigger.push(column);
+      if (code.startsWith('23000/')) refusedByTrigger.push(`${column}=${code}`);
     }
     expect(survived, 'a column fixed at composition was changed by a finalization').toStrictEqual([]);
     // And it is the CONTRACT's trigger that refuses every one of them, not
     // an accident of some other constraint. `tenant_id` is in the list too,
     // which is worth knowing: a BEFORE trigger runs before the ownership
     // FK is evaluated, so the trigger — not the FK — is what reports it.
-    expect(refusedByTrigger.sort()).toStrictEqual(['business_id', 'charge_minor', 'currency', 'id', 'period_index', 'tenant_id'].sort());
+    // ROUND 10, the challenger's F-11: each column is paired with the name
+    // of the defence that refused it, not with the SQLSTATE class alone.
+    // 23000 is raised from fifteen sites in this schema, so a bare 23000
+    // here would have been satisfied by any one of them.
+    expect(refusedByTrigger.sort()).toStrictEqual([
+      'business_id=23000/si_fixed_at_composition',
+      'charge_minor=23000/si_fixed_at_composition',
+      'currency=23000/si_fixed_at_composition',
+      'id=23000/si_fixed_at_composition',
+      'period_index=23000/si_fixed_at_composition',
+      'tenant_id=23000/si_fixed_at_composition',
+    ].sort());
   });
 
   it('permits the finalization that writes only the credit, the total and the instant', async () => {
@@ -383,8 +394,8 @@ describe('what finalization may write, and nothing else', () => {
     for (const mutation of ['credit_minor = 1, total_minor = 999', 'issued_at = now()']) {
       const code = await owner
         .query(`UPDATE p5scratch.subscription_invoices SET state = 'paid', ${mutation} WHERE id = $1`, [id])
-        .then(() => '', (e: unknown) => sqlstate(e));
-      expect(code, `a settled invoice accepted: ${mutation}`).toBe('23000');
+        .then(() => '', (e: unknown) => refusedBy(e));
+      expect(code, `a settled invoice accepted: ${mutation}`).toBe('23000/si_only_state_after_draft');
     }
   });
 });

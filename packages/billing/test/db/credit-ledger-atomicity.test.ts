@@ -34,7 +34,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
-import { appUrl, connect, constraintOf, isBlocked, ownerUrl, pidOf, sqlstate, uuid, waitUntilBlocked } from './helpers/cluster';
+import { appUrl, connect, isBlocked, ownerUrl, pidOf, refusedBy, uuid, waitUntilBlocked } from './helpers/cluster';
 import {
   consumedMinor,
   createDraftInvoice,
@@ -154,7 +154,7 @@ describe('the deterministic grant lock order', () => {
       await a.query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, s.currency]);
       const bLock = b
         .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, s.currency])
-        .then(() => '', (e: unknown) => sqlstate(e));
+        .then(() => '', (e: unknown) => refusedBy(e));
 
       // B cannot get past the first row A holds, so it never holds one row
       // while reaching for another — which is the cycle round 4 produced.
@@ -179,7 +179,7 @@ describe('the deterministic grant lock order', () => {
                 credit_minor=200, total_minor=0 WHERE id=$1`,
         [invB, T2],
       );
-      const bCommit = await b.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e));
+      const bCommit = await b.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e));
 
       // The whole claim: no 40P01 anywhere, and both invoices are paid out
       // of credit correctly despite one of them writing backwards.
@@ -210,7 +210,7 @@ describe('the deterministic grant lock order', () => {
       await a.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`p5scratch:${s.businessId}`]);
       const bLock = b
         .query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`p5scratch:${s.businessId}`])
-        .then(() => '', (e: unknown) => sqlstate(e));
+        .then(() => '', (e: unknown) => refusedBy(e));
       await waitUntilBlocked(observer, bPid, 'B on the business advisory lock');
 
       await insertConsumption(a, 'p5scratch', s, older, 100n, invA, 'inv-A', T2);
@@ -232,7 +232,7 @@ describe('the deterministic grant lock order', () => {
                 credit_minor=200, total_minor=0 WHERE id=$1`,
         [invB, T2],
       );
-      expect(await b.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e))).toBe('');
+      expect(await b.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('');
     } finally {
       await a.end();
       await b.end();
@@ -310,11 +310,11 @@ describe('the invoice and the ledger commit together, or not at all', () => {
                   credit_minor=500, total_minor=0 WHERE id=$1`,
           [invoiceId, T1],
         )
-        .then(() => '', (e: unknown) => sqlstate(e));
+        .then(() => '', (e: unknown) => refusedBy(e));
       expect(upd).toBe('');
 
-      const commit = await a.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e));
-      expect(commit).toBe('23000');
+      const commit = await a.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e));
+      expect(commit).toBe('23000/si_credit_agrees_with_ledger');
     } finally {
       await a.end();
     }
@@ -338,7 +338,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
                 credit_minor=500, total_minor=0 WHERE id=$1`,
         [invoiceId, T1],
       );
-      expect(await a.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e))).toBe('23000');
+      expect(await a.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('23000/si_credit_agrees_with_ledger');
     } finally {
       await a.end();
     }
@@ -356,7 +356,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       // A plausible invoice identity that was never written. The FK is
       // DEFERRABLE, so the INSERT succeeds and the COMMIT does not.
       await insertConsumption(a, 'p5scratch', s, grant, 300n, uuid(), 'inv-ghost', T1);
-      expect(await a.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e))).toBe('23503');
+      expect(await a.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('23503/pca_invoice_fk');
     } finally {
       await a.end();
     }
@@ -381,7 +381,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
                 credit_minor=400, total_minor=0 WHERE id=$1`,
         [invoiceId, T1],
       );
-      expect(await a.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e))).toBe('');
+      expect(await a.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('');
     } finally {
       await a.end();
     }
@@ -406,8 +406,8 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       // rather than merely intended.
       const code = await finalizeInvoice(a, 'p5scratch', s, invoiceId, 500n, 'inv-A', T1, {
         withLock: false,
-      }).then(() => '', (e: unknown) => sqlstate(e));
-      expect(code).toBe('23000');
+      }).then(() => '', (e: unknown) => refusedBy(e));
+      expect(code).toBe('23000/si_credit_agrees_with_ledger');
     } finally {
       await a.end();
     }
@@ -442,8 +442,8 @@ describe('the invoice and the ledger commit together, or not at all', () => {
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,300,800,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       )
-      .then(() => '', (e: unknown) => sqlstate(e));
-    expect(bad).toBe('23514');
+      .then(() => '', (e: unknown) => refusedBy(e));
+    expect(bad).toBe('23514/si_total_is_charge_minus_credit');
 
     const negative = await owner
       .query(
@@ -452,8 +452,8 @@ describe('the invoice and the ledger commit together, or not at all', () => {
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,1500,-500,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       )
-      .then(() => '', (e: unknown) => sqlstate(e));
-    expect(negative).toBe('23514');
+      .then(() => '', (e: unknown) => refusedBy(e));
+    expect(negative).toBe('23514/si_credit_within_charge');
   });
 
   it('a draft invoice may not claim applied credit', async () => {
@@ -467,7 +467,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,400,600,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       );
-      expect(await a.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e))).toBe('23000');
+      expect(await a.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('23000/si_draft_claims_no_credit');
     } finally {
       await a.end();
     }
@@ -553,7 +553,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
         withLock: true,
         withGrantLocks: true,
       });
-      expect(await app.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e))).toBe('');
+      expect(await app.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('');
     } finally {
       await app.end();
     }
@@ -602,7 +602,7 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
     }
     const refusal = await c.query('COMMIT').then(
       () => '',
-      (e: unknown) => `${sqlstate(e)}/${constraintOf(e)}`,
+      (e: unknown) => refusedBy(e),
     );
     await c.query('ROLLBACK').catch(() => undefined);
     return refusal;
@@ -690,7 +690,7 @@ describe('the agreement invariant refuses what it cannot verify', () => {
     // other 74 cases are the check on.
     const refusal = await owner
       .query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [uuid()])
-      .then(() => '', (e: unknown) => `${sqlstate(e)}/${constraintOf(e)}`);
+      .then(() => '', (e: unknown) => refusedBy(e));
     expect(refusal, 'an unreadable invoice was treated as a rolled-back one').toBe('23000/si_invoice_unreadable');
   });
 
@@ -703,7 +703,7 @@ describe('the agreement invariant refuses what it cannot verify', () => {
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,250,750,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       )
-      .then(() => '', (e: unknown) => `${sqlstate(e)}/${constraintOf(e)}`);
+      .then(() => '', (e: unknown) => refusedBy(e));
     // Three refusals share SQLSTATE 23000 inside this one function. Naming
     // them is what makes a case able to tell which of the three it got.
     expect(refusal).toBe('23000/si_draft_claims_no_credit');
