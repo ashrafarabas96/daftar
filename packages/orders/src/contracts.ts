@@ -291,17 +291,25 @@ export interface OrderQuoteConfirmationDto {
    */
   confirmedQuoteDigest: string;
   /**
-   * The expiry the confirming side saw, or null for a quote with no expiry.
+   * The expiry the confirming side saw. **Never null** — a quote with no expiry carries
+   * `'infinity'`, and `NO_QUOTE_EXPIRY` is that value.
    *
    * Carried for the same reason as the digest, and it solves a problem the digest does not: the
    * half-open window `confirmedAt < expiresAt` is a rule about TWO rows, and a SQL `CHECK` cannot
    * read another row. Pulling the quote's `expires_at` through the same composite foreign key
    * makes it a SAME-ROW check — no trigger, and a trigger is something an operator can disable.
-   * MEASURED: with the expiry inside the key, a confirmation claiming a later expiry than its
-   * quote has is refused by the foreign key, and with the key dropped the same row is accepted
-   * and stores a confirmation twelve hours after the quote really expired.
+   *
+   * **Why it is not nullable, which is a defect this field had for one revision.** MEASURED on
+   * PostgreSQL 16.15 as a non-superuser: under the default `MATCH SIMPLE`, a composite foreign
+   * key is **skipped in its entirety** when ANY of its columns is null. With the expiry nullable,
+   * a confirmation claiming a null expiry was ACCEPTED while naming an order, a quote, a version
+   * and a digest that **no parent row had** — the whole seven-column key went unchecked, for
+   * exactly the open-ended quotes. `'infinity'` removes the null, so the key is always enforced,
+   * and it is the honest value anyway: in a half-open window, a quote that never expires is one
+   * whose expiry is infinitely far away, and `confirmedAt < 'infinity'` is true by arithmetic
+   * rather than by a special case.
    */
-  confirmedQuoteExpiresAt: string | null;
+  confirmedQuoteExpiresAt: string;
   /** Null when the shopper confirmed on the storefront; a member when they confirmed on their behalf. */
   confirmedByUserId: string | null;
 }
@@ -335,6 +343,17 @@ export const ORDER_QUOTE_CONFIRMATION_FIELDS: readonly (keyof OrderQuoteConfirma
  * `order_quote_confirmations` CHECK constraints are specified to enforce by VALUE.
  */
 export const ORDER_QUOTE_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * What a quote with no expiry carries, in the confirmation fact and in the DDL alike.
+ *
+ * It exists so that `confirmedQuoteExpiresAt` is never null. A null inside a composite foreign
+ * key disables that key completely under `MATCH SIMPLE` — measured, with a confirmation of a
+ * nonexistent order accepted because of it. This is not a sentinel standing in for "unknown":
+ * `'infinity'` is a real, ordered timestamptz value, and every instant is strictly less than it,
+ * which is precisely what "this quote does not expire" means in a half-open window.
+ */
+export const NO_QUOTE_EXPIRY = 'infinity';
 
 export interface OrderQuoteReconfirmationRequiredDto {
   orderId: string;

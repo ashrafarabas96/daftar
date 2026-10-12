@@ -19,6 +19,7 @@ import {
   ORDER_CLIENT_ERROR_CODES,
   ORDER_EDGES,
   ORDER_QUOTE_CONFIRMATION_FIELDS,
+  NO_QUOTE_EXPIRY,
   ORDER_QUOTE_DIGEST_PATTERN,
   ORDER_SETTLEMENT_EVIDENCE_KINDS,
   SETTLEMENT_MODE_BY_EVIDENCE,
@@ -174,11 +175,26 @@ describe('the quote-confirmation fact carries the intent digest (Master Continuo
       .filter(([, v]) => v === null)
       .map(([k]) => k);
     expect(nullable).toEqual(['confirmedByUserId']);
-    // `confirmedQuoteExpiresAt` is nullable in the TYPE — a quote may have no
-    // expiry — and populated in this subject, so the list above is about the
-    // subject. What matters here is that the DIGEST can never be null, and
-    // that it is the unified representation rather than any string.
+    // `confirmedByUserId` is the ONLY nullable field. The expiry used to be
+    // nullable too, and that nullability silently disabled the composite
+    // foreign key — see the case below.
     expect(CONFIRMATION.confirmedQuoteDigest).toMatch(ORDER_QUOTE_DIGEST_PATTERN);
+  });
+
+  it('never carries a null expiry, because a null inside a composite key disables the whole key', () => {
+    // MEASURED on PostgreSQL 16.15, as a non-superuser migrator, from the catalogue and then by
+    // execution: `pg_constraint.confmatchtype = 's'` (MATCH SIMPLE), under which a composite
+    // foreign key is skipped ENTIRELY if ANY of its columns is null. With this field nullable, a
+    // confirmation naming an order, a quote, a version and a digest that no parent row had was
+    // ACCEPTED — the seven-column key went unchecked, for exactly the quotes that never expire.
+    // With `'infinity'` in place of the null, the same two attacks are refused and both lawful
+    // cases (open-ended, and one microsecond before a real expiry) are still accepted.
+    const openEnded: OrderQuoteConfirmationDto = { ...CONFIRMATION, confirmedQuoteExpiresAt: NO_QUOTE_EXPIRY };
+    expect(openEnded.confirmedQuoteExpiresAt).toBe('infinity');
+    expect(Object.values(openEnded).filter((v) => v === null)).toEqual([null]); // only confirmedByUserId
+    // And the half-open rule still holds for it by arithmetic, with no special case: every
+    // instant is strictly less than infinity.
+    expect(ORDER_QUOTE_CONFIRMATION_FIELDS).toContain('confirmedQuoteExpiresAt');
   });
 
   it('carries the expiry it was shown, which is what makes the half-open window a same-row check', () => {
@@ -189,7 +205,7 @@ describe('the quote-confirmation fact carries the intent digest (Master Continuo
     // is refused by that key; with the key dropped, the identical row is accepted and stores a
     // confirmation twelve hours after the quote really expired.
     expect(DTO_KEYS).toContain('confirmedQuoteExpiresAt');
-    expect(new Date(CONFIRMATION.confirmedAt).getTime()).toBeLessThan(new Date(CONFIRMATION.confirmedQuoteExpiresAt as string).getTime());
+    expect(new Date(CONFIRMATION.confirmedAt).getTime()).toBeLessThan(new Date(CONFIRMATION.confirmedQuoteExpiresAt).getTime());
   });
 
   it('is not a settlement and carries no amount (I6a.6)', () => {
