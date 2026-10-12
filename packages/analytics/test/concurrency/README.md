@@ -2,7 +2,7 @@
 
 `remainder-conservation.pgtest.mts` is the first **measured** concurrency
 evidence for the Phase 13 point-spend conservation mechanism. Everything else
-Phase 13 has produced is pure unit tests (193 of them, in `../`), and the owner
+Phase 13 has produced is pure unit tests (198 of them, in `../`), and the owner
 directive behind this file says so plainly: *"test atomic spend/earn/return/
 reversal with two connections; 193 pure tests do not prove it."* A fold held in
 memory cannot double-spend, so it cannot show that the mechanism is needed, and
@@ -51,15 +51,30 @@ node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts
 echo "RC=$?"
 ```
 
-Observed: `10/10 cases passed`, `RC=0` — three consecutive runs on
-PostgreSQL 16.15. The outcomes were identical in each **except one, which is
+**Precondition: the `en_US.utf8` locale must be generated on the machine.** It
+is absent from a minimal image, where `locale -a` reports only `C`, `C.utf8`
+and `POSIX`. An independent challenge followed this block literally in a clean
+container and got `initdb: error: invalid locale name`, `0/1 cases passed`,
+`RC=1` — a failure that named neither the cause nor the cure. The proof now
+checks the locale **before** `initdb` and prints the command:
+
+```
+localedef -i en_US -f UTF-8 en_US.UTF-8
+```
+
+(`UTF-8` is the charmap's own spelling; `localedef -f utf8` fails with `cannot
+open charmap`, which is why the printed command does not simply echo the locale
+name PostgreSQL reports back.) To measure a line this proof is **not** evidence
+for, set `P13_PG_LOCALE` explicitly.
+
+Observed: `11/11 cases passed`, `RC=0` on PostgreSQL 16.15. The outcomes were identical in each **except one, which is
 itself a finding**: the deadlock victim in case 5b differed between runs on the
 same cluster and the same version (see qualification 4 below).
 
 The package's vitest config includes only `test/**/*.test.ts`. This file is
 `.mts`, under `test/concurrency/`, **specifically so that it cannot match that
 pattern**: it needs a cluster, and the unit suite must stay cluster-free. The
-unit suite is unaffected and still reports **7 files / 193 tests, rc=0**.
+unit suite is unaffected and reports **7 files / 198 tests, rc=0**.
 
 It starts its own throwaway cluster (`/tmp/daftar-pg-p13`, port 55777, both
 overridable via `P13_PG_DIR` / `P13_PG_PORT`), creates a scratch schema inside
@@ -106,6 +121,29 @@ are coordinated three ways, all taken from `tests/helpers/stock-ledger.ts`:
 Both connections run under **READ COMMITTED**, read back from
 `SHOW transaction_isolation` rather than assumed.
 
+## The principal every racing connection runs as, and why it changed
+
+Every racing connection used to be the cluster **superuser**. A superuser
+bypasses row level security unconditionally, so ten green cases established
+nothing about whether these guards hold for the role the application actually
+uses. The Phase 5 challenge measured what that hides: a deferred check function
+without `SECURITY DEFINER` could not see its row under tenant RLS, read the
+absence as a deletion, and passed at `COMMIT`.
+
+So the proof relations now carry the house pattern — `ENABLE` and `FORCE ROW
+LEVEL SECURITY`, a PERMISSIVE membership policy and a RESTRICTIVE business
+boundary reading a per-connection GUC — and every racing session connects as
+**`daftar_app_proof` (`NOSUPERUSER NOBYPASSRLS`)**. The role, its bypass
+attributes and the business context are **read back from the catalogue** on each
+session: a session that silently failed to set its context would see no rows,
+and every conservation guard here would then sum zero and fail **open**.
+
+The superuser pool stays, deliberately, for the fixtures, the catalogue reads
+and `pg_stat_activity`. That is the **positive control** — the thing that can
+see what the app role must not — and case 11 uses it to print the row the
+blinded check could not see. All ten pre-existing cases hold unchanged under the
+app role.
+
 ## The cases, and the SQLSTATEs actually observed
 
 Every SQLSTATE below is what the server returned in a run, not what the design
@@ -129,6 +167,8 @@ predicts.
 | 8b | what the failed sale left behind | nothing | ledger `100 → 0` (one consumption, not two), remainder `0`, **exactly 1** surviving draw row |
 | 9 | the lock loser's re-bind retry, with a competing sale committing **after** each bind | **terminated on attempt 4** | 3 forced retries, each refused **`23505`** on `point_draws_level_uq` at binds of `100`, `80`, `60`; then spent at a bind of `40`. Identical in all three runs |
 | 10 | an expiry sweep takes a grant's whole remainder; a sale waits behind it | the sweep won, the sale was **refused** | sale observed parked (`wait_event = advisory`), re-read `remaining = 0` after the sweep committed, and its spend was refused **`P0001`**; ledger `100 → 0` — the points were taken **once** |
+
+| 11 | **RED PROOF** — an invoker-rights **deferred** check under RLS, against the same check as `SECURITY DEFINER` | **the negative row committed** past the blinded check; the definer check refused | the app role saw **0** rows of its own `SECURITY DEFINER` write (the row is a sibling business's); `COMMIT` **accepted**; the superuser control then read `points = -5`. With `SECURITY DEFINER`: `COMMIT` refused **`P0001`**, **0** rows left |
 
 Case 1 **asserts the defect**: it fails loudly if the double-spend does *not*
 happen, so it cannot quietly become decoration. That is what makes it evidence
@@ -212,6 +252,14 @@ settled deploy line. It does **not** cover:
   connection pooling, pgbouncer and transaction-mode pooling (which would break
   `pg_advisory_xact_lock` semantics).
 - **Any timing, throughput or latency figure.**
+- **The real policies.** The RLS the racing connections now run under is the
+  house *shape* on scratch relations, not the Phase 13 policies, which have no
+  DDL yet. Case 11 establishes what an invoker-rights deferred check does under
+  that shape; whether the real checks are written as `SECURITY DEFINER` is for
+  the Migration Owner to carry, and it is requested in
+  `P13-MIGRATION-PATCH-REQUEST.md` with case 11 as the reason.
+- **Every RLS question that is not about these guards.** Tenant and business
+  isolation as such is proved separately, in `../rls/`.
 
 ## Exit codes, for the handoff
 
@@ -221,8 +269,9 @@ line) against this working tree:
 
 | Command | Result | Exit code |
 |---|---|---|
-| `node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts` | `10/10 cases passed` | **0** (three consecutive runs) |
-| `../../node_modules/.bin/vitest run` (in `packages/analytics`) | 7 files, 193 tests passed | **0** |
+| `node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts` | `11/11 cases passed`, every racing connection as `daftar_app_proof` (`NOSUPERUSER NOBYPASSRLS`) | **0** |
+| the same, with `P13_PG_LOCALE=zz_ZZ.utf8` | refuses **before** `initdb`, printing the `localedef` command | **1** |
+| `../../node_modules/.bin/vitest run` (in `packages/analytics`) | 7 files, 198 tests passed | **0** |
 | `../../node_modules/.bin/tsc -p tsconfig.json --noEmit` | no diagnostics | **0** |
 | `./node_modules/.bin/eslint packages/analytics` (from the repo root) | no findings | **0** |
 | `./node_modules/.bin/eslint .` (from the repo root) | 4220 errors, **0 of them in `packages/analytics`** | **1** |

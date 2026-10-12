@@ -1,7 +1,7 @@
 # P13-PROOF-RLS — tenant and business isolation, asserted as a non-superuser
 
 `tenant-isolation.pgtest.mts` is Phase 13's **first RLS evidence of any kind.**
-Before it, the phase had 193 pure unit tests and a concurrency proof, and
+Before it, the phase had 198 pure unit tests and a concurrency proof, and
 neither can be denied a row: a fold held in memory has no tenant, no role and
 no policy. The phase directive lists "RLS and permission tests" as outstanding
 work, and the security part of the same directive sets the standard this file is
@@ -23,6 +23,23 @@ written to:
 
 ## How to run it, and the version it must run on
 
+**Precondition: the `en_US.utf8` locale must be generated.** A minimal image has
+only `C`, `C.utf8` and `POSIX`, and `initdb --locale=en_US.utf8` then dies with
+`invalid locale name` — a failure that names neither cause nor cure, as an
+independent challenge measured (`0/1 cases passed`, rc=1). This proof now checks
+the locale **before** `initdb` and refuses with the command that fixes it:
+
+```
+localedef -i en_US -f UTF-8 en_US.UTF-8
+```
+
+`UTF-8` is the charmap's spelling; `localedef -f utf8` fails with `cannot open
+charmap`, so the printed command does not echo the locale name PostgreSQL
+reports. Measured: with `P13_PG_LOCALE=zz_ZZ.utf8` the proof exits **1** before
+any cluster is created. Unlike the concurrency proof, this one has **no**
+version fallback at all: an RLS result on an unchosen major line is not the
+evidence that was asked for.
+
 ```
 export PATH=<node 24 bin>:$PATH
 cd /home/user/daftar
@@ -41,7 +58,7 @@ result on an unchosen version is not the evidence that was asked for.
 
 It is `.mts` under `test/rls/`, deliberately outside the package's vitest
 pattern (`test/**/*.test.ts`), so the unit suite stays cluster-free. That suite
-still reports 7 files / 193 tests, `rc=0`.
+still reports 7 files / 198 tests, `rc=0`.
 
 ## What it does not touch
 
