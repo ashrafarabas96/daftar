@@ -308,3 +308,47 @@ describe('assessQuoteDivergence', () => {
     );
   });
 });
+
+describe('the quote snapshot carries NO confirmation field (Master Continuous Mission, 12 Oct 2026)', () => {
+  // "Settle the quote confirmation fields together with immutability, by an
+  // approved fact-transition mechanism, not a silent update that violates the
+  // contract."
+  //
+  // The migration request had declared the quote relation immutable (no UPDATE,
+  // no DELETE) and then given it `confirmed_at` and `confirmed_version` — two
+  // columns nothing could ever fill, since they start NULL at insert and only an
+  // UPDATE could set them. The contradiction had one obvious bad resolution:
+  // drop the no-UPDATE rule so the write goes through, which is how an immutable
+  // snapshot quietly stops being immutable. The confirmation is its own
+  // append-only fact instead.
+  //
+  // This is the domain-side half of that law. The snapshot type must stay free
+  // of any confirmation field, because the digest covers the snapshot: a
+  // `confirmedAt` on it would either be outside the digest (an uncovered field
+  // on a tamper-evident record) or inside it (making the digest change when the
+  // shopper agrees, so every confirmation would read as tampering).
+  const CONFIRMATION_WORDS = /confirm|accept|agree|approv/i;
+
+  it('has no confirmation-shaped key on the quote, nor on any of its lines', () => {
+    const header = Object.keys(QUOTED).filter((k) => CONFIRMATION_WORDS.test(k));
+    expect(header).toEqual([]);
+    const line = Object.keys(QUOTED.lines[0] as object).filter((k) => CONFIRMATION_WORDS.test(k));
+    expect(line).toEqual([]);
+  });
+
+  it('proves the regex would catch one, so the empty result is a measurement and not a vacuous pass', () => {
+    // Without this, the case above passes equally well if CONFIRMATION_WORDS
+    // never matched anything at all.
+    const planted = { ...(QUOTED as unknown as Record<string, unknown>), confirmedAt: '2026-10-01T09:30:00Z' };
+    expect(Object.keys(planted).filter((k) => CONFIRMATION_WORDS.test(k))).toEqual(['confirmedAt']);
+  });
+
+  it('keeps the digest independent of any confirmation, since confirming changes nothing on the quote', () => {
+    // The same quote, confirmed or not, is byte-identical and so digest-identical.
+    // That is the property the append-only confirmation record buys: the shopper
+    // agreeing leaves the thing they agreed to untouched.
+    const reissued = buildCommercialQuote(INPUT);
+    expect(reissued.digest).toBe(QUOTED.digest);
+    expect(() => assertQuoteIntact(QUOTED)).not.toThrow();
+  });
+});

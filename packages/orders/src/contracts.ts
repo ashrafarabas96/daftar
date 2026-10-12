@@ -190,8 +190,19 @@ export interface OrderTransitionRequestDto {
    * it, and `providerRef` belongs to the kind this surface refuses.
    */
   settlementEvidence: { kind: OrderSettlementEvidenceKindDto; actorUserId: string | null; providerRef: string | null } | null;
-  /** The quote version the shopper confirmed — REQUIRED for `record_sale` (§27). */
-  confirmedQuoteVersion: number | null;
+  /**
+   * The CONFIRMATION that authorized this sale — REQUIRED for `record_sale`.
+   *
+   * **Changed from `confirmedQuoteVersion: number` by the Master Continuous
+   * Mission (12 Oct 2026):** *"settle the quote confirmation fields together with
+   * immutability, by an approved fact-transition mechanism, not a silent
+   * update."* A shopper agreeing to a quote is an EVENT, so it is its own
+   * append-only record, and the sale binds to that record rather than carrying a
+   * copy of its version beside it. A copy can disagree with its source; a
+   * reference cannot, and two places recording which version was agreed to is
+   * two answers to one question.
+   */
+  confirmedQuoteConfirmationId: string | null;
   /** 1..500 characters after trimming for `reject` and `cancel`; a refusal nobody explained cannot be reviewed. */
   reason: string | null;
 }
@@ -241,6 +252,30 @@ export interface OrderQuoteDto {
  * the confirmed quote beyond policy: the commit did NOT happen, and these are
  * the two figures the shopper must be shown before they agree again.
  */
+/**
+ * One confirmation of a quote — an append-only FACT, never a field on the quote.
+ *
+ * The quote snapshot is immutable and digest-bound, so a confirmation cannot be
+ * written onto it: recording an event by mutating the thing the event is about
+ * is not a record of the event, it is the loss of the thing's previous state.
+ * Re-confirmation after a divergence is therefore a SECOND confirmation of a
+ * later version, which is also the audit trail of the divergence having been
+ * shown to the shopper.
+ *
+ * `confirmedAt` is stated, never read from a clock, and must fall strictly
+ * before the quote's `expiresAt` when it has one (the half-open window).
+ */
+export interface OrderQuoteConfirmationDto {
+  confirmationId: string;
+  quoteId: string;
+  orderId: string;
+  /** The version agreed to; it must equal the named quote's own version. */
+  confirmedVersion: number;
+  confirmedAt: string;
+  /** Null when the shopper confirmed on the storefront; a member when they confirmed on their behalf. */
+  confirmedByUserId: string | null;
+}
+
 export interface OrderQuoteReconfirmationRequiredDto {
   orderId: string;
   quoteId: string;
