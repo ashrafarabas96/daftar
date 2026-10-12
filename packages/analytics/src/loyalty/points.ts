@@ -1317,8 +1317,29 @@ export interface ReversalRequest {
    * is narrowed, not a caller that miscounts or lies, and only the database can
    * close that -- `P13-MIGRATION-PATCH-REQUEST.md` §A.3c.3 asks for the bound as
    * a trigger, where the relation cannot be narrowed by a caller at all.
+   *
+   * HOW TO DEFEAT THIS CHECK BY ACCIDENT (`R11-03`), which is why the field is
+   * named for its source. The obvious caller
+   *
+   *     const rows = await load(party);
+   *     buildReversalMovement({ movements: rows }, { ..., storedPartyMovementCount: rows.length });
+   *
+   * SATISFIES this check for any narrowing whatsoever, and reproduces the whole
+   * defect: the length of the array you are about to hand over is a count of
+   * that array, never of the store. The number must come from a count over the
+   * party with NO predicate -- `COUNT(*) ... WHERE business_id = $1 AND
+   * customer_id = $2`, or the length of an unfiltered read -- and the hazard is
+   * a correct-looking line, not a dishonest caller.
+   *
+   * AND COUNT EQUALITY IS NOT SET EQUALITY (`R11-04`, measured and pinned by a
+   * test). An `asOf`-narrowed ledger with one unrelated row of the same party
+   * appended -- a paged read with an overlapping window gets there honestly --
+   * states a true count, hands over the wrong SET, and is ACCEPTED at delta 40
+   * where the whole ledger refuses. A scalar the caller computes cannot close
+   * that; §A.3c.3's trigger can, and this writer's refusals are a seam, not the
+   * bound.
    */
-  readonly partyMovementCount: number;
+  readonly storedPartyMovementCount: number;
 }
 
 /**
@@ -1374,19 +1395,19 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   // C-2: the ledger must be the party's whole ledger, and that is now a checked
   // statement rather than a sentence in a comment. The count is the caller's,
   // taken from the store with no filter; the rows are what this call was given.
-  if (!Number.isSafeInteger(request.partyMovementCount) || request.partyMovementCount < 0) {
+  if (!Number.isSafeInteger(request.storedPartyMovementCount) || request.storedPartyMovementCount < 0) {
     refuseLoyalty('loyalty.ledger_count_not_stated',
       'a reversal must state how many movements the store holds for this party', {
-        partyMovementCount: String(request.partyMovementCount),
+        storedPartyMovementCount: String(request.storedPartyMovementCount),
       });
   }
   const heldForParty = ledger.movements.filter(
     (m) => m.businessId === request.businessId && m.customerId === request.customerId,
   ).length;
-  if (heldForParty !== request.partyMovementCount) {
+  if (heldForParty !== request.storedPartyMovementCount) {
     refuseLoyalty('loyalty.ledger_not_party_complete',
       'the ledger handed to this writer is not the whole of this party\'s ledger', {
-        stated: String(request.partyMovementCount), handedOver: String(heldForParty),
+        stated: String(request.storedPartyMovementCount), handedOver: String(heldForParty),
       });
   }
   // `F-26` — THE TARGET IS FOUND BY THE DECLARED KEY, NOT BY `id` ALONE.
@@ -1582,17 +1603,27 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   }
   // F-33, and the two mutations behind it. BOTH this index and the sum below
   // filter on the declared key, and each masks the other: drop `sameParty` from
-  // either one alone and nothing reds (measured: 231 passed, rc 0, both ways),
-  // because a foreign row the index admits is discarded by the sum, and one the
-  // sum would admit was never in `chain`. Dropping it from BOTH reds this case
-  // and `F-26` (2 failed / 229 passed, rc 1). So the pair is reported as
-  // witnessed and neither filter is reported as witnessed alone -- the `P5 R9`
-  // lesson, that a one-at-a-time sweep cannot see two defences that mask each
-  // other.
+  // either one alone and nothing reds (measured at this head: 233 passed, rc 0,
+  // both ways), because a foreign row the index admits is discarded by the sum,
+  // and one the sum would admit was never in `chain`. Dropping it from BOTH reds
+  // this case and `F-26` (2 failed / 231 passed, rc 1). So the pair is reported
+  // as witnessed and neither filter is reported as witnessed alone -- the
+  // `P5 R9` lesson, that a one-at-a-time sweep cannot see two defences that mask
+  // each other.
   //
-  // The `chain.has` guard on the next line is defence in depth and is
+  // `R11-06`: these four figures used to read 231 and 2 failed / 229, which were
+  // measured on the tree BEFORE the C-2 case landed in the same commit. The
+  // conclusions were right and the counts belonged to another tree, which is
+  // `P13-AL-22` in a code comment. Every figure here is re-measured at the head
+  // that carries it.
+  //
+  // There are TWO `chain.has` calls below and they are not the same guard, which
+  // this paragraph used to run together. The one in the SUM (`chain.has(m.id)`)
+  // is witnessed: removing it gives 1 failed / 232 passed, rc 1. The one in the
+  // walk (`chain.has(child.id)`, the visited check) is defence in depth and is
   // UNWITNESSABLE, which is said here rather than left as a surviving mutation
-  // that reads like a hole: removing it leaves 231 passed and does not hang.
+  // that reads like a hole: removing it leaves 233 passed, rc 0, and does not
+  // hang.
   // `correctsId` is single-valued, so the children relation is a FOREST -- no row
   // has two parents and none is reachable twice -- and a cycle cannot hang below
   // a root at all, because a cycle's members have no path to a row with

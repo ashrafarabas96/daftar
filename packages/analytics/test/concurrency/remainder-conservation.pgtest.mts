@@ -2293,8 +2293,21 @@ async function main(): Promise<number> {
   // 0 lines and the sentence it supported, that the frozen migrations are
   // untouched, was a claim the measurement could not make. The conclusion was
   // true and the coverage was not, which is the class this round is about.
-  const mergeBase = gitFact(['merge-base', 'HEAD', 'main']);
-  console.log(`migrations touched : ${gitFact(['diff', '--shortstat', mergeBase, '--', 'infrastructure/database/migrations']) || '0 lines'} (worktree vs merge-base with main ${mergeBase.slice(0, 7)}, so a commit on this branch is included)`);
+  // R11-05: `main` does not resolve in a clone that holds only `origin/` refs --
+  // the F-12 shape, which a challenger reproduced by cloning. There the merge
+  // base came back `(unavailable)`, the diff ran against nothing, and the line
+  // printed `(unavai` -- a slice of that word -- inside a sentence that reads
+  // as though a merge base had been used. The two lines above already read
+  // `origin/main`; this one does too, with the local ref only as a fallback,
+  // and the unresolvable case now says so in words instead of slicing one.
+  const mergeBase = ['origin/main', 'main']
+    .map((ref) => gitFact(['merge-base', 'HEAD', ref]))
+    .find((sha) => /^[0-9a-f]{40}$/.test(sha));
+  console.log(
+    mergeBase === undefined
+      ? 'migrations touched : NOT MEASURED \u2014 no merge base with main resolves in this clone (neither origin/main nor main), so no diff was run'
+      : `migrations touched : ${gitFact(['diff', '--shortstat', mergeBase, '--', 'infrastructure/database/migrations']) || '0 lines'} (worktree vs merge-base with main ${mergeBase.slice(0, 7)}, so a commit on this branch is included)`,
+  );
   console.log(`node               : ${process.version}`);
   console.log(`database           : ${serverVersionLine}`);
   console.log(`collation          : ${collationLine}`);

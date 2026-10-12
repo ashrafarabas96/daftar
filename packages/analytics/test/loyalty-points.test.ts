@@ -71,15 +71,22 @@ const BUSINESS = '11111111-1111-4111-8111-111111111111';
 const CUSTOMER = '22222222-2222-4222-8222-222222222222';
 
 /**
- * The `partyMovementCount` a caller must state (C-2), derived from the ledger
- * being handed over. In a test the two agree by construction, which is the
- * point: the check exists for real call sites, and the one case that exercises
- * a DISAGREEMENT states the count by hand.
+ * The `storedPartyMovementCount` a caller must state (C-2), derived from the ledger
+ * being handed over.
+ *
+ * `R11-03`: this is EXACTLY the shape the guard cannot see — the length of the
+ * array about to be handed over is a count of that array, not of the store, and
+ * it satisfies the check for any narrowing. It is used here deliberately,
+ * because every ledger in this suite is the whole of its party's ledger and the
+ * two numbers are the same number; it is NOT the shape a real caller should
+ * copy, which is why the field carries its source in its name and the writer's
+ * contract says where the number must come from. The cases that exercise a
+ * DISAGREEMENT, and the padded narrowing of `R11-04`, state the count by hand.
  */
 const partyCount = (
   l: LoyaltyLedger, businessId: string = BUSINESS, customerId: string = CUSTOMER,
-): { partyMovementCount: number } => ({
-  partyMovementCount: l.movements.filter(
+): { storedPartyMovementCount: number } => ({
+  storedPartyMovementCount: l.movements.filter(
     (m) => m.businessId === businessId && m.customerId === customerId,
   ).length,
 });
@@ -2364,7 +2371,7 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     const full = appendMovement(base, first).ledger;
     const second = (ledger: LoyaltyLedger, count: number) =>
       buildReversalMovement(ledger, {
-        partyMovementCount: count, businessId: BUSINESS, customerId: CUSTOMER,
+        storedPartyMovementCount: count, businessId: BUSINESS, customerId: CUSTOMER,
         sourceId: 'desk-2', correctsId: 'c1', points: 40n, asOf: '2026-01-05',
         movementId: 'r2', reason: 'second',
       });
@@ -2394,6 +2401,58 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     expect(second(narrowed, 2).pointsDelta).toBe(40n);
   });
 
+  it('R11-04 — count equality is not set equality, and the writer accepts a padded narrowing', () => {
+    // The challenger's own finding on the C-2 guard, reproduced and PINNED so
+    // that closing it has to be a deliberate change to this case rather than a
+    // silent one. The stated count is a scalar, so a ledger that drops the row
+    // that matters and carries another row of the same party in its place
+    // states a TRUE count over a WRONG set. A paged read with an overlapping
+    // window reaches this shape without anyone intending it.
+    //
+    // What is measured: the whole ledger refuses the second 40, the padded
+    // narrowing is ACCEPTED at delta 40, and the count guard never fires
+    // because the count is right. Only §A.3c.3's trigger closes it — the
+    // relation cannot be narrowed by a caller at all there.
+    let base = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'));
+    base = appendMovement(base, buildSaleConsumptionMovement(base, sale(40n, '2026-01-02', 'c1'))).ledger;
+    const first = buildReversalMovement(base, {
+      ...partyCount(base), businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1',
+      correctsId: 'c1', points: 40n, asOf: '2026-01-03', movementId: 'r1', reason: 'first',
+    });
+    const full = appendMovement(base, first).ledger;
+    const second = (ledger: LoyaltyLedger, count: number) =>
+      buildReversalMovement(ledger, {
+        storedPartyMovementCount: count, businessId: BUSINESS, customerId: CUSTOMER,
+        sourceId: 'desk-2', correctsId: 'c1', points: 40n, asOf: '2026-01-05',
+        movementId: 'r2', reason: 'second',
+      });
+
+    expect(full.movements).toHaveLength(3);
+    expect(refusalCodeOf(() => second(full, 3))).toBe('loyalty.corrects_more_than_target');
+
+    // Drop the correction that moved the root, pad with an unrelated earn of
+    // the SAME party, and the count is three again — truthfully three.
+    const padded: LoyaltyLedger = {
+      movements: [
+        ...full.movements.filter((m) => m.id !== 'r1'),
+        {
+          id: 'e2', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 9n,
+          movementKind: 'earn', sourceType: 'manual_adjustment', sourceId: 'desk-pad',
+          pointsDelta: 10n, expiresOn: '2027-06-01', effectiveOn: '2026-01-04',
+          reason: 'goodwill', correctsId: null,
+        },
+      ],
+    };
+    expect(padded.movements).toHaveLength(3);
+    const accepted = second(padded, 3);
+    expect(accepted.pointsDelta).toBe(40n);
+
+    // The guard still fires on a count that does NOT match the padded set, so
+    // what is accepted here is a true count over the wrong rows, and nothing
+    // weaker than that.
+    expect(refusalCodeOf(() => second(padded, 4))).toBe('loyalty.ledger_not_party_complete');
+  });
+
   it('F-33 — the two party filters are load-bearing TOGETHER, and neither is witnessable alone', () => {
     // The chain is collected by a `correctsId -> children` index and its net is
     // summed from the ledger, and BOTH steps filter on the declared key. Drop
@@ -2403,10 +2462,12 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // lesson — a one-at-a-time sweep cannot see two defences that mask each
     // other, so the honest proof is a PAIR-DROP and an assertion by name.
     //
-    // Measured: dropping `sameParty` from the index alone leaves 230 passed,
-    // rc 0. Dropping it from BOTH the index and the sum reds `F-26` above and
-    // this case, 1 failed / 229 passed, rc 1. So neither filter is reported as
-    // witnessed on its own, and both are reported as witnessed together.
+    // Measured AT THIS HEAD (`R11-06` corrected the earlier figures, which came
+    // from the tree before the C-2 case landed): dropping `sameParty` from the
+    // index alone leaves 233 passed, rc 0, and from the sum alone likewise.
+    // Dropping it from BOTH reds `F-26` above and this case, 2 failed / 231
+    // passed, rc 1. So neither filter is reported as witnessed on its own, and
+    // both are reported as witnessed together.
     const row = (businessId: string, id: string, seq: bigint, delta: bigint, correctsId: string | null = null): LoyaltyMovement => ({
       id, businessId, customerId: CUSTOMER, pointSeq: seq,
       movementKind: delta < 0n ? 'consume' : 'adjust',
