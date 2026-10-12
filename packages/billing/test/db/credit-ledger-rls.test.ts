@@ -49,7 +49,15 @@
  * The challenger's round-11 observation, adopted: in the real-schema lane
  * the schema owner IS `daftar_platform`, for whom `app_bypass()` is TRUE, so
  * every policy's first disjunct is satisfied and ANY isolation claim made on
- * that connection is vacuous by construction. The cases that carry weight
+ * that connection is vacuous by construction.
+ *
+ * ROUND 17, THE OPEN HALF OF THE COORDINATOR'S R-8: this paragraph scoped
+ * the vacuity to "the real-schema lane", and it is true of BOTH lanes. The
+ * fixture lane's `app_bypass()` names `p5owner`, which is that lane's owner
+ * connection, so the first disjunct is satisfied there too. The two lanes
+ * differ in WHICH role the bypass names, not in whether the owner has it.
+ * `P5-CHECKPOINT.md` was corrected to "both lanes" at round 14 and this file
+ * was not, which is exactly the drift that made N-5 a finding. The cases that carry weight
  * are the `p5_app` ones — exactly the six that go red when the three
  * `*_business_isolation` policies are dropped. The owner connection is used
  * here for catalogue reads, for fixtures, and for ONE case that asserts the
@@ -136,7 +144,14 @@ describe('the policies are the house pattern, read from the catalogue', () => {
     }
   });
 
-  it('keeps FORCE ROW LEVEL SECURITY on, so the owner is subject to policy too', async () => {
+  // ROUND 17, R-8's other half: the name used to end "so the owner is
+  // subject to policy too", which overstates what the case reads. FORCE RLS
+  // is a CATALOGUE fact here (`relforcerowsecurity`), and in both lanes the
+  // owner is the bypass principal, so no case in this file demonstrates the
+  // owner being refused anything. What FORCE RLS buys is that the owner is
+  // subject to POLICY rather than exempt from RLS — and the policy it is
+  // subject to admits it. The name now says what is read.
+  it('keeps FORCE ROW LEVEL SECURITY on for every requested relation, read from the catalogue', async () => {
     const r = await owner.query<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>(
       `SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -442,6 +457,70 @@ describe('a definer routine trusts the context, not its caller', () => {
       expect(usage.rows[0]?.ok, 'the stranger has no USAGE, so the refusal above was the wrong one').toBe(true);
     } finally {
       await stranger.end();
+    }
+  });
+
+  it('refuses BEFORE it takes the lock, measured against a session that already holds it', async () => {
+    // ROUND 16, THE COORDINATOR'S N-1, AND IT IS THE BEST FINDING OF THE
+    // ROUND BECAUSE IT IS ABOUT MY EVIDENCE RATHER THAN MY CODE.
+    //
+    // Round 14's pack argued that "0 advisory locks held after the refusal"
+    // proves the guard precedes the lock, and the independent challenger
+    // re-measured the same thing with a SAVEPOINT and agreed. BOTH OF US WERE
+    // WRONG ABOUT WHAT THAT EVIDENCE CAN SHOW: PostgreSQL releases locks when
+    // the transaction ABORTS, not when ROLLBACK is issued, so a guard placed
+    // AFTER `pg_advisory_xact_lock` reads 0 locks after its refusal too. The
+    // coordinator planted exactly that and the whole RLS file stayed GREEN,
+    // 16 of 16 — so until this case, no case in this lane pinned the ordering,
+    // and the pack's claim that it did was the kind of sentence this phase
+    // keeps learning to distrust.
+    //
+    // THE DISCRIMINATOR IS A LOCK SOMEBODY ELSE ALREADY HOLDS. A second
+    // session takes the victim business's advisory key and keeps it. Then the
+    // cross-tenant call runs under a `lock_timeout`:
+    //
+    //   guard BEFORE the lock  -> 23000/lgo_scope_is_the_callers_own
+    //   guard AFTER  the lock  -> 55P03, lock_not_available
+    //
+    // Two different SQLSTATEs, which is why this case asserts a code and
+    // claims nothing about how long anything took. A timing figure from this
+    // container would not be evidence about anything.
+    const victim = await freshScope(OTHER_TENANT);
+    await insertGrant(owner, 'p5scratch', victim, 500n, T1);
+    const mine = await freshScope();
+    // The holder takes the SAME key the routine takes:
+    // `hashtext('p5scratch:' || business_id)`, held to the end of its
+    // transaction, which is what `pg_advisory_xact_lock` means.
+    const holder = await connectWithoutContext(ownerUrl());
+    const attacker = await connectWithoutContext(appUrl());
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT pg_advisory_xact_lock(hashtext('p5scratch:' || $1::text))`, [victim.businessId]);
+      // The holder really does hold it, read from `pg_locks` rather than
+      // assumed from the statement having returned.
+      const held = await holder.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM pg_locks
+          WHERE locktype = 'advisory' AND pid = pg_backend_pid()`,
+      );
+      expect(held.rows[0]?.n, 'the holder does not hold the lock, so this case discriminates nothing').toBe(1);
+
+      await attacker.query('BEGIN');
+      await setRequestContext(attacker, mine, 'transaction');
+      await attacker.query(`SET LOCAL lock_timeout = '2s'`);
+      const refusal = await attacker
+        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD'])
+        .then(() => '', (e: unknown) => refusedBy(e));
+      // `55P03` here would mean the routine reached the lock before it
+      // checked the caller — the cross-tenant denial of service the guard is
+      // supposed to have closed, surviving behind a refusal that looks right.
+      expect(refusal, 'the routine waited on the victim\'s lock before checking the caller').toBe(
+        '23000/lgo_scope_is_the_callers_own',
+      );
+      await attacker.query('ROLLBACK');
+      await holder.query('ROLLBACK');
+    } finally {
+      await attacker.end();
+      await holder.end();
     }
   });
 

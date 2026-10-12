@@ -153,8 +153,17 @@ CREATE TABLE p5scratch.platform_credit_grant_remainders (
 --
 -- What is true now, and it is a different sentence: every route into this
 -- table is either the trigger below or a definer routine that checks the
--- caller's scope against the transaction context and refuses by name
--- otherwise. The check is the claim; the missing grant is not.
+-- caller's scope against the transaction context and refuses by name —
+-- UNLESS the session authenticated as that routine's own owner and is not
+-- acting as another role, which is the designed admin exemption. The check
+-- is the claim; the missing grant is not.
+--
+-- ROUND 17, THE COORDINATOR'S N-4: the sentence was universally quantified
+-- and the exemption was left unsaid, which is how F-16 hid in it — a
+-- session that authenticated as the owner and then `SET ROLE`d to the
+-- application role satisfied "authenticated as the owner" and was skipped.
+-- The exemption is now also narrowed by the `role` GUC, and it is named
+-- here rather than only where it is implemented.
 CREATE FUNCTION p5scratch.pca_maintain_remainder() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, public, pg_temp AS $fn$
 DECLARE
@@ -391,11 +400,24 @@ BEGIN
   -- came back GREEN — the hole still open. The reason is general and worth
   -- more than this function: the house `app_bypass()` is a CURRENT_USER
   -- test, and inside a `SECURITY DEFINER` routine CURRENT_USER IS THE
-  -- ROUTINE'S OWNER. So the house bypass is UNCONDITIONALLY TRUE inside
-  -- any definer routine, whoever called it, and it cannot identify a
-  -- caller there. A `SECURITY INVOKER` helper does not rescue it either:
-  -- current_user is inherited from the calling context, which is already
-  -- the definer's.
+  -- ROUTINE'S OWNER. So the house bypass is UNCONDITIONALLY TRUE inside a
+  -- definer routine OWNED BY THE BYPASS PRINCIPAL, whoever called it, and
+  -- it cannot identify a caller there.
+  --
+  -- ROUND 17, THE COORDINATOR'S N-2: the sentence above said "inside ANY
+  -- definer routine", which is FALSE and it measured it false. A definer
+  -- owned by a role that is NOT the bypass principal reads its own owner
+  -- there, so `app_bypass()` is unconditionally **FALSE** inside it —
+  -- measured on `assert_invoice_credit_agrees`, owned by `p5_invariants`
+  -- and called by the application role: `current_user = p5_invariants`,
+  -- `app_bypass() = false`. The useful rule is the one both halves share:
+  -- inside a definer, `app_bypass()` is a CONSTANT determined by the
+  -- routine's owner, so whichever constant it is, IT CANNOT IDENTIFY A
+  -- CALLER. Precision matters here because this rule is addressed to the
+  -- Migration Owner in `P5-MIGRATION-PATCH-REQUEST.md`.
+  --
+  -- A `SECURITY INVOKER` helper does not rescue it either: current_user is
+  -- inherited from the calling context, which is already the definer's.
   --
   -- `SESSION_USER` is what a definer cannot overwrite: it is the role the
   -- session authenticated as, and `SECURITY DEFINER` does not touch it. So
@@ -1015,8 +1037,21 @@ CREATE POLICY sca_business_isolation ON p5scratch.subscription_charge_attempts A
 --
 -- A trigger function does not need `EXECUTE` at firing time, only at
 -- `CREATE TRIGGER` time, which has already happened above in this same
--- file as the owner. That is why the two trigger functions can be revoked
--- outright with no compensating grant.
+-- file as the owner. That is why `pca_maintain_remainder()` — THE ONE
+-- trigger function among the three revoked here — can be revoked outright
+-- with no compensating grant.
+--
+-- ROUND 17, THE COORDINATOR'S N-3: this said "the two trigger functions",
+-- and only one of the three is a trigger function. The other two each need
+-- an explicit grant, for two different reasons, and neither is "it is a
+-- trigger": `lock_grants_in_order` relies on the grant `credit-ledger-roles.sql`
+-- already makes to the application role, and `assert_invoice_credit_agrees`
+-- needed the two compensating grants that file adds, because it is
+-- `PERFORM`ed from `SECURITY INVOKER` trigger functions running as the
+-- application role. The seven invoker trigger functions in this schema keep
+-- PostgreSQL's PUBLIC default and that is not a finding: a trigger function
+-- cannot be called except as a trigger (`0A000`), which the independent
+-- challenger checked rather than assumed.
 REVOKE ALL ON FUNCTION p5scratch.pca_maintain_remainder() FROM PUBLIC;
 REVOKE ALL ON FUNCTION p5scratch.lock_grants_in_order(uuid, uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION p5scratch.assert_invoice_credit_agrees(uuid) FROM PUBLIC;

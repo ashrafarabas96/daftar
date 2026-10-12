@@ -61,7 +61,12 @@ def main() -> int:
     if not manifest.is_file():
         sys.exit(f"no {MANIFEST} in {base}")
 
-    on_disk = sorted(p.name for p in base.glob("*.md"))
+    # ROUND 17: `*.md` alone stopped being the pack. `P5-STATUS.json` is now
+    # the SOURCE the status block in five documents is generated from, so a
+    # digest table that hashed only the Markdown would have left the one file
+    # that decides what those five documents SAY outside the hashed set —
+    # the same shape as a check that cannot look at what it reassures about.
+    on_disk = sorted(p.name for p in base.glob("*.md")) + sorted(p.name for p in base.glob("*.json"))
     lines = manifest.read_text().split("\n")
     start, end = table_bounds(lines)
 
@@ -73,13 +78,25 @@ def main() -> int:
         print(f"wrote {len(rows) - 2} rows for {len(on_disk)} files in {base}")
         return 0
 
+    # ROUND 17, THE COORDINATOR'S N-6. This used to be a plain dict
+    # assignment, so two rows naming the same file COLLAPSED and the last one
+    # won. Measured: a WRONG duplicate digest row placed BEFORE the correct
+    # one gave `30 rows, 0 problems`, rc 0 — a checker that cannot see a
+    # contradiction in the table it is checking. Rows are counted per name
+    # now, and more than one is a problem of its own: the right answer to
+    # "which of these two digests is the file's?" is to refuse, not to pick.
     listed: dict[str, str | None] = {}
+    seen: dict[str, int] = {}
     for line in lines[start:end]:
         m = ROW.match(line)
         if m:
+            seen[m.group(1)] = seen.get(m.group(1), 0) + 1
             listed[m.group(1)] = m.group(2)
 
     problems: list[str] = []
+    for name, n in sorted(seen.items()):
+        if n > 1:
+            problems.append(f"DUPLICATE rows ({n}) for: {name}")
     for name in on_disk:
         if name not in listed:
             problems.append(f"ABSENT from the table: {name}")

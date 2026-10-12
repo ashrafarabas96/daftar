@@ -33,7 +33,16 @@ PGBIN=${PGBIN:-/usr/lib/postgresql/16/bin}
 PGPORT_P5=${PGPORT_P5:-54333}
 CLUSTER=${P5_CLUSTER_DIR:-/home/p5pg/p5cluster-mig}
 P5_LOCALE=${P5_LOCALE:-en_US.utf8}
-SQLDIR="$(cd "$(dirname "$0")/sql" && pwd)"
+# ROUND 17, THE COORDINATOR'S B-4 FOUND THIS BY ACCIDENT AND IT IS WORSE THAN
+# THE ITEM IT WAS FOUND UNDER. This line used to be unconditional, so this
+# lane IGNORED `P5_SQL_DIR` while the fixture lane honoured it. A red proof
+# pointed at this lane through that variable therefore ran the UNMUTATED
+# files and came back green — which is exactly what happened on the first
+# attempt at re-measuring B-4 here: 125 of 125 passed with both compensating
+# grants supposedly removed, and the live `proacl` still showed them present.
+# Recorded as a NON-MUTATION, the fourth in this phase (M27, M34, M45 are the
+# others), and the reason every mutation prints a count before its run.
+SQLDIR="${P5_SQL_DIR:-$(cd "$(dirname "$0")/sql" && pwd)}"
 REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
 W=${P5_WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/p5-real-lane-XXXXXX")}
 mkdir -p "$W"
