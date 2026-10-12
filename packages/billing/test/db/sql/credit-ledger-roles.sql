@@ -29,9 +29,18 @@ GRANT SELECT, INSERT ON p5scratch.platform_credit_adjustments TO p5_app;
 -- PG 16.15, 400 policies in `public`, 86 of them mentioning `app_tenant()`:
 --
 --   25  compare `tenant_id` directly    <- the shape this slice copied
---   61  go through `EXISTS (SELECT 1 FROM businesses b WHERE b.id = …
---         AND b.tenant_id::text = app_tenant())`
+--   61  go through `businesses`, IN TWO SPELLINGS:
+--         27  `EXISTS (SELECT 1 FROM businesses b WHERE b.id = …
+--               AND b.tenant_id::text = app_tenant())`
+--         34  a SCALAR SUBQUERY, `(SELECT b.tenant_id FROM businesses b
+--               WHERE b.id = …business_id) = NULLIF(app_tenant(),'')::uuid`
 --   35  of those 61 are on tables that DO carry their own `tenant_id`
+--
+-- ROUND 18, the coordinator's S-1: this comment quoted all 61 as the EXISTS
+-- spelling. The count was right; the spelling covered less than half of them.
+-- Re-measured on the migrated database rather than adopted from the review:
+-- 400 / 86 / 27 / 34 / 25. The same mistake as the three-versus-25 note at
+-- the bottom of this comment, one layer up.
 --
 -- So the subquery is the MAJORITY shape and it is used even where a direct
 -- comparison was available. Both halves of the round-14 sentence are true

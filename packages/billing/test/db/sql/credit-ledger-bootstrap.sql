@@ -76,3 +76,52 @@ END $$;
 -- policies, and it does not affect what the function sees, because a
 -- SECURITY DEFINER function runs as its OWNER whoever called it.
 GRANT p5_invariants TO p5owner;
+
+-- ROUND 18, GAP 1: the OBSERVER must be able to see a wait it does not own.
+--
+-- Gap 1 is "concurrency under more than one writer in one principal": every
+-- interleaving pair in `credit-ledger-concurrency.test.ts` opened on
+-- `ownerUrl()`, the bypass principal in both lanes, so no concurrency claim
+-- in this pack had been measured under RLS as the APPLICATION role. Moving
+-- the writers to `appUrl()` made two of the new cases fail in the barrier
+-- rather than in the assertion:
+--
+--     second finalization, as the application role: backend 3580 never
+--     waited on a lock; and B had not settled either
+--
+-- The diagnosis is not in the schema under test. `waitUntilBlocked` reads
+-- `pg_stat_activity.wait_event_type`, and PostgreSQL hides `state`, `query`
+-- and the wait columns of a backend belonging to a role the observer is not
+-- a member of. Measured on this lane's cluster (PG 16.15, port 54331), with
+-- one `p5_app` session holding `pg_advisory_xact_lock(987654)` and a second
+-- `p5_app` session queued behind it:
+--
+--     observer = p5owner    (rolsuper=f)  Lock-waiting backends visible: 0
+--     observer = postgres   (rolsuper=t)  Lock-waiting backends visible: 1
+--
+-- and after the grant below, p5owner reads 1 as well. So the barrier was
+-- reporting the observer's BLINDNESS as the absence of a wait — the same
+-- class as P14's "a missing BLOB counted as a deletion": an instrument that
+-- cannot see reports what it cannot see as a negative observation.
+--
+-- `pg_read_all_stats` is the smallest remedy and the right one: it is a
+-- monitoring role, it confers NO data privilege and does NOT bypass row
+-- level security, so the observer stays NOSUPERUSER NOBYPASSRLS and the
+-- lane's own principal guard — which runs after this file and refuses
+-- anything but `false:false` — still covers it. A superuser observer would
+-- have worked too and would have been the wrong fix: this lane's round-8
+-- finding (F-05) is precisely that a superuser in the room makes the
+-- surrounding claims narrower than they read.
+--
+-- Granted to whichever observer exists: `p5owner` in the fixture lane,
+-- `daftar_platform` in the real-schema lane, since `ownerUrl()` is the
+-- observing connection in both.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'p5owner') THEN
+    EXECUTE 'GRANT pg_read_all_stats TO p5owner';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_platform') THEN
+    EXECUTE 'GRANT pg_read_all_stats TO daftar_platform';
+  END IF;
+END $$;

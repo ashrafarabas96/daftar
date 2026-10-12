@@ -824,3 +824,195 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
     expect(otherCurrency).toBe('23503/pca_grant_same_owner_currency_kind');
   });
 });
+
+describe('GAP 1 — the same races, run by the APPLICATION role instead of the platform principal', () => {
+  // ROUND 18, AND THIS GAP HAS BEEN OWED SINCE ROUND 8. Every interleaving
+  // case above opens its two writers on `ownerUrl()`, and the owner IS the
+  // bypass principal in both lanes — `app_bypass()` names `p5owner` in the
+  // fixture lane and `daftar_platform` in the real one. So every concurrency
+  // claim in this file was measured with RLS satisfied at the first disjunct
+  // of every policy, by a role that production does not use for this work.
+  //
+  // That is not a defect in the races: a lock is a lock whoever takes it, and
+  // the constraint that refuses an overdraw does not read a policy. What was
+  // missing is the CONJUNCTION — the claim that these races still hold when
+  // the writers are subject to the policies, hold only the grants §7 asks
+  // for, and set a request context per transaction the way the frozen
+  // discipline requires. A guard that refuses under one role and a race that
+  // is safe under another are two measurements, not one.
+  //
+  // The independent challenger named this gap 1 and has declined to cover it
+  // at four successive heads, correctly, because nothing measured it. These
+  // cases measure it.
+  //
+  // WHAT STAYS OWNER-ONLY, and why it is not a hole in this block: the GRANT
+  // path. Invariant (3) gives the application role SELECT and INSERT on the
+  // adjustments relation and nothing on the remainders, and a grant is an
+  // administrative act in this design — §7 asks for no application-role path
+  // that creates one. So the fixtures below are still written by the owner,
+  // and what the application role does is exactly what it does in
+  // production: finalize.
+
+  it('the overdraw race is refused by the same named constraint under RLS', async () => {
+    const s = await freshScope('p5scratch');
+    const grant = await insertGrant(owner, 'p5scratch', s, 1000n, T0);
+    const invA = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+    const invB = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+
+    const a = await connect(appUrl());
+    const b = await connect(appUrl());
+    try {
+      await a.query('BEGIN');
+      await b.query('BEGIN');
+      // The context is set INSIDE each transaction and dies with it, which is
+      // the frozen discipline and not this lane's session-level divergence.
+      await setRequestContext(a, s, 'transaction');
+      await setRequestContext(b, s, 'transaction');
+      const bPid = await pidOf(b);
+
+      await finalizeInvoice(a, 'p5scratch', s, invA, 1000n, 'inv-A-app', T1, { withLock: false });
+
+      // B's outcome is captured the moment it settles, so that a B which
+      // FAILED instead of blocking reports its own refusal rather than the
+      // barrier's "never waited on a lock" — which says nothing about why.
+      let bSettled: string | null = null;
+      const bInsert = finalizeInvoice(b, 'p5scratch', s, invB, 1000n, 'inv-B-app', T1, { withLock: false }).then(
+        (v) => { bSettled = ''; return v; },
+        (e: unknown) => { bSettled = refusedBy(e) || String(e); throw e; },
+      );
+      bInsert.catch(() => undefined);
+      // The barrier is an OBSERVED lock wait on a named backend. If B never
+      // blocks this throws, so the case cannot pass by B having been let
+      // through for want of a privilege.
+      try {
+        await waitUntilBlocked(observer, bPid, 'second finalization, as the application role');
+      } catch (barrier) {
+        throw new Error(
+          bSettled === null
+            ? `${String(barrier)}; and B had not settled either`
+            : `B did not block, it settled first with: ${bSettled}`,
+        );
+      }
+
+      await a.query('COMMIT');
+
+      const refusal = await bInsert.then(
+        () => ({ ok: true as const }),
+        (e: unknown) => ({ ok: false as const, code: refusedBy(e) }),
+      );
+      expect(refusal.ok, 'the overdraw was admitted when the writers were the application role').toBe(false);
+      // The SAME named defence as the owner-run case above, not merely "some
+      // refusal": under RLS a `42501` here would also be a failure, and a
+      // case asserting only that something was refused could not tell them
+      // apart. That is F-11's law applied to the thing F-11 did not cover.
+      if (!refusal.ok) expect(refusal.code).toBe('23514/pcgr_never_overdrawn');
+      await b.query('ROLLBACK');
+    } finally {
+      await a.end();
+      await b.end();
+    }
+
+    expect(await consumedMinor(owner, 'p5scratch', s)).toBe(1000n);
+    expect(await remainderOf(owner, grant)).toBe(0n);
+  });
+
+  it('two application-role finalizations of the SAME invoice: one commits, the other is refused', async () => {
+    const s = await freshScope('p5scratch');
+    await insertGrant(owner, 'p5scratch', s, 1000n, T0);
+    const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 400n);
+
+    const a = await connect(appUrl());
+    const b = await connect(appUrl());
+    try {
+      await a.query('BEGIN');
+      await b.query('BEGIN');
+      await setRequestContext(a, s, 'transaction');
+      await setRequestContext(b, s, 'transaction');
+      const bPid = await pidOf(b);
+
+      await finalizeInvoice(a, 'p5scratch', s, invoiceId, 400n, 'inv-dup-app', T1, { withLock: false });
+      let bSettled: string | null = null;
+      const bAttempt = finalizeInvoice(b, 'p5scratch', s, invoiceId, 400n, 'inv-dup-app-2', T1, {
+        withLock: false,
+      }).then(
+        (v) => { bSettled = ''; return v; },
+        (e: unknown) => { bSettled = refusedBy(e) || String(e); throw e; },
+      );
+      bAttempt.catch(() => undefined);
+      try {
+        await waitUntilBlocked(observer, bPid, 'duplicate finalization, as the application role');
+      } catch (barrier) {
+        throw new Error(
+          bSettled === null
+            ? `${String(barrier)}; and B had not settled either`
+            : `B did not block, it settled first with: ${bSettled}`,
+        );
+      }
+
+      await a.query('COMMIT');
+
+      const second = await bAttempt.then(() => '', (e: unknown) => refusedBy(e));
+      // By NAME, not by "some error happened": the pure law bans the bare
+      // form and it caught this line on the first run of this round. The
+      // owner-lane case for the same race (line 407) names the same index,
+      // and the point of this one is that the APPLICATION role meets the
+      // same defence and not a policy refusal that happens to arrive first.
+      // MEASURED, not predicted. I first wrote the index's name here —
+      // `23505/pca_one_consumption_per_grant_per_invoice`, which is what the
+      // owner-lane case at line 407 gets — and the run answered
+      // `23000/si_transition_allowed`. The two writers are serialised on the
+      // invoice row, so by the time B resumes, A's COMMIT has already moved
+      // the invoice out of `draft`, and the STATE MACHINE refuses before any
+      // grant is consumed. That is the earlier of the two defences and the
+      // better answer; the index's own refusal is held by line 407, which
+      // reaches it through a second invoice.
+      expect(second, 'the same invoice was finalized twice by two application sessions').toBe(
+        '23000/si_transition_allowed',
+      );
+      await b.query('ROLLBACK');
+    } finally {
+      await a.end();
+      await b.end();
+    }
+
+    // Exactly once applied, read back by the principal whose view no policy
+    // narrows, so the assertion is about the stored rows and not about what
+    // either writer could see.
+    expect(await consumedMinor(owner, 'p5scratch', s)).toBe(400n);
+  });
+
+  it('two application-role finalizations across the same two grants in FIFO order do not deadlock', async () => {
+    const s = await freshScope('p5scratch');
+    await insertGrant(owner, 'p5scratch', s, 300n, T0);
+    await insertGrant(owner, 'p5scratch', s, 300n, T1);
+    const invA = await createDraftInvoice(owner, 'p5scratch', s, 400n);
+    const invB = await createDraftInvoice(owner, 'p5scratch', s, 200n);
+
+    const a = await connect(appUrl());
+    const b = await connect(appUrl());
+    try {
+      await a.query('BEGIN');
+      await b.query('BEGIN');
+      await setRequestContext(a, s, 'transaction');
+      await setRequestContext(b, s, 'transaction');
+
+      // A draws across both grants; B then draws what is left. With one lock
+      // order there is no cycle to find, and a `40P01` here would be the
+      // deadlock this design exists to prevent — asserted by SQLSTATE, so a
+      // privilege failure could not be mistaken for a clean run.
+      await finalizeInvoice(a, 'p5scratch', s, invA, 400n, 'inv-fifo-a', T2, { withLock: true, withGrantLocks: true });
+      await a.query('COMMIT');
+      const bResult = await finalizeInvoice(b, 'p5scratch', s, invB, 200n, 'inv-fifo-b', T2, {
+        withLock: true,
+        withGrantLocks: true,
+      }).then(() => '', (e: unknown) => refusedBy(e));
+      expect(bResult, 'the second application-role allocator was refused or deadlocked').toBe('');
+      await b.query('COMMIT');
+    } finally {
+      await a.end();
+      await b.end();
+    }
+
+    expect(await consumedMinor(owner, 'p5scratch', s)).toBe(600n);
+  });
+});

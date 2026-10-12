@@ -134,6 +134,54 @@ export async function pidOf(c: Client): Promise<number> {
 }
 
 /**
+ * What the OBSERVER can actually see about one backend.
+ *
+ * ROUND 18, GAP 1, and this thread's own finding. `wait_event_type` was read
+ * straight out of `pg_stat_activity`, and PostgreSQL NULLs `state`, `query`
+ * and the wait columns of a backend belonging to a role the observer is not
+ * a member of. So when Gap 1 moved the writers from the bypass principal to
+ * `p5_app`, the barrier below said "backend 3580 never waited on a lock"
+ * about a backend that was, at that moment, parked on exactly that lock: the
+ * instrument reported its own BLINDNESS as a negative observation. Measured
+ * on the lane's cluster, one `p5_app` holder and one `p5_app` waiter:
+ * `p5owner` counted 0 Lock-waiting backends, the superuser counted 1, and
+ * after `GRANT pg_read_all_stats TO p5owner` (now in
+ * `credit-ledger-bootstrap.sql`) `p5owner` counted 1 too.
+ *
+ * The grant is the remedy; this function is the GUARD, so that a lane whose
+ * observer loses that membership fails loudly instead of quietly confirming
+ * every negative. `visible` is the discriminator: a row the observer may not
+ * read still appears, with `state` NULL.
+ */
+async function observe(
+  observer: Client,
+  pid: number,
+): Promise<{ present: boolean; visible: boolean; waiting: boolean }> {
+  const r = await observer.query<{ present: boolean; visible: boolean; waiting: boolean }>(
+    `SELECT true AS present,
+            (state IS NOT NULL) AS visible,
+            (wait_event_type = 'Lock' AND state = 'active') AS waiting
+       FROM pg_stat_activity WHERE pid = $1`,
+    [pid],
+  );
+  const row = r.rows[0];
+  if (row === undefined) return { present: false, visible: false, waiting: false };
+  return { present: true, visible: row.visible, waiting: row.waiting };
+}
+
+/** The one message that names WHY no wait was seen, so blindness cannot read as absence. */
+function blindnessOr(seen: { present: boolean; visible: boolean }, pid: number, what: string): string {
+  if (!seen.present) return `${what}: no backend ${pid} in pg_stat_activity at all`;
+  if (!seen.visible)
+    return (
+      `${what}: the observer cannot READ backend ${pid} — pg_stat_activity hides state and the wait ` +
+      `columns of another role's backend, so this is not an observation that it did not wait. ` +
+      `The observing principal needs pg_read_all_stats (granted in credit-ledger-bootstrap.sql).`
+    );
+  return `${what}: backend ${pid} never waited on a lock`;
+}
+
+/**
  * Wait, bounded, until backend `pid` is parked on a heavyweight lock.
  *
  * The same shape the repository's own interleaving tests use
@@ -147,26 +195,28 @@ export async function pidOf(c: Client): Promise<number> {
  * fails the case instead of being assumed to have blocked.
  */
 export async function waitUntilBlocked(observer: Client, pid: number, what: string): Promise<void> {
+  let seen = { present: false, visible: false, waiting: false };
   for (let i = 0; i < 400; i += 1) {
-    const r = await observer.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM pg_stat_activity
-        WHERE pid = $1 AND wait_event_type = 'Lock' AND state = 'active'`,
-      [pid],
-    );
-    if ((r.rows[0]?.n ?? 0) > 0) return;
+    seen = await observe(observer, pid);
+    if (seen.waiting) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`${what}: backend ${pid} never waited on a lock`);
+  throw new Error(blindnessOr(seen, pid, what));
 }
 
-/** A point observation, used to prove a statement did NOT block. */
+/**
+ * A point observation, used to prove a statement did NOT block.
+ *
+ * It THROWS rather than returning false when the observer cannot read the
+ * backend. A negative is the whole purpose of this call, and a blind
+ * observer returns the negative the caller is hoping for.
+ */
 export async function isBlocked(observer: Client, pid: number): Promise<boolean> {
-  const r = await observer.query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM pg_stat_activity
-      WHERE pid = $1 AND wait_event_type = 'Lock' AND state = 'active'`,
-    [pid],
-  );
-  return (r.rows[0]?.n ?? 0) > 0;
+  const seen = await observe(observer, pid);
+  if (!seen.present || !seen.visible) {
+    throw new Error(blindnessOr(seen, pid, 'isBlocked'));
+  }
+  return seen.waiting;
 }
 
 export function uuid(): string {

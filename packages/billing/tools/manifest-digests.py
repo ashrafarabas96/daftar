@@ -15,7 +15,9 @@ lesson, now with a tool.
 
 `--check` is the gate. It fails on three things, not one:
   * a row whose digest no longer matches its file (drift);
-  * a `.md` file in the directory with no row at all (absence);
+  * a `.md` **or `.json`** file in the directory with no row at all
+    (absence) — round 17 added `.json` to the hashed set and this docstring
+    kept saying `.md` only, which is the coordinator's S-5;
   * a row naming a file that is not there any more (an orphan).
 
 The manifest's own row is `this file` by necessity — a file cannot carry its
@@ -87,13 +89,25 @@ def main() -> int:
     # "which of these two digests is the file's?" is to refuse, not to pick.
     listed: dict[str, str | None] = {}
     seen: dict[str, int] = {}
+    malformed: list[str] = []
     for line in lines[start:end]:
         m = ROW.match(line)
         if m:
             seen[m.group(1)] = seen.get(m.group(1), 0) + 1
             listed[m.group(1)] = m.group(2)
+        elif line.strip() not in ("", HEADER, "|---|---|"):
+            # ROUND 18, found while building S-5's positive control. `ROW`
+            # requires 64 hex characters, so a line INSIDE the table that
+            # looks like a row but is not one — a truncated digest, a stray
+            # pipe — was not a row and not a problem: it was nothing. A
+            # duplicate planted that way reported clean, which is N-6's own
+            # failure wearing different clothes. A line in the table is now
+            # either a row or a problem.
+            malformed.append(line.strip()[:60])
 
     problems: list[str] = []
+    for line in malformed:
+        problems.append(f"MALFORMED line inside the digest table, neither a row nor a heading: {line}")
     for name, n in sorted(seen.items()):
         if n > 1:
             problems.append(f"DUPLICATE rows ({n}) for: {name}")
@@ -112,7 +126,13 @@ def main() -> int:
 
     for p in problems:
         print(p)
-    print(f"{len(on_disk)} files, {len(listed)} rows, {len(problems)} problems")
+    # S-5's second half: `len(listed)` counts NAMES, so the summary said
+    # "34 rows" while 35 row lines existed and one name was duplicated. The
+    # duplicate was still reported as a problem above — the summary was
+    # merely unable to say so. Both numbers are printed now.
+    row_lines = sum(seen.values())
+    rows_text = f"{row_lines} rows" if row_lines == len(listed) else f"{row_lines} row lines for {len(listed)} names"
+    print(f"{len(on_disk)} files, {rows_text}, {len(problems)} problems")
     return 1 if problems else 0
 
 
