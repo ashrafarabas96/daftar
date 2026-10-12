@@ -161,9 +161,16 @@ do not exist at `6fc505d` at all, all three being Phase 4's unmerged work. The
 conclusion survives **for a reason now stated rather than assumed**: every
 migration cited *for an RLS policy, a grant or a role* — `0002`, `0003`, `0004`,
 `0006`, `0010`, `0014`, `0020`, `0025`, `0045`, `0054` — is byte-identical at
-both. Three route-surface citations are exposed, and a reader on `6fc505d`
-cannot check them at all rather than checking them wrongly, which is the better
-of the two failures.
+both, and a reader on `6fc505d` cannot check the three absent ones at all rather
+than checking them wrongly, which is the better of the two failures.
+
+**And the report's second consequence is recorded, not generalised away.** It is
+not true that all three absences are route-surface facts: `0079` is cited as
+the **freeze boundary itself** (`frozenThrough =
+0079_phase4_pos_till_sessions_cart.sql`, in four places), so **a reader on
+`6fc505d` cannot verify the freeze boundary at all.** That is the one
+consequence of the absence that touches a rule rather than a citation, and §15
+now says so.
 
 **`P3-04` — the ambiguous citations are CITED BY PATH.** An unqualified
 errors.ts matched three real files and an unqualified tokens.ts matched two

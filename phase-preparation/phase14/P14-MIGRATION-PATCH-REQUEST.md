@@ -1480,11 +1480,18 @@ unmerged work. The conclusion the sentence was carrying nevertheless **holds,
 for a reason that must be stated rather than assumed**: every migration this
 pack cites *for an RLS policy, a grant or a role* — `0002`, `0003`, `0004`,
 `0006`, `0010`, `0014`, `0020`, `0025`, `0045`, `0054` — is byte-identical at
-both trees, and the three absent ones are cited only for Phase 4 surface
-facts. So no RLS, grant or policy citation in this request is exposed to the
-trap; three route-surface citations are, and a reader on `6fc505d` cannot
-check them at all rather than checking them wrongly, which is the better of
-the two failures.
+both trees. So no RLS, grant or policy citation in this request is exposed to
+the trap, and a reader on `6fc505d` cannot check the three absent ones at all
+rather than checking them wrongly, which is the better of the two failures.
+
+What the three absent ones are cited **for** has to be said rather than
+generalised, because two of them are not route-surface facts:
+`0076` and `0086` are cited for Phase 4 permission and RLS surface facts, and
+**`0079` is cited as the freeze boundary itself** — `frozenThrough =
+0079_phase4_pos_till_sessions_cart.sql`, which appears in four places in this
+pack. **So a reader on `6fc505d` cannot verify the freeze boundary at all**,
+which is the one consequence of this absence that touches a rule rather than a
+citation, and it is recorded here rather than left for a reader to discover.
 
 **The two remediations, and why neither is taken.**
 
