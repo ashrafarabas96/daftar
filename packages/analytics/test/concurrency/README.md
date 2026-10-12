@@ -2,7 +2,8 @@
 
 `remainder-conservation.pgtest.mts` is the first **measured** concurrency
 evidence for the Phase 13 point-spend conservation mechanism. Everything else
-Phase 13 has produced is pure unit tests (198 of them, in `../`), and the owner
+Phase 13 has produced is pure unit tests (in `../`; the count for a SHA is the
+generated §3.5 row of `P13-HANDOFF-MANIFEST.md`), and the owner
 directive behind this file says so plainly: *"test atomic spend/earn/return/
 reversal with two connections; 193 pure tests do not prove it."* A fold held in
 memory cannot double-spend, so it cannot show that the mechanism is needed, and
@@ -74,7 +75,9 @@ same cluster and the same version (see qualification 4 below).
 The package's vitest config includes only `test/**/*.test.ts`. This file is
 `.mts`, under `test/concurrency/`, **specifically so that it cannot match that
 pattern**: it needs a cluster, and the unit suite must stay cluster-free. The
-unit suite is unaffected and reports **7 files / 201 tests, rc=0**.
+unit suite is unaffected and reports **rc=0**. Its case count for a given SHA is the
+generated row in `P13-HANDOFF-MANIFEST.md` §3.5, not a second copy here — a figure typed
+into a README is gated by nothing, and F-18 of a challenge round found three of them stale.
 
 It starts its own throwaway cluster (`/tmp/daftar-pg-p13`, port 55777, both
 overridable via `P13_PG_DIR` / `P13_PG_PORT`), creates a scratch schema inside
@@ -288,7 +291,7 @@ line) against this working tree:
 |---|---|---|
 | `node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts` | `11/11 cases passed`, every racing connection as `daftar_app_proof` (`NOSUPERUSER NOBYPASSRLS`), and case 11's fixture owned by a non-superuser too | **0** |
 | the same, with `P13_PG_LOCALE=zz_ZZ.utf8` | refuses **before** `initdb`, printing the `localedef` command | **1** |
-| `../../node_modules/.bin/vitest run` (in `packages/analytics`) | 7 files, 201 tests passed | **0** |
+| `../../node_modules/.bin/vitest run` (in `packages/analytics`) | 7 files, every case passed; the count for a SHA is the generated §3.5 row | **0** |
 | `../../node_modules/.bin/tsc -p tsconfig.json --noEmit` | no diagnostics | **0** |
 | `./node_modules/.bin/eslint packages/analytics` (from the repo root) | no findings | **0** |
 | `./node_modules/.bin/eslint .` (from the repo root) | 4220 errors, **0 of them in `packages/analytics`** | **1** |

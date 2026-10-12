@@ -690,9 +690,18 @@ export interface LoyaltyExpiryFold {
   readonly spendablePoints: bigint;
   /**
    * The part of `spendablePoints` that is backed by NO lot and therefore has
-   * no horizon — a STANDING manual grant (`correctsId === null`), and nothing
-   * else. A positive row that corrects another row is refused, not counted
-   * here: see the loop in `foldExpiry`.
+   * no horizon: a STANDING manual grant (`correctsId === null`), an earn that
+   * carries no horizon, and the part of a restoration that is attributable
+   * because its target drew on this pool rather than on a lot. It is DRAWN
+   * DOWN by consumption like any other store, after the lots, because a grant
+   * has no horizon and so survives last.
+   *
+   * A positive row that corrects another row is NOT counted here in full: only
+   * the part its target drew from this pool is, and the lot-backed part is
+   * reported in `unattributablePoints`. (This sentence replaces one that said
+   * such a row is "refused, not counted here" — that was true of an earlier
+   * commit and `F-17` of a challenge round found it surviving on the interface
+   * a caller reads.)
    *
    * It is reported separately because it used to be invisible. It was summed
    * into `spendablePoints` and nowhere else, so a caller could not tell a
@@ -751,103 +760,204 @@ export function foldExpiry(
 ): LoyaltyExpiryFold {
   const rows = visibleMovements(ledger, businessId, customerId, asOf);
 
-  const lots = rows
-    .filter((m): m is LoyaltyMovement & { expiresOn: CivilDate } => m.movementKind === 'earn' && m.expiresOn !== null)
-    .map((m) => ({ movementId: m.id, pointSeq: m.pointSeq, expiresOn: m.expiresOn, earned: m.pointsDelta, remaining: m.pointsDelta }))
-    .sort((a, b) =>
-      a.expiresOn < b.expiresOn ? -1 : a.expiresOn > b.expiresOn ? 1 : a.pointSeq < b.pointSeq ? -1 : a.pointSeq > b.pointSeq ? 1 : 0,
-    );
+  // THE FOLD IS A SEQUENTIAL REPLAY, and a fifth challenge round is why.
+  //
+  // It used to be two passes: sum every negative into one `draw`, then apply
+  // that total to the lots and discard whatever the lots could not absorb. Two
+  // defects lived in that shape and neither was visible from the totals.
+  //
+  // `F-14` (P1): an un-horizoned standing grant was never drawn down, and the
+  // overflow was discarded, so a lawful spend that SPANNED a grant and a lot
+  // was recorded against the lot alone. Reversing it then withheld the whole
+  // restored quantity, and `eligiblePoints` subtracted it from the whole
+  // balance — so the part the lots never backed came out of the grant.
+  // Measured through this package's own writers: a grant of 30, an earn of 10,
+  // a lawful spend of 40 and its lawful full return gave eligible **0** at
+  // 2026-06-01, 2027-06-01 and 2040-01-01, with `spendablePoints` reporting 30
+  // the whole time. That is `F-13`'s harm at `F-13`'s site, one layer in, and
+  // SILENT where `F-13` at least threw: the till reads `available: '0'`.
+  // `F-15` (P2): the same discarded overflow made `spendablePoints` report 30
+  // against a balance of 20, and 50 against a balance of 15.
+  // `F-16` (P2): a NEGATIVE `manual_adjustment` naming the restoring row — the
+  // lawful way to record that a return was itself cancelled — went into the
+  // same total, so it drew a lot that never funded the restoration while the
+  // withheld quantity was never discharged. Two errors of 40 that CANCELLED
+  // inside the conservation identity, which is why asserting that identity
+  // proves nothing about attribution.
+  //
+  // So the rows are replayed IN `pointSeq` ORDER against three stores, and a
+  // CORRECTION IS ATTRIBUTED THROUGH THE ROW IT CORRECTS, in both signs:
+  //
+  //   `lots`     dated earns, drawn oldest-horizon-first (`§4.3`'s forced order)
+  //   `pool`     un-horizoned standing grants, drawn after the lots because a
+  //              grant has no horizon and therefore survives last
+  //   `withheld` positive corrections whose lot attribution is unknown
+  //
+  // A restoration restores what its target actually drew: the part that drew on
+  // a LOT is un-attributable and is withheld (`F-01`, remedied properly only by
+  // `§A.3c.1`), and the part that drew on the POOL is perfectly attributable,
+  // because a grant has no horizon to recover — giving it back restores it
+  // exactly. A restoration of a row that is not a draw at all (an `earn`, say)
+  // is withheld in full, which is the conservative answer and the one `F-01`'s
+  // own fixture gets.
+  interface LotState {
+    readonly movementId: string;
+    readonly pointSeq: bigint;
+    readonly expiresOn: CivilDate;
+    readonly earned: bigint;
+    remaining: bigint;
+  }
+  /** What a negative row actually drew, so a correction of it can be attributed. */
+  interface DrawSplit {
+    fromLots: bigint;
+    fromPool: bigint;
+    fromWithheld: bigint;
+    /** Drawn against capacity that did not exist yet — see `pending`. */
+    unfunded: bigint;
+  }
+  /** What a positive row put where, so a negative correction of it discharges the same store. */
+  interface CreditSplit {
+    toPool: bigint;
+    toWithheld: bigint;
+  }
 
-  // Everything that draws the balance down — an `expire` already written, a
-  // `consume` inside a sale, a negative `adjust` — draws on the OLDEST lot
-  // first.
-  //
-  // A POSITIVE non-earn row is the subtle case, and TWO rounds of independent
-  // challenge were needed to get it right. `horizon_ck` makes it impossible
-  // for any kind but an `earn` to carry a horizon, so such a row joins no lot.
-  // The loop originally added every one of them to an `unhorizoned` total that
-  // was spendable at every `asOf` FOREVER. For the one shape that is MEANT to
-  // work that way — a standing manual grant, the merchant's goodwill remedy,
-  // which corrects nothing and deliberately has no horizon — that is correct.
-  // For a RESTORATION it is a defect with the merchant's money on the far
-  // side: `§5.7.3` restores a consumed point by appending `+c`, the
-  // consumption's `-c` stays in `draw` so the original lot remains drawn down,
-  // and the restored points come back with no horizon at all. Measured on the
-  // challenge's fixture: 100 points with a horizon of 2026-06-01, 40 consumed
-  // and reversed, gave `expiringPoints = 60` and `spendablePoints = 40` on the
-  // horizon day, and after the sweep took its 60 those 40 were still eligible
-  // at `asOf = 2036-01-01` with nothing left to expire them.
-  //
-  // THE DISCRIMINATOR IS `correctsId`, NOT `sourceType`. The first fix keyed on
-  // the source and exempted `manual_adjustment`, and the re-challenge showed
-  // why that was wrong twice over: the pack specifies the restoration AS a
-  // positive `manual_adjustment` `adjust` naming its target (`§1.4`, `§2.3`,
-  // `A-16`), so the exemption covered the exact row it was written to stop and
-  // the fixture reproduced byte-identically; and enumerating
-  // `SOURCE_KIND_PAIRS` against `KIND_SIGN` shows `manual_adjustment:adjust` is
-  // the ONLY positive non-earn row a lawful writer can produce at all, so the
-  // refusal was unreachable except by building a ledger by hand. A guard that
-  // can only fire on a row no writer can write is not a guard.
-  //
-  // `§1.4` makes `correctsId` the marker of every correction, and a standing
-  // grant corrects nothing. So a positive non-earn row REFUSES when it names a
-  // row it corrects — or when it is not a manual adjustment at all, which keeps
-  // the guard closed over a restoring source `§5.7.2` has yet to register.
-  //
-  // THE EXACT EXTENT OF THAT CLOSURE, because a later challenge measured it and
-  // the first statement of it here was too broad: this fails closed on a
-  // reversal THAT NAMES ITS TARGET. `corrects_ck` constrains `corrects_id` only
-  // when it is non-null, so the same reversal with the field omitted passes
-  // `validateDraft` and is admitted as a grant — immortal again, measured. No
-  // code in this package can close that: a nullable field cannot be made
-  // mandatory for writers that do not come through this package.
-  // `buildReversalMovement` takes `correctsId` as a REQUIRED field so no caller
-  // of it can omit one, and §A.3c.1 asks the Migration Owner for the
-  // distinction on a column the writer cannot omit — a restoring kind of its
-  // own, or `corrects_id NOT NULL` for that kind.
-  //
-  // Failing closed is forced rather than chosen: the migration patch request
-  // demotes this fold to a cross-check that may only REFUSE and never permit,
-  // and an un-horizoned total silently PERMITS a spend the remainder relation —
-  // whose lot is drawn down and expired — must refuse.
-  //
-  // ONE ARM THIS DOES NOT CLOSE, stated rather than papered over: a `§2.3`
-  // adjustment that supplies an earn the outbox never wrote has
-  // `correctsId === null` and SHOULD carry that sale's horizon, which
-  // `horizon_ck` forbids. It is admitted here as a grant, and the horizon it
-  // deserves needs the DDL item already raised in
-  // `P13-MIGRATION-PATCH-REQUEST.md` §A.3c.1.
-  //
-  // AND THE LAST ROUND MOVED WHERE THAT CLOSURE IS TAKEN, which is `F-13`: a
-  // refusal here propagated `foldExpiry` -> `eligiblePoints` ->
-  // `buildSaleConsumptionMovement`, so ONE lawful return, recorded correctly
-  // through `buildReversalMovement`, made every later redemption for that
-  // customer a 500 at the till, for good, while the rest of the ledger was
-  // perfectly attributable. Measured: 100 earned inside a 2027-01-01 horizon,
-  // 40 consumed, the sale reversed, and the remaining 60 — whose lot and whose
-  // horizon are not in doubt at all — could not be spent either.
-  //
-  // Failing closed has to be as wide as the doubt and no wider. So the
-  // un-attributable quantity is WITHHELD rather than refused: it is counted in
-  // the balance, excluded from `spendablePoints`, and subtracted by
-  // `eligiblePoints`. The fold still never PERMITS a spend the remainder
-  // relation would refuse, which is the only thing `§A.3`'s cross-check
-  // contract demands of it; it just refuses a QUANTITY instead of a customer.
-  //
-  // A positive row that is not a manual adjustment at all is a different
-  // animal and still REFUSES: no lawful writer can produce one
-  // (`SOURCE_KIND_PAIRS` registers no other positive non-earn pair), so its
-  // presence means the ledger was assembled past `validateDraft` and the fold
-  // has no basis for an answer of any kind.
-  let unhorizoned = 0n;
-  let unattributable = 0n;
-  let draw = 0n;
+  const lots: LotState[] = [];
+  let pool = 0n;
+  let withheld = 0n;
+  const draws = new Map<string, DrawSplit>();
+  const credits = new Map<string, CreditSplit>();
+  // A draw against capacity that does not exist yet. The two-pass fold allowed
+  // it — it summed every negative before building the lots — and a ledger whose
+  // spend precedes its earn must not change answer because the fold now reads in
+  // order. The claim is queued and settled FIFO when capacity appears, and the
+  // row's own split is corrected then, so an attribution read later is still
+  // right.
+  const pending: { readonly id: string; amount: bigint }[] = [];
+
+  const oldestLot = (): LotState | undefined => {
+    let best: LotState | undefined;
+    for (const lot of lots) {
+      if (lot.remaining <= 0n) continue;
+      if (
+        best === undefined ||
+        lot.expiresOn < best.expiresOn ||
+        (lot.expiresOn === best.expiresOn && lot.pointSeq < best.pointSeq)
+      ) {
+        best = lot;
+      }
+    }
+    return best;
+  };
+
+  const takeFromLots = (amount: bigint): bigint => {
+    let left = amount;
+    for (let lot = oldestLot(); lot !== undefined && left > 0n; lot = oldestLot()) {
+      const take = lot.remaining < left ? lot.remaining : left;
+      lot.remaining -= take;
+      left -= take;
+    }
+    return amount - left;
+  };
+
+  const takeFromPool = (amount: bigint): bigint => {
+    const take = pool < amount ? pool : amount;
+    pool -= take;
+    return take;
+  };
+
+  const takeFromWithheld = (amount: bigint): bigint => {
+    const take = withheld < amount ? withheld : amount;
+    withheld -= take;
+    return take;
+  };
+
+  /** Capacity has appeared; settle the oldest unfunded claims against it. */
+  const settlePending = (): void => {
+    while (pending.length > 0) {
+      const claim = pending[0];
+      if (claim === undefined) break;
+      const split = draws.get(claim.id);
+      const fromLots = takeFromLots(claim.amount);
+      const fromPool = takeFromPool(claim.amount - fromLots);
+      const settled = fromLots + fromPool;
+      if (settled === 0n) break;
+      claim.amount -= settled;
+      if (split !== undefined) {
+        split.fromLots += fromLots;
+        split.fromPool += fromPool;
+        split.unfunded -= settled;
+      }
+      if (claim.amount === 0n) pending.shift();
+      else break;
+    }
+  };
+
   for (const m of rows) {
-    if (m.movementKind === 'earn') continue;
-    if (m.pointsDelta < 0n) {
-      draw += -m.pointsDelta;
+    if (m.movementKind === 'earn') {
+      if (m.expiresOn !== null) {
+        lots.push({
+          movementId: m.id,
+          pointSeq: m.pointSeq,
+          expiresOn: m.expiresOn,
+          earned: m.pointsDelta,
+          remaining: m.pointsDelta,
+        });
+        settlePending();
+      } else {
+        // An earn with no horizon is not a lot and never expires. `horizon_ck`
+        // does not require one, so this is reachable and it belongs in the pool.
+        pool += m.pointsDelta;
+        credits.set(m.id, { toPool: m.pointsDelta, toWithheld: 0n });
+        settlePending();
+      }
       continue;
     }
+
+    if (m.pointsDelta < 0n) {
+      let left = -m.pointsDelta;
+      const split: DrawSplit = { fromLots: 0n, fromPool: 0n, fromWithheld: 0n, unfunded: 0n };
+      // `F-16`: a negative correction discharges the stores its TARGET credited,
+      // before anything else. Without this it draws a lot that never funded the
+      // row it corrects, and the withheld quantity is never released.
+      if (m.correctsId !== null) {
+        const credit = credits.get(m.correctsId);
+        if (credit !== undefined) {
+          const fromWithheld = takeFromWithheld(credit.toWithheld < left ? credit.toWithheld : left);
+          credit.toWithheld -= fromWithheld;
+          split.fromWithheld += fromWithheld;
+          left -= fromWithheld;
+          const fromPool = takeFromPool(credit.toPool < left ? credit.toPool : left);
+          credit.toPool -= fromPool;
+          split.fromPool += fromPool;
+          left -= fromPool;
+        }
+      }
+      const fromLots = takeFromLots(left);
+      split.fromLots += fromLots;
+      left -= fromLots;
+      const fromPool = takeFromPool(left);
+      split.fromPool += fromPool;
+      left -= fromPool;
+      const fromWithheld = takeFromWithheld(left);
+      split.fromWithheld += fromWithheld;
+      left -= fromWithheld;
+      if (left > 0n) {
+        split.unfunded += left;
+        pending.push({ id: m.id, amount: left });
+      }
+      draws.set(m.id, split);
+      continue;
+    }
+
+    // A POSITIVE NON-EARN ROW.
+    //
+    // A source other than `manual_adjustment` still REFUSES, and this arm is
+    // deliberately not a withholding. `SOURCE_KIND_PAIRS` registers no other
+    // positive non-earn pair, so no lawful writer can produce one: its presence
+    // means the ledger was assembled past `validateDraft`, and there is no sound
+    // answer of any kind over a ledger that cannot exist. A challenge round
+    // measured this arm and agreed; withholding a quantity here would be
+    // inventing an attribution rather than declining to guess one.
     if (m.sourceType !== 'manual_adjustment') {
       refuseLoyalty(
         'loyalty.unattributable_positive_movement',
@@ -861,17 +971,43 @@ export function foldExpiry(
         },
       );
     }
-    if (m.correctsId !== null) {
-      unattributable += m.pointsDelta;
+
+    if (m.correctsId === null) {
+      // A STANDING grant. `§1.4` makes `correctsId` the marker of every
+      // correction, and a grant corrects nothing: the merchant's goodwill
+      // remedy under `A-16`, deliberately without a horizon.
+      pool += m.pointsDelta;
+      credits.set(m.id, { toPool: m.pointsDelta, toWithheld: 0n });
+      settlePending();
       continue;
     }
-    unhorizoned += m.pointsDelta;
-  }
-  for (const lot of lots) {
-    if (draw === 0n) break;
-    const take = lot.remaining < draw ? lot.remaining : draw;
-    lot.remaining -= take;
-    draw -= take;
+
+    const target = draws.get(m.correctsId);
+    let toWithheld = m.pointsDelta;
+    let toPool = 0n;
+    if (target !== undefined) {
+      // Restore what the target actually drew. The lot-backed part — including a
+      // part that was never funded, which cannot be attributed either — is
+      // withheld; the pool-backed part goes straight back to the pool.
+      const lotBacked = target.fromLots + target.unfunded;
+      const lotPart = lotBacked < m.pointsDelta ? lotBacked : m.pointsDelta;
+      const rest = m.pointsDelta - lotPart;
+      const poolPart = target.fromPool < rest ? target.fromPool : rest;
+      // Claimed quantities are struck off the target so a second restoration of
+      // the same row cannot claim them again.
+      const fromLots = target.fromLots < lotPart ? target.fromLots : lotPart;
+      target.fromLots -= fromLots;
+      target.unfunded -= lotPart - fromLots;
+      target.fromPool -= poolPart;
+      toPool = poolPart;
+      // Anything beyond what the target drew is a quantity no draw accounts for,
+      // so it is withheld rather than offered.
+      toWithheld = m.pointsDelta - poolPart;
+    }
+    withheld += toWithheld;
+    pool += toPool;
+    credits.set(m.id, { toPool, toWithheld });
+    if (toPool > 0n) settlePending();
   }
 
   let expiring = 0n;
@@ -897,9 +1033,9 @@ export function foldExpiry(
       remainingPoints: l.remaining,
     })),
     expiringPoints: bounded,
-    spendablePoints: spendableFromLots + unhorizoned,
-    unhorizonedPoints: unhorizoned,
-    unattributablePoints: unattributable,
+    spendablePoints: spendableFromLots + pool,
+    unhorizonedPoints: pool,
+    unattributablePoints: withheld,
     balancePoints: balance,
   };
 }
@@ -924,6 +1060,19 @@ export function eligiblePoints(
   // the fold. It is part of the balance and it is not offerable, so the only
   // sound answer is the balance less what the next sweep will take and less
   // what no lot can account for.
+  //
+  // THE BALANCE AND THE STORES AGREE, and this is why no second bound is taken
+  // here. The replay puts every positive point in exactly one store, and every
+  // negative either takes from a store or is queued as an unfunded claim, so
+  // `balance <= lots + pool + withheld` always, with equality on any ledger
+  // whose draws were funded. A bound of `min(this, spendablePoints)` was
+  // written here first and then removed: it could never bind, and a guard that
+  // cannot fire is the defect `F-17` was about — a comment promising a
+  // protection the code does not provide. Where the two differ, the balance is
+  // the SMALLER figure (an unfunded draw lowers it and leaves the stores
+  // alone), so deriving the answer from it is the conservative direction. The
+  // suite asserts `eligible <= spendablePoints` over 2 000 generated ledgers at
+  // three dates rather than asserting it here where it cannot fail.
   const eligible = fold.balancePoints - fold.expiringPoints - fold.unattributablePoints;
   return eligible > 0n ? eligible : 0n;
 }

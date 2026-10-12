@@ -1,7 +1,7 @@
 # P13-PROOF-RLS — tenant and business isolation, asserted as a non-superuser
 
 `tenant-isolation.pgtest.mts` is Phase 13's **first RLS evidence of any kind.**
-Before it, the phase had 198 pure unit tests and a concurrency proof, and
+Before it, the phase had a pure unit suite and a concurrency proof, and
 neither can be denied a row: a fold held in memory has no tenant, no role and
 no policy. The phase directive lists "RLS and permission tests" as outstanding
 work, and the security part of the same directive sets the standard this file is
@@ -58,7 +58,9 @@ result on an unchosen version is not the evidence that was asked for.
 
 It is `.mts` under `test/rls/`, deliberately outside the package's vitest
 pattern (`test/**/*.test.ts`), so the unit suite stays cluster-free. That suite
-still reports 7 files / 198 tests, `rc=0`.
+still reports `rc=0`, and the case count for a given SHA is the generated row in
+`P13-HANDOFF-MANIFEST.md` §3.5 rather than a second copy here: a figure typed into a
+README is gated by nothing, and F-18 of a challenge round found three of them stale.
 
 ## What it does not touch
 

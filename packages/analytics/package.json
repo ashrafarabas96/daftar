@@ -12,11 +12,14 @@
     "lint": "eslint src test --max-warnings 0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.1",
     "@types/node": "24.10.1",
     "@types/pg": "8.15.6",
     "embedded-postgres": "^18.4.0-beta.17",
+    "eslint": "9.39.1",
     "pg": "8.16.3",
     "typescript": "5.9.3",
+    "typescript-eslint": "^8.48.0",
     "vitest": "4.1.11"
   }
 }
