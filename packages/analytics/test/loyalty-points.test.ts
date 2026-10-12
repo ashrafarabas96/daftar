@@ -1200,7 +1200,19 @@ describe('eligiblePoints — F-13, a lawful reversal withholds its own quantity 
     expect(draft.pointsDelta).toBe(-10n);
     expect(draft.sourceType).toBe('sale');
     // And the whole attributable remainder, to the point, not one past it.
-    expect(buildSaleConsumptionMovement(ledger, spend(60n)).pointsDelta).toBe(-60n);
+    const whole = buildSaleConsumptionMovement(ledger, spend(60n));
+    expect(whole.pointsDelta).toBe(-60n);
+
+    // Once that remainder is actually spent, the withheld 40 do not reappear as
+    // the balance nothing has drawn down. This is the sequence, not a single
+    // reading: the ledger is append-only, so a quantity that comes back later
+    // comes back for good.
+    const afterSpend = appendMovement(ledger, whole).ledger;
+    const fold2 = foldExpiry(afterSpend, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(fold2.balancePoints).toBe(40n);
+    expect(fold2.unattributablePoints).toBe(40n);
+    expect(fold2.spendablePoints).toBe(0n);
+    expect(eligiblePoints(afterSpend, BUSINESS, CUSTOMER, '2026-06-01')).toBe(0n);
   });
 
   it('still refuses the 40 it withheld — withholding is not permitting', () => {
