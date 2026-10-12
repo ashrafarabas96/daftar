@@ -23,6 +23,7 @@
  */
 import { assertQuantityRepresentable, formatQuantity, parseQuantity } from '@daftar/inventory';
 import { OrderError, assertCanonicalId, isCanonicalId } from './errors';
+import { isCanonicalInstant } from './instant';
 import { type UnitPrecisionDeclaration, requireUnitPrecision } from './unit-precision';
 
 /** One basket row as the client appended it. */
@@ -34,6 +35,22 @@ export interface CartLine {
   variantId: string | null;
   /** A positive decimal string, exact at the product's unit precision. */
   quantity: string;
+  /**
+   * When the shopper removed this line, as a canonical RFC3339 UTC instant, or
+   * `null` for a live line.
+   *
+   * REQUIRED, not optional, and that is the whole point of it. A basket line is
+   * append-only in the database — `I2.4` refuses UPDATE of the quantity, DELETE
+   * and TRUNCATE — so a removal is a TOMBSTONE and never a deletion, and this
+   * field is how the merge knows. An OPTIONAL field here would leave the law
+   * unclaimed by default: a caller that omitted it would get every retracted
+   * line counted, silently, and the shopper would be charged for what they took
+   * out of the basket. The migration request states the merge is "over the
+   * non-retracted rows" (`I2.6`), and the round-7 Challenger was right that the
+   * sentence had no implementation: a law stated in a migration request and
+   * absent from the code that reads the relation is a law nobody enforces.
+   */
+  retractedAt: string | null;
 }
 
 /**
@@ -84,7 +101,7 @@ export interface BasketPosition {
 }
 
 /**
- * Merge a basket into one position per stock key.
+ * Merge a basket into one position per stock key, over the LIVE lines only.
  *
  * `precisionByStockKey` is REQUIRED and must cover every stock key the basket
  * names: a caller that does not know what the catalogue declares for a product
@@ -105,6 +122,7 @@ export function summariseBasket(lines: readonly CartLine[], precisionByStockKey:
   }
 
   const seenLineIds = new Set<string>();
+  let retractedLines = 0;
   const byKey = new Map<
     string,
     { productId: string; variantId: string | null; total: bigint; lineIds: string[]; unitDecimals: number | null; tracksInventory: boolean }
@@ -117,6 +135,32 @@ export function summariseBasket(lines: readonly CartLine[], precisionByStockKey:
     }
     seenLineIds.add(line.lineId);
 
+    // The retraction is read BEFORE anything else about the line is judged, and a
+    // retracted line is then skipped. It contributes no quantity, so nothing
+    // about its quantity or its product's precision can make a basket
+    // unorderable: a shopper who removed a line must be able to check out even
+    // if that line could no longer be priced — the catalogue may have changed
+    // its unit precision since, and refusing the whole basket over a line the
+    // shopper already took out would be a defect, not strictness. Its ID is
+    // still claimed above, so a retracted line cannot be reused to smuggle a
+    // duplicate.
+    // An ABSENT field is caught here too, and deliberately by the same branch:
+    // `undefined !== null`, so it enters and fails the shape check with
+    // `stated: "undefined"`. A type-only requirement has no runtime existence.
+    if (line.retractedAt !== null) {
+      if (typeof line.retractedAt !== 'string' || !isCanonicalInstant(line.retractedAt)) {
+        throw new OrderError(
+          'order.cart_line_invalid',
+          'a retracted basket line states its retraction as a canonical RFC3339 UTC instant at second precision',
+          {
+            lineId: line.lineId,
+            stated: String(line.retractedAt),
+          },
+        );
+      }
+      retractedLines += 1;
+      continue;
+    }
     assertCanonicalId(line.productId, 'productId');
     if (line.variantId !== null && !isCanonicalId(line.variantId)) {
       throw new OrderError('order.cart_line_invalid', 'variantId must be a canonical lowercase UUID or null', { lineId: line.lineId });
@@ -168,6 +212,16 @@ export function summariseBasket(lines: readonly CartLine[], precisionByStockKey:
       existing.total += q4;
       existing.lineIds.push(line.lineId);
     }
+  }
+
+  if (byKey.size === 0) {
+    // Every line was retracted. The basket is not empty as a document, but it
+    // asks for nothing, and a checkout over zero positions would be an order for
+    // nothing. Same code as a basket with no lines at all, because the caller's
+    // next action is the same.
+    throw new OrderError('order.cart_empty', 'every line of this basket has been retracted, so it asks for nothing', {
+      retractedLines: String(retractedLines),
+    });
   }
 
   const positions: BasketPosition[] = [];

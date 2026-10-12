@@ -111,7 +111,34 @@ export function adviseBasketAvailability(positions: readonly BasketPosition[], o
     // disagreement means the basket was validated against one catalogue and the
     // stock read answered about another, and picking a winner here would make
     // one of the two silently wrong. So neither wins; the read is refused.
-    if (typeof position.tracksInventory === 'boolean' && row.trackInventory !== position.tracksInventory) {
+    //
+    // THE ABSENCE IS REFUSED FIRST, and the round-7 Challenger was right that it
+    // was not. This guard was written as
+    // `typeof position.tracksInventory === 'boolean' && …`, which reads as
+    // defensive and is the opposite: reading a property cannot throw, so the
+    // prefix bought no safety and its only effect was to make the agreement
+    // check CONDITIONAL on the field whose absence it exists to catch. A
+    // position with no flag, or with the string `"false"` that a flag becomes
+    // across a JSON or form boundary, was folded past with a verdict. That is
+    // the exact thing this module's own header forbids — "never folded past
+    // with a silent `continue`, which is how a financial read loses a row" —
+    // and the two sibling entry points (`checkout-intent.ts`, `cart.ts`) refuse
+    // the identical input. A fail-open guard is worse than no guard, because a
+    // reviewer counts it as one.
+    if (typeof position.tracksInventory !== 'boolean') {
+      throw new OrderError('order.availability_tracking_inconsistent', 'a basket position does not state whether its product tracks inventory, as a boolean', {
+        stockKey: position.stockKey,
+        stated: String(position.tracksInventory),
+      });
+    }
+    if (typeof row.trackInventory !== 'boolean') {
+      throw new OrderError('order.availability_tracking_inconsistent', 'an on-hand row does not state whether the product tracks inventory, as a boolean', {
+        stockKey: position.stockKey,
+        stated: String(row.trackInventory),
+      });
+    }
+
+    if (row.trackInventory !== position.tracksInventory) {
       throw new OrderError(
         'order.availability_tracking_inconsistent',
         'the on-hand row and the basket position disagree about whether the product tracks inventory',
