@@ -94,6 +94,30 @@ export type BillingErrorCode =
   // Dunning — the retry/grace schedule.
   | 'billing.dunning_policy_invalid'
   | 'billing.dunning_attempt_out_of_order'
+  /**
+   * The COLLECTION ATTEMPT's identity (round 6, Master Continuous Mission V3
+   * §12). A collection attempt is named by the invoice it collects and its
+   * own ordinal, and nothing else — so these two refusals are about an
+   * attempt that cannot be named, and about naming a NEW attempt while an
+   * earlier one's verdict is still unknown. The second is the one that
+   * matters: a new key after a lost response is how a merchant is charged
+   * twice by a provider that already accepted the first request, and no
+   * uniqueness in this database can undo an external debit.
+   */
+  | 'billing.collection_identity_invalid'
+  | 'billing.collection_awaiting_reconciliation'
+  /**
+   * A charge was asked for when the schedule does not say to charge. Refused
+   * rather than allowed "just in case", because a caller that can charge off
+   * schedule is a caller whose retry count is its own.
+   */
+  | 'billing.collection_not_due'
+  /**
+   * The subscription invoice's LIFECYCLE (round 6). A transition the settled
+   * contract does not allow — `draft → open → paid | uncollectible | voided`
+   * and nothing else, never backwards, never from a settled state.
+   */
+  | 'billing.invoice_state_transition_invalid'
   // The payment provider port.
   | 'billing.provider_idempotency_key_invalid'
   | 'billing.provider_idempotency_conflict'

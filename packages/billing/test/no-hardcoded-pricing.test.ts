@@ -75,6 +75,7 @@ const ALLOWED_NUMERIC: Readonly<Record<string, string>> = {
   '100': 'the century step of the Gregorian leap rule',
   '400': 'the quadricentennial step of the Gregorian leap rule',
   '500': "the maximum length of a credit adjustment's reason text",
+  '999': 'MAX_COLLECTION_ATTEMPT_NO — the bound on how many attempts one invoice can name',
   '3_600_000': 'milliseconds in an hour, converting a dunning offset stated in hours',
   '100_000': 'MAX_PERIOD_INDEX — the bound on how far a period may be walked',
   '1_000_000': 'MAX_ADDON_QUANTITY — the per-line cap on an add-on quantity',

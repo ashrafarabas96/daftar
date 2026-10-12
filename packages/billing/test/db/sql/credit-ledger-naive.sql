@@ -64,28 +64,30 @@ CREATE TABLE p5naive.platform_credit_adjustments (
 -- CHECKs and the same deferrable FK from a consumption to its invoice.
 --
 -- DELIBERATELY ABSENT here too: the deferred agreement trigger that makes
--- an invoice's `credit_applied_minor` equal the sum of the consumption
+-- an invoice's `credit_minor` equal the sum of the consumption
 -- rows naming it. So on this schema an invoice may claim a figure its own
 -- ledger rows do not support, which is the second symptom of the naive
 -- double-spend and is asserted as such.
+CREATE SEQUENCE p5naive.scratch_period_seq;
+
 CREATE TABLE p5naive.subscription_invoices (
-  id                   uuid        NOT NULL PRIMARY KEY,
-  tenant_id            uuid        NOT NULL,
-  business_id          uuid        NOT NULL,
-  currency             text        NOT NULL,
-  total_minor          bigint      NOT NULL,
-  credit_applied_minor bigint      NOT NULL DEFAULT 0,
-  payable_minor        bigint      NOT NULL,
-  state                text        NOT NULL,
-  finalized_at         timestamptz,
-  CONSTRAINT si_total_positive        CHECK (total_minor > 0),
-  CONSTRAINT si_currency_shape        CHECK (currency ~ '^[A-Z]{3}$'),
-  CONSTRAINT si_state_known           CHECK (state IN ('draft', 'finalized')),
-  CONSTRAINT si_finalized_has_instant CHECK ((state = 'finalized') = (finalized_at IS NOT NULL)),
-  CONSTRAINT si_credit_non_negative   CHECK (credit_applied_minor >= 0),
-  CONSTRAINT si_credit_within_total   CHECK (credit_applied_minor <= total_minor),
-  CONSTRAINT si_payable_non_negative  CHECK (payable_minor >= 0),
-  CONSTRAINT si_payable_is_total_minus_credit CHECK (payable_minor = total_minor - credit_applied_minor),
+  id            uuid        NOT NULL PRIMARY KEY,
+  tenant_id     uuid        NOT NULL,
+  business_id   uuid        NOT NULL,
+  period_index  integer     NOT NULL,
+  currency      text        NOT NULL,
+  charge_minor  bigint      NOT NULL,
+  credit_minor  bigint      NOT NULL DEFAULT 0,
+  tax_minor     bigint      NOT NULL DEFAULT 0,
+  total_minor   bigint      NOT NULL,
+  state         text        NOT NULL,
+  issued_at     timestamptz,
+  -- The naive schema keeps the invoice's own arithmetic: what it lacks is
+  -- the per-grant conservation row, the identical-source key and the
+  -- immutability trigger. An attack has to succeed somewhere specific.
+  CONSTRAINT si_state_known           CHECK (state IN ('draft', 'open', 'paid', 'uncollectible', 'voided')),
+  CONSTRAINT si_credit_non_negative   CHECK (credit_minor >= 0),
+  CONSTRAINT si_total_non_negative    CHECK (total_minor >= 0),
   CONSTRAINT si_owner_fk FOREIGN KEY (tenant_id, business_id)
     REFERENCES p5naive.businesses (tenant_id, id),
   CONSTRAINT si_scoped_identity_uq UNIQUE (tenant_id, business_id, currency, id)

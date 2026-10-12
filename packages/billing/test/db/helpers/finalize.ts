@@ -87,8 +87,8 @@ export interface FinalizationPlan {
  * `pca_invoice_fk` to the DDL made eight of round 4's twenty cases fail
  * immediately. They were right to fail.
  *
- * A draft carries no credit: `credit_applied_minor` is 0 and
- * `payable_minor` is the whole total, and the deferred agreement trigger
+ * A draft carries no credit: `credit_minor` is 0 and
+ * `total_minor` is the whole total, and the deferred agreement trigger
  * checks that rather than assuming it.
  */
 export async function createDraftInvoice(
@@ -96,13 +96,18 @@ export async function createDraftInvoice(
   schema: string,
   s: Scope,
   totalMinor: bigint,
+  periodIndex?: number,
 ): Promise<string> {
   const id = uuid();
+  // `charge_minor` and `total_minor` are the same figure on a draft, and
+  // `credit_minor` is 0: a draft claims no credit, and the deferred
+  // agreement trigger checks that rather than assuming it. The period is
+  // the fixture sequence unless the case is itself about the period.
   await c.query(
     `INSERT INTO ${schema}.subscription_invoices
-       (id, tenant_id, business_id, currency, total_minor, credit_applied_minor, payable_minor, state)
-     VALUES ($1,$2,$3,$4,$5,0,$5,'draft')`,
-    [id, s.tenantId, s.businessId, s.currency, totalMinor.toString()],
+       (id, tenant_id, business_id, period_index, currency, charge_minor, credit_minor, total_minor, state)
+     VALUES ($1,$2,$3,coalesce($6::integer, nextval('${schema}.scratch_period_seq')::integer),$4,$5,0,$5,'draft')`,
+    [id, s.tenantId, s.businessId, s.currency, totalMinor.toString(), periodIndex ?? null],
   );
   return id;
 }
@@ -160,8 +165,8 @@ export async function finalizeInvoice(
   // proves that.
   await c.query(
     `UPDATE ${schema}.subscription_invoices
-        SET state = 'finalized', finalized_at = $2,
-            credit_applied_minor = $3, payable_minor = $4
+        SET state = 'open', issued_at = $2,
+            credit_minor = $3, total_minor = $4
       WHERE id = $1`,
     [invoiceId, appliedAt, application.appliedMinor.toString(), application.payableMinor.toString()],
   );

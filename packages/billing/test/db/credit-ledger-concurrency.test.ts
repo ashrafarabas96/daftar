@@ -333,11 +333,15 @@ describe('rollback and retry', () => {
       (e: unknown) => sqlstate(e),
     );
     await owner.query('ROLLBACK');
-    // 23505 is `unique_violation`: the partial unique index on
-    // (business, invoice, grant) for consumptions. Idempotency belongs to
-    // the schema because a retry is exactly the case where the
+    // ROUND 6: this used to be 23505, the partial unique index on
+    // (business, invoice, grant). It is now 23000: the settled contract's
+    // immutability trigger refuses `open -> open` at the invoice UPDATE,
+    // which happens one statement EARLIER than the first consumption
+    // insert. The refusal moved, the guarantee did not — and the index is
+    // still proved, on its own, by the case below. Idempotency belongs to
+    // the schema either way, because a retry is exactly the case where the
     // application's own bookkeeping is the thing that failed.
-    expect(second).toBe('23505');
+    expect(second).toBe('23000');
     expect(await consumedMinor(owner, 'p5scratch', s)).toBe(300n);
   });
 
@@ -357,15 +361,40 @@ describe('rollback and retry', () => {
         () => '',
         (e: unknown) => sqlstate(e),
       );
+      // B blocks on the invoice ROW LOCK now, not on the ledger: its
+      // UPDATE of a row A has already updated cannot proceed until A
+      // commits. Then it reads the committed state and the contract
+      // refuses the transition.
       await waitUntilBlocked(observer, bPid, 'duplicate invoice finalization');
       await a.query('COMMIT');
-      expect(await bRun).toBe('23505');
+      expect(await bRun).toBe('23000');
       await b.query('ROLLBACK');
     } finally {
       await a.end();
       await b.end();
     }
     expect(await consumedMinor(owner, 'p5scratch', s)).toBe(200n);
+  });
+
+  it('the identical-source key refuses a duplicate consumption on its own, with no state machine involved', async () => {
+    // ROUND 6, and it is here because of a mistake that was nearly made:
+    // when the immutability trigger started refusing a re-finalization one
+    // statement earlier, the two cases above stopped reaching the unique
+    // index they were written for — and would have gone on passing while
+    // proving something else. A defence that is only ever observed BEHIND
+    // another defence is not observed at all.
+    const s = await freshScope('p5scratch');
+    const grant = await insertGrant(owner, 'p5scratch', s, 900n, T0);
+    const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 300n);
+
+    await owner.query('BEGIN');
+    await insertConsumption(owner, 'p5scratch', s, grant, 100n, invoiceId, 'inv-dup', T1);
+    const again = await insertConsumption(owner, 'p5scratch', s, grant, 100n, invoiceId, 'inv-dup', T1).then(
+      () => '',
+      (e: unknown) => sqlstate(e),
+    );
+    await owner.query('ROLLBACK');
+    expect(again, 'one grant may be consumed once per invoice, and the index is what says so').toBe('23505');
   });
 });
 

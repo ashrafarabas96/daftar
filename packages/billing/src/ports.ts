@@ -81,6 +81,21 @@ export interface ChargeResult {
  * re-classify it. An adapter throws only when it could not reach a verdict
  * at all — `billing.provider_unavailable` — because "we do not know whether
  * the money moved" is the one answer a caller must never treat as a decline.
+ *
+ * A refusal from an implementation may arrive SYNCHRONOUSLY rather than as a
+ * rejected promise — the shipped fake validates its request before it does
+ * anything asynchronous, and a real adapter will validate before it opens a
+ * socket. So a caller handles it with `try`/`catch` around the `await`, never
+ * with a bare `.catch()` on the returned promise, which a synchronous throw
+ * walks straight past. Round 6 found this the way callers find it: a case
+ * that used `.catch()` failed with the refusal uncaught.
+ *
+ * And `billing.provider_unavailable` does NOT mean the charge did not
+ * happen. It means no verdict was read. A provider that accepted the request
+ * and lost the response raises exactly this, so the attempt is recorded with
+ * outcome `unknown` and the NEXT provider call for it carries the SAME
+ * idempotency key — see `collection.ts`, which is the only place a key is
+ * formed.
  */
 export interface PaymentProviderPort {
   charge(request: ChargeRequest): Promise<ChargeResult>;

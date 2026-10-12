@@ -281,34 +281,132 @@ END;
 $fn$;
 
 -- ── the platform invoice, and the tie to the ledger ──────────────────
--- §11c of the patch request, realized: `credit_applied_minor` and
--- `payable_minor` as COLUMNS with CHECKs, because the provider charge is
--- taken against `payable_minor` and a figure a charge was taken against
--- must be the figure that was recorded.
+-- §11c of the patch request, realized, in the vocabulary the round-6
+-- Contract Diff settled: `charge_minor` is the composed invoice,
+-- `credit_minor` is the platform credit applied, `tax_minor` is the
+-- structural zero and `total_minor` is what is left to collect. Round 5
+-- realized the same relation under three different names — and called the
+-- figure BEFORE credit `total_minor`, which the earlier spec uses for the
+-- figure AFTER it. One relation with two meanings for one column name is
+-- the conflict V3 §12 required settled before promotion; the names here
+-- are now the spec's, and `src/invoice-states.ts` holds the settled
+-- lifecycle that `credit-ledger-contract.test.ts` pins this DDL to.
+--
+-- Realized here: the money columns, the state machine, the immutability
+-- rule and one invoice per business per period. NOT realized: the period
+-- bounds (`period_starts_at`, `period_ends_at`) and the invoice LINES —
+-- nothing in the credit attack reads either, and a fixture that carried
+-- columns no case exercises would claim coverage it does not have.
 CREATE TABLE p5scratch.subscription_invoices (
-  id                   uuid        NOT NULL PRIMARY KEY,
-  tenant_id            uuid        NOT NULL,
-  business_id          uuid        NOT NULL,
-  currency             text        NOT NULL,
-  total_minor          bigint      NOT NULL,
-  credit_applied_minor bigint      NOT NULL DEFAULT 0,
-  payable_minor        bigint      NOT NULL,
-  state                text        NOT NULL,
-  finalized_at         timestamptz,
-  CONSTRAINT si_total_positive        CHECK (total_minor > 0),
+  id            uuid        NOT NULL PRIMARY KEY,
+  tenant_id     uuid        NOT NULL,
+  business_id   uuid        NOT NULL,
+  period_index  integer     NOT NULL,
+  currency      text        NOT NULL,
+  charge_minor  bigint      NOT NULL,
+  credit_minor  bigint      NOT NULL DEFAULT 0,
+  tax_minor     bigint      NOT NULL DEFAULT 0,
+  total_minor   bigint      NOT NULL,
+  state         text        NOT NULL,
+  issued_at     timestamptz,
+  CONSTRAINT si_charge_non_negative   CHECK (charge_minor >= 0),
+  CONSTRAINT si_period_index_valid    CHECK (period_index >= 0),
   CONSTRAINT si_currency_shape        CHECK (currency ~ '^[A-Z]{3}$'),
-  CONSTRAINT si_state_known           CHECK (state IN ('draft', 'finalized')),
-  CONSTRAINT si_finalized_has_instant CHECK ((state = 'finalized') = (finalized_at IS NOT NULL)),
-  CONSTRAINT si_credit_non_negative   CHECK (credit_applied_minor >= 0),
-  CONSTRAINT si_credit_within_total   CHECK (credit_applied_minor <= total_minor),
-  CONSTRAINT si_payable_non_negative  CHECK (payable_minor >= 0),
+  -- The five states of the settled contract. `finalized` is NOT one of
+  -- them: a finalized, uncollected invoice is `open`, and two names for
+  -- one state is how a sign gets lost.
+  CONSTRAINT si_state_known           CHECK (state IN ('draft', 'open', 'paid', 'uncollectible', 'voided')),
+  -- A draft has no issue instant, and anything that was ever OPEN has one.
+  -- `voided` is the exception on purpose, and it was found by the
+  -- twenty-five-pair law in `credit-ledger-contract.test.ts`: the first
+  -- version of this CHECK read `(state = 'draft') = (issued_at IS NULL)`,
+  -- which made the contract's own `draft -> voided` transition
+  -- UNREACHABLE — an abandoned draft was never issued, so it has no
+  -- instant to carry, and the trigger rightly refuses to invent one. A
+  -- state machine with a transition no row can take is two contracts
+  -- again, in miniature.
+  CONSTRAINT si_issued_when_not_draft CHECK (
+    (state = 'draft'  AND issued_at IS NULL)
+    OR state = 'voided'
+    OR (state IN ('open', 'paid', 'uncollectible') AND issued_at IS NOT NULL)
+  ),
+  CONSTRAINT si_credit_non_negative   CHECK (credit_minor >= 0),
+  CONSTRAINT si_credit_within_charge  CHECK (credit_minor <= charge_minor),
+  -- Platform tax is a policy nobody has settled, so it is structurally
+  -- unrepresentable rather than defaulted (`OPEN-P5-02`).
+  CONSTRAINT si_tax_structural_zero   CHECK (tax_minor = 0),
+  CONSTRAINT si_total_non_negative    CHECK (total_minor >= 0),
   -- PART 25's "invoice payable cannot become negative" as arithmetic the
   -- database owns, not a code path a later edit changes.
-  CONSTRAINT si_payable_is_total_minus_credit CHECK (payable_minor = total_minor - credit_applied_minor),
+  CONSTRAINT si_total_is_charge_minus_credit CHECK (total_minor = charge_minor - credit_minor + tax_minor),
   CONSTRAINT si_owner_fk FOREIGN KEY (tenant_id, business_id)
     REFERENCES p5scratch.businesses (tenant_id, id),
+  -- §5's defence against a double renewal: a second invoice for the same
+  -- business and period cannot insert, whatever the application does.
+  CONSTRAINT si_one_per_period_uq UNIQUE (business_id, period_index),
   CONSTRAINT si_scoped_identity_uq UNIQUE (tenant_id, business_id, currency, id)
 );
+
+-- A period number for fixtures that do not care which period they are in.
+-- `period_index` is NOT NULL and unique per business, so every draft needs
+-- one; a sequence keeps the cases that are about credit from having to
+-- invent periods, and leaves the one case that IS about the period free to
+-- pass its own.
+CREATE SEQUENCE p5scratch.scratch_period_seq;
+
+-- ── the immutability rule, as the settled contract states it ─────────
+-- The earlier spec's trigger allowed ONLY `state` to change. That would
+-- refuse the finalization this whole phase is built on, because applying
+-- credit writes `credit_minor` and `total_minor` in the same statement.
+-- So the settled contract names the columns that one transition may
+-- write — `src/invoice-states.ts`, `FINALIZATION_WRITABLE_COLUMNS` — and
+-- freezes every other column and every other transition.
+--
+-- A BEFORE trigger rather than a CHECK because a CHECK cannot see OLD.
+CREATE FUNCTION p5scratch.si_immutable() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'a subscription invoice is never deleted: %', OLD.id
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+
+  IF NEW.id <> OLD.id
+     OR NEW.tenant_id <> OLD.tenant_id
+     OR NEW.business_id <> OLD.business_id
+     OR NEW.period_index <> OLD.period_index
+     OR NEW.currency <> OLD.currency
+     OR NEW.charge_minor <> OLD.charge_minor
+     OR NEW.tax_minor <> OLD.tax_minor THEN
+    RAISE EXCEPTION 'a subscription invoice is fixed at composition: % may not change its identity, period, currency, charge or tax', OLD.id
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+
+  IF OLD.state = 'draft' AND NEW.state = 'open' THEN
+    -- The finalization. `credit_minor`, `total_minor` and `issued_at` are
+    -- the three the contract lets it write, and the CHECKs above are what
+    -- keep them consistent with each other.
+    RETURN NEW;
+  END IF;
+
+  IF (OLD.state = 'draft' AND NEW.state = 'voided')
+     OR (OLD.state = 'open' AND NEW.state IN ('paid', 'uncollectible', 'voided')) THEN
+    IF NEW.credit_minor <> OLD.credit_minor OR NEW.total_minor <> OLD.total_minor
+       OR NEW.issued_at IS DISTINCT FROM OLD.issued_at THEN
+      RAISE EXCEPTION 'only the state may change once invoice % is past draft', OLD.id
+        USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'the subscription invoice contract does not allow % -> % on %', OLD.state, NEW.state, OLD.id
+    USING ERRCODE = 'integrity_constraint_violation';
+END;
+$fn$;
+
+CREATE TRIGGER si_immutable_trg
+  BEFORE UPDATE OR DELETE ON p5scratch.subscription_invoices
+  FOR EACH ROW EXECUTE FUNCTION p5scratch.si_immutable();
 
 -- A consumption's invoice must exist, in the same business and currency.
 -- DEFERRABLE, so the two writes may happen in either order inside one
@@ -322,7 +420,7 @@ ALTER TABLE p5scratch.platform_credit_adjustments
 
 -- ── the invariant V2 says is unproven ────────────────────────────────
 -- "the invoice finalization tied to the grant and the consumption in the
--- same transaction": an invoice's `credit_applied_minor` must equal the
+-- same transaction": an invoice's `credit_minor` must equal the
 -- sum of the consumption rows naming it. DEFERRED to commit, which is
 -- what makes it a statement about the TRANSACTION rather than about one
 -- statement inside it — and what makes partial consumption impossible:
@@ -342,7 +440,7 @@ DECLARE
   consumed bigint;
   invoice_state text;
 BEGIN
-  SELECT i.credit_applied_minor, i.state INTO claimed, invoice_state
+  SELECT i.credit_minor, i.state INTO claimed, invoice_state
     FROM p5scratch.subscription_invoices i WHERE i.id = p_invoice;
   IF claimed IS NULL THEN
     -- The invoice is gone: the transaction rolled it back, or never wrote
@@ -350,7 +448,7 @@ BEGIN
     -- nothing here left to compare.
     RETURN;
   END IF;
-  IF invoice_state <> 'finalized' THEN
+  IF invoice_state = 'draft' THEN
     -- A draft carries no credit. Checked rather than assumed, because a
     -- draft with a non-zero figure would otherwise pass unexamined.
     IF claimed <> 0 THEN
@@ -410,5 +508,148 @@ CREATE POLICY si_tenant_insert ON p5scratch.subscription_invoices
 -- USING and the WITH CHECK side are scoped, so a row cannot be moved to
 -- another business by updating it either.
 CREATE POLICY si_tenant_update ON p5scratch.subscription_invoices
+  FOR UPDATE USING (business_id = current_setting('app.business_id', true)::uuid)
+          WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);
+
+-- =====================================================================
+-- ROUND 6 — the collection attempt, and the rule V3 §12 adds
+--
+--   «قبل مزوّد تحصيل حقيقي، اربط محاولة التحصيل بهوية منطقية ثابتة لدى
+--    المزوّد؛ إذا قُبل الطلب وضاع الرد فلا تُنشئ محاولة بمفتاح جديد قبل
+--    المصالحة، لأن تفرد صف النجاح في DB لا يمنع خصمًا خارجيًا ثانيًا»
+--
+-- The last clause is the one that decides what this table can and cannot
+-- be. It cannot prevent the second debit: by the time a second request
+-- leaves the process the money has moved at another institution, and a
+-- unique index here could then only refuse to RECORD it — which is worse
+-- than useless. The defence is in `src/collection.ts`, in what the
+-- request is NAMED.
+--
+-- What the database CAN do, and does here, is make the application unable
+-- to ADVANCE past an attempt it has not accounted for. Three witnesses:
+--   1. a key that does not name its own attempt is unrepresentable;
+--   2. no second attempt may be inserted for an invoice while one has no
+--      verdict (the trigger), and two racing unresolved attempts cannot
+--      both exist (the partial unique index);
+--   3. at most one success per invoice, ever.
+--
+-- §7 of the patch request is amended by this round in one way: the
+-- relation is append-only EXCEPT for the single transition
+-- `unknown -> succeeded | declined | failed`, which is RECONCILIATION —
+-- recording the verdict the provider always had and we had not read. It
+-- is the same shape as the invoice's one mutable transition, and it is
+-- why the application role needs UPDATE here, narrowed by a trigger, where
+-- §7 originally granted none.
+-- =====================================================================
+CREATE TABLE p5scratch.subscription_charge_attempts (
+  id              uuid        NOT NULL PRIMARY KEY,
+  tenant_id       uuid        NOT NULL,
+  business_id     uuid        NOT NULL,
+  invoice_id      uuid        NOT NULL,
+  attempt_no      integer     NOT NULL,
+  idempotency_key text        NOT NULL,
+  amount_minor    bigint      NOT NULL,
+  currency        text        NOT NULL,
+  outcome         text        NOT NULL,
+  provider        text        NOT NULL,
+  provider_ref    text        NOT NULL,
+  provider_code   text,
+  attempted_at    timestamptz NOT NULL,
+  CONSTRAINT sca_attempt_no_valid CHECK (attempt_no >= 1),
+  CONSTRAINT sca_amount_positive  CHECK (amount_minor > 0),
+  CONSTRAINT sca_outcome_known    CHECK (outcome IN ('succeeded', 'declined', 'failed', 'unknown')),
+  -- A declined or failed attempt carries the provider's own code; a
+  -- success needs none, and an UNKNOWN attempt has none to carry — which
+  -- the original §7 CHECK would have made unrepresentable without a
+  -- fabricated code, since it required a code for everything but a
+  -- success.
+  CONSTRAINT sca_code_present CHECK (outcome IN ('succeeded', 'unknown') OR provider_code IS NOT NULL),
+  -- The key NAMES the attempt. A key that does not end in the invoice and
+  -- the ordinal it belongs to is refused, so a caller that generated a
+  -- fresh random key per call cannot record it at all. The namespace is
+  -- deliberately NOT named here: that part is the application's
+  -- (`COLLECTION_KEY_NAMESPACE`), and a schema that pinned it would need a
+  -- migration to rename a string.
+  CONSTRAINT sca_key_names_attempt CHECK (idempotency_key LIKE '%:' || invoice_id::text || ':' || attempt_no::text),
+  CONSTRAINT sca_key_long_enough   CHECK (length(idempotency_key) >= 8),
+  CONSTRAINT sca_owner_fk FOREIGN KEY (tenant_id, business_id)
+    REFERENCES p5scratch.businesses (tenant_id, id),
+  CONSTRAINT sca_invoice_fk FOREIGN KEY (tenant_id, business_id, currency, invoice_id)
+    REFERENCES p5scratch.subscription_invoices (tenant_id, business_id, currency, id),
+  -- One key is one charge, and the order of attempts is a fact.
+  CONSTRAINT sca_key_uq   UNIQUE (idempotency_key),
+  CONSTRAINT sca_order_uq UNIQUE (invoice_id, attempt_no)
+);
+
+-- An invoice is collected at most once.
+CREATE UNIQUE INDEX sca_one_success_per_invoice
+  ON p5scratch.subscription_charge_attempts (invoice_id) WHERE outcome = 'succeeded';
+
+-- And has at most one attempt awaiting a verdict. This is the witness that
+-- holds under concurrency: two processes that both decide to retry, in the
+-- same instant, cannot both record an unresolved attempt.
+CREATE UNIQUE INDEX sca_one_unresolved_per_invoice
+  ON p5scratch.subscription_charge_attempts (invoice_id) WHERE outcome = 'unknown';
+
+CREATE FUNCTION p5scratch.sca_no_attempt_while_unresolved() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM p5scratch.subscription_charge_attempts
+     WHERE invoice_id = NEW.invoice_id AND outcome = 'unknown'
+  ) THEN
+    RAISE EXCEPTION 'invoice % has an attempt with no verdict; reconcile it before attempting again', NEW.invoice_id
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END;
+$fn$;
+
+CREATE TRIGGER sca_no_attempt_while_unresolved_trg
+  BEFORE INSERT ON p5scratch.subscription_charge_attempts
+  FOR EACH ROW EXECUTE FUNCTION p5scratch.sca_no_attempt_while_unresolved();
+
+CREATE FUNCTION p5scratch.sca_append_only_except_reconciliation() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'a collection attempt is never deleted: %', OLD.id
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF OLD.outcome <> 'unknown' THEN
+    RAISE EXCEPTION 'a collection attempt with a verdict is immutable: %', OLD.id
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.outcome NOT IN ('succeeded', 'declined', 'failed') THEN
+    RAISE EXCEPTION 'reconciliation records a verdict, and % is not one', NEW.outcome
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.id <> OLD.id
+     OR NEW.tenant_id <> OLD.tenant_id
+     OR NEW.business_id <> OLD.business_id
+     OR NEW.invoice_id <> OLD.invoice_id
+     OR NEW.attempt_no <> OLD.attempt_no
+     OR NEW.idempotency_key <> OLD.idempotency_key
+     OR NEW.amount_minor <> OLD.amount_minor
+     OR NEW.currency <> OLD.currency
+     OR NEW.attempted_at <> OLD.attempted_at THEN
+    RAISE EXCEPTION 'reconciliation may record the verdict and the provider''s own fields, and nothing else: %', OLD.id
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END;
+$fn$;
+
+CREATE TRIGGER sca_append_only_trg
+  BEFORE UPDATE OR DELETE ON p5scratch.subscription_charge_attempts
+  FOR EACH ROW EXECUTE FUNCTION p5scratch.sca_append_only_except_reconciliation();
+
+ALTER TABLE p5scratch.subscription_charge_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE p5scratch.subscription_charge_attempts FORCE ROW LEVEL SECURITY;
+CREATE POLICY sca_tenant_isolation ON p5scratch.subscription_charge_attempts
+  FOR SELECT USING (business_id = current_setting('app.business_id', true)::uuid);
+CREATE POLICY sca_tenant_insert ON p5scratch.subscription_charge_attempts
+  FOR INSERT WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);
+CREATE POLICY sca_tenant_update ON p5scratch.subscription_charge_attempts
   FOR UPDATE USING (business_id = current_setting('app.business_id', true)::uuid)
           WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);

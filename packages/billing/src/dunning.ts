@@ -40,8 +40,21 @@ import { SUBSCRIPTION_STATES, type SubscriptionState } from './types';
 
 const HOUR_MS = 3_600_000;
 
-/** The collection outcomes a recorded attempt can have. */
-export const DUNNING_OUTCOMES = ['succeeded', 'failed'] as const;
+/**
+ * The collection outcomes a recorded attempt can have.
+ *
+ * `unknown` is the third one, added in round 6 for Master Continuous Mission
+ * V3 §12: the provider accepted the request and the response was lost, so no
+ * verdict was ever read. It is NOT a failure. Recording it as one would move
+ * the merchant towards suspension on an attempt that may well have collected
+ * the money, and — far worse — it would advance the retry count, which mints
+ * a NEW idempotency key and asks the provider for a SECOND debit it has no
+ * way to recognize as a retry. There was no way to say "we do not know" here
+ * until this round, and that absence was the defect: every caller had to
+ * record a lost response as `failed` or record nothing, and both of those
+ * produce the second charge.
+ */
+export const DUNNING_OUTCOMES = ['succeeded', 'failed', 'unknown'] as const;
 export type DunningOutcome = (typeof DUNNING_OUTCOMES)[number];
 
 export interface DunningAttempt {
@@ -93,7 +106,13 @@ export const DUNNING_SUSPENDED_STATE: SubscriptionState = 'paused';
 /** The state a subscription is in while retries are still scheduled. */
 export const DUNNING_GRACE_STATE: SubscriptionState = 'grace_period';
 
-export type DunningAction = 'none' | 'wait' | 'charge';
+/**
+ * `reconcile` is the action for an attempt whose verdict was never read. It
+ * means: go and find out what happened to THAT attempt, by its own
+ * idempotency key, before anything else. It is deliberately not `charge`
+ * with a flag, because a flag on a charge is a thing a caller can drop.
+ */
+export type DunningAction = 'none' | 'wait' | 'charge' | 'reconcile';
 
 export interface DunningDecision {
   readonly action: DunningAction;
@@ -188,6 +207,23 @@ export function decideDunning(input: DunningInput): DunningDecision {
 
   const idle: DunningDecision = { action: 'none', attemptNo: 0, nextAttemptAt: null, targetState: null, exhausted: false };
 
+  /**
+   * An unknown verdict is only ever the LAST thing in the history. An
+   * unknown row with attempts after it means somebody advanced the schedule
+   * without finding out what the earlier attempt did — which is exactly the
+   * sequence that produces a second external debit — so it is refused here
+   * rather than interpreted. Checked before the `succeeded` short-circuit on
+   * purpose: a later success does not retroactively make it safe to have
+   * skipped past an unresolved attempt, and the history is still malformed.
+   */
+  for (let i = 0; i < attempts.length - 1; i++) {
+    if (attempts[i]?.outcome === 'unknown') {
+      refuse('billing.collection_awaiting_reconciliation', 'an attempt with no verdict must be resolved before a later attempt is recorded', {
+        attemptNo: i + 1,
+      });
+    }
+  }
+
   if (!DUNNABLE_STATES.has(input.storedState)) return idle;
   if (attempts.some((a) => a.outcome === 'succeeded')) return idle;
 
@@ -202,6 +238,18 @@ export function decideDunning(input: DunningInput): DunningDecision {
    * second implementation of this rule, in the caller.
    */
   const targetState: SubscriptionState | null = failures === 0 ? null : asOfMs >= graceEndMs ? DUNNING_SUSPENDED_STATE : DUNNING_GRACE_STATE;
+
+  /**
+   * The unknown verdict wins over every scheduled step, including an
+   * exhausted schedule: until that attempt is accounted for, this
+   * subscription has no next step but finding out. `attemptNo` is the
+   * unknown attempt's own ordinal, NOT a new one, because the caller's next
+   * provider call must carry that attempt's key — see
+   * `collectionAttemptKey` in `collection.ts`.
+   */
+  if (attempts.length > 0 && attempts[attempts.length - 1]?.outcome === 'unknown') {
+    return { action: 'reconcile', attemptNo: attempts.length, nextAttemptAt: null, targetState, exhausted: false };
+  }
 
   const exhausted = failures >= policy.retryOffsetHours.length;
   if (exhausted) {

@@ -60,14 +60,14 @@ async function freshScope(currency = 'USD'): Promise<Scope> {
 }
 
 async function invoiceRow(c: Client, id: string): Promise<{ state: string; credit: bigint; payable: bigint } | null> {
-  const r = await c.query<{ state: string; credit_applied_minor: string; payable_minor: string }>(
-    `SELECT state, credit_applied_minor::text, payable_minor::text FROM p5scratch.subscription_invoices WHERE id = $1`,
+  const r = await c.query<{ state: string; credit_minor: string; total_minor: string }>(
+    `SELECT state, credit_minor::text, total_minor::text FROM p5scratch.subscription_invoices WHERE id = $1`,
     [id],
   );
   const row = r.rows[0];
   return row === undefined
     ? null
-    : { state: row.state, credit: BigInt(row.credit_applied_minor), payable: BigInt(row.payable_minor) };
+    : { state: row.state, credit: BigInt(row.credit_minor), payable: BigInt(row.total_minor) };
 }
 
 beforeAll(async () => {
@@ -165,8 +165,8 @@ describe('the deterministic grant lock order', () => {
       await insertConsumption(a, 'p5scratch', s, older, 100n, invA, 'inv-A', T2);
       await insertConsumption(a, 'p5scratch', s, newer, 100n, invA, 'inv-A', T2);
       await a.query(
-        `UPDATE p5scratch.subscription_invoices SET state='finalized', finalized_at=$2,
-                credit_applied_minor=200, payable_minor=0 WHERE id=$1`,
+        `UPDATE p5scratch.subscription_invoices SET state='open', issued_at=$2,
+                credit_minor=200, total_minor=0 WHERE id=$1`,
         [invA, T2],
       );
       await a.query('COMMIT');
@@ -175,8 +175,8 @@ describe('the deterministic grant lock order', () => {
       await insertConsumption(b, 'p5scratch', s, newer, 100n, invB, 'inv-B', T2);
       await insertConsumption(b, 'p5scratch', s, older, 100n, invB, 'inv-B', T2);
       await b.query(
-        `UPDATE p5scratch.subscription_invoices SET state='finalized', finalized_at=$2,
-                credit_applied_minor=200, payable_minor=0 WHERE id=$1`,
+        `UPDATE p5scratch.subscription_invoices SET state='open', issued_at=$2,
+                credit_minor=200, total_minor=0 WHERE id=$1`,
         [invB, T2],
       );
       const bCommit = await b.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e));
@@ -216,8 +216,8 @@ describe('the deterministic grant lock order', () => {
       await insertConsumption(a, 'p5scratch', s, older, 100n, invA, 'inv-A', T2);
       await insertConsumption(a, 'p5scratch', s, newer, 100n, invA, 'inv-A', T2);
       await a.query(
-        `UPDATE p5scratch.subscription_invoices SET state='finalized', finalized_at=$2,
-                credit_applied_minor=200, payable_minor=0 WHERE id=$1`,
+        `UPDATE p5scratch.subscription_invoices SET state='open', issued_at=$2,
+                credit_minor=200, total_minor=0 WHERE id=$1`,
         [invA, T2],
       );
       await a.query('COMMIT');
@@ -228,8 +228,8 @@ describe('the deterministic grant lock order', () => {
       await insertConsumption(b, 'p5scratch', s, newer, 100n, invB, 'inv-B', T2);
       await insertConsumption(b, 'p5scratch', s, older, 100n, invB, 'inv-B', T2);
       await b.query(
-        `UPDATE p5scratch.subscription_invoices SET state='finalized', finalized_at=$2,
-                credit_applied_minor=200, payable_minor=0 WHERE id=$1`,
+        `UPDATE p5scratch.subscription_invoices SET state='open', issued_at=$2,
+                credit_minor=200, total_minor=0 WHERE id=$1`,
         [invB, T2],
       );
       expect(await b.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e))).toBe('');
@@ -276,7 +276,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       await finalizeInvoice(a, 'p5scratch', s, invoiceId, 500n, 'inv-A', T1, { withLock: true, withGrantLocks: true });
 
       // Inside the transaction, A sees its own work.
-      expect((await invoiceRow(a, invoiceId))?.state).toBe('finalized');
+      expect((await invoiceRow(a, invoiceId))?.state).toBe('open');
 
       // Outside it, nothing of either half is visible. This is the
       // atomicity claim, OBSERVED from another backend rather than
@@ -289,7 +289,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       await a.end();
     }
 
-    expect(await invoiceRow(observer, invoiceId)).toEqual({ state: 'finalized', credit: 500n, payable: 0n });
+    expect(await invoiceRow(observer, invoiceId)).toEqual({ state: 'open', credit: 500n, payable: 0n });
     expect(await consumedMinor(observer, 'p5scratch', s)).toBe(500n);
   });
 
@@ -306,8 +306,8 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       // command may write the invoice first and the rows second.
       const upd = await a
         .query(
-          `UPDATE p5scratch.subscription_invoices SET state='finalized', finalized_at=$2,
-                  credit_applied_minor=500, payable_minor=0 WHERE id=$1`,
+          `UPDATE p5scratch.subscription_invoices SET state='open', issued_at=$2,
+                  credit_minor=500, total_minor=0 WHERE id=$1`,
           [invoiceId, T1],
         )
         .then(() => '', (e: unknown) => sqlstate(e));
@@ -334,8 +334,8 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       await a.query('BEGIN');
       await insertConsumption(a, 'p5scratch', s, grant, 300n, invoiceId, 'inv-A', T1);
       await a.query(
-        `UPDATE p5scratch.subscription_invoices SET state='finalized', finalized_at=$2,
-                credit_applied_minor=500, payable_minor=0 WHERE id=$1`,
+        `UPDATE p5scratch.subscription_invoices SET state='open', issued_at=$2,
+                credit_minor=500, total_minor=0 WHERE id=$1`,
         [invoiceId, T1],
       );
       expect(await a.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e))).toBe('23000');
@@ -377,8 +377,8 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       // into a write order the database had no business dictating.
       await insertConsumption(a, 'p5scratch', s, grant, 400n, invoiceId, 'inv-A', T1);
       await a.query(
-        `UPDATE p5scratch.subscription_invoices SET state='finalized', finalized_at=$2,
-                credit_applied_minor=400, payable_minor=0 WHERE id=$1`,
+        `UPDATE p5scratch.subscription_invoices SET state='open', issued_at=$2,
+                credit_minor=400, total_minor=0 WHERE id=$1`,
         [invoiceId, T1],
       );
       expect(await a.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e))).toBe('');
@@ -438,8 +438,8 @@ describe('the invoice and the ledger commit together, or not at all', () => {
     const bad = await owner
       .query(
         `INSERT INTO p5scratch.subscription_invoices
-           (id, tenant_id, business_id, currency, total_minor, credit_applied_minor, payable_minor, state)
-         VALUES ($1,$2,$3,'USD',1000,300,800,'draft')`,
+           (id, tenant_id, business_id, period_index, currency, charge_minor, credit_minor, total_minor, state)
+         VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,300,800,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       )
       .then(() => '', (e: unknown) => sqlstate(e));
@@ -448,8 +448,8 @@ describe('the invoice and the ledger commit together, or not at all', () => {
     const negative = await owner
       .query(
         `INSERT INTO p5scratch.subscription_invoices
-           (id, tenant_id, business_id, currency, total_minor, credit_applied_minor, payable_minor, state)
-         VALUES ($1,$2,$3,'USD',1000,1500,-500,'draft')`,
+           (id, tenant_id, business_id, period_index, currency, charge_minor, credit_minor, total_minor, state)
+         VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,1500,-500,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       )
       .then(() => '', (e: unknown) => sqlstate(e));
@@ -463,8 +463,8 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       await a.query('BEGIN');
       await a.query(
         `INSERT INTO p5scratch.subscription_invoices
-           (id, tenant_id, business_id, currency, total_minor, credit_applied_minor, payable_minor, state)
-         VALUES ($1,$2,$3,'USD',1000,400,600,'draft')`,
+           (id, tenant_id, business_id, period_index, currency, charge_minor, credit_minor, total_minor, state)
+         VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,400,600,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       );
       expect(await a.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e))).toBe('23000');
@@ -510,8 +510,8 @@ describe('the invoice and the ledger commit together, or not at all', () => {
     }
 
     expect(await consumedMinor(owner, 'p5scratch', s)).toBe(600n);
-    expect(await invoiceRow(owner, invA)).toEqual({ state: 'finalized', credit: 400n, payable: 0n });
-    expect(await invoiceRow(owner, invB)).toEqual({ state: 'finalized', credit: 200n, payable: 200n });
+    expect(await invoiceRow(owner, invA)).toEqual({ state: 'open', credit: 400n, payable: 0n });
+    expect(await invoiceRow(owner, invB)).toEqual({ state: 'open', credit: 200n, payable: 200n });
   });
 
   it('the application role can neither read nor finalize another business invoice', async () => {
@@ -530,7 +530,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       // The role HOLDS the UPDATE privilege, so this is RLS refusing and
       // not a missing grant: the statement succeeds and touches no row.
       const upd = await app.query(
-        `UPDATE p5scratch.subscription_invoices SET state='finalized', finalized_at=$2 WHERE id = $1`,
+        `UPDATE p5scratch.subscription_invoices SET state='open', issued_at=$2 WHERE id = $1`,
         [theirInvoice, T2],
       );
       expect(upd.rowCount).toBe(0);
@@ -557,7 +557,7 @@ describe('the invoice and the ledger commit together, or not at all', () => {
     } finally {
       await app.end();
     }
-    expect(await invoiceRow(owner, invoiceId)).toEqual({ state: 'finalized', credit: 200n, payable: 0n });
+    expect(await invoiceRow(owner, invoiceId)).toEqual({ state: 'open', credit: 200n, payable: 0n });
     expect(await remainderOf(owner, grant)).toBe(0n);
   });
 });

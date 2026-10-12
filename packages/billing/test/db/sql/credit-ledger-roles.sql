@@ -26,3 +26,11 @@ REVOKE ALL ON p5scratch.platform_credit_grant_remainders FROM p5_app;
 -- schema owner, so the owner needs one policy — and it is the only one.
 CREATE POLICY pcgr_owner_only ON p5scratch.platform_credit_grant_remainders
   FOR ALL TO p5owner USING (true) WITH CHECK (true);
+
+-- ROUND 6: the collection attempts. SELECT, INSERT and UPDATE — the UPDATE
+-- is RECONCILIATION and nothing else, narrowed by
+-- `sca_append_only_except_reconciliation`. §7 of the patch request granted
+-- no UPDATE here; this round amends that, because recording the verdict an
+-- attempt always had at the provider is the one write that must be possible.
+-- No DELETE.
+GRANT SELECT, INSERT, UPDATE ON p5scratch.subscription_charge_attempts TO p5_app;

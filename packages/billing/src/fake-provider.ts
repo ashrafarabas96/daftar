@@ -37,8 +37,19 @@ import { MAX_BILLING_MINOR } from './types';
  * `unavailable` models the one case that is not a result: the adapter could
  * not reach a verdict, so it throws. Being able to exercise that is the whole
  * reason the outcome set and the throw are different mechanisms.
+ *
+ * `accept_then_lose` models the case Master Continuous Mission V3 §12 is
+ * about, and which this fake could not express until round 6: the provider
+ * ACCEPTED the charge and the response never came back. From the caller's
+ * side it is indistinguishable from `unavailable` — the same throw, the same
+ * code — but at the provider the money has moved. So the fake records the
+ * charge and then throws, and a repeat of the same key is answered with that
+ * recorded result while a FRESH key charges a second time. That asymmetry is
+ * what makes the key-reuse law provable here instead of merely stated: with
+ * `unavailable` alone, a caller that minted a new key after every throw
+ * looked perfectly correct.
  */
-export const FAKE_BEHAVIOURS = ['succeed', 'decline', 'fail', 'unavailable'] as const;
+export const FAKE_BEHAVIOURS = ['succeed', 'decline', 'fail', 'unavailable', 'accept_then_lose'] as const;
 export type FakeBehaviour = (typeof FAKE_BEHAVIOURS)[number];
 
 export interface FakeProviderScenario {
@@ -60,6 +71,9 @@ const OUTCOME_OF: Readonly<Record<Exclude<FakeBehaviour, 'unavailable'>, ChargeO
   succeed: 'succeeded',
   decline: 'declined',
   fail: 'failed',
+  // The charge the provider accepted before the connection died. It is a
+  // SUCCESS at the provider; only the answer was lost.
+  accept_then_lose: 'succeeded',
 };
 
 export class FakePaymentProvider implements PaymentProviderPort {
@@ -141,6 +155,17 @@ export class FakePaymentProvider implements PaymentProviderPort {
     }
 
     const behaviour = this.behaviourFor(request.instrumentRef);
+    if (behaviour === 'accept_then_lose') {
+      // Recorded FIRST, then thrown: the order is the whole model. A fake
+      // that threw without recording would be `unavailable` again, and the
+      // law under test would have nothing to fail against.
+      this.sequence += 1;
+      const providerRef = `fake_${String(this.sequence).padStart(6, '0')}`;
+      this.calls.set(key, { fingerprint, result: { outcome: 'succeeded', providerRef, replayed: false } });
+      refuse('billing.provider_unavailable', 'the provider accepted the charge and the response was lost', {
+        businessId: request.businessId,
+      });
+    }
     if (behaviour === 'unavailable') {
       // Nothing is recorded: the adapter reached no verdict, so a later retry
       // of the same key is a genuine retry and not a replay of a decline.

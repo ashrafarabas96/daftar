@@ -191,7 +191,11 @@ describe('each exported union constant is the set its validator enforces', () =>
   });
 
   it('DUNNING_OUTCOMES', () => {
-    expect([...DUNNING_OUTCOMES]).toEqual(['succeeded', 'failed']);
+    // `unknown` joined the set in round 6: a provider that accepted the
+    // charge and lost the response. It is pinned here as well as in
+    // `collection.test.ts` because this is the law that would otherwise let
+    // a fourth outcome be added without a validator knowing about it.
+    expect([...DUNNING_OUTCOMES]).toEqual(['succeeded', 'failed', 'unknown']);
     const policy = { retryOffsetHours: [24, 48], graceHours: 72 } as const;
     const input = (outcome: (typeof DUNNING_OUTCOMES)[number] | 'pending') => ({
       policy,
@@ -207,7 +211,7 @@ describe('each exported union constant is the set its validator enforces', () =>
   });
 
   it('FAKE_BEHAVIOURS', () => {
-    expect([...FAKE_BEHAVIOURS]).toEqual(['succeed', 'decline', 'fail', 'unavailable']);
+    expect([...FAKE_BEHAVIOURS]).toEqual(['succeed', 'decline', 'fail', 'unavailable', 'accept_then_lose']);
     for (const behaviour of FAKE_BEHAVIOURS) {
       expect(() => new FakePaymentProvider({ defaultBehaviour: behaviour })).not.toThrow();
       expect(() => new FakePaymentProvider({ byInstrument: { card: behaviour } })).not.toThrow();
