@@ -627,8 +627,8 @@ MUTATIONS = [
     (
         "P3-07 — an undefined field is refused rather than ignored",
         "src/consumption-occasion.ts",
-        "  if (unexpected.length === 0) return;",
-        "  if (unexpected.length >= 0) return;",
+        "  if (unexpected.length > 0) {",
+        "  if (false) {",
         "refuses a field the contract does not define, even when it is not a valuation",
     ),
     (
