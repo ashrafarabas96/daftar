@@ -69,6 +69,50 @@ const APP_PASSWORD = 'probe';
 const superUrl = `postgresql://${SUPER}@localhost:${PG_PORT}/postgres`;
 const appUrl = `postgresql://${APP_ROLE}:${APP_PASSWORD}@localhost:${PG_PORT}/postgres`;
 
+/**
+ * F-03 — the locale is a PRECONDITION, so it is checked before `initdb` and
+ * named in the failure.
+ *
+ * The settled deploy line is the PostgreSQL 16 family at `en_US.utf8`, so the
+ * cluster is built with `--locale=en_US.utf8`. A reviewer on a minimal image
+ * does not have that locale generated, and `initdb` then dies with
+ * `initdb: error: invalid locale name "en_US.utf8"` — which names neither the
+ * cause nor the fix. An independent challenge hit exactly that and recorded a
+ * run with exit code 1. Two glibc spellings mean the same locale
+ * (`en_US.utf8`, `en_US.UTF-8`), so the comparison normalises both sides
+ * rather than asking for a string match.
+ */
+function normaliseLocale(name: string): string {
+  return name.trim().toLowerCase().replace(/-/g, '');
+}
+
+function assertLocaleAvailable(): void {
+  if (normaliseLocale(PG_LOCALE) === 'c' || normaliseLocale(PG_LOCALE) === 'cutf8') return;
+  let available: readonly string[];
+  try {
+    available = execFileSync('locale', ['-a'], { encoding: 'utf8' }).split('\n');
+  } catch (error) {
+    // No `locale` binary is not a reason to claim the locale is missing. Say
+    // what could not be checked and let `initdb` be the authority.
+    process.stdout.write(`NOTE: could not list locales (${String(error)}); letting initdb decide\n`);
+    return;
+  }
+  const wanted = normaliseLocale(PG_LOCALE);
+  if (available.some((name) => normaliseLocale(name) === wanted)) return;
+  const [language = 'en_US', charset = 'UTF-8'] = PG_LOCALE.split('.');
+  // `localedef` wants the charmap's own spelling, which is `UTF-8`: passing the
+  // `utf8` that PostgreSQL reports back would fail with `cannot open charmap`,
+  // so a command printed from the locale name verbatim would be useless advice.
+  const charmap = normaliseLocale(charset) === 'utf8' ? 'UTF-8' : charset.toUpperCase();
+  throw new Error(
+    `the locale ${PG_LOCALE} is not generated on this machine, and the settled deploy line is the ` +
+      'PostgreSQL 16 family at en_US.utf8, so this proof will not silently measure another ' +
+      'collation. Generate it and re-run:\n' +
+      `    localedef -i ${language} -f ${charmap} ${language}.${charmap}\n` +
+      'Or, to measure a line this is NOT evidence for, set P13_PG_LOCALE explicitly.',
+  );
+}
+
 function isRoot(): boolean {
   return typeof process.getuid === 'function' && process.getuid() === 0;
 }
@@ -116,6 +160,7 @@ class Cluster {
       chownSync(PG_DIR, uid, gid);
       chownSync(join(PG_DIR, 'sock'), uid, gid);
     }
+    assertLocaleAvailable();
     this.run('initdb', [
       '-D', join(PG_DIR, 'data'),
       `--locale=${PG_LOCALE}`,

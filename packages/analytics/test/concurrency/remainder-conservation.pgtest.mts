@@ -126,6 +126,16 @@ const PG_PASSWORD = 'postgres';
 const url = `postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/postgres`;
 
 /**
+ * The role every RACING connection uses: `NOSUPERUSER NOBYPASSRLS`, created by
+ * the schema above. The superuser URL stays in use for fixtures, for the
+ * catalogue reads and for `pg_stat_activity`, which is what makes it the
+ * control: the proof can compare what the app role sees against what is there.
+ */
+const APP_ROLE = 'daftar_app_proof';
+const APP_PASSWORD = 'proof';
+const appUrl = `postgresql://${APP_ROLE}:${APP_PASSWORD}@localhost:${PG_PORT}/postgres`;
+
+/**
  * Make the shipped PostgreSQL binaries executable before `initdb` is spawned.
  *
  * `embedded-postgres` calls its own chmod helper without awaiting it, so on a
@@ -187,6 +197,50 @@ const PG_LOCALE = process.env['P13_PG_LOCALE'] ?? 'en_US.utf8';
  * run through `su`. `P13_PG_OWNER` overrides the account.
  */
 const PG_OWNER = process.env['P13_PG_OWNER'] ?? 'claude';
+
+/**
+ * F-03 — the locale is a PRECONDITION, so it is checked before `initdb` and
+ * named in the failure.
+ *
+ * The settled deploy line is the PostgreSQL 16 family at `en_US.utf8`, so the
+ * cluster is built with `--locale=en_US.utf8`. A reviewer on a minimal image
+ * does not have that locale generated, and `initdb` then dies with
+ * `initdb: error: invalid locale name "en_US.utf8"` — which names neither the
+ * cause nor the fix. An independent challenge hit exactly that and recorded a
+ * run with exit code 1. Two glibc spellings mean the same locale
+ * (`en_US.utf8`, `en_US.UTF-8`), so the comparison normalises both sides
+ * rather than asking for a string match.
+ */
+function normaliseLocale(name: string): string {
+  return name.trim().toLowerCase().replace(/-/g, '');
+}
+
+function assertLocaleAvailable(): void {
+  if (normaliseLocale(PG_LOCALE) === 'c' || normaliseLocale(PG_LOCALE) === 'cutf8') return;
+  let available: readonly string[];
+  try {
+    available = execFileSync('locale', ['-a'], { encoding: 'utf8' }).split('\n');
+  } catch (error) {
+    // No `locale` binary is not a reason to claim the locale is missing. Say
+    // what could not be checked and let `initdb` be the authority.
+    process.stdout.write(`NOTE: could not list locales (${String(error)}); letting initdb decide\n`);
+    return;
+  }
+  const wanted = normaliseLocale(PG_LOCALE);
+  if (available.some((name) => normaliseLocale(name) === wanted)) return;
+  const [language = 'en_US', charset = 'UTF-8'] = PG_LOCALE.split('.');
+  // `localedef` wants the charmap's own spelling, which is `UTF-8`: passing the
+  // `utf8` that PostgreSQL reports back would fail with `cannot open charmap`,
+  // so a command printed from the locale name verbatim would be useless advice.
+  const charmap = normaliseLocale(charset) === 'utf8' ? 'UTF-8' : charset.toUpperCase();
+  throw new Error(
+    `the locale ${PG_LOCALE} is not generated on this machine, and the settled deploy line is the ` +
+      'PostgreSQL 16 family at en_US.utf8, so this proof will not silently measure another ' +
+      'collation. Generate it and re-run:\n' +
+      `    localedef -i ${language} -f ${charmap} ${language}.${charmap}\n` +
+      'Or, to measure a line this is NOT evidence for, set P13_PG_LOCALE explicitly.',
+  );
+}
 
 function isRoot(): boolean {
   return typeof process.getuid === 'function' && process.getuid() === 0;
@@ -255,6 +309,7 @@ class ExternalCluster implements EmbeddedCluster {
       chownSync(this.dataDir, Number(owner), Number(group));
       chownSync(this.sockDir, Number(owner), Number(group));
     }
+    assertLocaleAvailable();
     this.run('initdb', [
       '-D',
       join(this.dataDir, 'data'),
@@ -468,6 +523,56 @@ create table p13_proof.point_movement_identities (
   movement_id   uuid not null,
   constraint point_movements_identity_uq primary key (business_id, source_type, source_id, movement_kind)
 );
+
+-- ================================================================== --
+-- THE PRINCIPAL, AND WHY IT CHANGED (case 11)
+--
+-- Every racing connection below used to be postgres. A superuser bypasses
+-- row level security unconditionally, so ten green cases established nothing
+-- about whether these guards hold for the role the application actually uses.
+-- The Phase 5 challenge found the cost of exactly that: a check function
+-- without SECURITY DEFINER could not see its row under tenant RLS, treated it
+-- as DELETED, and passed at COMMIT.
+--
+-- So the proof relations now carry the house pattern -- ENABLE and FORCE row
+-- level security, a business-scoped policy reading a GUC -- and every racing
+-- session connects as a NOSUPERUSER NOBYPASSRLS role. The fixtures and the
+-- observations stay on the superuser pool ON PURPOSE: it is the positive
+-- control, the thing that can see what the app role must not.
+create function p13_proof.app_business() returns uuid language sql stable as $fn$
+  select nullif(current_setting('app.business', true), '')::uuid
+$fn$;
+
+create role daftar_app_proof login password 'proof'
+  nosuperuser nobypassrls nocreatedb nocreaterole noreplication noinherit;
+
+grant usage on schema p13_proof to daftar_app_proof;
+grant select, insert, update on all tables in schema p13_proof to daftar_app_proof;
+grant execute on all functions in schema p13_proof to daftar_app_proof;
+
+do $do$
+declare r record;
+begin
+  for r in
+    select c.relname
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'p13_proof' and c.relkind = 'r'
+  loop
+    execute format('alter table p13_proof.%I enable row level security', r.relname);
+    execute format('alter table p13_proof.%I force row level security', r.relname);
+    -- PERMISSIVE for membership, RESTRICTIVE for the business boundary: the
+    -- same two-policy shape the live migrations use, so a result here is about
+    -- that shape and not about a simpler one invented for the test.
+    execute format(
+      'create policy tenant_membership on p13_proof.%I for all to daftar_app_proof '
+      'using (true) with check (true)', r.relname);
+    execute format(
+      'create policy business_isolation on p13_proof.%I as restrictive for all to daftar_app_proof '
+      'using (business_id = p13_proof.app_business()) '
+      'with check (business_id = p13_proof.app_business())', r.relname);
+  end loop;
+end
+$do$;
 `;
 
 /* ------------------------------------------------------------------ *
@@ -528,9 +633,25 @@ async function remaining(c: Client | Pool, grantId: string): Promise<bigint> {
 }
 
 /** A fresh connection in READ COMMITTED, with the isolation level READ BACK from the server. */
-async function session(): Promise<Client> {
-  const c = new Client({ connectionString: url });
+async function session(businessId: string = BUSINESS): Promise<Client> {
+  const c = new Client({ connectionString: appUrl });
   await c.connect();
+  // The business context is per connection, exactly as the application sets it,
+  // and it is READ BACK: a session that silently failed to set it would see no
+  // rows and every conservation guard here would then sum zero and fail OPEN.
+  await c.query('SELECT set_config($1, $2, false)', ['app.business', businessId]);
+  const who = await one<{ role: string; bypass: boolean; business: string | null }>(
+    c,
+    `SELECT current_user AS role,
+            (SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = current_user) AS bypass,
+            p13_proof.app_business()::text AS business`,
+  );
+  if (who.role !== APP_ROLE || who.bypass) {
+    throw new Error(`a racing session must be ${APP_ROLE} without RLS bypass; got ${who.role} bypass=${who.bypass}`);
+  }
+  if (who.business !== businessId) {
+    throw new Error(`the session business context did not take: expected ${businessId}, got ${String(who.business)}`);
+  }
   return c;
 }
 
@@ -1656,6 +1777,147 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
       }
     },
   },
+
+  {
+    name:
+      'case-11-red-proof: a deferred check without SECURITY DEFINER cannot see its own row under RLS, ' +
+      'and passes at COMMIT',
+    fn: async (admin, note) => {
+      // The Phase 5 challenge found this shape in the ledger pattern Phase 13
+      // adopted: a deferred check function that could not see its row under
+      // tenant RLS treated it as DELETED and passed at COMMIT. Phase 5's
+      // concurrency proof had run as a superuser, which bypasses RLS
+      // unconditionally, so nothing in it could have noticed. This case is
+      // that defect, reproduced on a relation of Phase 13's own, and then the
+      // same check with the one keyword that fixes it.
+      const SIBLING = '33333333-3333-4333-8333-333333333333';
+      await admin.query(`
+        create table p13_proof.deferred_shape (
+          id uuid primary key, business_id uuid not null, points bigint not null
+        );
+        alter table p13_proof.deferred_shape enable row level security;
+        alter table p13_proof.deferred_shape force row level security;
+        create policy tenant_membership on p13_proof.deferred_shape for all to daftar_app_proof
+          using (true) with check (true);
+        create policy business_isolation on p13_proof.deferred_shape as restrictive for all to daftar_app_proof
+          using (business_id = p13_proof.app_business())
+          with check (business_id = p13_proof.app_business());
+        grant select, insert, update on p13_proof.deferred_shape to daftar_app_proof;
+
+        -- The check, written the way Phase 5's was: invoker rights, and a
+        -- "the row is gone, nothing to check" branch. Both halves are the
+        -- defect, and neither looks like one in review.
+        create function p13_proof.deferred_check_invoker() returns trigger language plpgsql as $fn$
+        declare v_points bigint;
+        begin
+          -- FOUND is plpgsql's own flag for "the last query returned a row".
+          -- It is exactly what Phase 5's check read, and it is TRUE of the
+          -- caller's VIEW of the relation, never of the relation.
+          select points into v_points from p13_proof.deferred_shape where id = new.id;
+          if not found then
+            return null;  -- treated as deleted
+          end if;
+          if v_points < 0 then
+            raise exception 'p13.negative_points: % left at %', new.id, v_points;
+          end if;
+          return null;
+        end
+        $fn$;
+
+        create constraint trigger deferred_shape_check after insert on p13_proof.deferred_shape
+          deferrable initially deferred for each row
+          execute function p13_proof.deferred_check_invoker();
+
+        -- A service write path, SECURITY DEFINER, which is how a job or an
+        -- internal service writes a row for a business that is not the
+        -- caller's. Its WITH CHECK does not apply, so the row lands.
+        create function p13_proof.service_write(p_id uuid, p_business uuid, p_points bigint)
+          returns void language sql security definer as $fn$
+            insert into p13_proof.deferred_shape (id, business_id, points) values (p_id, p_business, p_points)
+        $fn$;
+        grant execute on function p13_proof.service_write(uuid, uuid, bigint) to daftar_app_proof;
+      `);
+
+      const first = id();
+      const app = await session();
+      try {
+        await begin(app);
+        // Visibility, measured rather than assumed: the row is for the sibling
+        // business, and this session's context names its own.
+        await app.query('SELECT p13_proof.service_write($1, $2, $3)', [first, SIBLING, '-5']);
+        const seen = await one<{ n: string }>(
+          app,
+          'SELECT count(*)::text AS n FROM p13_proof.deferred_shape WHERE id = $1',
+          [first],
+        );
+        note(`11: the app role sees ${seen.n} row(s) of its own write — the row is for another business`);
+        if (seen.n !== '0') throw new Error(`11: the fixture needs an INVISIBLE row; the app role saw ${seen.n}`);
+
+        const committed = await settle(() => app.query('COMMIT'));
+        note(`11: COMMIT with the invoker-rights check: ${observed(committed)}`);
+        if (!committed.ok) {
+          throw new Error('11: the defect did not reproduce — the invoker check refused, so there is nothing to fix');
+        }
+        const landed = await one<{ points: string }>(
+          admin,
+          'SELECT points::text AS points FROM p13_proof.deferred_shape WHERE id = $1',
+          [first],
+        );
+        note(`11: the superuser control sees the row the check could not: points = ${landed.points}`);
+        if (landed.points !== '-5') throw new Error(`11: expected the -5 row to be committed, saw ${landed.points}`);
+        note('11: RED PROOF = a negative row committed past a deferred check that reported nothing to check.');
+        note('11: The check did not fail. It could not SEE, and read invisible as absent — which is the');
+        note('11: one reading a guard may never take, because RLS hides rows it must still conserve.');
+      } finally {
+        await settle(() => app.query('ROLLBACK'));
+        await app.end();
+      }
+
+      // The fix: the same check, SECURITY DEFINER, so its reads are the
+      // relation's own and not the caller's view of it.
+      await admin.query(`
+        create or replace function p13_proof.deferred_check_invoker() returns trigger
+          language plpgsql security definer as $fn$
+        declare v_points bigint;
+        begin
+          select points into v_points from p13_proof.deferred_shape where id = new.id;
+          if not found then
+            -- A definer check that finds nothing has found a REAL absence, and
+            -- even then it refuses rather than assuming: a check cannot tell a
+            -- deleted row from one it was handed wrongly, and only one of those
+            -- two readings is safe.
+            raise exception 'p13.row_vanished: % is not readable at commit', new.id;
+          end if;
+          if v_points < 0 then
+            raise exception 'p13.negative_points: % left at %', new.id, v_points;
+          end if;
+          return null;
+        end
+        $fn$;
+      `);
+
+      const second = id();
+      const app2 = await session();
+      try {
+        await begin(app2);
+        await app2.query('SELECT p13_proof.service_write($1, $2, $3)', [second, SIBLING, '-5']);
+        const refused = await settle(() => app2.query('COMMIT'));
+        note(`11: COMMIT with the SECURITY DEFINER check: ${observed(refused)}`);
+        if (refused.ok) throw new Error('11: the definer check still admitted the negative row');
+        const after = await admin.query('SELECT 1 FROM p13_proof.deferred_shape WHERE id = $1', [second]);
+        note(`11: rows committed for the refused write: ${after.rowCount ?? 0}`);
+        if ((after.rowCount ?? 0) !== 0) throw new Error('11: the refused transaction still left a row');
+        note('11: OUTCOME = the check that can read refuses at COMMIT, and the transaction is gone.');
+        note('11: WHAT THIS SETTLES FOR PHASE 13: every deferred or trigger check this phase asks the');
+        note('11: Migration Owner for must be SECURITY DEFINER with a fixed search_path, and must');
+        note('11: refuse on an unreadable row rather than returning. Recorded in the migration patch');
+        note('11: request; this proof is the reason, measured rather than argued.');
+      } finally {
+        await settle(() => app2.query('ROLLBACK'));
+        await app2.end();
+      }
+    },
+  },
 ];
 
 /* ------------------------------------------------------------------ *
@@ -1786,8 +2048,12 @@ async function main(): Promise<number> {
   console.log(`database           : ${serverVersionLine}`);
   console.log(`collation          : ${collationLine}`);
   console.log(`on the settled line: ${onTarget ? 'YES — the PostgreSQL 16 family' : 'NO — OFF-TARGET, see the banner above'}`);
-  console.log(`execution role     : the cluster superuser throughout. This proof measures CONCURRENCY, not`);
-  console.log(`                     authorization; the RLS proof in ../rls/ is the one that must not use it.`);
+  console.log(`execution role     : EVERY RACING CONNECTION runs as ${APP_ROLE} (NOSUPERUSER NOBYPASSRLS, read`);
+  console.log(`                     back from pg_roles on each session), with the proof relations under ENABLE`);
+  console.log(`                     and FORCE row level security and a business-scoped policy. Fixtures,`);
+  console.log(`                     catalogue reads and pg_stat_activity use the superuser pool deliberately,`);
+  console.log(`                     as the positive control. This used to be the superuser throughout, which`);
+  console.log(`                     is exactly what hid the defect case 11 now reproduces.`);
   console.log(`fixture identity   : business ${BUSINESS}; customers and grants generated deterministically`);
   console.log(`                     (see id(), so a failing id is the same id on a re-run)`);
   console.log(`isolation level    : READ COMMITTED, read back from SHOW transaction_isolation per transaction`);
