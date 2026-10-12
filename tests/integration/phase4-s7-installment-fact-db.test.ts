@@ -48,12 +48,18 @@
  * COMMITS or ANSWERS, and §E restores each attacked policy and re-reads.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import type { ScratchDb } from '../helpers/scratch-db';
 import { createScratchDb, urlOf } from '../helpers/scratch-db';
+import {
+  INSTALLMENT_INTERNAL_INVARIANT_CODES,
+  isInstallmentInternalInvariant,
+  parseDatabaseInstallmentInternalCode,
+  parseDatabaseSellingCode,
+} from '../../apps/api/src/modules/selling/selling-errors';
 
 const DB = 'daftar_s7f1_fact';
 const SPEC_PATH = join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql');
@@ -369,7 +375,7 @@ beforeAll(async () => {
   }
   M['specError'] = specError;
   if (specError !== null) {
-    writeFileSync('/tmp/claude-0/s7f1-fact.json', JSON.stringify(M, null, 2));
+  writeFileSync('/tmp/claude-0/s7f1-fact.json', JSON.stringify(M, null, 2));
     return;
   }
 
@@ -1155,6 +1161,284 @@ beforeAll(async () => {
     )
   ).rows[0] as Record<string, unknown>;
 
+    // ══════════════════════════════════════════════════════════════════════
+  // §Z ROUND 11 STEP ZERO — THE `status`-PREDICATED BLINDING, TAKEN AGAINST
+  //    AN INVOICE WHOSE FLAG IS ALREADY `false`
+  //
+  // The round-10 challenger's own first limitation named this as an UNMEASURED
+  // route that could be a Critical, and the coordinator ordered it executed
+  // before anything else. The construction: a RESTRICTIVE read policy
+  // predicated on `status <> 'active'`, which hides exactly the ACTIVE rows.
+  // The writer's by-primary-key probe then PASSES for a NON-ACTIVE handed row
+  // — the row is visible — while the cross-check's `EXISTS` is blind, and a
+  // non-active transition derives an EMPTY write set so the cross-check never
+  // runs at all. Against an invoice whose flag is already `false`, the
+  // deferred verifier's two readings then AGREE, which the specification
+  // itself admits «degrades to a pass».
+  //
+  // SO THE QUESTION IS WHETHER A WRONG FACT COMMITS THERE, and the answer is
+  // measured in both directions and in both blinding shapes.
+  // ══════════════════════════════════════════════════════════════════════
+  /** The shipped text with `status <> 'active'` folded in for EVERY principal. */
+  const STATUS_BLIND_ALL_SQL = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
+     USING (status <> 'active'
+            AND (app_bypass() OR current_user IN ('daftar_inventory_internal','daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid))`;
+  /**
+   * And for the DEFINER ALONE, which is the sharper shape: `daftar_app` and
+   * `daftar_migrator` keep reading every plan row, so the reader is SIGHTED
+   * throughout and nothing about the caller is in question.
+   */
+  const STATUS_BLIND_WRITER_SQL = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
+     USING (app_bypass()
+            OR (current_user = 'daftar_accounting_internal' AND status <> 'active')
+            OR (current_user <> 'daftar_accounting_internal'
+                AND (current_user = 'daftar_inventory_internal' OR business_id = nullif(app_business(), '')::uuid)))`;
+
+  /**
+   * THE FIXTURE INVOICE, BACK TO THE BASE CASE OF THE INDUCTION: no plan, no
+   * schedule, flag `false`. Both relations in ONE transaction and the
+   * schedule first, because `installments_plan_fk` refuses a plan whose rows
+   * are still there and `installment_schedule_verify` refuses a half-deleted
+   * schedule at COMMIT. Each section below starts from this rather than from
+   * whatever the section above left, because a count that depends on the
+   * section above is a count nobody can check.
+   */
+  const resetInvoice = async (): Promise<string | null> =>
+    (
+      await inCtx(mig, APP_CTX(), [
+        { sql: `DELETE FROM installments WHERE plan_id IN (SELECT id FROM installment_plans WHERE invoice_id = $1)`, params: [world.invoiceId] },
+        { sql: `DELETE FROM installment_plans WHERE invoice_id = $1`, params: [world.invoiceId] },
+      ])
+    ).error;
+
+  // THE SUBJECT IS THE BODY THIS FILE'S SPECIFICATION INSTALLED, re-read from
+  // the catalogue rather than assumed, because §F1-c and §F1-c′ above have been
+  // replacing it. A probe that trusts the body is a probe of nothing.
+  M['Z_installed_body_is_shipped'] =
+    (await sup.query<{ h: string }>(`SELECT md5(pg_get_functiondef('public.installment_plan_fact_sync()'::regprocedure)) AS h`)).rows[0]?.h ===
+    createHash('md5').update(SYNC_NEW).digest('hex');
+
+  // NON-VACUITY: the fixture starts where the step-zero question needs it —
+  // flag `false`, and no plan at all on the invoice.
+  M['Z_pre'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+
+  // ── Z1 THE DIRECTION ITSELF. Flag already `false`, nothing active, and the
+  //    status-blinded INSERT of a cancelled plan: empty write set, probe
+  //    passes, cross-check never runs, deferred verifier compares `false`
+  //    against a blinded `false` and AGREES.
+  M['Z1_blind_ddl'] = await rePolicy(STATUS_BLIND_ALL_SQL);
+  const z1 = randomUUID();
+  M['Z1_insert_cancelled'] = await commitBarePlan('cancelled', z1);
+  M['Z1_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['Z1_restore_ddl'] = await rePolicy(RESTORE_PLANS_READ_SQL);
+  M['Z1_state_after_restore'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['Z1_aging'] = await aging(app, APP_CTX());
+
+  // ── Z2 AND WHY NO WRONG FACT CAN BE WRITTEN THAT WAY: every transition that
+  //    would write `true` carries an ACTIVE `NEW` row, and an ACTIVE row is
+  //    exactly what this policy hides — so the probe REFUSES it. Measured
+  //    under both blinding shapes, because the definer-only one leaves the
+  //    writing principal able to see the row and is the one that could have
+  //    been different.
+  await rePolicy(STATUS_BLIND_ALL_SQL);
+  M['Z2_insert_active_all_blind'] = await commitBarePlan('active', randomUUID());
+  await rePolicy(STATUS_BLIND_WRITER_SQL);
+  M['Z3_mig_still_sees'] = (await visiblePlans(mig, APP_CTX())).rows[0]?.['n'] ?? null;
+  M['Z3_insert_active_writer_blind'] = await commitBarePlan('active', randomUUID());
+  M['Z3_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(RESTORE_PLANS_READ_SQL);
+
+  // ── Z4 THE FLAG-TRUE MIRROR, which is `TL-P4-COORD-R46` F-3's own case: a
+  //    real active plan, then the status-blinded DELETE of a cancelled plan
+  //    beside it. Empty write set, no probe on a DELETE, and the deferred
+  //    verifier catches it — under the WRONG NAME, which is the whole of F-3.
+  const zActive = await commitPlan(APP_CTX());
+  M['Z4_active_commits'] = zActive.error;
+  M['Z4_pre'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(STATUS_BLIND_WRITER_SQL);
+  M['Z4_blinded_delete_cancelled'] = await dropBarePlan(z1);
+  M['Z4_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(RESTORE_PLANS_READ_SQL);
+
+  // ══════════════════════════════════════════════════════════════════════
+  // §F5 THE INSERT-BRANCH DERIVATION IS LOAD-BEARING, AND THE CASE IS NOT THE
+  //     PROBE (`TL-P4-COORD-R46`, F-5)
+  //
+  // Round 10 reported, unprompted, that an INSERT-branch reversion left all
+  // 198 cases GREEN — so on INSERT the only load-bearing thing was the probe,
+  // which F-3 shows is defeatable. THIS is the case that is not the probe: with
+  // the status-predicated policy the probe PASSES for a non-active row, so
+  // round 9's INSERT branch — write set «this invoice», value from the blinded
+  // recomputation — writes `false` beside a live active plan, and the deferred
+  // verifier, blinded the same way, AGREES with it and the transaction COMMITS.
+  // The shipped derivation refuses the identical construction because the
+  // transition determines NOTHING and no UPDATE is issued at all.
+  // ══════════════════════════════════════════════════════════════════════
+  M['F5_r9_install'] = await installSync(SYNC_R9);
+  await rePolicy(STATUS_BLIND_WRITER_SQL);
+  const f5r9 = randomUUID();
+  M['F5_r9_insert_cancelled'] = await commitBarePlan('cancelled', f5r9);
+  M['F5_r9_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(RESTORE_PLANS_READ_SQL);
+  M['F5_r9_state_after_restore'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['F5_r9_aging_after_restore'] = await aging(app, APP_CTX());
+  //    THE SHIPPED BODY, THE SAME CONSTRUCTION. The planted row goes and the
+  //    flag is put back to what the plan relation supports, so the two bodies
+  //    are asked the same question from the same state.
+  M['F5_cleanup'] = (await inCtx(mig, APP_CTX(), [{ sql: `DELETE FROM installment_plans WHERE id = $1`, params: [f5r9] }])).error;
+  M['F5_new_install'] = await installSync(SYNC_NEW);
+  M['F5_repair_flag'] = (
+    await inCtx(sup, APP_CTX(), [
+      {
+        sql: `UPDATE invoices SET has_active_installment_plan = EXISTS (SELECT 1 FROM installment_plans p WHERE p.business_id = invoices.business_id AND p.invoice_id = invoices.id AND p.status = 'active') WHERE id = $1`,
+        params: [world.invoiceId],
+      },
+    ])
+  ).error;
+  M['F5_pre_new'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(STATUS_BLIND_WRITER_SQL);
+  M['F5_new_insert_cancelled'] = await commitBarePlan('cancelled', randomUUID());
+  M['F5_new_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(RESTORE_PLANS_READ_SQL);
+  M['F5_new_aging'] = await aging(app, APP_CTX());
+
+  // ══════════════════════════════════════════════════════════════════════
+  // §F4 THE ONE-ACTIVE EXCLUSION: ONE NAME, BOTH HEAP ORDERS
+  //     (`TL-P4-COORD-R46`, F-4)
+  //
+  // The declared over-strictness was ROW-ORDER DEPENDENT and its message was a
+  // false diagnosis. Fixtures differing only in HEAP ORDER are built here, with
+  // the `ctid`s recorded so the order is a MEASUREMENT and not an intention,
+  // and three repeats of each — because a split that is reported once is a
+  // coincidence.
+  // ══════════════════════════════════════════════════════════════════════
+  M['F4_reset'] = await resetInvoice();
+  M['F4_pre'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+
+  /** One move attempt, in the given heap order. Returns everything the claim needs. */
+  const movePair = async (activeFirst: boolean): Promise<Record<string, unknown>> => {
+    const a = randomUUID();
+    const b = randomUUID();
+    const first = activeFirst ? { id: a, status: 'active' } : { id: b, status: 'cancelled' };
+    const second = activeFirst ? { id: b, status: 'cancelled' } : { id: a, status: 'active' };
+    // Both plans carry a LAWFUL schedule: obligation (b) refuses an active plan
+    // with none, and the `cancel, then activate` control has to be able to
+    // COMMIT with the incoming plan's schedule already correct.
+    const build1 = await commitPlan(APP_CTX(), { planId: first.id, status: first.status });
+    const build2 = await commitPlan(APP_CTX(), { planId: second.id, status: second.status });
+    const heap = (
+      await inCtx(sup, {}, [
+        { sql: `SELECT id::text AS id, status, ctid::text AS ctid FROM installment_plans WHERE invoice_id = $1 ORDER BY ctid`, params: [world.invoiceId] },
+      ])
+    ).rows;
+    const move = await inCtx(mig, APP_CTX(), [
+      {
+        sql: `UPDATE installment_plans SET status = CASE WHEN id = $1 THEN 'cancelled' ELSE 'active' END WHERE invoice_id = $2 AND id IN ($1, $3)`,
+        params: [a, world.invoiceId, b],
+      },
+    ]);
+    const after = { flag: await flag(), truth: await truth(), plans: await planCount() };
+    const clean = (
+      await inCtx(mig, APP_CTX(), [
+        { sql: `DELETE FROM installments WHERE plan_id = ANY ($1::uuid[])`, params: [[a, b]] },
+        { sql: `DELETE FROM installment_plans WHERE id = ANY ($1::uuid[])`, params: [[a, b]] },
+      ])
+    ).error;
+    return { activeFirst, build: build1.error ?? build2.error, heap, moveError: move.error, after, clean, flagAfterClean: await flag() };
+  };
+  const moves: unknown[] = [];
+  for (const activeFirst of [true, false]) for (const _n of [1, 2, 3]) moves.push(await movePair(activeFirst));
+  M['F4_single_statement_moves'] = moves;
+
+  // ── AND HALF TWO OF THE DECLARATION, in both orders. «The same change in two
+  //    statements commits» held in ONE of them and the COMMENT did not say
+  //    which.
+  const twoStatement = async (cancelFirst: boolean): Promise<Record<string, unknown>> => {
+    const a = randomUUID();
+    const b = randomUUID();
+    const build1 = await commitPlan(APP_CTX(), { planId: a, status: 'active' });
+    const build2 = await commitPlan(APP_CTX(), { planId: b, status: 'cancelled' });
+    const cancel = { sql: `UPDATE installment_plans SET status = 'cancelled' WHERE id = $1`, params: [a] };
+    const activate = { sql: `UPDATE installment_plans SET status = 'active' WHERE id = $1`, params: [b] };
+    const move = await inCtx(mig, APP_CTX(), cancelFirst ? [cancel, activate] : [activate, cancel]);
+    const after = { flag: await flag(), truth: await truth(), plans: await planCount() };
+    const clean = (
+      await inCtx(mig, APP_CTX(), [
+        { sql: `DELETE FROM installments WHERE plan_id = ANY ($1::uuid[])`, params: [[a, b]] },
+        { sql: `DELETE FROM installment_plans WHERE id = ANY ($1::uuid[])`, params: [[a, b]] },
+      ])
+    ).error;
+    return { build: build1.error ?? build2.error, moveError: move.error, after, clean };
+  };
+  M['F4_cancel_then_activate'] = await twoStatement(true);
+  M['F4_activate_then_cancel'] = await twoStatement(false);
+
+  // ── AND THE EXCLUSION IS NOT THE MECHANISM, which has to be measured or the
+  //    section reads as a claim that a blindable read bounds the active count.
+  //    Blinded, the BEFORE trigger reads nothing and PASSES, and the PARTIAL
+  //    UNIQUE INDEX — which is physical — refuses instead.
+  const f4Live = await commitPlan(APP_CTX(), { planId: randomUUID(), status: 'active' });
+  M['F4_live_active_commits'] = f4Live.error;
+  M['F4_second_active_sighted'] = await commitBarePlan('active', randomUUID());
+  await rePolicy(STATUS_BLIND_WRITER_SQL);
+  M['F4_second_active_blinded'] = await commitBarePlan('active', randomUUID());
+  await rePolicy(RESTORE_PLANS_READ_SQL);
+  M['F4_state_after'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+
+  // ══════════════════════════════════════════════════════════════════════
+  // §Z6 THE TWO-FAULT COMPOSITE, with its one-fault controls on both sides
+  //     (round 11 step zero, second half)
+  //
+  // The deferred verifier is what catches a DISABLED sync trigger (§D1 above).
+  // Under this policy its `EXISTS` reads `false`, so against a flag that is
+  // already `false` the two readings AGREE. Either fault alone is refused;
+  // together they COMMIT. It still FAILS CLOSED one layer out, at the READ, and
+  // that is measured rather than asserted.
+  // ══════════════════════════════════════════════════════════════════════
+  M['Z6_cleanup'] = await resetInvoice();
+  M['Z6_pre'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['Z6_disable_sync'] = await ddl(`ALTER TABLE installment_plans DISABLE TRIGGER installment_plans_fact_sync`);
+  const z6a = await commitPlan(APP_CTX(), { planId: randomUUID(), status: 'active' });
+  M['Z6_control_trigger_only'] = z6a.error;
+  M['Z6_control_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(STATUS_BLIND_WRITER_SQL);
+  const z6b = await commitPlan(APP_CTX(), { planId: randomUUID(), status: 'active' });
+  M['Z6_two_faults'] = z6b.error;
+  M['Z6_two_faults_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  await rePolicy(RESTORE_PLANS_READ_SQL);
+  M['Z6_enable_sync'] = await ddl(`ALTER TABLE installment_plans ENABLE TRIGGER installment_plans_fact_sync`);
+  //    EVERY FAULT REMOVED, and the READ is the layer that refuses.
+  M['Z6_state_all_restored'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['Z6_aging_all_restored'] = await aging(app, APP_CTX());
+
+  // ══════════════════════════════════════════════════════════════════════
+  // §F6 THE TWO ADVERTISED SYNC REFUSALS, MEASURED AS THE PRINCIPAL THAT
+  //     WRITES (`TL-P4-COORD-R46`, F-6)
+  // ══════════════════════════════════════════════════════════════════════
+  M['F6_business_change_migrator'] = (
+    await inCtx(mig, APP_CTX(), [{ sql: `UPDATE installment_plans SET business_id = gen_random_uuid() WHERE id = $1`, params: [z6b.planId] }])
+  ).error;
+  //    AND AS THE SUPERUSER, which row security does not apply to at all —
+  //    so if `plan_fact_unwritable` were reachable anywhere it would be here.
+  M['F6_business_change_superuser'] = (
+    await inCtx(sup, APP_CTX(), [{ sql: `UPDATE installment_plans SET business_id = gen_random_uuid() WHERE id = $1`, params: [z6b.planId] }])
+  ).error;
+  //    THE CROSS-TENANT PLAN, in both of its constructions: with the session
+  //    context set to the divergent tenant, and with it left at the invoice's.
+  M['F6_cross_tenant_divergent_ctx'] = (
+    await commitPlan({ 'app.tenant_id': world.otherTenantId, 'app.business_id': world.businessId }, { tenantId: world.otherTenantId, status: 'cancelled' })
+  ).error;
+  M['F6_cross_tenant_own_ctx'] = (await commitPlan(APP_CTX(), { tenantId: world.otherTenantId, status: 'cancelled' })).error;
+  //    AND THE FIXTURE IS LEFT AS §Z FOUND IT, so this block's own state is not
+  //    a conclusion anybody draws from the ones above.
+  M['F6_teardown'] = await resetInvoice();
+  M['F6_teardown_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['F6_policies'] = (
+    await mig.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM pg_policy WHERE polrelid = 'public.installment_plans'::regclass AND polname = 'business_isolation_read'`,
+    )
+  ).rows[0]?.n;
+
   writeFileSync('/tmp/claude-0/s7f1-fact.json', JSON.stringify(M, null, 2));
 }, 1800000);
 
@@ -1656,6 +1940,284 @@ describe("P4-S7 §F1-d obligation (a)'s RIGHT-HAND SIDE (TL-P4-COORD-R43, F1-d)"
     // 1 000 000 for the invoice whose total moved and whose plan is now gone,
     // plus 1 100 000 for the one the trigger protected.
     expect(sum(rows(M['F1d_aging_answers']))).toBe(2100000n);
+  });
+});
+
+interface MoveRow {
+  readonly activeFirst: boolean;
+  readonly build: string | null;
+  readonly heap: readonly { id: string; status: string; ctid: string }[];
+  readonly moveError: string | null;
+  readonly after: { flag: string; truth: string; plans: string };
+  readonly clean: string | null;
+  readonly flagAfterClean: string;
+}
+const moveRows = (): readonly MoveRow[] => (M['F4_single_statement_moves'] as readonly MoveRow[] | undefined) ?? [];
+const twoRow = (k: string): { build: string | null; moveError: string | null; after: { flag: string; truth: string; plans: string } } =>
+  M[k] as { build: string | null; moveError: string | null; after: { flag: string; truth: string; plans: string } };
+
+describe('P4-S7 §Z ROUND 11 STEP ZERO — the status-predicated blinding against a flag that is already false', () => {
+  it('the subject is the body the SPECIFICATION installed, and the fixture starts where the question needs it', () => {
+    expect(M['Z_installed_body_is_shipped'], 'the sync body under test is not the one the specification installs').toBe(true);
+    expect(M['Z_pre']).toEqual({ flag: 'false', truth: 'false', plans: '0' });
+  });
+
+  it('THE ANSWER: the blinded non-active INSERT COMMITS, and the fact it leaves behind is CORRECT', () => {
+    // This is the direction the specification admits «degrades to a pass», and
+    // it does pass — with the right answer. The EMPTY write set wrote nothing,
+    // so there was nothing for a blinded read to decide.
+    expect(M['Z1_blind_ddl']).toEqual([null, null]);
+    expect(M['Z1_insert_cancelled'], 'the blinded non-active INSERT was refused, which is not what was measured').toBeNull();
+    expect(M['Z1_state']).toEqual({ flag: 'false', truth: 'false', plans: '1' });
+    expect(M['Z1_state_after_restore']).toEqual({ flag: 'false', truth: 'false', plans: '1' });
+  });
+
+  it('and the reader ANSWERS over it — no refusal, because nothing is wrong', () => {
+    expect(errOf(M['Z1_aging'])).toBe('');
+    expect(rows(M['Z1_aging']).length).toBeGreaterThan(0);
+  });
+
+  it('NO WRONG FACT CAN BE WRITTEN THAT WAY: every transition that would write true is REFUSED by the probe, under both blinding shapes', () => {
+    // A transition that writes `true` carries an ACTIVE `NEW` row, and an
+    // ACTIVE row is exactly what this policy hides — so the one case where the
+    // probe still bites is the one that matters.
+    expect(String(M['Z2_insert_active_all_blind'])).toContain('installment.plan_fact_blind');
+    expect(String(M['Z3_insert_active_writer_blind'])).toContain('installment.plan_fact_blind');
+    expect(M['Z3_state']).toEqual({ flag: 'false', truth: 'false', plans: '1' });
+  });
+
+  it('NON-VACUITY: under the definer-only shape the WRITING principal still sees the plan, so the blinding really is asymmetric', () => {
+    expect(M['Z3_mig_still_sees']).toBe('1');
+  });
+
+  it("F-3's own case, flag TRUE: the empty write set passes the probe and the DEFERRED VERIFIER refuses — by the wrong name, which is F-3", () => {
+    expect(M['Z4_active_commits']).toBeNull();
+    expect(M['Z4_pre']).toEqual({ flag: 'true', truth: 'true', plans: '2' });
+    expect(String(M['Z4_blinded_delete_cancelled'])).toContain('installment.plan_fact_desynchronised');
+    expect(M['Z4_state'], 'the refused transaction changed the fact').toEqual({ flag: 'true', truth: 'true', plans: '2' });
+  });
+});
+
+describe('P4-S7 §F5 the INSERT-branch derivation is load-bearing, and the case is NOT the probe', () => {
+  it('the counterfactual is the ROUND-9 writer and the shipped body is not it', () => {
+    expect(M['F5_r9_install']).toBeNull();
+    expect(M['F1b_counterfactual_rewrote']).toBe(true);
+  });
+
+  it("the ROUND-9 INSERT branch COMMITS {flag: false, active plan: 1} with the probe PASSING — the mutation round 10 reported staying green", () => {
+    expect(M['F5_r9_insert_cancelled'], 'round 9 was refused here, so this is not the case F-5 names').toBeNull();
+    expect(M['F5_r9_state']).toEqual({ flag: 'false', truth: 'true', plans: '3' });
+  });
+
+  it('and it DOES NOT HEAL: the flag stays false and the sighted reader is refused for ever, by name', () => {
+    expect(M['F5_r9_state_after_restore']).toEqual({ flag: 'false', truth: 'true', plans: '3' });
+    expect(errOf(M['F5_r9_aging_after_restore'])).toContain('installment.plan_fact_unflagged');
+  });
+
+  it('the SHIPPED derivation refuses the identical construction and leaves the fact ALONE', () => {
+    expect(M['F5_new_install']).toBeNull();
+    expect(M['F5_pre_new']).toEqual({ flag: 'true', truth: 'true', plans: '2' });
+    expect(String(M['F5_new_insert_cancelled'])).toContain('installment.plan_fact_desynchronised');
+    expect(M['F5_new_state'], 'the shipped writer moved the fact').toEqual({ flag: 'true', truth: 'true', plans: '2' });
+  });
+
+  it('and the CONTROL: with everything restored the reader ANSWERS, so this is a discrimination and not a reader that refuses this customer', () => {
+    expect(errOf(M['F5_new_aging'])).toBe('');
+    expect(rows(M['F5_new_aging']).length).toBeGreaterThan(0);
+  });
+});
+
+describe('P4-S7 §F4 the one-active exclusion: ONE NAME, BOTH HEAP ORDERS', () => {
+  it('the fixture is back to the base case before the orders are built, so the counts below depend on nothing above', () => {
+    expect(M['F4_reset']).toBeNull();
+    expect(M['F4_pre']).toEqual({ flag: 'false', truth: 'false', plans: '0' });
+  });
+
+  it('both heap orders were really built, three times each, and the order is MEASURED from ctid and not intended', () => {
+    const rs = moveRows();
+    expect(rs.length).toBe(6);
+    for (const r of rs) {
+      expect(r.build, 'the move fixture did not build').toBeNull();
+      expect(r.heap.length, 'the pair is not two rows').toBe(2);
+      expect(r.heap[0]?.status, `heap order disagrees with the intent activeFirst=${r.activeFirst}`).toBe(r.activeFirst ? 'active' : 'cancelled');
+      expect(r.clean).toBeNull();
+      expect(r.flagAfterClean).toBe('false');
+    }
+    expect(rs.filter((r) => r.activeFirst).length).toBe(3);
+    expect(rs.filter((r) => !r.activeFirst).length).toBe(3);
+  });
+
+  it('EVERY order is refused installment.plan_active_conflict — the split into plan_fact_blind and 23505 is gone', () => {
+    for (const r of moveRows()) {
+      expect(String(r.moveError), `activeFirst=${r.activeFirst}`).toContain('installment.plan_active_conflict');
+      expect(String(r.moveError), 'the false diagnosis is back').not.toContain('plan_fact_blind');
+      // The INDEX is named inside the message as one of the two causes, which
+      // is correct; what must be gone is the raw `23505` the cancelled-first
+      // order used to produce instead of a named refusal.
+      expect(String(r.moveError), 'the raw unique violation is back').not.toContain('duplicate key value');
+    }
+  });
+
+  it('and the message is TRUE of the state it refuses: another plan of this invoice IS active, and it says which escape to take', () => {
+    const m = String(moveRows()[0]?.moveError);
+    expect(m).toMatch(/another plan of this invoice is active|already that invoice's active plan/);
+    expect(m, 'the writer is not told the two-statement route').toMatch(/cancel the outgoing plan in one statement/);
+  });
+
+  it('the refused statement changed NOTHING — the state is the one the fixture built', () => {
+    for (const r of moveRows()) expect(r.after).toEqual({ flag: 'true', truth: 'true', plans: '2' });
+  });
+
+  it('HALF TWO, both orders: `cancel, then activate` COMMITS and `activate, then cancel` meets the SAME name at the FIRST statement', () => {
+    expect(twoRow('F4_cancel_then_activate').build).toBeNull();
+    expect(twoRow('F4_cancel_then_activate').moveError, 'the documented escape no longer commits').toBeNull();
+    expect(twoRow('F4_cancel_then_activate').after).toEqual({ flag: 'true', truth: 'true', plans: '2' });
+    expect(twoRow('F4_activate_then_cancel').build).toBeNull();
+    expect(String(twoRow('F4_activate_then_cancel').moveError)).toContain('installment.plan_active_conflict');
+  });
+
+  it('AND THE EXCLUSION IS NOT THE MECHANISM: blinded, it passes and the PARTIAL UNIQUE INDEX refuses instead', () => {
+    expect(M['F4_live_active_commits']).toBeNull();
+    expect(String(M['F4_second_active_sighted'])).toContain('installment.plan_active_conflict');
+    expect(String(M['F4_second_active_blinded']), 'the physical index did not refuse the second active plan').toContain(
+      'installment_plans_one_active_per_invoice_uq',
+    );
+    expect(M['F4_state_after']).toEqual({ flag: 'true', truth: 'true', plans: '1' });
+  });
+});
+
+describe('P4-S7 §Z6 the two-fault composite — and both one-fault controls', () => {
+  it('the fixture is back to the base case before the composite is built', () => {
+    expect(M['Z6_cleanup']).toBeNull();
+    expect(M['Z6_pre']).toEqual({ flag: 'false', truth: 'false', plans: '0' });
+  });
+
+  it('CONTROL — the disabled trigger ALONE is refused at COMMIT by the deferred verifier, by name', () => {
+    expect(M['Z6_disable_sync']).toBeNull();
+    expect(String(M['Z6_control_trigger_only'])).toContain('installment.plan_fact_desynchronised');
+    expect(M['Z6_control_state']).toEqual({ flag: 'false', truth: 'false', plans: '0' });
+  });
+
+  it('TOGETHER THEY COMMIT a false flag beside a live active plan — the verifier is not a backstop while that policy is installed', () => {
+    expect(M['Z6_two_faults'], 'the composite was refused, so this claim has no subject').toBeNull();
+    expect(M['Z6_two_faults_state']).toEqual({ flag: 'false', truth: 'true', plans: '1' });
+  });
+
+  it('and it FAILS CLOSED one layer out: with every fault removed the READ refuses that receivable BY NAME rather than serving a number', () => {
+    expect(M['Z6_enable_sync']).toBeNull();
+    expect(M['Z6_state_all_restored']).toEqual({ flag: 'false', truth: 'true', plans: '1' });
+    expect(errOf(M['Z6_aging_all_restored'])).toContain('installment.plan_fact_unflagged');
+    expect(rows(M['Z6_aging_all_restored']).length).toBe(0);
+  });
+});
+
+describe('P4-S7 §F6 the two advertised sync refusals, measured as the principal that writes', () => {
+  it('a business change is refused 42501 by business_isolation_update, and NEVER installment.plan_fact_unwritable', () => {
+    expect(String(M['F6_business_change_migrator'])).toContain('business_isolation_update');
+    expect(String(M['F6_business_change_migrator'])).not.toContain('plan_fact_unwritable');
+  });
+
+  it('and not even the SUPERUSER reaches that raise — a foreign key answers first, so its reachability is OPEN and is claimed nowhere', () => {
+    expect(String(M['F6_business_change_superuser'])).toMatch(/installment_plans_invoice_fk|installments_plan_fk/);
+    expect(String(M['F6_business_change_superuser'])).not.toContain('plan_fact_unwritable');
+  });
+
+  it('the CROSS-TENANT plan is refused STRUCTURALLY in both constructions, and by neither the ROW_COUNT check nor its name', () => {
+    expect(String(M['F6_cross_tenant_divergent_ctx'])).toContain('installment_plans_tenant_fk');
+    expect(String(M['F6_cross_tenant_own_ctx'])).toContain('row-level security policy');
+    for (const k of ['F6_cross_tenant_divergent_ctx', 'F6_cross_tenant_own_ctx']) expect(String(M[k])).not.toContain('plan_fact_unwritable');
+  });
+
+  it('and every policy this file replaced is back, exactly one of it', () => {
+    expect(M['F6_teardown']).toBeNull();
+    expect(M['F6_teardown_state']).toEqual({ flag: 'false', truth: 'false', plans: '0' });
+    expect(M['F6_policies']).toBe('1');
+  });
+});
+
+/**
+ * EVERY `installment.*` NAME THIS SPECIFICATION RAISES FROM A FUNCTION BODY,
+ * discovered from the text rather than listed by hand. A plpgsql body in this
+ * file is delimited by `$fn$`, so the bodies are the odd segments of a split on
+ * that tag, and a `RAISE EXCEPTION 'installment.x'` inside one is reachable by
+ * whatever calls it. The `DO` block at the end of the file is NOT a function
+ * body and its 35 raises are therefore not in this set.
+ */
+const RAISED_FROM_A_BODY: readonly string[] = (() => {
+  const segments = SPEC.split('$fn$');
+  const found = new Set<string>();
+  for (let i = 1; i < segments.length; i += 2) {
+    for (const m of (segments[i] ?? '').matchAll(/RAISE EXCEPTION '(installment\.[a-z_]+)/g)) found.add(m[1] as string);
+  }
+  return [...found].sort();
+})();
+
+/**
+ * The names raised from a body and DELIBERATELY not registered, each with the
+ * reason the registry states. A name that is neither registered nor here fails
+ * the law below — which is the whole point: the next person to add a refusal to
+ * this specification has to say which it is.
+ */
+const DELIBERATELY_UNREGISTERED: Readonly<Record<string, string>> = {
+  'installment.plan_fact_unwritable':
+    'TL-P4-COORD-R46 F-6: both raises are pre-empted — business_isolation_update (42501) / installment_plans_invoice_fk (23503) for the business-change arm, installment_plans_tenant_fk or the plan relation WITH CHECK for the ROW_COUNT arm. Reachability OPEN; §F6 measures it.',
+};
+
+describe('P4-S7 §T the refusal names are in the TypeScript catalogue (TL-P4-COORD-R46, F-4)', () => {
+  it('NON-VACUITY: the specification really does raise these names from function bodies, and the migration-time ones are NOT in the set', () => {
+    expect(RAISED_FROM_A_BODY.length, 'no installment.* raise was found inside a function body — the discovery is broken').toBeGreaterThan(5);
+    expect(RAISED_FROM_A_BODY).not.toContain('installment.migration_end_state_invalid');
+    expect(RAISED_FROM_A_BODY).not.toContain('installment.authority_leak');
+    expect(RAISED_FROM_A_BODY).not.toContain('installment.derived_truth_stored');
+  });
+
+  it('EVERY one of them is either REGISTERED or deliberately excluded with a reason — no name falls through silently', () => {
+    const unaccounted = RAISED_FROM_A_BODY.filter((c) => !isInstallmentInternalInvariant(c) && !Object.hasOwn(DELIBERATELY_UNREGISTERED, c));
+    expect(unaccounted, 'a refusal this specification raises is in no catalogue and in no exclusion list').toEqual([]);
+  });
+
+  it('and the registry holds NOTHING the specification does not raise from a body', () => {
+    const phantom = INSTALLMENT_INTERNAL_INVARIANT_CODES.filter((c) => !RAISED_FROM_A_BODY.includes(c));
+    expect(phantom, 'the catalogue classifies a refusal nobody raises').toEqual([]);
+  });
+
+  it("the four names the round-10 ruling found NOWHERE in the TypeScript tree are all registered now", () => {
+    for (const c of [
+      'installment.plan_fact_blind',
+      'installment.plan_fact_unflagged',
+      'installment.schedule_incomplete',
+      'installment.plan_schedule_unreadable',
+    ]) {
+      expect(isInstallmentInternalInvariant(c), c).toBe(true);
+    }
+    // And F-4's own name, which is the refusal a plan writer meets.
+    expect(isInstallmentInternalInvariant('installment.plan_active_conflict')).toBe(true);
+  });
+
+  it('the recognizer takes the CODE out of the real message and nothing after it', () => {
+    // The messages are the ones measured above, not invented ones.
+    for (const raw of [
+      String(M['Z2_insert_active_all_blind']),
+      String(M['Z4_blinded_delete_cancelled']),
+      String(errOf(M['Z6_aging_all_restored'])),
+      String((M['F4_single_statement_moves'] as readonly MoveRow[])[0]?.moveError),
+      String(M['F1d_bump_with_trigger']),
+    ]) {
+      const code = parseDatabaseInstallmentInternalCode(new Error(raw));
+      expect(code, raw.slice(0, 60)).not.toBeNull();
+      expect(isInstallmentInternalInvariant(code as string), raw.slice(0, 60)).toBe(true);
+      expect(raw.startsWith(`${code as string}:`), 'the recognizer took more or less than the code').toBe(true);
+    }
+  });
+
+  it('and the MERCHANT recognizer does not match them, so none can be rendered as a business outcome', () => {
+    for (const c of INSTALLMENT_INTERNAL_INVARIANT_CODES) expect(parseDatabaseSellingCode(new Error(`${c}: something`)), c).toBeNull();
+  });
+
+  it('an UNREGISTERED installment name is not treated as an invariant — the registry is closed, not a prefix test', () => {
+    expect(parseDatabaseInstallmentInternalCode(new Error('installment.migration_end_state_invalid: x'))).toBe('installment.migration_end_state_invalid');
+    expect(isInstallmentInternalInvariant('installment.migration_end_state_invalid')).toBe(false);
+    expect(isInstallmentInternalInvariant('installment.plan_fact_unwritable')).toBe(false);
   });
 });
 

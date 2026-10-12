@@ -8,8 +8,10 @@ import { getContext } from '../infra/request-context';
 import type { Logger } from '../infra/logger';
 import { inventoryRefusal, parseDatabaseInventoryCode } from '../modules/inventory/inventory-errors';
 import {
+  isInstallmentInternalInvariant,
   isSellingCode,
   isSellingInternalInvariant,
+  parseDatabaseInstallmentInternalCode,
   parseDatabaseSellingCode,
   parseDatabaseSellingInternalCode,
   sellingRefusal,
@@ -164,6 +166,21 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       const invariant = parseDatabaseSellingInternalCode(exception);
       if (invariant !== null && isSellingInternalInvariant(invariant)) {
         this.logger.error({ requestId, invariant }, 'phase 4 selling invariant violated');
+        body('INTERNAL_ERROR', 'Internal error', HttpStatus.INTERNAL_SERVER_ERROR);
+        return;
+      }
+      //     AND THE P4-S7 INSTALLMENT INVARIANTS, on the same contract and for
+      //     the same reason (`TL-P4-COORD-R46`, F-4). Until this branch existed
+      //     every `installment.*` refusal fell to the `403 Access denied`
+      //     below — including the three that
+      //     `GET /v1/customers/:customerId/receivable/aging` can raise through
+      //     `customer_ar_aging`, a read with no authorization question in it,
+      //     so the answer named a cause that cannot apply. The registry is
+      //     explicit: the migration-time end-state codes of that same prefix
+      //     are NOT in it and keep the unaudited rendering.
+      const installment = parseDatabaseInstallmentInternalCode(exception);
+      if (installment !== null && isInstallmentInternalInvariant(installment)) {
+        this.logger.error({ requestId, invariant: installment }, 'phase 4 installment invariant violated');
         body('INTERNAL_ERROR', 'Internal error', HttpStatus.INTERNAL_SERVER_ERROR);
         return;
       }

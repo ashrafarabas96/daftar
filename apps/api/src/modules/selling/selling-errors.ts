@@ -568,6 +568,116 @@ const SELLING_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
 export const SELLING_INTERNAL_INVARIANT_CODES: readonly string[] = [...SELLING_INTERNAL_INVARIANTS];
 
 /**
+ * ── THE INTERNAL P4-S7 INSTALLMENT INVARIANTS (`installment.*`) ───────────
+ *
+ * The SECOND internal vocabulary this module recognizes, registered for the
+ * same reason as the first and found the same way (`TL-P4-COORD-R46`, F-4).
+ *
+ * `GET /v1/customers/:customerId/receivable/aging` calls
+ * `customer_ar_aging(...)` (`customer-reads.ts:244`), and that function calls
+ * `installment_plan_fact_assert`, which RAISES. The installment relations also
+ * carry four trigger routines that raise on a plan writer's own transaction.
+ * Until this commit NOT ONE of those codes appeared anywhere in `apps/` or in any
+ * package source tree, so every one of them fell through
+ * `GlobalExceptionFilter`'s last `P0001` branch and was answered
+ * **`403 FORBIDDEN / Access denied`** — a broken invariant rendered as an
+ * authorization denial, which is precisely the incident the `selling.*`
+ * registry above exists to record and not to repeat. The aging read is a GET
+ * with no authorization question in it at all, so the answer was not merely
+ * mis-typed: it named a cause that cannot apply.
+ *
+ * Registered the same way, and the reachability of every entry read from the
+ * RAISE and not from the name.
+ *
+ * INCLUDED — raised from a FUNCTION BODY, so a request can reach it:
+ *
+ *   - `installment.plan_fact_unreadable`, `installment.plan_fact_unflagged`
+ *     and `installment.plan_schedule_unreadable` —
+ *     `installment_plan_fact_assert(BIGINT, BIGINT, BIGINT)`, called at the
+ *     ROOT of `customer_ar_aging`. These three are reachable by the aging GET
+ *     today, and they are the three this slice was built to raise;
+ *   - `installment.schedule_incomplete` — `installment_schedule_verify()`,
+ *     three DEFERRED constraint triggers, fired at the COMMIT of a plan
+ *     writer's own transaction;
+ *   - `installment.plan_fact_blind` and
+ *     `installment.plan_fact_desynchronised` —
+ *     `installment_plan_fact_sync()` and
+ *     `installment_plan_fact_verify()`, the immediate writer and the deferred
+ *     verifier of `invoices.has_active_installment_plan`;
+ *   - `installment.plan_active_conflict` —
+ *     `installment_plan_active_exclusive()`, the BEFORE row trigger, and the
+ *     one direction of the sync's cross-check that cannot be caused by a
+ *     blinded read. THIS IS THE ENTRY F-4 ASKED FOR: the refusal a plan writer
+ *     actually meets when it tries to move `active` between two plans of one
+ *     invoice in a single statement, which it must then retry as two.
+ *
+ * EXCLUDED, and each for a stated reason rather than by omission:
+ *
+ *   - `installment.migration_end_state_invalid` (29 raises),
+ *     `installment.authority_leak` (5) and
+ *     `installment.derived_truth_stored` (1) — every one is inside the
+ *     specification's end-state `DO` block, outside every `CREATE FUNCTION`.
+ *     They fire while the migration runs, in a transaction no request is
+ *     attached to;
+ *   - `installment.plan_fact_unwritable` — raised from a function body, and
+ *     left out anyway, because `TL-P4-COORD-R46` F-6 measured BOTH of its
+ *     raises pre-empted: the business-change arm by
+ *     `business_isolation_update` (`42501`) for the writing principal and by
+ *     `installment_plans_invoice_fk` / `installments_plan_fk` (`23503`) for
+ *     the superuser, and the `ROW_COUNT` arm's advertised case — the
+ *     cross-tenant plan — by `installment_plans_tenant_fk` or by the plan
+ *     relation's own `WITH CHECK`. Whether any principal can reach it is OPEN,
+ *     and an entry here would be a contract for a refusal nobody has located.
+ *     It joins this set in the same commit as the measurement that reaches it.
+ *
+ * P4-AL-38 IS WHY THERE IS NO MERCHANT TABLE FOR THESE. The slice ships no
+ * plan writer and no plan command, so there is no request whose BUSINESS
+ * outcome any of these codes is. Three of them are reachable on a READ, and on
+ * a read the honest answer is 500 with the code in the log: the reader refused
+ * because the database's own fact disagrees with its own rows, which is a
+ * defect in the estate and never something the merchant did. When a later
+ * slice ships the plan writer, the codes a MERCHANT can cause — a schedule
+ * that does not sum, a second active plan — get merchant entries in
+ * `SELLING_STATUS` beside their internal ones, and that is the edit this
+ * explicitness exists to force.
+ */
+const INSTALLMENT_INTERNAL_CODE_RE = /^(installment\.[a-z_]+)\b/;
+
+const INSTALLMENT_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
+  'installment.plan_fact_unreadable',
+  'installment.plan_fact_unflagged',
+  'installment.plan_schedule_unreadable',
+  'installment.schedule_incomplete',
+  'installment.plan_fact_blind',
+  'installment.plan_fact_desynchronised',
+  'installment.plan_active_conflict',
+]);
+
+/** The installment invariant codes, in registry order — the list a contract test enumerates. */
+export const INSTALLMENT_INTERNAL_INVARIANT_CODES: readonly string[] = [...INSTALLMENT_INTERNAL_INVARIANTS];
+
+/**
+ * A RECOGNIZED internal `installment.*` invariant code — never a prefix test,
+ * for the reason the `selling.*` registry states: most `installment.*` strings
+ * in the tree are migration-time end-state assertions, and a wildcard would be
+ * a standing claim that they can reach a response.
+ */
+export function isInstallmentInternalInvariant(code: string): boolean {
+  return INSTALLMENT_INTERNAL_INVARIANTS.has(code);
+}
+
+/**
+ * The `installment.*` code a database refusal carries, or null. The code is all
+ * that is taken: these messages name a plan, an invoice, a business and a
+ * count, and they are written for an engineer reading a log.
+ */
+export function parseDatabaseInstallmentInternalCode(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : null;
+  if (message === null) return null;
+  return INSTALLMENT_INTERNAL_CODE_RE.exec(message)?.[1] ?? null;
+}
+
+/**
  * A RECOGNIZED internal `selling.*` invariant code — never a prefix test. A
  * `selling.*` string this registry does not hold is not treated as an
  * invariant at all: it keeps the unaudited historical `P0001` rendering,

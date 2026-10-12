@@ -2859,11 +2859,28 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // holds comments too. Sixth occurrence of this file's oldest lesson.
     expect(sketchCode).not.toMatch(/NOT EXISTS \(SELECT 1 FROM public\.installments/);
 
-    // THE RATCHET, so a future author cannot put the existence test back
-    // without the specification refusing to apply.
-    expect(code).toContain("p.prosrc LIKE '%visible_schedule%'");
-    expect(code).toContain("p.prosrc LIKE '%declared_total%'");
-    expect(code).toContain("p.prosrc NOT LIKE '%NOT EXISTS (SELECT 1 FROM public.installments%'");
+    // THE RATCHET, AND IT IS A PRESENCE-OF-STRING TEST AND SAYS SO
+    // (`TL-P4-COORD-R46`, F-1). It used to read `prosrc` raw, which the
+    // coordinator's structural ruling retired: «a `prosrc LIKE` test cannot
+    // establish a property of code. It establishes the presence of a string,
+    // and a comment is a string.» It now reads `prosrc` with its comments
+    // STRIPPED, which stops the measured defeat (the tokens placed in
+    // comments) and stops the measured FALSE REJECTION (a correct body
+    // mentioning a retired identifier in a comment) — and the behavioural
+    // proof of the property is the EXECUTION proof in
+    // `tests/integration/phase4-s7-installment-fact-db.test.ts`, not this.
+    //
+    // THE STRIPPER MAY NOT CONTAIN `--`, `/*` OR `*/` IN A LITERAL, and that
+    // is not a style note: `sqlSchemaOnly` above is line-based and
+    // quote-blind, so one `--` inside a string literal of the specification
+    // truncates the line, unbalances the quote, and makes `sqlCodeOnly`
+    // return newlines for the whole file. Measured, on this very law. The
+    // character classes are what keep it honest in both directions.
+    expect(code).toContain("c.code LIKE '%visible_schedule%'");
+    expect(code).toContain("c.code LIKE '%declared_total%'");
+    expect(code).toContain("c.code NOT LIKE '%NOT EXISTS (SELECT 1 FROM public.installments%'");
+    expect(code).toContain("'[-][-][^\\n]*'");
+    expect(code).toContain("'[/][*].*?[*][/]'");
 
     // AND THE COMPLETENESS THE TEST RESTS ON IS DECLARED, not assumed: every
     // hidden row moves the sum only because no instalment may be worth zero.
@@ -2903,10 +2920,25 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(syncBody).toMatch(/SET has_active_installment_plan = v_value/);
     expect(syncBody, 'the recomputation is still writing the fact').not.toMatch(/SET has_active_installment_plan = v_state/);
 
-    // THE RECOMPUTATION SURVIVES AS A CROSS-CHECK THAT MAY ONLY REFUSE.
+    // THE RECOMPUTATION SURVIVES AS A CROSS-CHECK THAT MAY ONLY REFUSE, AND
+    // ITS TWO DIRECTIONS NOW CARRY DIFFERENT NAMES (`TL-P4-COORD-R46`, F-4).
+    // One `IS DISTINCT FROM` under one name was a FALSE DIAGNOSIS in one of
+    // the two directions, because a blinded `EXISTS` can only read `false`:
+    // «derived false, recomputed true» is therefore never blindness and is
+    // always another active plan, so it raises `plan_active_conflict`, while
+    // «derived true, recomputed false» is the blind one and keeps
+    // `plan_fact_blind`. Asserted as the two branches, because a single
+    // branch is exactly what this law is now against.
     expect(syncBody).toMatch(/SELECT EXISTS \(SELECT 1 FROM public\.installment_plans p[\s\S]{0,200}INTO v_state;/);
-    expect(syncBody).toMatch(/IF v_state IS DISTINCT FROM v_value THEN/);
+    expect(syncBody, 'the two directions are back under one name').not.toMatch(/IF v_state IS DISTINCT FROM v_value THEN/);
+    expect(syncBody).toMatch(/IF v_state AND NOT v_value THEN/);
+    expect(syncBody).toMatch(/IF v_value AND NOT v_state THEN/);
     expect(code).toContain('installment.plan_fact_blind');
+    expect(code).toContain('installment.plan_active_conflict');
+    // AND THE EXCLUSION IS JUDGED BEFORE THE ROW IS WRITTEN, which is the half
+    // of F-4's repair that makes the OTHER heap order give the same name.
+    expect(code).toMatch(/CREATE TRIGGER installment_plans_active_exclusive\s*\n\s*BEFORE INSERT OR UPDATE ON installment_plans/);
+    expect(code).toContain('CREATE OR REPLACE FUNCTION installment_plan_active_exclusive() RETURNS TRIGGER');
 
     // AND THE WRITER DETECTS ITS OWN BLINDNESS (F1-c prime): it reads the row
     // it was HANDED, by primary key, on every INSERT and UPDATE. That row
@@ -2930,11 +2962,27 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(verifyBody).not.toContain('v_asserted');
     expect(verifyBody).toContain('installment.plan_fact_desynchronised');
 
-    // THE RATCHET for the write side.
-    expect(code).toContain("p.prosrc LIKE '%plan_fact_blind%'");
-    expect(code).toContain("p.prosrc LIKE '%NEW.status%'");
-    expect(code).toContain("p.prosrc LIKE '%OLD.status%'");
-    expect(code).toContain("p.prosrc NOT LIKE '%v_asserted%'");
+    // THE RATCHET for the write side, OVER COMMENT-STRIPPED CODE
+    // (`TL-P4-COORD-R46`, F-1). These four tests were the ones the round-10
+    // challenger satisfied with `NEW.status`, `OLD.status` and
+    // `plan_fact_blind` appearing only INSIDE COMMENTS of an otherwise round-9
+    // body — the law said OK and a blinded writer then committed a wrong fact
+    // — and they also false-rejected a correct body that merely mentioned
+    // `v_asserted` in a comment. Stripping the comments first closes both.
+    // It is still a presence-of-string test and the specification says so in
+    // terms; the law that actually establishes the property is the execution
+    // proof in `tests/integration/phase4-s7-installment-fact-db.test.ts`,
+    // whose §F1-b, §F1-c, §F1-c′ and §F5 plant the pre-repair bodies and
+    // require the refusal. A body with its tokens in comments IS round 9's
+    // body to that suite, because the suite RUNS it.
+    expect(code).toContain("c.code LIKE '%plan_fact_blind%'");
+    expect(code).toContain("c.code LIKE '%NEW.status%'");
+    expect(code).toContain("c.code LIKE '%OLD.status%'");
+    expect(code).toContain("c.code NOT LIKE '%v_asserted%'");
+    expect(code, 'a raw prosrc substring law is back on the write side').not.toContain("p.prosrc LIKE '%NEW.status%'");
+    // AND THE SPECIFICATION SAYS WHAT THE TEST IS, in the refusal a future
+    // applier reads, so the limit travels with the law.
+    expect(SPEC).toContain('This is a PRESENCE-OF-STRING test and nothing more');
 
     // AND THE ENUMERATION `R41` ORDERED IS IN THE FILE, with the one relation
     // whose invisibility is NOT observable named as such rather than given an
