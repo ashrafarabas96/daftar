@@ -135,7 +135,11 @@ function verify(dir: string): { readonly outcomes: Outcome[]; readonly manifest:
   const outcomes: Outcome[] = [];
   const manifestPath = join(dir, 'DELIVERY_MANIFEST.json');
   if (!existsSync(manifestPath)) {
-    outcomes.push({ route: 'R0 manifest', ok: false, detail: 'DELIVERY_MANIFEST.json is not in the extracted tree: the archive embeds no source identity at all' });
+    outcomes.push({
+      route: 'R0 manifest',
+      ok: false,
+      detail: 'DELIVERY_MANIFEST.json is not in the extracted tree: the archive embeds no source identity at all',
+    });
     return { outcomes, manifest: null };
   }
   let manifest: Manifest;
@@ -156,14 +160,22 @@ function verify(dir: string): { readonly outcomes: Outcome[]; readonly manifest:
     });
     return { outcomes, manifest };
   }
-  outcomes.push({ route: 'R0 manifest', ok: true, detail: `phase ${manifest.phase ?? '?'}, commit ${commit}, ${inv.length} inventory entries, fileCount ${manifest.fileCount ?? '?'}` });
+  outcomes.push({
+    route: 'R0 manifest',
+    ok: true,
+    detail: `phase ${manifest.phase ?? '?'}, commit ${commit}, ${inv.length} inventory entries, fileCount ${manifest.fileCount ?? '?'}`,
+  });
 
   // R1 — the manifest's treeHash, recomputed from the inventory it carries.
   const fromInventory = treeHashOf(inv);
   outcomes.push(
     fromInventory === stated
       ? { route: 'R1 manifest self-consistency', ok: true, detail: `treeHash recomputed from the inventory equals the stated one (${stated})` }
-      : { route: 'R1 manifest self-consistency', ok: false, detail: `the stated treeHash is ${stated} but the inventory it carries hashes to ${fromInventory}: the inventory and the treeHash disagree` },
+      : {
+          route: 'R1 manifest self-consistency',
+          ok: false,
+          detail: `the stated treeHash is ${stated} but the inventory it carries hashes to ${fromInventory}: the inventory and the treeHash disagree`,
+        },
   );
 
   // R2 — every file's digest, recomputed from the extracted bytes.
@@ -177,14 +189,21 @@ function verify(dir: string): { readonly outcomes: Outcome[]; readonly manifest:
       continue;
     }
     const buf = readFileSync(full);
-    if (sha256(buf) !== e.sha256) mismatched.push(`${e.path} (inventory ${e.sha256.slice(0, 12)}…, on disk ${sha256(buf).slice(0, 12)}…, ${e.bytes} → ${buf.byteLength} bytes)`);
+    if (sha256(buf) !== e.sha256)
+      mismatched.push(`${e.path} (inventory ${e.sha256.slice(0, 12)}…, on disk ${sha256(buf).slice(0, 12)}…, ${e.bytes} → ${buf.byteLength} bytes)`);
     onDisk.delete(e.path);
   }
   const extra = [...onDisk];
   const r2problems = [
-    ...(missing.length > 0 ? [`${missing.length} inventory file(s) absent from the extracted tree: ${missing.slice(0, 4).join(', ')}${missing.length > 4 ? ', …' : ''}`] : []),
-    ...(mismatched.length > 0 ? [`${mismatched.length} file(s) whose bytes do not match their digest: ${mismatched.slice(0, 3).join('; ')}${mismatched.length > 3 ? '; …' : ''}`] : []),
-    ...(extra.length > 0 ? [`${extra.length} file(s) in the tree that the inventory does not list: ${extra.slice(0, 4).join(', ')}${extra.length > 4 ? ', …' : ''}`] : []),
+    ...(missing.length > 0
+      ? [`${missing.length} inventory file(s) absent from the extracted tree: ${missing.slice(0, 4).join(', ')}${missing.length > 4 ? ', …' : ''}`]
+      : []),
+    ...(mismatched.length > 0
+      ? [`${mismatched.length} file(s) whose bytes do not match their digest: ${mismatched.slice(0, 3).join('; ')}${mismatched.length > 3 ? '; …' : ''}`]
+      : []),
+    ...(extra.length > 0
+      ? [`${extra.length} file(s) in the tree that the inventory does not list: ${extra.slice(0, 4).join(', ')}${extra.length > 4 ? ', …' : ''}`]
+      : []),
   ];
   outcomes.push(
     r2problems.length === 0
@@ -202,7 +221,11 @@ function verify(dir: string): { readonly outcomes: Outcome[]; readonly manifest:
     });
     return { outcomes, manifest };
   }
-  const listed = spawnSync('git', ['ls-tree', '-r', '--format=%(path)%x00%(objectname)%x00%(objecttype)', commit], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const listed = spawnSync('git', ['ls-tree', '-r', '--format=%(path)%x00%(objectname)%x00%(objecttype)', commit], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
   if (listed.status !== 0) {
     outcomes.push({ route: 'R3 git identity', ok: false, detail: `UNMEASURED: git ls-tree ${commit} failed: ${(listed.stderr ?? '').slice(0, 200)}` });
     return { outcomes, manifest };
@@ -393,7 +416,9 @@ function main(): number {
             console.log(`     refused by ${r.route}: ${(refusal?.detail ?? '').slice(0, 200)}`);
           } else {
             redOk = false;
-            console.log(`     ${r.route} said: ${refusal === undefined ? '(that route did not run)' : refusal.ok ? 'PASS — it did not notice' : `FAIL, but for another reason: ${refusal.detail.slice(0, 200)}`}`);
+            console.log(
+              `     ${r.route} said: ${refusal === undefined ? '(that route did not run)' : refusal.ok ? 'PASS — it did not notice' : `FAIL, but for another reason: ${refusal.detail.slice(0, 200)}`}`,
+            );
           }
         } catch (e) {
           redOk = false;
@@ -406,7 +431,9 @@ function main(): number {
 
     console.log('');
     console.log('-'.repeat(78));
-    console.log(`identity: ${green ? 'ESTABLISHED by all three routes' : 'NOT ESTABLISHED'}${prove ? `; red proofs ${redOk ? 'all RED as required' : 'INCOMPLETE'}` : '; red proofs not run (pass --prove)'}`);
+    console.log(
+      `identity: ${green ? 'ESTABLISHED by all three routes' : 'NOT ESTABLISHED'}${prove ? `; red proofs ${redOk ? 'all RED as required' : 'INCOMPLETE'}` : '; red proofs not run (pass --prove)'}`,
+    );
     const commit = manifest?.sourceCommit ?? '(unknown)';
     const onBranch = spawnSync('git', ['branch', '--contains', commit, '--format=%(refname:short)'], { cwd: ROOT, encoding: 'utf8' });
     const branches = onBranch.status === 0 ? onBranch.stdout.trim().split('\n').filter(Boolean) : [];

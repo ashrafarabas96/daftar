@@ -60,9 +60,14 @@ interface Plant {
   readonly plant: (dir: string) => void;
   /** null when the gate behaved as required. */
   readonly expect: (d: ReturnType<typeof direction4>) => string | null;
+  /** Set for a §3 plant: this case is measured on DIRECTION 5 instead. */
+  readonly viaDirection5?: (d: ReturnType<typeof direction5>) => string | null;
 }
 
-const reports = (dir: string): string[] => readdirSync(dir).filter((f) => /^P15-CHALLENGE-[0-9a-f]{7,40}\.md$/.test(f)).sort();
+const reports = (dir: string): string[] =>
+  readdirSync(dir)
+    .filter((f) => /^P15-CHALLENGE-[0-9a-f]{7,40}\.md$/.test(f))
+    .sort();
 
 /**
  * Run the gate's own sanctioned regeneration against a copy. `--rewrite` adds
@@ -78,6 +83,21 @@ function rewrite(dir: string): void {
   });
   if (r.error !== undefined || (r.status !== 0 && r.status !== 1))
     throw new Error(`--rewrite did not run: exit ${String(r.status)}${r.error === undefined ? '' : ` (${String(r.error)})`}`);
+}
+
+/** The gate's DIRECTION 5 block, read the same way and with the same refusal. */
+function direction5(dir: string): { readonly text: string; readonly wrong: number; readonly ran: boolean } {
+  const r = spawnSync('npx', ['tsx', join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts'), `--dir=${dir}`], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  if (r.error !== undefined || (r.status !== 0 && r.status !== 1))
+    return { text: `${out.slice(-500)}\n[harness] the gate did not run: exit ${String(r.status)}`, wrong: 0, ran: false };
+  if (!out.includes('DIRECTION 5')) return { text: out.slice(-600), wrong: 0, ran: false };
+  const block = out.slice(out.indexOf('DIRECTION 5'));
+  return { text: block, wrong: (block.match(/WRONG /g) ?? []).length, ran: true };
 }
 
 const PLANTS: readonly Plant[] = [
@@ -153,6 +173,44 @@ const PLANTS: readonly Plant[] = [
           ? null
           : 'after its own --rewrite the gate counted the planted report as NAMED, because the digest row it had just written looked like a record. An index proves a file exists, which is the one thing never in doubt',
   },
+  {
+    id: 'M6',
+    what: 'a line count in §3 carried forward past the commit that changed the file — the challenger\u2019s round-8 B4-1, as a case',
+    plant: (dir) => {
+      const f = join(dir, MANIFEST);
+      const s = readFileSync(f, 'utf8');
+      const m = /^\| `(scripts\/phase15\/[^`]+)` \| (\d+) \|/m.exec(s);
+      if (m === null) throw new Error('no repo-file row found in \u00a73 to age');
+      const broken = s.replace(m[0], `| \`${m[1] as string}\` | ${Number(m[2]) + 7} |`);
+      if (broken === s) throw new Error('the row could not be changed, so this plant proves nothing');
+      writeFileSync(f, broken);
+    },
+    expect: () => null,
+    viaDirection5: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.wrong > 0
+          ? null
+          : 'a line count in \u00a73 disagreed with git at the declared SHA and the gate passed. 24 of 25 rows being right is not a check',
+  },
+  {
+    id: 'M7',
+    what: 'a §3 row for a file that does not exist at the declared SHA — the absence half',
+    plant: (dir) => {
+      const f = join(dir, MANIFEST);
+      const s = readFileSync(f, 'utf8');
+      const m = /^\| `(scripts\/phase15\/[^`]+)` \| (\d+) \|.*$/m.exec(s);
+      if (m === null) throw new Error('no repo-file row found in \u00a73 to add beside');
+      writeFileSync(f, s.replace(m[0], `${m[0]}\n| \`scripts/phase15/never-existed.ts\` | 123 | a file no commit carries |`));
+    },
+    expect: () => null,
+    viaDirection5: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.wrong > 0
+          ? null
+          : 'the table named a file the commit does not have and the gate passed \u2014 an index of what the branch carries must not invent a row',
+  },
 ];
 
 function main(): number {
@@ -164,20 +222,37 @@ function main(): number {
 
   const base = mkdtempSync(join(tmpdir(), 'p15-mf-base-'));
   let baseline: ReturnType<typeof direction4>;
+  let baseline5: ReturnType<typeof direction5>;
   try {
     cpSync(PACK, join(base, 'pack'), { recursive: true });
     baseline = direction4(join(base, 'pack'));
+    baseline5 = direction5(join(base, 'pack'));
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+  // BOTH directions have to be clean on an untouched copy, or a later red
+  // cannot be attributed to the plant that was made for it.
+  if (!baseline5.ran || baseline5.wrong > 0) {
+    console.log(
+      `  M0 BASELINE  direction 5 on an untouched copy: FAIL — ${baseline5.ran ? `${baseline5.wrong} wrong row(s) already` : 'the gate did not run'}`,
+    );
+    console.log('  Everything below is INVALID. Run `verify:handoff-manifest -- --rewrite` to recount §3');
+    console.log('  from git at the declared SHA, then re-run this proof.');
+    console.log(baseline5.text);
+    return 1;
+  }
   if (!baseline.ran || baseline.contradictions > 0) {
-    console.log(`  M0 BASELINE  an untouched copy is clean: FAIL — ${baseline.ran ? `${baseline.contradictions} contradiction(s) already` : 'the gate did not run'}`);
+    console.log(
+      `  M0 BASELINE  an untouched copy is clean: FAIL — ${baseline.ran ? `${baseline.contradictions} contradiction(s) already` : 'the gate did not run'}`,
+    );
     console.log('  Everything below is INVALID: a baseline that is already red cannot attribute a');
     console.log('  later red to a planted defect. Fix the manifest first, then re-run this proof.');
     console.log(baseline.text);
     return 1;
   }
-  console.log('  M0 BASELINE  an untouched copy is clean: OK (direction 4 reports no contradiction)');
+  console.log(
+    `  M0 BASELINE  an untouched copy is clean: OK (direction 4 reports no contradiction, direction 5 re-measured ${/(\d+) repo-file row/.exec(baseline5.text)?.[1] ?? '0'} row(s) from git)`,
+  );
 
   let failures = 0;
   for (const p of PLANTS) {
@@ -186,8 +261,7 @@ function main(): number {
       cpSync(PACK, join(tmp, 'pack'), { recursive: true });
       const dir = join(tmp, 'pack');
       p.plant(dir);
-      const d = direction4(dir);
-      const problem = p.expect(d);
+      const problem = p.viaDirection5 === undefined ? p.expect(direction4(dir)) : p.viaDirection5(direction5(dir));
       const verdict = p.id === 'M4' ? 'HELD GREEN ' : 'RED';
       if (problem === null) console.log(`  ${p.id} ${verdict.padEnd(10)}${p.what}`);
       else {

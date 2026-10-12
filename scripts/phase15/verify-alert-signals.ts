@@ -101,8 +101,18 @@ interface Rule {
  * nobody noticed is the thing being prevented.
  */
 const SCHEMA_KEYS = [
-  'id', 'title', 'signal', 'signal_source', 'condition', 'for', 'severity',
-  'slo_id', 'runbook_step', 'false_positive_notes', 'exists_today', 'resolution',
+  'id',
+  'title',
+  'signal',
+  'signal_source',
+  'condition',
+  'for',
+  'severity',
+  'slo_id',
+  'runbook_step',
+  'false_positive_notes',
+  'exists_today',
+  'resolution',
 ] as const;
 
 /**
@@ -150,9 +160,17 @@ const NESTED_SCHEMA_KEYS: Readonly<Record<string, readonly string[]>> = {
  * own contents.
  */
 const DOC_KEYS = [
-  'generatedAt', 'status', 'repository', 'designDocument', 'sloCatalogue',
-  'notPromotedMeaning', 'bindingRules', 'severityContract', 'labelSafety',
-  'rules', 'resolutionContract',
+  'generatedAt',
+  'status',
+  'repository',
+  'designDocument',
+  'sloCatalogue',
+  'notPromotedMeaning',
+  'bindingRules',
+  'severityContract',
+  'labelSafety',
+  'rules',
+  'resolutionContract',
 ] as const;
 
 /** Declared sub-schemas at the document level, by the path that reaches them. */
@@ -249,7 +267,33 @@ function keyPaths(value: unknown, prefix: string): { readonly path: string; read
  * as PROBABLE ROUTING rather than merely unrecognised, which tells a reader
  * whether they are looking at a schema addition or at a receiver appearing.
  */
-const ROUTING_WORDS = ['receiver', 'route', 'routing', 'destination', 'notify', 'notification', 'target', 'channel', 'recipient', 'webhook', 'pagerduty', 'opsgenie', 'email', 'mail', 'sink', 'oncall', 'on_call', 'page', 'alert_to', 'escalat', 'slack', 'sms', 'phone', 'subscriber', 'audience'] as const;
+const ROUTING_WORDS = [
+  'receiver',
+  'route',
+  'routing',
+  'destination',
+  'notify',
+  'notification',
+  'target',
+  'channel',
+  'recipient',
+  'webhook',
+  'pagerduty',
+  'opsgenie',
+  'email',
+  'mail',
+  'sink',
+  'oncall',
+  'on_call',
+  'page',
+  'alert_to',
+  'escalat',
+  'slack',
+  'sms',
+  'phone',
+  'subscriber',
+  'audience',
+] as const;
 
 /**
  * DERIVE a rule's receiver from the rule object. Never a constant.
@@ -576,7 +620,17 @@ function exporter(): { readonly present: boolean; readonly evidence: string } {
   for (const { pattern, what } of codeSignals) {
     const r = spawnSync(
       'grep',
-      ['-rn', '--include=*.ts', '--exclude-dir=node_modules', '--exclude-dir=dist', '--exclude-dir=.next', '-F', pattern, join(ROOT, 'apps'), join(ROOT, 'packages')],
+      [
+        '-rn',
+        '--include=*.ts',
+        '--exclude-dir=node_modules',
+        '--exclude-dir=dist',
+        '--exclude-dir=.next',
+        '-F',
+        pattern,
+        join(ROOT, 'apps'),
+        join(ROOT, 'packages'),
+      ],
       { encoding: 'utf8' },
     );
     // grep exits 0 for a match, 1 for none, and >=2 for a FAILED SEARCH.
@@ -599,7 +653,10 @@ function exporter(): { readonly present: boolean; readonly evidence: string } {
       found.push(`${what}: ${rel.slice(0, 140)}`);
     }
   }
-  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
   for (const d of ['prom-client', '@opentelemetry/api', '@opentelemetry/sdk-node', 'hot-shots', 'statsd-client']) {
     if (pkg.dependencies?.[d] ?? pkg.devDependencies?.[d]) found.push(`package.json declares ${d}`);
   }
@@ -678,13 +735,19 @@ function main(): number {
     const claimsReserved = /no call site|NAME reserved/i.test(r.signal_source);
     const claimsUnmeasured = /^UNMEASURED/.test(r.signal_source) || /UNMEASURED as a runtime signal/.test(r.signal_source);
 
-    const derived = site !== undefined ? `EMITTED at ${site}` : isDeclared ? `DECLARED at ${METRICS}:${names.get(r.signal) ?? 0}, NOT EMITTED` : 'NOT A DECLARED METRIC OF THIS APPLICATION';
+    const derived =
+      site !== undefined
+        ? `EMITTED at ${site}`
+        : isDeclared
+          ? `DECLARED at ${METRICS}:${names.get(r.signal) ?? 0}, NOT EMITTED`
+          : 'NOT A DECLARED METRIC OF THIS APPLICATION';
 
     const mismatches: string[] = [];
     if (claimsEmitted && site === undefined) mismatches.push('its signal_source says "EMITTED TODAY" and no emit site exists');
     if (claimsReserved && site !== undefined) mismatches.push(`its signal_source says the name is reserved with no call site, but one exists at ${site}`);
     if (claimsUnmeasured && site !== undefined) mismatches.push(`its signal_source says UNMEASURED, but the signal is emitted at ${site}`);
-    if (claimsUnmeasured && isDeclared && !claimsReserved) mismatches.push(`its signal_source says UNMEASURED, but the name IS declared at ${METRICS}:${names.get(r.signal) ?? 0}`);
+    if (claimsUnmeasured && isDeclared && !claimsReserved)
+      mismatches.push(`its signal_source says UNMEASURED, but the name IS declared at ${METRICS}:${names.get(r.signal) ?? 0}`);
     // exists_today is a claim about being able to FIRE, which needs an exporter.
     if (r.exists_today && !exp.present) mismatches.push('exists_today is true while no exporter or scrape surface exists, so the rule could not fire');
     if (!r.exists_today && exp.present && site !== undefined) {
@@ -705,7 +768,9 @@ function main(): number {
   console.log('-'.repeat(78));
   const emittedRules = rules.filter((r) => sites.has(r.signal));
   console.log(`${rules.length} rules: ${rules.length - stale} with claims matching the tree, ${stale} stale`);
-  console.log(`${emittedRules.length} of ${rules.length} rules name a signal that is emitted today${exp.present ? '' : ', and none can fire while there is no exporter'}`);
+  console.log(
+    `${emittedRules.length} of ${rules.length} rules name a signal that is emitted today${exp.present ? '' : ', and none can fire while there is no exporter'}`,
+  );
   const resolutionProblems: string[] = [];
   const receivers = new Map<string, string>();
 
@@ -720,11 +785,13 @@ function main(): number {
   console.log(`${'ALERT'.padEnd(14)} ${'SIGNAL'.padEnd(42)} ${'EMIT SITE'.padEnd(18)} ${'RECEIVER'.padEnd(12)} FIRE / RESOLUTION`);
   for (const r of rules) {
     const site = sites.get(r.signal);
-    const emit = site !== undefined ? site.split('/').pop()?.slice(0, 18) ?? 'yes' : names.has(r.signal) ? 'RESERVED ONLY' : 'none in tree';
+    const emit = site !== undefined ? (site.split('/').pop()?.slice(0, 18) ?? 'yes') : names.has(r.signal) ? 'RESERVED ONLY' : 'none in tree';
     const recv = receiverOf(r);
     const fires = site !== undefined && exp.present ? 'could fire' : 'cannot fire';
     receivers.set(r.id, recv.value);
-    console.log(`${r.id.replace('P15-ALERT-', 'A-').padEnd(14)} ${r.signal.slice(0, 42).padEnd(42)} ${emit.padEnd(18)} ${recv.value.slice(0, 12).padEnd(12)} ${fires}`);
+    console.log(
+      `${r.id.replace('P15-ALERT-', 'A-').padEnd(14)} ${r.signal.slice(0, 42).padEnd(42)} ${emit.padEnd(18)} ${recv.value.slice(0, 12).padEnd(12)} ${fires}`,
+    );
   }
   console.log('');
 
@@ -747,7 +814,9 @@ function main(): number {
   console.log(`  the key set actually present on the ${rules.length} rules, read from the file:`);
   console.log(`    ${keyUnion.join(', ')}`);
   console.log(`  keys the rule SCHEMA accounts for: ${SCHEMA_KEYS.join(', ')}`);
-  console.log(`  keys it does NOT account for: ${unexpected.length === 0 ? 'NONE' : unexpected.map((u) => `${u.key} (on ${u.rule}${u.routing ? ', PROBABLE ROUTING' : ''})`).join('; ')}`);
+  console.log(
+    `  keys it does NOT account for: ${unexpected.length === 0 ? 'NONE' : unexpected.map((u) => `${u.key} (on ${u.rule}${u.routing ? ', PROBABLE ROUTING' : ''})`).join('; ')}`,
+  );
   console.log(`  rules whose receiver is therefore UNSET: ${unset} of ${rules.length}`);
   console.log('');
   console.log('  THE DOCUMENT AROUND THE RULES (challenge round 6, H-01)');
@@ -782,8 +851,12 @@ function main(): number {
   // sound checks, one false conclusion, reachable by no single-check mutation.
   const inFile = destinationsInRuleFile(rulesBytes.toString('utf8'));
   destinations.push(...inFile);
-  console.log(`  destination configuration in the repository: ${destinations.length === 0 ? `NONE FOUND \u2014 ${DESTINATION_PATTERNS.length} patterns searched over the TRACKED tree (${DESTINATION_PATTERNS.map((d) => d.what).join(', ')}), excluding only the ${APPARATUS.length} apparatus file(s) that contain destination literals by necessity (${APPARATUS.join(', ')})` : destinations.join('; ')}`);
-  console.log(`  destination patterns over the RULE FILE'S OWN TEXT (${RULES}): ${inFile.length === 0 ? 'NONE FOUND' : `${inFile.length} match(es) — ${inFile.join('; ')}`}`);
+  console.log(
+    `  destination configuration in the repository: ${destinations.length === 0 ? `NONE FOUND \u2014 ${DESTINATION_PATTERNS.length} patterns searched over the TRACKED tree (${DESTINATION_PATTERNS.map((d) => d.what).join(', ')}), excluding only the ${APPARATUS.length} apparatus file(s) that contain destination literals by necessity (${APPARATUS.join(', ')})` : destinations.join('; ')}`,
+  );
+  console.log(
+    `  destination patterns over the RULE FILE'S OWN TEXT (${RULES}): ${inFile.length === 0 ? 'NONE FOUND' : `${inFile.length} match(es) — ${inFile.join('; ')}`}`,
+  );
   console.log('    This subject is searched separately because neither other check can reach it: the');
   console.log('    tree grep reads TRACKED files and the rule file is not in Git, and the key walk reads');
   console.log('    key PATHS, so a destination written as the VALUE of an accounted key — or in a block');
@@ -826,7 +899,6 @@ function main(): number {
       `the receiver claim is STALE or UNVERIFIABLE: ${docUnaccounted.length} key path(s) BESIDE the rules that the document schema does not account for (${docUnaccounted.map((k) => k.path).join(', ') || 'none'}), ${unexpected.length} key(s) the rule schema does not account for (${unexpected.map((u) => `${u.rule}.${u.key}`).join(', ')})${routing.length > 0 ? ` \u2014 ${routing.length} of them named like routing` : ''}, and ${destinations.length} destination pattern(s) match the tree. B-15 says no receiver exists anywhere; an unclassified key cannot be assumed to be nothing, so classify each one in SCHEMA_KEYS or record the receiver before any handoff repeats that claim.`,
     );
   }
-
 
   /* ── the resolution model, re-derived rather than trusted ─────────────── */
   console.log('RESOLUTION IS NOW MODELLED — and this section CHECKS the model instead of reading it.');

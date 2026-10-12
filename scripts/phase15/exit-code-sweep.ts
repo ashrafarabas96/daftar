@@ -88,9 +88,7 @@ function apparatusIsInert(dir: string): string | null {
   // withdrew the exemption on the strength of a string — a check fooled by the
   // very text it exists to tell apart from code.
   const valueImport = /^import\s*\{[^}]*\bspawnSync\b[^}]*\}\s*from\s*'node:child_process'/m.test(text);
-  return valueImport
-    ? `${APPARATUS} imports spawnSync as a VALUE, so it can run commands and its exemption is withdrawn`
-    : null;
+  return valueImport ? `${APPARATUS} imports spawnSync as a VALUE, so it can run commands and its exemption is withdrawn` : null;
 }
 
 interface Wrapper {
@@ -113,8 +111,7 @@ interface Site {
 
 const sources = (dir: string): ReadonlyMap<string, readonly string[]> => {
   const out = new Map<string, readonly string[]>();
-  for (const name of readdirSync(dir).sort())
-    if (name.endsWith('.ts')) out.set(name, readFileSync(join(dir, name), 'utf8').split('\n'));
+  for (const name of readdirSync(dir).sort()) if (name.endsWith('.ts')) out.set(name, readFileSync(join(dir, name), 'utf8').split('\n'));
   return out;
 };
 
@@ -242,7 +239,8 @@ function decideAt(
   const line = lines[i] ?? '';
   const window = lines.slice(i, i + WINDOW).join('\n');
   const near = lines.slice(i, i + 3).join('\n');
-  const bound = new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*(?::[^=]+)?=\\s*(?:await\\s+)?${producer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\(`).exec(line)?.[1] ?? null;
+  const bound =
+    new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*(?::[^=]+)?=\\s*(?:await\\s+)?${producer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\(`).exec(line)?.[1] ?? null;
   if (bound !== null) {
     const own = statusDecision(bound, window);
     if (own !== null) return { kind: 'read', how: `${bound}: ${own}` };
@@ -347,13 +345,25 @@ function sweep(dir: string): SweepResult {
     for (const [key, sites] of sitesOf) {
       if (safe.has(key) || sites.length === 0) continue;
       const [, token] = key.split('::') as [string, string];
-      if (sites.every((s) => s.d?.kind === 'read' || (s.d?.kind === 'defer' && (s.d.to !== token || s.file !== key.split('::')[0]) && safe.has(keyOf(s.file, s.d.to))))) safe.add(key);
+      if (
+        sites.every(
+          (s) => s.d?.kind === 'read' || (s.d?.kind === 'defer' && (s.d.to !== token || s.file !== key.split('::')[0]) && safe.has(keyOf(s.file, s.d.to))),
+        )
+      )
+        safe.add(key);
     }
 
   const unchecked: Site[] = [];
   const read: Site[] = [];
   for (const r of raws) {
-    const site = (how: string | null, note?: string): Site => ({ file: r.file, line: r.line + 1, text: note === undefined ? r.text : `${r.text}   — ${note}`, bound: null, via: null, how });
+    const site = (how: string | null, note?: string): Site => ({
+      file: r.file,
+      line: r.line + 1,
+      text: note === undefined ? r.text : `${r.text}   — ${note}`,
+      bound: null,
+      via: null,
+      how,
+    });
     if (r.d === null) unchecked.push(site(null));
     else if (r.d.kind === 'read') read.push(site(r.d.how));
     else if (safe.has(keyOf(r.file, r.d.to))) read.push(site(`forwarded by ${r.d.to}(), every call site measured`));
@@ -365,14 +375,20 @@ function sweep(dir: string): SweepResult {
           `forwarded by ${r.d.to}(), and ${bad.length === 0 ? 'nothing in the pack reads what it returns' : `${bad.length} call site(s) discard the code: ${bad.map((s) => `${s.file}:${s.line + 1}`).join(', ')}`}`,
         ),
       );
-      for (const s of bad) unchecked.push({ file: s.file, line: s.line + 1, text: `${s.text}   — discards the code ${r.d.to}() returns`, bound: null, via: null, how: null });
+      for (const s of bad)
+        unchecked.push({ file: s.file, line: s.line + 1, text: `${s.text}   — discards the code ${r.d.to}() returns`, bound: null, via: null, how: null });
     }
   }
   if (apparatusProblem !== null) unchecked.push({ file: APPARATUS, line: 0, text: apparatusProblem, bound: null, via: null, how: null });
   const forwarders: Forwarder[] = [...sitesOf].map(([key, sites]) => ({
     token: `${key.split('::')[1]} (${key.split('::')[0]})`,
     safe: safe.has(key),
-    sites: sites.map((s) => ({ file: s.file, line: s.line + 1, text: s.text, how: s.d === null ? null : s.d.kind === 'read' ? s.d.how : `deferred to ${s.d.to}()` })),
+    sites: sites.map((s) => ({
+      file: s.file,
+      line: s.line + 1,
+      text: s.text,
+      how: s.d === null ? null : s.d.kind === 'read' ? s.d.how : `deferred to ${s.d.to}()`,
+    })),
   }));
   return { unchecked, read, wrappers, forwarders };
 }
@@ -423,7 +439,15 @@ const PLANTS: readonly Plant[] = [
     what: 'a bound spawn whose status is never read',
     plant: (dir) => {
       const f = join(dir, 'planted-x1.ts');
-      writeFileSync(f, ["import { spawnSync } from 'node:child_process';", "const r = spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' });", 'export const clean = (r.stdout ?? "").trim().length === 0;', ''].join('\n'));
+      writeFileSync(
+        f,
+        [
+          "import { spawnSync } from 'node:child_process';",
+          "const r = spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' });",
+          'export const clean = (r.stdout ?? "").trim().length === 0;',
+          '',
+        ].join('\n'),
+      );
     },
     expect: (r) => (r.unchecked.some((s) => s.file === 'planted-x1.ts') ? null : 'the sweep did not report a bound spawn whose exit code is never read'),
   },
@@ -455,7 +479,7 @@ const PLANTS: readonly Plant[] = [
   },
   {
     id: 'X3',
-    what: "a real wrapper stops reading the code — every call it covers must fall back to unchecked",
+    what: 'a real wrapper stops reading the code — every call it covers must fall back to unchecked',
     plant: (dir) => {
       const f = join(dir, 'verify-alert-signals.ts');
       const s = readFileSync(f, 'utf8');
@@ -483,7 +507,8 @@ const PLANTS: readonly Plant[] = [
       if (broken === s) throw new Error('X4 could not plant: the DR proof no longer reads provenance through gitRead()');
       writeFileSync(f, broken);
     },
-    expect: (r) => (r.unchecked.some((s) => s.file === 'backup-restore-proof.ts') ? null : 'the reintroduced discarded-status provenance read was not reported'),
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'backup-restore-proof.ts') ? null : 'the reintroduced discarded-status provenance read was not reported',
   },
   {
     id: 'X5',
@@ -492,8 +517,8 @@ const PLANTS: readonly Plant[] = [
       const f = join(dir, 'pg-version-matrix.ts');
       const s = readFileSync(f, 'utf8');
       const broken = s
-        .replace('  if (r.status === 0) return (r.stdout ?? \'\').toString();', '  if (false) return (r.stdout ?? \'\').toString();')
-        .replace('  if (allowNoMatch && r.status === 1) return (r.stdout ?? \'\').toString();', '  if (allowNoMatch) return (r.stdout ?? \'\').toString();');
+        .replace("  if (r.status === 0) return (r.stdout ?? '').toString();", "  if (false) return (r.stdout ?? '').toString();")
+        .replace("  if (allowNoMatch && r.status === 1) return (r.stdout ?? '').toString();", "  if (allowNoMatch) return (r.stdout ?? '').toString();");
       if (broken === s) throw new Error('X5 could not plant: outOf() no longer tests r.status in the shape this proof edits');
       writeFileSync(f, broken);
     },
@@ -510,7 +535,10 @@ const PLANTS: readonly Plant[] = [
     plant: (dir) => {
       const f = join(dir, 'pg-cluster.ts');
       const s = readFileSync(f, 'utf8');
-      const broken = s.replace('  if (r.status !== 0) throw new ClusterError(`${what}: exit ${r.status}`', '  if (false) throw new ClusterError(`${what}: exit ${r.status}`');
+      const broken = s.replace(
+        '  if (r.status !== 0) throw new ClusterError(`${what}: exit ${r.status}`',
+        '  if (false) throw new ClusterError(`${what}: exit ${r.status}`',
+      );
       if (broken === s) throw new Error('X6 could not plant: must() no longer compares r.status in the shape this proof edits');
       writeFileSync(f, broken);
     },
@@ -519,7 +547,7 @@ const PLANTS: readonly Plant[] = [
         ? 'must() no longer compares the status yet still qualified — the exit code is named only in its message'
         : r.unchecked.some((s) => s.file === 'pg-cluster.ts')
           ? null
-          : 'nothing was reported after the only wrapper deciding pg-cluster\'s exit codes stopped deciding',
+          : "nothing was reported after the only wrapper deciding pg-cluster's exit codes stopped deciding",
   },
   {
     id: 'X7',
@@ -535,7 +563,10 @@ const PLANTS: readonly Plant[] = [
         ].join('\n'),
       );
     },
-    expect: (r) => (r.unchecked.some((s) => s.file === 'planted-x7.ts') ? null : 'an arrow-bodied call whose exit code is discarded was exempted, which is the blanket `=>` exemption returning'),
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'planted-x7.ts')
+        ? null
+        : 'an arrow-bodied call whose exit code is discarded was exempted, which is the blanket `=>` exemption returning',
   },
   {
     id: 'X8',
@@ -546,7 +577,7 @@ const PLANTS: readonly Plant[] = [
         f,
         [
           "import { spawnSync } from 'node:child_process';",
-          "function raw(args: readonly string[]): ReturnType<typeof spawnSync> {",
+          'function raw(args: readonly string[]): ReturnType<typeof spawnSync> {',
           "  return spawnSync('git', [...args], { encoding: 'utf8' });",
           '}',
           "export const dirty = (raw(['status', '--porcelain']).stdout ?? '').trim().length > 0;",
@@ -571,7 +602,7 @@ const PLANTS: readonly Plant[] = [
         f,
         [
           "import { spawnSync } from 'node:child_process';",
-          "function raw2(args: readonly string[]): ReturnType<typeof spawnSync> {",
+          'function raw2(args: readonly string[]): ReturnType<typeof spawnSync> {',
           "  return spawnSync('git', [...args], { encoding: 'utf8' });",
           '}',
           "const r = raw2(['status', '--porcelain']);",
@@ -599,7 +630,9 @@ function prove(): number {
     console.log('  a later red to a planted defect.');
     return 1;
   }
-  console.log(`  X0 BASELINE  the untouched pack is clean: OK (0 unchecked, ${base.read.length} read, ${base.wrappers.length} measured wrapper(s), ${base.forwarders.filter((f) => f.safe).length} of ${base.forwarders.length} forwarder(s) fully measured)`);
+  console.log(
+    `  X0 BASELINE  the untouched pack is clean: OK (0 unchecked, ${base.read.length} read, ${base.wrappers.length} measured wrapper(s), ${base.forwarders.filter((f) => f.safe).length} of ${base.forwarders.length} forwarder(s) fully measured)`,
+  );
   let failures = 0;
   for (const p of PLANTS) {
     const dir = mkdtempSync(join(tmpdir(), 'p15-sweep-'));

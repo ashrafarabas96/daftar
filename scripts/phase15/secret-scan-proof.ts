@@ -165,7 +165,10 @@ const CASES: readonly Case[] = [
       '0-file arm cannot be what speaks, and the floor must',
     plant: (clone) => {
       const keep = new Set(['package.json', 'tsconfig.json', 'README.md']);
-      const all = sh(clone, 'git', ['ls-files']).out.trim().split('\n').filter((f) => f.length > 0);
+      const all = sh(clone, 'git', ['ls-files'])
+        .out.trim()
+        .split('\n')
+        .filter((f) => f.length > 0);
       const drop = all.filter((f) => !keep.has(f));
       if (all.length - drop.length === 0) throw new Error('nothing would be left, so this would be the S5 case rather than the floor case');
       // argv has a length limit, so the removal goes in through stdin.
@@ -196,7 +199,10 @@ const CASES: readonly Case[] = [
     plant: (clone) => {
       const f = join(clone, 'scripts/phase3-secret-scan.ts');
       const s = readFileSync(f, 'utf8');
-      const broken = s.replace('{ cwd: copy, encoding: \'utf8\', env, maxBuffer: 64 * 1024 * 1024 },', '{ cwd: mkdtempSync(join(tmpdir(), \'p15-blind-\')), encoding: \'utf8\', env, maxBuffer: 64 * 1024 * 1024 },');
+      const broken = s.replace(
+        "{ cwd: copy, encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024 },",
+        "{ cwd: mkdtempSync(join(tmpdir(), 'p15-blind-')), encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024 },",
+      );
       if (broken === s) throw new Error('could not blind gitleaks: the scan no longer runs it with `cwd: copy` in the shape this plant edits');
       writeFileSync(f, broken);
       commitInClone(clone, 'point gitleaks at an empty directory');

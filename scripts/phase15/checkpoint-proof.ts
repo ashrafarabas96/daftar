@@ -61,9 +61,7 @@ interface Case {
 const CASES: readonly Case[] = [
   {
     id: 'C1',
-    what:
-      'the challenger’s own plant: every pack document deleted, head untouched. The check reported CURRENT, ' +
-      'because deleting a file moves no SHA',
+    what: 'the challenger’s own plant: every pack document deleted, head untouched. The check reported CURRENT, ' + 'because deleting a file moves no SHA',
     plant: (dir) => {
       let removed = 0;
       for (const f of readdirSync(dir)) {

@@ -48,7 +48,17 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { startCluster, stopCluster, prepareClusterDir, psqlScalar, createEmptyDatabase, clusterIdentity, PG_SUPERPASS, PG16_BIN, type ClusterSpec } from './pg-cluster';
+import {
+  startCluster,
+  stopCluster,
+  prepareClusterDir,
+  psqlScalar,
+  createEmptyDatabase,
+  clusterIdentity,
+  PG_SUPERPASS,
+  PG16_BIN,
+  type ClusterSpec,
+} from './pg-cluster';
 // G3 runs the REAL validator rather than reading it, so it is imported here
 // and not re-implemented: a paraphrase of a rule is not the rule.
 import { loadConfig } from '../../apps/api/src/config';
@@ -122,7 +132,9 @@ function verifyG1(): void {
     // (a) the refresh cookie must stay off the proxy's path.
     const rtPath = /path:\s*'([^']+)'/.exec(cookies.slice(cookies.indexOf('rtCookieOptions')));
     if (rtPath?.[1] === '/api/auth') {
-      it.notes.push(`${app}: the refresh cookie is path-scoped to /api/auth (${cookiesRel}:${lineOf(cookiesRel, "path: '/api/auth'")}), so it never reaches /api/proxy`);
+      it.notes.push(
+        `${app}: the refresh cookie is path-scoped to /api/auth (${cookiesRel}:${lineOf(cookiesRel, "path: '/api/auth'")}), so it never reaches /api/proxy`,
+      );
     } else {
       it.findings.push(
         `${app}: the refresh cookie's path is ${rtPath?.[1] ?? 'UNREADABLE'}, not /api/auth — if it covers /api/proxy, every mutating proxy method becomes CSRF-reachable and the proxy has no CSRF check (${proxyRel})`,
@@ -146,9 +158,13 @@ function verifyG1(): void {
         .map((s) => s.trim().replace(/^'|'$/g, '').toLowerCase())
         .filter((s) => s.length > 0);
       if (names.includes('cookie')) {
-        it.findings.push(`${app}: the proxy forwards the 'cookie' header (${proxyRel}:${lineOf(proxyRel, headerSet[0].slice(0, 30))}) AND has no CSRF check — cookie-borne authority reaches a mutating route unprotected`);
+        it.findings.push(
+          `${app}: the proxy forwards the 'cookie' header (${proxyRel}:${lineOf(proxyRel, headerSet[0].slice(0, 30))}) AND has no CSRF check — cookie-borne authority reaches a mutating route unprotected`,
+        );
       } else {
-        it.notes.push(`${app}: the proxy forwards no cookie (forwarded = ${names.join(', ')}), so its authority is the Authorization header a cross-site form cannot set`);
+        it.notes.push(
+          `${app}: the proxy forwards no cookie (forwarded = ${names.join(', ')}), so its authority is the Authorization header a cross-site form cannot set`,
+        );
       }
     }
 
@@ -162,7 +178,10 @@ function verifyG1(): void {
       const src = read(rel);
       const checks = src.includes("headers.get('x-daftar-csrf')") && /header\s*!==\s*csrfCookie/.test(src);
       if (checks) it.notes.push(`${app}/${route}: enforces the double-submit header (${rel}:${lineOf(rel, 'x-daftar-csrf')})`);
-      else it.findings.push(`${app}/${route}: its authority is the ${route === 'refresh' ? 'refresh' : 'session'} cookie but it does not compare x-daftar-csrf against the cookie (${rel})`);
+      else
+        it.findings.push(
+          `${app}/${route}: its authority is the ${route === 'refresh' ? 'refresh' : 'session'} cookie but it does not compare x-daftar-csrf against the cookie (${rel})`,
+        );
     }
   }
 
@@ -288,12 +307,16 @@ function verifyG2(): void {
       `${storageRel}:${guardLine} the traversal guard compares a path PREFIX, not a path BOUNDARY: root='${probe.root}', key='${probe.key}' normalises to '${probe.p}', which is OUTSIDE the root and still satisfies startsWith(root). The correct test is \`p === root || p.startsWith(root + sep)\`. LATENT today — part (a) shows no caller-supplied component reaches a key, and LocalObjectStorage is refused in production by createObjectStorage — so this is a guard that would not hold if it were ever relied on, not a reachable traversal.`,
     );
   } else {
-    it.notes.push(`${storageRel}:${guardLine} the traversal guard rejects a sibling directory sharing the root's prefix (executed: root='${probe.root}', key='${probe.key}' → '${probe.p}')`);
+    it.notes.push(
+      `${storageRel}:${guardLine} the traversal guard rejects a sibling directory sharing the root's prefix (executed: root='${probe.root}', key='${probe.key}' → '${probe.p}')`,
+    );
   }
 
   // And the production refusal that makes the above latent rather than live.
   if (/if \(config\.isProd\) throw new Error\('MEDIA_STORAGE=local is forbidden in production'\)/.test(storageSrc)) {
-    it.notes.push(`${storageRel}:${lineOf(storageRel, 'MEDIA_STORAGE=local is forbidden in production')} local storage is refused in production, so the guard above is dev/test only`);
+    it.notes.push(
+      `${storageRel}:${lineOf(storageRel, 'MEDIA_STORAGE=local is forbidden in production')} local storage is refused in production, so the guard above is dev/test only`,
+    );
   } else {
     it.findings.push(`${storageRel}: local disk storage is NOT refused in production, so the prefix guard above is on a production path`);
   }
@@ -373,7 +396,8 @@ function verifyG3(): void {
     for (const r of results) r.refused = r.env === 'production';
   }
 
-  for (const r of results) it.notes.push(`    NODE_ENV=${r.env} + PROCESS_MODE=platform-api + APP_DATABASE_URL → ${r.refused === true ? 'REFUSED' : 'ACCEPTED'}`);
+  for (const r of results)
+    it.notes.push(`    NODE_ENV=${r.env} + PROCESS_MODE=platform-api + APP_DATABASE_URL → ${r.refused === true ? 'REFUSED' : 'ACCEPTED'}`);
 
   const lax = results.filter((r) => r.refused !== true).map((r) => r.env);
   if (lax.length > 0) {
@@ -483,17 +507,30 @@ function verifyG4(runCluster: boolean): void {
     const filled = boot.replace(/__([A-Z_]+)_PASSWORD__/g, () => `p15_${randomBytes(12).toString('hex')}`);
     const sqlPath = join(G4_DIR, 'bootstrap.filled.sql');
     writeFileSync(sqlPath, filled, { mode: 0o644 });
-    const applied = spawnSync(`${PG16_BIN}/psql`, ['-h', '127.0.0.1', '-p', String(spec.port), '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-f', sqlPath], {
-      encoding: 'utf8',
-      env: { ...process.env, PGPASSWORD: PG_SUPERPASS },
-      maxBuffer: 64 * 1024 * 1024,
-    });
+    const applied = spawnSync(
+      `${PG16_BIN}/psql`,
+      ['-h', '127.0.0.1', '-p', String(spec.port), '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-f', sqlPath],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, PGPASSWORD: PG_SUPERPASS },
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    );
     if (applied.status !== 0) {
       // bootstrap.sql expects a daftar database and extensions; a partial
       // apply still runs the role block, which is this item's subject. Say so
       // rather than pretending the whole file applied.
-      it.notes.push(`bootstrap.sql exited ${applied.status}; the role block is at the top of the file and ran — the verdict below is read from the catalogue, not from this exit code`);
-      it.notes.push(`    first error: ${(applied.stderr ?? '').split('\n').find((l) => /ERROR/.test(l))?.slice(0, 200) ?? '(none captured)'}`);
+      it.notes.push(
+        `bootstrap.sql exited ${applied.status}; the role block is at the top of the file and ran — the verdict below is read from the catalogue, not from this exit code`,
+      );
+      it.notes.push(
+        `    first error: ${
+          (applied.stderr ?? '')
+            .split('\n')
+            .find((l) => /ERROR/.test(l))
+            ?.slice(0, 200) ?? '(none captured)'
+        }`,
+      );
     }
 
     for (const role of subjects) {
@@ -508,16 +545,24 @@ function verifyG4(runCluster: boolean): void {
           `${role}: BYPASSRLS SURVIVES a full bootstrap.sql run (rolbypassrls t → t, read from pg_roles on a real cluster). Its ALTER branch is \`ALTER ROLE ${role} LOGIN PASSWORD '…'\` (${bootRel}:${lineOf(bootRel, `ALTER ROLE ${role} LOGIN PASSWORD`)}) and names no negative attribute, so re-running the deployment's own bootstrap does not take the attribute away. bootstrap.sql states this exact reasoning in its own words, and applies it to daftar_reconciler and daftar_migrator only: "a role that drifts into BYPASSRLS on an existing database would turn a scoped verifier into a global reader without a single line of the repository changing" (${bootRel}:${lineOf(bootRel, 'would turn a scoped verifier into a')}). ${role === 'daftar_app' ? 'daftar_app is the RLS-enforced tenant credential: BYPASSRLS on it is the loss of ALL tenant isolation, a strictly larger blast radius than the reconciler the law was written for.' : ''}`,
         );
       } else if (after.value !== 't' && reasserts) {
-        it.notes.push(`${role}: BYPASSRLS was STRIPPED by the run (t → ${after.value}) — its ALTER branch re-asserts NOBYPASSRLS, and that is what convergence looks like`);
+        it.notes.push(
+          `${role}: BYPASSRLS was STRIPPED by the run (t → ${after.value}) — its ALTER branch re-asserts NOBYPASSRLS, and that is what convergence looks like`,
+        );
       } else if (after.value !== 't' && !reasserts) {
-        it.notes.push(`${role}: BYPASSRLS was stripped although its ALTER branch does not name NOBYPASSRLS — the static reading was wrong; something else in the file converges it`);
+        it.notes.push(
+          `${role}: BYPASSRLS was stripped although its ALTER branch does not name NOBYPASSRLS — the static reading was wrong; something else in the file converges it`,
+        );
       } else {
-        it.findings.push(`${role}: its ALTER branch re-asserts NOBYPASSRLS and the attribute SURVIVED anyway — the convergence this file relies on does not work`);
+        it.findings.push(
+          `${role}: its ALTER branch re-asserts NOBYPASSRLS and the attribute SURVIVED anyway — the convergence this file relies on does not work`,
+        );
       }
     }
     const unreasserted = drifters.filter((r) => !subjects.includes(r));
     if (unreasserted.length > 0) {
-      it.notes.push(`same ALTER shape, not executed in this run: ${unreasserted.join(', ')} — each is the measured subject's exact form, so the finding is theirs too by construction, not by measurement`);
+      it.notes.push(
+        `same ALTER shape, not executed in this run: ${unreasserted.join(', ')} — each is the measured subject's exact form, so the finding is theirs too by construction, not by measurement`,
+      );
     }
   } catch (e) {
     it.notes.push(`the cluster run failed: ${(e as Error).message.slice(0, 400)}`);
@@ -611,7 +656,8 @@ function verifyG5(): void {
   if (/imageSize\(/.test(media)) mitigations.push('magic bytes that must agree with the declared MIME');
   if (/MAX_DIMENSION/.test(media)) mitigations.push('a dimension ceiling');
   if (/MEDIA_MAX_BYTES/.test(media)) mitigations.push('a byte ceiling');
-  if (/sharp\(file\.buffer\)[\s\S]{0,80}\.webp\(/.test(media)) mitigations.push('a full sharp re-encode to webp, which does not carry a non-image payload through');
+  if (/sharp\(file\.buffer\)[\s\S]{0,80}\.webp\(/.test(media))
+    mitigations.push('a full sharp re-encode to webp, which does not carry a non-image payload through');
   it.notes.push(`what the upload path does enforce without a scanner: ${mitigations.join('; ')}`);
   it.notes.push('    so the honest statement is that uploads are CONSTRAINED and RE-ENCODED, never that they are SCANNED');
 

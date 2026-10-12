@@ -93,8 +93,7 @@ const AUTHORISED: readonly { readonly role: string; readonly attribute: Elevated
   {
     role: 'daftar_reconciler',
     attribute: 'rolbypassrls',
-    why:
-      'infrastructure/database/bootstrap.sql grants it deliberately and states the reason in its own comment: the reconciler is a scoped verifier that must read across tenants in order to verify them. Authorised BY THE BOOTSTRAP OWNER, not by this script.',
+    why: 'infrastructure/database/bootstrap.sql grants it deliberately and states the reason in its own comment: the reconciler is a scoped verifier that must read across tenants in order to verify them. Authorised BY THE BOOTSTRAP OWNER, not by this script.',
   },
 ];
 

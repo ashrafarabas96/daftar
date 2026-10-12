@@ -158,7 +158,8 @@ const CASES: readonly Case[] = [
         o['closure_requirement'] = `${o['closure_requirement'] as string} Page pagerduty://daftar-oncall on breach.`;
         n += 1;
       }
-      if (n !== doc.rules.length) throw new Error(`planted into ${n} of ${doc.rules.length} rules; a set-wide proof that is not set-wide proves something else`);
+      if (n !== doc.rules.length)
+        throw new Error(`planted into ${n} of ${doc.rules.length} rules; a set-wide proof that is not set-wide proves something else`);
     },
     expect: /PagerDuty in key `closure_requirement`/,
   },
@@ -166,7 +167,8 @@ const CASES: readonly Case[] = [
     id: 'R2h',
     what: 'the same shape with a Slack webhook URL as the value, because one pattern passing is not six passing',
     plant: (doc) => {
-      for (const r of doc.rules) r['false_positive_notes'] = `${String(r['false_positive_notes'] ?? '')} See https://hooks.slack.com/services/T000/B000/xxxx`.trim();
+      for (const r of doc.rules)
+        r['false_positive_notes'] = `${String(r['false_positive_notes'] ?? '')} See https://hooks.slack.com/services/T000/B000/xxxx`.trim();
     },
     expect: /a Slack webhook in key `false_positive_notes`/,
   },
@@ -312,9 +314,21 @@ const TREE_CASES: readonly TreeCase[] = [
     contents: 'PAGERDUTY_ROUTING_KEY=abc123\n',
     mustFind: true,
   },
-  { id: 'T2', what: 'an UPPER-CASE Alertmanager URL', file: 'deploy/alerts.env', contents: 'ALERTMANAGER_URL=https://am.internal/api/v2/alerts\n', mustFind: true },
+  {
+    id: 'T2',
+    what: 'an UPPER-CASE Alertmanager URL',
+    file: 'deploy/alerts.env',
+    contents: 'ALERTMANAGER_URL=https://am.internal/api/v2/alerts\n',
+    mustFind: true,
+  },
   { id: 'T3', what: 'an UPPER-CASE Opsgenie key', file: 'deploy/alerts.env', contents: 'OPSGENIE_API_KEY=xxxx\n', mustFind: true },
-  { id: 'T4', what: 'the same key in lower case — the control for the control', file: 'deploy/alerts.env', contents: 'pagerduty_routing_key=abc123\n', mustFind: true },
+  {
+    id: 'T4',
+    what: 'the same key in lower case — the control for the control',
+    file: 'deploy/alerts.env',
+    contents: 'pagerduty_routing_key=abc123\n',
+    mustFind: true,
+  },
 ];
 
 function scratchRepo(file: string | null, contents: string): string {
@@ -378,8 +392,13 @@ function main(): number {
       console.log(`   expected: the check names it — /${c.expect.source}/`);
       if (!ok) {
         failures += 1;
-        console.log(`   ! ${red ? 'it went red but did NOT name this defect, so it may have reddened on something else' : 'IT STAYED GREEN — the check cannot detect this class at all'}`);
-        const tail = got.out.split('\n').filter((l) => /EXIT 1|·/.test(l)).slice(0, 6);
+        console.log(
+          `   ! ${red ? 'it went red but did NOT name this defect, so it may have reddened on something else' : 'IT STAYED GREEN — the check cannot detect this class at all'}`,
+        );
+        const tail = got.out
+          .split('\n')
+          .filter((l) => /EXIT 1|·/.test(l))
+          .slice(0, 6);
         for (const l of tail) console.log(`     ${l}`);
       } else {
         const line = got.out.split('\n').find((l) => c.expect.test(l));

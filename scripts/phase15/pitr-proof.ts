@@ -279,7 +279,10 @@ function waitForRecovery(port: number, timeoutMs: number): { readonly ok: boolea
     // exit codes.
     const sleeper = spawnSync('/bin/bash', ['-c', 'sleep 0.3']);
     if (sleeper.error !== undefined || sleeper.status !== 0)
-      return { ok: false, detail: `the recovery poll could not pace itself (sleep exited ${String(sleeper.status)}), so no recovery timing measured here is valid` };
+      return {
+        ok: false,
+        detail: `the recovery poll could not pace itself (sleep exited ${String(sleeper.status)}), so no recovery timing measured here is valid`,
+      };
   }
   return { ok: false, detail: `still in recovery (or unreachable) after ${timeoutMs}ms: ${last}` };
 }
@@ -428,7 +431,10 @@ async function main(): Promise<void> {
   const vBalanced = record('P5', 'Every journal entry on the recovered cluster is balanced');
   const vMonitor = record('P6', 'The archive-failure monitor reads pg_stat_archiver and reports a healthy archive');
   record('P7', 'The retention command removes only segments older than the base backup it is given');
-  const vBreadth = record('P8', 'Every table in public matches the state captured at the target by whole-row digest — including the empty ones, which prove only that they were empty');
+  const vBreadth = record(
+    'P8',
+    'Every table in public matches the state captured at the target by whole-row digest — including the empty ones, which prove only that they were empty',
+  );
   const vDomains = record(
     'P9',
     'Every named domain — journal, AR, stock, tenants, files — is accounted for after the restore, each as measured or explicitly not measurable here',
@@ -455,7 +461,6 @@ async function main(): Promise<void> {
     // The identity below is read back from the server, so the collation is now
     // part of the evidence instead of part of the weather.
     console.log(`CLUSTER: ${clusterIdentity(PRIMARY.port, 'postgres')}`);
-
 
     const admin = new Pool({ connectionString: dbUrl(PRIMARY.port, 'postgres'), max: 2 });
     admin.on('error', () => undefined);
@@ -684,7 +689,12 @@ async function main(): Promise<void> {
       if (brokenDomains > 0) fail(vDomains, DOMAINS.length, lines.join(' | '));
       else if (measuredDomains === 0) fail(vDomains, 0, `no domain had any row to compare: ${lines.join(' | ')}`);
       else if (measuredDomains < DOMAINS.length)
-        partial(vDomains, measuredDomains, DOMAINS.length, `0 broken, but ${DOMAINS.length - measuredDomains} domain(s) could not be measured — ${lines.join(' | ')}`);
+        partial(
+          vDomains,
+          measuredDomains,
+          DOMAINS.length,
+          `0 broken, but ${DOMAINS.length - measuredDomains} domain(s) could not be measured — ${lines.join(' | ')}`,
+        );
       else pass(vDomains, DOMAINS.length, `all ${DOMAINS.length} domain(s) measured, 0 broken — ${lines.join(' | ')}`);
     }
 
@@ -1012,8 +1022,12 @@ async function redProofs(t: Timeline): Promise<void> {
       // than claiming anything, which is the behaviour wanted; the lesson is
       // that a red proof must be checked against the real schema, not a
       // remembered one.
-      const edit = psqlScalar(rec.port, DB, `SET session_replication_role = replica; UPDATE businesses SET name = left(name, 140) || '-p15-r-p8' WHERE id = (SELECT id FROM businesses ORDER BY 1 LIMIT 1); SET session_replication_role = origin; SELECT 1`);
-      if (!edit.ok) p.outcome = `INCONCLUSIVE — the mutation was refused, so nothing was planted: ${edit.detail.replace(/\n/g, " | ").slice(0, 400)}`;
+      const edit = psqlScalar(
+        rec.port,
+        DB,
+        `SET session_replication_role = replica; UPDATE businesses SET name = left(name, 140) || '-p15-r-p8' WHERE id = (SELECT id FROM businesses ORDER BY 1 LIMIT 1); SET session_replication_role = origin; SELECT 1`,
+      );
+      if (!edit.ok) p.outcome = `INCONCLUSIVE — the mutation was refused, so nothing was planted: ${edit.detail.replace(/\n/g, ' | ').slice(0, 400)}`;
       else {
         const after = tableDigests(rec.port);
         const changed = Object.keys(before).filter((k) => before[k] !== after[k]);
@@ -1034,7 +1048,7 @@ async function redProofs(t: Timeline): Promise<void> {
   {
     const p: RedProof = {
       id: 'R-P9',
-      what: "break the `tenants` domain on the recovered cluster — one of the two domains P9 reports as MEASURED",
+      what: 'break the `tenants` domain on the recovered cluster — one of the two domains P9 reports as MEASURED',
       expect: 'the domain comparison reports a mismatch rather than counting the domain as accounted for',
       outcome: 'NOT RUN',
     };
@@ -1043,7 +1057,11 @@ async function redProofs(t: Timeline): Promise<void> {
     if (!rec.ok) p.outcome = `INCONCLUSIVE — recovery did not complete: ${rec.detail}`;
     else {
       const digestsBefore = tableDigests(rec.port);
-      const del = psqlScalar(rec.port, DB, `SET session_replication_role = replica; DELETE FROM tenants WHERE id = (SELECT id FROM tenants ORDER BY 1 DESC LIMIT 1); SET session_replication_role = origin; SELECT count(*)::text FROM tenants`);
+      const del = psqlScalar(
+        rec.port,
+        DB,
+        `SET session_replication_role = replica; DELETE FROM tenants WHERE id = (SELECT id FROM tenants ORDER BY 1 DESC LIMIT 1); SET session_replication_role = origin; SELECT count(*)::text FROM tenants`,
+      );
       if (!del.ok) p.outcome = `INCONCLUSIVE — the deletion was refused, so nothing was planted: ${del.detail.slice(0, 200)}`;
       else {
         const digestsAfter = tableDigests(rec.port);
@@ -1121,7 +1139,15 @@ function report(sha: string, dirty: boolean, t: Timeline | undefined, ms: number
     elapsedMs: ms,
     rpo: 'BOUNDED BY archive_timeout=30s IN THIS FIXTURE — not the documented 15-minute production RPO, which stays UNMEASURED',
     rto: 'container-scale on a seeded fixture — NOT production RTO (PART 105)',
-    result: ok ? (partialResults.length > 0 ? 'PASS WITH PARTIAL COVERAGE' : 'PASS') : failed.length > 0 ? 'FAIL' : unmeasured.length > 0 ? 'UNMEASURED' : 'FAIL',
+    result: ok
+      ? partialResults.length > 0
+        ? 'PASS WITH PARTIAL COVERAGE'
+        : 'PASS'
+      : failed.length > 0
+        ? 'FAIL'
+        : unmeasured.length > 0
+          ? 'UNMEASURED'
+          : 'FAIL',
     partialCoverage: partialResults.map((r) => ({ id: r.id, measuredSubjects: r.subjects })),
   };
 

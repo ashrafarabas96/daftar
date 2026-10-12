@@ -126,8 +126,20 @@ interface Line {
 // and its collation is not the deployment's.
 const LINES: Line[] = [
   { name: '16 @ C (host tooling · diagnostic)', bin: '/usr/lib/postgresql/16/bin', dir: '/tmp/daftar-p15-matrix-16', port: 55481, locale: 'C' },
-  { name: '18 @ C (embedded · DIAGNOSTIC ONLY)', bin: join(ROOT, 'node_modules/@embedded-postgres/linux-x64/native/bin'), dir: '/tmp/daftar-p15-matrix-18', port: 55482, locale: 'C' },
-  { name: '16 @ en_US.utf8 (PRIMARY · deployment-equivalent)', bin: '/usr/lib/postgresql/16/bin', dir: '/tmp/daftar-p15-matrix-16d', port: 55484, locale: 'en_US.utf8' },
+  {
+    name: '18 @ C (embedded · DIAGNOSTIC ONLY)',
+    bin: join(ROOT, 'node_modules/@embedded-postgres/linux-x64/native/bin'),
+    dir: '/tmp/daftar-p15-matrix-18',
+    port: 55482,
+    locale: 'C',
+  },
+  {
+    name: '16 @ en_US.utf8 (PRIMARY · deployment-equivalent)',
+    bin: '/usr/lib/postgresql/16/bin',
+    dir: '/tmp/daftar-p15-matrix-16d',
+    port: 55484,
+    locale: 'en_US.utf8',
+  },
 ];
 
 /* ── cluster plumbing (the server account cannot be root) ─────────────────── */
@@ -168,7 +180,10 @@ function start(line: Line): void {
   // fsync off: these clusters are disposable and no durability claim is made
   // from them. The matrix measures BEHAVIOUR, never timing — a timing claim
   // from an fsync-off cluster would be worthless and none is made here.
-  writeFileSync(join(line.dir, 'extra.conf'), [`port = ${line.port}`, "listen_addresses = '127.0.0.1'", 'fsync = off', 'full_page_writes = off', ''].join('\n'));
+  writeFileSync(
+    join(line.dir, 'extra.conf'),
+    [`port = ${line.port}`, "listen_addresses = '127.0.0.1'", 'fsync = off', 'full_page_writes = off', ''].join('\n'),
+  );
   const appended = sh(`cat ${join(line.dir, 'extra.conf')} >> ${join(data, 'postgresql.conf')}`);
   if (appended.status !== 0) throw new Error(`conf (${line.name}): ${appended.stderr.slice(0, 300)}`);
   const up = sh(`${line.bin}/pg_ctl -D ${data} -l ${join(line.dir, 'server.log')} -w start`);
@@ -197,7 +212,11 @@ function stop(line: Line): void {
 const url = (line: Line, db = 'postgres'): string => `postgresql://postgres:${SUPERPASS}@127.0.0.1:${line.port}/${db}`;
 
 /** One query on one line. Returns the rows, or the SQLSTATE of the refusal. */
-async function probe(line: Line, db: string, sql: string): Promise<{ readonly ok: boolean; readonly rows: unknown[]; readonly code: string; readonly message: string }> {
+async function probe(
+  line: Line,
+  db: string,
+  sql: string,
+): Promise<{ readonly ok: boolean; readonly rows: unknown[]; readonly code: string; readonly message: string }> {
   const c = new Client({ connectionString: url(line, db) });
   try {
     await c.connect();
@@ -296,19 +315,27 @@ async function v3(): Promise<void> {
     (x) => spawnSync('git', ['cat-file', '-e', `${x}^{commit}`], { cwd: ROOT }).status === 0,
   );
   if (ref === undefined) {
-    r.note.push('UNMEASURED: no Phase 4 candidate ref is reachable here, so the candidate train cannot be the subject. Fetch it and re-run; this is not a result about the candidate.');
+    r.note.push(
+      'UNMEASURED: no Phase 4 candidate ref is reachable here, so the candidate train cannot be the subject. Fetch it and re-run; this is not a result about the candidate.',
+    );
     r.status = 'UNMEASURED';
     return;
   }
   const shaOut = outOf(spawnSync('git', ['rev-parse', ref], { cwd: ROOT, encoding: 'utf8' }));
   const treeOut = outOf(
-    spawnSync('git', ['ls-tree', '-r', '--name-only', ref, '--', 'infrastructure/database/migrations'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
+    spawnSync('git', ['ls-tree', '-r', '--name-only', ref, '--', 'infrastructure/database/migrations'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    }),
   );
   if (shaOut === null || treeOut === null) {
     // An empty migration list from a FAILED ls-tree would print as "the
     // candidate carries 0 migrations", which is a statement about the frozen
     // set and must never come from a command that did not run.
-    r.note.push(`UNMEASURED: the candidate at ${ref} could not be read (git rev-parse ${shaOut === null ? 'FAILED' : 'ok'}, git ls-tree ${treeOut === null ? 'FAILED' : 'ok'}). No count is claimed.`);
+    r.note.push(
+      `UNMEASURED: the candidate at ${ref} could not be read (git rev-parse ${shaOut === null ? 'FAILED' : 'ok'}, git ls-tree ${treeOut === null ? 'FAILED' : 'ok'}). No count is claimed.`,
+    );
     return;
   }
   const sha = shaOut.trim();
@@ -317,12 +344,14 @@ async function v3(): Promise<void> {
     .filter((n: string) => n.endsWith('.sql'))
     .sort();
   const prepCount = readdirSync(join(ROOT, 'infrastructure/database/migrations')).filter((n: string) => n.endsWith('.sql')).length;
-  r.note.push(`subject: the candidate at ${ref} → ${sha}, ${names.length} migration(s). This prep branch carries ${prepCount}, which is the P3 baseline and NOT the candidate.`);
+  r.note.push(
+    `subject: the candidate at ${ref} → ${sha}, ${names.length} migration(s). This prep branch carries ${prepCount}, which is the P3 baseline and NOT the candidate.`,
+  );
   r.note.push(
     "PRINCIPAL, named because V3 §7 requires every run to name it: this probe applies the WHOLE train as the disposable cluster's SUPERUSER. That is the same principal CI uses (docs/PHASE_2_S8_ACCEPTANCE.md:109 — 'CI applies migrations as the superuser'), and it is why a green run here, like a green run in CI, NEVER proves the deployment principal can apply anything. So this row measures that the SCHEMA is accepted in each context, and nothing about deployment authority.",
   );
   r.note.push(
-    "V3 §7 describes the split «0000–0039 administrator, 0040+ migrator». In THIS tree that is not the deployment contract: TL-P4-COORD-R61 confirms the deployment path is `daftar_migrator` over the whole history, and the four claims behind the administrator reading were WITHDRAWN in P2-S9 (docs/PHASE_1_MIGRATION_HISTORY_DECISION.md:135–141). The instrument that proves deployment authority is `npm run check:deployment-authority`, which applies the history as `daftar_migrator` and nothing else; this matrix is not that instrument and does not stand in for it.",
+    'V3 §7 describes the split «0000–0039 administrator, 0040+ migrator». In THIS tree that is not the deployment contract: TL-P4-COORD-R61 confirms the deployment path is `daftar_migrator` over the whole history, and the four claims behind the administrator reading were WITHDRAWN in P2-S9 (docs/PHASE_1_MIGRATION_HISTORY_DECISION.md:135–141). The instrument that proves deployment authority is `npm run check:deployment-authority`, which applies the history as `daftar_migrator` and nothing else; this matrix is not that instrument and does not stand in for it.',
   );
   if (names.length === 0) {
     r.note.push('UNMEASURED: the candidate ref carries no migrations at that path.');
@@ -343,15 +372,24 @@ async function v3(): Promise<void> {
     // cleanly and proves nothing, which is the worst possible shape for this
     // failure to take.
     const out = outOf(spawnSync('git', ['cat-file', 'blob', `${ref}:${path}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }));
-    if (out === null || out.length === 0) throw new Error(`git cat-file blob ${ref}:${path} produced nothing — refusing to stage an empty file and apply it as if it were the candidate's`);
+    if (out === null || out.length === 0)
+      throw new Error(`git cat-file blob ${ref}:${path} produced nothing — refusing to stage an empty file and apply it as if it were the candidate's`);
     return out;
   };
   const bootPath = join(stage, 'boot', 'bootstrap.sql');
-  writeFileSync(bootPath, blob('infrastructure/database/bootstrap.sql').replace(/__([A-Z_]+)_PASSWORD__/g, () => `p15_${randomBytes(18).toString('base64url')}`), { mode: 0o644 });
+  writeFileSync(
+    bootPath,
+    blob('infrastructure/database/bootstrap.sql').replace(/__([A-Z_]+)_PASSWORD__/g, () => `p15_${randomBytes(18).toString('base64url')}`),
+    { mode: 0o644 },
+  );
   for (const n of names) writeFileSync(join(stage, 'sql', n.split('/').pop() as string), blob(n), { mode: 0o644 });
 
   for (const line of LINES) {
-    const create = await probe(line, 'postgres', `CREATE DATABASE daftar TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE '${line.locale}' LC_CTYPE '${line.locale}'`);
+    const create = await probe(
+      line,
+      'postgres',
+      `CREATE DATABASE daftar TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE '${line.locale}' LC_CTYPE '${line.locale}'`,
+    );
     if (!create.ok) {
       r.answers[line.name] = `UNMEASURED: CREATE DATABASE refused (${create.code})`;
       r.note.push(`${line.name}: ${create.message}`);
@@ -384,9 +422,11 @@ async function v3(): Promise<void> {
 /* V4 — Class 23, to §22.1's standard: a real constraint, role and transaction. */
 async function v4(): Promise<void> {
   const r = row('V4', 'ON DELETE RESTRICT: the exact SQLSTATE, constraint, and that the row survives the refusal');
-  r.note.push('documented as 23001 on 18 and 23503 on 16–17 (docs/PHASE_3_S2_CONTRACT.md:209); T-14.4 derives it from server_version_num, so the tree ACCOUNTS for this one');
   r.note.push(
-    'V3 §22.1 SCOPES THIS RESULT, and the scope is part of the result: this is a NARROW COMPATIBILITY EXPERIMENT on one constraint and one command. It is NOT an adoption of PostgreSQL 18, NOT exact-final-RC evidence, and NOT authority to widen an allowed-SQLSTATE list across Class 23. The mapping for THIS constraint and THIS command is the gate owner\'s and the domain owner\'s to review, with the constraint name, the rollback and the outcome in hand.',
+    'documented as 23001 on 18 and 23503 on 16–17 (docs/PHASE_3_S2_CONTRACT.md:209); T-14.4 derives it from server_version_num, so the tree ACCOUNTS for this one',
+  );
+  r.note.push(
+    "V3 §22.1 SCOPES THIS RESULT, and the scope is part of the result: this is a NARROW COMPATIBILITY EXPERIMENT on one constraint and one command. It is NOT an adoption of PostgreSQL 18, NOT exact-final-RC evidence, and NOT authority to widen an allowed-SQLSTATE list across Class 23. The mapping for THIS constraint and THIS command is the gate owner's and the domain owner's to review, with the constraint name, the rollback and the outcome in hand.",
   );
   r.note.push(
     '§22.1: 23001 is restrict_violation and 23503 is foreign_key_violation, and NO Class 23 may be turned into a PASS. So this probe names the constraint, runs inside an explicit transaction as a non-superuser role, and proves three things rather than one: the refusal happens, it carries the constraint’s own name, and the parent row is STILL THERE afterwards. A probe that only reads the code would pass on a server that refused for the wrong reason, or that refused and deleted anyway.',
@@ -465,7 +505,7 @@ async function v5(): Promise<void> {
     {
       id: 'V5d',
       question: 'Integer minor units: a bigint sum of minor units never acquires a fraction',
-      sql: "SELECT (sum(x)::text) AS v FROM (VALUES (1::bigint), (2), (-3), (9223372036854775000)) t(x)",
+      sql: 'SELECT (sum(x)::text) AS v FROM (VALUES (1::bigint), (2), (-3), (9223372036854775000)) t(x)',
       documented: 'an exact integer on any line (the directive’s INTEGER MINOR UNITS ONLY law)',
     },
   ];
@@ -495,7 +535,8 @@ async function main(): Promise<number> {
 
   /* V1 — the versions in play, each from its own source. */
   const v1 = row('V1', 'Which PostgreSQL versions is this project actually using?');
-  const declared = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string>; dependencies?: Record<string, string> }) ?? {};
+  const declared =
+    (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string>; dependencies?: Record<string, string> }) ?? {};
   const emb = declared.devDependencies?.['embedded-postgres'] ?? declared.dependencies?.['embedded-postgres'] ?? '(not declared)';
   v1.note.push(`package.json declares embedded-postgres ${emb}`);
   v1.note.push('');
@@ -531,9 +572,9 @@ async function main(): Promise<number> {
         line,
         'postgres',
         "SELECT current_setting('server_version') AS version, current_setting('server_version_num') AS num, " +
-          "(SELECT datcollate FROM pg_database WHERE datname=current_database()) AS collate, " +
-          "(SELECT datctype FROM pg_database WHERE datname=current_database()) AS ctype, " +
-          "pg_encoding_to_char(encoding) AS encoding FROM pg_database WHERE datname=current_database()",
+          '(SELECT datcollate FROM pg_database WHERE datname=current_database()) AS collate, ' +
+          '(SELECT datctype FROM pg_database WHERE datname=current_database()) AS ctype, ' +
+          'pg_encoding_to_char(encoding) AS encoding FROM pg_database WHERE datname=current_database()',
       );
       const got0 = got.rows[0] as { version?: string; num?: string; collate?: string; ctype?: string; encoding?: string } | undefined;
       line.version = got0?.version ?? 'UNKNOWN';
@@ -555,7 +596,9 @@ async function main(): Promise<number> {
     if (started === LINES.length) {
       const nums = LINES.map((l) => l.versionNum ?? 0);
       if (new Set(nums).size === 1) {
-        v1.note.push(`! every context reports the SAME version (${nums[0]}): this box cannot produce a multi-version matrix today, and nothing below should be read as one`);
+        v1.note.push(
+          `! every context reports the SAME version (${nums[0]}): this box cannot produce a multi-version matrix today, and nothing below should be read as one`,
+        );
         v1.status = 'UNMEASURED';
       }
       v2();
@@ -588,7 +631,9 @@ async function main(): Promise<number> {
   console.log('-'.repeat(78));
   const unmeasured = rows.filter((r) => r.status === 'UNMEASURED');
   const unaccounted = rows.filter((r) => r.status === 'DIVERGENT_UNACCOUNTED');
-  console.log(`${rows.length} probes: ${rows.length - unmeasured.length - unaccounted.length} MEASURED, ${unaccounted.length} DIVERGENT AND UNACCOUNTED FOR, ${unmeasured.length} UNMEASURED`);
+  console.log(
+    `${rows.length} probes: ${rows.length - unmeasured.length - unaccounted.length} MEASURED, ${unaccounted.length} DIVERGENT AND UNACCOUNTED FOR, ${unmeasured.length} UNMEASURED`,
+  );
   console.log('');
   console.log('WHAT THIS MATRIX DOES NOT DECIDE');
   console.log('  The DB target is NOT an open question and this matrix does not reopen it:');
@@ -602,11 +647,11 @@ async function main(): Promise<number> {
   console.log('  probe, per context.');
   console.log('');
   console.log('WHICH CONTEXT CARRIES WHICH WEIGHT (V3 §22.1)');
-  console.log('  16 @ en_US.utf8 is the PRIMARY line: the product\'s own evidence is produced');
+  console.log("  16 @ en_US.utf8 is the PRIMARY line: the product's own evidence is produced");
   console.log('  there, on the frozen set itself. The 18 context is INDEPENDENT DIAGNOSTIC');
   console.log('  evidence and carries no product claim — a fixture on 18 never stands in for');
-  console.log('  an estate on 16. The 16 @ C context is this container\'s tooling, and its');
-  console.log('  collation is not the deployment\'s.');
+  console.log("  an estate on 16. The 16 @ C context is this container's tooling, and its");
+  console.log("  collation is not the deployment's.");
   console.log('');
   console.log('  V3 §7 asks every run to name its principal. Here it is the cluster SUPERUSER,');
   console.log('  which is also what CI uses, so no row above says anything about whether the');
@@ -619,13 +664,15 @@ async function main(): Promise<number> {
     console.log('EXIT 1 — A CLUSTER DID NOT STOP, SO EVERY LATER CONTEXT ON ITS PORT IS SUSPECT:');
     for (const f of teardownFailures) console.log(`  · ${f}`);
     console.log('  The data directory was removed, so a surviving postmaster would be serving a');
-    console.log('  deleted directory on this line\'s port. Nothing above is claimed for the');
+    console.log("  deleted directory on this line's port. Nothing above is claimed for the");
     console.log('  contexts measured after that point. Kill the stray server and re-run.');
     return 1;
   }
   if (unaccounted.length > 0) {
     console.log('');
-    console.log(`EXIT 2: ${unaccounted.map((r) => r.id).join(', ')} diverged between the measured contexts and the tree has no version-conditional branch for it.`);
+    console.log(
+      `EXIT 2: ${unaccounted.map((r) => r.id).join(', ')} diverged between the measured contexts and the tree has no version-conditional branch for it.`,
+    );
     return 2;
   }
   if (unmeasured.length > 0) {

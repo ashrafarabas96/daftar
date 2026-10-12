@@ -112,7 +112,9 @@ function checkCurrency(manifest: string, root: string, dir: string): Currency {
   const headSha = git(['rev-parse', 'HEAD']);
   const base = 'origin/main';
   const commits = Number(git(['rev-list', '--count', `${base}..HEAD`]) || '0');
-  const newFiles = git(['diff', '--diff-filter=A', '--name-only', `${base}...HEAD`]).split('\n').filter((l) => l.trim().length > 0).length;
+  const newFiles = git(['diff', '--diff-filter=A', '--name-only', `${base}...HEAD`])
+    .split('\n')
+    .filter((l) => l.trim().length > 0).length;
 
   let scriptsAdded = 0;
   try {
@@ -227,7 +229,9 @@ function checkChallenges(manifest: string, dir: string): Challenge {
   for (const m of narrative.matchAll(/P15-CHALLENGE-([0-9A-Za-z._-]+)\.md/g)) {
     const token = m[1] ?? '';
     if (!/^[0-9a-fA-F]{7,40}$/.test(token))
-      problems.push(`this file names P15-CHALLENGE-${token}.md, whose name is not a commit SHA — a report nobody can match to a head is not a record of a round`);
+      problems.push(
+        `this file names P15-CHALLENGE-${token}.md, whose name is not a commit SHA — a report nobody can match to a head is not a record of a round`,
+      );
   }
   // Two things are removed before the phrase test, and for different reasons.
   // The digest-table filenames are an index, not a claim about rounds. And text
@@ -252,8 +256,109 @@ function checkChallenges(manifest: string, dir: string): Challenge {
   if (onDisk.length > 0)
     for (const phrase of ['Independent Challenger\u2060? *\\| *\\*\\*NOT RUN', 'NOT RUN on any Phase 15 artifact', 'No second party has inspected'])
       if (new RegExp(phrase).test(body))
-        problems.push(`${onDisk.length} challenge report(s) are on disk, yet this file still asserts the challenger has not run ("${phrase.replace(/\\\\/g, '')}")`);
+        problems.push(
+          `${onDisk.length} challenge report(s) are on disk, yet this file still asserts the challenger has not run ("${phrase.replace(/\\\\/g, '')}")`,
+        );
   return { problems, onDisk, named: [...new Set(named)].sort() };
+}
+
+/**
+ * DIRECTION 5: does the table of REPO FILES agree with git at the SHA this
+ * file declares?
+ *
+ * The challenger's round-8 B4-1 and B4-2. §3 claimed 312 lines for
+ * `secret-scan-proof.ts`, which is its length at `955ee11`; at the SHA the
+ * header declares as exact it is 319, because the newest commit touched that
+ * one file. Twenty-four of the twenty-five rows reproduced — and that is the
+ * point rather than the consolation: **the row that was wrong is the row the
+ * last commit touched**, which is what a carried-forward figure always does.
+ *
+ * The digest table covers the 23 documents beside this file. NOTHING covered
+ * the 25 rows of claims about files in the repository, so the only thing
+ * standing between that table and a false figure was care — and B4-1 is what
+ * care costs on a busy day.
+ *
+ * Two things matter about HOW this is checked.
+ *   - It is measured against **git at the declared SHA**, not against the
+ *     working tree, because the sentence under the table says the counts are
+ *     `wc -l` at that commit. A row that matches the working tree and not the
+ *     commit is still false as written.
+ *   - It is NOT checked against anything this gate writes. Direction 4 was
+ *     fooled exactly that way: it counted a report as recorded because its own
+ *     `--rewrite` had digested it. The authority here is git; `--rewrite` may
+ *     write the column FROM git, and this direction then agrees with it
+ *     because both read the same authority, not because one read the other.
+ */
+interface FileTable {
+  readonly problems: readonly string[];
+  readonly rows: number;
+  readonly sha: string | null;
+}
+
+const FILE_ROW = /^\| `((?:scripts|tests|apps|packages|infrastructure)\/[^`]+)` \| (\d+) \|/gm;
+
+function linesAt(root: string, sha: string, path: string): number | null {
+  const r = spawnSync('git', ['show', `${sha}:${path}`], { cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  if (r.error !== undefined || r.status !== 0) return null;
+  const text = r.stdout ?? '';
+  // `wc -l` counts newlines, which is what the sentence under the table says.
+  let n = 0;
+  for (const ch of text) if (ch === '\n') n += 1;
+  return n;
+}
+
+function checkFileTable(manifest: string, root: string): FileTable {
+  const problems: string[] = [];
+  const sha = /\*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\*/.exec(manifest)?.[1] ?? null;
+  const rows = [...manifest.matchAll(FILE_ROW)].map((m) => ({ path: m[1] as string, lines: Number(m[2]) }));
+  if (sha === null) {
+    problems.push('the header declares no exact SHA, so the line counts in §3 cannot be measured against anything — an unanchored figure is not a measurement');
+    return { problems, rows: rows.length, sha };
+  }
+  const known = spawnSync('git', ['cat-file', '-t', `${sha}^{commit}`], { cwd: root, encoding: 'utf8' });
+  if (known.error !== undefined || known.status !== 0 || (known.stdout ?? '').trim() !== 'commit') {
+    problems.push(
+      `the declared SHA ${sha} is not a commit this clone can read, so every figure attributed to it is UNMEASURED. If it was written before the push, push first and re-run: a manifest naming a commit nobody can fetch indexes nothing (the challenger's round-8 P3)`,
+    );
+    return { problems, rows: rows.length, sha };
+  }
+  if (rows.length === 0) {
+    problems.push('no repo-file rows were parsed from §3, so this direction measured nothing — which is a failure and not a pass (PART 17)');
+    return { problems, rows: rows.length, sha };
+  }
+  for (const row of rows) {
+    const measured = linesAt(root, sha, row.path);
+    if (measured === null) {
+      problems.push(
+        `§3 lists \`${row.path}\`, which does not exist at the declared SHA ${sha.slice(0, 7)} — a table of what the branch carries must not name a file the commit does not have`,
+      );
+      continue;
+    }
+    if (measured !== row.lines)
+      problems.push(
+        `§3 says ${row.lines} lines for \`${row.path}\`; \`git show ${sha.slice(0, 7)}:${row.path} | wc -l\` is ${measured}. A count carried forward from an earlier commit is the one defect this direction exists for`,
+      );
+  }
+  // And the other direction: a phase-owned file the branch added with no row.
+  const added = spawnSync('git', ['diff', '--diff-filter=A', '--name-only', `origin/main...${sha}`], {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (added.error === undefined && added.status === 0) {
+    const listed = new Set(rows.map((r) => r.path));
+    for (const f of (added.stdout ?? '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0))
+      if (!listed.has(f))
+        problems.push(`the branch adds \`${f}\` at the declared SHA and §3 has no row for it — a file nobody indexes is how PART 108 recovery fails`);
+  } else {
+    problems.push(
+      `the added-file list could not be read (git exited ${String(added.status)}), so "every added file has a row" is UNMEASURED rather than established`,
+    );
+  }
+  return { problems, rows: rows.length, sha };
 }
 
 function main(): void {
@@ -329,9 +434,38 @@ function main(): void {
     const lines = manifest.slice(start).split('\n');
     let end = 0;
     while (end < lines.length && /^\| `P15-/.test(lines[end] ?? '')) end++;
-    const rewritten = `${manifest.slice(0, start)}${table}\n${lines.slice(end).join('\n')}`;
+    let rewritten = `${manifest.slice(0, start)}${table}\n${lines.slice(end).join('\n')}`;
+
+    // THE REPO-FILE TABLE IS REWRITTEN FROM GIT TOO — the challenger's
+    // round-8 B4-2. Every Lines cell in §3 is re-read with `git show
+    // <declared SHA>:<path>`, so a figure cannot be carried forward past the
+    // commit that changed the file. The counts are taken from git and not
+    // from the working tree, because the sentence under the table says that is
+    // what they are; and direction 5 re-measures them from the same authority
+    // afterwards, which is agreement rather than circularity: the claim is
+    // checked against git, never against what this branch of the code wrote.
+    const declared = /\*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\*/.exec(rewritten)?.[1] ?? null;
+    let repoRows = 0;
+    let repoUnreadable = 0;
+    if (declared !== null) {
+      rewritten = rewritten.replace(/^\| `((?:scripts|tests|apps|packages|infrastructure)\/[^`]+)` \| (\d+) \|/gm, (whole, path: string, was: string) => {
+        const measured = linesAt(resolve(__dirname, '../..'), declared, path);
+        if (measured === null) {
+          repoUnreadable += 1;
+          return whole; // left as written, and direction 5 then names it
+        }
+        repoRows += 1;
+        if (String(measured) !== was) console.log(`  RECOUNTED ${path}: ${was} → ${measured} lines at ${declared.slice(0, 7)}`);
+        return `| \`${path}\` | ${measured} |`;
+      });
+    }
     writeFileSync(manifestPath, rewritten);
     console.log(`\nREWROTE the digest table: ${onDisk.length} artifact(s).`);
+    console.log(
+      declared === null
+        ? '  §3 was NOT recounted: the header declares no exact SHA, so there is nothing to measure the line counts against.'
+        : `  §3 recounted from git at ${declared.slice(0, 7)}: ${repoRows} row(s)${repoUnreadable > 0 ? `, ${repoUnreadable} left as written because the path is absent at that commit — direction 5 names them` : ''}.`,
+    );
     console.log(
       '  This is the LAST action before a handoff, never an earlier one: a digest computed before the next edit is stale the moment that edit lands.',
     );
@@ -344,7 +478,9 @@ function main(): void {
   console.log('');
   console.log('DIRECTION 3 — IS THE HEADER CURRENT? (measured from git, not read from the file)');
   console.log(`  HEAD ${cur.headSha}`);
-  console.log(`  measured: ${cur.commits} commit(s) ahead of origin/main, ${cur.newFiles} file(s) added, ${cur.scriptsAdded === -1 ? 'package.json unreadable' : `${cur.scriptsAdded} package.json script key(s) added`}`);
+  console.log(
+    `  measured: ${cur.commits} commit(s) ahead of origin/main, ${cur.newFiles} file(s) added, ${cur.scriptsAdded === -1 ? 'package.json unreadable' : `${cur.scriptsAdded} package.json script key(s) added`}`,
+  );
   if (cur.problems.length === 0) {
     console.log('  the header SHA and every stated count match this branch.');
   } else {
@@ -360,16 +496,24 @@ function main(): void {
   if (ch.problems.length === 0) console.log('  every round on disk is named here, and every round named here has a report behind it.');
   else for (const pr of ch.problems) console.log(`  CONTRADICTED ${pr}`);
 
-  const problems = stale.length + missing.length + unlisted.length + cur.problems.length + ch.problems.length;
+  // ── direction 5: does the repo-file table agree with git at the SHA? ───
+  const ft = checkFileTable(manifest, resolve(__dirname, '../..'));
+  console.log('');
+  console.log('DIRECTION 5 — DOES §3 AGREE WITH GIT AT THE SHA THIS FILE DECLARES?');
+  console.log(`  ${ft.rows} repo-file row(s) measured against ${ft.sha === null ? 'no declared SHA' : ft.sha.slice(0, 12)}`);
+  if (ft.problems.length === 0) console.log('  every row\u2019s line count is `wc -l` at that commit, and every file the branch adds has a row.');
+  else for (const pr of ft.problems) console.log(`  WRONG ${pr}`);
+
+  const problems = stale.length + missing.length + unlisted.length + cur.problems.length + ch.problems.length + ft.problems.length;
   console.log('');
   if (problems === 0) {
     console.log(
-      `PHASE 15 HANDOFF MANIFEST: VERIFIED — ${rows.length} digest(s) match, ${onDisk.length} artifact(s) all listed, none missing, header current at ${cur.headSha.slice(0, 12)}, ${ch.onDisk.length} challenge round(s) recorded`,
+      `PHASE 15 HANDOFF MANIFEST: VERIFIED — ${rows.length} digest(s) match, ${onDisk.length} artifact(s) all listed, none missing, header current at ${cur.headSha.slice(0, 12)}, ${ch.onDisk.length} challenge round(s) recorded, ${ft.rows} repo-file row(s) re-measured from git`,
     );
     return;
   }
   console.error(
-    `PHASE 15 HANDOFF MANIFEST: FAIL — ${stale.length} stale digest(s), ${missing.length} missing file(s), ${unlisted.length} unlisted artifact(s), ${cur.problems.length} stale header claim(s), ${ch.problems.length} contradicted challenge claim(s).`,
+    `PHASE 15 HANDOFF MANIFEST: FAIL — ${stale.length} stale digest(s), ${missing.length} missing file(s), ${unlisted.length} unlisted artifact(s), ${cur.problems.length} stale header claim(s), ${ch.problems.length} contradicted challenge claim(s), ${ft.problems.length} wrong repo-file row(s).`,
   );
   console.error('  A stale digest is not a cosmetic defect: it is an evidence index asserting a byte state that is not the one on disk.');
   console.error(

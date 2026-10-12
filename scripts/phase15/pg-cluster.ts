@@ -68,7 +68,25 @@ export interface ClusterSpec {
   readonly port: number;
   /** A label used in error messages: `source` / `target`. */
   readonly label: string;
+  /**
+   * The `initdb` locale. It defaults to the SETTLED DEPLOYMENT COLLATION, and
+   * that default is the whole point of the field existing.
+   *
+   * These clusters were created with `--locale=C` for as long as B-23 has been
+   * open: the PostgreSQL version matched the deploy target and the collation
+   * did not, so every DR and PITR exit code was evidence about a cluster the
+   * deployment is not. A caller may still ask for another locale — the version
+   * matrix exists to compare them — but it has to ASK, and the identity line
+   * each proof prints names what it got.
+   */
+  readonly locale?: string;
 }
+
+/**
+ * PostgreSQL 16 at `en_US.utf8` is the deployment line (`TL-P4-S3-R4`), so it
+ * is what a proof gets unless it says otherwise.
+ */
+export const SETTLED_COLLATION = 'en_US.utf8';
 
 export class ClusterError extends Error {
   constructor(
@@ -124,7 +142,11 @@ export function startCluster(spec: ClusterSpec, extraSettings: readonly string[]
     const gid = Number(must(run('id', ['-g', SERVER_OS_USER]), 'id -g postgres').trim());
     chownSync(pwfile, uid, gid);
   }
-  must(asServerUser(`${PG16_BIN}/initdb -D ${data} -U ${PG_SUPERUSER} --auth=md5 --pwfile=${pwfile} -E UTF8 --locale=C`), `initdb (${spec.label})`);
+  const locale = spec.locale ?? SETTLED_COLLATION;
+  must(
+    asServerUser(`${PG16_BIN}/initdb -D ${data} -U ${PG_SUPERUSER} --auth=md5 --pwfile=${pwfile} -E UTF8 --locale=${locale}`),
+    `initdb (${spec.label}, locale ${locale})`,
+  );
   // Written AFTER initdb so the generated file is not overwritten.
   const conf = join(data, 'postgresql.conf');
   // `extraSettings` are appended LAST, so a caller can override a default
@@ -278,6 +300,11 @@ export const clusterStopFailures = (): readonly string[] => stopFailures;
 export function stopCluster(spec: ClusterSpec): void {
   const data = join(spec.dir, 'data');
   if (!existsSync(join(data, 'PG_VERSION'))) return;
+  // ALREADY STOPPED IS NOT A FAILED STOP. `pg_ctl stop` exits 1 with "PID file
+  // does not exist" when the server is not running, and reporting that as a
+  // teardown failure would cry wolf on every proof that stops its cluster
+  // twice — which is how a real held port stops being read.
+  if (!existsSync(join(data, 'postmaster.pid'))) return;
   // Immediate, not fast: the drill's clusters are disposable and a stuck
   // shutdown would hold the port for the next run.
   const r = asServerUser(`${PG16_BIN}/pg_ctl -D ${data} -m immediate -w stop`);
@@ -347,8 +374,19 @@ export function restoreGlobals(port: number, file: string): { readonly tolerated
   return { tolerated };
 }
 
-/** `CREATE DATABASE` on the target, from `template0` so nothing is inherited. */
-export function createEmptyDatabase(port: number, db: string): void {
+/**
+ * `CREATE DATABASE` on the target, from `template0` so nothing is inherited.
+ *
+ * THE COLLATION IS THE SOURCE'S, NOT `C`. This hard-coded `LC_COLLATE 'C'`
+ * against a source cluster that is now `en_US.utf8` is what turned V2 of the DR
+ * drill red the first time the drill ran on the deployment line — two tables
+ * with equal row counts and unequal digests, because the digests order text.
+ * The red is correct and the defect is here: a restore target whose collation
+ * differs from the source's is not a restore of that database, and while both
+ * sides were `C` nothing could see it. B-23 said the collation was off the
+ * target and that equivalence was UNMEASURED; this is the measurement.
+ */
+export function createEmptyDatabase(port: number, db: string, locale: string = SETTLED_COLLATION): void {
   must(
     run(
       `${PG16_BIN}/psql`,
@@ -364,7 +402,7 @@ export function createEmptyDatabase(port: number, db: string): void {
         '-v',
         'ON_ERROR_STOP=1',
         '-c',
-        `CREATE DATABASE ${db} TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'`,
+        `CREATE DATABASE ${db} TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE '${locale}' LC_CTYPE '${locale}'`,
       ],
       {
         env: { PGPASSWORD: PG_SUPERPASS },

@@ -124,14 +124,17 @@ const PRECONDITIONS: readonly Precondition[] = [
       const dist = join(ROOT, 'packages/inventory', main);
       return existsSync(dist)
         ? { met: true, detail: `packages/inventory → ${main} exists` }
-        : { met: false, detail: `packages/inventory → ${main} is absent, so the cases cannot import it. Build it and re-run; a vitest run that finds no test files is not a measurement of the harness` };
+        : {
+            met: false,
+            detail: `packages/inventory → ${main} is absent, so the cases cannot import it. Build it and re-run; a vitest run that finds no test files is not a measurement of the harness`,
+          };
     },
   },
   {
     id: 'build-accounting',
     kind: 'environment',
     what: 'packages/accounting is built — the dist `verify:gap-list` reaches through apps/api/src/config',
-    how: "packages/accounting/package.json main, checked for existence on disk; plus a non-blocking survey of every workspace package",
+    how: 'packages/accounting/package.json main, checked for existence on disk; plus a non-blocking survey of every workspace package',
     measure: () => {
       // NARROW ON PURPOSE. The first version of this precondition required
       // EVERY workspace package to be built, and it immediately blocked
@@ -145,7 +148,9 @@ const PRECONDITIONS: readonly Precondition[] = [
       // information printed beside it.
       const survey: string[] = [];
       try {
-        for (const name of readdirSync(join(ROOT, 'packages'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)) {
+        for (const name of readdirSync(join(ROOT, 'packages'), { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => d.name)) {
           const pkgPath = join(ROOT, 'packages', name, 'package.json');
           if (!existsSync(pkgPath)) continue;
           let main: unknown;
@@ -185,7 +190,7 @@ const PRECONDITIONS: readonly Precondition[] = [
     id: 'phase4-ref',
     kind: 'environment',
     what: 'the Phase 4 candidate ref is present in THIS clone',
-    how: "git rev-parse --verify on 969b8605, then origin/phase/4-sales-pos-customers-receivables",
+    how: 'git rev-parse --verify on 969b8605, then origin/phase/4-sales-pos-customers-receivables',
     measure: () => {
       for (const ref of ['969b8605', 'origin/phase/4-sales-pos-customers-receivables']) {
         const r = spawnSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: ROOT, encoding: 'utf8' });
@@ -305,15 +310,15 @@ const INSTRUMENTS: readonly Instrument[] = [
   },
   {
     script: 'verify:outcome-class:prove',
-    what: "what a non-zero exit code means, measured from real process output — a crash before measuring, a crash after the totals print, and the two controls",
+    what: 'what a non-zero exit code means, measured from real process output — a crash before measuring, a crash after the totals print, and the two controls',
     cluster: false,
-    nonZeroMeans: "the record cannot tell a crash from a verdict, so every outcome class in this log is a label rather than a reading",
+    nonZeroMeans: 'the record cannot tell a crash from a verdict, so every outcome class in this log is a label rather than a reading',
   },
   {
     script: 'verify:handoff-manifest:prove',
     what: "the ways the manifest's prose and the challenge reports on disk can disagree, and the one way they only appear to",
     cluster: false,
-    nonZeroMeans: "direction 4 did not redden on a planted contradiction, or it failed a correction for quoting the claim it retracts",
+    nonZeroMeans: 'direction 4 did not redden on a planted contradiction, or it failed a correction for quoting the claim it retracts',
   },
   {
     script: 'checkpoint:phase15',
@@ -428,7 +433,8 @@ const INSTRUMENTS: readonly Instrument[] = [
     script: 'test:phase15:load-harness',
     what: 'the load harness’s own laws, as unit cases — its globalSetup starts the shared embedded PostgreSQL on a fixed port',
     cluster: true,
-    nonZeroMeans: 'a case failed, OR its fixture could not start — vitest reports an unstartable fixture as "No test files found", so read the log, not the code',
+    nonZeroMeans:
+      'a case failed, OR its fixture could not start — vitest reports an unstartable fixture as "No test files found", so read the log, not the code',
     requires: ['build-inventory'],
   },
   {
@@ -549,12 +555,10 @@ interface Result {
  * than a number scavenged from its body.
  */
 
-
 /**
  * The summary shapes the instruments in this pack actually print. Each is
  * start-anchored so an item id (`G4`, `V1`) can never be read as a count.
  */
-
 
 interface Subject {
   /** every distinct "<version>, collate <x>" the output names, in order of appearance. */
@@ -603,7 +607,7 @@ function scrapeSubject(out: string): Subject {
 function runtimeIdentity(): { readonly node: string; readonly npm: string; readonly psql: string; readonly embedded: string; readonly os: string } {
   const v = (cmd: string, args: readonly string[]): string => {
     const r = spawnSync(cmd, [...args], { encoding: 'utf8' });
-    return r.status === 0 ? (r.stdout ?? '').trim().split('\n')[0] ?? 'unknown' : 'not present';
+    return r.status === 0 ? ((r.stdout ?? '').trim().split('\n')[0] ?? 'unknown') : 'not present';
   };
   return {
     node: process.version,
@@ -664,9 +668,11 @@ function run(inst: Instrument, src: ReturnType<typeof sourceIdentity>, i: number
         return null;
       }
     })();
-    const target = cmd === null ? null : /(?:^|\s)(scripts\/phase15\/[A-Za-z0-9_.-]+\.ts)/.exec(cmd)?.[1] ?? null;
+    const target = cmd === null ? null : (/(?:^|\s)(scripts\/phase15\/[A-Za-z0-9_.-]+\.ts)/.exec(cmd)?.[1] ?? null);
     if (target === null) {
-      console.log(`  ! P15_PROVE_CRASH names ${inst.script}, but its command is not a single scripts/phase15 entry point, so it cannot be poisoned in its own process. NOT POISONED.`);
+      console.log(
+        `  ! P15_PROVE_CRASH names ${inst.script}, but its command is not a single scripts/phase15 entry point, so it cannot be poisoned in its own process. NOT POISONED.`,
+      );
     } else {
       const hook = join(LOG_DIR, poisonMode === 'late' ? 'p15-poison-late.mjs' : 'p15-poison-loader.mjs');
       mkdirSync(LOG_DIR, { recursive: true });
@@ -797,10 +803,6 @@ function notRun(inst: Instrument, reason: string): Result {
  * assumed to have finished.
  */
 
-
-
-
-
 /**
  * PART 19's last field: MEASUREMENT VALIDITY. This is the one judgement the
  * runner is entitled to make, because it is a judgement about the RUN and not
@@ -856,6 +858,13 @@ function emitSection(
   L.push(`| base SHA | ${src.base} |`);
   L.push(`| tree | **${src.clean ? 'clean tree' : 'TREE NOT CLEAN — preparation measurement only'}** |`);
   L.push(`| runtime | node ${rt.node}, npm ${rt.npm}, ${rt.psql}, embedded initdb ${rt.embedded} |`);
+  // The verdict goes in the TABLE, not only in the runtime string: a reader
+  // who takes "runner exit 0" from a summary never reaches a version number.
+  const eng = engineVerdict();
+  L.push(
+    `| authoritative | **${eng.satisfied && src.clean ? 'YES' : 'NO'}** — ${eng.running} against engines.node ${eng.declared ?? 'UNDECLARED'}${eng.satisfied ? '' : ', so this is a DIAGNOSTIC run'}${src.clean ? '' : ', and the tree was not clean'} |`,
+  );
+  L.push(`| collation | cluster instruments default to \`${SETTLED_COLLATION}\`, the settled deployment line; each proof prints the collation it got |`);
   L.push(`| os | ${rt.os} |`);
   L.push(
     `| coverage | **${results.length} instrument(s) driven** against ${coverage.total} Phase 15 script key(s) in \`package.json\`; **${coverage.readFailed ? 'COVERAGE UNMEASURED — package.json could not be read' : `${coverage.missing.length} omission(s)`}**, measured rather than declared |`,
@@ -874,7 +883,9 @@ function emitSection(
   L.push('|---|---|---|---|---|');
   for (const r of results) {
     const exit = r.notRunReason !== null ? '**—**' : r.exitCode === null ? `**KILLED (${String(r.signal)})**` : `**${String(r.exitCode)}**`;
-    L.push(`| \`npm run ${r.instrument.script}\` | ${exit} | ${r.notRunReason === null ? r.runId : 'not run'} | ${cell(outcomeClass(r))} | ${cell(validity(r, src))} |`);
+    L.push(
+      `| \`npm run ${r.instrument.script}\` | ${exit} | ${r.notRunReason === null ? r.runId : 'not run'} | ${cell(outcomeClass(r))} | ${cell(validity(r, src))} |`,
+    );
   }
   L.push('');
   L.push('**What a non-zero exit means, per instrument** — recorded because it differs, and flattening');
@@ -886,8 +897,53 @@ function emitSection(
   console.log(`  §8b written to ${path} — ${results.length} run(s). The manifest references this file; nothing is transcribed by hand.`);
 }
 
+/**
+ * THE PINNED ENGINE, AND WHY A RUN CAN REFUSE TO BE CALLED AUTHORITATIVE.
+ *
+ * `package.json` declares `engines.node >= 24 < 25`. Every authoritative run in
+ * this pack through round 8 was produced on Node v22.22.0, and the record said
+ * so honestly in each proof's runtime line — which is why the coordinator
+ * called it a NAMED residual rather than a false claim. But an honest line
+ * inside 1,000 lines of record is not a gate: a reader takes "runner exit 0,
+ * 25 instruments" from the summary and never reaches it.
+ *
+ * So the engine is now a VERDICT the run prints about itself, and
+ * `--authoritative` makes it a refusal: off the pinned engine, nothing runs and
+ * nothing is claimed. Without the flag the run still happens — a diagnostic run
+ * on whatever engine the box has is useful — but the banner and the emitted
+ * section both carry `AUTHORITATIVE: NO`, so the record cannot be mistaken for
+ * the handoff run.
+ *
+ * Node 24 is not in this container's image. Fetching it is a step, not a round:
+ * about 30 MB, digest checked against the published SHASUMS256.txt every time,
+ * never trusted from a cache.
+ */
+function engineVerdict(): { readonly declared: string | null; readonly running: string; readonly satisfied: boolean } {
+  const running = process.version;
+  let declared: string | null = null;
+  try {
+    declared = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { engines?: { node?: string } }).engines?.node ?? null;
+  } catch {
+    declared = null;
+  }
+  if (declared === null) return { declared, running, satisfied: false };
+  // The declared range in this repo is a `>=A <B` pair on MAJORS, which is all
+  // this needs to read. Anything it cannot parse is NOT satisfied: an
+  // unreadable range must never be a pass (PART 18).
+  const major = Number(/^v(\d+)/.exec(running)?.[1] ?? 'NaN');
+  const lo = Number(/>=\s*(\d+)/.exec(declared)?.[1] ?? 'NaN');
+  const hi = Number(/<\s*(\d+)/.exec(declared)?.[1] ?? 'NaN');
+  if (!Number.isFinite(major) || !Number.isFinite(lo) || !Number.isFinite(hi)) return { declared, running, satisfied: false };
+  return { declared, running, satisfied: major >= lo && major < hi };
+}
+
+/** The collation the deployment line runs at (`TL-P4-S3-R4`). */
+const SETTLED_COLLATION = 'en_US.utf8';
+
 function main(): number {
   const quick = process.argv.includes('--quick');
+  const authoritative = process.argv.includes('--authoritative');
+  const engine = engineVerdict();
   const src = sourceIdentity();
   mkdirSync(LOG_DIR, { recursive: true });
 
@@ -896,6 +952,30 @@ function main(): number {
   console.log(`source   : ${src.sha}${src.clean ? ' (clean tree)' : ' PLUS UNCOMMITTED CHANGES'}`);
   console.log(`logs     : ${LOG_DIR}`);
   console.log(`selection: ${quick ? 'cluster-free instruments only (--quick)' : 'every instrument'}`);
+  console.log(
+    `engine   : ${engine.running} against engines.node ${engine.declared ?? 'UNDECLARED'} — ${engine.satisfied ? 'ON THE PINNED ENGINE' : 'OFF THE PINNED ENGINE'}`,
+  );
+  console.log(`collation: cluster instruments default to ${SETTLED_COLLATION}, the settled deployment line; each proof prints the collation it got`);
+  console.log(
+    `AUTHORITATIVE: ${engine.satisfied && src.clean ? (authoritative ? 'YES — requested and granted' : 'ELIGIBLE — pass --authoritative to assert it') : 'NO'}`,
+  );
+  if (!engine.satisfied) {
+    console.log('');
+    console.log('! THIS RUN IS NOT ON THE PINNED ENGINE. Every figure below is a diagnostic');
+    console.log('  measurement on this box\u2019s Node, not evidence on the engine the package declares.');
+    console.log('  A handoff run is `npm run verify:evidence-log -- --authoritative`, which REFUSES');
+    console.log('  rather than producing a record someone has to read a runtime line to discount.');
+  }
+  if (authoritative && (!engine.satisfied || !src.clean)) {
+    console.log('');
+    console.log('REFUSED — nothing was run and nothing is claimed.');
+    if (!engine.satisfied) console.log(`  the engine is ${engine.running}, and the package declares ${engine.declared ?? 'no range this runner can read'}.`);
+    if (!src.clean) console.log('  the tree is not clean, and an authoritative run is made at an exact SHA.');
+    console.log('  Fetch the pinned engine (digest checked against the published SHASUMS256.txt, not');
+    console.log('  from a cache), commit, and run this again. A refusal is the only honest output');
+    console.log('  here: the alternative is a full record whose one disqualifying fact is on line 8.');
+    return 3;
+  }
   if (!src.clean) {
     console.log('');
     console.log('! THE TREE IS NOT CLEAN. Under §79 / V3 §22.3 the final evidence runs on the FINAL');
@@ -994,13 +1074,25 @@ function main(): number {
     console.log(`  \u2500\u2500 npm run ${r.instrument.script}`);
     console.log(`     measures : ${r.instrument.what}`);
     console.log(`     run id   : ${r.runId}`);
-    console.log(`     utc      : ${r.notRunReason !== null ? 'none — no run, so no window' : `${r.startedUtc} \u2192 ${r.endedUtc}  (${(r.ms / 1000).toFixed(1)}s)`}`);
-    console.log(`     exit     : ${r.notRunReason !== null ? 'none — this instrument was not run' : r.exitCode === null ? `KILLED by ${String(r.signal)}` : String(r.exitCode)}`);
-    console.log(`     database : ${r.subject.servers.length === 0 ? (r.instrument.cluster ? 'NOT STATED BY THE INSTRUMENT \u2014 and it starts a cluster, so this is a gap in its record' : 'none \u2014 this instrument reads the tree and starts no cluster') : r.subject.servers.join('; ')}`);
+    console.log(
+      `     utc      : ${r.notRunReason !== null ? 'none — no run, so no window' : `${r.startedUtc} \u2192 ${r.endedUtc}  (${(r.ms / 1000).toFixed(1)}s)`}`,
+    );
+    console.log(
+      `     exit     : ${r.notRunReason !== null ? 'none — this instrument was not run' : r.exitCode === null ? `KILLED by ${String(r.signal)}` : String(r.exitCode)}`,
+    );
+    console.log(
+      `     database : ${r.subject.servers.length === 0 ? (r.instrument.cluster ? 'NOT STATED BY THE INSTRUMENT \u2014 and it starts a cluster, so this is a gap in its record' : 'none \u2014 this instrument reads the tree and starts no cluster') : r.subject.servers.join('; ')}`,
+    );
     console.log(`     role     : ${r.subject.principal ?? (r.instrument.cluster ? 'NOT STATED BY THE INSTRUMENT' : 'none \u2014 no SQL is executed')}`);
-    console.log(`     fixture  : ${r.subject.declaresFixture ? 'the instrument declares its subject a FIXTURE, not a real database' : 'no fixture declared in the output'}`);
-    console.log(`     counts   : measured ${stated(r.counts.measured)}, unmeasured ${stated(r.counts.unmeasured)}, findings ${stated(r.counts.findings)}, skips ${stated(r.counts.skips)}`);
-    console.log(`     read from: ${r.counts.readFrom === null ? 'no summary line this runner recognises \u2014 so NO count is reported, rather than one scavenged from the body' : `\u201c${r.counts.readFrom}\u201d`}`);
+    console.log(
+      `     fixture  : ${r.subject.declaresFixture ? 'the instrument declares its subject a FIXTURE, not a real database' : 'no fixture declared in the output'}`,
+    );
+    console.log(
+      `     counts   : measured ${stated(r.counts.measured)}, unmeasured ${stated(r.counts.unmeasured)}, findings ${stated(r.counts.findings)}, skips ${stated(r.counts.skips)}`,
+    );
+    console.log(
+      `     read from: ${r.counts.readFrom === null ? 'no summary line this runner recognises \u2014 so NO count is reported, rather than one scavenged from the body' : `\u201c${r.counts.readFrom}\u201d`}`,
+    );
     console.log(`     log      : ${r.logPath}`);
     console.log(`                sha256 ${r.logSha}  (${r.logBytes} bytes)`);
     console.log(`     outcome  : ${outcomeClass(r)}`);
@@ -1067,6 +1159,11 @@ function main(): number {
     }
   }
 
+  if (!engine.satisfied) {
+    console.log(`AUTHORITATIVE: NO — ${engine.running} against engines.node ${engine.declared ?? 'UNDECLARED'}.`);
+    console.log('  The instruments ran and returned their own codes; this run is not the handoff run.');
+    console.log('');
+  }
   console.log('EVERY INSTRUMENT RAN AND RETURNED ITS OWN EXIT CODE, OR WAS NOT RUN FOR A');
   console.log('CALLER-SUPPLIED PRECONDITION IT CORRECTLY REFUSED TO INVENT.');
   console.log('  This runner asserts nothing beyond that. The exit codes above are the evidence');

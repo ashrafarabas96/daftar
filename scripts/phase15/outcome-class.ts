@@ -44,10 +44,20 @@ export const SUMMARY_LINE = /^(?:measured\s+\d+\s+of\s+\d+:|\d+\s+probes?:|\d+\s
 
 export function scrape(out: string): Counts {
   const full = out;
-  const line = out.split('\n').map((l) => l.trim()).find((l) => SUMMARY_LINE.test(l));
+  const line = out
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => SUMMARY_LINE.test(l));
 
   if (line === undefined) {
-    return { measured: null, unmeasured: null, findings: null, skips: null, dirtyTreeDeclared: /PLUS UNCOMMITTED CHANGES|THE TREE IS NOT CLEAN/.test(full), readFrom: null };
+    return {
+      measured: null,
+      unmeasured: null,
+      findings: null,
+      skips: null,
+      dirtyTreeDeclared: /PLUS UNCOMMITTED CHANGES|THE TREE IS NOT CLEAN/.test(full),
+      readFrom: null,
+    };
   }
 
   const num = (re: RegExp): number | null => {
@@ -68,9 +78,11 @@ export function scrape(out: string): Counts {
   };
 }
 
-export const LOADER_MARKERS = /ERR_MODULE_NOT_FOUND|Cannot find module|ERR_UNKNOWN_FILE_EXTENSION|ERR_REQUIRE_ESM|SyntaxError:|ERR_INVALID_ARG|MODULE_NOT_FOUND/;
+export const LOADER_MARKERS =
+  /ERR_MODULE_NOT_FOUND|Cannot find module|ERR_UNKNOWN_FILE_EXTENSION|ERR_REQUIRE_ESM|SyntaxError:|ERR_INVALID_ARG|MODULE_NOT_FOUND/;
 
-export const RUNTIME_MARKERS = /(?:^|\n)\s*(?:Uncaught )?(?:TypeError|RangeError|ReferenceError|AssertionError|Error):|\n\s+at [^\n]*\(?[^\n]*:\d+:\d+\)?|UnhandledPromiseRejection|FATAL ERROR:|Segmentation fault/;
+export const RUNTIME_MARKERS =
+  /(?:^|\n)\s*(?:Uncaught )?(?:TypeError|RangeError|ReferenceError|AssertionError|Error):|\n\s+at [^\n]*\(?[^\n]*:\d+:\d+\)?|UnhandledPromiseRejection|FATAL ERROR:|Segmentation fault/;
 
 export const VERDICT_LINE = /^(?:EXIT\s+\d+\s+[—-]|PHASE\s+15\s+[A-Z0-9 /-]+:\s*(?:PASS|FAIL|VERIFIED|UNMEASURED|REJECT)|P15[A-Z0-9_ ]*:\s*\{)/m;
 
@@ -89,8 +101,7 @@ export function outcomeClass(r: Classifiable): string {
   const loader = LOADER_MARKERS.test(r.output);
   const threw = RUNTIME_MARKERS.test(r.output);
   const reached = r.counts.readFrom !== null || reachedVerdict(r) !== null;
-  if (loader && !reached)
-    return 'CRASHED BEFORE MEASURING — a loader/parse error and no summary line, so this exit code is NOT a verdict about the subject';
+  if (loader && !reached) return 'CRASHED BEFORE MEASURING — a loader/parse error and no summary line, so this exit code is NOT a verdict about the subject';
   if (threw && !reached)
     return 'CRASHED BEFORE MEASURING — an uncaught runtime error with no summary line, so this exit code is NOT a verdict about the subject';
   if (loader || threw)

@@ -238,7 +238,13 @@ function independentInventory(root: string): { readonly source: string; readonly
     const path = line.slice(tab + 1);
     if (stage === '0' && /^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(oid)) oidOf.set(path, oid);
   }
-  const listed = [...new Set(git(root, ['ls-files', '-z']).split('\0').filter((f) => f.length > 0))].filter((f) => existsSync(join(root, f)));
+  const listed = [
+    ...new Set(
+      git(root, ['ls-files', '-z'])
+        .split('\0')
+        .filter((f) => f.length > 0),
+    ),
+  ].filter((f) => existsSync(join(root, f)));
   let bound = 0;
   for (const f of listed) {
     if (oidOf.has(f)) bound += 1;
@@ -262,7 +268,12 @@ function independentInventory(root: string): { readonly source: string; readonly
         `The scan read the working-tree bytes, so its verdict is about content no commit holds — a release scan has to be run on a clean tree or it certifies something that will not ship.`,
     );
 
-  return { source: 'git ls-files -z for the inventory, ls-files -s stage 0 for the binding', paths: listed, withDigest: bound, head: git(root, ['rev-parse', 'HEAD']) };
+  return {
+    source: 'git ls-files -z for the inventory, ls-files -s stage 0 for the binding',
+    paths: listed,
+    withDigest: bound,
+    head: git(root, ['rev-parse', 'HEAD']),
+  };
 }
 
 /**
@@ -416,7 +427,10 @@ function runTree(root: string, gitleaks: string): TreeOutcome {
   // A canary that was never planted is NOT a canary that passed: `null` fails
   // here exactly as an unreported one does.
   if (canary === null || canary === undefined)
-    fail('non-vacuity', 'no positive control was planted in the scanned copy, so a green here would rest on a file count alone — which cannot show that gitleaks read a single byte');
+    fail(
+      'non-vacuity',
+      'no positive control was planted in the scanned copy, so a green here would rest on a file count alone — which cannot show that gitleaks read a single byte',
+    );
   else if (!canary.reported)
     fail(
       'non-vacuity',

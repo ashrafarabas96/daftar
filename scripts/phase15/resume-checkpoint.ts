@@ -113,9 +113,7 @@ function measure(): readonly Fact[] {
     { what: 'HEAD (the current candidate for this pack)', value: measured(['rev-parse', 'HEAD'], SHA), how: 'git rev-parse HEAD' },
     {
       what: 'pushed head on the remote',
-      value: pushed.startsWith('UNMEASURED')
-        ? `NOT PUSHED or not fetched — a local head nobody else can read is not a checkpoint (${pushed})`
-        : pushed,
+      value: pushed.startsWith('UNMEASURED') ? `NOT PUSHED or not fetched — a local head nobody else can read is not a checkpoint (${pushed})` : pushed,
       how: `git rev-parse origin/${BRANCH}`,
     },
     {
@@ -157,7 +155,12 @@ function measure(): readonly Fact[] {
       how: `git diff --name-only ${BASE}...HEAD | grep migrations/`,
     },
   ];
-  if (!headR.ok) facts.unshift({ what: '! THIS CHECKPOINT IS NOT TRUSTWORTHY', value: `git rev-parse HEAD exited ${String(headR.code)} — nothing below is anchored to a commit`, how: 'git rev-parse HEAD' });
+  if (!headR.ok)
+    facts.unshift({
+      what: '! THIS CHECKPOINT IS NOT TRUSTWORTHY',
+      value: `git rev-parse HEAD exited ${String(headR.code)} — nothing below is anchored to a commit`,
+      how: 'git rev-parse HEAD',
+    });
   return facts;
 }
 
@@ -179,26 +182,28 @@ function packState(): readonly { readonly file: string; readonly bytes: number; 
     console.error(`! could not list ${PACK} (ls exited ${String(names.status)}): the pack state below is UNMEASURED, not empty`);
     return [];
   }
-  return (names.stdout ?? '')
-    .split('\n')
-    // The handoff manifest is EXCLUDED, and its own gate is cited instead.
-    // Otherwise the two indexes are circular: the manifest's digest table must
-    // be rewritten as the LAST action of a round, which would immediately
-    // invalidate a digest recorded for it here, and a digest table that is
-    // known-stale by construction teaches a reader to ignore digest tables.
-    // One file, one indexing authority.
-    .filter((f) => /^P15-.*\.(md|json)$/.test(f.trim()) && f.trim() !== 'P15-HANDOFF-MANIFEST.md' && f.trim() !== 'P15-RESUME-CHECKPOINT.md')
-    // This file is excluded too, and for a harder reason than the manifest: a
-    // file cannot carry its own digest. Including itself made every write change
-    // the digest it had just recorded, so the output was non-deterministic no
-    // matter how the timestamp was derived. Its own integrity is the manifest's
-    // to record, which is the same one-file-one-authority rule running the other
-    // way.
-    .map((f) => f.trim())
-    .map((f) => {
-      const b = readFileSync(join(PACK, f));
-      return { file: f, bytes: b.length, sha: createHash('sha256').update(b).digest('hex') };
-    });
+  return (
+    (names.stdout ?? '')
+      .split('\n')
+      // The handoff manifest is EXCLUDED, and its own gate is cited instead.
+      // Otherwise the two indexes are circular: the manifest's digest table must
+      // be rewritten as the LAST action of a round, which would immediately
+      // invalidate a digest recorded for it here, and a digest table that is
+      // known-stale by construction teaches a reader to ignore digest tables.
+      // One file, one indexing authority.
+      .filter((f) => /^P15-.*\.(md|json)$/.test(f.trim()) && f.trim() !== 'P15-HANDOFF-MANIFEST.md' && f.trim() !== 'P15-RESUME-CHECKPOINT.md')
+      // This file is excluded too, and for a harder reason than the manifest: a
+      // file cannot carry its own digest. Including itself made every write change
+      // the digest it had just recorded, so the output was non-deterministic no
+      // matter how the timestamp was derived. Its own integrity is the manifest's
+      // to record, which is the same one-file-one-authority rule running the other
+      // way.
+      .map((f) => f.trim())
+      .map((f) => {
+        const b = readFileSync(join(PACK, f));
+        return { file: f, bytes: b.length, sha: createHash('sha256').update(b).digest('hex') };
+      })
+  );
 }
 
 /** The blocker ids the handoff declares, read from it rather than restated. */
@@ -377,7 +382,7 @@ function main(): number {
   lines.push('`npm run checkpoint:phase15 -- --write` rewrites it — the read-only verb is the default, because');
   lines.push('this directory has several writers and a bare command should not change shared state. It rewrites');
   lines.push('this file from measurement, and at an unchanged head it rewrites it **byte-identically** — its');
-  lines.push('timestamp is the HEAD commit\'s date, not the clock, so the manifest can digest-index it');
+  lines.push("timestamp is the HEAD commit's date, not the clock, so the manifest can digest-index it");
   lines.push('without the two gates fighting. It still changes when another pack document changes,');
   lines.push('because §6 digests them, and that is real content drift rather than a moving clock.');
   lines.push('');
@@ -408,7 +413,8 @@ function main(): number {
   lines.push('');
   lines.push('| what | value | how it was measured |');
   lines.push('|---|---|---|');
-  for (const f of facts) lines.push(`| ${f.what} | ${f.value.startsWith('NONE') || f.value === 'clean' ? `**${f.value}**` : `\`${f.value}\`` } | \`${f.how}\` |`);
+  for (const f of facts)
+    lines.push(`| ${f.what} | ${f.value.startsWith('NONE') || f.value === 'clean' ? `**${f.value}**` : `\`${f.value}\``} | \`${f.how}\` |`);
   lines.push('');
   lines.push('## 2 · What is accepted, and by whom');
   lines.push('');
@@ -445,7 +451,7 @@ function main(): number {
   lines.push('');
   lines.push(`${bs.length} declared in \`P15-HANDOFF-MANIFEST.md\` §9, read from that file: ${bs.join(', ')}.`);
   lines.push('');
-  lines.push('Two are the owner\'s and only the owner\'s: the **alert destination** (B-15) and');
+  lines.push("Two are the owner's and only the owner's: the **alert destination** (B-15) and");
   lines.push('**confirmation of the production PITR/RDS plan** with real access and approved');
   lines.push('retention/RPO/RTO (B-3, B-16). Neither may delay anything else.');
   lines.push('');
@@ -463,10 +469,10 @@ function main(): number {
   lines.push('3. **B-25** — this directory has several writers, so an index written here is current');
   lines.push('   only at the instant it was written. Partly closed: the manifest gate reads the');
   lines.push('   challenge reports on disk and fails when the prose disagrees, in either direction.');
-  lines.push('4. The coordinator\'s round-7 residuals R1-R10, each named in its own review file.');
+  lines.push("4. The coordinator's round-7 residuals R1-R10, each named in its own review file.");
   lines.push('');
   lines.push('B-18, B-19, B-20, B-21 and B-24 were on this list and are closed; the items that');
-  lines.push('closed them are measured in the handoff manifest and in `verify:evidence-log`\'s own');
+  lines.push("closed them are measured in the handoff manifest and in `verify:evidence-log`'s own");
   lines.push('output. A next-task list that still names finished work sends the next session to');
   lines.push('redo it.');
   lines.push('');
@@ -474,14 +480,14 @@ function main(): number {
   lines.push('fetched Node v24.12.0, verified its digest against the published `SHASUMS256`, and ran');
   lines.push('the whole inventory on it with the runner exiting 0 — so that debt is paid, by a second');
   lines.push('party rather than by this author. It is not a standing property of the environment:');
-  lines.push('this container\'s image carries Node 20, 21 and 22, so a session that means to measure');
+  lines.push("this container's image carries Node 20, 21 and 22, so a session that means to measure");
   lines.push('on the pinned engine fetches it first and prints `node -v` in the record.');
   lines.push('');
   lines.push('**Owed regardless, and not fixable here:** a read of the **real**');
   lines.push('Phase 4/staging/production role attributes,');
   lines.push('which the Security Authority performs with `npm run verify:role-attributes` and their own');
   lines.push('credentials. That instrument needs `P15_ROLE_READ_URL` set; this file records the');
-  lines.push('variable\'s NAME and never a value.');
+  lines.push("variable's NAME and never a value.");
   lines.push('');
   lines.push('## 5 · Evidence still valid at this head');
   lines.push('');

@@ -42,10 +42,14 @@ const PORT = 55487;
 const spec: ClusterSpec = { dir: DIR, port: PORT, label: 'roleread' };
 
 function psqlRun(sql: string): void {
-  const r = spawnSync('/usr/lib/postgresql/16/bin/psql', ['-h', '127.0.0.1', '-p', String(PORT), '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', sql], {
-    encoding: 'utf8',
-    env: { ...process.env, PGPASSWORD: PG_SUPERPASS },
-  });
+  const r = spawnSync(
+    '/usr/lib/postgresql/16/bin/psql',
+    ['-h', '127.0.0.1', '-p', String(PORT), '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', sql],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, PGPASSWORD: PG_SUPERPASS },
+    },
+  );
   if (r.status !== 0) throw new Error(`psql failed: ${r.stderr?.slice(0, 300) ?? ''}`);
 }
 
@@ -80,7 +84,11 @@ function main(): number {
     console.log('CONTROL 1 (POSITIVE) — clean roles, read by a NON-SUPERUSER: expect exit 0');
     const c1 = readAttributes(readerUrl);
     console.log(c1.out);
-    const c1ok = c1.status === 0 && c1.out.includes('no UNAUTHORISED elevated attribute') && c1.out.includes('is_superuser=off') && c1.out.includes('daftar_reconciler holds BYPASSRLS');
+    const c1ok =
+      c1.status === 0 &&
+      c1.out.includes('no UNAUTHORISED elevated attribute') &&
+      c1.out.includes('is_superuser=off') &&
+      c1.out.includes('daftar_reconciler holds BYPASSRLS');
     if (!c1.spawned) {
       console.log(`CONTROL 1: NOT MEASURED — the check could not be started (exit ${String(c1.status)}). This is NOT a failed control.`);
       notRun += 1;
@@ -134,16 +142,50 @@ function main(): number {
     psqlRun('CREATE SCHEMA p15_reader_owned AUTHORIZATION p15_reader');
     // Positive half: with writes allowed, the statement must SUCCEED — otherwise
     // the negative half below would prove nothing.
-    const allowed = spawnSync('/usr/lib/postgresql/16/bin/psql', ['-h', '127.0.0.1', '-p', String(PORT), '-U', 'p15_reader', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'CREATE TABLE p15_reader_owned.allowed_probe(x int)'], {
-      encoding: 'utf8',
-      env: { ...process.env, PGPASSWORD: PW.read },
-    });
+    const allowed = spawnSync(
+      '/usr/lib/postgresql/16/bin/psql',
+      [
+        '-h',
+        '127.0.0.1',
+        '-p',
+        String(PORT),
+        '-U',
+        'p15_reader',
+        '-d',
+        'postgres',
+        '-v',
+        'ON_ERROR_STOP=1',
+        '-c',
+        'CREATE TABLE p15_reader_owned.allowed_probe(x int)',
+      ],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, PGPASSWORD: PW.read },
+      },
+    );
     const canWriteWhenAllowed = allowed.status === 0;
     console.log(`  with writes allowed, the same role CAN create there: ${canWriteWhenAllowed ? 'yes' : 'NO — this control is invalid'}`);
-    const w = spawnSync('/usr/lib/postgresql/16/bin/psql', ['-h', '127.0.0.1', '-p', String(PORT), '-U', 'p15_reader', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'CREATE TABLE p15_reader_owned.must_not_exist(x int)'], {
-      encoding: 'utf8',
-      env: { ...process.env, PGPASSWORD: PW.read, PGOPTIONS: '-c default_transaction_read_only=on' },
-    });
+    const w = spawnSync(
+      '/usr/lib/postgresql/16/bin/psql',
+      [
+        '-h',
+        '127.0.0.1',
+        '-p',
+        String(PORT),
+        '-U',
+        'p15_reader',
+        '-d',
+        'postgres',
+        '-v',
+        'ON_ERROR_STOP=1',
+        '-c',
+        'CREATE TABLE p15_reader_owned.must_not_exist(x int)',
+      ],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, PGPASSWORD: PW.read, PGOPTIONS: '-c default_transaction_read_only=on' },
+      },
+    );
     const refusal = (w.stderr ?? '').trim().split('\n')[0] ?? '(nothing)';
     const refused = w.status !== 0 && /read-only transaction/i.test(`${w.stderr ?? ''}`);
     console.log(`  under default_transaction_read_only=on, the server said: ${refusal}`);

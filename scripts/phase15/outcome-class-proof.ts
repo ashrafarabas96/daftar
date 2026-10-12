@@ -31,7 +31,10 @@ import { outcomeClass, scrape } from './outcome-class';
 const ROOT = resolve(__dirname, '../..');
 
 /** Run a .ts entry point for real and classify what came out of the process. */
-function runAndClassify(entry: string, env: Readonly<Record<string, string>> = {}): { readonly code: number | null; readonly cls: string; readonly out: string } {
+function runAndClassify(
+  entry: string,
+  env: Readonly<Record<string, string>> = {},
+): { readonly code: number | null; readonly cls: string; readonly out: string } {
   const r = spawnSync('npx', ['tsx', entry], {
     cwd: ROOT,
     encoding: 'utf8',
@@ -66,10 +69,9 @@ function copySubject(dir: string, append: string): string {
   // directory that re-exports nothing: it is run by absolute path with tsx, and
   // its relative imports are rewritten to absolute ones so the copy behaves
   // exactly like the original up to the appended line.
-  const fixed = src.replace(/from '\.\/([A-Za-z0-9_.-]+)'/g, (_m, f: string) => `from '${join(ROOT, 'scripts/phase15', f)}'`).replace(
-    /resolve\(__dirname, '\.\.\/\.\.'\)/g,
-    `'${ROOT}'`,
-  );
+  const fixed = src
+    .replace(/from '\.\/([A-Za-z0-9_.-]+)'/g, (_m, f: string) => `from '${join(ROOT, 'scripts/phase15', f)}'`)
+    .replace(/resolve\(__dirname, '\.\.\/\.\.'\)/g, `'${ROOT}'`);
   writeFileSync(entry, `${fixed}${append}`);
   return entry;
 }
@@ -149,7 +151,10 @@ function main(): number {
       console.log(`     expected : /${c.expect.source}/ — ${c.why}`);
       console.log(`     got      : ${got.cls.slice(0, 150)}`);
       if (!ok) {
-        const tail = got.out.split('\n').filter((l) => l.trim().length > 0).slice(-4);
+        const tail = got.out
+          .split('\n')
+          .filter((l) => l.trim().length > 0)
+          .slice(-4);
         for (const l of tail) console.log(`       | ${l.slice(0, 140)}`);
       }
       console.log('');

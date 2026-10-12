@@ -62,7 +62,18 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { startCluster, stopCluster, prepareClusterDir, psqlScalar, createEmptyDatabase, clusterIdentity, dbUrl, PG_SUPERPASS, PG16_BIN, type ClusterSpec } from './pg-cluster';
+import {
+  startCluster,
+  stopCluster,
+  prepareClusterDir,
+  psqlScalar,
+  createEmptyDatabase,
+  clusterIdentity,
+  dbUrl,
+  PG_SUPERPASS,
+  PG16_BIN,
+  type ClusterSpec,
+} from './pg-cluster';
 // The candidate runtime is built by the APPLICATION'S OWN migrator, not by a
 // loop of `psql -f`.
 //
@@ -119,7 +130,11 @@ function psqlFile(path: string, db: string): { ok: boolean; detail: string; firs
   return {
     ok: r.status === 0,
     detail: all.trim(),
-    firstError: all.split('\n').find((l) => /ERROR|FATAL/.test(l))?.trim() ?? '',
+    firstError:
+      all
+        .split('\n')
+        .find((l) => /ERROR|FATAL/.test(l))
+        ?.trim() ?? '',
   };
 }
 
@@ -168,7 +183,9 @@ async function main(): Promise<number> {
     .out.split('\n')
     .filter((n) => n.endsWith('.sql'))
     .sort();
-  console.log(`migrations:      ${migNames.length} on the candidate (this prep branch carries ${readdirSync(join(ROOT, 'infrastructure/database/migrations')).filter((n) => n.endsWith('.sql')).length})`);
+  console.log(
+    `migrations:      ${migNames.length} on the candidate (this prep branch carries ${readdirSync(join(ROOT, 'infrastructure/database/migrations')).filter((n) => n.endsWith('.sql')).length})`,
+  );
   if (migNames.length === 0) {
     console.log('UNMEASURED: the candidate ref carries no migrations at that path.');
     return 1;
@@ -334,7 +351,10 @@ async function main(): Promise<number> {
           const done = Number(psqlScalar(spec.port, DB, 'SELECT count(*) FROM schema_migrations').value || '0');
           caughtBy = (FILE_NAMES[done] ?? '(the file after the last recorded one)').toString();
         }
-        if (caughtBy === '') c.notes.push(`the re-run applied ${reapplied} new migration(s) — an already-recorded file is skipped by checksum, so its DO-block guards do not execute again`);
+        if (caughtBy === '')
+          c.notes.push(
+            `the re-run applied ${reapplied} new migration(s) — an already-recorded file is skipped by checksum, so its DO-block guards do not execute again`,
+          );
         c.measured = true;
         if (caughtBy === '') {
           c.answer = 'NO — the train re-ran to completion with the drift in place';
@@ -382,7 +402,9 @@ async function main(): Promise<number> {
   const trainRechecks = c3?.answer.startsWith('YES') === true;
 
   console.log(`  CONFIRMED on the candidate's own bootstrap.sql${bootBlob === myBootBlob ? ' (byte-identical to the file Phase 15 measured)' : ''}:`);
-  console.log(`    re-running bootstrap ${bootstrapConverges ? 'DOES' : 'does NOT'} converge a drifted ${SUBJECT}, while it ${bootstrapConverges ? 'also does' : 'DOES'} converge ${CONTROL}.`);
+  console.log(
+    `    re-running bootstrap ${bootstrapConverges ? 'DOES' : 'does NOT'} converge a drifted ${SUBJECT}, while it ${bootstrapConverges ? 'also does' : 'DOES'} converge ${CONTROL}.`,
+  );
   console.log('');
   if (freshProtected && !bootstrapConverges && !trainRechecks) {
     console.log('  NARROWED, and this is the part §10.0 does not yet account for:');
