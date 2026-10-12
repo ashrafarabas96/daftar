@@ -83,6 +83,7 @@ import { Client, Pool } from 'pg';
 import { runMigrations, MIGRATIONS_DIR } from '../../apps/api/src/infra/migrate';
 import {
   adminUrl,
+  clusterIdentity,
   createEmptyDatabase,
   dbUrl,
   dropDatabase,
@@ -1000,6 +1001,14 @@ async function main(): Promise<void> {
     stopCluster(SOURCE);
     prepareClusterDir(SOURCE.dir);
     startCluster(SOURCE);
+
+    // F-10, raised by the independent challenger: this proof's output IS release
+    // evidence, and it ran at collation `C` while the settled deployment target
+    // is the PostgreSQL 16 family at `en_US.utf8` (TL-P4-S3-R4) -- and said so
+    // nowhere. Seven limitations were printed and none of them was this one.
+    // The identity below is read back from the server, so the collation is now
+    // part of the evidence instead of part of the weather.
+    console.log(`CLUSTER: ${clusterIdentity(SOURCE.port, 'postgres')}`);
 
     /* ── 2/8 SCHEMA ─────────────────────────────────────────────────────── */
     console.log('2/8  bootstrap.sql → migrations → assertion keys');
