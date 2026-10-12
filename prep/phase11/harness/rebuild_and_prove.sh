@@ -58,7 +58,7 @@ echo "MANIFEST_SHA256   : $(sha256sum $REPO/infrastructure/database/MIGRATION_MA
 echo "BOOTSTRAP_SHA256  : $(sha256sum $REPO/infrastructure/database/bootstrap.sql | cut -d' ' -f1)"
 echo "PACK_A_DDL_SHA256 : $(sha256sum $REPO/prep/phase11/ddl/p11-pack-a-apparel.sql | cut -d' ' -f1)"
 echo "PACK_B_DDL_SHA256 : $(test -f $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry.sql && sha256sum $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry.sql | cut -d' ' -f1 || echo 'absent at this SHA — Pack B is not on the branch yet, and the run below skips it by name rather than silently')"
-echo "HARNESS_SHA256    : $(cat $(ls $H/proofs.py $H/proofs_b.py $H/races.py $H/run_migrations.py $H/render_bootstrap.py $H/world.sql $H/world_b.sql $H/rebuild_and_prove.sh 2>/dev/null) | sha256sum | cut -d' ' -f1)"
+echo "HARNESS_SHA256    : $(cat $(ls $H/proofs.py $H/proofs_b.py $H/races.py $H/races_b.py $H/run_migrations.py $H/render_bootstrap.py $H/world.sql $H/world_b.sql $H/rebuild_and_prove.sh 2>/dev/null) | sha256sum | cut -d' ' -f1)"
 echo "PG_VERSION        : $($PG/postgres --version)"
 echo "PG_CLUSTER_DIR    : $S/data (port $PORT, socket $SOCK)"
 echo "NODE_VERSION      : $(node -v) (repository engines: $(node -e "process.stdout.write(require('$REPO/package.json').engines.node)")) -- NO npm suite is run here"
@@ -169,9 +169,20 @@ if [ -f "$H/proofs_b.py" ]; then
 else
   RC_B2="n/a"
 fi
-echo "=== 6b. real concurrency: the races, two live backends, no sleep() ==="
+echo "=== 6b. real concurrency: the races, two live backends, no sleep() (Pack A) ==="
 python3 -I $H/races.py
 RCR=$?; [ $RCR -ne 0 ] && RC=$RCR
+# The overlay's own races, carried here from the second independent
+# challenge's `pb3race.py` rather than left in its evidence directory: a law
+# whose concurrency is proved by somebody else's script is a law this pack
+# cannot re-prove when §3.6's writer lands.
+if [ -f "$H/races_b.py" ]; then
+  echo "=== 6d. real concurrency: the lot overlay's races (Pack B) ==="
+  python3 -I $H/races_b.py
+  RCRB=$?; [ $RCRB -ne 0 ] && RC=$RCRB
+else
+  RCRB="n/a"
+fi
 echo "=== 7. the frozen tree, after the run ==="
 cd $REPO && git status --porcelain -- infrastructure/database | wc -l | sed 's/^/tracked changes under infrastructure\/database: /'
 python3 -I - <<PY
@@ -191,5 +202,6 @@ echo "EXIT_PROOFS_B     : $RC_B  (prep/phase11/harness/proofs_b.py)"
 echo "EXIT_PROOFS_A_RUN2: $RC_PROOFS2  (the same file, the same database -- idempotence)"
 echo "EXIT_PROOFS_B_RUN2: $RC_B2  (the same file, the same database -- idempotence)"
 echo "EXIT_RACES        : $RCR  (prep/phase11/harness/races.py)"
+echo "EXIT_RACES_B      : $RCRB  (prep/phase11/harness/races_b.py)"
 echo "EXIT_SCRIPT       : $RC  (0 means every step above returned 0)"
 exit $RC
