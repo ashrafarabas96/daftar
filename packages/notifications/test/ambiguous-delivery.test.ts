@@ -6,7 +6,7 @@ import { dispatchIntent, type DispatchPorts, type HydratedObligation, type Notif
 import { planFromOutboxRow, type DispatchIntent, type OutboxRow } from '../src/consumer';
 import { FakeNotificationProvider } from '../src/providers/fake-provider';
 import type { ChannelEligibility, EligibilityDecision } from '../src/eligibility';
-import { dateFormatter, moneyFormatter } from './helpers';
+import { consentOf, dateFormatter, moneyFormatter } from './helpers';
 import type { Recipient } from '../src/types';
 
 const saleRow: OutboxRow = {
@@ -38,7 +38,7 @@ const recipient: Recipient = {
 };
 
 function obligation(over: Partial<HydratedObligation> = {}): HydratedObligation {
-  return { recipient, preferences: { channels: [] }, vars, channelOrder: ['whatsapp', 'email', 'inapp'], ...over };
+  return { recipient, vars, channelOrder: ['whatsapp', 'email', 'inapp'], ...over };
 }
 
 function hydratorOf(list: readonly HydratedObligation[]): NotificationHydrator {
@@ -49,6 +49,7 @@ function ports(over: Partial<DispatchPorts>): DispatchPorts {
   return {
     hydrator: hydratorOf([obligation()]),
     provider: new FakeNotificationProvider({ requiresApprovedTemplate: true, channels: ['whatsapp', 'email', 'inapp'] }),
+    consent: consentOf(),
     eligibility: allEligible,
     moneyFormatter,
     dateFormatter,

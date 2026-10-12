@@ -13,7 +13,7 @@
  * `nowMinuteOfDay` is SUPPLIED by the caller — this package never reads a clock
  * (the same law P4-S7 applies to `asOf`).
  */
-import type { Channel, ConsentClass } from './types';
+import type { Channel, ConsentClass, Recipient } from './types';
 import type { NotificationRefusalCode } from './errors';
 
 export type PreferenceState = 'opted_in' | 'opted_out' | 'unset';
@@ -83,3 +83,24 @@ export function evaluateConsent(req: ConsentRequest): ConsentDecision {
   }
   return { decision: 'allow' };
 }
+
+/**
+ * Mission §15 — LIVE consent, not a snapshot.
+ *
+ * "An audit consent snapshot is not a lasting send right after withdrawal."
+ * So consent is never carried on the obligation and handed to the sender; it is
+ * READ through this port, once when the obligation is enqueued and **again
+ * immediately before every send and every retry**. A recipient who opts out
+ * between the two reads is not sent to, and the ledger says why.
+ *
+ * The port is synchronous on purpose: an adapter may hold a short-lived cache
+ * behind it, but the decision to send is taken from whatever this returns at
+ * that moment, so the staleness window is the adapter's stated contract rather
+ * than an accident of when the obligation happened to be created.
+ */
+export interface ConsentReader {
+  read(recipient: Recipient): RecipientPreferences;
+}
+
+/** Which read this is. It changes the refusal code, never the verdict. */
+export type ConsentStage = 'enqueue' | 'send';

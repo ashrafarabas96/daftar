@@ -7,6 +7,7 @@
 import { refuse } from './errors';
 import { catalogEntry, type KindVariable, type NotificationKind } from './catalog';
 import { placeholdersOf, template, type TemplateEntry } from './template-registry';
+import { CONTRACT_CURRENCIES, MINOR_UNITS } from './types';
 import type { Channel, DateFormatter, Locale, MoneyFormatter, RenderedMessage, TemplateValue, TemplateVars } from './types';
 
 export interface RenderRequest {
@@ -28,6 +29,16 @@ function display(name: string, value: TemplateValue, locale: Locale, req: Render
       return value.text;
     case 'money': {
       if (!req.moneyFormatter) refuse('notification.money_formatter_missing', name);
+      // Mission §15: the correct currency and scope, checked here rather than
+      // trusted. A formatter handed an unknown code would either throw deep in
+      // Intl or print the code itself to a customer; neither is acceptable for
+      // a figure about their money.
+      if (!CONTRACT_CURRENCIES.includes(value.money.currency)) {
+        refuse('notification.currency_not_in_contract', `${name}/${value.money.currency}`);
+      }
+      // Integer minor units only (Part 12). A float amount cannot be expressed
+      // by the type; a malformed decimal string still can, so it is refused.
+      if (!MINOR_UNITS.test(value.money.minor)) refuse('notification.money_minor_invalid', name);
       return req.moneyFormatter.format(value.money, locale);
     }
     case 'date': {

@@ -5,7 +5,7 @@ import { FakeNotificationProvider } from '../src/providers/fake-provider';
 import { obligationKey } from '../src/identity';
 import type { ChannelEligibility, EligibilityDecision } from '../src/eligibility';
 import { RefuseExternalChannels } from '../src/eligibility';
-import { dateFormatter, moneyFormatter } from './helpers';
+import { consentOf, dateFormatter, moneyFormatter, OPTED_OUT_WHATSAPP } from './helpers';
 import type { Channel, Recipient, RecipientRef } from '../src/types';
 
 const saleRow: OutboxRow = {
@@ -34,7 +34,7 @@ function recipient(over: Partial<Recipient> = {}): Recipient {
 }
 
 function obligation(over: Partial<HydratedObligation> = {}): HydratedObligation {
-  return { recipient: recipient(), preferences: { channels: [] }, vars, channelOrder: ['whatsapp', 'email', 'inapp'], ...over };
+  return { recipient: recipient(), vars, channelOrder: ['whatsapp', 'email', 'inapp'], ...over };
 }
 
 function hydratorOf(list: readonly HydratedObligation[] | undefined): NotificationHydrator {
@@ -45,6 +45,7 @@ function ports(over: Partial<DispatchPorts> = {}): DispatchPorts {
   return {
     hydrator: hydratorOf([obligation()]),
     provider: new FakeNotificationProvider({ requiresApprovedTemplate: true, channels: ['whatsapp', 'email', 'inapp'] }),
+    consent: consentOf(),
     eligibility: allEligible,
     moneyFormatter,
     dateFormatter,
@@ -158,6 +159,7 @@ describe('dispatch — obligations', () => {
         channel: 'whatsapp',
         code: 'notification.channel_not_eligible',
         detail: 'outside the service window',
+        stage: 'enqueue',
       },
     ]);
     expect(provider.deliveryCount()).toBe(0);
@@ -165,10 +167,7 @@ describe('dispatch — obligations', () => {
 
   it('falls through to the next channel when the first is opted out', async () => {
     const provider = new FakeNotificationProvider({ channels: ['whatsapp', 'email', 'inapp'] });
-    const outcomes = await dispatchIntent(
-      intentOf(),
-      ports({ provider, hydrator: hydratorOf([obligation({ preferences: { channels: [{ channel: 'whatsapp', state: 'opted_out' }] } })]) }),
-    );
+    const outcomes = await dispatchIntent(intentOf(), ports({ provider, consent: consentOf(OPTED_OUT_WHATSAPP) }));
     expect(outcomes.map((o) => o.result)).toEqual(['suppressed', 'delivered']);
     expect(provider.deliveries()[0]?.channel).toBe('email');
   });
@@ -180,13 +179,19 @@ describe('dispatch — obligations', () => {
       ports({
         provider,
         nowMinuteOfDay: 120,
-        hydrator: hydratorOf([
-          obligation({ preferences: { channels: [], quietHours: { startMinuteOfDay: 1320, endMinuteOfDay: 420 } }, channelOrder: ['whatsapp'] }),
-        ]),
+        consent: consentOf({ channels: [], quietHours: { startMinuteOfDay: 1320, endMinuteOfDay: 420 } }),
+        hydrator: hydratorOf([obligation({ channelOrder: ['whatsapp'] })]),
       }),
     );
     expect(outcomes).toEqual([
-      { result: 'deferred', kind: 'invoice_issued', obligation: 'event:ev-1|invoice_issued|customer:c-1', channel: 'whatsapp', untilMinuteOfDay: 420 },
+      {
+        result: 'deferred',
+        kind: 'invoice_issued',
+        obligation: 'event:ev-1|invoice_issued|customer:c-1',
+        channel: 'whatsapp',
+        untilMinuteOfDay: 420,
+        stage: 'enqueue',
+      },
     ]);
     expect(provider.deliveryCount()).toBe(0);
   });

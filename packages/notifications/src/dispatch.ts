@@ -1,7 +1,7 @@
 /**
- * The dispatcher: intent → hydrate recipients → consent → channel eligibility →
- * render → provider, with every outside dependency injected as a port. This is
- * the whole Phase 8 pipeline, runnable and assertable with no database, no
+ * The dispatcher: intent → hydrate recipients → ENQUEUE gate → render →
+ * SEND gate → provider, with every outside dependency injected as a port. This
+ * is the whole Phase 8 pipeline, runnable and assertable with no database, no
  * network and no clock.
  *
  * TL-P8-R2 shapes its spine, in three layers that never collapse into one
@@ -15,22 +15,41 @@
  * ten recipients are ten obligation keys, ten ledger rows, ten outcomes. No
  * recipient disappears behind the event that triggered them (TL-P8-R1).
  *
- * PART 44/46 shape its endings. A send has three outcomes, not two, and the
- * ambiguous one is a FULL STOP for the obligation: no resend, and no fallback
- * to the next channel either — a channel fallback after an ambiguous WhatsApp
- * send is a duplicate notification wearing a different hat. The obligation
- * waits for reconciliation (a status lookup, or a VERIFIED callback), which is
- * open work, not finished work.
+ * TWO GATES, not one (Mission §15). Consent and channel eligibility are read
+ * LIVE at enqueue, and read LIVE AGAIN immediately before every send and every
+ * retry. A consent snapshot taken when the obligation was created is an audit
+ * record; it is not a lasting right to send to someone who has since withdrawn.
+ * That is why `ConsentReader` is a port and why no preference travels on the
+ * hydrated obligation.
+ *
+ * PART 44/46 and Mission §15 shape its endings. A send has three outcomes, not
+ * two, and neither of the two that may already have reached the provider
+ * permits anything further for this obligation:
+ *
+ *   - `unknown`  — it may have arrived. No resend, and NO next channel.
+ *   - `rejected` whose next action is `retry` — the SAME delivery will be tried
+ *     again, so a different channel now would be the second message Mission §15
+ *     forbids ("no channel fallback that yields two messages").
+ *   - `rejected` whose next action is `stop` (dead, proven not sent, nothing
+ *     further will be attempted) — the next channel may be tried, because
+ *     exactly one message can result.
+ *
+ * A channel refused BEFORE any provider call (consent, eligibility, address,
+ * render, limits) may always fall through: nothing was sent.
  *
  * Every path ends in a NAMED outcome. A notification that vanished without a
- * reason is indistinguishable from one that was never owed.
+ * reason is indistinguishable from one that was never owed — and Mission §15
+ * requires that a notification failure never cancel a successful sale or
+ * payment, yet never be silent either. This package cannot cancel anything: it
+ * holds no transaction and no rollback. Being heard is the part it owes.
  */
 import { NotificationRefusal, refuse, type NotificationRefusalCode } from './errors';
 import { catalogEntry } from './catalog';
 import type { DispatchIntent } from './consumer';
 import { attemptIdentity, deliveryKey, obligationKey } from './identity';
-import { evaluateConsent, type RecipientPreferences } from './preferences';
+import { evaluateConsent, type ConsentReader, type ConsentStage } from './preferences';
 import type { ChannelEligibility } from './eligibility';
+import { assertWithinLimits, DefaultChannelLimits, type ChannelLimits } from './limits';
 import { renderNotification } from './render';
 import { sendThroughProvider, type NotificationProvider } from './provider';
 import { classifySend, type DeliveryAction, type DeliveryState } from './delivery';
@@ -41,6 +60,9 @@ import { recipientId, type Channel, type DateFormatter, type MoneyFormatter, typ
  * Resolves an intent into ONE ENTRY PER RECIPIENT, from canonical reads.
  * Returning an empty list means "nobody is owed this" — a legitimate answer,
  * distinct from `undefined`, which means "I could not read what I needed".
+ *
+ * Note what is NOT here: consent. A hydrated obligation carries the facts to
+ * render and the channels the merchant enabled, never a permission to send.
  */
 export interface NotificationHydrator {
   hydrate(intent: DispatchIntent): Promise<readonly HydratedObligation[] | undefined>;
@@ -48,7 +70,6 @@ export interface NotificationHydrator {
 
 export interface HydratedObligation {
   readonly recipient: Recipient;
-  readonly preferences: RecipientPreferences;
   readonly vars: TemplateVars;
   /** Channels the merchant enabled for this kind, in preference order. */
   readonly channelOrder: readonly Channel[];
@@ -65,7 +86,14 @@ export type DispatchOutcome =
       readonly providerMessageId: string;
       readonly state: DeliveryState;
     }
-  | { readonly result: 'deferred'; readonly kind: string; readonly obligation: string; readonly channel: Channel; readonly untilMinuteOfDay: number }
+  | {
+      readonly result: 'deferred';
+      readonly kind: string;
+      readonly obligation: string;
+      readonly channel: Channel;
+      readonly untilMinuteOfDay: number;
+      readonly stage: ConsentStage;
+    }
   | {
       readonly result: 'suppressed';
       readonly kind: string;
@@ -73,6 +101,8 @@ export type DispatchOutcome =
       readonly channel: Channel;
       readonly code: NotificationRefusalCode;
       readonly detail?: string;
+      /** Which gate refused it: the enqueue read or the read before the send. */
+      readonly stage?: ConsentStage;
     }
   | { readonly result: 'refused'; readonly kind: string; readonly obligation?: string; readonly code: NotificationRefusalCode }
   | { readonly result: 'already_owed'; readonly kind: string; readonly obligation: string }
@@ -101,15 +131,36 @@ export type DispatchOutcome =
       readonly reason: string;
       readonly state: DeliveryState;
       readonly next: DeliveryAction;
+    }
+  /**
+   * Mission §15. A channel the dispatcher deliberately did NOT try, because an
+   * earlier channel of this obligation has an attempt that may still land.
+   * Named rather than omitted: a channel that silently vanished looks like a
+   * channel that was never configured.
+   */
+  | {
+      readonly result: 'withheld';
+      readonly kind: string;
+      readonly obligation: string;
+      readonly channel: Channel;
+      readonly code: NotificationRefusalCode;
+      readonly detail: string;
     };
 
 export interface DispatchPorts {
   readonly hydrator: NotificationHydrator;
   readonly provider: NotificationProvider;
+  /**
+   * Mission §15: the LIVE consent read. Required — there is no snapshot to fall
+   * back on, by design.
+   */
+  readonly consent: ConsentReader;
   /** §40/PART 48: required. An unconfigured deployment refuses external channels. */
   readonly eligibility: ChannelEligibility;
   readonly moneyFormatter: MoneyFormatter;
   readonly dateFormatter: DateFormatter;
+  /** Provider payload limits. Defaults to the shipped table. */
+  readonly limits?: ChannelLimits;
   /** Supplied, never read from a machine clock (the P4-S7 asOf law). */
   readonly nowMinuteOfDay: number;
   /**
@@ -131,6 +182,43 @@ function assertRecipientBelongs(intent: DispatchIntent, recipient: Recipient): v
   if (recipient.businessId !== intent.businessId) {
     refuse('notification.recipient_business_mismatch', `${intent.kind}/${recipient.ref.kind}`);
   }
+}
+
+type GateVerdict =
+  | { readonly verdict: 'allow' }
+  | { readonly verdict: 'defer'; readonly untilMinuteOfDay: number }
+  | { readonly verdict: 'refuse'; readonly code: NotificationRefusalCode; readonly detail?: string };
+
+/**
+ * The gate, run at BOTH stages against a fresh read. The verdict is identical
+ * either way; only the refusal code differs, so that an operator can tell "was
+ * never permitted" from "was withdrawn between enqueue and send" — which are
+ * different facts about the recipient and want different follow-up.
+ */
+function evaluateGate(stage: ConsentStage, intent: DispatchIntent, owed: HydratedObligation, channel: Channel, ports: DispatchPorts): GateVerdict {
+  const entry = catalogEntry(intent.kind);
+  if (!entry) return { verdict: 'refuse', code: 'notification.kind_unknown' };
+
+  // LIVE read, at this moment, for this stage. Never a value carried in.
+  const preferences = ports.consent.read(owed.recipient);
+  const consent = evaluateConsent({ consent: entry.consent, channel, preferences, nowMinuteOfDay: ports.nowMinuteOfDay });
+  if (consent.decision === 'refuse') {
+    return { verdict: 'refuse', code: stage === 'send' ? 'notification.consent_withdrawn' : consent.code, detail: consent.code };
+  }
+  if (consent.decision === 'defer') return { verdict: 'defer', untilMinuteOfDay: consent.deferUntilMinuteOfDay };
+
+  // §40/PART 48: internal consent is not provider or legal permission. Asked
+  // for every channel, and `inapp` is answered `eligible` by the port itself —
+  // the dispatcher does not carve out an exception it cannot see.
+  const eligible = ports.eligibility.evaluate({ channel, kind: entry.kind, consent: entry.consent, recipient: owed.recipient });
+  if (!eligible.eligible) {
+    return {
+      verdict: 'refuse',
+      code: stage === 'send' ? 'notification.eligibility_withdrawn' : 'notification.channel_not_eligible',
+      detail: eligible.reason,
+    };
+  }
+  return { verdict: 'allow' };
 }
 
 async function dispatchOne(intent: DispatchIntent, owed: HydratedObligation, ports: DispatchPorts): Promise<readonly DispatchOutcome[]> {
@@ -155,25 +243,46 @@ async function dispatchOne(intent: DispatchIntent, owed: HydratedObligation, por
     return [{ result: 'refused', kind: intent.kind, obligation, code: 'notification.channel_not_supported_for_kind' }];
   }
 
+  const limits = ports.limits ?? new DefaultChannelLimits();
   const maxAttempts = ports.maxAttempts ?? MAX_ATTEMPTS;
   const outcomes: DispatchOutcome[] = [];
+
+  /**
+   * Set once an attempt has been made that may still result in a message —
+   * an ambiguous send, or a rejection whose same-delivery retry is scheduled.
+   * From then on no further channel is tried for this obligation.
+   */
+  let pendingDelivery: { readonly channel: Channel; readonly why: string } | undefined;
+
   for (const channel of channels) {
-    const consent = evaluateConsent({ consent: entry.consent, channel, preferences: owed.preferences, nowMinuteOfDay: ports.nowMinuteOfDay });
-    if (consent.decision === 'refuse') {
-      outcomes.push({ result: 'suppressed', kind: intent.kind, obligation, channel, code: consent.code });
-      continue;
-    }
-    if (consent.decision === 'defer') {
-      outcomes.push({ result: 'deferred', kind: intent.kind, obligation, channel, untilMinuteOfDay: consent.deferUntilMinuteOfDay });
+    if (pendingDelivery !== undefined) {
+      outcomes.push({
+        result: 'withheld',
+        kind: intent.kind,
+        obligation,
+        channel,
+        code: 'notification.channel_withheld_pending_delivery',
+        detail: `${pendingDelivery.channel} ${pendingDelivery.why}`,
+      });
       continue;
     }
 
-    // §40/PART 48: internal consent is not provider or legal permission. Asked
-    // for every channel, and `inapp` is answered `eligible` by the port itself —
-    // the dispatcher does not carve out an exception it cannot see.
-    const eligible = ports.eligibility.evaluate({ channel, kind: entry.kind, consent: entry.consent, recipient: owed.recipient });
-    if (!eligible.eligible) {
-      outcomes.push({ result: 'suppressed', kind: intent.kind, obligation, channel, code: 'notification.channel_not_eligible', detail: eligible.reason });
+    // GATE 1 — enqueue. A live read, before anything is rendered or sent.
+    const atEnqueue = evaluateGate('enqueue', intent, owed, channel, ports);
+    if (atEnqueue.verdict === 'refuse') {
+      outcomes.push({
+        result: 'suppressed',
+        kind: intent.kind,
+        obligation,
+        channel,
+        code: atEnqueue.code,
+        stage: 'enqueue',
+        ...(atEnqueue.detail === undefined ? {} : { detail: atEnqueue.detail }),
+      });
+      continue;
+    }
+    if (atEnqueue.verdict === 'defer') {
+      outcomes.push({ result: 'deferred', kind: intent.kind, obligation, channel, untilMinuteOfDay: atEnqueue.untilMinuteOfDay, stage: 'enqueue' });
       continue;
     }
 
@@ -186,6 +295,30 @@ async function dispatchOne(intent: DispatchIntent, owed: HydratedObligation, por
         moneyFormatter: ports.moneyFormatter,
         dateFormatter: ports.dateFormatter,
       });
+      // Mission §15: body limits are a refusal, before the provider sees it.
+      assertWithinLimits(rendered, limits);
+
+      // GATE 2 — immediately before the send, and before EVERY retry. Rendering
+      // and the provider handshake both take time; a withdrawal inside that
+      // window is a withdrawal, not a race we are entitled to ignore.
+      const atSend = evaluateGate('send', intent, owed, channel, ports);
+      if (atSend.verdict === 'refuse') {
+        outcomes.push({
+          result: 'suppressed',
+          kind: intent.kind,
+          obligation,
+          channel,
+          code: atSend.code,
+          stage: 'send',
+          ...(atSend.detail === undefined ? {} : { detail: atSend.detail }),
+        });
+        continue;
+      }
+      if (atSend.verdict === 'defer') {
+        outcomes.push({ result: 'deferred', kind: intent.kind, obligation, channel, untilMinuteOfDay: atSend.untilMinuteOfDay, stage: 'send' });
+        continue;
+      }
+
       // TL-P8-R2 (2). The approved template name is the stable provider context
       // where the provider has one; it is a property of (kind, locale), so it
       // does not move between retries of the same intended send.
@@ -254,6 +387,14 @@ async function dispatchOne(intent: DispatchIntent, owed: HydratedObligation, por
         state: classified.state,
         next: classified.next,
       });
+      // Mission §15: "no channel fallback that yields two messages". A retry of
+      // THIS delivery is scheduled, so a message may still arrive on this
+      // channel; another channel now would make two. A `dead` delivery is
+      // different — proven not sent, and nothing further will be attempted —
+      // so the next channel may be tried and exactly one message can result.
+      if (classified.next.action === 'retry') {
+        pendingDelivery = { channel, why: 'has a retry scheduled for the same delivery' };
+      }
     } catch (err) {
       if (err instanceof NotificationRefusal) {
         outcomes.push({ result: 'suppressed', kind: intent.kind, obligation, channel, code: err.code });

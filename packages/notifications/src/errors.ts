@@ -29,6 +29,28 @@ export type NotificationRefusalCode =
   | 'notification.recipient_business_mismatch'
   /** §41: a scheduled kind fired with no configured schedule behind it. */
   | 'notification.schedule_not_configured'
+  /**
+   * Mission §15: consent was ALLOWED at enqueue and refuses NOW. A consent
+   * snapshot taken when the obligation was created is an audit record, not a
+   * lasting right to send — so this is its own code, distinct from a message
+   * that was never permitted, because the two mean different things to an
+   * operator reading the ledger.
+   */
+  | 'notification.consent_withdrawn'
+  /** Mission §15: channel eligibility allowed at enqueue and refuses NOW. */
+  | 'notification.eligibility_withdrawn'
+  /**
+   * Mission §15: a channel was not attempted because an earlier channel of the
+   * same obligation has an attempt that may still land. A fallback there would
+   * be the second message the directive forbids.
+   */
+  | 'notification.channel_withheld_pending_delivery'
+  // Money and formatting scope (Mission §15: correct language, currency, scope)
+  | 'notification.currency_not_in_contract'
+  | 'notification.money_minor_invalid'
+  // Provider payload limits (Mission §15: body limits)
+  | 'notification.body_too_long'
+  | 'notification.parameter_invalid'
   // Provider edge
   | 'notification.provider_not_configured'
   | 'notification.provider_template_required'

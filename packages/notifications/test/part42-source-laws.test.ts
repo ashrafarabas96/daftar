@@ -71,6 +71,17 @@ export function sourceViolations(files: Record<string, string> = readSource()): 
     if (/\bsignatureVerified\b/.test(body)) {
       found.push({ law: 'L-P48-1 no caller-supplied signatureVerified', file, detail: 'a caller-supplied verification flag exists' });
     }
+
+    // L-M15-1 (Mission §15): "a notification failure never cancels a
+    // successful sale or payment". This package holds no transaction and no
+    // rollback, so it CANNOT cancel one — and that is a property worth keeping
+    // mechanically, because the cheapest way to lose it is for an adapter
+    // helper to drift in here carrying a handle. `businessTransactionId` is an
+    // outbox payload key and is not a transaction handle, so the law names the
+    // verbs rather than the noun.
+    if (/\brollback\b|\bbeginTransaction\b|\.rollback\s*\(|\.commit\s*\(|\bsavepoint\b/i.test(body)) {
+      found.push({ law: 'L-M15-1 the engine cannot cancel a sale', file, detail: 'transaction control reached a pure domain module' });
+    }
   }
   return found;
 }
@@ -80,6 +91,7 @@ const LAWS = [
   'L-P42-2 an attempt key is not an idempotency key',
   'L-P42-3 an adapter declares its idempotency semantics',
   'L-P48-1 no caller-supplied signatureVerified',
+  'L-M15-1 the engine cannot cancel a sale',
 ] as const;
 
 describe('PART 42/48 — laws read over the live source', () => {
@@ -137,6 +149,28 @@ describe('PART 42/48 — laws read over the live source', () => {
     expect(sourceViolations(planted).map((v) => v.law)).toContain('L-P48-1 no caller-supplied signatureVerified');
   });
 
+  it('L-M15-1 reds when transaction control reaches a pure module', () => {
+    const files = readSource();
+    const planted = {
+      ...files,
+      'dispatch.ts': fileOf(files, 'dispatch.ts').replace(
+        'const outcomes: DispatchOutcome[] = [];',
+        'await tx.rollback();\n  const outcomes: DispatchOutcome[] = [];',
+      ),
+    };
+    expect(code(fileOf(planted, 'dispatch.ts')), 'the mutation must land').toMatch(/await tx\.rollback\(\);/);
+    expect(sourceViolations(planted).map((v) => v.law)).toContain('L-M15-1 the engine cannot cancel a sale');
+  });
+
+  it('L-M15-1 is not satisfied by the absence of its subject: the outbox payload key stays legal', () => {
+    // `businessTransactionId` is live in catalog.ts. A law written against the
+    // noun would red on the real tree, and the fix would be to delete a true
+    // payload key — so the law names the verbs, and this proves it.
+    const files = readSource();
+    expect(fileOf(files, 'catalog.ts')).toMatch(/businessTransactionId/);
+    expect(sourceViolations(files)).toEqual([]);
+  });
+
   it('every declared law has a red proof above', () => {
     // The law that reds if a law is added without one. The names below are the
     // ones each red proof asserts on; a new law with no proof fails here.
@@ -145,6 +179,7 @@ describe('PART 42/48 — laws read over the live source', () => {
       'L-P42-2 an attempt key is not an idempotency key',
       'L-P42-3 an adapter declares its idempotency semantics',
       'L-P48-1 no caller-supplied signatureVerified',
+      'L-M15-1 the engine cannot cancel a sale',
     ]);
     for (const law of LAWS) expect(proved.has(law), law).toBe(true);
     expect(proved.size).toBe(LAWS.length);
@@ -155,7 +190,9 @@ describe('PART 42/48 — laws read over the live source', () => {
     // satisfied by nothing more than careful comment wording, which is exactly
     // the defect TL-P4-COORD-R46 found elsewhere in this program.
     const files = readSource();
-    const commentOnly = { 'x.ts': '// idempotencyKey signatureVerified attemptKey idempotency\n/* idempotencyKey */\nexport const a = 1;\n' };
+    const commentOnly = {
+      'x.ts': '// idempotencyKey signatureVerified attemptKey idempotency rollback savepoint\n/* idempotencyKey .commit( */\nexport const a = 1;\n',
+    };
     expect(sourceViolations(commentOnly)).toEqual([]);
     const realCode = { 'x.ts': 'export interface A { readonly idempotencyKey: string }\n' };
     expect(sourceViolations(realCode).map((v) => v.law)).toContain('L-P42-1 no conflated idempotencyKey');

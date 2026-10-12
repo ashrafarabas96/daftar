@@ -72,6 +72,22 @@ export interface MoneyRef {
   readonly currency: string;
 }
 
+/**
+ * The currencies the contract names (Mission §23's currency matrix). A money
+ * value arriving with anything else is REFUSED rather than formatted: a figure
+ * shown in a currency the platform does not operate in is a figure the
+ * recipient will misread, and the mockups' SAR is named in the directive as
+ * exactly the value that must not leak through.
+ *
+ * This is a contract fact, not an invented business policy: the set is the
+ * directive's own list. Phase 8 does not add to it and does not pick a default
+ * — a money value always carries its own currency.
+ */
+export const CONTRACT_CURRENCIES: readonly string[] = ['ILS', 'JOD', 'LBP', 'SYP', 'TRY', 'USD', 'EUR'];
+
+/** Integer minor units as a decimal string, optionally negative. No floats, ever. */
+export const MINOR_UNITS = /^-?(0|[1-9]\d*)$/;
+
 /** Template variable values. Deliberately narrow: no objects, no arrays, no any. */
 export type TemplateValue =
   | { readonly kind: 'text'; readonly text: string }

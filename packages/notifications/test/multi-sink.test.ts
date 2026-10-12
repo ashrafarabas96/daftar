@@ -26,7 +26,7 @@ import { dispatchIntent, type DispatchPorts, type HydratedObligation, type Notif
 import { planFromOutboxRow, type OutboxRow } from '../src/consumer';
 import { FakeNotificationProvider } from '../src/providers/fake-provider';
 import type { ChannelEligibility, EligibilityDecision } from '../src/eligibility';
-import { dateFormatter, moneyFormatter } from './helpers';
+import { consentOf, dateFormatter, moneyFormatter } from './helpers';
 import type { Recipient, RecipientRef } from '../src/types';
 
 const saleRow: OutboxRow = {
@@ -48,7 +48,7 @@ function recipientOf(ref: RecipientRef): Recipient {
 }
 
 function obligationFor(ref: RecipientRef): HydratedObligation {
-  return { recipient: recipientOf(ref), preferences: { channels: [] }, vars, channelOrder: ['whatsapp'], ...{} };
+  return { recipient: recipientOf(ref), vars, channelOrder: ['whatsapp'], ...{} };
 }
 
 function hydratorOf(list: readonly HydratedObligation[]): NotificationHydrator {
@@ -101,6 +101,7 @@ describe('PART 47 — sink A succeeded, sink B failed, and the retry must not du
     const ports = (): DispatchPorts => ({
       hydrator: hydratorOf([obligationFor({ kind: 'customer', customerId: 'c-1' })]),
       provider,
+      consent: consentOf(),
       eligibility: allEligible,
       moneyFormatter,
       dateFormatter,
@@ -168,6 +169,7 @@ describe('PART 47 — sink A succeeded, sink B failed, and the retry must not du
           await dispatchIntent(intent, {
             hydrator: hydratorOf([obligationFor({ kind: 'customer', customerId: 'c-1' })]),
             provider,
+            consent: consentOf(),
             eligibility: allEligible,
             moneyFormatter,
             dateFormatter,
@@ -189,6 +191,7 @@ describe('PART 47 — sink A succeeded, sink B failed, and the retry must not du
     const ports = (): DispatchPorts => ({
       hydrator: hydratorOf(refs.map(obligationFor)),
       provider,
+      consent: consentOf(),
       eligibility: allEligible,
       moneyFormatter,
       dateFormatter,
