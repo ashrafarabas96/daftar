@@ -321,15 +321,29 @@ def main():
             # folder. Lumping the two together put `P4-SLOT4-ROSTER-PROOF-LAW.md`
             # among Phase 14's proposed files, which is simply false.
             otherdocs = [x for x in unresolved if x not in proofs and x not in deleted
-                         and x not in abspath and x.endswith(('.md','.yaml'))]
+                         and x not in abspath and x.endswith(('.md','.yaml'))
+                         and not x.startswith('P14-')]
+            # COORDINATOR RE-REVIEW AT a725342 (P3): a MISSPELLED pack document
+            # name sat in the "documents that live outside this pack" bucket,
+            # which is a false sentence about it -- `P14-AMENDMENT-11-CHALLENGE-
+            # ROUND-7.md` lives nowhere, it is the wrong name for a file that is
+            # in the pack. A token spelled like one of this pack's own documents
+            # and absent from the pack is neither outside nor proposed: it is
+            # named and not present, and it gets its own line saying exactly
+            # that, because the next one may be a typo rather than a name quoted
+            # as wrong.
+            misnamed = [x for x in unresolved if x not in proofs and x not in deleted
+                        and x not in abspath and x.endswith(('.md','.yaml'))
+                        and x.startswith('P14-')]
             future  = [x for x in unresolved if x not in proofs and x not in deleted
-                       and x not in abspath and x not in otherdocs]
-            assert (len(proofs)+len(deleted)+len(abspath)+len(otherdocs)+len(future)
-                    == len(unresolved)), 'the buckets do not partition the unresolved tokens'
-            fp, fd, fa, fo, ff = (fold(proofs), fold(deleted), fold(abspath),
-                                  fold(otherdocs), fold(future))
+                       and x not in abspath and x not in otherdocs and x not in misnamed]
+            assert (len(proofs)+len(deleted)+len(abspath)+len(otherdocs)+len(misnamed)
+                    +len(future) == len(unresolved)), \
+                'the buckets do not partition the unresolved tokens'
+            fp, fd, fa, fo, fm, ff = (fold(proofs), fold(deleted), fold(abspath),
+                                      fold(otherdocs), fold(misnamed), fold(future))
             print('\n**Cited tokens that are not live code at `%s`, classified.** Each token is in'
-                  ' exactly one bucket, and the generator asserts that all five add up to the %d'
+                  ' exactly one bucket, and the generator asserts that all six add up to the %d'
                   ' unresolved tokens. The counts below are of FILES (spellings of one path folded'
                   ' together); the token count is given beside each, because an earlier edition'
                   ' counted tokens while saying files and the buckets summed to one more than'
@@ -353,6 +367,12 @@ def main():
                       ' outside both trees — another phase\'s pack, or a directive — cited by name:'
                       ' %s. They are not files this phase proposes.'
                       % (len(fo), len(otherdocs), ', '.join('`%s`' % x for x in fo)))
+            if fm:
+                print('- **%d file(s)** (%d tokens) are spelled like one of THIS pack\'s own'
+                      ' documents and are not in the pack: %s. Such a token is neither an outside'
+                      ' document nor a proposed file — it is a name that exists nowhere, either a'
+                      ' typo or a wrong name quoted as wrong (`COORD-DIFF-REVIEW a725342`).'
+                      % (len(fm), len(misnamed), ', '.join('`%s`' % x for x in fm)))
             print('- **%d file(s)** (%d tokens) are files this phase PROPOSES and that correctly do'
                   ' not exist yet: %s'
                   % (len(ff), len(future), ', '.join('`%s`' % x for x in ff)))

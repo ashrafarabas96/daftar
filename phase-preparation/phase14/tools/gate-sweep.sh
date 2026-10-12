@@ -22,9 +22,29 @@ SHARED=/mnt/project-files/phase14
 NODB=0; [ "${1:-}" = --no-db ] && NODB=1
 fail=0
 
+# COORDINATOR RE-REVIEW AT a725342, R-11 (partial): the trap was installed long
+# after the worktree was created, so a signal in between left a worktree
+# registered in the repository; and `trap cleanup INT TERM` without an exit let
+# the sweep CARRY ON after the signal, cleaning up under itself. The backups the
+# cleanup needs do not exist yet here, so it is written to restore only what it
+# finds, and it is installed FIRST.
+T=$(mktemp -d); WT=$(mktemp -d); WT2=""
+cleanup() {
+  [ -f "$T/doc.bak" ]   && cp "$T/doc.bak" "$DOC" 2>/dev/null
+  [ -f "$T/man.bak" ]   && cp "$T/man.bak" "$PACK/P14-HANDOFF-MANIFEST.md" 2>/dev/null
+  [ -f "$T/ar.bak" ]    && cp "$T/ar.bak" "$PACK/README-AR.md" 2>/dev/null
+  [ -f "$T/rep.bak" ]   && cp "$T/rep.bak" "$PACK/P14-CHALLENGE-7af6438.md" 2>/dev/null
+  [ -f "$T/coord.bak" ] && cp "$T/coord.bak" "$PACK/P14-COORD-DIFF-REVIEW-c812aa5.md" 2>/dev/null
+  [ -n "${WT2:-}" ] && git -C "$REPO" worktree remove --force "$WT2" >/dev/null 2>&1
+  rm -rf "$WT" "$T"
+  return 0
+}
+trap cleanup EXIT
+trap 'printf "\nINTERRUPTED: restoring the pack and leaving.\n" >&2; cleanup; exit 130' INT
+trap 'printf "\nTERMINATED: restoring the pack and leaving.\n" >&2; cleanup; exit 143' TERM HUP
+
 # A second worktree of the same repository: the case that broke the round-6 fix.
-WT=$(mktemp -d); git -C "$REPO" worktree add -q "$WT/wt" HEAD 2>/dev/null \
-  && WT2="$WT/wt" || WT2=""
+git -C "$REPO" worktree add -q "$WT/wt" HEAD 2>/dev/null && WT2="$WT/wt" || WT2=""
 DIRS="$PACK $REPO /tmp"; [ -n "$WT2" ] && DIRS="$DIRS $WT2"
 # ROUND-8 CHALLENGE P3-03: the four-directory property was REPORTED and never
 # ASSERTED. Outside a git checkout $REPO is empty and the worktree add is
@@ -160,29 +180,10 @@ red() { # name | mutate | command | expected-rc | restore | [file the mutation m
   else printf 'FAIL  %-26s rc=%s, required %s — the gate did not turn red\n' "$name" "$rc" "$want"
        fail=$((fail+1)); fi
 }
-T=$(mktemp -d)
 cp "$DOC" "$T/doc.bak"; cp "$PACK/P14-HANDOFF-MANIFEST.md" "$T/man.bak"
 cp "$PACK/README-AR.md" "$T/ar.bak"
 cp "$PACK/P14-CHALLENGE-7af6438.md" "$T/rep.bak"
 cp "$PACK/P14-COORD-DIFF-REVIEW-c812aa5.md" "$T/coord.bak" 2>/dev/null
-# COORD DIFF REVIEW AT c812aa5, R-11: the red proofs mutate the LIVE pack, and
-# every restore was a line at the end of its own proof -- so a Ctrl-C or a
-# killed container between the mutation and the restore left a reviewer's report
-# tampered and the manifest edited, with nothing saying so. The next run reds,
-# which is fail-closed, but the pack is the handoff and it is not left in a
-# state nobody chose. Every file any proof touches is backed up here and put
-# back on EXIT, INT, TERM and HUP, and the worktree is removed by the same hand.
-cleanup() {
-  cp "$T/doc.bak" "$DOC" 2>/dev/null
-  cp "$T/man.bak" "$PACK/P14-HANDOFF-MANIFEST.md" 2>/dev/null
-  cp "$T/ar.bak"  "$PACK/README-AR.md" 2>/dev/null
-  cp "$T/rep.bak" "$PACK/P14-CHALLENGE-7af6438.md" 2>/dev/null
-  [ -f "$T/coord.bak" ] && cp "$T/coord.bak" "$PACK/P14-COORD-DIFF-REVIEW-c812aa5.md" 2>/dev/null
-  [ -n "${WT2:-}" ] && git -C "$REPO" worktree remove --force "$WT2" >/dev/null 2>&1
-  [ -n "${WT:-}" ] && rm -rf "$WT"
-  return 0
-}
-trap cleanup EXIT INT TERM HUP
 
 red provenance-stale \
   "sed -i 's/\*\*DIFFERS\*\*/identical/' '$DOC'" \
@@ -379,9 +380,16 @@ named coord-review-protected 1 "REVIEWER COPIES DIFFER" \
 # every revision" over ONE truncated revision. The witness is now discarded
 # there, which makes every reviewer row with no counterpart NO WITNESS: loud and
 # fail-closed, instead of quietly trusting the oldest digest that survived.
-SW=$(mktemp -d)
+SW=$(mktemp -d); SW2=$(mktemp -d); EMPTYW2=$(mktemp -d)
 ( cd "$FW/pack" && git -c user.email=p14@local -c user.name=p14 commit -qam 'another revision' \
     --allow-empty ) >/dev/null 2>&1
+# the R11-P2-01 world: a depth-1 clone of the SAME forged repository, with a
+# counterpart carrying the same tampered bytes, so the two-directory witness
+# agrees and cannot be what refuses.
+git clone -q --depth 1 "file://$FW/pack" "$SW2/shallow" >/dev/null 2>&1
+if [ -d "$SW2/shallow/.git" ]; then
+  cp -r "$SW2/shallow" "$SW2/counterpart"; rm -rf "$SW2/counterpart/.git"
+fi
 git clone -q --depth 1 "file://$FW/pack" "$SW/shallow" >/dev/null 2>&1
 if [ -d "$SW/shallow/.git" ]; then
   named history-truncated-not-checked 1 "shallow boundary" \
@@ -390,7 +398,60 @@ else
   printf 'FAIL  %-26s the shallow clone was not created — nothing was proved\n' history-truncated-not-checked
   fail=$((fail+1))
 fi
-rm -rf "$FW" "$DW" "$CW" "$SW" "$EMPTYW"
+# CHALLENGE R11-P2-01 and the COORDINATOR RE-REVIEW's remedy: a truncated clone
+# WITH a matching counterpart used to answer 0, announcing NOT CHECKED. An
+# announced blind spot still exits 0, and the exit code is what a gate is read
+# by -- so NOT CHECKED now REFUSES by default, and a caller who accepts the
+# limit says so with --allow-unverified-history. All three states are proved:
+# the refusal, the explicit opt-in (which must still PRINT the limit), and the
+# no-counterpart case, whose sentence names the clone rather than claiming no
+# revision ever recorded a digest (R11-P2-02).
+if [ -d "$SW2/shallow/.git" ]; then
+  SWM="--manifest $SW2/shallow/P14-HANDOFF-MANIFEST.md --dir $SW2/shallow"
+  named shallow-counterpart-refused 1 "HISTORY NOT VERIFIED" \
+    "python3 -I $HERE/manifest-digests.py $SWM --witness $SW2/counterpart --check"
+  named shallow-optin-prints-the-limit 0 "NOT CHECKED" \
+    "python3 -I $HERE/manifest-digests.py $SWM --witness $SW2/counterpart --check --allow-unverified-history"
+  named shallow-no-witness-names-the-clone 1 "visible in the revisions this clone has" \
+    "python3 -I $HERE/manifest-digests.py $SWM --witness $EMPTYW2 --check"
+else
+  printf 'FAIL  %-26s the shallow clone with a counterpart was not created — nothing was proved\n' shallow-counterpart-refused
+  fail=$((fail+1))
+fi
+
+# COORDINATOR RE-REVIEW AT a725342, P2-01-bis, which BLOCKED: two ordinary
+# commits -- `git rm` the manifest, then re-add it carrying a forged row -- made
+# the walk treat a DELETION revision as unreadable, discard the whole witness,
+# and pass the forgery at 0 with the counterpart edited in step. In a full
+# history a deletion is not a truncation. Proved here on the whole route.
+DR=$(mktemp -d); cp -r "$PACK" "$DR/pack"
+( cd "$DR/pack" && rm -rf .git && git init -q . && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' ) >/dev/null 2>&1
+forge "$DR/pack"
+cp "$DR/pack/P14-HANDOFF-MANIFEST.md" "$DR/forged-manifest.md"
+( cd "$DR/pack" \
+  && git checkout -q -- P14-HANDOFF-MANIFEST.md \
+  && git add P14-CHALLENGE-7af6438.md \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'a line appended to a received report' \
+  && git rm -q P14-HANDOFF-MANIFEST.md \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'drop the manifest' \
+  && cp "$DR/forged-manifest.md" P14-HANDOFF-MANIFEST.md \
+  && git add P14-HANDOFF-MANIFEST.md \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 're-add the manifest' ) >/dev/null 2>&1
+cp -r "$DR/pack" "$DR/counterpart"; rm -rf "$DR/counterpart/.git"
+DRM="--manifest $DR/pack/P14-HANDOFF-MANIFEST.md --dir $DR/pack"
+if [ "$(cd "$DR/pack" && git rev-list --count HEAD)" = 4 ]; then
+  named manifest-dropped-and-readded 1 "REWRITTEN IN HISTORY" \
+    "python3 -I $HERE/manifest-digests.py $DRM --witness $DR/counterpart --check"
+  named manifest-dropped-and-readded-write 1 "REWRITTEN IN HISTORY" \
+    "python3 -I $HERE/manifest-digests.py $DRM --witness $DR/counterpart --write"
+else
+  printf 'FAIL  %-26s the drop/re-add world was not built (%s commits) — nothing was proved\n' \
+         manifest-dropped-and-readded "$(cd "$DR/pack" && git rev-list --count HEAD 2>/dev/null)"
+  fail=$((fail+1))
+fi
+rm -rf "$DR"
+rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"
 
 red retracted-claim-planted \
   "printf '\n\nthe three absent ones are cited only for Phase 4 surface facts\n' >> '$PACK/README-AR.md'" \

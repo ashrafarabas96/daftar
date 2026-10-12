@@ -40,6 +40,21 @@ def main():
                     ' reviewer report; defaults to the counterpart of --dir')
     ap.add_argument('--write', action='store_true')
     ap.add_argument('--check', action='store_true')
+    # CHALLENGE R11-P2-01 and the COORDINATOR RE-REVIEW's remedy, which is the
+    # stronger one and closes both: in a `--depth 1` clone WITH a matching
+    # counterpart the committed forgery answered 0, because the history witness
+    # was NOT CHECKED and the only witness left was the other directory, written
+    # by the same hand. An ANNOUNCED blind spot still exits 0, and an exit code
+    # is what a gate is read by. So NOT CHECKED is now a REFUSAL by default
+    # whenever there is a reviewer row to protect, and a caller who accepts the
+    # limit says so explicitly with --allow-unverified-history. My first attempt
+    # at this had the default the other way round, which is the same mistake in
+    # the opposite direction: the safe thing has to be what happens when nobody
+    # passes a flag. `actions/checkout` defaults to `fetch-depth: 1`, so a CI job
+    # running this gate needs `fetch-depth: 0`.
+    ap.add_argument('--allow-unverified-history', action='store_true',
+                    help='accept a manifest history that cannot be read in full (shallow clone);'
+                         ' the limit is printed either way')
     a = ap.parse_args()
 
     # ROUND-8 CHALLENGE P3-02: an absent --dir refused by FileNotFoundError
@@ -147,10 +162,31 @@ def main():
     elif _incomplete:
         history = 'NOT CHECKED (%s)' % _incomplete
     else:
+        # COORDINATOR RE-REVIEW AT a725342, P2-01-bis, which BLOCKED: this loop
+        # treated ANY unreadable revision as a truncation, discarded the whole
+        # history witness and the `moved` refusal with it -- and a DELETION
+        # revision is unreadable that way. So two ordinary commits (`git rm` the
+        # manifest, then re-add it carrying a forged row) emptied the witness in
+        # a FULL history, and with the counterpart edited in step the forgery
+        # passed at 0. No history was rewritten, which is exactly what the pack
+        # said was required. A deletion is not a truncation: the revisions
+        # BEFORE it are readable and so is the digest the report was received
+        # with, so an absent path is SKIPPED and RECORDED, never discarded.
+        # Only a missing object -- a graft boundary, a corrupt or unfetched
+        # commit -- is NOT CHECKED.
+        gaps = []
         for rev in reversed(_revs.stdout.split()):           # OLDEST first
+            if _g('rev-parse', '--verify', '--quiet', '%s^{commit}' % rev).returncode != 0:
+                signed_history, moved = {}, {}
+                history = ('NOT CHECKED (the commit object %s is not in this repository, so the'
+                           ' records at and below it cannot be read)' % rev[:12])
+                break
             r = subprocess.run(['git','-C',_md,'show','%s:./%s' % (rev,_mb)],
                                capture_output=True, text=True)
             if r.returncode != 0:
+                if _g('cat-file', '-e', '%s:./%s' % (rev, _mb)).returncode != 0:
+                    gaps.append(rev)      # the manifest does not exist in this revision
+                    continue
                 _why = (r.stderr.strip().split('\n') or [''])[0][:120]
                 signed_history, moved = {}, {}
                 history = ('NOT CHECKED (revision %s of this manifest could not be read: %s)'
@@ -164,6 +200,10 @@ def main():
                     signed_history[nm] = dg
                 elif dg != signed_history[nm] and nm not in moved:
                     moved[nm] = (signed_history[nm], dg, rev)
+        if gaps and history.startswith('checked'):
+            history += (', and the manifest is ABSENT in %d of them (%s) — removed and re-added,'
+                        ' which does not erase the records before it'
+                        % (len(gaps), ', '.join(g[:12] for g in gaps[:4])))
     listed, out, stale, refused = [], [], [], []
     for ln in lines:
         m = ROW.match(ln)
@@ -221,8 +261,11 @@ def main():
                 why = ('REVIEWER ROW REWRITTEN IN HISTORY: %s was recorded as %s when it was'
                        ' received, and a later revision of this manifest (%s) records %s for it'
                        ' instead. A signed reviewer row does not move, and a later commit does not'
-                       ' get to redefine what was received. Restore the row to the digest the'
-                       ' report arrived with.'
+                       ' get to redefine what was received. **This refusal cannot be cleared'
+                       ' from here**, and that is deliberate: restoring the row and the file'
+                       ' leaves the forging revision in the history, which is the record. What'
+                       ' can be done is to say so in the handoff and have the reviewer re-send'
+                       ' the report.'
                        % (name, mv[0][:12], mv[2][:12], mv[1][:12]))
             elif sig and h != sig:
                 why = ('%s: a signed reviewer row does not move. The OLDEST revision of this'
@@ -231,10 +274,24 @@ def main():
                        ' was received with. Restore the reviewer\'s file.'
                        % (name, sig[:12], a.dir, h[:12]))
             elif wh is None and sig is None:
-                why = ('NO WITNESS for %s: it has no digest in any revision of this manifest and'
-                       ' no counterpart under %s, so nothing here can confirm what was received.'
-                       ' Place the reviewer\'s report in both directories before signing its row.'
-                       % (name, wdir))
+                # CHALLENGE R11-P2-02, the SIXTH instance of one class: this said "no digest in
+                # any revision of this manifest" in a clone that cannot SEE the revisions --
+                # seventeen of them record that report, oldest e89fcb1c90ea. The verdict was
+                # right and the sentence sent the reader to re-sign a report signed long ago.
+                # The rule the reviewer draws, and it is the right one: a refusal is written
+                # from the variable it actually read. `history` is in hand, so it is used.
+                why = ('NO WITNESS for %s: %s, and there is no counterpart under %s, so nothing'
+                       ' here can confirm what was received. %s'
+                       % (name,
+                          ('no digest for it is visible in the revisions this clone has'
+                           if history.startswith('NOT CHECKED')
+                           else 'it has no digest in any revision of this manifest'),
+                          wdir,
+                          ('Fetch the full history (`fetch-depth: 0`) and re-run, or place the'
+                           ' reviewer\'s report in both directories.'
+                           if history.startswith('NOT CHECKED')
+                           else 'Place the reviewer\'s report in both directories before signing'
+                                ' its row.')))
             if why:
                 stale.append(why); refused.append(name); out.append(ln); continue
             # Only a row that is unsigned in BOTH cells may be signed, and only
@@ -255,15 +312,40 @@ def main():
     missing  = [n for n in listed if not os.path.exists(os.path.join(a.dir,n))]
 
     for u in unlisted: stale.append('%s: ARTIFACT WITH NO ROW' % u)
+    # It fires only when there IS a reviewer row to protect, so it cannot red a
+    # manifest that has none.
+    blocked = False
+    if (history.startswith('NOT CHECKED') and not a.allow_unverified_history
+            and any(n.startswith(REVIEWER_PREFIXES) for n in listed)):
+        blocked = True
+        stale.append('HISTORY NOT VERIFIED: the reviewer-row history is %s. The only witness'
+                     ' left for a reviewer row is then the copy in the other directory, which'
+                     ' the same hand writes, so nothing here can confirm what was received.'
+                     ' Fetch the full history (`fetch-depth: 0`) and re-run, or pass'
+                     ' --allow-unverified-history to accept that limit deliberately.' % history)
     # COORD DIFF REVIEW AT c812aa5, R-02: a whole reviewer report could be
     # deleted together with its row and this lane stayed green -- what caught it
     # was the other directory, which is a second witness and not a refusal. A
     # name that any revision of this manifest signed must keep its row here.
+    # COORDINATOR RE-REVIEW AT a725342, two P3s on this one refusal: it called
+    # every removed row a REVIEWER row -- an amendment's deleted row was
+    # answered with "a received review is not deleted", a cause that is
+    # measurably not the cause (the class again) -- and `--write` printed it and
+    # still exited 0, so a gate reading the code alone saw a pass.
     for nm in sorted(signed_history):
         if nm not in listed:
-            stale.append('%s: SIGNED REVIEWER ROW REMOVED — this manifest signed it in an earlier'
-                         ' revision (%s) and it has no row now. A received review is not deleted;'
-                         ' restore the row and the file.' % (nm, signed_history[nm][:12]))
+            if nm.startswith(REVIEWER_PREFIXES):
+                stale.append('%s: SIGNED REVIEWER ROW REMOVED — this manifest signed it in an'
+                             ' earlier revision (%s) and it has no row now. A received review is'
+                             ' not deleted; restore the row and the file.'
+                             % (nm, signed_history[nm][:12]))
+            else:
+                stale.append('%s: SIGNED ROW REMOVED — this manifest signed it in an earlier'
+                             ' revision (%s) and it has no row now. This is not a reviewer\'s'
+                             ' report: a pack document may legitimately be withdrawn, but not'
+                             ' silently, so restore the row or record the withdrawal.'
+                             % (nm, signed_history[nm][:12]))
+            refused.append(nm)
     print('manifest: %d artifact row(s) + the manifest itself; %d file(s) in %s;'
           ' reviewer-row history %s'
           % (len(listed), len(on_disk), a.dir, history))
@@ -271,7 +353,7 @@ def main():
         open(a.manifest,'w',encoding='utf-8').write('\n'.join(out))
         for s in stale: print('  updated/flagged: %s' % s)
         if unlisted: print('  NOT ADDED (a row is a description, not a digest — write it): %s' % ', '.join(unlisted))
-        return 1 if (unlisted or missing or refused) else 0
+        return 1 if (unlisted or missing or refused or blocked) else 0
     if a.check:
         for r in refused: print('  REFUSED: %s' % r, file=sys.stderr)
         for s in stale: print('  STALE: %s' % s, file=sys.stderr)

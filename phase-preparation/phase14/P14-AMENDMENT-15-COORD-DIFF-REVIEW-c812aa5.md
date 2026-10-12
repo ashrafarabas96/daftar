@@ -52,8 +52,31 @@ counterpart every reviewer row answers `NO WITNESS` — loud, and fail-closed. T
 own clone **is** shallow, and the manifest's first record is still above the boundary, so the
 real pack is checked.
 
-**The limit that remains, stated and not guarded:** rewriting the manifest's own history. A
-commit cannot move the witness; `git filter-branch` or a force-push can. Nothing inside a
+**And the consequence, which `CHALLENGE R11-P2-01` is right that this pack stated nowhere:** in a
+truncated clone **with** a counterpart present, the committed forgery of §1 answers **0** again —
+`NOT CHECKED` is printed, and the only witness left is the other directory, which the same hand
+writes. `actions/checkout` defaults to `fetch-depth: 1`, so that is the CI shape and not an
+exotic one. Three things follow, and all three are in the pack rather than in this paragraph
+alone: the case is red-proofed **as it is** (`shallow-with-counterpart-passes` asserts rc `0`
+*together with* `NOT CHECKED` in one output, so the blind spot cannot be lost quietly);
+`--require-history` turns the announcement into a refusal for a caller that needs the guarantee,
+and is proved to (`shallow-require-history-refuses`); and **`R10-ADD-01` is therefore
+load-bearing, not theoretical** (`CHALLENGE R11-P3-02`) — whenever history is `NOT CHECKED` the
+two-directory witness is the only one left, and no claim made after promotion should treat it as
+a second witness. A gate that runs this check in CI needs `fetch-depth: 0` **and**
+`--require-history`.
+
+**The limit that remains, stated and not guarded:** rewriting the manifest's own history.
+
+> **ANNOTATION (`COORD-DIFF-REVIEW a725342 P2-01-bis`, which BLOCKED).** The sentence that stood
+> here — *"A commit cannot move the witness; `git filter-branch` or a force-push can"* — is
+> **false**, and the reviewer measured it on a full clone of the real repository. **Two ordinary
+> commits** (`git rm` the manifest, then re-add it with the forged row) do not move the witness;
+> they made the walk **discard** it, because the code read any unreadable revision — a deletion
+> among them — as a truncation. Answered in
+> `P14-AMENDMENT-16-COORD-RE-REVIEW-a725342.md` §1: a readable commit whose tree lacks the
+> manifest is now skipped and recorded, only a missing object is `NOT CHECKED`, and `NOT CHECKED`
+> itself no longer exits 0. Nothing inside a
 repository the author can write to closes that, which is why the two-directory witness is the
 other half and why `R10-ADD-01` (outside a repository, two copies written by the same hand are
 one witness) stays open.
@@ -81,10 +104,15 @@ it is a real file under it at any depth matched at a path boundary, and `was_in_
 git rejects the pathspec. A `./` prefix is normalised, which also moved
 `./redproof-preflight.sh` out of the DELETED bucket where it did not belong.
 
-**Measured after the fix:** PROPOSES **9 files / 10 tokens**, all genuinely absent from both
-trees; in-pack **84 files / 89 tokens**; DELETED 1; absolute 8; other documents 1; and the
-partition assertion holds against 110 unresolved tokens. The sentence "the generator asserts
-the four add up" now says **five**, which is how many buckets there are.
+**Measured after the fix:** the PROPOSES bucket lists **nine files**, all genuinely absent from
+both trees and from the pack, and no `tools/*` file is in it. **The other bucket sizes are not
+typed here** — I typed them in an earlier edition of this very amendment and they were stale
+within the hour, because every document added to the pack changes them
+(`COORD-DIFF-REVIEW a725342`, a P3, and the same lesson as `P2-03` one paragraph away from where
+I had just written it). They are in the generated block in §15 of
+`P14-MIGRATION-PATCH-REQUEST.md`, which the gate regenerates and `--check` holds to the trees.
+The sentence "the generator asserts the four add up" now names however many buckets there
+are — six, since a misspelled pack-document name got its own (`COORD-DIFF-REVIEW a725342`).
 
 ## 3. `P2-03` (BLOCKING) — typed counts, again, on the pages a handoff reader reads first
 
@@ -157,6 +185,30 @@ that named the pack's own tools.
 - `OD-P14-09`, `OD-P14-10`, `OD-P14-11`: the owner's, and the service refuses to boot before
   they are set.
 
+## 6a. The challenger's narrow check at `a725342`, and the four residuals it filed
+
+Verdict **PASS-WITH-SCOPE, nothing blocking** (`P14-CHALLENGE-a725342.md`, sha256
+`d6917dbbd9fb…fd0c3d3e`, committed unedited, a row in §2). It closed the coordinator's `P2-01`
+**by execution**: the challenger built the committed-forgery plant itself, with the report
+tampered in **both** directories so the two-directory witness could not be what refuses, and ran
+that one world against two tools — this head **1** (`REVIEWER ROW REWRITTEN IN HISTORY`, naming
+the forging revision), `c812aa5`'s extracted `manifest-digests.py` **0** while printing *history
+checked over every revision*. That is the finding and its remedy measured against each other in
+the same world, which is stronger than my own proof of it.
+
+| # | finding | what I did |
+|---|---|---|
+| `R11-P2-01` | in a `--depth 1` clone **with** a matching counterpart the forgery answers 0 again; announced and red-proofed, but the consequence was stated nowhere, and my own §7 evidence row dropped the qualifier §1 carried | **Closed.** The consequence is stated in §1, the row is corrected, the case is red-proofed as it is (`shallow-with-counterpart-passes`, rc 0 **with** `NOT CHECKED`), and `--require-history` refuses for a caller that needs the guarantee (`shallow-require-history-refuses`) |
+| `R11-P2-02` | the `NO WITNESS` sentence said *no digest in any revision of this manifest* in a clone that cannot see seventeen revisions that do record one. The **sixth** instance of one class | **Closed.** The refusal is written from the variable it read: when `history` is `NOT CHECKED` it says *no digest for it is visible in the revisions this clone has*, and points at `fetch-depth: 0`. Red proof `shallow-no-witness-names-the-clone` |
+| `R11-P3-01` | the `moved` refusal printed *restore the row to the digest the report arrived with* — which the reviewer had already done; the refusal is permanent by design | **Closed as a sentence.** It now says the refusal **cannot be cleared from here**, that this is deliberate because the forging revision stays in the record, and what can be done instead: say so in the handoff and have the reviewer re-send the report |
+| `R11-P3-02` | `R10-ADD-01` is load-bearing, not theoretical | **Recorded** in §1 and in §6: whenever history is `NOT CHECKED` the two-directory witness is the only one, and it is not to be called a second witness in any post-promotion claim |
+
+**The class is now six, and five of the six are mine.** `R8-P3-05`, `R9-P3-01`, `R10-P3-01`,
+`R-04` and `R11-P2-02` are all *a fail-closed refusal naming a cause that is measurably not the
+cause*. The reviewer's formulation is the rule I take from this phase: **write the refusal from
+the variable it actually read.** Every one of these had the true cause already in a local
+variable — `history`, `serr`, the arm's own name — and typed a guess beside it.
+
 ## 7. What was executed, with the path each code was measured from
 
 Host `vm`. Pack `/home/user/daftar/phase-preparation/phase14`, repository `/home/user/daftar`
@@ -176,8 +228,9 @@ Host `vm`. Pack `/home/user/daftar/phase-preparation/phase14`, repository `/home
 | `PATH=/nonexistent … redproof-preflight.sh`; lock directory uncreatable | `…/phase14` | **5** each, naming `flock` and `mkdir`'s own error (`R-04`) |
 | `retracted-claims.py --check` with a planted claim, pack at `…/plain/phase14` and `…/tools/phase14` | `…/phase14` | **1** and **1**, 25 documents either way (`R-01`); empty pack → **2** |
 | `manifest-digests.py --check`, pack and shared folder | `/home/user/daftar/phase-preparation/phase14`, `/mnt/project-files/phase14` | **0** / **0**, 39 rows each, both directories byte-identical |
-| the committed-forgery worlds (§1), `--check` and `--write` | scratch repositories under the session scratchpad | **1** / **1** in both witness shapes; a `--depth 1` clone answers `NO WITNESS` |
+| the committed-forgery worlds (§1), `--check` and `--write` | scratch repositories under the session scratchpad | **1** / **1** in both witness shapes; a `--depth 1` clone **with no counterpart** answers `NO WITNESS`, and **with a matching counterpart answers 0** with `NOT CHECKED` printed (`CHALLENGE R11-P2-01`: this row read as a property of the clone, and it is a property of that constructed world) |
 | the `R-06` handler, both shapes in one script | `p14scratch` on the cluster | old: `LAW UNPROVED … P0001`; new: `ERROR: LAW VIOLATED`, exit **3** |
+| the three shallow-clone worlds (§6a) | scratch clones under the session scratchpad | counterpart in step → **0** with `NOT CHECKED`; `--require-history` → **1**; no counterpart → **1**, naming the clone |
 
 **Order of the record.** The sweep above ran after the last content edit; the manifest digests
 and the shared-folder copies were then regenerated, and the sweep was run again with the same
