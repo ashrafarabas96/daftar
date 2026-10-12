@@ -41,6 +41,20 @@ describe('the stock key', () => {
   });
 });
 
+// Round 8, P3-02: `summariseBasket` now takes the instant the basket is read at,
+// REQUIRED and supplied rather than read from a clock, because the relation
+// refuses a retraction at an instant that has not arrived (`I2.6`, leg 8) and
+// this package accepted one. Existing cases call it through this helper, which
+// pins one reference instant for the whole suite so no case depends on when it
+// runs; the law about `asOf` itself is asserted on the real signature in
+// `summariseBasket — the reference instant` below.
+const AS_OF = '2026-10-12T12:00:00Z';
+const summariseAt = (
+  lines: readonly CartLine[],
+  precision: ReadonlyMap<string, UnitPrecisionDeclaration>,
+  asOf: string = AS_OF,
+): ReturnType<typeof summariseBasket> => summariseBasket(lines, precision, asOf);
+
 describe('summariseBasket', () => {
   it('merges rows of one stock key, sums them exactly, and keeps the FIRST row as representative', () => {
     const lines: CartLine[] = [
@@ -48,7 +62,7 @@ describe('summariseBasket', () => {
       { lineId: LINE(2), productId: PRODUCT_B, variantId: null, quantity: '0.125', retractedAt: null },
       { lineId: LINE(3), productId: PRODUCT_A, variantId: null, quantity: '6', retractedAt: null },
     ];
-    const positions = summariseBasket(lines, PRECISION);
+    const positions = summariseAt(lines, PRECISION);
     expect(positions).toHaveLength(2);
 
     const a = positions.find((p) => p.stockKey === KEY_A);
@@ -65,7 +79,7 @@ describe('summariseBasket', () => {
   });
 
   it('orders positions by first appearance, not by how a UUID sorts', () => {
-    const positions = summariseBasket(
+    const positions = summariseAt(
       [
         { lineId: LINE(1), productId: PRODUCT_B, variantId: null, quantity: '1', retractedAt: null },
         { lineId: LINE(2), productId: PRODUCT_A, variantId: null, quantity: '1', retractedAt: null },
@@ -76,12 +90,12 @@ describe('summariseBasket', () => {
   });
 
   it('refuses an empty basket', () => {
-    expect(() => summariseBasket([], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_empty' }));
+    expect(() => summariseAt([], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_empty' }));
   });
 
   it('refuses two rows that share a lineId', () => {
     expect(() =>
-      summariseBasket(
+      summariseAt(
         [
           { lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity: '1', retractedAt: null },
           { lineId: LINE(1), productId: PRODUCT_B, variantId: null, quantity: '1', retractedAt: null },
@@ -92,30 +106,30 @@ describe('summariseBasket', () => {
   });
 
   it.each(['0', '-1', '1.5', 'abc', ''])('refuses the quantity %s on a whole-unit product', (quantity) => {
-    expect(() => summariseBasket([{ lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity, retractedAt: null }], PRECISION)).toThrowError(
+    expect(() => summariseAt([{ lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity, retractedAt: null }], PRECISION)).toThrowError(
       expect.objectContaining({ code: 'order.cart_quantity_invalid' }),
     );
   });
 
   it('refuses a quantity finer than the unit allows, and admits one at exactly its precision', () => {
-    expect(() => summariseBasket([{ lineId: LINE(1), productId: PRODUCT_B, variantId: null, quantity: '0.0001', retractedAt: null }], PRECISION)).toThrowError(
+    expect(() => summariseAt([{ lineId: LINE(1), productId: PRODUCT_B, variantId: null, quantity: '0.0001', retractedAt: null }], PRECISION)).toThrowError(
       expect.objectContaining({ code: 'order.cart_quantity_invalid' }),
     );
-    expect(
-      summariseBasket([{ lineId: LINE(1), productId: PRODUCT_B, variantId: null, quantity: '0.001', retractedAt: null }], PRECISION)[0]?.totalQuantity,
-    ).toBe('0.0010');
+    expect(summariseAt([{ lineId: LINE(1), productId: PRODUCT_B, variantId: null, quantity: '0.001', retractedAt: null }], PRECISION)[0]?.totalQuantity).toBe(
+      '0.0010',
+    );
   });
 
   it('refuses a line whose stock key has no stated unit precision', () => {
     expect(() =>
-      summariseBasket([{ lineId: LINE(1), productId: PRODUCT_A, variantId: VARIANT_1, quantity: '1', retractedAt: null }], new Map([[KEY_A, tracked(0)]])),
+      summariseAt([{ lineId: LINE(1), productId: PRODUCT_A, variantId: VARIANT_1, quantity: '1', retractedAt: null }], new Map([[KEY_A, tracked(0)]])),
     ).toThrowError(expect.objectContaining({ code: 'order.cart_line_invalid' }));
   });
 
   it('refuses a variant id that is not a canonical UUID', () => {
-    expect(() =>
-      summariseBasket([{ lineId: LINE(1), productId: PRODUCT_A, variantId: 'not-a-uuid', quantity: '1', retractedAt: null }], PRECISION),
-    ).toThrowError(expect.objectContaining({ code: 'order.cart_line_invalid' }));
+    expect(() => summariseAt([{ lineId: LINE(1), productId: PRODUCT_A, variantId: 'not-a-uuid', quantity: '1', retractedAt: null }], PRECISION)).toThrowError(
+      expect.objectContaining({ code: 'order.cart_line_invalid' }),
+    );
   });
 });
 
@@ -124,7 +138,7 @@ describe('adviseBasketAvailability — the basket, not the line', () => {
 
   it('each line of six alone is satisfiable', () => {
     for (const lineId of [LINE(1), LINE(3)]) {
-      const positions = summariseBasket([{ lineId, productId: PRODUCT_A, variantId: null, quantity: '6', retractedAt: null }], PRECISION);
+      const positions = summariseAt([{ lineId, productId: PRODUCT_A, variantId: null, quantity: '6', retractedAt: null }], PRECISION);
       const advice = adviseBasketAvailability(positions, onHandTen);
       expect(advice.items[0]?.verdict).toBe('sufficient');
       expect(advice.anyInsufficient).toBe(false);
@@ -132,7 +146,7 @@ describe('adviseBasketAvailability — the basket, not the line', () => {
   });
 
   it('the two of them together are NOT — and the shortfall is named exactly', () => {
-    const positions = summariseBasket(
+    const positions = summariseAt(
       [
         { lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity: '6', retractedAt: null },
         { lineId: LINE(3), productId: PRODUCT_A, variantId: null, quantity: '6', retractedAt: null },
@@ -148,26 +162,26 @@ describe('adviseBasketAvailability — the basket, not the line', () => {
   });
 
   it('says in its own type that it is advice', () => {
-    const positions = summariseBasket([{ lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity: '1', retractedAt: null }], PRECISION);
+    const positions = summariseAt([{ lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity: '1', retractedAt: null }], PRECISION);
     expect(adviseBasketAvailability(positions, onHandTen).advisory).toBe(true);
   });
 
   it('calls exactly-on-hand sufficient, and one more than on hand insufficient', () => {
-    const exact = summariseBasket([{ lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity: '10', retractedAt: null }], PRECISION);
+    const exact = summariseAt([{ lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity: '10', retractedAt: null }], PRECISION);
     expect(adviseBasketAvailability(exact, onHandTen).items[0]?.verdict).toBe('sufficient');
-    const over = summariseBasket([{ lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity: '11', retractedAt: null }], PRECISION);
+    const over = summariseAt([{ lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity: '11', retractedAt: null }], PRECISION);
     expect(adviseBasketAvailability(over, onHandTen).items[0]?.verdict).toBe('insufficient');
     expect(adviseBasketAvailability(over, onHandTen).items[0]?.shortfallQuantity).toBe('1.0000');
   });
 });
 
 describe('adviseBasketAvailability — an untracked product is not out of stock', () => {
-  const positions = summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '3', retractedAt: null }], PRECISION);
+  const positions = summariseAt([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '3', retractedAt: null }], PRECISION);
   // The same request, declared by the catalogue as a TRACKED product, for the
   // cases whose subject is the on-hand row of a tracked key. The position's own
   // `tracksInventory` must agree with the row's, so a tracked row needs a
   // tracked position: the disagreement is its own refusal, proved below.
-  const trackedPositions = summariseBasket(
+  const trackedPositions = summariseAt(
     [{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '3', retractedAt: null }],
     new Map([[KEY_GIFT, tracked(0)]]),
   );
@@ -209,7 +223,7 @@ describe('adviseBasketAvailability — an untracked product is not out of stock'
     // The round-6 finding: a service, a delivery fee or a digital good carries
     // `unit_decimals IS NULL` in the frozen catalogue, which is lawful exactly
     // when `track_inventory` is false. Such a line must be sellable.
-    const precisionFree = summariseBasket(
+    const precisionFree = summariseAt(
       [{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '3.5', retractedAt: null }],
       new Map([[KEY_GIFT, untrackedNoPrecision]]),
     );
@@ -222,7 +236,7 @@ describe('adviseBasketAvailability — an untracked product is not out of stock'
 
   it('refuses a TRACKED product declared with no precision, as the catalogue CHECK does', () => {
     expect(() =>
-      summariseBasket(
+      summariseAt(
         [{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '3', retractedAt: null }],
         new Map([[KEY_GIFT, { tracksInventory: true, unitDecimals: null }]]),
       ),
@@ -232,22 +246,22 @@ describe('adviseBasketAvailability — an untracked product is not out of stock'
   it('bounds a precision-free quantity by the storage scale and nothing narrower', () => {
     const map = new Map([[KEY_GIFT, untrackedNoPrecision]]);
     // Q4 is exactly representable...
-    expect(summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '0.0001', retractedAt: null }], map)[0]?.totalQuantity).toBe(
+    expect(summariseAt([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '0.0001', retractedAt: null }], map)[0]?.totalQuantity).toBe(
       '0.0001',
     );
     // ...and a fifth decimal is refused, by the storage scale the frozen column carries.
-    expect(() => summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '0.00001', retractedAt: null }], map)).toThrowError(
+    expect(() => summariseAt([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '0.00001', retractedAt: null }], map)).toThrowError(
       expect.objectContaining({ code: 'order.cart_quantity_invalid' }),
     );
     // A precision-free line is still strictly positive.
-    expect(() => summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '0', retractedAt: null }], map)).toThrowError(
+    expect(() => summariseAt([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '0', retractedAt: null }], map)).toThrowError(
       expect.objectContaining({ code: 'order.cart_quantity_invalid' }),
     );
   });
 
   it('refuses a declaration that does not say whether the product tracks inventory', () => {
     const malformed = new Map([[KEY_GIFT, { unitDecimals: 0 } as unknown as UnitPrecisionDeclaration]]);
-    expect(() => summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '1', retractedAt: null }], malformed)).toThrowError(
+    expect(() => summariseAt([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '1', retractedAt: null }], malformed)).toThrowError(
       expect.objectContaining({ code: 'order.unit_precision_invalid' }),
     );
   });
@@ -311,7 +325,7 @@ describe('adviseBasketAvailability — an untracked product is not out of stock'
     // A4 in the challenge: a precision-free 0.0001 was advised 'sufficient'
     // against a tracked row with 1.0000 on hand and never checked for
     // representability, because the flag was absent and the check was skipped.
-    const precisionFree = summariseBasket(
+    const precisionFree = summariseAt(
       [{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '0.0001', retractedAt: null }],
       new Map([[KEY_GIFT, untrackedNoPrecision]]),
     );
@@ -334,7 +348,7 @@ describe('adviseBasketAvailability — an untracked product is not out of stock'
 });
 
 describe('adviseBasketAvailability — the subject set is exhaustive and disjoint', () => {
-  const positions = summariseBasket(
+  const positions = summariseAt(
     [
       { lineId: LINE(1), productId: PRODUCT_A, variantId: null, quantity: '1', retractedAt: null },
       { lineId: LINE(2), productId: PRODUCT_B, variantId: null, quantity: '1', retractedAt: null },
@@ -411,26 +425,26 @@ describe('summariseBasket — a retracted line is not in the basket', () => {
   const retracted = (n: number, quantity: string): CartLine => ({ ...live(n, quantity), retractedAt: '2026-10-12T01:00:00Z' });
 
   it('excludes a retracted line from the position it would otherwise have joined', () => {
-    const both = summariseBasket([live(1, '2'), retracted(2, '5')], PRECISION);
+    const both = summariseAt([live(1, '2'), retracted(2, '5')], PRECISION);
     expect(both).toHaveLength(1);
     expect(both[0]?.totalQuantity).toBe('2.0000');
     expect(both[0]?.lineIds).toEqual([LINE(1)]);
     // The control: the same two lines, both live, sum to 7.
-    expect(summariseBasket([live(1, '2'), live(2, '5')], PRECISION)[0]?.totalQuantity).toBe('7.0000');
+    expect(summariseAt([live(1, '2'), live(2, '5')], PRECISION)[0]?.totalQuantity).toBe('7.0000');
   });
 
   it('drops the whole position when every line of a stock key is retracted, and keeps the others', () => {
-    const positions = summariseBasket([retracted(1, '2'), { ...live(2, '3'), productId: PRODUCT_B }], PRECISION);
+    const positions = summariseAt([retracted(1, '2'), { ...live(2, '3'), productId: PRODUCT_B }], PRECISION);
     expect(positions).toHaveLength(1);
     expect(positions[0]?.stockKey).toBe(KEY_B);
   });
 
   it('refuses a basket whose every line is retracted, because it asks for nothing', () => {
-    expect(() => summariseBasket([retracted(1, '2'), retracted(2, '3')], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_empty' }));
+    expect(() => summariseAt([retracted(1, '2'), retracted(2, '3')], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_empty' }));
   });
 
   it('keeps a retracted line REPRESENTATIVE of nothing but still claims its id, so it cannot smuggle a duplicate', () => {
-    expect(() => summariseBasket([retracted(1, '2'), live(1, '3')], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_line_duplicate' }));
+    expect(() => summariseAt([retracted(1, '2'), live(1, '3')], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_line_duplicate' }));
   });
 
   it('claims the IDENTITY of a retracted line too, so a malformed id is refused before the skip', () => {
@@ -440,14 +454,14 @@ describe('summariseBasket — a retracted line is not in the basket', () => {
     // retracted line is skipped as a QUANTITY; it is not skipped as an
     // identity, because `consumedCartLineIds` will name it to the sales
     // authority and a malformed id there is a row nobody can match.
-    expect(() => summariseBasket([live(1, '2'), { ...retracted(2, '5'), lineId: 'not-a-uuid' }], PRECISION)).toThrowError(
+    expect(() => summariseAt([live(1, '2'), { ...retracted(2, '5'), lineId: 'not-a-uuid' }], PRECISION)).toThrowError(
       expect.objectContaining({ code: 'order.id_invalid' }),
     );
   });
 
   it('refuses a retraction that is not a canonical instant', () => {
     for (const bad of ['2026-10-12', '2026-10-12T01:00:00.000Z', '2026-10-12T01:00:00+02:00', 'yesterday', '']) {
-      expect(() => summariseBasket([live(1, '2'), { ...retracted(2, '5'), retractedAt: bad }], PRECISION)).toThrowError(
+      expect(() => summariseAt([live(1, '2'), { ...retracted(2, '5'), retractedAt: bad }], PRECISION)).toThrowError(
         expect.objectContaining({ code: 'order.cart_line_invalid' }),
       );
     }
@@ -456,7 +470,7 @@ describe('summariseBasket — a retracted line is not in the basket', () => {
   it('refuses a line that does not state its retraction at all, since a type-only field has no runtime existence', () => {
     const noField = [live(1, '2'), live(2, '5')] as CartLine[];
     delete (noField[1] as { retractedAt?: string | null }).retractedAt;
-    expect(() => summariseBasket(noField, PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_line_invalid' }));
+    expect(() => summariseAt(noField, PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_line_invalid' }));
   });
 
   it('does not judge a retracted line by the live rules, so a basket stays orderable after a removal', () => {
@@ -464,13 +478,63 @@ describe('summariseBasket — a retracted line is not in the basket', () => {
     // now says whole units. A live line of 2.5 is refused — and the same line
     // retracted is skipped, because it contributes nothing and the shopper
     // already removed it. Refusing the basket here would punish them for it.
-    expect(() => summariseBasket([live(1, '2'), live(2, '2.5')], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_quantity_invalid' }));
-    expect(summariseBasket([live(1, '2'), { ...retracted(2, '2.5') }], PRECISION)[0]?.totalQuantity).toBe('2.0000');
+    expect(() => summariseAt([live(1, '2'), live(2, '2.5')], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_quantity_invalid' }));
+    expect(summariseAt([live(1, '2'), { ...retracted(2, '2.5') }], PRECISION)[0]?.totalQuantity).toBe('2.0000');
   });
 
   it('needs no precision declaration for a stock key only retracted lines name', () => {
-    const onlyRetractedKey = summariseBasket([live(1, '2'), { ...retracted(2, '1'), productId: GIFT_CARD }], new Map([[KEY_A, tracked(0)]]));
+    const onlyRetractedKey = summariseAt([live(1, '2'), { ...retracted(2, '1'), productId: GIFT_CARD }], new Map([[KEY_A, tracked(0)]]));
     expect(onlyRetractedKey).toHaveLength(1);
     expect(onlyRetractedKey[0]?.stockKey).toBe(KEY_A);
+  });
+});
+
+// Round 8, P3-02. The round-8 Challenger measured that this package accepted a
+// retraction at `'2999-01-01T00:00:00Z'` while the relation's leg 8 refuses
+// `NEW.retracted_at > now()`. One law stated twice, differently, is a law whose
+// verdict depends on which layer the caller reaches first.
+describe('summariseBasket — the reference instant', () => {
+  const line = (retractedAt: string | null): CartLine => ({
+    lineId: LINE(1),
+    productId: PRODUCT_A,
+    variantId: null,
+    quantity: '2',
+    retractedAt,
+  });
+  const live = (): CartLine => ({ ...line(null), lineId: LINE(2) });
+
+  it('refuses a retraction at an instant that has not arrived', () => {
+    expect(() => summariseBasket([live(), line('2999-01-01T00:00:00Z')], PRECISION, AS_OF)).toThrowError(
+      expect.objectContaining({ code: 'order.cart_retraction_not_future' }),
+    );
+  });
+
+  it('accepts a retraction at exactly the reference instant, because that instant HAS arrived', () => {
+    const positions = summariseBasket([live(), line(AS_OF)], PRECISION, AS_OF);
+    expect(positions).toHaveLength(1);
+    expect(positions[0]?.lineIds).toEqual([LINE(2)]);
+  });
+
+  it('is decided by the supplied instant and not by a clock, so the same basket moves with asOf', () => {
+    const retractedLater = [live(), line('2026-10-12T18:00:00Z')] as const;
+    // read at noon the retraction is in the future and refused ...
+    expect(() => summariseBasket([...retractedLater], PRECISION, '2026-10-12T12:00:00Z')).toThrowError(
+      expect.objectContaining({ code: 'order.cart_retraction_not_future' }),
+    );
+    // ... and read at midnight the same basket is lawful and the line is gone.
+    expect(summariseBasket([...retractedLater], PRECISION, '2026-10-13T00:00:00Z')[0]?.lineIds).toEqual([LINE(2)]);
+  });
+
+  it('refuses a reference instant that is not canonical, including an absent one', () => {
+    for (const bad of ['2026-10-12', '2026-10-12T12:00:00.000Z', '2026-10-12T12:00:00+02:00', '', 'now']) {
+      expect(() => summariseBasket([live()], PRECISION, bad)).toThrowError(expect.objectContaining({ code: 'order.occurred_at_invalid' }));
+    }
+    expect(() => summariseBasket([live()], PRECISION, undefined as unknown as string)).toThrowError(
+      expect.objectContaining({ code: 'order.occurred_at_invalid' }),
+    );
+  });
+
+  it('judges the reference instant BEFORE the basket, so an empty basket and a bad instant cannot be confused', () => {
+    expect(() => summariseBasket([], PRECISION, 'not-an-instant')).toThrowError(expect.objectContaining({ code: 'order.occurred_at_invalid' }));
   });
 });

@@ -23,7 +23,7 @@
  */
 import { assertQuantityRepresentable, formatQuantity, parseQuantity } from '@daftar/inventory';
 import { OrderError, assertCanonicalId, isCanonicalId } from './errors';
-import { isCanonicalInstant } from './instant';
+import { compareCanonical, isCanonicalInstant } from './instant';
 import { type UnitPrecisionDeclaration, requireUnitPrecision } from './unit-precision';
 
 /** One basket row as the client appended it. */
@@ -113,10 +113,25 @@ export interface BasketPosition {
  * number on its own: a precision-free product is lawful and sellable, and
  * `unit-precision.ts` holds the whole of that law.
  *
+ * `asOf` is the instant the basket is being read at, and it is SUPPLIED rather
+ * than read from a clock — the same rule the quote gate follows, so the same
+ * retry reaches the same verdict. It is REQUIRED for the same reason
+ * `retractedAt` is: the relation refuses a retraction at an instant that has
+ * not arrived (`I2.6`, leg 8), and a law stated in the database and not here is
+ * a law with two different answers. The round-8 Challenger measured that
+ * disagreement — `'2999-01-01T00:00:00Z'` was accepted here and refused there.
+ *
  * Positions come back in order of FIRST APPEARANCE, which is deterministic
  * from the input and does not depend on how a UUID happens to sort.
  */
-export function summariseBasket(lines: readonly CartLine[], precisionByStockKey: ReadonlyMap<string, UnitPrecisionDeclaration>): readonly BasketPosition[] {
+export function summariseBasket(
+  lines: readonly CartLine[],
+  precisionByStockKey: ReadonlyMap<string, UnitPrecisionDeclaration>,
+  asOf: string,
+): readonly BasketPosition[] {
+  if (!isCanonicalInstant(asOf)) {
+    throw new OrderError('order.occurred_at_invalid', 'asOf must be a canonical RFC3339 UTC instant at second precision', { stated: String(asOf) });
+  }
   if (lines.length === 0) {
     throw new OrderError('order.cart_empty', 'a basket must carry at least one line');
   }
@@ -157,6 +172,16 @@ export function summariseBasket(lines: readonly CartLine[], precisionByStockKey:
             stated: String(line.retractedAt),
           },
         );
+      }
+      if (compareCanonical(line.retractedAt, asOf) > 0) {
+        // The relation's leg 8 refuses `NEW.retracted_at > now()`. The same law
+        // is stated here against the supplied instant rather than a clock, so
+        // the two layers cannot disagree and a retry cannot change the verdict.
+        throw new OrderError('order.cart_retraction_not_future', 'a basket line states a retraction at an instant that has not arrived', {
+          lineId: line.lineId,
+          stated: line.retractedAt,
+          asOf,
+        });
       }
       retractedLines += 1;
       continue;

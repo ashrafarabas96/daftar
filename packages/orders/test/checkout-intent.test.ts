@@ -52,7 +52,11 @@ const tracked = (unitDecimals: number): UnitPrecisionDeclaration => ({ tracksInv
 const PRECISION = new Map([[KEY, tracked(0)]]);
 /** A product the merchant does not track and the catalogue gives no precision — lawful, and sellable. */
 const SERVICE: UnitPrecisionDeclaration = { tracksInventory: false, unitDecimals: null };
-const POSITIONS = summariseBasket(
+const AS_OF_BASKET = '2026-10-12T12:00:00Z';
+const summariseAt = (lines: readonly CartLineInput[], precision: ReadonlyMap<string, UnitPrecisionDeclaration>): ReturnType<typeof summariseBasket> =>
+  summariseBasket(lines, precision, AS_OF_BASKET);
+
+const POSITIONS = summariseAt(
   [
     { lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '2', retractedAt: null },
     { lineId: LINE2, productId: PRODUCT, variantId: VARIANT, quantity: '3', retractedAt: null },
@@ -450,7 +454,7 @@ describe('the confirmed quote now guards the hand-off (challenger P1-01)', () =>
   });
 
   it('refuses a checkout whose positions the confirmed quote does not price', () => {
-    const other = summariseBasket(
+    const other = summariseAt(
       [{ lineId: LINE1, productId: PRODUCT, variantId: null, quantity: '1', retractedAt: null }],
       new Map([[stockKeyOf({ productId: PRODUCT, variantId: null }), tracked(0)]]),
     );
@@ -587,10 +591,10 @@ describe('the mirror carries the authority CONSTRAINTS, not only its shape (chal
         expiresAt: '2026-10-01T10:00:00Z',
       });
 
-    const atLimit = summariseBasket(basketOf(200), precisionOf(200));
+    const atLimit = summariseAt(basketOf(200), precisionOf(200));
     expect(buildSaleCommitIntent(snapshot('fulfilling'), atLimit, { ...CASH, quoteApproval: approve(quoteFor(200)) }).lines).toHaveLength(200);
 
-    const overLimit = summariseBasket(basketOf(201), precisionOf(201));
+    const overLimit = summariseAt(basketOf(201), precisionOf(201));
     try {
       buildSaleCommitIntent(snapshot('fulfilling'), overLimit, { ...CASH, quoteApproval: approve(quoteFor(201)) });
       throw new Error('201 lines were accepted over a stated limit of 200');
@@ -655,10 +659,7 @@ describe('the hand-off supplies the precisions it validated the basket with (rou
     );
     // A position that declares four decimals admits the same quantity. The law
     // follows the basket, not a field beside it.
-    const atQ4 = summariseBasket(
-      [{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', retractedAt: null }],
-      new Map([[KEY, tracked(4)]]),
-    );
+    const atQ4 = summariseAt([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', retractedAt: null }], new Map([[KEY, tracked(4)]]));
     expect(atQ4[0]?.unitDecimals).toBe(4);
     expect(() => buildSaleCommitIntent(snapshot('fulfilling'), atQ4, { ...CASH, quoteApproval: approve(halfUnitQuote) })).not.toThrow();
   });
@@ -711,7 +712,7 @@ describe('the hand-off supplies the precisions it validated the basket with (rou
   // refused it at two sites — it could not be sold at all. The frozen shape is
   // right; the sale path was wrong about it.
   it('commits a position the catalogue declares with NO precision, at a quantity whole units would refuse', () => {
-    const precisionFree = summariseBasket(
+    const precisionFree = summariseAt(
       [{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', retractedAt: null }],
       new Map([[KEY, SERVICE]]),
     );
@@ -755,10 +756,10 @@ describe('the hand-off supplies the precisions it validated the basket with (rou
 
   it('refuses a precision-free position whose quantity exceeds the storage scale, and admits one at it', () => {
     const map = new Map([[KEY, SERVICE]]);
-    expect(summariseBasket([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '0.0001', retractedAt: null }], map)[0]?.totalQuantity).toBe(
+    expect(summariseAt([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '0.0001', retractedAt: null }], map)[0]?.totalQuantity).toBe(
       '0.0001',
     );
-    expect(() => summariseBasket([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '0.00001', retractedAt: null }], map)).toThrowError(
+    expect(() => summariseAt([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '0.00001', retractedAt: null }], map)).toThrowError(
       expect.objectContaining({ code: 'order.cart_quantity_invalid' }),
     );
   });

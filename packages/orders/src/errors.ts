@@ -52,6 +52,18 @@ export type OrderErrorCode =
   | 'order.cart_line_duplicate'
   /** A line quantity is not positive, or is not representable at the unit's precision. */
   | 'order.cart_quantity_invalid'
+  /**
+   * A basket line states a retraction at an instant that has not arrived at the
+   * instant the basket is being read.
+   *
+   * The relation refuses the same thing (`I2.6`, leg 8:
+   * `AFTER UPDATE … WHEN (NEW.retracted_at > now())`), and until this code
+   * existed the two statements of one law differed: the database refused a
+   * future retraction and this package accepted `'2999-01-01T00:00:00Z'`. A law
+   * with two statements that disagree is a law whose verdict depends on which
+   * layer the caller happens to reach first.
+   */
+  | 'order.cart_retraction_not_future'
 
   // ── the advisory availability read (availability.ts) ─────────────────────
   /** An on-hand figure was supplied for a stock key the basket does not name. */

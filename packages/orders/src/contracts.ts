@@ -523,6 +523,7 @@ export const ORDER_CLIENT_ERROR_CODES: readonly string[] = Object.freeze([
   'order.transition_conflict',
   'order.cart_empty',
   'order.cart_quantity_invalid',
+  'order.cart_retraction_not_future',
   'order.checkout_customer_required',
   'order.checkout_tax_policy_absent',
   'order.settlement_mode_unsupported',
