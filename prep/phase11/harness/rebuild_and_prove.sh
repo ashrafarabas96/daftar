@@ -38,6 +38,7 @@ $Q "$PG/psql -h $S/run -p 55511 -U postgres -d daftar -X -q -v ON_ERROR_STOP=1 -
 echo "=== 6. proofs ==="
 python3 -I $S/proofs.py
 RC=$?
+RC_PROOFS=$RC
 echo "=== 6b. real concurrency: three races, two live backends, no sleep() ==="
 python3 -I $S/races.py
 RCR=$?
@@ -51,4 +52,11 @@ d='/home/user/daftar/infrastructure/database/migrations'
 bad=[r['name'] for r in m['migrations'] if hashlib.sha256(open(os.path.join(d,r['name']),'rb').read()).hexdigest()!=r['sha256']]
 print("frozenThrough:",m['frozenThrough'],"| frozen entries:",len(m['migrations']),"| digest mismatches:",bad)
 PY
+# EXIT CODES, printed in the log itself (V3 §9: exit codes are required in
+# every handoff). A verdict read from prose rather than from a status is how
+# a green report over a failing run happens.
+echo
+echo "EXIT_PROOFS       : $RC_PROOFS  (prep/phase11/harness/proofs.py)"
+echo "EXIT_RACES        : $RCR  (prep/phase11/harness/races.py)"
+echo "EXIT_SCRIPT       : $RC  (0 means every step above returned 0)"
 exit $RC
