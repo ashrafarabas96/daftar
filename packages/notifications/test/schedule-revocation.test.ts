@@ -128,10 +128,25 @@ describe('PART 7.5 — the occurrence is supplied, so a re-run is not a second m
 });
 
 describe('PART 7.5 — revocation cancels future sends and does not rewrite the past', () => {
-  it('queued and retry_scheduled are ABANDONED: nothing was sent', () => {
+  // CORRECTED after the second independent challenge. This case asserted that
+  // `retry_scheduled` is abandoned because "nothing was sent" — a premise this
+  // module cannot see. `classifySend` reaches that state from an AMBIGUOUS
+  // result too, whenever the provider declares server-side idempotency, and
+  // abandoning there discards a message that may already have arrived. So the
+  // state alone no longer decides: the provenance does, and an unrecorded
+  // provenance is reconciled. See `test/challenge-4302cd5.test.ts` N-3.
+  it('queued is ABANDONED: nothing was ever handed to a provider', () => {
     expect(onRevocation('queued')).toEqual({ verdict: 'abandon', code: 'notification.consent_withdrawn' });
-    expect(onRevocation('retry_scheduled')).toEqual({ verdict: 'abandon', code: 'notification.consent_withdrawn' });
     expect(onRevocation('queued', 'eligibility')).toEqual({ verdict: 'abandon', code: 'notification.eligibility_withdrawn' });
+  });
+
+  it('a scheduled retry is abandoned ONLY where the last attempt was a proven rejection', () => {
+    expect(onRevocation({ state: 'retry_scheduled', scheduledRetryProvenance: 'after_proven_rejection' })).toEqual({
+      verdict: 'abandon',
+      code: 'notification.consent_withdrawn',
+    });
+    expect(onRevocation({ state: 'retry_scheduled', scheduledRetryProvenance: 'after_ambiguous_result' }).verdict).toBe('reconcile_only');
+    expect(onRevocation('retry_scheduled').verdict).toBe('reconcile_only');
   });
 
   it('sending and unknown are RECONCILED, never abandoned: a message may already have arrived', () => {

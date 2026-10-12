@@ -143,7 +143,7 @@ describe('PART 44 — a VERIFIED callback is what resolves an ambiguous delivery
   // The fourth argument is the delivery this reconciliation is ABOUT. See
   // `test/challenge-01e85f7.test.ts` F-2 for why it is required: without it, a
   // verified callback about ANOTHER message discharged this delivery.
-  const about = { deliveryKey: 'ob::whatsapp', expectedProviderMessageId: 'wamid.A' };
+  const about = { expectedProviderMessageId: 'wamid.A' };
 
   it('a verified callback with a MATCHING provider message id proves the provider has it', () => {
     expect(reconcileFromCallback(callback(), signed(), verifier, about)).toEqual({ found: true, providerMessageId: 'wamid.A' });

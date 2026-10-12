@@ -42,25 +42,70 @@ export type NotificationOrigin =
   | { readonly source: 'schedule'; readonly scheduleId: string; readonly occurrenceKey: string };
 
 /**
- * The separators this module composes keys with. A field carrying one of them
- * could spell a different key, so a field carrying one is REFUSED rather than
- * escaped: escaping adds a decoder, and every reader of these keys — including
- * the database's own UNIQUE constraint and a `ReadonlySet<string>` of recorded
- * obligations — would have to agree on it. Refusing needs no agreement.
+ * The separators these keys are composed with. A field carrying one could spell
+ * a different key, so a field carrying one is REFUSED rather than escaped:
+ * escaping adds a decoder, and every reader of these keys — the database's own
+ * UNIQUE constraint and a `ReadonlySet<string>` of recorded obligations
+ * included — would have to agree on it. Refusing needs no agreement.
  *
- * The challenger found two calls that produced an identical key by moving a
- * `|` from one field to another. With UUID ids it is unreachable; the scheduled
- * path made it reachable, because `occurrenceKey` is free text supplied by the
- * automation layer rather than a generated id.
+ * The first challenge found two calls producing an identical key by moving a
+ * `|` from one field to another. With UUID ids that is unreachable; the
+ * scheduled path made it reachable, because `occurrenceKey` is free text from
+ * the automation layer rather than a generated id.
+ *
+ * **`:` is legal in an occurrence key, and nowhere else — CORRECTED after the
+ * second challenge.** Refusing it everywhere was a blanket rule that broke the
+ * single most obvious occurrence value: an ISO-8601 timestamp. `2026-10-12T00:00`
+ * is the natural key for a monthly statement run, and a rule that refuses the
+ * canonical spelling of a period does not make the system safer, it makes the
+ * automation layer invent a private format.
+ *
+ * It is safe for exactly one reason, and the reason is structural rather than a
+ * judgement: the occurrence is the LAST field of its segment, and every field
+ * that can precede it — `schedule` and the schedule id — is itself `:`-free. So
+ * `schedule:<scheduleId>:<occurrence>` has its first two colons in fixed
+ * positions and everything after the second belongs to the occurrence, however
+ * many colons it contains. The segment ends at a `|`, which no field may carry.
+ * `::`, `#` and `@` stay refused in every field including this one, because
+ * `deliveryKey` and `attemptIdentity` append `::channel`, `@context` and `#n`
+ * AFTER the obligation key — a `::` inside an occurrence would make a DELIVERY
+ * key ambiguous even while the obligation key stayed sound.
  */
-const KEY_SEPARATORS: readonly string[] = ['|', ':', '::', '#', '@'];
+const SEPARATORS_REFUSED_EVERYWHERE: readonly string[] = ['|', '::', '#', '@'];
+/** Refused in every field except the terminal occurrence key. See above. */
+const SEGMENT_SEPARATOR = ':';
 
-function assertKeyField(name: string, value: string): void {
+function assertKeyField(name: string, value: string, options?: { readonly allowSegmentSeparator?: boolean }): void {
   if (value === '') throw new NotificationRefusal('notification.obligation_key_field_invalid', `${name}/empty`);
-  for (const separator of KEY_SEPARATORS) {
+  for (const separator of SEPARATORS_REFUSED_EVERYWHERE) {
     if (value.includes(separator)) {
       throw new NotificationRefusal('notification.obligation_key_field_invalid', `${name}/separator`);
     }
+  }
+  if (options?.allowSegmentSeparator !== true && value.includes(SEGMENT_SEPARATOR)) {
+    throw new NotificationRefusal('notification.obligation_key_field_invalid', `${name}/separator`);
+  }
+}
+
+/**
+ * Check an origin's key fields WITHOUT composing a key, so a caller that holds
+ * a firing or an event row can refuse it as a named outcome before anything is
+ * planned.
+ *
+ * This exists because of the second challenge's P1. The scheduled path accepted
+ * any non-empty occurrence, planned the dispatch, and the refusal then fired
+ * deep inside `dispatchOne` where it escaped as a thrown exception instead of a
+ * named outcome — so one badly shaped occurrence took down a whole monthly
+ * batch and the ledger recorded nothing about any recipient. A validity rule
+ * that can only be learned by triggering it is not a validity rule.
+ */
+export function originKeyFieldsAreValid(origin: NotificationOrigin): { readonly valid: true } | { readonly valid: false; readonly detail: string } {
+  try {
+    originKey(origin);
+    return { valid: true };
+  } catch (err) {
+    if (err instanceof NotificationRefusal) return { valid: false, detail: err.subject };
+    throw err;
   }
 }
 
@@ -70,7 +115,8 @@ function originKey(origin: NotificationOrigin): string {
     return `event:${origin.eventId}`;
   }
   assertKeyField('scheduleId', origin.scheduleId);
-  assertKeyField('occurrenceKey', origin.occurrenceKey);
+  // The occurrence is last in this segment, so a `:` inside it is unambiguous.
+  assertKeyField('occurrenceKey', origin.occurrenceKey, { allowSegmentSeparator: true });
   return `schedule:${origin.scheduleId}:${origin.occurrenceKey}`;
 }
 

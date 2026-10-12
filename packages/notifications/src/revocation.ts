@@ -40,14 +40,59 @@ export type RevocationVerdict =
  */
 export type RevocationCause = 'consent' | 'eligibility';
 
-export function onRevocation(state: DeliveryState, cause: RevocationCause = 'consent'): RevocationVerdict {
-  const code: NotificationRefusalCode = cause === 'consent' ? 'notification.consent_withdrawn' : 'notification.eligibility_withdrawn';
+/**
+ * Why a delivery is in `retry_scheduled` — the one state that does not say, on
+ * its own, whether a message may already be out.
+ *
+ * `classifySend` reaches it from TWO different results: a proven rejection
+ * (nothing was sent, so abandoning is clean) and an AMBIGUOUS result where the
+ * provider declares server-side idempotency (something may already have
+ * arrived). The second challenge found this module abandoning both, under a
+ * comment asserting "the last attempt was PROVEN not sent" — a premise this
+ * module cannot see and did not read. Fifth instance of that pattern, and the
+ * first in code written in the same push that fixed the fourth.
+ *
+ * It is latent only because the single shipped adapter declares
+ * `serverSideIdempotency = false`. It goes live with the second adapter, which
+ * is exactly when nobody will be reading this file.
+ */
+export type ScheduledRetryProvenance =
+  /** The attempt was refused by the provider: nothing was sent. */
+  | 'after_proven_rejection'
+  /** The attempt's outcome was unknown: a message may already have arrived. */
+  | 'after_ambiguous_result';
+
+export interface RevocationInput {
+  readonly state: DeliveryState;
+  readonly cause?: RevocationCause;
+  /**
+   * Required in effect for `retry_scheduled`: OMITTING it does not mean "clean",
+   * it means "unknown", and unknown fails closed to `reconcile_only`. A worker
+   * that cannot tell the two apart must not be allowed to pick the destructive
+   * reading by saying nothing.
+   */
+  readonly scheduledRetryProvenance?: ScheduledRetryProvenance;
+}
+
+export function onRevocation(input: RevocationInput | DeliveryState, cause: RevocationCause = 'consent'): RevocationVerdict {
+  const resolved: RevocationInput = typeof input === 'string' ? { state: input, cause } : input;
+  const state = resolved.state;
+  const code: NotificationRefusalCode = (resolved.cause ?? cause) === 'consent' ? 'notification.consent_withdrawn' : 'notification.eligibility_withdrawn';
   switch (state) {
-    // Nothing has been handed to a provider, or the last attempt was PROVEN not
-    // sent. Both stop cleanly, and the ledger says who withdrew what.
+    // Nothing has been handed to a provider at all.
     case 'queued':
-    case 'retry_scheduled':
       return { verdict: 'abandon', code };
+    case 'retry_scheduled':
+      // Only a PROVEN rejection permits abandoning. Anything else — including
+      // a worker that did not record which it was — is reconciled.
+      if (resolved.scheduledRetryProvenance === 'after_proven_rejection') return { verdict: 'abandon', code };
+      return {
+        verdict: 'reconcile_only',
+        reason:
+          resolved.scheduledRetryProvenance === 'after_ambiguous_result'
+            ? 'the scheduled retry follows an ambiguous attempt, which may have arrived'
+            : 'the provenance of the scheduled retry was not recorded, so it may have arrived',
+      };
     // An attempt is in flight. We cannot know yet whether the provider has it,
     // so this is the ambiguous case before it is even ambiguous.
     case 'sending':

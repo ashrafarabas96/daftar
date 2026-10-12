@@ -404,7 +404,7 @@ describe('§15.5 — lost-ack acceptance, end to end', () => {
       // The lost ack DID return this id before the connection was lost, so the
       // delivery can be correlated. An id that was never learned cannot be, and
       // no callback may close it — see F-2.
-      { deliveryKey: 'ob::whatsapp', expectedProviderMessageId: 'wamid.LOST' },
+      { expectedProviderMessageId: 'wamid.LOST' },
     );
     expect(reconciliation).toEqual({ found: true, providerMessageId: 'wamid.LOST' });
 
@@ -416,7 +416,6 @@ describe('§15.5 — lost-ack acceptance, end to end', () => {
   it('an UNVERIFIED callback cannot close a lost-ack delivery — it would be a silencing attack', () => {
     const body = JSON.stringify({ id: 'wamid.LOST', status: 'delivered' });
     const forged = reconcileFromCallback({ providerMessageId: 'wamid.LOST', status: 'delivered' }, { rawBody: body, signatureHeader: 'sha256=00' }, verifier, {
-      deliveryKey: 'ob::whatsapp',
       expectedProviderMessageId: 'wamid.LOST',
     });
     expect(forged).toEqual({ inconclusive: true, reason: 'signature_unverified' });

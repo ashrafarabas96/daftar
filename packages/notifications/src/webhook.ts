@@ -148,9 +148,18 @@ export function applyProviderCallback(
  * the recipient and the send window, never by an incoming callback.
  */
 export interface DeliveryCorrelation {
-  /** The stable logical delivery key this reconciliation is about. */
-  readonly deliveryKey: string;
-  /** The id the provider returned for THIS send, where one was returned. */
+  /**
+   * The id the provider returned for THIS send, where one was returned. This is
+   * the ONLY field, and that is deliberate.
+   *
+   * It carried a `deliveryKey` too, documented as "the stable logical delivery
+   * key this reconciliation is about" — and nothing read it. A provider
+   * callback carries the provider's own message id and not our key, so there is
+   * nothing to compare it against; it was a field that looked like a second
+   * check and was decoration. The smallest version of the very pattern the same
+   * commit fixed twice, caught by the second challenge. A field that cannot be
+   * compared is dropped rather than left to read as a guarantee.
+   */
   readonly expectedProviderMessageId?: string;
 }
 

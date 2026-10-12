@@ -84,7 +84,6 @@ describe('F-2 — a callback resolves only the delivery it is ABOUT', () => {
   it('a verified callback about another message is inconclusive, not a discharge', () => {
     const other: ProviderCallback = { providerMessageId: 'wamid.SOMEONE-ELSE', status: 'delivered' };
     const r = reconcileFromCallback(other, signed, alwaysVerifies, {
-      deliveryKey: 'ob|whatsapp',
       expectedProviderMessageId: 'wamid.MINE',
     });
     expect(r).toEqual({ inconclusive: true, reason: 'provider_message_id_mismatch' });
@@ -93,7 +92,6 @@ describe('F-2 — a callback resolves only the delivery it is ABOUT', () => {
 
   it('a matching verified callback discharges it', () => {
     const r = reconcileFromCallback(callback, signed, alwaysVerifies, {
-      deliveryKey: 'ob|whatsapp',
       expectedProviderMessageId: 'wamid.MINE',
     });
     expect(r).toEqual({ found: true, providerMessageId: 'wamid.MINE' });
@@ -105,7 +103,7 @@ describe('F-2 — a callback resolves only the delivery it is ABOUT', () => {
     // usable id. There is nothing to correlate against, so a callback must not
     // be allowed to close it. The challenger named this the one state the
     // function existed to resolve and the one in which it cannot.
-    const r = reconcileFromCallback(callback, signed, alwaysVerifies, { deliveryKey: 'ob|whatsapp' });
+    const r = reconcileFromCallback(callback, signed, alwaysVerifies, {});
     expect(r).toEqual({ inconclusive: true, reason: 'provider_message_id_never_learned' });
     expect(resolveUnknown(r).state).toBe('unknown');
   });
@@ -118,7 +116,6 @@ describe('F-2 — a callback resolves only the delivery it is ABOUT', () => {
 
   it('an unverified callback still resolves nothing, whatever it claims about the id', () => {
     const r = reconcileFromCallback(callback, signed, { verify: () => ({ verified: false, reason: 'bad_signature' }) } as never, {
-      deliveryKey: 'ob|whatsapp',
       expectedProviderMessageId: 'wamid.MINE',
     });
     expect(r).toEqual({ inconclusive: true, reason: 'signature_unverified' });

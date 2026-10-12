@@ -28,6 +28,7 @@
  */
 import { refuse, type NotificationRefusalCode } from './errors';
 import { catalogEntry, scheduledKindsFor, type NotificationKind } from './catalog';
+import { originKeyFieldsAreValid } from './identity';
 import type { DispatchIntent } from './consumer';
 
 /**
@@ -98,6 +99,20 @@ export function planFromScheduleFiring(firing: ScheduleFiring, schedules: Schedu
     refuse('notification.schedule_not_configured', `${firing.scheduleId}/configuration_mismatch`);
   }
 
+  const origin = { source: 'schedule', scheduleId: firing.scheduleId, occurrenceKey: firing.occurrenceKey } as const;
+
+  // The occurrence must be able to BE part of an obligation key, and the caller
+  // learns that here rather than by having an exception thrown at it from three
+  // frames deeper. The second challenge's P1: an ISO occurrence was planned
+  // happily and then refused inside `dispatchOne`, outside the try that names
+  // outcomes, so one bad occurrence took down a whole monthly batch and nothing
+  // was recorded for any recipient. `:` is legal in an occurrence now, but a
+  // `|`, `::`, `#` or `@` is not, and a refusal here is a recordable answer.
+  const keyFields = originKeyFieldsAreValid(origin);
+  if (!keyFields.valid) {
+    return { plan: 'refuse', code: 'notification.obligation_key_field_invalid', detail: keyFields.detail };
+  }
+
   const intents: DispatchIntent[] = [];
   for (const kind of kinds) {
     const entry = catalogEntry(kind);
@@ -106,7 +121,7 @@ export function planFromScheduleFiring(firing: ScheduleFiring, schedules: Schedu
       kind: kind as NotificationKind,
       businessId: firing.businessId,
       subjectRefs: firing.subjectRefs ?? {},
-      origin: { source: 'schedule', scheduleId: firing.scheduleId, occurrenceKey: firing.occurrenceKey },
+      origin,
     });
   }
   return { plan: 'dispatch', intents };

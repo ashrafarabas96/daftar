@@ -234,7 +234,20 @@ async function dispatchOne(intent: DispatchIntent, owed: HydratedObligation, por
   // and `assertRecipientBelongs` below is what proves it matches; keying on it
   // would let a hydrator file an obligation under any tenant it named, which is
   // the cross-tenant mixing this key was given a tenant to prevent.
-  const obligation = obligationKey(intent.businessId, intent.origin, intent.kind, owed.recipient.ref);
+  //
+  // Composing the key is INSIDE the try, because it can refuse: a field holding
+  // a key separator is rejected rather than escaped. Outside it, that refusal
+  // escaped `dispatchIntent` as a thrown exception and no outcome was recorded
+  // for any recipient in the batch — against this file's own "every path ends
+  // in a NAMED outcome" and against §15's never-silent. A refusal that cannot
+  // be recorded is indistinguishable from a notification that was never owed.
+  let obligation: string;
+  try {
+    obligation = obligationKey(intent.businessId, intent.origin, intent.kind, owed.recipient.ref);
+  } catch (err) {
+    if (err instanceof NotificationRefusal) return [{ result: 'refused', kind: intent.kind, code: err.code }];
+    throw err;
+  }
 
   try {
     assertRecipientBelongs(intent, owed.recipient);
@@ -463,7 +476,17 @@ export async function dispatchIntent(intent: DispatchIntent, ports: DispatchPort
     // with nothing saying why: exactly the "vanished without a reason" case the
     // law forbids, in the one place the law itself did not read.
     if (seen.has(key)) {
-      outcomes.push({ result: 'already_owed', kind: intent.kind, obligation: obligationKey(intent.businessId, intent.origin, intent.kind, one.recipient.ref) });
+      // Same reason as above: this second call site can refuse too, and a
+      // duplicate recipient must not be the thing that throws out of a batch.
+      let duplicate: string | undefined;
+      try {
+        duplicate = obligationKey(intent.businessId, intent.origin, intent.kind, one.recipient.ref);
+      } catch (err) {
+        if (!(err instanceof NotificationRefusal)) throw err;
+        outcomes.push({ result: 'refused', kind: intent.kind, code: err.code });
+        continue;
+      }
+      outcomes.push({ result: 'already_owed', kind: intent.kind, obligation: duplicate });
       continue;
     }
     seen.add(key);

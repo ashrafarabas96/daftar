@@ -186,15 +186,30 @@ export function classifySend(input: ClassifyInput): SendOutcome {
     return { state: 'retry_scheduled', next: { action: 'retry', afterSeconds: backoffSeconds(attemptsMade) } };
   }
 
-  // An adapter that says a class is not retryable stops the delivery whatever
-  // the class-level policy thinks. This is the narrower of the two, so it runs
-  // first.
+  // TWO vetoes, and either one stops the delivery. Stated explicitly because
+  // the second challenge found the comment here claiming the adapter's flag was
+  // "the narrower of the two" after delegation had made them independent:
+  //
+  //  1. the ADAPTER's `retryable` — it saw the actual response;
+  //  2. the CLASS policy in `retry.ts` (`isTransient`) — it knows which error
+  //     classes are worth retrying at all.
+  //
+  // `retry.ts`'s docstring says the two must agree. Where they disagree the
+  // delivery stops, which is the safe direction and is now what the code does
+  // rather than what a comment claimed.
   if (!result.retryable) return { state: 'dead', next: { action: 'stop', reason: result.code } };
   // PART 8, single authority: the attempt limit and the backoff live in
   // `retry.ts`, and this asks them. The two used to be written out here as
   // well — the same policy twice, with nothing holding the copies together.
   const step = nextStepAfterFailure(attemptsMade - 1, result.code, { maxAttempts, backoff: backoffSeconds });
-  if (step.step === 'dead') return { state: 'dead', next: { action: 'stop', reason: 'attempt limit reached' } };
+  if (step.step === 'dead') {
+    // The reason is CARRIED, never substituted. This returned the constant
+    // "attempt limit reached" for every dead rejection, so a delivery stopped
+    // by its error class on attempt 1 of 8 reported a limit that was nowhere
+    // near reached — a falsehood in the one field an operator reads to find out
+    // why a customer was not told something.
+    return { state: 'dead', next: { action: 'stop', reason: step.reason } };
+  }
   return { state: 'retry_scheduled', next: { action: 'retry', afterSeconds: step.afterSeconds } };
 }
 

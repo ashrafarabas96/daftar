@@ -104,9 +104,14 @@ describe('PART 44 — an ambiguous result is never auto-resent', () => {
       state: 'retry_scheduled',
       next: { action: 'retry', afterSeconds: 20 },
     });
+    // The reason NAMES the class that was being retried, rather than the
+    // constant "attempt limit reached" this used to assert. That constant was
+    // returned for every dead rejection, including ones stopped by their error
+    // class on attempt 1 of 8 — a falsehood in the field an operator reads.
+    // See `test/challenge-4302cd5.test.ts` N-2.
     expect(classifySend({ result: rejectedTransient, providerServerSideIdempotency: false, attemptsMade: 8, maxAttempts: 8, backoffSeconds })).toEqual({
       state: 'dead',
-      next: { action: 'stop', reason: 'attempt limit reached' },
+      next: { action: 'stop', reason: 'PROVIDER_UNAVAILABLE' },
     });
   });
 
