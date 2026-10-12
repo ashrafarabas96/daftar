@@ -163,7 +163,10 @@
 --          none means REFUSE, one resolves, more than one means REFUSE
 --          unless the caller states the offset it means. Never the first
 --          occurrence by default, because "first" is not a thing the
---          caller said.
+--          caller said. The candidates are the zone's own offsets over
+--          ±1440 minutes and the supported date range is enforced, both
+--          measured: see §5c, where the two earlier versions of this scan
+--          are recorded as the defects they were.
 --
 -- R-P9-14  A REPLAY IS ANSWERED FROM THE RECORD, NOT FROM THE REFUSAL.
 --          A unique key that refuses the second attempt is necessary and
@@ -740,27 +743,21 @@ REVOKE ALL ON FUNCTION booking_lock_resources(UUID, UUID[]) FROM PUBLIC;
 --   zone        any IANA name this server knows. Anything else:
 --               booking.timezone_unknown.
 --   wall clock  finite. ±infinity: booking.local_time_not_finite.
---   shift       up to ±180 minutes, and that bound is MEASURED against this
---               server's whole tz database rather than asserted. Over all 598
---               zones it knows, sampled every twelve hours across 2024-2030 —
---               the window bookings are actually placed in — the widest
---               transition in either direction is 120 minutes
---               (Antarctica/Troll). Over 1970-2040 the record is wider than
---               the bound: a 1440-minute date-line move (Kwajalein, 1993) and
---               a 420-minute repeat (Antarctica/Vostok). So the claim is
---               stated in the two directions, because they fail differently:
---
---                 a GAP wider than the bound  → still refused, because the
---                 scan finds no candidate. The safe side, and the same answer
---                 a wider scan would give. Measured on Kwajalein's skipped
---                 day.
---                 a REPEAT wider than the bound → the second occurrence is
---                 outside the scan, so the time would be resolved as
---                 unambiguous instead of refused — a silent choice, which is
---                 exactly what this routine exists to prevent. No such repeat
---                 exists in 2024-2030; one exists historically. A booking is
---                 a future appointment, so the law holds where bookings live,
---                 and this sentence is the honest width of the claim.
+--   date        1970-01-01 to 2100-01-01, ENFORCED
+--               (booking.local_time_out_of_supported_range). The scan's
+--               width is measured over exactly that span, so it is the span
+--               the routine will answer in. V3 of the Mission asked for the
+--               supported range to be declared and enforced rather than
+--               implied, and for the claim or the algorithm to be fixed to
+--               match the usage scope; both were fixed.
+--   shift       up to ±1440 minutes, MEASURED over all 598 zones this server
+--               knows across the supported range: the widest gap is 1440
+--               minutes (Kwajalein's 1993 date-line move) and the widest
+--               repeat is 420 minutes (Antarctica/Vostok, 1994-01-31). The
+--               earlier ±180 claimed more than it could deliver — it
+--               resolved that 420-minute repeat SILENTLY instead of refusing
+--               it as ambiguous, which the suite now proves against a copy of
+--               the old scan.
 --   offset      must be one the stated wall clock actually has, whether or
 --               not there is anything to disambiguate. Otherwise
 --               booking.local_time_offset_mismatch.
@@ -801,6 +798,18 @@ BEGIN
     RAISE EXCEPTION 'booking.local_time_not_finite: % is not a wall-clock time a booking can be placed at', p_local USING ERRCODE = 'P0001';
   END IF;
 
+  -- THE SUPPORTED RANGE, ENFORCED. The width and the granularity of the scan
+  -- below are claims about the tz database, and they are measured over
+  -- 1970-2100: every transition in that span is within ±1440 minutes in both
+  -- directions. Outside it there is no measurement, so the routine refuses
+  -- rather than answering something it cannot stand behind. This is a scope
+  -- guard with evidence behind it, not a ban on old dates: widening the range
+  -- means re-running the measurement in the suite, not editing this comment.
+  IF p_local < '1970-01-01 00:00:00'::timestamp OR p_local >= '2100-01-01 00:00:00'::timestamp THEN
+    RAISE EXCEPTION 'booking.local_time_out_of_supported_range: % is outside the resolved range 1970-01-01 to 2100-01-01, which is the span this resolver has evidence for', p_local
+      USING ERRCODE = 'P0001';
+  END IF;
+
   -- An unknown zone is refused by name, not by whatever 22023 happens to
   -- say. businesses.timezone has been a validated IANA name since 0023, so
   -- this fires for a caller that passed something else.
@@ -810,10 +819,37 @@ BEGIN
     RAISE EXCEPTION 'booking.timezone_unknown: % is not a timezone this server knows', p_zone USING ERRCODE = 'P0001';
   END;
 
-  SELECT array_agg(c ORDER BY c) INTO v_cands
-    FROM (SELECT (v_naive + make_interval(mins => k)) AS c
-            FROM generate_series(-180, 180, 1) AS k
-           WHERE ((v_naive + make_interval(mins => k)) AT TIME ZONE p_zone) = p_local) AS s;
+  -- THE CANDIDATES ARE THE ZONE'S OWN OFFSETS, not whole-minute shifts of
+  -- PostgreSQL's answer. Both halves of that sentence were defects:
+  --
+  --   * stepping by one minute assumed every offset is a whole number of
+  --     minutes. That premise is MEASURED FALSE inside the supported range:
+  --     Africa/Monrovia ran at -00:44:30 until 1972. No wrong answer was
+  --     found from it — PostgreSQL's own conversion is the k = 0 candidate and
+  --     is exact whatever the seconds are, and Monrovia's change is a gap,
+  --     which both versions refuse — so this is a PREMISE REMOVED rather than
+  --     a defect repaired, and the suite says so in those words. Reading the
+  --     offsets OUT of the zone carries their seconds exactly, so the question
+  --     stops being load-bearing.
+  --   * ±180 minutes was too narrow. MEASURED: Antarctica/Vostok moved from
+  --     +07:00 to +00:00 on 1994-01-31, so seven hours of wall clock occur
+  --     TWICE; at ±180 the second occurrence is outside the scan, the time
+  --     looks unambiguous, and the resolver SILENTLY PICKS ONE — the single
+  --     thing R-P9-13 exists to prevent. The width is now ±1440 minutes,
+  --     which is measured to cover every transition in the supported range
+  --     in both directions.
+  --
+  -- The round-trip filter is what makes this sound rather than merely wider:
+  -- a candidate is kept only if mapping it back into the zone returns exactly
+  -- the wall clock asked for, so no extra candidate can ever be invented by
+  -- widening.
+  SELECT array_agg(DISTINCT k.c ORDER BY k.c) INTO v_cands
+    FROM (SELECT ((p_local - o.off) AT TIME ZONE 'UTC') AS c
+            FROM (SELECT DISTINCT ((s.ts AT TIME ZONE p_zone) - (s.ts AT TIME ZONE 'UTC')) AS off
+                    FROM generate_series(v_naive - interval '1440 minutes',
+                                         v_naive + interval '1440 minutes',
+                                         interval '1 minute') AS s(ts)) AS o) AS k
+   WHERE (k.c AT TIME ZONE p_zone) = p_local;
   v_n := coalesce(cardinality(v_cands), 0);
 
   IF v_n = 0 THEN
@@ -846,7 +882,7 @@ BEGIN
   RETURN v_pick;
 END $fn$;
 COMMENT ON FUNCTION booking_resolve_local(TEXT, TIMESTAMP, INTERVAL) IS
-  'P9-S1, R-P9-13. Resolves a wall-clock time in an IANA zone to the instant the booking is stored at, and REFUSES rather than guessing where the clock makes the question unanswerable: booking.local_time_nonexistent for an hour a spring-forward skipped, booking.local_time_ambiguous for one an autumn fall-back repeated unless the caller states the offset it means. PostgreSQL''s own AT TIME ZONE answers both silently, which is the defect this exists to prevent. STABLE, because the tz database is data: never put this in a generated column or an index.';
+  'P9-S1, R-P9-13. Resolves a wall-clock time in an IANA zone to the instant the booking is stored at, and REFUSES rather than guessing where the clock makes the question unanswerable: booking.local_time_nonexistent for an hour a spring-forward skipped, booking.local_time_ambiguous for one an autumn fall-back repeated unless the caller states the offset it means. PostgreSQL''s own AT TIME ZONE answers both silently, which is the defect this exists to prevent. Candidates are the zone''s OWN offsets over ±1440 minutes, not whole-minute shifts of PostgreSQL''s answer: a minute-stepped scan mis-handled Africa/Monrovia''s -00:44:30 and a ±180 scan resolved Antarctica/Vostok''s 420-minute repeat silently. Refuses a wall clock outside 1970-2100 (booking.local_time_out_of_supported_range), which is the span the scan''s width is measured over. STABLE, because the tz database is data: never put this in a generated column or an index.';
 REVOKE ALL ON FUNCTION booking_resolve_local(TEXT, TIMESTAMP, INTERVAL) FROM PUBLIC;
 
 

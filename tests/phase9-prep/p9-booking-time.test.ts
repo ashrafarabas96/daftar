@@ -356,7 +356,7 @@ describe('P9 bookings — a local time is resolved or refused, never guessed', (
    * A sample window wide enough to hold two transitions reports their sum,
    * which can only overstate a single transition — the conservative direction.
    */
-  it('the ±180-minute bound, measured against every zone this server knows, in both directions', async () => {
+  it('the ±1440-minute scan covers every transition in the supported range, measured in both directions', async () => {
     const c = new Client({ connectionString: db.url('postgres') });
     await c.connect();
     try {
@@ -403,18 +403,22 @@ describe('P9 bookings — a local time is resolved or refused, never guessed', (
       expect(near.widest_gap).toBeLessThanOrEqual(180);
 
       // Long range, coarsely: 1970 to 2040 in seven-day samples.
-      const far = await sweep('1970-01-01T00:00:00Z', '2040-01-01T00:00:00Z', '7 days');
+      const far = await sweep('1970-01-01T00:00:00Z', '2100-01-01T00:00:00Z', '7 days');
       expect(far.zones).toBeGreaterThan(400);
       expect(far.steps).toBeGreaterThan(3000);
-      // MEASURED, AND IT IS OUTSIDE THE BOUND: the historical record contains
-      // date-line moves of a full day (Kwajalein, 1993). This case does NOT
-      // assert the bound covers them, because it does not — §5c's scope says
-      // so, LIMITATION 12 of the prep report says so, and the direction that
-      // would be unsafe is asserted separately below.
+      // THE BOUND THE SCAN ACTUALLY USES, over the whole supported range:
+      // ±1440 minutes. This is the assertion that would red if a tz update
+      // ever moved a clock further than the scan can see — which is the only
+      // honest way to hold a claim about data that updates.
+      expect(far.widest_gap).toBeLessThanOrEqual(1440);
+      expect(far.widest_repeat).toBeLessThanOrEqual(1440);
+      // And it is NOT inside the old ±180: that is why the scan was widened,
+      // and this is the measurement that forced it.
       expect(far.widest_gap).toBeGreaterThan(180);
+      expect(far.widest_repeat).toBeGreaterThan(180);
       console.log(
         `[P9 tz bound] 2024-2030: gap ${near.widest_gap} min, repeat ${near.widest_repeat} min (${near.repeat_zone}), ${near.zones} zones × ${near.steps} samples. ` +
-          `1970-2040: gap ${far.widest_gap} min, repeat ${far.widest_repeat} min (${far.repeat_zone}).`,
+          `1970-2100: gap ${far.widest_gap} min, repeat ${far.widest_repeat} min (${far.repeat_zone}).`,
       );
     } finally {
       await c.end().catch(() => undefined);
@@ -439,6 +443,135 @@ describe('P9 bookings — a local time is resolved or refused, never guessed', (
       expect(ok.error).toBe('');
       expect(ok.instant).not.toBe('');
     }
+  });
+
+  /**
+   * V3 of the Mission: «قد ينتقي occurrence في تكرار تاريخي أطول (مثل 420
+   * دقيقة). حدد نطاق التاريخ الذي تدعمه فعليًا بحارس منفذ واختبارات ضمنه» —
+   * the ±180 window may pick an occurrence inside a longer historical repeat;
+   * declare the supported date range with an ENFORCED guard and tests inside
+   * it, and fix the claim or the algorithm to match the usage scope.
+   *
+   * Both were wrong, and both are fixed rather than declared away. These cases
+   * prove the fix against a COPY of each old scan, created in this scratch
+   * database — never against the document, which no proof here mutates.
+   */
+  describe('the two defects V3 named, each proved against a copy of the old scan', () => {
+    /** The old ±180 minute-stepped scan, as a scratch routine beside the real one. */
+    const OLD_SCAN = `
+      CREATE OR REPLACE FUNCTION p9_resolve_old(p_zone TEXT, p_local TIMESTAMP) RETURNS TIMESTAMPTZ
+      LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
+      DECLARE v_naive TIMESTAMPTZ; v_cands TIMESTAMPTZ[]; v_n INTEGER;
+      BEGIN
+        v_naive := p_local AT TIME ZONE p_zone;
+        SELECT array_agg(c ORDER BY c) INTO v_cands
+          FROM (SELECT (v_naive + make_interval(mins => k)) AS c
+                  FROM generate_series(-180, 180, 1) AS k
+                 WHERE ((v_naive + make_interval(mins => k)) AT TIME ZONE p_zone) = p_local) AS s;
+        v_n := coalesce(cardinality(v_cands), 0);
+        IF v_n = 0 THEN RAISE EXCEPTION 'old.nonexistent' USING ERRCODE = 'P0001'; END IF;
+        IF v_n = 1 THEN RETURN v_cands[1]; END IF;
+        RAISE EXCEPTION 'old.ambiguous' USING ERRCODE = 'P0001';
+      END $fn$;`;
+
+    beforeAll(async () => {
+      await db.pool.query(OLD_SCAN);
+    });
+
+    const old = async (zone: string, local: string): Promise<{ instant: string; error: string }> => {
+      try {
+        const r = await db.pool.query<{ i: string }>(`SELECT p9_resolve_old($1, $2::timestamp)::text AS i`, [zone, local]);
+        return { instant: r.rows[0]?.i ?? '', error: '' };
+      } catch (e) {
+        return { instant: '', error: (e as Error).message };
+      }
+    };
+
+    it('DEFECT 1 — a 420-minute repeat: the old ±180 scan RESOLVES IT SILENTLY, the current one refuses it', async () => {
+      // Antarctica/Vostok went from +07:00 to +00:00 at 1994-01-31 17:00Z —
+      // measured from this server, not recalled — so the seven wall-clock
+      // hours before midnight occur twice. The subject is asserted first.
+      const shift = await db.pool.query<{ before: string; after: string }>(
+        `SELECT (('1994-01-31 16:00:00Z'::timestamptz AT TIME ZONE 'Antarctica/Vostok') - ('1994-01-31 16:00:00Z'::timestamptz AT TIME ZONE 'UTC'))::text AS before,
+                (('1994-01-31 18:00:00Z'::timestamptz AT TIME ZONE 'Antarctica/Vostok') - ('1994-01-31 18:00:00Z'::timestamptz AT TIME ZONE 'UTC'))::text AS after`,
+      );
+      expect(shift.rows[0]?.before).toBe('07:00:00');
+      expect(shift.rows[0]?.after).toBe('00:00:00');
+
+      const repeated = '1994-01-31 20:00:00';
+      // There really are two instants for that wall clock.
+      const n = await db.pool.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM generate_series('1994-01-31Z'::timestamptz, '1994-02-02Z'::timestamptz, '1 minute'::interval) AS ts
+          WHERE (ts AT TIME ZONE 'Antarctica/Vostok') = $1::timestamp`,
+        [repeated],
+      );
+      expect(n.rows[0]?.n).toBe(2);
+
+      // THE OLD SCAN: one candidate inside ±180, so it answers. Silently.
+      const before = await old('Antarctica/Vostok', repeated);
+      expect(before.error).toBe('');
+      expect(before.instant).not.toBe('');
+
+      // THE CURRENT ONE: refused as ambiguous, by name, and resolvable only
+      // when the caller says which offset it means — which is the law.
+      const now = await resolve('Antarctica/Vostok', repeated);
+      expect(now.error).toContain('booking.local_time_ambiguous');
+      expect(now.instant).toBe('');
+      const picked = await resolve('Antarctica/Vostok', repeated, '07:00:00');
+      expect(picked.error).toBe('');
+      expect(picked.instant).not.toBe('');
+      const other = await resolve('Antarctica/Vostok', repeated, '00:00:00');
+      expect(other.error).toBe('');
+      expect(other.instant).not.toBe(picked.instant);
+    });
+
+    it('PREMISE 2 — offsets in the supported range are NOT all whole minutes, so candidates are read out of the zone', async () => {
+      // The old scan did not only use ±180: it generated its candidates as
+      // whole-MINUTE shifts of PostgreSQL's answer, which assumes every offset
+      // is a whole number of minutes. That premise is measured FALSE inside
+      // the supported range.
+      const off = await db.pool.query<{ off: string; nonminute: number }>(
+        `SELECT (('1971-06-15T10:00:00Z'::timestamptz AT TIME ZONE 'Africa/Monrovia') - ('1971-06-15T10:00:00Z'::timestamptz AT TIME ZONE 'UTC'))::text AS off,
+                (SELECT count(*)::int FROM generate_series('1970-01-01Z'::timestamptz, '1973-01-01Z'::timestamptz, '7 days'::interval) AS ts
+                  WHERE extract(epoch FROM ((ts AT TIME ZONE 'Africa/Monrovia') - (ts AT TIME ZONE 'UTC')))::bigint % 60 <> 0) AS nonminute`,
+      );
+      expect(off.rows[0]?.off).toBe('-00:44:30');
+      expect(off.rows[0]?.nonminute).toBeGreaterThan(0);
+
+      // HONEST ABOUT WHAT THIS IS. A wrong answer was NOT found: the old scan
+      // resolves this time too, because PostgreSQL's own conversion is the
+      // k = 0 candidate and is exact whatever the offset's seconds are, and
+      // Monrovia's 1972 change is a GAP, which both versions refuse. So this
+      // case proves a PREMISE REMOVED, not a defect repaired — the candidates
+      // are now the zone's own offsets, seconds included, so the question of
+      // whether every offset is a whole minute stops being load-bearing.
+      const alsoOld = await old('Africa/Monrovia', '1971-06-15 09:15:30');
+      expect(alsoOld.error).toBe('');
+
+      const now = await resolve('Africa/Monrovia', '1971-06-15 09:15:30');
+      expect(now.error).toBe('');
+      const back = await db.pool.query<{ local: string }>(`SELECT ($1::timestamptz AT TIME ZONE 'Africa/Monrovia')::text AS local`, [now.instant]);
+      expect(back.rows[0]?.local).toBe('1971-06-15 09:15:30');
+      // And the skipped side of that sub-minute change is still refused, by
+      // name, which is the behaviour a gap must have at any granularity.
+      const skipped = await resolve('Africa/Monrovia', '1972-01-07 00:20:00');
+      expect(skipped.error).toContain('booking.local_time_nonexistent');
+    });
+
+    it('the supported range is ENFORCED, not implied, and refused by its own name', async () => {
+      for (const local of ['1969-12-31 23:59:00', '2100-01-01 00:00:00', '2199-06-01 12:00:00']) {
+        const r = await resolve(ORDINARY_NY.zone, local);
+        expect(r.error).toContain('booking.local_time_out_of_supported_range');
+        expect(r.instant).toBe('');
+      }
+      // And the edges INSIDE the range answer, so the guard is a boundary and
+      // not a blanket refusal of old or distant dates.
+      for (const local of ['1970-01-01 00:00:00', '2099-12-31 23:00:00']) {
+        const r = await resolve('UTC', local);
+        expect(r.error).toBe('');
+        expect(r.instant).not.toBe('');
+      }
+    });
   });
 
   it('the resolver is STABLE, so it can never be folded into an index or a generated column', async () => {
