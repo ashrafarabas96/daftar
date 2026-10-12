@@ -42,7 +42,7 @@
  *
  * Nothing here touches a database. The subject is a pure rendering.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ArgumentsHost } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
@@ -388,12 +388,42 @@ describe('P4-S7 the installment.* rendering contract', () => {
     for (const named of [POISON.business, POISON.invoice, AMOUNT, 'the schedule of plan']) {
       expect(found, `the widened sweep missed ${named} on the planted second line`).toContain(named);
     }
-    // ...and the one-line scope round 17 shipped would have passed that plant,
-    // which is what makes this arm a repair and not a decoration.
-    expect(
-      LEAKS.filter((leak) => JSON.stringify(plantedSecondLine[0]).includes(leak)),
-      "round 17's one-line scope sees the plant",
-    ).toStrictEqual([]);
+    //
+    //    AND THE ARM THAT DOES THE WORK IS `found.length > 0` IMMEDIATELY
+    //    ABOVE, TOGETHER WITH THE FOUR NAMED ARTEFACTS. Round 18 wrote a
+    //    further `expect` here, asserting that `LEAKS` filtered over
+    //    `plantedSecondLine[0]` was empty, under a comment claiming that it
+    //    was what made this arm a demonstration rather than a decoration.
+    //    BOTH THE ASSERTION AND THAT SENTENCE ARE DELETED
+    //    (`TL-P4-COORD-R74` §3 and ordered item 1, F18-1), because it could
+    //    not fail: `plantedSecondLine[0]` is the SHIPPED line, and
+    //    `leaksIn(r.logged)` at the top of this block has already asserted
+    //    that line is clean — for an array of plain objects
+    //    `JSON.stringify(arr)` contains `JSON.stringify(arr[0])`, so the
+    //    passing sweep IMPLIES the deleted assertion. An assertion the
+    //    fixture's own construction guarantees, under a comment claiming it
+    //    demonstrates something, is this phase's tracked shape sitting inside
+    //    the arm that was ordered to be a demonstration.
+    //
+    //    THE PROPERTY IT MEANT TO RECORD IS TRUE, AND IT IS A THEOREM OF THE
+    //    OLD STRUCTURE RATHER THAN A MEASUREMENT, SO IT IS STATED AND NOT
+    //    ASSERTED. Round 17's scope was `lines[0]` where `lines` is
+    //    `r.logged` FILTERED on one message string. A plant placed under
+    //    ANOTHER message can therefore never be the line that scope reads,
+    //    and a plant placed under the SAME message still leaves the shipped
+    //    line first — so NO index and NO re-filtering makes such an arm able
+    //    to fail. `R74` §3 is where that reasoning is ruled on, and it is
+    //    also why the round-18 challenger's proposed `[0]` → `[1]` was
+    //    refused: `[1]` would assert that round 17 read a line its own filter
+    //    excluded, which is false.
+    //
+    //    THAT ROUND 17'S SCOPE REALLY DID PASS THIS PLANT IS MEASURED, BUT
+    //    NOT HERE AND NOT BY THIS SLICE'S AUTHOR: the round-17 challenger ran
+    //    the round-17 guard against a filter carrying this exact second line
+    //    and got **6 tests passed, exit 0** (`P4-S7-R17-CHALLENGE-7ee4668.md`,
+    //    F17-1), and round 18 reproduced that plant at the same md5 and
+    //    required this sweep to red on it. Those are the measurements; this
+    //    paragraph is not one and does not claim to be.
     // ── AND THE BRANCH EMITS THAT ONE LINE AND NO OTHER. This is the BELT
     //    and it is deliberately asserted AFTER the sweep: the sweep is what
     //    `R72` ordered and the sweep is what must red first on a second line
@@ -529,47 +559,116 @@ describe('P4-S7 the installment.* rendering contract', () => {
       expect(ruleText.toLowerCase(), `the derived rule range does not contain «${phrase}»`).toContain(phrase.toLowerCase());
     }
 
-    // ── (3) EVERY SITE THAT CITES IT SPELLS THE DERIVED RANGE, AND QUOTES THE
-    //    RULE. The five are this slice's own; a site that stops citing the
-    //    rule at all is a finding, so the list is pinned rather than
-    //    discovered — a discovered list shrinks to zero and passes.
-    const SITES: readonly string[] = [
+    // ── (3) THE SUBJECT IS DISCOVERED, NOT ONLY PINNED
+    //    (`TL-P4-COORD-R74` ordered item 2, F18-3) ─────────────────────────
+    //
+    //    ROUND 18 SCANNED FOUR PINNED FILES, and the round-18 challenger
+    //    planted a full-spelling, WRONG-RANGE citation of the leak rule —
+    //    quoting its words — in a FIFTH file outside that list, and this law
+    //    stayed GREEN, exit 0. A pinned list cannot see a citation born
+    //    outside it.
+    //
+    //    SO THE SET IS DISCOVERED BY THE RULE'S OWN WORDS: every text file
+    //    under the repository roots below that carries «routine's message
+    //    after the colon» is a site, because that is what citing this rule
+    //    looks like. Measured at this SHA, the discovered set is exactly the
+    //    four pinned files, so this costs nothing today and grows with the
+    //    tree tomorrow.
+    //
+    //    AND THE PINNED LIST STAYS ALONGSIDE IT, for the reason round 18
+    //    gave and `R74` §4 upholds: a purely discovered set shrinks to zero
+    //    and passes. Every pinned site must still be discovered, so a pinned
+    //    file that stops carrying the rule's words is a finding rather than a
+    //    silent exit from the scan.
+    //
+    //    WHAT IS DELIBERATELY **NOT** SCANNED, because reddening it would be
+    //    a worse defect than the one being closed: files that cite OTHER
+    //    parts of `error.filter.ts`. The tree carries TEN such citations —
+    //    `:68-80`, `:171-173`, `:112-115`, `:176-187`, `:37-39`, `:25-28`,
+    //    `:38-40`, in `tests/security/**` and `docs/**` — and they are
+    //    correct about their own subjects. A scan that required every
+    //    `error.filter.ts:<range>` in the whole tree to equal the leak rule's
+    //    range would red all ten (`R74` §4 refuses that framing, and so does
+    //    this law). Those ten are a real and unguarded instance of the same
+    //    class, raised by `R74` §5 to the owners of `tests/security/**` and
+    //    the Phase 3 contracts. They are not this slice's and are not touched
+    //    here.
+    const PINNED_SITES: readonly string[] = [
       join(REPO, 'apps', 'api', 'src', 'common', 'error.filter.ts'),
       join(REPO, 'apps', 'api', 'src', 'modules', 'selling', 'selling-errors.ts'),
       join(REPO, 'tests', 'guards', 'p4s7-installment-filter-contract.test.ts'),
       join(REPO, 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'),
     ];
+    const ROOTS = ['apps', 'packages', 'tests', 'scripts', 'infrastructure', 'docs'] as const;
+    const SKIP = new Set(['node_modules', 'dist', 'build', 'coverage', '.git', '.turbo', '.next']);
+    const TEXT = /\.(ts|tsx|js|mjs|cjs|sql|md|json|ya?ml)$/;
+    const walk = (dir: string, out: string[]): string[] => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (SKIP.has(e.name)) continue;
+        const full = join(dir, e.name);
+        if (e.isDirectory()) walk(full, out);
+        else if (e.isFile() && TEXT.test(e.name)) out.push(full);
+      }
+      return out;
+    };
+    const ARTEFACT = "routine's message after the colon";
+    const PREDICATE = 'never leave the process';
+    const candidates: string[] = [];
+    for (const root of ROOTS) {
+      const at = join(REPO, root);
+      if (existsSync(at)) walk(at, candidates);
+    }
+    expect(candidates.length, 'the file walk found nothing, so this law has no subject').toBeGreaterThan(100);
+    const discovered = candidates.filter((f) => readFileSync(f, 'utf8').toLowerCase().includes(ARTEFACT)).sort();
+    expect(discovered.length, 'no file in the tree carries the leak rule words, so this law has no subject').toBeGreaterThan(0);
+    // EVERY PINNED SITE IS STILL DISCOVERED. A pinned file that stopped
+    // quoting the rule would otherwise leave the scan silently.
+    for (const site of PINNED_SITES) {
+      expect(discovered, `${site} no longer carries the leak rule's own words`).toContain(site);
+    }
+
+    // ── AND EVERY CITATION IN THE DISCOVERED SET SPELLS THE DERIVED RANGE.
     let cited = 0;
-    for (const site of SITES) {
+    for (const site of discovered) {
       const text = readFileSync(site, 'utf8');
       const ranges = [...text.matchAll(/error\.filter\.ts:(\d+-\d+)/g)].map((m) => m[1] as string);
-      expect(ranges.length, `${site} no longer cites the leak rule at all`).toBeGreaterThan(0);
       for (const range of ranges) {
         expect(range, `${site} cites error.filter.ts:${range} where the rule is at :${derived}`).toBe(derived);
       }
       cited += ranges.length;
       // ...and the citation carries the rule's own words, not only its
-      // offsets, for the reader who meets it after the next shift.
+      // offsets, for the reader who meets it after the next shift. The
+      // ARTEFACT is what discovered the file; the PREDICATE is the half that
+      // `:148-152` used to clip, so it is required of every site too.
       const flat = text.replace(/\s+/g, ' ').toLowerCase();
-      expect(flat, `${site} cites the rule without quoting the artefact it names`).toContain("routine's message after the colon");
-      expect(flat, `${site} cites the rule without quoting the predicate`).toContain('never leave the process');
+      expect(flat, `${site} quotes the rule's artefact but not its predicate`).toContain(PREDICATE);
+    }
+    for (const site of PINNED_SITES) {
+      const ranges = [...readFileSync(site, 'utf8').matchAll(/error\.filter\.ts:(\d+-\d+)/g)];
+      expect(ranges.length, `${site} no longer cites the leak rule at all`).toBeGreaterThan(0);
     }
     // THE FIVE CITATIONS `R72` §2 COUNTED, STILL FIVE: the specification
     // carries two of them. A citation deleted to make this law pass is a
-    // finding, because the count is pinned.
+    // finding, because the count is pinned — measured by the round-18
+    // challenger's plant D, which converted one citation to the bare spelling
+    // and reded here with «expected 4 to be 5», exit 1. So the bare-spelling
+    // residue round 18 disclosed is CLOSED by this count, and the residue that
+    // was open is the one item 2 closes above.
     expect(cited, 'the number of citations of the leak rule moved').toBe(5);
 
-    // ── (4) WHAT THIS DOES NOT CATCH, SO IT IS NOT TAKEN FOR MORE. The scan
-    //    matches the FULL spelling `error.filter.ts:<range>`. A citation
-    //    written as a bare `:<range>` with no file name -- which is how this
-    //    file's own self-citation was spelled until round 18 re-spelled it --
-    //    is invisible to it, and would be an uncounted sixth citation rather
-    //    than a wrong one. The pinned count of five is what makes a DELETED
-    //    citation a finding; it is not a bound on citations spelled some other
-    //    way. Stated rather than left to be found. (The stale string
-    //    `148-152` appears in this law's own narrative above, deliberately:
-    //    the law may describe the defect it closes, and a `not.toContain` over
-    //    the whole file would have been a test about this comment.)
+    // ── (4) WHAT THIS STILL DOES NOT CATCH, SO IT IS NOT TAKEN FOR MORE.
+    //    The range scan matches the FULL spelling `error.filter.ts:<range>`;
+    //    a bare `:<range>` with no file name is not a range this law checks,
+    //    though converting an existing citation to that form reds on the
+    //    pinned count. The discovery is by the ARTEFACT phrase, so a file
+    //    that cited the rule by its PREDICATE alone, or by paraphrase, with a
+    //    wrong range, would still be invisible — a smaller gap than round
+    //    18's and a real one. And the walk covers the six repository roots
+    //    named above: a citation written outside them is not seen.
+    //    (The stale string `148-152` appears in this law's own narrative
+    //    above, deliberately: the law may describe the defect it closes, and
+    //    a `not.toContain` over the whole file would have been a test about
+    //    this comment.)
   });
 
   it('REGRESSION: an unknown P0001, an unregistered installment.* and a 42501 are all still 403', () => {
