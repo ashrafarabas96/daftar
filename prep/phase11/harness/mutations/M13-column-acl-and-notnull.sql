@@ -1,0 +1,48 @@
+-- M13. The two mutations finding P3-02 of the fifth round measured as
+-- byte-identical no-ops under the round-4 digest, which covered `relacl` and
+-- `proacl` but not `pg_attribute`. Both are real, and the second changes the
+-- single catalogue fact forms 3 and 4 of the tautology test rest on.
+--
+-- WHAT THIS FILE IS FOR, exactly: it is the red proof of the DIGEST, not of
+-- the tautology test. It answers one question -- does the mutation hook see
+-- these two statements at all? Round 4's digest said no (digest before ==
+-- digest after, byte for byte, so step 5c would have reported a no-op
+-- mutation as a passing suite).
+--
+-- MEASURED after the pg_attribute arm was added (run of this tree, step 5c):
+--   MUTATION_DDL_DIGEST_BEFORE  c926636e...
+--   MUTATION_DDL_DIGEST_AFTER   627a2013...   <- CHANGED. The gap is closed.
+--   PACK A TOTAL 93 cases, 0 failed  (pass 1 and pass 2)
+--   PACK B TOTAL 53 cases, 8 failed (pass 1), 9 failed (pass 2)
+--   EXIT=2
+--
+-- So the digest claim is PROVEN and the suite claim written here in the first
+-- draft of this file was WRONG. Both halves are recorded as measured:
+--
+-- 1. The REVOKE reds Pack B, and it reds it as a harness setup failure, not as
+--    a law refusing: `permission denied for table stock_lot_levels` on the
+--    D-32, P1-01 and PB-17 cases, and EXIT=2 is the rebuild script's own
+--    "a suite could not run" code, not "a law caught the mutant". A reader must
+--    not count those 8/9 reds as the column grant being enforced by a Pack B
+--    law; they are the mutant removing a privilege the FIXTURE needs. The
+--    difference between pass 1 (8) and pass 2 (9) is the pass, not the mutant:
+--    pass 2 starts from the state pass 1 left behind.
+--
+-- 2. The DROP NOT NULL reds NO Pack A case. Expected, and the reason is the
+--    documented step-5c ordering limit: the only Pack A instrument that reads
+--    `attnotnull` is the end-state assertion inside the pack itself, which runs
+--    at step 4 (while the pack is being applied), BEFORE step 5c mutates
+--    anything. By the time this file runs, that assertion has already passed on
+--    the unmutated catalogue and is not re-evaluated. Forms 3 and 4 of
+--    `catalog_policy_qual_is_tautology` consult `attnotnull` only for a qual
+--    naming `axis_position`, and no live policy on `product_matrix_axes`
+--    carries one, so dropping the NOT NULL changes no verdict any case asserts.
+--
+-- CLASSIFICATION of what this file establishes:
+--   PROVEN BY DATABASE CATALOGUE  -- the digest now changes for both statements
+--   UNMEASURED                    -- that a Pack A law refuses the attnotnull
+--                                    change; no instrument runs after step 5c
+--                                    that reads it. Named as a residual in
+--                                    P11-LIVE-DDL-PROOF.md §13.
+REVOKE UPDATE (on_hand) ON stock_lot_levels FROM daftar_inventory_internal;
+ALTER TABLE product_matrix_axes ALTER COLUMN axis_position DROP NOT NULL;

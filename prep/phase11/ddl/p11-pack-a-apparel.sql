@@ -796,6 +796,88 @@ CREATE TRIGGER product_matrix_axes_30_set_frozen
 -- needs and REFUSES rather than passing if it cannot look — the Pack B D-32
 -- shape ("a check that cannot look must not reassure"), stated here as a
 -- name of its own, catalog.matrix_grid_unverifiable.
+-- ── THE SESSION THAT JUDGES MUST BE THE SESSION THAT WROTE ────────────────
+-- Finding P1-01 of the FIFTH independent challenge, and it is a fail-open in
+-- the function the fourth round added, so it is the blocker of this round.
+--
+-- The blindness arm below tested `has_table_privilege`, which is a statement
+-- about the GRANT. The condition that defeats a read of these relations is
+-- VISIBILITY: they carry ENABLE + FORCE row-level security and `app_bypass()`
+-- is a ROLE test (`CURRENT_USER = 'daftar_platform'`, 0052), so a principal
+-- can hold SELECT on all four relations and read zero rows. The challenger
+-- measured it in the shape of this pack's own D-32 red proof: run the whole
+-- fourth-door chain lawfully in one transaction, then drop to `daftar_app`
+-- and RESET the context immediately before COMMIT —
+--   SELECT privilege on all four relations : true true true true
+--   rows of this product daftar_app can see: 0
+--   transaction                            : rc=0, NOT REFUSED
+--   live non-base variants outside the grid: 1
+-- The author's own case withdrew a GRANT, and a withdrawn grant and an empty
+-- read are two different facts. This is the class this phase has now closed
+-- four times (Phase 5's fail-open, the movement side in Pack B round 1, the
+-- cache side in round 4 — that one found here — and now this): **the intent
+-- carried forward and the condition did not.**
+--
+-- The fix is not a better visibility probe. There is no sound probe inside an
+-- invoker's own read: "I see no rows" and "there are no rows" are the same
+-- answer, which is exactly why the previous three instances of this class were
+-- closed by refusing rather than by looking harder. What IS decidable is the
+-- thing the exploit needs: **the principal or the context changed between the
+-- last write and the COMMIT.** So the identity under which the state was
+-- WRITTEN is recorded at statement time, in a transaction-local setting, and
+-- the deferred check refuses unless the identity at COMMIT is the same one.
+--
+--   * recorded by a STATEMENT-level trigger, so a fifty-cell grid records once
+--     per statement rather than once per row;
+--   * first write wins (`p11.grid_ctx` is only set when empty), so the
+--     identity compared is the one the EARLIEST write in the transaction had;
+--   * `is_local => true`, so it is discarded at COMMIT or ROLLBACK and cannot
+--     leak into the next transaction on a pooled connection;
+--   * ABSENT is a refusal, not a pass: a check reached with no recorded
+--     identity means the recorder is gone or was bypassed, and the whole
+--     point of this finding is that an empty read must not reassure.
+--
+-- This closes the DELETE direction too, which a visibility probe could not: a
+-- deleted row cannot be read back, so "can I still see what I wrote" has no
+-- answer there, while "am I still who wrote it" has the same answer for every
+-- statement kind.
+CREATE FUNCTION catalog_grid_ctx_identity()
+RETURNS TEXT
+LANGUAGE sql STABLE SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $fn$
+  SELECT current_user::text
+         || '|' || coalesce(current_setting('app.business_id', true), '')
+         || '|' || coalesce(current_setting('app.tenant_id', true), '');
+$fn$;
+-- PUBLIC keeps EXECUTE on this one, deliberately and against this pack's own
+-- default, and the reason is measured rather than argued: it is called from a
+-- STATEMENT trigger on `product_variants`, whose writers include
+-- `daftar_inventory_internal` (base variants, 0053) and whoever else a later
+-- phase gives a grant to. A REVOKE here made the lot fixture fail with
+-- `permission denied for function catalog_grid_ctx_identity` — a guard that
+-- breaks a lawful write is a worse defect than the one it closes. It returns
+-- `current_user` and two of the caller's own session settings, so it tells a
+-- caller nothing the caller does not already have; it is kept as ONE function
+-- rather than inlined twice precisely because "one of two sites carries the
+-- arm" is the defect shape this phase has now paid for three times.
+
+CREATE FUNCTION catalog_grid_90_ctx_record()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $fn$
+BEGIN
+  IF coalesce(current_setting('p11.grid_ctx', true), '') = '' THEN
+    PERFORM set_config('p11.grid_ctx', catalog_grid_ctx_identity(), true);
+  END IF;
+  RETURN NULL;
+END;
+$fn$;
+
+COMMENT ON FUNCTION catalog_grid_90_ctx_record() IS
+  'Phase 11 Pack A, finding P1-01 (fifth challenge round). AFTER STATEMENT trigger function on the four relations C-APP-01 is written from: records the principal and the request context of the FIRST write of the transaction in the transaction-local setting p11.grid_ctx, which catalog_grid_closed_check compares against the identity at COMMIT. A deferred check run by a session that is no longer the session that wrote cannot see what it is judging, and an empty read must not reassure. No EXECUTE grant.';
+
 CREATE FUNCTION catalog_grid_closed_check(p_business UUID, p_product UUID)
 RETURNS VOID
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER
@@ -804,6 +886,7 @@ AS $fn$
 DECLARE
   r RECORD;
   v_rel TEXT;
+  v_at_write TEXT;
 BEGIN
   -- Blindness is a refusal, not a pass. Privilege is checkable; row-level
   -- visibility is not checkable from inside the read, so the privilege test
@@ -816,6 +899,22 @@ BEGIN
         USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
+
+  -- The privilege test above is necessary and NOT sufficient, and finding
+  -- P1-01 of the fifth round is the measurement that says so: every privilege
+  -- can be held while the read returns nothing. See the long comment above
+  -- catalog_grid_ctx_record(). The identity under which the state was written
+  -- is recorded at statement time; if it is absent, or differs from the
+  -- identity at this COMMIT, the read below is not a measurement.
+  v_at_write := coalesce(current_setting('p11.grid_ctx', true), '');
+  IF v_at_write = '' THEN
+    RAISE EXCEPTION 'catalog.matrix_grid_unverifiable: no write identity was recorded for this transaction, so the grid-closure law cannot know whether the session judging the state is the session that wrote it; it refuses rather than passes'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF v_at_write <> catalog_grid_ctx_identity() THEN
+    RAISE EXCEPTION 'catalog.matrix_grid_unverifiable: this transaction wrote as [%] and is committing as [%]; the committing session cannot see what the writing session wrote, so the law refuses rather than passing on an empty read', v_at_write, catalog_grid_ctx_identity()
+      USING ERRCODE = 'P0001';
+  END IF;
 
   FOR r IN
     SELECT v.id,
@@ -881,10 +980,10 @@ COMMENT ON FUNCTION catalog_grid_closed_check(UUID, UUID) IS
 --                                             whose live variants name the axis
 --   product_attribute_values               -> every product of the business
 --                                             whose live variants name the value
--- A base-variant write returns without reading anything, because the law is
--- about non-base variants and because `daftar_inventory_internal` — the only
--- principal 0053 allows to write a base variant — holds no SELECT on this
--- pack's registries. A check that refused that lawful write would be a new
+-- A base-variant write returns without reading this pack's registries,
+-- because the law is about non-base variants and because
+-- `daftar_inventory_internal` — the only principal 0053 allows to write a base
+-- variant — holds no SELECT on them. A check that refused that lawful write would be a new
 -- defect, so the early return is deliberate and is asserted in section 7.
 CREATE FUNCTION product_grid_90_closed()
 RETURNS TRIGGER
@@ -892,8 +991,8 @@ LANGUAGE plpgsql SECURITY INVOKER
 SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
-  v_row RECORD;
-  r     RECORD;
+  v_row     RECORD;
+  r         RECORD;
 BEGIN
   v_row := CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
   -- The relation test is NESTED rather than conjoined, and that is a
@@ -903,6 +1002,36 @@ BEGIN
   -- `record "v_row" has no field "is_base"` on the first registry write of
   -- the fixture. A guard that errors on a lawful write is a worse defect
   -- than the one it was added to close.
+  -- ── THE READ-BACK OF THE ROW THAT QUEUED THIS CHECK, AND WHY IT IS NOT HERE ──
+  -- Finding P1-01 of the fifth round came with two remedies, and the
+  -- challenger and the coordinator both preferred the second: have this
+  -- function hand the written row's identity into the check and refuse when it
+  -- cannot read back the very row whose write queued it. One EXISTS. "A
+  -- deferred check that cannot see the row that fired it is blind by
+  -- definition."
+  --
+  -- It was implemented, in exactly that form, and MEASURED -- and the
+  -- measurement rejects it as a refusal. A transaction that INSERTs a row and
+  -- DELETEs it again before COMMIT is lawful and ordinary (this suite's own
+  -- sweep does it twice, to exercise an INSERT privilege without leaving the
+  -- fixture changed). At COMMIT the queued INSERT's row is absent, the
+  -- read-back fails, and the law refuses a transaction that broke nothing:
+  --   INSERT product_attribute_axes 'sightedaxis'; ...; DELETE it; COMMIT;
+  --   -> catalog.matrix_grid_unverifiable   (a lawful write, refused)
+  -- "Absent" has two causes -- invisible, and deleted later in the same
+  -- transaction -- and this function cannot tell them apart: that is the same
+  -- sentence as the finding itself, one level down. A guard that refuses a
+  -- lawful write is a worse defect than the one it closes (measured twice in
+  -- this pack now: this, and the plpgsql IF that errored on a registry write).
+  --
+  -- So the arm that closes the finding is the WRITE-IDENTITY comparison in
+  -- catalog_grid_closed_check: it answers "am I still the session that wrote
+  -- this", which has one cause, has the same answer for every statement kind
+  -- (a deleted row cannot be read back at all, so the read-back has no answer
+  -- for DELETE), and refuses exactly the thing the exploit needs. The
+  -- recommended remedy is recorded here as REJECTED BY MEASUREMENT rather than
+  -- silently dropped, the way this pack recorded the SECURITY DEFINER
+  -- recommendation of the first round.
   IF TG_TABLE_NAME IN ('product_variants', 'product_matrix_axes') THEN
     IF TG_TABLE_NAME = 'product_variants' THEN
       IF v_row.is_base THEN
@@ -947,6 +1076,22 @@ $fn$;
 
 COMMENT ON FUNCTION product_grid_90_closed() IS
   'Phase 11 Pack A, finding P1-01. Deferred constraint trigger function on product_variants, product_matrix_axes, product_attribute_axes and product_attribute_values, for INSERT, UPDATE and DELETE. Derives the affected (business, product) set from the written row and calls catalog_grid_closed_check for each. Returns without reading for a base-variant write, which the law does not cover and whose only principal holds no SELECT on this pack''s registries. No EXECUTE grant.';
+
+CREATE TRIGGER product_variants_01_grid_ctx
+  AFTER INSERT OR UPDATE OR DELETE ON product_variants
+  FOR EACH STATEMENT EXECUTE FUNCTION catalog_grid_90_ctx_record();
+
+CREATE TRIGGER product_matrix_axes_01_grid_ctx
+  AFTER INSERT OR UPDATE OR DELETE ON product_matrix_axes
+  FOR EACH STATEMENT EXECUTE FUNCTION catalog_grid_90_ctx_record();
+
+CREATE TRIGGER product_attribute_axes_01_grid_ctx
+  AFTER INSERT OR UPDATE OR DELETE ON product_attribute_axes
+  FOR EACH STATEMENT EXECUTE FUNCTION catalog_grid_90_ctx_record();
+
+CREATE TRIGGER product_attribute_values_01_grid_ctx
+  AFTER INSERT OR UPDATE OR DELETE ON product_attribute_values
+  FOR EACH STATEMENT EXECUTE FUNCTION catalog_grid_90_ctx_record();
 
 CREATE CONSTRAINT TRIGGER product_variants_90_grid_closed
   AFTER INSERT OR UPDATE OR DELETE ON product_variants
@@ -1439,16 +1584,42 @@ BEGIN
   -- The law itself, asserted BEHAVIOURALLY rather than by name. A text pin
   -- over pg_get_functiondef proves which function was examined and not what
   -- it does -- that is finding P3-01 of Pack B's fourth round, and the same
-  -- shape would be wrong here. So the function is CALLED, on a product that
-  -- does not exist (no live variant, so it must return quietly) and on the
-  -- missing-privilege arm, which is reached by naming a relation this
-  -- session cannot select from. The second half cannot be staged from
-  -- inside an install that owns everything, so it is left to the proof
-  -- suite, which runs as a principal that can be stripped; what is asserted
-  -- here is that the quiet path IS quiet, so an install whose check raised
-  -- unconditionally would be refused instead of shipped.
-  PERFORM catalog_grid_closed_check('00000000-0000-0000-0000-000000000000'::UUID,
-                                    '00000000-0000-0000-0000-000000000000'::UUID);
+  -- shape would be wrong here. So the function is CALLED.
+  --
+  -- The fourth round called it on a nonexistent product and asserted that it
+  -- returned QUIETLY, and said the blindness arm could not be staged from
+  -- inside an install that owns everything. Finding P1-01 of the FIFTH round
+  -- turned that around: the installing session has written nothing to the four
+  -- relations, so no write identity is recorded, so the check must REFUSE.
+  -- That makes the blindness arm assertable here after all, behaviourally,
+  -- at the one moment the pack can still refuse itself -- and an install whose
+  -- check had been reverted to passing on an empty read is refused instead of
+  -- shipped.
+  BEGIN
+    PERFORM catalog_grid_closed_check('00000000-0000-0000-0000-000000000000'::UUID,
+                                      '00000000-0000-0000-0000-000000000000'::UUID);
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: the grid-closure check returned quietly although this session recorded no write identity, so its blindness arm passes on an empty read' USING ERRCODE='P0001';
+  EXCEPTION WHEN SQLSTATE 'P0001' THEN
+    IF position('catalog.matrix_grid_unverifiable' in SQLERRM) = 0 THEN
+      RAISE;
+    END IF;
+  END;
+  -- And the recorder itself, which the comparison depends on: four
+  -- STATEMENT-level triggers, one per relation. A recorder that is absent
+  -- makes every judgement refuse (fail closed), which is safe but would
+  -- break every lawful write, so its absence is a refusal to install.
+  FOR r IN SELECT unnest(ARRAY['product_variants','product_matrix_axes',
+                               'product_attribute_axes','product_attribute_values']) AS rel
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid
+                    WHERE c.relnamespace = 'public'::regnamespace AND c.relname = r.rel
+                      AND g.tgname = r.rel || '_01_grid_ctx' AND NOT g.tgisinternal
+                      AND (g.tgtype & 1) = 0            -- FOR EACH STATEMENT
+                      AND (g.tgtype & 2) = 0            -- AFTER
+                      AND (g.tgtype & 4) = 4 AND (g.tgtype & 8) = 8 AND (g.tgtype & 16) = 16) THEN
+      RAISE EXCEPTION 'catalog.migration_end_state_invalid: the write-identity recorder on % is absent or does not cover INSERT, UPDATE and DELETE as an AFTER STATEMENT trigger', r.rel USING ERRCODE='P0001';
+    END IF;
+  END LOOP;
   IF (SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = 'product_variants_matrix_uq' AND relkind = 'i') <> 1 THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: the matrix uniqueness index is absent' USING ERRCODE='P0001';
   END IF;

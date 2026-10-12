@@ -660,10 +660,13 @@ they refuse at the statement, where a merchant can still be told which write was
 wrong; and they refuse writes the state check cannot see at all (a value
 archived with no variant yet naming it). Which layer answers which door is not
 arguable — it is **pair-dropped**: drop the state check alone, drop the verb
-guards alone, drop both, and read the three result sets. Measured here as M7 (9
-red, all of them the new door), M8 (17 red, six of them the deferred check
-answering with its own name where the case expected the statement guard's) and
-M9 (35 red, and the race fixture unbuildable).
+guards alone, drop both, and read the three result sets. Measured here, and **every count names
+its pass** (`P3-01` of the fifth round — the suites run twice on one database on
+purpose): M7 (14 red on pass 1, 18 on pass 2, all of them the new door), M8 (17
+on pass 1, 17 on pass 2, six of them the deferred check answering with its own
+name where the case expected the statement guard's) and M9 (39 on pass 1, 43 on
+pass 2, with the race fixture unbuildable at `EXIT=2` because cases the dropped
+layers would have refused leave the fixture's own axes archived).
 
 The gate arm is `law-checked-on-the-state`, and it reds on the COUNT: two
 rounds, two doors, one state, and no state check.
@@ -709,3 +712,50 @@ case, and must say so where it is written.** It reads `prosrc`, strips comments,
 and matches a RAISE OF the condition rather than a mention of its name — and the
 law it pins is proved by a case that makes the arm fire, as a principal that
 cannot read what the arm protects.
+
+### `P11-AL-40` — privilege is not visibility, and the session that judges must be the session that wrote
+
+**`P1-01` of the fifth round, and the fourth door opened for the second time —
+this time through the arm added to close it.** `P11-AL-37` moved `C-APP-01` onto
+the forbidden state at `COMMIT`, and gave the state check a blindness arm so it
+could not pass on an empty read. The arm asked `has_table_privilege`.
+
+`has_table_privilege` answers a question about the **GRANT**. What defeats a
+deferred check is **VISIBILITY**. On relations carrying `ENABLE` *and* `FORCE ROW
+LEVEL SECURITY`, with an `app_bypass()` that is a ROLE test
+(`CURRENT_USER = 'daftar_platform'`, `0013`/`0052`) rather than a GUC test, a
+principal holds every privilege the arm asks about and reads **zero rows**.
+Measured: the lawful chain, then `SET ROLE daftar_app` and `RESET` of the request
+context before `COMMIT` — four privileges `true`, rows visible `0`, `rc 0 NOT
+REFUSED`, one live variant outside its grid.
+
+**The law, in two halves.**
+
+First: **a defence must test the fact that decides, not a fact that correlates
+with it.** This is `P11-AL-33`'s sentence ("a proxy predicate is not the property
+it stands for", P7's lesson) arriving inside this pack, and the phase has now
+paid for it at four levels: the verb instead of the state, the comment instead of
+the body, the consistency instead of the overlap, the grant instead of the read.
+
+Second, the remedy that actually closes it: **the session that judges must be the
+session that wrote.** A statement-level recorder writes
+`current_user|app.business_id|app.tenant_id` into a transaction-local setting on
+the transaction's first write; the deferred check refuses when that setting is
+empty or differs from the identity at `COMMIT`. One cause, one answer, and the
+same answer for every statement kind — which the preferred alternative does not
+have.
+
+**And the alternative is part of the law, because it was measured.** A
+**read-back** — refuse when the check cannot read back the row whose write
+queued it — was implemented in exactly the recommended form and **REJECTED BY
+MEASUREMENT**: a lawful `INSERT`-then-`DELETE` transaction has nothing to read
+back, so it refuses a transaction that broke nothing, and `DELETE` has no
+read-back by construction. "Absent" has two causes the function cannot
+distinguish, which is the finding one level down. **A guard that refuses a lawful
+write is a worse defect than the one it closes**, and a rejected recommendation
+is recorded where it would have been written rather than silently dropped.
+
+The gate arms are `privilege-tested-where-visibility-decides` and
+`count-without-its-pass`; the second is `P3-01` of the same round — a count
+stated without naming which of the two passes it was measured on is an ambiguous
+cell, and this phase runs every suite twice on one database on purpose.

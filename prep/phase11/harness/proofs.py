@@ -593,6 +593,68 @@ case("P1-01 and after the whole sweep the grid is still closed",
 # stage: a principal that holds the write but not the read must get a
 # REFUSAL, not a pass. Measured by withdrawing the privilege for the length
 # of one case, and the next case asserts it was put back.
+# ── P1-01 of the FIFTH round: the blindness arm tested the GRANT ──────────
+# The fourth round's arm asked `has_table_privilege`, which is a statement
+# about the grant. The condition that defeats a read of these relations is
+# VISIBILITY: they carry ENABLE + FORCE RLS and `app_bypass()` is a ROLE test,
+# so a principal can hold SELECT on all four and read zero rows. The
+# challenger's measurement at 5bad734, in the shape of this pack's own D-32
+# proof: run the whole fourth-door chain lawfully in ONE transaction, then drop
+# to daftar_app and RESET the context immediately before COMMIT —
+#   privileges: true true true true | rows visible: 0 | rc=0 NOT REFUSED
+#   live non-base variants outside their product's grid: 1
+# The author's own case withdrew a GRANT, and a withdrawn grant and an empty
+# read are two different facts. These are the challenger's exact scenario and
+# its DELETE sibling, which is the one a read-back cannot answer.
+case("P1-01/5 the challenger's scenario: the chain, then daftar_app with the context RESET before COMMIT, is REFUSED",
+     f"BEGIN;\n"
+     f"UPDATE product_variants SET status='archived' WHERE business_id='{A}' AND product_id='{PG}' AND NOT is_base AND status <> 'archived';\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','blindaxis',92);\n"
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PG}','blindaxis',4);\n"
+     f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G2}';\n"
+     f"SET ROLE daftar_app;\n"
+     f"RESET app.business_id;\n"
+     f"RESET app.tenant_id;\n"
+     f"COMMIT;",
+     "catalog.matrix_grid_unverifiable")
+case("P1-01/5 and that refusal rolled the chain back: the axis is gone and nothing is outside the grid",
+     f"SELECT 'axis_left=' || count(*)::text FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='blindaxis';\n"
+     f"SELECT 'axes=' || count(*)::text FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PG}';\n"
+     f"""SELECT 'outside=' || count(*)::text FROM product_variants v
+          WHERE v.business_id='{A}' AND NOT v.is_base AND v.status <> 'archived'
+            AND ( (SELECT coalesce(array_agg(k ORDER BY k), ARRAY[]::TEXT[]) FROM jsonb_object_keys(v.attributes) k)
+                  IS DISTINCT FROM
+                  (SELECT coalesce(array_agg(ma.axis_code ORDER BY ma.axis_code), ARRAY[]::TEXT[])
+                     FROM product_matrix_axes ma
+                    WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id) );""",
+     "axis_left=0\naxes=3\noutside=0", kind="value")
+# The DELETE sibling, and it is why the read-back cannot be the whole remedy: a
+# deleted row is GONE at COMMIT, so "can I read back what I wrote" has no
+# answer. The identity comparison gives the same answer for every statement
+# kind, and this case is the one that needs it. The refusal rolls the delete
+# back, so the fixture product keeps its two axes.
+case("P1-01/5 a DELETE committed by a session that is no longer the writing session is REFUSED (the read-back has no answer here)",
+     f"BEGIN;\n"
+     f"DELETE FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PE}' AND axis_code='color';\n"
+     f"SET ROLE daftar_app;\n"
+     f"RESET app.business_id;\n"
+     f"RESET app.tenant_id;\n"
+     f"COMMIT;",
+     "catalog.matrix_grid_unverifiable")
+case("P1-01/5 and the delete was rolled back: the fixture product keeps both axes",
+     f"SELECT 'axes=' || count(*)::text FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PE}';",
+     "axes=2", kind="value")
+# And the arm is specific, not a blanket refusal of anything unusual: the same
+# transaction that keeps its identity commits. A role CHANGE alone is enough to
+# refuse, because the row the writer could see is not the row the committer
+# can -- which is the whole finding.
+case("P1-01/5 the same shape WITHOUT the identity change commits (the arm refuses blindness, not transactions)",
+     f"BEGIN;\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','sightedaxis',91);\n"
+     f"SELECT 'added=' || count(*)::text FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='sightedaxis';\n"
+     f"DELETE FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='sightedaxis';\n"
+     f"COMMIT;",
+     "added=1", kind="value")
 case("P1-01 a principal that cannot read the registries is REFUSED, not passed (catalog.matrix_grid_unverifiable)",
      f"REVOKE SELECT ON product_matrix_axes FROM daftar_app;\n"
      f"SET ROLE daftar_app;\n"

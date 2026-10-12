@@ -20,5 +20,21 @@ answering, and only the pair shows which law each door actually meets.
 `M10` changes nothing. It is the red proof of the hook itself: a run with it
 must REFUSE rather than report a green mutation run.
 
+`M11` (round 5) drops ONLY the write-identity comparison inside
+`catalog_grid_closed_check`, leaving the privilege loop and both guard layers in
+place. It is the red proof of round 5's own finding — privilege is not
+visibility, and the session that judges must be the session that wrote.
+
+`M13` (round 5) applies the two statements the challenger produced as
+byte-identical no-ops under round 4's digest: a column ACL and a `DROP NOT
+NULL`. It is the red proof of the DIGEST, not of the tautology test, and the
+file states its own measurement including the half of its first draft that was
+wrong.
+
+**Every count reported from a mutation run names the PASS it was measured on**
+(`P3-01` of round 5). The suites run twice on one database on purpose: the
+second pass starts from the state the first left behind, so a bare number is an
+ambiguous cell. There is no numbered migration anywhere in this directory.
+
 None of these touches a frozen migration. They are applied to the running
 scratch database, never to the tree.

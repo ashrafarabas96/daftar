@@ -201,8 +201,9 @@ from the round:
    state check recomputes the forbidden state at COMMIT, through four
    `DEFERRABLE INITIALLY DEFERRED` constraint triggers on every relation the
    state can be written from. The per-verb guards are kept and **pair-dropped**
-   so a reviewer can see which layer answers which door (`M7` 9 red, all of them
-   the new door; `M8` 17; `M9` 35).
+   so a reviewer can see which layer answers which door (re-measured in round 5 with each
+   count naming its pass: `M7` 14 red on pass 1 / 18 on pass 2, all of them the
+   new door; `M8` 17 / 17; `M9` 39 / 43).
 2. **Three of the six findings are in the WITNESSES, not in the laws** — a race
    verdict satisfied by nothing happening, a mutation hook blind to its own
    mutation, and a text pin over `pg_get_functiondef`, which includes comments.
@@ -224,6 +225,60 @@ this round added, and **nothing here is self-signed.** Still open: `MPR-09`
 `PR-SEC-P11-01` (four named spellings), `MPR-07`, `MPR-08`, the Pack B grants
 and the registered op code, `OD-P11-07` (the owner's), Packs C and D as
 `SPEC ONLY`. `READY_TO_PROMOTE` = **NO**; **no migration number exists**.
+
+---
+
+## 7.5 The FIFTH independent challenge round (2026-10-12) — Pack A `REJECT` on one fail-open, answered
+
+The round reproduced every figure of round 4, credited the grant-generated
+write-path sweep, accepted this pack's correction of the challenger's own
+round-3 sentence, and then rejected Pack A on **one** defect plus two `P3`s.
+Answered in ONE commit, as the coordinator asked.
+
+1. **Privilege is not visibility.** Round 4's blindness arm asked
+   `has_table_privilege` — a question about the GRANT — while what defeats a
+   deferred check is VISIBILITY: under `FORCE ROW LEVEL SECURITY` with a
+   role-based `app_bypass()`, a principal holds all four privileges and reads
+   zero rows. Measured at `rc 0 NOT REFUSED` with one live variant outside its
+   grid. **The fourth door, re-opened by the arm added to close it.** What
+   closes it is a **write-identity comparison**: four `AFTER … FOR EACH
+   STATEMENT` recorders write `current_user|app.business_id|app.tenant_id` into
+   a transaction-local setting on the first write, and the deferred check
+   refuses when it is empty or has changed by `COMMIT`. The remedy both the
+   challenger and the coordinator preferred — a **read-back** of the row that
+   queued the check — was implemented in exactly that form, measured, and
+   **REJECTED BY MEASUREMENT** (it refuses a lawful `INSERT`-then-`DELETE`
+   transaction, and has no answer at all for `DELETE`); the rejection is
+   recorded in the DDL where the remedy would have been written.
+2. **Every count now names its pass.** The suites are run twice on one database
+   on purpose, and the second pass starts from the state the first left behind,
+   so a bare number is an ambiguous cell (the P10 R7 lesson, applied to prose).
+3. **The digest was blind to `pg_attribute`.** Two real mutations produced
+   byte-identical digests, one of them changing `attnotnull` — the single
+   catalogue fact two forms of the tautology test rest on. Closed with a
+   `UNION ALL` arm over `pg_attribute`; proved by `M13`, whose own first draft
+   over-claimed and is corrected in the file.
+
+Numbers, this round, **each naming its pass**: **93 Pack A cases, 0 failed on
+pass 1 and 0 on pass 2**, and **53 Pack B cases, 0 and 0**, on one database; **9
+and 4 races, overlap `2/2` on every one, 0 findings**; every exit code `0`; the
+frozen tree clean (`digest mismatches: []`). Six mutations, each on its own full
+rebuild: `M7` 14/18, `M8` 17/17, `M9` 39/43 (race fixture unbuildable, exit 2),
+`M10` refused at exit 4 with an identical digest, `M11` 5/15 (this round's
+finding red-proved), `M13` 0/0 in Pack A with the digest changed.
+
+Evidence: `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND5.txt` and
+`RUN-EVIDENCE-MUTATIONS-ROUND5.txt` (`M7`, `M8`, `M9`, `M10`, `M11`, `M13`, each
+on its own full rebuild). Run identity, exit codes and the mutation table are in
+`P11-LIVE-DDL-PROOF.md` §13.4; the two residuals this round NAMES rather than
+closes — a superuser's `session_replication_role = replica`, which `daftar_app`
+cannot set, and an unreachable `RAISE` satisfying a comment-stripped pin — are
+in §13.5.
+
+**A SIXTH round is owed on both packs**, and **nothing here is self-signed.**
+`MPR-10` now carries five items. Everything listed above as open stays open.
+`READY_TO_PROMOTE` = **NO**; **no migration number exists**; no CI has executed
+any of it.
 
 ---
 

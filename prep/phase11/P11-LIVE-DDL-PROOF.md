@@ -1393,3 +1393,273 @@ one-at-a-time sweep cannot see two defences that mask each other.
   and D as `SPEC ONLY`.
 - `READY_TO_PROMOTE` = **NO** for both packs, **no migration number exists**, and
   no CI has executed any of it.
+
+## 13. The FIFTH independent challenge: Pack A `REJECT` on one fail-open — defect 44, and two `P3`s
+
+The report is at `/mnt/project-files/phase11/` with the round's evidence. It
+reproduced every figure of round 4 — the 88 + 53 cases on both passes, the 9 + 4
+races with overlap `2/2`, the pair-drop table, the four scenarios the
+coordinator named by hand — credited the grant-generated write-path sweep as
+finding the `daftar_app` write path by generation rather than by review, and
+accepted this pack's correction of its own round-3 sentence. It then rejected
+Pack A on **one** defect, and that defect is the same sentence this phase has now
+paid for at four levels: **a defence that tests the wrong fact passes.**
+
+### 13.1 Defect 44 (`P1-01`, the P1) — privilege is not visibility, and the blindness arm tested privilege
+
+Round 4 added a blindness arm to `catalog_grid_closed_check`: before judging,
+refuse `catalog.matrix_grid_unverifiable` if the session cannot read the four
+relations the law is computed from. It tested `has_table_privilege(rel,
+'SELECT')` on each.
+
+`has_table_privilege` answers a question about the **GRANT**. The condition that
+defeats the check is **VISIBILITY**. All four relations carry `ENABLE ROW LEVEL
+SECURITY` **and** `FORCE ROW LEVEL SECURITY`, and `app_bypass()` on this schema is
+a ROLE test (`CURRENT_USER = 'daftar_platform'`, migrations `0013`/`0052`), not a
+GUC test — so a principal can hold `SELECT` on all four relations and read zero
+rows from every one of them. The grant is held; the read is empty; the loop over
+the live variants iterates nothing; the function returns quietly; the forbidden
+state commits.
+
+The challenger measured it, and the measurement is the scenario, not an argument:
+run the fourth-door chain lawfully in one transaction (archive the product's
+variants, register a fourth axis, bring a two-axis variant back to `active`),
+then before `COMMIT` drop to `daftar_app` and `RESET` the request context.
+
+```
+privileges : true true true true      <- has_table_privilege says yes, four times
+rows visible: 0                       <- FORCE RLS, no app_bypass, no context
+rc = 0  NOT REFUSED
+live variants outside their grid after COMMIT: 1
+```
+
+`PROVEN BY TEST`. It is the fourth door again, through the arm that was added to
+close the third: **a fail-open whose own remedy fails open.**
+
+**Two remedies, one implemented and one REJECTED BY MEASUREMENT.** The remedy the
+challenger and the coordinator both preferred was a **read-back**: hand the
+written row's identity into the check and refuse when the check cannot read back
+the very row whose write queued it, with one `EXISTS`. It was implemented in
+exactly that form and measured, and the measurement rejects it **as a refusal**:
+
+```
+BEGIN; INSERT product_attribute_axes 'sightedaxis'; ... ; DELETE it; COMMIT;
+  -> catalog.matrix_grid_unverifiable        (a lawful transaction, refused)
+```
+
+"Absent" has two causes — invisible, and deleted later in the same transaction —
+and the function cannot tell them apart, which is the finding itself one level
+down. An `INSERT`-then-`DELETE` transaction is ordinary (this suite's own
+generated sweep does it twice, to exercise an `INSERT` privilege without leaving
+the fixture changed), and the read-back has no answer at all for a `DELETE`,
+whose row cannot be read back by construction. **A guard that refuses a lawful
+write is a worse defect than the one it closes** — measured twice in this pack
+now, the other being the plpgsql `IF` that errored on a registry write. The
+recommendation is recorded in the DDL as `REJECTED BY MEASUREMENT`, in the place
+where it would have been written, the same way the first round's `SECURITY
+DEFINER` recommendation was.
+
+**What closes it is a WRITE-IDENTITY comparison.** The session that judges must
+be the session that wrote:
+
+- `catalog_grid_ctx_identity()` — `STABLE`, `SECURITY INVOKER` — returns
+  `current_user || '|' || app.business_id || '|' || app.tenant_id`, all read
+  from the caller's own session.
+- `catalog_grid_90_ctx_record()` — four `AFTER … FOR EACH STATEMENT` triggers,
+  `<rel>_01_grid_ctx`, on all four relations for `INSERT`, `UPDATE` and `DELETE`
+  — writes that identity into the transaction-local setting `p11.grid_ctx`
+  (`set_config(..., true)`), **first write wins**.
+- `catalog_grid_closed_check` then refuses `catalog.matrix_grid_unverifiable`
+  when `p11.grid_ctx` is empty (a deferred check queued by a write that
+  recorded no identity) **and** when it differs from the identity at `COMMIT`,
+  naming both in the message.
+
+It answers one question with one cause, gives the same answer for every
+statement kind, and refuses exactly what the exploit needs: the role change, the
+context reset, or both. The privilege loop is **kept**, because it is necessary
+and was never sufficient — a principal with no `SELECT` grant is blind too, and
+its message says which relation.
+
+`PUBLIC` keeps `EXECUTE` on `catalog_grid_ctx_identity()`, and that is measured
+rather than assumed: a `REVOKE` broke `world_b.sql` with `permission denied for
+function catalog_grid_ctx_identity`, because the statement trigger runs as
+`daftar_inventory_internal` too. The function exposes only the caller's own role
+and settings, so the grant gives away nothing the caller does not already hold.
+
+The red proof is the challenger's exact scenario, plus a `DELETE` sibling and a
+control: `M11-drop-the-write-identity-comparison.sql` replaces
+`catalog_grid_closed_check` with the same body minus the identity test, and the
+cases red.
+
+### 13.2 `P3-01` — a count must name the pass it was measured on
+
+Round 4's documents reported `M9` as "35 red", and §12.9 corrected that to "35 on
+the first pass and 38 on the second" when the figure was re-measured. The
+challenger's finding is that the correction stopped at one table: **every other
+count in the phase's documents is still written as a single number for a suite
+that is deliberately run twice on the same database.** Two passes are not two
+measurements of one quantity — the second pass starts from the state the first
+left behind, which is the whole point of running it — so a bare count is an
+ambiguous cell, and the P10 R7 lesson applies to prose as well as to a parsed
+log: **an ambiguous measurement reports nothing it does not choose.**
+
+Every count in this round's §13.4, in the laws document's pair-drop paragraph, in
+the architecture document's `P11-AL-37` and in the Arabic report now names its
+pass.
+
+### 13.3 `P3-02` — the new DDL digest was blind to `pg_attribute`
+
+Round 4 added a digest to the mutation hook (§12.5) so a mutation that changes
+nothing is refused with exit `4` instead of reported as a passing suite. It
+covered `pg_class.relacl` and `pg_proc.proacl`. It did not cover
+`pg_attribute`, and the challenger produced two real mutations that the hook
+therefore saw as byte-identical no-ops:
+
+```sql
+REVOKE UPDATE (on_hand) ON stock_lot_levels FROM daftar_inventory_internal;
+ALTER TABLE product_matrix_axes ALTER COLUMN axis_position DROP NOT NULL;
+```
+
+The first is a column ACL (`attacl`); the second changes `attnotnull`, **the one
+catalogue fact forms 3 and 4 of `catalog_policy_qual_is_tautology` rest on**. A
+tool that reports on evidence is itself evidence (`P11-AL-39`), and this one was
+blind to the fact its own newest arm consults.
+
+Closed with a `UNION ALL` arm over `pg_attribute` joined to `pg_class`, carrying
+`attname`, `attnotnull` and `attacl` for every live column of `public`:
+
+```sql
+UNION ALL SELECT 'c:'||c.relname||':'||a.attname||':'||a.attnotnull::text
+                 ||':'||coalesce(a.attacl::text,'')
+            FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+           WHERE c.relnamespace = 'public'::regnamespace
+             AND a.attnum > 0 AND NOT a.attisdropped
+```
+
+Both mutants now change the digest, and the proof of that is
+`M13-column-acl-and-notnull.sql`, which applies both statements in one file. Its
+measurement is recorded in the file itself, including the half of its own first
+draft that was **wrong**: the `DROP NOT NULL` reds no Pack A case, because the
+only instrument that reads `attnotnull` is the pack's end-state assertion, which
+runs at step 4 while the pack is applied — **before** step 5c mutates anything.
+That is the ordering limit §12.5 documented, and no digest can fix it. The file
+is classified accordingly: the digest claim `PROVEN BY DATABASE CATALOGUE`, the
+suite claim `UNMEASURED`, and it is named as a residual in §13.5.
+
+### 13.4 Run identity, exit codes, and the mutations of this round
+
+| | |
+|---|---|
+| `RUN_ID` | `p11-20261012T215116Z-9013` |
+| `SOURCE_BRANCH` | `claude/phase11-prep-re0epv` |
+| `SOURCE_SHA` at the run | `5bad734b98c6cd64b69906037dac1803c50173b2`, `SOURCE_TREE_DIRTY: YES` — the run is of the answer, which is committed in the same commit as this section; the subject is identified by the file digests below, and the clean-tree verification run is reported in the handoff |
+| `PACK_A_DDL_SHA256` | `5f5d9ee0b5848e8af1aff30604cf366c7bc0d5d4e47e10ea8c0ef6407ecc8b2d` |
+| `PACK_B_DDL_SHA256` | `d5820ada9f3f0ddee2a3475271a996f5c2e3be83190845d2e85130d601c8ff75` (byte-identical to round 4 — this round changed Pack A only) |
+| `HARNESS_SHA256` | `eeeeed7982ca378f259af5acd14f3b00edad679ce26bc7a4275ab22bf128b5fc` |
+| `MIGRATIONS_SHA` | `b128c7033a3381bd2237d0a1405f0676ac509960` (unchanged; frozen tree clean after the run, `digest mismatches: []`) |
+| `PG_VERSION` | PostgreSQL 16.15, `datcollate = datctype = en_US.utf8`, measured on the database under test |
+| `EXIT_PROOFS_A` | **0** — **93 cases, 0 failed on pass 1** |
+| `EXIT_PROOFS_A_RUN2` | **0** — **93 cases, 0 failed on pass 2** |
+| `EXIT_PROOFS_B` | **0** — **53 cases, 0 failed on pass 1** |
+| `EXIT_PROOFS_B_RUN2` | **0** — **53 cases, 0 failed on pass 2** |
+| `EXIT_RACES` | **0** — 9 races, 0 findings, overlap `2/2` on every one |
+| `EXIT_RACES_B` | **0** — 4 races, 0 findings, overlap `2/2` on every one |
+| `EXIT_SCRIPT` | **0** |
+
+`NODE_VERSION` in the log is `v22.22.0` against repository engines `>=24 <25`,
+which is why the log says in its own header that **no npm suite is run here**.
+**No timing claim is made.**
+
+**The mutations, each on its own full rebuild, each count naming its pass.**
+
+| mutation | digest | Pack A red | Pack B red | exit | what it establishes |
+|---|---|---|---|---|---|
+| `M7-drop-deferred-grid-closure` | changed | **14 (p1) / 18 (p2)** | 0 / 0 | 1 | every red is a `P1-01` case, all four `P1-01/5` cases of this round among them — **no per-verb guard answers the fourth door, and none answers this round's exploit either.** The 13 races still pass, which is information: they do not rest on this layer |
+| `M8-drop-per-verb-guards` | changed | **17 (p1) / 17 (p2)** | 0 / 0 | 1 | six of them are the write-path sweep, reding because the DEFERRED check answered with **its** name where the case expected the statement guard's — the signal a pair-drop exists to give |
+| `M9-drop-both` | changed | **39 (p1) / 43 (p2)** | 0 / 0 | 2 | nothing else in the schema holds `C-APP-01`. The Pack A race fixture cannot be built (`EXIT=2`) and the harness says why rather than guessing: `catalog.variant_axis_archived: axis color is not an active axis of this business` — cases the dropped layers would have refused leave the fixture's own axes archived. **Not** a race regression |
+| `M10-noop` | **identical** | not run | not run | **4** | the hook **refuses** rather than reporting a clean-tree green under a mutation's name — the red proof of the hook itself (`P11-AL-39`) |
+| `M11-drop-the-write-identity-comparison` | changed | **5 (p1) / 15 (p2)** | 0 / 0 | 1 | this round's finding, red-proved: the five on pass 1 are the challenger's exact scenario, its rollback assertion, the `DELETE` sibling, that delete's rollback assertion, and the RLS-scoping control |
+| `M13-column-acl-and-notnull` | changed | **0 (p1) / 0 (p2)** | **8 (p1) / 9 (p2)** | 2 | the `P3-02` fix: both previously byte-identical mutants now change the digest. The suite half of the file's own first draft was **wrong** and is corrected in the file — see §13.3, and the residual in §13.5 |
+
+Round 4's figures for `M7`, `M8` and `M9` were **re-measured here**, not carried
+forward: round 5 added five cases to Pack A, so a count from the previous round
+would have been a figure about a different suite. `M7` moved from 9 to 14 on
+pass 1 for exactly that reason, and the four new reds are the four new cases.
+
+Full logs of all six runs are in
+`harness/RUN-EVIDENCE-MUTATIONS-ROUND5.txt`; the authoritative run is
+`harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND5.txt`.
+
+### 13.5 What remains unsigned after this round, and the two residuals this round NAMES
+
+**A SIXTH challenge round is owed on both packs.** The newest and least reviewed
+code in the phase is again what this round added: `catalog_grid_ctx_identity()`,
+`catalog_grid_90_ctx_record()` and the four `_01_grid_ctx` statement triggers,
+the identity comparison inside `catalog_grid_closed_check`, the `pg_attribute`
+arm of the digest, and the four `P1-01/5` cases. **Nothing here is self-signed.**
+
+Two residuals are named rather than closed, because naming them is the honest
+verdict and closing either would be a claim this round cannot make:
+
+1. **A superuser with `session_replication_role = replica` bypasses the deferred
+   check.** `replica` suppresses non-`ALWAYS` triggers, which includes both the
+   constraint triggers and the `_01_grid_ctx` recorders, so a session that can
+   set it can write the forbidden state with no refusal at all. It is a residual
+   and not a defect of this pack for one measured reason: **`daftar_app` cannot
+   set it, and neither can any other role this schema creates** — measured on
+   this round's cluster: `pg_settings.context` for the parameter is `superuser`,
+   and `SET ROLE daftar_app; SET session_replication_role='replica';` returns
+   `ERROR: permission denied to set parameter "session_replication_role"`. The
+   same attempt as **`daftar_platform`** returns the same error, and
+   `pg_roles` shows `rolsuper = false` and `rolbypassrls = false` for **all
+   twelve `daftar_*` roles**, `daftar_platform` and `daftar_migrator` included.
+   So the only principal that can set it is a true superuser, which is outside
+   every boundary this phase defines, and the parameter widens no boundary that
+   was closed before it (`PROVEN BY TEST` and `PROVEN BY DATABASE CATALOGUE`,
+   stated as two measurements rather than one sentence). `ENABLE ALWAYS TRIGGER` would close it and
+   is **not** done here: it would also fire the triggers during a logical-replica
+   apply and during a `pg_restore` that sets `replica`, i.e. it would make
+   restore and replication fail on states the law refuses rather than on states
+   that are wrong — a trade the Migration Owner decides, not the author.
+   Classification: `UNMEASURED` as an exploit by any principal this phase grants;
+   recorded for `MPR-10`.
+
+2. **An unreachable `RAISE EXCEPTION` carrying the exact condition name still
+   satisfies the comment-stripped pin.** §12.6 replaced a pin over
+   `pg_get_functiondef` (which includes comments, so the arm could be deleted
+   from the body and left named in a comment) with one over `prosrc` with
+   comments stripped, matching `RAISE EXCEPTION '<condition>`. That is strictly
+   stronger and still not a behavioural proof: a `RAISE` inside a branch nothing
+   can reach — `IF false THEN`, or a condition the data cannot produce — is a
+   statement in the body and the pin matches it. **A text pin proves the arm is
+   written, never that it fires.** What proves firing is a case that makes it
+   fire, and each of the three pinned conditions has one; the pin exists for the
+   conditions whose firing principal does not exist yet. The residual is that the
+   pin's *verdict wording* must never be read as "this arm is enforced".
+   Classification: `DESIGN ONLY` for the pin's strength claim, with the
+   behavioural cases carrying the enforcement claim separately — they are never
+   mixed in one sentence (PART 82).
+
+- `MPR-09` is open and restated, unchanged by this round: nothing refuses a
+  movement posted onto an archived variant, and the deferred check cannot see
+  it — the transaction that creates that state writes only the ledger and fires
+  no trigger of this pack.
+- `MPR-10` now carries five items for the Migration Owner: the tautology test,
+  the comment stripper, form 4 available to Pack B's own relations, the
+  `session_replication_role` decision above, and the `ENABLE ALWAYS TRIGGER`
+  question it rests on.
+- `PR-SEC-P11-01` keeps the tautology residual: four named spellings still pass.
+- `M13`'s suite half is `UNMEASURED` by the ordering limit of step 5c (§13.3),
+  and the mutation file says so in its own text.
+- The deferred check's own **concurrency** with the identity remedy in place is
+  `UNMEASURED`: no race in this round drives two sessions through
+  `p11.grid_ctx`. `SERIALIZABLE` is `UNMEASURED` everywhere in this phase, and
+  Pack B's fifth race is still owed.
+- Everything §9.6, §10.6, §11.8 and §12.10 left open stays open: `MPR-07`,
+  `MPR-08`, the Pack B grants and the registered op code, `OD-P11-07` (**the
+  owner's**), Packs C and D as `SPEC ONLY`, `PB-17` as a scope statement rather
+  than a law, and `inventory_lot_verify` as `SPEC ONLY`.
+- Node 24 and the repository's own `npm run build` / `npm run typecheck` are
+  `UNMEASURED` here (G6 is a root-level defect of `main`, not of this branch).
+- `READY_TO_PROMOTE` = **NO** for both packs, **no migration number exists**, and
+  **no CI has executed any of it**.

@@ -146,6 +146,17 @@ fi
 # table and function ACLs and the row-security flags — which is every object
 # this phase's mutations touch.
 #
+# `pg_attribute` is in the digest, and finding P3-02 of the fifth round is why
+# it had to be added: without it, two real mutations were byte-identical
+# no-ops the hook would have refused -- `REVOKE UPDATE (on_hand) ON
+# stock_lot_levels` (a COLUMN acl, which `relacl` does not carry) and
+# `ALTER TABLE product_matrix_axes ALTER COLUMN axis_position DROP NOT NULL`.
+# The second is the sharp one: `attnotnull` is the single catalogue fact forms
+# 3 and 4 of the tautology test rest on, and the write-path sweep is
+# enumerated from `pg_attribute.attacl` precisely because information_schema
+# hid those grants -- so the digest could not mutation-test the two facts the
+# round's other two fixes depend on.
+#
 # Its own limit, stated because it is real: the digest is of the schema, not
 # of the data, so a mutation that only changes FIXTURE rows reads as a no-op
 # and is refused. That is the right default for this phase, whose mutations
@@ -171,6 +182,9 @@ pg_ddl_digest () {
       UNION ALL SELECT 'a:'||c.relname||':'||coalesce(c.relacl::text,'')||':'||c.relrowsecurity::text||':'||c.relforcerowsecurity::text
                   FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind='r'
       UNION ALL SELECT 'x:'||p.proname||':'||coalesce(p.proacl::text,'') FROM pg_proc p WHERE p.pronamespace='public'::regnamespace
+      UNION ALL SELECT 'c:'||c.relname||':'||a.attname||':'||a.attnotnull::text||':'||coalesce(a.attacl::text,'')
+                  FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
+                 WHERE c.relnamespace='public'::regnamespace AND a.attnum > 0 AND NOT a.attisdropped
     ) s\"" | tr -d '[:space:]'
 }
 if [ -n "$P11_MUTATION_SQL" ]; then
