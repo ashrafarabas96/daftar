@@ -58,6 +58,14 @@ a line shaped like a recorder line and having it believed; logs written
 before that change cannot be verified by the current `--check`, which is
 correct, since their cells were parsed from text a child could have written.
 
+A law's red is attributed to the case declared for it by reading that case's
+own `status` out of the runner's structured report (`--reporter=json`), never
+by searching the runner's text. A test can print anything, including a line
+shaped like another test's failure, and vitest forwards a test's own stdout
+into the reporter stream — so prose cannot carry an attribution. Each declared
+title must resolve to exactly one test at baseline, or the harness refuses to
+run at all.
+
 Each gate's two streams are recorded as two labelled blocks, its stdout and
 then its stderr under `--- stderr:`. The counts in the run-identity table are
 measured from **stdout alone**, and a gate whose output carries more than one

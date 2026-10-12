@@ -140,12 +140,43 @@ def gate_measurements(label: str, returncode: int, out: str) -> list[str]:
     return out_lines
 
 
-def run_verdict(before: str, after: str, exits: list[int]) -> int:
+def record_gate(label: str, cmd: list[str], proc: "subprocess.CompletedProcess[str]") -> tuple[list[str], int, list[str]]:
+    """The lines ONE gate contributes to the log, its exit code, its figures.
+
+    `do_run` does nothing else per gate. The choice of WHICH stream the
+    measurement reads is made here, once, and a caller cannot make it
+    differently — which is the whole of round 8's F-02: the earlier self-test
+    fixture handed `gate_measurements` a concatenation as an ARGUMENT, so it
+    chose what to feed the function and could not notice the production
+    caller reverting to `proc.stdout + proc.stderr`. A self-test that calls
+    this function exercises the real path.
+    """
+    lines = [f"=== command: {' '.join(cmd)}"]
+    lines += child_lines(proc.stdout)
+    if proc.stderr != "":
+        lines.append("--- stderr:")
+        lines += child_lines(proc.stderr)
+    lines.append(f"--- exit code: {proc.returncode}")
+    measured = gate_measurements(label, proc.returncode, proc.stdout)
+    lines += measured
+    lines.append("")
+    return lines, proc.returncode, measured
+
+
+def run_verdict(before: str, after: str, exits: list[int], cells: list[str]) -> int:
     """`--run`'s own exit code: 0 only if nothing at all went wrong.
 
     It used to be 0 whatever happened: a gate could fail, or the tree could
     end dirty or start dirty, and the recorder would say nothing to its
     caller or to CI. An evidence tool that cannot fail is not a gate.
+
+    `cells` are the recorder's own measurement lines, `name: value`. A run in
+    which any of them is ABSENT produced no usable evidence, and round 8's
+    F-03 measured the consequence: on the stderr-forgery run `--run` exited 0
+    with two cells ABSENT while this docstring already claimed otherwise.
+    `--check` refused that run, but `--run` is the CI entry point, so a run
+    that measured nothing went green there. The docstring was not narrowed to
+    fit the check; the check was widened to fit the docstring.
 
     It is a function of its own, and not three lines woven through the loop,
     so that each of the three rules can be deleted in a self-test and the
@@ -158,6 +189,8 @@ def run_verdict(before: str, after: str, exits: list[int]) -> int:
     if after != "":
         return 1
     if any(code != 0 for code in exits):
+        return 1
+    if any(cell.split(":", 1)[1].strip().startswith("ABSENT") for cell in cells):
         return 1
     return 0
 
@@ -207,24 +240,14 @@ def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path,
         "",
     ]
     codes: list[int] = []
+    cells: list[str] = []
     for label, cmd in GATES:
-        lines.append(f"=== command: {' '.join(cmd)}")
         proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=env, check=False)
-        # The two streams are written as two labelled blocks. Concatenating
-        # them cost two things: a stdout that did not end in a newline merged
-        # its last line into stderr's first, and the log could not say which
-        # stream a line came from. Neither block is parsed — both are
-        # prefixed — but the measurement below reads stdout alone, so the log
-        # has to show which lines that was.
-        lines += child_lines(proc.stdout)
-        if proc.stderr != "":
-            lines.append("--- stderr:")
-            lines += child_lines(proc.stderr)
-        lines.append(f"--- exit code: {proc.returncode}")
-        lines += gate_measurements(label, proc.returncode, proc.stdout)
-        lines.append("")
-        codes.append(proc.returncode)
-        print(f"{'ok  ' if proc.returncode == 0 else 'FAIL'} {' '.join(cmd)} -> exit {proc.returncode}")
+        gate_lines, code, measured = record_gate(label, cmd, proc)
+        lines += gate_lines
+        codes.append(code)
+        cells += measured
+        print(f"{'ok  ' if code == 0 else 'FAIL'} {' '.join(cmd)} -> exit {code}")
     # The red-proof harness plants defects in `src/` and restores them in a
     # `finally`. A `finally` does not run if the process is killed, and a
     # planted defect left behind is both a corrupt tree and — far worse — a
@@ -244,7 +267,7 @@ def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path,
     # happened: a gate could fail, or the tree could end dirty or start
     # dirty, and the recorder would say nothing to its caller or to CI. An
     # evidence tool that cannot fail is not a gate.
-    return log_path, run_verdict(before, after, codes)
+    return log_path, run_verdict(before, after, codes, cells)
 
 
 def derive(log_path: pathlib.Path) -> dict[str, str]:
@@ -754,17 +777,46 @@ def self_test() -> int:
         if gate_measurements("T1 unit", 0, "(nothing it says is a summary)") != ["test_files: ABSENT", "cases: ABSENT"]:
             failures.append("a gate that reported no figure at all did not read ABSENT")
 
+        # ---- 2b-bis. the PRODUCTION per-gate step ---------------------------
+        # Round 8, F-02. The fixture below hands `record_gate` a real gate's
+        # two streams and lets IT choose which one the measurement reads —
+        # which is the choice `do_run` makes and the one round 7 was about.
+        # Restoring `proc.stdout + proc.stderr` inside `record_gate` makes
+        # the two streams disagree, the cell ABSENT, and this case red.
+        import types
+
+        forged = types.SimpleNamespace(
+            stdout="  Test Files  11 passed (11)\n       Tests  220 passed (220)\n",
+            stderr="  Test Files  1 passed (1)\n       Tests  7 passed (7)\n",
+            returncode=0,
+        )
+        gate_lines, code, measured = record_gate("T1 unit", ["npx", "vitest", "run"], forged)
+        if "|   Test Files  1 passed (1)" not in gate_lines:
+            failures.append("the forged-stderr fixture's stderr never reached the log, so the case below proves nothing")
+        if measured != ["test_files: 11", "cases: 220"]:
+            failures.append("the production per-gate step did not measure the gate's stdout alone")
+        if code != 0:
+            failures.append("the production per-gate step did not report the gate's own exit code")
+        if "--- stderr:" not in gate_lines:
+            failures.append("a gate's stderr was written without being labelled as stderr")
+
         # ---- 2c. `--run`'s own verdict --------------------------------------
         # `--check` refusing a bad run was measured; `--run` exiting non-zero
         # on the same facts was not (challenger round 7, P3-01). Each of the
         # three rules is deleted by a different one of these four.
-        for before, after, exits, why in [
-            ("", "", [0] * len(GATES), ""),
-            (" M src/x.ts", "", [0] * len(GATES), "a run that STARTED on a dirty tree still exited 0"),
-            ("", " M src/x.ts", [0] * len(GATES), "a run that ENDED on a dirty tree still exited 0"),
-            ("", "", [0, 0, 0, 0, 1, 0], "a run with a failing gate still exited 0"),
+        clean_cells = ["test_files: 10", "cases: 219", "laws: 88"]
+        absent_cells = ["test_files: ABSENT \u2014 this gate's output carries 2 different figures for it", "cases: 219", "laws: 88"]
+        for before, after, exits, cells, why in [
+            ("", "", [0] * len(GATES), clean_cells, ""),
+            (" M src/x.ts", "", [0] * len(GATES), clean_cells, "a run that STARTED on a dirty tree still exited 0"),
+            ("", " M src/x.ts", [0] * len(GATES), clean_cells, "a run that ENDED on a dirty tree still exited 0"),
+            ("", "", [0, 0, 0, 0, 1, 0], clean_cells, "a run with a failing gate still exited 0"),
+            # Round 8, F-03: every gate passed, both trees clean, and the run
+            # measured nothing. `--check` refused it; `--run`, which is the CI
+            # entry point, exited 0.
+            ("", "", [0] * len(GATES), absent_cells, "a run that produced an ABSENT measurement still exited 0"),
         ]:
-            verdict = run_verdict(before, after, exits)
+            verdict = run_verdict(before, after, exits, cells)
             if why == "" and verdict != 0:
                 failures.append("a run with nothing wrong with it did not exit 0")
             if why != "" and verdict == 0:
