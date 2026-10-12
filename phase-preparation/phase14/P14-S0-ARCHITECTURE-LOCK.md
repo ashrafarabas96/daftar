@@ -168,7 +168,7 @@ join the wrong surface.
 
 ### `P14-AL-06` — THE KEY CARRIES THE BUSINESS
 For a key credential the business is **the key's own business**. An
-`X-Business-Id` header that differs is a refusal (`KEY_BUSINESS_MISMATCH`, the repository's `ApiErrorCode` style at the HTTP boundary — `errors.ts:6-31` — not a dotted domain code),
+`X-Business-Id` header that differs is a refusal (`KEY_BUSINESS_MISMATCH`, the repository's `ApiErrorCode` style at the HTTP boundary — `packages/domain-core/src/errors.ts:6-31` — not a dotted domain code),
 never an override and never silently ignored. A key cannot pivot to another
 business of the same tenant.
 
@@ -185,12 +185,12 @@ choice.
 
 ### `P14-AL-08` — THE SECRET IS WRITE-ONCE AND IMMUTABLE
 - 32 bytes from `randomBytes`, presented **once** in the creation response.
-- Stored as SHA-256 hex only (the refresh-token precedent, `tokens.ts:105`).
+- Stored as SHA-256 hex only (the refresh-token precedent, `apps/api/src/modules/auth/tokens.ts:105`).
   Argon2 is deliberately **not** used: it is the right answer for low-entropy
   human passwords and the wrong answer for a 256-bit random secret on a hot
   path.
 - Lookup is by the key's **public id** (indexed), then
-  `timingSafeEqual` on the digest (`tokens.ts:112`). No table scan, no
+  `timingSafeEqual` on the digest (`apps/api/src/modules/auth/tokens.ts:112`). No table scan, no
   comparison that leaks length by early return.
 - A key row's `key_id` and secret digest are **immutable after insert**,
   enforced by a database trigger. One key row has exactly one secret for its

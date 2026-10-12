@@ -10,6 +10,17 @@ BEGIN
   IF to_regclass('p14s.webhook_deliveries') IS NULL THEN
     RAISE EXCEPTION 'PREREQUISITE NOT MET: p14s.webhook_deliveries does not exist — run cases/c7_fix.sql first';
   END IF;
+  -- Round-5 CHALLENGE P2-01: the prerequisite assertions fenced only the
+  -- ABSENCE of a relation this case needs, never the PRESENCE of state it
+  -- needs to be absent. This case's whole law is what happens WITHOUT a SELECT
+  -- grant, so c7d's GRANT surviving from an earlier run made it print
+  -- "FINDING REFUTED" about the live TL-P14-SEC-02 ruling when the real cause
+  -- was leftover state. A leftover grant must never be able to print a
+  -- verdict, so the absence is now asserted as explicitly as the presence and
+  -- the case refuses instead of ruling.
+  IF has_table_privilege('p14_merchant', 'p14s.outbox_events', 'SELECT') THEN
+    RAISE EXCEPTION 'PREREQUISITE NOT MET: p14_merchant ALREADY holds SELECT on p14s.outbox_events — this case measures the ungranted state, and a leftover grant (cases/c7d_setup_grant.sql) would make it rule on a world it is not in. Replay from a clean database: ./replay.sh';
+  END IF;
 END $$;
 
 -- FINDING against my own §7a: an INVOKER-RIGHTS assertion cannot read the

@@ -177,7 +177,7 @@ read.
    `api_keys` (§14), because a comment cannot keep a query and a schema in
    agreement.
 2. The digest is compared in the application with `timingSafeEqual`
-   (`tokens.ts:112`). Nothing about the comparison happens in SQL, so no
+   (`apps/api/src/modules/auth/tokens.ts:112`). Nothing about the comparison happens in SQL, so no
    SQL-level timing or error-message difference can leak which half matched.
 3. The resolved `tenant_id` / `business_id` then set the transaction-local GUCs
    for the **business** transaction, which runs as `daftar_app` under the
@@ -1381,20 +1381,110 @@ carrying this pack**, and a reader who verifies a citation against the branch
 they checked out may get a different file. `git merge-base --is-ancestor
 93084f8 <head>` fails by design here.
 
-**Six of the fourteen cited files differ between the two trees**, not one. The
-earlier disclosure named `database.ts` only, which understated the trap:
+### What this pack claims, exactly (CHALLENGE R4 P2-02)
 
-| Cited file | `6fc505d` vs `93084f8` |
-|---|---|
-| `apps/api/src/infra/database.ts` | **DIFFERS** (190+/15−) |
-| `packages/domain-core/src/permissions.ts` | **DIFFERS** (66+/1−) — the P2-02 root cause |
-| `apps/api/src/modules/selling/customers.controller.ts` | **DIFFERS** (113+/0−) |
-| `apps/api/src/modules/inventory/inventory-authorization.ts` | **DIFFERS** (117+/1−) |
-| `apps/api/src/modules/pos/pos-permissions.ts` | **DIFFERS** (138+/0−) |
-| `apps/api/src/modules/pos/pos-cart-routes.ts` | **DIFFERS** (212+/0−) |
-| `apps/api/src/modules/outbox/publisher.ts` | identical |
-| `apps/api/src/modules/inventory/inventory-reads.controller.ts` | identical |
-| `0004_infra.sql`, `0006_rls.sql`, `0010_db_roles.sql`, `0014_branch_scopes.sql`, `0020_credential_delivery_outbox.sql`, `0045_accounting_post_entry.sql` | **all identical** — every cited frozen migration is byte-identical at both trees, so no RLS, grant or policy citation is exposed to this trap |
+Earlier revisions of this section read as though each citation carried its own
+recorded tree. It does not, and the claim is now stated as what the pack
+actually does:
+
+> There is **one declared base for the whole pack**, `93084f8`. No individual
+> citation names a tree. The per-file record of what that base costs a reader
+> on another tree is the **generated** table below, which is derived by
+> scanning the pack rather than kept by hand, and which names, per cited file,
+> which pack documents cite it.
+
+That is per-*file* provenance, generated; it is not per-*citation* provenance,
+and this section no longer implies otherwise. Pinning the tree at read time is
+`P14-GATE-032`'s obligation, below.
+
+### The measurement (CHALLENGE R4 P2-01)
+
+The previous table and its "six of the fourteen" count were **typed from a
+hand-kept list**, which is the same mechanism the base-tree trap is made of.
+The table below is produced by `tools/citation-provenance.py`, which scans
+every pack document for `` `path:line` `` citations, resolves each against
+`git ls-tree` at the declared base, and compares the blobs.
+
+Two corrections came out of generating it rather than typing it:
+
+- the count was wrong in **both** directions — not "six of fourteen", and not
+  the eleven the challenger inferred from the hand-kept list either;
+- two citations were **bare basenames that resolve to several real files** —
+  an unqualified errors.ts, which matches three files in the tree, and an
+  unqualified tokens.ts, which matches two. Both are now cited by full path
+  (CHALLENGE R4 P3-04), and with the ambiguity gone the generated set is
+  smaller and truer: three rows of the pre-fix run existed only because a
+  basename matched a file the pack never cited. (Those two names are written
+  here **without backticks on purpose** — the generator scans backticked
+  tokens, so writing them as citations in the very paragraph that retires them
+  would resurrect them in the table. The generated block below is the
+  authority for the counts, and it is checked, not typed.)
+
+<!-- BEGIN GENERATED citation-provenance -- do not edit by hand -->
+| Cited file | `6fc505d` vs `93084f8` | cited as | cited in |
+|---|---|---|---|
+| `infrastructure/database/migrations/0002_identity.sql` | identical | `0002_identity.sql` | P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/migrations/0003_tenancy.sql` | identical | `0003_tenancy.sql` | P14-MIGRATION-PATCH-REQUEST |
+| `infrastructure/database/migrations/0004_infra.sql` | identical | `0004_infra.sql` | P14-AMENDMENT-04-MISSION-V2, P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/migrations/0006_rls.sql` | identical | `0006_rls.sql` | P14-AMENDMENT-03-CONTINUOUS-MISSION, P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/migrations/0010_db_roles.sql` | identical | `0010_db_roles.sql` | P14-AMENDMENT-03-CONTINUOUS-MISSION, P14-AMENDMENT-07-CHALLENGE-ROUND-2, P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/migrations/0014_branch_scopes.sql` | identical | `0014_branch_scopes.sql` | P14-AMENDMENT-03-CONTINUOUS-MISSION, P14-MIGRATION-PATCH-REQUEST |
+| `infrastructure/database/migrations/0020_credential_delivery_outbox.sql` | identical | `0020_credential_delivery_outbox.sql` | P14-AMENDMENT-03-CONTINUOUS-MISSION, P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/migrations/0025_credential_payload_protection.sql` | identical | `0025_credential_payload_protection.sql` | P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/migrations/0045_accounting_post_entry.sql` | identical | `0045_accounting_post_entry.sql` | P14-AMENDMENT-03-CONTINUOUS-MISSION, P14-MIGRATION-PATCH-REQUEST |
+| `infrastructure/database/migrations/0054_inventory_assertion_authority.sql` | identical | `0054_inventory_assertion_authority.sql` | P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/migrations/0076_phase4_permission_defaults_backfill.sql` | **ABSENT at 6fc505d** | `0076_phase4_permission_defaults_backfill.sql` | P14-MIGRATION-PATCH-REQUEST |
+| `infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql` | **ABSENT at 6fc505d** | `0079_phase4_pos_till_sessions_cart.sql` | P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql` | **ABSENT at 6fc505d** | `0086_phase4_rls_quals_once_per_query.sql` | P14-MIGRATION-PATCH-REQUEST |
+| `apps/api/src/common/guards.ts` | identical | `apps/api/src/common/guards.ts` | P14-HANDOFF-MANIFEST, P14-S0-ARCHITECTURE-LOCK, P14-TASK-DAG |
+| `apps/api/src/infra/database.ts` | **DIFFERS** (+190/-15) | `apps/api/src/infra/database.ts` | P14-AMENDMENT-03-CONTINUOUS-MISSION |
+| `apps/api/src/infra/redis.ts` | identical | `apps/api/src/infra/redis.ts` | P14-AMENDMENT-01-SEALED-CONTRACTS, P14-HANDOFF-MANIFEST, P14-S0-ARCHITECTURE-LOCK, P14-TASK-DAG |
+| `apps/api/src/modules/auth/tokens.ts` | identical | `apps/api/src/modules/auth/tokens.ts` | P14-AMENDMENT-09-CHALLENGE-ROUNDS-4-5, P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
+| `apps/api/src/modules/delivery/credential-protector.ts` | identical | `apps/api/src/modules/delivery/credential-protector.ts` | P14-S0-ARCHITECTURE-LOCK |
+| `apps/api/src/modules/inventory/inventory-reads.controller.ts` | identical | `apps/api/src/modules/inventory/inventory-reads.controller.ts` | P14-AMENDMENT-05-MISSION-V3, P14-MIGRATION-PATCH-REQUEST |
+| `apps/api/src/modules/outbox/publisher.ts` | identical | `apps/api/src/modules/outbox/publisher.ts` | P14-AMENDMENT-01-SEALED-CONTRACTS, P14-HANDOFF-MANIFEST, P14-S0-ARCHITECTURE-LOCK, P14-TASK-DAG |
+| `apps/api/src/modules/receivables/receivables.controller.ts` | **ABSENT at 6fc505d** | `apps/api/src/modules/receivables/receivables.controller.ts` | P14-OPEN-DECISIONS-AR, P14-S0-ARCHITECTURE-LOCK |
+| `packages/domain-core/src/capabilities.ts` | identical | `capabilities.ts` | P14-AMENDMENT-02-DIRECTIVE-11 |
+| `packages/domain-core/src/errors.ts` | identical | `domain-core/src/errors.ts` | P14-CONTRACT-PACK |
+| `apps/api/src/common/error.filter.ts` | **DIFFERS** (+59/-0) | `error.filter.ts` | P14-S0-ARCHITECTURE-LOCK |
+| `apps/api/src/infra/request-context.ts` | identical | `infra/request-context.ts` | P14-CONTRACT-PACK |
+| `apps/api/src/modules/inventory/inventory-authorization.ts` | **DIFFERS** (+117/-1) | `inventory/inventory-authorization.ts` | P14-AMENDMENT-05-MISSION-V3, P14-MIGRATION-PATCH-REQUEST |
+| `packages/shared-contracts/src/invoices.ts` | **ABSENT at 6fc505d** | `invoices.ts` | P14-AMENDMENT-01-SEALED-CONTRACTS |
+| `apps/api/src/modules/tenancy/tenancy.service.ts` | identical | `modules/tenancy/tenancy.service.ts` | P14-HANDOFF-MANIFEST, P14-TASK-DAG |
+| `packages/domain-core/src/money.ts` | identical | `packages/domain-core/src/money.ts` | P14-CONTRACT-PACK |
+| `packages/domain-core/src/permissions.ts` | **DIFFERS** (+66/-1) | `packages/domain-core/src/permissions.ts` | P14-HANDOFF-MANIFEST, P14-S0-ARCHITECTURE-LOCK, P14-TASK-DAG |
+| `apps/api/src/modules/pos/pos-cart-routes.ts` | **ABSENT at 6fc505d** | `pos/pos-cart-routes.ts` | P14-AMENDMENT-05-MISSION-V3, P14-MIGRATION-PATCH-REQUEST |
+| `apps/api/src/modules/pos/pos-permissions.ts` | **ABSENT at 6fc505d** | `pos/pos-permissions.ts` | P14-AMENDMENT-05-MISSION-V3, P14-MIGRATION-PATCH-REQUEST |
+| `scripts/static-guards.ts` | **DIFFERS** (+106/-9) | `scripts/static-guards.ts` | P14-S0-ARCHITECTURE-LOCK |
+| `apps/api/src/modules/selling/customers.controller.ts` | **ABSENT at 6fc505d** | `selling/customers.controller.ts` | P14-AMENDMENT-05-MISSION-V3, P14-MIGRATION-PATCH-REQUEST |
+| `apps/api/src/modules/pos/till-sessions.controller.ts` | **ABSENT at 6fc505d** | `till-sessions.controller.ts` | P14-MIGRATION-PATCH-REQUEST |
+
+**35 cited files resolved: 5 DIFFER, 21 identical, 9 ABSENT at `6fc505d`.**
+
+Absent at `6fc505d`: `apps/api/src/modules/pos/pos-cart-routes.ts`, `apps/api/src/modules/pos/pos-permissions.ts`, `apps/api/src/modules/pos/till-sessions.controller.ts`, `apps/api/src/modules/receivables/receivables.controller.ts`, `apps/api/src/modules/selling/customers.controller.ts`, `infrastructure/database/migrations/0076_phase4_permission_defaults_backfill.sql`, `infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql`, `infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql`, `packages/shared-contracts/src/invoices.ts` — a reader on that tree cannot verify these citations at all.
+
+**Cited tokens that are not live code at `93084f8`, classified:**
+- 39 are this pack's own proof scripts (`proofs/cases/*.sql`), which live in the pack, not the repo.
+- 2 are the pack's own artifacts.
+- 11 are files this phase PROPOSES and that correctly do not exist yet: `apps/api/src/modules/integrations/key-material.ts`, `cases/c7a_cross_business_accepted.sql`, `packages/domain-core/src/api-scopes.ts`, `packages/shared-contracts/src/public-api.ts`, `public-api.ts`, `scripts/phase14-event-catalogue-gate.ts`, `scripts/phase14-gate.ts`, `scripts/phase14-openapi.ts`, `scripts/phase14-registry-gate.ts`, `webhooks/egress-guard.ts`, `webhooks/signature.ts`
+  A reader should not look for these in any tree; `P14-GATE-034` asserts they stay absent until the phase is built.
+<!-- END GENERATED citation-provenance -->
+
+**The frozen-migration sentence, corrected (CHALLENGE R4 P3-03).** Earlier
+revisions said *every cited frozen migration is byte-identical at both trees*.
+That is false: **three cited migrations do not exist at `6fc505d` at all** —
+`0076_phase4_permission_defaults_backfill.sql`,
+`0079_phase4_pos_till_sessions_cart.sql` and
+`0086_phase4_rls_quals_once_per_query.sql`, all three of them Phase 4's
+unmerged work. The conclusion the sentence was carrying nevertheless **holds,
+for a reason that must be stated rather than assumed**: every migration this
+pack cites *for an RLS policy, a grant or a role* — `0002`, `0003`, `0004`,
+`0006`, `0010`, `0014`, `0020`, `0025`, `0045`, `0054` — is byte-identical at
+both trees, and the three absent ones are cited only for Phase 4 surface
+facts. So no RLS, grant or policy citation in this request is exposed to the
+trap; three route-surface citations are, and a reader on `6fc505d` cannot
+check them at all rather than checking them wrongly, which is the better of
+the two failures.
 
 **The two remediations, and why neither is taken.**
 
@@ -1409,10 +1499,25 @@ earlier disclosure named `database.ts` only, which understated the trap:
    merging it in now has the same effect.
 2. **Rewrite the branch's history.** Forbidden outright, and not proposed.
 
-**So the fix is this table plus a gate obligation**, not a different commit:
-every live-code citation in this pack names the tree it was verified in, and
-`P14-GATE-032` is extended to **assert each citation against `93084f8`
-explicitly** rather than against whatever tree the runner happens to have —
-because a citation verified against the wrong tree is not a typo, it is a
-coherent reading of the wrong world, and it will keep producing findings that
-look like carelessness.
+**So the fix is this generated table plus a gate obligation**, not a different
+commit. `P14-GATE-032` is extended twice over:
+
+- it **asserts each citation against `93084f8` in an explicitly checked-out
+  worktree**, never against whatever tree the runner happens to have — because
+  a citation verified against the wrong tree is not a typo, it is a coherent
+  reading of the wrong world, and it will keep producing findings that look
+  like carelessness;
+- and it **runs `tools/citation-provenance.py --check` on this document**,
+  which exits `1` when the block above has drifted from the trees. A
+  provenance table that cannot detect its own staleness is a typed claim
+  again, which is exactly the defect this round found.
+
+**The generator's own first run was wrong, and that is the fourth appearance
+of this round's pattern.** It reported `absent=0` while `0079` is genuinely
+absent at `6fc505d`, because `git rev-parse <rev>:<missing path>` exits
+non-zero **but still echoes the ref to stdout**, so a missing file read as a
+present blob while only stdout was checked. The fix is one line
+(`if rb.returncode == 0`), the note is in the script, and the lesson is that
+the instrument written to replace a hand-kept claim must itself be measured:
+`0079`'s absence was confirmed against `git` directly before either the
+generator or the challenge report was believed.

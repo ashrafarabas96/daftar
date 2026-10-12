@@ -15,14 +15,53 @@ being tested.
 ## Reproducing
 
 ```
-locale-gen en_US.UTF-8            # the image ships only C, C.utf8, POSIX
+localedef -i en_US -f UTF-8 en_US.UTF-8   # the image ships only C, C.utf8, POSIX
 initdb -D <data> --locale=en_US.utf8 --encoding=UTF8 -U p14super
 pg_ctl -D <data> -o "-p 54314 -c listen_addresses='' -k <sock> -c fsync=off" -w start
 psql -U p14super -d postgres -f bootstrap.sql      # non-superuser roles + database
 ./replay.sh                                        # recreates the DB, loads the
                                                    # fixture, runs every case
-./replay.sh c7                                     # one family only
+./replay.sh c7                                     # same, stopping after the
+                                                   # last c7 line of ORDER
+./redproof-preflight.sh                            # red-proofs the preflight's
+                                                   # own arms (5 of 6)
 ```
+
+**`localedef`, not `locale-gen` (`CHALLENGE R5 P3-04`).** Measured rather than
+conceded: `locale-gen` **does** exist on this image, at `/usr/sbin/locale-gen`,
+which is not on a non-root `PATH` — so step one of a recipe whose whole point is
+that a reader can run it failed for the challenger and would fail for anyone
+replaying as an unprivileged user. `localedef` is at `/usr/bin/localedef` and
+produces the same `en_US.utf8`, so it is the documented step and the absolute
+path is given here for the other.
+
+**A filter chooses how far down `ORDER` the replay goes, never whether the
+database is clean (`CHALLENGE R5 P2-01`).** The filtered form used to skip the
+recreation, the fixture **and** the preflight, so it could not exit 0 in any
+state of the database: on a fresh one the prerequisite assertions refused, and
+straight after a full replay — the state a reader is actually in, because the
+full run is the first documented command — `c7d_setup_grant`'s `GRANT` survived
+and made `c7c_assertion_inoperable` print **`FINDING REFUTED`** about the live
+`TL-P14-SEC-02` ruling. The round-3 prerequisite assertions could not catch it
+because they fence the **absence** of a relation a case needs and never the
+**presence** of state it needs to be absent: one direction only, which is the
+shape Phase 11 paid for in its closure law. Both halves are now closed:
+
+- there is **one setup path**, taken unconditionally, and a filter selects the
+  `ORDER` prefix up to and including the last matching line — its prerequisites
+  included, since `ORDER` is topologically sorted. A filter matching nothing
+  exits `2`, because an empty replay is an error and not a pass;
+- and `c7c_assertion_inoperable` now **asserts the absence it requires** —
+  `has_table_privilege('p14_merchant','p14s.outbox_events','SELECT')` must be
+  false — so if it is ever reached in the granted state it refuses with
+  `PREREQUISITE NOT MET` instead of ruling on a world it is not in. Measured
+  both ways: through `replay.sh` it is 43/43 and `./replay.sh c7` is 36/36 exit
+  0 twice in a row; called directly on the dirty database it now exits 3 with
+  the refusal rather than the false verdict.
+
+**A leftover grant must never be able to print a verdict**, and the structural
+fix alone would not have been enough: `run.sh` can still be called by hand, so
+the case had to stop ruling as well as the driver had to stop allowing it.
 
 **`replay.sh` IS the recipe.** It is committed, and the README points at it
 rather than restating it. Round-3 `CHALLENGE P2-01` found that the one-line
@@ -43,10 +82,28 @@ live only in the evidence document's prose, verified by hand — **which is
 exactly the shape that failed twice**, as ad-hoc mutations and then an ad-hoc
 driver. The evidence can no longer be produced on a runtime it misdescribes.
 
-The preflight is itself red-proofed, because an assertion that has never failed
-is an unfenced assertion: `ALTER ROLE p14_worker BYPASSRLS` makes the replay
-abort with `PRINCIPAL CLAIM FALSE: p14_worker has BYPASSRLS` and exit 1, and it
-returns to 43/43 once reverted.
+**The preflight is itself red-proofed, by a committed script, on five of its
+six arms** (`CHALLENGE R5 P3-03`). The first edition red-proofed the `BYPASSRLS`
+arm only, in prose — so by this pack's own law, *an assertion that has never
+failed is an unfenced assertion*, the encoding, collation, superuser and
+role-count arms were unproved, and the recipe lived in prose again.
+`./redproof-preflight.sh` mutates, requires the preflight to abort, and
+reverts:
+
+```
+ok    collation    preflight exit=3  RUNTIME CLAIM FALSE: collation is C/C , not en_US.utf8 — a result measured on the wrong collation is OFF-TARGET
+ok    encoding     preflight exit=3  RUNTIME CLAIM FALSE: encoding is SQL_ASCII, not UTF8
+ok    bypassrls    preflight exit=3  PRINCIPAL CLAIM FALSE: p14_worker has BYPASSRLS
+ok    superuser    preflight exit=3  PRINCIPAL CLAIM FALSE: p14_merchant is SUPERUSER
+ok    rolecount    preflight exit=3  PRINCIPAL CLAIM FALSE: 3 of the 4 roles under test exist
+== 5 arm(s), 0 not red.  The version arm is UNFENCED (needs a second cluster).
+```
+
+The **collation** arm is the one that matters most, because it guards the
+settled deploy target: Phase 9 lost a 75-case base to a result measured on the
+wrong collation. The **version** arm is **UNFENCED** and is recorded as such
+rather than described as proved — proving it needs a second cluster of a
+different major version, which this container does not have.
 
 `replay.sh` also **enforces the verdict**: a normal case must exit 0 and a red
 proof must exit 3, and it exits non-zero if any case missed its required code,
