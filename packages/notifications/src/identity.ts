@@ -217,8 +217,7 @@ export function deliveryKey(obligation: string, channel: Channel, providerContex
 function assertComposedDeliveryKey(composed: string): string {
   const doubleColons = composed.split('::').length - 1;
   if (doubleColons !== 1) {
-    throw new NotificationRefusal('notification.delivery_key_invalid',
-      `deliveryKey/composed_double_colon_count_${doubleColons}`);
+    throw new NotificationRefusal('notification.delivery_key_invalid', `deliveryKey/composed_double_colon_count_${doubleColons}`);
   }
   const ats = composed.split('@').length - 1;
   if (ats > 1) {

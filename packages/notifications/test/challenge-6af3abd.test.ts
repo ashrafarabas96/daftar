@@ -129,11 +129,7 @@ describe('D-6 — the composed delivery key', () => {
         }
       }
     }
-    expect([...outcomes].sort()).toEqual([
-      'accepted',
-      'deliveryKey/composed_at_before_channel',
-      'deliveryKey/composed_at_count_2',
-    ]);
+    expect([...outcomes].sort()).toEqual(['accepted', 'deliveryKey/composed_at_before_channel', 'deliveryKey/composed_at_count_2']);
   });
 });
 
