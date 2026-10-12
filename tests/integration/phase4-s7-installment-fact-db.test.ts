@@ -1866,13 +1866,38 @@ beforeAll(async () => {
   //    NAME instead. These arms measure that the three poisoning cases the
   //    challenger built now do nothing at all, and that the one lawful use
   //    still commits.
-  const poisoned = async (gucs: readonly (readonly [string, string])[], immediateFirstToo: boolean, schedule: boolean): Promise<string | null> => {
+  //
+  //    ── `knobs` AND `freshPool`: THE ACCESS PATH, FORCED RATHER THAN HOPED
+  //       FOR (`TL-P4-COORD-R86` §5, round 26 item 1a) ───────────────────────
+  //
+  //    The same two options `commitPlan` carries, for the same reason and with
+  //    the same mechanics. Each statement in `knobs` is issued inside the
+  //    write transaction, after the session context and the caller's own GUCs
+  //    and before the INSERTs, so a planner setting given here is in force for
+  //    every plan this transaction builds -- including the plans of the
+  //    statements inside the `SECURITY DEFINER` trigger functions, which carry
+  //    `SET search_path` and no cost settings of their own. `freshPool` goes
+  //    with it because those bodies are plpgsql and their statements are
+  //    CACHED PLANS: a backend that has already settled on a GENERIC plan does
+  //    not rebuild it because a cost setting changed, so a caller that needs
+  //    the path it asks for asks on a backend that has never planned these
+  //    statements. Neither option changes any default: every call site that
+  //    passes neither keeps the pooled connection and the planner's free
+  //    choice, which is what every arm outside §R16 does.
+  const poisoned = async (
+    gucs: readonly (readonly [string, string])[],
+    immediateFirstToo: boolean,
+    schedule: boolean,
+    o: { knobs?: readonly string[]; freshPool?: boolean } = {},
+  ): Promise<string | null> => {
     const planId = randomUUID();
-    const c = await mig.connect();
+    const pool = o.freshPool === true ? new Pool({ connectionString: urlOf(DB, 'daftar_migrator'), max: 1 }) : mig;
+    const c = await pool.connect();
     try {
       await c.query('BEGIN');
       for (const [k, v] of Object.entries(APP_CTX())) await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
       for (const [k, v] of gucs) await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
+      for (const sql of o.knobs ?? []) await c.query(sql);
       if (immediateFirstToo) await c.query('SET CONSTRAINTS ALL IMMEDIATE');
       await c.query(
         `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
@@ -1893,6 +1918,7 @@ beforeAll(async () => {
       return err(e);
     } finally {
       c.release();
+      if (pool !== mig) await pool.end().catch(() => undefined);
     }
   };
   //    (a) THE SETTINGS ARE STILL CALLER-WRITABLE. That fact has not changed
@@ -2045,11 +2071,50 @@ beforeAll(async () => {
   //    (`TL-P4-COORD-R55` ordered items 2, 3 and 7; F13-2, F13-3, F13-9).
   //
   //    `installment_plans_pkey` occurred ZERO times in the specification. One
-  //    catalogue flag on it made EVERY lawful plan write fail — the writer
+  //    catalogue flag on it made a lawful plan write fail — the writer
   //    reads the handed row BY PRIMARY KEY — under `installment.plan_fact_blind`,
   //    whose message said the cause was row security and told the operator to
   //    look in `pg_policy` and NOT in `pg_index`, while the whole end-state
   //    block reported OK and the reader served a figure.
+  //
+  //    ── IT DID NOT MAKE «EVERY» LAWFUL WRITE FAIL, AND THIS COMMENT USED TO
+  //       SAY THAT IT DID (`TL-P4-COORD-R86` §3 FINDING C, round 26 item 1a) ──
+  //
+  //    The probe that refuses is an `EXISTS` over `installment_plans` keyed on
+  //    `(business_id, id)`, which is the primary key itself. INDEX-SERVED it
+  //    finds nothing, because at `indisready = false` that index holds no
+  //    entry for the row this statement just wrote, and the write is refused.
+  //    ON A `Seq Scan` IT FINDS THE ROW AND NOTHING REFUSES. So whether this
+  //    state is detected at all is a PLANNER CHOICE, and it was measured
+  //    going the other way: at the round-24 bytes, one run in thirty committed
+  //    the poisoned write and read `R16_lawful_pkey` as `null`, with the
+  //    sibling arm receiving `installment.plan_active_conflict` instead of
+  //    `installment.plan_index_unenforcing`
+  //    (`P4-S7-R25-EVIDENCE-control-r16-red-at-34d3d77.log`, run `ctl-16`).
+  //
+  //    THAT IS A FAIL-OPEN IN THE SHIPPED GUARD AND NOT A DEFECT OF THIS
+  //    INSTRUMENT. It is written up as `PATCH-REQ-P4S7-FINDING-C` and the
+  //    probe it is about is `spec:1513-1515`; round 26 was NOT authorised to
+  //    redesign it and did not. What round 26 changed is this file: the three
+  //    arms below now FORCE the access path, so the state each one asserts is
+  //    CONSTRUCTED rather than hoped for, and the fail-open is measured
+  //    separately with the path forced the OTHER way rather than asserted
+  //    around. No arm here claims that `indisready = false` keeps the planner
+  //    on the index; usable is not chosen, and round 24's red disproved the
+  //    same belief where §R3 had written it down.
+  //
+  //    The one forcing every §R16 write below carries: push the planner AT
+  //    the relation's indexes, on a backend that has never planned the
+  //    trigger bodies' statements. `enable_seqscan = off` DISCOURAGES the
+  //    sequential path rather than forbidding it, so this is still the
+  //    planner's decision and the knob's effect is MEASURED ON BOTH SIDES
+  //    rather than asserted from PostgreSQL's costing: forced this way the
+  //    three arms refuse in every run of round 26's tally, and forced the
+  //    OTHER way the poisoned write COMMITS, deterministically, three runs of
+  //    three. That second reading is round 26 item 1b's measurement of the
+  //    fail-open and it is what shows the knob reaches the plans inside the
+  //    `SECURITY DEFINER` trigger bodies at all.
+  const FORCE_IX = { knobs: ['SET LOCAL enable_seqscan = off'], freshPool: true } as const;
   const setFlag = async (ix: string, column: string, value: boolean): Promise<string | null> => {
     try {
       await sup.query(`UPDATE pg_index SET ${column} = ${value ? 'true' : 'false'} WHERE indexrelid = $1::regclass`, [`public.${ix}`]);
@@ -2063,15 +2128,25 @@ beforeAll(async () => {
   //    (1) THE APPLY-TIME BLOCK NOW SEES IT. It reported OK at `c0d37ca`.
   M['R16_ratchet_pkey'] = await ratchet();
   //    (2) AND THE LAWFUL WRITE IS REFUSED UNDER A NAME TRUE OF WHAT WAS
-  //        OBSERVED, naming the index and not `pg_policy`.
-  M['R16_lawful_pkey'] = await poisoned([], false, true);
+  //        OBSERVED, naming the index and not `pg_policy`. FORCED: the probe
+  //        must be served by the primary key for the state to be detected at
+  //        all, so the planner is pushed at it.
+  M['R16_lawful_pkey'] = await poisoned([], false, true, FORCE_IX);
   M['R16_lawful_pkey_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
   //    (3) BOTH INDEXES UNENFORCING — the state in which the two counts
   //        under-report TOGETHER and `plan_index_disagrees` is silent.
   M['R16_unready_uq'] = await setFlag('installment_plans_one_active_per_invoice_uq', 'indisready', false);
-  M['R16_lawful_both'] = await poisoned([], false, true);
+  M['R16_lawful_both'] = await poisoned([], false, true, FORCE_IX);
   M['R16_lawful_both_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
   //    (4) RESTORE, REBUILD, AND THE CONTROL: the identical write commits.
+  //        «IDENTICAL» IS LOAD-BEARING, so the control carries the SAME
+  //        forcing as the two arms above. If (2) and (3) were forced and the
+  //        control were not, the control would no longer control for the one
+  //        thing round 26 changed — it could pass because the flags are back
+  //        OR because the knob is gone, and the arm could not tell which.
+  //        Forced and with every index enforcing, the probe finds the row it
+  //        was handed and the write commits, which is the reading this arm
+  //        has always taken.
   M['R16_restore'] = [
     await setFlag('installment_plans_pkey', 'indisready', true),
     await setFlag('installment_plans_one_active_per_invoice_uq', 'indisready', true),
@@ -2079,7 +2154,7 @@ beforeAll(async () => {
   M['R16_reindex'] = [await ddl('REINDEX INDEX public.installment_plans_pkey'), await ddl('REINDEX INDEX public.installment_plans_one_active_per_invoice_uq')];
   M['R16_ratchet_restored'] = await ratchet();
   M['R16_reset_b'] = await resetInvoice();
-  M['R16_lawful_control'] = await poisoned([], false, true);
+  M['R16_lawful_control'] = await poisoned([], false, true, FORCE_IX);
   M['R16_lawful_control_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
   M['R16_reset_c'] = await resetInvoice();
 
@@ -3867,9 +3942,18 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
   /**
    * `TL-P4-COORD-R55` ordered items 2 and 3, F13-2 and F13-3. ONE catalogue
    * flag on `installment_plans_pkey` — a name that occurred ZERO times in the
-   * specification at `c0d37ca` — made every lawful plan write fail under a
+   * specification at `c0d37ca` — made a lawful plan write fail under a
    * message that attributed the cause to row security, while the end-state
    * block reported OK and the reader served a figure.
+   *
+   * IT DID NOT MAKE «EVERY» SUCH WRITE FAIL, AND THIS COMMENT USED TO SAY IT
+   * DID (`TL-P4-COORD-R86` §3 FINDING C): the probe that refuses reads the
+   * handed row BY PRIMARY KEY, so the detection is conditional on the planner
+   * choosing the very index that is not enforcing — on a `Seq Scan` the probe
+   * finds the row and NOTHING REFUSES. The three arms below therefore force
+   * the access path; the fail-open in the shipped guard is measured separately
+   * and routed as `PATCH-REQ-P4S7-FINDING-C`, and round 26 did not redesign
+   * the guard.
    */
   it('R16 THE END-STATE BLOCK NOW SEES AN UNENFORCING PRIMARY KEY, where it reported OK', () => {
     expect(M['R16_reset']).toBeNull();
