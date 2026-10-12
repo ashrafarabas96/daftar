@@ -53,17 +53,10 @@ import { stockKeyOf } from './cart';
 import { NO_QUOTE_EXPIRY, type OrderQuoteConfirmationDto } from './contracts';
 import { OrderError, assertCanonicalId } from './errors';
 import { compareCanonical, isCanonicalInstant } from './instant';
+import { type UnitPrecisionDeclaration, requireUnitPrecision } from './unit-precision';
 
 /** Non-negative integer minor units as a decimal string. A shape check, so a float, a sign or padding cannot pass. */
 const NON_NEGATIVE_MINOR = /^(0|[1-9]\d*)$/;
-
-/**
- * The inventory authority's own bound on a product's frozen `unit_decimals`
- * (`packages/inventory/src/quantity.ts`, `Q4_STEP` for d = 0..4). It is mirrored
- * here so a malformed PRECISION is refused under its own code instead of being
- * relabelled as a malformed quantity.
- */
-export const MAX_UNIT_DECIMALS = 4;
 
 function requireMinor(value: string, field: string): bigint {
   if (!NON_NEGATIVE_MINOR.test(value)) {
@@ -93,7 +86,7 @@ function requireMinor(value: string, field: string): bigint {
  * position's `totalQuantity` — which is produced by that same formatter — by
  * string equality rather than by re-parsing.
  */
-function requireQuoteQuantity(line: QuoteLineSnapshot, unitDecimals: number | undefined): bigint {
+function requireQuoteQuantity(line: QuoteLineSnapshot, declaration: UnitPrecisionDeclaration | undefined): bigint {
   let q4: bigint;
   try {
     q4 = parseQuantity(line.quantity);
@@ -113,17 +106,20 @@ function requireQuoteQuantity(line: QuoteLineSnapshot, unitDecimals: number | un
       canonical: formatQuantity(q4),
     });
   }
-  if (unitDecimals !== undefined) {
+  if (declaration !== undefined) {
     // The PRECISION is checked before the quantity is checked against it, and
     // under its own code. A caller-supplied precision that is not an integer in
     // 0..4 is a defect in the CALLER's figure, not in the shopper's quantity;
     // relabelling it `order.quote_quantity_invalid` told a client to ask the
     // shopper to fix a number the shopper never wrote (round-5 challenge P3).
-    if (!Number.isInteger(unitDecimals) || unitDecimals < 0 || unitDecimals > MAX_UNIT_DECIMALS) {
-      throw new OrderError('order.unit_precision_invalid', 'a stated unit precision is an integer from 0 to 4', {
-        stockKey: line.stockKey,
-        stated: String(unitDecimals),
-      });
+    // The whole law, including which products may declare no precision at all,
+    // lives in `unit-precision.ts` and is not restated here.
+    const unitDecimals = requireUnitPrecision(declaration, { stockKey: line.stockKey });
+    if (unitDecimals === null) {
+      // A precision-free product's quantity is bounded by the storage scale
+      // alone, and `parseQuantity` above has already applied it. The law is not
+      // claimed where the catalogue states none to claim it against.
+      return q4;
     }
     try {
       assertQuantityRepresentable(q4, unitDecimals);
@@ -233,11 +229,17 @@ function digestOf(quote: CommercialQuoteInput): string {
  */
 export interface CommercialQuoteChecks {
   /**
-   * Stock key → the product's unit precision. A key that is absent is not
-   * checked for representability — the law is not claimed where the caller did
-   * not supply the precision, rather than being quietly assumed to be 4.
+   * Stock key → what the catalogue declares about that product's unit
+   * precision. A key that is absent is not checked for representability — the
+   * law is not claimed where the caller did not supply the declaration, rather
+   * than being quietly assumed to be 4.
+   *
+   * A DECLARATION rather than a number: a product that does not track inventory
+   * may lawfully carry no precision, and `null` inside a supplied declaration
+   * means exactly that, while an absent KEY means the caller did not say. The
+   * two are different and are kept different.
    */
-  unitDecimalsByStockKey?: ReadonlyMap<string, number>;
+  unitPrecisionByStockKey?: ReadonlyMap<string, UnitPrecisionDeclaration>;
 }
 
 /**
@@ -288,7 +290,7 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
         expected: canonicalKey,
       });
     }
-    requireQuoteQuantity(line, checks?.unitDecimalsByStockKey?.get(canonicalKey));
+    requireQuoteQuantity(line, checks?.unitPrecisionByStockKey?.get(canonicalKey));
     if (seen.has(line.stockKey)) {
       throw new OrderError('order.quote_line_duplicate', 'two quote lines name one stock key', { stockKey: line.stockKey });
     }

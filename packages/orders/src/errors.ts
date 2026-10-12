@@ -114,7 +114,15 @@ export type OrderErrorCode =
   | 'order.quote_version_stale'
   /** A quoted quantity is not positive, not exact at the supported scale, not canonically spelled, or not representable at the unit precision. */
   | 'order.quote_quantity_invalid'
+  /** A STATED unit precision is not an integer from 0 to 4, or a declaration does not say whether the product tracks inventory. */
   | 'order.unit_precision_invalid'
+  /**
+   * A product that TRACKS inventory was declared with no unit precision. The
+   * frozen catalogue's `products_tracked_requires_unit_ck` refuses that row, so
+   * a declaration carrying it did not come from the catalogue. This is distinct
+   * from a lawfully precision-free product, which is ADMITTED.
+   */
+  | 'order.unit_precision_required'
   /** A quote line's stock key is not the canonical key of its own product and variant. */
   | 'order.quote_stock_key_invalid'
   /**

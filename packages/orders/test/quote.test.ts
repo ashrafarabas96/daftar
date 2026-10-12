@@ -31,7 +31,11 @@ import {
   type CommercialQuoteInput,
   type ConfirmedQuoteApproval,
   type OrderQuoteConfirmationDto,
+  type UnitPrecisionDeclaration,
 } from '../src';
+
+/** A product that tracks inventory at the given precision — the ordinary case. */
+const tracked = (unitDecimals: number): UnitPrecisionDeclaration => ({ tracksInventory: true, unitDecimals });
 
 const QUOTE = '11111111-1111-4111-8111-111111111111';
 const ORDER = '22222222-2222-4222-8222-222222222222';
@@ -449,7 +453,7 @@ describe('a quoted quantity is validated by the inventory truth (challenger P1-0
     // Without a precision the law is not claimed: 2.5 of something is a fine
     // quantity until a caller says the product is sold in whole units.
     expect(buildCommercialQuote(fractional).lines[0]?.quantity).toBe('2.5000');
-    expect(() => buildCommercialQuote(fractional, { unitDecimalsByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, 0]]) })).toThrowError(
+    expect(() => buildCommercialQuote(fractional, { unitPrecisionByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, tracked(0)]]) })).toThrowError(
       expect.objectContaining({ code: 'order.quote_quantity_invalid' }),
     );
   });
@@ -701,7 +705,7 @@ describe('the representability leg of the gate has a caller (round-3 challenge P
   // none — so the builder's representability law had no caller AT THE GATE.
   // Measured by the challenger: with a precision of 0 the builder refuses a
   // quantity of 0.5000, and a forged quote carrying it passed the whole gate.
-  const WHOLE_UNITS = { unitDecimalsByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, 0]]) };
+  const WHOLE_UNITS = { unitPrecisionByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, tracked(0)]]) };
   const HALF = { ...INPUT, lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), quantity: '2.5000' }, ...INPUT.lines.slice(1)] };
 
   it('the builder refuses the half unit, so there is a law to carry', () => {
@@ -739,7 +743,7 @@ describe('the representability leg of the gate has a caller (round-3 challenge P
     // Not `order.quote_quantity_invalid`: the quantity is honest and the figure
     // at fault is the caller's. Round-5 challenge P3.
     for (const bad of [Number.NaN, -1, 2.5, Number.POSITIVE_INFINITY, 10]) {
-      const checks = { unitDecimalsByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, bad]]) };
+      const checks = { unitPrecisionByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, tracked(bad)]]) };
       expect(() => buildCommercialQuote(INPUT, checks)).toThrowError(expect.objectContaining({ code: 'order.unit_precision_invalid' }));
       expect(() => assertQuoteApproved(approve(QUOTED), ORDER, checks)).toThrowError(expect.objectContaining({ code: 'order.unit_precision_invalid' }));
     }
@@ -750,7 +754,7 @@ describe('the representability leg of the gate has a caller (round-3 challenge P
 
   it('lets the explicit argument win over the approval own checks when they disagree', () => {
     const forged = buildCommercialQuote(HALF);
-    const atQ4 = { unitDecimalsByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, 4]]) };
+    const atQ4 = { unitPrecisionByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, tracked(4)]]) };
     // The approval says four decimals, the call site says whole units. The call
     // site decides, so the half unit is REFUSED.
     const lenientApproval: ConfirmedQuoteApproval = { ...approve(forged), checks: atQ4 };
@@ -760,6 +764,40 @@ describe('the representability leg of the gate has a caller (round-3 challenge P
     // call site decides again — admitted.
     const strictApproval: ConfirmedQuoteApproval = { ...approve(forged), checks: WHOLE_UNITS };
     expect(() => assertQuoteApproved(strictApproval, ORDER, atQ4)).not.toThrow();
+  });
+
+  // Round-6 challenge §7. A supplied declaration whose precision is `null` is
+  // the catalogue SAYING there is none, which is lawful for a product that does
+  // not track inventory. An absent KEY is the caller not saying. The two look
+  // the same to a reader of the old map type and are different laws.
+  const SERVICE = { unitPrecisionByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, { tracksInventory: false, unitDecimals: null }]]) };
+
+  it('admits the half unit for a product the catalogue declares with no precision', () => {
+    expect(() => buildCommercialQuote(HALF, SERVICE)).not.toThrow();
+    const quoted = buildCommercialQuote(HALF, SERVICE);
+    expect(() => assertQuoteApproved(approve(quoted), ORDER, SERVICE)).not.toThrow();
+    // The same line, the same bytes, under a declaration of whole units: refused.
+    expect(() => assertQuoteApproved(approve(quoted), ORDER, WHOLE_UNITS)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+  });
+
+  it('refuses a declaration of a TRACKED product with no precision, under its own code', () => {
+    const contradiction = { unitPrecisionByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, { tracksInventory: true, unitDecimals: null }]]) };
+    expect(() => buildCommercialQuote(INPUT, contradiction)).toThrowError(expect.objectContaining({ code: 'order.unit_precision_required' }));
+    expect(() => assertQuoteApproved(approve(QUOTED), ORDER, contradiction)).toThrowError(expect.objectContaining({ code: 'order.unit_precision_required' }));
+  });
+
+  it('still bounds a precision-free quoted quantity by the storage scale', () => {
+    const tooFine = { ...INPUT, lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), quantity: '2.00001' }, ...INPUT.lines.slice(1)] };
+    expect(() => buildCommercialQuote(tooFine, SERVICE)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+  });
+
+  it('refuses a declaration that does not state whether the product tracks inventory', () => {
+    const malformed = {
+      unitPrecisionByStockKey: new Map([
+        [`${PRODUCT_A}:${VARIANT}`, { unitDecimals: 0 } as unknown as { tracksInventory: boolean; unitDecimals: number | null }],
+      ]),
+    };
+    expect(() => buildCommercialQuote(INPUT, malformed)).toThrowError(expect.objectContaining({ code: 'order.unit_precision_invalid' }));
   });
 });
 

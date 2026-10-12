@@ -23,6 +23,7 @@
  */
 import { assertQuantityRepresentable, formatQuantity, parseQuantity } from '@daftar/inventory';
 import { OrderError, assertCanonicalId, isCanonicalId } from './errors';
+import { type UnitPrecisionDeclaration, requireUnitPrecision } from './unit-precision';
 
 /** One basket row as the client appended it. */
 export interface CartLine {
@@ -59,33 +60,55 @@ export interface BasketPosition {
   representativeLineId: string;
   /**
    * The product's frozen unit precision, as the caller declared it for this
-   * stock key and as this function CHECKED the quantity against. It is carried
-   * on the position rather than left to be supplied a second time downstream:
-   * a precision the hand-off has to be given again is a precision it can be
-   * given differently, and then a law is claimed against the wrong figure or
-   * silently not claimed at all.
+   * stock key and as this function CHECKED the quantity against, or `null`
+   * where the catalogue declares none. It is carried on the position rather
+   * than left to be supplied a second time downstream: a precision the
+   * hand-off has to be given again is a precision it can be given differently,
+   * and then a law is claimed against the wrong figure or silently not claimed
+   * at all.
+   *
+   * `null` is NOT "unknown" and not "4". It is the catalogue's own statement
+   * that this product has no unit precision, which the frozen schema permits
+   * exactly for a product that does not track inventory — see
+   * `unit-precision.ts`. A reader must not read it as an absence to fill in.
    */
-  unitDecimals: number;
+  unitDecimals: number | null;
+  /**
+   * `products.track_inventory` for this stock key, as declared. It travels with
+   * the precision because it is the other half of the law that admitted it: a
+   * `null` precision is lawful only here, and a downstream reader that saw the
+   * `null` without this flag could not tell a precision-free service from a
+   * tracked product whose precision went missing.
+   */
+  tracksInventory: boolean;
 }
 
 /**
  * Merge a basket into one position per stock key.
  *
- * `unitDecimalsByStockKey` is REQUIRED and must cover every stock key the
- * basket names: a caller that does not know a product's unit precision cannot
- * validate a quantity against it, and accepting the line anyway would push an
- * unrepresentable quantity to a layer that can only refuse it later.
+ * `precisionByStockKey` is REQUIRED and must cover every stock key the basket
+ * names: a caller that does not know what the catalogue declares for a product
+ * cannot validate a quantity against it, and accepting the line anyway would
+ * push an unrepresentable quantity to a layer that can only refuse it later.
+ *
+ * A DECLARATION is asked for, not a number, because the frozen catalogue's law
+ * is a relationship between `track_inventory` and `unit_decimals` rather than a
+ * number on its own: a precision-free product is lawful and sellable, and
+ * `unit-precision.ts` holds the whole of that law.
  *
  * Positions come back in order of FIRST APPEARANCE, which is deterministic
  * from the input and does not depend on how a UUID happens to sort.
  */
-export function summariseBasket(lines: readonly CartLine[], unitDecimalsByStockKey: ReadonlyMap<string, number>): readonly BasketPosition[] {
+export function summariseBasket(lines: readonly CartLine[], precisionByStockKey: ReadonlyMap<string, UnitPrecisionDeclaration>): readonly BasketPosition[] {
   if (lines.length === 0) {
     throw new OrderError('order.cart_empty', 'a basket must carry at least one line');
   }
 
   const seenLineIds = new Set<string>();
-  const byKey = new Map<string, { productId: string; variantId: string | null; total: bigint; lineIds: string[]; unitDecimals: number }>();
+  const byKey = new Map<
+    string,
+    { productId: string; variantId: string | null; total: bigint; lineIds: string[]; unitDecimals: number | null; tracksInventory: boolean }
+  >();
 
   for (const line of lines) {
     assertCanonicalId(line.lineId, 'lineId');
@@ -100,10 +123,14 @@ export function summariseBasket(lines: readonly CartLine[], unitDecimalsByStockK
     }
 
     const key = stockKeyOf(line);
-    const unitDecimals = unitDecimalsByStockKey.get(key);
-    if (unitDecimals === undefined) {
-      throw new OrderError('order.cart_line_invalid', 'no unit precision was supplied for the line stock key', { lineId: line.lineId, stockKey: key });
+    const declaration = precisionByStockKey.get(key);
+    if (declaration === undefined) {
+      throw new OrderError('order.cart_line_invalid', 'no unit precision declaration was supplied for the line stock key', {
+        lineId: line.lineId,
+        stockKey: key,
+      });
     }
+    const unitDecimals = requireUnitPrecision(declaration, { lineId: line.lineId, stockKey: key });
 
     let q4: bigint;
     try {
@@ -114,15 +141,29 @@ export function summariseBasket(lines: readonly CartLine[], unitDecimalsByStockK
     if (q4 <= 0n) {
       throw new OrderError('order.cart_quantity_invalid', 'a basket line quantity is strictly positive', { lineId: line.lineId });
     }
-    try {
-      assertQuantityRepresentable(q4, unitDecimals);
-    } catch {
-      throw new OrderError('order.cart_quantity_invalid', 'quantity is not representable at the product unit precision', { lineId: line.lineId });
+    if (unitDecimals !== null) {
+      try {
+        assertQuantityRepresentable(q4, unitDecimals);
+      } catch {
+        throw new OrderError('order.cart_quantity_invalid', 'quantity is not representable at the product unit precision', { lineId: line.lineId });
+      }
     }
+    // When the catalogue declares NO precision, the only bound is the one
+    // `parseQuantity` has already applied: the storage scale of
+    // `NUMERIC(18,4)`. That is a fact of the frozen schema, not a default
+    // chosen here, and OD-P6-08 is where a narrower merchant rule would come
+    // from.
 
     const existing = byKey.get(key);
     if (existing === undefined) {
-      byKey.set(key, { productId: line.productId, variantId: line.variantId, total: q4, lineIds: [line.lineId], unitDecimals });
+      byKey.set(key, {
+        productId: line.productId,
+        variantId: line.variantId,
+        total: q4,
+        lineIds: [line.lineId],
+        unitDecimals,
+        tracksInventory: declaration.tracksInventory,
+      });
     } else {
       existing.total += q4;
       existing.lineIds.push(line.lineId);
@@ -147,6 +188,7 @@ export function summariseBasket(lines: readonly CartLine[], unitDecimalsByStockK
       lineIds: Object.freeze([...acc.lineIds]),
       representativeLineId,
       unitDecimals: acc.unitDecimals,
+      tracksInventory: acc.tracksInventory,
     });
   }
   return Object.freeze(positions);

@@ -43,7 +43,8 @@ import type { BasketPosition } from './cart';
 import { requireSettlementTruth, type OrderSettlementEvidence, type OrderSettlementMode } from './settlement';
 import { OrderError, assertCanonicalId } from './errors';
 import { isCanonicalCivilDate } from './instant';
-import { MAX_UNIT_DECIMALS, assertCommitWithinConfirmedQuote, assertQuoteApproved, type ConfirmedQuoteApproval } from './quote';
+import { assertCommitWithinConfirmedQuote, assertQuoteApproved, type ConfirmedQuoteApproval } from './quote';
+import { type UnitPrecisionDeclaration, requireUnitPrecision } from './unit-precision';
 import { SALE_BOUND_ORDER_STATES, type OrderSnapshot } from './state';
 
 /** One line of the sale commit intent. Mirrors `SaleCommitLineDto` at `93084f8`. */
@@ -337,30 +338,39 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
   // be absent: the runtime presence guard lives inside `assertQuoteApproved`,
   // and reading a property of the thing being checked before it is checked is
   // how a refusal becomes a TypeError.
-  const unitDecimalsByStockKey = new Map<string, number>();
+  const unitPrecisionByStockKey = new Map<string, UnitPrecisionDeclaration>();
   for (const position of positions) {
     // A type-only requirement has no runtime existence, and this one decides
     // whether a law is claimed at all: a hand-built position whose precision is
     // missing would produce a map that answers `undefined` for its key, and the
     // representability check would then skip that line in silence.
-    if (typeof position.unitDecimals !== 'number') {
+    //
+    // `null` is a STATEMENT and `undefined` is an absence, so only the absence
+    // is refused here. A precision-free product is lawful, and the declaration
+    // law below is what decides whether this particular `null` is.
+    if (position.unitDecimals !== null && typeof position.unitDecimals !== 'number') {
       throw new OrderError('order.checkout_field_forbidden', 'a checkout position carries no unit precision', { stockKey: position.stockKey });
+    }
+    if (typeof position.tracksInventory !== 'boolean') {
+      throw new OrderError('order.checkout_field_forbidden', 'a checkout position does not state whether its product tracks inventory', {
+        stockKey: position.stockKey,
+      });
     }
     // And it is a precision, not merely a number. `NaN`, `-1`, `2.5` and `10`
     // are all refused HERE, under a code that names the caller's figure. The
     // inventory authority does refuse every one of them one layer in — the
     // round-5 Challenger measured that and published five cases proving it
     // fails closed — but it refuses them while the client is being told the
-    // SHOPPER's quantity is wrong. The subject of the refusal matters.
-    if (!Number.isInteger(position.unitDecimals) || position.unitDecimals < 0 || position.unitDecimals > MAX_UNIT_DECIMALS) {
-      throw new OrderError('order.unit_precision_invalid', 'a checkout position states a unit precision that is not an integer from 0 to 4', {
-        stockKey: position.stockKey,
-        stated: String(position.unitDecimals),
-      });
-    }
-    unitDecimalsByStockKey.set(position.stockKey, position.unitDecimals);
+    // SHOPPER's quantity is wrong. The subject of the refusal matters. A
+    // tracked product with a `null` precision is refused here too, under
+    // `order.unit_precision_required`, because the catalogue's own CHECK
+    // refuses it and a position that reached this gate carrying one was not
+    // built from the catalogue.
+    const declaration: UnitPrecisionDeclaration = { tracksInventory: position.tracksInventory, unitDecimals: position.unitDecimals };
+    requireUnitPrecision(declaration, { stockKey: position.stockKey });
+    unitPrecisionByStockKey.set(position.stockKey, declaration);
   }
-  assertQuoteApproved(approval, facts.orderId, { unitDecimalsByStockKey });
+  assertQuoteApproved(approval, facts.orderId, { unitPrecisionByStockKey });
   if (approval.priorRecomputedTotalMinor !== undefined) {
     assertCommitWithinConfirmedQuote(approval, facts.orderId, approval.priorRecomputedTotalMinor);
   }

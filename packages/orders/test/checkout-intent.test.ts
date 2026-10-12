@@ -28,6 +28,7 @@ import {
   type OrderQuoteConfirmationDto,
   type OrderSnapshot,
   type OrderState,
+  type UnitPrecisionDeclaration,
 } from '../src';
 
 const PRODUCT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -46,7 +47,11 @@ const CASH_COLLECTED = { kind: 'cash_collected_on_handover', collectedByUserId: 
 const CREDIT_AUTHORIZED = { kind: 'authorized_customer_credit', authorizedByUserId: MANAGER } as const;
 
 const KEY = stockKeyOf({ productId: PRODUCT, variantId: VARIANT });
-const PRECISION = new Map([[KEY, 0]]);
+/** A product that tracks inventory at the given precision — the ordinary case. */
+const tracked = (unitDecimals: number): UnitPrecisionDeclaration => ({ tracksInventory: true, unitDecimals });
+const PRECISION = new Map([[KEY, tracked(0)]]);
+/** A product the merchant does not track and the catalogue gives no precision — lawful, and sellable. */
+const SERVICE: UnitPrecisionDeclaration = { tracksInventory: false, unitDecimals: null };
 const POSITIONS = summariseBasket(
   [
     { lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '2' },
@@ -447,7 +452,7 @@ describe('the confirmed quote now guards the hand-off (challenger P1-01)', () =>
   it('refuses a checkout whose positions the confirmed quote does not price', () => {
     const other = summariseBasket(
       [{ lineId: LINE1, productId: PRODUCT, variantId: null, quantity: '1' }],
-      new Map([[stockKeyOf({ productId: PRODUCT, variantId: null }), 0]]),
+      new Map([[stockKeyOf({ productId: PRODUCT, variantId: null }), tracked(0)]]),
     );
     expect(() => buildSaleCommitIntent(snapshot('fulfilling'), POSITIONS.concat(other), CASH)).toThrowError(
       expect.objectContaining({ code: 'order.quote_not_approved' }),
@@ -559,8 +564,8 @@ describe('the mirror carries the authority CONSTRAINTS, not only its shape (chal
         variantId: null,
         quantity: '1',
       }));
-    const precisionOf = (count: number): Map<string, number> =>
-      new Map(Array.from({ length: count }, (_unused, index) => [stockKeyOf({ productId: productOf(index), variantId: null }), 0] as const));
+    const precisionOf = (count: number): Map<string, UnitPrecisionDeclaration> =>
+      new Map(Array.from({ length: count }, (_unused, index) => [stockKeyOf({ productId: productOf(index), variantId: null }), tracked(0)] as const));
     const quoteFor = (count: number): CommercialQuote =>
       buildCommercialQuote({
         quoteId: QUOTE_ID,
@@ -649,7 +654,7 @@ describe('the hand-off supplies the precisions it validated the basket with (rou
     );
     // A position that declares four decimals admits the same quantity. The law
     // follows the basket, not a field beside it.
-    const atQ4 = summariseBasket([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000' }], new Map([[KEY, 4]]));
+    const atQ4 = summariseBasket([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000' }], new Map([[KEY, tracked(4)]]));
     expect(atQ4[0]?.unitDecimals).toBe(4);
     expect(() => buildSaleCommitIntent(snapshot('fulfilling'), atQ4, { ...CASH, quoteApproval: approve(halfUnitQuote) })).not.toThrow();
   });
@@ -693,6 +698,59 @@ describe('the hand-off supplies the precisions it validated the basket with (rou
     delete (noPrecision[0] as { unitDecimals?: number }).unitDecimals;
     expect(() => buildSaleCommitIntent(snapshot('fulfilling'), noPrecision, CASH)).toThrowError(
       expect.objectContaining({ code: 'order.checkout_field_forbidden' }),
+    );
+  });
+
+  // Round-6 challenge §7: the catalogue's `products.unit_decimals` is NULLABLE
+  // and required only of a product that tracks inventory, so a service, a
+  // delivery fee or a digital good has no precision to supply and this package
+  // refused it at two sites — it could not be sold at all. The frozen shape is
+  // right; the sale path was wrong about it.
+  it('commits a position the catalogue declares with NO precision, at a quantity whole units would refuse', () => {
+    const precisionFree = summariseBasket([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000' }], new Map([[KEY, SERVICE]]));
+    expect(precisionFree[0]?.unitDecimals).toBeNull();
+    expect(precisionFree[0]?.tracksInventory).toBe(false);
+    const halfUnitQuote = buildCommercialQuote({
+      quoteId: QUOTE_ID,
+      orderId: ORDER,
+      version: 1,
+      currency: 'ILS',
+      lines: [
+        { stockKey: KEY, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '5500' },
+      ],
+      displayedTotalMinor: '5500',
+      issuedAt: '2026-10-01T09:00:00Z',
+      expiresAt: '2026-10-01T10:00:00Z',
+    });
+    // The SAME quote and the SAME quantity that POSITIONS (whole units) refuses
+    // two tests above. The difference is the declaration, and only that.
+    expect(buildSaleCommitIntent(snapshot('fulfilling'), precisionFree, { ...CASH, quoteApproval: approve(halfUnitQuote) }).lines).toHaveLength(1);
+    expect(() => buildSaleCommitIntent(snapshot('fulfilling'), POSITIONS, { ...CASH, quoteApproval: approve(halfUnitQuote) })).toThrowError(
+      expect.objectContaining({ code: 'order.quote_quantity_invalid' }),
+    );
+  });
+
+  it('refuses a position that TRACKS inventory and declares no precision, as the catalogue CHECK does', () => {
+    const contradiction = [{ ...(POSITIONS[0] as (typeof POSITIONS)[number]), unitDecimals: null, tracksInventory: true }];
+    expect(() => buildSaleCommitIntent(snapshot('fulfilling'), contradiction, CASH)).toThrowError(
+      expect.objectContaining({ code: 'order.unit_precision_required' }),
+    );
+  });
+
+  it('refuses a position that does not state whether its product tracks inventory', () => {
+    // The other half of the declaration is as load-bearing as the precision: a
+    // `null` precision is lawful or not according to THIS flag, so a position
+    // that omits it carries half a premise and the law cannot be claimed.
+    const half = [{ ...(POSITIONS[0] as (typeof POSITIONS)[number]) }] as unknown as typeof POSITIONS;
+    delete (half[0] as { tracksInventory?: boolean }).tracksInventory;
+    expect(() => buildSaleCommitIntent(snapshot('fulfilling'), half, CASH)).toThrowError(expect.objectContaining({ code: 'order.checkout_field_forbidden' }));
+  });
+
+  it('refuses a precision-free position whose quantity exceeds the storage scale, and admits one at it', () => {
+    const map = new Map([[KEY, SERVICE]]);
+    expect(summariseBasket([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '0.0001' }], map)[0]?.totalQuantity).toBe('0.0001');
+    expect(() => summariseBasket([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '0.00001' }], map)).toThrowError(
+      expect.objectContaining({ code: 'order.cart_quantity_invalid' }),
     );
   });
 });

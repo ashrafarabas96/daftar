@@ -1,6 +1,7 @@
 export * from './errors';
 export * from './instant';
 export * from './state';
+export * from './unit-precision';
 export * from './cart';
 export * from './availability';
 export * from './settlement';

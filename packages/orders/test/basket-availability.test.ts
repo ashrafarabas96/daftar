@@ -8,7 +8,12 @@
  * directions — the two lines pass individually, and the merged position fails.
  */
 import { describe, expect, it } from 'vitest';
-import { OrderError, adviseBasketAvailability, stockKeyOf, summariseBasket, type CartLine, type StockOnHand } from '../src';
+import { OrderError, adviseBasketAvailability, stockKeyOf, summariseBasket, type CartLine, type StockOnHand, type UnitPrecisionDeclaration } from '../src';
+
+/** A product that tracks inventory at the given precision — the ordinary case. */
+const tracked = (unitDecimals: number): UnitPrecisionDeclaration => ({ tracksInventory: true, unitDecimals });
+/** A product the merchant does not track, as the catalogue may lawfully declare it: no precision at all. */
+const untrackedNoPrecision: UnitPrecisionDeclaration = { tracksInventory: false, unitDecimals: null };
 
 const PRODUCT_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PRODUCT_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -21,11 +26,11 @@ const KEY_A1 = stockKeyOf({ productId: PRODUCT_A, variantId: VARIANT_1 });
 const KEY_B = stockKeyOf({ productId: PRODUCT_B, variantId: null });
 const KEY_GIFT = stockKeyOf({ productId: GIFT_CARD, variantId: null });
 
-const PRECISION = new Map<string, number>([
-  [KEY_A, 0],
-  [KEY_A1, 0],
-  [KEY_B, 3],
-  [KEY_GIFT, 0],
+const PRECISION = new Map<string, UnitPrecisionDeclaration>([
+  [KEY_A, tracked(0)],
+  [KEY_A1, tracked(0)],
+  [KEY_B, tracked(3)],
+  [KEY_GIFT, { tracksInventory: false, unitDecimals: 0 }],
 ]);
 
 describe('the stock key', () => {
@@ -100,9 +105,9 @@ describe('summariseBasket', () => {
   });
 
   it('refuses a line whose stock key has no stated unit precision', () => {
-    expect(() => summariseBasket([{ lineId: LINE(1), productId: PRODUCT_A, variantId: VARIANT_1, quantity: '1' }], new Map([[KEY_A, 0]]))).toThrowError(
-      expect.objectContaining({ code: 'order.cart_line_invalid' }),
-    );
+    expect(() =>
+      summariseBasket([{ lineId: LINE(1), productId: PRODUCT_A, variantId: VARIANT_1, quantity: '1' }], new Map([[KEY_A, tracked(0)]])),
+    ).toThrowError(expect.objectContaining({ code: 'order.cart_line_invalid' }));
   });
 
   it('refuses a variant id that is not a canonical UUID', () => {
@@ -156,6 +161,11 @@ describe('adviseBasketAvailability — the basket, not the line', () => {
 
 describe('adviseBasketAvailability — an untracked product is not out of stock', () => {
   const positions = summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '3' }], PRECISION);
+  // The same request, declared by the catalogue as a TRACKED product, for the
+  // cases whose subject is the on-hand row of a tracked key. The position's own
+  // `tracksInventory` must agree with the row's, so a tracked row needs a
+  // tracked position: the disagreement is its own refusal, proved below.
+  const trackedPositions = summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '3' }], new Map([[KEY_GIFT, tracked(0)]]));
 
   it('verdicts an untracked key not_tracked, with a null figure rather than zero', () => {
     const advice = adviseBasketAvailability(positions, [{ stockKey: KEY_GIFT, trackInventory: false, onHand: null }]);
@@ -171,13 +181,72 @@ describe('adviseBasketAvailability — an untracked product is not out of stock'
   });
 
   it('refuses a tracked key that reported none — never folds past it', () => {
-    expect(() => adviseBasketAvailability(positions, [{ stockKey: KEY_GIFT, trackInventory: true, onHand: null }])).toThrowError(
+    expect(() => adviseBasketAvailability(trackedPositions, [{ stockKey: KEY_GIFT, trackInventory: true, onHand: null }])).toThrowError(
       expect.objectContaining({ code: 'order.availability_tracking_inconsistent' }),
     );
   });
 
+  it('refuses a row that says tracked where the catalogue declaration said untracked', () => {
+    // The position was validated against a declaration of UNTRACKED. A row that
+    // answers "tracked" is about a different product, and neither source wins.
+    expect(() => adviseBasketAvailability(positions, [{ stockKey: KEY_GIFT, trackInventory: true, onHand: '9' }])).toThrowError(
+      expect.objectContaining({ code: 'order.availability_tracking_inconsistent' }),
+    );
+  });
+
+  it('refuses a row that says untracked where the catalogue declaration said tracked — the other direction', () => {
+    expect(() => adviseBasketAvailability(trackedPositions, [{ stockKey: KEY_GIFT, trackInventory: false, onHand: null }])).toThrowError(
+      expect.objectContaining({ code: 'order.availability_tracking_inconsistent' }),
+    );
+  });
+
+  it('admits a line of a product the catalogue declares with NO precision at all', () => {
+    // The round-6 finding: a service, a delivery fee or a digital good carries
+    // `unit_decimals IS NULL` in the frozen catalogue, which is lawful exactly
+    // when `track_inventory` is false. Such a line must be sellable.
+    const precisionFree = summariseBasket(
+      [{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '3.5' }],
+      new Map([[KEY_GIFT, untrackedNoPrecision]]),
+    );
+    expect(precisionFree[0]?.unitDecimals).toBeNull();
+    expect(precisionFree[0]?.tracksInventory).toBe(false);
+    expect(precisionFree[0]?.totalQuantity).toBe('3.5000');
+    const advice = adviseBasketAvailability(precisionFree, [{ stockKey: KEY_GIFT, trackInventory: false, onHand: null }]);
+    expect(advice.items[0]?.verdict).toBe('not_tracked');
+  });
+
+  it('refuses a TRACKED product declared with no precision, as the catalogue CHECK does', () => {
+    expect(() =>
+      summariseBasket(
+        [{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '3' }],
+        new Map([[KEY_GIFT, { tracksInventory: true, unitDecimals: null }]]),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'order.unit_precision_required' }));
+  });
+
+  it('bounds a precision-free quantity by the storage scale and nothing narrower', () => {
+    const map = new Map([[KEY_GIFT, untrackedNoPrecision]]);
+    // Q4 is exactly representable...
+    expect(summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '0.0001' }], map)[0]?.totalQuantity).toBe('0.0001');
+    // ...and a fifth decimal is refused, by the storage scale the frozen column carries.
+    expect(() => summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '0.00001' }], map)).toThrowError(
+      expect.objectContaining({ code: 'order.cart_quantity_invalid' }),
+    );
+    // A precision-free line is still strictly positive.
+    expect(() => summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '0' }], map)).toThrowError(
+      expect.objectContaining({ code: 'order.cart_quantity_invalid' }),
+    );
+  });
+
+  it('refuses a declaration that does not say whether the product tracks inventory', () => {
+    const malformed = new Map([[KEY_GIFT, { unitDecimals: 0 } as unknown as UnitPrecisionDeclaration]]);
+    expect(() => summariseBasket([{ lineId: LINE(1), productId: GIFT_CARD, variantId: null, quantity: '1' }], malformed)).toThrowError(
+      expect.objectContaining({ code: 'order.unit_precision_invalid' }),
+    );
+  });
+
   it('shows that zero on hand and untracked are different answers for the same request', () => {
-    const outOfStock = adviseBasketAvailability(positions, [{ stockKey: KEY_GIFT, trackInventory: true, onHand: '0' }]);
+    const outOfStock = adviseBasketAvailability(trackedPositions, [{ stockKey: KEY_GIFT, trackInventory: true, onHand: '0' }]);
     expect(outOfStock.items[0]?.verdict).toBe('insufficient');
     const untracked = adviseBasketAvailability(positions, [{ stockKey: KEY_GIFT, trackInventory: false, onHand: null }]);
     expect(untracked.items[0]?.verdict).toBe('not_tracked');

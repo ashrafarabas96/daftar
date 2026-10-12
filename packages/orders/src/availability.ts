@@ -104,6 +104,25 @@ export function adviseBasketAvailability(positions: readonly BasketPosition[], o
       });
     }
 
+    // TWO SOURCES OF ONE FACT, and a precedence between them would be a law of
+    // its own. The basket position carries `tracksInventory` as the catalogue
+    // declared it — it is half of what admitted the line's precision — and this
+    // row carries it as the inventory read reports it. They must AGREE: a
+    // disagreement means the basket was validated against one catalogue and the
+    // stock read answered about another, and picking a winner here would make
+    // one of the two silently wrong. So neither wins; the read is refused.
+    if (typeof position.tracksInventory === 'boolean' && row.trackInventory !== position.tracksInventory) {
+      throw new OrderError(
+        'order.availability_tracking_inconsistent',
+        'the on-hand row and the basket position disagree about whether the product tracks inventory',
+        {
+          stockKey: position.stockKey,
+          position: String(position.tracksInventory),
+          onHandRow: String(row.trackInventory),
+        },
+      );
+    }
+
     if (!row.trackInventory) {
       if (row.onHand !== null) {
         throw new OrderError('order.availability_tracking_inconsistent', 'an untracked stock key reported an on-hand figure', { stockKey: position.stockKey });
