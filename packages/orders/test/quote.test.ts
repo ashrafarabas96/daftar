@@ -18,6 +18,7 @@ import {
   assertQuoteConfirmable,
   assertQuoteIntact,
   assessQuoteDivergence,
+  ORDER_QUOTE_DIGEST_PATTERN,
   P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR,
   buildCommercialQuote,
   canonicalQuoteBytes,
@@ -341,6 +342,27 @@ describe('the quote snapshot carries NO confirmation field (Master Continuous Mi
     // never matched anything at all.
     const planted = { ...(QUOTED as unknown as Record<string, unknown>), confirmedAt: '2026-10-01T09:30:00Z' };
     expect(Object.keys(planted).filter((k) => CONFIRMATION_WORDS.test(k))).toEqual(['confirmedAt']);
+  });
+
+  it('produces the ONE digest representation the DDL can reference (Mission V3)', () => {
+    // V3: «وحّد تمثيل digest وبايتاته» — unify the digest representation AND its bytes. There
+    // were THREE across two documents and this code: `bytea` on the quote relation, `text` on the
+    // confirmation, and a hex string here. MEASURED on PostgreSQL 16.15, as the finding rather
+    // than as an opinion:
+    //
+    //   ERROR: foreign key constraint ... cannot be implemented
+    //   DETAIL: Key columns "confirmed_quote_digest" and "digest" are of
+    //           incompatible types: text and bytea.
+    //
+    // So the specification as written could not have been applied, and no number of green cases
+    // here would have said so. The unified representation is hex text — what this package already
+    // computes — so nothing is encoded at the boundary, and an encoding step is one more place
+    // two values can disagree.
+    expect(QUOTED.digest).toMatch(ORDER_QUOTE_DIGEST_PATTERN);
+    expect(QUOTED.digest).toHaveLength(64);
+    // Planted controls: a pattern matching anything would pass the two cases above.
+    expect(ORDER_QUOTE_DIGEST_PATTERN.test(QUOTED.digest.toUpperCase())).toBe(false);
+    expect(ORDER_QUOTE_DIGEST_PATTERN.test(QUOTED.digest.slice(0, 63))).toBe(false);
   });
 
   it('keeps the digest independent of any confirmation, since confirming changes nothing on the quote', () => {

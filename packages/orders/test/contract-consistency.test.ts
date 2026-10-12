@@ -19,6 +19,7 @@ import {
   ORDER_CLIENT_ERROR_CODES,
   ORDER_EDGES,
   ORDER_QUOTE_CONFIRMATION_FIELDS,
+  ORDER_QUOTE_DIGEST_PATTERN,
   ORDER_SETTLEMENT_EVIDENCE_KINDS,
   SETTLEMENT_MODE_BY_EVIDENCE,
   TERMINAL_ORDER_STATES,
@@ -131,12 +132,22 @@ describe('the quote-confirmation fact carries the intent digest (Master Continuo
     orderId: '6b1f0a2c-0000-4000-8000-000000000003',
     confirmedVersion: 3,
     confirmedAt: '2026-10-01T09:30:00.000Z',
-    confirmedQuoteDigest: 'c2a0ffb4e1d9',
+    confirmedQuoteDigest: 'a'.repeat(64),
+    confirmedQuoteExpiresAt: '2026-10-01T10:00:00.000Z',
     confirmedByUserId: null,
   };
 
   /** Hand-written from `OrderQuoteConfirmationDto`. Edited only when that interface is edited. */
-  const DTO_KEYS: readonly string[] = ['confirmationId', 'quoteId', 'orderId', 'confirmedVersion', 'confirmedAt', 'confirmedQuoteDigest', 'confirmedByUserId'];
+  const DTO_KEYS: readonly string[] = [
+    'confirmationId',
+    'quoteId',
+    'orderId',
+    'confirmedVersion',
+    'confirmedAt',
+    'confirmedQuoteDigest',
+    'confirmedQuoteExpiresAt',
+    'confirmedByUserId',
+  ];
 
   it('names the digest of the snapshot that was agreed to, not only its version', () => {
     expect(Object.keys(CONFIRMATION).sort()).toEqual([...DTO_KEYS].sort());
@@ -163,6 +174,22 @@ describe('the quote-confirmation fact carries the intent digest (Master Continuo
       .filter(([, v]) => v === null)
       .map(([k]) => k);
     expect(nullable).toEqual(['confirmedByUserId']);
+    // `confirmedQuoteExpiresAt` is nullable in the TYPE — a quote may have no
+    // expiry — and populated in this subject, so the list above is about the
+    // subject. What matters here is that the DIGEST can never be null, and
+    // that it is the unified representation rather than any string.
+    expect(CONFIRMATION.confirmedQuoteDigest).toMatch(ORDER_QUOTE_DIGEST_PATTERN);
+  });
+
+  it('carries the expiry it was shown, which is what makes the half-open window a same-row check', () => {
+    // `confirmedAt < expiresAt` is a rule about TWO rows, and a SQL CHECK cannot read another
+    // row — so without this field the rule needs a trigger, and a trigger is something an
+    // operator can disable. MEASURED on PostgreSQL 16.15: with the quote's expiry pulled through
+    // the same composite foreign key, a confirmation claiming a later expiry than its quote has
+    // is refused by that key; with the key dropped, the identical row is accepted and stores a
+    // confirmation twelve hours after the quote really expired.
+    expect(DTO_KEYS).toContain('confirmedQuoteExpiresAt');
+    expect(new Date(CONFIRMATION.confirmedAt).getTime()).toBeLessThan(new Date(CONFIRMATION.confirmedQuoteExpiresAt as string).getTime());
   });
 
   it('is not a settlement and carries no amount (I6a.6)', () => {

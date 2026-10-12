@@ -277,10 +277,31 @@ export interface OrderQuoteConfirmationDto {
    * «intent digest». It is NOT a second copy of the quote's own digest: it is the value the
    * confirming side saw, carried so that a confirmation of a snapshot the server no longer
    * holds is REFUSED rather than silently accepted against whatever the quote says now.
-   * R6a.7 makes a disagreeing row unrepresentable by putting the digest inside the composite
+   * `I6a.7` makes a disagreeing row unrepresentable by putting the digest inside the composite
    * foreign key, so the stored value cannot drift from its source.
+   *
+   * **Exactly 64 lowercase hexadecimal characters** — the same representation `quote.digest`
+   * carries, because the Mission V3 required the digest representation AND ITS BYTES to be
+   * unified. MEASURED on PostgreSQL 16.15: a `text` column cannot reference a `bytea` one at
+   * all (`foreign key constraint cannot be implemented … are of incompatible types: text and
+   * bytea`), so the earlier spec's `bytea` quote column with a `text` confirmation column was
+   * not implementable. Hex `text` on both sides is also the representation this package already
+   * computes, so nothing has to be encoded at the boundary — and an encoding step is one more
+   * place two values can disagree.
    */
   confirmedQuoteDigest: string;
+  /**
+   * The expiry the confirming side saw, or null for a quote with no expiry.
+   *
+   * Carried for the same reason as the digest, and it solves a problem the digest does not: the
+   * half-open window `confirmedAt < expiresAt` is a rule about TWO rows, and a SQL `CHECK` cannot
+   * read another row. Pulling the quote's `expires_at` through the same composite foreign key
+   * makes it a SAME-ROW check — no trigger, and a trigger is something an operator can disable.
+   * MEASURED: with the expiry inside the key, a confirmation claiming a later expiry than its
+   * quote has is refused by the foreign key, and with the key dropped the same row is accepted
+   * and stores a confirmation twelve hours after the quote really expired.
+   */
+  confirmedQuoteExpiresAt: string | null;
   /** Null when the shopper confirmed on the storefront; a member when they confirmed on their behalf. */
   confirmedByUserId: string | null;
 }
@@ -301,8 +322,19 @@ export const ORDER_QUOTE_CONFIRMATION_FIELDS: readonly (keyof OrderQuoteConfirma
   'confirmedVersion',
   'confirmedAt',
   'confirmedQuoteDigest',
+  'confirmedQuoteExpiresAt',
   'confirmedByUserId',
 ] as const);
+
+/**
+ * The digest representation, as one place rather than as prose in several.
+ *
+ * The Mission V3 asked for the digest representation and its bytes to be unified across the
+ * domain, the DTO and the DDL. This is that single statement: 64 lowercase hex characters, which
+ * is what `createHash('sha256').digest('hex')` produces and what the `order_quotes` and
+ * `order_quote_confirmations` CHECK constraints are specified to enforce by VALUE.
+ */
+export const ORDER_QUOTE_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 
 export interface OrderQuoteReconfirmationRequiredDto {
   orderId: string;
