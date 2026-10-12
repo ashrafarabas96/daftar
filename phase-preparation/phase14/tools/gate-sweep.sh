@@ -42,8 +42,11 @@ fi
 gate() { # name | command (absolute paths only)
   local name="$1"; shift
   local first="" rc d
+  local out1=""
   for d in $DIRS; do
-    rc=$( cd "$d" && eval "$@" >/dev/null 2>&1; echo $? )
+    local o
+    o=$( cd "$d" && eval "$@" 2>&1 ); rc=$?
+    [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 . | cut -c1-120)
     # COORDINATOR RELAY round 8: an exit code recorded without the path it was
     # measured from is not a property of the commit. My 0 and the challenger's 1
     # at the same head were both true -- my clone is outside /tmp, theirs inside
@@ -62,9 +65,22 @@ gate() { # name | command (absolute paths only)
   # one. Identical AND 0.
   case "$first" in
     *'!'*) ;;
-    0) printf 'ok    %-26s rc=0 identical from %s directories\n' "$name" "$(echo $DIRS | wc -w)" ;;
-    *) printf 'FAIL  %-26s rc=%s identical from %s directories — consistent, but FAILING\n' \
-              "$name" "$first" "$(echo $DIRS | wc -w)"; fail=$((fail+1)) ;;
+    0) printf 'ok    %-26s rc=0 identical from %s directories\n' "$name" "$NDIRS" ;;
+    *) # ROUND-9 CHALLENGE P3-01: output was discarded, so a gate that FAILED
+       # and a gate that COULD NOT RUN printed the same line — and the
+       # challenger nearly filed a container permission problem as a pack
+       # defect. The first line of output is kept, and the two states are
+       # named apart. Both still fail: fail-closed, but diagnosable.
+       case "$out1" in
+         *"Permission denied"*|*"No such file or directory"*|*"command not found"*|*"not found"*)
+           printf 'UNRUNNABLE %-21s rc=%s from %s directories — this gate never asked its question\n' \
+                  "$name" "$first" "$NDIRS" ;;
+         *)
+           printf 'FAIL  %-26s rc=%s identical from %s directories — consistent, but FAILING\n' \
+                  "$name" "$first" "$NDIRS" ;;
+       esac
+       printf '      first line: %s\n' "${out1:-<no output>}"
+       fail=$((fail+1)) ;;
   esac
 }
 
@@ -140,39 +156,14 @@ red provenance-stale \
   "sed -i 's/\*\*DIFFERS\*\*/identical/' '$DOC'" \
   "python3 -I $HERE/citation-provenance.py --check $DOC" 1 \
   "cp '$T/doc.bak' '$DOC'" "$DOC"
-# ROUND-8 CHALLENGE P2-01: this proof used to pass `--repo /tmp`, which is
-# foreign only when the pack is NOT under /tmp. In a reviewer's `mktemp -d`
-# clone -- or any CI runner checking out under /tmp -- the mutation became a
-# no-op, the refusal could not fire, and the sweep reported this pack's own
-# handoff gate RED at a head the pack records as 0. A foreign repository is now
-# CONSTRUCTED, so the proof is about the property and not about this host's
-# directory layout.
-FR=$(mktemp -d); git -C "$FR" init -q
-red provenance-foreign-repo \
-  "true" \
-  "python3 -I $HERE/citation-provenance.py --check $DOC --repo $FR" 2 \
-  "true"
-# R8-P2-02: a --repo that is an ANCESTOR of the pack -- so the round-7 ancestry
-# refusal cannot fire -- but is not a repository at all. This is the case that
-# printed 13 rows instead of 57 and then called the committed block stale.
-NR=$(mktemp -d); mkdir -p "$NR/inner"; cp -r "$PACK" "$NR/inner/phase14"
-red provenance-nonrepo-ancestor \
-  "true" \
-  "python3 -I $HERE/citation-provenance.py --pack $NR/inner/phase14 --repo $NR --check $NR/inner/phase14/P14-MIGRATION-PATCH-REQUEST.md" 2 \
-  "true"
-# The two refusals R8-P2-02 added are required BY THEIR OWN MESSAGE, not by
-# their exit code: both answer 2, and an exit code alone cannot tell one
-# refusal from another -- which is COORD P3-07's point, applied here rather
-# than only recorded. The world they need is CONSTRUCTED: a real repository,
-# with the pack inside it (so the ancestry refusal cannot fire instead) and a
-# committed tree that knows nothing of the cited files. My first attempt at
-# this proof used the repository's own root commit, which already carries 972
-# files: it answered 1, the proof was wrong, and the sweep caught it.
-ER=$(mktemp -d); git -C "$ER" init -q
-mkdir -p "$ER/phase-preparation"; cp -r "$PACK" "$ER/phase-preparation/phase14"
-echo scaffolding > "$ER/unrelated.txt"; git -C "$ER" add unrelated.txt
-git -C "$ER" -c user.email=p14@local -c user.name=p14 commit -q -m 'a tree that knows nothing of the cited files'
-EP="$ER/phase-preparation/phase14"
+# ROUND-9 CHALLENGE P2-01: `citation-provenance.py` has FIVE reachable
+# refusals that all answer 2, and two of these proofs were judged by the code
+# alone — so the `foreign-repo` proof was in fact firing "is a git repository
+# but does not contain 93084f8", not the escaping-pathspec refusal its name
+# described, and the round-7 ancestry remedy had NO red proof at all. Each
+# refusal is now asserted by its own message, each world is CONSTRUCTED, and
+# each proof is named for the refusal it actually fires. This closes
+# `COORD P3-07` for the whole provenance lane.
 named() { # name | expected-rc | required message | command
   local nm="$1" want="$2" msg="$3"; shift 3
   local out rc
@@ -181,10 +172,39 @@ named() { # name | expected-rc | required message | command
     printf 'ok    %-26s rc=%s, refused with %s\n' "$nm" "$rc" "$msg"
   else
     printf 'FAIL  %-26s rc=%s (required %s), and the message was not %s: %s\n' \
-           "$nm" "$rc" "$want" "$msg" "$(printf '%s' "$out" | head -1 | cut -c1-90)"
+           "$nm" "$rc" "$want" "$msg" "$(printf '%s' "$out" | grep -m1 . | cut -c1-90)"
     fail=$((fail+1))
   fi
 }
+
+# (a) --repo is not a repository at all, and IS an ancestor of the pack, so the
+# ancestry refusal cannot fire instead. This is the world that printed 12 rows.
+NR=$(mktemp -d); mkdir -p "$NR/inner"; cp -r "$PACK" "$NR/inner/phase14"
+named provenance-not-a-repo 2 "is not a git repository" \
+  "python3 -I $HERE/citation-provenance.py --pack $NR/inner/phase14 --repo $NR --check $NR/inner/phase14/P14-MIGRATION-PATCH-REQUEST.md"
+
+# (b) --repo IS a repository but does not carry the declared base.
+FR=$(mktemp -d); git -C "$FR" init -q
+named provenance-repo-without-base 2 "does not contain 93084f8" \
+  "python3 -I $HERE/citation-provenance.py --check $DOC --repo $FR"
+
+# (c) the ROUND-7 remedy itself, which had never been red-proofed: a repository
+# that does carry the revisions, with the pack OUTSIDE it, so every pathspec
+# would climb out of the tree.
+OP=$(mktemp -d); cp -r "$PACK" "$OP/phase14"
+named provenance-pack-outside-repo 2 "is not inside --repo" \
+  "python3 -I $HERE/citation-provenance.py --pack $OP/phase14 --repo $REPO --check $OP/phase14/P14-MIGRATION-PATCH-REQUEST.md"
+
+# (d) and (e): a real repository, with the pack inside it so the ancestry
+# refusal cannot fire instead, whose committed tree knows nothing of the cited
+# files. My first attempt at (d) used the repository's own root commit, which
+# already carries 972 files: it answered 1, the proof was wrong, and the sweep
+# caught it.
+ER=$(mktemp -d); git -C "$ER" init -q
+mkdir -p "$ER/phase-preparation"; cp -r "$PACK" "$ER/phase-preparation/phase14"
+echo scaffolding > "$ER/unrelated.txt"; git -C "$ER" add unrelated.txt
+git -C "$ER" -c user.email=p14@local -c user.name=p14 commit -q -m 'a tree that knows nothing of the cited files'
+EP="$ER/phase-preparation/phase14"
 named provenance-empty-table 2 "MEASUREMENT EMPTY" \
   "python3 -I $HERE/citation-provenance.py --pack $EP --repo $ER --base HEAD --other HEAD --check $EP/P14-MIGRATION-PATCH-REQUEST.md"
 # ...and now one cited file is PRESENT on disk in that repository but unknown to
@@ -194,15 +214,45 @@ mkdir -p "$ER/infrastructure/database"
 cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$ER/infrastructure/database/"
 named provenance-floor 2 "MEASUREMENT INCOMPLETE" \
   "python3 -I $HERE/citation-provenance.py --pack $EP --repo $ER --base HEAD --other HEAD --check $EP/P14-MIGRATION-PATCH-REQUEST.md"
+
 red manifest-digest-corrupt \
   "sed -i '0,/| \`[0-9a-f]\{64\}\` |/s/| \`\([0-9a-f]\{64\}\)\` |/| \`0\{64\}\` |/' '$PACK/P14-HANDOFF-MANIFEST.md'" \
   "python3 -I $HERE/manifest-digests.py --dir $PACK --check" 1 \
   "cp '$T/man.bak' '$PACK/P14-HANDOFF-MANIFEST.md'" "$PACK/P14-HANDOFF-MANIFEST.md"
+# ROUND-9 CHALLENGE P2-02: the one-step bypass. Tamper with a committed
+# reviewer's report, then zero its row digest -- the state that used to mean
+# "unsigned" -- and `--write` re-signed the row against the tampered file. Both
+# halves are proved here: the refusal on the drifted row, and the refusal after
+# the digest is moved to a placeholder.
+RB=$(mktemp -d); cp "$PACK/P14-CHALLENGE-7af6438.md" "$RB/rep.bak"; cp "$PACK/P14-HANDOFF-MANIFEST.md" "$RB/man.bak"
+printf '\n\nthe three absent ones are cited only for Phase 4 surface facts\n' >> "$PACK/P14-CHALLENGE-7af6438.md"
+rc=$( cd /tmp && python3 -I "$HERE/manifest-digests.py" --dir "$PACK" --write >/dev/null 2>&1; echo $? )
+[ "$rc" = 1 ] && printf 'ok    %-26s rc=1 — refused to re-sign a tampered reviewer report\n' reviewer-row-resign \
+             || { printf 'FAIL  %-26s rc=%s — a tampered reviewer report was re-signed\n' reviewer-row-resign "$rc"; fail=$((fail+1)); }
+python3 - "$PACK/P14-HANDOFF-MANIFEST.md" <<'ZERO'
+import re,sys
+p=sys.argv[1]; L=open(p,encoding='utf-8').read().split('\n')
+for k,l in enumerate(L):
+    if l.startswith('| `P14-CHALLENGE-7af6438.md`'):
+        L[k]=re.sub(r'`[0-9a-f]{64}`','`'+'0'*64+'`',l); break
+open(p,'w',encoding='utf-8').write('\n'.join(L))
+ZERO
+out=$( cd /tmp && python3 -I "$HERE/manifest-digests.py" --dir "$PACK" --write 2>&1 ); rc=$?
+if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "does not move, in either direction"; then
+  printf 'ok    %-26s rc=1 — a signed reviewer row cannot be moved back to unsigned\n' reviewer-row-unsign
+else
+  printf 'FAIL  %-26s rc=%s — the placeholder is still an escape hatch: %s\n' reviewer-row-unsign "$rc" \
+         "$(printf '%s' "$out" | grep -m1 . | cut -c1-80)"; fail=$((fail+1))
+fi
+cp "$RB/rep.bak" "$PACK/P14-CHALLENGE-7af6438.md"; cp "$RB/man.bak" "$PACK/P14-HANDOFF-MANIFEST.md"; rm -rf "$RB"
+rc=$( cd /tmp && python3 -I "$HERE/manifest-digests.py" --dir "$PACK" --check >/dev/null 2>&1; echo $? )
+[ "$rc" = 0 ] || { printf 'FAIL  %-26s rc=%s — the proof did not restore the pack\n' reviewer-row-restore "$rc"; fail=$((fail+1)); }
+
 red retracted-claim-planted \
   "printf '\n\nthe three absent ones are cited only for Phase 4 surface facts\n' >> '$PACK/README-AR.md'" \
   "python3 -I $HERE/retracted-claims.py --pack $PACK --check" 1 \
   "cp '$T/ar.bak' '$PACK/README-AR.md'" "$PACK/README-AR.md"
-rm -rf "$T" "$FR" "$NR" "$ER"
+rm -rf "$T" "$FR" "$NR" "$ER" "$OP"
 
 # ---- the no-cluster red proof (COORD-DIFF-REVIEW R1 P2-05, confirmed by
 # execution in P14-CHALLENGE-583a4a0-ADDENDUM-01). The preflight red proofs used
@@ -234,13 +284,43 @@ if [ "$NODB" = 0 ] && [ -d /tmp/p14pg/data ]; then
   else
     printf 'ok    %-26s rc=%s after renaming a DIFFERENT role (required non-zero)\n' rolecount-discriminates "$rc"
   fi
-  rc=$( "$PACK/proofs/redproof-preflight.sh" >/dev/null 2>&1; echo $? )
+  out=$( "$PACK/proofs/redproof-preflight.sh" 2>&1 ); rc=$?
   if [ "$rc" = 0 ]; then
     printf 'ok    %-26s rc=0 again once the cluster is back (the proof reverted its own world)\n' no-cluster-revert
   else
-    printf 'FAIL  %-26s rc=%s after restarting the cluster — the sweep left the box broken\n' no-cluster-revert "$rc"
+    # ROUND-9 CHALLENGE P3-01: this line used to name ONE cause -- "the sweep
+    # left the box broken" -- and in the reviewer's container that cause was
+    # measurably false: the cluster was up and answering `select 1`, and the
+    # real cause was that the unprivileged account could not READ the pack.
+    # A refusal that names a cause must have asked it. So ask the cluster.
+    if $PGC "/usr/lib/postgresql/16/bin/psql -h /tmp/p14pg/sock -p 54314 -U p14super -d postgres -qtAc 'select 1'" 2>/dev/null | grep -q 1; then
+      printf 'FAIL  %-26s rc=%s while the cluster ANSWERS select 1 — so this is not the cluster: %s\n' \
+             no-cluster-revert "$rc" "$(printf '%s' "$out" | grep -m1 -E 'FAIL|Permission|denied|No such' | cut -c1-90)"
+    else
+      printf 'FAIL  %-26s rc=%s and the cluster does not answer — the sweep left the box broken\n' no-cluster-revert "$rc"
+    fi
     fail=$((fail+1))
   fi
+  # ROUND-9 CHALLENGE P3-02, offered as a remedy and taken: the VERSION arm
+  # cannot be proved against a real PG 17 cluster here, but its purpose is to
+  # prove the assertion FIRES. The bound is mutated in a COPY of preflight.sql
+  # and the specific abort is required. It remains UNFENCED for the narrower
+  # claim that a real PG 17 cluster is refused, and that note stays.
+  VC=$(mktemp -d); sed 's/v < 160000 OR v >= 170000/v < 170000 OR v >= 180000/' \
+      "$PACK/proofs/preflight.sql" > "$VC/preflight.sql"; chmod 755 "$VC"; chmod 644 "$VC/preflight.sql"
+  if grep -q 'v < 170000 OR v >= 180000' "$VC/preflight.sql"; then
+    out=$( $PGC "/usr/lib/postgresql/16/bin/psql -h /tmp/p14pg/sock -p 54314 -U p14_owner -d p14scratch -v ON_ERROR_STOP=1 -q -f $VC/preflight.sql" 2>&1 ); rc=$?
+    if [ "$rc" = 3 ] && printf '%s' "$out" | grep -q 'is not PostgreSQL 16'; then
+      printf 'ok    %-26s rc=3 with the bound mutated, refused with "is not PostgreSQL 16"\n' version-arm-fires
+    else
+      printf 'FAIL  %-26s rc=%s — the version assertion did not fire: %s\n' version-arm-fires "$rc" \
+             "$(printf '%s' "$out" | grep -m1 . | cut -c1-90)"; fail=$((fail+1))
+    fi
+  else
+    printf 'FAIL  %-26s the bound mutation did not apply — nothing was proved\n' version-arm-fires
+    fail=$((fail+1))
+  fi
+  rm -rf "$VC"
 fi
 
 [ -n "$WT2" ] && git -C "$REPO" worktree remove --force "$WT2" >/dev/null 2>&1
