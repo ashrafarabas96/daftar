@@ -996,7 +996,7 @@ BEGIN
   --      booking, which between them left the one shape that matters most:
   --      a field still NULL on an already-CLOSED booking, written later.
   --      The two shape CHECKs cover most of it by accident —
-  --      `bookings_settle_shape_ck` forces settled_at and
+  --      `bookings_settled_shape_ck` forces settled_at and
   --      settled_by_user_id to be non-NULL at close, and
   --      `bookings_reschedule_shape_ck` forces the forward link — but
   --      `settle_reason` is required only for 'cancelled', so on
@@ -1018,6 +1018,26 @@ BEGIN
   END IF;
 
   -- (b) The state machine. 'booked' is the only state anything leaves.
+  --
+  --     OPEN DESIGN ITEM, recorded and deliberately NOT collapsed: the second
+  --     refusal below cannot fire. Any UPDATE that would re-enter 'booked' is
+  --     also leaving a terminal state, so the first clause refuses it with
+  --     booking.state_terminal and booking.state_not_reopenable is dead code
+  --     with a live name. Which refusal a caller should see is a question
+  --     about the command slice's error contract, not about the schema, and
+  --     merging them here would decide it silently. Raised by the
+  --     coordinator's actual-diff review of 51626e1..9a64289; limitation 18
+  --     of the prep report.
+  --
+  --     SECOND OPEN DESIGN ITEM, same place: this is a BEFORE UPDATE trigger,
+  --     so R-P9-15 and the state machine bind UPDATEs only. Nothing refuses an
+  --     INSERT that arrives already closed — state 'cancelled' with a
+  --     settlement record written, or a forward reschedule link — and the
+  --     shape CHECKs make such a row consistent rather than impossible.
+  --     Whether a booking may be BORN closed is a command-slice decision (an
+  --     import, a historical migration and a live cancellation want different
+  --     answers). What is guaranteed here is that once the row exists, every
+  --     later write to its closure record is refused. Limitation 19.
   IF OLD.state <> 'booked' AND NEW.state IS DISTINCT FROM OLD.state THEN
     RAISE EXCEPTION 'booking.state_terminal: % is a terminal state and cannot become %', OLD.state, NEW.state USING ERRCODE = 'P0001';
   END IF;

@@ -20,7 +20,7 @@
  * before the fix — a refusal that did not come.
  *
  * The three shape CHECKs on `bookings` are NOT what these cases prove.
- * `bookings_settle_shape_ck` and `bookings_reschedule_shape_ck` would refuse
+ * `bookings_settled_shape_ck` and `bookings_reschedule_shape_ck` would refuse
  * some of these UPDATEs for a different reason (the shape would stop agreeing
  * with `state`), which is exactly why a test must name the refusal it expects:
  * a case asserting only "it failed" would have passed on the wrong constraint
@@ -160,7 +160,7 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
     await withBookingDb('daftar_p9_integrity_4', async (db, world) => {
       await book(db, world, 1, '09', '10');
 
-      // This is the gap the shape CHECKs leave. `bookings_settle_shape_ck`
+      // This is the gap the shape CHECKs leave. `bookings_settled_shape_ck`
       // ties settled_at and settled_by_user_id to `state <> 'booked'`, and
       // `bookings_reschedule_shape_ck` ties rescheduled_to_id to
       // 'rescheduled' — but NOTHING ties `settle_reason` to a closed booking,
@@ -178,6 +178,130 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       );
       expect(row.rows[0]?.state).toBe('booked');
       expect(row.rows[0]?.reason).toBeNull();
+
+      // The other two fields (a3) covers, each written ALONE onto a row that
+      // is still 'booked'. `bookings_settled_shape_ck` would also refuse both
+      // — it ties settled_at and settled_by_user_id to `state <> 'booked'` —
+      // and that is exactly why these assert the NAME: the trigger fires
+      // BEFORE the constraint, so a case that accepted any failure would pass
+      // on the CHECK and tell us nothing about (a3).
+      for (const set of [`settled_at = now()`, `settled_by_user_id = $3`]) {
+        const alone = await refused(
+          db,
+          `UPDATE bookings SET ${set} WHERE business_id = $1 AND id = $2`,
+          set.includes('$3') ? [world.businessId, uuid(1), world.userId] : [world.businessId, uuid(1)],
+        );
+        expect(alone).toMatch(/booking\.settlement_without_close/);
+      }
+
+      const still = await db.pool.query<{ state: string; at: string | null; by: string | null }>(
+        `SELECT state, settled_at::text AS at, settled_by_user_id::text AS by
+           FROM bookings WHERE business_id = $1 AND id = $2`,
+        [world.businessId, uuid(1)],
+      );
+      expect(still.rows[0]).toEqual({ state: 'booked', at: null, by: null });
+    });
+  });
+
+  it('(a4) is a real guard and not a shadow of the shape CHECKs: with each CHECK DROPPED, the late write is still refused', async () => {
+    await withBookingDb('daftar_p9_integrity_7', async (db, world) => {
+      // THE CHALLENGER'S OWN THREE PROBES, promoted into the suite at the
+      // coordinator's request so the clauses are covered by committed tests.
+      //
+      // Why they exist at all: every other case here reaches (a4) through a
+      // field the shape CHECKs do not constrain (`settle_reason` on
+      // 'completed' and 'no_show'). For the other three fields the CHECKs
+      // would refuse the late write anyway, so those cases could not tell
+      // whether (a4) does anything — and the author of this file wrote the
+      // guard and the CHECKs both, which is precisely the position from which
+      // that question cannot be answered. The challenger answered it from
+      // outside, by removing the mechanism it was not testing and making the
+      // other one speak its own name.
+      //
+      // The CHECK is dropped on a SCRATCH database built from the migration
+      // history, captured by `pg_get_constraintdef` first, restored in a
+      // `finally`, and the restoration is asserted. No frozen migration is
+      // touched and the document is not edited.
+      // The probes leave rows that the dropped CHECK would reject, so they are
+      // discarded before it goes back on — otherwise the restoration itself
+      // fails with 23514 and the case leaves the schema weakened, which is a
+      // worse outcome than the hole it is testing for. Measured: the first
+      // version of this case did exactly that.
+      const discard = async (ids: readonly string[]): Promise<void> => {
+        await db.pool.query(`ALTER TABLE bookings DISABLE TRIGGER bookings_no_deletion`);
+        try {
+          await db.pool.query(`DELETE FROM bookings WHERE business_id = $1 AND id = ANY($2::uuid[])`, [world.businessId, ids]);
+        } finally {
+          await db.pool.query(`ALTER TABLE bookings ENABLE TRIGGER bookings_no_deletion`);
+        }
+      };
+
+      const defOf = async (name: string): Promise<string> => {
+        const r = await db.pool.query<{ def: string }>(
+          `SELECT pg_get_constraintdef(c.oid) AS def FROM pg_constraint c
+             JOIN pg_class t ON t.oid = c.conrelid
+            WHERE t.relname = 'bookings' AND c.conname = $1`,
+          [name],
+        );
+        const def = r.rows[0]?.def;
+        if (def === undefined) throw new Error(`${name} is not on bookings — the probe cannot run or be restored without it`);
+        return def;
+      };
+
+      // PROBE 1 and 2 — settled_at and settled_by_user_id, behind
+      // `bookings_settled_shape_ck`.
+      const settled = await defOf('bookings_settled_shape_ck');
+      try {
+        await db.pool.query(`ALTER TABLE bookings DROP CONSTRAINT bookings_settled_shape_ck`);
+        await book(db, world, 20, '08', '09');
+        // With the CHECK gone a booking can close with an EMPTY settlement
+        // record, which is the state the CHECK exists to make unreachable and
+        // the state (a4) has to be tested from.
+        await db.pool.query(`UPDATE bookings SET state = 'completed' WHERE business_id = $1 AND id = $2`, [world.businessId, uuid(20)]);
+        const empty = await db.pool.query<{ state: string; at: string | null; by: string | null }>(
+          `SELECT state, settled_at::text AS at, settled_by_user_id::text AS by
+             FROM bookings WHERE business_id = $1 AND id = $2`,
+          [world.businessId, uuid(20)],
+        );
+        expect(empty.rows[0]).toEqual({ state: 'completed', at: null, by: null });
+
+        for (const [set, params] of [
+          [`settled_at = now()`, [world.businessId, uuid(20)]],
+          [`settled_by_user_id = $3`, [world.businessId, uuid(20), world.userId]],
+        ] as const) {
+          const late = await refused(db, `UPDATE bookings SET ${set} WHERE business_id = $1 AND id = $2`, params);
+          expect(late).toMatch(/booking\.settlement_after_close/);
+        }
+      } finally {
+        await discard([uuid(20)]);
+        await db.pool.query(`ALTER TABLE bookings ADD CONSTRAINT bookings_settled_shape_ck ${settled}`);
+      }
+      expect(await defOf('bookings_settled_shape_ck')).toBe(settled);
+
+      // PROBE 3 — the forward link, behind `bookings_reschedule_shape_ck`.
+      const reschedule = await defOf('bookings_reschedule_shape_ck');
+      try {
+        await db.pool.query(`ALTER TABLE bookings DROP CONSTRAINT bookings_reschedule_shape_ck`);
+        await book(db, world, 21, '10', '11');
+        await db.pool.query(
+          `UPDATE bookings SET state = 'rescheduled', settled_at = now(), settled_by_user_id = $2
+            WHERE business_id = $1 AND id = $3`,
+          [world.businessId, world.userId, uuid(21)],
+        );
+        const nulled = await db.pool.query<{ state: string; fwd: string | null }>(
+          `SELECT state, rescheduled_to_id::text AS fwd FROM bookings WHERE business_id = $1 AND id = $2`,
+          [world.businessId, uuid(21)],
+        );
+        expect(nulled.rows[0]).toEqual({ state: 'rescheduled', fwd: null });
+
+        await book(db, world, 22, '12', '13');
+        const late = await refused(db, `UPDATE bookings SET rescheduled_to_id = $3 WHERE business_id = $1 AND id = $2`, [world.businessId, uuid(21), uuid(22)]);
+        expect(late).toMatch(/booking\.settlement_after_close/);
+      } finally {
+        await discard([uuid(21), uuid(22)]);
+        await db.pool.query(`ALTER TABLE bookings ADD CONSTRAINT bookings_reschedule_shape_ck ${reschedule}`);
+      }
+      expect(await defOf('bookings_reschedule_shape_ck')).toBe(reschedule);
     });
   });
 

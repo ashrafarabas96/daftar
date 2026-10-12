@@ -24,13 +24,13 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 588 | 7 cases: each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
 | `tests/phase9-prep/p9-booking-time.test.ts` | 621 | 21 cases: the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan at one-day granularity, and the two defects V3 named |
-| `tests/phase9-prep/p9-booking-integrity.test.ts` | 275 | 6 cases: the closure record is write-once (R-P9-15) — the two defects the independent challenger found, and the non-vacuity that keeps the guard honest |
+| `tests/phase9-prep/p9-booking-integrity.test.ts` | 399 | 7 cases: the closure record is write-once (R-P9-15) — the three defects the challenger found, the challenger's own (a4) probes behind each dropped CHECK, and the non-vacuity that keeps the guard honest |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 350 | 10 cases: the schema attacked as the real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | 206 | the spec loader, the state contract parser, and the non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**82 of 82 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`**
+**84 of 84 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
 — over seven suites, and again on PostgreSQL 18.4 at `C` as the comparison the mission permits.
 A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
@@ -340,6 +340,67 @@ this phase's own container is owed, and one signature of the three — the coord
 actual-diff review — is still owed. The D11 PART 117 label for the same state is
 `PREPARED / NOT PROMOTED`; it names the promotion state, not the ladder rung, and this
 report uses both so neither vocabulary has to be guessed at.
+
+### 3c.15 The COORDINATOR's actual-diff review of `51626e1..9a64289`, and its seven scope items
+
+PART 15's chain is AUTHOR → INDEPENDENT CHALLENGER → COORDINATOR ACTUAL-DIFF REVIEW. The
+third is now given: **COORDINATOR-ACCEPT-WITH-SCOPE** over the five commits
+`bcfb4fb`, `5f15601`, `76ab277`, `e1b201e`, `9a64289` against `main` at `6fc505d`. Report:
+`/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-9a64289.md`, digest
+`bc8fcfa4f13545c92036dc864e2bacb9175fe8e4783aaa6a21afe66c6286443c`.
+
+**It was static and read-only — no database, no test run — and says so in its own method
+line**, because its container also ships Node v22.22.0. Every count in it is attributed to
+the author or to the challenger by name. What it checked and accepted: all eight challenger
+findings fixed in code, scope clean, nothing under `migrations/`, no migration number
+assigned, no new grant, policy or role. Its verdict names `9a64289`; `2d10117`, the
+documentation commit recording the challenger's PASS, was not reviewed.
+
+Its seven scope items, each closed here — documentation and tests only, no `src/` and no DDL
+change beyond the two items it asked be *recorded*:
+
+1. **§3c.7 still said "no challenger has run".** Already corrected at `2d10117`, which the
+   review had not seen. §3c.7 now states the rung as `CHALLENGED` and keeps the part that is
+   still true: every case in this report was written by the author of the thing it tests.
+2. **"All seven are committed" contradicted the artifact table, and Node 24's coverage had
+   two accounts.** The count was corrected at `2d10117` (and is now nine). The second
+   account was a stale clause on the round-2 paragraph — "this round has not been
+   challenged" — true when written and false once round 3 ran; it now records that round 3
+   confirmed the fix there, and the Node 24 coverage is stated once, in one place.
+3. **Three comments named a constraint that does not exist.** `bookings_settle_shape_ck` for
+   `bookings_settled_shape_ck`, in the spec and twice in the integrity suite. Corrected. A
+   comment naming a constraint that is not there is worse than no comment: a reader checking
+   the claim finds nothing and cannot tell whether the guard or the note is wrong.
+4. **(a3) had no case for a lone `settled_at` or a lone `settled_by_user_id`.** Added to the
+   standing-booking case, each refused by name. Worth saying why the name matters here:
+   `bookings_settled_shape_ck` would refuse both as well, and the trigger fires *before* the
+   constraint, so a case that accepted any failure would have passed on the CHECK and proved
+   nothing about (a3).
+5. **The challenger's three (a4) probes were not in the suite.** Promoted, as a case of their
+   own: it captures each shape CHECK with `pg_get_constraintdef`, drops it, closes a booking
+   with an **empty** settlement record (with `bookings_reschedule_shape_ck` gone, as
+   `'rescheduled'` with a NULL forward link), shows the late write still refused by name,
+   then discards the probe rows and restores the constraint — and asserts the restoration.
+   The first version of that case failed on the restore with `23514`, because the rows it had
+   just created were the ones the CHECK forbids; a case that weakens the schema and cannot
+   put it back is worse than the hole it tests for, so the discard step is measured, not
+   assumed.
+6. **Two things to record, not fix.** `booking.state_not_reopenable` cannot fire — block
+   (b)'s first clause refuses every change out of a terminal state first — and R-P9-15 binds
+   UPDATE only, so nothing refuses an INSERT that arrives already closed. Both are
+   command-slice questions: which refusal a caller should see is an error contract, and
+   whether a booking may be born closed has different answers for an import, a historical
+   migration and a live cancellation. Recorded as limitations 18 and 19 and as comments at
+   block (b), deliberately not collapsed — fixing either under a review's scope would decide
+   a contract silently.
+7. **This phase's own Node 24 run.** Done, and it is this phase's first: the container ships
+   v22.22.0, so Node **v24.21.0** was fetched from nodejs.org into the session scratch
+   directory and the suite was run under it against the same PostgreSQL 16.15 at
+   `en_US.utf8`. Both runs are in the run log with their run ids, commands and exit codes.
+   PART 7.6's rerun is therefore no longer owed on the database half or the runtime half.
+
+**The run after these items.** `tests/phase9-prep`, 7 files, **84 of 84 cases, exit code 0**,
+on PostgreSQL 16.15 at `en_US.utf8` under **Node v24.21.0** and again under v22.22.0.
 
 ### 3c.14 The challenger's THIRD pass at `9a64289` — PASS, and what a PASS is not
 
@@ -727,9 +788,32 @@ Stated as limitations rather than left to be discovered.
     the routine's own fail-closed check. It is proved (`booking.replay_scope_mismatch`), but
     it is a different kind of guarantee from a policy, and a future routine over these
     relations must make the same check rather than assume it.
-16. **No independent challenger has run.** Every case here was written by the author of the
-    thing it tests, which is exactly the review the three-signature rule (PART 114) exists
-    to require. Two of the three signatures are owed.
+16. **~~No independent challenger has run.~~** Written before the challenge and left in
+    place, because a limitations list that quietly deletes its own entries cannot be
+    audited. Superseded: an independent challenger ran three times and passed the work at
+    `9a64289` (§3c.12–§3c.14). What remains true is the part under it — every case in this
+    report was written by the author of the thing it tests, and the challenger's probes
+    are the challenger's. The coordinator actual-diff review was given at `9a64289`
+    (ACCEPT-WITH-SCOPE); one signature of three is now owed, not two.
+18. **`booking.state_not_reopenable` can never fire — OPEN DESIGN ITEM, not a fix.** Block
+    (b)'s first clause already refuses every change of state out of a terminal state, so
+    the clause beneath it, which refuses re-entering `'booked'`, is unreachable: any UPDATE
+    that would re-enter `'booked'` is leaving a terminal state and is refused by
+    `booking.state_terminal` first. The refusal is therefore dead code with a live name,
+    and its name appears in the function's own COMMENT as though it were reachable.
+    Recorded rather than deleted: which of the two refusals a caller should see is a
+    question about the command slice's error contract, not about the schema, and
+    collapsing them now would decide it silently. Raised by the coordinator's actual-diff
+    review of `51626e1..9a64289`.
+19. **R-P9-15 guards UPDATE only, so an INSERT can create an already-closed booking —
+    OPEN DESIGN ITEM, not a fix.** `bookings_transition` is a BEFORE UPDATE trigger, and
+    nothing refuses an INSERT that arrives with `state = 'cancelled'` and a settlement
+    record already written, or with a forward reschedule link. The shape CHECKs make such
+    a row internally consistent rather than impossible. Whether a booking may be born
+    closed is a command-slice question — an import, a migration of historical data and a
+    live cancellation want different answers — so the schema does not decide it here.
+    What the schema does guarantee is that once such a row exists, every later write to
+    its closure record is refused. Raised by the same review.
 17. **The lock-set collision case is reasoned, not measured.** Two distinct resources
     hashing to one key would merge their locks, which broadens exclusion and cannot
     narrow it; no fixture constructs such a collision, because constructing one against

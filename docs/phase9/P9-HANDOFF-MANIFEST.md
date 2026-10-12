@@ -58,7 +58,7 @@ relation, not as "the same commit".
 
 ## Artifacts
 
-All eight are **committed** to the branch above. The copies under
+All nine are **committed** to the branch above. The copies under
 `/mnt/project-files/phase9/` are off-Git and carry the same bytes; their hashes are
 the same values, recorded here because PART 13 asks for a hash on anything that does
 not live in Git.
@@ -71,6 +71,7 @@ not live in Git.
 | Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `ab0354c5bf499807234e20085db274cf8ae2268a994afc483e5ed7046b1978e4` |
 | Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
 | Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `e5f2367037806a305c997086e0577a6694a6fa99bc451501775d11dd07649336` |
+| Coordinator actual-diff review at `9a64289` | `/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-9a64289.md` | **no — off-Git** | `bc8fcfa4f13545c92036dc864e2bacb9175fe8e4783aaa6a21afe66c6286443c` |
 | Independent challenger's PASS at `9a64289` | `/mnt/project-files/phase9/P9-CHALLENGE-9a64289.md` | **no — off-Git** | `9fe72d8f3f0337732cf32e251a5365a4a35eda7959fb8c42c00d20d19c3611d9` |
 | Independent challenger's PASS-WITH-SCOPE at `76ab277` | `/mnt/project-files/phase9/P9-CHALLENGE-76ab277.md` | **no — off-Git** | `67742ec1c85916505af86f1bb3a9699833af604e77e899ef9ca8bd653ac532a6` |
 | Independent challenger's REJECT at `51626e1` | `/mnt/project-files/phase9/P9-CHALLENGE-51626e1.md` | **no — off-Git** | `d5b751c6a6da094d9ccb428414ec886d27c45b2a0a2011351e17bb9f50c8d577` |
@@ -88,7 +89,7 @@ byte-identical duplicates to canonicalize (PART 14).
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 7 | each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 10 | the global lock order (PART 50), idempotent retries and the replay (PART 53) |
 | `tests/phase9-prep/p9-booking-time.test.ts` | 21 | the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan at one-day granularity, and the two defects V3 named |
-| `tests/phase9-prep/p9-booking-integrity.test.ts` | 6 | the closure record is write-once (R-P9-15) — the two defects the independent challenger found, and the non-vacuity that keeps the guard honest |
+| `tests/phase9-prep/p9-booking-integrity.test.ts` | 7 | the closure record is write-once (R-P9-15) — the two defects the independent challenger found, and the non-vacuity that keeps the guard honest |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 10 | the schema attacked as the six real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | — | the spec loader and its non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
@@ -172,7 +173,19 @@ directory change is in this branch.
    command work continues around it. This one IS an owner escalation, and it has been put
    to the owner.
 
-Items 1 and 3 are not owner-only escalations under PART 116; item 4 is.
+5. **`booking.state_not_reopenable` cannot fire.** Block (b)'s first clause already refuses
+   every change out of a terminal state, so the clause refusing re-entry to `'booked'` is
+   unreachable. Which of the two refusals a caller should see is the command slice's error
+   contract, so it is recorded rather than collapsed. Limitation 18.
+6. **R-P9-15 binds UPDATE only.** Nothing refuses an INSERT that arrives already closed —
+   `'cancelled'` with a settlement record written, or a forward reschedule link — and the
+   shape CHECKs make such a row consistent rather than impossible. Whether a booking may be
+   born closed is a command-slice decision; once the row exists, every later write to its
+   closure record is refused. Limitation 19.
+
+Items 1, 3, 5 and 6 are not owner-only escalations under PART 116; item 4 is. Items 5 and 6
+were raised by the coordinator's actual-diff review, which asked that they be RECORDED as
+open design items and not fixed under a review's scope.
 
 ## Challenger state
 
@@ -195,8 +208,8 @@ about their own fix, having written the fix and the CHECKs both.
 
 **Seven findings across three rounds, none outstanding** — one P1 and two P2s in round 1, one
 P2 and a provenance item in round 2, nothing in round 3. PART 114's signatures now stand at
-**two of three**: author and challenger. The coordinator actual-diff review is the third and
-is not given.
+**three of three**: author, challenger and coordinator — see Coordinator state below, and
+note that each signature names its own SHA.
 
 Round 1, at `51626e1`: **REJECT.**
 
@@ -208,8 +221,8 @@ across 330 zones scanned hourly: never more than one transition in 24 hours) and
 probe of its own as its own bug. It left **one residual P2**: R-P9-15's words were wider than
 its code, and a settlement reason could still be ADDED to a `completed` or `no_show` booking
 after close. That is closed at the subject SHA above as block (a4),
-`booking.settlement_after_close`, with a red proof per state — and **this round has not been
-challenged**. Report: `/mnt/project-files/phase9/P9-CHALLENGE-76ab277.md`.
+`booking.settlement_after_close`, with a red proof per state, and round 3 confirmed it there.
+Report: `/mnt/project-files/phase9/P9-CHALLENGE-76ab277.md`.
 
 Node 24 now has an independent measurement **at this subject SHA**, from round 3. It is cited
 as the CHALLENGER's measurement in the CHALLENGER's container, which settles the evidence
@@ -241,9 +254,28 @@ settling a standing booking — all refused by name, with the lawful closures st
 
 ## Coordinator state
 
-**NOT GIVEN.** No Coordinator actual-diff review has been performed on this branch.
-PART 114 requires it for high-risk changes before promotion; this is preparation, so it
-is owed at promotion, not now.
+**GIVEN at `9a64289`: COORDINATOR-ACCEPT-WITH-SCOPE.** The coordinator reviewed the actual
+diff `51626e10d1cbfc8fa41ad59dfebeb55fab1d34c3..9a6428957d6d9f804f493954546a33686b8211f8`
+(five commits: `bcfb4fb`, `5f15601`, `76ab277`, `e1b201e`, `9a64289`) against `main` at
+`6fc505d`, in its own clone, on 2026-10-12T15:44:14Z. Report:
+`/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-9a64289.md`, hashed below.
+
+**Its method was static and read-only — it ran no database and no tests**, and says so: its
+container has Node v22.22.0, so it makes no run claim of its own and every count in it is
+attributed to the author or to the challenger by name. Its findings: all eight challenger
+findings fixed in code, scope clean, nothing under `migrations/`, no migration number
+assigned, and no new grant, policy or role.
+
+**The verdict names `9a64289` only.** `2d10117` — the documentation commit recording the
+challenger's PASS — was not reviewed, and nor is the subject of this manifest. The scope
+items it asked be closed are closed at the subject SHA above, and they are documentation and
+tests only: no `src/` and no DDL change, except the two OPEN DESIGN ITEMS it asked be
+*recorded* rather than fixed, which are recorded as comments in the spec and as limitations
+18 and 19 of the prep report.
+
+PART 114's three signatures now stand at **three of three** — author, challenger, coordinator
+— each at the SHA its own report names, and none of them at this manifest commit, which
+carries no code.
 
 ## Unresolved blockers
 
@@ -266,7 +298,9 @@ retention decision.
   `>=24 <25`. Node 24 behaviour at this SHA is measured — by the challenger, in its own
   container, round 3 — but PART 7.6 asks this phase to produce its own, and that is owed at
   final integration.
-* **Not three signatures.** Author and challenger, not the coordinator actual-diff review.
+* **Not one review of THIS SHA.** All three signatures name earlier SHAs: the challenger's
+  PASS and the coordinator's review both name `9a64289`, and this subject adds the tests and
+  documentation the coordinator's scope items asked for, which neither has seen.
 * **Not a promotion.** A challenger PASS moves the rung to `CHALLENGED` and nothing further;
   every `READY_TO_PROMOTE` gate below is external and open.
 * Business isolation of a registry read is enforced by `booking_replay_result` itself and
