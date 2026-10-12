@@ -74,7 +74,7 @@
  *   npm run dr:proof -- --prove-detection   # the drill plus the red proofs
  *   npm run dr:proof -- --keep       # leave both clusters running for inspection
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { join } from 'node:path';
@@ -1261,15 +1261,26 @@ async function bootstrapHelpers(): Promise<{
   applyBootstrapTo: (port: number, db: string) => Promise<void>;
   ensureDatabaseOn: (port: number, db: string) => Promise<void>;
 }> {
+  /**
+   * PART 103: every fixture credential is MINTED PER RUN. The literals that
+   * used to sit here were real secret-like source material in the tree, and
+   * the directive's answer to a scanner finding on them is to stop the tree
+   * carrying the material — never an allowlist entry, and never reshaping the
+   * literal so the scanner stops recognising it, which is evasion. base64url
+   * so the value is safe inside bootstrap.sql's single-quoted SQL literals.
+   * APP_DB stays the fixture's own password because the drill authenticates
+   * as daftar_app after the restore to prove its privileges survived.
+   */
+  const minted = (role: string): string => `p15_${role}_${randomBytes(18).toString('base64url')}`;
   const PASSWORDS: Readonly<Record<string, string>> = {
     __APP_DB_PASSWORD__: APP_PASSWORD,
-    __PLATFORM_DB_PASSWORD__: 'test_platform_password_123',
-    __WORKER_DB_PASSWORD__: 'test_worker_password_123',
-    __RESOLVER_DB_PASSWORD__: 'test_resolver_password_123',
-    __IDENTITY_DB_PASSWORD__: 'test_identity_password_123',
-    __PROVISIONER_DB_PASSWORD__: 'test_provisioner_password_123',
-    __RECONCILER_DB_PASSWORD__: 'test_reconciler_password_123',
-    __MIGRATOR_DB_PASSWORD__: 'test_migrator_password_123',
+    __PLATFORM_DB_PASSWORD__: minted('platform'),
+    __WORKER_DB_PASSWORD__: minted('worker'),
+    __RESOLVER_DB_PASSWORD__: minted('resolver'),
+    __IDENTITY_DB_PASSWORD__: minted('identity'),
+    __PROVISIONER_DB_PASSWORD__: minted('provisioner'),
+    __RECONCILER_DB_PASSWORD__: minted('reconciler'),
+    __MIGRATOR_DB_PASSWORD__: minted('migrator'),
   };
   return {
     async ensureDatabaseOn(port, db) {

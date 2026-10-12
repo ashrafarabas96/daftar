@@ -36,6 +36,8 @@
     "load:harness": "tsx scripts/phase15/load-harness.ts",
     "test:phase15:load-harness": "vitest run tests/performance/p15-load-harness.test.ts",
     "scan:secrets:release": "tsx scripts/phase15/release-secret-scan.ts",
+    "verify:gap-list": "tsx scripts/phase15/gap-list-verification.ts",
+    "verify:gap-list:static": "tsx scripts/phase15/gap-list-verification.ts --no-cluster",
     "dr:proof": "tsx scripts/phase15/backup-restore-proof.ts",
     "dr:proof:prove": "tsx scripts/phase15/backup-restore-proof.ts --prove-detection",
     "pitr:proof": "tsx scripts/phase15/pitr-proof.ts",
