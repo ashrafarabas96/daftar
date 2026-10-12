@@ -513,11 +513,11 @@ MUTATIONS = [
         "does not let a foreign writer's record occupy the line's one slot",
     ),
     (
-        "PART 8 — the restaurant pack carries no valuation",
+        "PART 8 — a valuation is refused AS a valuation, not as an unknown field",
         "src/consumption-occasion.ts",
-        "  if (carried.length > 0) {",
+        "  if (valuation.length > 0) {",
         "  if (false) {",
-        "refuses every valuation field the pack must not carry",
+        "refuses every valuation spelling, including ones no list anticipated",
     ),
     (
         "PART 7.7 — a refund of a composed line restocks nothing",
@@ -609,6 +609,48 @@ MUTATIONS = [
         "  return Object.freeze(lines.filter((line) => line.mode !== 'service' && cancellationWastesStock(line.stateAtCancellation)));",
         "  return Object.freeze(lines.filter((line) => line.mode !== 'service'));",
         "separates a line voided while queued from one voided after the cook started",
+    ),
+    (
+        "P3-07 — the record contract is an ALLOW-list, so an unanticipated valuation spelling is refused",
+        "src/consumption-occasion.ts",
+        "  const unexpected = Object.keys(record).filter((k) => !CONSUMPTION_RECORD_KEYS.includes(k));",
+        "  const unexpected = Object.keys(record).filter((k) => ['costMinor', 'valueMinor'].includes(k));",
+        "refuses every valuation spelling, including ones no list anticipated",
+    ),
+    (
+        "P3-07 — the allow-list itself is pinned, and cannot be shortened unnoticed",
+        "src/consumption-occasion.ts",
+        "export const CONSUMPTION_RECORD_KEYS: readonly string[] = Object.freeze(['orderLineId', 'occasion', 'commandId', 'authority', 'movementCount']);",
+        "export const CONSUMPTION_RECORD_KEYS: readonly string[] = Object.freeze(['orderLineId', 'occasion', 'commandId', 'authority']);",
+        "names the five fields a record may carry, and no more",
+    ),
+    (
+        "P3-07 — an undefined field is refused rather than ignored",
+        "src/consumption-occasion.ts",
+        "  if (unexpected.length === 0) return;",
+        "  if (unexpected.length >= 0) return;",
+        "refuses a field the contract does not define, even when it is not a valuation",
+    ),
+    (
+        "P3-08 — a replay must match the OCCASION as well as the command",
+        "src/consumption-occasion.ts",
+        "      if (existing.commandId === record.commandId && existing.occasion === record.occasion) {",
+        "      if (existing.commandId === record.commandId) {",
+        "refuses the same command re-presented under a DIFFERENT fate, which is a real double take",
+    ),
+    (
+        "P3-09 — the scaled modifier quantity reaches the grain check unrounded by truncation",
+        "src/order-to-sale.ts",
+        "const scaledQuantityQ4 = halfEvenDiv(modifier.quantityQ4 * line.quantityQ4, QUANTITY_SCALE);",
+        "const scaledQuantityQ4 = (modifier.quantityQ4 * line.quantityQ4) / QUANTITY_SCALE;",
+        "carries a HALF_EVEN rounding result into the grain check, not a truncated one",
+    ),
+    (
+        "P3-09 — the grain check still fires on a quantity that came through aggregation",
+        "src/stock-effect.ts",
+        "    if (!isRepresentableAtPrecision(soldQuantityQ4, unitDecimals)) {",
+        "    if (false) {",
+        "lets a fractional modifier through aggregation and refuses it at the stock grain, before service",
     ),
 ]
 

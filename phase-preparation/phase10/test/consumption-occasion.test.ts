@@ -3,7 +3,7 @@ import {
   CONSUMPTION_OCCASIONS,
   ConsumptionLedger,
   ConsumptionRefusal,
-  FORBIDDEN_VALUATION_KEYS,
+  CONSUMPTION_RECORD_KEYS,
   INVENTORY_AUTHORITY,
   assertNoLocalValuation,
   assertRefundRestocksNothing,
@@ -124,6 +124,18 @@ describe('PART 7.7 — exactly once', () => {
     expect(ledger.size).toBe(1);
   });
 
+  it('refuses the same command re-presented under a DIFFERENT fate, which is a real double take', () => {
+    // The replay condition compares the occasion as well as the command, and
+    // this is the case that needs it: one command id, one line, two fates.
+    // Without the occasion conjunct the ledger calls the second take a
+    // harmless replay and the caller is told nothing moved — while the line
+    // has taken its stock twice, once as a sale and once as waste.
+    const ledger = new ConsumptionLedger();
+    expect(ledger.record(COMPOSED_SOLD, sale('ol-1', 'cmd-same'))).toBe('recorded');
+    const nowCancelled: OrderLineFate = { orderLineId: 'ol-1', mode: 'composed', outcome: 'cancelled', stateAtCancellation: 'preparing' };
+    expect(codeOf(() => ledger.record(nowCancelled, waste('ol-1', 'cmd-same')))).toBe('restaurant.consumption.occasion_repeated');
+  });
+
   it('keeps lines independent: one line consuming says nothing about another', () => {
     const ledger = new ConsumptionLedger();
     ledger.record(COMPOSED_SOLD, sale('ol-1', 'cmd-a'));
@@ -204,12 +216,45 @@ describe('PART 8 — one writer, and no second valuation', () => {
     expect(ledger.record(COMPOSED_SOLD, sale('ol-1', 'cmd-b'))).toBe('recorded');
   });
 
-  it('refuses every valuation field the pack must not carry', () => {
-    for (const forbidden of FORBIDDEN_VALUATION_KEYS) {
-      const record = { ...sale('ol-1', 'cmd-a'), [forbidden]: 1234n } as unknown as ConsumptionRecord;
+  it('refuses every valuation spelling, including ones no list anticipated', () => {
+    // The challenge's own set. `costBaseMinor` is the one that matters:
+    // `inventory_sale_cost_base_minor` is the live SQL authority's name for
+    // the quantity, so it is what a real bridge is most likely to send, and
+    // the deny-list this replaced admitted it intact.
+    const spellings = [
+      'costMinor',
+      'costBaseMinor',
+      'unitCostMinor',
+      'unitPriceMinor',
+      'valuationMinor',
+      'valueMinor',
+      'cogsMinor',
+      'totalCostMinor',
+      'averageCostMinor',
+      'weightedAverageCostMinor',
+      'cost_minor',
+      'costMinorBase',
+    ];
+    for (const spelling of spellings) {
+      const record = { ...sale('ol-1', 'cmd-a'), [spelling]: 1234n } as unknown as ConsumptionRecord;
       expect(codeOf(() => assertNoLocalValuation(record))).toBe('restaurant.consumption.valuation_present');
-      expect(detailsOf(() => assertNoLocalValuation(record)).carriedKeys).toEqual([forbidden]);
+      expect(detailsOf(() => assertNoLocalValuation(record)).carriedKeys).toEqual([spelling]);
     }
+  });
+
+  it('refuses a field the contract does not define, even when it is not a valuation', () => {
+    // Admission is decided by the allow-list, not by recognising a cost. An
+    // unrecognised field is refused rather than ignored, because what it would
+    // have meant is unknown.
+    const record = { ...sale('ol-1', 'cmd-a'), tableNo: 7 } as unknown as ConsumptionRecord;
+    expect(codeOf(() => assertNoLocalValuation(record))).toBe('restaurant.consumption.record_field_unknown');
+  });
+
+  it('names the five fields a record may carry, and no more', () => {
+    // Pins the allow-list itself: the deny-list it replaced could be shortened
+    // by one entry with every test still green.
+    expect([...CONSUMPTION_RECORD_KEYS].sort()).toEqual(['authority', 'commandId', 'movementCount', 'occasion', 'orderLineId']);
+    expect(Object.keys(sale('ol-1', 'cmd-a')).sort()).toEqual([...CONSUMPTION_RECORD_KEYS].sort());
   });
 
   it('refuses a valued record before it is entered, not after', () => {

@@ -66,25 +66,34 @@ export const CONSUMPTION_OCCASIONS = ['sale_commit', 'cancellation_waste'] as co
 export type ConsumptionOccasion = (typeof CONSUMPTION_OCCASIONS)[number];
 
 /**
- * Fields that would make this pack a second source of inventory VALUE.
+ * The ONLY keys a consumption record may carry.
  *
- * Quantity is the restaurant pack's to state; what a quantity is WORTH is the
- * inventory authority's, and COGS follows from its costing method, not from a
- * recipe. A record that carries a cost has already decided a number that only
- * the authority may decide, and the ledger would then hold a valuation nobody
- * can reconcile against the authority's own.
+ * This was a deny-list of six valuation spellings, and the second independent
+ * challenge showed why that could not work: the law is categorical — *the
+ * restaurant pack states quantities, and the inventory authority states what
+ * they are worth* — and a list of names cannot enforce a categorical law. A
+ * record carrying `costBaseMinor` passed it intact, and that spelling is not
+ * hypothetical: `inventory_sale_cost_base_minor` is the live SQL authority's
+ * own name for the quantity, so it is what a real bridge is most likely to
+ * send. `unitPriceMinor`, `valuationMinor`, `cost_minor` and
+ * `weightedAverageCostMinor` passed too. Worse, deleting an entry from the
+ * list broke no test: an incomplete list that nothing would notice shrinking.
  *
- * Checked at runtime, not only in the type, because records cross a bridge as
- * plain objects and an excess property survives that crossing.
+ * Inverted, the law is enforceable and cannot be outgrown by a spelling nobody
+ * has thought of. A record has five fields; anything else is refused.
  */
-export const FORBIDDEN_VALUATION_KEYS: readonly string[] = Object.freeze([
-  'unitCostMinor',
-  'valueMinor',
-  'cogsMinor',
-  'totalCostMinor',
-  'averageCostMinor',
-  'costMinor',
-]);
+export const CONSUMPTION_RECORD_KEYS: readonly string[] = Object.freeze(['orderLineId', 'occasion', 'commandId', 'authority', 'movementCount']);
+
+/**
+ * Spellings that make an unexpected key recognisably a VALUATION.
+ *
+ * This is not what decides admission — {@link CONSUMPTION_RECORD_KEYS} does,
+ * and it decides it categorically. This only decides which refusal NAMES the
+ * problem more usefully, so a bridge sending a cost is told it sent a cost
+ * rather than told it sent an unknown field. A pattern that misses is a worse
+ * message, never an admitted record.
+ */
+const VALUATION_SPELLING = /cost|price|valuation|value|worth|amount|cogs|margin/i;
 
 export type ConsumptionRefusalCode =
   /** A second, different command took stock for a line that already consumed. */
@@ -97,6 +106,8 @@ export type ConsumptionRefusalCode =
   | 'restaurant.consumption.authority_not_canonical'
   /** The record carried a cost or a value; valuation is not this pack's. */
   | 'restaurant.consumption.valuation_present'
+  /** The record carried a field this contract does not define at all. */
+  | 'restaurant.consumption.record_field_unknown'
   /** A refund of a composed line asked to put cooked food back on the shelf. */
   | 'restaurant.consumption.refund_restocks_composed'
   /** A cancellation record did not say what state the line was cancelled in. */
@@ -273,14 +284,21 @@ export class ConsumptionLedger {
  * pack hands the inventory authority, not only what it remembers afterwards.
  */
 export function assertNoLocalValuation(record: ConsumptionRecord): void {
-  const carried = Object.keys(record).filter((k) => FORBIDDEN_VALUATION_KEYS.includes(k));
-  if (carried.length > 0) {
+  const unexpected = Object.keys(record).filter((k) => !CONSUMPTION_RECORD_KEYS.includes(k));
+  if (unexpected.length === 0) return;
+  const valuation = unexpected.filter((k) => VALUATION_SPELLING.test(k));
+  if (valuation.length > 0) {
     throw new ConsumptionRefusal(
       'restaurant.consumption.valuation_present',
-      `Line ${record.orderLineId} carried ${carried.join(', ')}; the restaurant pack states quantities, and the inventory authority states what they are worth`,
-      { orderLineId: record.orderLineId, carriedKeys: carried },
+      `Line ${record.orderLineId} carried ${valuation.join(', ')}; the restaurant pack states quantities, and the inventory authority states what they are worth`,
+      { orderLineId: record.orderLineId, carriedKeys: valuation },
     );
   }
+  throw new ConsumptionRefusal(
+    'restaurant.consumption.record_field_unknown',
+    `Line ${record.orderLineId} carried ${unexpected.join(', ')}, which this contract does not define; an unrecognised field is refused rather than ignored, because what it would have meant is unknown`,
+    { orderLineId: record.orderLineId, carriedKeys: unexpected },
+  );
 }
 
 /**
