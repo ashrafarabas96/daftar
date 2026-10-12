@@ -110,4 +110,42 @@ SELECT p8.case_refuses('A10 the app may not read unattributed events',
                        'SELECT count(*) FROM notification_provider_quarantine',
                        'permission denied for table notification_provider_quarantine');
 
+-- ---- A11: the SETTINGS relation is isolated, measured and not merely asserted ----
+-- ROUND 12, R-4. The overlay's §7 asserts that every tenant-scoped relation is
+-- under forced RLS with both policies, and it is a real fail-closed guard: a
+-- mutant that drops `notification_settings` from the isolation loop cannot be
+-- applied at all. But §7 is checked ONCE, at apply time, and it cannot see a
+-- hole opened afterwards — by a later migration, or by an edit to §7 itself.
+-- The challenger supplied the missing half with my own two mutation functions
+-- and measured 48 OF 48 PASSING with the settings relation at `rls=false
+-- force=false` and an unrelated business reading all three rows. So the case
+-- that would have noticed is written here, and mutant 8b now requires it.
+SET LOCAL app.tenant_id   = '22222222-2222-4222-8222-222222222222';
+SET LOCAL app.business_id = 'bbbbbbbb-0000-4000-8000-000000000003';
+SELECT p8.case_equals('A11 another tenant sees none of this business''s settings',
+  (SELECT count(*) FROM notification_settings
+    WHERE business_id = 'bbbbbbbb-0000-4000-8000-000000000001'), 0::bigint);
+SELECT p8.case_equals('A11b and it sees exactly its own one row',
+  (SELECT count(*) FROM notification_settings), 1::bigint);
+SET LOCAL app.tenant_id   = '11111111-1111-4111-8111-111111111111';
+SET LOCAL app.business_id = 'bbbbbbbb-0000-4000-8000-000000000001';
+SELECT p8.case_equals('A11c while its own business sees its own row',
+  (SELECT count(*) FROM notification_settings), 1::bigint);
+
+-- ---- A12: the quarantine carries NO row level security, and that is correct ----
+-- §7's E(4) refuses an overlay that puts RLS on the quarantine, and round 11
+-- gave that assertion no mutant in either direction, so it was unmeasured. The
+-- reason it must stay unprotected is not a preference: an event whose signature
+-- did not verify carries no tenant we are entitled to believe, the relation
+-- therefore has no `tenant_id` column, and a policy over a column that does not
+-- exist cannot be written. The protection is the ABSENCE of any read grant,
+-- which A10 and P7 measure. This case states the shape so that an overlay which
+-- claims an isolation it cannot have reds here as well as at apply time.
+SELECT p8.case_equals('A12 the quarantine is not under RLS, because it has no tenant to scope by',
+  (SELECT relrowsecurity FROM pg_class WHERE oid = 'notification_provider_quarantine'::regclass), false);
+SELECT p8.case_equals('A12b and it has no tenant column to scope by',
+  (SELECT count(*) FROM pg_attribute
+    WHERE attrelid = 'notification_provider_quarantine'::regclass
+      AND attname IN ('tenant_id','business_id') AND attnum > 0), 0::bigint);
+
 ROLLBACK;

@@ -219,19 +219,56 @@ SELECT p8.case_equals('T1d FORCE is back on both relations',
     WHERE oid IN ('notifications'::regclass, 'notification_deliveries'::regclass)
       AND relforcerowsecurity), 2::bigint);
 
--- Two of the five are proved by an EXECUTED refusal above. The other three
--- (`notification_attempts`, `notification_provider_statuses`,
--- `notification_settings`) are proved by SHAPE only — this case — and that
--- limit is stated here rather than left for a reader to discover.
-SELECT p8.case_equals('T2 all five scoped relations carry a composite tenant key',
-  (SELECT count(*) FROM pg_constraint
-    WHERE conname IN ('notifications_tenant_fk','deliveries_tenant_fk','attempts_tenant_fk',
-                      'provider_statuses_tenant_fk','settings_tenant_fk')
-      AND contype = 'f'
-      AND confrelid = 'businesses'::regclass
-      AND (SELECT array_agg(attname::text ORDER BY attname::text) FROM pg_attribute
-             WHERE attrelid = confrelid AND attnum = ANY(confkey)) = ARRAY['id','tenant_id']),
-  5::bigint);
+-- ROUND 12, R-3: THIS CASE WAS GREEN WHILE A RELATION HAD LOST ITS TENANT KEY.
+-- The old T2 counted five constraints by five hardcoded names. The schema has
+-- SIX relations carrying `tenant_id` under the tenant policy, and six composite
+-- tenant keys; `notification_preferences` / `prefs_tenant_fk` was in neither the
+-- name list nor the comment that said which were executed and which were shape
+-- only. The challenger dropped exactly that key and measured the owner file at
+-- rc=0, 26 passes, `T2 … PASS 5 = 5`, with a preference carrying another
+-- tenant then ACCEPTED behind the policy. Mutant 4 targets the notification's
+-- key alone, so the one-at-a-time sweep missed it too.
+--
+-- A hardcoded list is a second place the truth is written, and it goes stale
+-- the moment a relation is added — which is the same defect as a hardcoded
+-- count, in the same file, for the same reason. So the SET IS DERIVED: every
+-- relation that carries a `tenant_id` column AND the tenant policy must carry a
+-- composite key to the business relation's `(tenant_id, id)`. A seventh
+-- relation is then covered by construction, and a relation that loses its key
+-- reds here whichever one it is.
+SELECT p8.case_equals('T2 every tenant-scoped relation carries a composite tenant key', (
+  SELECT string_agg(t, ',' ORDER BY t) FROM (
+    SELECT c.relname AS t
+      FROM pg_class c
+      JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'tenant_id' AND a.attnum > 0
+     WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace
+       AND c.relname LIKE 'notification%'
+       AND EXISTS (SELECT 1 FROM pg_policies p
+                    WHERE p.tablename = c.relname AND p.policyname = 'tenant_membership')
+       AND NOT EXISTS (
+             SELECT 1 FROM pg_constraint k
+              WHERE k.conrelid = c.oid AND k.contype = 'f'
+                AND k.confrelid = 'businesses'::regclass
+                AND (SELECT array_agg(attname::text ORDER BY attname::text) FROM pg_attribute
+                      WHERE attrelid = k.confrelid AND attnum = ANY(k.confkey)) = ARRAY['id','tenant_id'])) x),
+  NULL::text);
+
+-- And the set must not be EMPTY, or the case above passes on a schema with no
+-- tenant-scoped relation at all — the shape that makes a derived check as
+-- hollow as a hardcoded one.
+SELECT p8.case_equals('T2b and the derived set is the six relations the schema has', (
+  SELECT count(*) FROM pg_class c
+    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'tenant_id' AND a.attnum > 0
+   WHERE c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace
+     AND c.relname LIKE 'notification%'
+     AND EXISTS (SELECT 1 FROM pg_policies p
+                  WHERE p.tablename = c.relname AND p.policyname = 'tenant_membership')), 6::bigint);
+
+-- Two of the six are proved by an EXECUTED refusal above (T1b, T1c). The other
+-- four are proved by the derived SHAPE check, which reads `confrelid` and the
+-- referenced column set out of `pg_constraint` — weaker than an executed
+-- refusal, and not nothing. The distinction is stated here rather than left for
+-- a reader to discover.
 
 -- =====================================================================
 -- D-3  Catalogue agreement — the ladder's DOMAIN is written more than once

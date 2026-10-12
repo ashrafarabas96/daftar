@@ -15,10 +15,25 @@
 --   proof/p8-mutants.py               the mutants, as a program
 --   proof/run-p8-real-proof.sh        the runner
 --
--- This file is kept, unrepaired, for one reason: the mutant that reinstates its
--- defect (`guc_bypass` in p8-mutants.py) exists because of it, and a reviewer
--- comparing the two rounds should be able to see what was wrong rather than a
--- clean file and a claim. Nothing in the current proof reads it.
+-- WHAT THIS HEADER SAID, AND WHY IT WAS WRONG (round 12, fifth challenge R-5).
+-- It said the file was "kept, unrepaired … so a reviewer comparing the two
+-- rounds should be able to see what was wrong". The same commit that wrote that
+-- sentence had already repaired the file five ways: `app_bypass()` became
+-- identity-based, `businesses` gained `UNIQUE (tenant_id, id)`, `customers` lost
+-- a redundant unique, `users` became the real global shape, and `memberships`
+-- was added. All five changes are CORRECT — they are the shapes the challenger
+-- measured — but the claim about the file was false, and a reviewer who opened
+-- it to see the D-1 defect would not have found it. That is the third time in
+-- this project a file's own status header has been outside its own laws.
+--
+-- SO, PLAINLY: this file is a REPAIRED prototype, not a preserved defect. The
+-- defects it used to carry are described above and in FINDING 42, and the one
+-- that still has to be reproducible — the GUC bypass — is reinstated by
+-- `guc_bypass` in `p8-mutants.py`, which plants into a copy of
+-- `p8-overlay.sql`, so that mutant does not depend on this file at all. Nothing
+-- in the current proof reads this file; its only reader is the superseded
+-- round-10 runner. It is kept as a record of what was rejected and how it was
+-- answered, and for no stronger purpose than that.
 -- =====================================================================
 -- Phase 8 — a PROTOTYPE of the DDL specified in `P8-DDL-SPEC.md`,
 -- written to be APPLIED, so that the spec's invariants stop being a

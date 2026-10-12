@@ -140,6 +140,63 @@ def unisolate_settings(s):
     return s.replace(loop, "'notification_provider_statuses'] LOOP", 1)
 
 
+def isolate_quarantine(s):
+    """Put row level security on the quarantine, which cannot be scoped.
+
+    Section 7's E(4) refuses this at apply time, and round 11 gave that
+    assertion no mutant in either direction, so it was unmeasured. The relation
+    has no `tenant_id` and no `business_id` — an unverifiable event carries no
+    attribution we may believe — so a policy here is a claim of protection that
+    protects nothing, which is worse than the honest absence.
+    """
+    old = "  IF EXISTS (SELECT 1 FROM pg_class WHERE oid = 'notification_provider_quarantine'::regclass"
+    assert old in s, "the quarantine assertion was not found"
+    add = ("ALTER TABLE notification_provider_quarantine ENABLE ROW LEVEL SECURITY;\n"
+           "CREATE POLICY tenant_membership ON notification_provider_quarantine "
+           "AS PERMISSIVE FOR ALL USING (true) WITH CHECK (true);\n")
+    marker = "-- " + chr(167) + "7  The overlay asserts its own shape"
+    i = s.index(marker)
+    # before section 7, so section 7 sees it and E(4) can fire
+    j = s.rindex("-- ---------------------------------------------------------------------\n", 0, i)
+    return s[:j] + add + s[j:]
+
+
+def drop_preferences_tenant_key(s):
+    """Drop the ONE tenant key the old hardcoded enumeration left out.
+
+    Round 12, R-3: the challenger's own plant. With the old T2 this was green at
+    `PASS 5 = 5` while a preference carrying another tenant was accepted behind
+    the policy, and mutant 4 did not reach it because it targets the
+    notification's key alone. A mutant per relation would go stale the same way
+    the list did, so T2 now derives the set from the catalogue — and this mutant
+    is the proof that the derivation reaches a relation no case names.
+    """
+    old = ("  CONSTRAINT prefs_tenant_fk\n"
+           "    FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id)")
+    if old not in s:
+        # The constraint may be written on one line; try that spelling too and
+        # fail loudly rather than returning the text unchanged, which would look
+        # like a mutant that reds nothing.
+        one = "CONSTRAINT prefs_tenant_fk FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id)"
+        assert one in s, "prefs_tenant_fk was not found in either spelling"
+        return s.replace(one, "CONSTRAINT prefs_business_only_fk FOREIGN KEY (business_id) REFERENCES businesses (id)")
+    return s.replace(old, "  CONSTRAINT prefs_business_only_fk\n"
+                          "    FOREIGN KEY (business_id) REFERENCES businesses (id)")
+
+
+def drop_obligation_once(s):
+    """Remove the unique the race contends for.
+
+    Round 12: the restored I-1 race is only evidence if the key it races for is
+    what refuses the loser. With this dropped both connections commit, two rows
+    carry one obligation, and the race must report FAIL rather than pass with a
+    different survivor count.
+    """
+    old = "  CONSTRAINT notifications_obligation_once UNIQUE (business_id, obligation_key),"
+    assert old in s, "the obligation unique was not found"
+    return s.replace(old, "  -- mutant: the obligation unique is gone", 1)
+
+
 def grant_quarantine(s):
     """Make the unattributed quarantine readable by a business-tier role."""
     old = "GRANT INSERT ON notification_provider_quarantine TO daftar_worker;"
@@ -158,8 +215,13 @@ MUTANTS = {
     "6":  [arrival_domain_drift],
     "7":  [drop_truncate_guard],
     "8":  [unisolate_settings],
+    "8b": [unisolate_settings, blind_sec7],
     "9":  [grant_quarantine],
     "9b": [grant_quarantine, blind_sec7],
+    "10":  [isolate_quarantine],
+    "10b": [isolate_quarantine, blind_sec7],
+    "11":  [drop_preferences_tenant_key],
+    "12":  [drop_obligation_once],
 }
 
 
