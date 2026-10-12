@@ -690,7 +690,9 @@ export interface LoyaltyExpiryFold {
   readonly spendablePoints: bigint;
   /**
    * The part of `spendablePoints` that is backed by NO lot and therefore has
-   * no horizon — a registered manual grant, and nothing else.
+   * no horizon — a STANDING manual grant (`correctsId === null`), and nothing
+   * else. A positive row that corrects another row is refused, not counted
+   * here: see the loop in `foldExpiry`.
    *
    * It is reported separately because it used to be invisible. It was summed
    * into `spendablePoints` and nowhere else, so a caller could not tell a
@@ -741,37 +743,49 @@ export function foldExpiry(
   // `consume` inside a sale, a negative `adjust` — draws on the OLDEST lot
   // first.
   //
-  // A POSITIVE non-earn row is the subtle case, and an independent challenge
-  // found it reported wrongly here. `horizon_ck` makes it impossible for any
-  // kind but an `earn` to carry a horizon, so such a row joins no lot. The
-  // loop used to add every one of them to an `unhorizoned` total that was
-  // spendable at every `asOf` FOREVER. For the one row shape that is MEANT to
-  // work that way — a registered manual grant, which is the merchant's
-  // standing remedy and deliberately has no horizon — that is correct. For a
-  // RESTORATION it is a defect with the merchant's money on the far side:
-  // `§5.7.3` restores a consumed point by appending `+c`, the consumption's
-  // `-c` stays in `draw` so the original lot remains drawn down, and the
-  // restored points come back with no horizon at all. Measured on the
-  // challenge's own fixture: 100 points with a horizon of 2026-06-01, 40
-  // consumed and fully reversed, gave `expiringPoints = 60` and
-  // `spendablePoints = 40` on the horizon day, and after the sweep took its 60
-  // those 40 were still eligible at `asOf = 2036-01-01` with nothing left to
-  // expire them.
+  // A POSITIVE non-earn row is the subtle case, and TWO rounds of independent
+  // challenge were needed to get it right. `horizon_ck` makes it impossible
+  // for any kind but an `earn` to carry a horizon, so such a row joins no lot.
+  // The loop originally added every one of them to an `unhorizoned` total that
+  // was spendable at every `asOf` FOREVER. For the one shape that is MEANT to
+  // work that way — a standing manual grant, the merchant's goodwill remedy,
+  // which corrects nothing and deliberately has no horizon — that is correct.
+  // For a RESTORATION it is a defect with the merchant's money on the far
+  // side: `§5.7.3` restores a consumed point by appending `+c`, the
+  // consumption's `-c` stays in `draw` so the original lot remains drawn down,
+  // and the restored points come back with no horizon at all. Measured on the
+  // challenge's fixture: 100 points with a horizon of 2026-06-01, 40 consumed
+  // and reversed, gave `expiringPoints = 60` and `spendablePoints = 40` on the
+  // horizon day, and after the sweep took its 60 those 40 were still eligible
+  // at `asOf = 2036-01-01` with nothing left to expire them.
   //
-  // So the two shapes are now separated by their SOURCE, which is the only
-  // thing that distinguishes them, and anything that is not the registered
-  // grant shape REFUSES. That direction is forced rather than chosen: the
-  // migration patch request demotes this fold to a cross-check that may only
-  // REFUSE and never permit, and an un-horizoned total silently PERMITS a
-  // spend the remainder relation — whose lot is drawn down and expired — must
-  // refuse. Failing closed is the only answer that keeps the two authorities
-  // from disagreeing in the direction that costs money.
+  // THE DISCRIMINATOR IS `correctsId`, NOT `sourceType`. The first fix keyed on
+  // the source and exempted `manual_adjustment`, and the re-challenge showed
+  // why that was wrong twice over: the pack specifies the restoration AS a
+  // positive `manual_adjustment` `adjust` naming its target (`§1.4`, `§2.3`,
+  // `A-16`), so the exemption covered the exact row it was written to stop and
+  // the fixture reproduced byte-identically; and enumerating
+  // `SOURCE_KIND_PAIRS` against `KIND_SIGN` shows `manual_adjustment:adjust` is
+  // the ONLY positive non-earn row a lawful writer can produce at all, so the
+  // refusal was unreachable except by building a ledger by hand. A guard that
+  // can only fire on a row no writer can write is not a guard.
   //
-  // Today no restoration row can be written through `validateDraft` at all:
-  // `SOURCE_KIND_PAIRS` has no restoring source, and `§5.7.2` already records
-  // that registry row as OWED in a later migration. That is exactly why the
-  // guard belongs here NOW — the change that lands the row belongs to another
-  // owner, and nothing in this fold would have complained.
+  // `§1.4` makes `correctsId` the marker of every correction, and a standing
+  // grant corrects nothing. So a positive non-earn row REFUSES when it names a
+  // row it corrects — or when it is not a manual adjustment at all, which keeps
+  // the guard closed over a restoring source `§5.7.2` has yet to register.
+  //
+  // Failing closed is forced rather than chosen: the migration patch request
+  // demotes this fold to a cross-check that may only REFUSE and never permit,
+  // and an un-horizoned total silently PERMITS a spend the remainder relation —
+  // whose lot is drawn down and expired — must refuse.
+  //
+  // ONE ARM THIS DOES NOT CLOSE, stated rather than papered over: a `§2.3`
+  // adjustment that supplies an earn the outbox never wrote has
+  // `correctsId === null` and SHOULD carry that sale's horizon, which
+  // `horizon_ck` forbids. It is admitted here as a grant, and the horizon it
+  // deserves needs the DDL item already raised in
+  // `P13-MIGRATION-PATCH-REQUEST.md` §A.3c.1.
   let unhorizoned = 0n;
   let draw = 0n;
   for (const m of rows) {
@@ -780,11 +794,19 @@ export function foldExpiry(
       draw += -m.pointsDelta;
       continue;
     }
-    if (m.sourceType !== 'manual_adjustment') {
+    if (m.correctsId !== null || m.sourceType !== 'manual_adjustment') {
       refuseLoyalty(
         'loyalty.unattributable_positive_movement',
-        'a positive movement that is not a manual grant reached the expiry fold, and its horizon cannot be attributed to any lot',
-        { movementId: m.id, sourceType: m.sourceType, movementKind: m.movementKind, points: String(m.pointsDelta) },
+        m.correctsId !== null
+          ? 'a positive movement that corrects another row reached the expiry fold, and the horizon of the points it restores cannot be attributed to any lot'
+          : 'a positive movement that is not a manual grant reached the expiry fold, and its horizon cannot be attributed to any lot',
+        {
+          movementId: m.id,
+          sourceType: m.sourceType,
+          movementKind: m.movementKind,
+          points: String(m.pointsDelta),
+          correctsId: m.correctsId ?? '(none)',
+        },
       );
     }
     unhorizoned += m.pointsDelta;

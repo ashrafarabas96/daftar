@@ -27,11 +27,13 @@ import {
   foldBalance,
   foldExpiry,
   identityKey,
+  KIND_SIGN,
   LoyaltyRefusal,
   POINTS_DELTA_MAX,
   REGISTERED_KINDS,
   saleConsumptionIdentity,
   saleEarnIdentity,
+  SOURCE_KIND_PAIRS,
   tryBuildPostSaleEarnMovement,
   type LoyaltyEarningConfig,
   type LoyaltyLedger,
@@ -811,46 +813,28 @@ describe('RED PROOFS — the laws, proved by breaking them', () => {
 /* ================================================================== *
  * F-01 — the restoration horizon, and why the fold refuses it
  *
- * An independent challenge of `383b0f3` found that points restored after a
- * full sale reversal came back with NO horizon and stayed redeemable forever.
- * These are the permanent proofs of the fix. They are written against the
- * ledger VALUE rather than through `appendMovement`, because `validateDraft`
- * refuses an unregistered `source:kind` pair and `SOURCE_KIND_PAIRS` has no
- * restoring source yet (`§5.7.2` records that registry row as OWED). That is
- * the point: the row shape is one migration away, it belongs to another
- * owner, and these tests are what will complain the moment it lands.
+ * Round 1 of an independent challenge found that points restored after a full
+ * sale reversal came back with NO horizon and stayed redeemable forever.
+ * Round 2 found that the first fix keyed on `sourceType` and so exempted the
+ * exact row it was written to stop: the pack specifies the restoration AS a
+ * positive `manual_adjustment` `adjust` naming its target (§1.4, §2.3, A-16).
+ * These are the permanent proofs of the second fix, and the lesson they encode
+ * is that a guard must be driven through the REAL WRITER. Every fixture below
+ * goes through `appendMovement`, so every shape law is satisfied and the rows
+ * are ones a lawful writer can actually produce.
  * ================================================================== */
 
-describe('foldExpiry — F-01, a positive non-grant row has no attributable horizon', () => {
-  /** The challenge's own fixture, as a ledger value: 100 points with a horizon
-   *  of 2026-06-01, 40 consumed in a sale, then that sale fully reversed by a
-   *  `+40` restoration naming the consumption through `correctsId`. */
+describe('foldExpiry — F-01, a positive row that CORRECTS another has no attributable horizon', () => {
+  /** The challenge's fixture, built the way the pack says a reversal is written:
+   *  100 points with a horizon of 2026-06-01, 40 consumed by a sale, and that
+   *  sale reversed by a positive `manual_adjustment` `adjust` whose `correctsId`
+   *  names the row it corrects. Nothing here bypasses `validateDraft`. */
   function restoredLedger(): LoyaltyLedger {
-    return {
-      movements: [
-        {
-          id: 'e1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
-          movementKind: 'earn', sourceType: 'sale', sourceId: 'sale-earn',
-          pointsDelta: 100n, expiresOn: '2026-06-01', effectiveOn: '2025-06-01',
-          reason: null, correctsId: null,
-        },
-        {
-          id: 'c1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 2n,
-          movementKind: 'consume', sourceType: 'sale', sourceId: 'sale-spend',
-          pointsDelta: -40n, expiresOn: null, effectiveOn: '2025-09-01',
-          reason: null, correctsId: null,
-        },
-        {
-          // The restoration. `horizon_ck` forbids a horizon on any kind but an
-          // earn, so this row CANNOT carry the lot's 2026-06-01 even though
-          // that is the date the restored points belong to.
-          id: 'r1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
-          movementKind: 'adjust', sourceType: 'sale', sourceId: 'sale-spend',
-          pointsDelta: 40n, expiresOn: null, effectiveOn: '2025-09-02',
-          reason: 'sale fully reversed', correctsId: 'c1',
-        },
-      ],
-    };
+    return ledgerOf(
+      earn('e1', 100n, '2025-06-01', '2026-06-01'),
+      consume('c1', 40n, '2025-09-01'),
+      adjust('r1', 40n, '2025-09-02', 'sale fully reversed', 'e1'),
+    );
   }
 
   it('refuses the fold rather than reporting a total it cannot attribute', () => {
@@ -864,9 +848,11 @@ describe('foldExpiry — F-01, a positive non-grant row has no attributable hori
     const thrown = must(refusal instanceof LoyaltyRefusal ? refusal : null, 'a loyalty refusal');
     expect(thrown.code).toBe('loyalty.unattributable_positive_movement');
     expect(thrown.httpStatus).toBe(500);
-    // The refusal names the row, because whoever reads the log has to find it.
+    // The refusal names the row AND the row it corrects, because whoever reads
+    // the log has to find both.
     expect(thrown.context.movementId).toBe('r1');
-    expect(thrown.context.sourceType).toBe('sale');
+    expect(thrown.context.correctsId).toBe('e1');
+    expect(thrown.context.sourceType).toBe('manual_adjustment');
     expect(thrown.context.points).toBe('40');
   });
 
@@ -880,8 +866,9 @@ describe('foldExpiry — F-01, a positive non-grant row has no attributable hori
 
   it('RED PROOF — the fold this replaced reported 40 points that never expire', () => {
     // The old loop, restated exactly: every positive non-earn row joined an
-    // un-horizoned total that was spendable at every asOf. Run it over the
-    // same ledger and it reproduces the challenge's measured figures.
+    // un-horizoned total spendable at every asOf. Run it over the same lawful
+    // ledger and it reproduces the figures BOTH challenge rounds measured —
+    // which is the point, because the round-1 fix changed none of them.
     const rows = restoredLedger().movements;
     const brokenFold = (asOf: string) => {
       let unhorizoned = 0n;
@@ -916,39 +903,103 @@ describe('foldExpiry — F-01, a positive non-grant row has no attributable hori
     expect(muchLater.expiringPoints).toBe(60n);
 
     // The canary: the shipped fold does NOT answer this, at either date.
-    expect(refusalCodeOf(() => foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, '2026-06-01'))).toBe(
-      'loyalty.unattributable_positive_movement',
-    );
-    expect(refusalCodeOf(() => foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, '2036-01-01'))).toBe(
-      'loyalty.unattributable_positive_movement',
-    );
+    expect(() => foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, '2026-06-01')).toThrow(LoyaltyRefusal);
+    expect(() => foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, '2036-01-01')).toThrow(LoyaltyRefusal);
   });
 
-  it('still spends a registered manual grant, and now reports it as un-horizoned', () => {
-    // The one positive non-earn shape that is MEANT to have no horizon. It is
-    // the merchant's standing remedy, it goes through `appendMovement` like
-    // every other registered row, and the fix must not take it away.
+  it('REACHABILITY — the guard fires on a row the LAWFUL writer produces, not only on a hand-built one', () => {
+    // The round-1 fix was unreachable through `appendMovement`, and nothing
+    // caught that because its own test built a ledger by hand. So reachability
+    // is now asserted: every row of the fixture passes `validateDraft`, and the
+    // enumeration below is why `manual_adjustment:adjust` is the only shape
+    // that can reach the guard at all.
+    const ledger = restoredLedger();
+    expect(ledger.movements.map((m) => m.id)).toEqual(['e1', 'c1', 'r1']);
+    const restoring = must(
+      ledger.movements.find((m) => m.id === 'r1'),
+      'the restoring row',
+    );
+    expect(restoring.pointsDelta).toBe(40n);
+    expect(restoring.correctsId).toBe('e1');
+    expect(SOURCE_KIND_PAIRS).toContain(`${restoring.sourceType}:${restoring.movementKind}`);
+
+    // Of the four registered pairs, `sale:earn` is skipped by the loop, and
+    // `sale:consume` and `expiry_sweep:expire` cannot be positive at all — so a
+    // guard that exempted `manual_adjustment` could never fire.
+    const positiveNonEarnPairs = SOURCE_KIND_PAIRS.filter((pair) => {
+      const kind = must(pair.split(':')[1], 'a kind') as keyof typeof KIND_SIGN;
+      return kind !== 'earn' && KIND_SIGN[kind] !== 'negative';
+    });
+    expect(positiveNonEarnPairs).toEqual(['manual_adjustment:adjust']);
+  });
+
+  it('still spends a STANDING manual grant, which corrects nothing', () => {
+    // The one positive non-earn shape that is MEANT to have no horizon: the
+    // merchant's goodwill grant, with `correctsId === null`. The fix must not
+    // take it away, and the field must say that none of it is lot-backed.
     const ledger = ledgerOf(
       earn('e1', 100n, '2025-06-01', '2026-06-01'),
       adjust('a1', 40n, '2025-09-01', 'merchant goodwill'),
     );
     const onHorizon = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(must(ledger.movements.find((m) => m.id === 'a1'), 'the grant').correctsId).toBeNull();
     expect(onHorizon.balancePoints).toBe(140n);
     expect(onHorizon.expiringPoints).toBe(100n);
     expect(onHorizon.spendablePoints).toBe(40n);
     expect(onHorizon.unhorizonedPoints).toBe(40n);
     expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, '2026-06-01')).toBe(40n);
 
-    // Ten years on it is still spendable, and the field says WHY: none of it
-    // is lot-backed, so no horizon can reach it.
     const muchLater = foldExpiry(ledger, BUSINESS, CUSTOMER, '2036-01-01');
     expect(muchLater.spendablePoints).toBe(40n);
     expect(muchLater.unhorizonedPoints).toBe(40n);
     expect(muchLater.spendablePoints - muchLater.unhorizonedPoints).toBe(0n);
   });
 
+  it('separates the two shapes by `correctsId` and by nothing else', () => {
+    // Same source, same kind, same sign, same points, same dates. The ONLY
+    // difference is whether the row names a row it corrects — which is what
+    // §1.4 makes the marker of a correction, and what the round-1 fix could
+    // not see.
+    const grant = ledgerOf(earn('e1', 100n, '2025-06-01', '2026-06-01'), adjust('a1', 40n, '2025-09-01', 'goodwill'));
+    const correction = ledgerOf(
+      earn('e1', 100n, '2025-06-01', '2026-06-01'),
+      adjust('a1', 40n, '2025-09-01', 'goodwill', 'e1'),
+    );
+    expect(foldExpiry(grant, BUSINESS, CUSTOMER, '2026-06-01').unhorizonedPoints).toBe(40n);
+    expect(refusalCodeOf(() => foldExpiry(correction, BUSINESS, CUSTOMER, '2026-06-01'))).toBe(
+      'loyalty.unattributable_positive_movement',
+    );
+  });
+
+  it('keeps the guard closed over a source §5.7.2 has yet to register', () => {
+    // Defence in depth, and labelled as such: this ledger is built BY HAND
+    // because no writer can produce `sale:adjust` today. If a later migration
+    // registers a restoring source, the fold refuses it on arrival instead of
+    // reporting a total it cannot attribute.
+    const byHand: LoyaltyLedger = {
+      movements: [
+        {
+          id: 'e1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
+          movementKind: 'earn', sourceType: 'sale', sourceId: 'sale-earn',
+          pointsDelta: 100n, expiresOn: '2026-06-01', effectiveOn: '2025-06-01',
+          reason: null, correctsId: null,
+        },
+        {
+          id: 'x1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 2n,
+          movementKind: 'adjust', sourceType: 'sale', sourceId: 'sale-spend',
+          pointsDelta: 40n, expiresOn: null, effectiveOn: '2025-09-02',
+          reason: 'a source no registry admits yet', correctsId: null,
+        },
+      ],
+    };
+    expect(SOURCE_KIND_PAIRS).not.toContain('sale:adjust');
+    expect(refusalCodeOf(() => foldExpiry(byHand, BUSINESS, CUSTOMER, '2026-06-01'))).toBe(
+      'loyalty.unattributable_positive_movement',
+    );
+  });
+
   it('reports zero un-horizoned points for a ledger that has none', () => {
-    // Without this the field could be a constant 40 in the case above and
+    // Without this the field could be a constant 40 in the cases above and
     // nothing would notice.
     const ledger = ledgerOf(earn('e1', 100n, '2025-06-01', '2026-06-01'), consume('c1', 40n, '2025-09-01'));
     const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-05-31');
