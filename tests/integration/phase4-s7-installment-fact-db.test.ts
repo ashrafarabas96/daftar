@@ -4080,12 +4080,23 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     //    can fail on STATISTICS appearing across the readings, and settles
     //    NOTHING about the isolation level: that plant is the same session's
     //    own write and is visible to it at every level.
+    //
+    //    AND THE LEVEL ARM'S MESSAGE WAS A DEPENDENT OF THE SAME WITHDRAWN
+    //    PREMISE, CORRECTED UNDER `TL-P4-COORD-R83` ordered item 1 (T3 of
+    //    round 23's sweep). It used to say that failing this arm meant a
+    //    re-read MAY be equal to the first read by construction — which is
+    //    not available to THESE two captures at any level, because each is
+    //    its own transaction, so the hedge covered an impossibility. It now
+    //    names the condition that really would make the pair unable to fail
+    //    (a higher level INSIDE ONE TRANSACTION) and discloses that
+    //    READ UNCOMMITTED is refused as well, which PostgreSQL treats as
+    //    READ COMMITTED — so the pin is wider than its subject and says so.
     const statsBefore = M['R7_cost_inputs'] as Record<string, unknown>;
     const statsAfter = M['R7_stats_after_last_plan'] as Record<string, unknown>;
     expect(statsAfter, 'the premise was never re-read after the last plan reading').toBeTruthy();
     expect(
       [String(statsBefore['iso']), String(statsAfter['iso'])],
-      'the two captures of the premise did not both run at READ COMMITTED, so a re-read may be equal to the first read by construction and this pair may be unable to fail',
+      "the two captures of the premise did not both run at READ COMMITTED: at REPEATABLE READ or SERIALIZABLE two captures taken INSIDE ONE TRANSACTION would share the first read's snapshot and the pair would be unable to fail, which is the route this pin refuses; READ UNCOMMITTED is refused too, which PostgreSQL treats as READ COMMITTED, so the pin is deliberately conservative",
     ).toStrictEqual(['read committed', 'read committed']);
     expect(
       Number(statsBefore['stats_rows']),
