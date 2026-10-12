@@ -145,3 +145,47 @@ describe('what this fold does NOT claim', () => {
     }
   });
 });
+
+describe('ids are validated, and no finding is lost (challenger P3-03)', () => {
+  it('refuses a non-canonical order or sale id rather than naming it in a finding', () => {
+    // The findings name their subjects by id, and a report that names `''` or
+    // `'ORDER-7'` as the orphaned order cannot be acted on by whoever reads it.
+    for (const orderId of ['', 'ORDER-7', 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA']) {
+      expect(() => reconcileChannelOrders([{ orderId, channel: 'storefront', state: 'placed', saleId: null }], [])).toThrowError(
+        expect.objectContaining({ code: 'order.id_invalid' }),
+      );
+    }
+    expect(() => reconcileChannelOrders([{ orderId: O1, channel: 'storefront', state: 'fulfilled', saleId: 'not-a-uuid' }], [])).toThrowError(
+      expect.objectContaining({ code: 'order.id_invalid' }),
+    );
+    expect(() => reconcileChannelOrders([], [{ saleId: 'nope', orderId: null }])).toThrowError(expect.objectContaining({ code: 'order.id_invalid' }));
+  });
+
+  it('reports BOTH orders as orphaned when two share a sale the ledger has no row for', () => {
+    // It used to `continue` past the orphan check for the second claimant, so a
+    // human reading the findings saw one missing sale where there were two.
+    const report = reconcileChannelOrders(
+      [
+        { orderId: O1, channel: 'storefront', state: 'fulfilled', saleId: S1 },
+        { orderId: O2, channel: 'pos', state: 'fulfilled', saleId: S1 },
+      ],
+      [],
+    );
+    expect(report.isReconciled).toBe(false);
+    expect(report.findings.filter((f) => f.code === 'sale_shared_by_orders')).toHaveLength(1);
+    const orphans = report.findings.filter((f) => f.code === 'order_without_sale');
+    expect(orphans).toHaveLength(2);
+    expect(orphans.map((f) => f.orderId).sort()).toEqual([O1, O2].sort());
+  });
+
+  it('still reports the shared sale once when the sale DOES exist', () => {
+    const report = reconcileChannelOrders(
+      [
+        { orderId: O1, channel: 'storefront', state: 'fulfilled', saleId: S1 },
+        { orderId: O2, channel: 'pos', state: 'fulfilled', saleId: S1 },
+      ],
+      [{ saleId: S1, orderId: O1 }],
+    );
+    expect(report.findings.map((f) => f.code)).toEqual(['sale_shared_by_orders']);
+  });
+});

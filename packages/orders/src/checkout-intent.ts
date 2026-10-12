@@ -43,6 +43,7 @@ import type { BasketPosition } from './cart';
 import { requireSettlementTruth, type OrderSettlementEvidence, type OrderSettlementMode } from './settlement';
 import { OrderError, assertCanonicalId } from './errors';
 import { isCanonicalCivilDate } from './instant';
+import { assertCommitWithinConfirmedQuote, assertQuoteApproved, type ConfirmedQuoteApproval } from './quote';
 import { SALE_BOUND_ORDER_STATES, type OrderSnapshot } from './state';
 
 /** One line of the sale commit intent. Mirrors `SaleCommitLineDto` at `93084f8`. */
@@ -143,10 +144,46 @@ export function assertNoForbiddenIntentFields(intent: object): void {
 /** Non-negative integer minor units as a decimal string. No arithmetic — a shape check, so a float or a sign cannot pass. */
 const NON_NEGATIVE_MINOR = /^(0|[1-9]\d*)$/;
 
+/**
+ * The sales authority's own LINE LIMIT, mirrored from
+ * `packages/domain-core/src/sale.ts:150` (`MAX_SALE_LINES = 200`) at `93084f8`.
+ *
+ * It is here because the mirror had copied the command's SHAPE and not its
+ * CONSTRAINTS, so Phase 6 built requests the authority would refuse — a 5000
+ * character note and an unbounded line count were both measured. A refusal at
+ * the boundary is a late place to learn that, and an order that reaches the
+ * commit and is rejected there has already consumed an idempotency attempt.
+ *
+ * Like the shape, the constant is DELETED at promotion and imported from the
+ * sealed contract; `P6-CONTRACT-BINDING.md` carries that as a step, and the
+ * manifest carries the blocker that `main` at `6fc505d` holds no sales contract
+ * at all, so nothing on this branch can compare the mirror to its source.
+ */
+export const SALE_MIRROR_MAX_LINES = 200;
+
+/** The authority's `notes` bounds, mirrored the same way: 1..1000 characters AFTER trimming, or null. */
+export const SALE_MIRROR_NOTES_MAX_LENGTH = 1000;
+
 /** What the order states about its own checkout. Every field is the merchant's or the shopper's, none is a clock's. */
 export interface OrderCheckoutFacts {
+  /** The order being checked out. It is what the confirmed quote must belong to. */
+  orderId: string;
   /** The id stored ON THE ORDER, not minted per attempt. */
   saleId: string;
+  /**
+   * The quote the shopper confirmed, the confirmation itself, and the instant of
+   * the attempt — REQUIRED (`TL-P6-R?`, audited §27).
+   *
+   * It is required rather than optional because an optional defence is not one:
+   * the independent challenger measured that the whole quote module was called
+   * by nothing on the path to a sale, so §27's purpose (the catalogue edit
+   * between placement and commit), PART 33's zero tolerance and PART 34's
+   * half-open boundary were implemented, tested, and guarding nothing. Every
+   * line of the intent below is now checked against what the shopper agreed to:
+   * the positions, their quantities and — the case the challenger built — the
+   * discount, which was previously free for any caller to state.
+   */
+  quoteApproval: ConfirmedQuoteApproval;
   /**
    * What the merchant CLAIMS the settlement is. It is a claim, not a fact: the
    * evidence below decides whether it may be committed under, and a mismatch is
@@ -206,10 +243,30 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
   if (snapshot.state !== 'accepted' && snapshot.state !== 'fulfilling') {
     throw new OrderError('order.checkout_state_invalid', 'a checkout is built from an accepted or fulfilling order', { state: snapshot.state });
   }
+  // Cash collected AT HANDOVER is a fact about a handover, so it is admitted
+  // only while the order is being fulfilled. Nothing in this package can verify
+  // that cash was collected — that is accepted, and stated — but the structural
+  // narrowing that IS available was previously not taken: an order in
+  // `accepted`, where no handover has begun, produced `settlementMode: 'cash'`.
+  // The §25 law was carried by the evidence variant's NAME and by the caller's
+  // honesty; now the topology carries as much of it as the topology can.
+  if (facts.settlementEvidence.kind === 'cash_collected_on_handover' && snapshot.state !== 'fulfilling') {
+    throw new OrderError('order.checkout_state_invalid', 'cash collected at handover is admissible only while the order is fulfilling', {
+      state: snapshot.state,
+      evidenceKind: facts.settlementEvidence.kind,
+    });
+  }
   if (positions.length === 0) {
     throw new OrderError('order.cart_empty', 'a checkout carries at least one position');
   }
+  if (positions.length > SALE_MIRROR_MAX_LINES) {
+    throw new OrderError('order.checkout_line_limit', 'the checkout carries more lines than the sales authority accepts', {
+      lines: String(positions.length),
+      maxLines: String(SALE_MIRROR_MAX_LINES),
+    });
+  }
 
+  assertCanonicalId(facts.orderId, 'orderId');
   assertCanonicalId(facts.saleId, 'saleId');
   assertCanonicalId(facts.warehouseId, 'warehouseId');
   if (facts.customerId !== null) assertCanonicalId(facts.customerId, 'customerId');
@@ -241,9 +298,45 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
     throw new OrderError('order.checkout_customer_required', 'a due date requires a credit checkout with a named customer');
   }
 
+  if (facts.notes !== null) {
+    // The authority's bound, checked on the TRIMMED text, because that is the
+    // text it checks: a note of 1000 spaces is not a note.
+    const trimmed = facts.notes.trim();
+    if (trimmed.length === 0 || trimmed.length > SALE_MIRROR_NOTES_MAX_LENGTH) {
+      throw new OrderError('order.checkout_notes_invalid', 'notes must be 1 to 1000 characters after trimming, or null', {
+        trimmedLength: String(trimmed.length),
+        maxLength: String(SALE_MIRROR_NOTES_MAX_LENGTH),
+      });
+    }
+  }
+
   if (facts.taxMinor !== '0') {
     throw new OrderError('order.checkout_tax_policy_absent', 'sales tax is a structural zero; a non-zero tax is refused, never normalized', {
       stated: facts.taxMinor,
+    });
+  }
+
+  // THE QUOTE GATE. Before any line is assembled: the quote is intact, it is
+  // this order's, the confirmation agrees with it field for field, and the
+  // window is still open at `asOf` (half-open, so `asOf === expiresAt` is
+  // expired). A second attempt that carries the authority's previously
+  // recomputed total is refused HERE under PART 33's zero tolerance, rather
+  // than rebuilding an intent for a total the shopper never agreed to.
+  const approval = facts.quoteApproval;
+  assertQuoteApproved(approval, facts.orderId);
+  if (approval.priorRecomputedTotalMinor !== undefined) {
+    assertCommitWithinConfirmedQuote(approval, facts.orderId, approval.priorRecomputedTotalMinor);
+  }
+
+  // The confirmed quote prices exactly the positions being committed. Set
+  // equality in both directions: a position the quote never priced is a line
+  // the shopper never saw, and a quoted line that is not being committed means
+  // the basket changed after confirmation.
+  const quotedByStockKey = new Map(approval.quote.lines.map((line) => [line.stockKey, line] as const));
+  if (quotedByStockKey.size !== positions.length) {
+    throw new OrderError('order.quote_not_approved', 'the confirmed quote prices a different set of positions than the checkout carries', {
+      quotedLines: String(quotedByStockKey.size),
+      positions: String(positions.length),
     });
   }
 
@@ -264,6 +357,35 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
         stockKey: position.stockKey,
       });
     }
+
+    const quoted = quotedByStockKey.get(position.stockKey);
+    if (quoted === undefined) {
+      throw new OrderError('order.quote_not_approved', 'the checkout carries a position the confirmed quote does not price', {
+        stockKey: position.stockKey,
+      });
+    }
+    // String equality, not re-parsing: both sides are written by
+    // `formatQuantity`, and the quote relation now refuses any other spelling.
+    if (quoted.quantity !== position.totalQuantity) {
+      throw new OrderError('order.quote_not_approved', 'the checkout quantity is not the quantity the shopper confirmed', {
+        stockKey: position.stockKey,
+        confirmed: quoted.quantity,
+        checkout: position.totalQuantity,
+      });
+    }
+    // The discount must be the one the quote GRANTED. This is the case the
+    // independent challenger built: a discount of 999999999 minor units on a
+    // position no quote ever authorised used to build without complaint,
+    // because the request was the caller's to state and nothing compared it to
+    // what the shopper was shown.
+    if (requested !== quoted.discountMinor) {
+      throw new OrderError('order.quote_discount_unapproved', 'the discount request is not the discount the confirmed quote granted', {
+        stockKey: position.stockKey,
+        granted: quoted.discountMinor,
+        requested,
+      });
+    }
+
     return {
       lineId: position.representativeLineId,
       productId: position.productId,

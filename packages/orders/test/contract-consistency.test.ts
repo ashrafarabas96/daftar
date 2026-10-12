@@ -13,6 +13,8 @@
  * out by hand on the other — never from the same source twice, which would
  * compare the vocabulary to itself.
  */
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ORDER_CHANNELS,
@@ -216,5 +218,44 @@ describe('the quote-confirmation fact carries the intent digest (Master Continuo
     expect(moneyish).toEqual([]);
     // The planted control, so the empty result above is a measurement.
     expect(Object.keys({ ...CONFIRMATION, paidTotalMinor: '1' }).filter((k) => /minor|amount|total|paid|settle|tender/i.test(k))).toEqual(['paidTotalMinor']);
+  });
+});
+
+describe('every published error code is one this package can actually raise (challenger P3-01)', () => {
+  // The previous test asserted that the published codes are non-empty,
+  // duplicate-free and prefixed `order.` — and its title claimed they are codes
+  // "this package can actually raise", which its body never reached. It stayed
+  // green over `order.sale_binding_conflict`, a code whose only branch was
+  // unreachable: the independent challenger measured a second `record_sale`
+  // naming a different sale raising `order.transition_not_allowed` instead.
+  //
+  // So the subject set is now READ FROM THE SOURCE. Every `new OrderError('x'`
+  // in `src/` is collected, and the published list must be a subset of it. A
+  // published code with no `throw` behind it is now impossible to ship, and a
+  // code that is raised without being published stays allowed — not every
+  // refusal is a client's business.
+  const raised = new Set<string>();
+  const sourceDir = join(__dirname, '..', 'src');
+  for (const file of readdirSync(sourceDir)) {
+    if (!file.endsWith('.ts')) continue;
+    const text = readFileSync(join(sourceDir, file), 'utf8');
+    for (const match of text.matchAll(/new OrderError\(\s*'([^']+)'/g)) {
+      const code = match[1];
+      if (code !== undefined) raised.add(code);
+    }
+  }
+
+  it('found the raise sites at all — the scan is not vacuously green', () => {
+    // A scan that matched nothing would make the subset check below pass for
+    // every possible published list, which is the failure mode of a test that
+    // reads its own subject.
+    expect(raised.size).toBeGreaterThan(20);
+    expect(raised).toContain('order.quote_expired');
+    expect(raised).not.toContain('order.sale_binding_conflict');
+  });
+
+  it('publishes no code the source never raises', () => {
+    const unraisable = ORDER_CLIENT_ERROR_CODES.filter((code) => !raised.has(code));
+    expect(unraisable).toEqual([]);
   });
 });

@@ -14,10 +14,21 @@
  *    `record_sale` transition REPORTS and does not perform.
  *
  * 2. **The sale binding is single and immutable.** `record_sale` is the only
- *    transition that may carry a `saleId`, every other transition is refused
- *    if it carries one, and a second DIFFERENT sale id for an order already
- *    bound to one is `order.sale_binding_conflict`. An order has at most one
- *    canonical sale, forever.
+ *    transition that may carry a `saleId`, and every other transition is
+ *    refused if it carries one. The SECOND sale is impossible by TOPOLOGY, not
+ *    by a check: `record_sale` runs only from `fulfilling`, it leaves the order
+ *    in `fulfilled`, and the only edge out of `fulfilled` is `complete`, so no
+ *    reachable state both carries a `saleId` and admits `record_sale`.
+ *
+ *    An earlier revision also carried a runtime branch raising
+ *    `order.sale_binding_conflict` for that case, and published the code to
+ *    clients. The independent challenger measured it: a second `record_sale`
+ *    naming a different sale raises `order.transition_not_allowed`, so the
+ *    branch was dead and the code was unraisable — a published promise nothing
+ *    could keep. Both are gone, and `order-state.test.ts` now proves the law
+ *    the way it is actually enforced, by enumerating the edge table: no state
+ *    in `record_sale`'s `from` set is sale-bound. A law carried by a dead branch
+ *    is a law carried by nothing.
  *
  * 3. **Nothing is cancelled after the sale.** There is no edge from
  *    `fulfilled` or `completed` to `cancelled`, and an attempt gets its own
@@ -164,9 +175,9 @@ function step(current: OrderSnapshot, t: OrderTransition): OrderSnapshot {
     });
   }
 
-  if (t.saleId !== null && current.saleId !== null && current.saleId !== t.saleId) {
-    throw new OrderError('order.sale_binding_conflict', 'the order is already bound to a different canonical sale', { transitionId: t.transitionId });
-  }
+  // No binding-conflict branch: see law 2. The edge table makes a second,
+  // different sale id unreachable, and the enumeration test over `ORDER_EDGES`
+  // is what keeps that true if a future author adds an edge.
 
   return {
     state: edge.to,

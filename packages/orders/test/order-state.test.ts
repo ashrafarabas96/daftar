@@ -281,3 +281,46 @@ describe('law 5 — physical handover is not a state of its own (Directive #11 P
     expect(sold.snapshot.saleId).toBe(ID.saleDoc);
   });
 });
+
+describe('law 2 is carried by the edge table, not by a dead branch (challenger P3-01)', () => {
+  it('no state that admits record_sale is a state that already carries a sale', () => {
+    // This is the whole enforcement of "one sale per order, forever": a second,
+    // DIFFERENT sale id is unreachable because no reachable state both carries a
+    // `saleId` and admits `record_sale`. Enumerated over the edge table as DATA,
+    // so an author who adds an edge from `fulfilled` or `completed` into the
+    // binding transition turns this red instead of silently re-opening the
+    // binding.
+    for (const state of ORDER_EDGES.record_sale.from) {
+      expect(SALE_BOUND_ORDER_STATES).not.toContain(state);
+    }
+    expect(SALE_BOUND_ORDER_STATES).toContain(ORDER_EDGES.record_sale.to);
+    // Every edge OUT of a sale-bound state is some other transition, so no path
+    // returns to the binding.
+    for (const [kind, edge] of Object.entries(ORDER_EDGES)) {
+      for (const from of edge.from) {
+        if (SALE_BOUND_ORDER_STATES.includes(from)) expect(kind).not.toBe('record_sale');
+      }
+    }
+  });
+
+  it('a second record_sale naming a different sale is refused as a non-edge', () => {
+    // Measured rather than asserted: the refusal is
+    // `order.transition_not_allowed`, which is why publishing a dedicated
+    // binding-conflict code promised a refusal nothing could deliver. The branch
+    // that raised it was unreachable and is gone.
+    const history = [
+      t(ID.place, 'place', '2026-10-01T09:00:00Z'),
+      t(ID.accept, 'accept', '2026-10-01T09:01:00Z'),
+      t(ID.start, 'start_fulfilment', '2026-10-01T09:02:00Z'),
+      t(ID.sale, 'record_sale', '2026-10-01T09:03:00Z', ID.saleDoc),
+    ];
+    expect(foldOrderHistory(history).saleId).toBe(ID.saleDoc);
+    try {
+      applyOrderTransition(history, t(ID.probe, 'record_sale', '2026-10-01T09:04:00Z', ID.otherSaleDoc));
+      throw new Error('a second record_sale naming a different sale was admitted');
+    } catch (error) {
+      expect(error).toBeInstanceOf(OrderError);
+      expect((error as OrderError).code).toBe('order.transition_not_allowed');
+    }
+  });
+});

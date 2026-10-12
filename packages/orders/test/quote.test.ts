@@ -14,16 +14,22 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  NO_QUOTE_EXPIRY,
   OrderError,
+  assertCommitWithinConfirmedQuote,
+  assertQuoteApproved,
   assertQuoteConfirmable,
   assertQuoteIntact,
   assessQuoteDivergence,
+  quoteExpiryText,
   ORDER_QUOTE_DIGEST_PATTERN,
   P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR,
   buildCommercialQuote,
   canonicalQuoteBytes,
   type CommercialQuote,
   type CommercialQuoteInput,
+  type ConfirmedQuoteApproval,
+  type OrderQuoteConfirmationDto,
 } from '../src';
 
 const QUOTE = '11111111-1111-4111-8111-111111111111';
@@ -55,6 +61,31 @@ const INPUT: CommercialQuoteInput = {
 };
 
 const QUOTED = buildCommercialQuote(INPUT);
+
+const CONFIRMATION_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+/**
+ * A HONEST approval of a quote: the confirmation agrees with it field for field.
+ *
+ * Every refusal case below starts from this and breaks exactly one field, which
+ * is what makes each case name its own subject rather than failing for whatever
+ * the first disagreement happens to be.
+ */
+function approve(quote: CommercialQuote, asOf = '2026-10-01T09:30:00Z'): ConfirmedQuoteApproval {
+  const confirmation: OrderQuoteConfirmationDto = {
+    confirmationId: CONFIRMATION_ID,
+    quoteId: quote.quoteId,
+    orderId: quote.orderId,
+    confirmedVersion: quote.version,
+    confirmedAt: asOf,
+    confirmedQuoteDigest: quote.digest,
+    confirmedQuoteExpiresAt: quoteExpiryText(quote),
+    confirmedByUserId: null,
+  };
+  return { quote, confirmation, asOf };
+}
+
+const APPROVAL = approve(QUOTED);
 
 describe('buildCommercialQuote', () => {
   it('produces a stable lowercase-hex sha256 digest over the canonical stream', () => {
@@ -253,16 +284,17 @@ describe('assessQuoteDivergence', () => {
   it('PART 33 — the function takes NO tolerance argument, so no caller can widen the policy', () => {
     // An extra argument would be silently ignored by JS, so arity is asserted
     // directly: this is the only mechanical check that a tolerance parameter has
-    // not quietly come back.
-    expect(assessQuoteDivergence.length).toBe(2);
+    // not quietly come back. Three parameters: the approval, the order it must
+    // belong to, and the recomputed total. None of them is a tolerance.
+    expect(assessQuoteDivergence.length).toBe(3);
   });
 
   it('passes an exact match', () => {
-    expect(assessQuoteDivergence(QUOTED, '3799')).toEqual({ status: 'within_policy', differenceMinor: '0' });
+    expect(assessQuoteDivergence(APPROVAL, ORDER, '3799')).toEqual({ status: 'within_policy', differenceMinor: '0' });
   });
 
   it('PART 33 — one minor unit MORE requires re-confirmation', () => {
-    expect(assessQuoteDivergence(QUOTED, '3800')).toEqual({
+    expect(assessQuoteDivergence(APPROVAL, ORDER, '3800')).toEqual({
       status: 'requires_reconfirmation',
       quotedTotalMinor: '3799',
       recomputedTotalMinor: '3800',
@@ -271,7 +303,7 @@ describe('assessQuoteDivergence', () => {
   });
 
   it('PART 33 — one minor unit LESS requires re-confirmation too — charging less is still not what was agreed', () => {
-    const verdict = assessQuoteDivergence(QUOTED, '3798');
+    const verdict = assessQuoteDivergence(APPROVAL, ORDER, '3798');
     expect(verdict.status).toBe('requires_reconfirmation');
     expect(verdict.differenceMinor).toBe('1');
   });
@@ -281,9 +313,9 @@ describe('assessQuoteDivergence', () => {
     // automatically is 3799 itself; both neighbours diverge. The three numbers
     // are written out rather than derived, so an arithmetic slip in the test
     // cannot agree with one in the implementation.
-    expect(assessQuoteDivergence(QUOTED, '3798').status).toBe('requires_reconfirmation');
-    expect(assessQuoteDivergence(QUOTED, '3799').status).toBe('within_policy');
-    expect(assessQuoteDivergence(QUOTED, '3800').status).toBe('requires_reconfirmation');
+    expect(assessQuoteDivergence(APPROVAL, ORDER, '3798').status).toBe('requires_reconfirmation');
+    expect(assessQuoteDivergence(APPROVAL, ORDER, '3799').status).toBe('within_policy');
+    expect(assessQuoteDivergence(APPROVAL, ORDER, '3800').status).toBe('requires_reconfirmation');
   });
 
   it('is exact above Number.MAX_SAFE_INTEGER — a double could not hold this comparison', () => {
@@ -293,18 +325,18 @@ describe('assessQuoteDivergence', () => {
       lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), lineTotalMinor: big }],
       displayedTotalMinor: big,
     });
-    expect(assessQuoteDivergence(huge, big)).toEqual({ status: 'within_policy', differenceMinor: '0' });
-    expect(assessQuoteDivergence(huge, '9007199254740994').status).toBe('requires_reconfirmation');
+    expect(assessQuoteDivergence(approve(huge), ORDER, big)).toEqual({ status: 'within_policy', differenceMinor: '0' });
+    expect(assessQuoteDivergence(approve(huge), ORDER, '9007199254740994').status).toBe('requires_reconfirmation');
   });
 
   it('refuses a negative or non-canonical recomputed total rather than reading it as zero', () => {
     for (const bad of ['-1', '0.5', '']) {
-      expect(() => assessQuoteDivergence(QUOTED, bad)).toThrowError(expect.objectContaining({ code: 'order.quote_amount_invalid' }));
+      expect(() => assessQuoteDivergence(APPROVAL, ORDER, bad)).toThrowError(expect.objectContaining({ code: 'order.quote_amount_invalid' }));
     }
   });
 
   it('refuses a tampered quote before comparing anything', () => {
-    expect(() => assessQuoteDivergence({ ...QUOTED, displayedTotalMinor: '3798' }, '3798')).toThrowError(
+    expect(() => assessQuoteDivergence(approve({ ...QUOTED, displayedTotalMinor: '3798' }), ORDER, '3798')).toThrowError(
       expect.objectContaining({ code: 'order.quote_tampered' }),
     );
   });
@@ -372,5 +404,180 @@ describe('the quote snapshot carries NO confirmation field (Master Continuous Mi
     const reissued = buildCommercialQuote(INPUT);
     expect(reissued.digest).toBe(QUOTED.digest);
     expect(() => assertQuoteIntact(QUOTED)).not.toThrow();
+  });
+});
+
+describe('a quoted quantity is validated by the inventory truth (challenger P1-02)', () => {
+  // The independent challenger measured seven values that the quote relation
+  // accepted into the immutable record of what the shopper was shown, each of
+  // which then reported itself intact AND confirmable. They are written out
+  // here one by one rather than generated, because each is a different way of
+  // being wrong and a reader should see all seven.
+  const REFUSED = ['-5', '', 'abc', '0', '1e3', '  2  ', '2.00000000001'];
+
+  for (const quantity of REFUSED) {
+    it(`refuses a line quantity of ${JSON.stringify(quantity)}`, () => {
+      const first = INPUT.lines[0] as (typeof INPUT.lines)[number];
+      try {
+        buildCommercialQuote({ ...INPUT, lines: [{ ...first, quantity }, ...INPUT.lines.slice(1)] });
+        throw new Error(`a line quantity of ${JSON.stringify(quantity)} was accepted`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(OrderError);
+        expect((error as OrderError).code).toBe('order.quote_quantity_invalid');
+        expect((error as OrderError).details?.stated).toBe(quantity);
+      }
+    });
+  }
+
+  it('refuses a non-canonical spelling of a valid quantity, so one quantity has one digest', () => {
+    const first = INPUT.lines[0] as (typeof INPUT.lines)[number];
+    for (const spelling of ['2', '2.0', '2.00']) {
+      try {
+        buildCommercialQuote({ ...INPUT, lines: [{ ...first, quantity: spelling }, ...INPUT.lines.slice(1)] });
+        throw new Error(`the spelling ${JSON.stringify(spelling)} was accepted beside 2.0000`);
+      } catch (error) {
+        expect((error as OrderError).code).toBe('order.quote_quantity_invalid');
+        expect((error as OrderError).details?.canonical).toBe('2.0000');
+      }
+    }
+  });
+
+  it('refuses a quantity the product unit precision cannot represent, when the precision is supplied', () => {
+    const first = INPUT.lines[0] as (typeof INPUT.lines)[number];
+    const fractional = { ...INPUT, lines: [{ ...first, quantity: '2.5000' }, ...INPUT.lines.slice(1)] };
+    // Without a precision the law is not claimed: 2.5 of something is a fine
+    // quantity until a caller says the product is sold in whole units.
+    expect(buildCommercialQuote(fractional).lines[0]?.quantity).toBe('2.5000');
+    expect(() => buildCommercialQuote(fractional, { unitDecimalsByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, 0]]) })).toThrowError(
+      expect.objectContaining({ code: 'order.quote_quantity_invalid' }),
+    );
+  });
+});
+
+describe('the digest premise about \\u0000 is now true for the reason it gives (challenger P3-02)', () => {
+  // The module states that `\u0000` separates fields because it cannot occur in
+  // any value. `stockKey` and `quantity` were the two fields nothing validated,
+  // so both could carry one; the premise held only by the accident of the
+  // line-count field. Both are validated now, and these two cases are what keep
+  // that true.
+  it('refuses a stock key that is not the canonical key of its own product and variant', () => {
+    const first = INPUT.lines[0] as (typeof INPUT.lines)[number];
+    for (const stockKey of ['A\u0000B', `${PRODUCT_A}:`, `${PRODUCT_B}:${VARIANT}`, '']) {
+      try {
+        buildCommercialQuote({ ...INPUT, lines: [{ ...first, stockKey }, ...INPUT.lines.slice(1)] });
+        throw new Error(`a stock key of ${JSON.stringify(stockKey)} was accepted`);
+      } catch (error) {
+        expect((error as OrderError).code).toBe('order.quote_stock_key_invalid');
+        expect((error as OrderError).details?.expected).toBe(`${PRODUCT_A}:${VARIANT}`);
+      }
+    }
+  });
+
+  it('no NUL reaches the canonical stream, so the segment count is exactly the field count', () => {
+    // 9 header fields + 7 per line × 2 lines = 23 segments. A NUL smuggled into
+    // any value would raise this count, which is the mechanism the challenger
+    // found was doing the work on its own.
+    expect(canonicalQuoteBytes(INPUT).split('\u0000')).toHaveLength(23);
+  });
+});
+
+describe('an approval is an approval of THIS order current quote (challenger P2-02)', () => {
+  it('refuses a confirmation that names another order, another quote or other bytes', () => {
+    const OTHER = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+    const cases: [string, ConfirmedQuoteApproval][] = [
+      ['another order', { ...APPROVAL, confirmation: { ...APPROVAL.confirmation, orderId: OTHER } }],
+      ['another quote', { ...APPROVAL, confirmation: { ...APPROVAL.confirmation, quoteId: OTHER } }],
+      ['other bytes', { ...APPROVAL, confirmation: { ...APPROVAL.confirmation, confirmedQuoteDigest: 'a'.repeat(64) } }],
+      ['another expiry', { ...APPROVAL, confirmation: { ...APPROVAL.confirmation, confirmedQuoteExpiresAt: '2026-10-01T11:00:00Z' } }],
+    ];
+    for (const [what, approval] of cases) {
+      try {
+        assertQuoteApproved(approval, ORDER);
+        throw new Error(`a confirmation naming ${what} was accepted`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(OrderError);
+        expect((error as OrderError).code).toBe('order.quote_not_approved');
+      }
+    }
+  });
+
+  it('refuses a quote that belongs to another order even when the confirmation agrees with it', () => {
+    const OTHER = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+    const foreign = buildCommercialQuote({ ...INPUT, orderId: OTHER });
+    expect(() => assertQuoteApproved(approve(foreign), ORDER)).toThrowError(expect.objectContaining({ code: 'order.quote_not_approved' }));
+  });
+
+  it('PART 34 — no divergence verdict exists at all for an expired quote', () => {
+    // This is the defect the challenger measured: the same quote that
+    // `assertQuoteConfirmable` refuses at this instant used to return
+    // `within_policy` from the one function whose verdict gates the commit.
+    const atExpiry = approve(QUOTED, '2026-10-01T10:00:00Z');
+    expect(() => assertQuoteConfirmable(QUOTED, '2026-10-01T10:00:00Z', 1)).toThrowError(expect.objectContaining({ code: 'order.quote_expired' }));
+    expect(() => assessQuoteDivergence(atExpiry, ORDER, '3799')).toThrowError(expect.objectContaining({ code: 'order.quote_expired' }));
+  });
+
+  it('refuses a superseded version rather than passing it', () => {
+    const superseded: ConfirmedQuoteApproval = { ...APPROVAL, confirmation: { ...APPROVAL.confirmation, confirmedVersion: 9 } };
+    expect(() => assessQuoteDivergence(superseded, ORDER, '3799')).toThrowError(expect.objectContaining({ code: 'order.quote_version_stale' }));
+  });
+
+  it('turns the divergence verdict into a refusal that names both figures (PART 33)', () => {
+    expect(() => assertCommitWithinConfirmedQuote(APPROVAL, ORDER, '3799')).not.toThrow();
+    try {
+      assertCommitWithinConfirmedQuote(APPROVAL, ORDER, '3800');
+      throw new Error('a recomputation of 3800 was admitted over a confirmed 3799');
+    } catch (error) {
+      expect((error as OrderError).code).toBe('order.quote_requires_reconfirmation');
+      expect((error as OrderError).details?.quotedTotalMinor).toBe('3799');
+      expect((error as OrderError).details?.recomputedTotalMinor).toBe('3800');
+      expect((error as OrderError).details?.toleranceMinor).toBe('0');
+    }
+  });
+});
+
+describe('the domain null and the relation infinity are one mapping (challenger P0-01)', () => {
+  // The domain says `expiresAt: string | null`; `I6a.2`'s seven-column foreign
+  // key cannot carry a null, because under the default MATCH SIMPLE a null in
+  // any column skips the WHOLE key — measured on PostgreSQL 16.15, where a
+  // confirmation of a nonexistent order, quote, version and digest was
+  // accepted. `quoteExpiryText` is the one place the two representations meet.
+  const OPEN_ENDED = buildCommercialQuote({ ...INPUT, expiresAt: null });
+
+  it('maps a quote with no expiry onto the value the relation stores', () => {
+    expect(OPEN_ENDED.expiresAt).toBeNull();
+    expect(quoteExpiryText(OPEN_ENDED)).toBe(NO_QUOTE_EXPIRY);
+    expect(quoteExpiryText(QUOTED)).toBe('2026-10-01T10:00:00Z');
+  });
+
+  it('a no-expiry quote is confirmable at any instant at or after issue, and never before', () => {
+    expect(() => assertQuoteApproved(approve(OPEN_ENDED, '2099-01-01T00:00:00Z'), ORDER)).not.toThrow();
+    expect(() => assertQuoteApproved(approve(OPEN_ENDED, '2026-10-01T08:59:59Z'), ORDER)).toThrowError(
+      expect.objectContaining({ code: 'order.quote_expiry_invalid' }),
+    );
+  });
+
+  it('the three cases the relation used to accept for a no-expiry quote are refused in the domain too', () => {
+    const OTHER = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+    const honest = approve(OPEN_ENDED);
+    // 1. a WRONG DIGEST on a quote with no expiry — the case the challenger
+    //    asked to be named explicitly, because the composite key could not see it.
+    expect(() => assertQuoteApproved({ ...honest, confirmation: { ...honest.confirmation, confirmedQuoteDigest: 'b'.repeat(64) } }, ORDER)).toThrowError(
+      expect.objectContaining({ code: 'order.quote_not_approved' }),
+    );
+    // 2. a NONEXISTENT VERSION.
+    expect(() => assertQuoteApproved({ ...honest, confirmation: { ...honest.confirmation, confirmedVersion: 7 } }, ORDER)).toThrowError(
+      expect.objectContaining({ code: 'order.quote_version_stale' }),
+    );
+    // 3. a FOREIGN ORDER.
+    expect(() => assertQuoteApproved({ ...honest, confirmation: { ...honest.confirmation, orderId: OTHER } }, ORDER)).toThrowError(
+      expect.objectContaining({ code: 'order.quote_not_approved' }),
+    );
+  });
+
+  it('a null expiry is never written into a confirmation', () => {
+    // The DTO's type forbids it; this reads the VALUE the mapping produces, so
+    // the law is executed and not only compiled.
+    expect(approve(OPEN_ENDED).confirmation.confirmedQuoteExpiresAt).toBe(NO_QUOTE_EXPIRY);
+    expect(approve(OPEN_ENDED).confirmation.confirmedQuoteExpiresAt).not.toBeNull();
   });
 });

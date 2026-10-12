@@ -41,7 +41,7 @@
  * - **A sale with a null `orderId`** is a direct or POS sale and is correctly
  *   outside Phase 6. It is COUNTED and never reported.
  */
-import { OrderError } from './errors';
+import { OrderError, assertCanonicalId } from './errors';
 import { SALE_BOUND_ORDER_STATES, type OrderState } from './state';
 
 /** The channels an order can originate from. An unrecognised key is refused, never bucketed as "other". */
@@ -95,6 +95,12 @@ export interface ChannelReconciliationReport {
 export function reconcileChannelOrders(orders: readonly ChannelOrderRow[], sales: readonly CanonicalSaleRow[]): ChannelReconciliationReport {
   const orderById = new Map<string, ChannelOrderRow>();
   for (const order of orders) {
+    // Ids are validated here as they are in every other module of this package.
+    // They were not, and that mattered more than it looks: the findings name
+    // their subjects by id, and a report that names `''` or `'ORDER-7'` as the
+    // orphaned order cannot be acted on by whoever reads it.
+    assertCanonicalId(order.orderId, 'orderId');
+    if (order.saleId !== null) assertCanonicalId(order.saleId, 'saleId');
     if (orderById.has(order.orderId)) {
       throw new OrderError('order.reconciliation_order_duplicate', 'two input rows claim one order id', { orderId: order.orderId });
     }
@@ -109,6 +115,8 @@ export function reconcileChannelOrders(orders: readonly ChannelOrderRow[], sales
 
   const saleById = new Map<string, CanonicalSaleRow>();
   for (const sale of sales) {
+    assertCanonicalId(sale.saleId, 'saleId');
+    if (sale.orderId !== null) assertCanonicalId(sale.orderId, 'orderId');
     if (saleById.has(sale.saleId)) {
       throw new OrderError('order.reconciliation_sale_duplicate', 'two input rows claim one sale id', { saleId: sale.saleId });
     }
@@ -131,12 +139,17 @@ export function reconcileChannelOrders(orders: readonly ChannelOrderRow[], sales
     }
     if (order.saleId === null) continue;
 
+    // A shared sale is reported, and then the row is checked for the ORPHAN
+    // condition as well. It used to `continue` here, which lost one finding per
+    // shared sale: where two orders claimed one sale that the ledger has no row
+    // for, only the first was reported as orphaned, and a human reading the
+    // findings list saw one missing sale where there were two.
     const firstClaimant = orderBySaleId.get(order.saleId);
     if (firstClaimant !== undefined) {
       findings.push({ code: 'sale_shared_by_orders', orderId: order.orderId, saleId: order.saleId, counterpartId: firstClaimant });
-      continue;
+    } else {
+      orderBySaleId.set(order.saleId, order.orderId);
     }
-    orderBySaleId.set(order.saleId, order.orderId);
 
     if (!saleById.has(order.saleId)) {
       findings.push({ code: 'order_without_sale', orderId: order.orderId, saleId: order.saleId, counterpartId: null });

@@ -48,6 +48,9 @@
  * sum to the total the shopper was shown.
  */
 import { createHash } from 'node:crypto';
+import { assertQuantityRepresentable, formatQuantity, parseQuantity } from '@daftar/inventory';
+import { stockKeyOf } from './cart';
+import { NO_QUOTE_EXPIRY, type OrderQuoteConfirmationDto } from './contracts';
 import { OrderError, assertCanonicalId } from './errors';
 import { compareCanonical, isCanonicalInstant } from './instant';
 
@@ -62,6 +65,57 @@ function requireMinor(value: string, field: string): bigint {
     });
   }
   return BigInt(value);
+}
+
+/**
+ * The quantity law for a quoted line.
+ *
+ * `cart.ts` already runs `@daftar/inventory`'s parse and representability pair
+ * over a basket line; the quote relation did not, and that was a real defect
+ * rather than an omission: the quote is the immutable record of what the shopper
+ * was shown, `I6.3` stores `quantity` in `NUMERIC(18,4)`, and a `'-5'`, an
+ * `'abc'` or a `'2.00000000001'` that this module admitted would be a commercial
+ * fact nobody can defend and a row the column would reject or silently round.
+ * So the same inventory truth is called here, under a quote-specific code.
+ *
+ * The CANONICAL FORM check is the third law and the one that is not obvious: the
+ * quantity must be spelled exactly as `formatQuantity` spells it, so `'2'`,
+ * `'2.0'` and `'2.0000'` are not three quotes of the same thing with three
+ * different digests, and so a quoted quantity can be compared to a basket
+ * position's `totalQuantity` — which is produced by that same formatter — by
+ * string equality rather than by re-parsing.
+ */
+function requireQuoteQuantity(line: QuoteLineSnapshot, unitDecimals: number | undefined): bigint {
+  let q4: bigint;
+  try {
+    q4 = parseQuantity(line.quantity);
+  } catch {
+    throw new OrderError('order.quote_quantity_invalid', 'a quoted quantity is not an exact decimal at the supported scale', {
+      stockKey: line.stockKey,
+      stated: line.quantity,
+    });
+  }
+  if (q4 <= 0n) {
+    throw new OrderError('order.quote_quantity_invalid', 'a quoted quantity is strictly positive', { stockKey: line.stockKey, stated: line.quantity });
+  }
+  if (formatQuantity(q4) !== line.quantity) {
+    throw new OrderError('order.quote_quantity_invalid', 'a quoted quantity is written in its canonical four-decimal form, so one quantity has one spelling', {
+      stockKey: line.stockKey,
+      stated: line.quantity,
+      canonical: formatQuantity(q4),
+    });
+  }
+  if (unitDecimals !== undefined) {
+    try {
+      assertQuantityRepresentable(q4, unitDecimals);
+    } catch {
+      throw new OrderError('order.quote_quantity_invalid', 'a quoted quantity is not representable at the product unit precision', {
+        stockKey: line.stockKey,
+        stated: line.quantity,
+      });
+    }
+  }
+  return q4;
 }
 
 /**
@@ -145,10 +199,27 @@ function digestOf(quote: CommercialQuoteInput): string {
 }
 
 /**
+ * What is CHECKED about a quote without being part of it.
+ *
+ * It is a second parameter rather than a field of the input on purpose: the
+ * input is exactly what the digest is taken over, and a checking aid that lived
+ * on the input would either enter the canonical stream or have to be excluded
+ * from it by hand, which is the kind of exception a later author drops.
+ */
+export interface CommercialQuoteChecks {
+  /**
+   * Stock key → the product's unit precision. A key that is absent is not
+   * checked for representability — the law is not claimed where the caller did
+   * not supply the precision, rather than being quietly assumed to be 4.
+   */
+  unitDecimalsByStockKey?: ReadonlyMap<string, number>;
+}
+
+/**
  * Build a quote snapshot, checking everything that can be checked without
  * inventing a pricing policy.
  */
-export function buildCommercialQuote(input: CommercialQuoteInput): CommercialQuote {
+export function buildCommercialQuote(input: CommercialQuoteInput, checks?: CommercialQuoteChecks): CommercialQuote {
   assertCanonicalId(input.quoteId, 'quoteId');
   assertCanonicalId(input.orderId, 'orderId');
 
@@ -178,6 +249,21 @@ export function buildCommercialQuote(input: CommercialQuoteInput): CommercialQuo
   for (const line of input.lines) {
     assertCanonicalId(line.productId, 'productId');
     if (line.variantId !== null) assertCanonicalId(line.variantId, 'variantId');
+    // The stock key must BE the canonical key of its own product and variant,
+    // not merely a string. It is the same identity `stock_levels` is keyed on,
+    // and it is also what makes this module's statement about `\u0000` true:
+    // every other field in the canonical stream is matched against a pattern
+    // that excludes a NUL, and `stockKey` and `quantity` were the two that were
+    // not. The injectivity premise held only by the accident of the line-count
+    // field; now it holds for the reason the comment gives.
+    const canonicalKey = stockKeyOf(line);
+    if (line.stockKey !== canonicalKey) {
+      throw new OrderError('order.quote_stock_key_invalid', 'a quote line stock key is not the canonical key of its own product and variant', {
+        stated: line.stockKey,
+        expected: canonicalKey,
+      });
+    }
+    requireQuoteQuantity(line, checks?.unitDecimalsByStockKey?.get(canonicalKey));
     if (seen.has(line.stockKey)) {
       throw new OrderError('order.quote_line_duplicate', 'two quote lines name one stock key', { stockKey: line.stockKey });
     }
@@ -261,6 +347,105 @@ export function assertQuoteConfirmable(quote: CommercialQuote, asOf: string, con
   }
 }
 
+/**
+ * A quote, the confirmation that agreed to it, and the instant of the attempt.
+ *
+ * This type exists because the three were previously passed around separately,
+ * which let a caller consult one and not the others — and because the
+ * independent challenger measured exactly that: `assessQuoteDivergence` would
+ * report `within_policy` over a quote that `assertQuoteConfirmable` refused at
+ * the same `asOf`. A verdict that gates the automatic commit must be impossible
+ * to obtain for a quote nobody may confirm, so the window, the version, the
+ * order and the digest are now checked by the same call that produces it.
+ */
+export interface ConfirmedQuoteApproval {
+  quote: CommercialQuote;
+  confirmation: OrderQuoteConfirmationDto;
+  /**
+   * The instant the commit is attempted. A caller input, never a clock, so one
+   * request's retries reach one verdict (see `assertQuoteConfirmable`).
+   */
+  asOf: string;
+  /**
+   * The total the canonical sales authority recomputed on a PREVIOUS refused
+   * attempt, when there was one.
+   *
+   * Phase 6 cannot recompute the authoritative total — that is the whole point
+   * of §27 — so divergence can only be measured against a figure the authority
+   * returned. Carrying it here is what lets the hand-off itself refuse a second
+   * attempt at a total the shopper never agreed to, instead of rebuilding the
+   * same intent and letting the boundary refuse it again.
+   */
+  priorRecomputedTotalMinor?: string;
+}
+
+/**
+ * The text a confirmation must carry for the quote's expiry.
+ *
+ * The domain says `expiresAt: string | null`; `I6a.2`'s seven-column foreign key
+ * cannot, because a null inside a composite key under the default `MATCH SIMPLE`
+ * skips the whole key — MEASURED on PostgreSQL 16.15. So the relation stores
+ * `'infinity'` for "no expiry", and this function is the ONE place the domain's
+ * `null` and the relation's `NO_QUOTE_EXPIRY` are mapped onto each other. A
+ * second mapping written at a call site is how the two representations drift.
+ */
+export function quoteExpiryText(quote: CommercialQuote): string {
+  return quote.expiresAt ?? NO_QUOTE_EXPIRY;
+}
+
+/**
+ * Refuse an approval that is not an approval OF THIS ORDER'S CURRENT QUOTE.
+ *
+ * This is the in-process twin of `I6a.2`: the seven-column foreign key makes a
+ * confirmation that disagrees with its quote UNREPRESENTABLE in the relation,
+ * and these five comparisons make it unusable in the domain. Both exist because
+ * either alone can be bypassed — the relation is not consulted by a pure
+ * function, and a check in a function is not consulted by an `INSERT`.
+ */
+export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: string): void {
+  assertCanonicalId(orderId, 'orderId');
+  // The presence of the approval is checked at RUNTIME, not only by the type.
+  // A required field is a type-level law, and a type-level law reds the
+  // typecheck while leaving the suite green — so a JavaScript caller, or a
+  // caller holding an `as` cast, would reach the rest of this function and
+  // crash on a property of `undefined` instead of being refused.
+  if (approval === null || typeof approval !== 'object' || typeof approval.quote !== 'object' || typeof approval.confirmation !== 'object') {
+    throw new OrderError('order.quote_not_approved', 'a checkout carries the quote the shopper confirmed; there is no unapproved path');
+  }
+  const { quote, confirmation } = approval;
+  assertCanonicalId(confirmation.confirmationId, 'confirmationId');
+
+  if (quote.orderId !== orderId) {
+    throw new OrderError('order.quote_not_approved', 'the quote belongs to another order', { orderId, quoteOrderId: quote.orderId });
+  }
+  if (confirmation.orderId !== orderId) {
+    throw new OrderError('order.quote_not_approved', 'the confirmation names another order', { orderId, confirmedOrderId: confirmation.orderId });
+  }
+  if (confirmation.quoteId !== quote.quoteId) {
+    throw new OrderError('order.quote_not_approved', 'the confirmation names another quote', {
+      quoteId: quote.quoteId,
+      confirmedQuoteId: confirmation.quoteId,
+    });
+  }
+  if (confirmation.confirmedQuoteDigest !== quote.digest) {
+    throw new OrderError('order.quote_not_approved', 'the confirmation agreed to different bytes than the quote it names', {
+      quoteId: quote.quoteId,
+      confirmedDigest: confirmation.confirmedQuoteDigest,
+    });
+  }
+  if (confirmation.confirmedQuoteExpiresAt !== quoteExpiryText(quote)) {
+    throw new OrderError('order.quote_not_approved', 'the confirmation saw a different expiry than the quote states', {
+      quoteId: quote.quoteId,
+      confirmedExpiresAt: confirmation.confirmedQuoteExpiresAt,
+      expiresAt: quoteExpiryText(quote),
+    });
+  }
+
+  // The window and the version, last, so a mismatch of IDENTITY is reported as
+  // one rather than as a stale version of a quote that was never this order's.
+  assertQuoteConfirmable(quote, approval.asOf, confirmation.confirmedVersion);
+}
+
 /** The verdict on comparing the canonical recomputation against the confirmed quote. */
 export type QuoteDivergenceVerdict =
   | { status: 'within_policy'; differenceMinor: string }
@@ -298,8 +483,11 @@ export const P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR = '0';
  * still not the transaction they agreed to, and a one-sided comparison is how a
  * discount bug ships as a feature.
  */
-export function assessQuoteDivergence(quote: CommercialQuote, recomputedTotalMinor: string): QuoteDivergenceVerdict {
-  assertQuoteIntact(quote);
+export function assessQuoteDivergence(approval: ConfirmedQuoteApproval, orderId: string, recomputedTotalMinor: string): QuoteDivergenceVerdict {
+  // Not `assertQuoteIntact` alone: the whole approval, so no verdict at all
+  // exists for an expired, superseded or foreign quote.
+  assertQuoteApproved(approval, orderId);
+  const quote = approval.quote;
   const recomputed = requireMinor(recomputedTotalMinor, 'recomputedTotalMinor');
   const tolerance = requireMinor(P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR, 'P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR');
   const quoted = BigInt(quote.displayedTotalMinor);
@@ -316,4 +504,27 @@ export function assessQuoteDivergence(quote: CommercialQuote, recomputedTotalMin
     };
   }
   return { status: 'within_policy', differenceMinor: difference.toString() };
+}
+
+/**
+ * The refusal, as a refusal.
+ *
+ * `assessQuoteDivergence` returns a verdict because a caller may want to report
+ * the two figures; the checkout hand-off wants the commit STOPPED, and a verdict
+ * a caller can ignore is how PART 33's zero tolerance ends up guarding nothing.
+ */
+export function assertCommitWithinConfirmedQuote(approval: ConfirmedQuoteApproval, orderId: string, recomputedTotalMinor: string): void {
+  const verdict = assessQuoteDivergence(approval, orderId, recomputedTotalMinor);
+  if (verdict.status === 'requires_reconfirmation') {
+    throw new OrderError(
+      'order.quote_requires_reconfirmation',
+      'the recomputed total diverges from the confirmed quote, so an explicit re-confirmation is required',
+      {
+        quotedTotalMinor: verdict.quotedTotalMinor,
+        recomputedTotalMinor: verdict.recomputedTotalMinor,
+        differenceMinor: verdict.differenceMinor,
+        toleranceMinor: P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR,
+      },
+    );
+  }
 }

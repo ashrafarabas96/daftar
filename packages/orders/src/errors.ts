@@ -28,12 +28,6 @@ export type OrderErrorCode =
   | 'order.terminal_state'
   /** A transition to `fulfilled` carried no `saleId`, or another transition carried one. */
   | 'order.sale_binding_invalid'
-  /**
-   * A second, DIFFERENT canonical sale was named for an order that is already
-   * bound to one. The binding is immutable: an order has at most one sale,
-   * forever.
-   */
-  | 'order.sale_binding_conflict'
   /** A cancellation was attempted after the canonical sale had committed. */
   | 'order.cancel_after_sale'
   /** The same `transitionId` was replayed with a different transition. */
@@ -78,6 +72,10 @@ export type OrderErrorCode =
   | 'order.checkout_tax_policy_absent'
   /** `documentDate` or `dueDate` is not a `YYYY-MM-DD` civil date, or the due date precedes it. */
   | 'order.checkout_date_invalid'
+  /** `notes` is empty or longer than the sales authority's bound after trimming. */
+  | 'order.checkout_notes_invalid'
+  /** The checkout carries more lines than the sales authority accepts. */
+  | 'order.checkout_line_limit'
 
   // ── settlement truth at the order → sale boundary (settlement.ts) ────────
   /** The stated settlement evidence is not an evidence kind this package recognises. */
@@ -114,6 +112,20 @@ export type OrderErrorCode =
   | 'order.quote_expired'
   /** The confirmed version is not the order's current quote version. */
   | 'order.quote_version_stale'
+  /** A quoted quantity is not positive, not exact at the supported scale, not canonically spelled, or not representable at the unit precision. */
+  | 'order.quote_quantity_invalid'
+  /** A quote line's stock key is not the canonical key of its own product and variant. */
+  | 'order.quote_stock_key_invalid'
+  /**
+   * The confirmation is not an approval of this order's current quote: another
+   * order, another quote, other bytes, another expiry — or the checkout does not
+   * carry the positions and quantities that were confirmed.
+   */
+  | 'order.quote_not_approved'
+  /** A discount was requested that the confirmed quote did not grant. */
+  | 'order.quote_discount_unapproved'
+  /** The recomputed total diverges from the confirmed quote beyond the policy (PART 33: exactly zero). */
+  | 'order.quote_requires_reconfirmation'
 
   // ── channel reconciliation (reconciliation.ts) ───────────────────────────
   /** Two input rows claim the same order id. */
