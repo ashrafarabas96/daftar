@@ -1160,3 +1160,236 @@ re-measured through it.
   and D as `SPEC ONLY`.
 - `READY_TO_PROMOTE` = **NO** for both packs, no migration number exists, and no
   CI has executed any of it.
+
+---
+
+## 12. The FOURTH independent challenge: Pack A `REJECT`, Pack B `PASS-WITH-SCOPE` — defects 38–43
+
+Verdicts at `04d87b3`: **Pack A REJECT** (`P1-01`, `P2-01`, `P3-01`, `P3-02`),
+**Pack B PASS-WITH-SCOPE** (two `P2`s, three `P3`s). Both reports are at
+`/mnt/project-files/phase11/P11-CHALLENGE-04d87b3-PACK-A.md` and `-PACK-B.md`.
+Every finding below is answered at the cause, in one commit, and the one thing
+this round should be read for is **where the defect came from**: the door that
+rejected Pack A was opened by the previous round's own correct remedy.
+
+### 12.1 Defect 38 (`P1-01`, the P1) — the fourth door, and the end of per-verb guarding
+
+Measured by the challenger on `TSHIRT-RECOVER`: archive both cells (permitted,
+0061 requires zero stock and it held), register a third axis (permitted — the
+freeze guard now reads LIVE variants only, which is round 3's fix for `PA-02`),
+then `UPDATE product_variants SET status='active'` → **rc=0**, leaving one live
+non-base variant naming two of the product's three axes and holding 7.0000 on
+its own stock key. The challenger also showed the door is NEW at this SHA: the
+same sequence at `0db9450` was refused at its second step.
+
+`product_variants_40_matrix_canonical` fires `BEFORE INSERT OR UPDATE OF
+attributes, is_base, product_id` — **not** of `status` — and 0061 fires only
+`WHEN (NEW.status='archived' AND OLD.status IS DISTINCT FROM 'archived')`.
+Nothing watched the way back. The narrowing itself was right and stays; what
+was wrong is that a narrowing adds verbs, and the new verb never joined the
+law's closure list.
+
+**The answer is a state check at COMMIT.** `catalog_grid_closed_check(business,
+product)` recomputes the clause for one product and is called by four
+`DEFERRABLE INITIALLY DEFERRED` constraint triggers — on `product_variants`,
+`product_matrix_axes`, `product_attribute_axes` and `product_attribute_values`,
+for INSERT, UPDATE and DELETE alike. Refusals: `catalog.variant_axis_set_incomplete`,
+`catalog.variant_axis_archived`, `catalog.variant_axis_value_unregistered`, each
+tagged `[deferred grid closure at COMMIT]`; and `catalog.matrix_grid_unverifiable`
+when the check lacks the privilege to look, because a check that cannot look must
+not reassure. DEFERRED and not IMMEDIATE because a grid build writes the axes
+before the cells; the end-state assertion pins `tgconstraint <> 0`,
+`tgdeferrable`, `tginitdeferred`, AFTER, FOR EACH ROW and all three statement
+kinds, and asserts the function is not `SECURITY DEFINER`.
+
+Eleven new cases, on a **fourth** fixture product (`TSHIRT-GRID`): the premise,
+the door as a single statement, the door again asserting the refusal's **site**,
+the door inside a multi-statement transaction (the statement is accepted and the
+COMMIT refuses), a lawful grid build in one transaction through states the check
+would refuse mid-transaction, a lawful archive-and-un-archive of a cell that
+matches the current grid, a multi-statement reach whose refusal rolls back the
+axis it created, the roll-back verified, and the committed-state predicate run
+**after** an un-archive. The fourth product exists because the first draft of
+these cases grew `TSHIRT-RECOVER`'s grid to four axes and red the recovery case
+that asserts it has three — one product per lifecycle, the third time this suite
+has paid for order dependence.
+
+**The challenger's own sentence, corrected on the record.** The committed-state
+case of round 3 was offered as "the case that would have caught all three
+rounds". It would not have caught this one: it measures the state after the
+suite's own writes, and no write in the suite un-archived anything. A state case
+is only as good as the transitions performed before it, which is why the law is
+now held by a check that runs at every commit rather than by a case noticing.
+
+**The premise text is corrected too.** "An archived variant holds no stock" is a
+fact about the moment of archiving: 0061 tests it on the way in and nothing
+re-tests it on the way back. The un-archive path is now guarded by the state
+check rather than by that premise, and `MPR-09`'s residual is restated — it is
+not confined to the inventory authority's own writes.
+
+### 12.2 Defect 39 (`P2-01` of Pack A) — a tautology that was a working hole
+
+Six of fifteen spellings passed `catalog_policy_qual_is_tautology`. One of them
+is not a spelling but a measured cross-tenant hole: `(business_id =
+business_id)` installed as `tenant_membership`'s USING and WITH CHECK — **the
+policy name unchanged, so the set pin beside it passes** — made a cross-tenant
+read return 6 rows instead of 0 and a cross-tenant INSERT return rc=0 instead of
+rc=3. **Form 4** is added: `(col = col)` and `NOT (col <> col)` over a column the
+catalogue marks `attnotnull`, and `col IS NOT DISTINCT FROM col` whatever the
+nullability, because that one is true of the NULL rows too. Both directions are
+proved — over a nullable column the self-comparison is **not** called a
+tautology, `(business_id = product_id)` is not, `(axis_position = 1)` is not —
+and the four spellings that honestly remain (`= ANY (ARRAY[…])`, `IS NOT NULL OR
+IS NULL`, the `coalesce` form) are asserted as **still passing**, so the list of
+what the function does not decide cannot quietly grow. The residual stays
+`PR-SEC-P11-01`.
+
+The `attnotnull` lookup forms 3 and 4 both rest on is now one function,
+`catalog_relation_column_is_notnull`, namespace-qualified, with the end-state
+asserting it answers in both directions.
+
+### 12.3 Defect 40 (`P3-01` of Pack A) — form 2 executes the stored expression
+
+Form 2 EXECUTEs the qualifier to see whether it evaluates to true, so a
+qualifier with **side effects** has them, as the installing principal. Measured
+with a function that writes a row: `side_effect_ran_as=postgres`. It is a limit
+of the form rather than a new hole — the input is never user text, it is
+`pg_get_expr` of a policy already stored on one of the pack's five relations, and
+the set pin means the qualifier can only be one the pack installed itself — and
+it is now the third stated limit of form 2, with a case that measures it and a
+note that it must be revisited if the pin is relaxed.
+
+### 12.4 Defect 41 (`P2-01` of Pack B) — a race that passes when nothing happened
+
+`races_b.py`'s verdict was `k == c`, which is satisfied by an untouched
+database. The challenger planted an unrelated refusal and R2/R2b printed
+**PASS** while both transactions were thrown out. Every race now carries three
+conditions, and all three must hold:
+
+1. **Overlap.** Both backends held an open transaction at the same time, read
+   from a THIRD connection (`pg_stat_activity.xact_start IS NOT NULL`, which
+   stays set through an aborted block, so a race that expects a refusal does not
+   read as an absence of overlap). 0 or 1 is a FINDING, whatever else is true.
+2. **The expected outcome.** `expect_commits` is `neither` or `both` and
+   `expect_delta` is the amount the key must have moved. R1/R1b expect neither
+   and 0; R2/R2b expect both and 4+2.
+3. **Consistency**, the committed key against the committed per-lot cache —
+   kept, as the last of the three rather than as the only one.
+
+`races.py` is instrumented the same way although the finding was not reported
+against it: three of its nine verdicts ("the forbidden state is absent after both
+commit") have the same shape, and the overlap requirement is applied to all nine
+through the one `record()` every row passes through.
+
+### 12.5 Defect 42 (`P2-02` of Pack B) — the mutation hook could not see its own mutation
+
+A no-op mutation ran with every `EXIT_*` 0: a run that measured the clean tree
+while reporting a mutation. Step 5c now digests the DDL-visible state before and
+after — function bodies, triggers with `tgtype`, `tgdeferrable` and
+`tginitdeferred` and their full definitions, constraints, policies with both
+expressions, indexes, table and function ACLs, `relrowsecurity` and
+`relforcerowsecurity` — and **refuses with exit 4** when they are equal. Its own
+red proof is `mutations/M10-noop.sql`, measured: `EXIT=4`, digests identical.
+Two limits are written into the hook: the digest is of the schema and not of the
+data, so a fixture-only mutation reads as a no-op; and step 5c runs after the
+packs were applied, so a mutation there cannot test an **end-state** arm — that
+needs a scratch copy of the DDL, which is how the §11 M4 row was measured and
+which never touches frozen history.
+
+### 12.6 Defect 43 (`P3-01` of Pack B) — a pin over `pg_get_functiondef` proves nothing about the body
+
+`pg_get_functiondef` returns the function's COMMENTS. The challenger replaced
+the fail-closed body with a silent `RETURN NEW`, left the string in a comment,
+and the end-state assertion passed, the pack installed, and the invisibility
+case committed — on **two** sites, because the movement side and the cache side
+had the same shape. Both now read `prosrc` through
+`inventory_prosrc_uncommented`, which strips `--` and `/* */`, and match
+`RAISE EXCEPTION 'inventory.<condition>` rather than a mention of the name. The
+stripper's own two failure directions are asserted at install (it must return
+something, and it must leave no comment behind). The same shape was in
+`proofs.py` — two cases pinning Pack A's validator through `pg_get_functiondef`
+— so Pack A gets `catalog_prosrc_uncommented` and the same treatment, rather
+than waiting for the identical finding to be reported against it. **It is stated
+plainly in both packs that a text pin is weaker than the behavioural case**: what
+proves the arm fires is `proofs_b.py`'s invisibility case, run as a principal
+that cannot read the key.
+
+### 12.7 `P3-02` and `P3-03` of Pack B — the unqualified-lookup class, again
+
+The PUBLIC-tautology arm matched `c.relname IN ('stock_lots', …)` with no
+namespace filter, so a `chal_other.stock_lots` decoy made Pack B refuse to
+install naming a policy `public.stock_lots` does not carry. Eleven lookups in
+Pack B's end-state are now qualified — the two `information_schema` queries by
+`table_schema='public'`, the `column_privileges` query likewise, every
+`::regclass` as `'public.<rel>'::regclass`, the deferred-trigger count through a
+`pg_class` join, and the PUBLIC arm by `relnamespace`. This is the third round in
+which this class has been found; the gate arm `unqualified-catalogue-lookup`
+exists for it, and the arm is about the shape wherever it appears.
+
+`P3-03` is recorded rather than implemented: the overlay's permissive
+role-scoped qualifier is defended only by its NAME, and the right home for a
+qualifier test on Pack B's own relations is `MPR-10` — which now carries form 4
+and the two comment strippers as well as the tautology test.
+
+### 12.8 Run identity of this round
+
+| | |
+|---|---|
+| `RUN_ID` | `p11-20261012T204838Z-6398` |
+| `SOURCE_BRANCH` | `claude/phase11-prep-re0epv` |
+| `SOURCE_SHA` at the run | `04d87b35833173c8088f6004735b1ccfee7bb128`, `SOURCE_TREE_DIRTY: YES` — the run is of the answer, which is committed in the same commit as this section; the subject is identified by the file digests below, and the clean-tree verification run is reported in the handoff |
+| `PACK_A_DDL_SHA256` | `04068975c138c41fe5401b8b5deee3d1b3176ea9325727a203eb6d8df52b67b4` |
+| `PACK_B_DDL_SHA256` | `d5820ada9f3f0ddee2a3475271a996f5c2e3be83190845d2e85130d601c8ff75` |
+| `HARNESS_SHA256` | `cf56241be85e3f82be154466ff957da92c09c42ee7f6e909521717d4034a0f3c` |
+| `MIGRATIONS_SHA` | `b128c7033a3381bd2237d0a1405f0676ac509960` (unchanged; frozen tree clean after the run) |
+| `PG_VERSION` | PostgreSQL 16.15, `datcollate = datctype = en_US.utf8`, measured on the database under test |
+| `EXIT_PROOFS_A` | **0** — 88 cases, 0 failed |
+| `EXIT_PROOFS_B` | **0** — 53 cases, 0 failed |
+| `EXIT_PROOFS_A_RUN2` / `EXIT_PROOFS_B_RUN2` | **0** / **0** — the same files, the same database (idempotence) |
+| `EXIT_RACES` | **0** — 9 races, 0 findings, overlap 2/2 on every one |
+| `EXIT_RACES_B` | **0** — 4 races, 0 findings, overlap 2/2 on every one |
+| `EXIT_SCRIPT` | **0** |
+
+No npm suite was run; `NODE_VERSION` in the log is `v22.22.0` against repository
+engines `>=24 <25`, which is why the log says in its own header that no npm
+suite is run here. **No timing claim is made.**
+
+### 12.9 The mutations, and the PAIR-DROP
+
+The mutation set is now **in the repository**, under
+`prep/phase11/harness/mutations/`, with a README that names the invocation. Each
+file is applied at step 5c, on a fresh database, before any proof runs.
+
+| mutation | what it drops | measured |
+|---|---|---|
+| `M7-drop-deferred-grid-closure.sql` | the four constraint triggers only | **9 cases red, every one of them a `P1-01` case** — so no per-verb guard answers the fourth door |
+| `M8-drop-per-verb-guards.sql` | the four BEFORE guards, deferred check kept | **17 red.** Six of them are the write-path sweep, and they red because the deferred check answered with ITS name (`catalog.variant_axis_set_incomplete`, `catalog.variant_axis_archived`, `catalog.variant_axis_value_unregistered`) where the case expected the statement guard's (`catalog.matrix_axis_in_use`, `catalog.attribute_value_in_use`) — which is exactly the signal a pair-drop exists to give: both layers answer those paths, and the statement layer is what names the write |
+| `M9-drop-both.sql` | both layers | **35 red on the first pass and 38 on the second**, and the race fixture can no longer be built (`EXIT=2`) — nothing else in the schema holds `C-APP-01` |
+| `M10-noop.sql` | nothing | **exit 4, refused**, digests identical before and after — the red proof of the hook itself |
+
+The pair-drop is the P5 R9 lesson applied before a challenger had to apply it: a
+one-at-a-time sweep cannot see two defences that mask each other.
+
+### 12.10 What remains unsigned after this round
+
+- **A FIFTH challenge round is owed on both packs.** The newest and least
+  reviewed code in the phase is what this round added: the deferred
+  grid-closure check and its four constraint triggers, form 4 of the tautology
+  test, the two comment strippers, the race overlap measurement in both race
+  files, the mutation hook's digest, and the grant-generated write-path sweep.
+  **Nothing here is self-signed.**
+- `MPR-09` is open and restated: nothing refuses a movement posted onto an
+  archived variant, and the deferred check cannot see it — the transaction that
+  creates that state writes only the ledger and fires no trigger of this pack.
+  Reading `stock_levels` from the check would not fix it, because the write is
+  in the other transaction.
+- `MPR-10` now carries three items for the Migration Owner: one tautology test,
+  one comment stripper, and form 4 available to Pack B's own relations.
+- `PR-SEC-P11-01` keeps the tautology residual: four named spellings still pass.
+- `PB-17` is still a scope statement and a case, not a law;
+  `inventory_lot_verify` is `SPEC ONLY`.
+- Everything §9.6, §10.6 and §11.8 left open stays open: `MPR-07`, `MPR-08`, the
+  Pack B grants and the registered op code, `OD-P11-07` (the owner's), Packs C
+  and D as `SPEC ONLY`.
+- `READY_TO_PROMOTE` = **NO** for both packs, **no migration number exists**, and
+  no CI has executed any of it.

@@ -98,6 +98,8 @@ Each document exists in **two places**: the shared project-files location (the c
 
 A trial run that printed `SOURCE_TREE_DIRTY : YES` is deliberately **not** reported as evidence: its input had no name.
 
+**Round 4 (this round):** `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND4.txt` — the full run, `RUN_ID p11-20261012T204838Z-6398`, 88 + 53 cases twice, 9 + 4 races, `EXIT_SCRIPT 0`; and `RUN-EVIDENCE-MUTATIONS-ROUND4.txt` — the pair-drop (`M7`/`M8`/`M9`) and the hook's own red proof (`M10`, exit 4). The mutation files themselves are in `prep/phase11/harness/mutations/`, so a mutation run is reproducible by name rather than from the author's shell.
+
 **What is NOT evidence, stated so no reader promotes it:** no npm workspace suite ran at all — this container has **Node 22.22.0 while the repository requires `>=24 <25`** and has no `node_modules`, so `format`, `lint`, `typecheck` and every Vitest suite are `UNMEASURED`. There is **no CI run** for any of this and a local green is never reported as CI. There is **no timing or performance number**, measured or claimed. Lot, serial and repair remain `SPEC ONLY`. There is **no challenger signature**.
 
 Every other verdict in every Phase 11 document remains labelled `SPEC ONLY`, `DESIGN ONLY`, `UNMEASURED`, `BLOCKED` or `WAITING_FOR_INTEGRATED_SURFACE`, never two classes in one sentence (§82).
@@ -186,6 +188,44 @@ because none of them has been attacked yet): An author does not sign their own w
 4. a proof whose mutation lands in **frozen history** (`P11-AL-25`, §0a of the laws document);
 5. `C-SER-03` satisfied by **zero** serial events on some writer branch — silent, permanent overlay drift;
 6. `C-LOT-03`'s per-lot cache disagreeing with `stock_levels` — a second quantity truth wearing a cache's clothes.
+
+### 7.x The FOURTH round, answered
+
+**Pack A `REJECT`, Pack B `PASS-WITH-SCOPE` at `04d87b3`** — reports
+`P11-CHALLENGE-04d87b3-PACK-A.md` and `-PACK-B.md`. Answered in ONE commit, as
+the coordinator asked. Six findings, and the two sentences a reader should take
+from the round:
+
+1. **The door that rejected Pack A was opened by round 3's own correct
+   remedy.** `C-APP-01` is therefore no longer enforced as a list of verbs: a
+   state check recomputes the forbidden state at COMMIT, through four
+   `DEFERRABLE INITIALLY DEFERRED` constraint triggers on every relation the
+   state can be written from. The per-verb guards are kept and **pair-dropped**
+   so a reviewer can see which layer answers which door (`M7` 9 red, all of them
+   the new door; `M8` 17; `M9` 35).
+2. **Three of the six findings are in the WITNESSES, not in the laws** — a race
+   verdict satisfied by nothing happening, a mutation hook blind to its own
+   mutation, and a text pin over `pg_get_functiondef`, which includes comments.
+   All three are fixed with red proofs of their own, in both packs wherever the
+   shape appeared, including where no challenger had yet looked.
+
+Numbers, this round: **88 Pack A cases and 53 Pack B cases, each twice on the
+same database; 9 and 4 races, every one of them now also proving its two
+backends overlapped; every exit code 0**; the mutation set is in the repository
+under `prep/phase11/harness/mutations/` with a README naming the invocation; the
+frozen tree is clean. Evidence:
+`prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND4.txt` and
+`RUN-EVIDENCE-MUTATIONS-ROUND4.txt`. Run identity and exit codes in
+`P11-LIVE-DDL-PROOF.md` §12.8.
+
+**A FIFTH round is owed on both packs.** The newest code in the phase is what
+this round added, and **nothing here is self-signed.** Still open: `MPR-09`
+(restated and narrower), `MPR-10` (now three routines to fold),
+`PR-SEC-P11-01` (four named spellings), `MPR-07`, `MPR-08`, the Pack B grants
+and the registered op code, `OD-P11-07` (the owner's), Packs C and D as
+`SPEC ONLY`. `READY_TO_PROMOTE` = **NO**; **no migration number exists**.
+
+---
 
 ## 8. Coordinator state
 

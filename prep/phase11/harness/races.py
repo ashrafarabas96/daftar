@@ -52,6 +52,26 @@ PB=U('4b',1)   # race B product
 PC=U('4c',1)   # race C product
 PD=U('4d',1)   # race B2 product (the reverse arrival order)
 
+LIVE=[]
+_OV=[0]
+
+def _note_overlap():
+    """How many of this file's own backends are inside a transaction right
+    now, read from a THIRD connection. Called after every statement, and the
+    MAXIMUM over a race is what `record` then requires to be 2.
+
+    `xact_start IS NOT NULL` is the test rather than `backend_xid`, because a
+    transaction that has already been refused stays open-and-aborted and must
+    still count as having overlapped -- the races that expect a refusal are
+    exactly the ones whose overlap would otherwise read as absent."""
+    if len(LIVE) < 2: return
+    pids=",".join(str(int(x.pid)) for x in LIVE if str(x.pid).strip().isdigit())
+    if not pids: return
+    rc,out,_=admin(f"SELECT count(*) FROM pg_stat_activity WHERE pid IN ({pids}) AND xact_start IS NOT NULL;",
+                   must_succeed=False)
+    try: _OV[0]=max(_OV[0], int(out.splitlines()[-1]))
+    except Exception: pass
+
 class Session:
     def __init__(self, name, role="postgres"):
         self.name=name
@@ -63,6 +83,13 @@ class Session:
         threading.Thread(target=self._reader, daemon=True).start()
         self.n=0
         self.send(f"SET app.tenant_id='{TA}'; SET app.business_id='{A}';")
+        # The backend's own pid, so OVERLAP is measured rather than assumed.
+        # See the comment above `record` -- this file was NOT the one the
+        # fourth round found the verdict defect in, and it is instrumented
+        # anyway, because three of its own verdicts ("the forbidden state is
+        # absent after both commit") are satisfied by nothing happening too.
+        self.pid=(self.send("SELECT pg_backend_pid();")[0] or ["0"])[-1]
+        LIVE.append(self)
     def _reader(self):
         for line in self.p.stdout: self.q.put(line.rstrip("\n"))
         self.q.put(None)
@@ -76,9 +103,11 @@ class Session:
                 if time.time()-t0>timeout: return out, True
                 continue
             if line is None: return out, False
-            if sent in line: return out, False
+            if sent in line:
+                _note_overlap(); return out, False
             if line.strip(): out.append(line.strip())
     def close(self):
+        if self in LIVE: LIVE.remove(self)
         try: self.p.stdin.write("\\q\n"); self.p.stdin.flush()
         except Exception: pass
         try: self.p.wait(timeout=3)
@@ -108,7 +137,28 @@ def product(pid, sku):
 V=lambda pid,vid,attrs: (f"INSERT INTO product_variants (business_id,id,product_id,attributes) "
                          f"VALUES ('{A}','{vid}','{pid}','{attrs}'::jsonb);")
 rows=[]
-def record(*r): rows.append(r)
+def record(*r):
+    """Every row passes through here, so the OVERLAP requirement is stated
+    once for the whole file.
+
+    Finding P2-01 of the fourth independent challenge was measured on Pack
+    B's `races_b.py`: its verdict was `key == cache`, which is satisfied by
+    an untouched database, so a planted unrelated refusal produced a printed
+    PASS for a race in which nothing happened. This file's verdicts are
+    per-race and most of them assert a specific observed outcome (exactly one
+    commits, the loser BLOCKED, the guard refused by name), which that
+    planting would fail. Three do not: "the forbidden state is absent after
+    both commit" is true of a database neither transaction touched. Rather
+    than reason about which three, the requirement is applied to all of them:
+    a race whose two backends were never inside a transaction at the same
+    time did not happen, and its verdict is replaced by a FINDING whatever it
+    says."""
+    ov=_OV[0]; _OV[0]=0
+    r=list(r)
+    r[3]=f"{r[3]} | backends in a transaction together: {ov}/2"
+    if ov<2:
+        r[4]="**FINDING — the two sessions never overlapped, so this race measured nothing** (was: "+str(r[4])[:70]+")"
+    rows.append(tuple(r))
 
 # ── RACE A ──────────────────────────────────────────────────────────────────
 product(PR,f'RACE-A-{RUN}')

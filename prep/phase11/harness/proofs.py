@@ -336,8 +336,8 @@ case("PA-02 residual: a stock key on the OTHER archived cell is accepted today, 
      f"SELECT 'archived_variant_on_hand=' || on_hand::text FROM stock_levels WHERE business_id='{A}' AND variant_id='f0000024-0000-0000-0000-000000000024';\n"
      f"SELECT 'triggers_reading_variant_status=' || count(*)::text FROM pg_trigger g JOIN pg_proc pr ON pr.oid=g.tgfoid "
      f"WHERE NOT g.tgisinternal AND g.tgrelid IN ('stock_levels'::regclass,'stock_movements'::regclass) "
-     f"AND position('product_variants' in pg_get_functiondef(pr.oid)) > 0 "
-     f"AND position('status' in pg_get_functiondef(pr.oid)) > 0;",
+     f"AND position('product_variants' in catalog_prosrc_uncommented(pr.oid::regprocedure::text)) > 0 "
+     f"AND position('status' in catalog_prosrc_uncommented(pr.oid::regprocedure::text)) > 0;",
      "archived_variant_on_hand=5.0000\ntriggers_reading_variant_status=0",
      kind="value", pre=f"SET app.tenant_id='{TA}'; SET app.business_id='{A}'; INSERT INTO branches (business_id,id,name) VALUES ('{A}','{A}','BR') ON CONFLICT DO NOTHING; INSERT INTO warehouses (business_id,id,branch_id,name) VALUES ('{A}','{A}','{A}','WH') ON CONFLICT DO NOTHING;")
 # And the freeze still holds while a cell is LIVE on the SAME product, which
@@ -348,6 +348,261 @@ case("PA-02 and once the grid is live again, the axis set is frozen again (the f
      f"UPDATE product_attribute_axes SET status='active' WHERE business_id='{A}' AND axis_code='fabric';"
      f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PR}','fabric',4);",
      "catalog.matrix_axis_set_frozen")
+
+# ── P1-01. THE FOURTH DOOR, and the law moved onto the STATE ──────────────
+# Fourth independent challenge, measured at 04d87b3:
+#   archive both cells             -> permitted (0061 requires zero stock, held)
+#   register a third axis          -> permitted (no LIVE variant, so not frozen)
+#   UPDATE ... SET status='active' -> rc=0
+# and the committed state was one live non-base variant naming two of three
+# axes, holding 7.0000. The verb was made reachable by the PREVIOUS round's
+# own fix (the `status` filter on the freeze guard, finding PA-02), and
+# nothing watched it: the canonicalization trigger fires on UPDATE OF
+# attributes, is_base, product_id -- not of status -- and 0061 fires only on
+# the way INTO 'archived'.
+#
+# The answer is not a fifth column in a trigger's list. C-APP-01 is checked
+# at COMMIT now, by DEFERRABLE INITIALLY DEFERRED constraint triggers on all
+# four relations the state is written from, for INSERT, UPDATE and DELETE
+# alike. The refusal names the site ("deferred grid closure at COMMIT") so a
+# pair-drop can tell which defence answered.
+#
+# On its OWN product, for a reason this suite has now paid for twice: the
+# first draft of these cases grew TSHIRT-RECOVER's grid to four axes and red
+# the recovery case that asserts it has three. One product per lifecycle.
+PG='dddddddd-0000-0000-0000-000000000011'
+G1='f0000031-0000-0000-0000-000000000031'
+G2='f0000032-0000-0000-0000-000000000032'
+G3='f0000033-0000-0000-0000-000000000033'
+# Step 0, the premise: a populated 2-axis grid, archived at zero stock, and a
+# third axis registered on it -- the state the fourth door opens from. Every
+# write is conditional, so the case measures the same thing on a second run.
+case("P1-01 premise: a 2-axis grid is archived at zero stock and a third axis is then registered",
+     f"INSERT INTO product_variants (business_id,id,product_id,attributes,is_base) "
+     f"SELECT '{A}','{G1}','{PG}','{{\"size\":\"s\",\"color\":\"red\"}}'::jsonb,false "
+     f"WHERE NOT EXISTS (SELECT 1 FROM product_variants WHERE business_id='{A}' AND id='{G1}');\n"
+     # EVERY live cell of this product, not only the one just created: on a
+     # second run the cell the un-archive case below leaves active is still
+     # live, and a premise that archived one named cell would then measure
+     # `live=1` and red. The suite's own writes are part of the state it
+     # starts from, which is the lesson that cost this file two runs already.
+     f"UPDATE product_variants SET status='archived' WHERE business_id='{A}' AND product_id='{PG}' AND NOT is_base AND status <> 'archived';\n"
+     f"INSERT INTO product_attribute_values (business_id,axis_code,value_code,sort_order) VALUES ('{A}','material','cotton',1) ON CONFLICT DO NOTHING;\n"
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) "
+     f"SELECT '{A}','{PG}','material',3 WHERE NOT EXISTS (SELECT 1 FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PG}' AND axis_code='material');\n"
+     f"SELECT 'axes=' || count(*)::text FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PG}';\n"
+     f"SELECT 'live=' || count(*)::text FROM product_variants WHERE business_id='{A}' AND product_id='{PG}' AND NOT is_base AND status <> 'archived';",
+     "axes=3\nlive=0", kind="value")
+case("P1-01 un-archiving a 2-axis cell onto a 3-axis grid is refused at COMMIT (the fourth door)",
+     f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G1}';",
+     "catalog.variant_axis_set_incomplete")
+case("P1-01 and the refusal comes from the deferred state check, not from a per-verb guard",
+     f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G1}';",
+     "deferred grid closure at COMMIT")
+# The same statement inside a multi-statement transaction, because a deferred
+# check that only answered for single-statement transactions would be a check
+# on psql's autocommit rather than on the law. The SELECT between the two
+# shows the statement itself was accepted and the COMMIT is what refuses.
+case("P1-01 and inside a multi-statement transaction it is the COMMIT that refuses",
+     f"BEGIN;\n"
+     f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G1}';\n"
+     f"SELECT 'the statement itself was accepted';\n"
+     f"COMMIT;",
+     "catalog.variant_axis_set_incomplete")
+# The grid is regenerated the lawful way, in ONE transaction, which is the
+# case that shows why the check is DEFERRED: the axes are written before the
+# cells, so every intermediate state of a grid build names fewer cells than
+# axes. An IMMEDIATE copy of this check would refuse the ordinary act of
+# building a matrix product, which is why the end-state assertion pins
+# tginitdeferred.
+case("P1-01 the law is on the COMMITTED state: a grid is built in one transaction through states it would refuse",
+     f"BEGIN;\n"
+     f"INSERT INTO product_variants (business_id,id,product_id,attributes,is_base) "
+     f"SELECT '{A}','{G2}','{PG}','{{\"size\":\"s\",\"color\":\"red\",\"material\":\"cotton\"}}'::jsonb,false "
+     f"WHERE NOT EXISTS (SELECT 1 FROM product_variants WHERE business_id='{A}' AND id='{G2}');\n"
+     f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G2}' AND status <> 'active';\n"
+     f"SELECT 'live=' || count(*)::text FROM product_variants WHERE business_id='{A}' AND product_id='{PG}' AND NOT is_base AND status <> 'archived';\n"
+     f"COMMIT;",
+     "live=1", kind="value")
+# And it is a LAW, not a ban on un-archiving: a cell whose combination IS the
+# current grid comes back. Archived and un-archived in one case, so the suite
+# leaves the product as it found it.
+case("P1-01 a cell that matches the CURRENT grid can be archived and un-archived",
+     f"UPDATE product_variants SET status='archived' WHERE business_id='{A}' AND id='{G2}' AND status <> 'archived';\n"
+     f"SELECT 'archived=' || status FROM product_variants WHERE id='{G2}';\n"
+     f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G2}';\n"
+     f"SELECT 'back=' || status FROM product_variants WHERE id='{G2}';",
+     "archived=archived\nback=active", kind="value")
+# The multi-statement REACH: a transaction whose every statement is
+# permissible on its own and whose committed state is forbidden. The axis is
+# created inside the transaction, so the refusal rolls it back and the
+# business's axis count is left as it was -- which is also why this case can
+# run twice.
+case("P1-01 a transaction that registers an axis while the cells are archived and then un-archives one is refused at COMMIT",
+     f"BEGIN;\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','gridaxis5',93);\n"
+     f"UPDATE product_variants SET status='archived' WHERE business_id='{A}' AND id='{G2}';\n"
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PG}','gridaxis5',4);\n"
+     f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G2}';\n"
+     f"COMMIT;",
+     "catalog.variant_axis_set_incomplete")
+case("P1-01 and that refusal rolled the whole transaction back: the axis it created is gone and the cell is live",
+     f"SELECT 'axis_left=' || count(*)::text FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='gridaxis5';\n"
+     f"SELECT 'cell=' || status FROM product_variants WHERE id='{G2}';\n"
+     f"SELECT 'axes=' || count(*)::text FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PG}';",
+     "axis_left=0\ncell=active\naxes=3", kind="value")
+# The committed-state case the challenge asked for: the same predicate as the
+# one above section 7b, but evaluated AFTER an un-archive has actually
+# happened in this suite. The earlier one measures the state after the
+# suite's own writes, and no write in it un-archived anything, which is
+# exactly why it could not have caught this door.
+case("P1-01 and after an un-archive, no committed LIVE variant of this business is outside its product's grid",
+     f"""SELECT count(*)::text FROM product_variants v
+          WHERE v.business_id='{A}' AND NOT v.is_base AND v.status <> 'archived'
+            AND ( (SELECT coalesce(array_agg(k ORDER BY k), ARRAY[]::TEXT[]) FROM jsonb_object_keys(v.attributes) k)
+                  IS DISTINCT FROM
+                  (SELECT coalesce(array_agg(ma.axis_code ORDER BY ma.axis_code), ARRAY[]::TEXT[])
+                     FROM product_matrix_axes ma
+                    WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id) );""",
+     "0", kind="value")
+
+# ── P1-01's second half: EVERY WRITE PATH THE GRANTS ALLOW ────────────────
+# "Prove it with a case that builds the forbidden state through every write
+# path the role holds, generated from the grants and not from a hand-written
+# list." So the list is read from the CATALOGUE -- `pg_class.relacl` and
+# `pg_attribute.attacl` through `aclexplode`, not information_schema, whose
+# views filter by enabled role and showed none of the column-scoped grants
+# this schema actually carries. Every (grantee, relation, privilege) a
+# non-migrator principal holds on the four relations C-APP-01 is written from
+# is enumerated, PUBLIC included; the plan below says what this suite does
+# with each one, and the coverage case refuses when the catalogue and the
+# plan differ in EITHER direction, so a privilege granted later makes this
+# suite RED rather than silently uncovered (the "a check must also fail on
+# ABSENCE" lesson).
+#
+# What the enumeration itself found, and it is why the list is generated:
+# `daftar_app` holds INSERT, UPDATE and SELECT on `product_variants`. No
+# migration grants it by name on any line this author grepped for, and the
+# hand-written plan this case started as did not have it -- the role that
+# walks through the fourth door was missing from the author's own list of
+# write paths.
+SWEEP_RELS = "('product_variants','product_matrix_axes','product_attribute_axes','product_attribute_values')"
+GRANT_SQL = (
+  "SELECT DISTINCT coalesce(r.rolname,'PUBLIC')||'|'||c.relname||'|'||a.privilege_type AS g "
+  "  FROM pg_class c, aclexplode(c.relacl) a LEFT JOIN pg_roles r ON r.oid = a.grantee "
+  " WHERE c.relnamespace='public'::regnamespace AND c.relname IN " + SWEEP_RELS +
+  "   AND coalesce(r.rolname,'PUBLIC') <> 'daftar_migrator' "
+  "UNION "
+  "SELECT DISTINCT coalesce(r.rolname,'PUBLIC')||'|'||c.relname||'|'||a.privilege_type||'('||att.attname||')' "
+  "  FROM pg_class c JOIN pg_attribute att ON att.attrelid=c.oid, aclexplode(att.attacl) a "
+  "  LEFT JOIN pg_roles r ON r.oid = a.grantee "
+  " WHERE c.relnamespace='public'::regnamespace AND c.relname IN " + SWEEP_RELS +
+  "   AND att.attnum > 0 AND NOT att.attisdropped AND coalesce(r.rolname,'PUBLIC') <> 'daftar_migrator' "
+  "ORDER BY 1;")
+rc_g, out_g, err_g = run(GRANT_SQL)
+held = sorted(x.strip() for x in out_g.splitlines() if x.strip())
+
+rls_a_ctx = f"SET app.tenant_id='{TA}'; SET app.business_id='{A}';"
+# Each entry: the statement, the string that must appear, and whether it is a
+# refusal or an accepted write that cannot reach the forbidden state. A
+# privilege that CANNOT reach the state is still exercised -- the write is
+# made and then undone in the same case -- because "it cannot reach it" is a
+# claim, and an unexercised claim is the kind this phase keeps paying for.
+SWEEP = {
+ "daftar_app|product_variants|INSERT": (
+   f"INSERT INTO product_variants (business_id,id,product_id,attributes,is_base) VALUES ('{A}','f0000034-0000-0000-0000-000000000034','{PG}','{{\"size\":\"s\"}}'::jsonb,false);",
+   "catalog.variant_axis_set_incomplete", "refusal"),
+ "daftar_app|product_variants|UPDATE": (
+   f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G1}';",
+   "deferred grid closure at COMMIT", "refusal"),
+ "daftar_app|product_matrix_axes|INSERT": (
+   f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PA}','material',3);",
+   "catalog.matrix_axis_set_frozen", "refusal"),
+ "daftar_app|product_matrix_axes|UPDATE": (
+   f"UPDATE product_matrix_axes SET axis_code='material' WHERE business_id='{A}' AND product_id='{PA}' AND axis_code='color';",
+   "catalog.matrix_axis_in_use", "refusal"),
+ "daftar_app|product_matrix_axes|DELETE": (
+   f"DELETE FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PA}' AND axis_code='color';",
+   "catalog.matrix_axis_in_use", "refusal"),
+ "daftar_app|product_attribute_axes|UPDATE": (
+   f"UPDATE product_attribute_axes SET status='archived' WHERE business_id='{A}' AND axis_code='color';",
+   "catalog.attribute_axis_in_use", "refusal"),
+ "daftar_app|product_attribute_axes|DELETE": (
+   f"DELETE FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='color';",
+   "foreign key", "refusal"),
+ "daftar_app|product_attribute_axes|INSERT": (
+   f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','sweep_axis',97);\n"
+   f"SELECT 'added=' || count(*)::text FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='sweep_axis';\n"
+   f"DELETE FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='sweep_axis';",
+   "added=1", "accepted"),
+ "daftar_app|product_attribute_values|UPDATE": (
+   f"UPDATE product_attribute_values SET status='archived' WHERE business_id='{A}' AND axis_code='color' AND value_code='red';",
+   "catalog.attribute_value_in_use", "refusal"),
+ "daftar_app|product_attribute_values|DELETE": (
+   f"DELETE FROM product_attribute_values WHERE business_id='{A}' AND axis_code='color' AND value_code='red';",
+   "catalog.attribute_value_in_use", "refusal"),
+ "daftar_app|product_attribute_values|INSERT": (
+   f"INSERT INTO product_attribute_values (business_id,axis_code,value_code,sort_order) VALUES ('{A}','color','sweepval',96);\n"
+   f"SELECT 'added=' || count(*)::text FROM product_attribute_values WHERE business_id='{A}' AND axis_code='color' AND value_code='sweepval';\n"
+   f"DELETE FROM product_attribute_values WHERE business_id='{A}' AND axis_code='color' AND value_code='sweepval';",
+   "added=1", "accepted"),
+}
+# The inventory authority's INSERT on product_variants is COLUMN-scoped and
+# cannot name `attributes` at all, and 0053's own authority guard refuses a
+# non-base insert from it -- so the cell it would take to reach the forbidden
+# state is unwritable twice over. One measured attempt covers every column of
+# that grant.
+INV_INSERT = (
+   f"SET ROLE daftar_inventory_internal;\n"
+   f"INSERT INTO product_variants (business_id,id,product_id,is_base) VALUES ('{A}','f0000035-0000-0000-0000-000000000035','{PG}',false);",
+   "catalog.base_variant_not_mutable", "refusal")
+# A read cannot write the forbidden state, and that is the whole of a SELECT
+# entry: it is registered so the coverage comparison SEES it rather than
+# filtering it out, which is how a privilege quietly stops being covered.
+for k in list(held):
+    if "|SELECT" in k:
+        SWEEP.setdefault(k, (None, "a read cannot write the forbidden state", "read"))
+    elif k.startswith("daftar_inventory_internal|product_variants|INSERT("):
+        SWEEP.setdefault(k, INV_INSERT)
+case("P1-01 write-path coverage: the plan and the catalogue's grants agree, in both directions",
+     "SELECT 'held_not_planned=%s planned_not_held=%s';" % (
+        ",".join(sorted(set(held) - set(SWEEP))), ",".join(sorted(set(SWEEP) - set(held)))),
+     "held_not_planned= planned_not_held=", kind="value")
+_swept=set()
+for k in sorted(SWEEP):
+    sql, expect, kind_ = SWEEP[k]
+    if kind_ == "read":
+        continue
+    grantee, rel, priv = k.split("|", 2)
+    if (grantee, rel, priv.split("(")[0], expect) in _swept:
+        continue   # one measured attempt covers every column of one grant
+    _swept.add((grantee, rel, priv.split("(")[0], expect))
+    case(f"P1-01 sweep {grantee} {priv} on {rel} -> {'refused' if kind_=='refusal' else 'accepted, and cannot reach the state'}",
+         sql, expect, role=("daftar_app" if grantee == "daftar_app" else "postgres"),
+         pre=rls_a_ctx, kind=("refusal" if kind_ == "refusal" else "value"))
+case("P1-01 and after the whole sweep the grid is still closed",
+     f"""SELECT count(*)::text FROM product_variants v
+          WHERE v.business_id='{A}' AND NOT v.is_base AND v.status <> 'archived'
+            AND ( (SELECT coalesce(array_agg(k ORDER BY k), ARRAY[]::TEXT[]) FROM jsonb_object_keys(v.attributes) k)
+                  IS DISTINCT FROM
+                  (SELECT coalesce(array_agg(ma.axis_code ORDER BY ma.axis_code), ARRAY[]::TEXT[])
+                     FROM product_matrix_axes ma
+                    WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id) );""",
+     "0", kind="value")
+# The blindness arm of the deferred check, which the install itself cannot
+# stage: a principal that holds the write but not the read must get a
+# REFUSAL, not a pass. Measured by withdrawing the privilege for the length
+# of one case, and the next case asserts it was put back.
+case("P1-01 a principal that cannot read the registries is REFUSED, not passed (catalog.matrix_grid_unverifiable)",
+     f"REVOKE SELECT ON product_matrix_axes FROM daftar_app;\n"
+     f"SET ROLE daftar_app;\n"
+     f"INSERT INTO product_attribute_values (business_id,axis_code,value_code,sort_order) VALUES ('{A}','color','blind',95);\n",
+     "catalog.matrix_grid_unverifiable", pre=rls_a_ctx)
+case("P1-01 and the privilege that case withdrew is restored, measured rather than assumed",
+     f"GRANT SELECT ON product_matrix_axes TO daftar_app;\n"
+     f"DELETE FROM product_attribute_values WHERE business_id='{A}' AND axis_code='color' AND value_code='blind';\n"
+     f"SELECT 'select_restored=' || has_table_privilege('daftar_app','product_matrix_axes','SELECT')::text;",
+     "select_restored=true", kind="value")
 
 # ── PA-03 / PA-04. The end-state assertion's own two defects ──────────────
 # PA-03: the policy-set pin joined pg_class on `relname` with no namespace
@@ -401,6 +656,59 @@ case("PA-04 and it does not call the pack's own tenant qualifier, a false consta
      + "SELECT 'nullable=' || catalog_policy_qual_is_tautology('stock_levels','(avg_unit_cost_base_minor IS NOT NULL)')::text;\n"
      + "SELECT 'notnullable=' || catalog_policy_qual_is_tautology('stock_levels','(on_hand IS NOT NULL)')::text;",
      "own=false\nfalseconst=false\nnullable=false\nnotnullable=true", kind="value")
+# ── P2-01 (round 4). Form 4: the column compared with ITSELF ─────────────
+# The fourth challenge put fifteen spellings through the function and six
+# passed. One of them is not a spelling but a working hole, MEASURED in both
+# directions with the policy NAME left intact so the set pin cannot see it:
+# `(business_id = business_id)` as tenant_membership's USING and WITH CHECK
+# made a cross-tenant read return 6 rows instead of 0 and a cross-tenant
+# INSERT return rc=0 instead of rc=3. It is decidable by the premise form 3
+# already uses, so it is answered rather than routed.
+case("P2-01 the self-comparison the challenge measured as a live cross-tenant hole is caught",
+     (TAUT % ("'self'", "(business_id = business_id)"))
+     + (TAUT % ("'notdistinct'", "(business_id IS NOT DISTINCT FROM business_id)"))
+     + (TAUT % ("'negated'", "(NOT (business_id <> business_id))")),
+     "self=true\nnotdistinct=true\nnegated=true", kind="value")
+# And the premise is proved rather than assumed, in both directions: over a
+# NULLABLE column `(col = col)` is NOT true of every row, so it is not
+# called a tautology, while `IS NOT DISTINCT FROM` is true of every row
+# including the NULL ones and is caught whatever the column's nullability.
+case("P2-01 and form 4 rests on NOT NULL: over a nullable column the self-comparison is not a tautology, but IS NOT DISTINCT FROM still is",
+     "SELECT 'nullable_eq=' || catalog_policy_qual_is_tautology('stock_levels','(avg_unit_cost_base_minor = avg_unit_cost_base_minor)')::text;\n"
+     "SELECT 'nullable_nd=' || catalog_policy_qual_is_tautology('stock_levels','(avg_unit_cost_base_minor IS NOT DISTINCT FROM avg_unit_cost_base_minor)')::text;\n"
+     "SELECT 'notnull_eq=' || catalog_policy_qual_is_tautology('stock_levels','(on_hand = on_hand)')::text;\n"
+     "SELECT 'twocols=' || catalog_policy_qual_is_tautology('product_matrix_axes','(business_id = product_id)')::text;",
+     "nullable_eq=false\nnullable_nd=true\nnotnull_eq=true\ntwocols=false", kind="value")
+# The spellings that still pass, named rather than left for the next round to
+# find. They are PR-SEC-P11-01's work: the function is a list of decidable
+# forms, not a decision procedure, and this case is the list of what it does
+# NOT decide, asserted so the list cannot quietly grow.
+case("P2-01 and the spellings that honestly remain are named and measured as still passing (PR-SEC-P11-01)",
+     (TAUT % ("'anyarray'", "(business_id = ANY (ARRAY[''00000000-0000-0000-0000-000000000000''::uuid]))"))
+     + (TAUT % ("'orself'", "(business_id IS NOT NULL OR business_id IS NULL)"))
+     + (TAUT % ("'coalesce'", "(coalesce(business_id, business_id) IS NOT NULL)")),
+     "anyarray=false\norself=false\ncoalesce=false", kind="value")
+# ── P3-01 (round 4). Form 2 executes the stored expression ───────────────
+# The challenge's third finding on this function: form 2 EXECUTEs the
+# qualifier to see whether it evaluates to true, so a qualifier with SIDE
+# EFFECTS has them, as the INSTALLING principal. Measured with a function
+# that writes a row. It is a limit of the form, not a new hole, because the
+# input is never user text: it is pg_get_expr of a policy already stored on
+# one of this pack's five relations, and the set pin two assertions up means
+# the qualifier can only be one the pack installed itself. Recorded as the
+# third stated limit of form 2 -- the other two being the installing
+# session's settings and a volatile function called once -- and it must be
+# revisited if that pin is ever relaxed.
+case("P3-01 form 2 evaluates the stored expression, so its side effects happen as the installer (a stated limit, measured)",
+     "CREATE SCHEMA IF NOT EXISTS chal_side;\n"
+     "CREATE TABLE IF NOT EXISTS chal_side.witness (who TEXT);\n"
+     "CREATE OR REPLACE FUNCTION chal_side.touch() RETURNS BOOLEAN LANGUAGE sql VOLATILE AS "
+     "$x$ INSERT INTO chal_side.witness VALUES (current_user); SELECT false; $x$;\n"
+     "DELETE FROM chal_side.witness;\n"
+     "SELECT 'verdict=' || catalog_policy_qual_is_tautology('product_matrix_axes','(chal_side.touch())')::text;\n"
+     "SELECT 'side_effect_ran_as=' || coalesce((SELECT who FROM chal_side.witness LIMIT 1),'nobody');\n"
+     "DROP SCHEMA chal_side CASCADE;",
+     "verdict=false\nside_effect_ran_as=postgres", kind="value")
 case("PA-04 and PUBLIC cannot execute the test, which reads the catalogue",
      "SELECT has_function_privilege('public','catalog_policy_qual_is_tautology(text,text)','EXECUTE')::text;",
      "f", kind="value")
@@ -431,9 +739,21 @@ case("P2-N02 and once no matrix registers it, archiving the same axis is allowed
 # so the branch cannot be reached by a live case any more. It is kept as
 # defence in depth and asserted structurally — stated as a weaker evidence
 # class rather than left as a case that passes for a changed reason.
-case("P2-06 the validator still carries its archived-axis branch, now unreachable from a committed state (defence in depth, STRUCTURAL)",
-     "SELECT (position('catalog.variant_axis_archived' in pg_get_functiondef(p.oid)) > 0)::text "
-     "FROM pg_proc p WHERE p.proname='product_variants_40_matrix_canonical';", "t", kind="value")
+# Finding P3-01 (reported against Pack B at 04d87b3, the same shape here):
+# this pin read `pg_get_functiondef`, which INCLUDES the comments, so the
+# branch could be deleted from the body and left named in a comment and the
+# case would still pass. It reads the comment-stripped `prosrc` now, and it
+# matches a RAISE OF that condition rather than a mention of its name. Still
+# STRUCTURAL, and still weaker than a behavioural case -- which is why the
+# label says so; the state it would refuse is unreachable from any committed
+# state, which is the whole reason this is a text pin at all.
+case("P2-06 the validator still RAISES its archived-axis refusal, now unreachable from a committed state (defence in depth, STRUCTURAL, comment-stripped)",
+     "SELECT (catalog_prosrc_uncommented('public.product_variants_40_matrix_canonical()') "
+     "~ 'RAISE\\s+EXCEPTION\\s+''catalog\\.variant_axis_archived')::text;", "t", kind="value")
+case("P2-06 and the pin is not vacuous: the stripper answers, and leaves no comment behind for a name to hide in",
+     "SELECT (length(catalog_prosrc_uncommented('public.product_variants_40_matrix_canonical()')) > 400)::text "
+     "|| ',' || (catalog_prosrc_uncommented('public.product_variants_40_matrix_canonical()') !~ '-- ')::text;",
+     "true,true", kind="value")
 
 # P2-07. The guards' absence conclusion, exercised where RLS is LIVE.
 # Every case above runs as `postgres`, where row-level security is bypassed

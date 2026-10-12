@@ -133,11 +133,65 @@ fi
 # worlds, before any proof runs. It is in this file rather than in the
 # author's shell so a challenger can reproduce a mutation run by name, and it
 # is printed in full so a log says which words were changed.
+# ── What the hook MEASURES about its own mutation (finding P2-02, round 4) ──
+# The fourth independent challenge planted a mutation that changes nothing
+# (`SELECT 1;`) and the hook reported it as applied, every suite passed, and
+# every EXIT_* was 0 — a mutation run that proves nothing while looking like
+# a clean one. A tool that reports on evidence must be able to fail (the P10
+# lesson), and the thing this tool reports is "the schema was changed and the
+# suites noticed". So the DDL-VISIBLE STATE is digested before and after, and
+# a mutation that leaves it identical is refused here rather than measured as
+# a pass. The digest covers function bodies, triggers (definition, timing and
+# deferredness), constraints, policies with both their expressions, indexes,
+# table and function ACLs and the row-security flags — which is every object
+# this phase's mutations touch.
+#
+# Its own limit, stated because it is real: the digest is of the schema, not
+# of the data, so a mutation that only changes FIXTURE rows reads as a no-op
+# and is refused. That is the right default for this phase, whose mutations
+# are all guard removals; a data mutation would need its own hook.
+#
+# And the ORDERING limit, which no digest can fix: step 5c runs AFTER the
+# packs were applied at step 4, so a mutation cannot test an end-state
+# assertion — the assertion already passed on the unmutated pack. An
+# end-state arm is mutation-tested by editing the DDL on a scratch COPY and
+# applying that, which is how the §11 table's M4 row was measured, and the
+# copy is used because a frozen tree is never mutated in place.
+pg_ddl_digest () {
+  $Q "$PSQL_P -U postgres -d daftar -X -A -t -c \"
+    SELECT md5(string_agg(x, chr(10) ORDER BY x)) FROM (
+      SELECT 'f:'||p.proname||':'||md5(p.prosrc) AS x FROM pg_proc p WHERE p.pronamespace='public'::regnamespace
+      UNION ALL SELECT 't:'||c.relname||':'||g.tgname||':'||g.tgtype||':'||g.tgdeferrable::text||':'||g.tginitdeferred::text||':'||pg_get_triggerdef(g.oid)
+                  FROM pg_trigger g JOIN pg_class c ON c.oid=g.tgrelid WHERE NOT g.tgisinternal AND c.relnamespace='public'::regnamespace
+      UNION ALL SELECT 'k:'||co.conname||':'||pg_get_constraintdef(co.oid) FROM pg_constraint co WHERE co.connamespace='public'::regnamespace
+      UNION ALL SELECT 'p:'||c.relname||':'||pol.polname||':'||coalesce(pg_get_expr(pol.polqual,pol.polrelid),'')||':'||coalesce(pg_get_expr(pol.polwithcheck,pol.polrelid),'')
+                  FROM pg_policy pol JOIN pg_class c ON c.oid=pol.polrelid WHERE c.relnamespace='public'::regnamespace
+      UNION ALL SELECT 'i:'||i.indexrelid::regclass::text||':'||pg_get_indexdef(i.indexrelid)
+                  FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid WHERE c.relnamespace='public'::regnamespace
+      UNION ALL SELECT 'a:'||c.relname||':'||coalesce(c.relacl::text,'')||':'||c.relrowsecurity::text||':'||c.relforcerowsecurity::text
+                  FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind='r'
+      UNION ALL SELECT 'x:'||p.proname||':'||coalesce(p.proacl::text,'') FROM pg_proc p WHERE p.pronamespace='public'::regnamespace
+    ) s\"" | tr -d '[:space:]'
+}
 if [ -n "$P11_MUTATION_SQL" ]; then
   echo "=== 5c. MUTATION APPLIED: $P11_MUTATION_SQL (this run is NOT a clean-tree proof run) ==="
   sed 's/^/  | /' "$P11_MUTATION_SQL"
+  DDL_BEFORE=$(pg_ddl_digest)
   $Q "$PSQL_P -U postgres -d daftar -X -q -v ON_ERROR_STOP=1 -f $P11_MUTATION_SQL" || exit 1
-  echo "=== the suites below are expected to FAIL; a mutation run whose suites pass is a gap in the suite ==="
+  DDL_AFTER=$(pg_ddl_digest)
+  echo "MUTATION_DDL_DIGEST_BEFORE: $DDL_BEFORE"
+  echo "MUTATION_DDL_DIGEST_AFTER : $DDL_AFTER"
+  if [ -z "$DDL_BEFORE" ] || [ -z "$DDL_AFTER" ]; then
+    echo "the mutation hook could not digest the schema, so it cannot say whether the mutation changed anything; refusing to report this run"; exit 4
+  fi
+  if [ "$DDL_BEFORE" = "$DDL_AFTER" ]; then
+    echo "=== MUTATION IS A NO-OP: the DDL-visible state is byte-identical before and after. ==="
+    echo "A run whose mutation changed nothing measures the clean tree while reporting a mutation."
+    echo "Refusing to run the suites (finding P2-02 of the fourth independent challenge)."
+    exit 4
+  fi
+  echo "=== the mutation CHANGED the schema (digests differ); the suites below are expected to FAIL ==="
+  echo "=== a mutation run whose suites pass is a gap in the suite ==="
 fi
 
 echo "=== 6. proofs (Pack A, apparel) ==="

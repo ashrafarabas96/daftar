@@ -645,6 +645,48 @@ BEGIN
   EXECUTE 'GRANT UPDATE (on_hand, last_movement_seq) ON stock_lot_levels TO daftar_inventory_internal';
 END $$;
 
+-- ── A TEXT PIN PROVES WHICH FUNCTION WAS READ, NOT WHAT IT DOES ───────────
+-- Finding P3-01 of the fourth independent challenge, measured: the three
+-- end-state assertions below searched `pg_get_functiondef` for the name of
+-- the arm they were pinning, and `pg_get_functiondef` returns the function's
+-- COMMENTS. The challenger replaced the fail-closed body with a silent
+-- `RETURN NEW` and left the string in a comment: the assertion passed, the
+-- pack installed, and the invisibility case committed. Two sites had the same
+-- shape, so one planted edit defeated both.
+--
+-- The real answer is behavioural, and it exists: `proofs_b.py` runs the
+-- invisibility case end to end (a cache row written as the internal role
+-- against a key the committing principal cannot read, expecting
+-- `inventory.lot_conservation_unverifiable`) on both the movement side and
+-- the cache side. That is what proves the arm FIRES. It cannot be run from
+-- inside this install, which owns every privilege and has no second
+-- principal to be blind as, so the install's own pin is kept and made as
+-- strong as a text pin can be:
+--   * it reads `prosrc`, not `pg_get_functiondef`, so the header and the
+--     COMMENT ON are not part of the subject;
+--   * it strips `--` and `/* */` comments from the body, so a name parked in
+--     a comment is not a match;
+--   * it matches a RAISE OF THAT CONDITION, not a mention of its name, so a
+--     variable or a log line carrying the string is not a match either.
+-- Stated plainly: this is weaker than the suite's behavioural case, it is an
+-- install-time tripwire against a later edit, and the suite is what proves
+-- the law. The same stripping is used for every text pin in this file.
+CREATE FUNCTION inventory_prosrc_uncommented(p_fn TEXT)
+RETURNS TEXT
+LANGUAGE sql STABLE SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $fn$
+  SELECT regexp_replace(
+           regexp_replace(p.prosrc, '/\*.*?\*/', ' ', 'gs'),
+           '--[^' || chr(10) || ']*', ' ', 'g')
+    FROM pg_proc p
+   WHERE p.oid = p_fn::regprocedure;
+$fn$;
+REVOKE ALL ON FUNCTION inventory_prosrc_uncommented(TEXT) FROM PUBLIC;
+
+COMMENT ON FUNCTION inventory_prosrc_uncommented(TEXT) IS
+  'Phase 11 Pack B, finding P3-01. The comment-stripped prosrc of a function, for the end-state text pins: pg_get_functiondef includes comments, so a pin over it proves which function was examined rather than what it does. Weaker than the behavioural cases in proofs_b.py, which are what prove the arms fire.';
+
 -- ─── END-STATE ASSERTION ──────────────────────────────────────────────────
 -- The apply FAILS if any of this is not true, so a silent partial install is
 -- not a possible outcome.
@@ -656,7 +698,8 @@ BEGIN
   -- monetary vocabulary.
   SELECT string_agg(table_name||'.'||column_name, ', ') INTO bad
     FROM information_schema.columns
-   WHERE table_name IN ('stock_lots','stock_lot_movements','stock_lot_levels')
+   WHERE table_schema = 'public'
+     AND table_name IN ('stock_lots','stock_lot_movements','stock_lot_levels')
      AND (column_name ~ '(minor|price|cost|value|amount|currency|valuation)');
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'P11 end-state: a monetary column appeared on the overlay: %', bad; END IF;
 
@@ -666,47 +709,49 @@ BEGIN
   IF n <> 3 THEN RAISE EXCEPTION 'P11 end-state: RLS enabled+forced on % of 3 overlay relations', n; END IF;
 
   SELECT count(*) INTO n FROM pg_policy
-   WHERE polrelid IN ('stock_lots'::regclass,'stock_lot_movements'::regclass,'stock_lot_levels'::regclass);
+   WHERE polrelid IN ('public.stock_lots'::regclass,'public.stock_lot_movements'::regclass,'public.stock_lot_levels'::regclass);
   IF n <> 9 THEN RAISE EXCEPTION 'P11 end-state: % policies on the overlay, expected 9', n; END IF;
 
   -- append-only, and the twin rather than a second implementation
   SELECT count(*) INTO n FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
-   WHERE t.tgrelid='stock_lot_movements'::regclass AND NOT t.tgisinternal
+   WHERE t.tgrelid='public.stock_lot_movements'::regclass AND NOT t.tgisinternal
      AND p.proname='stock_ledger_append_only';
   IF n <> 1 THEN RAISE EXCEPTION 'P11 end-state: the overlay ledger is not append-only by the existing twin'; END IF;
 
   -- the deferred conservation triggers exist AND are deferred
-  SELECT count(*) INTO n FROM pg_trigger
-   WHERE tgname IN ('stock_movements_lot_conservation','stock_lot_movements_conservation','stock_lot_levels_conservation')
-     AND tgdeferrable AND tginitdeferred;
+  SELECT count(*) INTO n FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid
+   WHERE c.relnamespace = 'public'::regnamespace
+     AND g.tgname IN ('stock_movements_lot_conservation','stock_lot_movements_conservation','stock_lot_levels_conservation')
+     AND g.tgdeferrable AND g.tginitdeferred;
   IF n <> 3 THEN RAISE EXCEPTION 'P11 end-state: % of 3 conservation triggers are DEFERRABLE INITIALLY DEFERRED', n; END IF;
 
   -- no DELETE privilege for any runtime principal on any overlay relation
   SELECT string_agg(grantee||' on '||table_name, ', ') INTO bad
     FROM information_schema.table_privileges
-   WHERE table_name IN ('stock_lots','stock_lot_movements','stock_lot_levels')
+   WHERE table_schema = 'public'
+     AND table_name IN ('stock_lots','stock_lot_movements','stock_lot_levels')
      AND privilege_type='DELETE' AND grantee <> 'daftar_migrator';
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'P11 end-state: a runtime principal may DELETE overlay history: %', bad; END IF;
 
   -- the expiry policy admits exactly one value
   SELECT count(*) INTO n FROM pg_constraint
-   WHERE conrelid='products'::regclass AND conname='products_expiry_policy_ck'
+   WHERE conrelid='public.products'::regclass AND conname='products_expiry_policy_ck'
      AND pg_get_constraintdef(oid) ~ 'refuse';
   IF n <> 1 THEN RAISE EXCEPTION 'P11 end-state: the expiry policy CHECK is not the single-value one'; END IF;
 
   -- the history lock sits at 40, after the three occupied positions
   SELECT count(*) INTO n FROM pg_trigger
-   WHERE tgrelid='products'::regclass AND tgname='products_40_lot_history_lock';
+   WHERE tgrelid='public.products'::regclass AND tgname='products_40_lot_history_lock';
   IF n <> 1 THEN RAISE EXCEPTION 'P11 end-state: the lot history lock is not at position 40 on products'; END IF;
 
   -- the new column is authority-bound, and its guard fires before the others
   SELECT count(*) INTO n FROM pg_trigger
-   WHERE tgrelid='products'::regclass AND tgname='products_05_lot_config_authority';
+   WHERE tgrelid='public.products'::regclass AND tgname='products_05_lot_config_authority';
   IF n <> 1 THEN RAISE EXCEPTION 'P11 end-state: track_lot is not bound to the inventory configuration authority'; END IF;
 
   -- the authority can actually write the columns it owns
   SELECT count(*) INTO n FROM information_schema.column_privileges
-   WHERE table_name='products' AND grantee='daftar_inventory_internal'
+   WHERE table_schema='public' AND table_name='products' AND grantee='daftar_inventory_internal'
      AND privilege_type='UPDATE' AND column_name IN ('track_lot','expiry_policy');
   IF n <> 2 THEN RAISE EXCEPTION 'P11 end-state: the inventory authority cannot UPDATE its own lot columns (% of 2 grants)', n; END IF;
 
@@ -719,7 +764,8 @@ BEGIN
   -- blanket read policy disables tenant isolation.
   SELECT string_agg(c.relname||'.'||p.polname, ', ') INTO bad
     FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
-   WHERE c.relname IN ('stock_lots','stock_lot_movements','stock_lot_levels')
+   WHERE c.relnamespace = 'public'::regnamespace
+     AND c.relname IN ('stock_lots','stock_lot_movements','stock_lot_levels')
      AND p.polpermissive AND p.polroles = '{0}'::oid[]
      AND pg_get_expr(p.polqual, p.polrelid) = 'true';
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'P11 end-state: a blanket permissive policy applies to PUBLIC, which switches tenant isolation off for SELECT: %', bad; END IF;
@@ -740,22 +786,34 @@ BEGIN
   -- Asserted on the function's own text, because the defect was that one of
   -- two sites existed: a future edit that removes the comparison from the
   -- movement path would leave the other trigger in place and the hole open.
-  IF position('lot_level_conservation_violated' in
-              pg_get_functiondef('stock_lot_movement_conservation()'::regprocedure)) = 0 THEN
-    RAISE EXCEPTION 'P11 end-state: the movement-side conservation trigger no longer compares the per-lot cache with the stock key';
+  IF inventory_prosrc_uncommented('public.stock_lot_movement_conservation()')
+       !~ 'RAISE\s+EXCEPTION\s+''inventory\.lot_level_conservation_violated' THEN
+    RAISE EXCEPTION 'P11 end-state: the movement-side conservation trigger does not RAISE the cache-versus-key violation (searched the comment-stripped body, so a name in a comment is not a match)';
   END IF;
   -- Finding P1-02: and it must FAIL CLOSED when it cannot read the movement.
-  IF position('lot_conservation_unverifiable' in
-              pg_get_functiondef('stock_lot_movement_conservation()'::regprocedure)) = 0 THEN
-    RAISE EXCEPTION 'P11 end-state: the conservation trigger has no fail-closed arm, so a COMMIT that cannot see its movement would skip the law';
+  IF inventory_prosrc_uncommented('public.stock_lot_movement_conservation()')
+       !~ 'RAISE\s+EXCEPTION\s+''inventory\.lot_conservation_unverifiable' THEN
+    RAISE EXCEPTION 'P11 end-state: the conservation trigger does not RAISE a fail-closed refusal, so a COMMIT that cannot see its movement would skip the law';
   END IF;
 
   -- Finding D-32, found here rather than reported: the CACHE side must fail
   -- closed on the same condition, for the same reason. Asserted on its own
   -- text, because the hole was that one of two sites had the arm.
-  IF position('lot_conservation_unverifiable' in
-              pg_get_functiondef('stock_lot_level_conservation()'::regprocedure)) = 0 THEN
-    RAISE EXCEPTION 'P11 end-state: the cache-side conservation trigger returns silently when it cannot read the stock key, so a cache row written against an unreadable key would commit unjudged';
+  IF inventory_prosrc_uncommented('public.stock_lot_level_conservation()')
+       !~ 'RAISE\s+EXCEPTION\s+''inventory\.lot_conservation_unverifiable' THEN
+    RAISE EXCEPTION 'P11 end-state: the cache-side conservation trigger does not RAISE a fail-closed refusal when it cannot read the stock key, so a cache row written against an unreadable key would commit unjudged';
+  END IF;
+  -- And the stripper itself, proved on this install rather than trusted: a
+  -- stripper that returned the body unchanged would make the three pins
+  -- above exactly as weak as the ones they replaced, and a stripper that
+  -- returned NULL or '' would make them pass nothing at all. Both arms are
+  -- asserted. The second uses this pack's own function text, which contains
+  -- `--` comments in every body.
+  IF coalesce(inventory_prosrc_uncommented('public.stock_lot_level_conservation()'), '') = '' THEN
+    RAISE EXCEPTION 'P11 end-state: the comment stripper returns nothing, so every text pin above is vacuous';
+  END IF;
+  IF inventory_prosrc_uncommented('public.stock_lot_level_conservation()') ~ '-- ' THEN
+    RAISE EXCEPTION 'P11 end-state: the comment stripper left a comment in the body, so a pin over it can still be satisfied by a comment';
   END IF;
 
   -- The policy SET of each overlay relation, pinned the way Pack A pins its
@@ -792,7 +850,7 @@ BEGIN
 
   -- P3: lot facts are frozen once the ledger names the lot
   SELECT count(*) INTO n FROM pg_trigger
-   WHERE tgrelid='stock_lots'::regclass AND tgname='stock_lots_10_facts_frozen_once_moved';
+   WHERE tgrelid='public.stock_lots'::regclass AND tgname='stock_lots_10_facts_frozen_once_moved';
   IF n <> 1 THEN RAISE EXCEPTION 'P11 end-state: a lot''s dates and receipt order are rewritable after it has movements'; END IF;
 
   RAISE NOTICE 'P11 PACK B end-state assertion passed: 19 checks';

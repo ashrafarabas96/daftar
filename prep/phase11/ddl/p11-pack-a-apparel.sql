@@ -731,6 +731,263 @@ CREATE TRIGGER product_matrix_axes_30_set_frozen
   BEFORE INSERT ON product_matrix_axes
   FOR EACH ROW EXECUTE FUNCTION product_matrix_axes_30_set_frozen();
 
+-- ── C-APP-01 AS A STATE, CHECKED AT COMMIT, NOT AS A LIST OF VERBS ────────
+-- Finding P1-01 of the FOURTH independent challenge, and the reason this
+-- section exists rather than a fifth per-verb guard.
+--
+-- The previous round narrowed the freeze guard's read to LIVE variants, so
+-- that the recovery path its own message recommends could be walked (finding
+-- PA-02). The narrowing was right and stays. What it did was make a verb
+-- reachable that nothing watched: `UPDATE product_variants SET status =
+-- 'active'`. Measured by the challenger at 04d87b3 on TSHIRT-RECOVER —
+--   archive both cells        -> permitted (0061 requires zero stock, which held)
+--   INSERT a third axis       -> permitted (no LIVE variant, so not frozen)
+--   UPDATE … SET status='active' -> rc=0
+-- and the committed state was one live non-base variant naming two of the
+-- product's three axes, holding 7.0000 on its own stock key. The same
+-- unaddressable split identity P0-01, P1-N01 and PA-01 each produced, by a
+-- fourth door. `product_variants_40_matrix_canonical` fires BEFORE INSERT OR
+-- UPDATE OF attributes, is_base, product_id — not of `status` — and 0061
+-- fires only on the way INTO 'archived'. Nothing watched the way back.
+--
+-- Four rounds, four doors, one state. The lesson is not "add status to the
+-- trigger's column list"; that is the fifth per-verb guard and the sixth door
+-- would be whatever verb the next correct narrowing makes reachable. What is
+-- stable is the STATE, which C-APP-01 states and which the freeze guard's own
+-- comment has described since round 2:
+--
+--   For every (business, product): every LIVE non-base variant names
+--   exactly the axis codes the product's matrix currently registers, and
+--   every axis and value it names is active in the business's registries.
+--
+-- So it is recomputed, for the affected product, at COMMIT, by DEFERRABLE
+-- INITIALLY DEFERRED constraint triggers on every relation the state is
+-- written from — product_variants, product_matrix_axes,
+-- product_attribute_axes, product_attribute_values — on INSERT, UPDATE and
+-- DELETE alike. A verb nobody enumerated still lands in one of those four
+-- relations, and the check does not ask which verb was used.
+--
+-- The per-verb guards above are NOT removed, and the distinction is worth
+-- stating because a reviewer should be able to see which one answers:
+--   * the BEFORE guards refuse at the STATEMENT, so a merchant is told which
+--     write was wrong while the transaction can still be corrected, and they
+--     refuse writes this check cannot see at all (a value archived with no
+--     variant yet naming it, an axis removed from a matrix that has none);
+--   * this check refuses at COMMIT, so a sequence whose individual statements
+--     are each permissible cannot leave the forbidden state behind.
+-- Both are proved, and they are PAIR-DROPPED in the mutation set (M7 drops
+-- this check, M8 drops the four BEFORE guards, M9 drops both) so the log
+-- shows which refusal each door actually meets rather than leaving one
+-- defence masked by the other — the P5 R9 lesson, applied here before a
+-- challenger has to apply it.
+--
+-- DEFERRED rather than IMMEDIATE, deliberately: generating a grid writes the
+-- axes and then the cells, and every intermediate state of that transaction
+-- names fewer cells than axes. An IMMEDIATE check would refuse the ordinary
+-- act of building a matrix. The law is about what is COMMITTED, so it is
+-- checked where commit is.
+--
+-- SECURITY INVOKER, for the reason measured three times in this pack: a
+-- definer reads nothing through product_variants' RESTRICTIVE policy without
+-- a session context. The premise that makes an invoker read conclusive is
+-- that the writer must already satisfy business_isolation on the relation it
+-- wrote, so the product's own variants and registry rows are in its scope.
+-- That premise is not assumed: the check asserts it holds the privileges it
+-- needs and REFUSES rather than passing if it cannot look — the Pack B D-32
+-- shape ("a check that cannot look must not reassure"), stated here as a
+-- name of its own, catalog.matrix_grid_unverifiable.
+CREATE FUNCTION catalog_grid_closed_check(p_business UUID, p_product UUID)
+RETURNS VOID
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $fn$
+DECLARE
+  r RECORD;
+  v_rel TEXT;
+BEGIN
+  -- Blindness is a refusal, not a pass. Privilege is checkable; row-level
+  -- visibility is not checkable from inside the read, so the privilege test
+  -- is stated as what it is — the half that can be measured — and the
+  -- visibility half rests on the writer's own policy obligation above.
+  FOREACH v_rel IN ARRAY ARRAY['product_variants','product_matrix_axes',
+                               'product_attribute_axes','product_attribute_values'] LOOP
+    IF NOT has_table_privilege(v_rel, 'SELECT') THEN
+      RAISE EXCEPTION 'catalog.matrix_grid_unverifiable: the grid-closure law cannot read %, so the state it is asked to judge is unknown; it refuses rather than passes', v_rel
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+
+  FOR r IN
+    SELECT v.id,
+           v.attributes,
+           jsonb_typeof(v.attributes) AS vtype,
+           (SELECT coalesce(array_agg(k ORDER BY k), ARRAY[]::TEXT[])
+              FROM jsonb_object_keys(v.attributes) k
+             WHERE jsonb_typeof(v.attributes) = 'object')              AS named,
+           (SELECT coalesce(array_agg(ma.axis_code ORDER BY ma.axis_code), ARRAY[]::TEXT[])
+              FROM product_matrix_axes ma
+             WHERE ma.business_id = v.business_id
+               AND ma.product_id  = v.product_id)                      AS registered
+      FROM product_variants v
+     WHERE v.business_id = p_business
+       AND v.product_id  = p_product
+       AND NOT v.is_base
+       AND v.status <> 'archived'
+  LOOP
+    IF r.vtype <> 'object' THEN
+      RAISE EXCEPTION 'catalog.variant_attributes_shape_invalid: live variant % carries attributes that are not a flat object [deferred grid closure at COMMIT]', r.id
+        USING ERRCODE = 'P0001';
+    END IF;
+    -- One law, one name: the empty set names zero of the product's axes and
+    -- a partial set names some of them, which is what
+    -- variant_axis_set_incomplete has said since round 0. The site is named
+    -- in the message so a pair-drop can tell which defence answered.
+    IF r.named IS DISTINCT FROM r.registered THEN
+      RAISE EXCEPTION 'catalog.variant_axis_set_incomplete: live variant % names {%} while its product''s matrix registers {%}; a variant outside the grid is a costing identity nothing can address [deferred grid closure at COMMIT]',
+        r.id, array_to_string(r.named, ','), array_to_string(r.registered, ',')
+        USING ERRCODE = 'P0001';
+    END IF;
+    IF EXISTS (SELECT 1 FROM jsonb_each_text(r.attributes) e
+                WHERE NOT EXISTS (SELECT 1 FROM product_attribute_axes ax
+                                   WHERE ax.business_id = p_business
+                                     AND ax.axis_code   = e.key
+                                     AND ax.status      = 'active')) THEN
+      RAISE EXCEPTION 'catalog.variant_axis_archived: live variant % names an axis that is not active in this business [deferred grid closure at COMMIT]', r.id
+        USING ERRCODE = 'P0001';
+    END IF;
+    IF EXISTS (SELECT 1 FROM jsonb_each_text(r.attributes) e
+                WHERE NOT EXISTS (SELECT 1 FROM product_attribute_values av
+                                   WHERE av.business_id = p_business
+                                     AND av.axis_code   = e.key
+                                     AND av.value_code  = e.value
+                                     AND av.status      = 'active')) THEN
+      RAISE EXCEPTION 'catalog.variant_axis_value_unregistered: live variant % names a value that is not an active value of its axis [deferred grid closure at COMMIT]', r.id
+        USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION catalog_grid_closed_check(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION catalog_grid_closed_check(UUID, UUID) TO daftar_app;
+
+COMMENT ON FUNCTION catalog_grid_closed_check(UUID, UUID) IS
+  'Phase 11 Pack A, finding P1-01 (fourth challenge round). Recomputes C-APP-01 for one (business, product): every LIVE non-base variant names exactly the matrix''s current axis codes, and every axis and value it names is active. Raises variant_axis_set_incomplete / variant_axis_archived / variant_axis_value_unregistered, each tagged "deferred grid closure at COMMIT", or matrix_grid_unverifiable when it lacks the privilege to look. SECURITY INVOKER: a definer reads nothing through product_variants'' restrictive policy.';
+
+-- The trigger adapter. Which products a write can disturb depends on which
+-- relation was written, and that mapping is the only per-relation knowledge
+-- here: the LAW itself is one function, called once per affected product.
+--   product_variants, product_matrix_axes  -> the row's own product
+--   product_attribute_axes                 -> every product of the business
+--                                             whose live variants name the axis
+--   product_attribute_values               -> every product of the business
+--                                             whose live variants name the value
+-- A base-variant write returns without reading anything, because the law is
+-- about non-base variants and because `daftar_inventory_internal` — the only
+-- principal 0053 allows to write a base variant — holds no SELECT on this
+-- pack's registries. A check that refused that lawful write would be a new
+-- defect, so the early return is deliberate and is asserted in section 7.
+CREATE FUNCTION product_grid_90_closed()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $fn$
+DECLARE
+  v_row RECORD;
+  r     RECORD;
+BEGIN
+  v_row := CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  -- The relation test is NESTED rather than conjoined, and that is a
+  -- measured correction rather than a style choice: plpgsql evaluates an IF
+  -- condition as one SQL expression with no short-circuit, so
+  -- `TG_TABLE_NAME = 'product_variants' AND v_row.is_base` raised
+  -- `record "v_row" has no field "is_base"` on the first registry write of
+  -- the fixture. A guard that errors on a lawful write is a worse defect
+  -- than the one it was added to close.
+  IF TG_TABLE_NAME IN ('product_variants', 'product_matrix_axes') THEN
+    IF TG_TABLE_NAME = 'product_variants' THEN
+      IF v_row.is_base THEN
+        RETURN NULL;
+      END IF;
+    END IF;
+    PERFORM catalog_grid_closed_check(v_row.business_id, v_row.product_id);
+    -- An UPDATE that MOVES a row between products leaves two products to
+    -- judge, and judging only the new one is how a verb escapes a state
+    -- check. Both are judged whenever the key moved.
+    IF TG_OP = 'UPDATE' AND (OLD.business_id, OLD.product_id)
+                         IS DISTINCT FROM (NEW.business_id, NEW.product_id) THEN
+      PERFORM catalog_grid_closed_check(OLD.business_id, OLD.product_id);
+    END IF;
+  ELSE
+    FOR r IN
+      SELECT DISTINCT v.business_id, v.product_id
+        FROM product_variants v
+       WHERE v.business_id = v_row.business_id
+         AND NOT v.is_base
+         AND v.status <> 'archived'
+         AND v.attributes ? CASE WHEN TG_OP = 'DELETE' THEN OLD.axis_code ELSE NEW.axis_code END
+    LOOP
+      PERFORM catalog_grid_closed_check(r.business_id, r.product_id);
+    END LOOP;
+    IF TG_OP = 'UPDATE' AND OLD.axis_code IS DISTINCT FROM NEW.axis_code THEN
+      FOR r IN
+        SELECT DISTINCT v.business_id, v.product_id
+          FROM product_variants v
+         WHERE v.business_id = OLD.business_id
+           AND NOT v.is_base
+           AND v.status <> 'archived'
+           AND v.attributes ? OLD.axis_code
+      LOOP
+        PERFORM catalog_grid_closed_check(r.business_id, r.product_id);
+      END LOOP;
+    END IF;
+  END IF;
+  RETURN NULL;
+END;
+$fn$;
+
+COMMENT ON FUNCTION product_grid_90_closed() IS
+  'Phase 11 Pack A, finding P1-01. Deferred constraint trigger function on product_variants, product_matrix_axes, product_attribute_axes and product_attribute_values, for INSERT, UPDATE and DELETE. Derives the affected (business, product) set from the written row and calls catalog_grid_closed_check for each. Returns without reading for a base-variant write, which the law does not cover and whose only principal holds no SELECT on this pack''s registries. No EXECUTE grant.';
+
+CREATE CONSTRAINT TRIGGER product_variants_90_grid_closed
+  AFTER INSERT OR UPDATE OR DELETE ON product_variants
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION product_grid_90_closed();
+
+CREATE CONSTRAINT TRIGGER product_matrix_axes_90_grid_closed
+  AFTER INSERT OR UPDATE OR DELETE ON product_matrix_axes
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION product_grid_90_closed();
+
+CREATE CONSTRAINT TRIGGER product_attribute_axes_90_grid_closed
+  AFTER INSERT OR UPDATE OR DELETE ON product_attribute_axes
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION product_grid_90_closed();
+
+CREATE CONSTRAINT TRIGGER product_attribute_values_90_grid_closed
+  AFTER INSERT OR UPDATE OR DELETE ON product_attribute_values
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION product_grid_90_closed();
+
+-- ── What this check does NOT close, measured rather than assumed ──────────
+-- MPR-09 stands and is now narrower. "No stock outside the grid" has a
+-- second half this pack cannot reach: a movement posted onto an ARCHIVED
+-- variant. Nothing in the frozen core refuses it (measured in round 3: a
+-- stock_levels row with on_hand 5.0000 on an archived variant is accepted,
+-- and no trigger on stock_levels or stock_movements reads
+-- product_variants.status), and this check cannot see it either — it judges
+-- LIVE variants, and a transaction that writes only the ledger fires no
+-- trigger of this pack at all. Reading stock_levels from here would not fix
+-- that: the write that creates the forbidden state is in the OTHER
+-- transaction, so there is nothing to judge at this commit.
+-- So the residual is stated exactly: the grid is closed over the catalogue,
+-- and "a movement is not posted onto an archived variant" is the inventory
+-- authority's obligation, requested as MPR-09. Under Option B the variant IS
+-- the costing key, so a live variant outside the grid is a stock identity
+-- outside the grid whether or not it currently holds units — which is why
+-- the law above is stated over the catalogue's own relations and is
+-- decidable there, and why the ledger read was NOT added as a clause that
+-- would be sound only inside one transaction.
+
 -- One variant per combination. The trigger has already rewritten
 -- `attributes` into canonical form, so the expression is a canonicalization
 -- of an already-canonical value: stable, and still correct if a future path
@@ -841,15 +1098,66 @@ INSERT INTO features (key, description)
 -- input is never user text — it is `pg_get_expr` of a policy already stored
 -- on one of this pack's five relations, and the set pin above means the
 -- qualifier can only be one of two policies the pack installed itself.
+-- ── The same text-pin weakness Pack B measured, fixed in this pack too ────
+-- Finding P3-01 of the fourth round was reported against Pack B: an
+-- end-state assertion searching `pg_get_functiondef` for the name of the arm
+-- it pins proves WHICH FUNCTION WAS EXAMINED, not what the function does,
+-- because `pg_get_functiondef` includes the comments. Two of this pack's
+-- proof cases have the same shape (`proofs.py`, the unreachable
+-- archived-axis branch and the MPR-09 trigger count), so the same stripper
+-- exists here rather than waiting for a challenger to report the identical
+-- finding against this file. It reads `prosrc`, so the header and the
+-- COMMENT ON are not part of the subject, and it removes `--` and `/* */`
+-- comments from the body.
+--
+-- The two packs now carry the same function under two names, which is
+-- deliberate and recorded: a pack must not require a relation or a routine
+-- created by another pack (it is applied alone, in its own transaction).
+-- ONE implementation at assembly is MPR-10's work, and MPR-10 now names
+-- this pair as well as the tautology test.
+CREATE FUNCTION catalog_prosrc_uncommented(p_fn TEXT)
+RETURNS TEXT
+LANGUAGE sql STABLE SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $fn$
+  SELECT regexp_replace(
+           regexp_replace(p.prosrc, '/\*.*?\*/', ' ', 'gs'),
+           '--[^' || chr(10) || ']*', ' ', 'g')
+    FROM pg_proc p
+   WHERE p.oid = p_fn::regprocedure;
+$fn$;
+REVOKE ALL ON FUNCTION catalog_prosrc_uncommented(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION catalog_prosrc_uncommented(TEXT) TO daftar_app;
+
+COMMENT ON FUNCTION catalog_prosrc_uncommented(TEXT) IS
+  'Phase 11 Pack A, finding P3-01 (reported against Pack B, fixed in both). The comment-stripped prosrc of a function, for text pins: pg_get_functiondef includes comments, so a pin over it can be satisfied by a comment. Weaker than a behavioural case and labelled as such wherever it is used. MPR-10: one implementation with Pack B''s inventory_prosrc_uncommented at assembly.';
+
+-- Form 3 and form 4 both rest on one catalogue fact -- is this column NOT
+-- NULL -- so it is read in one place. Namespace-qualified, which is the
+-- class the third challenge round made this pack fix everywhere (finding
+-- PA-03): `relname` alone is not a name.
+CREATE FUNCTION catalog_relation_column_is_notnull(p_relname TEXT, p_col TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $fn$
+  SELECT coalesce((SELECT a.attnotnull
+                     FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+                    WHERE c.relnamespace = 'public'::regnamespace
+                      AND c.relname = p_relname
+                      AND a.attname  = p_col
+                      AND a.attnum > 0 AND NOT a.attisdropped), false);
+$fn$;
+REVOKE ALL ON FUNCTION catalog_relation_column_is_notnull(TEXT, TEXT) FROM PUBLIC;
+
 CREATE FUNCTION catalog_policy_qual_is_tautology(p_relname TEXT, p_qual TEXT)
 RETURNS BOOLEAN
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER
 SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
-  v_col     TEXT;
-  v_notnull BOOLEAN;
-  v_val     BOOLEAN;
+  v_col TEXT;
+  v_val BOOLEAN;
 BEGIN
   IF p_qual IS NULL OR btrim(p_qual) = '' THEN
     RETURN true;                      -- no USING clause at all
@@ -867,14 +1175,43 @@ BEGIN
   END;
   v_col := substring(p_qual from '^\(?([a-z_][a-z0-9_]*) IS NOT NULL\)?$');
   IF v_col IS NOT NULL THEN           -- form 3
-    SELECT a.attnotnull INTO v_notnull
-      FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
-     WHERE c.relnamespace = 'public'::regnamespace
-       AND c.relname = p_relname
-       AND a.attname = v_col AND a.attnum > 0 AND NOT a.attisdropped;
-    IF coalesce(v_notnull, false) THEN
+    IF catalog_relation_column_is_notnull(p_relname, v_col) THEN
       RETURN true;
     END IF;
+  END IF;
+  -- ── Form 4: the column compared with ITSELF (finding P2-01, round 4) ────
+  -- The fourth independent challenge measured six of fifteen spellings
+  -- through this function, and one of them is not a spelling at all but a
+  -- working hole: `(business_id = business_id)` installed as the USING and
+  -- WITH CHECK of `tenant_membership` -- the policy NAME unchanged, so the
+  -- set pin three lines up passes -- made a cross-tenant read return 6 rows
+  -- instead of 0 and a cross-tenant INSERT return rc=0 instead of rc=3.
+  -- Measured in BOTH directions, which is why it is answered here rather
+  -- than routed. It is decidable by exactly the test form 3 already uses: a
+  -- column compared with itself is TRUE of every row the column is not NULL
+  -- in, so over an attnotnull column it is true of every row, full stop.
+  --
+  -- `IS NOT DISTINCT FROM` needs no such premise: it is true of every row
+  -- including the NULL ones, so nullability is not consulted for it. The
+  -- negated form `NOT (col <> col)` is the same tautology written backwards
+  -- and is matched over an attnotnull column for the same reason as `=`.
+  --
+  -- This does NOT make the function complete, and the four spellings the
+  -- challenge measured as still passing (`(business_id = ANY (ARRAY[...]))`
+  -- over the full key set among them) stay named in
+  -- P11-MIGRATION-PATCH-REQUEST.md §12.2 as PR-SEC-P11-01's work. The
+  -- function is a list of DECIDABLE forms, not a decision procedure, and
+  -- the end-state assertion beside it says so.
+  v_col := substring(p_qual from '^\(?([a-z_][a-z0-9_]*) IS NOT DISTINCT FROM \1\)?$');
+  IF v_col IS NOT NULL THEN
+    RETURN true;
+  END IF;
+  v_col := substring(p_qual from '^\(?([a-z_][a-z0-9_]*) = \1\)?$');
+  IF v_col IS NULL THEN
+    v_col := substring(p_qual from '^\(?NOT \(?([a-z_][a-z0-9_]*) <> \1\)?\)?$');
+  END IF;
+  IF v_col IS NOT NULL AND catalog_relation_column_is_notnull(p_relname, v_col) THEN
+    RETURN true;
   END IF;
   RETURN false;
 END;
@@ -1071,6 +1408,47 @@ BEGIN
       (SELECT string_agg(p.polname, ',' ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'product_variants')
       USING ERRCODE='P0001';
   END IF;
+  -- ── The deferred grid-closure check, finding P1-01 of the fourth round ──
+  -- Four doors in four rounds reached one state, so the state is checked at
+  -- COMMIT on every relation it is written from. The assertion names the
+  -- relation, the three statement kinds, the DEFERRED timing and the fact
+  -- that it is a constraint trigger -- because each of those is a way the
+  -- check could be present and not answer: an IMMEDIATE copy would refuse
+  -- the ordinary act of building a grid, and a non-constraint AFTER trigger
+  -- would fire per statement and see the half-built one.
+  FOR r IN SELECT unnest(ARRAY['product_variants','product_matrix_axes',
+                               'product_attribute_axes','product_attribute_values']) AS rel
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid
+                    WHERE c.relnamespace = 'public'::regnamespace AND c.relname = r.rel
+                      AND g.tgname = r.rel || '_90_grid_closed' AND NOT g.tgisinternal
+                      AND g.tgconstraint <> 0            -- it IS a constraint trigger
+                      AND g.tgdeferrable AND g.tginitdeferred
+                      AND (g.tgtype & 2) = 0             -- AFTER, not BEFORE
+                      AND (g.tgtype & 1) = 1             -- FOR EACH ROW
+                      AND (g.tgtype & 4) = 4 AND (g.tgtype & 8) = 8 AND (g.tgtype & 16) = 16) THEN
+      RAISE EXCEPTION 'catalog.migration_end_state_invalid: the deferred grid-closure constraint trigger on % is absent, is not deferred, or does not cover INSERT, UPDATE and DELETE', r.rel USING ERRCODE='P0001';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_trigger g JOIN pg_proc pr ON pr.oid = g.tgfoid
+                JOIN pg_class c ON c.oid = g.tgrelid
+                WHERE c.relnamespace = 'public'::regnamespace AND c.relname = r.rel
+                  AND g.tgname = r.rel || '_90_grid_closed' AND pr.prosecdef) THEN
+      RAISE EXCEPTION 'catalog.migration_end_state_invalid: the grid-closure check on % is SECURITY DEFINER; it concludes from a read of product_variants and a definer cannot satisfy its restrictive policy without a session context', r.rel USING ERRCODE='P0001';
+    END IF;
+  END LOOP;
+  -- The law itself, asserted BEHAVIOURALLY rather than by name. A text pin
+  -- over pg_get_functiondef proves which function was examined and not what
+  -- it does -- that is finding P3-01 of Pack B's fourth round, and the same
+  -- shape would be wrong here. So the function is CALLED, on a product that
+  -- does not exist (no live variant, so it must return quietly) and on the
+  -- missing-privilege arm, which is reached by naming a relation this
+  -- session cannot select from. The second half cannot be staged from
+  -- inside an install that owns everything, so it is left to the proof
+  -- suite, which runs as a principal that can be stripped; what is asserted
+  -- here is that the quiet path IS quiet, so an install whose check raised
+  -- unconditionally would be refused instead of shipped.
+  PERFORM catalog_grid_closed_check('00000000-0000-0000-0000-000000000000'::UUID,
+                                    '00000000-0000-0000-0000-000000000000'::UUID);
   IF (SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = 'product_variants_matrix_uq' AND relkind = 'i') <> 1 THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: the matrix uniqueness index is absent' USING ERRCODE='P0001';
   END IF;
@@ -1083,8 +1461,40 @@ BEGIN
   IF NOT (catalog_policy_qual_is_tautology('product_matrix_axes','true')
           AND catalog_policy_qual_is_tautology('product_matrix_axes','(1 = 1)')
           AND catalog_policy_qual_is_tautology('product_matrix_axes','(2 > 1)')
-          AND catalog_policy_qual_is_tautology('product_matrix_axes','(business_id IS NOT NULL)')) THEN
+          AND catalog_policy_qual_is_tautology('product_matrix_axes','(business_id IS NOT NULL)')
+          -- Form 4, finding P2-01 of the fourth round. The first of these
+          -- was MEASURED as a working cross-tenant hole with the policy name
+          -- left intact, so the set pin above cannot see it; it is asserted
+          -- here as well as in the proof suite because an install is the
+          -- last moment at which this pack can refuse itself.
+          AND catalog_policy_qual_is_tautology('product_matrix_axes','(business_id = business_id)')
+          AND catalog_policy_qual_is_tautology('product_matrix_axes','(business_id IS NOT DISTINCT FROM business_id)')
+          AND catalog_policy_qual_is_tautology('product_matrix_axes','(NOT (business_id <> business_id))')) THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: the tautology test does not catch the spellings it is documented to catch' USING ERRCODE='P0001';
+  END IF;
+  -- And the other direction, which is the arm that keeps the list honest: a
+  -- function that answered `true` to everything would pass every assertion
+  -- above. `(axis_position = 1)` is true of SOME rows and must not be called
+  -- a tautology, and `(axis_code = axis_code)` over a NULLABLE column would
+  -- not be one either -- there is no nullable column on this relation to
+  -- state that with, so the premise is asserted on the catalogue directly.
+  IF catalog_policy_qual_is_tautology('product_matrix_axes','(axis_position = 1)') THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: the tautology test calls a row-selective qualifier a tautology, so it would refuse correct installs' USING ERRCODE='P0001';
+  END IF;
+  IF NOT catalog_relation_column_is_notnull('product_matrix_axes','business_id')
+     OR catalog_relation_column_is_notnull('product_matrix_axes','no_such_column') THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: the NOT NULL lookup forms 3 and 4 rest on does not answer from the catalogue' USING ERRCODE='P0001';
+  END IF;
+  -- The comment stripper, proved on this install rather than trusted: both
+  -- failure directions of finding P3-01's remedy are arms here. A stripper
+  -- that returned nothing would make every pin that uses it vacuous; one
+  -- that returned the body unchanged would leave the pins exactly as weak as
+  -- the ones they replace.
+  IF coalesce(catalog_prosrc_uncommented('public.product_variants_40_matrix_canonical()'), '') = '' THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: the comment stripper returns nothing, so every text pin over it is vacuous' USING ERRCODE='P0001';
+  END IF;
+  IF catalog_prosrc_uncommented('public.product_variants_40_matrix_canonical()') ~ '-- ' THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: the comment stripper left a comment in the body, so a pin over it can still be satisfied by a comment' USING ERRCODE='P0001';
   END IF;
   IF catalog_policy_qual_is_tautology('product_matrix_axes',
        (SELECT pg_get_expr(p.polqual, p.polrelid) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid

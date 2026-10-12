@@ -633,3 +633,67 @@ arrival orders, 0 findings, in this pack's own harness — and what remains
 key, which no principal can be today; the lock order still belongs with §3.6's
 writer. **No migration number exists**, and a FOURTH challenge round is owed on
 both packs.
+
+---
+
+## 16. After the FOURTH independent challenge round
+
+### 16.1 `MPR-09`, restated and narrower — a movement onto an ARCHIVED variant
+
+**Unchanged in substance, corrected in premise.** Round 3 routed this as "the
+inventory authority should refuse a movement posted onto an archived variant",
+resting on the sentence *"an archived variant holds no stock, because 0061
+refuses the transition to `archived` while its key holds stock"*. The fourth
+challenge round showed that sentence is a fact about **the moment of
+archiving**: 0061 tests it on the way in, and nothing re-tested it on the way
+back, which is how the un-archive door existed at all.
+
+Pack A now holds the catalogue side at COMMIT (the deferred grid-closure check,
+`P11-LIVE-DDL-PROOF.md` §12.1), so the request to the inventory authority is
+exactly this and no more: **`inventory_post_movement` and the stock command
+refuse a movement or a stock key whose variant is `archived`.** Pack A cannot
+close it from here, and the reason is now sharper than "a read of an absent row
+cannot be locked": the transaction that creates the forbidden state writes only
+the ledger, so it fires no trigger of this pack and there is nothing for a check
+of ours to judge at that commit. Reading `stock_levels` from the deferred check
+would not help.
+
+### 16.2 `MPR-10` — now THREE routines to fold at assembly, not one
+
+Each pack is applied alone, in its own transaction, so a pack may not require a
+relation or a routine another pack created. That is why the following exist
+twice, and why one implementation is the Migration Owner's work at assembly:
+
+| in Pack A | in Pack B | what it is |
+|---|---|---|
+| `catalog_policy_qual_is_tautology(text,text)` | the inline PUBLIC-policy arm in Pack B's end-state | the tautology test. Pack A's now carries **four** forms; Pack B's relations have no qualifier test of their own at all, which is `P3-03` of the fourth round |
+| `catalog_relation_column_is_notnull(text,text)` | — | the `attnotnull` lookup forms 3 and 4 rest on |
+| `catalog_prosrc_uncommented(text)` | `inventory_prosrc_uncommented(text)` | the comment stripper the end-state text pins read through, because `pg_get_functiondef` includes comments (`P3-01` of the fourth round) |
+
+At assembly: one tautology test, available to **both** packs' relations and
+carrying form 4 (`(col = col)` / `NOT (col <> col)` over an `attnotnull`
+column, `col IS NOT DISTINCT FROM col` unconditionally); one comment stripper;
+one `attnotnull` lookup. Pack B's role-scoped permissive qualifier is currently
+defended only by its NAME in the policy-set pin, and that is what the folded
+test closes.
+
+### 16.3 `PR-SEC-P11-01` — the residual is four named spellings
+
+Form 4 moves `(business_id = business_id)` out of the residual and into the
+decided set, which matters because that spelling was **measured as a working
+cross-tenant hole in both directions** with the policy name left intact, so the
+set pin could not see it. What the standing RLS invariant check still has to
+cover is asserted as still-passing in the proof suite, so the list cannot grow
+quietly: `(business_id = ANY (ARRAY[…]))` over the full key set,
+`(business_id IS NOT NULL OR business_id IS NULL)`, the `coalesce` form, and
+any qualifier true of every row that none of the four forms sees.
+
+### 16.4 Still owed, unchanged
+
+The Pack B grants and the registered operation code for lot configuration
+(inventory authority); `MPR-07` (the Pack A trigger positions — **now seven**:
+the four `_90_grid_closed` constraint triggers are at position 90 on their four
+relations, after every existing `_NN_` guard on each, and they are constraint
+triggers so their firing order among themselves does not matter);
+`MPR-08` (`stock_lots._10_`); `OD-P11-07` (the owner's). **No migration number
+exists**, and a FIFTH challenge round is owed on both packs.

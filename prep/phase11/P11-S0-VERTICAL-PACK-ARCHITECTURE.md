@@ -621,3 +621,91 @@ parties a race must use. And a measurement that settles one of the pack's own la
 ported into the pack's harness, credited to where it came from, so the law can be
 re-proved when the missing writer lands. A law whose concurrency is proved only by
 somebody else's script is a law the author cannot re-prove.
+
+### `P11-AL-36` — a narrowing adds verbs, and every new verb joins the closure list
+
+**Round 4 of the Pack A challenge, measured.** Round 3 narrowed the freeze
+guard's read to LIVE variants, which was correct and remains: without it the
+recovery path the guard's own message recommends could not be walked. What the
+narrowing did was make `UPDATE product_variants SET status='active'` reach a
+state it could not reach before — and nothing watched that statement, because
+the canonicalization trigger's column list does not include `status` and the
+archive guard fires only on the way into `archived`.
+
+So a narrowing is not a smaller law; it is a different reachable set. The law:
+**a commit that narrows a guard's predicate enumerates the statements the
+narrowing newly permits, proves each of them red, and updates the law's closure
+table in the same commit.** The gate arm is `verb-reachable-by-a-narrowing`.
+
+The corollary is harsher and is `P11-AL-37`.
+
+### `P11-AL-37` — after the second door, stop guarding verbs and check the state
+
+`C-APP-01` was defeated four times, by four different statements, reaching one
+committed state: a live non-base variant outside its product's grid, holding
+stock. Rounds 1, 2 and 3 each added the guard the reported statement needed, and
+each of those guards is correct. The fourth door still existed, and it was
+created by the third fix.
+
+**The law: a clause that has been defeated through a SECOND route to the same
+state is thereafter enforced by a check that recomputes the forbidden state
+itself, at COMMIT, on every relation the state can be written from — not by a
+guard on the verb that was reported.** In PostgreSQL that is a `DEFERRABLE
+INITIALLY DEFERRED` constraint trigger on each such relation, for INSERT,
+UPDATE and DELETE alike, deferred because the lawful way to build the state
+passes through intermediate states the law would refuse.
+
+The per-verb guards are kept, for two reasons that are worth distinguishing:
+they refuse at the statement, where a merchant can still be told which write was
+wrong; and they refuse writes the state check cannot see at all (a value
+archived with no variant yet naming it). Which layer answers which door is not
+arguable — it is **pair-dropped**: drop the state check alone, drop the verb
+guards alone, drop both, and read the three result sets. Measured here as M7 (9
+red, all of them the new door), M8 (17 red, six of them the deferred check
+answering with its own name where the case expected the statement guard's) and
+M9 (35 red, and the race fixture unbuildable).
+
+The gate arm is `law-checked-on-the-state`, and it reds on the COUNT: two
+rounds, two doors, one state, and no state check.
+
+### `P11-AL-38` — a verdict that holds on an untouched database is not a verdict
+
+**`P2-01` of the fourth round, measured on `races_b.py`.** Its pass condition
+was `key == cache`, which is true of a database nothing touched; a planted
+unrelated refusal made two races print PASS while both transactions were thrown
+out and nothing moved. The same shape was in three of `races.py`'s nine
+verdicts, where no challenger had yet looked.
+
+**The law: a concurrency case asserts (a) that its sessions actually overlapped
+— both backends inside a transaction at the same time, read from a third
+connection — and (b) the outcome it EXPECTS: which transactions commit, and by
+how much the subject moved.** Consistency stays, as one condition of three
+rather than the only one. A race whose backends never overlapped did not happen
+and its row is a finding whatever else it says.
+
+The generalization beyond races: an assertion whose subject is the ABSENCE of a
+bad state must be paired with evidence that the write which could have produced
+it was actually attempted. `P11-AL-13`'s "a check must fail on absence" is the
+same sentence one level down.
+
+### `P11-AL-39` — a tool that reports on evidence is itself evidence, and gets a red proof
+
+**Three of this round's six findings are in the witnesses, not in the laws**: a
+race verdict satisfied by nothing happening, a mutation hook that could not tell
+whether its own mutation changed anything, and a pin that proved which function
+was examined rather than what it does (`pg_get_functiondef` includes comments,
+so the arm could be deleted from the body and left named in a comment).
+
+**The law: every mechanism whose output is an evidence claim ships with a case
+in which it FAILS** — the mutation hook with a no-op mutation whose expected
+outcome is a refusal (`mutations/M10-noop.sql`, exit 4), the comment stripper
+with both of its failure directions asserted at install, a race with a
+non-overlap arm. This is `P11-AL-24`'s `check-with-no-failing-case` extended
+from checks inside the schema to the tooling around it, and the reason it needs
+saying separately is that a tool's green is read as the subject's green.
+
+The second half: **a text pin over a function body is weaker than a behavioural
+case, and must say so where it is written.** It reads `prosrc`, strips comments,
+and matches a RAISE OF the condition rather than a mention of its name — and the
+law it pins is proved by a case that makes the arm fire, as a principal that
+cannot read what the arm protects.

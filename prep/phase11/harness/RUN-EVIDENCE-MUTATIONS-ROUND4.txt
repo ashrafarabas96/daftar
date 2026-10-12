@@ -1,0 +1,132 @@
+PHASE 11 — ROUND 4 MUTATION EVIDENCE
+Each mutation is applied through P11_MUTATION_SQL at step 5c of
+rebuild_and_prove.sh: on a FRESH database, after the packs and the worlds,
+BEFORE any proof runs. The hook now digests the DDL-visible state before and
+after and refuses a mutation that changed nothing. No frozen migration is
+touched by any of this; the mutations are applied to the running scratch
+database and the files are in prep/phase11/harness/mutations/.
+
+M7/M8/M9 are a PAIR-DROP: C-APP-01 is now held by two layers, so dropping
+either alone leaves the other answering, and only the pair shows which law
+each door actually meets.
+
+================================================================
+MUTATION: M7-drop-deferred-grid-closure.sql
+RUN_ID            : p11-20261012T205141Z-8055
+=== 5c. MUTATION APPLIED: prep/phase11/harness/mutations/M7-drop-deferred-grid-closure.sql (this run is NOT a clean-tree proof run) ===
+MUTATION_DDL_DIGEST_BEFORE: fdaa7c329a402f6b15f422dcd272efe6
+MUTATION_DDL_DIGEST_AFTER : b506557009156bd819c9c3f197d69f8a
+=== the mutation CHANGED the schema (digests differ); the suites below are expected to FAIL ===
+RUN_ID            : p11-20261012T205141Z-8055
+cases red: 9
+  - P1-01 a principal that cannot read the registries is REFUSED, not passed (catalog.matrix_grid_unverifiable) **PROOF FAILED** no error
+  - P1-01 a transaction that registers an axis while the cells are archived and then un-archives one is refused at COMMIT **PROOF FAILED** psql:<stdin>:4: ERROR: catalog.matrix_axis_set_frozen: this
+  - P1-01 and after an un-archive, no committed LIVE variant of this business is outside its product's grid **PROOF FAILED** 1
+  - P1-01 and after the whole sweep the grid is still closed **PROOF FAILED** 1
+  - P1-01 and inside a multi-statement transaction it is the COMMIT that refuses **PROOF FAILED** no error
+  - P1-01 and the refusal comes from the deferred state check, not from a per-verb guard **PROOF FAILED** no error
+  - P1-01 sweep daftar_app UPDATE on product_variants -> refused **PROOF FAILED** no error
+  - P1-01 the law is on the COMMITTED state: a grid is built in one transaction through states it would refuse **PROOF FAILED** live=2
+  - P1-01 un-archiving a 2-axis cell onto a 3-axis grid is refused at COMMIT (the fourth door) **PROOF FAILED** no error
+EXIT_PROOFS_A     : 1  (prep/phase11/harness/proofs.py)
+EXIT_PROOFS_B     : 0  (prep/phase11/harness/proofs_b.py)
+EXIT_PROOFS_A_RUN2: 1  (the same file, the same database -- idempotence)
+EXIT_PROOFS_B_RUN2: 0  (the same file, the same database -- idempotence)
+EXIT_RACES        : 0  (prep/phase11/harness/races.py)
+EXIT_RACES_B      : 0  (prep/phase11/harness/races_b.py)
+EXIT_SCRIPT       : 1  (0 means every step above returned 0)
+
+================================================================
+MUTATION: M8-drop-per-verb-guards.sql
+RUN_ID            : p11-20261012T205410Z-9711
+=== 5c. MUTATION APPLIED: prep/phase11/harness/mutations/M8-drop-per-verb-guards.sql (this run is NOT a clean-tree proof run) ===
+MUTATION_DDL_DIGEST_BEFORE: fdaa7c329a402f6b15f422dcd272efe6
+MUTATION_DDL_DIGEST_AFTER : f86d81a8f40509b63bc09a649351c40e
+=== the mutation CHANGED the schema (digests differ); the suites below are expected to FAIL ===
+RUN_ID            : p11-20261012T205410Z-9711
+cases red: 17
+  - P0-02 a value named by existing variants cannot be DELETED **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_value_unregiste
+  - P1-01 sweep daftar_app DELETE on product_attribute_values -> refused **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_value_unregiste
+  - P1-01 sweep daftar_app DELETE on product_matrix_axes -> refused **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_set_incomplete:
+  - P1-01 sweep daftar_app INSERT on product_matrix_axes -> refused **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_set_incomplete:
+  - P1-01 sweep daftar_app UPDATE on product_attribute_axes -> refused **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_archived: live 
+  - P1-01 sweep daftar_app UPDATE on product_attribute_values -> refused **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_value_unregiste
+  - P1-01 sweep daftar_app UPDATE on product_matrix_axes -> refused **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_set_incomplete:
+  - P1-03 nor ARCHIVED (the non-key UPDATE the FOR KEY SHARE lock did not cover) **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_value_unregiste
+  - P1-03 nor REPOINTED to another code, which is the same removal **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_value_unregiste
+  - P1-04 an axis in use cannot be REPOINTED either (an UPDATE is the same removal) **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_archived: axis 
+  - P1-N01 an axis cannot be ADDED to a matrix that already has variants **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_set_incomplete:
+  - P2-07 an in-use axis cannot be deleted by the APPLICATION role either (the guard under live RLS) **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_set_incomplete:
+  - P2-07 nor can it delete an in-use VALUE **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_value_unregiste
+  - P2-N02 an axis a product's matrix registers cannot be archived either **PROOF FAILED** no error
+  - PA-02 and once the grid is live again, the axis set is frozen again (the filter is not an opening) **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_set_incomplete:
+  - an axis named by existing variants can be neither renamed nor archived in the REGISTRY **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_archived: live 
+  - an axis named by existing variants cannot be removed **PROOF FAILED** psql:<stdin>:1: ERROR: catalog.variant_axis_set_incomplete:
+EXIT_PROOFS_A     : 1  (prep/phase11/harness/proofs.py)
+EXIT_PROOFS_B     : 0  (prep/phase11/harness/proofs_b.py)
+EXIT_PROOFS_A_RUN2: 1  (the same file, the same database -- idempotence)
+EXIT_PROOFS_B_RUN2: 0  (the same file, the same database -- idempotence)
+EXIT_RACES        : 0  (prep/phase11/harness/races.py)
+EXIT_RACES_B      : 0  (prep/phase11/harness/races_b.py)
+EXIT_SCRIPT       : 1  (0 means every step above returned 0)
+
+================================================================
+MUTATION: M9-drop-both.sql
+RUN_ID            : p11-20261012T205546Z-11379
+=== 5c. MUTATION APPLIED: prep/phase11/harness/mutations/M9-drop-both.sql (this run is NOT a clean-tree proof run) ===
+MUTATION_DDL_DIGEST_BEFORE: fdaa7c329a402f6b15f422dcd272efe6
+MUTATION_DDL_DIGEST_AFTER : f883a1afcf777aa8e76d0ab332b831bc
+=== the mutation CHANGED the schema (digests differ); the suites below are expected to FAIL ===
+RUN_ID            : p11-20261012T205546Z-11379
+cases red: 35
+  - P0-02 a value named by existing variants cannot be DELETED **PROOF FAILED** no error
+  - P1-01 a cell that matches the CURRENT grid can be archived and un-archived **PROOF FAILED** 
+  - P1-01 a principal that cannot read the registries is REFUSED, not passed (catalog.matrix_grid_unverifiable) **PROOF FAILED** no error
+  - P1-01 a transaction that registers an axis while the cells are archived and then un-archives one is refused at COMMIT **PROOF FAILED** no error
+  - P1-01 and after an un-archive, no committed LIVE variant of this business is outside its product's grid **PROOF FAILED** 1
+  - P1-01 and after the whole sweep the grid is still closed **PROOF FAILED** 1
+  - P1-01 and inside a multi-statement transaction it is the COMMIT that refuses **PROOF FAILED** no error
+  - P1-01 and that refusal rolled the whole transaction back: the axis it created is gone and the cell is live **PROOF FAILED** axis_left=1
+  - P1-01 and the refusal comes from the deferred state check, not from a per-verb guard **PROOF FAILED** no error
+  - P1-01 premise: a 2-axis grid is archived at zero stock and a third axis is then registered **PROOF FAILED** 
+  - P1-01 sweep daftar_app DELETE on product_attribute_values -> refused **PROOF FAILED** no error
+  - P1-01 sweep daftar_app DELETE on product_matrix_axes -> refused **PROOF FAILED** no error
+  - P1-01 sweep daftar_app INSERT on product_matrix_axes -> refused **PROOF FAILED** psql:<stdin>:1: ERROR: duplicate key value violates unique 
+  - P1-01 sweep daftar_app UPDATE on product_attribute_axes -> refused **PROOF FAILED** no error
+  - P1-01 sweep daftar_app UPDATE on product_attribute_values -> refused **PROOF FAILED** no error
+  - P1-01 sweep daftar_app UPDATE on product_matrix_axes -> refused **PROOF FAILED** no error
+  - P1-01 sweep daftar_app UPDATE on product_variants -> refused **PROOF FAILED** no error
+  - P1-01 the law is on the COMMITTED state: a grid is built in one transaction through states it would refuse **PROOF FAILED** 
+  - P1-01 un-archiving a 2-axis cell onto a 3-axis grid is refused at COMMIT (the fourth door) **PROOF FAILED** no error
+  - P1-03 nor ARCHIVED (the non-key UPDATE the FOR KEY SHARE lock did not cover) **PROOF FAILED** no error
+  - P1-03 nor REPOINTED to another code, which is the same removal **PROOF FAILED** no error
+  - P1-04 an axis in use cannot be REPOINTED either (an UPDATE is the same removal) **PROOF FAILED** no error
+  - P1-04 and the matrix still registers exactly its two axes **PROOF FAILED** size
+  - P1-N01 an axis cannot be ADDED to a matrix that already has variants **PROOF FAILED** no error
+  - P1-N01 and no committed LIVE variant of this business names other than exactly its product's registered set **PROOF FAILED** 1
+  - P1-N01 and the populated product still registers exactly its two axes **PROOF FAILED** size,material
+  - P2-07 an in-use axis cannot be deleted by the APPLICATION role either (the guard under live RLS) **PROOF FAILED** no error
+  - P2-07 nor can it delete an in-use VALUE **PROOF FAILED** no error
+  - P2-N02 an axis a product's matrix registers cannot be archived either **PROOF FAILED** no error
+  - PA-02 and once the grid is live again, the axis set is frozen again (the filter is not an opening) **PROOF FAILED** no error
+  - PA-02 residual: a stock key on the OTHER archived cell is accepted today, and no trigger on the key reads variant status (MPR-09) **PROOF FAILED** 
+  - PA-02 the documented recovery runs: archive the cells at zero stock, register another axis, regenerate the grid **PROOF FAILED** 
+  - an axis named by existing variants can be neither renamed nor archived in the REGISTRY **PROOF FAILED** no error
+  - an axis named by existing variants cannot be removed **PROOF FAILED** no error
+  - with business A's own context the same rows ARE visible (the read is not broken, it is scoped) **PROOF FAILED** 7
+EXIT_PROOFS_A     : 1  (prep/phase11/harness/proofs.py)
+EXIT_PROOFS_B     : 0  (prep/phase11/harness/proofs_b.py)
+EXIT_PROOFS_A_RUN2: 1  (the same file, the same database -- idempotence)
+EXIT_PROOFS_B_RUN2: 0  (the same file, the same database -- idempotence)
+EXIT_RACES        : 2  (prep/phase11/harness/races.py)
+EXIT_RACES_B      : 0  (prep/phase11/harness/races_b.py)
+EXIT_SCRIPT       : 2  (0 means every step above returned 0)
+
+================================================================
+MUTATION: M10-noop.sql  (the red proof of the HOOK, not of a law)
+RUN_ID            : p11-20261012T205625Z-12724
+MUTATION_DDL_DIGEST_BEFORE: fdaa7c329a402f6b15f422dcd272efe6
+MUTATION_DDL_DIGEST_AFTER : fdaa7c329a402f6b15f422dcd272efe6
+=== MUTATION IS A NO-OP: the DDL-visible state is byte-identical before and after. ===
+Refusing to run the suites (finding P2-02 of the fourth independent challenge).
+script exit: 4 (expected; a no-op mutation must be refused, not reported green)

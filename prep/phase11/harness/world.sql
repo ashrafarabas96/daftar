@@ -32,11 +32,21 @@ VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000
        -- depends on, and it cannot be TSHIRT-EMPTY, whose grid must stay
        -- empty for the matrix-lifecycle cases.
        ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000f','TSHIRT-RECOVER','active',0,'ILS'),
+       -- A FOURTH apparel product, added for finding P1-01 of the fourth
+       -- challenge round. The fourth door (archive the cells, register an
+       -- axis, then UPDATE one back to 'active') needs a product whose grid
+       -- is archived and extended and then un-archived against, and it
+       -- cannot be TSHIRT-RECOVER: the recovery case asserts that product's
+       -- axis count, and a case that grew the grid underneath it made the
+       -- two depend on each other's order. One product per lifecycle is the
+       -- cheapest way not to be bitten by that a third time.
+       ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-000000000011','TSHIRT-GRID','active',0,'ILS'),
        ('bbbbbbbb-0000-0000-0000-00000000000b','eeeeeeee-0000-0000-0000-00000000000e','ABAYA','active',0,'JOD');
 INSERT INTO product_translations (business_id, product_id, locale, name) VALUES
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000d','ar','تي شيرت'),
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000e','ar','تي شيرت فارغ'),
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000f','ar','تي شيرت للاستعادة'),
+ ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-000000000011','ar','تي شيرت الشبكة'),
  ('bbbbbbbb-0000-0000-0000-00000000000b','eeeeeeee-0000-0000-0000-00000000000e','ar','عباية');
 -- Pack A world: two axes, three sizes, two colours, a 2-axis matrix.
 INSERT INTO product_attribute_axes (business_id, axis_code, sort_order) VALUES
@@ -56,6 +66,8 @@ INSERT INTO product_matrix_axes (business_id, product_id, axis_code, axis_positi
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000e','size',1),
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000e','color',2),
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000f','size',1),
- ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000f','color',2);
+ ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000f','color',2),
+ ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-000000000011','size',1),
+ ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-000000000011','color',2);
 COMMIT;
 SELECT 'WORLD BUILT' AS step;

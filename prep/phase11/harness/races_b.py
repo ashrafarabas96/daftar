@@ -45,6 +45,9 @@ class Session:
         self.q=queue.Queue()
         threading.Thread(target=self._reader, daemon=True).start()
         self.send(f"SET app.tenant_id='{TA}'; SET app.business_id='{A}';")
+        # The backend's own pid, so OVERLAP can be measured from a third
+        # connection rather than assumed from the order of the writes.
+        self.pid=(self.send("SELECT pg_backend_pid();")[0] or ["0"])[-1]
     def _reader(self):
         for line in self.p.stdout: self.q.put(line.rstrip("\n"))
         self.q.put(None)
@@ -114,17 +117,53 @@ def state():
 admin("BEGIN;\n"+receipt(U('e1',11), L1, 3)+"\nCOMMIT;")
 rows=[]; findings=0
 
-def race(name, t1, t2, first, note=""):
-    """The verdict is the COMMITTED key-versus-cache comparison. It is stated
-    that way, and not as 'both were refused', because the property that
-    matters is that neither transaction is rescued by the other's
-    uncommitted work — a race can pass with both refused or both committed,
-    and only the committed state says which happened lawfully."""
+def overlapping(p1, p2):
+    """Did the two backends really hold open transactions AT THE SAME TIME?
+
+    Finding P2-01 of the fourth independent challenge, and it is a finding
+    about this file's verdict rather than about the law: `consistent = (k==c)`
+    is satisfied by NOTHING HAPPENING. The challenger planted an unrelated
+    refusal and R2/R2b still printed PASS -- both transactions were thrown
+    out, the key did not move, key still equalled cache, and the race
+    reported that two lawful movements had serialized correctly. A race whose
+    pass condition is an equality that holds on an untouched database is not
+    a concurrency proof.
+
+    So two things are measured now. The first is here: `pg_stat_activity`
+    is read from a THIRD connection at the moment both statements have been
+    issued and neither has committed, and both backends must show an open
+    transaction (`xact_start IS NOT NULL`, which stays set through an
+    aborted block too, so a refusal does not read as an absence of overlap).
+    Zero or one means the interleaving this row describes did not happen,
+    and the row is a FINDING rather than a pass. The second is in `race`:
+    every race now carries the outcome it EXPECTS."""
+    rc,out,_=admin(f"SELECT count(*) FROM pg_stat_activity "
+                   f"WHERE pid IN ({int(p1)},{int(p2)}) AND xact_start IS NOT NULL;",
+                   must_succeed=False)
+    try: return int(out.splitlines()[-1])
+    except Exception: return -1
+
+def race(name, t1, t2, first, expect_commits, expect_delta, note=""):
+    """The verdict has three parts, and all three must hold.
+
+      1. OVERLAP. Both backends held an open transaction simultaneously
+         (`overlapping` above). Without it the row describes an
+         interleaving that did not occur.
+      2. THE EXPECTED OUTCOME. `expect_commits` is 'neither' or 'both', and
+         `expect_delta` is the amount the key must have moved. A race in
+         which both transactions were refused by an unrelated cause fails
+         the race that expected both to commit, which is exactly the hole
+         the fourth round measured.
+      3. CONSISTENCY. The committed key still equals the committed per-lot
+         cache. This is the property the law is about, and it is kept as the
+         last of the three rather than as the only one.
+    """
     global findings
     k0,c0=state()
     s1,s2=Session("1"),Session("2")
     s1.send("BEGIN;"); s2.send("BEGIN;")
     o1,b1=s1.send(t1); o2,b2=s2.send(t2)
+    ov=overlapping(s1.pid, s2.pid)
     if first=="1":
         c1,_=s1.send("COMMIT;"); c2,_=s2.send("COMMIT;")
     else:
@@ -132,31 +171,43 @@ def race(name, t1, t2, first, note=""):
     s1.close(); s2.close()
     k,c=state()
     one=lambda o: (" ".join(x for x in o if x)[:90] or "ok")
+    err=lambda *os: any("ERROR" in x for o in os for x in o)
+    e1,e2=err(o1,c1),err(o2,c2)
+    delta=round(float(k)-float(k0),4)
+    seen = "neither" if (e1 and e2) else ("both" if not (e1 or e2) else "one")
     consistent = (k==c)
-    if not consistent: findings+=1
+    overlapped = (ov==2)
+    as_expected = (seen==expect_commits and delta==round(float(expect_delta),4))
+    ok = consistent and overlapped and as_expected
+    if not ok: findings+=1
+    why=[]
+    if not overlapped: why.append(f"**NO OVERLAP** (backends in a transaction together: {ov}, expected 2)")
+    if seen!=expect_commits: why.append(f"**{seen.upper()} COMMITTED**, expected {expect_commits}")
+    if delta!=round(float(expect_delta),4): why.append(f"**KEY MOVED {delta}**, expected {expect_delta}")
+    if not consistent: why.append("**INCONSISTENT**")
     rows.append((name,
-                 f"T1 {one(o1)}{' [BLOCKED]' if b1 else ''} / T2 {one(o2)}{' [BLOCKED]' if b2 else ''}; {'T1' if first=='1' else 'T2'} commits first",
+                 f"T1 {one(o1)}{' [BLOCKED]' if b1 else ''} / T2 {one(o2)}{' [BLOCKED]' if b2 else ''}; {'T1' if first=='1' else 'T2'} commits first; overlap {ov}/2",
                  f"T1 commit: {one(c1)}; T2 commit: {one(c2)}",
-                 f"before key {k0} = cache {c0}; after key {k} vs cache {c}" + (" — CONSISTENT" if consistent else " — **INCONSISTENT**"),
-                 ("PASS" if consistent else "**FINDING**") + (" — "+note if note else "")))
+                 f"before key {k0} = cache {c0}; after key {k} vs cache {c}; key moved {delta}, expected {expect_delta}; committed: {seen}, expected {expect_commits}",
+                 ("PASS" if ok else "**FINDING** "+"; ".join(why)) + (" — "+note if note else "")))
 
 # R1 / R1b. Each transaction is UNLAWFUL alone: T1 moves the key with its
 # allocation and writes no cache, T2 writes only the cache. Their COMBINATION
 # would look consistent, which is the shape a deferred check can be fooled by.
 race("R1 a key-mover against a cache-writer, T1 commits first",
-     receipt(U('e2',12), L1, 4, cache=False), CACHE_ONLY(L1,4), "1",
+     receipt(U('e2',12), L1, 4, cache=False), CACHE_ONLY(L1,4), "1", "neither", 0,
      note="neither may commit: each transaction is judged on what IT commits, not on the pair")
 race("R1b the same pair, T2 commits first",
-     receipt(U('e3',13), L1, 4, cache=False), CACHE_ONLY(L1,4), "2",
+     receipt(U('e3',13), L1, 4, cache=False), CACHE_ONLY(L1,4), "2", "neither", 0,
      note="neither may commit, in this arrival order either")
 # R2 / R2b. Both transactions are LAWFUL alone, on the same key through
 # different lots: they must both commit, and the key must equal the cache.
 race("R2 two lawful movements on one key through different lots, T1 commits first",
-     receipt(U('e4',14), L1, 4), receipt(U('e5',15), L2, 2), "1",
-     note="both commit; the command's own lock on the key row serializes them")
+     receipt(U('e4',14), L1, 4), receipt(U('e5',15), L2, 2), "1", "both", 6,
+     note="both commit and the key moves by 4+2; the command's own lock on the key row serializes them")
 race("R2b the same pair, T2 commits first",
-     receipt(U('e6',16), L1, 4), receipt(U('e7',17), L2, 2), "2",
-     note="both commit in the reverse order too")
+     receipt(U('e6',16), L1, 4), receipt(U('e7',17), L2, 2), "2", "both", 6,
+     note="both commit in the reverse order too, and the key moves by 4+2")
 
 print("| race | interleaving | commits | committed state | verdict |")
 print("|---|---|---|---|---|")
