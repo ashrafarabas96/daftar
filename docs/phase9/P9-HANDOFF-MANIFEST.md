@@ -27,7 +27,7 @@ first (PART 4), a migration number must be allocated by the one Migration Owner
 ## Exact prep SHA
 
 ```
-e1b201e0e8917e540b5a4173f8232bfa4a422905
+903e1f4710daeef152129f8a0c10d1c9c6e37f63
 ```
 
 Branch: `claude/project-thread-4i752q`
@@ -38,14 +38,14 @@ after it and names the SHA it describes rather than being backfilled into it.
 
 **Evidence subject vs head, reconciled (Mission V2).** The evidence in this handoff was
 produced against the subject SHA above; the branch head is later because the head IS this
-manifest naming that subject. The challenger signed `9a64289`, the first manifest commit on
-this subject, and verified for itself that `git diff --stat e1b201e 9a64289` touches only
-this file; the commit carrying this paragraph is a second manifest commit recording that
-PASS, and it changes no code either. The two can never be the same string, and the
+manifest naming that subject. The challenger signed `9a64289` and the coordinator reviewed
+`51626e1..9a64289`; the subject above is later, because it carries the tests and
+documentation the coordinator's scope items asked for. Neither signature has seen it, and
+the Coordinator state below says so. The two can never be the same string, and the
 whole difference between them is one file:
 
 ```
-git diff --stat e1b201e <head>
+git diff --stat 903e1f4 <head>
  docs/phase9/P9-HANDOFF-MANIFEST.md | (this manifest only)
  1 file changed
 ```
@@ -65,12 +65,12 @@ not live in Git.
 
 | artifact | location | committed | SHA256 |
 |---|---|---|---|
-| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `80e654ce944a9fac64e9052bb187eca55668b50730b288c3c4ebaf9b05a1ccb4` |
-| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `0a0634709734469d488e960785fc7a76d2165d29086e3be4c4ce04409190f2e9` |
+| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `cafa5ef6f41d78b196047722633c26564685e79adafa8f79a4265ea1d7ca48c5` |
+| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `239828ed57ce41fe99a3716d67624104a7e574b51c23fbc0ded1392ce4a78efe` |
 | Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
-| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `ab0354c5bf499807234e20085db274cf8ae2268a994afc483e5ed7046b1978e4` |
+| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `ace56a2cd20c7142ffca7066245c3725019a602fd01cca42949ec87416fea792` |
 | Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
-| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `e5f2367037806a305c997086e0577a6694a6fa99bc451501775d11dd07649336` |
+| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `82fc119271575f84ed44c5e45d04d57264c2a69b03680c979d894e7132ad011a` |
 | Coordinator actual-diff review at `9a64289` | `/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-9a64289.md` | **no — off-Git** | `bc8fcfa4f13545c92036dc864e2bacb9175fe8e4783aaa6a21afe66c6286443c` |
 | Independent challenger's PASS at `9a64289` | `/mnt/project-files/phase9/P9-CHALLENGE-9a64289.md` | **no — off-Git** | `9fe72d8f3f0337732cf32e251a5365a4a35eda7959fb8c42c00d20d19c3611d9` |
 | Independent challenger's PASS-WITH-SCOPE at `76ab277` | `/mnt/project-files/phase9/P9-CHALLENGE-76ab277.md` | **no — off-Git** | `67742ec1c85916505af86f1bb3a9699833af604e77e899ef9ca8bd653ac532a6` |
@@ -95,15 +95,16 @@ byte-identical duplicates to canonicalize (PART 14).
 | `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | — | the race harness: `pg_blocking_pids`, never a sleep |
 
-**82 of 82 green, EXIT CODE 0**, on the APPROVED TARGET — a live PostgreSQL **16.15**
+**83 of 83 green, EXIT CODE 0**, on the APPROVED TARGET — a live PostgreSQL **16.15**
 cluster whose `datcollate` and `datctype` are both **`en_US.utf8`** (HIGH-VELOCITY V1 PART
 1.3; PART 19 requires the version and the collation) — with the spec applied in one
 transaction as the non-superuser deployment principal `daftar_migrator` on top of the sealed
 Phase 3 head. Run with `npx vitest run tests/phase9-prep`, `PG_DIR=/tmp/daftar-pg16
-PG_PORT=55433`, started 2026-10-12T15:19:41Z, finished 15:22:21Z.
+PG_PORT=55433`, started 2026-10-12T15:53:19Z, finished 15:56:03Z, under **Node v24.21.0** — this phase's own Node 24 run, which PART 7.6 asked for and which earlier rounds recorded as owed.
 
-The same set was then run on PostgreSQL 18.4 at collation `C` — **82 of 82, EXIT CODE 0**,
-15:22:21Z to 15:25:51Z — and that run is a COMPARISON and nothing more, which is all PART
+The same set was then run under Node v22.22.0 on PostgreSQL 16.15 (15:56:13Z to 15:58:49Z)
+and on PostgreSQL 18.4 at collation `C` (15:58:49Z to 16:02:18Z) — **83 of 83, EXIT CODE 0**
+on both. The 18.4 run is a comparison — and that run is a COMPARISON and nothing more, which is all PART
 1.3 permits it to be. No schema, invariant, routine or policy behaved differently between
 the two; the one case that ever did was a harness defect in the suite's own text ordering,
 found by the first target run and reported independently as C-P9-01.
@@ -292,12 +293,14 @@ retention decision.
 * No timing or performance number from this container, anywhere (PART 20, PART 123).
 * No evidence class mixed: see §3b of the prep report.
 * No progress percentage, and no progress claim derived from the case count, the line
-  counts or the number of agents (Mission, cross-phase). 82 green cases say what was
+  counts or the number of agents (Mission, cross-phase). 83 green cases say what was
   measured, not how much of Phase 9 exists.
-* **Not Node 24 FROM THIS CONTAINER.** It ships v22.22.0 against an `engines` of
-  `>=24 <25`. Node 24 behaviour at this SHA is measured — by the challenger, in its own
-  container, round 3 — but PART 7.6 asks this phase to produce its own, and that is owed at
-  final integration.
+* **CLOSED: Node 24 from this container.** It ships v22.22.0 against an `engines` of
+  `>=24 <25`, so **Node v24.21.0 was fetched from nodejs.org into the session scratch
+  directory** and the suite was run under it on the approved target — 83 of 83, exit code 0.
+  PART 7.6's rerun is no longer owed. What this does NOT establish: the container's own
+  toolchain still resolves `node` to v22.22.0, so a CI or deployment runner that honours
+  `engines` is a different environment from either run here.
 * **Not one review of THIS SHA.** All three signatures name earlier SHAs: the challenger's
   PASS and the coordinator's review both name `9a64289`, and this subject adds the tests and
   documentation the coordinator's scope items asked for, which neither has seen.

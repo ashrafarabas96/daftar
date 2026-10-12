@@ -30,7 +30,7 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**84 of 84 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
+**83 of 83 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
 — over seven suites, and again on PostgreSQL 18.4 at `C` as the comparison the mission permits.
 A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
@@ -399,8 +399,11 @@ change beyond the two items it asked be *recorded*:
    `en_US.utf8`. Both runs are in the run log with their run ids, commands and exit codes.
    PART 7.6's rerun is therefore no longer owed on the database half or the runtime half.
 
-**The run after these items.** `tests/phase9-prep`, 7 files, **84 of 84 cases, exit code 0**,
-on PostgreSQL 16.15 at `en_US.utf8` under **Node v24.21.0** and again under v22.22.0.
+**The run after these items.** `tests/phase9-prep`, 7 files, **83 of 83 cases, exit code 0**,
+on PostgreSQL 16.15 at `en_US.utf8` under **Node v24.21.0**, and again under v22.22.0 on both
+16.15 and 18.4. (83, not the 84 this paragraph first said: the two (a3) probes are assertions
+inside the existing standing-booking case, not cases of their own, and only the promoted (a4)
+probes added a case. The number is what the runner printed.)
 
 ### 3c.14 The challenger's THIRD pass at `9a64289` — PASS, and what a PASS is not
 
