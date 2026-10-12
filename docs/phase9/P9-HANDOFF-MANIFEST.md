@@ -7,11 +7,16 @@ tell a missing file from a file they have not found yet.
 
 ## Phase
 
-Phase 9 — Universal Booking and Services (roadmap Phase 9; directive #11 PARTs 49–53).
+Phase 9 — Universal Booking and Services (roadmap Phase 9; directive #11 PARTs 49–53, and
+the Master Continuous Mission's Phase 9 items).
 
 ## Status
 
-`PREPARED / NOT PROMOTED` (PART 49, PART 117).
+`PREPARED / NOT PROMOTED` (PART 49, PART 117). On the Mission's ladder
+(`PREPARED → CHALLENGED → READY_TO_PROMOTE → PROMOTION_IN_PROGRESS → ACCEPTED / SEALED`)
+this work stands at **`PREPARED`** and not one rung further: `CHALLENGED` requires an
+independent challenger pass, and none has run. The two labels are the same claim in the two
+vocabularies.
 
 `READY_TO_PROMOTE` = **NO**. Its gates are external: the roadmap predecessor must seal
 first (PART 4), a migration number must be allocated by the one Migration Owner
@@ -51,16 +56,17 @@ byte-identical duplicates to canonicalize (PART 14).
 
 | suite | cases | what it measures |
 |---|---|---|
-| `tests/phase9-prep/p9-booking-schema.test.ts` | 15 | shape, RLS, grants, ownership, end state |
+| `tests/phase9-prep/p9-booking-schema.test.ts` | 16 | shape, RLS, grants, ownership, end state, the state contract |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 11 | no double booking under real concurrency |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 7 | each invariant removed, and the damage measured |
-| `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 8 | the global lock order (PART 50), idempotent retries (PART 53) |
-| `tests/phase9-prep/p9-booking-time.test.ts` | 13 | the timezone / DST law (PART 51) |
+| `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 10 | the global lock order (PART 50), idempotent retries and the replay (PART 53) |
+| `tests/phase9-prep/p9-booking-time.test.ts` | 16 | the timezone / DST law (PART 51) and its soundness sweep |
+| `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 10 | the schema attacked as the six real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | — | the spec loader and its non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | — | the race harness: `pg_blocking_pids`, never a sleep |
 
-**54 of 54 green**, on a live PostgreSQL 18.4 cluster, the spec applied in one
+**70 of 70 green**, on a live PostgreSQL 18.4 cluster, the spec applied in one
 transaction as the non-superuser deployment principal on top of the sealed Phase 3
 head. Run with `npx vitest run tests/phase9-prep`.
 
@@ -95,14 +101,25 @@ directory change is in this branch.
    (PART 52). If aggregate-capacity resources are ever wanted, that needs a new
    explicit architecture and its own concurrency proof — an exclusion constraint cannot
    express "at most N overlapping".
-2. **Replay semantics at the command layer.** The schema makes a duplicate operation id
-   impossible; whether a replay returns the recorded booking or an error is the command
-   slice's decision (PART 53).
+2. **Replay semantics — DECIDED AND BUILT, not deferred.** The Mission ruled that a
+   uniqueness constraint alone is not replay proof, so `booking_replay_result` (R-P9-14)
+   returns the first attempt's recorded booking and refuses a key reused over a different
+   request. What remains the command slice's decision is only the HTTP shape of that
+   answer, not whether the recorded result is available.
 3. **Schedule containment.** Deferred to the command slice as a validation. The
    resolver settles the harder half; the comparison against the schedule relations is
    not written.
 
-None of these is an owner-only escalation under PART 116.
+4. **Retention period, and any erasure path — OWNER-ONLY.** The schema's rules are
+   approved and enforced today: nothing is deletable by any principal, cancellation is a
+   state rather than a removal, a reschedule keeps both halves with a backlink, and the
+   operation registry is append-only in the grant and again in a trigger. What is NOT
+   decided is how long a booking is retained and whether a right-to-erasure path exists at
+   all; it trades a customer's erasure right against an append-only history. The
+   fail-closed default shipped here is **retain indefinitely, erase nothing** (prep report
+   §3c.6). This one IS an owner escalation.
+
+Items 1 and 3 are not owner-only escalations under PART 116; item 4 is.
 
 ## Challenger state
 
@@ -129,3 +146,9 @@ step, and the Challenger and Coordinator signatures.
 * No canonical CI claim (PART 49) — a branch push is not CI (PART 15).
 * No timing or performance number from this container, anywhere (PART 20, PART 123).
 * No evidence class mixed: see §3b of the prep report.
+* No progress percentage, and no progress claim derived from the case count, the line
+  counts or the number of agents (Mission, cross-phase). 70 green cases say what was
+  measured, not how much of Phase 9 exists.
+* Business isolation of a registry read is enforced by `booking_replay_result` itself and
+  not by row security — a different kind of guarantee from a policy, stated as limitation
+  15 of the prep report because the executed attack is what revealed it.

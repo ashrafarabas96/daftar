@@ -86,6 +86,14 @@ The target must be the composite `(business_id, id)` key, for the same reason ev
 FK in this slice is composite: a single-column target lets a row point at a customer of
 another business.
 
+**That target is VERIFIED, not assumed.** `customers` is created with
+`PRIMARY KEY (business_id, id)` in a migration that is already inside the frozen boundary,
+and the shape above is the shape the project's own `payments_customer_fk` already uses
+against it. This was read off that frozen file rather than off a Phase 4 working tree, so
+the statement does not depend on anything still moving — what remains pending is the seal,
+not the key. (This request names no migration number or filename anywhere, including here;
+the prep report records which frozen file was read.)
+
 ---
 
 ## 3. RELATIONS — exact names, in dependency order
@@ -231,6 +239,7 @@ read it (end-state check (f)).
 | `booking_resource_lock_key(UUID, UUID)` | `sql IMMUTABLE STRICT`, owned by `daftar_booking_internal`, pinned path | — | — |
 | `booking_lock_resources(UUID, UUID[])` | `plpgsql VOLATILE`, owned, pinned path | — | `booking.lock_set_invalid` |
 | `booking_resolve_local(TEXT, TIMESTAMP, INTERVAL)` | `plpgsql STABLE`, owned, pinned path | — | `booking.local_time_nonexistent`, `booking.local_time_ambiguous`, `booking.local_time_offset_mismatch`, `booking.timezone_unknown`, `booking.local_time_unresolvable` |
+| `booking_replay_result(UUID, UUID, TEXT, TEXT)` | `plpgsql STABLE`, SECURITY INVOKER, owned, pinned path | — | `booking.replay_lookup_invalid`, `booking.replay_scope_mismatch`, `booking.operation_conflict`, `booking.operation_intent_conflict` |
 | `bookings_no_delete()` | raise-only, not a definer | `bookings_no_deletion` BEFORE DELETE | `booking.not_deletable` |
 | `bookings_transition()` | raise-only, not a definer | `bookings_transition_only` BEFORE UPDATE | `booking.immutable`, `booking.state_terminal`, `booking.state_not_reopenable` |
 | `bookings_buffers_match_service()` | `SECURITY DEFINER`, owned by `daftar_booking_internal`, pinned path | `bookings_buffers_are_the_service_s` — CONSTRAINT trigger, `DEFERRABLE INITIALLY DEFERRED`, `WHEN (kind = 'appointment')` | `booking.service_unreadable`, `booking.buffers_not_the_service_s` |
@@ -393,6 +402,38 @@ the functions exist and after their own `REVOKE`/`COMMENT` have been issued, the
 CREATE ON SCHEMA public FROM daftar_booking_internal`. The end-state block fails the
 deployment if that authority survives (check (i), `booking.authority_leak`).
 
+### 4.5 R-P9-14 — the replay is answered from the record
+
+**Name:** `booking_replay_result(UUID, UUID, TEXT, TEXT)`, returning
+`OUT o_replay BOOLEAN, OUT o_booking_id UUID, OUT o_recorded_at TIMESTAMPTZ`.
+**Volatility:** `STABLE`. **Security:** INVOKER — never DEFINER. **Path:** pinned to
+`pg_catalog, public, pg_temp`. **Owner:** the internal booking authority. **ACL:** empty;
+no runtime role, and not `PUBLIC`.
+
+**What it does.** Reads `booking_operations` by `(business_id, operation_id)` and returns
+the booking the FIRST attempt produced. An unused key is reported as a first attempt, not
+as an error. A key whose recorded `op_code` or `intent_sha256` disagrees with the request
+being replayed is refused: `booking.operation_conflict`,
+`booking.operation_intent_conflict`.
+
+**Why it is requested rather than left to the command layer.** The registry's primary key
+establishes only that no second booking exists. The caller holding the refusal has no
+booking id, and the SQLSTATE it receives depends on which constraint its statements reached
+first — measured as `23P01` when the whole request is re-sent and `23505` when only the
+registry row is left to refuse it. A command layer that turned either into "already exists"
+would be inventing a result it never read.
+
+**The business is checked inside the routine, and this is the part that matters.** Every
+`business_isolation_read` policy in this slice exempts the internal authority by name, so
+that its definer bodies can read across the businesses of one tenant — and that principal
+is the only one with execute here. The routine therefore compares the business asked about
+against the caller's own scope and refuses a mismatch, or an unscoped caller, with
+`booking.replay_scope_mismatch`. Without that check the lookup answers a sibling business's
+operation id with that sibling's booking id; this is not a hypothesis, it is what the
+executed attack returned before the check existed.
+
+---
+
 ### 4.4 PART 53 — audit and idempotency
 
 The identity of a booking command is the caller's `operation_id`, the primary key
@@ -455,9 +496,17 @@ money-shaped column reached the schema.
    its own slice. §6's grants already put every runtime role in the position that layer
    requires, so the command slice adds routines and changes no grant.
 4. **The `customers` FK** — §2 above, at promotion.
-5. **Reversal.** Every object this request creates is new. There is no data migration, no
+5. **Retention, and every erasure path.** This request asks for a schema in which nothing
+   is deletable: no `DELETE` grant on any relation, a raise-only delete trigger behind that
+   missing grant, cancellation as a state rather than a removal, and an append-only
+   operation registry. That is what makes a replay answerable later, and it is also the
+   reason a retention period and a right-to-erasure path cannot be written here: they
+   trade a customer's erasure right against an append-only history, which is an owner
+   ruling and not a schema decision. The default this request ships is **retain
+   indefinitely, erase nothing**.
+6. **Reversal.** Every object this request creates is new. There is no data migration, no
    backfill and no change to any existing relation, so the reverse is a drop of the seven
-   relations, their five routines and the one role — but the project's migrations are
+   relations, their six routines and the one role — but the project's migrations are
    forward-only and frozen once applied, and this request does not ask for a down
    migration.
 
@@ -465,7 +514,7 @@ money-shaped column reached the schema.
 
 ## 9. EVIDENCE
 
-**54 cases over five suites, all green, on a live PostgreSQL 18.4 cluster**, with the
+**70 cases over six suites, all green, on a live PostgreSQL 18.4 cluster**, with the
 spec applied in one transaction as the non-superuser deployment principal
 `daftar_migrator` on top of the sealed Phase 3 head.
 
@@ -474,11 +523,13 @@ is mixed, and nothing is claimed in a stronger class than it was measured in.
 
 | suite | cases | class |
 |---|---|---|
-| `p9-booking-schema.test.ts` | 15 | PROVEN BY DATABASE CATALOGUE |
+| `p9-booking-schema.test.ts` | 16 | PROVEN BY DATABASE CATALOGUE |
 | `p9-booking-concurrency.test.ts` | 11 | PROVEN BY TEST (real concurrency) |
 | `p9-booking-negative-controls.test.ts` | 7 | PROVEN BY TEST (red proofs) |
-| `p9-booking-multi-resource.test.ts` | 8 | PROVEN BY TEST (real concurrency) |
-| `p9-booking-time.test.ts` | 13 | PROVEN BY TEST |
+| `p9-booking-multi-resource.test.ts` | 10 | PROVEN BY TEST (real concurrency) |
+| `p9-booking-time.test.ts` | 16 | PROVEN BY TEST |
+| `p9-booking-runtime-attack.test.ts` | 10 | PROVEN BY EXECUTED ATTACK (no superuser) |
+| any retention period, or an erasure path | — | **UNMEASURED** — owner-only; nothing deletable today |
 | the command layer | — | **SPEC ONLY** — not written |
 | schedule containment | — | **SPEC ONLY** — deferred to the command slice |
 | required CI for these suites | — | **UNMEASURED** — owner-only (TD-08) |
@@ -505,12 +556,29 @@ is mixed, and nothing is claimed in a stronger class than it was measured in.
   against B→A crossing both ways; the single-transaction swap that commits; the
   per-resource deadlock control; two concurrent retries of one operation id; the
   registry's append-only refusals.
+* **The replay (PART 53, R-P9-14)** — the lookup reports an unused key as a first
+  attempt; both retry routes measured (`23P01` for the re-sent request, `23505` where
+  only the registry can refuse); the replay returning the FIRST attempt's booking id,
+  that id asserted to name a booking standing on the resource and instant asked for, the
+  retry's own id asserted not to be a booking, and the same answer returned twice down to
+  the recorded instant; a reused key over a different op code or intent digest refused by
+  name; the scope check refusing a sibling business and an unscoped caller.
+* **Executed attack, no superuser** — every INSERT on all seven relations and
+  UPDATE/DELETE against a booking that really exists, as each of the six runtime roles,
+  refused `42501` with the row asserted to survive; the merchant's own calendar read
+  allowed, so the refusals are a boundary and not a blanket denial; row security biting
+  on a sibling business whose row is asserted to exist; the registry unreadable by every
+  runtime role; the four routines unexecutable by every runtime role; and the internal
+  authority itself refused a cross-business write by POLICY while the same row in its own
+  business is accepted.
 * **Time (PART 51)** — the two negative controls measuring that `AT TIME ZONE` answers
   silently; nonexistent and ambiguous refused on both shift sizes; either occurrence
   reachable by stated offset; a wrong offset refused rather than rounded; an offset
   checked even when unambiguous; cross-midnight explicit; an unknown zone refused by
   name; the resolver's `STABLE` volatility asserted and PostgreSQL's own refusal to
-  index it.
+  index it; and the soundness sweep over 14 000+ inputs across ten transition days in two
+  zones, with an independent round-trip oracle, together with the control that shows
+  `AT TIME ZONE` failing that same sweep.
 
 Waits are observed through `pg_blocking_pids` against a separate observer connection,
 never slept for, and every barrier is explicit (PART 18). No timing or performance

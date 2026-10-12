@@ -546,6 +546,175 @@ describe('P9 bookings — multi-resource lock order and idempotent retries', () 
     expect(operations.rows[0]?.n).toBe(1);
   });
 
+  /**
+   * PART 53, as the Mission corrected it: «قيد التفرّد المانع للتكرار وحده
+   * ليس برهان نجاح replay» — the uniqueness constraint alone is not proof
+   * that a replay succeeds; the recorded result must be RETURNED. PROOF 14
+   * above proves only the first half, that a second attempt cannot produce
+   * a second booking. The caller holding that refusal still has no booking
+   * id, and which SQLSTATE it received is an accident of which constraint
+   * its statements reached first — 23P01 when it re-sent the whole booking,
+   * 23505 when only the registry row was left to refuse it. Both are
+   * measured below, and both are answered from the same recorded row.
+   */
+  it('PROOF 15 — a refused retry is ANSWERED FROM THE RECORD: the replay returns the first attempt’s booking (PART 53, R-P9-14)', async () => {
+    const operationId = uuid(1600);
+    const winner = uuid(1601);
+    const resent = uuid(1602);
+    const c = new Client({ connectionString: db.url('postgres') });
+    await c.connect();
+    // The replay lookup enforces the caller's business scope itself, so the
+    // scope is set here as a command would set it.
+    await c.query(`SELECT set_config('app.tenant_id', $1, false), set_config('app.business_id', $2, false)`, [world.tenantId, world.businessId]);
+    const replay = async (
+      opCode = 'booking.create',
+      intent = INTENT,
+    ): Promise<{ o_replay: boolean; o_booking_id: string | null; o_recorded_at: Date | null }> => {
+      const r = await c.query<{ o_replay: boolean; o_booking_id: string | null; o_recorded_at: Date | null }>(
+        `SELECT o_replay, o_booking_id, o_recorded_at FROM booking_replay_result($1, $2, $3, $4)`,
+        [world.businessId, operationId, opCode, intent],
+      );
+      const row = r.rows[0];
+      if (row === undefined) throw new Error('booking_replay_result returned no row');
+      return row;
+    };
+    try {
+      // The key is UNUSED first, and the routine says so without inventing
+      // anything. Asserted before the write, or "the record was returned"
+      // could be read off a row some earlier case in this file left behind.
+      const before = await replay();
+      expect(before.o_replay).toBe(false);
+      expect(before.o_booking_id).toBeNull();
+      expect(before.o_recorded_at).toBeNull();
+
+      // The first attempt: the booking and its registry row, one transaction.
+      await c.query('BEGIN');
+      await c.query(INSERT_BOOKING, bookingParams({ world, id: winner, startsAt: at('18:00'), endsAt: at('18:30') }));
+      await c.query(INSERT_OPERATION, [world.tenantId, world.businessId, operationId, 'booking.create', INTENT, winner, world.userId]);
+      await c.query('COMMIT');
+
+      // Retry (a): the client re-sends its whole request, as a client whose
+      // connection dropped before the response does. The invariant refuses
+      // it, because the slot the first attempt took is the slot it asks for.
+      let resentCode = '';
+      await c.query('BEGIN');
+      try {
+        await c.query(INSERT_BOOKING, bookingParams({ world, id: resent, startsAt: at('18:00'), endsAt: at('18:30') }));
+        await c.query(INSERT_OPERATION, [world.tenantId, world.businessId, operationId, 'booking.create', INTENT, resent, world.userId]);
+        await c.query('COMMIT');
+      } catch (e) {
+        resentCode = sqlState(e);
+        await c.query('ROLLBACK').catch(() => undefined);
+      }
+      expect(resentCode).toBe('23P01');
+      // Nothing of the retry survived: the id it minted is not a booking.
+      const ghost = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1 AND id = $2`, [world.businessId, resent]);
+      expect(ghost.rows[0]?.n).toBe(0);
+
+      // Retry (b): the same key where ONLY the registry can refuse it —
+      // the registry row alone, naming the booking that already stands.
+      let keyCode = '';
+      try {
+        await c.query(INSERT_OPERATION, [world.tenantId, world.businessId, operationId, 'booking.create', INTENT, winner, world.userId]);
+      } catch (e) {
+        keyCode = sqlState(e);
+      }
+      expect(keyCode).toBe('23505');
+
+      // THE POINT. Neither refusal is an answer; this is the answer, and it
+      // is the booking the FIRST attempt produced, not the id either retry
+      // minted and not "whatever is true now".
+      const answer = await replay();
+      expect(answer.o_replay).toBe(true);
+      expect(answer.o_booking_id).toBe(winner);
+      expect(answer.o_booking_id).not.toBe(resent);
+      expect(answer.o_recorded_at).toBeInstanceOf(Date);
+
+      // And the booking it names really stands, on the resource and at the
+      // instant that were asked for. A replay that returned a dangling id
+      // would be a worse failure than the refusal it replaces.
+      const standing = await c.query<{ state: string; resource_id: string; starts_at: Date }>(
+        `SELECT state, resource_id, starts_at FROM bookings WHERE business_id = $1 AND id = $2`,
+        [world.businessId, answer.o_booking_id],
+      );
+      expect(standing.rows[0]?.state).toBe('booked');
+      expect(standing.rows[0]?.resource_id).toBe(world.resourceAId);
+      expect(standing.rows[0]?.starts_at.toISOString()).toBe(new Date(at('18:00')).toISOString());
+
+      // The replay is itself idempotent: asked twice, byte-for-byte the same
+      // answer, including the instant the record was written.
+      const again = await replay();
+      expect(again.o_booking_id).toBe(winner);
+      expect(again.o_recorded_at?.getTime()).toBe(answer.o_recorded_at?.getTime());
+
+      // Exactly one row carries the key, and exactly one booking stands.
+      const rows = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM booking_operations WHERE business_id = $1 AND operation_id = $2`, [
+        world.businessId,
+        operationId,
+      ]);
+      expect(rows.rows[0]?.n).toBe(1);
+      expect(await held(world.resourceAId, '18:00')).toBe(1);
+      expect(await overlaps()).toBe(0);
+    } finally {
+      await c.end().catch(() => undefined);
+    }
+  });
+
+  it('PROOF 16 — a key replayed over a DIFFERENT request is refused, never answered with the stored row (R-P9-14)', async () => {
+    const operationId = uuid(1700);
+    const booking = uuid(1701);
+    const otherIntent = `${'f'.repeat(63)}0`;
+    const c = new Client({ connectionString: db.url('postgres') });
+    await c.connect();
+    // The replay lookup enforces the caller's business scope itself, so the
+    // scope is set here as a command would set it.
+    await c.query(`SELECT set_config('app.tenant_id', $1, false), set_config('app.business_id', $2, false)`, [world.tenantId, world.businessId]);
+    try {
+      await c.query('BEGIN');
+      // 20:00: an hour no other case in this file touches. 19:00 was taken
+      // by PROOF 13, and the exclusion constraint said so.
+      await c.query(INSERT_BOOKING, bookingParams({ world, id: booking, startsAt: at('20:00'), endsAt: at('20:30') }));
+      await c.query(INSERT_OPERATION, [world.tenantId, world.businessId, operationId, 'booking.create', INTENT, booking, world.userId]);
+      await c.query('COMMIT');
+      // The subject exists and the HONEST replay works, or the three
+      // refusals below would prove nothing about this key.
+      const ok = await c.query<{ o_booking_id: string }>(`SELECT o_booking_id FROM booking_replay_result($1, $2, 'booking.create', $3)`, [
+        world.businessId,
+        operationId,
+        INTENT,
+      ]);
+      expect(ok.rows[0]?.o_booking_id).toBe(booking);
+      // The two digests really differ, or the intent case would be vacuous.
+      expect(otherIntent).not.toBe(INTENT);
+
+      const refusals: { params: unknown[]; name: string }[] = [
+        { params: [world.businessId, operationId, 'booking.cancel', INTENT], name: 'booking.operation_conflict' },
+        { params: [world.businessId, operationId, 'booking.create', otherIntent], name: 'booking.operation_intent_conflict' },
+        { params: [null, operationId, 'booking.create', INTENT], name: 'booking.replay_lookup_invalid' },
+        { params: [world.businessId, null, 'booking.create', INTENT], name: 'booking.replay_lookup_invalid' },
+        { params: [world.businessId, operationId, 'booking.create', null], name: 'booking.replay_lookup_invalid' },
+      ];
+      for (const refusal of refusals) {
+        let message = '';
+        try {
+          await c.query(`SELECT * FROM booking_replay_result($1, $2, $3, $4)`, refusal.params);
+        } catch (e) {
+          message = e instanceof Error ? e.message : String(e);
+        }
+        expect(message, `${refusal.name} was not raised`).toContain(refusal.name);
+      }
+      // An unknown key is NOT one of those refusals: it is a first attempt.
+      const fresh = await c.query<{ o_replay: boolean }>(`SELECT o_replay FROM booking_replay_result($1, $2, 'booking.create', $3)`, [
+        world.businessId,
+        uuid(1702),
+        INTENT,
+      ]);
+      expect(fresh.rows[0]?.o_replay).toBe(false);
+    } finally {
+      await c.end().catch(() => undefined);
+    }
+  });
+
   it('the operation registry is append-only: a recorded operation cannot be rewritten or removed (PART 53)', async () => {
     const row = await db.pool.query<{ operation_id: string }>(`SELECT operation_id FROM booking_operations WHERE business_id = $1 LIMIT 1`, [world.businessId]);
     const operationId = row.rows[0]?.operation_id;

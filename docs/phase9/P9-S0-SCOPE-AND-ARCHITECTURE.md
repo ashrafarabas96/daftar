@@ -105,13 +105,22 @@ primary key exists to be a **foreign-key target**. Every appointment's
 declarative property of the row rather than a trigger (R-P9-06). `MATCH SIMPLE` means a
 resource block, which has no `service_id`, is simply out of scope for the check.
 
-### 2.8 Rows are never deleted, and almost nothing is mutable
+### 2.8 Rows are never deleted, and almost nothing is mutable — which is also the retention rule
 
 A `BEFORE DELETE` trigger refuses every delete. A `BEFORE UPDATE` trigger freezes
 everything except `state` and its settlement metadata: the window, the resource, the
 service, the customer, the buffers, the creator and the creation time are immutable after
 INSERT. A booking's history is the record; the four settlement states are terminal and none
 of them reopens.
+
+That is the retention rule, stated as such: **retain everything, erase nothing.** No
+principal holds `DELETE` on any of the seven relations, cancellation is a state rather than
+a removal, a reschedule keeps both halves with a backlink between them, and the operation
+registry is append-only in the grant and again in a trigger — which is what makes a replay
+answerable later (§2.9b). A retention PERIOD and any erasure path are deliberately absent:
+they trade a customer's erasure right against an append-only history, which is an owner
+ruling, and a schema with no delete path cannot lose a record by accident while that ruling
+is pending.
 
 ### 2.9 Serialization: a refusal a human can read (R-P9-11, R-P9-12)
 
@@ -162,6 +171,25 @@ something the caller said.
 It is `STABLE`, not `IMMUTABLE`, because the tz database is data — and PostgreSQL
 itself therefore refuses to build an index over it, which is the guard that stops a
 resolved value outliving the next tz update.
+
+### 2.9b A replay is answered from the record (R-P9-14)
+
+A caller-supplied `operation_id` makes a retry identifiable, and the registry's primary
+key makes a second booking impossible. Neither of those gives the retrying caller an
+answer: it holds a constraint violation whose SQLSTATE depends on which constraint its
+statements happened to reach first. So `booking_replay_result` reads the registry by
+`(business_id, operation_id)` and returns the booking the FIRST attempt produced —
+answering from the record rather than from current state, which would be a different claim
+and wrong the moment someone else cancels that booking.
+
+Two refusals come with it, because a key that answers a *different* request is worse than
+no key: a recorded `op_code` or `intent_sha256` that disagrees is refused by name.
+
+And the business is checked in the routine, not left to row security. §3's read policies
+exempt the internal authority by name so its definer bodies can read across one tenant's
+businesses, and that is the only principal with execute here — so with the business as a
+parameter, the lookup would answer a sibling's operation id with that sibling's booking.
+The executed attack returned exactly that before the check existed; it now fails closed.
 
 ### 2.10 No money, anywhere
 

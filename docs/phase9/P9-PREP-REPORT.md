@@ -13,19 +13,23 @@ head of `main`.
 
 | file | lines | what it is |
 |---|---|---|
-| `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | 180 | the model, and why it has this shape |
-| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 1073 | the schema and its physical invariants — **not a migration** |
-| `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 384 | what the Migration Owner is asked to allocate |
-| `tests/phase9-prep/p9-booking-schema.test.ts` | — | 15 cases: shape, security, grants, end state |
-| `tests/phase9-prep/p9-booking-concurrency.test.ts` | — | 11 proofs against real concurrent transactions |
-| `tests/phase9-prep/p9-booking-negative-controls.test.ts` | — | 7 cases: each invariant removed, and the damage measured |
-| `tests/phase9-prep/p9-booking-multi-resource.test.ts` | — | 8 cases: the global lock order (PART 50) and idempotent retries (PART 53) |
-| `tests/phase9-prep/p9-booking-time.test.ts` | — | 13 cases: the timezone / DST law (PART 51) |
-| `tests/phase9-prep/p9-booking-spec.ts` | — | the spec loader and its non-vacuity guards |
-| `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
-| `tests/phase9-prep/p9-race.ts` | — | the race harness: `pg_blocking_pids`, never a sleep |
+| `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | 212 | the model, and why it has this shape |
+| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 1483 | the schema and its physical invariants — **not a migration** |
+| `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 521 | what the Migration Owner is asked to allocate |
+| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 131 | the PART 13 handoff gate, with a SHA256 per artifact |
+| `tests/phase9-prep/p9-booking-schema.test.ts` | 262 | 16 cases: shape, security, grants, end state, the state contract |
+| `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
+| `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 588 | 7 cases: each invariant removed, and the damage measured |
+| `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
+| `tests/phase9-prep/p9-booking-time.test.ts` | 342 | 16 cases: the timezone / DST law (PART 51) and its soundness sweep |
+| `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 350 | 10 cases: the schema attacked as the real runtime roles, no superuser |
+| `tests/phase9-prep/p9-booking-spec.ts` | 206 | the spec loader, the state contract parser, and the non-vacuity guards |
+| `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
+| `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**54 of 54 cases green**, over five suites, on a live PostgreSQL 18.4 cluster.
+**70 of 70 cases green**, over six suites, on a live PostgreSQL 18.4 cluster. A case count is
+not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
+not how much of Phase 9 exists.
 
 The DDL spec is executable and **is executed**: the suites read it from its path, apply it
 in one transaction as the non-superuser deployment principal `daftar_migrator` on top of the
@@ -192,8 +196,127 @@ one booking and one registry row; the loser is refused by the registry's primary
 well as the grant. Cancellation and reschedule retain history, and the reschedule
 proofs assert that no predecessor is left released with no successor.
 
-Answering a replay **from the recorded row** rather than returning the duplicate-key
-error is the command layer's obligation and is not built.
+Answering a replay **from the recorded row** is now built and proved, not deferred — see
+§3c.3.
+
+---
+
+## 3c. The Master Continuous Mission (Phases 4→15), applied
+
+Seven Phase 9 items arrived after the sections above. Each one is answered here, and two
+of them changed the build rather than the prose.
+
+### 3c.1 The customer key comes from sealed Phase 4 — VERIFIED, not assumed
+
+`customers` carries `PRIMARY KEY (business_id, id)` in frozen migration `0075`, which is
+inside the frozen boundary (`0000`–`0079`). The composite FK the patch request asks for at
+promotion is therefore the shape the sealed phase actually offers, and it matches the
+project's own `payments_customer_fk`. This was read off the frozen file, not inferred from
+the Phase 4 branch's working state.
+
+### 3c.2 The occupancy states come from the contract, not from guessing
+
+«حدد حالات شغل المورد من العقد، دون تخمين». The DDL header carries one machine-readable
+line, `P9-STATE-CONTRACT`, and the suites DERIVE both lists from it. The loader
+cross-checks that line against the exclusion constraint's own predicate and against
+`state`'s `CHECK` list, and refuses to run if they disagree or if a state exists that the
+line does not classify — so a sixth state cannot be added without a decision about whether
+it holds the resource. Four mutations of the document each red the loader by name, and each
+mutation is asserted to have landed before its refusal is believed (PART 17).
+
+### 3c.3 A uniqueness constraint is not replay proof — the recorded result is returned
+
+«تعيد المحاولة المتكررة النتيجة المسجلة. قيد التفرّد المانع للتكرار وحده ليس برهان نجاح
+replay». The registry's primary key only establishes that no second booking exists; the
+caller holding the refusal still has no booking id, and the SQLSTATE it received is an
+accident of which constraint its statements reached first (measured: `23P01` when the whole
+request is re-sent, `23505` when only the registry row is left to refuse it).
+`booking_replay_result` (R-P9-14) returns the booking the **first** attempt produced, read
+by `(business_id, operation_id)`; PROOF 15 measures both retry routes and then asserts the
+replay returns the winner's id, that the id names a booking that really stands on the
+resource and instant asked for, that the retry's own id is not a booking, and that asking
+twice gives the identical answer down to the recorded instant. PROOF 16 adds the refusals
+that keep an idempotency key from answering a *different* request: a recorded op code or
+intent digest that disagrees is `booking.operation_conflict` /
+`booking.operation_intent_conflict`, and an unknown key is reported as a first attempt
+rather than as an error.
+
+### 3c.4 The runtime is not a direct writer — proved by executed attack, not by catalogue
+
+«لا إثبات نواة أو كتالوج بدل هجوم منفذ». `p9-booking-runtime-attack.test.ts` connects as
+each of the six real runtime roles with no superuser anywhere, sets the tenant and business
+GUCs the way a request does, and EXECUTES the writes: every INSERT on all seven relations,
+and UPDATE and DELETE against a booking that really exists, come back `42501` and the row
+survives. It also proves what the roles *may* do (a merchant reads its own calendar), so the
+refusals are a boundary and not a blanket denial, and that RLS applies to the internal
+authority itself: a cross-business INSERT as `daftar_booking_internal` is refused by policy
+while the same row in its own business is accepted.
+
+**This suite found a real hole in work written an hour earlier.** The first version of
+`booking_replay_result` relied on row security for business isolation. §8's read policies
+exempt `daftar_booking_internal` by name — and that is the only principal allowed to execute
+the routine — so with the business as a parameter, the lookup answered a sibling business's
+operation id with that sibling's booking id. The cross-business case returned the row; the
+boundary now lives in the routine and fails closed (`booking.replay_scope_mismatch`, also
+for an unscoped caller). The lesson is the one this phase keeps re-learning: a law that
+names its premise must read it, and RLS is not a premise a routine may assume on behalf of a
+principal RLS deliberately exempts.
+
+### 3c.5 Thirteen DST cases do not prove all dates and zones — so the scope is written down
+
+The scope `booking_resolve_local` claims is stated in the DDL beside the routine: any IANA
+zone the server knows, a finite wall clock, a transition of at most ±180 minutes, and an
+offset that the stated wall clock actually has. Everything outside it is REFUSED by name
+rather than guessed — including `±infinity`, which the earlier version reported as
+*ambiguous*: a refusal that said something false about why, found while writing this scope
+and now `booking.local_time_not_finite`. The SOUNDNESS property is swept rather than
+sampled: over 14 000 inputs across ten transition days in two zones, every instant the
+routine returns maps back through its zone to exactly the wall clock asked for, with an
+oracle (the round trip) independent of the candidate counting the routine decides by — and
+a control shows PostgreSQL's own `AT TIME ZONE` failing that same sweep.
+
+### 3c.6 Retention — the rules that ARE approved, and the one that is not
+
+The rules the schema enforces today, which need no owner decision because they follow from
+laws already in force:
+
+* **Nothing is deleted.** No principal holds `DELETE` on any of the seven relations, and
+  `bookings` carries a raise-only `BEFORE DELETE` trigger behind that missing grant.
+* **Cancellation is a state, not a removal.** A cancelled or rescheduled booking keeps its
+  row, its window and its intent digest; it stops occupying the resource because the
+  exclusion predicate stops matching it, not because anything was erased.
+* **A reschedule keeps both halves.** The predecessor is transitioned and the successor
+  carries a backlink to it, so the history of a moved appointment is readable in both
+  directions.
+* **The operation registry is append-only** in the grant (`SELECT, INSERT` only) and again
+  in a trigger, so a recorded command identity cannot be rewritten or removed — which is
+  what makes a replay answerable years later.
+
+What is NOT approved, and is therefore not built: **the retention PERIOD, and any erasure
+path at all** — a merchant's right-to-erasure request, an archival cut-off, a purge of
+bookings belonging to a closed business. Those need an owner ruling (they trade a customer's
+erasure right against an append-only financial-adjacent history), and the fail-closed
+default this work ships is **retain indefinitely, erase nothing**, because a schema with no
+delete path cannot lose a record by accident. Recorded as an open decision in the handoff
+manifest; Phase 9 proposes no retention window of its own.
+
+### 3c.7 The status ladder
+
+The Mission's ladder is `PREPARED → CHALLENGED → READY_TO_PROMOTE → PROMOTION_IN_PROGRESS →
+ACCEPTED / SEALED`. Phase 9 stands at **`PREPARED`**, and not one rung further: the next rung
+needs an INDEPENDENT challenger pass, and no challenger has run — every case in this report
+was written by the author of the thing it tests. `READY_TO_PROMOTE = NO`, because the
+roadmap predecessor is not sealed, no migration number exists, and two signatures of the
+three are owed. The D11 PART 117 label for the same state is `PREPARED / NOT PROMOTED`; the
+two are the same claim, and this report uses both so neither vocabulary has to be guessed
+at.
+
+### 3c.8 The prep cases are not a sealed phase
+
+70 green cases say that the invariants in this document hold on a live server. They do not
+say Phase 9 exists: there is no command layer, no surface, no migration number, and these
+suites are not in required CI. §4 states that in full, and nothing in this report may be
+read as a promotion claim (PART 83).
 
 ---
 
@@ -206,9 +329,13 @@ claimed in a stronger class than it was measured in.
 |---|---|
 | the seven relations, their constraints, RLS, grants, ownership, end state | PROVEN BY DATABASE CATALOGUE |
 | no double booking under race; the lock orders; DST refusals; idempotent retries | PROVEN BY TEST |
+| the replay returns the first attempt's recorded booking, and refuses a reused key over a different request | PROVEN BY TEST |
+| no runtime role writes these relations, and RLS confines the internal authority | PROVEN BY EXECUTED ATTACK (test, no superuser) |
+| the local-time soundness property over 14 000+ inputs | PROVEN BY TEST (sweep, independent oracle) |
 | each invariant is load-bearing (six red proofs, restored character-identical) | PROVEN BY TEST |
 | the DDL spec as a deployable migration | **SPEC ONLY** — no number allocated |
 | the command layer, schedule containment | **SPEC ONLY** — not written |
+| any retention period, and any erasure path | **UNMEASURED** — owner-only; nothing deletable today |
 | these suites in required CI | **UNMEASURED** — owner-only (TD-08) |
 | browser, UX, localization (PART 111) | **UNMEASURED** — no surface exists |
 | performance | **UNMEASURED** — and no number from this container may be quoted |
@@ -286,7 +413,22 @@ Stated as limitations rather than left to be discovered.
     occurrence counts of its four moments from the server before relying on them. A tz
     update that moved a rule reds the suite rather than silently making its proofs
     vacuous — but it does red it, and that is maintenance this work hands forward.
-14. **The lock-set collision case is reasoned, not measured.** Two distinct resources
+14. **The retention period and every erasure path are undecided.** What the schema
+    enforces is "retain everything, delete nothing", which is a default and not a policy. A
+    right-to-erasure request has no path here, by design rather than by oversight, and
+    building one is an owner decision because it trades that right against an append-only
+    history (§3c.6).
+15. **Business isolation of a registry READ is enforced by the routine, not by RLS.** §8's
+    read policies exempt `daftar_booking_internal` by name so its definer bodies can read
+    across the businesses of one tenant, and that principal is the only one allowed to
+    execute `booking_replay_result`. The business boundary for the replay therefore lives in
+    the routine's own fail-closed check. It is proved (`booking.replay_scope_mismatch`), but
+    it is a different kind of guarantee from a policy, and a future routine over these
+    relations must make the same check rather than assume it.
+16. **No independent challenger has run.** Every case here was written by the author of the
+    thing it tests, which is exactly the review the three-signature rule (PART 114) exists
+    to require. Two of the three signatures are owed.
+17. **The lock-set collision case is reasoned, not measured.** Two distinct resources
     hashing to one key would merge their locks, which broadens exclusion and cannot
     narrow it; no fixture constructs such a collision, because constructing one against
     `hashtextextended` is not something a proof can do honestly at this size.

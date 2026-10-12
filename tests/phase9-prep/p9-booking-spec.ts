@@ -51,12 +51,85 @@ export const P9_NAMED_OBJECTS = [
   'booking_resource_lock_key',
   'booking_lock_resources',
   'booking_resolve_local',
+  'booking_replay_result',
 ] as const;
 
-/** The states the invariant must treat as occupying the resource. */
-export const OCCUPYING_STATES = ['booked', 'completed', 'no_show'] as const;
-/** The states the invariant must forget, so a cancelled booking frees its slot. */
-export const RELEASING_STATES = ['cancelled', 'rescheduled'] as const;
+/**
+ * The occupancy classification, READ FROM THE SPEC rather than restated here.
+ *
+ * The spec carries one `P9-STATE-CONTRACT:` line and one exclusion predicate,
+ * and `loadSpec` refuses unless they agree with each other and between them
+ * classify every value `state`'s CHECK allows. So these two arrays are the
+ * document's own answer, and a sixth state cannot slip in unclassified: it
+ * reds the loader before any suite runs.
+ *
+ * They are populated on first `loadSpec()` and read through the two accessors,
+ * which throw rather than return an empty list — an empty set would make every
+ * loop over it pass vacuously, which is the failure PART 17 names.
+ */
+let stateContract: { occupying: readonly string[]; releasing: readonly string[] } | null = null;
+
+export function parseStateContractForTest(text: string): { occupying: readonly string[]; releasing: readonly string[] } {
+  return parseStateContract(text);
+}
+
+function parseStateContract(text: string): { occupying: readonly string[]; releasing: readonly string[] } {
+  const declared = /P9-STATE-CONTRACT:\s*occupying\s*=\s*([a-z_,\s]+);\s*releasing\s*=\s*([a-z_,\s]+)/.exec(text);
+  if (declared === null) throw new Error('the P9 spec carries no P9-STATE-CONTRACT line, so the occupancy states would have to be guessed');
+  const split = (s: string): string[] =>
+    s
+      .split(',')
+      .map((x) => x.trim())
+      .filter((x) => x.length > 0);
+  const occupying = split(declared[1] ?? '');
+  const releasing = split(declared[2] ?? '');
+  if (occupying.length === 0 || releasing.length === 0) {
+    throw new Error('the P9 state contract declares an empty side, which would make every proof over it vacuous');
+  }
+  for (const s of occupying) {
+    if (releasing.includes(s)) throw new Error(`the P9 state contract classifies ${s} as both occupying and releasing`);
+  }
+
+  // The predicate on the exclusion constraint must name exactly the occupying
+  // side. This is the half that matters: the declaration is prose until the
+  // index agrees with it.
+  const predicate = /WHERE \(state IN \(([^)]+)\)\)/.exec(text);
+  if (predicate === null) throw new Error('the P9 spec no longer states the exclusion predicate, so the contract cannot be checked against it');
+  const inPredicate = [...(predicate[1] ?? '').matchAll(/'([a-z_]+)'/g)].map((m) => m[1] ?? '');
+  if ([...inPredicate].sort().join(',') !== [...occupying].sort().join(',')) {
+    throw new Error(`the P9 exclusion predicate holds ${inPredicate.join(', ')} but the state contract declares ${occupying.join(', ')}`);
+  }
+
+  // And every state the relation ALLOWS must be classified by one side or the
+  // other, or a sixth state could exist that nothing has decided about.
+  const allowed = /CHECK \(state IN \(([^)]+)\)\)/.exec(text);
+  if (allowed === null) throw new Error('the P9 spec no longer states the CHECK on bookings.state');
+  const all = [...(allowed[1] ?? '').matchAll(/'([a-z_]+)'/g)].map((m) => m[1] ?? '');
+  const classified = [...occupying, ...releasing];
+  for (const s of all) {
+    if (!classified.includes(s)) throw new Error(`bookings.state allows ${s}, which the P9 state contract does not classify as occupying or releasing`);
+  }
+  for (const s of classified) {
+    if (!all.includes(s)) throw new Error(`the P9 state contract classifies ${s}, which bookings.state does not allow`);
+  }
+  return { occupying, releasing };
+}
+
+/** The states that occupy a resource, as the spec declares them. */
+export function occupyingStates(): readonly string[] {
+  if (stateContract === null) loadSpec();
+  const c = stateContract;
+  if (c === null || c.occupying.length === 0) throw new Error('the P9 occupancy states are unavailable');
+  return c.occupying;
+}
+
+/** The states that release a resource, as the spec declares them. */
+export function releasingStates(): readonly string[] {
+  if (stateContract === null) loadSpec();
+  const c = stateContract;
+  if (c === null || c.releasing.length === 0) throw new Error('the P9 releasing states are unavailable');
+  return c.releasing;
+}
 
 const MIN_BYTES = 20_000;
 
@@ -92,12 +165,13 @@ export function loadSpec(): string {
   if (!/EXCLUDE USING gist \(business_id WITH =, resource_id WITH =, blocking_window WITH &&\)/.test(text)) {
     throw new Error('P9 spec no longer excludes on (business_id, resource_id, blocking_window) — the buffers would fall outside the invariant (R-P9-02)');
   }
-  for (const state of OCCUPYING_STATES) {
+  stateContract = parseStateContract(text);
+  for (const state of stateContract.occupying) {
     if (!new RegExp(`WHERE \\(state IN \\([^)]*'${state}'`).test(text)) {
       throw new Error(`P9 spec's exclusion predicate no longer holds '${state}', so that state would stop occupying its resource`);
     }
   }
-  for (const state of RELEASING_STATES) {
+  for (const state of stateContract.releasing) {
     if (new RegExp(`WHERE \\(state IN \\([^)]*'${state}'`).test(text)) {
       throw new Error(`P9 spec's exclusion predicate now holds '${state}', so a released slot would never be reusable`);
     }

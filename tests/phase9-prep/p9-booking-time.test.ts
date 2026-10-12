@@ -18,6 +18,7 @@
  *
  * Status: PREPARED / NOT PROMOTED. Not part of required CI.
  */
+import { Client } from 'pg';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import type { ScratchDb } from '../helpers/scratch-db';
 import { createScratchDb } from '../helpers/scratch-db';
@@ -204,6 +205,122 @@ describe('P9 bookings — a local time is resolved or refused, never guessed', (
         error = (e as Error).message;
       }
       expect(error).toContain('booking.local_time_unresolvable');
+    }
+  });
+
+  it('SOUNDNESS, swept: every instant the resolver returns maps back to the wall clock asked for', async () => {
+    // "13 حالة لا تثبت كل تاريخ وكل منطقة" — thirteen cases do not prove every
+    // date in every zone. This case does not claim to either, but it widens
+    // the ground enormously and it checks the one property that matters most:
+    // the resolver is never SILENTLY WRONG.
+    //
+    // Over five zones and every minute of each zone's 2026 transition days,
+    // plus a fortnight of ordinary days, each local time is either refused or
+    // resolved — and every resolution is checked by mapping the returned
+    // instant BACK into the zone and comparing it to the request. That oracle
+    // is the round trip, which is independent of the candidate counting the
+    // resolver decides by, so this is not the algorithm compared to itself
+    // (PART 17).
+    //
+    // PostgreSQL's own `AT TIME ZONE` FAILS this property, on exactly the
+    // inputs CONTROL T1 is about, which is what makes passing it meaningful.
+    // One dedicated connection: the loop writes its counts into a TEMP table,
+    // which only exists on the session that made it, so a pooled connection
+    // could issue the SELECT on a different backend and find nothing.
+    const client = new Client({ connectionString: db.url('postgres') });
+    await client.connect();
+    let row: { swept: number; resolved: number; refused: number; wrong: number } | undefined;
+    try {
+      await client.query(`
+        DO $$
+        DECLARE
+          v_rec RECORD; v_i TIMESTAMPTZ;
+          v_swept INT := 0; v_res INT := 0; v_ref INT := 0; v_wrong INT := 0;
+        BEGIN
+          FOR v_rec IN
+            WITH days AS (
+              SELECT * FROM (VALUES
+                ('America/New_York', DATE '2026-03-08'), ('America/New_York', DATE '2026-11-01'),
+                ('Australia/Lord_Howe', DATE '2026-10-04'), ('Australia/Lord_Howe', DATE '2026-04-05'),
+                ('Pacific/Chatham', DATE '2026-09-27'), ('Pacific/Chatham', DATE '2026-04-05'),
+                ('Asia/Hebron', DATE '2026-03-21'), ('Asia/Hebron', DATE '2026-10-24'),
+                ('Europe/Istanbul', DATE '2026-03-29'), ('Europe/Istanbul', DATE '2026-10-25')
+              ) AS t(zone, on_date)
+            )
+            SELECT d.zone AS zone, (d.on_date + make_interval(mins => m))::timestamp AS local
+              FROM days d, generate_series(0, 1439, 1) AS m
+             UNION ALL
+            SELECT 'America/New_York', (DATE '2026-06-01' + make_interval(mins => m * 7))::timestamp
+              FROM generate_series(0, 2879, 1) AS m
+          LOOP
+            v_swept := v_swept + 1;
+            BEGIN
+              v_i := booking_resolve_local(v_rec.zone, v_rec.local, NULL);
+              v_res := v_res + 1;
+              -- THE INDEPENDENT ORACLE: the returned instant must map back to
+              -- the wall clock that was asked for. Nothing else is acceptable.
+              IF (v_i AT TIME ZONE v_rec.zone) <> v_rec.local THEN
+                v_wrong := v_wrong + 1;
+              END IF;
+            EXCEPTION WHEN SQLSTATE 'P0001' THEN
+              v_ref := v_ref + 1;
+            END;
+          END LOOP;
+          CREATE TEMP TABLE p9_sweep AS SELECT v_swept AS swept, v_res AS resolved, v_ref AS refused, v_wrong AS wrong;
+        END $$`);
+      const verdict = await client.query<{ swept: number; resolved: number; refused: number; wrong: number }>(
+        `SELECT swept, resolved, refused, wrong FROM p9_sweep`,
+      );
+      row = verdict.rows[0];
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+    expect(row).toBeDefined();
+    // Not vacuous: thousands of inputs, and BOTH outcomes actually occurred.
+    expect(row?.swept).toBeGreaterThan(14000);
+    expect(row?.resolved).toBeGreaterThan(14000 - 400);
+    expect(row?.refused).toBeGreaterThan(0);
+    // And not one silently wrong answer anywhere in the sweep.
+    expect(row?.wrong).toBe(0);
+  });
+
+  it('and PostgreSQL’s own AT TIME ZONE FAILS that same soundness sweep, which is why the resolver exists', async () => {
+    // The control for the case above. Same inputs, same oracle, the naive
+    // expression instead of the resolver: it returns an instant for every
+    // input and some of those instants map back to a different wall clock.
+    const r = await db.pool.query<{ swept: number; wrong: number }>(`
+      WITH days AS (
+        SELECT * FROM (VALUES
+          ('America/New_York', DATE '2026-03-08'), ('Australia/Lord_Howe', DATE '2026-10-04'),
+          ('Pacific/Chatham', DATE '2026-09-27'), ('Asia/Hebron', DATE '2026-03-21'),
+          ('Europe/Istanbul', DATE '2026-03-29')
+        ) AS t(zone, on_date)
+      ),
+      locals AS (
+        SELECT d.zone AS zone, (d.on_date + make_interval(mins => m))::timestamp AS local
+          FROM days d, generate_series(0, 1439, 1) AS m
+      )
+      SELECT count(*)::int AS swept,
+             count(*) FILTER (WHERE ((local AT TIME ZONE zone) AT TIME ZONE zone) <> local)::int AS wrong
+        FROM locals`);
+    expect(r.rows[0]?.swept).toBe(7200);
+    // Every zone's spring-forward gap is an hour or less, so the count is
+    // bounded — but it is not zero, and each one is a booking silently moved.
+    expect(r.rows[0]?.wrong).toBeGreaterThan(0);
+  });
+
+  it('OUTSIDE THE SCOPE: a non-finite wall clock is refused by its own name, not reported as ambiguous', async () => {
+    // Found while writing the scope the Mission asked for. Infinity survives
+    // every step of the resolver — adding an interval leaves it infinite and
+    // mapping it through a zone returns it unchanged — so the candidate scan
+    // found all 361 offsets matching and the routine reported an AMBIGUOUS
+    // local time. Nothing unsafe happened, but the refusal said something
+    // false about why, and a caller cannot act on that.
+    for (const local of ['infinity', '-infinity']) {
+      const r = await resolve(ORDINARY_NY.zone, local);
+      expect(r.error).toContain('booking.local_time_not_finite');
+      expect(r.error).not.toContain('ambiguous');
+      expect(r.instant).toBe('');
     }
   });
 

@@ -29,6 +29,7 @@
 --   booking_resource_lock_key       one lock per (business, resource)
 --   booking_lock_resources          the whole lock set, in one global order
 --   booking_resolve_local           a local time resolved, or refused
+--   booking_replay_result           the recorded result of a replayed command
 --   row security on all seven relations, and the grant model
 --   the end-state block (P9-E)
 --
@@ -164,10 +165,44 @@
 --          occurrence by default, because "first" is not a thing the
 --          caller said.
 --
+-- R-P9-14  A REPLAY IS ANSWERED FROM THE RECORD, NOT FROM THE REFUSAL.
+--          A unique key that refuses the second attempt is necessary and
+--          NOT sufficient: the caller that was refused still has no answer,
+--          and a command layer that turns 23505 into "already exists" has
+--          invented a result it never read. `booking_replay_result` returns
+--          the booking the FIRST attempt produced, read by
+--          `(business_id, operation_id)` from the registry, so a retry
+--          receives the same answer the winner received. Two refusals come
+--          with it, because an idempotency key that answers a DIFFERENT
+--          request is worse than no key at all: a recorded operation whose
+--          op code or whose intent digest disagrees with the one being
+--          replayed is `booking.operation_conflict` /
+--          `booking.operation_intent_conflict`, never the stored row.
+--          An unknown key is not an error — it is a first attempt, and the
+--          routine says so without fabricating anything. The business asked
+--          about must be the one the caller is scoped to: §8's read policies
+--          let the internal authority read its whole tenant, so the lookup
+--          enforces the business itself and refuses an unscoped caller
+--          (`booking.replay_scope_mismatch`). Measured, not assumed — the
+--          first version relied on row security and the cross-business case
+--          returned the row.
+--
 -- R-P9-10  Every refusal is `'<domain>.<snake_case_condition>: sentence'`
 --          with `ERRCODE = 'P0001'`, the convention of every migration from
 --          0053 on. Domain prefix `booking.`.
 --
+-- ── THE RESOURCE-OCCUPANCY CONTRACT, DECLARED ────────────────────────────
+-- The states that occupy a resource are stated HERE, once, in a form a
+-- parser reads, because "حدد حالات شغل المورد من العقد، دون تخمين" — take
+-- them from the contract, do not guess. The suites derive them from this
+-- line and from the exclusion predicate, and refuse to run if the two
+-- disagree or if `state`'s CHECK ever carries a value this line does not
+-- classify. A sixth state therefore cannot be added without a decision
+-- about whether it holds the resource; it reds the loader until it is
+-- classified here.
+--
+-- P9-STATE-CONTRACT: occupying = booked, completed, no_show; releasing = cancelled, rescheduled
+
 -- Migrations 0000-0073 are FROZEN and untouched. This file adds no migration.
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -698,12 +733,28 @@ REVOKE ALL ON FUNCTION booking_lock_resources(UUID, UUID[]) FROM PUBLIC;
 -- may ever be built on this — see R-P9-03 for the same lesson learned the
 -- expensive way.
 --
--- LIMITATION, stated rather than discovered: the scan is bounded to ±180
--- minutes around PostgreSQL's own answer. Every DST transition in the IANA
--- database is far inside that, but a zone whose offset moved by more than
--- three hours at once would resolve as "does not exist" rather than being
--- found. Refusing is the safe side of that bound, and it is the side this
--- lands on.
+-- ── THE SCOPE THIS ROUTINE CLAIMS, AND WHAT IS OUTSIDE IT ───────────────
+-- Thirteen cases do not prove every date in every zone, so the scope is
+-- written down and everything outside it is REFUSED rather than guessed:
+--
+--   zone        any IANA name this server knows. Anything else:
+--               booking.timezone_unknown.
+--   wall clock  finite. ±infinity: booking.local_time_not_finite.
+--   shift       up to ±180 minutes. The scan is bounded there, so a zone
+--               whose offset moved by more than three hours in one
+--               transition would be reported as "does not exist" rather
+--               than found. Every transition in the IANA database is far
+--               inside the bound, and refusing is its safe side.
+--   offset      must be one the stated wall clock actually has, whether or
+--               not there is anything to disambiguate. Otherwise
+--               booking.local_time_offset_mismatch.
+--
+-- The SOUNDNESS property holds everywhere, not only in the cases named
+-- above, and the suite sweeps it: whenever this routine returns an instant,
+-- mapping that instant back into the zone gives exactly the wall clock that
+-- was asked for. The oracle for that is the round trip, which is
+-- independent of the counting this routine decides by — so the sweep is not
+-- the algorithm compared to itself.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION booking_resolve_local(
   p_zone TEXT,
@@ -720,6 +771,18 @@ DECLARE
 BEGIN
   IF p_zone IS NULL OR p_local IS NULL THEN
     RAISE EXCEPTION 'booking.local_time_unresolvable: a local time needs both a zone and a wall-clock time' USING ERRCODE = 'P0001';
+  END IF;
+
+  -- FINITE, and refused by its own name. PostgreSQL's TIMESTAMP carries
+  -- 'infinity', and infinity survives every step below: adding an interval
+  -- leaves it infinite and mapping it through any zone returns it unchanged,
+  -- so the candidate scan would find all 361 offsets equal to the input and
+  -- report an AMBIGUOUS local time. That is a refusal, so nothing unsafe
+  -- happens — but it is a refusal that says something false about why, and a
+  -- caller cannot act on it. Found while writing the scope the Mission asked
+  -- for; stated here rather than left as a surprise.
+  IF p_local = 'infinity'::timestamp OR p_local = '-infinity'::timestamp THEN
+    RAISE EXCEPTION 'booking.local_time_not_finite: % is not a wall-clock time a booking can be placed at', p_local USING ERRCODE = 'P0001';
   END IF;
 
   -- An unknown zone is refused by name, not by whatever 22023 happens to
@@ -769,6 +832,7 @@ END $fn$;
 COMMENT ON FUNCTION booking_resolve_local(TEXT, TIMESTAMP, INTERVAL) IS
   'P9-S1, R-P9-13. Resolves a wall-clock time in an IANA zone to the instant the booking is stored at, and REFUSES rather than guessing where the clock makes the question unanswerable: booking.local_time_nonexistent for an hour a spring-forward skipped, booking.local_time_ambiguous for one an autumn fall-back repeated unless the caller states the offset it means. PostgreSQL''s own AT TIME ZONE answers both silently, which is the defect this exists to prevent. STABLE, because the tz database is data: never put this in a generated column or an index.';
 REVOKE ALL ON FUNCTION booking_resolve_local(TEXT, TIMESTAMP, INTERVAL) FROM PUBLIC;
+
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 6. Append-only, and the state machine.
@@ -918,6 +982,98 @@ REVOKE ALL ON FUNCTION booking_operations_immutable() FROM PUBLIC;
 CREATE TRIGGER booking_operations_no_mutation
   BEFORE UPDATE OR DELETE ON booking_operations
   FOR EACH ROW EXECUTE FUNCTION booking_operations_immutable();
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 7a. `booking_replay_result` — what the first attempt produced.
+--
+-- Declared HERE and not beside the other routines in §5: its body declares a
+-- `booking_operations` row, and plpgsql resolves a declared composite type
+-- when the function is CREATED. Placed earlier, the whole document failed to
+-- apply with `type "booking_operations" does not exist` — measured, not
+-- guessed at.
+--
+-- PART 53 is satisfied by the registry's primary key only up to the point
+-- where the duplicate is REFUSED. The caller holding the retry still needs
+-- the booking id, and the only honest source for it is the row the winner
+-- wrote. Reading current state instead would answer "whatever is true now",
+-- which is a different claim and wrong as soon as the booking was since
+-- cancelled by someone else.
+--
+-- SECURITY INVOKER and STABLE on purpose: row security applies to this
+-- lookup exactly as it applies to a direct read.
+--
+-- THAT IS NOT ENOUGH, AND THE SUITE MEASURED IT. Every `business_isolation_read`
+-- policy in §8 carries `current_user = 'daftar_booking_internal'`, because the
+-- authority's definer bodies read across the businesses of ONE tenant. The
+-- only principal that may execute this routine is therefore the one principal
+-- RLS does not confine to a business — so with the business as a PARAMETER,
+-- a caller that passed a sibling's business id would have been answered with
+-- that sibling's booking id. The first version of this routine was written
+-- believing RLS covered it; the cross-business case in the attack suite
+-- returned the row, which is how the hole was found rather than reasoned
+-- about.
+--
+-- The boundary is therefore enforced HERE, and fails closed: the business
+-- asked about must be the business the caller is scoped to, and an unscoped
+-- caller is refused rather than served. `app_bypass()` is NOT an escape hatch
+-- in that check, because 0052 redefined it as `CURRENT_USER = 'daftar_platform'`
+-- and §9 grants that role nothing — an exception written for it would be a
+-- refusal path no caller can reach.
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION booking_replay_result(
+  p_business UUID,
+  p_operation_id UUID,
+  p_op_code TEXT,
+  p_intent_sha256 TEXT,
+  OUT o_replay BOOLEAN,
+  OUT o_booking_id UUID,
+  OUT o_recorded_at TIMESTAMPTZ
+) LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_rec   booking_operations;
+  v_scope UUID;
+BEGIN
+  IF p_business IS NULL OR p_operation_id IS NULL OR p_op_code IS NULL OR p_intent_sha256 IS NULL THEN
+    RAISE EXCEPTION 'booking.replay_lookup_invalid: a replay lookup needs a business, an operation id, an op code and an intent digest'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- The scope IS the boundary here, not row security. See the note above.
+  v_scope := nullif(app_business(), '')::uuid;
+  IF v_scope IS NULL OR v_scope <> p_business THEN
+    RAISE EXCEPTION 'booking.replay_scope_mismatch: a recorded operation is read only within the business the caller is scoped to'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT * INTO v_rec FROM booking_operations
+   WHERE business_id = p_business AND operation_id = p_operation_id;
+
+  -- Not a failure. A key nobody has used yet is a first attempt, and
+  -- saying so is what lets the command layer proceed instead of guessing.
+  IF NOT FOUND THEN
+    o_replay := false;
+    o_booking_id := NULL;
+    o_recorded_at := NULL;
+    RETURN;
+  END IF;
+
+  IF v_rec.op_code <> p_op_code THEN
+    RAISE EXCEPTION 'booking.operation_conflict: operation % already performed %, and % is a different command',
+      p_operation_id, v_rec.op_code, p_op_code USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_rec.intent_sha256 <> p_intent_sha256 THEN
+    RAISE EXCEPTION 'booking.operation_intent_conflict: operation % was performed over a different intent; reusing its key would answer a request nobody made',
+      p_operation_id USING ERRCODE = 'P0001';
+  END IF;
+
+  o_replay := true;
+  o_booking_id := v_rec.booking_id;
+  o_recorded_at := v_rec.created_at;
+END $fn$;
+COMMENT ON FUNCTION booking_replay_result(UUID, UUID, TEXT, TEXT) IS
+  'P9-S1, R-P9-14. Returns the booking the FIRST attempt at this operation id produced, so a retry is answered from the record rather than from a 23505 the command layer would have to interpret. Refuses a lookup outside the caller''s own business scope (booking.replay_scope_mismatch), because the one principal that may execute it is the one row security does not confine to a business. Refuses a key whose recorded op code or intent digest disagrees with the request being replayed (booking.operation_conflict / booking.operation_intent_conflict); reports an unused key as a first attempt rather than an error. STABLE, SECURITY INVOKER: row security applies to it as to any read.';
+REVOKE ALL ON FUNCTION booking_replay_result(UUID, UUID, TEXT, TEXT) FROM PUBLIC;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 8. Row security — the established model, in the 0067 per-command shape.
@@ -1097,6 +1253,7 @@ ALTER FUNCTION bookings_buffers_match_service() OWNER TO daftar_booking_internal
 ALTER FUNCTION booking_resource_lock_key(UUID, UUID) OWNER TO daftar_booking_internal;
 ALTER FUNCTION booking_lock_resources(UUID, UUID[]) OWNER TO daftar_booking_internal;
 ALTER FUNCTION booking_resolve_local(TEXT, TIMESTAMP, INTERVAL) OWNER TO daftar_booking_internal;
+ALTER FUNCTION booking_replay_result(UUID, UUID, TEXT, TEXT) OWNER TO daftar_booking_internal;
 
 REVOKE CREATE ON SCHEMA public FROM daftar_booking_internal;
 
@@ -1271,6 +1428,21 @@ BEGIN
        AND p.proconfig = ARRAY['search_path=pg_catalog, public, pg_temp']) THEN
     RAISE EXCEPTION 'booking.migration_end_state_invalid: booking_resolve_local is not a STABLE routine owned by daftar_booking_internal with a pinned search_path (R-P9-13)' USING ERRCODE = 'P0001';
   END IF;
+
+  -- (g4) The replay lookup exists, is STABLE, is NOT SECURITY DEFINER, is
+  --      owned by the internal principal with its path pinned, and is
+  --      callable by no runtime role. DEFINER here would be a tenant leak:
+  --      the lookup must see exactly what the caller's row security lets it
+  --      see, so that replaying another business's operation id reports a
+  --      first attempt rather than that business's booking (R-P9-14).
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+     WHERE p.proname = 'booking_replay_result'
+       AND p.provolatile = 's' AND NOT p.prosecdef
+       AND r.rolname = 'daftar_booking_internal'
+       AND p.proconfig = ARRAY['search_path=pg_catalog, public, pg_temp']) THEN
+    RAISE EXCEPTION 'booking.migration_end_state_invalid: booking_replay_result is not a STABLE SECURITY INVOKER routine owned by daftar_booking_internal with a pinned search_path (R-P9-14)' USING ERRCODE = 'P0001';
+  END IF;
   FOR v_role IN SELECT unnest(ARRAY['daftar_app', 'daftar_platform', 'daftar_worker', 'daftar_identity', 'daftar_resolver', 'daftar_provisioner', 'daftar_reconciler', 'public'])
   LOOP
     IF has_function_privilege(v_role, 'booking_lock_resources(uuid,uuid[])', 'EXECUTE') THEN
@@ -1278,6 +1450,9 @@ BEGIN
     END IF;
     IF has_function_privilege(v_role, 'booking_resolve_local(text,timestamp,interval)', 'EXECUTE') THEN
       RAISE EXCEPTION 'booking.registry_exposed: % may resolve booking local times', v_role USING ERRCODE = 'P0001';
+    END IF;
+    IF has_function_privilege(v_role, 'booking_replay_result(uuid,uuid,text,text)', 'EXECUTE') THEN
+      RAISE EXCEPTION 'booking.registry_exposed: % may read recorded booking operation results', v_role USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
 

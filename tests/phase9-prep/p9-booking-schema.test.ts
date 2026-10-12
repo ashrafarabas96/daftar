@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ScratchDb } from '../helpers/scratch-db';
 import { createScratchDb } from '../helpers/scratch-db';
-import { BASE_HEAD, BOOTSTRAP_PATCH, P9_RELATIONS, loadSpec } from './p9-booking-spec';
+import { BASE_HEAD, BOOTSTRAP_PATCH, P9_RELATIONS, loadSpec, occupyingStates, parseStateContractForTest, releasingStates } from './p9-booking-spec';
 import { applySpecAsMigrator } from './p9-booking-world';
 import { sqlState } from './p9-booking-world';
 
@@ -90,12 +90,16 @@ describe('P9 booking schema — applies as the deployment principal', () => {
     expect(row?.contype).toBe('x');
     expect(row?.partial).toBe(true);
     expect(row?.def).toContain('EXCLUDE USING gist (business_id WITH =, resource_id WITH =, blocking_window WITH &&)');
-    // The predicate must hold the three occupying states and neither releasing one.
-    expect(row?.def).toContain("'booked'");
-    expect(row?.def).toContain("'completed'");
-    expect(row?.def).toContain("'no_show'");
-    expect(row?.def).not.toContain("'cancelled'");
-    expect(row?.def).not.toContain("'rescheduled'");
+    // The predicate must hold every occupying state and no releasing one —
+    // and both lists come from the spec's own P9-STATE-CONTRACT line, not from
+    // a copy of it written here. A sixth state cannot pass unclassified: the
+    // loader reds first.
+    const occupying = occupyingStates();
+    const releasing = releasingStates();
+    expect(occupying.length).toBeGreaterThan(0);
+    expect(releasing.length).toBeGreaterThan(0);
+    for (const state of occupying) expect(row?.def).toContain(`'${state}'`);
+    for (const state of releasing) expect(row?.def).not.toContain(`'${state}'`);
   });
 
   it('row security is enabled AND forced on every relation', async () => {
@@ -194,6 +198,60 @@ describe('P9 booking schema — applies as the deployment principal', () => {
     expect(r.rows[0]?.tgdeferrable).toBe(true);
     expect(r.rows[0]?.tginitdeferred).toBe(true);
     expect(r.rows[0]?.tgconstraint).not.toBe('0');
+  });
+
+  it('the state contract is CHECKED against the document, not trusted: four mutations each red it by name', () => {
+    // The red proofs for the occupancy contract (PART 17). Each mutation is a
+    // one-line change to the spec TEXT, applied in memory, and each must be
+    // refused with a message that names what is wrong — because a parser that
+    // accepts a contradiction is not a contract, it is a comment.
+    const text = loadSpec();
+    const mutations: { label: string; from: string; to: string; expect: string }[] = [
+      {
+        label: 'the declaration is gone',
+        from: 'P9-STATE-CONTRACT: occupying',
+        to: 'P9-STATE-CONTRACK: occupying',
+        expect: 'carries no P9-STATE-CONTRACT line',
+      },
+      {
+        label: 'a state is declared on both sides',
+        from: 'occupying = booked, completed, no_show; releasing = cancelled, rescheduled',
+        to: 'occupying = booked, completed, no_show; releasing = cancelled, rescheduled, booked',
+        expect: 'both occupying and releasing',
+      },
+      {
+        label: 'the declaration and the index disagree',
+        from: 'occupying = booked, completed, no_show; releasing = cancelled, rescheduled',
+        to: 'occupying = booked, completed; releasing = no_show, cancelled, rescheduled',
+        expect: 'but the state contract declares',
+      },
+      {
+        label: 'a sixth state is allowed but classified by nobody',
+        from: "CHECK (state IN ('booked', 'completed', 'no_show', 'cancelled', 'rescheduled'))",
+        to: "CHECK (state IN ('booked', 'completed', 'no_show', 'cancelled', 'rescheduled', 'abandoned'))",
+        expect: 'which the P9 state contract does not classify',
+      },
+    ];
+    for (const m of mutations) {
+      // PROVE THE MUTATION LANDED. A sed that matches nothing goes green and
+      // records a missing law as fine — this project has paid for that once.
+      expect(text, m.label).toContain(m.from);
+      const mutated = text.replace(m.from, m.to);
+      expect(mutated, m.label).not.toBe(text);
+      let message = '';
+      try {
+        parseStateContractForTest(mutated);
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      // The SPECIFIC refusal, never merely "it threw".
+      expect(message, m.label).toContain(m.expect);
+    }
+    // And the unmutated document still parses, so the four refusals above are
+    // about the mutations and not about a parser that refuses everything.
+    const sound = parseStateContractForTest(text);
+    expect([...sound.occupying].sort()).toEqual(['booked', 'completed', 'no_show']);
+    expect([...sound.releasing].sort()).toEqual(['cancelled', 'rescheduled']);
   });
 
   it('the spec loader refuses a subject it cannot recognise', () => {
