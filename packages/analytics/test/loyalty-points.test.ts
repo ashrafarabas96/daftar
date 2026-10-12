@@ -812,7 +812,7 @@ describe('RED PROOFS — the laws, proved by breaking them', () => {
 });
 
 /* ================================================================== *
- * F-01 — the restoration horizon, and why the fold refuses it
+ * F-01 — the restoration horizon, and what the fold withholds
  *
  * Round 1 of an independent challenge found that points restored after a full
  * sale reversal came back with NO horizon and stayed redeemable forever.
@@ -823,6 +823,11 @@ describe('RED PROOFS — the laws, proved by breaking them', () => {
  * is that a guard must be driven through the REAL WRITER. Every fixture below
  * goes through `appendMovement`, so every shape law is satisfied and the rows
  * are ones a lawful writer can actually produce.
+ *
+ * Round 4 moved the remedy from a REFUSAL to a WITHHOLDING (`F-13`, below):
+ * the quantity that cannot be attributed is excluded from what may be spent,
+ * and the rest of the ledger is answered. These cases now pin that, and the
+ * `F-13` block holds the red proof and the positive case for the remainder.
  * ================================================================== */
 
 describe('foldExpiry — F-01, a positive row that CORRECTS another has no attributable horizon', () => {
@@ -838,31 +843,30 @@ describe('foldExpiry — F-01, a positive row that CORRECTS another has no attri
     );
   }
 
-  it('refuses the fold rather than reporting a total it cannot attribute', () => {
-    let refusal: unknown;
-    try {
-      foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, '2026-06-01');
-    } catch (error) {
-      refusal = error;
-    }
-    expect(refusal).toBeInstanceOf(LoyaltyRefusal);
-    const thrown = must(refusal instanceof LoyaltyRefusal ? refusal : null, 'a loyalty refusal');
-    expect(thrown.code).toBe('loyalty.unattributable_positive_movement');
-    expect(thrown.httpStatus).toBe(500);
-    // The refusal names the row AND the row it corrects, because whoever reads
-    // the log has to find both.
-    expect(thrown.context.movementId).toBe('r1');
-    expect(thrown.context.correctsId).toBe('e1');
-    expect(thrown.context.sourceType).toBe('manual_adjustment');
-    expect(thrown.context.points).toBe('40');
+  it('withholds the 40 it cannot attribute rather than reporting them spendable', () => {
+    const fold = foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, '2026-06-01');
+    // The whole ledger is still in the balance — withholding is not forgetting.
+    expect(fold.balancePoints).toBe(100n);
+    expect(fold.unattributablePoints).toBe(40n);
+    // And it is NOT in either spendable figure: not lot-backed, not a grant.
+    expect(fold.unhorizonedPoints).toBe(0n);
+    expect(fold.spendablePoints).toBe(0n);
+    expect(fold.expiringPoints).toBe(60n);
+    // The quantity the old fold offered, now offered to nobody.
+    expect(eligiblePoints(restoredLedger(), BUSINESS, CUSTOMER, '2026-06-01')).toBe(0n);
   });
 
-  it('refuses at EVERY asOf, not only on the horizon day', () => {
+  it('withholds at EVERY asOf, not only on the horizon day', () => {
     for (const asOf of ['2025-09-02', '2026-05-31', '2026-06-01', '2036-01-01']) {
-      expect(refusalCodeOf(() => foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, asOf))).toBe(
-        'loyalty.unattributable_positive_movement',
-      );
+      const fold = foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, asOf);
+      expect(fold.unattributablePoints).toBe(40n);
+      expect(fold.unhorizonedPoints).toBe(0n);
+      // On no date does the restored quantity become spendable.
+      expect(fold.spendablePoints).toBe(asOf < '2026-06-01' ? 60n : 0n);
     }
+    // Ten years on there is nothing left to spend, where the fold this replaced
+    // still offered 40.
+    expect(eligiblePoints(restoredLedger(), BUSINESS, CUSTOMER, '2036-01-01')).toBe(0n);
   });
 
   it('RED PROOF — the fold this replaced reported 40 points that never expire', () => {
@@ -903,9 +907,13 @@ describe('foldExpiry — F-01, a positive row that CORRECTS another has no attri
     expect(muchLater.spendablePoints).toBe(40n);
     expect(muchLater.expiringPoints).toBe(60n);
 
-    // The canary: the shipped fold does NOT answer this, at either date.
-    expect(() => foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, '2026-06-01')).toThrow(LoyaltyRefusal);
-    expect(() => foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, '2036-01-01')).toThrow(LoyaltyRefusal);
+    // The canary: the shipped fold offers none of those 40, at either date.
+    for (const asOf of ['2026-06-01', '2036-01-01']) {
+      const shipped = foldExpiry(restoredLedger(), BUSINESS, CUSTOMER, asOf);
+      expect(shipped.unattributablePoints).toBe(40n);
+      expect(shipped.spendablePoints).toBe(0n);
+      expect(eligiblePoints(restoredLedger(), BUSINESS, CUSTOMER, asOf)).toBe(0n);
+    }
   });
 
   it('REACHABILITY — the guard fires on a row the LAWFUL writer produces, not only on a hand-built one', () => {
@@ -966,17 +974,26 @@ describe('foldExpiry — F-01, a positive row that CORRECTS another has no attri
       earn('e1', 100n, '2025-06-01', '2026-06-01'),
       adjust('a1', 40n, '2025-09-01', 'goodwill', 'e1'),
     );
-    expect(foldExpiry(grant, BUSINESS, CUSTOMER, '2026-06-01').unhorizonedPoints).toBe(40n);
-    expect(refusalCodeOf(() => foldExpiry(correction, BUSINESS, CUSTOMER, '2026-06-01'))).toBe(
-      'loyalty.unattributable_positive_movement',
-    );
+    const asGrant = foldExpiry(grant, BUSINESS, CUSTOMER, '2026-06-01');
+    const asCorrection = foldExpiry(correction, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(asGrant.unhorizonedPoints).toBe(40n);
+    expect(asGrant.unattributablePoints).toBe(0n);
+    expect(asCorrection.unhorizonedPoints).toBe(0n);
+    expect(asCorrection.unattributablePoints).toBe(40n);
+    // Same balance, opposite verdicts on the same 40 points.
+    expect(asGrant.balancePoints).toBe(asCorrection.balancePoints);
+    expect(eligiblePoints(grant, BUSINESS, CUSTOMER, '2026-06-01')).toBe(40n);
+    expect(eligiblePoints(correction, BUSINESS, CUSTOMER, '2026-06-01')).toBe(0n);
   });
 
   it('keeps the guard closed over a source §5.7.2 has yet to register', () => {
     // Defence in depth, and labelled as such: this ledger is built BY HAND
-    // because no writer can produce `sale:adjust` today. If a later migration
-    // registers a restoring source, the fold refuses it on arrival instead of
-    // reporting a total it cannot attribute.
+    // because no writer can produce `sale:adjust` today. This arm stays a
+    // REFUSAL where the correcting arm became a withholding (`F-13`), and the
+    // difference is the point: a correction is a lawful row whose quantity can
+    // be set aside, while a positive row from an unregistered source means the
+    // ledger was assembled past `validateDraft`, and a fold has no basis for
+    // an answer of any kind over a ledger that cannot exist.
     const byHand: LoyaltyLedger = {
       movements: [
         {
@@ -1005,6 +1022,7 @@ describe('foldExpiry — F-01, a positive row that CORRECTS another has no attri
     const ledger = ledgerOf(earn('e1', 100n, '2025-06-01', '2026-06-01'), consume('c1', 40n, '2025-09-01'));
     const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-05-31');
     expect(fold.unhorizonedPoints).toBe(0n);
+    expect(fold.unattributablePoints).toBe(0n);
     expect(fold.spendablePoints).toBe(60n);
   });
 });
@@ -1044,12 +1062,10 @@ describe('buildReversalMovement — F-11, a reversal cannot omit what it correct
     // for a correction.
     expect(SOURCE_KIND_PAIRS).toContain(`${draft.sourceType}:${draft.movementKind}`);
 
-    // And the fold then refuses it, which is the F-01 law reached through the
+    // And the fold then withholds it, which is the F-01 law reached through the
     // real writer rather than through a fixture.
     const applied = appendMovement(ledger, draft).ledger;
-    expect(refusalCodeOf(() => foldExpiry(applied, BUSINESS, CUSTOMER, '2026-06-01'))).toBe(
-      'loyalty.unattributable_positive_movement',
-    );
+    expect(foldExpiry(applied, BUSINESS, CUSTOMER, '2026-06-01').unattributablePoints).toBe(40n);
   });
 
   it('refuses a reversal that names a movement the ledger does not hold, or itself', () => {
@@ -1116,8 +1132,175 @@ describe('buildReversalMovement — F-11, a reversal cannot omit what it correct
         reason: 'sale fully reversed',
       }),
     ).ledger;
-    expect(refusalCodeOf(() => foldExpiry(named, BUSINESS, CUSTOMER, '2026-06-01'))).toBe(
-      'loyalty.unattributable_positive_movement',
+    expect(foldExpiry(named, BUSINESS, CUSTOMER, '2026-06-01').unattributablePoints).toBe(40n);
+    expect(foldExpiry(named, BUSINESS, CUSTOMER, '2026-06-01').unhorizonedPoints).toBe(0n);
+  });
+});
+
+/* ================================================================== *
+ * F-13 — failing closed must be as wide as the doubt and no wider
+ *
+ * Round 4 of the independent challenge accepted the F-01 and F-11 fixes and
+ * then measured what they cost: the refusal propagated `foldExpiry` ->
+ * `eligiblePoints` -> `buildSaleConsumptionMovement`, so ONE lawful full
+ * return — recorded correctly, through `buildReversalMovement`, naming the row
+ * it corrects — made every later redemption for that customer a 500 at the
+ * till, permanently, inside the horizon, while 60 of the 100 points on that
+ * ledger were perfectly attributable.
+ *
+ * The remedy is to withhold the QUANTITY rather than refuse the CUSTOMER. The
+ * fold still never permits a spend the remainder relation would refuse, which
+ * is all §A.3's cross-check contract asks of it.
+ * ================================================================== */
+
+describe('eligiblePoints — F-13, a lawful reversal withholds its own quantity and nothing else', () => {
+  /** The challenge's probe: the horizon is 2027-01-01, so NOTHING here is
+   *  expiring and the only question is attribution. 100 earned, 40 consumed,
+   *  that sale reversed through the real writer. */
+  function reversedInsideHorizon(): LoyaltyLedger {
+    const ledger = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'), consume('c1', 40n, '2026-03-01'));
+    return appendMovement(
+      ledger,
+      buildReversalMovement(ledger, {
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId: 'sale-c1',
+        correctsId: 'c1',
+        points: 40n,
+        asOf: '2026-03-02',
+        movementId: 'r1',
+        reason: 'sale fully reversed',
+      }),
+    ).ledger;
+  }
+
+  const spend = (points: bigint) =>
+    ({
+      phase: 'inside_sale_transaction',
+      businessId: BUSINESS,
+      customerId: CUSTOMER,
+      saleId: 'sale-later',
+      businessTransactionId: 'btx-later',
+      points,
+      asOf: '2026-06-01',
+      movementId: 'mv-later',
+    }) as Parameters<typeof buildSaleConsumptionMovement>[1];
+
+  it('answers the attributable 60 and lets the customer spend them', () => {
+    const ledger = reversedInsideHorizon();
+    const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(fold.balancePoints).toBe(100n);
+    expect(fold.expiringPoints).toBe(0n);
+    expect(fold.unattributablePoints).toBe(40n);
+    expect(fold.spendablePoints).toBe(60n);
+    expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, '2026-06-01')).toBe(60n);
+
+    // The till, which is the surface the defect was measured at.
+    const draft = buildSaleConsumptionMovement(ledger, spend(10n));
+    expect(draft.pointsDelta).toBe(-10n);
+    expect(draft.sourceType).toBe('sale');
+    // And the whole attributable remainder, to the point, not one past it.
+    expect(buildSaleConsumptionMovement(ledger, spend(60n)).pointsDelta).toBe(-60n);
+  });
+
+  it('still refuses the 40 it withheld — withholding is not permitting', () => {
+    const ledger = reversedInsideHorizon();
+    for (const points of [61n, 70n, 100n]) {
+      expect(refusalCodeOf(() => buildSaleConsumptionMovement(ledger, spend(points)))).toBe(
+        'loyalty.insufficient_eligible_points',
+      );
+    }
+    // The refusal states the bound it enforced, so the 40 are visibly absent
+    // from what was offered rather than silently added to it.
+    let refusal: unknown;
+    try {
+      buildSaleConsumptionMovement(ledger, spend(61n));
+    } catch (error) {
+      refusal = error;
+    }
+    const thrown = must(refusal instanceof LoyaltyRefusal ? refusal : null, 'a loyalty refusal');
+    expect(thrown.context.available).toBe('60');
+    expect(thrown.context.requested).toBe('61');
+  });
+
+  it('RED PROOF — the fold this replaced refused every spend on that ledger', () => {
+    // The previous shipped predicate, restated exactly: a positive non-earn row
+    // naming a correction REFUSED the fold. Driven over the same lawful ledger
+    // it reproduces the figure the challenge measured — no quantity is
+    // spendable, not even the 60 nothing was ever in doubt about.
+    const refusingEligible = (ledger: LoyaltyLedger, asOf: string): bigint => {
+      for (const m of ledger.movements) {
+        if (m.movementKind === 'earn') continue;
+        if (m.pointsDelta < 0n) continue;
+        if (m.correctsId !== null || m.sourceType !== 'manual_adjustment') {
+          throw new LoyaltyRefusal('loyalty.unattributable_positive_movement', 'the old predicate', {
+            movementId: m.id,
+          });
+        }
+      }
+      return eligiblePoints(ledger, BUSINESS, CUSTOMER, assertCivilDate(asOf, 'asOf'));
+    };
+
+    const ledger = reversedInsideHorizon();
+    for (const asOf of ['2026-03-02', '2026-06-01', '2026-12-31']) {
+      expect(() => refusingEligible(ledger, asOf)).toThrow(LoyaltyRefusal);
+    }
+
+    // The canary: the shipped path answers all three, and answers 60 — the
+    // quantity the broken one could not report at any date.
+    for (const asOf of ['2026-03-02', '2026-06-01', '2026-12-31']) {
+      expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, asOf)).toBe(60n);
+    }
+  });
+
+  it('withholds across SEVERAL reversals and keeps the arithmetic exact', () => {
+    // Two reversals, so the figure cannot be the single row's points under
+    // another name, and one standing grant, so the two un-lot-backed totals are
+    // measured apart from each other on one ledger.
+    const first = ledgerOf(
+      earn('e1', 100n, '2026-01-01', '2027-01-01'),
+      consume('c1', 40n, '2026-03-01'),
+      consume('c2', 25n, '2026-03-05'),
+      adjust('g1', 7n, '2026-03-06', 'merchant goodwill'),
+    );
+    const reverse = (ledger: LoyaltyLedger, target: string, points: bigint, id: string, day: string) =>
+      appendMovement(
+        ledger,
+        buildReversalMovement(ledger, {
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          sourceId: `sale-${target}`,
+          correctsId: target,
+          points,
+          asOf: day,
+          movementId: id,
+          reason: 'sale fully reversed',
+        }),
+      ).ledger;
+    const ledger = reverse(reverse(first, 'c1', 40n, 'r1', '2026-03-02'), 'c2', 25n, 'r2', '2026-03-07');
+
+    const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(fold.balancePoints).toBe(107n); // 100 - 40 - 25 + 7 + 40 + 25
+    expect(fold.unattributablePoints).toBe(65n);
+    expect(fold.unhorizonedPoints).toBe(7n);
+    expect(fold.spendablePoints).toBe(42n); // 35 left in the lot, plus the grant
+    expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, '2026-06-01')).toBe(42n);
+    // The identity the figure has to satisfy, asserted rather than assumed.
+    expect(fold.balancePoints - fold.expiringPoints - fold.unattributablePoints).toBe(42n);
+  });
+
+  it('never offers more than the lot-backed remainder once the horizon passes', () => {
+    // The bound that made refusing attractive in the first place: after the
+    // horizon the withheld quantity must not reappear as the balance the sweep
+    // has not yet taken.
+    const ledger = reversedInsideHorizon();
+    const after = foldExpiry(ledger, BUSINESS, CUSTOMER, '2027-01-01');
+    expect(after.expiringPoints).toBe(60n);
+    expect(after.unattributablePoints).toBe(40n);
+    expect(after.spendablePoints).toBe(0n);
+    expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, '2027-01-01')).toBe(0n);
+    expect(refusalCodeOf(() => buildSaleConsumptionMovement(ledger, { ...spend(1n), asOf: '2027-01-01' }))).toBe(
+      'loyalty.insufficient_eligible_points',
     );
   });
 });

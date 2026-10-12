@@ -702,6 +702,25 @@ export interface LoyaltyExpiryFold {
    * the same quantity even when they add to the same total.
    */
   readonly unhorizonedPoints: bigint;
+  /**
+   * The part of the balance that is positive, backed by no lot, and NOT a
+   * standing grant — today, a restoration that names the row it corrects. It
+   * is WITHHELD: it is counted in `balancePoints`, excluded from
+   * `spendablePoints`, and subtracted by `eligiblePoints`, so no caller can
+   * spend it.
+   *
+   * It is a separate figure from `unhorizonedPoints` because the two are
+   * opposite answers to the same question. An un-horizoned grant is a quantity
+   * the fold KNOWS never expires; an un-attributable restoration is a quantity
+   * the fold CANNOT place in any lot, so it may not be offered — and the
+   * remedy for it is the DDL item in `P13-MIGRATION-PATCH-REQUEST.md` §A.3c.1,
+   * not arithmetic here.
+   *
+   * It replaced a refusal, and `F-13` in `P13-S0-ARCHITECTURE-LOCK.md` §19 is
+   * why: refusing the fold refused the whole customer, so one lawful return
+   * disabled redemption for every point on that ledger, permanently.
+   */
+  readonly unattributablePoints: bigint;
   /** The whole-ledger balance at `asOf`, for the bound below. */
   readonly balancePoints: bigint;
 }
@@ -798,7 +817,30 @@ export function foldExpiry(
   // `horizon_ck` forbids. It is admitted here as a grant, and the horizon it
   // deserves needs the DDL item already raised in
   // `P13-MIGRATION-PATCH-REQUEST.md` §A.3c.1.
+  //
+  // AND THE LAST ROUND MOVED WHERE THAT CLOSURE IS TAKEN, which is `F-13`: a
+  // refusal here propagated `foldExpiry` -> `eligiblePoints` ->
+  // `buildSaleConsumptionMovement`, so ONE lawful return, recorded correctly
+  // through `buildReversalMovement`, made every later redemption for that
+  // customer a 500 at the till, for good, while the rest of the ledger was
+  // perfectly attributable. Measured: 100 earned inside a 2027-01-01 horizon,
+  // 40 consumed, the sale reversed, and the remaining 60 — whose lot and whose
+  // horizon are not in doubt at all — could not be spent either.
+  //
+  // Failing closed has to be as wide as the doubt and no wider. So the
+  // un-attributable quantity is WITHHELD rather than refused: it is counted in
+  // the balance, excluded from `spendablePoints`, and subtracted by
+  // `eligiblePoints`. The fold still never PERMITS a spend the remainder
+  // relation would refuse, which is the only thing `§A.3`'s cross-check
+  // contract demands of it; it just refuses a QUANTITY instead of a customer.
+  //
+  // A positive row that is not a manual adjustment at all is a different
+  // animal and still REFUSES: no lawful writer can produce one
+  // (`SOURCE_KIND_PAIRS` registers no other positive non-earn pair), so its
+  // presence means the ledger was assembled past `validateDraft` and the fold
+  // has no basis for an answer of any kind.
   let unhorizoned = 0n;
+  let unattributable = 0n;
   let draw = 0n;
   for (const m of rows) {
     if (m.movementKind === 'earn') continue;
@@ -806,12 +848,10 @@ export function foldExpiry(
       draw += -m.pointsDelta;
       continue;
     }
-    if (m.correctsId !== null || m.sourceType !== 'manual_adjustment') {
+    if (m.sourceType !== 'manual_adjustment') {
       refuseLoyalty(
         'loyalty.unattributable_positive_movement',
-        m.correctsId !== null
-          ? 'a positive movement that corrects another row reached the expiry fold, and the horizon of the points it restores cannot be attributed to any lot'
-          : 'a positive movement that is not a manual grant reached the expiry fold, and its horizon cannot be attributed to any lot',
+        'a positive movement that is not a manual grant reached the expiry fold, and no lawful writer can produce one',
         {
           movementId: m.id,
           sourceType: m.sourceType,
@@ -820,6 +860,10 @@ export function foldExpiry(
           correctsId: m.correctsId ?? '(none)',
         },
       );
+    }
+    if (m.correctsId !== null) {
+      unattributable += m.pointsDelta;
+      continue;
     }
     unhorizoned += m.pointsDelta;
   }
@@ -855,6 +899,7 @@ export function foldExpiry(
     expiringPoints: bounded,
     spendablePoints: spendableFromLots + unhorizoned,
     unhorizonedPoints: unhorizoned,
+    unattributablePoints: unattributable,
     balancePoints: balance,
   };
 }
@@ -875,7 +920,11 @@ export function eligiblePoints(
   asOf: CivilDate,
 ): bigint {
   const fold = foldExpiry(ledger, businessId, customerId, asOf);
-  const eligible = fold.balancePoints - fold.expiringPoints;
+  // `F-13`: the un-attributable quantity is subtracted here and not refused in
+  // the fold. It is part of the balance and it is not offerable, so the only
+  // sound answer is the balance less what the next sweep will take and less
+  // what no lot can account for.
+  const eligible = fold.balancePoints - fold.expiringPoints - fold.unattributablePoints;
   return eligible > 0n ? eligible : 0n;
 }
 
