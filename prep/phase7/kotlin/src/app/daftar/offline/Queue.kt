@@ -47,6 +47,19 @@ sealed interface SideEffect {
 
     /** The local row may now be removed. Emitted only alongside SYNCED (L5). */
     data object ClearLocalRow : SideEffect
+
+    /**
+     * Reduce what is stored for this operation to the minimum that keeps the
+     * obligation legible: its identity, its amount and the server's refusal
+     * code. The personal and price detail of the payload goes.
+     *
+     * This is NOT a delete, and the distinction is the whole of L16. The row
+     * survives, the operation is still owed, and `ClearLocalRow` is never
+     * emitted with it — the model check asserts exactly that, because the
+     * tempting implementation of "bounded retention" is to drop the row, which
+     * is the silent loss of money L4 and L5 forbid.
+     */
+    data class MinimizePayload(val reason: String, val law: String) : SideEffect
 }
 
 /**
@@ -101,6 +114,17 @@ sealed interface QueueEvent {
 
     /** A human looked at a NEEDS_ATTENTION operation and chose. */
     data class ResolveByMerchant(val keep: Boolean, override val actingScope: OwnerScope) : ByScope
+
+    /**
+     * The retention window for a waiting operation has run out.
+     *
+     * Not a `ByScope` event: it originates with a clock, not a session, and
+     * there is nobody to authorize it. That is consistent with L8 — the device
+     * clock may order the queue and schedule retries, and here it schedules a
+     * data-minimization. It decides nothing financial: the obligation is
+     * untouched, and only what is STORED about it shrinks.
+     */
+    data object RetentionDeadlineReached : QueueEvent
 }
 
 /** The outcome of applying one event. */
@@ -271,6 +295,34 @@ class Operation private constructor(
             } else {
                 // Every other state is already durable; a crash changes nothing.
                 Step.Moved(this, emptyList())
+            }
+
+        is QueueEvent.RetentionDeadlineReached ->
+            if (state != OperationState.NEEDS_ATTENTION) {
+                // Everywhere else the row is either moving or already terminal.
+                // Minimizing a payload that is still going to be SENT would
+                // destroy the frozen bytes L3 exists to preserve.
+                Step.Refused(
+                    "offline.nothing_awaiting_a_person",
+                    P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id,
+                )
+            } else {
+                // Expiry, reach and escalation in one step, and no fourth
+                // thing: the state does not move, the row is not cleared, and
+                // the operation stays exactly as owed as it was.
+                Step.Moved(
+                    this,
+                    listOf(
+                        SideEffect.MinimizePayload(
+                            "offline.retention_window_elapsed",
+                            P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id,
+                        ),
+                        SideEffect.Alert(
+                            "offline.waiting_operation_escalated",
+                            P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id,
+                        ),
+                    ),
+                )
             }
 
         is QueueEvent.ResolveByMerchant ->

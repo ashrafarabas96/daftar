@@ -16,18 +16,19 @@ conflict over money or stock is ever resolved silently by a device.
 Android and no third-party dependency, so it compiles and its suite runs
 wherever a JDK exists.
 
-| File                | What it holds                                                                                             |
-| ------------------- | --------------------------------------------------------------------------------------------------------- |
-| `Laws.kt`           | the fourteen offline laws, as values the code cites and tests assert                                      |
-| `Model.kt`          | effect classes, attempt results, decisions                                                                |
-| `Outcome.kt`        | the classifier: one attempt's result becomes one decision                                                 |
-| `Backoff.kt`        | the retry schedule, derived rather than drawn                                                             |
-| `Queue.kt`          | the operation state machine, as a pure reducer                                                            |
-| `Conflict.kt`       | the conflict model, as a permission table                                                                 |
-| `CommandEffects.kt` | which commands move money or stock — registered by each domain owner, never defaulted                     |
-| `Scope.kt`          | the row's owner (tenant, business, member) and the queue schema version, both refused rather than guessed |
+| File                | What it holds                                                                                                               |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `Laws.kt`           | the sixteen offline laws, as values the code cites and tests assert                                                         |
+| `Model.kt`          | effect classes, attempt results, decisions                                                                                  |
+| `Outcome.kt`        | the classifier: one attempt's result becomes one decision                                                                   |
+| `Backoff.kt`        | the retry schedule, derived rather than drawn                                                                               |
+| `Queue.kt`          | the operation state machine, as a pure reducer                                                                              |
+| `Conflict.kt`       | the conflict model, as a permission table                                                                                   |
+| `CommandEffects.kt` | which commands move money or stock — registered by each domain owner, never defaulted                                       |
+| `Scope.kt`          | the row's owner (tenant, business, member) and the queue schema version, both refused rather than guessed                   |
+| `Reconciliation.kt` | whether a wiped device may re-enter an operation under a new key — only once the canonical receipt has settled the original |
 
-`kotlin/test/app/daftar/offline/` — eight suites, including an exhaustive sweep of
+`kotlin/test/app/daftar/offline/` — nine suites, including an exhaustive sweep of
 the classifier's input space and a breadth-first model check of every reachable
 queue configuration.
 

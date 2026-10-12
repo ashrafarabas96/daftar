@@ -203,6 +203,37 @@ PROOFS: list[Proof] = [
         expect_red="every reachable configuration honours every invariant",
         why="the model check stops offering the kernel another account's session; every invariant still passes, so only the non-vacuity count distinguishes a search that proved INV-9 from one that never tested it",
     ),
+    Proof(
+        law="P7-L15-NO-REENTRY-UNDER-A-NEW-KEY-BEFORE-THE-ORIGINAL-IS-SETTLED",
+        path="src/app/daftar/offline/Reconciliation.kt",
+        find="        PriorOutcome.UNKNOWN -> when (lookup) {",
+        replace="        PriorOutcome.UNKNOWN -> when (ReceiptLookup.ABSENT) {",
+        expect_red="a wiped device may not re-enter an unknown sale while the receipt cannot be read",
+        why="an unreachable server is treated as settling the original, so a wiped device re-enters a sale the server may already hold, under a new key that no later reconciliation can match to the first",
+    ),
+    Proof(
+        law="P7-L16-EXPIRY-MINIMIZES-THE-PAYLOAD-NEVER-THE-OBLIGATION",
+        path="src/app/daftar/offline/Queue.kt",
+        find="""                Step.Moved(
+                    this,
+                    listOf(
+                        SideEffect.MinimizePayload(""",
+        replace="""                Step.Moved(
+                    moved(OperationState.DISCARDED),
+                    listOf(
+                        SideEffect.ClearLocalRow,
+                        SideEffect.MinimizePayload(""",
+        expect_red="expiry never clears the row, never discards the operation and never forgets why",
+        why="bounded retention is implemented as a delete, which is the one implementation the ruling forbids: a financial operation the server may hold is silently dropped when its retention window elapses",
+    ),
+    Proof(
+        law="HARNESS-THE-SEARCH-CANNOT-STOP-OFFERING-A-RETENTION-DEADLINE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="        add(QueueEvent.RetentionDeadlineReached)",
+        replace="        // add(QueueEvent.RetentionDeadlineReached)",
+        expect_red="every reachable configuration honours every invariant",
+        why="the search stops exercising the retention deadline, so INV-10 holds vacuously; only the counted event and effect sets notice that the minimize-versus-delete invariant was never tested",
+    ),
 ]
 
 FAILURE_LINE = re.compile(r"^\s+JUnit Jupiter:(\S+):(.+)\(\)\s*$")

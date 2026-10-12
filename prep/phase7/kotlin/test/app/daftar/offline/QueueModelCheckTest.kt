@@ -61,6 +61,7 @@ class QueueModelCheckTest {
             add(QueueEvent.ResolveByMerchant(false, acting))
         }
         add(QueueEvent.ProcessDeath)
+        add(QueueEvent.RetentionDeadlineReached)
         answers.forEach { add(QueueEvent.Observe(it)) }
     }
 
@@ -201,6 +202,30 @@ class QueueModelCheckTest {
                                 )
                             }
 
+                            // INV-10: minimizing a payload is not a delete. The
+                            // tempting implementation of "bounded retention" is
+                            // to drop the row, so the two side effects are
+                            // asserted mutually exclusive over the whole space,
+                            // and a minimized operation must remain exactly as
+                            // owed as it was.
+                            val minimized = step.effects.filterIsInstance<SideEffect.MinimizePayload>()
+                            if (minimized.isNotEmpty()) {
+                                assertTrue(
+                                    step.effects.none { it is SideEffect.ClearLocalRow },
+                                    "a payload was minimized AND the row cleared: $op on $event " +
+                                        "(${P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id})",
+                                )
+                                assertEquals(
+                                    OperationState.NEEDS_ATTENTION, next.state,
+                                    "minimizing a payload moved the operation out of NEEDS_ATTENTION: " +
+                                        "$op -> $next on $event",
+                                )
+                                assertEquals(
+                                    op.lastCode, next.lastCode,
+                                    "minimizing a payload discarded the server's refusal code",
+                                )
+                            }
+
                             // INV-4: the local row is cleared only once there is
                             // nothing left that could exist only on the device.
                             if (step.effects.any { it is SideEffect.ClearLocalRow }) {
@@ -231,12 +256,15 @@ class QueueModelCheckTest {
             "the search did not reach every state; it saw $statesSeen",
         )
         assertEquals(
-            setOf("Release", "CancelByMerchant", "Send", "ProcessDeath", "Observe", "ResolveByMerchant"),
+            setOf(
+                "Release", "CancelByMerchant", "Send", "ProcessDeath", "Observe",
+                "ResolveByMerchant", "RetentionDeadlineReached",
+            ),
             eventsThatMoved,
             "some event never moved anything, so its transitions were never checked",
         )
         assertEquals(
-            setOf("SendAttempt", "Alert", "ClearLocalRow"), effectsSeen,
+            setOf("SendAttempt", "Alert", "ClearLocalRow", "MinimizePayload"), effectsSeen,
             "some side effect was never produced, so its invariant was never exercised",
         )
         assertTrue(refusals > 0, "no event was ever refused, so the refusal invariant is vacuous")

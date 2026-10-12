@@ -45,6 +45,10 @@ class LawsTest {
             "ScopeAndSchemaTest.a sale captured in one business is not sent under another",
         P7Laws.UNKNOWN_QUEUE_SCHEMA_REFUSED.id to
             "ScopeAndSchemaTest.a row from a schema version this build does not know is refused, not reinterpreted",
+        P7Laws.NO_REENTRY_BEFORE_THE_ORIGINAL_IS_SETTLED.id to
+            "ReentryAndRetentionTest.a wiped device may not re-enter an unknown sale while the receipt cannot be read",
+        P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id to
+            "ReentryAndRetentionTest.expiry never clears the row, never discards the operation and never forgets why",
     )
 
     @Test
@@ -52,7 +56,7 @@ class LawsTest {
         val stated = P7Laws.ALL.map { it.id }.toSet()
         assertEquals(stated, defendedBy.keys, "the law table and the coverage map have drifted apart")
         assertEquals(P7Laws.ALL.size, stated.size, "two laws share an id")
-        assertTrue(stated.size >= 14, "only ${stated.size} laws are stated")
+        assertTrue(stated.size >= 16, "only ${stated.size} laws are stated")
     }
 
     @Test
@@ -74,7 +78,7 @@ class LawsTest {
     fun `the defenders are distinct, so no one test is credited with every law`() {
         val distinct = defendedBy.values.distinct()
         assertTrue(
-            distinct.size >= 11,
+            distinct.size >= 13,
             "only ${distinct.size} distinct tests defend ${defendedBy.size} laws — a single test credited " +
                 "with several laws is how an undefended law reads as covered",
         )

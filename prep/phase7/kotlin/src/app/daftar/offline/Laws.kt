@@ -25,7 +25,7 @@ data class OfflineLaw(
 /**
  * The absolute law of the Tech Lead's directive — an offline device is never
  * canonical financial authority, and there is no silent conflict resolution
- * for money or stock — together with the thirteen laws it implies once the LIVE
+ * for money or stock — together with the fifteen laws it implies once the LIVE
  * server contract is read rather than assumed and the Tech Lead's rulings on
  * effect classification (§34) and local data security (PART 40) are applied.
  *
@@ -125,6 +125,41 @@ object P7Laws {
         "A persisted queue row carries the schema version it was written under, and a build that does not understand that version refuses the row and leaves it on disk rather than reinterpreting its fields under the current meanings.",
     )
 
+    /**
+     * The continuous-mission directive §14: after a device wipe or reinstall an
+     * `UNKNOWN_OUTCOME` must be matched against the canonical receipt, and
+     * there is no re-entry under a new key before the original is settled.
+     *
+     * This is the hole L2 and L7 cannot reach: both assume the row still
+     * exists, and a wipe removes it. What follows is not a retry but a new
+     * capture under a new key, which the server has never seen and will
+     * therefore commit a second time.
+     */
+    val NO_REENTRY_BEFORE_THE_ORIGINAL_IS_SETTLED = OfflineLaw(
+        "P7-L15-NO-REENTRY-UNDER-A-NEW-KEY-BEFORE-THE-ORIGINAL-IS-SETTLED",
+        "An operation whose earlier outcome was never established may be re-entered under a new key only once the canonical receipt has settled the original; a receipt that cannot be read settles nothing and the re-entry is refused, because permitting it wrongly charges twice under a key no later reconciliation can match.",
+    )
+
+    /**
+     * The same directive's ruling on retention, which REPLACED the default I
+     * had proposed: "منع التقاط جديد لا يثبت مدة احتفاظ محدودة؛ تحتاج انتهاءً
+     * ووصولًا وتصعيدًا، مع عدم إسقاط العمليات المالية صامتًا وحماية PII" —
+     * blocking new capture does not prove bounded retention; expiry, reach and
+     * escalation are required, with no silent drop of financial operations and
+     * with personal data protected.
+     *
+     * The two halves pull in opposite directions and that is the whole
+     * difficulty: retention must be bounded, and a material operation may not
+     * be dropped. They are reconciled by bounding the PAYLOAD rather than the
+     * OPERATION — the personal and price data is minimized on expiry while the
+     * operation's identity, its amount and the server's refusal code are kept,
+     * and the obligation is escalated off the till rather than deleted.
+     */
+    val EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION = OfflineLaw(
+        "P7-L16-EXPIRY-MINIMIZES-THE-PAYLOAD-NEVER-THE-OBLIGATION",
+        "Retention is bounded by minimizing the stored payload and escalating the obligation, never by discarding it: on expiry a waiting operation's personal and price data is reduced while its identity, amount and server refusal code are retained, the local row is not cleared, and a material operation is never silently dropped.",
+    )
+
     /** Every stated law, for the completeness proof. */
     val ALL: List<OfflineLaw> = listOf(
         DEVICE_NOT_AUTHORITY,
@@ -141,5 +176,7 @@ object P7Laws {
         QUEUE_SCOPED_BY_OWNER,
         NO_CROSS_ACCOUNT_SEND,
         UNKNOWN_QUEUE_SCHEMA_REFUSED,
+        NO_REENTRY_BEFORE_THE_ORIGINAL_IS_SETTLED,
+        EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION,
     )
 }
