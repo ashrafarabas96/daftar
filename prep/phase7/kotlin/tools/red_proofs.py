@@ -396,8 +396,8 @@ PROOFS: list[Proof] = [
         path="src/app/daftar/offline/Scope.kt",
         find="            -> memberId == owner.memberId",
         replace="            -> true",
-        expect_red="another member on the same till cannot release, cancel or resolve another member's capture",
-        why="the F-05 split collapses entirely and the member stops being compared for anything: Bob can cancel and clear the local row of a sale Alice captured, which is the shared-till case PART 40 item 2 names",
+        expect_red="another member on the same till cannot cancel or resolve another member's capture",
+        why="the F-05 and G-02 splits collapse entirely and the member stops being compared for anything: Bob can cancel and clear the local row of a sale Alice captured, which is the shared-till case PART 40 item 2 names. G-02 narrowed this proof's subject rather than weakening it: a release is now business-gated by design, so what is left to defend is the three events where a person decides something about money",
     ),
     Proof(
         law="P7-L17-NOTHING-MAY-INFER-A-FENCE",
