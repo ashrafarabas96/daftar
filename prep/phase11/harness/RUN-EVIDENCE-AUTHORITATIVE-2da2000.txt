@@ -1,0 +1,114 @@
+RUN_ID            : p11-20261012T145959Z-7449
+RUN_AT_UTC_START  : 2026-10-12T14:59:59Z
+HOST_KERNEL       : Linux 6.18.44-fc-v114
+SOURCE_REPO       : https://github.com/ashrafarabas96/daftar
+SOURCE_BRANCH     : claude/phase11-prep-re0epv
+SOURCE_SHA        : 2da200009e119e36ebde2eabdab9a14299f0a1a1
+SOURCE_TREE_DIRTY : no
+MIGRATIONS_SHA    : b128c7033a3381bd2237d0a1405f0676ac509960
+MANIFEST_SHA256   : 4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804
+BOOTSTRAP_SHA256  : 19df5cca37a6a887ede923e6f108163e579ac42f68cb0c8b48730eb2f2a3c507
+PACK_A_DDL_SHA256 : 9ff638d426ec396947dfd0d89d759d0510faf8bb5e9da62921eb97a419304052
+PACK_B_DDL_SHA256 : absent at this SHA — Pack B is not on the branch yet, and the run below skips it by name rather than silently
+HARNESS_SHA256    : 6cc552919e1e25029b2bc7d75a5dcd416abdb17850b9796fc2177e8a55900c79
+PG_VERSION        : postgres (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+PG_CLUSTER_DIR    : /var/tmp/p11u/data (port 55512, socket /var/tmp/p11u/run)
+NODE_VERSION      : v22.22.0 (repository engines: >=24 <25) -- NO npm suite is run here
+FIXTURES          : world.sql (Pack A). Within the packs present, no fixture and no case is skipped; a pack that is not on the branch is named as skipped above and below.
+
+=== 1. drop and recreate the database ===
+DB_COLLATION      : en_US.utf8 / en_US.utf8 / UTF8   (measured on the database under test, not on template1)
+=== 2. bootstrap.sql (the runtime roles + extensions), as the deployment administrator ===
+bootstrap rendered: 16 placeholders substituted
+psql:/var/tmp/p11u/sql/bootstrap.rendered.sql:297: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_accounting_internal" by role "postgres"
+psql:/var/tmp/p11u/sql/bootstrap.rendered.sql:298: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_platform" by role "postgres"
+psql:/var/tmp/p11u/sql/bootstrap.rendered.sql:304: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_inventory_internal" by role "postgres"
+psql:/var/tmp/p11u/sql/bootstrap.rendered.sql:314: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_catalog_internal" by role "postgres"
+psql:/var/tmp/p11u/sql/bootstrap.rendered.sql:315: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_provisioning_internal" by role "postgres"
+=== 3. migrations 0000..0086 as daftar_migrator (NOT superuser) ===
+APPLIED 87/87 as daftar_migrator
+LAST: 0086_phase4_rls_quals_once_per_query.sql
+=== 4. Pack A (apparel / variant matrix), unnumbered, as daftar_migrator ===
+ set_config | set_config | set_config 
+------------+------------+------------
+ 9          | 11         | 34
+(1 row)
+
+PACK A APPLIED in one transaction, end-state assertion passed
+=== 4b. Pack B: NOT PRESENT at this SHA — skipped (not applied, not proved, not claimed) ===
+=== 5. the world (Pack A) ===
+    step     
+-------------
+ WORLD BUILT
+(1 row)
+
+=== 6. proofs (Pack A, apparel) ===
+case                                                                     verdict                      detail
+--------------------------------------------------------------------------------------------------------------------------------------------
+happy path: a registered combination is accepted                         GREEN                        {"size": "s", "color": "red"}
+jsonb itself canonicalizes key order, which is what makes the index work GREEN                        t
+attributes is an array, not an object                                    RED (refused as required)    catalog.variant_attributes_shape_invalid
+attributes has a nested value                                            RED (refused as required)    catalog.variant_attributes_shape_invalid
+attributes has a non-text value                                          RED (refused as required)    catalog.variant_attributes_shape_invalid
+an axis the product's matrix does not register                           RED (refused as required)    catalog.variant_axis_unregistered
+a value that exists but is archived                                      RED (refused as required)    catalog.variant_axis_value_unregistered
+a value that does not exist at all                                       RED (refused as required)    catalog.variant_axis_value_unregistered
+a partial combination (one of two registered axes)                       RED (refused as required)    catalog.variant_axis_set_incomplete
+a product with no registered axes cannot carry attributes                RED (refused as required)    catalog.variant_axis_unregistered
+a base variant write is refused by the pre-existing authority, not by Pack A RED (refused as required)    catalog.base_variant_not_mutable
+the same combination twice                                               RED (refused as required)    product_variants_matrix_uq
+the same combination with the keys written in the other order            RED (refused as required)    product_variants_matrix_uq
+attributes changed at all (the combination is the identity)              RED (refused as required)    catalog.variant_matrix_immutable
+an axis named by existing variants cannot be removed                     RED (refused as required)    catalog.matrix_axis_in_use
+P0-01 the combination cannot be BLANKED either (the early return used to allow it) RED (refused as required)    catalog.variant_matrix_immutable
+P0-01 and the cell therefore still has exactly ONE stock identity        GREEN                        1
+a plain product's non-base variant may carry no combination at all (why the CHECK is unavailable) GREEN                        1
+and ITS combination is immutable in the other direction too              RED (refused as required)    catalog.variant_matrix_immutable
+P0-02 a value named by existing variants cannot be DELETED               RED (refused as required)    catalog.attribute_value_in_use
+P1-03 nor ARCHIVED (the non-key UPDATE the FOR KEY SHARE lock did not cover) RED (refused as required)    catalog.attribute_value_in_use
+P1-03 nor REPOINTED to another code, which is the same removal           RED (refused as required)    catalog.attribute_value_in_use
+a value no variant names is still archivable (the guard refuses removal, not administration) GREEN                        archived
+and un-archiving it is not a removal either                              GREEN                        active
+P1-04 an axis in use cannot be REPOINTED either (an UPDATE is the same removal) RED (refused as required)    catalog.matrix_axis_in_use
+P1-04 and the matrix still registers exactly its two axes                GREEN                        size,color
+an axis named by existing variants can be neither renamed nor archived in the REGISTRY RED (refused as required)    catalog.attribute_axis_in_use
+P2-06 an ARCHIVED axis cannot be added to a product's matrix             RED (refused as required)    catalog.variant_axis_archived
+P2-06 nor can a variant name an archived axis, even one its matrix registers RED (refused as required)    catalog.variant_axis_archived
+P2-07 an in-use axis cannot be deleted by the APPLICATION role either (the guard under live RLS) RED (refused as required)    catalog.matrix_axis_in_use
+P2-07 nor can it delete an in-use VALUE                                  RED (refused as required)    catalog.attribute_value_in_use
+P2-07 the guards are SECURITY INVOKER, because a DEFINER one cannot satisfy the restrictive policy GREEN                        0
+P2-07 the measurement itself: that role reads NOTHING without a session context GREEN                        0
+P2-07 and the same read WITH a context sees the business's variants, so it is the policy and not the grant GREEN                        t
+P2-07 and Pack A leaves product_variants' policy set exactly as it found it GREEN                        business_isolation,tenant_membership
+as daftar_app in business B, business A's axes are invisible             GREEN                        0
+as daftar_app in business B, inserting an axis FOR business A is refused RED (refused as required)    row-level security
+as daftar_app in business B, business A's matrix rows are invisible      GREEN                        0
+with business A's own context the same rows ARE visible (the read is not broken, it is scoped) GREEN                        4
+business A's context with the WRONG tenant sees nothing (tenant_membership, not only business_isolation) GREEN                        0
+daftar_app does not bypass RLS                                           GREEN                        f
+
+TOTAL 41 cases, 0 failed
+=== 6b. real concurrency: the races, two live backends, no sleep() ===
+## RESULT MATRIX — 7 races, real backends, no sleep()
+
+| race                                                 | T1 | T2 | observed | verdict |
+|------------------------------------------------------|---|---|---|---|
+| A  duplicate combination                             | INSERT {size:s,color:red}, then COMMIT | INSERT the same combination, concurrently | T2 blocked while T1 held the speculative insert: True. Rows after both: 1. T2: refused on product_variants_matrix_uq | PASS — exactly one commits; the index refuses the other, and it BLOCKS rather than racing |
+| B  axis removed vs variant inserted                  | DELETE the 'color' axis of this product, then COMMIT | INSERT a variant naming 'color', concurrently | T2 blocked: True. T2: ERROR:  catalog.variant_axis_unregistered: axis co. Variants naming an unregistered axis after both commit: 0 | PASS — the closure invariant holds after both commit |
+| B2 variant inserted vs axis removed (reverse order)  | INSERT a variant naming 'color', then COMMIT | DELETE the 'color' axis, concurrently | T2 blocked: True. T2: refused on catalog.matrix_axis_in_use. Axis rows after both: 1; variants naming it: 1 | PASS — the deleter waits on the inserter's key-share lock and the guard then SEES the committed variant (R62's mechanism: the executor locks OLD before the trigger body) |
+| C  attributes changed vs first stock movement        | UPDATE attributes while no stock exists yet, then COMMIT | INSERT the variant's FIRST stock_levels row, concurrently | T1: ERROR:  catalog.variant_matrix_immutable. T2 blocked: False. T2: committed. Final: {"size": "s", "color": "red"} | stock rows: 1 | PASS — the interleaving does not produce a changed-attributes-with-stock row |
+| D  value archived vs variant inserted                | INSERT a variant naming value 'rd1', then COMMIT | UPDATE that value row to status='archived', concurrently | T2 blocked: True. T2: refused on catalog.attribute_value_in_use. Variants naming a non-active value after both: 0 | PASS — FOR SHARE makes the non-key UPDATE wait, and the new in-use guard then refuses it |
+| E  value deleted vs variant inserted                 | INSERT a variant naming value 'rd2', then COMMIT | DELETE that value row, concurrently | T2 blocked: True. T2: refused on catalog.attribute_value_in_use. Variants naming a value that no longer exists: 0 | PASS — the deleter waits, then the guard sees the committed variant and refuses |
+| F  value deleted vs variant inserted (reverse order) | DELETE the value row 'rd3', then COMMIT | INSERT a variant naming 'rd3', concurrently | T2 blocked: True. T2: refused on catalog.variant_axis_value_unregistered. Orphan variants: 0 | PASS — the inserter waits on the deleted row and is then refused by its own registry read |
+
+7 races run; 0 finding(s).
+=== 7. the frozen tree, after the run ===
+tracked changes under infrastructure/database: 0
+frozenThrough: 0079_phase4_pos_till_sessions_cart.sql | frozen entries: 80 | digest mismatches: []
+
+RUN_ID            : p11-20261012T145959Z-7449
+RUN_AT_UTC_END    : 2026-10-12T15:01:19Z
+EXIT_PROOFS_A     : 0  (prep/phase11/harness/proofs.py)
+EXIT_PROOFS_B     : n/a (Pack B is not on the branch at this SHA)  (prep/phase11/harness/proofs_b.py)
+EXIT_RACES        : 0  (prep/phase11/harness/races.py)
+EXIT_SCRIPT       : 0  (0 means every step above returned 0)

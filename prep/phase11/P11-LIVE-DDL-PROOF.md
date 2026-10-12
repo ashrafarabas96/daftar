@@ -29,26 +29,41 @@ One script, `prep/phase11/harness/rebuild_and_prove.sh`, which does every step f
 - `prep/phase11/harness/RUN-EVIDENCE-2026-10-12.txt` — the first green run, before the concurrency work.
 - `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-d813de2.txt` — the first clean-tree run, kept because evidence is preserved rather than replaced.
 - `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-99dbbe7.txt` — the three-race run with **exit codes printed in the log itself**, which V3 §9 requires of every handoff.
-- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-e27acaf.txt` — **the authoritative log**: four races, both arrival orders of the axis race, `EXIT_PROOFS`/`EXIT_RACES`/`EXIT_SCRIPT` all `0`.
+- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-e27acaf.txt` — the authoritative log of the **pre-challenge** round: four races, both arrival orders of the axis race, exit codes all `0`. Kept, and **its collation is not stated because the cluster was at `C`** — see §7.3, defect 15.
+- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-2da2000.txt` — **the authoritative log of the challenge round, and the current one**: 41 cases, 7 races, `EXIT_PROOFS_A`/`EXIT_RACES`/`EXIT_SCRIPT` all `0`, on `datcollate = datctype = en_US.utf8`, `SOURCE_TREE_DIRTY : no`.
 
 **Run identity of the authoritative log**, printed by the script itself as its first lines, because V2 §18 says not to bind the proof to the remote head by guesswork:
 
 | field | value |
 |---|---|
-| `RUN_ID` | `p11-packA-20261012T125*Z` (the exit-code run; the earlier log names its own) |
-| `RUN_AT_UTC` | `2026-10-12`, both runs |
+| `RUN_ID` | **`p11-20261012T145825Z-6848`** — the real identifier printed by the run, not a pattern. (Finding P3-10: this table used to carry `p11-packA-20261012T125*Z` with a wildcard, which matched no run.) |
+| `RUN_AT_UTC_START` / `RUN_AT_UTC_END` | `2026-10-12T14:58:25Z` / `2026-10-12T14:59:44Z` |
 | `SOURCE_REPO` | `https://github.com/ashrafarabas96/daftar` |
 | `SOURCE_BRANCH` | `claude/phase11-prep-re0epv` |
-| `SOURCE_SHA` | **`e27acafeee94ce7ce4852c920a95957a757d051c`** (earlier logs name `99dbbe7…` — three races — and `d813de2…`; **the Pack A DDL is byte-identical across all three**, `PACK_A_DDL_SHA256 7561f8f8…d3a8`; what changed is the harness) |
+| `SOURCE_SHA` | **`2da200009e119e36ebde2eabdab9a14299f0a1a1`** — the challenge round. Earlier logs name `e27acaf…`, `99dbbe7…` and `d813de2…`, across which the Pack A DDL was byte-identical (`PACK_A_DDL_SHA256 7561f8f8…d3a8`); **at this SHA the DDL itself changed** and its digest is below, so no claim from an earlier log carries forward to it. |
 | `SOURCE_TREE_DIRTY` | **`no`** — nothing uncommitted; the SHA is the whole input |
 | `MIGRATIONS_SHA` (tree of `infrastructure/database/migrations`) | `b128c7033a3381bd2237d0a1405f0676ac509960` |
 | `MANIFEST_SHA256` | `4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804` |
-| `PACK_A_DDL_SHA256` | `7561f8f859d2007643c8ec78992d739d1aa137fa6733ba76bc5a8dcf7af1d3a8` |
-| `PG_VERSION` | PostgreSQL **16.15** — and as of V3 the **PG16 family with `en_US.utf8` is the settled deploy target** (`TL-P4-S3-R4`), so this proof ran on the target family rather than on an arbitrary version. It is still a scratch cluster in this container, not the deployment. |
+| `PACK_A_DDL_SHA256` | **`9ff638d426ec396947dfd0d89d759d0510faf8bb5e9da62921eb97a419304052`** (was `7561f8f8…d3a8` through `1a8ba15`, which is the digest the challenge reviewed) |
+| `BOOTSTRAP_SHA256` | `19df5cca37a6a887ede923e6f108163e579ac42f68cb0c8b48730eb2f2a3c507` |
+| `HARNESS_SHA256` | `6cc552919e1e25029b2bc7d75a5dcd416abdb17850b9796fc2177e8a55900c79` — the seven harness files hashed together, so the whole executable input is named by one digest |
+| `PACK_B_DDL_SHA256` | **absent at this SHA**: Pack B is not on the branch, and the script prints that rather than hashing a file it did not run |
+| `DB_COLLATION` | **`en_US.utf8 / en_US.utf8 / UTF8`**, read off the database under test. The settled target (V3 §15/§26). Earlier runs of this proof were at `C` and did not say so |
+| `PG_VERSION` | PostgreSQL **16.15** — the settled deploy family (`TL-P4-S3-R4`), now with the collation half measured too. It is still a scratch cluster in this container, not the deployment. |
+| `PG_CLUSTER_DIR` | `/var/tmp/p11u/data`, port `55512` — created by the script itself, named in the log, and reachable by any re-runner through `P11_SOCK` / `P11_PORT` |
 | `NODE_VERSION` | v22.22.0, against repository `engines.node >=24 <25` — **no npm suite was run** |
-| `EXIT_PROOFS` / `EXIT_RACES` / `EXIT_SCRIPT` | **`0` / `0` / `0`** — read from the process statuses, not from the prose above them |
+| `EXIT_PROOFS_A` / `EXIT_RACES` / `EXIT_SCRIPT` | **`0` / `0` / `0`** — read from the process statuses, not from the prose above them. `EXIT_PROOFS_B` reads `n/a (Pack B is not on the branch at this SHA)`, which is the honest value: there was nothing to run |
 
-A reader can therefore check out that exact SHA, hash those two files, and get the same digests, or know at once that they are reading a different subject. The dirty-tree flag is part of the record on purpose: an earlier trial run printed `SOURCE_TREE_DIRTY : YES`, and that run is not reported here because its input had no name.
+**The commands, verbatim, and they need nothing that is not in the repository:**
+
+```
+git checkout 2da2000
+bash prep/phase11/harness/rebuild_and_prove.sh        # creates its own en_US.utf8 cluster if absent
+# optional, to use a different scratch cluster:
+P11_SCRATCH=/var/tmp/mine P11_PORT=55599 bash prep/phase11/harness/rebuild_and_prove.sh
+```
+
+A reader can therefore check out that exact SHA, hash those files, and get the same digests, or know at once that they are reading a different subject. The dirty-tree flag is part of the record on purpose: an earlier trial run printed `SOURCE_TREE_DIRTY : YES`, and that run is not reported here because its input had no name.
 
 **Why step 3 is the load-bearing one.** CI applies migrations as a superuser. A superuser is not subject to RLS and is not checked for the two privileges an ownership handover needs, so a superuser run cannot tell you whether a real deployment would work. Applying the whole frozen prefix as `daftar_migrator` is the only version of this measurement that means anything, and it is the version the nearby Phase 4 slice learned to run after a deployment died halfway where CI had been green.
 
