@@ -1,8 +1,8 @@
-# P11 — PACK A (APPAREL): THE EXECUTED SCRATCH PROOF, AND THE SIXTEEN DEFECTS IT FOUND
+# P11 — PACK A (APPAREL): THE EXECUTED SCRATCH PROOF, AND THE TWENTY-SEVEN DEFECTS IT FOUND
 
 **What this is.** The Master Continuous Mission's §18 says, for Phase 11: *execute unnumbered DDL for a scratch proof, then the Owner's allocation at promotion*, and *do not drop any required part of the scope because it is currently design only*. §18 also fixes the build order — start with the cheapest independent end-to-end path, **apparel**. This document is the result of doing that, and the point of it is the part a design document cannot produce: **eight defects, six of them in this preparation's own specification or its own proof, found by execution and none of them findable by reading.** Two of the eight were found only after V2 of the Master Continuous Mission refused the sentence this document used to carry — *"no concurrency case here; apparel has none to prove"* — on the ground that **"no locks, therefore no concurrency" is not a proof**. Running the races it asked for found two real holes in Pack A.
 
-**Status.** `PREPARED / NOT PROMOTED`, and now **`CHALLENGED` and REJECTED once**. An independent challenger read Pack A at `1a8ba15`, reproduced every claim three times from zero, and **rejected it** on five defects that single SQL statements expose (§7). Those five are fixed and red-proved here; the pack returns to the challenger unsigned. **An author does not sign their own work**, so nothing in this document is a signature. Nothing is promoted, **no migration number exists**, and the Migration Owner allocates at promotion from the live prefix.
+**Status.** `PREPARED / NOT PROMOTED`, and **`CHALLENGED` twice**. An independent challenger read Pack A at `1a8ba15`, reproduced every claim three times from zero, and **rejected it** on five defects that single SQL statements expose (§7). Those five were fixed and red-proved, and the **second round at `23a7139` returned `PASS-WITH-SCOPE`**: all five closed and each covered by a case that fails when its guard is dropped, the off-target refusal measured at exit `3`, and the challenger's own `SECURITY DEFINER` recommendation **withdrawn on measurement**. It also found **three new defects**, one of them the ADD direction of the very clause round 1's fixes were built for. Those three are answered in **§9**, and the pack returns to the challenger unsigned for a third round. **An author does not sign their own work**, so nothing in this document is a signature. Nothing is promoted, **no migration number exists**, and the Migration Owner allocates at promotion from the live prefix.
 
 **Evidence class.** What follows is `PROVEN BY TEST` and `PROVEN BY DATABASE CATALOGUE` on a scratch cluster in **this** container, and nothing more. It is **not CI**, it is **not release evidence**, and it carries **no timing or performance claim**. The container runs **Node 22.22.0 while the repository requires `>=24 <25`**, so no npm workspace suite was run at all and none is claimed; the proof uses PostgreSQL and `psql` only, which is why it was possible here.
 
@@ -20,8 +20,10 @@ One script, `prep/phase11/harness/rebuild_and_prove.sh`, which does every step f
 | 3 | migrations `0000` → `0086`, **87 files**, each in its own transaction with the ownership-handover bracket, **as `daftar_migrator` and not as a superuser** | **87/87 applied** |
 | 4 | `prep/phase11/ddl/p11-pack-a-apparel.sql` — **unnumbered** — as `daftar_migrator` | applied; **end-state assertion passed** |
 | 5 | a world of two tenants, two businesses, two products, two axes, five axis values (one archived), one two-axis matrix | built |
-| 6 | the proof suite, `prep/phase11/harness/proofs.py` | **41 cases, 0 failed** (21 before the challenge round, 20 added by it) |
-| 6b | **seven real-concurrency races**, `prep/phase11/harness/races.py` — two live backends, sentinel-awaited interleaving, **no `sleep()`** | **7 races, 0 findings** (after the fixes of §2, §3a and §7) |
+| 6 | the proof suite, `prep/phase11/harness/proofs.py` | **46 cases, 0 failed** (21 before the first challenge, 20 added by it, 5 by the second — §9) |
+| 6a2 | the Pack B suite, `prep/phase11/harness/proofs_b.py` | **31 cases, 0 failed** (§8) |
+| 6c | **both suites again, on the same database** — idempotence, which the second challenge measured was absent | **46 and 31, 0 failed**; see §9.4 |
+| 6b | **nine real-concurrency races**, `prep/phase11/harness/races.py` — two live backends, sentinel-awaited interleaving, **no `sleep()`** | **9 races, 0 findings** (G and H added by §9.1, both arrival orders) |
 | 7 | the frozen tree re-verified **after** the run | 0 tracked changes under `infrastructure/database`; `frozenThrough = 0079_phase4_pos_till_sessions_cart.sql`; **80 frozen entries, 0 digest mismatches** |
 
 **Run repeatedly from zero, green each time.** Two raw logs are kept:
@@ -30,7 +32,12 @@ One script, `prep/phase11/harness/rebuild_and_prove.sh`, which does every step f
 - `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-d813de2.txt` — the first clean-tree run, kept because evidence is preserved rather than replaced.
 - `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-99dbbe7.txt` — the three-race run with **exit codes printed in the log itself**, which V3 §9 requires of every handoff.
 - `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-e27acaf.txt` — the authoritative log of the **pre-challenge** round: four races, both arrival orders of the axis race, exit codes all `0`. Kept, and **its collation is not stated because the cluster was at `C`** — see §7.3, defect 15.
-- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-2da2000.txt` — **the authoritative log of the challenge round, and the current one**: 41 cases, 7 races, `EXIT_PROOFS_A`/`EXIT_RACES`/`EXIT_SCRIPT` all `0`, on `datcollate = datctype = en_US.utf8`, `SOURCE_TREE_DIRTY : no`.
+- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-2da2000.txt` — the authoritative log of the first challenge round: 41 cases, 7 races, exit codes all `0`, on `datcollate = datctype = en_US.utf8`, `SOURCE_TREE_DIRTY : no`.
+- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-c2289ce.txt` — the authoritative log of the Pack B round: both packs on one cluster, 41 + 31 cases, 7 races.
+- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-0db9450.txt` — **the authoritative log of the SECOND challenge round, and the current one**: 46 + 31 cases **each run twice on the same database**, 9 races, every exit code `0`, `SOURCE_SHA 0db94504abdc6b9142564e655c8032613214c06d`, `SOURCE_TREE_DIRTY : no`, `DB_COLLATION en_US.utf8 / en_US.utf8 / UTF8`.
+- `prep/phase11/harness/RUN-EVIDENCE-MUTATIONS-0db9450.txt` — the **mutation** log of the three new mechanisms: each one removed, one at a time, and the cases that go red named with their counts (§9.5).
+
+**The run identity table below is the FIRST challenge round's log and is kept as it was.** The current round's identity is §9.3.
 
 **Run identity of the authoritative log**, printed by the script itself as its first lines, because V2 §18 says not to bind the proof to the remote head by guesswork:
 
@@ -390,3 +397,251 @@ variant.
 
 `SPEC ONLY` and unsigned: the writer change (§3.6), FEFO picking (`C-FEFO-01`), serial
 (`C-SER-*`) and repair (`C-REP-*`). **No challenger has read Pack B.**
+
+---
+
+## 9. The SECOND independent challenge: `PASS-WITH-SCOPE`, and the three defects it found (defects 25–27)
+
+The report is `/mnt/project-files/phase11/P11-CHALLENGE-23a7139.md`, with its
+scripts and logs in `phase11/challenge-23a7139/`. It is a better round than
+the first in one specific way: it measured **coverage** rather than counting
+cases — rebuild from zero, drop exactly one guard, run the author's own
+suite, read the exit code — and every one of the five new guards was reached
+by a case that fails when it is gone. It also **re-measured the author's own
+rejection** of its `SECURITY DEFINER` recommendation, implemented the variant
+with the clause the author's version lacked, found that `app_bypass()`'s live
+definition at this head is `RETURN (CURRENT_USER = 'daftar_platform')` — a
+role identity, not a session setting — and concluded that the recommendation
+was *"not merely weaker than INVOKER, it is unimplementable without a
+privilege escalation"*, and withdrew it. The comment above the first guard in
+the pack now carries that mechanism, because the author's own version of the
+reason named `BYPASSRLS`, which is a different mechanism reaching the same row.
+
+**What it did not sign:** `C-APP-01`'s clause *"exactly its registered axis
+set"*, defeated by one `INSERT`; the archive lifecycle of an axis a matrix
+registers; anything in Packs B, C or D; any CI, npm or TypeScript claim; any
+performance claim; `SERIALIZABLE` or deadlock behaviour. That scope stands,
+and this round narrows only the first two items of it.
+
+### 9.1 Defect 25 (`P1-N01`, the one that held the scope back) — the ADD direction
+
+| | |
+|---|---|
+| the law | `C-APP-01`: a matrix product's non-base variant `attributes` name **exactly** its product's registered axis set |
+| what was guarded | the VARIANT insert (round 0), and since round 1 every REMOVAL path on both registries |
+| what was not | **adding an axis to a matrix that already has variants** |
+| measured at `23a7139` | on a product holding one committed `{size:m,color:blue}`: `INSERT INTO product_matrix_axes … 'material',3` → **rc=0, not refused**; the matrix then registered `[size,color,material]`; committed variants not naming exactly the registered set: **1** |
+| the cost | not a duplicate cell this time — a variant **nothing can address through the matrix**, since no 2-axis cell exists on a 3-axis product, while it keeps its own stock key and its whole movement history. Under Option B the variant **is** the costing key, so this is the same split identity `P0-01` produced |
+| why it matters more than its class | it is the door a merchant walks through **on purpose**: *"add a material axis to this shirt"* |
+
+**The fix.** `product_matrix_axes_30_set_frozen`, `BEFORE INSERT` on
+`product_matrix_axes`, refusing `catalog.matrix_axis_set_frozen` when the
+product already carries a non-base variant. A populated matrix's axis set is
+now as immutable as a variant's combination, and for the same reason. The
+merchant's path is the one the pack already chose for a mistyped combination:
+archive the variants at zero stock, which
+`product_variants_30_archive_requires_zero_stock` already permits, and
+regenerate the grid.
+
+**One widening of the challenger's own fix, stated because it is a decision
+and not a detail.** The guard refuses on **any** non-base variant, including
+one whose `attributes` are `'{}'`. That is a plain product's single variant;
+it holds the product's stock; registering a first axis under it would leave
+it exactly as unaddressable as the 2-axis row above. So converting a plain
+product into a matrix product while it has a variant is refused too. A
+product with **no** non-base variants may be given, re-ordered and taken off
+axes freely, which is the whole lifecycle a merchant building a grid needs,
+and there is a case for that direction so the guard cannot quietly become a
+ban.
+
+**The concurrency half, which the challenger did not ask for and the fix
+needs.** Row locks cannot order a variant insert against an axis INSERT: the
+validator can lock every matrix row that **exists** and the row the other
+transaction is about to add is not among them, while the freeze guard's read
+of `product_variants` cannot see an uncommitted variant. Mutual invisibility,
+so neither side's lock serializes them — the same shape as the registry
+races, one relation up. Both paths now take a **transaction advisory lock**
+on `(business_id, product_id)`: **shared** on the variant side, so generating
+a grid of fifty cells in parallel is unaffected, and **exclusive** on the
+matrix side, so an axis write waits for the variant writes in flight and then
+reads a state it can conclude from. It is taken on the INSERT path only: a
+DELETE-path lock order is a caller obligation (`TL-P4-COORD-R62`), and taking
+a lock after the executor's own lock on `OLD` is how a deadlock is built.
+
+Races **G** and **H** run both arrival orders, measured:
+
+| race | T1 | T2 | observed |
+|---|---|---|---|
+| G | INSERT the product's first variant, then COMMIT | INSERT a third axis, concurrently | T2 **blocked**, then refused `catalog.matrix_axis_set_frozen`; axes after both: 2; variants not naming exactly the registered set: **0** |
+| H | INSERT a third axis while the product has no variants, then COMMIT | INSERT a 2-axis variant, concurrently | T2 **blocked**, then refused `catalog.variant_axis_set_incomplete`; axes after both: 3; non-base variants: 0; not naming the registered set: **0** |
+
+Race H is the interesting one: there the freeze guard is **lawfully silent**,
+because when T1 adds the axis the product has no variants at all. The
+invariant is held by the variant side instead — in `READ COMMITTED` a plpgsql
+trigger's queries take a fresh snapshot per statement, so once T2 stops
+waiting on the advisory lock its completeness count reads three registered
+against two supplied. A guard being silent is not the same as a guard being
+absent, and only running the reverse order shows which one you have.
+
+### 9.2 Defects 26 and 27
+
+**Defect 26 (`P2-N02`).** `product_attribute_axes_10_axis_in_use` read *"in
+use"* as *"named by a variant"*. Its own comment gave the outcome it was
+written to prevent — *"it leaves the row in place while the validator above
+stops treating it as an axis, which would freeze every matrix product that
+names it"* — and an axis a matrix **registers with no variants yet** was
+exactly that case and was not refused: measured, the archive succeeded, the
+product's first variant insert was then refused `catalog.variant_axis_archived`,
+and the product could not get a variant at all. Recoverable, so a trap and
+not a corruption. The guard now reads `product_matrix_axes` too, which is the
+relation its comment was about. **A guard whose own comment states a case it
+does not cover is a guard that was written from the right reason and stopped
+early.**
+
+A consequence worth stating rather than hiding: the validator's own
+`catalog.variant_axis_archived` branch is now **unreachable from any
+committed state**, because both writers of that state are refused — an
+archived axis cannot be registered, and a registered axis cannot be archived.
+It is kept as defence in depth, and its case is now **structural** (the
+branch is present in the installed function body) rather than live, with the
+evidence class written down as the weaker one. The alternative was to keep a
+live case that passes for a different reason than its name claims.
+
+**Defect 27 (`P3-N03`): four mechanisms that did not do what they said.**
+
+1. **The inert check.** The in-file bootstrap renderer ended with
+   `assert "__" not in re.sub(...).replace("__","") or True` — inert twice
+   over: `X or True` is always true, and `.replace("__","")` deletes the very
+   substring the test looks for. The challenger measured it on a bootstrap
+   carrying a placeholder outside the `_DB_PASSWORD__` shape: *"the renderer
+   printed 1 placeholders substituted, exited 0, and wrote
+   `__NEWROLE_PASSWORD__` through unrendered."* It is the **third** inert
+   mechanism in this pack's history, after the canonicalizer's `ORDER BY k`
+   and race B2's unregistered axis value, so it is taken as a rule and not as
+   a typo: **anything shaped like a check needs a case that fails it.** The
+   renderer is now `prep/phase11/harness/render_bootstrap.py`, its check has
+   `--selftest` — a synthetic bootstrap with an unmatched placeholder, which
+   must exit `1` and write nothing, and a clean one, which must exit `0` —
+   and the harness runs that selftest **before** it renders or applies
+   anything, so an inert check stops the run before a cluster exists.
+2. **Stale labels.** `races.py` still called the ordering lock *"the
+   inserter's key-share lock"* after it became `FOR SHARE` a round earlier.
+   Corrected in the verdict text and the comments. The mechanism changing and
+   the label not is how a reader is taught the wrong thing by a green run.
+3. **A narrow assertion stated broadly.** The PUBLIC-policy assertion fired
+   only on a permissive policy whose qualifier is literally absent or `true`,
+   so `1=1` passed it while the message claimed the general case. **The
+   recommended replacement — pin on `polroles = '{0}' AND polpermissive`
+   alone, since these relations own no legitimate PUBLIC policy — was
+   implemented and MEASURED, and it is false:** every relation of this pack
+   carries exactly such a policy by design, its own permissive
+   `tenant_membership` with no `TO` clause, and the pack refused itself on its
+   own schema (`product_attribute_axes carries a permissive policy applied to
+   PUBLIC`). *"A qualifier true of every row"* is not decidable in SQL, so no
+   form of the assertion is both sound and complete. What is decidable is the
+   **policy SET**, so the pack now refuses to install unless each of its
+   relations carries exactly the two policies it reasoned about — which
+   catches an added PUBLIC policy whatever its qualifier, and a removed one
+   too — with a **named list of tautology spellings** beside it for the one
+   case the set pin cannot see: the two policies themselves rewritten to a
+   tautology. The residual is `PR-SEC-P11-01`'s and is stated as a residual.
+   This is the second recommendation of this challenger's that measurement
+   has refused, and both refusals produced a better assertion than either
+   side proposed.
+4. **The split GRANT/REVOKE**, which left a privilege on another phase's
+   relation if the first case failed, is one case now, whose last statement
+   revokes whatever the reads said and which then asserts the grant is gone.
+   And the DEFINER refusal in the end-state assertion read
+   `pg_proc.proname` unqualified, so a same-named function in another schema
+   would have answered for the one the trigger calls; it reads
+   `pg_trigger.tgfoid` now.
+
+### 9.3 Run identity of this round
+
+| field | value |
+|---|---|
+| `RUN_ID` | **`p11-20261012T155328Z-18615`** |
+| `SOURCE_SHA` | **`0db94504abdc6b9142564e655c8032613214c06d`**, `SOURCE_TREE_DIRTY : no` |
+| `PACK_A_DDL_SHA256` | `36913f0d6f79d81488bc80a8e9b467b3f6c9622106b1f2f16632c6240c18a8c7` |
+| `PACK_B_DDL_SHA256` | `27bca629dc4d0ed238204e0e0cc11828db53808868dbae5c0854118410c5f60a` |
+| `HARNESS_SHA256` | `76425738a036fd42c7dd3fdadfa1a53c156a27b84a5173f095330d4098ce5639` |
+| PostgreSQL | **16.15**, cluster built by the harness itself; `DB_COLLATION en_US.utf8 / en_US.utf8 / UTF8`, read off the database under test |
+| migrations | `0000`–`0086`, **87/87**, as **non-superuser** `daftar_migrator`; each pack in ONE transaction, end-state assertion as its last statement |
+| frozen tree after the run | 0 tracked changes under `infrastructure/database`; `frozenThrough = 0079`; 80 entries, **0 digest mismatches** |
+
+Commands, verbatim:
+
+```
+bash prep/phase11/harness/rebuild_and_prove.sh
+```
+
+Exit codes, printed by the run itself:
+
+```
+EXIT_PROOFS_A     : 0     46 cases, 0 failed
+EXIT_PROOFS_B     : 0     31 cases, 0 failed
+EXIT_PROOFS_A_RUN2: 0     the same file, the same database — idempotence
+EXIT_PROOFS_B_RUN2: 0     the same file, the same database — idempotence
+EXIT_RACES        : 0     9 races, 0 findings
+EXIT_SCRIPT       : 0
+```
+
+### 9.4 Idempotence, and the order dependence it uncovered
+
+The challenger's disclosure of its own method's limits carried a finding
+about this preparation: *"your suite is not idempotent — a second run on the
+same database fails 7 cases with no mutation at all, because its own writes
+persist. The harness always rebuilds, so it never bites you, but it cost me a
+run and it would mislead any reviewer who re-runs for a quick check."* It is
+also a correctness hazard in the direction that matters: **a mutation
+measured on a dirty database measures the dirt**, which is why that
+challenger discarded its own first coverage run.
+
+Both suites are fixed — every write that outlives its case is
+conflict-tolerant, and the cases assert the committed state rather than the
+fact of an insert — and the claim is **measured, not asserted**: step 6c of
+the harness runs each suite a second time on the database the first run just
+wrote and requires `0` both times. `races.py` keeps its append-only design
+within a run (`stock_levels_retain()` forbids deleting a stock key at all, so
+a clean slate inside one database is not available) and takes a **per-run
+namespace** instead — products, variants, SKUs, value codes and sort orders —
+so a second run adds a generation beside the first and measures its own.
+
+Then a **third** run, after the races, found one more case of the same class
+that the second run could not: *"a value no variant names is still
+archivable"* archived the world's size `l`, and race B2 names `l` in a
+committed variant. The case was true only while `proofs.py` ran **before**
+`races.py` — a verdict that depended on the order the harness happens to call
+its files in. It registers its own probe value now. **Idempotence of a file
+is not independence of a suite**, and both have to be measured.
+
+### 9.5 The new mechanisms are mutation-covered
+
+Measured on the database the clean run left, which the idempotence proof
+above makes a legitimate baseline (`RUN-EVIDENCE-MUTATIONS-0db9450.txt`):
+
+| mutation | `proofs.py` exit | cases failed | which |
+|---|---|---|---|
+| baseline (a third run on that database) | **0** | 0 | — |
+| `DROP TRIGGER product_matrix_axes_30_set_frozen` | **1** | 2 | the `P1-N01` refusal (`no error`) and the committed-state count, which reads **1** non-conforming variant |
+| the `P2-N02` branch removed from `product_attribute_axes_10_axis_in_use` | **1** | 1 | the archive of an axis a matrix registers (`no error`) |
+| the renderer's completeness check made inert again (`if left and False`) | **1** (`--selftest`) | — | the RED case reports `rc=0, output written=True` → `SELFTEST FAILED: the check is inert` |
+
+Each mutation was restored and the baseline re-measured at `0` before the
+next, and the committed state the mutated run left behind was undone.
+
+### 9.6 What remains unsigned after this round
+
+- **A third challenge is OWED.** The answered head is not the reviewed head,
+  and this round's new surface — the freeze guard, the advisory lock pair,
+  races G and H, the renderer and its selftest, the policy-set pin — is
+  **the least reviewed code in the pack**, which is where this project has
+  repeatedly found its worst defects. Nothing here is signed by its author.
+- `READY_TO_PROMOTE` = **NO**. No migration number exists. No CI has executed
+  any of this, and the container's Node (22.22.0 against `engines >=24 <25`)
+  means no npm suite was run or claimed.
+- Packs C and D (serial, repair/warranty) remain `SPEC ONLY`.
+- `OD-P11-07` is the owner's.
+- `PR-SEC-P11-01` (the standing RLS invariant check pinning `product_variants`'
+  policy set) is the Security Authority's, and `MPR-07` (trigger positions,
+  now including `_30_` on `product_matrix_axes`) is the Migration Owner's.

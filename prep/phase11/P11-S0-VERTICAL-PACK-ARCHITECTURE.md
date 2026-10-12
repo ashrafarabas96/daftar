@@ -514,3 +514,38 @@ believed — exactly as the reviewer's findings were.
 - It was written from a **read** of the tree at `93084f8`, and that is no longer the whole story: **Pack A (apparel) has since been applied, unnumbered, to a scratch cluster** — 21 serial cases and **4 real-concurrency races** green over the frozen prefix applied **as `daftar_migrator`**, at `e27acaf` with every exit code `0` (`P11-LIVE-DDL-PROOF.md`; raw log `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-e27acaf.txt`, with the earlier logs kept). So `C-APP-01` and `C-APP-02` are `PROVEN BY TEST` and the live RLS shape on `stock_levels` is `PROVEN BY DATABASE CATALOGUE`. **That is not CI**, no npm suite ran (this container is Node 22.22.0 against `engines.node >=24 <25`), no gate exists yet, and lot, serial and repair remain untouched by any run. Every verdict outside those is therefore still `SPEC ONLY` or `UNMEASURED`, never combined with another class (§82 classes: `PROVEN IN LIVE CODE` / `PROVEN BY TEST` / `PROVEN BY DATABASE CATALOGUE` / `DESIGN ONLY` / `SPEC ONLY` / `UNMEASURED` / `BLOCKED` / `WAITING_FOR_INTEGRATED_SURFACE`), and this document says so rather than implying design equals proof. The S7 lesson is the standing one: **a spec is design until a parser has had an opinion, and still design until the principal that will apply it has had one.**
 - `0080`–`0086` are unfrozen. Any citation into them describes a candidate, not frozen law, and the patch request re-reads the live effective definition at allocation time instead of pinning a number.
 - `PROJECT_STATUS.md` at this head still describes the S4 candidates as `0080`–`0082`, while the tree carries `0080`–`0086`. That is documentation drift, recorded here and not silently corrected: the live code is the fact (Master Part 1), and the canonical status page belongs to the coordinator, not to this preparation.
+
+
+### `P11-AL-30` — an equality is a law about both of its sides
+
+**The measurement.** `C-APP-01`'s first clause had read *"a matrix product's variant
+`attributes` is exactly its registered axis set"* since S0. Round 1 of the independent
+challenge found it enforced only on the VARIANT side and added every removal path on
+both registries — twenty cases. Round 2 then defeated the same clause with **one
+`INSERT INTO product_matrix_axes`**: adding an axis under a product that already had
+variants, which changes the OTHER side of the equality and leaves a committed variant
+nothing can address through the matrix while it keeps its own stock key.
+
+**The decision.** A law written as an equality (`X is exactly Y`) is a law about every
+transition that can change `X` **or** `Y`, and a guard list that covers one side is half
+a guard list. When a law is drafted, both sides are enumerated and each one's writers
+are named; when a law is reviewed, the question is not *"is this enforced?"* but
+*"which side of it is enforced, and by what?"* The new gate arm `add-direction` carries
+it, beside `removal-direction` from round 1 — and the pair is itself the lesson: two
+rounds, same sentence, two unguarded directions, because each round asked whether the
+law was enforced and not which half of it was. Related: [[P11-AL-29]].
+
+### `P11-AL-31` — a guard that is lawfully silent needs the arrival order that proves it
+
+**The measurement.** Race H (a third axis added, then a variant inserted concurrently)
+does not fire the freeze guard at all: when the axis is added the product has no
+variants, so the add is lawful. The invariant is held by the OTHER side — the variant's
+completeness count, which sees the third axis once it stops waiting on the advisory
+lock. Had only race G been run, the pass would have been read as *"the freeze guard
+holds this invariant under concurrency"*, which is false in one of the two orders.
+
+**The decision.** For a two-sided law under concurrency, every arrival order is run and
+**the verdict names which mechanism held the invariant in that order**. A guard being
+silent and a guard being absent produce the same green, and only the order that makes it
+speak distinguishes them. This is `race-estate`'s both-orders arm, sharpened: not only
+*run both orders*, but *say what did the work in each*.

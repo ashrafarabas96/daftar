@@ -1,0 +1,23 @@
+=== MUTATION MEASUREMENT, one guard at a time, on the database the clean run left ===
+-- baseline, the third run of proofs.py on this database --
+
+TOTAL 46 cases, 0 failed
+-- M1: DROP TRIGGER product_matrix_axes_30_set_frozen (the P1-N01 guard) --
+P1-N01 an axis cannot be ADDED to a matrix that already has variants     **PROOF FAILED**             no error
+P1-N01 and no committed variant of this business names other than exactly its product's registered set **PROOF FAILED**             1
+TOTAL 46 cases, 2 failed
+-- restore, and the state the mutated run committed is undone --
+
+TOTAL 46 cases, 0 failed
+-- M2: the P2-N02 branch removed from product_attribute_axes_10_axis_in_use --
+P2-N02 an axis a product's matrix registers cannot be archived either    **PROOF FAILED**             no error
+TOTAL 46 cases, 1 failed
+-- restore --
+
+TOTAL 46 cases, 0 failed
+-- M3: the renderer's completeness check made inert again (the P3-N03 shape) --
+bootstrap rendered: 2 placeholders substituted, 0 left
+  selftest RED case  : rc=0, output written=True -> **SELFTEST FAILED: the check is inert**
+bootstrap rendered: 1 placeholders substituted, 0 left
+  selftest GREEN case: rc=0 -> renders and passes
+selftest exit code with the check made inert: 1 (1 = the mutation is caught)

@@ -450,9 +450,53 @@ Pack A changes no grant and no policy outside its own five relations.
 
 ### 12.3 Owed to the Migration Owner
 
-**MPR-07.** The four triggers above occupy `product_matrix_axes._10_` / `._20_`,
-`product_attribute_values._10_` and `product_attribute_axes._10_`, and the validator on
-`product_variants` stays at `_40_`. Trigger **name order decides firing order for the
+**MPR-07.** The **five** triggers above occupy `product_matrix_axes._10_` / `._20_` /
+**`._30_`** (the freeze guard of the ADD direction, added in the second challenge
+round), `product_attribute_values._10_` and `product_attribute_axes._10_`, and the
+validator on `product_variants` stays at `_40_`. The position of `._30_` is not
+decorative: `._20_` (an archived axis cannot be registered) must fire **before** it, so
+a merchant registering an archived axis on an empty grid is told which of the two
+reasons applies. Pack A's end-state assertion asserts each trigger's **statement kinds**
+(`INSERT` / `DELETE` / `UPDATE`) and not merely its existence, so a renumbering that
+also changed an event would be caught. Trigger **name order decides firing order for the
 same event**, so the Owner is asked to confirm these positions when the pack is
 allocated — and, if another phase has since taken one, to renumber rather than let two
 guards race for first.
+
+
+---
+
+## 13. The second challenge round, and what it owes whom
+
+The round's three findings are answered in `P11-LIVE-DDL-PROOF.md` §9 and nothing
+in it is owed to another authority: all three fixes are **inside Pack A**, and
+Pack A still changes no grant and no policy outside its own five relations.
+
+### 13.1 What changed inside the pack
+
+| | |
+|---|---|
+| `product_matrix_axes_30_set_frozen` | new `BEFORE INSERT` guard, `SECURITY INVOKER`, refusing `catalog.matrix_axis_set_frozen` when the product already carries a non-base variant |
+| `product_variants_40_matrix_canonical` | takes `pg_advisory_xact_lock_shared(hashtextextended(business_id || '/' || product_id, 0))` above its early return; the freeze guard takes the **exclusive** form of the same key. Nothing else about the function changed |
+| `product_attribute_axes_10_axis_in_use` | second `EXISTS`, on `product_matrix_axes`, which is the relation its own comment was about |
+| the end-state assertion | the trigger table asserts `INSERT` as well as `DELETE`/`UPDATE`; the DEFINER refusal reads `pg_trigger.tgfoid` instead of an unqualified `pg_proc.proname`; the PUBLIC-policy pin became a **policy-SET pin per relation** plus a named tautology list (§13.2) |
+
+### 13.2 A recommendation measured and refused, for the second time in this phase
+
+The challenger asked for the PUBLIC-policy assertion to pin on
+`polroles = '{0}' AND polpermissive` alone, *"since the pack's own relations own no
+legitimate PUBLIC policy at all"*. Implemented, the pack **refused itself**: every one
+of its five relations carries exactly such a policy by design — its own permissive
+`tenant_membership`, with no `TO` clause, so `polroles = '{0}'`. The thing the
+assertion is about, *a qualifier true of every row*, is not decidable in SQL, so the
+assertion pins the **policy set** (decidable, and it catches an added PUBLIC policy
+whatever its qualifier) and keeps a named list of tautology spellings for the case the
+set pin cannot see. `PR-SEC-P11-01` is unchanged and is still the only place the
+residual can be answered.
+
+### 13.3 Owed, unchanged
+
+`PR-SEC-P11-01` (Security Authority), `MPR-07` (Migration Owner, now five triggers),
+the Pack B grants and the registered operation code for lot configuration (inventory
+authority), and `OD-P11-07` (the owner's). **No migration number exists**, and a third
+challenge round is owed before anything here is signed.
