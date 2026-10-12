@@ -99,6 +99,52 @@ export function resolveHost(host: string, allowlist: readonly ProviderSpec[] = A
 }
 
 // ---------------------------------------------------------------------------
+// One tenant per inference call — Mission §19
+// ---------------------------------------------------------------------------
+
+/**
+ * A piece of context about to be sent for inference, tagged with whose data it is.
+ *
+ * Mission §19 forbids *"سياق مختلط بين المستأجرين"* — mixed tenant context. The tag is on every
+ * fragment rather than on the request as a whole, because the request's own label is exactly what a
+ * mixing bug would leave correct: a batching layer, a shared cache, or a "recent items" helper
+ * contributes one foreign fragment while the request still says it belongs to one tenant.
+ */
+export interface ContextFragment {
+  readonly tenantId: string;
+  readonly businessId: string;
+  readonly label: string;
+}
+
+/**
+ * Assert that everything being sent belongs to exactly the acting tenant and business.
+ *
+ * Refuses on a foreign fragment, **naming the fragment's label** rather than reporting that something
+ * was mixed — the latter is unactionable, and an auditor needs to know which path contributed it. Also
+ * refuses an empty context: there is nothing to send, and a call with nothing to reason about is a
+ * defect upstream rather than a cheap success here (PART 17).
+ */
+export function assertSingleTenantContext(
+  actor: { readonly tenantId: string; readonly businessId: string },
+  fragments: readonly ContextFragment[],
+): Decision<true> {
+  if (fragments.length === 0) {
+    return deny(refuse('ai_provider.tenant_context_mixed', { detail: 'empty context — nothing to send, which is an upstream defect' }));
+  }
+  for (const fragment of fragments) {
+    if (fragment.tenantId !== actor.tenantId || fragment.businessId !== actor.businessId) {
+      return deny(
+        refuse('ai_provider.tenant_context_mixed', {
+          field: fragment.label,
+          detail: `${fragment.tenantId}/${fragment.businessId} is not the acting ${actor.tenantId}/${actor.businessId}`,
+        }),
+      );
+    }
+  }
+  return allow(true);
+}
+
+// ---------------------------------------------------------------------------
 // Audit minimization (§71) and retention (§72)
 // ---------------------------------------------------------------------------
 

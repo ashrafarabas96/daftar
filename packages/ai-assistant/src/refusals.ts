@@ -41,6 +41,9 @@ export const REFUSAL_CODES = [
   // PART 75: a redirect away from an approved host. Refused; never followed, and no credential is
   // forwarded to the redirected origin.
   'ai_provider.redirect_refused',
+  // Mission §19: the context sent for inference carries data from more than one tenant or business.
+  // A separate code from `not_approved` because the defect is in the PAYLOAD, not the destination.
+  'ai_provider.tenant_context_mixed',
   // Provider boundary (TL §70 / TL-P12-R2). Four codes, not one: an auditor must be able to tell an
   // attempt to CHOOSE a provider from merely naming an unapproved one.
   'ai_provider.selection_not_server_controlled',

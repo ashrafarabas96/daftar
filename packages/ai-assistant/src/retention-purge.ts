@@ -47,6 +47,31 @@ export const AUDIT_IDENTITY_FIELDS: readonly string[] = [
   'providerIdentifier',
 ];
 
+/**
+ * Financial facts, which the purge must also keep.
+ *
+ * Master Continuous Mission §19 adds this to PART 77 in so many words: *"لا يمحو الاحتفاظ أو التطهير
+ * هويات التدقيق أو الوقائع المالية"* — neither retention nor purge erases audit identities **or
+ * financial facts**.
+ *
+ * They are listed separately from the identities above because they are a different kind of thing and
+ * the reason they survive is different. An identity survives so an auditor can see who acted. A
+ * financial fact survives because **posted history is immutable** (PART 12, the program's oldest law):
+ * the link from a confirmation to the transaction it executed is part of that history, and a retention
+ * policy is not a route around immutability. A policy that could quietly shorten the life of a
+ * financial record would be a second authority over financial truth, which Phase 12 is not.
+ */
+export const FINANCIAL_FACT_FIELDS: readonly string[] = [
+  'businessTransactionId',
+  'submittedDigest',
+  'draftVersion',
+  'decision',
+  'currencyCode',
+  'totalMinor',
+  'paidMinor',
+  'outstandingMinor',
+];
+
 /** Columns a purge redacts once the retention period has elapsed. Content, not identity. */
 export const PURGEABLE_CONTENT_FIELDS: readonly string[] = ['transcriptText', 'audioObjectKey', 'promptText', 'modelOutputText', 'argumentsJson'];
 
@@ -108,10 +133,14 @@ export function planPurge(plan: PurgePlan): Decision<PurgeExecution> {
     return deny(refuse('ai.purge_scope_unsafe', { field: 'redactFields', detail: 'a purge that redacts nothing is not a purge' }));
   }
   const identities = new Set(AUDIT_IDENTITY_FIELDS);
+  const financial = new Set(FINANCIAL_FACT_FIELDS);
   const purgeable = new Set(PURGEABLE_CONTENT_FIELDS);
   for (const field of plan.redactFields) {
     if (identities.has(field)) {
       return deny(refuse('ai.purge_scope_unsafe', { field, detail: 'audit identity field — kept on its own lifecycle, never purged with content' }));
+    }
+    if (financial.has(field)) {
+      return deny(refuse('ai.purge_scope_unsafe', { field, detail: 'financial fact — posted history is immutable; retention is not a route around it' }));
     }
     if (!purgeable.has(field)) {
       return deny(refuse('ai.purge_scope_unsafe', { field, detail: 'not a declared purgeable content field' }));
@@ -123,5 +152,8 @@ export function planPurge(plan: PurgePlan): Decision<PurgeExecution> {
 /** The identity and content lists share no member. Asserted by a test as well as returned here. */
 export function lifecyclesAreSeparate(): boolean {
   const purgeable = new Set(PURGEABLE_CONTENT_FIELDS);
-  return !AUDIT_IDENTITY_FIELDS.some((f) => purgeable.has(f));
+  return ![...AUDIT_IDENTITY_FIELDS, ...FINANCIAL_FACT_FIELDS].some((f) => purgeable.has(f));
 }
+
+/** Every field the purge must never touch, from both protected classes. */
+export const NEVER_PURGEABLE_FIELDS: readonly string[] = [...AUDIT_IDENTITY_FIELDS, ...FINANCIAL_FACT_FIELDS];

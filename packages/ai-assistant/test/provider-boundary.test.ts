@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   APPROVED_PROVIDERS,
+  assertSingleTenantContext,
   DEFAULT_RETENTION,
   evaluateRedirect,
   FORWARD_NOTHING,
@@ -235,5 +236,41 @@ describe('provider redirects are REFUSED (PART 75)', () => {
     // And the default-allowlist host is NOT approved under that list, so the check really consulted it.
     const toDefault = evaluateRedirect({ fromHost: 'other.invalid', status: 307, locationHost: 'fake.invalid' }, { allowRedirects: true, allowlist: other });
     expect(toDefault.ok).toBe(false);
+  });
+});
+
+describe('one tenant per inference call — no mixed context (Mission §19)', () => {
+  const actor = { tenantId: 't1', businessId: 'b1' };
+  const own = [
+    { tenantId: 't1', businessId: 'b1', label: 'customer.balance' },
+    { tenantId: 't1', businessId: 'b1', label: 'recent.sales' },
+  ];
+
+  it('accepts a context entirely within the acting tenant and business', () => {
+    expect(assertSingleTenantContext(actor, own).ok).toBe(true);
+  });
+
+  it('REFUSES one foreign fragment and names the path that contributed it', () => {
+    // The request's own label stays correct in a mixing bug; it is the fragment that is wrong. A
+    // batching layer or a shared cache is what contributes it.
+    const decision = assertSingleTenantContext(actor, [...own, { tenantId: 't2', businessId: 'b9', label: 'cache.recentItems' }]);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.refusal.code).toBe('ai_provider.tenant_context_mixed');
+      expect(decision.refusal.field).toBe('cache.recentItems');
+      expect(decision.refusal.detail).toContain('t2/b9');
+    }
+  });
+
+  it('REFUSES a fragment from the same tenant but a DIFFERENT business', () => {
+    const decision = assertSingleTenantContext(actor, [{ tenantId: 't1', businessId: 'b2', label: 'sibling.branch' }]);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.field).toBe('sibling.branch');
+  });
+
+  it('NON-VACUITY: refuses an EMPTY context rather than passing it', () => {
+    const decision = assertSingleTenantContext(actor, []);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.detail).toContain('empty');
   });
 });

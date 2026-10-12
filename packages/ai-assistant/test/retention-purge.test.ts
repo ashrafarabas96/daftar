@@ -7,7 +7,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { AUDIT_IDENTITY_FIELDS, lifecyclesAreSeparate, planPurge, PURGEABLE_CONTENT_FIELDS, type PurgePlan } from '../src/retention-purge';
+import {
+  AUDIT_IDENTITY_FIELDS,
+  FINANCIAL_FACT_FIELDS,
+  lifecyclesAreSeparate,
+  NEVER_PURGEABLE_FIELDS,
+  planPurge,
+  PURGEABLE_CONTENT_FIELDS,
+  type PurgePlan,
+} from '../src/retention-purge';
 
 const CONFIGURED = { keepAudio: false, transcriptDays: 90 } as const;
 
@@ -141,5 +149,43 @@ describe('NON-VACUITY', () => {
     const decision = planPurge(plan());
     expect(decision.ok).toBe(true);
     if (decision.ok) expect(Object.keys(decision.value).sort()).toEqual(['redactFields', 'scope', 'transcriptCutoffDays']);
+  });
+});
+
+describe('the purge erases no FINANCIAL FACT either (Mission §19)', () => {
+  it.each(FINANCIAL_FACT_FIELDS)('REFUSES a purge that would redact the financial fact %s', (field) => {
+    const decision = planPurge(plan({ redactFields: [field] }));
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.refusal.code).toBe('ai.purge_scope_unsafe');
+      expect(decision.refusal.field).toBe(field);
+      expect(decision.refusal.detail).toContain('financial fact');
+    }
+  });
+
+  it('gives a financial fact its OWN reason, not the audit-identity one', () => {
+    // The two survive for different reasons — an identity so an auditor can see who acted, a
+    // financial fact because posted history is immutable. An auditor reading the refusal should be
+    // told which law was invoked.
+    const identity = planPurge(plan({ redactFields: ['actorUserId'] }));
+    const financial = planPurge(plan({ redactFields: ['businessTransactionId'] }));
+    expect(identity.ok).toBe(false);
+    expect(financial.ok).toBe(false);
+    if (!identity.ok && !financial.ok) {
+      expect(identity.refusal.detail).toContain('audit identity');
+      expect(financial.refusal.detail).toContain('immutable');
+      expect(identity.refusal.detail).not.toBe(financial.refusal.detail);
+    }
+  });
+
+  it('keeps all three classes disjoint — protected fields are never also purgeable', () => {
+    expect(lifecyclesAreSeparate()).toBe(true);
+    expect(new Set(NEVER_PURGEABLE_FIELDS).size).toBe(AUDIT_IDENTITY_FIELDS.length + FINANCIAL_FACT_FIELDS.length);
+  });
+
+  it('refuses a financial fact hidden among legitimate content fields', () => {
+    const decision = planPurge(plan({ redactFields: ['transcriptText', 'totalMinor', 'promptText'] }));
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.field).toBe('totalMinor');
   });
 });
