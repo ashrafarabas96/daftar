@@ -44,6 +44,8 @@
     "verify:role-convergence": "tsx scripts/phase15/verify-role-convergence.ts",
     "verify:gap-list:static": "tsx scripts/phase15/gap-list-verification.ts --no-cluster",
     "verify:evidence-log": "tsx scripts/phase15/run-evidence-log.ts",
+    "verify:role-attributes": "tsx scripts/phase15/role-attribute-read.ts",
+    "verify:role-attributes:prove": "tsx scripts/phase15/role-attribute-read-proof.ts",
     "dr:proof": "tsx scripts/phase15/backup-restore-proof.ts",
     "dr:proof:prove": "tsx scripts/phase15/backup-restore-proof.ts --prove-detection",
     "pitr:proof": "tsx scripts/phase15/pitr-proof.ts",

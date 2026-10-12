@@ -44,12 +44,41 @@ const ROOT = resolve(__dirname, '../..');
 const RULES = '/mnt/project-files/phase15/P15-ALERT-RULES.json';
 const METRICS = 'apps/api/src/infra/metrics.ts';
 
+interface Resolution {
+  readonly class: string;
+  readonly derivation: string;
+  readonly clearing_is_a_fix: boolean;
+  readonly closure_requirement: string;
+  readonly closure_recorded_today: boolean;
+}
+
 interface Rule {
   readonly id: string;
   readonly title: string;
   readonly signal: string;
   readonly signal_source: string;
+  readonly condition: string;
   readonly exists_today: boolean;
+  readonly resolution?: Resolution;
+}
+
+/**
+ * Re-derive a rule's resolution class FROM ITS EXPRESSION, independently of
+ * whatever the rules file claims.
+ *
+ * This exists because the resolution model is data in a file this branch owns,
+ * and data a branch owns is exactly the kind of claim that drifts from the
+ * thing it describes. The classes are not labels chosen per rule: each one is a
+ * property of the expression text, so it can be computed here and compared.
+ * If an expression is edited and its class is not, this disagrees and says so.
+ */
+function deriveResolutionClass(condition: string): string {
+  if (condition.includes('UNMEASURED-THRESHOLD')) return 'cannot_fire_no_threshold';
+  if (/\b(increase|rate)\s*\(/.test(condition) && !condition.includes('histogram_quantile') && !condition.includes('/')) {
+    return 'self_clearing_window';
+  }
+  if (condition.includes('histogram_quantile') || condition.includes('/')) return 'state_based_clears_on_no_traffic';
+  return 'state_based';
 }
 
 /** Every metric name the application declares, and the line declaring it. */
@@ -251,6 +280,8 @@ function main(): number {
   const emittedRules = rules.filter((r) => sites.has(r.signal));
   console.log(`${rules.length} rules: ${rules.length - stale} with claims matching the tree, ${stale} stale`);
   console.log(`${emittedRules.length} of ${rules.length} rules name a signal that is emitted today${exp.present ? '' : ', and none can fire while there is no exporter'}`);
+  const resolutionProblems: string[] = [];
+
   /* ── §22.2's table: name → emit site → receiver → fire/resolution ─────── */
   console.log('');
   console.log('§22.2 — THE METRIC/ALERT TABLE: name, emit site, receiver, fire and resolution');
@@ -278,14 +309,59 @@ function main(): number {
   console.log('  retention here, so the column stays empty until the owner fills it. A rule with a');
   console.log('  condition and no receiver is a rule that fires into nothing.');
   console.log('');
-  console.log('RESOLUTION is not modelled at all. Every rule states a fire condition and a `for`');
-  console.log('  duration; none states when it clears. An alert that cannot resolve has to be');
-  console.log('  silenced by hand, and a page that must be silenced by hand gets ignored.');
+  /* ── the resolution model, re-derived rather than trusted ─────────────── */
+  console.log('RESOLUTION IS NOW MODELLED — and this section CHECKS the model instead of reading it.');
+  console.log('  Each rule carries a `resolution` whose class is a property of its own expression, so');
+  console.log('  the class is re-derived here from the condition text and compared. A rule whose');
+  console.log('  expression was edited without its class being updated fails this check.');
+  console.log('');
+  const missing: string[] = [];
+  const mismatched: string[] = [];
+  const noClosure: string[] = [];
+  const falselyFixed: string[] = [];
+  const byClass = new Map<string, number>();
+  for (const r of rules) {
+    const res = r.resolution;
+    if (res === undefined) {
+      missing.push(r.id);
+      continue;
+    }
+    const want = deriveResolutionClass(r.condition);
+    byClass.set(res.class, (byClass.get(res.class) ?? 0) + 1);
+    if (res.class !== want) mismatched.push(`${r.id}: file says ${res.class}, the expression gives ${want}`);
+    if (res.closure_requirement.trim().length === 0) noClosure.push(r.id);
+    // The one substantive cross-check: a window-sliding rule clears itself, so
+    // calling its clear a fix is the error the whole model exists to prevent.
+    if (res.class === 'self_clearing_window' && res.clearing_is_a_fix) falselyFixed.push(r.id);
+    if (res.class === 'state_based' && !res.clearing_is_a_fix) falselyFixed.push(r.id);
+  }
+  for (const [cls, n] of [...byClass.entries()].sort()) console.log(`  ${String(n).padStart(2)} × ${cls}`);
+  console.log('');
+  console.log('  The hazard the model names: a rule whose expression is a counter increase over a');
+  console.log('  sliding window goes false once the window slides PAST the event, whether or not');
+  console.log(`  anything was fixed. ${byClass.get('self_clearing_window') ?? 0} of the ${rules.length} rules are that shape, so for those a clear is`);
+  console.log('  not a fix and closure needs the recorded action the rule names.');
+  console.log(`  ${byClass.get('state_based_clears_on_no_traffic') ?? 0} more are a quantile or ratio over live traffic: they also fall when traffic`);
+  console.log('  stops, so a clear has to be read together with traffic volume.');
+  console.log('');
+  console.log('  closure_recorded_today is FALSE for every rule, and that is a measurement: no');
+  console.log('  closure record exists in the repository, because no rule can fire without an');
+  console.log('  exporter and a receiver. The requirements are the contract for when there is one.');
+  if (missing.length > 0) resolutionProblems.push(`${missing.length} rule(s) carry no resolution: ${missing.join(', ')}`);
+  for (const m of mismatched) resolutionProblems.push(`class disagrees with the expression — ${m}`);
+  if (noClosure.length > 0) resolutionProblems.push(`empty closure_requirement: ${noClosure.join(', ')}`);
+  for (const f of falselyFixed) resolutionProblems.push(`${f}: clearing_is_a_fix contradicts the class`);
   console.log('');
   console.log('WHAT THIS DOES NOT DECIDE');
   console.log('  The alert destination, the dashboards and the incident rota are owner');
   console.log('  decisions. The exporter is a change to apps/api/src/infra/metrics.ts,');
   console.log('  which is not this branch’s file: it goes to its owner as a patch request.');
+  if (resolutionProblems.length > 0) {
+    console.log('');
+    console.log('EXIT 1 — THE RESOLUTION MODEL DOES NOT MATCH THE RULES IT DESCRIBES:');
+    for (const p of resolutionProblems) console.log(`  · ${p}`);
+    return 1;
+  }
   if (stale > 0) {
     console.log('');
     console.log(`EXIT 1: ${problems.join(', ')} assert something about the tree that the tree does not say.`);

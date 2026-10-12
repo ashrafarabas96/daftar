@@ -1,0 +1,109 @@
+/**
+ * Positive and negative control for `verify:role-attributes`, on a disposable
+ * cluster. PART 10 requires both: a control proving the clean case reads clean,
+ * and a control proving a planted attribute is actually caught.
+ */
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
+import { prepareClusterDir, startCluster, stopCluster, PG_SUPERPASS, type ClusterSpec } from './pg-cluster';
+
+const DIR = '/tmp/daftar-p15-roleread';
+const PORT = 55487;
+const spec: ClusterSpec = { dir: DIR, port: PORT, label: 'roleread' };
+
+function psqlRun(sql: string): void {
+  const r = spawnSync('/usr/lib/postgresql/16/bin/psql', ['-h', '127.0.0.1', '-p', String(PORT), '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', sql], {
+    encoding: 'utf8',
+    env: { ...process.env, PGPASSWORD: PG_SUPERPASS },
+  });
+  if (r.status !== 0) throw new Error(`psql failed: ${r.stderr?.slice(0, 300) ?? ''}`);
+}
+
+function readAttributes(url: string): { status: number | null; out: string } {
+  const r = spawnSync('npx', ['tsx', 'scripts/phase15/role-attribute-read.ts'], {
+    cwd: '/home/user/daftar',
+    encoding: 'utf8',
+    env: { ...process.env, P15_ROLE_READ_URL: url },
+  });
+  return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+}
+
+function main(): number {
+  prepareClusterDir(DIR);
+  startCluster(spec);
+  let failures = 0;
+  try {
+    psqlRun("CREATE ROLE daftar_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'p15app'");
+    psqlRun("CREATE ROLE daftar_reconciler LOGIN NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'p15rec'");
+    psqlRun("CREATE ROLE daftar_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'p15mig'");
+    psqlRun("CREATE ROLE p15_reader LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'p15read'");
+    const readerUrl = `postgresql://p15_reader:p15read@127.0.0.1:${PORT}/postgres`;
+
+    console.log('='.repeat(78));
+    console.log('CONTROL 1 (POSITIVE) — clean roles, read by a NON-SUPERUSER: expect exit 0');
+    const c1 = readAttributes(readerUrl);
+    console.log(c1.out);
+    const c1ok = c1.status === 0 && c1.out.includes('no UNAUTHORISED elevated attribute') && c1.out.includes('is_superuser=off') && c1.out.includes('daftar_reconciler holds BYPASSRLS');
+    console.log(`CONTROL 1: ${c1ok ? 'PASS' : 'FAIL'} (exit ${String(c1.status)})`);
+    if (!c1ok) failures += 1;
+
+    console.log('='.repeat(78));
+    console.log('CONTROL 2 (NEGATIVE) — plant BYPASSRLS on daftar_app: expect exit 1 naming it');
+    psqlRun('ALTER ROLE daftar_app BYPASSRLS');
+    const c2 = readAttributes(readerUrl);
+    console.log(c2.out);
+    const c2ok = c2.status === 1 && c2.out.includes('daftar_app holds BYPASSRLS') && c2.out.includes('IMMEDIATE BLOCKER');
+    console.log(`CONTROL 2: ${c2ok ? 'PASS' : 'FAIL'} (exit ${String(c2.status)})`);
+    if (!c2ok) failures += 1;
+
+    console.log('='.repeat(78));
+    console.log('CONTROL 3 (NEGATIVE) — plant CREATEROLE on the RECONCILER, whose BYPASSRLS is');
+    console.log('authorised: the allow-list is per ATTRIBUTE, so this must still be caught.');
+    psqlRun('ALTER ROLE daftar_app NOBYPASSRLS');
+    psqlRun('ALTER ROLE daftar_reconciler CREATEROLE');
+    const c3 = readAttributes(readerUrl);
+    console.log(c3.out);
+    const c3ok = c3.status === 1 && c3.out.includes('daftar_reconciler holds CREATEROLE') && c3.out.includes('daftar_reconciler holds BYPASSRLS');
+    console.log(`CONTROL 3: ${c3ok ? 'PASS' : 'FAIL'} (exit ${String(c3.status)})`);
+    if (!c3ok) failures += 1;
+
+    console.log('='.repeat(78));
+    console.log('CONTROL 4 — the read is genuinely READ ONLY: a write attempt under the same');
+    console.log('connection settings must be refused BY THE SERVER, not by this code.');
+    console.log('');
+    console.log('  The first attempt at this control was WRONG and is kept here as the reason the');
+    console.log('  control is shaped this way. It tried to CREATE TABLE in schema public, and the');
+    console.log('  server refused with "permission denied for schema public" — a PRIVILEGE refusal,');
+    console.log('  not a read-only refusal. It would have passed a looser assertion while proving');
+    console.log('  nothing about read-only: when a different constraint stops the statement before');
+    console.log('  the intended one, the test does not establish the intended law (PART 12). So the');
+    console.log('  reader is first given a schema IT OWNS, where privilege cannot be the refuser,');
+    console.log('  and only the read-only setting can refuse.');
+    psqlRun('CREATE SCHEMA p15_reader_owned AUTHORIZATION p15_reader');
+    // Positive half: with writes allowed, the statement must SUCCEED — otherwise
+    // the negative half below would prove nothing.
+    const allowed = spawnSync('/usr/lib/postgresql/16/bin/psql', ['-h', '127.0.0.1', '-p', String(PORT), '-U', 'p15_reader', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'CREATE TABLE p15_reader_owned.allowed_probe(x int)'], {
+      encoding: 'utf8',
+      env: { ...process.env, PGPASSWORD: 'p15read' },
+    });
+    const canWriteWhenAllowed = allowed.status === 0;
+    console.log(`  with writes allowed, the same role CAN create there: ${canWriteWhenAllowed ? 'yes' : 'NO — this control is invalid'}`);
+    const w = spawnSync('/usr/lib/postgresql/16/bin/psql', ['-h', '127.0.0.1', '-p', String(PORT), '-U', 'p15_reader', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'CREATE TABLE p15_reader_owned.must_not_exist(x int)'], {
+      encoding: 'utf8',
+      env: { ...process.env, PGPASSWORD: 'p15read', PGOPTIONS: '-c default_transaction_read_only=on' },
+    });
+    const refusal = (w.stderr ?? '').trim().split('\n')[0] ?? '(nothing)';
+    const refused = w.status !== 0 && /read-only transaction/i.test(`${w.stderr ?? ''}`);
+    console.log(`  under default_transaction_read_only=on, the server said: ${refusal}`);
+    const ok4 = canWriteWhenAllowed && refused;
+    console.log(`CONTROL 4: ${ok4 ? 'PASS' : 'FAIL'} — the refusal must name a read-only transaction, not a privilege`);
+    if (!ok4) failures += 1;
+  } finally {
+    stopCluster(spec);
+  }
+  console.log('='.repeat(78));
+  console.log(failures === 0 ? 'ALL FOUR CONTROLS PASSED' : `${failures} CONTROL(S) FAILED`);
+  return failures === 0 ? 0 : 1;
+}
+
+process.exitCode = main();
