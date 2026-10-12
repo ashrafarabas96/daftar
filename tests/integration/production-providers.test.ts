@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../../apps/api/src/config';
-import { createObjectStorage, S3ObjectStorage } from '../../apps/api/src/infra/storage';
+import { ClamAvMalwareScanner, createMalwareScanner, createObjectStorage, S3ObjectStorage } from '../../apps/api/src/infra/storage';
 import { createCredentialDelivery, SmtpDelivery } from '../../apps/api/src/modules/delivery/smtp-delivery';
 import { RedisRateLimiter } from '../../apps/api/src/infra/redis';
 
@@ -31,6 +31,10 @@ const PROD_ENV: NodeJS.ProcessEnv = {
   WORKER_DATABASE_URL: 'postgresql://daftar_worker:x@db/daftar',
   JWT_SECRET: 'production-secret-with-at-least-32-characters',
   MEDIA_STORAGE: 's3',
+  // Owner ruling 2026-10-12 (fail-closed uploads): a production merchant
+  // surface does not start with the disabled scanner placeholder.
+  MALWARE_SCANNER: 'clamav',
+  MALWARE_SCANNER_URL: 'clamav://clamd.internal:3310',
   S3_ENDPOINT: 'https://s3.example.com',
   S3_BUCKET: 'daftar-media',
   S3_ACCESS_KEY_ID: 'AKIAEXAMPLE',
@@ -55,6 +59,10 @@ describe('production provider wiring (Gate A §20–32)', () => {
     const storage = createObjectStorage(config);
     expect(storage).toBeInstanceOf(S3ObjectStorage);
     expect(storage.kind).toBe('s3');
+    // …and the REAL scanner adapter, never the disabled placeholder.
+    const scanner = createMalwareScanner(config);
+    expect(scanner).toBeInstanceOf(ClamAvMalwareScanner);
+    expect(scanner.enabled).toBe(true);
   });
 
   it('NODE_ENV=production + CREDENTIAL_DELIVERY_KIND=smtp → REAL SMTP adapter', () => {
@@ -98,6 +106,11 @@ describe('production provider wiring (Gate A §20–32)', () => {
 
   it('production REFUSES local storage / log delivery / missing payload key / shared DB roles', () => {
     expect(() => loadConfig({ ...PROD_ENV, MEDIA_STORAGE: 'local' })).toThrow(/MEDIA_STORAGE/);
+    // Fail-closed uploads: the disabled scanner placeholder, and a real
+    // scanner with no address, are both production startup failures.
+    expect(() => loadConfig({ ...PROD_ENV, MALWARE_SCANNER: undefined })).toThrow(/MALWARE_SCANNER/);
+    expect(() => loadConfig({ ...PROD_ENV, MALWARE_SCANNER: 'disabled' })).toThrow(/MALWARE_SCANNER/);
+    expect(() => loadConfig({ ...PROD_ENV, MALWARE_SCANNER_URL: undefined })).toThrow(/MALWARE_SCANNER_URL/);
     expect(() => loadConfig({ ...PROD_ENV, CREDENTIAL_DELIVERY_KIND: 'log' })).toThrow(/CREDENTIAL_DELIVERY_KIND/);
     expect(() => loadConfig({ ...PROD_ENV, CREDENTIAL_PAYLOAD_KEY: undefined })).toThrow(/CREDENTIAL_PAYLOAD_KEY/);
     // §31: misconfiguration — worker credentials must not alias the app role.
@@ -111,6 +124,11 @@ describe('production provider wiring (Gate A §20–32)', () => {
       JWT_SECRET: 'dev-secret-with-at-least-32-characters!',
     });
     expect(createObjectStorage(devConfig).kind).toBe('local-development-only');
+    // The scanner factory follows the same law: disabled outside production,
+    // refused inside it — never a silent "scanned" claim.
+    expect(createMalwareScanner(devConfig).kind).toBe('disabled');
+    expect(createMalwareScanner(devConfig).enabled).toBe(false);
+    expect(() => createMalwareScanner({ ...devConfig, isProd: true })).toThrow(/forbidden in production/);
     expect(createCredentialDelivery(devConfig).kind).toBe('log-development-only');
     expect(() => createObjectStorage({ ...devConfig, MEDIA_STORAGE: 's3' })).toThrow(/S3_BUCKET/);
   });

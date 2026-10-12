@@ -1,4 +1,5 @@
 import { mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { connect } from 'node:net';
 import { dirname, join, normalize } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Injectable, Inject } from '@nestjs/common';
@@ -162,21 +163,151 @@ export function createObjectStorage(config: AppConfig): ObjectStorage {
 }
 
 /**
- * Malware scanning port (§64). Seam only. The development adapter is DISABLED
- * and says so — it never claims a file was scanned.
+ * Malware scanning port (§64) — FAIL-CLOSED (owner ruling, 2026-10-12).
+ *
+ * A verdict is a three-state FACT, never a boolean. `clean` may be produced
+ * ONLY by an adapter that really scanned these bytes and really got a clean
+ * answer. Everything else collapses to `unavailable`: disabled, unreachable,
+ * timed out, protocol error, or a reply the adapter cannot vouch for. There is
+ * no branch in this file that turns "we do not know" into "the file is fine",
+ * and no adapter here may report `clean` without a scan.
+ *
+ * The caller (media upload) REFUSES the upload on anything but `clean`, before
+ * a single byte reaches object storage or the database — so an unscanned file
+ * is never stored, and no restart can later promote one to "accepted".
  */
+export type MalwareVerdict =
+  | { readonly outcome: 'clean'; readonly scanner: string }
+  | { readonly outcome: 'infected'; readonly scanner: string; readonly signature: string }
+  | { readonly outcome: 'unavailable'; readonly scanner: string; readonly reason: string };
+
 export interface MalwareScanner {
-  /** Returns true only when a REAL scan found the file clean. */
-  scanClean(key: string): Promise<boolean>;
+  readonly kind: string;
+  /** True ONLY for an adapter that performs a real scan. A disabled adapter is false. */
   readonly enabled: boolean;
+  /** Scans the bytes BEFORE they are stored. Never returns `clean` unscanned. */
+  scan(input: { bytes: Buffer; filename: string }): Promise<MalwareVerdict>;
 }
 
+/**
+ * Development/test placeholder. It scans nothing, says so, and therefore
+ * refuses every upload that needs a scan: `unavailable` is the only verdict it
+ * can produce. It exists so the seam is wired in dev without pretending, and
+ * `createMalwareScanner` refuses to build it in production.
+ */
 export class DisabledDevelopmentMalwareScanner implements MalwareScanner {
+  readonly kind = 'disabled';
   readonly enabled = false;
-  scanClean(): Promise<boolean> {
-    // Honest: no scanning happened. Uploads still proceed in dev because Phase 1
-    // media is re-encoded (sharp) which strips payloads; production must wire a
-    // real scanner (ClamAV/cloud) before claiming `scanned`.
-    return Promise.resolve(false);
+  scan(): Promise<MalwareVerdict> {
+    // Honest: no scanning happened. Re-encoding (sharp) strips payloads from a
+    // valid image, which is NOT a scan and is never reported as one.
+    return Promise.resolve({ outcome: 'unavailable', scanner: this.kind, reason: 'scanner_disabled' });
   }
+}
+
+/**
+ * Real clamd adapter (INSTREAM over TCP). Bounded connect/scan timeout, an
+ * explicit byte ceiling, and a STRICT reply parse: only clamd's own
+ * `stream: OK` is `clean`, only `... FOUND` is `infected`, and every other
+ * reply — including a truncated one, an `ERROR`, or silence — is
+ * `unavailable`. Errors never carry the scanned bytes or the reply verbatim
+ * beyond a bounded slice.
+ */
+export class ClamAvMalwareScanner implements MalwareScanner {
+  readonly kind = 'clamav';
+  readonly enabled = true;
+  private readonly host: string;
+  private readonly port: number;
+  private readonly timeoutMs: number;
+  private readonly maxBytes: number;
+
+  constructor(config: AppConfig) {
+    if (!config.MALWARE_SCANNER_URL) {
+      throw new Error('ClamAvMalwareScanner requires MALWARE_SCANNER_URL (clamav://host:port)');
+    }
+    let url: URL;
+    try {
+      url = new URL(config.MALWARE_SCANNER_URL);
+    } catch {
+      throw new Error('MALWARE_SCANNER_URL must be a URL of the form clamav://host:port');
+    }
+    if (url.protocol !== 'clamav:' && url.protocol !== 'tcp:') {
+      throw new Error(`MALWARE_SCANNER_URL protocol must be clamav:// or tcp:// (got ${url.protocol})`);
+    }
+    if (!url.hostname || !url.port) {
+      throw new Error('MALWARE_SCANNER_URL must carry both a host and a port (clamav://host:port)');
+    }
+    this.host = url.hostname;
+    this.port = Number(url.port);
+    this.timeoutMs = config.MALWARE_SCAN_TIMEOUT_MS;
+    this.maxBytes = config.MEDIA_MAX_BYTES;
+  }
+
+  async scan(input: { bytes: Buffer; filename: string }): Promise<MalwareVerdict> {
+    if (input.bytes.length > this.maxBytes) {
+      // Larger than what this deployment accepts at all: refuse, never scan.
+      return { outcome: 'unavailable', scanner: this.kind, reason: 'payload_exceeds_scan_ceiling' };
+    }
+    let reply: string;
+    try {
+      reply = await this.instream(input.bytes);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message.slice(0, 120) : 'scan_transport_error';
+      return { outcome: 'unavailable', scanner: this.kind, reason };
+    }
+    // STRICT parse. Anything unrecognised is `unavailable`, never `clean`.
+    const text = reply.replace(/\0/g, '').trim();
+    const found = /^(?:stream|[^:]*):\s*(.+?)\s+FOUND$/.exec(text);
+    if (found) return { outcome: 'infected', scanner: this.kind, signature: found[1] ?? 'unnamed_signature' };
+    if (/^(?:stream|[^:]*):\s*OK$/.test(text)) return { outcome: 'clean', scanner: this.kind };
+    return { outcome: 'unavailable', scanner: this.kind, reason: `unparsable_reply:${text.slice(0, 80) || 'empty'}` };
+  }
+
+  /** clamd zINSTREAM: length-prefixed chunks, then a zero-length terminator. */
+  private instream(bytes: Buffer): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const socket = connect({ host: this.host, port: this.port });
+      const chunks: Buffer[] = [];
+      let settled = false;
+      const finish = (err: Error | null, out?: string): void => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        if (err) reject(err);
+        else resolve(out ?? '');
+      };
+      socket.setTimeout(this.timeoutMs, () => finish(new Error('clamd_timeout')));
+      socket.on('error', (e: Error) => finish(new Error(`clamd_unreachable:${e.message.slice(0, 80)}`)));
+      socket.on('data', (d: Buffer) => chunks.push(d));
+      socket.on('end', () => finish(null, Buffer.concat(chunks).toString('utf8')));
+      socket.on('close', () => finish(null, Buffer.concat(chunks).toString('utf8')));
+      socket.on('connect', () => {
+        socket.write('zINSTREAM\0');
+        const CHUNK = 64 * 1024;
+        for (let off = 0; off < bytes.length; off += CHUNK) {
+          const slice = bytes.subarray(off, Math.min(off + CHUNK, bytes.length));
+          const header = Buffer.alloc(4);
+          header.writeUInt32BE(slice.length, 0);
+          socket.write(header);
+          socket.write(slice);
+        }
+        socket.write(Buffer.from([0, 0, 0, 0]));
+      });
+    });
+  }
+}
+
+/**
+ * §21 factory, same shape as `createObjectStorage`: a real scanner when one is
+ * configured, the honest disabled placeholder outside production, and a hard
+ * refusal to compose the placeholder IN production. It never falls back
+ * silently, and there is no adapter here that can answer `clean` without a
+ * real scan.
+ */
+export function createMalwareScanner(config: AppConfig): MalwareScanner {
+  if (config.MALWARE_SCANNER === 'clamav') return new ClamAvMalwareScanner(config);
+  if (config.isProd) {
+    throw new Error('MALWARE_SCANNER=disabled is forbidden in production: uploads fail closed, so a real scanner must be configured');
+  }
+  return new DisabledDevelopmentMalwareScanner();
 }
