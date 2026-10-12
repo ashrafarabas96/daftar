@@ -27,7 +27,7 @@ first (PART 4), a migration number must be allocated by the one Migration Owner
 ## Exact prep SHA
 
 ```
-903e1f4710daeef152129f8a0c10d1c9c6e37f63
+6e339bf888b68bb7ef7b38d4af2a8b0ac0aecbbe
 ```
 
 Branch: `claude/project-thread-4i752q`
@@ -45,7 +45,7 @@ the Coordinator state below says so. The two can never be the same string, and t
 whole difference between them is one file:
 
 ```
-git diff --stat 903e1f4 <head>
+git diff --stat 6e339bf <head>
  docs/phase9/P9-HANDOFF-MANIFEST.md | (this manifest only)
  1 file changed
 ```
@@ -58,19 +58,20 @@ relation, not as "the same commit".
 
 ## Artifacts
 
-All nine are **committed** to the branch above. The copies under
+All ten are **committed** to the branch above. The copies under
 `/mnt/project-files/phase9/` are off-Git and carry the same bytes; their hashes are
 the same values, recorded here because PART 13 asks for a hash on anything that does
 not live in Git.
 
 | artifact | location | committed | SHA256 |
 |---|---|---|---|
-| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `cafa5ef6f41d78b196047722633c26564685e79adafa8f79a4265ea1d7ca48c5` |
-| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `239828ed57ce41fe99a3716d67624104a7e574b51c23fbc0ded1392ce4a78efe` |
+| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `ac87f1246357c9c2fb78b8b87a8faf0abd5ca12d747f3192cc01ca3aa94705f5` |
+| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `973983845b11b88056caba94209ae4a355088a4fb04b77ad2d0a45ee46010a4d` |
 | Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
-| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `ace56a2cd20c7142ffca7066245c3725019a602fd01cca42949ec87416fea792` |
+| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `8dab9c1815ecd4c7f769601ba8121fabe273cc82b9445f366884ac3da8a38bae` |
 | Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
-| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `82fc119271575f84ed44c5e45d04d57264c2a69b03680c979d894e7132ad011a` |
+| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `9147ebc93b66aefe199e78a24821145ccbd34cff35bef5727ec1aa2d18c1f976` |
+| Independent challenger's PASS-WITH-SCOPE at `903e1f4` | `/mnt/project-files/phase9/P9-CHALLENGE-903e1f4.md` | **no — off-Git** | `54b8f4d24cc087f6b3757b789c6eed4012265e792f0cefd79ae72e38fb06dbb3` |
 | Coordinator actual-diff review at `9a64289` | `/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-9a64289.md` | **no — off-Git** | `bc8fcfa4f13545c92036dc864e2bacb9175fe8e4783aaa6a21afe66c6286443c` |
 | Independent challenger's PASS at `9a64289` | `/mnt/project-files/phase9/P9-CHALLENGE-9a64289.md` | **no — off-Git** | `9fe72d8f3f0337732cf32e251a5365a4a35eda7959fb8c42c00d20d19c3611d9` |
 | Independent challenger's PASS-WITH-SCOPE at `76ab277` | `/mnt/project-files/phase9/P9-CHALLENGE-76ab277.md` | **no — off-Git** | `67742ec1c85916505af86f1bb3a9699833af604e77e899ef9ca8bd653ac532a6` |
@@ -89,21 +90,21 @@ byte-identical duplicates to canonicalize (PART 14).
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 7 | each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 10 | the global lock order (PART 50), idempotent retries and the replay (PART 53) |
 | `tests/phase9-prep/p9-booking-time.test.ts` | 21 | the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan at one-day granularity, and the two defects V3 named |
-| `tests/phase9-prep/p9-booking-integrity.test.ts` | 7 | the closure record is write-once (R-P9-15) — the two defects the independent challenger found, and the non-vacuity that keeps the guard honest |
+| `tests/phase9-prep/p9-booking-integrity.test.ts` | 11 | the closure record is write-once (R-P9-15) — the two defects the independent challenger found, and the non-vacuity that keeps the guard honest |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 10 | the schema attacked as the six real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | — | the spec loader and its non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | — | the race harness: `pg_blocking_pids`, never a sleep |
 
-**83 of 83 green, EXIT CODE 0**, on the APPROVED TARGET — a live PostgreSQL **16.15**
+**87 of 87 green, EXIT CODE 0**, on the APPROVED TARGET — a live PostgreSQL **16.15**
 cluster whose `datcollate` and `datctype` are both **`en_US.utf8`** (HIGH-VELOCITY V1 PART
 1.3; PART 19 requires the version and the collation) — with the spec applied in one
 transaction as the non-superuser deployment principal `daftar_migrator` on top of the sealed
 Phase 3 head. Run with `npx vitest run tests/phase9-prep`, `PG_DIR=/tmp/daftar-pg16
-PG_PORT=55433`, started 2026-10-12T15:53:19Z, finished 15:56:03Z, under **Node v24.21.0** — this phase's own Node 24 run, which PART 7.6 asked for and which earlier rounds recorded as owed.
+PG_PORT=55433`, started 2026-10-12T16:29:37Z, finished 16:32:18Z, under **Node v24.21.0** — this phase's own Node 24 run, which PART 7.6 asked for and which earlier rounds recorded as owed.
 
-The same set was then run under Node v22.22.0 on PostgreSQL 16.15 (15:56:13Z to 15:58:49Z)
-and on PostgreSQL 18.4 at collation `C` (15:58:49Z to 16:02:18Z) — **83 of 83, EXIT CODE 0**
+The same set was then run under Node v22.22.0 on PostgreSQL 16.15 (16:32:18Z to 16:34:54Z)
+and on PostgreSQL 18.4 at collation `C` (16:34:54Z to 16:38:35Z) — **87 of 87, EXIT CODE 0**
 on both. The 18.4 run is a comparison — and that run is a COMPARISON and nothing more, which is all PART
 1.3 permits it to be. No schema, invariant, routine or policy behaved differently between
 the two; the one case that ever did was a harness defect in the suite's own text ordering,
@@ -174,15 +175,16 @@ directory change is in this branch.
    command work continues around it. This one IS an owner escalation, and it has been put
    to the owner.
 
-5. **`booking.state_not_reopenable` cannot fire.** Block (b)'s first clause already refuses
+5. **`booking.state_not_reopenable` cannot fire.** VERIFIED by execution in round 4. Block (b)'s first clause already refuses
    every change out of a terminal state, so the clause refusing re-entry to `'booked'` is
    unreachable. Which of the two refusals a caller should see is the command slice's error
    contract, so it is recorded rather than collapsed. Limitation 18.
-6. **R-P9-15 binds UPDATE only.** Nothing refuses an INSERT that arrives already closed —
-   `'cancelled'` with a settlement record written, or a forward reschedule link — and the
-   shape CHECKs make such a row consistent rather than impossible. Whether a booking may be
-   born closed is a command-slice decision; once the row exists, every later write to its
-   closure record is refused. Limitation 19.
+6. **~~R-P9-15 binds UPDATE only.~~ CLOSED as R-P9-16**, after round 4 measured it reachable
+   and one of its products — a booking born `'rescheduled'` pointing at a standing booking
+   with no backlink — contradicted R-P9-08. A law that is UPDATE-only by oversight is not a
+   design decision. What remains open is narrower and is all that limitation 19 now says:
+   whether an **import of historical bookings** may create a closed row, which is a command
+   with its own authority and audit rather than a side effect of INSERT privilege.
 
 Items 1, 3, 5 and 6 are not owner-only escalations under PART 116; item 4 is. Items 5 and 6
 were raised by the coordinator's actual-diff review, which asked that they be RECORDED as
@@ -190,7 +192,35 @@ open design items and not fixed under a review's scope.
 
 ## Challenger state
 
-**RUN THREE TIMES. Round 3 at `9a64289`: PASS, no open finding.**
+**RUN FOUR TIMES. Round 4 at `903e1f4`: PASS-WITH-SCOPE, and its signature extends there.**
+
+Round 4 reviewed the delta `9a64289..3a1d0fd` and re-ran the suite: **83 of 83, exit code 0**,
+Node v24.12.0, PostgreSQL 16.15 at `en_US.utf8`, fresh `initdb` with zero recovery events,
+run id `P9-CHALLENGE-R4-20261012T160758Z`. It verified the previous round's "no schema
+change" claim instead of accepting it — the DDL spec's 21 moved lines tokenise, comments
+stripped at the top level and inside every dollar-quoted body, to the same 50 541 characters
+— and answered three questions of ours by execution: each promoted (a4) case reds to NO
+refusal when its own clause is removed; dropping (a3) and (a4) together is identical to
+either alone, because the two guards are mutually exclusive on `OLD.state`; and the
+constraint restore is byte-identical even with a failure injected mid-probe.
+
+**Four findings, one P2 — all closed at the subject SHA above, and that SHA DOES change the
+schema.** C4-P9-01: the laws were UPDATE-only, so a booking could be INSERTed already
+`'rescheduled'` pointing at a standing booking with no backlink — the asymmetric chain
+R-P9-08 forbids — or born `'completed'` with `settled_at` 27 years early. Closed as
+**R-P9-16** (`booking.not_born_closed`) with four red proofs, §3c.16. C4-P9-02: a comment of
+ours justified two cases with a CHECK that does not refuse what it claimed; verified against
+the live constraint and corrected, and the same measurement is why R-P9-16 checks the
+settlement fields one by one. C4-P9-03: the catalogue comment advertised a refusal that
+cannot fire; caveated. C4-P9-04: an assertion alternation with an unreachable arm, and a
+cleanup ordered so a throw in it would mask the real error; both closed.
+
+Round 4 also answered the coordinator's cross-phase question: Phase 9 is **not** exposed to
+the hand-written stand-in table class found in Phase 6 — the fixture applies the real frozen
+`0000`–`0073` through the project's own runner, `BOOTSTRAP_PATCH` creates a role and no
+table, and every foreign key out of this slice lands on a frozen key.
+
+Round 3, at `9a64289`: **PASS, no open finding.**
 
 Round 3 is the signature this handoff rests on. The challenger confirmed for itself that
 `git diff --stat e1b201e 9a64289` touches only this manifest, so its run exercises the stated
@@ -293,7 +323,7 @@ retention decision.
 * No timing or performance number from this container, anywhere (PART 20, PART 123).
 * No evidence class mixed: see §3b of the prep report.
 * No progress percentage, and no progress claim derived from the case count, the line
-  counts or the number of agents (Mission, cross-phase). 83 green cases say what was
+  counts or the number of agents (Mission, cross-phase). 87 green cases say what was
   measured, not how much of Phase 9 exists.
 * **CLOSED: Node 24 from this container.** It ships v22.22.0 against an `engines` of
   `>=24 <25`, so **Node v24.21.0 was fetched from nodejs.org into the session scratch
@@ -301,9 +331,9 @@ retention decision.
   PART 7.6's rerun is no longer owed. What this does NOT establish: the container's own
   toolchain still resolves `node` to v22.22.0, so a CI or deployment runner that honours
   `engines` is a different environment from either run here.
-* **Not one review of THIS SHA.** All three signatures name earlier SHAs: the challenger's
-  PASS and the coordinator's review both name `9a64289`, and this subject adds the tests and
-  documentation the coordinator's scope items asked for, which neither has seen.
+* **Not one review of THIS SHA.** The challenger's signature reaches `903e1f4` and the
+  coordinator's review names `9a64289`; this subject carries R-P9-16 and three corrections,
+  which neither has seen. R-P9-16 is an executable change, not documentation.
 * **Not a promotion.** A challenger PASS moves the rung to `CHALLENGED` and nothing further;
   every `READY_TO_PROMOTE` gate below is external and open.
 * Business isolation of a registry read is enforced by `booking_replay_result` itself and
