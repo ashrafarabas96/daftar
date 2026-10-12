@@ -140,7 +140,27 @@ function checkMode(): number {
 }
 
 function main(): number {
-  if (process.argv.includes('--check')) return checkMode();
+  // THE SAFE VERB IS THE DEFAULT.
+  //
+  // The bare command used to REGENERATE, and the independent challenger ran it
+  // for the most reasonable possible motive: it was the only verb available,
+  // and nothing in the command or its output said otherwise. That rewrote a
+  // document in a directory several sessions share, and the challenger had to
+  // disclose having done so rather than being able to undo it.
+  //
+  // A command whose default action writes to shared state, when its read-only
+  // mode is the one a reader almost always wants, is a trap with a polite
+  // manual. So `--check` is now what a bare invocation does, and writing takes
+  // an explicit `--write`. The determinism fix means a legitimate rewrite is
+  // byte-identical at an unchanged head anyway, so the cost of the stricter
+  // default is nil and the benefit is that nobody writes by accident.
+  if (!process.argv.includes('--write')) {
+    if (!process.argv.includes('--check')) {
+      console.log('P15 RESUME CHECKPOINT — read-only by default. Pass --write to regenerate.');
+      console.log('');
+    }
+    return checkMode();
+  }
 
   const facts = measure();
   const head = facts.find((f) => f.what.startsWith('HEAD'))?.value ?? 'UNKNOWN';
@@ -166,7 +186,9 @@ function main(): number {
   const lines: string[] = [];
   lines.push('# P15 — RESUMABLE CHECKPOINT (PART 22)');
   lines.push('');
-  lines.push('**Generated, not written, and deterministic.** `npm run checkpoint:phase15` rewrites this');
+  lines.push('**Generated, not written, and deterministic.** `npm run checkpoint:phase15` CHECKS this file;');
+  lines.push('`npm run checkpoint:phase15 -- --write` rewrites it — the read-only verb is the default, because');
+  lines.push('this directory has several writers and a bare command should not change shared state. It rewrites');
   lines.push('file from measurement, and at an unchanged head it rewrites it **byte-identically** — its');
   lines.push('timestamp is the HEAD commit\'s date, not the clock, so the manifest can digest-index it');
   lines.push('without the two gates fighting. It still changes when another pack document changes,');
@@ -271,7 +293,7 @@ function main(): number {
   console.log(`  head ${head}`);
   console.log(`  ${facts.length} measured position(s), ${bs.length} blocker(s) read from the manifest, ${pack.length} document(s) digested`);
   console.log('');
-  console.log('  It awards nothing and signs nothing. Re-run with --check before trusting it.');
+  console.log('  It awards nothing and signs nothing. A bare `checkpoint:phase15` re-checks it.');
   return 0;
 }
 
