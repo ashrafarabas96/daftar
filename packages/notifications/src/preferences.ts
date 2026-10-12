@@ -106,13 +106,28 @@ export function evaluateConsent(req: ConsentRequest): ConsentDecision {
  * "An audit consent snapshot is not a lasting send right after withdrawal."
  * So consent is never carried on the obligation and handed to the sender; it is
  * READ through this port, once when the obligation is enqueued and **again
- * immediately before every send and every retry**. A recipient who opts out
- * between the two reads is not sent to, and the ledger says why.
+ * immediately before every send**. A recipient who opts out between the two
+ * reads is not sent to, and the ledger says why.
+ *
+ * **What this package enforces, and what it only requires — corrected after the
+ * independent challenge at `01e85f7`.** The header used to say "before every
+ * send and every retry". The second read before the FIRST send of a dispatch
+ * pass is enforced here and tested. There is NO retry driver in this package:
+ * re-entering `dispatchIntent` for a retry meets `obligationsAlreadyRecorded`
+ * and returns `already_owed` without sending. So "before every retry" was an
+ * unimplemented claim. It is a REQUIREMENT ON THE RESUME WORKER that Phase 8
+ * owes at integration: that worker must call this port again before each retry
+ * attempt, and a retry that reuses an earlier verdict is a defect in it. Stated
+ * as owed work rather than as a property of code that cannot provide it.
  *
  * The port is synchronous on purpose: an adapter may hold a short-lived cache
  * behind it, but the decision to send is taken from whatever this returns at
  * that moment, so the staleness window is the adapter's stated contract rather
- * than an accident of when the obligation happened to be created.
+ * than an accident of when the obligation happened to be created. Note what
+ * that means for the §15 headline: within one pass the two reads are
+ * microseconds apart with no I/O between them, so the second read proves the
+ * MECHANISM, not the liveness guarantee — the guarantee is the adapter's, and
+ * its staleness bound is an owner decision, not something asserted here.
  */
 export interface ConsentReader {
   read(recipient: Recipient): RecipientPreferences;

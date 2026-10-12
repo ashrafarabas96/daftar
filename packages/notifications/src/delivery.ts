@@ -85,6 +85,14 @@ export type FinalProviderStatus = 'delivered' | 'read' | 'failed';
  * migration patch request asks for, so the rule is executable here and not only
  * asserted in a spec nobody can run.
  *
+ * It is also the rule the dispatcher ASKS — which it was not until the
+ * independent challenge pointed out that this function had no caller in `src/`
+ * at all, while this header already described it as the executable twin. The
+ * send path had its own copy of the decision, so the rule V3 corrected was not
+ * the rule that ran; the two agreed only by coincidence. `L-F5-1` in
+ * `test/part42-source-laws.test.ts` now reds if the dispatcher stops asking,
+ * because a behavioural test cannot tell two agreeing copies apart.
+ *
  * V3's finding: the index's predicate listed the OPEN states only, so it did
  * not constrain an `accepted` delivery — the very case where a second message
  * is most harmful, and the one a replay or a hand-written INSERT would hit.

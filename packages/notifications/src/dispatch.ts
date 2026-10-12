@@ -315,7 +315,9 @@ async function dispatchOne(intent: DispatchIntent, owed: HydratedObligation, por
       // Mission §15: body limits are a refusal, before the provider sees it.
       assertWithinLimits(rendered, limits);
 
-      // GATE 2 — immediately before the send, and before EVERY retry. Rendering
+      // GATE 2 — immediately before the send. (NOT "before every retry": there
+      // is no retry driver here, and the resume worker owes that call. See
+      // `preferences.ts`.) Rendering
       // and the provider handshake both take time; a withdrawal inside that
       // window is a withdrawal, not a race we are entitled to ignore.
       const atSend = evaluateGate('send', intent, owed, channel, ports);
