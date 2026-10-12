@@ -1038,7 +1038,12 @@ interface GateResult {
 function runRepoGates(): readonly GateResult[] {
   const out: GateResult[] = [];
   for (const g of REPO_GATES) {
-    const r = spawnSync('sh', ['-lc', `node --version && ${g.command}`], {
+    // `sh -c`, NOT `sh -lc`: a login shell re-sources the profile and puts the
+    // image's own Node back at the front of PATH, so the first run of this
+    // table reported every gate as passing on v22.22.0 while the runner itself
+    // was on v24.12.0. A gate measured on an engine the record does not name is
+    // a gate measured somewhere else.
+    const r = spawnSync('sh', ['-c', `node --version && ${g.command}`], {
       cwd: ROOT,
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
@@ -1294,7 +1299,12 @@ function main(): number {
     console.log(
       `  exit ${String(g.exitCode)}  ${g.engine}  ${g.name}${g.ok ? '' : g.tolerated === null ? '  — NOT TOLERATED' : '  — tolerated: inherited from main'}`,
     );
-  const gatesRed = gates.filter((g) => !g.ok && g.tolerated === null);
+  // A gate that ran on a different engine from this run is not this run's gate,
+  // whatever it returned — so an engine mismatch is red and cannot be tolerated.
+  const engineMismatch = gates.filter((g) => g.engine !== runtimeIdentity().node);
+  for (const g of engineMismatch)
+    console.log(`  ! ${g.name} ran on ${g.engine} while this run is on ${runtimeIdentity().node} — the gate was measured on another engine`);
+  const gatesRed = gates.filter((g) => (!g.ok && g.tolerated === null) || engineMismatch.includes(g));
   const gatesInherited = gates.filter((g) => !g.ok && g.tolerated !== null);
   for (const g of gatesInherited) console.log(`  ${g.name} — ${g.tolerated ?? ''}`);
   console.log('');
