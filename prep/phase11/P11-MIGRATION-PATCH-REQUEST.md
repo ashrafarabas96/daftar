@@ -500,3 +500,48 @@ residual can be answered.
 the Pack B grants and the registered operation code for lot configuration (inventory
 authority), and `OD-P11-07` (the owner's). **No migration number exists**, and a third
 challenge round is owed before anything here is signed.
+
+---
+
+## 14. The first challenge of Pack B, and what it owes whom
+
+All four fixes are **inside Pack B** and nothing is owed to another authority.
+Pack B still changes no grant and no policy outside its own three relations
+and the two `products` columns the inventory authority owns — with one
+addition that is its own function's ACL:
+
+| | |
+|---|---|
+| `stock_lot_movement_conservation()` | a **fail-closed** arm (`inventory.lot_conservation_unverifiable`) replacing the `RETURN NULL` on an unreadable movement, the same rule one join further for an unreadable product, and the **cache-versus-key comparison** moved into reach of the side that moves the key |
+| `inventory_lot_fold` | `REVOKE EXECUTE … FROM PUBLIC`; `GRANT EXECUTE` to `daftar_inventory_internal` and `daftar_app`; an explicit **tenant** half of its scope guard, and a refusal rather than a `0` for a lot it cannot see |
+| `stock_lots_10_facts_frozen_once_moved` | new `BEFORE UPDATE OF expiry_date, produced_on, received_seq, lot_code_norm, lot_code_input` guard (`inventory.lot_facts_frozen`) |
+| the end-state assertion | five more checks (17 total): PUBLIC holds no `EXECUTE` on the fold, the two principals do, the movement-side comparison and the fail-closed arm are both present in the installed function, and the lot-facts guard exists |
+
+### 14.1 Two things measured that changed a fix
+
+- **`FOR SHARE` is not available on an append-only relation.** The first
+  version of the fail-closed read took a row lock, and the COMMIT then failed
+  `permission denied for table stock_movements`: `SELECT … FOR SHARE` needs
+  UPDATE-class privilege, which every writer of a ledger deliberately lacks. A
+  refusal from the grant is not the law's refusal, so the lock was removed and
+  the reason written into the file.
+- **No runtime role holds `UPDATE` on `stock_lots`.** The lot-facts guard is
+  therefore proved against the **owner**, and the merchant-facing correction
+  path is a grant that does not exist yet. Recorded as a case, not as prose.
+
+### 14.2 Owed to the Migration Owner (`MPR-08`)
+
+`stock_lots` gains `stock_lots_10_facts_frozen_once_moved` at position `_10_`;
+`products` keeps `_05_lot_config_authority` and `_40_lot_history_lock`; the two
+conservation constraint triggers on `stock_movements` and
+`stock_lot_movements` are unchanged in name. The Owner is asked to confirm
+`_10_` on `stock_lots` at allocation, as `MPR-07` asks for Pack A's positions.
+
+### 14.3 Still owed, unchanged
+
+The Pack B grants and the registered operation code for lot configuration
+(inventory authority); `PR-SEC-P11-01` (Security Authority); `OD-P11-07` (the
+owner's). **Concurrency for Pack B is `UNMEASURED`** and the lock order
+belongs with §3.6's cache writer when it lands — no document may read it as
+cleared. **No migration number exists**, and a second challenge round for Pack
+B is owed.

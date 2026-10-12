@@ -1,0 +1,35 @@
+=== PACK B MUTATION MEASUREMENT — ONE FULL REBUILD PER MUTATION ===
+Why a rebuild per mutation and not one database: a Pack B mutation COMMITS
+a state the laws forbid (a ledger is append-only, a stock key is retained),
+so the mutated run cannot be undone. Measured the short way first, and the
+restored baseline then failed four cases from the mutant's own commits —
+which is the same trap the challenger disclosed in its own method.
+
+-- MB1: the conservation trigger back to fail-OPEN with no cache-versus-key compare --
+   rebuild exit: 0 (clean baseline)
+   PACK B TOTAL 47 cases, 0 failed
+P1-01 a movement that moves the key away from the per-lot cache is refused AT THE MOVEMENT              **PROOF FAILED**          no error
+P1-01 and the refusal is the same when the COMMIT is judged as daftar_app (NOSUPERUSER NOBYPASSRLS)     **PROOF FAILED**          no error
+P1-02 a COMMIT that cannot read its own movement is REFUSED, not passed                                 **PROOF FAILED**          no error
+PACK B TOTAL 47 cases, 3 failed
+
+-- MB2: EXECUTE on the definer fold granted back to PUBLIC --
+   rebuild exit: 0 (clean baseline)
+   PACK B TOTAL 47 cases, 0 failed
+P2-03 nor through the SECURITY DEFINER fold, which is no longer PUBLIC-executable                       **PROOF FAILED**          no error
+P2-03 and the end state says so from the catalogue, not from this test                                  **PROOF FAILED**          true
+PACK B TOTAL 47 cases, 2 failed
+
+-- MB3: the lot-facts guard dropped --
+   rebuild exit: 0 (clean baseline)
+   PACK B TOTAL 47 cases, 0 failed
+P3 a lot that movements name cannot have its expiry date rewritten (the guard binds the OWNER)          **PROOF FAILED**          no error
+P3 nor its receipt order, which the picker's index orders by                                            **PROOF FAILED**          no error
+PACK B TOTAL 47 cases, 2 failed
+
+-- MB4: the fold's tenant half removed (the silent zero restored) --
+   rebuild exit: 0 (clean baseline)
+   PACK B TOTAL 47 cases, 0 failed
+P2-04 with the tenant context dropped it REFUSES instead of answering 0                                 **PROOF FAILED**          no error
+P2-04 and with a FOREIGN tenant it refuses too (the lot is not visible, which is not the same as empty) **PROOF FAILED**          no error
+PACK B TOTAL 47 cases, 2 failed

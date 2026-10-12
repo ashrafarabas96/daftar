@@ -645,3 +645,214 @@ next, and the committed state the mutated run left behind was undone.
 - `PR-SEC-P11-01` (the standing RLS invariant check pinning `product_variants`'
   policy set) is the Security Authority's, and `MPR-07` (trigger positions,
   now including `_30_` on `product_matrix_axes`) is the Migration Owner's.
+
+---
+
+## 10. The FIRST independent challenge of PACK B: `REJECT`, and the four defects it found (defects 28–31)
+
+The report is `/mnt/project-files/phase11/P11-CHALLENGE-b43871b.md`, its probes
+and logs in `challenge-b43871b/`. It reproduced the whole authoritative run
+from zero at the head — bootstrap as the deployment administrator, 87/87
+migrations as `daftar_migrator`, both packs in one transaction each with their
+end-state assertions passing, both worlds, 41 + 31 cases with 0 failed, 7
+races with 0 findings, every exit code `0`, on PG 16.15 at `en_US.utf8`, clean
+frozen tree afterwards — **and rejected the pack on coverage**, in the same
+shape as the Pack A rejection: *a conservation law was guarded on the side
+that writes the thing being conserved, and not on the side that moves what it
+is conserved against.* It also signed the proof-SHA tie, the tenant-isolation
+fix, the single-writer bridge and the owner-binding append-only law, and
+recorded that my own labels for `C-LOT-02`, `C-LOT-04` and `C-FEFO-01` are
+honest. Two of its own first-pass probes were mis-aimed and it re-ran them
+from a clean rebuild before writing — disclosed in its own §7, and the reason
+its findings are worth answering line by line.
+
+### 10.1 Defect 28 (`P1-01`) — the law was unreachable from the side that moves the key
+
+`C-LOT-03` is *"`Σ stock_lot_levels.on_hand = stock_levels.on_hand` for every
+lot-tracked key"*, and the only guard was
+`CREATE CONSTRAINT TRIGGER stock_lot_levels_conservation AFTER INSERT OR
+UPDATE ON stock_lot_levels` — so it fired **only when the cache was written**.
+The quantity it compares against lives in `stock_levels`, and nothing fired
+when that side moved.
+
+**Measured** from a state every law in the pack accepts (key `8`, cache `8`,
+both lots cached): one more lot-tracked movement through the **official
+command**, with its allocation and no cache write, under `SET CONSTRAINTS ALL
+IMMEDIATE` — `COMMIT rc=0`, **the key at 12.0000 against a cache summing to
+8.0000**. `C-LOT-01` was satisfied, so the first trigger passed and the second
+never ran. It is item **6** of this preparation's own *"what a challenger
+should attack"* list, and it attacked successfully. The handoff's status
+sentence — *"a per-lot cache that does not sum to the stock key's on-hand is
+refused at COMMIT"* — **was false as written**, and is corrected rather than
+reinterpreted.
+
+**The fix.** The comparison is made in the movement-side trigger, which has
+the key in hand and fires on every movement, and it raises the **same error
+name** as the cache-side trigger: one law, two reachable sites, rather than a
+second truth about the same rule. **Scope, stated rather than widened:** what
+is enforced is *a per-lot cache that **exists** for a key folds to that key*.
+A key with **no** cache row stays lawful, because the writer that maintains
+the cache is the integration of patch request §3.6 and does not exist at this
+SHA — `C-LOT-03`'s other half (*every lot-tracked key has a cache*) stays
+`WAITING_FOR_INTEGRATED_SURFACE` and is not claimed. Enforcing it now would
+make the pack demand a writer nothing has written yet, which is how a
+preparation starts inventing the surface it is waiting for. A **second
+warehouse key** is in the world so that case has a subject of its own rather
+than resting on which section of the suite runs first.
+
+### 10.2 Defect 29 (`P1-02`) — the deferred check failed OPEN, and its stated reason was measurably false
+
+The trigger is `SECURITY INVOKER` and opened with an RLS-filtered read of the
+movement, returning `NULL` on `NOT FOUND`. **Measured:** the official command
+wrote a movement of 7 for a lot-tracked variant; the session dropped to
+`daftar_app` and `RESET` both context settings before `COMMIT`; `rc=0`, and a
+lot-tracked variant held **7 units belonging to no lot**.
+
+The comment justified the arm as *"the movement was rolled back inside this
+transaction"*. The challenger measured that this **cannot reach the arm**: a
+`DEFERRABLE INITIALLY DEFERRED` `AFTER INSERT` constraint trigger that always
+raises fires on `INSERT; COMMIT` and **never** fires when the insert is rolled
+back to a savepoint, because PostgreSQL discards the queued after-trigger
+events of an aborted subtransaction. So the arm was not a rollback
+accommodation; it was an RLS escape hatch with a comment on it.
+
+This is the project's twice-ruled class — Phase 5's *"a deferred check that
+reads under RLS fails open"* and Phase 13's case 11 — and the remedy is the
+settled one: **a fail-closed branch, not `SECURITY DEFINER`** (a definer could
+not satisfy these relations' RESTRICTIVE `business_isolation` anyway, which
+Pack A measured the same day). An unreadable movement now raises
+`inventory.lot_conservation_unverifiable`, which says *the law could not be
+evaluated* rather than *the law holds* — a different statement, and the
+difference is the defect. The same rule is applied one join further, where an
+invisible **product** would have read as *"not lot-tracked"* through
+`coalesce(…, false)`: an absence used as a negative answer.
+
+**And a measurement that changed the fix.** The first version of this read
+took `FOR SHARE` on the movement. `SELECT … FOR SHARE` needs UPDATE-class
+privilege, which every writer of an append-only ledger deliberately lacks, so
+the refusal came back as `permission denied for table stock_movements` — a
+refusal from the **grant** instead of from the **law**. Reverted to a plain
+read, with the reason in the file: the row was inserted by this same
+transaction and the relation is append-only, so there is no concurrent writer
+to order against.
+
+### 10.3 Defects 30 and 31 (the two `P2`s)
+
+**Defect 30 (`P2-03`): a `SECURITY DEFINER` reader with PUBLIC `EXECUTE`.**
+`inventory_lot_fold` is owned by `daftar_migrator`, which owns every relation
+in the pack, and carried no grant — so `EXECUTE` was PUBLIC by default.
+Measured as `daftar_reconciler`, a role with no privilege of any kind on the
+overlay: a direct `SELECT` on `stock_lot_movements` was refused *permission
+denied*, and **the same quantity came back through the function**. The frozen
+twin does not have that shape (`inventory_stock_fold` is owned by
+`daftar_inventory_internal` and its ACL names that role). Row-level security
+still scoped the read, so this was a **grant** boundary and not a tenant
+boundary — and a definer function owned by the tables' owner is exactly the
+object whose reach must be stated. `REVOKE EXECUTE … FROM PUBLIC`, a grant to
+the two principals that need it, and an end-state assertion over
+`has_function_privilege` so it cannot drift back to the default.
+
+**Defect 31 (`P2-04`): the fold answered `0` where it refuses on the
+business.** With the right business and the tenant context dropped or foreign,
+RLS filtered every row and the fold returned a confident `0` against a lot
+that really held `3.0000`. For a picker or an availability page `0` means
+*"this lot is empty"*, and this project's standing lesson is that an
+RLS-hidden zero is never proof of absence. Both halves of the scope refuse
+now, and an invisible lot is a refusal rather than a zero. The challenger
+checked whether the behaviour was inherited and found it is not — the frozen
+fold answers with the tenant dropped because the core relations carry a
+permissive `*_internal_read` policy for the principal it is reached through —
+and said that its own first draft of the finding had guessed the opposite.
+Recorded because that is the standard this round is held to as well.
+
+### 10.4 The three notes
+
+- **A lot's facts were freely rewritable** — `UPDATE stock_lots SET
+  expiry_date = '2099-01-01'` on an expired lot returned `rc=0`, which makes an
+  `expiry_policy` that admits only `refuse` weaker than it reads, and
+  `received_seq` (which the picker's index orders by) had the same gap. Nothing
+  in the pack *claimed* immutability, so this was a gap in the law set rather
+  than a broken law, and it is closed in the direction the pack already chose
+  for a mistyped variant combination: **correctable while nothing depends on
+  it, frozen once history does.** A receipt typo is real and must be fixable; a
+  lot whose movements exist is a thing the ledger has already spoken about. The
+  guard binds the **owner**, as the append-only law does — and a case records
+  that no runtime role holds `UPDATE` on `stock_lots` at this SHA at all, so
+  the merchant-facing correction path needs a grant that does not exist yet and
+  the guard is what that grant will be safe against.
+- **The manifest's run-identity table was the superseded run.** Corrected: the
+  manifest now names the current run, and the identity table in §1 of this
+  document says in the text that it is the first challenge round's log and that
+  the current round's identity is §9.3 / §10.5 — a status header must be gated
+  like everything else.
+- **`PB-09`'s refusal site.** Stated plainly: the proof that a hand-written
+  movement cannot be committed rests on **`inventory.assertion_missing` from
+  the command path**, which is the authority's own refusal. The `null value in
+  column "stock_seq"` the challenger saw is a column default the internal role
+  cannot supply — real, but weaker, and it could be removed by an unrelated
+  change, so nothing in this preparation relies on it.
+
+### 10.5 Run identity, exit codes, and the mutation measurement
+
+| field | value |
+|---|---|
+| `RUN_ID` | **`p11-20261012T162240Z-30238`** |
+| `SOURCE_SHA` | **`b7ee445cbe9a3bfe811a60ce004235878cb9c291`**, `SOURCE_TREE_DIRTY : no` |
+| `PACK_A_DDL_SHA256` | `36913f0d6f79d81488bc80a8e9b467b3f6c9622106b1f2f16632c6240c18a8c7` |
+| `PACK_B_DDL_SHA256` | `f9fe8ccc1490ddd8f1d72e6d2de29bbd9bb85fcc1f12bd983d1bd4c45883db22` |
+| `HARNESS_SHA256` | `932ea04eb1ad7f269b61068a59484e4f28d32fb463e46240ca998a5fabac3514` |
+| PostgreSQL / collation | **16.15**, `DB_COLLATION en_US.utf8 / en_US.utf8 / UTF8` read off the database under test |
+| migrations | `0000`–`0086`, 87/87, as **non-superuser** `daftar_migrator`; Pack B's end-state assertion now **17 checks** |
+| frozen tree after the run | 0 tracked changes, `frozenThrough = 0079`, 80 entries, 0 digest mismatches |
+
+```
+bash prep/phase11/harness/rebuild_and_prove.sh
+
+EXIT_PROOFS_A     : 0     46 cases, 0 failed
+EXIT_PROOFS_B     : 0     47 cases, 0 failed
+EXIT_PROOFS_A_RUN2: 0     the same file, the same database
+EXIT_PROOFS_B_RUN2: 0     the same file, the same database
+EXIT_RACES        : 0     9 races, 0 findings
+EXIT_SCRIPT       : 0
+```
+
+Raw logs: `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-b7ee445.txt` and
+`prep/phase11/harness/RUN-EVIDENCE-MUTATIONS-PACKB-b7ee445.txt`.
+
+**Every fix is red when its guard is removed**, each mutation measured on **its
+own full rebuild from zero**:
+
+| mutation | cases failed | which |
+|---|---|---|
+| the conservation trigger back to fail-OPEN with no cache-versus-key comparison | **3** | the movement-side cache refusal, the same refusal judged as `daftar_app`, and the unreadable-movement refusal — all three `no error` |
+| `EXECUTE` on the definer fold granted back to PUBLIC | **2** | the no-privilege role reads through the fold; the catalogue assertion reads `true` |
+| the lot-facts guard dropped | **2** | the expiry-date rewrite and the receipt-order rewrite, both `no error` |
+| the fold's tenant half removed (the silent zero restored) | **2** | the dropped-tenant and foreign-tenant cases, both `no error` |
+
+**Why a rebuild per mutation, which is itself a finding about method.** The
+first attempt measured all four on one database, as the Pack A mutations
+legitimately are. It cannot be done here: a Pack B mutation **commits** a state
+the laws forbid, and a ledger is append-only and a stock key is retained — so
+the restored baseline failed four cases from the mutant's own commits. The
+challenger disclosed the same trap in its own §7. **A mutation is only
+measurable on a state that can be restored.**
+
+### 10.6 What remains unsigned for Pack B
+
+- **Concurrency is `UNMEASURED` and is not claimed.** No race in this
+  preparation attacks the overlay. The deferred checks read `stock_levels` and
+  `stock_lot_levels` **without a row lock** — and `FOR SHARE` there is refused
+  by the same privilege rule measured in §10.2 — so two concurrent lot-tracked
+  movements on one key are an open question. In the official path nothing is
+  lost today, because `inventory_adjust_stock` holds a stronger lock on that
+  very row in the same transaction before the trigger fires; what is **not**
+  proved is the case where one transaction writes the cache while another moves
+  the key, and the cache writer is the integration that does not exist yet. No
+  document may read this as cleared, and the lock order belongs with that
+  writer when it lands.
+- A **second challenge round for Pack B is owed**: the answered head is not
+  the reviewed head, and the fail-closed arm, the movement-side comparison, the
+  fold's two refusals and the lot-facts guard are the newest and least reviewed
+  code in the pack.
+- `READY_TO_PROMOTE` = **NO**, no migration number exists, and no CI has
+  executed any of it.
