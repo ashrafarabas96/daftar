@@ -29,13 +29,13 @@ Each document exists in **two places**: the shared project-files location (the c
 
 | artifact | shared location | in Git | SHA256 (shared copy) |
 |---|---|---|---|
-| `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `f3dfa42cb4a8188493fda75d5587a3a99f34bcca4e6c80c4116befc02098cd53` |
-| `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `cb4260068a136cf6e05129745b053db1dbd975f2187f82f6663d675223a3a9f9` |
-| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8631716c62210d6ee529f49ea1609c0d6ab1ad6c5d746a64725504daf543fef8` |
-| `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `2b732ec1523d07c0b6d5ce9a8b6473f77caf4a67253623e30b63d0f81b5a549b` |
-| `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `945cc6971ab8524ef7479c6c0ed69f824e83e3105607cbf5f3f89eaaf100c79c` |
-| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `3bbb3c05554cd2288452e274eff2f6cccd7c1a0b2879de826ec69d51fb2c6d2b` |
-| `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `c3db5022574f06a1ea774bd344a365d1e13f615c223fa995991d75a1959a0ad1`|
+| `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `bba8d161536806994109705db5c8b1e5f65020b6e1705316e6c60f2f14ea8e18` |
+| `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `bda13b6d84ba82b577994abca9955c7115a374a850a8ebcee6aaa9c9f3d5d088` |
+| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `ec66e81f85fcbbf9795f88bcbfdb3a77322523a5c0a9d628871a5a6ca1a321f8` |
+| `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `6923f0add88d2a0bc31b89fa1b91be8ce20a7540fa6f95e20bf42ae2dd791979` |
+| `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `90c2b2ab8341247d7c65dcbe99b24b66d1d8cea8ee79fec97d2a8df9d35cfec9` |
+| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `1f64ecc5a9a52f44085ae5c183e24e482da75cc2155901966eaee7d487eac638` |
+| `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `df012bf5f4d73b6ea6c71746bd6bca1f1bc85ab1f72f1b88bc812b4f6a97a491`|
 | `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
 | `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
 
@@ -56,19 +56,20 @@ Each document exists in **two places**: the shared project-files location (the c
 | `prep/phase11/harness/rebuild_and_prove.sh` | the one script that does every step from zero on every run |
 | `prep/phase11/harness/run_migrations.py` | a faithful reproduction of the house runner's contract (per-file transaction, ownership-handover bracket, checksum history) for a container with no `node_modules` |
 | `prep/phase11/harness/world.sql`, `proofs.py` | the world and the **21** serial cases |
-| `prep/phase11/harness/races.py` | **three real-concurrency races** — two live backends, sentinel-awaited interleaving, **no `sleep()`**; exits non-zero on any failed setup statement, because an earlier version failed its setup silently and invalidated two races |
+| `prep/phase11/harness/races.py` | **four real-concurrency races** (the axis race in **both** arrival orders — `TL-P4-COORD-R62`: a `BEFORE DELETE` trigger cannot order a lock, so the reverse order is the only one that exercises the refusal guard's body) — two live backends, sentinel-awaited interleaving, **no `sleep()`**; exits non-zero on any failed setup statement, because an earlier version failed its setup silently and invalidated two races |
 | `prep/phase11/harness/RUN-EVIDENCE-2026-10-12.txt` | the first green run, **before** the concurrency work |
 | `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-d813de2.txt` | the first clean-tree raw log, kept rather than replaced |
-| `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-99dbbe7.txt` | **the authoritative raw log** — the same run with **exit codes in the log** (V3 §9): `EXIT_PROOFS 0`, `EXIT_RACES 0`, `EXIT_SCRIPT 0` |
+| `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-99dbbe7.txt` | the three-race run with **exit codes in the log** (V3 §9) |
+| `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-e27acaf.txt` | **the authoritative raw log** — 21 cases, **4 races**, `EXIT_PROOFS 0`, `EXIT_RACES 0`, `EXIT_SCRIPT 0` |
 
-**Measured, in the form it ran in:** PostgreSQL 16.15 scratch cluster; `bootstrap.sql` as the deployment administrator; **migrations 0000→0086, 87/87, as `daftar_migrator` and not as a superuser**; Pack A applied unnumbered with its end-state assertion passing; **21 proof cases, 0 failed**; **3 real-concurrency races, 0 findings**; and after the run, **0 tracked changes under `infrastructure/database`, `frozenThrough = 0079`, 80 frozen entries, 0 digest mismatches**.
+**Measured, in the form it ran in:** PostgreSQL 16.15 scratch cluster; `bootstrap.sql` as the deployment administrator; **migrations 0000→0086, 87/87, as `daftar_migrator` and not as a superuser**; Pack A applied unnumbered with its end-state assertion passing; **21 proof cases, 0 failed**; **4 real-concurrency races, 0 findings**; and after the run, **0 tracked changes under `infrastructure/database`, `frozenThrough = 0079`, 80 frozen entries, 0 digest mismatches**.
 
 **Run identity of the authoritative log** — V2 §18 requires the exact source rather than a guess at the remote head:
 
 | field | value |
 |---|---|
 | `RUN_ID` / `RUN_AT_UTC` | `p11-packA-20261012T115215Z-1834` / `2026-10-12T11:52:15Z` |
-| `SOURCE_BRANCH` / `SOURCE_SHA` | `claude/phase11-prep-re0epv` / **`99dbbe729d65450d3b70c54dd2b1ad395f58891b`** (earlier log: `d813de2…`; identical DDL and proofs) |
+| `SOURCE_BRANCH` / `SOURCE_SHA` | `claude/phase11-prep-re0epv` / **`e27acafeee94ce7ce4852c920a95957a757d051c`** (earlier logs: `99dbbe7…`, `d813de2…`; the Pack A DDL is byte-identical in all three — `7561f8f8…d3a8` — what changed is the harness) |
 | `SOURCE_TREE_DIRTY` | **`no`** |
 | `MIGRATIONS_SHA` | `b128c7033a3381bd2237d0a1405f0676ac509960` |
 | `MANIFEST_SHA256` | `4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804` |

@@ -20,14 +20,15 @@ One script, `prep/phase11/harness/rebuild_and_prove.sh`, which does every step f
 | 4 | `prep/phase11/ddl/p11-pack-a-apparel.sql` — **unnumbered** — as `daftar_migrator` | applied; **end-state assertion passed** |
 | 5 | a world of two tenants, two businesses, two products, two axes, five axis values (one archived), one two-axis matrix | built |
 | 6 | the proof suite, `prep/phase11/harness/proofs.py` | **21 cases, 0 failed** |
-| 6b | three **real-concurrency races**, `prep/phase11/harness/races.py` — two live backends, sentinel-awaited interleaving, **no `sleep()`** | **3 races, 0 findings** (after the two fixes of §2) |
+| 6b | **four real-concurrency races**, `prep/phase11/harness/races.py` — two live backends, sentinel-awaited interleaving, **no `sleep()`** | **4 races, 0 findings** (after the fixes of §2 and §3a) |
 | 7 | the frozen tree re-verified **after** the run | 0 tracked changes under `infrastructure/database`; `frozenThrough = 0079_phase4_pos_till_sessions_cart.sql`; **80 frozen entries, 0 digest mismatches** |
 
 **Run repeatedly from zero, green each time.** Two raw logs are kept:
 
 - `prep/phase11/harness/RUN-EVIDENCE-2026-10-12.txt` — the first green run, before the concurrency work.
 - `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-d813de2.txt` — the first clean-tree run, kept because evidence is preserved rather than replaced.
-- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-99dbbe7.txt` — **the authoritative log**, the same run with **exit codes printed in the log itself**, which V3 §9 requires of every handoff. Same results, re-run from zero.
+- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-99dbbe7.txt` — the three-race run with **exit codes printed in the log itself**, which V3 §9 requires of every handoff.
+- `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-e27acaf.txt` — **the authoritative log**: four races, both arrival orders of the axis race, `EXIT_PROOFS`/`EXIT_RACES`/`EXIT_SCRIPT` all `0`.
 
 **Run identity of the authoritative log**, printed by the script itself as its first lines, because V2 §18 says not to bind the proof to the remote head by guesswork:
 
@@ -37,7 +38,7 @@ One script, `prep/phase11/harness/rebuild_and_prove.sh`, which does every step f
 | `RUN_AT_UTC` | `2026-10-12`, both runs |
 | `SOURCE_REPO` | `https://github.com/ashrafarabas96/daftar` |
 | `SOURCE_BRANCH` | `claude/phase11-prep-re0epv` |
-| `SOURCE_SHA` | **`99dbbe729d65450d3b70c54dd2b1ad395f58891b`** (the earlier log names `d813de2b76b8fdf4667686dd1f0de1a48436b222`; the DDL and the proofs are identical in both, the difference is the exit-code trailer) |
+| `SOURCE_SHA` | **`e27acafeee94ce7ce4852c920a95957a757d051c`** (earlier logs name `99dbbe7…` — three races — and `d813de2…`; **the Pack A DDL is byte-identical across all three**, `PACK_A_DDL_SHA256 7561f8f8…d3a8`; what changed is the harness) |
 | `SOURCE_TREE_DIRTY` | **`no`** — nothing uncommitted; the SHA is the whole input |
 | `MIGRATIONS_SHA` (tree of `infrastructure/database/migrations`) | `b128c7033a3381bd2237d0a1405f0676ac509960` |
 | `MANIFEST_SHA256` | `4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804` |
@@ -140,15 +141,23 @@ Every refusal names **its own** string. None is satisfied by a non-empty error l
 
 Two live backends per race, interleaved by sentinel (each side announces where it is and waits for the other), **no `sleep()` anywhere** — a `sleep` proves only that one ordering happened once.
 
+**Both arrival orders of the axis race are run**, and that is owed to a lead from the Phase 4 thread (`TL-P4-COORD-R62`, measured there on PG18.4): **a `BEFORE ROW DELETE` trigger cannot take a lock before the row being deleted**, because the executor produces `OLD` through `GetTupleForTrigger`, **which locks that tuple before the trigger body is called**. Phase 4 built an arm on that premise, measured it, and the `40P01` was unchanged; the arm was removed rather than left carrying a rationale it did not serve. Two consequences here, both now stated rather than assumed:
+
+- **`product_matrix_axes_10_axis_in_use` is a refusal guard and never a lock-order device.** No Phase 11 document promises a DELETE-path lock order inside a trigger. The ordering in race B comes from the **insert** side's `FOR KEY SHARE` meeting that executor lock — caller-side, which is where R62 says the obligation lives.
+- **Race B had only run DELETE-first, and that is half a proof.** The reverse order is the one where the trigger body matters at all, and R62's mechanism is exactly why it works: the deleter blocks on the key-share lock, and by the time the guard's body runs the variant is committed and visible. Measured on PG16.15 as race B2 — T2 blocked, refused `catalog.matrix_axis_in_use`, and the committed state keeps both the axis and its variant.
+
 | race | T1 | T2 | observed | verdict |
 |---|---|---|---|---|
 | **A** duplicate combination | `INSERT {size:s,color:red}`, then `COMMIT` | the same combination, concurrently | T2 **blocked** while T1 held the speculative insert; rows after both: **1**; T2 refused on `product_variants_matrix_uq` | PASS — exactly one commits, and the loser **blocks** rather than racing |
 | **B** axis removed vs variant inserted | `DELETE` the `color` axis, then `COMMIT` | `INSERT` a variant naming `color`, concurrently | T2 **blocked**; T2 refused `catalog.variant_axis_unregistered`; variants naming an unregistered axis after both commit: **0** | PASS — closure holds after both commit (**defect 7's fix**) |
+| **B2** the same race in the **reverse arrival order** | `INSERT` a variant naming `color`, then `COMMIT` | `DELETE` the `color` axis, concurrently | T2 **blocked**; T2 refused `catalog.matrix_axis_in_use`; axis rows after both: **1**, variants naming it: **1** | PASS — the deleter waits on the inserter's key-share lock, and the guard then **sees** the committed variant |
 | **C** attributes changed vs first stock movement | `UPDATE attributes` while no stock exists, then `COMMIT` | `INSERT` the variant's **first** `stock_levels` row, concurrently | T1 refused `catalog.variant_matrix_immutable`; T2 **not** blocked and committed; final combination unchanged, stock rows: **1** | PASS — the interleaving cannot produce a changed-combination-with-stock row (**defect 8's fix**) |
 
 Race A's value is not that a unique index works; it is **that the second session blocks instead of both proceeding to a check** — a uniqueness guard implemented as a `SELECT` then an `INSERT` would have passed every serial test and failed this one.
 
-The harness itself had to be fixed twice before these results could be believed, and that is recorded rather than smoothed over: it first tried to reach a clean slate by deleting rows, and `inventory.stock_level_not_deletable: a stock key, once created, is retained with its history` refused it — **silently**, because the setup helper did not check return codes, which invalidated races B and C by leaving them running against an unprepared world. It is append-only now (a fresh product per race) and **exits non-zero on any failed setup statement**. The next error it caught was a non-hex UUID in its own fixtures, which is how the fix is known to work. **A race harness whose setup can fail quietly produces green that means nothing** — the same lesson, in a new place, as the Phase 5 clean-check that was narrower than its mutations.
+**Race B2's first run reported a finding that was its own**, and it is recorded because it is the same lesson a third time. T1's variant named `color=green`, which `product_attribute_values` does not register, so T1 was refused `catalog.variant_axis_value_unregistered`, **never took the key-share lock**, and T2's delete sailed through — printed as *"the closure invariant depends on arrival order"*. The product was never at fault. What caught it is worth keeping: **the assertion reads the committed state** (axis rows, and variants naming the axis) **rather than an error string**, so a race that did not happen could not pass. The value is registered now, and T1's arm — which is this race's setup — aborts the harness loudly if it is ever refused, the law the setup helper already followed.
+
+The harness itself had to be fixed twice before the first three results could be believed, and that is recorded rather than smoothed over: it first tried to reach a clean slate by deleting rows, and `inventory.stock_level_not_deletable: a stock key, once created, is retained with its history` refused it — **silently**, because the setup helper did not check return codes, which invalidated races B and C by leaving them running against an unprepared world. It is append-only now (a fresh product per race) and **exits non-zero on any failed setup statement**. The next error it caught was a non-hex UUID in its own fixtures, which is how the fix is known to work. **A race harness whose setup can fail quietly produces green that means nothing** — the same lesson, in a new place, as the Phase 5 clean-check that was narrower than its mutations.
 
 ---
 
@@ -158,7 +167,7 @@ The harness itself had to be fixed twice before these results could be believed,
 - **This is not CI.** No GitHub run exists for any of it, and a local green is never reported as CI.
 - **No performance claim.** None measured; the authoritative box is not this container.
 - **Pack A only.** Lot, serial and repair are untouched by this run and stay `SPEC ONLY`. Their laws are unchanged and unproved.
-- **Concurrency: three races for apparel, and no more than that.** This document previously said apparel had *no concurrency case to prove* because it adds no deferred conservation trigger and no lock order. **V2 refused that reasoning — "no locks, therefore no concurrency" is not a proof — and it was wrong twice over** (defects 7 and 8). What is proved now is exactly the three interleavings of §3a on this cluster at this isolation level (`read committed`); no claim is made about any other interleaving, about deadlock, or about `SERIALIZABLE`. The overlay packs' concurrency estate (`C-SER-04`, `C-LOT-02`, the deadlock test in both orders) is still **unproved** and belongs to lot and serial.
+- **Concurrency: four races for apparel, and no more than that.** This document previously said apparel had *no concurrency case to prove* because it adds no deferred conservation trigger and no lock order. **V2 refused that reasoning — "no locks, therefore no concurrency" is not a proof — and it was wrong twice over** (defects 7 and 8). What is proved now is exactly the four interleavings of §3a on this cluster at this isolation level (`read committed`) — the axis race in **both** arrival orders; no claim is made about any other interleaving, about deadlock, or about `SERIALIZABLE`. The overlay packs' concurrency estate (`C-SER-04`, `C-LOT-02`, the deadlock test in both orders) is still **unproved** and belongs to lot and serial.
 - **No API, no UI, no localization, no browser, no gate yet.** §18's order puts them after the DDL proof, and this is the DDL proof. The gate script, `scripts/phase11-s<N>-gate.ts`, does not exist.
 - **No challenger.** An author does not sign their own work. Everything above was written and run by the same hand, which is why its status is `PREPARED` and not `CHALLENGED`.
 - **The scratch cluster lived at `/var/tmp/p11s`**, not in the session scratchpad, for one mechanical reason worth recording so the next run does not rediscover it: a PostgreSQL unix socket path cannot exceed 107 bytes, and the scratchpad path is longer than that. The cluster is throw-away and holds no project data.
