@@ -61,8 +61,88 @@ The weaker form is satisfied by deleting the LOWEST file, which I measured: drop
 `0000_extensions.sql` and its row and a hole-between-the-ends test still passes.
 Anchoring the low end at zero closes it. A duplicate prefix (two files claiming
 one number) and a file renamed into a hole are caught by the same equality,
-since either leaves a repetition or a new hole, and renumbering the whole tail
-instead would change 80 names and be refused by the name equality below.
+since either leaves a repetition or a new hole.
+
+    CORRECTION, ROUND 15 (eighth challenge N-1'): the sentence that stood here
+    also said "renumbering the whole tail instead would change 80 names and be
+    refused by the name equality below". FALSE, and measured false. The tail
+    renumber changes as many names as the renumberer chooses — the challenger's
+    plant renamed 40, the plant now in the runner renames 79, and both pass —
+    and the name equality is not merely unrefused
+    but SATISFIED, because the rows are renamed with the files. The claim below
+    that "a DELETED file cannot shrink the set it is checked against" was false
+    for the same reason: the set shrank 80 -> 79 with the numbering law intact,
+    because the law pins the LOW end at zero and takes the HIGH end from the
+    set's own length, and `nums == list(range(0, len(nums)))` is as true of
+    0..78 as of 0..79. See WHY IT WAS REWRITTEN A FOURTH TIME.
+
+WHY IT WAS REWRITTEN A FOURTH TIME (round 15, eighth challenge N-1', P1).
+My own header named the shape of the first three fail-opens: the quantity that
+decides whether anything is wrong was read from the thing under test. Each was
+closed by moving the anchor OUT — out of git, out of the manifest's rows, out of
+the directory's length. `frozenThrough` WAS NEVER MOVED OUT. It is read from the
+manifest, it decides WHICH FILES ARE CHECKED AT ALL, and nothing asserted it:
+mutants (g) and (h) move it without moving the rows, so both reds come from the
+resulting mismatch rather than from the boundary itself. Move it WITH the rows
+and two things pass green, both measured here before being fixed:
+
+  * PLANT A, a whole-tail renumber that DELETES a frozen migration. Remove
+    `0039_…`, shift `0040`…`0079` each down by one, rename the rows with the
+    files, set `frozenThrough` to the new top name: 79 files derived, all 79
+    matching, rc=0. No content changed, so every digest matches; the rows were
+    renamed, so the equality holds; the numbering law holds as above.
+  * PLANT B, a boundary SHRINK that relabels a modified frozen file — round 13's
+    S-1 one level up. Edit `0006_rls.sql`, pull `frozenThrough` back to
+    `0005_catalog.sql`, drop the rows now beyond it: `6 files derived … all 6
+    matching` plus `NOT ATTESTED … 81 files`, rc=0, with the edited RLS
+    migration silently re-counted into the not-attested list. At the limit,
+    `frozenThrough = 0000_extensions.sql` with one row gives 1 of 1 matching.
+    What makes the shrink consequential is this file's own companion rule, which
+    is right in itself: beyond the boundary a change is REPORTED, never failed
+    on. So moving the boundary moves files out of the only region where
+    modification is an error.
+
+HOW THE BOUNDARY IS ANCHORED NOW — OUT, like the other three. The boundary and
+the covered set are read from A PINNED COMMIT THIS BRANCH CANNOT MOVE, through
+`--git-anchor <sha> --git-dir <path>`, and NOT from the tree under test:
+
+  * `git -C <path> show <sha>:…/MIGRATION_MANIFEST.json` gives the ANCHORED
+    `frozenThrough`. The live manifest's value must equal it, or the boundary has
+    moved and the check refuses, naming both values.
+  * `git -C <path> ls-tree -r --name-only <sha>` gives the anchored FILE LIST.
+    The live covered set must equal the anchored set, or files have been added,
+    removed or renumbered, and the check refuses, naming each difference.
+  * `git -C <path> cat-file blob <sha>:<path>` gives the anchored CONTENT of each
+    covered file, so a modification is caught against the pinned commit itself,
+    with the manifest's digests kept as a second and independent opinion.
+
+If the anchor commit is unreachable the check REFUSES AND NAMES THAT. It never
+falls back to the manifest, because falling back is how the first three
+fail-opens worked. This is the Phase 14 lesson in this project's own record: the
+witness must not be anchored to anything one commit can change. The anchor is
+`93084f8`, Phase 4's integration head, verified here as carrying 87 migration
+files with `frozenThrough` = `0079_phase4_pos_till_sessions_cart.sql` and 80
+rows — the same figures this tree reports.
+
+Note on method: the gates run from a clean `git archive` copy, which has no
+`.git`. So the anchor repository is named explicitly to the runner, which is the
+point rather than an inconvenience: the evidence comes from a repository the
+archive under test cannot write to, and the anchor SHA is a commit on the shared
+remote, so a reviewer on other hardware resolves the same witness.
+
+AND, BESIDE THAT, WHAT THE PACK CLAIMS. `--expect-covered`, `--expect-boundary`
+and `--expect-covered-digest` let the caller state the figures it claims to have
+attested, each refusing BY NAME on a mismatch, so they sit beside the 87
+migrations and 54 cases the runner already asserts. These are WEAKER than the
+git anchor and are not a substitute for it: a literal is anchored to its author,
+this project's own Phase 4 lesson. They are kept because two independent
+statements of the same figure are worth more than one, and the durable form of
+them is CI asserting the same numbers, where the author cannot edit the
+expectation in the commit that breaks it. That is a patch-request item.
+
+This file still does not judge WHERE the boundary belongs; that is the Migration
+Owner's (OD-P8-13). It judges only that the boundary has not MOVED since the
+pinned commit.
 
 WHAT IT DOES NOW. The required set is every `.sql` file in the migrations
 directory up to and including `frozenThrough` — read off the DIRECTORY. The
@@ -78,8 +158,13 @@ manifest supplies digests for that set and nothing else:
     self-inconsistent, where a reviewer diffing the manifest sees an added row
     rather than a changed one, and the one tool whose job is to read that record
     resolved the contradiction without a word;
-  * the covered set must satisfy the numbering law above, so a DELETED file
-    cannot shrink the set it is checked against;
+  * the covered set must satisfy the numbering law above — which refuses a hole,
+    a repetition and a deletion at either end, but NOT a coordinated whole-tail
+    renumber, for which the caller's expected figures are the guard;
+  * the boundary, the covered file list and each covered file's CONTENT must
+    match the pinned anchor commit, and an unreachable anchor refuses;
+  * where the caller states them, the covered COUNT, the BOUNDARY NAME and the
+    concatenated DIGEST of the covered set must match what was measured;
   * the derived set and the manifest's rows must be EQUAL, so a file with no row
     (`UNLISTED`) and a row with no file (`NO SUCH FILE`) each refuse BY NAME;
   * every file in the derived set must match its recorded digest.
@@ -103,6 +188,9 @@ A hole in the files BEYOND `frozenThrough` is reported, not failed on: nothing
 there is attested, so refusing it would be a claim this file cannot make.
 
 Usage:  p8-frozen-integrity.py <repo-root>
+          [--git-anchor SHA] [--git-dir PATH]
+          [--expect-covered N] [--expect-boundary NAME]
+          [--expect-covered-digest HEX]
 Exit 0 only when the manifest names no file twice, the covered set satisfies the
 numbering law, that set equals the manifest's rows, and every file in it matches
 its recorded digest. Every other path exits non-zero and names its cause.
@@ -110,7 +198,28 @@ its recorded digest. Every other path exits non-zero and names its cause.
 import hashlib
 import json
 import os
+import subprocess
 import sys
+
+
+def _arg(name, default=None):
+    if name in sys.argv:
+        i = sys.argv.index(name)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return default
+
+
+def _git(gitdir, *args):
+    """Run git in the ANCHOR repository, never in the tree under test.
+
+    Returns (rc, stdout_bytes, stderr_text). The caller refuses on rc != 0 and
+    never falls back to the manifest: falling back is how the first three
+    fail-opens worked.
+    """
+    proc = subprocess.run(("git", "-C", gitdir) + args,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return proc.returncode, proc.stdout, proc.stderr.decode("utf-8", "replace").strip()
 
 
 def digest(path):
@@ -122,10 +231,17 @@ def digest(path):
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.stderr.write("usage: p8-frozen-integrity.py <repo-root>\n")
+    if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
+        sys.stderr.write("usage: p8-frozen-integrity.py <repo-root> [--git-anchor SHA] "
+                         "[--git-dir PATH] [--expect-covered N] [--expect-boundary NAME] "
+                         "[--expect-covered-digest HEX]\n")
         return 2
     repo = sys.argv[1]
+    anchor_sha = _arg("--git-anchor")
+    anchor_dir = _arg("--git-dir")
+    want_covered = _arg("--expect-covered")
+    want_boundary = _arg("--expect-boundary")
+    want_digest = _arg("--expect-covered-digest")
     mdir = os.path.join(repo, "infrastructure", "database", "migrations")
     mpath = os.path.join(repo, "infrastructure", "database", "MIGRATION_MANIFEST.json")
 
@@ -186,7 +302,16 @@ def main():
     # nothing — not the manifest, not git, not a count recomputed from the
     # directory under test. See the docstring for why the low end is pinned at
     # zero rather than at whatever the lowest surviving file happens to be.
-    unnumbered = [f for f in covered if not f[:4].isdigit()]
+    # ROUND 15, P3-1: this was `.isdigit()`, which is NOT the int-able predicate.
+    # `00²6_sneak.sql` passes isdigit() and raises ValueError in int(), so the
+    # guard CRASHED where it must refuse — the very distinction fixed one guard
+    # over in the previous commit, and the challenger found it from the other
+    # side: with this guard patched out, mutant (f) crashes instead of going
+    # green. (Measured in passing: `٠٠٠٦` is isdigit AND isdecimal AND int-able to
+    # 6, which matters in a project whose domain language is Arabic — so ASCII is
+    # required too, because the tree's names are four ASCII digits.)
+    unnumbered = [f for f in covered
+                  if not (f[:4].isdecimal() and f[:4].isascii())]
     if unnumbered:
         sys.stderr.write("INTEGRITY FAIL: %d covered file(s) do not carry a four-digit "
                          "number, so the numbering cannot anchor the set\n" % len(unnumbered))
@@ -223,6 +348,88 @@ def main():
             sys.stderr.write("  ORPHANED ROW  %s — %s\n" % (name, why))
         return 1
 
+    # ---------------------------------------------------------------
+    # ROUND 15, N-1': THE BOUNDARY, ANCHORED OUT OF THE TREE UNDER TEST.
+    # Everything above still reads `frozenThrough` from the manifest, which is
+    # the one quantity never moved out — and moving it WITH the rows passes every
+    # check above (plants A and B in the docstring). So the boundary, the file
+    # list and the content are read from a PINNED COMMIT instead, in a
+    # repository this archive cannot write to. An unreachable anchor REFUSES; it
+    # never falls back to the manifest.
+    if anchor_sha:
+        if not anchor_dir:
+            sys.stderr.write("INTEGRITY FAIL: --git-anchor %s was given with no --git-dir, so the "
+                             "anchor cannot be resolved; refusing rather than falling back to the "
+                             "manifest\n" % anchor_sha)
+            return 1
+        rc, _out, err = _git(anchor_dir, "rev-parse", "--verify", "%s^{commit}" % anchor_sha)
+        if rc != 0:
+            sys.stderr.write("INTEGRITY FAIL: the anchor commit %s is not reachable in %s, so the "
+                             "boundary has no witness: %s\n" % (anchor_sha, anchor_dir, err))
+            return 1
+        rc, out, err = _git(anchor_dir, "show",
+                            "%s:infrastructure/database/MIGRATION_MANIFEST.json" % anchor_sha)
+        if rc != 0:
+            sys.stderr.write("INTEGRITY FAIL: the anchor commit %s has no readable manifest: %s\n"
+                             % (anchor_sha, err))
+            return 1
+        try:
+            anchored_boundary = json.loads(out.decode("utf-8"))["frozenThrough"]
+        except Exception as exc:                               # noqa: BLE001
+            sys.stderr.write("INTEGRITY FAIL: the anchor commit's manifest is not readable as "
+                             "JSON with a frozenThrough: %s\n" % exc)
+            return 1
+        if frozen_through != anchored_boundary:
+            sys.stderr.write("INTEGRITY FAIL: the attested boundary has MOVED — this tree says "
+                             "'%s', the anchor commit %s says '%s'\n"
+                             % (frozen_through, anchor_sha, anchored_boundary))
+            return 1
+        rc, out, err = _git(anchor_dir, "ls-tree", "-r", "--name-only", anchor_sha,
+                            "--", "infrastructure/database/migrations")
+        if rc != 0:
+            sys.stderr.write("INTEGRITY FAIL: the anchor commit %s has no readable migrations "
+                             "listing: %s\n" % (anchor_sha, err))
+            return 1
+        anchored_all = sorted(os.path.basename(line) for line
+                              in out.decode("utf-8").split("\n")
+                              if line.strip().endswith(".sql"))
+        if not anchored_all:
+            sys.stderr.write("INTEGRITY FAIL: the anchor commit %s lists no migration at all\n"
+                             % anchor_sha)
+            return 1
+        anchored_covered = [f for f in anchored_all if f <= anchored_boundary]
+        gone = [f for f in anchored_covered if f not in covered]
+        extra = [f for f in covered if f not in anchored_covered]
+        if gone or extra:
+            sys.stderr.write("INTEGRITY FAIL: the covered set does not match the anchor commit %s "
+                             "— %d missing, %d unexpected\n" % (anchor_sha, len(gone), len(extra)))
+            for name in gone:
+                sys.stderr.write("  NOT IN TREE   %s — present at the anchor commit, absent or "
+                                 "renumbered here\n" % name)
+            for name in extra:
+                sys.stderr.write("  NOT ANCHORED  %s — present here, not at the anchor commit\n"
+                                 % name)
+            return 1
+        # The anchored CONTENT, so a modification is caught against the pinned
+        # commit itself and not only against the manifest's record of it.
+        drifted = []
+        for name in covered:
+            rc, blob, err = _git(anchor_dir, "cat-file", "blob",
+                                 "%s:infrastructure/database/migrations/%s" % (anchor_sha, name))
+            if rc != 0:
+                drifted.append((name, "unreadable at the anchor commit: %s" % err))
+                continue
+            here = digest(os.path.join(mdir, name))
+            there = hashlib.sha256(blob).hexdigest()
+            if here != there:
+                drifted.append((name, "here %s, anchor %s" % (here[:16], there[:16])))
+        if drifted:
+            sys.stderr.write("INTEGRITY FAIL: %d covered file(s) differ from the anchor commit "
+                             "%s\n" % (len(drifted), anchor_sha))
+            for name, why in drifted:
+                sys.stderr.write("  ANCHOR DRIFT  %s — %s\n" % (name, why))
+            return 1
+
     bad = []
     for name in covered:
         path = os.path.join(mdir, name)
@@ -249,6 +456,45 @@ def main():
             sys.stderr.write("  MODIFIED      %s — %s\n" % (name, why))
         return 1
 
+    # ---------------------------------------------------------------
+    # ROUND 15, N-1' (second leg): WHAT THE PACK CLAIMS, ASSERTED BY NAME.
+    # These three literals are WEAKER than the git anchor above and are not a
+    # substitute for it — a literal travels in the same commit as the change it
+    # would catch, which is this project's own Phase 4 lesson (P14 B2). They are
+    # here so that the pack states the figures it rests on, and so that a reader
+    # of the gate log sees the boundary name and the count rather than inferring
+    # them. Each refuses BY NAME and never widens into a pass.
+    covered_digest = hashlib.sha256()
+    for name in covered:
+        covered_digest.update(recorded[name].encode())
+    covered_digest = covered_digest.hexdigest()
+    claimed = []
+    if want_covered is not None:
+        try:
+            n_want = int(want_covered)
+        except ValueError:
+            sys.stderr.write("INTEGRITY FAIL: --expect-covered '%s' is not a number\n"
+                             % want_covered)
+            return 1
+        if len(covered) != n_want:
+            claimed.append("COVERED COUNT  expected %d, measured %d"
+                           % (n_want, len(covered)))
+    if want_boundary is not None and frozen_through != want_boundary:
+        claimed.append("BOUNDARY NAME  expected '%s', measured '%s'"
+                       % (want_boundary, frozen_through))
+    if want_digest is not None and covered_digest != want_digest:
+        claimed.append("COVERED DIGEST expected %s, measured %s"
+                       % (want_digest, covered_digest))
+    if claimed:
+        sys.stderr.write("INTEGRITY FAIL: the covered set is internally consistent but is NOT "
+                         "the set this pack claims to attest — %d claim(s) falsified\n"
+                         % len(claimed))
+        for line in claimed:
+            sys.stderr.write("  %s\n" % line)
+        return 1
+
+    print("covered-set digest (sha256 over the recorded digests, in name order): %s"
+          % covered_digest)
     print("frozen integrity: %d files derived from the directory up to frozenThrough "
           "(read as %s), all %d matching the manifest's recorded digests"
           % (len(covered), frozen_through, len(covered)))
@@ -262,7 +508,8 @@ def main():
             joined.update(digest(os.path.join(mdir, name)).encode())
         print("NOT ATTESTED (beyond the manifest's coverage): %d files, concatenated digest %s"
               % (len(beyond), joined.hexdigest()))
-        bn = [int(f[:4]) for f in beyond if f[:4].isdigit()]
+        bn = [int(f[:4]) for f in beyond
+              if f[:4].isdecimal() and f[:4].isascii()]
         if bn:
             bholes = [n for n in range(min(bn), max(bn) + 1) if n not in bn]
             if bholes or len(bn) != len(beyond):

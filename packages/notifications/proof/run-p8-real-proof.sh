@@ -47,7 +47,13 @@ MIG=$REPO/infrastructure/database/migrations
 B=${PG_BIN:-/usr/lib/postgresql/16/bin}
 D=${PG_DIR:-/var/tmp/p8pg}
 P=${PG_PORT:-55438}
-RUN=${RUN_ID:-P8-R11-$(date -u +%Y%m%dT%H%M%SZ)}
+# ROUND 15: this default was the literal `P8-R11-`, four rounds after round 11,
+# so a run of THIS round stamped every line of its own log with another round's
+# number while the handoff quoted the right one. Nothing measured was wrong, and
+# that is the hazard: a label the reader cannot check against the run. The
+# default now carries no round number at all, so a round number appears only
+# where an operator supplied one.
+RUN=${RUN_ID:-P8-RUN-$(date -u +%Y%m%dT%H%M%SZ)}
 OUT=$D/$RUN
 mkdir -p "$OUT"
 FAILED=0
@@ -313,8 +319,37 @@ fi
 # printed "no frozen migration is modified". It fired in round 11's own gate-6
 # log. The check is now a program that verifies every file against the digests
 # the repository itself records, and ITS EXIT CODE IS READ.
+#
+# ROUND 15, N-1': the check's own boundary was still read from the manifest. It
+# is now ANCHORED to a pinned commit, and the three figures this pack claims are
+# stated here rather than left to be inferred from the log.
+#
+# The anchor repository must be NAMED, because the authoritative gates run from
+# a `git archive` copy that has no `.git` of its own — the same condition that
+# produced round 12's fail-open. If it is not named, or names no reachable
+# commit, THIS GATE GOES RED. It does not "skip the anchor": a run that quietly
+# drops its strongest witness and still prints a pass is the defect this round
+# exists to remove.
+P8_ANCHOR_SHA=${P8_GIT_ANCHOR_SHA:-93084f8}
+P8_ANCHOR_DIR=${P8_GIT_ANCHOR_DIR:-}
+P8_EXPECT_COVERED=80
+P8_EXPECT_BOUNDARY=0079_phase4_pos_till_sessions_cart.sql
+P8_EXPECT_COVERED_DIGEST=ae0a8d0a45403ced7f622c67dc4bb7ed8a196592c386c33379fcce79b205f916
+ANCHOR_ARGS=""
+if [ -z "$P8_ANCHOR_DIR" ]; then
+  say "FAIL: P8_GIT_ANCHOR_DIR is not set, so the frozen boundary has no witness outside the tree under test; refusing to report a pass without it"
+  FAILED=1
+elif ! git -C "$P8_ANCHOR_DIR" rev-parse --verify "${P8_ANCHOR_SHA}^{commit}" >/dev/null 2>&1; then
+  say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR does not contain the anchor commit $P8_ANCHOR_SHA"
+  FAILED=1
+else
+  ANCHOR_ARGS="--git-anchor $P8_ANCHOR_SHA --git-dir $P8_ANCHOR_DIR"
+  say "the frozen boundary is anchored to $P8_ANCHOR_SHA in $P8_ANCHOR_DIR (a commit this archive cannot write to)"
+fi
+CLAIM_ARGS="--expect-covered $P8_EXPECT_COVERED --expect-boundary $P8_EXPECT_BOUNDARY --expect-covered-digest $P8_EXPECT_COVERED_DIGEST"
 INTEGRITY_OUT=$OUT/frozen-integrity.log
-if python3 "$HERE/p8-frozen-integrity.py" "$REPO" > "$INTEGRITY_OUT" 2>&1; then
+# shellcheck disable=SC2086  # both are deliberate flag lists
+if python3 "$HERE/p8-frozen-integrity.py" "$REPO" $ANCHOR_ARGS $CLAIM_ARGS > "$INTEGRITY_OUT" 2>&1; then
   while IFS= read -r line; do say "$line"; done < "$INTEGRITY_OUT"
 else
   say "FAIL: the frozen history did not verify against the manifest"
@@ -344,10 +379,32 @@ fi
 # its row passed green, with the edited file silently re-counted as "beyond".
 # The check now derives the required set from the DIRECTORY, so a row can no
 # longer excuse a file. (g) and (h) close the same door on `frozenThrough`.
-integrity_must_refuse(){   # integrity_must_refuse <id> <setup-command> <expect>
+# A digest over EXACTLY the two things the sandbox is a copy of — the migrations
+# directory and the manifest — and nothing else, so the comparison is between
+# like and like. Paths are relative to the directory given, so the two sides are
+# comparable; an unreadable side yields a different digest, never an equal one.
+copied_digest(){
+  (
+    cd "$1" 2>/dev/null || exit 0
+    find migrations -type f -print0 2>/dev/null | sort -z | xargs -0r sha256sum 2>/dev/null
+    sha256sum MIGRATION_MANIFEST.json 2>/dev/null
+  ) | sha256sum | cut -d' ' -f1
+}
+
+integrity_must_refuse(){   # integrity_must_refuse <id> <setup> <expect> [extra-flags]
   local id=$1
   local setup=$2
   local expect=$3
+  # ROUND 15: the twelve plants above run with NO anchor and NO claimed figures,
+  # deliberately. The git anchor is an OUTER guard: with it on, a modified byte
+  # is diagnosed as ANCHOR DRIFT and a moved boundary as "the boundary has
+  # MOVED", so every one of the twelve would be refused by the outer guard's
+  # name and would stop being evidence about the guard its comment names. This
+  # phase has paid for that shape twice already ("a guard in front of a guard is
+  # evidence about the outer one"), so the new plants carry their flags
+  # explicitly, one arm per guard, and the old twelve keep testing the inner
+  # ones.
+  local extra=${4:-}
   local sand=$OUT/integrity-$id
   rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
   cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
@@ -358,13 +415,24 @@ integrity_must_refuse(){   # integrity_must_refuse <id> <setup-command> <expect>
   # unmodified tree. That would be caught here as "PASSED on a broken tree", but
   # by the wrong name, and a mutant whose failure is misdiagnosed is the defect
   # class this phase has now paid for four times.
-  if diff -r -q "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations" >/dev/null 2>&1 \
-     && cmp -s "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/MIGRATION_MANIFEST.json"; then
+  # ROUND 15, P3-2: this comparison was `diff -r -q ... && cmp -s ...`, and
+  # `diff` returns 2 for ITS OWN errors as well as 1 for a difference. So a
+  # sandbox the comparison could not read — the plant that deletes a file, a
+  # permission problem, a missing path — short-circuited the && and was recorded
+  # as "landed". The same shape as every other finding this phase has paid for:
+  # the quantity deciding whether anything is wrong was read from something that
+  # answers the same way when it cannot answer at all. It is now a DIGEST of
+  # both trees, computed the same way on each side, with no rc to misread: equal
+  # digests mean the plant did not land, and a digest that cannot be computed is
+  # an empty string on one side only, which is a difference, not a pass.
+  if [ "$(copied_digest "$REPO/infrastructure/database")" \
+     = "$(copied_digest "$sand/infrastructure/database")" ]; then
     say "INTEGRITY-MUT $id: FAIL — the mutation did not land; the sandbox is identical to the source"
     FAILED=1; return
   fi
   local out=$sand/out.log
-  if python3 "$HERE/p8-frozen-integrity.py" "$sand" > "$out" 2>&1; then
+  # shellcheck disable=SC2086  # $extra is a deliberate flag list, not a path
+  if python3 "$HERE/p8-frozen-integrity.py" "$sand" $extra > "$out" 2>&1; then
     say "INTEGRITY-MUT $id: FAIL — the check PASSED on a broken tree"
     FAILED=1; return
   fi
@@ -460,6 +528,119 @@ integrity_must_refuse k \
 integrity_must_refuse l \
   "python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations'].append({'name':'0013a_ghost.sql','sha256':'0'*64});json.dump(m,open(p,'w'))\"" \
   "ORPHANED ROW  0013a_ghost.sql — NO SUCH FILE"
+
+# ---------------------------------------------------------------------
+# ROUND 15, N-1': THE PLANTS THE ROUND-14 CHECK CALLED CORRECT.
+# ---------------------------------------------------------------------
+# Every one of the twelve plants above breaks the tree's INTERNAL consistency —
+# a file disagrees with a row, a row with a file, a number with its neighbours.
+# The eighth challenge found the case none of them reach: a change that moves
+# the boundary AND the rows together leaves nothing inside the tree disagreeing
+# with anything else inside it, so the round-14 check exited 0 on it.
+#
+# These five plants are therefore measured in a different shape, because
+# "it refuses" is not the claim. The claim is that the guard added this round is
+# LOAD-BEARING: the same tree must pass with the guard absent and be refused BY
+# NAME with it present. That is measured without patching the guard out, by
+# running the check twice on the same sandbox — once bare, which is exactly what
+# round 14 would have done, and once anchored. A plant whose bare arm goes RED
+# is reported as such and fails the gate, because then it is not evidence about
+# this round's guard at all; and a plant whose anchored arm passes is the
+# fail-open, still open.
+anchor_is_loadbearing(){   # anchor_is_loadbearing <id> <setup> <expect>
+  local id=$1
+  local setup=$2
+  local expect=$3
+  local sand=$OUT/anchor-$id
+  if [ -z "$ANCHOR_ARGS" ]; then
+    say "ANCHOR-MUT $id: FAIL — no anchor was resolved, so this round's guard is untested"
+    FAILED=1; return
+  fi
+  rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
+  cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
+  cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+  ( cd "$sand" && eval "$setup" ) >/dev/null 2>&1
+  if [ "$(copied_digest "$REPO/infrastructure/database")" \
+     = "$(copied_digest "$sand/infrastructure/database")" ]; then
+    say "ANCHOR-MUT $id: FAIL — the plant did not land; the sandbox is identical to the source"
+    FAILED=1; return
+  fi
+  local bare=$sand/bare.log anch=$sand/anchored.log
+  if python3 "$HERE/p8-frozen-integrity.py" "$sand" > "$bare" 2>&1; then
+    say "ANCHOR-MUT $id: bare — the tree is internally consistent and round 14's check PASSES it ($(grep -c . "$bare") lines, exit 0)"
+  else
+    say "ANCHOR-MUT $id: FAIL — the bare arm went RED, so this plant is not evidence about the anchor"
+    head -2 "$bare" | tee -a "$OUT/run.log"
+    FAILED=1; return
+  fi
+  # shellcheck disable=SC2086  # a deliberate flag list
+  if python3 "$HERE/p8-frozen-integrity.py" "$sand" $ANCHOR_ARGS > "$anch" 2>&1; then
+    say "ANCHOR-MUT $id: FAIL — the ANCHORED arm passed too; the fail-open is still open"
+    FAILED=1; return
+  fi
+  if grep -qF "$expect" "$anch"; then
+    say "ANCHOR-MUT $id: anchored — refused, and named it — '$expect'"
+  else
+    say "ANCHOR-MUT $id: FAIL — the anchored arm refused, but did not name '$expect'"
+    head -2 "$anch" | tee -a "$OUT/run.log"
+    FAILED=1
+  fi
+}
+
+say "=== the plants round 14 called correct (the anchor, measured) ==="
+# (m) THE CHALLENGER'S PLANT A: the lowest migration dropped and the whole tail
+#     renumbered down by one, rows and boundary carried with it. The challenger's
+#     own version of this plant renamed 40 files; this one renames 79, and both
+#     pass the round-14 check — the count is not what makes it work, the
+#     coordination is.
+anchor_is_loadbearing m \
+  "python3 '$HERE/p8-plant.py' tail-renumber" \
+  "the attested boundary has MOVED"
+# (n) THE CHALLENGER'S PLANT B: the boundary moved down to the sixth migration
+#     with every row above it deleted. 6 files, 6 rows, all matching, and the
+#     other 81 files reported as merely beyond the manifest's coverage.
+anchor_is_loadbearing n \
+  "python3 '$HERE/p8-plant.py' boundary-shrink" \
+  "the attested boundary has MOVED"
+# (o) THE COORDINATOR'S LIMIT CASE: one row, the boundary at 0000. The numbering
+#     law round 14 added is SATISFIED by [0], which is the plainest statement of
+#     why pinning the low end was necessary but not sufficient.
+anchor_is_loadbearing o \
+  "python3 '$HERE/p8-plant.py' limit-one" \
+  "the attested boundary has MOVED"
+# (p) THE WHOLE-RECORD FORGERY: a frozen file edited AND its manifest row
+#     updated to the edited digest. This is mutant (a) with the record brought
+#     along, and it is the case the manifest can never catch, because the
+#     manifest is what was forged. Only content read from the pinned commit sees
+#     it.
+anchor_is_loadbearing p \
+  "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql && python3 -c \"import json,hashlib;p='infrastructure/database/MIGRATION_MANIFEST.json';h=hashlib.sha256(open('infrastructure/database/migrations/0006_rls.sql','rb').read()).hexdigest();m=json.load(open(p));m['migrations']=[dict(r,sha256=h) if r['name']=='0006_rls.sql' else r for r in m['migrations']];json.dump(m,open(p,'w'))\"" \
+  "ANCHOR DRIFT  0006_rls.sql"
+# (q) A COVERED FILE RENAMED IN PLACE, row carried: same number, same bytes, a
+#     different name. The numbering law holds, the equality holds, the digests
+#     hold, the boundary is where it was — and the claimed figures hold too,
+#     because the count and the digest-over-digests are both unchanged. This one
+#     is caught by the anchor's FILE LIST and by nothing else in the pack.
+anchor_is_loadbearing q \
+  "mv infrastructure/database/migrations/0013_security_boundary.sql infrastructure/database/migrations/0013_security_boundaries.sql && python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[dict(r,name='0013_security_boundaries.sql') if r['name']=='0013_security_boundary.sql' else r for r in m['migrations']];json.dump(m,open(p,'w'))\"" \
+  "NOT IN TREE   0013_security_boundary.sql"
+
+# The three claimed figures are the pack's SECOND leg, and weaker: a literal
+# travels in the same commit as the change it would catch, which is this
+# project's own lesson (P14 B2 — the witness must not be anchored to anything
+# one commit can change). They are measured anyway, because a claim that cannot
+# fail is not a claim. Each of the three coordinated plants is run once more with
+# the figures and no anchor, and must be refused by the falsified figure's name.
+say "=== the claimed figures, measured (the weaker leg) ==="
+integrity_must_refuse m2 \
+  "python3 '$HERE/p8-plant.py' tail-renumber" \
+  "COVERED COUNT  expected 80, measured 79" "$CLAIM_ARGS"
+integrity_must_refuse n2 \
+  "python3 '$HERE/p8-plant.py' boundary-shrink" \
+  "COVERED COUNT  expected 80, measured 6" "$CLAIM_ARGS"
+integrity_must_refuse o2 \
+  "python3 '$HERE/p8-plant.py' limit-one" \
+  "COVERED COUNT  expected 80, measured 1" "$CLAIM_ARGS"
 
 # git is still consulted WHERE THERE IS A WORK TREE, as a second opinion on the
 # files that are beyond the manifest's coverage. Its exit code is read, and where
