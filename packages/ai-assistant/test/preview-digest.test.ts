@@ -204,6 +204,27 @@ describe('recomputation divergence names the diverging field (§5.3)', () => {
   });
 
   it.each([
+    ['lineNo', { lineNo: 7 }],
+    ['quantity', { quantity: '4' }],
+    ['lineTotalMinor', { lineTotalMinor: 36001n }],
+  ] as const)('refuses a diverging %s on a line and names it (COORDINATOR P3 — all six line fields)', (field, override) => {
+    // Three of the six line fields had committed cases; the compile-time guarantee covers all six,
+    // but a guarantee and an exercised case are different claims, which is the whole lesson of F-01.
+    const base = preview();
+    const first = base.lines[0];
+    expect(first).toBeDefined();
+    if (first === undefined) return;
+    const diverged = preview({ lines: [{ ...first, ...override }, ...base.lines.slice(1)] });
+    const decision = checkRecomputation(base, diverged);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.refusal.code).toBe('ai_draft.recomputation_diverged');
+      // A changed lineNo re-sorts the lines, so the divergence is named on the line it lands on.
+      expect(decision.refusal.field?.endsWith(`.${field}`)).toBe(true);
+    }
+  });
+
+  it.each([
     ['tenantId', { tenantId: 't2' }],
     ['businessId', { businessId: 'b2' }],
     ['documentDate', { documentDate: '2026-10-13' }],

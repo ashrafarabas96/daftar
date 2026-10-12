@@ -70,10 +70,16 @@ export interface Heard {
  * file that the code does not keep, which is the same defect class as a false coverage claim in a
  * document.
  *
- * This symbol is module-private and deliberately not exported: outside this file the property
- * cannot be named, so the type cannot be satisfied, so the sentence is now true rather than
- * asserted. The alternative was to soften the comment; the stronger closure is cheap here and the
- * claim is worth keeping.
+ * This symbol is module-private and deliberately not exported, so **a hand-written literal cannot
+ * satisfy the type**: the property cannot be named from outside this file. The alternative was to
+ * soften the comment; the stronger closure is cheap here and the claim is worth keeping.
+ *
+ * **It is not true that the type cannot be satisfied at all** (COORDINATOR P4, and the earlier
+ * wording here said otherwise). A spread copy of a genuine artefact type-checks with no cast — the
+ * compiler carries the symbol property through the spread — while losing the mark at *runtime*
+ * because the mark is non-enumerable. So the type stops the literal and the **runtime check** stops
+ * the copy, and neither alone is the guarantee. The test at `test/voice-flow.test.ts` does exactly
+ * that, without a cast, which is what made the old sentence checkably wrong.
  *
  * The mark is defined **non-enumerable** (COORDINATOR C-5). That is not a detail: a spread copy,
  * `{ ...genuineReview, resolvedEntityId: 'somebody-else' }`, copies own *enumerable* symbols, so
@@ -92,7 +98,15 @@ export interface Heard {
  * widened into the second sentence, that is the first thing to re-check.
  *
  * `Symbol()` rather than `Symbol.for()` is load-bearing: a registry symbol would be reachable by
- * description from anywhere, which is the one route that would make the type satisfiable again.
+ * description from anywhere, which is the one route that would let an outside caller name the
+ * property.
+ *
+ * **"Frozen" is two behaviours, not one** (measured by the challenger at this head, recorded
+ * because the word reads as a single guarantee). A strict-mode caller — every TypeScript module,
+ * and so every caller inside this package — gets a loud `TypeError` on a mutation attempt. A
+ * sloppy-mode JavaScript caller gets a **silent no-op**. The value is unchanged either way, which
+ * is the property that matters, and the silent branch is no worse than before: the artefact that
+ * caller still holds is the genuine one.
  */
 const MINTED_BY_AFTER_LISTEN: unique symbol = Symbol('voice-flow.mintedByAfterListen');
 
