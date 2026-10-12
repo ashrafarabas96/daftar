@@ -140,18 +140,36 @@ export interface SaleLineDraft {
   /**
    * Every contribution, with its own quantity and its own recipe binding. The
    * quantities sum to `quantityQ4` exactly, and the distinct bindings here are
-   * the M versions this one sale line was prepared under.
+   * the M recipe identities this one sale line was prepared under — identities,
+   * because two different recipes can share a version number.
    */
   readonly contributions: readonly SaleLineContribution[];
 }
 
-/** The distinct recipe versions one aggregated sale line was prepared under. */
-export function boundVersionsOf(draft: SaleLineDraft): readonly number[] {
-  const versions = new Set<number>();
+/**
+ * The distinct recipe IDENTITIES one aggregated sale line was prepared under.
+ *
+ * Identities, not version numbers. A bare `3` is not an identity: recipe A v3
+ * and recipe B v3 are different recipes, and a set of numbers cannot tell them
+ * apart. One sale line can legitimately carry two different recipes — a variant
+ * whose dish was re-recipied, or a priced modifier with a recipe of its own — so
+ * collapsing to numbers would let a movement from the wrong recipe pass the
+ * completeness check because some other contribution happened to be at the same
+ * version number.
+ */
+export function boundRecipesOf(draft: SaleLineDraft): readonly RecipeBinding[] {
+  const byKey = new Map<string, RecipeBinding>();
   for (const contribution of draft.contributions) {
-    if (contribution.recipeBinding !== null) versions.add(contribution.recipeBinding.version);
+    const binding = contribution.recipeBinding;
+    if (binding === null) continue;
+    byKey.set(`${binding.recipeId}@${binding.version}`, Object.freeze({ ...binding }));
   }
-  return Object.freeze([...versions].sort((a, b) => a - b));
+  return Object.freeze(
+    [...byKey.values()].sort((a, b) => {
+      if (a.recipeId !== b.recipeId) return a.recipeId < b.recipeId ? -1 : 1;
+      return a.version - b.version;
+    }),
+  );
 }
 
 function variantKey(productId: string, variantId: string | null): string {

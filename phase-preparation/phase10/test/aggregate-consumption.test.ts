@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { at } from './at';
 import { AggregateConsumptionRefusal, assertContributionsConserve, expandAggregatedSaleLine } from '../src/aggregate-consumption';
-import { aggregateToSaleLines, boundVersionsOf, type RestaurantOrderLine, type SaleLineDraft } from '../src/order-to-sale';
+import { aggregateToSaleLines, boundRecipesOf, type RestaurantOrderLine, type SaleLineDraft } from '../src/order-to-sale';
 import { isRepresentableAtPrecision, type RecipeVersion } from '../src/recipe-version';
 import { assertMovementSetComplete, type ActualMovement } from '../src/stock-effect';
 import type { RecipeBinding } from '../src/recipe-binding';
@@ -83,8 +83,11 @@ describe('§17 — aggregation keeps every line its own links and economics', ()
     expect(at(draft.contributions, 1)).toEqual({ orderLineId: 'o2', modifierId: null, quantityQ4: Q(1), recipeBinding: { recipeId: 'r-latte', version: 4 } });
     // The cardinality the Contract Diff has to resolve: 1 sale line, N
     // contributions, M distinct versions, M <= N.
-    expect([...boundVersionsOf(draft)]).toEqual([3, 4]);
-    expect(boundVersionsOf(draft).length).toBeLessThanOrEqual(draft.contributions.length);
+    expect([...boundRecipesOf(draft)]).toEqual([
+      { recipeId: 'r-latte', version: 3 },
+      { recipeId: 'r-latte', version: 4 },
+    ]);
+    expect(boundRecipesOf(draft).length).toBeLessThanOrEqual(draft.contributions.length);
   });
 
   it('records a priced modifier as its own contribution, with its own binding', () => {
@@ -107,7 +110,7 @@ describe('§17 — aggregation keeps every line its own links and economics', ()
     const drafts = aggregateToSaleLines([line({ orderLineId: 'o1', recipeBinding: V3 }), line({ orderLineId: 'o2', recipeBinding: V3 })]);
     const draft = at(drafts, 0);
     expect(draft.contributions).toHaveLength(2);
-    expect([...boundVersionsOf(draft)]).toEqual([3]);
+    expect([...boundRecipesOf(draft)]).toEqual([{ recipeId: 'r-latte', version: 3 }]);
   });
 
   it('conserves: the contributions account for the billed quantity exactly', () => {
@@ -197,25 +200,28 @@ describe('§17 + §58 — the completeness verifier reads the bound SET', () => 
     const draft = twoLattesUnderTwoVersions();
     const expected = expandAggregatedSaleLine(draft, lookup);
     const actual: ActualMovement[] = [
-      { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.036), recipeVersion: 3 },
-      { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(0.32), recipeVersion: 4 },
+      { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.036), recipeId: 'r-latte', recipeVersion: 3 },
+      { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(0.32), recipeId: 'r-latte', recipeVersion: 4 },
     ];
-    expect(() => assertMovementSetComplete(expected, actual, { boundRecipeVersions: [...boundVersionsOf(draft)] })).not.toThrow();
+    expect(() => assertMovementSetComplete(expected, actual, { boundRecipes: [...boundRecipesOf(draft)] })).not.toThrow();
   });
 
   it('still refuses a version the line was never bound to', () => {
     const draft = twoLattesUnderTwoVersions();
     const expected = expandAggregatedSaleLine(draft, lookup);
     const actual: ActualMovement[] = [
-      { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.036), recipeVersion: 3 },
-      { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(0.32), recipeVersion: 5 },
+      { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.036), recipeId: 'r-latte', recipeVersion: 3 },
+      { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(0.32), recipeId: 'r-latte', recipeVersion: 5 },
     ];
     try {
-      assertMovementSetComplete(expected, actual, { boundRecipeVersions: [...boundVersionsOf(draft)] });
+      assertMovementSetComplete(expected, actual, { boundRecipes: [...boundRecipesOf(draft)] });
       throw new Error('expected a refusal');
     } catch (error) {
       expect((error as { code?: string }).code).toBe('restaurant_stock_effect.recipe_version_mismatch');
-      expect((error as { details?: Record<string, unknown> }).details?.boundVersions).toEqual([3, 4]);
+      expect((error as { details?: Record<string, unknown> }).details?.boundRecipes).toEqual([
+        { recipeId: 'r-latte', version: 3 },
+        { recipeId: 'r-latte', version: 4 },
+      ]);
     }
   });
 
@@ -225,10 +231,10 @@ describe('§17 + §58 — the completeness verifier reads the bound SET', () => 
     const draft = twoLattesUnderTwoVersions();
     const expected = expandAggregatedSaleLine(draft, lookup);
     const actual: ActualMovement[] = [
-      { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.036), recipeVersion: 3 },
-      { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(0.32), recipeVersion: 4 },
+      { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.036), recipeId: 'r-latte', recipeVersion: 3 },
+      { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(0.32), recipeId: 'r-latte', recipeVersion: 4 },
     ];
-    expect(() => assertMovementSetComplete(expected, actual, { boundRecipeVersions: [3] })).toThrowError(
+    expect(() => assertMovementSetComplete(expected, actual, { boundRecipes: [{ recipeId: 'r-latte', version: 3 }] })).toThrowError(
       expect.objectContaining({ code: 'restaurant_stock_effect.recipe_version_mismatch' }),
     );
   });
@@ -267,12 +273,15 @@ describe("§17 — a component's precision belongs to the product, not to a reci
     }
   });
 
-  it('MEASURES that the folded-grain guard cannot fire once the precisions agree', () => {
-    // Why this is a measurement and not a red proof: with the precisions proven
-    // equal and every contribution already on that grain (§57), a fold is a sum
-    // of multiples of one step and is therefore a multiple of that step. A
-    // mutation removing the guard stays GREEN, so the harness does not claim a
-    // proof for it. Here is the arithmetic the claim rests on, enumerated.
+  it('finds no counterexample to the folded-grain guard within a bounded grid', () => {
+    // Deliberately NOT called a proof of unreachability, and not counted among
+    // the harness's laws. A mutation removing the guard stays GREEN, so claiming
+    // a red proof for it would be false; what this does instead is enumerate a
+    // finite grid and report that no counterexample appears inside it. The
+    // reasoning it supports — with the precisions proven equal and every
+    // contribution already on that grain (§57), a fold is a sum of multiples of
+    // one step — is an argument, and this is a bounded check of that argument,
+    // which is a limited examination either way.
     const steps = [
       { unitDecimals: 0, step: 10_000n },
       { unitDecimals: 1, step: 1_000n },
@@ -297,6 +306,8 @@ describe("§17 — a component's precision belongs to the product, not to a reci
     }
     expect(checked).toBe(8000);
     expect(everOffGrain).toBe(0);
+    // The bound itself, stated so the claim cannot be read as wider than it is:
+    // five precisions x 40 x 40 multiples. Nothing here speaks for a 41st.
   });
 
   it('folds a three-contribution bill on one grain without drift', () => {
@@ -311,5 +322,111 @@ describe("§17 — a component's precision belongs to the product, not to a reci
     // Milk: 0.150 + 0.170 + 0.150 = 0.470 l. Beans: 3 x 0.018 = 0.054 kg.
     expect(at(components, 0).quantityQ4).toBe(Q(0.054));
     expect(at(components, 1).quantityQ4).toBe(Q(0.47));
+  });
+});
+
+describe('V2 §17 — the bound set is recipe IDENTITIES, not version numbers', () => {
+  /**
+   * The case a set of numbers cannot express: one sale line whose contributions
+   * bind to two DIFFERENT recipes that happen to share a version number. A
+   * priced modifier with a recipe of its own is the ordinary way this arises.
+   */
+  const SYRUP_V3: RecipeVersion = {
+    recipeId: 'r-syrup',
+    version: 3,
+    productId: 'syrup-shot',
+    variantId: null,
+    yieldQuantityQ4: Q(1),
+    components: [{ componentProductId: 'syrup', componentVariantId: 'syrup-l', quantityQ4: Q(0.02), recipeUnit: 'l', stockUnit: 'l', unitDecimals: 3 }],
+  };
+
+  const twoRecipesLookup = (binding: RecipeBinding): RecipeVersion | null => {
+    if (binding.recipeId === 'r-latte' && binding.version === 3) return LATTE_V3;
+    if (binding.recipeId === 'r-syrup' && binding.version === 3) return SYRUP_V3;
+    return null;
+  };
+
+  it('keeps both identities distinct when two recipes share a version number', () => {
+    const drafts = aggregateToSaleLines([
+      line({ orderLineId: 'o1', productId: 'latte', recipeBinding: { recipeId: 'r-latte', version: 3 } }),
+      line({ orderLineId: 'o2', productId: 'latte', recipeBinding: { recipeId: 'r-syrup', version: 3 } }),
+    ]);
+    const draft = at(drafts, 0);
+    const bound = boundRecipesOf(draft);
+    // Two identities, not one number. A `Set<number>` would have collapsed these.
+    expect(bound).toHaveLength(2);
+    expect([...bound]).toEqual([
+      { recipeId: 'r-latte', version: 3 },
+      { recipeId: 'r-syrup', version: 3 },
+    ]);
+    expect(new Set(bound.map((b) => b.version)).size).toBe(1);
+  });
+
+  it('collapses an identity only when the recipe AND the version repeat', () => {
+    const drafts = aggregateToSaleLines([
+      line({ orderLineId: 'o1', recipeBinding: { recipeId: 'r-latte', version: 3 } }),
+      line({ orderLineId: 'o2', recipeBinding: { recipeId: 'r-latte', version: 3 } }),
+    ]);
+    expect(boundRecipesOf(at(drafts, 0))).toHaveLength(1);
+  });
+
+  it('refuses a movement from a foreign recipe at the same version number', () => {
+    // THE defect V2 §17 names. A line bound to r-latte v3 alone must not accept
+    // a movement made under r-syrup v3 just because the number matches.
+    const drafts = aggregateToSaleLines([line({ orderLineId: 'o1', recipeBinding: { recipeId: 'r-latte', version: 3 } })]);
+    const draft = at(drafts, 0);
+    const expected = expandAggregatedSaleLine(draft, twoRecipesLookup);
+    const actual: ActualMovement[] = expected.map((e) => ({ ...e, recipeId: 'r-syrup', recipeVersion: 3 }));
+    try {
+      assertMovementSetComplete(expected, actual, { boundRecipes: [...boundRecipesOf(draft)] });
+      throw new Error('expected a refusal');
+    } catch (error) {
+      expect((error as { code?: string }).code).toBe('restaurant_stock_effect.recipe_version_mismatch');
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      expect(details.movedRecipeId).toBe('r-syrup');
+      expect(details.boundRecipes).toEqual([{ recipeId: 'r-latte', version: 3 }]);
+    }
+  });
+
+  it('measures that a version-number check would have ADMITTED that foreign movement', () => {
+    // Why the option could not stay a set of numbers. The comparison the pack
+    // used to make, reproduced here over the same data, accepts it.
+    const drafts = aggregateToSaleLines([line({ orderLineId: 'o1', recipeBinding: { recipeId: 'r-latte', version: 3 } })]);
+    const draft = at(drafts, 0);
+    const foreign = { recipeId: 'r-syrup', version: 3 };
+    const boundNumbers = boundRecipesOf(draft).map((b) => b.version);
+    expect(boundNumbers).toEqual([3]);
+    expect(boundNumbers.includes(foreign.version)).toBe(true); // the old check: admitted
+    const boundKeys = boundRecipesOf(draft).map((b) => `${b.recipeId}@${b.version}`);
+    expect(boundKeys.includes(`${foreign.recipeId}@${foreign.version}`)).toBe(false); // identity: refused
+  });
+
+  it("accepts the two-recipe line's own movements under either identity", () => {
+    const drafts = aggregateToSaleLines([
+      line({ orderLineId: 'o1', productId: 'latte', recipeBinding: { recipeId: 'r-latte', version: 3 } }),
+      line({ orderLineId: 'o2', productId: 'latte', recipeBinding: { recipeId: 'r-syrup', version: 3 } }),
+    ]);
+    const draft = at(drafts, 0);
+    const expected = expandAggregatedSaleLine(draft, twoRecipesLookup);
+    // One cup to the latte recipe, one to the syrup recipe: beans, milk, syrup.
+    expect(expected.map((e) => e.componentProductId)).toEqual(['beans', 'milk', 'syrup']);
+    const actual: ActualMovement[] = [
+      { componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.018), recipeId: 'r-latte', recipeVersion: 3 },
+      { componentProductId: 'milk', componentVariantId: 'milk-l', quantityQ4: Q(0.15), recipeId: 'r-latte', recipeVersion: 3 },
+      { componentProductId: 'syrup', componentVariantId: 'syrup-l', quantityQ4: Q(0.02), recipeId: 'r-syrup', recipeVersion: 3 },
+    ];
+    expect(() => assertMovementSetComplete(expected, actual, { boundRecipes: [...boundRecipesOf(draft)] })).not.toThrow();
+  });
+
+  it('refuses half an identity rather than matching on the number alone', () => {
+    const drafts = aggregateToSaleLines([line({ orderLineId: 'o1', recipeBinding: { recipeId: 'r-latte', version: 3 } })]);
+    const draft = at(drafts, 0);
+    const expected = expandAggregatedSaleLine(draft, twoRecipesLookup);
+    for (const half of [{ recipeVersion: 3 }, { recipeId: 'r-latte' }]) {
+      const actual: ActualMovement[] = expected.map((e) => ({ ...e, ...half }));
+      expect(() => assertMovementSetComplete(expected, actual, { boundRecipes: [...boundRecipesOf(draft)] })).toThrowError(
+        expect.objectContaining({ code: 'restaurant_stock_effect.recipe_identity_incomplete' }),
+      );
+    }
   });
 });

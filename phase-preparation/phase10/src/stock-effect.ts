@@ -38,7 +38,9 @@ export type StockEffectRefusalCode =
   | 'restaurant_stock_effect.component_quantity_mismatch'
   | 'restaurant_stock_effect.direct_movement_set_invalid'
   | 'restaurant_stock_effect.service_consumed_stock'
-  | 'restaurant_stock_effect.recipe_version_mismatch';
+  | 'restaurant_stock_effect.recipe_version_mismatch'
+  /** A movement named a version without its recipe, or a recipe without its version. */
+  | 'restaurant_stock_effect.recipe_identity_incomplete';
 
 export class StockEffectRefusal extends Error {
   constructor(
@@ -135,7 +137,13 @@ export interface ActualMovement {
   readonly componentProductId: string;
   readonly componentVariantId: string;
   readonly quantityQ4: bigint;
-  /** The recipe version the committing command said it used, for a composed line. */
+  /**
+   * The recipe IDENTITY the committing command said it used, for a composed
+   * line. Both halves or neither: a version without its recipe is not an
+   * identity, and comparing bare version numbers across different recipes is
+   * what lets a movement from the wrong recipe pass.
+   */
+  readonly recipeId?: string;
   readonly recipeVersion?: number;
 }
 
@@ -154,22 +162,32 @@ function key(productId: string, variantId: string): string {
  * own case — it would otherwise be reported as one missing plus one extra, which
  * tells a reader two wrong things instead of one right one.
  *
- * `boundRecipeVersions` is checked for a composed line because §49's whole point
+ * `boundRecipes` is checked for a composed line because §49's whole point
  * is that the committed sale names the version it used: movements recorded
  * against a different version are not this sale's movements.
  *
- * It is a SET, not a single version. An aggregated sale line is prepared under M
- * distinct versions (the mission's §17), so a movement is this line's when its
- * version is one the line is actually bound to, and is foreign when it is not.
- * A single version is the one-element case; passing one version where several
- * were bound would refuse this line's own movements.
+ * It is a SET of IDENTITIES, not a single version and not a set of numbers. An
+ * aggregated sale line is prepared under M distinct recipe identities (the
+ * mission's §17), so a movement is this line's when its `(recipeId, version)`
+ * pair is one the line is actually bound to, and is foreign when it is not.
+ *
+ * Both halves matter for different reasons. A single version is the one-element
+ * case, and passing one version where several were bound would refuse this
+ * line's own movements. Comparing versions alone would do the opposite and ADMIT
+ * a foreign movement: recipe A v3 and recipe B v3 are different recipes, and a
+ * line bound to A v3 must not accept a movement made under B v3 merely because
+ * the number matches. A movement that names a version without its recipe is
+ * refused rather than matched on the number alone.
  */
 export function assertMovementSetComplete(
   expected: readonly ExpectedMovement[],
   actual: readonly ActualMovement[],
-  options: { readonly boundRecipeVersions?: readonly number[] } = {},
+  options: { readonly boundRecipes?: readonly { readonly recipeId: string; readonly version: number }[] } = {},
 ): void {
-  const bound = options.boundRecipeVersions;
+  const bound = options.boundRecipes;
+  const boundKeys = bound === undefined ? null : new Set(bound.map((b) => `${b.recipeId}@${b.version}`));
+  const describe = (b: readonly { readonly recipeId: string; readonly version: number }[]): string =>
+    b.map((one) => `${one.recipeId} v${one.version}`).join(', ');
   const actualByKey = new Map<string, ActualMovement>();
   for (const movement of actual) {
     const k = key(movement.componentProductId, movement.componentVariantId);
@@ -180,12 +198,26 @@ export function assertMovementSetComplete(
       });
     }
     actualByKey.set(k, movement);
-    if (bound !== undefined && bound.length > 0 && movement.recipeVersion !== undefined && !bound.includes(movement.recipeVersion)) {
-      throw new StockEffectRefusal(
-        'restaurant_stock_effect.recipe_version_mismatch',
-        `Component ${k} was moved against recipe version ${movement.recipeVersion}, but this sale line is bound to ${bound.join(', ')}`,
-        { componentProductId: movement.componentProductId, movedVersion: movement.recipeVersion, boundVersions: [...bound] },
-      );
+    if (bound !== undefined && boundKeys !== null && bound.length > 0 && (movement.recipeVersion !== undefined || movement.recipeId !== undefined)) {
+      if (movement.recipeId === undefined || movement.recipeVersion === undefined) {
+        throw new StockEffectRefusal(
+          'restaurant_stock_effect.recipe_identity_incomplete',
+          `Component ${k} names half a recipe identity (recipe ${String(movement.recipeId)}, version ${String(movement.recipeVersion)}); a version without its recipe cannot be matched`,
+          { componentProductId: movement.componentProductId, movedRecipeId: movement.recipeId ?? null, movedVersion: movement.recipeVersion ?? null },
+        );
+      }
+      if (!boundKeys.has(`${movement.recipeId}@${movement.recipeVersion}`)) {
+        throw new StockEffectRefusal(
+          'restaurant_stock_effect.recipe_version_mismatch',
+          `Component ${k} was moved against ${movement.recipeId} v${movement.recipeVersion}, but this sale line is bound to ${describe(bound)}`,
+          {
+            componentProductId: movement.componentProductId,
+            movedRecipeId: movement.recipeId,
+            movedVersion: movement.recipeVersion,
+            boundRecipes: bound.map((one) => ({ ...one })),
+          },
+        );
+      }
     }
   }
 

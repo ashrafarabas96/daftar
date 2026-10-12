@@ -13,24 +13,32 @@ require three things of the run, in this order:
 
 A non-empty list of failures names no law. Only (3) does.
 
-TWO GUARDS ARE DELIBERATELY ABSENT FROM THIS LIST.
+TWO GUARDS ARE DELIBERATELY ABSENT FROM THIS LIST, AND NEITHER IS COUNTED.
+
+On both, what exists is a BOUNDED ENUMERATION, not a proof. An enumeration over
+a finite grid is a LIMITED EXAMINATION: it shows no counterexample inside the
+range tried and says nothing about the range outside it. So neither guard is
+reclassified as a successful planted-red, neither is included in the law count
+this script prints, and the honest reading of each is "no counterexample found
+within the stated bounds" rather than "unreachable".
 
 The second is `expandAggregatedSaleLine`'s folded-grain check. Every
 contribution's quantity is already on its component's grain (§57), and the fold
 refuses two versions that declare different precisions for one component, so a
 sum of multiples of one step is a multiple of that step and the check cannot
 fire. Removing it leaves the suite green, so claiming a red proof for it would be
-a false claim. Its unreachability is MEASURED in
-`test/aggregate-consumption.test.ts` instead, and the guard is kept because it is
-the invariant the canonical stock writer will actually test.
+a false claim. `test/aggregate-consumption.test.ts` enumerates 8,000 pairs across
+all five precisions and finds no counterexample — which is a bounded check, not a
+proof — and the guard is kept because it is the invariant the canonical stock
+writer will actually test.
 
 The first: `distributeBillDiscount`'s
 per-line cap (`share.amountMinor < share.capMinor`) cannot be made to fire: when
 the discount is below the subtotal every positive-gross line's floor is strictly
 below its gross, and the leftover never exceeds the count of such lines. Removing
 the cap therefore leaves the suite green, so claiming a red proof for it would be
-a false claim. Its unreachability is MEASURED instead, by an exhaustive
-enumeration in `test/bill-discount.test.ts`.
+a false claim. `test/bill-discount.test.ts` enumerates the shapes instead and
+finds no counterexample within the range tried — a bounded check, not a proof.
 
 Usage, from the repository root:
     python3 phase-preparation/phase10/proofs/red-proofs.py
@@ -206,7 +214,7 @@ MUTATIONS = [
     (
         "§49 — movements against another recipe version are refused",
         "src/stock-effect.ts",
-        "!bound.includes(movement.recipeVersion)",
+        "!boundKeys.has(`${movement.recipeId}@${movement.recipeVersion}`)",
         "false",
         "refuses movements recorded against a different recipe version",
     ),
@@ -426,9 +434,30 @@ MUTATIONS = [
     (
         "\u00a717/\u00a758 — the verifier reads the bound SET, so a single version would reject this line's own movements",
         "src/stock-effect.ts",
-        "    if (bound !== undefined && bound.length > 0 && movement.recipeVersion !== undefined && !bound.includes(movement.recipeVersion)) {",
-        "    if (bound !== undefined && bound.length > 0 && movement.recipeVersion !== undefined && movement.recipeVersion !== bound[0]) {",
+        "      if (!boundKeys.has(`${movement.recipeId}@${movement.recipeVersion}`)) {",
+        "      if (movement.recipeVersion !== bound[0]?.version) {",
         "accepts movements recorded under either of the line's two versions",
+    ),
+    (
+        "V2 \u00a717 — the bound set is identities, so two recipes at one version stay distinct",
+        "src/order-to-sale.ts",
+        "    byKey.set(`${binding.recipeId}@${binding.version}`, Object.freeze({ ...binding }));",
+        "    byKey.set(String(binding.version), Object.freeze({ ...binding }));",
+        "keeps both identities distinct when two recipes share a version number",
+    ),
+    (
+        "V2 \u00a717 — a foreign recipe at the same version number is refused",
+        "src/stock-effect.ts",
+        "      if (!boundKeys.has(`${movement.recipeId}@${movement.recipeVersion}`)) {",
+        "      if (!bound.some((one) => one.version === movement.recipeVersion)) {",
+        "refuses a movement from a foreign recipe at the same version number",
+    ),
+    (
+        "V2 \u00a717 — half an identity is refused, not matched on the number",
+        "src/stock-effect.ts",
+        "      if (movement.recipeId === undefined || movement.recipeVersion === undefined) {",
+        "      if (false) {",
+        "refuses half an identity rather than matching on the number alone",
     ),
 ]
 
