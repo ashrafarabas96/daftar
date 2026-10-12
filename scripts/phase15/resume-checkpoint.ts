@@ -248,10 +248,17 @@ function main(): number {
   lines.push('**Generated, not written, and deterministic.** `npm run checkpoint:phase15` CHECKS this file;');
   lines.push('`npm run checkpoint:phase15 -- --write` rewrites it — the read-only verb is the default, because');
   lines.push('this directory has several writers and a bare command should not change shared state. It rewrites');
-  lines.push('file from measurement, and at an unchanged head it rewrites it **byte-identically** — its');
+  lines.push('this file from measurement, and at an unchanged head it rewrites it **byte-identically** — its');
   lines.push('timestamp is the HEAD commit\'s date, not the clock, so the manifest can digest-index it');
   lines.push('without the two gates fighting. It still changes when another pack document changes,');
   lines.push('because §6 digests them, and that is real content drift rather than a moving clock.');
+  lines.push('');
+  lines.push('**`--check` reads more than the head.** It compares the head it records against `HEAD`, AND');
+  lines.push('re-reads §6 against the disk, naming a MISSING document, a DRIFTED digest, a document on');
+  lines.push('disk that §6 never recorded, and an empty table. It used to compare the head alone, so with');
+  lines.push('every document in this pack DELETED it still printed CURRENT: deleting a file moves no SHA.');
+  lines.push('`npm run checkpoint:phase15:prove` plants each of those five cases and requires this check to');
+  lines.push('go red naming it.');
   lines.push('');
   lines.push('`npm run checkpoint:phase15` rewrites this file from');
   lines.push('measurement; `npm run checkpoint:phase15 -- --check` exits 1 when HEAD has moved past it.');
