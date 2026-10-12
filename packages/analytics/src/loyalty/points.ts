@@ -1435,6 +1435,39 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   const byDeclaredKey = (id: string): LoyaltyMovement | undefined =>
     ledger.movements.find((m) => m.id === id && sameParty(m));
 
+  // `R12-02` — THE ARRAY MAY NOT CARRY A SHAPE THE RELATION FORBIDS.
+  //
+  // I had declared the walk's visited check UNWITNESSABLE because `correctsId`
+  // is single-valued, so the children relation is a forest. A challenger showed
+  // the argument is about the RELATION and not about the ARRAY: `id` is unique
+  // per party because `§1.3` declares `PRIMARY KEY (business_id, id)`, and this
+  // function is handed an array. Two rows of ONE party sharing ONE id key the
+  // children index under the same string, so expanding their parent pushes that
+  // id twice and the walk re-expands multiplicatively -- measured by the
+  // challenger as exactly 2^depth, and at depth 40 the walk with the visited
+  // check removed did not return at all.
+  //
+  // The visited check makes that TERMINATE. It does not make it CORRECT: a
+  // duplicate id means the array is not a faithful read of the relation, and
+  // every lookup by `id` in this function -- the target, the upward walk to the
+  // root, the chain's own membership -- then resolves to whichever of the twins
+  // `find` reaches first. So the shape is refused here, by name, before any walk
+  // begins. A caller that hands over the party's own ledger can never trip it;
+  // a caller that stitches pages together, or joins across parties and relabels,
+  // can.
+  const seenIds = new Set<string>();
+  for (const m of ledger.movements) {
+    if (!sameParty(m)) continue;
+    if (seenIds.has(m.id)) {
+      refuseLoyalty('loyalty.ledger_duplicate_movement_id', 'the ledger handed to this writer carries two movements of one party under one id, which the relation\'s key forbids', {
+        movementId: m.id,
+        businessId: request.businessId,
+        customerId: request.customerId,
+      });
+    }
+    seenIds.add(m.id);
+  }
+
   const corrected = byDeclaredKey(request.correctsId);
   if (corrected === undefined) {
     refuseLoyalty('loyalty.corrects_unknown_movement', 'a reversal must name a movement this ledger holds for this party', {
@@ -1619,11 +1652,33 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   //
   // There are TWO `chain.has` calls below and they are not the same guard, which
   // this paragraph used to run together. The one in the SUM (`chain.has(m.id)`)
-  // is witnessed: removing it gives 1 failed / 232 passed, rc 1. The one in the
-  // walk (`chain.has(child.id)`, the visited check) is defence in depth and is
-  // UNWITNESSABLE, which is said here rather than left as a surviving mutation
-  // that reads like a hole: removing it leaves 233 passed, rc 0, and does not
-  // hang.
+  // is witnessed: removing it gives 1 failed / 233 passed, rc 1.
+  //
+  // The one in the WALK (`chain.has(child.id)`, the visited check) had a
+  // paragraph here claiming it was unwitnessable because `correctsId` is
+  // single-valued, so "none is reachable twice" and "no ledger distinguishes the
+  // two". `R12-02` measured both sentences FALSE. The forest argument is about
+  // the RELATION -- `id` is unique per party because `§1.3` declares
+  // `PRIMARY KEY (business_id, id)` -- and this function is handed an ARRAY. Two
+  // rows of one party under one id key the children index under the same string,
+  // the parent pushes that id twice, and the walk re-expands ×2 per level: the
+  // challenger measured exactly 2^depth and, at depth 40, no return at all.
+  //
+  // What that shape actually is, though, is an array that does not faithfully
+  // read the relation, and the lookups by `id` above would resolve to whichever
+  // twin `find` reaches first. So it is now REFUSED by name before any walk
+  // begins (`loyalty.ledger_duplicate_movement_id`, witnessed: deleting that
+  // refusal reds the R12-02 case in 12 ms, 1 failed / 233 passed -- no hang).
+  // Behind that refusal the visited check is a SURVIVING mutation (removing it
+  // leaves 234 passed, rc 0, no hang) and it stays, for the reason defence in
+  // depth exists: the refusal and this walk can drift apart, and only one of
+  // them makes a 2^depth expansion impossible.
+  //
+  // And the shape the finding proposed -- adopting the deep record as a case
+  // with a timeout -- was measured and NOT adopted: the walk is synchronous, so
+  // vitest's per-test timeout cannot interrupt it and the run HANGS instead of
+  // failing (killed at 120 s). A witness that stalls CI is worse than a
+  // surviving mutation that is declared.
   // `correctsId` is single-valued, so the children relation is a FOREST -- no row
   // has two parents and none is reachable twice -- and a cycle cannot hang below
   // a root at all, because a cycle's members have no path to a row with

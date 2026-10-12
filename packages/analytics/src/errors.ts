@@ -94,6 +94,7 @@ export const ANALYTICS_REFUSALS = {
   'loyalty.corrects_chain_unreadable': 422,
   'loyalty.ledger_count_not_stated': 422,
   'loyalty.ledger_not_party_complete': 422,
+  'loyalty.ledger_duplicate_movement_id': 422,
   'loyalty.corrects_cycle': 422,
     /** `F-22`: a correction may not be dated before the row it corrects. */
   'loyalty.corrects_out_of_order': 422,

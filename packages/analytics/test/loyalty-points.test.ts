@@ -2505,6 +2505,87 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     expect(refusalCodeOf(() => ask(101n))).toBe('loyalty.corrects_more_than_target');
   });
 
+  it('R12-02 — a ledger carrying a shape the relation forbids is refused BEFORE the walk', () => {
+    // I had declared the `chain.has(child.id)` visited check UNWITNESSABLE, on
+    // the argument that `correctsId` is single-valued so the children relation
+    // is a forest and no row is reachable twice. A challenger showed the
+    // argument is about the RELATION, not about the ARRAY: `id` is unique per
+    // party because `§1.3` declares `PRIMARY KEY (business_id, id)`, and this
+    // writer is handed an array. Two rows of ONE party under ONE id key the
+    // children index under the same string, so expanding their parent pushes
+    // that id twice and the walk re-expands ×2 per level. The challenger
+    // measured exactly 2^depth and, at depth 40 with the guard removed, no
+    // return at all.
+    //
+    // What I then measured, and why this case is not the one the finding
+    // proposed: adopting that record as a case with a TIMEOUT does not red the
+    // suite, it HANGS it. The walk is synchronous, so vitest's per-test timeout
+    // cannot interrupt it — the whole run stops rather than failing. A witness
+    // that hangs CI is worse than a surviving mutation.
+    //
+    // So the shape is refused by name before any walk begins: a duplicate id
+    // means the array is not a faithful read of the relation, and every lookup
+    // by `id` in that function would resolve to whichever twin `find` reaches
+    // first. That refusal is what this case asserts, and deleting it reds this
+    // case at once (1 failed, no hang) — the depth is irrelevant to the
+    // refusal, which is the point.
+    const DEPTH = 40;
+    const movements: LoyaltyMovement[] = [
+      {
+        id: 'root', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
+        movementKind: 'consume', sourceType: 'sale', sourceId: 'sale-root',
+        pointsDelta: -100n, expiresOn: null, effectiveOn: '2026-01-01',
+        reason: null, correctsId: null,
+      },
+    ];
+    for (let level = 1; level <= DEPTH; level += 1) {
+      const parent = level === 1 ? 'root' : `L${level - 1}`;
+      for (const twin of [0, 1]) {
+        movements.push({
+          id: `L${level}`, businessId: BUSINESS, customerId: CUSTOMER,
+          pointSeq: BigInt(level * 2 + twin + 1), movementKind: 'adjust',
+          sourceType: 'manual_adjustment', sourceId: `desk-${level}-${twin}`,
+          pointsDelta: 0n, expiresOn: null, effectiveOn: '2026-01-02',
+          reason: 'twin', correctsId: parent,
+        });
+      }
+    }
+    const twinned: LoyaltyLedger = { movements };
+    expect(twinned.movements).toHaveLength(DEPTH * 2 + 1);
+    const ask = (ledger: LoyaltyLedger) =>
+      buildReversalMovement(ledger, {
+        ...partyCount(ledger), businessId: BUSINESS, customerId: CUSTOMER,
+        sourceId: 'desk-1', correctsId: 'root', points: 100n, asOf: '2026-01-03',
+        movementId: 'r1', reason: 'desk correction',
+      });
+
+    // Refused by name, and it returns at once: nothing walks 2^40 anything.
+    expect(refusalCodeOf(() => ask(twinned))).toBe('loyalty.ledger_duplicate_movement_id');
+
+    // The SAME depth with distinct ids — the lawful shape — is accepted, so the
+    // refusal is about the duplicate and not about the size of the chain. Every
+    // delta is 0, so the root's whole 100 is still available.
+    const distinct: LoyaltyLedger = {
+      movements: movements.map((m, index) =>
+        m.correctsId === null
+          ? m
+          : { ...m, id: `D${index}`, correctsId: index <= 2 ? 'root' : `D${index - 2}` }),
+    };
+    expect(ask(distinct).pointsDelta).toBe(100n);
+
+    // And a duplicate of ANOTHER party's id is not this party's problem: the
+    // refusal is scoped by the declared key, like every other guard here.
+    const twinOfAnotherParty = distinct.movements.find((m) => m.correctsId === 'root');
+    expect(twinOfAnotherParty).toBeDefined();
+    const foreign: LoyaltyLedger = {
+      movements: [
+        ...distinct.movements,
+        { ...(twinOfAnotherParty as LoyaltyMovement), businessId: 'biz-2' },
+      ],
+    };
+    expect(ask(foreign).pointsDelta).toBe(100n);
+  });
+
   it('F-23 RED PROOF — the sign gate restored, and the defect comes back to the digit', () => {
     // `P13-S0 §5`'s canary requirement: the case above must be able to tell the
     // fixed writer from the broken one. `broken` is the bound exactly as it was
