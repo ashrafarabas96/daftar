@@ -152,7 +152,13 @@ class ScopeAndSchemaTest {
         for (event in attempted) {
             val step = captured.step(event)
             assertIs<Step.Refused>(step, "$event by another member was allowed")
-            assertEquals("offline.scope_switched", step.code, "$event was refused for the wrong reason")
+            // C-02′: within one business the refusal is "this is a
+            // colleague's capture", not "you are signed in to another
+            // business", which is the lie the single code told.
+            assertEquals(
+                "offline.another_members_capture", step.code,
+                "$event was refused for the wrong reason",
+            )
             assertEquals(P7Laws.NO_CROSS_ACCOUNT_SEND.id, step.law)
         }
         assertEquals(4, attempted.size, "every member-gated event must be covered")
@@ -228,7 +234,7 @@ class ScopeAndSchemaTest {
         // Everything that commits or settles is still Alice's alone.
         for (event in listOf(QueueEvent.ResolveByMerchant(true, bob), QueueEvent.RestorePayload(digest, bob))) {
             val refused = assertIs<Step.Refused>(op.step(event), "$event by the next shift was allowed")
-            assertEquals("offline.scope_switched", refused.code)
+            assertEquals("offline.another_members_capture", refused.code)
         }
     }
 
@@ -259,7 +265,18 @@ class ScopeAndSchemaTest {
             captured.step(QueueEvent.Release(bob)),
             "another member confirmed a capture they cannot be shown to have witnessed",
         )
-        assertEquals("offline.scope_switched", refused.code)
+        assertEquals("offline.another_members_capture", refused.code)
+        // And the view that refusal carries names what is true: a colleague
+        // must confirm this one, and the person reading it may still cancel it
+        // (C-02′ — it used to say they were signed in to another business).
+        assertEquals(
+            MerchantMessage.ANOTHER_MEMBER_MUST_CONFIRM_THIS,
+            Recovery.explain(refused.code).message,
+        )
+        assertEquals(
+            RecoveryAction.SEE_WHAT_THIS_OPERATION_NEEDS,
+            Recovery.explain(refused.code).action,
+        )
 
         // Abandoning it is open, so the row is not stranded.
         val cancelled = assertIs<Step.Moved>(

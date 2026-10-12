@@ -140,7 +140,18 @@ sealed interface SideEffect {
         val currency: String?,
     ) : SideEffect
 
-    /** The local row may now be removed. Emitted only alongside SYNCED (L5). */
+    /**
+     * The local row may now be removed (L5).
+     *
+     * Coordinator finding C-01′: this said "emitted only alongside SYNCED",
+     * which is false and was false when it was written. It is emitted on three
+     * paths, and what they have in common is not the state but that no custody
+     * action exists for them: a SYNCED row, where the server's own truth is
+     * the record; the capturer's OWN cancel of a row nothing was sent from,
+     * which is nobody else's capture to describe; and a benign resolve the
+     * capturer makes. Every FOREIGN destruction carries its record instead,
+     * as `ClearLocalRowRecording`.
+     */
     data object ClearLocalRow : SideEffect
 
     /**
@@ -158,8 +169,11 @@ sealed interface SideEffect {
      * the description of what was erased are **one value**: a caller cannot
      * obtain the first without holding the second.
      *
-     * `ClearLocalRow` survives for the path alongside SYNCED, where the
-     * server's own truth is the record and no custody action exists or should.
+     * `ClearLocalRow` survives for the paths where no custody action exists or
+     * should: alongside SYNCED, where the server's own truth is the record,
+     * and on the capturer's own cancel or benign resolve, where the acting
+     * session IS the row's session and there is no second actor to name
+     * (C-01′ corrected the earlier sentence, which named only SYNCED).
      */
     data class ClearLocalRowRecording(val record: RecordCustodyAction) : SideEffect
 
@@ -410,6 +424,16 @@ class Operation private constructor(
     /**
      * The refusal a finished row gives, whatever was asked of it.
      *
+     * Coordinator finding C-02′ made that sentence true. It was written while
+     * only `Release`, `CancelByMerchant` and `Observe` consulted it, so a
+     * `Send`, a `RestorePayload` or a `ResolveByMerchant` on a recorded or
+     * abandoned row still answered in the vocabulary of a row that was still
+     * live — `not_sendable`, whose view tells the merchant to CONFIRM a
+     * capture the server has already recorded or a colleague has abandoned.
+     * Every arm now routes its refusal of a finished row through here, which
+     * is the same "one place, not one per arm" reason the scope gate and the
+     * custody record have one site each.
+     *
      * Challenger finding J-01. A refusal's code decides what a person is told,
      * and three codes told a merchant to wait for something that was not
      * coming: a release of an abandoned row answered "already confirmed, wait",
@@ -447,6 +471,23 @@ class Operation private constructor(
             null
         }
 
+    /**
+     * The refusal a row that is already being sent gives.
+     *
+     * Coordinator finding C-02′. `offline.not_sendable` answers "confirm this
+     * capture", which is right for a CAPTURED row and false for one whose
+     * attempt is out: the merchant confirmed it, the device is sending it, and
+     * the button they are offered is the one they already pressed. Here the
+     * instruction to wait is honest, because IN_FLIGHT is pending on the
+     * device — which is exactly the distinction L20's clause draws.
+     */
+    private fun refusalForARowAlreadySending(): Step.Refused? =
+        if (state == OperationState.IN_FLIGHT) {
+            Step.Refused("offline.already_sending", P7Laws.KEY_MINTED_AT_CAPTURE.id)
+        } else {
+            null
+        }
+
     /** Sendable states: an attempt may be made from here. */
     val isSendable: Boolean
         get() = state == OperationState.QUEUED || state == OperationState.UNKNOWN_OUTCOME
@@ -473,7 +514,19 @@ class Operation private constructor(
         // and L5 forbid dropping it. A permanently closed state is not
         // fail-closed, it is a lost sale.
         if (event is QueueEvent.ByScope && !event.actingScope.mayAct(scope, event)) {
-            return Step.Refused("offline.scope_switched", P7Laws.NO_CROSS_ACCOUNT_SEND.id)
+            // Coordinator finding C-02′: one code for two different refusals
+            // made one of them lie. `mayAct` refuses on two separate grounds —
+            // the tenant-and-business half, which is never relaxed, and the
+            // member half, which gates only the three committing events — and
+            // both answered `offline.scope_switched`, whose view says
+            // SIGNED_IN_TO_ANOTHER_BUSINESS and "switch back to the owning
+            // account". For the next shift on the SAME business that is false
+            // in both halves. The gate still refuses exactly what it refused;
+            // only what the person is told is split.
+            val sameBusiness = event.actingScope.tenantId == scope.tenantId &&
+                event.actingScope.businessId == scope.businessId
+            val code = if (sameBusiness) "offline.another_members_capture" else "offline.scope_switched"
+            return Step.Refused(code, P7Laws.NO_CROSS_ACCOUNT_SEND.id)
         }
         val step = stepWithinScope(event)
 
@@ -552,7 +605,14 @@ class Operation private constructor(
 
         is QueueEvent.Send ->
             if (!isSendable) {
-                Step.Refused("offline.not_sendable", P7Laws.KEY_MINTED_AT_CAPTURE.id)
+                // C-02′. Each non-sendable state answers in its own terms, and
+                // what is left for `not_sendable` after the three helpers is
+                // exactly CAPTURED — the one state where "confirm this
+                // capture" is the true instruction.
+                refusalForAFinishedRow()
+                    ?: refusalForARowAwaitingAPerson()
+                    ?: refusalForARowAlreadySending()
+                    ?: Step.Refused("offline.not_sendable", P7Laws.KEY_MINTED_AT_CAPTURE.id)
             } else if (event.digestNow != payloadDigest) {
                 // Loud, local, and before the wire: the server would answer
                 // this with a permanent key conflict.
@@ -616,21 +676,25 @@ class Operation private constructor(
             }
 
         is QueueEvent.RestorePayload ->
-            if (!payloadMinimized) {
-                Step.Refused(
-                    "offline.payload_was_never_minimized",
-                    P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id,
-                )
-            } else if (event.digestNow != payloadDigest) {
-                Step.Refused(
-                    "offline.restored_payload_does_not_match_capture",
-                    P7Laws.PAYLOAD_FROZEN_AT_CAPTURE.id,
-                )
-            } else {
-                // Nothing else moves: same state, same key, same digest. The
-                // row is simply storable-and-sendable again.
-                Step.Moved(withPayloadMinimized(false), emptyList())
-            }
+            // C-02′: a finished row first, for the same reason as every other
+            // arm. Restoring the bytes of a row the server has recorded, or of
+            // one that was abandoned, is not a payload question.
+            refusalForAFinishedRow()
+                ?: if (!payloadMinimized) {
+                    Step.Refused(
+                        "offline.payload_was_never_minimized",
+                        P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id,
+                    )
+                } else if (event.digestNow != payloadDigest) {
+                    Step.Refused(
+                        "offline.restored_payload_does_not_match_capture",
+                        P7Laws.PAYLOAD_FROZEN_AT_CAPTURE.id,
+                    )
+                } else {
+                    // Nothing else moves: same state, same key, same digest.
+                    // The row is simply storable-and-sendable again.
+                    Step.Moved(withPayloadMinimized(false), emptyList())
+                }
 
         is QueueEvent.RetentionDeadlineReached ->
             if (state != OperationState.NEEDS_ATTENTION) {
@@ -661,42 +725,46 @@ class Operation private constructor(
             }
 
         is QueueEvent.ResolveByMerchant ->
-            if (state != OperationState.NEEDS_ATTENTION) {
-                Step.Refused("offline.nothing_to_resolve", P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)
-            } else if (event.keep && Outcome.isDivergence(lastCode)) {
-                // A reused key with a different payload is a device defect. The
-                // server will refuse it identically forever, so offering the
-                // merchant a retry would be offering them a button that cannot
-                // work; this needs a developer, and says so.
-                Step.Refused("offline.divergence_needs_a_fix", P7Laws.PAYLOAD_FROZEN_AT_CAPTURE.id)
-            } else if (event.keep && payloadMinimized) {
-                // The bytes this key is bound to no longer exist on the device.
-                // Sending anything else under it would burn the key for good,
-                // and L3 would refuse it at the wire anyway — so say the real
-                // reason here instead of letting it surface as a digest
-                // mismatch two steps later. The approved payload must be
-                // restored first, which is a settlement path that needs no new
-                // intent and no new key.
-                Step.Refused(
-                    "offline.payload_minimized_cannot_resend",
-                    P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id,
-                )
-            } else if (event.keep) {
-                // Try the SAME operation again — same key, same payload. A
-                // stated refusal means the server committed nothing, so this
-                // goes back to QUEUED rather than to UNKNOWN_OUTCOME: calling
-                // a definitively refused operation "unknown" would be the
-                // device misreporting an answer it actually received. What the
-                // merchant changed is a condition on the server's side — paid
-                // the balance, counted the stock — never the operation.
-                Step.Moved(moved(OperationState.QUEUED), emptyList())
-            } else if (effect.isMaterial) {
-                // Abandoning a financial or stock operation that the server
-                // may hold is not a decision the device may record.
-                Step.Refused("offline.material_cannot_be_abandoned", P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)
-            } else {
-                Step.Moved(moved(OperationState.DISCARDED), listOf(SideEffect.ClearLocalRow))
-            }
+            // C-02′: "nothing is waiting on you" is true of a finished row but
+            // says less than the kernel knows, and on a DISCARDED row it reads
+            // as though the operation simply never existed.
+            refusalForAFinishedRow()
+                ?: if (state != OperationState.NEEDS_ATTENTION) {
+                    Step.Refused("offline.nothing_to_resolve", P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)
+                } else if (event.keep && Outcome.isDivergence(lastCode)) {
+                    // A reused key with a different payload is a device defect. The
+                    // server will refuse it identically forever, so offering the
+                    // merchant a retry would be offering them a button that cannot
+                    // work; this needs a developer, and says so.
+                    Step.Refused("offline.divergence_needs_a_fix", P7Laws.PAYLOAD_FROZEN_AT_CAPTURE.id)
+                } else if (event.keep && payloadMinimized) {
+                    // The bytes this key is bound to no longer exist on the device.
+                    // Sending anything else under it would burn the key for good,
+                    // and L3 would refuse it at the wire anyway — so say the real
+                    // reason here instead of letting it surface as a digest
+                    // mismatch two steps later. The approved payload must be
+                    // restored first, which is a settlement path that needs no new
+                    // intent and no new key.
+                    Step.Refused(
+                        "offline.payload_minimized_cannot_resend",
+                        P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id,
+                    )
+                } else if (event.keep) {
+                    // Try the SAME operation again — same key, same payload. A
+                    // stated refusal means the server committed nothing, so this
+                    // goes back to QUEUED rather than to UNKNOWN_OUTCOME: calling
+                    // a definitively refused operation "unknown" would be the
+                    // device misreporting an answer it actually received. What the
+                    // merchant changed is a condition on the server's side — paid
+                    // the balance, counted the stock — never the operation.
+                    Step.Moved(moved(OperationState.QUEUED), emptyList())
+                } else if (effect.isMaterial) {
+                    // Abandoning a financial or stock operation that the server
+                    // may hold is not a decision the device may record.
+                    Step.Refused("offline.material_cannot_be_abandoned", P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)
+                } else {
+                    Step.Moved(moved(OperationState.DISCARDED), listOf(SideEffect.ClearLocalRow))
+                }
     }
 
     override fun toString(): String =

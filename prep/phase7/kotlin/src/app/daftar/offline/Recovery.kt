@@ -62,7 +62,12 @@ enum class RecoveryAction {
     /** This row belongs to another account. Switch back to it (L13). */
     SWITCH_BACK_TO_THE_OWNING_ACCOUNT,
 
-    /** Sign in again. The session, not the sale, is the problem. */
+    /**
+     * Sign in again. The session, not the sale, is the problem — and after a
+     * reinstall it is also the only place the till can recover what it cannot
+     * vouch for itself, because sign-in is already an online operation
+     * (coordinator finding D-01, the `prior_state_undetermined` arm).
+     */
     SIGN_IN_AGAIN,
 
     /**
@@ -121,8 +126,15 @@ enum class MerchantMessage {
     ORIGINAL_ALREADY_RECORDED,
     ORIGINAL_NOT_SETTLED_YET,
     CANNOT_CONFIRM_ORIGINAL_ENDED,
-    TILL_STILL_CHECKING_EARLIER_SALES,
+    // Coordinator finding D-01. This key replaces TILL_STILL_CHECKING_EARLIER
+    // SALES, which said the till was still working on it: an install that
+    // cannot vouch for its own store is not checking anything and will never
+    // resolve this by itself, so the old key asked the merchant to wait for
+    // work nobody was doing.
+    THIS_TILL_CANNOT_VOUCH_FOR_ITS_EARLIER_SALES,
     SERVER_DID_NOT_EXPLAIN,
+    ANOTHER_MEMBER_MUST_CONFIRM_THIS,
+    ALREADY_SENDING,
 }
 
 /**
@@ -240,10 +252,14 @@ object Recovery {
     /**
      * What a merchant is told when the kernel REFUSED what they just did.
      *
-     * Total over every code this kernel can produce. `RefusalVocabularyTest`
-     * sweeps the kernel's own source for `offline.*` literals and requires
-     * each one to appear here, so a code introduced without deciding what a
-     * person is told fails the suite rather than reaching a till.
+     * Total over every code this kernel can produce. `RecoveryTest` sweeps
+     * the kernel's own source for `offline.*` literals and requires each one
+     * to appear here, so a code introduced without deciding what a person is
+     * told fails the suite rather than reaching a till. The same sweep judges
+     * the INSTRUCTION each view carries: a code whose view says something is
+     * in progress must be one the model check has proven reachable only while
+     * something is pending on the device (coordinator finding D-01), so a new
+     * code that says "wait" fails here too.
      *
      * The `else` at the end is not a fallback in the usual sense and must not
      * be read as one: it maps an unrecognised code to "the device software has
@@ -340,18 +356,60 @@ object Recovery {
         "offline.original_already_committed" ->
             view(MerchantMessage.ORIGINAL_ALREADY_RECORDED, RecoveryAction.NOTHING_IT_IS_DONE, blocks = true)
 
+        // Coordinator finding D-01, and the reason all three of these changed
+        // in one place. L20's second clause says no refusal may claim
+        // something is in progress unless something is genuinely pending on
+        // the DEVICE, and re-entry is reached precisely BECAUSE the local row
+        // is gone: by premise there is nothing on this device to wait for.
+        // All three used to answer WAIT_IT_IS_IN_PROGRESS, which is the J-01
+        // harm one layer out — a merchant who is told to wait, waits, and the
+        // thing they are waiting for is not happening anywhere.
+        //
+        // What is true instead is that the till cannot settle this and a
+        // person has to: the canonical receipt is the server's, the fence
+        // `absence_not_fenced` needs does not exist in the merchant API at all
+        // (`Reconciliation.kt`, the L17 arm, carried as SPEC ONLY), and a
+        // reinstalled install recovers its history at sign-in. The block on
+        // new captures stays exactly as it was — that half was never the
+        // defect.
         "offline.original_unsettled" ->
-            view(MerchantMessage.ORIGINAL_NOT_SETTLED_YET, RecoveryAction.WAIT_IT_IS_IN_PROGRESS, blocks = true)
+            view(MerchantMessage.ORIGINAL_NOT_SETTLED_YET, RecoveryAction.ESCALATE_TO_A_SUPERVISOR, blocks = true)
 
         "offline.absence_not_fenced" ->
-            view(MerchantMessage.CANNOT_CONFIRM_ORIGINAL_ENDED, RecoveryAction.WAIT_IT_IS_IN_PROGRESS, blocks = true)
+            view(MerchantMessage.CANNOT_CONFIRM_ORIGINAL_ENDED, RecoveryAction.ESCALATE_TO_A_SUPERVISOR, blocks = true)
 
-        // F-01. A reinstalled till that cannot vouch for its own store. The
-        // merchant is not told "no" and left to key it in again: they are told
-        // the till is still checking, and the till stops taking captures until
-        // it has.
+        // F-01, corrected by D-01. A reinstalled till that cannot vouch for
+        // its own store. The merchant is still not told a bare "no" and left
+        // to key the sale in again — the till stops taking captures and says
+        // why — but it no longer claims to be checking: nothing on this device
+        // can establish what the previous install held, and what recovers it
+        // is signing in, which is an online operation the merchant was already
+        // going to perform.
         "offline.prior_state_undetermined" ->
-            view(MerchantMessage.TILL_STILL_CHECKING_EARLIER_SALES, RecoveryAction.WAIT_IT_IS_IN_PROGRESS, blocks = true)
+            view(
+                MerchantMessage.THIS_TILL_CANNOT_VOUCH_FOR_ITS_EARLIER_SALES,
+                RecoveryAction.SIGN_IN_AGAIN,
+                blocks = true,
+            )
+
+        // Coordinator finding C-02′. A member of the same business who is
+        // refused a release, a resolve or a restore of a colleague's capture
+        // used to be told SIGNED_IN_TO_ANOTHER_BUSINESS and to switch back to
+        // the owning account, which is false twice over: it is the same
+        // business, and the account to switch to is a colleague's. What is
+        // true is that this capture is someone else's to confirm, and that the
+        // cashier standing here may still cancel it (L13's deliberate
+        // asymmetry, H-01).
+        "offline.another_members_capture" ->
+            view(MerchantMessage.ANOTHER_MEMBER_MUST_CONFIRM_THIS, RecoveryAction.SEE_WHAT_THIS_OPERATION_NEEDS)
+
+        // C-02′ again, on the Send arm: a row whose attempt is out answered
+        // NOT_READY_TO_SEND / CONFIRM_THE_CAPTURE, which told the merchant to
+        // confirm a sale they had already confirmed and the device was already
+        // sending. Here the WAIT is honest — IN_FLIGHT is pending on the
+        // device — so this code keeps it.
+        "offline.already_sending" ->
+            view(MerchantMessage.ALREADY_SENDING, RecoveryAction.WAIT_IT_IS_IN_PROGRESS)
 
         // Effect reasons rather than refusals, but a surface can be handed
         // either, so both have a stated view instead of falling through.

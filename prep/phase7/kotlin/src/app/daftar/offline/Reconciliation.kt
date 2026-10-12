@@ -130,7 +130,7 @@ object Reconciliation {
      * Decide what may be done about an intent whose local row is gone.
      *
      * Total over all three enums: every triple has an arm, and
-     * `ReentryAndRetentionTest` asserts the full 4 x 4 x 2 cross product with
+     * `ReentryAndRetentionTest` asserts the full 5 x 4 x 2 cross product with
      * the subject count checked and the expected verdicts written out as
      * literals, so neither a member added later nor a logic change can fall
      * through an `else` or be silently agreed with.

@@ -307,6 +307,50 @@ class CrashSafetyTest {
                 "the guard cannot see the default '$plant', so its verdict means nothing",
             )
         }
+
+        // Coordinator finding D-02: the guard above watched for a DEFAULT, and
+        // a default is only one of the two ways to let a caller omit a fact.
+        // An OVERLOAD does it too — `capture(key, scope, effect, digest)`
+        // delegating `null, null` — and the coordinator measured the suite
+        // staying green with one added, while a pre-round call site compiled
+        // again and threw at the till, which is J-03's harm restored through
+        // the door this file left open. `Queue.kt` argues the general form
+        // itself at the `EffectClass` property: an obligation is not
+        // structural if an overload lets a caller past it. So what is asserted
+        // is the number of ways in, not the shape of one of them.
+        val declaration = Regex("fun\\s+capture\\s*\\(")
+        assertEquals(
+            1, declaration.findAll(queue).count(),
+            "Queue.kt declares more than one capture function. A second one is a way to capture " +
+                "without stating what the operation is worth, whatever its body passes for null",
+        )
+        val signature = queue.substringAfter("fun capture(").substringBefore("): Operation")
+        val mustBeAsked = listOf(
+            "effect: EffectClass",
+            "payloadDigest: String",
+            "amountMinorUnits: Long?",
+            "currency: String?",
+        )
+        for (required in mustBeAsked) {
+            assertTrue(
+                signature.contains(required),
+                "the one capture declaration does not take '$required', so the fact it carries is " +
+                    "not required of a caller at all",
+            )
+        }
+
+        // Non-vacuity, both ways: the counter can see an overload, and the
+        // signature check can see a parameter that is not there.
+        assertEquals(
+            2,
+            declaration.findAll("fun capture(a: Int) = 1 ; fun capture(\n b: Int,\n) = 2").count(),
+            "the declaration counter cannot see an overload, so its verdict means nothing",
+        )
+        assertTrue(
+            !"key: String, scope: OwnerScope, effect: EffectClass, payloadDigest: String"
+                .contains("amountMinorUnits: Long?"),
+            "the signature check cannot see an omitted parameter",
+        )
     }
 
     @Test

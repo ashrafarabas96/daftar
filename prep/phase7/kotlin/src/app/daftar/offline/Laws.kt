@@ -25,7 +25,7 @@ data class OfflineLaw(
 /**
  * The absolute law of the Tech Lead's directive — an offline device is never
  * canonical financial authority, and there is no silent conflict resolution
- * for money or stock — together with the eighteen laws it implies once the LIVE
+ * for money or stock — together with the nineteen laws it implies once the LIVE
  * server contract is read rather than assumed and the Tech Lead's rulings on
  * effect classification (§34) and local data security (PART 40) are applied.
  *
@@ -115,9 +115,27 @@ object P7Laws {
         "Every captured operation records the tenant, business and member it was captured under as part of the row itself, never as ambient session state, so the row's owner survives a sign-out, an account switch, a process death and a reinstall-time restore.",
     )
 
+    /**
+     * Coordinator findings C-03 and H-01, which are the same sentence read
+     * twice. The law used to say that a mismatch "is refused rather than
+     * adapted", flatly, and that has not been true since H-01: a member of
+     * the same business may send another member's released capture, and the
+     * attempt carries the ROW's scope, which is adaptation by any reading.
+     * Finding C-03 is that the law kept claiming the stronger rule while the
+     * code implemented the weaker one.
+     *
+     * The statement below is what `OwnerScope.mayAct` actually enforces, and
+     * the asymmetry is the point rather than a concession: the tenant and the
+     * business are never relaxed, because that is the half no server check can
+     * recover from; the member is relaxed exactly where the act is reversible
+     * by the person standing at the till (sending what was already confirmed,
+     * abandoning what was never sent) and never where it commits money
+     * (confirming, resolving, restoring). Whoever acts on a row that is not
+     * their own is named in a custody record (L20).
+     */
     val NO_CROSS_ACCOUNT_SEND = OfflineLaw(
         "P7-L13-NO-SEND-UNDER-A-SCOPE-IT-WAS-NOT-CAPTURED-UNDER",
-        "An attempt is made only under the exact scope the operation was captured under: the sender states the scope it holds, a mismatch is refused rather than adapted, and no signed-in session may send, cancel or resolve another account's captured entries.",
+        "An attempt is made only under the scope the operation was captured under, and the sender states the scope it holds: a tenant or business mismatch is refused for every event and never adapted, while within one business a member may send a colleague's released capture and abandon one nothing was ever sent from — the attempt still carrying the capturer's own scope — and may never confirm, resolve or restore it.",
     )
 
     val UNKNOWN_QUEUE_SCHEMA_REFUSED = OfflineLaw(
@@ -278,6 +296,21 @@ object P7Laws {
      * that nothing has been sent: a released row waiting its turn is genuinely
      * waiting, and a row the server has refused is waiting on the person
      * reading the message.
+     *
+     * **D-01**, from the coordinator's diff review, is why the second clause
+     * is now defended where it is stated. Widening it from "a refusal of such
+     * a move" to "no refusal" was the right correction and left the clause
+     * wider than its guard: INV-9b sees what `Operation.step` returns, and the
+     * re-entry layer refuses from somewhere else entirely. Three of its
+     * refusals told the merchant to wait — one of them for a server fence the
+     * merchant API does not have — while re-entry is reached precisely because
+     * the local row is gone, so nothing was pending on the device in any of
+     * them. The guard is now taken from the kernel's own source rather than
+     * from a list of sources: every `offline.*` code the kernel can produce is
+     * explained and its INSTRUCTION judged, and a code may say "wait" only if
+     * the model check has proven it reachable only while something is pending.
+     * A refusal added in a layer nobody has thought of yet is covered by
+     * absence, which is the only kind of coverage that survives the next file.
      */
     val A_DESTRUCTION_IS_RECORDED_BEFORE_IT_HAPPENS = OfflineLaw(
         "P7-L20-A-DESTRUCTION-IS-RECORDED-BEFORE-IT-HAPPENS",

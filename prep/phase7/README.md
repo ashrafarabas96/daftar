@@ -18,7 +18,7 @@ wherever a JDK exists.
 
 | File                | What it holds                                                                                                               |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `Laws.kt`           | the nineteen offline laws, as values the code cites and tests assert                                                        |
+| `Laws.kt`           | the twenty offline laws, as values the code cites and tests assert                                                           |
 | `Model.kt`          | effect classes, attempt results, decisions                                                                                  |
 | `Outcome.kt`        | the classifier: one attempt's result becomes one decision                                                                   |
 | `Backoff.kt`        | the retry schedule, derived rather than drawn                                                                               |

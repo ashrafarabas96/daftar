@@ -324,6 +324,118 @@ class RecoveryTest {
     }
 
     /**
+     * Coordinator finding D-01, and the guard L20's second clause was missing.
+     *
+     * The clause says that NO refusal claims something is in progress unless
+     * something is genuinely pending on the device. INV-9b enforces that over
+     * every configuration `Operation.step` can reach — and `Operation.step` is
+     * not the only thing in this kernel that refuses. `Reconciliation`
+     * refuses re-entry, and three of its refusals told the merchant to wait:
+     * for a receipt the server could not be asked for, for a fence the
+     * merchant API does not implement, and for a check a reinstalled till was
+     * not performing. Nothing tested them, because the invariant was written
+     * where the states are.
+     *
+     * So the subject here is not a layer but the kernel's own vocabulary:
+     * every `offline.*` literal the source contains, whoever produces it. A
+     * code may carry a waiting instruction only if it is one the model check
+     * has proven reachable only while something is pending on the device, and
+     * the assertion is an EQUALITY so that it fails in both directions — a new
+     * code that says "wait" fails here, and a code that quietly stops saying
+     * it fails here too, rather than leaving a guard that defends nothing.
+     */
+    @Test
+    fun `no refusal in any layer tells the merchant to wait for a device with nothing pending`() {
+        // The three queue codes INV-9b proves are produced only in QUEUED,
+        // IN_FLIGHT or UNKNOWN_OUTCOME, plus the send refusal added for C-02′,
+        // which exists only for IN_FLIGHT. Every one of them is a refusal of a
+        // queue move, where "the device is working on it" is a fact.
+        val waitIsHonest = mapOf(
+            "offline.already_released" to "the row is released and the device is working through it",
+            "offline.cancel_after_send" to "an attempt is out and its answer has not been seen",
+            "offline.no_attempt_in_flight" to "the row is queued or re-asking after a lost answer",
+            "offline.already_sending" to "the attempt is out now",
+        )
+        val literal = Regex("\"(offline\\.[a-z_]+)\"")
+        val codes = kernelSources()
+            .flatMap { file -> literal.findAll(file.readText()).map { it.groupValues[1] } }
+            .toSortedSet()
+        assertTrue(codes.size >= 20, "the sweep found only ${codes.size} codes")
+
+        val saysWait = codes.filter { code ->
+            val view = Recovery.explain(code)
+            view.action == RecoveryAction.WAIT_IT_IS_IN_PROGRESS ||
+                view.message in assertsATransmission
+        }.toSortedSet()
+
+        assertEquals(
+            waitIsHonest.keys.toSortedSet(), saysWait,
+            "the set of refusals that tell a merchant something is in progress is not the set of " +
+                "refusals the model check has proven can only be produced while something is " +
+                "pending on the device (${P7Laws.A_DESTRUCTION_IS_RECORDED_BEFORE_IT_HAPPENS.id}). " +
+                "A code that belongs here needs its state proven in QueueModelCheckTest first; a " +
+                "code that no longer belongs is a line to delete from waitIsHonest, with its reason",
+        )
+    }
+
+    /**
+     * D-01, at the layer that was unguarded, asserted on the layer's own terms
+     * rather than through the vocabulary sweep above.
+     *
+     * Re-entry is decided for an intent whose local row is GONE — that is the
+     * premise of the whole file — so there is nothing on this device for any
+     * of its refusals to be waiting for, and the rule needs no state map: not
+     * one refused re-entry view may instruct a wait. The subjects are the full
+     * cross product, counted, so a member added to any of the three enums is
+     * judged without being listed here.
+     */
+    @Test
+    fun `no re-entry refusal instructs a wait, because the row it is about is gone`() {
+        var refusals = 0
+        var triples = 0
+        for (prior in PriorOutcome.entries) {
+            for (lookup in ReceiptLookup.entries) {
+                for (provenance in Provenance.entries) {
+                    triples++
+                    val decision = Reconciliation.decideReentry(prior, lookup, provenance)
+                    if (decision !is Reentry.Refused) continue
+                    refusals++
+                    val view = Recovery.explain(decision.code)
+                    assertTrue(
+                        view.action != RecoveryAction.WAIT_IT_IS_IN_PROGRESS &&
+                            view.message !in assertsATransmission,
+                        "re-entry refused ${decision.code} for ($prior, $lookup, $provenance) and the " +
+                            "merchant is told ${view.message} / ${view.action} — but re-entry is " +
+                            "reached because the local row is gone, so nothing is pending on this " +
+                            "device to wait for (${P7Laws.A_DESTRUCTION_IS_RECORDED_BEFORE_IT_HAPPENS.id})",
+                    )
+                    assertTrue(
+                        view.blocksNewCaptures,
+                        "a re-entry refusal that does not stop the till invites the re-key it exists " +
+                            "to prevent: ${decision.code}",
+                    )
+                }
+            }
+        }
+        assertEquals(
+            PriorOutcome.entries.size * ReceiptLookup.entries.size * Provenance.entries.size, triples,
+            "the cross product is not complete",
+        )
+        assertTrue(refusals >= 4, "only $refusals re-entry refusals were judged; the gate has more")
+    }
+
+    /**
+     * The messages that assert a transmission, kept here as well as in the
+     * model check because this file sweeps codes the model check never sees.
+     * A message is on this list when a merchant reading it would conclude the
+     * operation has left the device.
+     */
+    private val assertsATransmission = setOf(
+        MerchantMessage.CANNOT_CANCEL_AFTER_SENDING,
+        MerchantMessage.ALREADY_SENDING,
+    )
+
+    /**
      * Every state, reached by the events that actually produce it. A
      * hand-built `Operation` cannot exist — the constructor is private — and
      * that is deliberate: a fixture that fakes a state proves the view of a

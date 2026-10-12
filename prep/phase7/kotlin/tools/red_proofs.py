@@ -85,8 +85,8 @@ PROOFS: list[Proof] = [
     Proof(
         law="P7-L4-NO-SILENT-RESOLUTION-OF-A-MATERIAL-CONFLICT",
         path="src/app/daftar/offline/Queue.kt",
-        find="            } else if (effect.isMaterial) {\n                // Abandoning a financial or stock operation that the server\n                // may hold is not a decision the device may record.\n                Step.Refused(\"offline.material_cannot_be_abandoned\", P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)",
-        replace="            } else if (false) {\n                Step.Refused(\"offline.material_cannot_be_abandoned\", P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)",
+        find="                } else if (effect.isMaterial) {\n                    // Abandoning a financial or stock operation that the server\n                    // may hold is not a decision the device may record.\n                    Step.Refused(\"offline.material_cannot_be_abandoned\", P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)",
+        replace="                } else if (false) {\n                    Step.Refused(\"offline.material_cannot_be_abandoned\", P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)",
         expect_red="a stock conflict waits for a person and keeps the server's own words",
         why="a refused stock movement can be made to disappear by the device, with no human and no record",
     ),
@@ -276,12 +276,12 @@ PROOFS: list[Proof] = [
     Proof(
         law="P7-L3-PAYLOAD-FROZEN-AT-CAPTURE-ACROSS-A-RESTORE",
         path="src/app/daftar/offline/Queue.kt",
-        find="""            } else if (event.digestNow != payloadDigest) {
-                Step.Refused(
-                    "offline.restored_payload_does_not_match_capture",""",
-        replace="""            } else if (event.digestNow != event.digestNow) {
-                Step.Refused(
-                    "offline.restored_payload_does_not_match_capture",""",
+        find="""                } else if (event.digestNow != payloadDigest) {
+                    Step.Refused(
+                        "offline.restored_payload_does_not_match_capture",""",
+        replace="""                } else if (event.digestNow != event.digestNow) {
+                    Step.Refused(
+                        "offline.restored_payload_does_not_match_capture",""",
         expect_red="a restore that does not reproduce the captured bytes is refused",
         why="a restore accepts bytes that are not the ones the key is bound to, which converts a recoverable obligation into a permanently refused key — the one outcome the restore path exists to avoid",
     ),
@@ -321,9 +321,9 @@ PROOFS: list[Proof] = [
         law="P7-L15-THE-RE-ENTRY-GATE-MUST-REACH-THE-TILL",
         path="src/app/daftar/offline/Recovery.kt",
         find="""        "offline.original_unsettled" ->
-            view(MerchantMessage.ORIGINAL_NOT_SETTLED_YET, RecoveryAction.WAIT_IT_IS_IN_PROGRESS, blocks = true)""",
+            view(MerchantMessage.ORIGINAL_NOT_SETTLED_YET, RecoveryAction.ESCALATE_TO_A_SUPERVISOR, blocks = true)""",
         replace="""        "offline.original_unsettled" ->
-            view(MerchantMessage.ORIGINAL_NOT_SETTLED_YET, RecoveryAction.WAIT_IT_IS_IN_PROGRESS, blocks = false)""",
+            view(MerchantMessage.ORIGINAL_NOT_SETTLED_YET, RecoveryAction.ESCALATE_TO_A_SUPERVISOR, blocks = false)""",
         expect_red="only the re-entry refusals stop the till, and all three of them do",
         why="the kernel still refuses the re-entry, but the till keeps taking captures, so a merchant told no with nothing stopping them keys the sale in again — which is the duplicate charge L15 exists to prevent, arriving through the UI instead of the kernel",
     ),
@@ -559,6 +559,76 @@ PROOFS: list[Proof] = [
         replace="            val effects = listOf(record) + step.effects",
         expect_red="a capture the previous shift never released can be abandoned by the next one, never confirmed",
         why="challenger finding J-04: the record goes back to being a separate effect that merely PRECEDES the erase, which is an obligation on whoever performs the list and nothing a type can hold them to. Fused, the permission to destroy another member\u2019s capture and the description of what is destroyed are one value; unfused, a caller that performs the erase and drops the record is doing something the kernel permitted",
+    ),
+    Proof(
+        law="P7-L20-A-RE-ENTRY-REFUSAL-DOES-NOT-SAY-WAIT",
+        path="src/app/daftar/offline/Recovery.kt",
+        find=(
+            '        "offline.absence_not_fenced" ->\n'
+            "            view(MerchantMessage.CANNOT_CONFIRM_ORIGINAL_ENDED, "
+            "RecoveryAction.ESCALATE_TO_A_SUPERVISOR, blocks = true)"
+        ),
+        replace=(
+            '        "offline.absence_not_fenced" ->\n'
+            "            view(MerchantMessage.CANNOT_CONFIRM_ORIGINAL_ENDED, "
+            "RecoveryAction.WAIT_IT_IS_IN_PROGRESS, blocks = true)"
+        ),
+        expect_red="no re-entry refusal instructs a wait, because the row it is about is gone",
+        why="coordinator finding D-01, restored exactly: the merchant is told to wait for a fenced absence, and the fence is a server capability the merchant API does not have, so the wait is for something nobody is building and no device is doing. L20\u2019s clause was widened to every refusal while its only guard watched Operation.step, and re-entry refuses from somewhere else \u2014 which is why this proof plants in the layer the invariant could not see",
+    ),
+    Proof(
+        law="INV-9B-A-NEW-CODE-MAY-NOT-SAY-WAIT-BY-DEFAULT",
+        path="src/app/daftar/offline/Recovery.kt",
+        find=(
+            '        "offline.another_members_capture" ->\n'
+            "            view(MerchantMessage.ANOTHER_MEMBER_MUST_CONFIRM_THIS, "
+            "RecoveryAction.SEE_WHAT_THIS_OPERATION_NEEDS)"
+        ),
+        replace=(
+            '        "offline.another_members_capture" ->\n'
+            "            view(MerchantMessage.ANOTHER_MEMBER_MUST_CONFIRM_THIS, "
+            "RecoveryAction.WAIT_IT_IS_IN_PROGRESS)"
+        ),
+        expect_red="no refusal in any layer tells the merchant to wait for a device with nothing pending",
+        why="D-01\u2019s other half, and the direction a per-layer guard cannot cover: a code that is NOT a queue state question starts telling the merchant to wait. The sweep takes its subjects from the kernel\u2019s own source and compares the set of waiting refusals for EQUALITY against the ones the model check proved are reachable only while something is pending, so a code added anywhere \u2014 in a layer written after this round \u2014 is judged by absence rather than by a list someone has to remember to extend",
+    ),
+    Proof(
+        law="INV-15-A-FINISHED-ROW-ANSWERS-IN-ITS-OWN-TERMS",
+        path="src/app/daftar/offline/Queue.kt",
+        find=(
+            "                refusalForAFinishedRow()\n"
+            "                    ?: refusalForARowAwaitingAPerson()\n"
+            "                    ?: refusalForARowAlreadySending()\n"
+            '                    ?: Step.Refused("offline.not_sendable", P7Laws.KEY_MINTED_AT_CAPTURE.id)'
+        ),
+        replace='                Step.Refused("offline.not_sendable", P7Laws.KEY_MINTED_AT_CAPTURE.id)',
+        expect_red="every reachable configuration honours every invariant",
+        why="coordinator finding C-02\u2032: the Send arm goes back to answering every non-sendable state with one code, so a row the server has already recorded, and one a colleague abandoned, are both answered NOT_READY_TO_SEND / CONFIRM_THE_CAPTURE \u2014 the till offers a cashier the button for a sale that is finished. The doc sentence on refusalForAFinishedRow said \u2018whatever was asked of it\u2019 while three arms out of six consulted it, so the invariant is asserted over the whole reachable space rather than arm by arm",
+    ),
+    Proof(
+        law="J-03-AN-OVERLOAD-IS-A-DEFAULT-WITH-A-DIFFERENT-SHAPE",
+        path="src/app/daftar/offline/Queue.kt",
+        find="        fun capture(\n",
+        replace=(
+            "        fun capture(key: String, scope: OwnerScope, effect: EffectClass, "
+            "payloadDigest: String): Operation =\n"
+            "            capture(key, scope, effect, payloadDigest, null, null)\n"
+            "\n"
+            "        fun capture(\n"
+        ),
+        expect_red="the facts a capture must state cannot be omitted by a caller",
+        why="coordinator finding D-02, measured by the coordinator as green before this round: the textual guard watched for a PARAMETER DEFAULT, and an overload omits the same facts without one. With this plant a pre-round four-argument FINANCIAL call site compiles again and throws at the till, which is J-03\u2019s exact harm through the one door the guard did not watch \u2014 so the guard now counts the ways in rather than checking the shape of one of them",
+    ),
+    Proof(
+        law="L13-TWO-DIFFERENT-REFUSALS-MAY-NOT-SHARE-ONE-VIEW",
+        path="src/app/daftar/offline/Queue.kt",
+        find=(
+            '            val code = if (sameBusiness) "offline.another_members_capture" '
+            'else "offline.scope_switched"'
+        ),
+        replace='            val code = "offline.scope_switched"',
+        expect_red="another member on the same till cannot confirm or settle another member's capture",
+        why="coordinator finding C-02\u2032: the gate refuses on two grounds \u2014 a business that is not the row\u2019s, which is never relaxed, and a colleague\u2019s capture inside one business, which is gated only for the three committing events \u2014 and with one code the second is told SIGNED_IN_TO_ANOTHER_BUSINESS and to switch back to the owning account. It is the same business, and the account named is a colleague\u2019s; a cashier who follows that instruction is being sent to sign in as someone else",
     ),
 ]
 

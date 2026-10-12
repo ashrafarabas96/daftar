@@ -104,6 +104,12 @@ class QueueModelCheckTest {
     private val assertsSomethingLeftTheDevice = mapOf(
         MerchantMessage.CANNOT_CANCEL_AFTER_SENDING to
             "it tells the merchant an attempt is out and they must wait for its answer",
+        // Coordinator finding C-02′. A send refused because an attempt is
+        // already out says so by name now, instead of telling the merchant to
+        // confirm a sale they confirmed; the claim is a transmission, so it
+        // belongs here and inherits the attempts > 0 requirement below.
+        MerchantMessage.ALREADY_SENDING to
+            "it tells the merchant the device is sending this operation now",
     ).keys
 
     /**
@@ -209,6 +215,7 @@ class QueueModelCheckTest {
         var refusalsWithNothingSent = 0
         var custodyRecordsBeforeAnErase = 0
         var waitsJudged = 0
+        var terminalRefusals = 0
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
 
@@ -236,8 +243,26 @@ class QueueModelCheckTest {
                                 // one, so the merchant is not told their sale
                                 // is corrupt when they are simply signed into
                                 // the wrong business.
+                                //
+                                // Coordinator finding C-02′ split the code in
+                                // two, because one code was answering two
+                                // different refusals and telling the second
+                                // one's merchant something false. The
+                                // expectation is written out from the acting
+                                // scope here, not read from the kernel: a
+                                // cross-business act is a business problem, and
+                                // a colleague's capture inside one business is
+                                // not.
+                                val sameBusiness =
+                                    event.actingScope.tenantId == op.scope.tenantId &&
+                                        event.actingScope.businessId == op.scope.businessId
                                 assertEquals(
-                                    "offline.scope_switched", step.code,
+                                    if (sameBusiness) {
+                                        "offline.another_members_capture"
+                                    } else {
+                                        "offline.scope_switched"
+                                    },
+                                    step.code,
                                     "a foreign-scope $event was refused as ${step.code}",
                                 )
                                 assertEquals(P7Laws.NO_CROSS_ACCOUNT_SEND.id, step.law)
@@ -255,6 +280,40 @@ class QueueModelCheckTest {
                             // space because "which states can be refused with
                             // nothing sent" is exactly the kind of question a
                             // later edit changes without noticing.
+                            // INV-15: a finished row answers in its own terms,
+                            // whatever was asked of it (coordinator finding
+                            // C-02′). The sentence was in `Queue.kt` and the
+                            // routing was in three arms out of six, so a send,
+                            // a restore or a resolve on a row the server had
+                            // already recorded answered `not_sendable` —
+                            // whose view tells the merchant to CONFIRM a
+                            // capture that is recorded, or one a colleague
+                            // abandoned. It is asserted here rather than per
+                            // arm for the reason the gate and the custody
+                            // record have one site each: the arm added later
+                            // is the one that would forget.
+                            //
+                            // The retention deadline is excluded by name and
+                            // not by accident: it is the only event in this
+                            // kernel that no person performs, so its refusal
+                            // is not an answer to anybody.
+                            if (op.isTerminal &&
+                                event !is QueueEvent.RetentionDeadlineReached &&
+                                (event !is QueueEvent.ByScope || permittedToAct(event.actingScope, op.scope, event))
+                            ) {
+                                terminalRefusals++
+                                assertEquals(
+                                    if (op.state == OperationState.SYNCED) {
+                                        "offline.already_recorded"
+                                    } else {
+                                        "offline.already_abandoned"
+                                    },
+                                    step.code,
+                                    "a ${op.state} row refused $event as ${step.code}, which describes a " +
+                                        "row that is still live; the merchant is then told " +
+                                        "${Recovery.explain(step.code).action}",
+                                )
+                            }
                             val view = Recovery.explain(step.code)
                             if (view.action == RecoveryAction.WAIT_IT_IS_IN_PROGRESS ||
                                 view.message in assertsSomethingLeftTheDevice
@@ -634,6 +693,10 @@ class QueueModelCheckTest {
                 "is vacuous: the path I-04 and J-04 are about was never explored",
         )
         assertTrue(
+            terminalRefusals > 0,
+            "no refusal on a finished row was judged, so INV-15 defends nothing",
+        )
+        assertTrue(
             waitsJudged > 0,
             "no refusal anywhere told the merchant to wait, so INV-9b judged nothing",
         )
@@ -667,8 +730,11 @@ class QueueModelCheckTest {
         }
 
         val covered = answers.map { shape(Outcome.classify(it, op, 1)) }.toSet()
-        // Five shapes exist; all five must be represented, or the search below
-        // the lemma is blind to one of them.
+        // Six shapes exist — the two `Synced` and the two `NeedsAttention` are
+        // distinguished because the merchant is told different things — and all
+        // six must be represented, or the search below the lemma is blind to
+        // one of them. (The comment said five while the set below listed six:
+        // coordinator finding C-01′.)
         assertEquals(
             setOf(
                 "Synced(replayed=true)",
