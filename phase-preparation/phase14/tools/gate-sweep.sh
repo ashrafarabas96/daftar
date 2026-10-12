@@ -55,7 +55,7 @@ gate() { # name | command (absolute paths only)
       # already has (the gate failed), the cause is what they need. Preferring
       # `FAIL` over `psql said:` cost me a diagnosis within the hour of fixing
       # R10-P3-01, which is the same defect one layer in.
-      out1=$(printf '%s' "$o" | grep -m1 -E 'Permission denied|No such file|command not found|psql said|CAUSE:|ERROR|FATAL|could not' | cut -c1-120)
+      out1=$(printf '%s' "$o" | grep -m1 -E 'Permission denied|No such file|command not found|psql said|CAUSE:|ERROR|[Ee]rror:|FATAL|could not' | cut -c1-120)
       [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 -E 'FAIL|STALE|CONFIGURATION ERROR|MEASUREMENT|ABORTED' | cut -c1-120)
       [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 . | cut -c1-120)
     fi
