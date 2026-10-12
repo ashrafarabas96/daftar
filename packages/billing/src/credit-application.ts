@@ -238,6 +238,17 @@ export function applyCreditToInvoice(input: CreditApplicationInput): CreditAppli
   // were derived from. This is the check that catches rows which balance but
   // are not valid.
   const after = foldCreditBalance([...input.ledger, ...consumptions], input.scope);
+  // The RE-FOLD above is load-bearing and proved so: replacing it with
+  // arithmetic reddens this module's suite, and it is also what catches an
+  // allocator that sorted the ledger into an order the authority refuses.
+  //
+  // The COMPARISON below is a different matter — it is unreachable given
+  // conservation (2), because rows that sum to `applied` and that the fold
+  // accepted cannot fold to anything but `balance − applied`. It is kept as a
+  // second witness and labelled, rather than deleted, for the same reason as
+  // `balance_never_negative` in `credit.ts`: a later allocator that stops
+  // satisfying (2) would arrive here first. Removing it alone is undetectable
+  // by any test, which is a fact about dead code and not a gap in the suite.
   if (after.balanceMinor !== before.balanceMinor - appliedMinor) {
     refuse('billing.invariant_violated', 'the ledger with these rows appended does not fold to the carried-forward remainder', {
       invariant: 'refold_equals_balance_minus_applied',

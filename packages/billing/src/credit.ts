@@ -304,6 +304,11 @@ export function foldCreditBalance(adjustments: readonly CreditAdjustment[], scop
     }
     remainderSum += r.remainingMinor;
   }
+  // Unreachable given the per-grant bound, and kept and labelled for the same
+  // reason as `balance_never_negative` above: the per-grant remainders and
+  // `running` are maintained separately, so a future change that broke one
+  // without the other would arrive here. Removing it alone is undetectable by
+  // any test — the honest consequence of a guard that cannot fire.
   if (remainderSum !== running) {
     refuse('billing.invariant_violated', 'the grant remainders do not sum to the balance', {
       invariant: 'remainders_sum_to_balance',
