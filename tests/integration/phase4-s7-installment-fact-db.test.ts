@@ -375,7 +375,7 @@ beforeAll(async () => {
   }
   M['specError'] = specError;
   if (specError !== null) {
-  writeFileSync('/tmp/claude-0/s7f1-fact.json', JSON.stringify(M, null, 2));
+    writeFileSync('/tmp/claude-0/s7f1-fact.json', JSON.stringify(M, null, 2));
     return;
   }
 
@@ -1161,7 +1161,7 @@ beforeAll(async () => {
     )
   ).rows[0] as Record<string, unknown>;
 
-    // ══════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════
   // §Z ROUND 11 STEP ZERO — THE `status`-PREDICATED BLINDING, TAKEN AGAINST
   //    AN INVOICE WHOSE FLAG IS ALREADY `false`
   //
@@ -2004,7 +2004,7 @@ describe('P4-S7 §F5 the INSERT-branch derivation is load-bearing, and the case 
     expect(M['F1b_counterfactual_rewrote']).toBe(true);
   });
 
-  it("the ROUND-9 INSERT branch COMMITS {flag: false, active plan: 1} with the probe PASSING — the mutation round 10 reported staying green", () => {
+  it('the ROUND-9 INSERT branch COMMITS {flag: false, active plan: 1} with the probe PASSING — the mutation round 10 reported staying green', () => {
     expect(M['F5_r9_insert_cancelled'], 'round 9 was refused here, so this is not the case F-5 names').toBeNull();
     expect(M['F5_r9_state']).toEqual({ flag: 'false', truth: 'true', plans: '3' });
   });
@@ -2181,7 +2181,7 @@ describe('P4-S7 §T the refusal names are in the TypeScript catalogue (TL-P4-COO
     expect(phantom, 'the catalogue classifies a refusal nobody raises').toEqual([]);
   });
 
-  it("the four names the round-10 ruling found NOWHERE in the TypeScript tree are all registered now", () => {
+  it('the four names the round-10 ruling found NOWHERE in the TypeScript tree are all registered now', () => {
     for (const c of [
       'installment.plan_fact_blind',
       'installment.plan_fact_unflagged',
