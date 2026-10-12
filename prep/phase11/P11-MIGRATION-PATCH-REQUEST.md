@@ -97,7 +97,11 @@ Feature registry: `INSERT INTO features (key, description) VALUES ('VARIANT_MATR
 `ALTER TABLE products ADD COLUMN track_lot BOOLEAN NOT NULL DEFAULT false, ADD COLUMN expiry_policy TEXT NOT NULL DEFAULT 'refuse';`
 - `CHECK (expiry_policy IN ('refuse'))` — **one admissible value in Phase 11** (`TL-P11-R4`). The column exists so a future country or regulated pack can widen the CHECK with its own permission, audit and policy; Phase 11 ships **no** override value, because a column whose second value nothing enforces yet is an override waiting to be set.
 - `CONSTRAINT products_lot_requires_tracking_ck CHECK (track_lot = false OR track_inventory = true)` — a lot of something that holds no stock is meaningless.
-- `products_30_lot_history_lock()` — `BEFORE UPDATE` trigger refusing `inventory.lot_tracking_history_locked` when `track_lot` changes and any variant of the product already has a `stock_levels` row (P11-AL-16).
+- `products_40_lot_history_lock()` — `BEFORE UPDATE` trigger refusing `inventory.lot_tracking_history_locked` when `track_lot` changes and any variant of the product already has a `stock_levels` row (P11-AL-16). **Position `_40_`, not `_30_` as this request first said: `products_30_archive_requires_zero_stock` already holds that name** (defect 17, found by applying it), and trigger name order decides firing order for the same event.
+- `products_05_lot_config_authority()` — **new, defect 18.** `track_lot` had no configuration authority at all, so `daftar_app` could switch lot tracking on by itself. This fires FIRST in name order and raises the same `inventory.configuration_authority_required` the existing inventory-configuration guard raises, for both INSERT and UPDATE.
+- **Owed to the inventory authority (defect 19): a new registered op code for lot configuration.** `inventory_configure_product`'s authority digest pins its four arguments in a fixed field order, so the frozen command **cannot** carry `track_lot`. The executed proof uses a fixture definer for the configuration step and labels it as a fixture; the production path needs the authority's own new operation.
+- **Owed to the Security Authority (defect 20): `GRANT UPDATE (track_lot, expiry_policy) ON products TO daftar_inventory_internal`.** Without it even the authority cannot write the columns it owns.
+- **Owed to the Security Authority (defect 21): `GRANT EXECUTE ON FUNCTION catalog_identifier_norm(TEXT, TEXT) TO daftar_inventory_internal`.** `stock_lots_code_canonical_ck` calls it, and **a CHECK expression is evaluated with the writing principal's privileges**, so every writer of `stock_lots` needs EXECUTE on it. Found by applying it, not by reading it.
 
 ### 3.2 `stock_lots`
 | column | type | notes |
@@ -128,6 +132,8 @@ PK `(business_id, stock_movement_id, lot_id)`. Append-only: `stock_lot_movements
 
 ### 3.4 `stock_lot_levels` — derived cache, foldable
 PK `(business_id, warehouse_id, variant_id, lot_id)`; columns `on_hand NUMERIC(18,4) NOT NULL`, `last_movement_seq BIGINT NOT NULL`; `CHECK (on_hand >= 0)`; composite FKs to `stock_levels (business_id, warehouse_id, variant_id)` and to `stock_lots`. Written only by the writer of §3.6, in the same statement as the movement. Column-scoped `UPDATE (on_hand, last_movement_seq)` to `daftar_inventory_internal`; no `DELETE`.
+
+**The read policy on all three overlay relations is `FOR SELECT TO daftar_inventory_internal`, never to PUBLIC (defect 22).** As first written it was a permissive `USING (true)` applied to PUBLIC, which ORs with `tenant_membership` and **silently switched tenant isolation off for SELECT**: a wrong-tenant read returned 2 rows where it must return 0. The end-state assertion now forbids a blanket permissive policy on PUBLIC for every relation of the pack. No positive test could have found this; only a wrong-tenant negative case did.
 
 ### 3.5 Deferred conservation triggers
 - `stock_lot_movement_conservation()` — `CONSTRAINT TRIGGER … DEFERRABLE INITIALLY DEFERRED` on `stock_movements` **and** on `stock_lot_movements`, firing at COMMIT, refusing:
@@ -160,6 +166,27 @@ Nothing else in the body changes: the value arithmetic of `0060:349-420` is unto
 No new movement kind and no new source type: a lot-tracked purchase is still `purchase`, a lot-tracked sale is still `sale`. **That is the point** — the overlay rides the existing kinds. Feature registry: `LOT_EXPIRY` already seeded (`0007:94-96`); nothing to add.
 
 ---
+
+### 3.9 What the executed proof learned about the FIXTURE, which the next pack will meet too
+
+Neither of these is a defect of the pack; both are authorities correctly refusing a
+shortcut, and they are recorded because the shortcut produces green cases over a state
+no production path can create.
+
+- **A movement cannot be written by hand (defect 23).** An adjustment binding requires a
+  row in `stock_source_bridge_inventory_adjustment`, and its **one writer**
+  (`inventory_bridge_source_lines`, `0062`) refuses unless this transaction's entry
+  routine consumed an inventory assertion for an operation that owns that source type.
+  Eight cases failed on `inventory.stock_source_line_missing` until the fixture stopped
+  writing movements and started calling **`inventory_adjust_stock`**, minting the
+  assertion the command demands and calling it as `daftar_app`. Every overlay case is now
+  an overlay over a movement written by the real writer.
+- **A valued document owes an accounting binding (defect 24).**
+  `inventory_adjustments_binding_owed_ck` makes a non-zero total owe a row in
+  `accounting_source_bindings`, which only the accounting authority may write — so the
+  cases use a **zero-value receipt**, which owes none. That is the right fixture anyway:
+  the overlay is value-neutral by law (`C-LOT-04`), so no case here needs money to exist.
+  **This phase may state an accounting question and may not answer one.**
 
 ## 4. Pack C — Serial / IMEI (`inventory.serial-tracking`) — **Option B shape**
 

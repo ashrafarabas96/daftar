@@ -325,3 +325,60 @@ different set of packs than the SHA carries. No CI claim, no npm or TypeScript s
 
 **`READY_TO_PROMOTE` = NO.** Five defects were fixed and red-proved in this round; the
 pack goes back to the independent challenger, and the author does not sign it.
+
+---
+
+## 8. Pack B (lot / expiry), executed: eight more defects, two of them about authority
+
+Pack B is the lot/expiry overlay of `TL-P11-R1`'s Option B: lot and serial extend the
+**traceability** identity and never the costing key, so **no overlay relation carries a
+monetary column** and the costing key stays `(business_id, warehouse_id, variant_id)`.
+It was applied unnumbered as `daftar_migrator` and proved the same way Pack A was.
+
+**Result: 31 cases, 0 failed** — `EXIT_PROOFS_B 0`. Applied in one transaction with its
+own end-state assertion (12 checks). The writer change of
+`P11-MIGRATION-PATCH-REQUEST.md` §3.6 is **not** in this round, so `C-LOT-01`'s
+integration with `inventory_apply_stock_movements` stays
+`WAITING_FOR_INTEGRATED_SURFACE`; what is proved here is the overlay's structure and its
+deferred conservation triggers.
+
+### 8.1 The defects execution found
+
+| # | defect | what it was |
+|---|---|---|
+| **17** | trigger position `_30_` on `products` was already taken by `products_30_archive_requires_zero_stock`, so the lot history lock had to be `_40_`. **Name order decides firing order for the same event** — the same defect Pack A hit at `product_variants._30_` |
+| **18** | `track_lot` had **no configuration authority at all**: `daftar_app` could switch lot tracking on. Closed by `products_05_lot_config_authority`, which fires FIRST in name order and raises the same `inventory.configuration_authority_required` the existing inventory-configuration guard does |
+| **19** | **the frozen configuration command cannot carry the new column.** `inventory_configure_product`'s authority digest pins its four arguments in a fixed field order, so `track_lot` cannot be passed through it. A **new registered op code is owed to the inventory authority**; the proof uses a fixture definer meanwhile and says so |
+| **20** | `daftar_inventory_internal` held no UPDATE on the new `products` columns, so even the authority could not write them. A **column-level grant** is owed |
+| **21** | `stock_lots_code_canonical_ck` calls `catalog_identifier_norm`, and **a CHECK expression is evaluated with the WRITING principal's privileges** — so every writer needs EXECUTE on it. An **EXECUTE grant** is owed |
+| **22** | **the overlay's read policy was PERMISSIVE and applied to PUBLIC**, which ORs with `tenant_membership` and silently switched tenant isolation OFF for SELECT: a wrong-tenant read returned **2** rows instead of 0. Closed by `FOR SELECT TO daftar_inventory_internal`, and by an end-state assertion that forbids a blanket permissive policy on PUBLIC. **No positive test could have found this** — only a wrong-tenant negative case did |
+| **23** | **a hand-written movement is a forgery, and the database said so.** The first version of these cases wrote `stock_source_bindings` and `stock_movements` directly as the internal principal; eight cases failed on `inventory.stock_source_line_missing`, because an adjustment binding requires a row in `stock_source_bridge_inventory_adjustment` whose **one writer** (`inventory_bridge_source_lines`, 0062) refuses unless this transaction's entry routine consumed an assertion for an operation that owns that source type. The fixture now calls **`inventory_adjust_stock`, the official command**, minting the assertion it demands and calling it as `daftar_app` — so every overlay case is an overlay over a movement written by the **real writer**, with its real binding and its real bridge row. That is also what PART 7.8 requires: consume the official services, create no second inventory |
+| **24** | **a valued document owes an accounting binding, and that is not this phase's to write.** With a non-zero unit cost the five conservation cases failed at COMMIT on `inventory_adjustments_binding_fk`: `inventory_adjustments_binding_owed_ck` makes a non-zero total owe a row in `accounting_source_bindings`, which only the **accounting authority** may write. A fixture that wrote one would be answering an accounting question, which this phase may state and may not answer. The cases therefore use a **zero-value receipt**, which owes no binding — and which is the right fixture regardless, because the lot overlay is **value-neutral by law** (`C-LOT-04`), so no case here needs money to exist |
+
+Defects 17–22 are in Pack B's own DDL or its spec; **23 and 24 are not defects of the
+pack at all** — they are the authorities refusing a fixture that had taken a shortcut,
+and they are recorded here because the shortcut would have produced green cases over a
+movement no production path can create.
+
+### 8.2 What Pack B proves, in which words
+
+`PROVEN BY TEST` on the scratch cluster, 31 cases: the lot code is the catalogue's
+canonical form and not a second normalization; one lot code per variant; expiry cannot
+precede production; the status set is closed (a quarantine is a status, not a value
+change); an overlay row cannot name a lot of another variant or a movement of another
+stock key; a zero allocation is refused; the allocation **sums to the movement** at
+COMMIT, and `SET CONSTRAINTS ALL IMMEDIATE` does not switch that off; a lot-tracked
+movement with no allocation is refused; a sign that disagrees with the movement is
+refused; the overlay is append-only **even for the principal that owns the table**; the
+per-lot cache cannot disagree with the stock key's on-hand and cannot go negative; the
+fold reads the movements rather than the cache and refuses a key outside the
+transaction's business; lot tracking is inventory configuration and `daftar_app` cannot
+set it, at insert or update, and it cannot change once the product has stock history;
+the expiry policy admits exactly one value in this phase (`TL-P11-R4`); tenant and
+business isolation hold from the application role, including the wrong-tenant case; and
+**no monetary column exists on any overlay relation**, asserted from the catalogue
+rather than from the text, with `stock_levels` still carrying no column below the
+variant.
+
+`SPEC ONLY` and unsigned: the writer change (§3.6), FEFO picking (`C-FEFO-01`), serial
+(`C-SER-*`) and repair (`C-REP-*`). **No challenger has read Pack B.**
