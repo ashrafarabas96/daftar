@@ -74,7 +74,7 @@ same cluster and the same version (see qualification 4 below).
 The package's vitest config includes only `test/**/*.test.ts`. This file is
 `.mts`, under `test/concurrency/`, **specifically so that it cannot match that
 pattern**: it needs a cluster, and the unit suite must stay cluster-free. The
-unit suite is unaffected and reports **7 files / 198 tests, rc=0**.
+unit suite is unaffected and reports **7 files / 201 tests, rc=0**.
 
 It starts its own throwaway cluster (`/tmp/daftar-pg-p13`, port 55777, both
 overridable via `P13_PG_DIR` / `P13_PG_PORT`), creates a scratch schema inside
@@ -138,11 +138,25 @@ attributes and the business context are **read back from the catalogue** on each
 session: a session that silently failed to set its context would see no rows,
 and every conservation guard here would then sum zero and fail **open**.
 
-The superuser pool stays, deliberately, for the fixtures, the catalogue reads
-and `pg_stat_activity`. That is the **positive control** — the thing that can
-see what the app role must not — and case 11 uses it to print the row the
-blinded check could not see. All ten pre-existing cases hold unchanged under the
-app role.
+The superuser pool stays, deliberately, for the catalogue reads and
+`pg_stat_activity`. That is the **positive control** — the thing that can see
+what the app role must not — and case 11 uses it to print the row the blinded
+check could not see. All ten pre-existing cases hold unchanged under the app
+role.
+
+**The OWNER of a fixture is part of the fixture, which took a second challenge
+to learn.** Case 11's first version created its table and both functions on the
+superuser connection, so they were superuser-owned — and a `SECURITY DEFINER`
+function runs its statements as the **owner**, with `FORCE ROW LEVEL SECURITY`
+existing precisely so the owner is not exempt either. With a superuser owner the
+policies did not apply, which is what made that fixture buildable and what made
+its definer check able to read. The same privilege blindness that was right to
+remove from the racing connections was still deciding one case. Case 11's
+objects are now owned by `daftar_owner_proof` (`NOSUPERUSER NOBYPASSRLS`), its
+policies are `TO PUBLIC` so the owner is governed by the same boundary as the
+caller, and **every arm asserts which exception fired** — the old version
+asserted only that `COMMIT` failed, so it was green whether the check judged the
+row or could not read it.
 
 ## The cases, and the SQLSTATEs actually observed
 
@@ -168,7 +182,10 @@ predicts.
 | 9 | the lock loser's re-bind retry, with a competing sale committing **after** each bind | **terminated on attempt 4** | 3 forced retries, each refused **`23505`** on `point_draws_level_uq` at binds of `100`, `80`, `60`; then spent at a bind of `40`. Identical in all three runs |
 | 10 | an expiry sweep takes a grant's whole remainder; a sale waits behind it | the sweep won, the sale was **refused** | sale observed parked (`wait_event = advisory`), re-read `remaining = 0` after the sweep committed, and its spend was refused **`P0001`**; ledger `100 → 0` — the points were taken **once** |
 
-| 11 | **RED PROOF** — an invoker-rights **deferred** check under RLS, against the same check as `SECURITY DEFINER` | **the negative row committed** past the blinded check; the definer check refused | the app role saw **0** rows of its own `SECURITY DEFINER` write (the row is a sibling business's); `COMMIT` **accepted**; the superuser control then read `points = -5`. With `SECURITY DEFINER`: `COMMIT` refused **`P0001`**, **0** rows left |
+| 11a | a `SECURITY DEFINER` write for a **sibling** business, with the fixture owned by a `NOSUPERUSER NOBYPASSRLS` role | **refused outright** | **`42501`** from the policy — `SECURITY DEFINER` is not an RLS exemption, so on this line the cross-business row never lands |
+| 11b | **RED PROOF** — insert for the session's own business, move the business context before `COMMIT`, invoker-rights deferred check | **the negative row committed** | visible at insert `1`, after the context moved `0`; `COMMIT` **accepted**; the superuser control then read `points = -5` |
+| 11c | the same, with the check as `SECURITY DEFINER` | refused, and **still blind** | **`P0001 p13.row_vanished`** — the RAISE refused it, not the keyword; **0** rows left |
+| 11d | the definer check with the row still **visible** | refused for the right reason | **`P0001 p13.negative_points`**, **0** rows left — which is how 11c is known to be a blindness and not a refuse-everything |
 
 Case 1 **asserts the defect**: it fails loudly if the double-spend does *not*
 happen, so it cannot quietly become decoration. That is what makes it evidence
@@ -269,9 +286,9 @@ line) against this working tree:
 
 | Command | Result | Exit code |
 |---|---|---|
-| `node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts` | `11/11 cases passed`, every racing connection as `daftar_app_proof` (`NOSUPERUSER NOBYPASSRLS`) | **0** |
+| `node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts` | `11/11 cases passed`, every racing connection as `daftar_app_proof` (`NOSUPERUSER NOBYPASSRLS`), and case 11's fixture owned by a non-superuser too | **0** |
 | the same, with `P13_PG_LOCALE=zz_ZZ.utf8` | refuses **before** `initdb`, printing the `localedef` command | **1** |
-| `../../node_modules/.bin/vitest run` (in `packages/analytics`) | 7 files, 198 tests passed | **0** |
+| `../../node_modules/.bin/vitest run` (in `packages/analytics`) | 7 files, 201 tests passed | **0** |
 | `../../node_modules/.bin/tsc -p tsconfig.json --noEmit` | no diagnostics | **0** |
 | `./node_modules/.bin/eslint packages/analytics` (from the repo root) | no findings | **0** |
 | `./node_modules/.bin/eslint .` (from the repo root) | 4220 errors, **0 of them in `packages/analytics`** | **1** |

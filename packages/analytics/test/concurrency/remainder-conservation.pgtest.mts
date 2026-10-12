@@ -1780,39 +1780,71 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
 
   {
     name:
-      'case-11-red-proof: a deferred check without SECURITY DEFINER cannot see its own row under RLS, ' +
-      'and passes at COMMIT',
+      'case-11: a deferred check reads INVISIBLE as ABSENT and commits a negative row; the raise is ' +
+      'what refuses it, and the owner decides what the check can see',
     fn: async (admin, note) => {
-      // The Phase 5 challenge found this shape in the ledger pattern Phase 13
-      // adopted: a deferred check function that could not see its row under
-      // tenant RLS treated it as DELETED and passed at COMMIT. Phase 5's
-      // concurrency proof had run as a superuser, which bypasses RLS
-      // unconditionally, so nothing in it could have noticed. This case is
-      // that defect, reproduced on a relation of Phase 13's own, and then the
-      // same check with the one keyword that fixes it.
+      // WHAT THIS CASE IS, AFTER TWO CORRECTIONS.
+      //
+      // The Phase 5 challenge found a deferred check function that could not
+      // see its row under tenant RLS, treated it as DELETED, and passed at
+      // COMMIT. Phase 5's proof had run as a superuser, which bypasses RLS, so
+      // nothing in it could have noticed. The first version of this case
+      // reproduced that defect — and an independent challenge then showed the
+      // reproduction was vacuous as to MECHANISM, in two ways that both came
+      // from privilege:
+      //
+      //   1. Every object was created on the `admin` connection, so the table
+      //      and both functions were SUPERUSER-OWNED. A SECURITY DEFINER
+      //      function is NOT exempt from RLS: it runs its statements as the
+      //      OWNER, and `FORCE ROW LEVEL SECURITY` exists precisely so the
+      //      owner is not exempt either. With a superuser owner the policies
+      //      simply did not apply, which is what made the fixture buildable
+      //      and what made the definer check able to read. The same superuser
+      //      blindness that was right to remove from the racing connections
+      //      was still deciding this case.
+      //   2. The definer arm asserted only that COMMIT was refused. It never
+      //      read the SQLSTATE or which exception fired, so it passed
+      //      identically whether the check read the row and judged it negative
+      //      or could not read it at all — green in the exact case where the
+      //      thing it claimed to prove did not happen.
+      //
+      // So the fixture is now owned by a NOSUPERUSER NOBYPASSRLS role, the
+      // superuser is the positive control only, and every arm asserts WHICH
+      // exception fired. The case now carries four measurements, and the third
+      // is the one that corrects the design request.
       const SIBLING = '33333333-3333-4333-8333-333333333333';
+
+      // The owner is a role with no RLS exemption of any kind, and the
+      // policies are TO PUBLIC rather than TO the app role, so the owner is
+      // governed by exactly the same boundary the caller is. That is the point:
+      // the question "what can a SECURITY DEFINER check see" is a question
+      // about the OWNER, and an owner carved out of the policy answers it
+      // trivially and wrongly.
       await admin.query(`
+        create role daftar_owner_proof nosuperuser nobypassrls nocreatedb nocreaterole noreplication;
+
         create table p13_proof.deferred_shape (
           id uuid primary key, business_id uuid not null, points bigint not null
         );
+        alter table p13_proof.deferred_shape owner to daftar_owner_proof;
         alter table p13_proof.deferred_shape enable row level security;
         alter table p13_proof.deferred_shape force row level security;
-        create policy tenant_membership on p13_proof.deferred_shape for all to daftar_app_proof
-          using (true) with check (true);
-        create policy business_isolation on p13_proof.deferred_shape as restrictive for all to daftar_app_proof
+        create policy business_isolation on p13_proof.deferred_shape for all
           using (business_id = p13_proof.app_business())
           with check (business_id = p13_proof.app_business());
+        grant usage on schema p13_proof to daftar_owner_proof;
+        grant execute on function p13_proof.app_business() to daftar_owner_proof;
         grant select, insert, update on p13_proof.deferred_shape to daftar_app_proof;
 
         -- The check, written the way Phase 5's was: invoker rights, and a
         -- "the row is gone, nothing to check" branch. Both halves are the
         -- defect, and neither looks like one in review.
-        create function p13_proof.deferred_check_invoker() returns trigger language plpgsql as $fn$
+        create function p13_proof.deferred_check() returns trigger language plpgsql as $fn$
         declare v_points bigint;
         begin
           -- FOUND is plpgsql's own flag for "the last query returned a row".
           -- It is exactly what Phase 5's check read, and it is TRUE of the
-          -- caller's VIEW of the relation, never of the relation.
+          -- reader's VIEW of the relation, never of the relation.
           select points into v_points from p13_proof.deferred_shape where id = new.id;
           if not found then
             return null;  -- treated as deleted
@@ -1823,69 +1855,116 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
           return null;
         end
         $fn$;
+        alter function p13_proof.deferred_check() owner to daftar_owner_proof;
 
         create constraint trigger deferred_shape_check after insert on p13_proof.deferred_shape
           deferrable initially deferred for each row
-          execute function p13_proof.deferred_check_invoker();
+          execute function p13_proof.deferred_check();
 
         -- A service write path, SECURITY DEFINER, which is how a job or an
-        -- internal service writes a row for a business that is not the
-        -- caller's. Its WITH CHECK does not apply, so the row lands.
+        -- internal service writes a row. Owned by the same unprivileged role.
         create function p13_proof.service_write(p_id uuid, p_business uuid, p_points bigint)
-          returns void language sql security definer as $fn$
+          returns void language sql security definer set search_path = p13_proof, pg_temp as $fn$
             insert into p13_proof.deferred_shape (id, business_id, points) values (p_id, p_business, p_points)
         $fn$;
+        alter function p13_proof.service_write(uuid, uuid, bigint) owner to daftar_owner_proof;
         grant execute on function p13_proof.service_write(uuid, uuid, bigint) to daftar_app_proof;
       `);
 
-      const first = id();
-      const app = await session();
+      // ---- 11a. On the deploy line the sibling write is REFUSED outright. ----
+      // The first version of this case got its invisible row by having a
+      // SECURITY DEFINER function write for ANOTHER business. With an owner
+      // that has no RLS exemption, that write cannot happen at all — so the
+      // precondition the old red proof needed is unreachable here. This is
+      // good news and is recorded as a measurement rather than an assurance.
+      const sibling = id();
+      const probe = await session();
       try {
-        await begin(app);
-        // Visibility, measured rather than assumed: the row is for the sibling
-        // business, and this session's context names its own.
-        await app.query('SELECT p13_proof.service_write($1, $2, $3)', [first, SIBLING, '-5']);
-        const seen = await one<{ n: string }>(
-          app,
-          'SELECT count(*)::text AS n FROM p13_proof.deferred_shape WHERE id = $1',
-          [first],
+        await begin(probe);
+        const refusedWrite = await settle(() =>
+          probe.query('SELECT p13_proof.service_write($1, $2, $3)', [sibling, SIBLING, '-5']),
         );
-        note(`11: the app role sees ${seen.n} row(s) of its own write — the row is for another business`);
-        if (seen.n !== '0') throw new Error(`11: the fixture needs an INVISIBLE row; the app role saw ${seen.n}`);
-
-        const committed = await settle(() => app.query('COMMIT'));
-        note(`11: COMMIT with the invoker-rights check: ${observed(committed)}`);
-        if (!committed.ok) {
-          throw new Error('11: the defect did not reproduce — the invoker check refused, so there is nothing to fix');
+        note(`11a: the SECURITY DEFINER write for a sibling business: ${observed(refusedWrite)}`);
+        if (refusedWrite.ok) {
+          throw new Error('11a: a definer write crossed the business boundary — the owner has an RLS exemption');
         }
-        const landed = await one<{ points: string }>(
-          admin,
-          'SELECT points::text AS points FROM p13_proof.deferred_shape WHERE id = $1',
-          [first],
-        );
-        note(`11: the superuser control sees the row the check could not: points = ${landed.points}`);
-        if (landed.points !== '-5') throw new Error(`11: expected the -5 row to be committed, saw ${landed.points}`);
-        note('11: RED PROOF = a negative row committed past a deferred check that reported nothing to check.');
-        note('11: The check did not fail. It could not SEE, and read invisible as absent — which is the');
-        note('11: one reading a guard may never take, because RLS hides rows it must still conserve.');
+        if (refusedWrite.code !== '42501') {
+          throw new Error(`11a: expected 42501 from the policy, observed ${String(refusedWrite.code)}`);
+        }
+        note('11a: SECURITY DEFINER is NOT an RLS exemption. It runs as the OWNER, and FORCE ROW LEVEL');
+        note('11a: SECURITY exists so the owner is not exempt either. With a non-superuser owner the');
+        note('11a: cross-business row never lands, which is why this is reported as the safe case.');
       } finally {
-        await settle(() => app.query('ROLLBACK'));
-        await app.end();
+        await settle(() => probe.query('ROLLBACK'));
+        await probe.end();
       }
 
-      // The fix: the same check, SECURITY DEFINER, so its reads are the
-      // relation's own and not the caller's view of it.
+      // ---- The lawful route to an invisible row: move the context. ----
+      // Insert for the session's OWN business, so WITH CHECK passes, then move
+      // app.business before COMMIT. A tenant switch, a pooled connection reset
+      // or a job that rebinds its context all do exactly this, and the row is
+      // then invisible to the deferred check that fires at COMMIT.
+      const invisibleRun = async (label: string): Promise<Outcome<unknown>> => {
+        const rowId = id();
+        const app = await session();
+        try {
+          await begin(app);
+          await app.query('SELECT p13_proof.service_write($1, $2, $3)', [rowId, BUSINESS, '-5']);
+          const before = await one<{ n: string }>(
+            app,
+            'SELECT count(*)::text AS n FROM p13_proof.deferred_shape WHERE id = $1',
+            [rowId],
+          );
+          await app.query('SELECT set_config($1, $2, false)', ['app.business', SIBLING]);
+          const after = await one<{ n: string }>(
+            app,
+            'SELECT count(*)::text AS n FROM p13_proof.deferred_shape WHERE id = $1',
+            [rowId],
+          );
+          note(`${label}: rows visible to this session — at insert ${before.n}, after the context moved ${after.n}`);
+          if (before.n !== '1' || after.n !== '0') {
+            throw new Error(`${label}: the fixture needs 1 then 0; observed ${before.n} then ${after.n}`);
+          }
+          const outcome = await settle(() => app.query('COMMIT'));
+          const left = await admin.query('SELECT 1 FROM p13_proof.deferred_shape WHERE id = $1', [rowId]);
+          note(`${label}: COMMIT ${observed(outcome)}; rows committed (superuser control): ${left.rowCount ?? 0}`);
+          if (outcome.ok && (left.rowCount ?? 0) !== 1) {
+            throw new Error(`${label}: COMMIT succeeded but the control sees no row`);
+          }
+          if (!outcome.ok && (left.rowCount ?? 0) !== 0) {
+            throw new Error(`${label}: COMMIT was refused and a row survived`);
+          }
+          return outcome;
+        } finally {
+          await settle(() => app.query('ROLLBACK'));
+          await app.end();
+        }
+      };
+
+      // ---- 11b. RED PROOF: the invoker-rights check commits a negative row. ----
+      const committed = await invisibleRun('11b');
+      if (!committed.ok) {
+        throw new Error(`11b: the defect did not reproduce — the check refused (${observed(committed)})`);
+      }
+      note('11b: RED PROOF = a negative row committed past a deferred check that reported nothing to');
+      note('11b: check. The check did not fail. It could not SEE, and read invisible as absent —');
+      note('11b: the one reading a guard may never take, because RLS hides rows it must conserve.');
+
+      // ---- 11c. The same check as SECURITY DEFINER is STILL blind here. ----
+      // This is the finding that corrects the design request. With a
+      // non-superuser owner the definer check cannot read the row either, so
+      // what refuses the transaction is the RAISE on an unreadable row, not
+      // the keyword. The old case asserted only "refused" and so could not
+      // tell these two apart.
       await admin.query(`
-        create or replace function p13_proof.deferred_check_invoker() returns trigger
-          language plpgsql security definer as $fn$
+        create or replace function p13_proof.deferred_check() returns trigger
+          language plpgsql security definer set search_path = p13_proof, pg_temp as $fn$
         declare v_points bigint;
         begin
           select points into v_points from p13_proof.deferred_shape where id = new.id;
           if not found then
-            -- A definer check that finds nothing has found a REAL absence, and
-            -- even then it refuses rather than assuming: a check cannot tell a
-            -- deleted row from one it was handed wrongly, and only one of those
-            -- two readings is safe.
+            -- A check cannot tell a deleted row from one it cannot read, and
+            -- only one of those two readings is safe. So it refuses.
             raise exception 'p13.row_vanished: % is not readable at commit', new.id;
           end if;
           if v_points < 0 then
@@ -1894,27 +1973,51 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
           return null;
         end
         $fn$;
+        alter function p13_proof.deferred_check() owner to daftar_owner_proof;
       `);
 
-      const second = id();
-      const app2 = await session();
+      const blindDefiner = await invisibleRun('11c');
+      if (blindDefiner.ok) throw new Error('11c: the definer check admitted the negative row');
+      if (blindDefiner.code !== 'P0001') {
+        throw new Error(`11c: expected P0001, observed ${String(blindDefiner.code)}`);
+      }
+      if (!blindDefiner.message.includes('p13.row_vanished')) {
+        throw new Error(`11c: expected row_vanished — the definer should be BLIND here — got ${blindDefiner.message}`);
+      }
+      note('11c: the SECURITY DEFINER check raised p13.row_vanished, which means it could NOT read the');
+      note('11c: row. SECURITY DEFINER is not what lets a check see a row under FORCE RLS; the');
+      note('11c: owner\u2019s RLS exemption is, and this owner has none. The RAISE is the load-bearing');
+      note('11c: half of the rule, and A.3c.2 now says so: a check that returns on an unreadable row fails open');
+      note('11c: whatever its privilege, and one that raises fails closed whatever its privilege.');
+
+      // ---- 11d. The definer check that CAN read judges the row. ----
+      // Context unchanged, so the row stays visible: the same function reaches
+      // its real law and refuses for the right reason. Without this arm, 11c
+      // alone could not tell a check that refuses everything from one that
+      // refuses what is wrong.
+      const judging = id();
+      const app = await session();
       try {
-        await begin(app2);
-        await app2.query('SELECT p13_proof.service_write($1, $2, $3)', [second, SIBLING, '-5']);
-        const refused = await settle(() => app2.query('COMMIT'));
-        note(`11: COMMIT with the SECURITY DEFINER check: ${observed(refused)}`);
-        if (refused.ok) throw new Error('11: the definer check still admitted the negative row');
-        const after = await admin.query('SELECT 1 FROM p13_proof.deferred_shape WHERE id = $1', [second]);
-        note(`11: rows committed for the refused write: ${after.rowCount ?? 0}`);
-        if ((after.rowCount ?? 0) !== 0) throw new Error('11: the refused transaction still left a row');
-        note('11: OUTCOME = the check that can read refuses at COMMIT, and the transaction is gone.');
-        note('11: WHAT THIS SETTLES FOR PHASE 13: every deferred or trigger check this phase asks the');
-        note('11: Migration Owner for must be SECURITY DEFINER with a fixed search_path, and must');
-        note('11: refuse on an unreadable row rather than returning. Recorded in the migration patch');
-        note('11: request; this proof is the reason, measured rather than argued.');
+        await begin(app);
+        await app.query('SELECT p13_proof.service_write($1, $2, $3)', [judging, BUSINESS, '-5']);
+        const refused = await settle(() => app.query('COMMIT'));
+        note(`11d: COMMIT with the row still visible: ${observed(refused)}`);
+        if (refused.ok) throw new Error('11d: a negative row committed while the check could read it');
+        if (refused.code !== 'P0001' || !refused.message.includes('p13.negative_points')) {
+          throw new Error(`11d: expected negative_points, observed ${String(refused.code)} ${refused.message}`);
+        }
+        const after = await admin.query('SELECT 1 FROM p13_proof.deferred_shape WHERE id = $1', [judging]);
+        if ((after.rowCount ?? 0) !== 0) throw new Error('11d: the refused transaction left a row');
+        note('11d: the two refusals are now DISTINGUISHED: row_vanished when the check cannot read,');
+        note('11d: negative_points when it can. The old case asserted only that COMMIT failed, so it');
+        note('11d: was green in both — including where the arm it claimed to prove had not happened.');
+        note('11d: WHAT THIS SETTLES FOR PHASE 13: a deferred or trigger check must RAISE on a row it');
+        note('11d: cannot read, must be owned by a NOSUPERUSER NOBYPASSRLS role with FORCE RLS on, and');
+        note('11d: SECURITY DEFINER with a pinned search_path is for the WRITE path, not a reading');
+        note('11d: exemption. Recorded in the migration patch request as A.3c.2.');
       } finally {
-        await settle(() => app2.query('ROLLBACK'));
-        await app2.end();
+        await settle(() => app.query('ROLLBACK'));
+        await app.end();
       }
     },
   },
