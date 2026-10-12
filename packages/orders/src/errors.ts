@@ -65,6 +65,19 @@ export type OrderErrorCode =
    */
   | 'order.cart_retraction_not_future'
 
+  /**
+   * A quote line total is not the line's exact value rounded ONCE to a minor
+   * unit, half to even.
+   *
+   * The owner decided per-line rounding on 2026-10-12 ("التقريب لكل سطر"), so a
+   * carried line total now has one lawful value and this is the refusal when it
+   * does not hold it. The mode is the project's own HALF_EVEN
+   * (`packages/inventory/src/rounding.ts:29`); nothing here invents one.
+   */
+  | 'order.quote_line_total_mismatch'
+  /** A line discount is larger than the line value it discounts, so the line would be negative money. */
+  | 'order.quote_discount_exceeds_line'
+
   // ── the advisory availability read (availability.ts) ─────────────────────
   /** An on-hand figure was supplied for a stock key the basket does not name. */
   | 'order.availability_subject_unknown'
@@ -181,12 +194,24 @@ const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 /** Throws `order.id_invalid` for anything that is not a canonical lowercase UUID. */
 export function assertCanonicalId(value: string, field: string): void {
-  if (!CANONICAL_UUID.test(value)) {
+  if (!isCanonicalId(value)) {
     throw new OrderError('order.id_invalid', 'identifier is not a canonical lowercase UUID', { field });
   }
 }
 
-/** Whether a string is a canonical lowercase UUID. */
+/**
+ * Whether a value is a canonical lowercase UUID.
+ *
+ * The TYPE is checked, not only the pattern, and the coordinator's diff review
+ * at `b3719c0` is why (R-08). `RegExp#test` coerces, so `['<uuid>']` matched:
+ * the string form of a one-element array is the element. That mattered beyond
+ * tidiness, because the duplicate register downstream is keyed on the VALUE —
+ * two arrays holding one uuid are two distinct keys — so the same line id could
+ * be presented twice and both lines counted, and the position's representative
+ * id came back as an array. This package's own law is that a type-only
+ * requirement has no runtime existence; this was the one place it was not
+ * applied to itself.
+ */
 export function isCanonicalId(value: string): boolean {
-  return CANONICAL_UUID.test(value);
+  return typeof value === 'string' && CANONICAL_UUID.test(value);
 }

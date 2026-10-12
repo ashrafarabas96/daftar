@@ -39,13 +39,21 @@
  * That is all of it, and both are exact integer operations on minor units with
  * no rounding and no policy.
  *
- * **In particular this module does NOT derive a line total from a unit price and
- * a quantity.** That multiplication needs a rounding mode at the product's unit
- * precision, a rounding mode is a pricing policy, and a pricing policy invented
- * here would be a second money truth — the one thing the project has a rule
- * about. The per-line unit price, discount and line total are the pricing
- * authority's figures, carried verbatim, and this module checks only that they
- * sum to the total the shopper was shown.
+ * **This module still does not PRICE a line.** The unit price, the discount and
+ * the line total remain the pricing authority's figures, carried verbatim into
+ * the quote and into its digest. What changed on 2026-10-12 is that the owner
+ * settled the rounding question the earlier note left open — per line, half to
+ * even, one rounding after the quantity and the approved discounts — so a
+ * carried line total now has exactly one lawful value and this module CHECKS it
+ * (`assertLineTotalRounded`, `line-rounding.ts`) instead of accepting any
+ * figure that happens to sum. The arithmetic of that check is exact integer
+ * arithmetic on `bigint` minor units and ten-thousandths of a quantity; the
+ * rounding mode is not invented here but imported from the one the project
+ * already accepted (`packages/inventory/src/rounding.ts:29`). Checking a figure
+ * against the project's own rule is not a second money truth; silently
+ * displaying a figure that disagrees with it, and leaving the sale command's
+ * recomputation to discover the disagreement after the shopper has confirmed,
+ * is the price surprise §27 exists to prevent.
  */
 import { createHash } from 'node:crypto';
 import { assertQuantityRepresentable, formatQuantity, parseQuantity } from '@daftar/inventory';
@@ -53,6 +61,7 @@ import { stockKeyOf } from './cart';
 import { NO_QUOTE_EXPIRY, type OrderQuoteConfirmationDto } from './contracts';
 import { OrderError, assertCanonicalId } from './errors';
 import { compareCanonical, isCanonicalInstant } from './instant';
+import { assertLineTotalRounded } from './line-rounding';
 import { type UnitPrecisionDeclaration, requireUnitPrecision } from './unit-precision';
 
 /** Non-negative integer minor units as a decimal string. A shape check, so a float, a sign or padding cannot pass. */
@@ -290,14 +299,22 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
         expected: canonicalKey,
       });
     }
-    requireQuoteQuantity(line, checks?.unitPrecisionByStockKey?.get(canonicalKey));
+    const quantityQ4 = requireQuoteQuantity(line, checks?.unitPrecisionByStockKey?.get(canonicalKey));
     if (seen.has(line.stockKey)) {
       throw new OrderError('order.quote_line_duplicate', 'two quote lines name one stock key', { stockKey: line.stockKey });
     }
     seen.add(line.stockKey);
-    requireMinor(line.unitPriceMinor, 'unitPriceMinor');
-    requireMinor(line.discountMinor, 'discountMinor');
-    sum += requireMinor(line.lineTotalMinor, 'lineTotalMinor');
+    const unitPriceMinor = requireMinor(line.unitPriceMinor, 'unitPriceMinor');
+    const discountMinor = requireMinor(line.discountMinor, 'discountMinor');
+    const lineTotalMinor = requireMinor(line.lineTotalMinor, 'lineTotalMinor');
+    // The owner's per-line rounding rule, as a gate rather than a derivation:
+    // the carried figure is still the pricing authority's, and it is refused
+    // when it is not the one the project's own HALF_EVEN produces from the
+    // quantity, the unit price and the discount this very line carries. The
+    // quantity is already parsed and canonical by here, so this check cannot
+    // be the one that reports a malformed quantity.
+    assertLineTotalRounded(lineTotalMinor, quantityQ4, unitPriceMinor, discountMinor, { stockKey: canonicalKey });
+    sum += lineTotalMinor;
   }
 
   const displayed = requireMinor(input.displayedTotalMinor, 'displayedTotalMinor');
@@ -488,7 +505,20 @@ export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: s
   // typecheck while leaving the suite green — so a JavaScript caller, or a
   // caller holding an `as` cast, would reach the rest of this function and
   // crash on a property of `undefined` instead of being refused.
-  if (approval === null || typeof approval !== 'object' || typeof approval.quote !== 'object' || typeof approval.confirmation !== 'object') {
+  // `typeof null === 'object'`, so the first two members of this guard used to
+  // admit `{ quote: null }` and `{ confirmation: null }` and the function then
+  // raised a `TypeError` on a property of `null` — the very crash the comment
+  // above says it prevents. Measured by the coordinator's diff review at
+  // `b3719c0` (R-09). It failed closed, under the wrong subject and the wrong
+  // error class; a caller cannot act on a `TypeError`.
+  if (
+    approval === null ||
+    typeof approval !== 'object' ||
+    approval.quote === null ||
+    approval.confirmation === null ||
+    typeof approval.quote !== 'object' ||
+    typeof approval.confirmation !== 'object'
+  ) {
     throw new OrderError('order.quote_not_approved', 'a checkout carries the quote the shopper confirmed; there is no unapproved path');
   }
   const { quote, confirmation } = approval;

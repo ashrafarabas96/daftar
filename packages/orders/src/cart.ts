@@ -51,6 +51,23 @@ export interface CartLine {
    * absent from the code that reads the relation is a law nobody enforces.
    */
   retractedAt: string | null;
+  /**
+   * The order that already consumed this line, as a canonical lowercase UUID,
+   * or `null` for a line still in the basket.
+   *
+   * REQUIRED, for exactly the reason `retractedAt` is required, and the
+   * coordinator's diff review at `b3719c0` was right that the reason had been
+   * applied to one tombstone and not the other (R-07). `R2` carries
+   * `consumed_by_order_id` and `I2.7` makes the consumption FINAL — a line
+   * cannot be consumed twice — so a line that has become an order's lines is no
+   * longer part of any basket. Without this field the merge could not express
+   * that: a consumed line handed back in would be counted as live, the shopper
+   * would be charged a second time for stock they have already bought, and the
+   * refusal would come from the database's leg 9 at placement, after the price
+   * had been shown. An optional field would leave the law unclaimed by default,
+   * which is the whole argument for the one above.
+   */
+  consumedByOrderId: string | null;
 }
 
 /**
@@ -138,6 +155,7 @@ export function summariseBasket(
 
   const seenLineIds = new Set<string>();
   let retractedLines = 0;
+  let consumedLines = 0;
   const byKey = new Map<
     string,
     { productId: string; variantId: string | null; total: bigint; lineIds: string[]; unitDecimals: number | null; tracksInventory: boolean }
@@ -149,6 +167,19 @@ export function summariseBasket(
       throw new OrderError('order.cart_line_duplicate', 'two basket lines share a lineId', { lineId: line.lineId });
     }
     seenLineIds.add(line.lineId);
+
+    // The consumption tombstone is SHAPE-checked for every line, including one
+    // that is about to be skipped as retracted. Validating a field only on the
+    // path that reads it is how mutation M54 survived round 7: the identity of a
+    // skipped line was unclaimed, so a malformed one passed. An absent field
+    // enters this branch too (`undefined !== null`) and fails with
+    // `stated: "undefined"`.
+    if (line.consumedByOrderId !== null && !isCanonicalId(line.consumedByOrderId)) {
+      throw new OrderError('order.cart_line_invalid', 'a consumed basket line names its consuming order as a canonical lowercase UUID', {
+        lineId: line.lineId,
+        stated: String(line.consumedByOrderId),
+      });
+    }
 
     // The retraction is read BEFORE anything else about the line is judged, and a
     // retracted line is then skipped. It contributes no quantity, so nothing
@@ -175,8 +206,23 @@ export function summariseBasket(
       }
       if (compareCanonical(line.retractedAt, asOf) > 0) {
         // The relation's leg 8 refuses `NEW.retracted_at > now()`. The same law
-        // is stated here against the supplied instant rather than a clock, so
-        // the two layers cannot disagree and a retry cannot change the verdict.
+        // is stated here against the SUPPLIED instant rather than a clock, so a
+        // retry cannot change this layer's verdict.
+        //
+        // It is not the same instant, and the coordinator's diff review at
+        // `b3719c0` was right that the old wording ("the two layers cannot
+        // disagree") claimed more than that (R-06). The relation judges against
+        // `now()` at the moment of the write; this judges against `asOf`. They
+        // agree on the LAW and can differ on the INSTANT, and they also differ
+        // on representation: `now()` writes microseconds, the relation accepts
+        // a fractional-second retraction, and `isCanonicalInstant` above refuses
+        // anything but whole seconds — including a `Date#toISOString()`
+        // rendering such as `'…T01:00:00.000Z'`. The whole basket then fails
+        // CLOSED, which is why this is a seam and not a hole, and the migration
+        // request asks for the narrowing CHECK that removes it
+        // (`retracted_at = date_trunc('second', retracted_at)`). Until that
+        // CHECK exists, the one lawful mapping from the relation to this layer
+        // is: truncate to the second, and `'infinity'` is not an instant.
         throw new OrderError('order.cart_retraction_not_future', 'a basket line states a retraction at an instant that has not arrived', {
           lineId: line.lineId,
           stated: line.retractedAt,
@@ -184,6 +230,19 @@ export function summariseBasket(
         });
       }
       retractedLines += 1;
+      continue;
+    }
+    if (line.consumedByOrderId !== null) {
+      // A consumed line contributes nothing, for the same reason a retracted one
+      // does not: it is a tombstone, and its quantity has already been sold on
+      // the order that consumed it. It is skipped rather than refused, because a
+      // basket holding a consumed line is an ordinary basket after a partial
+      // checkout — refusing the whole basket over it would be the fail-open's
+      // opposite defect, a shopper who cannot buy what is still in their hands.
+      // Its id stays claimed above, so it cannot be reused to smuggle a
+      // duplicate, and `I2.7`'s finality is the database's answer to a second
+      // consumption of the same line.
+      consumedLines += 1;
       continue;
     }
     assertCanonicalId(line.productId, 'productId');
@@ -244,8 +303,9 @@ export function summariseBasket(
     // asks for nothing, and a checkout over zero positions would be an order for
     // nothing. Same code as a basket with no lines at all, because the caller's
     // next action is the same.
-    throw new OrderError('order.cart_empty', 'every line of this basket has been retracted, so it asks for nothing', {
+    throw new OrderError('order.cart_empty', 'every line of this basket has been retracted or already consumed, so it asks for nothing', {
       retractedLines: String(retractedLines),
+      consumedLines: String(consumedLines),
     });
   }
 

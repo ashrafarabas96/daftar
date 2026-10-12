@@ -280,7 +280,7 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
       throw new OrderError('order.checkout_date_invalid', 'dueDate must be a YYYY-MM-DD civil date that names a real day');
     }
     if (facts.dueDate < facts.documentDate) {
-      throw new OrderError('order.checkout_date_invalid', 'dueDate falls on or after documentDate');
+      throw new OrderError('order.checkout_date_invalid', 'dueDate falls BEFORE documentDate; a term cannot end before the document it is a term of');
     }
   }
 

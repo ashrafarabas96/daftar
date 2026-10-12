@@ -134,9 +134,15 @@ describe('the quote-confirmation fact carries the intent digest (Master Continuo
     quoteId: '6b1f0a2c-0000-4000-8000-000000000002',
     orderId: '6b1f0a2c-0000-4000-8000-000000000003',
     confirmedVersion: 3,
-    confirmedAt: '2026-10-01T09:30:00.000Z',
+    // Whole seconds, like every other instant this package admits. The
+    // fractional `.000Z` rendering a `Date#toISOString()` produces was here
+    // until the coordinator's diff review at `b3719c0` pointed out that
+    // `quote.test.ts` asserts that exact spelling is REFUSED (R-06): a shape
+    // fixture that cannot pass the laws it is a fixture for teaches a reader
+    // the wrong canonical form, even where the case only counts keys.
+    confirmedAt: '2026-10-01T09:30:00Z',
     confirmedQuoteDigest: 'a'.repeat(64),
-    confirmedQuoteExpiresAt: '2026-10-01T10:00:00.000Z',
+    confirmedQuoteExpiresAt: '2026-10-01T10:00:00Z',
     confirmedByUserId: null,
   };
 

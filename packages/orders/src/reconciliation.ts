@@ -14,7 +14,22 @@
  *
  * ## What is checked
  *
- * Six conditions, and the list is exhaustive over the two inputs:
+ * Six conditions, and the list is exhaustive over the two inputs AS TYPED. Two
+ * of them cannot fire on the data that exists today, and saying so is the point
+ * of this paragraph: `sale_without_order` and `order_sale_mismatch` are both
+ * reached through `CanonicalSaleRow.orderId`, and **Phase 4's `sales` relation
+ * at `93084f8` carries no order back-reference** (`0077…:219-253`). So that
+ * field has no source: every real sale row arrives with `orderId: null`, is
+ * counted as a sale with no channel origin, and the two findings stay silent.
+ * The coordinator's diff review at `b3719c0` measured exactly that (R-10): an
+ * order in `fulfilled` naming a sale whose row has `orderId: null` reconciles
+ * clean. The gap is a CROSS-PHASE SEAM, not a defect in this fold: either Phase
+ * 4 gains the back-reference, or the sale side of the check has to be derived
+ * from `orders.sale_id` alone, and that is a contract decision rather than this
+ * module's to take. Until it is taken, this reconciler's real coverage is the
+ * four order-side conditions.
+ *
+ * The six:
  *
  * - `order_without_sale` — an order whose state says a sale committed, naming a
  *   sale id the ledger has no row for. The order believes it sold something the

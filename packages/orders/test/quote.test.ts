@@ -112,18 +112,38 @@ describe('buildCommercialQuote', () => {
     }
   });
 
-  it('does NOT derive a line total from the unit price and the quantity', () => {
-    // 2 × 1500 − 200 is 2800, and a line that said 9999 would be arithmetically
-    // wrong — but deriving the right answer needs a rounding policy at the
-    // product's unit precision, and a policy invented here would be a second
-    // money truth. So the figure is carried verbatim and only the SUM is
-    // checked, which this case documents by passing.
-    const odd = buildCommercialQuote({
-      ...INPUT,
-      lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), lineTotalMinor: '9999' }],
-      displayedTotalMinor: '9999',
-    });
-    expect(odd.displayedTotalMinor).toBe('9999');
+  // The owner settled the rounding question on 2026-10-12 ("التقريب لكل سطر"):
+  // per line, half to even, one rounding after the quantity and the approved
+  // discounts. Until then this builder deliberately accepted ANY line total
+  // that summed, because deriving one needs a rounding mode and inventing a
+  // mode here would have been a second money truth. The mode is no longer
+  // invented: it is the project's own, so the figure now has one lawful value.
+  // The previous case asserted the opposite and passed by accepting 9999; it is
+  // replaced rather than deleted, so the record shows which law changed and
+  // when.
+  it('refuses a line total that is not the line arithmetic, now that the rounding mode is settled', () => {
+    // 2 × 1500 − 200 is exactly 2800, so 9999 is simply wrong.
+    try {
+      buildCommercialQuote({
+        ...INPUT,
+        lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), lineTotalMinor: '9999' }],
+        displayedTotalMinor: '9999',
+      });
+      throw new Error('a line total of 9999 was accepted over an exact value of 2800');
+    } catch (error) {
+      expect(error).toBeInstanceOf(OrderError);
+      expect((error as OrderError).code).toBe('order.quote_line_total_mismatch');
+      expect((error as OrderError).details?.expectedLineTotalMinor).toBe('2800');
+      expect((error as OrderError).details?.statedLineTotalMinor).toBe('9999');
+    }
+  });
+
+  it('still does not PRICE the line: a lawful carried figure is returned verbatim, byte for byte', () => {
+    // The distinction the module note turns on. The builder never writes a line
+    // total, so a lawful one reaches the digest exactly as the pricing
+    // authority spelled it, and the digest is unchanged by the new gate.
+    expect(QUOTED.lines[0]?.lineTotalMinor).toBe('2800');
+    expect(QUOTED.lines[0]?.lineTotalMinor).toBe(INPUT.lines[0]?.lineTotalMinor);
   });
 
   it.each(['-1', '1.5', '01', '', ' 1', '1e3'])('refuses the non-canonical amount %s', (bad) => {
@@ -325,9 +345,12 @@ describe('assessQuoteDivergence', () => {
 
   it('is exact above Number.MAX_SAFE_INTEGER — a double could not hold this comparison', () => {
     const big = '9007199254740993';
+    // One unit at that price, no discount, so the figure is lawful under the
+    // per-line rounding rule as well as too large for a double: the case still
+    // measures the comparison and not the new gate.
     const huge = buildCommercialQuote({
       ...INPUT,
-      lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), lineTotalMinor: big }],
+      lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), quantity: '1.0000', unitPriceMinor: big, discountMinor: '0', lineTotalMinor: big }],
       displayedTotalMinor: big,
     });
     expect(assessQuoteDivergence(approve(huge), ORDER, big)).toEqual({ status: 'within_policy', differenceMinor: '0' });
@@ -449,7 +472,14 @@ describe('a quoted quantity is validated by the inventory truth (challenger P1-0
 
   it('refuses a quantity the product unit precision cannot represent, when the precision is supplied', () => {
     const first = INPUT.lines[0] as (typeof INPUT.lines)[number];
-    const fractional = { ...INPUT, lines: [{ ...first, quantity: '2.5000' }, ...INPUT.lines.slice(1)] };
+    // 2.5 × 1500 − 200 = 3550, so the line total moves with the quantity; a
+    // stale 2800 would be refused by the rounding gate and this case would
+    // then measure that gate instead of the precision law.
+    const fractional = {
+      ...INPUT,
+      lines: [{ ...first, quantity: '2.5000', lineTotalMinor: '3550' }, ...INPUT.lines.slice(1)],
+      displayedTotalMinor: '4549',
+    };
     // Without a precision the law is not claimed: 2.5 of something is a fine
     // quantity until a caller says the product is sold in whole units.
     expect(buildCommercialQuote(fractional).lines[0]?.quantity).toBe('2.5000');
@@ -598,7 +628,9 @@ describe('the gate proves LAWFULNESS, not only integrity (round-2 challenge P1-0
   }
 
   const LINE = INPUT.lines[0] as (typeof INPUT.lines)[number];
-  const ONE_LINE: Omit<CommercialQuote, 'digest'> = { ...INPUT, lines: [{ ...LINE, lineTotalMinor: '1000' }], displayedTotalMinor: '1000' };
+  // 2 × 1500 − 200 = 2800 is the line's one lawful total, so every forgery
+  // below breaks exactly the field it names and not the rounding rule as well.
+  const ONE_LINE: Omit<CommercialQuote, 'digest'> = { ...INPUT, lines: [{ ...LINE, lineTotalMinor: '2800' }], displayedTotalMinor: '2800' };
 
   it('a forged quote really does carry a valid digest — otherwise these cases prove nothing', () => {
     const forged = forge({ ...ONE_LINE, displayedTotalMinor: '999999' });
@@ -608,7 +640,7 @@ describe('the gate proves LAWFULNESS, not only integrity (round-2 challenge P1-0
 
   it('refuses a displayed total that does not equal its own lines, even with a valid digest', () => {
     // The challenger's case: the builder refuses 999999 against lines summing
-    // to 1000, and the hand-built quote carrying that same illegal total used to
+    // to 2800, and the hand-built quote carrying that same illegal total used to
     // pass the gate, build an intent, AND have the zero tolerance measured
     // against the forged figure — so the honest recomputation of 1000 was the
     // one refused as a divergence.
@@ -621,7 +653,7 @@ describe('the gate proves LAWFULNESS, not only integrity (round-2 challenge P1-0
   });
 
   it('refuses a forged negative quantity', () => {
-    const forged = forge({ ...ONE_LINE, lines: [{ ...LINE, lineTotalMinor: '1000', quantity: '-5.0000' }] });
+    const forged = forge({ ...ONE_LINE, lines: [{ ...LINE, lineTotalMinor: '2800', quantity: '-5.0000' }] });
     expect(() => assertQuoteIntact(forged)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
   });
 
@@ -632,10 +664,10 @@ describe('the gate proves LAWFULNESS, not only integrity (round-2 challenge P1-0
     const forged = forge({
       ...INPUT,
       lines: [
-        { ...LINE, discountMinor: '0', lineTotalMinor: '1000' },
-        { ...LINE, discountMinor: '77', lineTotalMinor: '1000' },
+        { ...LINE, discountMinor: '0', lineTotalMinor: '3000' },
+        { ...LINE, discountMinor: '77', lineTotalMinor: '2923' },
       ],
-      displayedTotalMinor: '2000',
+      displayedTotalMinor: '5923',
     });
     expect(() => assertQuoteIntact(forged)).toThrowError(expect.objectContaining({ code: 'order.quote_line_duplicate' }));
   });
@@ -706,7 +738,12 @@ describe('the representability leg of the gate has a caller (round-3 challenge P
   // Measured by the challenger: with a precision of 0 the builder refuses a
   // quantity of 0.5000, and a forged quote carrying it passed the whole gate.
   const WHOLE_UNITS = { unitPrecisionByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, tracked(0)]]) };
-  const HALF = { ...INPUT, lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), quantity: '2.5000' }, ...INPUT.lines.slice(1)] };
+  // 2.5 × 1500 − 200 = 3550, plus the second line's 999.
+  const HALF = {
+    ...INPUT,
+    lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), quantity: '2.5000', lineTotalMinor: '3550' }, ...INPUT.lines.slice(1)],
+    displayedTotalMinor: '4549',
+  };
 
   it('the builder refuses the half unit, so there is a law to carry', () => {
     expect(() => buildCommercialQuote(HALF, WHOLE_UNITS)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
@@ -816,5 +853,37 @@ describe('confirmedByUserId is an id or it is nothing (round-3 challenge P3-01)'
     expect(() => assertQuoteApproved(honest, ORDER)).not.toThrow();
     const byStaff = { ...honest, confirmation: { ...honest.confirmation, confirmedByUserId: '77777777-7777-4777-8777-777777777777' } };
     expect(() => assertQuoteApproved(byStaff, ORDER)).not.toThrow();
+  });
+});
+
+// The coordinator's diff review at `b3719c0`, R-09: the guard whose comment says
+// a malformed approval is REFUSED rather than crashing was itself crashing on
+// one, because `typeof null === 'object'`. It failed closed — a `TypeError` is
+// not an accepted sale — but under the wrong subject and the wrong error class,
+// and a caller cannot act on a `TypeError`.
+describe('a malformed approval is refused, not crashed on (coordinator R-09)', () => {
+  const honest = approve(QUOTED);
+
+  it.each([
+    ['quote', { ...honest, quote: null }],
+    ['confirmation', { ...honest, confirmation: null }],
+    ['both', { ...honest, quote: null, confirmation: null }],
+  ])('a null %s is order.quote_not_approved', (_which, broken) => {
+    try {
+      assertQuoteApproved(broken as unknown as ConfirmedQuoteApproval, ORDER);
+      throw new Error('a null member of the approval was accepted');
+    } catch (error) {
+      expect(error).toBeInstanceOf(OrderError);
+      expect((error as OrderError).code).toBe('order.quote_not_approved');
+    }
+  });
+
+  it('and so are the shapes that already worked, so the fix did not narrow the guard', () => {
+    for (const broken of [undefined, null, 'quote', 7, { quote: 'x', confirmation: 'y' }]) {
+      expect(() => assertQuoteApproved(broken as unknown as ConfirmedQuoteApproval, ORDER)).toThrowError(
+        expect.objectContaining({ code: 'order.quote_not_approved' }),
+      );
+    }
+    expect(() => assertQuoteApproved(honest, ORDER)).not.toThrow();
   });
 });

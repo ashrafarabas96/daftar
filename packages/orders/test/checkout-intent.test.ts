@@ -58,8 +58,8 @@ const summariseAt = (lines: readonly CartLineInput[], precision: ReadonlyMap<str
 
 const POSITIONS = summariseAt(
   [
-    { lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '2', retractedAt: null },
-    { lineId: LINE2, productId: PRODUCT, variantId: VARIANT, quantity: '3', retractedAt: null },
+    { lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '2', consumedByOrderId: null, retractedAt: null },
+    { lineId: LINE2, productId: PRODUCT, variantId: VARIANT, quantity: '3', consumedByOrderId: null, retractedAt: null },
   ],
   PRECISION,
 );
@@ -79,13 +79,20 @@ const CONFIRMATION_ID = '55555555-5555-4555-8555-555555555555';
  * against.
  */
 function quoteGranting(discountMinor: string): CommercialQuote {
+  // Five whole units at 1000 is 5000 gross, and since the owner's decision of
+  // 2026-10-12 the line total has to BE the exact value: 5000 less the discount
+  // this quote grants. It is written as the subtraction rather than as a
+  // literal, so a case that grants a discount cannot quietly price a line that
+  // never had one — the rounding gate would answer instead of the discount law
+  // the case is measuring.
+  const lineTotalMinor = (5000n - BigInt(discountMinor)).toString();
   return buildCommercialQuote({
     quoteId: QUOTE_ID,
     orderId: ORDER,
     version: 1,
     currency: 'ILS',
-    lines: [{ stockKey: KEY, productId: PRODUCT, variantId: VARIANT, quantity: '5.0000', unitPriceMinor: '1000', discountMinor, lineTotalMinor: '5000' }],
-    displayedTotalMinor: '5000',
+    lines: [{ stockKey: KEY, productId: PRODUCT, variantId: VARIANT, quantity: '5.0000', unitPriceMinor: '1000', discountMinor, lineTotalMinor }],
+    displayedTotalMinor: lineTotalMinor,
     issuedAt: '2026-10-01T09:00:00Z',
     expiresAt: '2026-10-01T10:00:00Z',
   });
@@ -455,7 +462,7 @@ describe('the confirmed quote now guards the hand-off (challenger P1-01)', () =>
 
   it('refuses a checkout whose positions the confirmed quote does not price', () => {
     const other = summariseAt(
-      [{ lineId: LINE1, productId: PRODUCT, variantId: null, quantity: '1', retractedAt: null }],
+      [{ lineId: LINE1, productId: PRODUCT, variantId: null, quantity: '1', consumedByOrderId: null, retractedAt: null }],
       new Map([[stockKeyOf({ productId: PRODUCT, variantId: null }), tracked(0)]]),
     );
     expect(() => buildSaleCommitIntent(snapshot('fulfilling'), POSITIONS.concat(other), CASH)).toThrowError(
@@ -567,6 +574,7 @@ describe('the mirror carries the authority CONSTRAINTS, not only its shape (chal
         productId: productOf(index),
         variantId: null,
         quantity: '1',
+        consumedByOrderId: null,
         retractedAt: null,
       }));
     const precisionOf = (count: number): Map<string, UnitPrecisionDeclaration> =>
@@ -659,7 +667,10 @@ describe('the hand-off supplies the precisions it validated the basket with (rou
     );
     // A position that declares four decimals admits the same quantity. The law
     // follows the basket, not a field beside it.
-    const atQ4 = summariseAt([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', retractedAt: null }], new Map([[KEY, tracked(4)]]));
+    const atQ4 = summariseAt(
+      [{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', consumedByOrderId: null, retractedAt: null }],
+      new Map([[KEY, tracked(4)]]),
+    );
     expect(atQ4[0]?.unitDecimals).toBe(4);
     expect(() => buildSaleCommitIntent(snapshot('fulfilling'), atQ4, { ...CASH, quoteApproval: approve(halfUnitQuote) })).not.toThrow();
   });
@@ -713,7 +724,7 @@ describe('the hand-off supplies the precisions it validated the basket with (rou
   // right; the sale path was wrong about it.
   it('commits a position the catalogue declares with NO precision, at a quantity whole units would refuse', () => {
     const precisionFree = summariseAt(
-      [{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', retractedAt: null }],
+      [{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', consumedByOrderId: null, retractedAt: null }],
       new Map([[KEY, SERVICE]]),
     );
     expect(precisionFree[0]?.unitDecimals).toBeNull();
@@ -756,11 +767,12 @@ describe('the hand-off supplies the precisions it validated the basket with (rou
 
   it('refuses a precision-free position whose quantity exceeds the storage scale, and admits one at it', () => {
     const map = new Map([[KEY, SERVICE]]);
-    expect(summariseAt([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '0.0001', retractedAt: null }], map)[0]?.totalQuantity).toBe(
-      '0.0001',
-    );
-    expect(() => summariseAt([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '0.00001', retractedAt: null }], map)).toThrowError(
-      expect.objectContaining({ code: 'order.cart_quantity_invalid' }),
-    );
+    expect(
+      summariseAt([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '0.0001', consumedByOrderId: null, retractedAt: null }], map)[0]
+        ?.totalQuantity,
+    ).toBe('0.0001');
+    expect(() =>
+      summariseAt([{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '0.00001', consumedByOrderId: null, retractedAt: null }], map),
+    ).toThrowError(expect.objectContaining({ code: 'order.cart_quantity_invalid' }));
   });
 });

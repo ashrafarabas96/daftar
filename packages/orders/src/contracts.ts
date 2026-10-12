@@ -534,6 +534,8 @@ export const ORDER_CLIENT_ERROR_CODES: readonly string[] = Object.freeze([
   'order.quote_discount_unapproved',
   'order.quote_requires_reconfirmation',
   'order.quote_quantity_invalid',
+  'order.quote_line_total_mismatch',
+  'order.quote_discount_exceeds_line',
   'order.unit_precision_invalid',
   'order.unit_precision_required',
   'order.checkout_date_invalid',

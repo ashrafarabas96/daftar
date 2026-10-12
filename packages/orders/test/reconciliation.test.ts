@@ -189,3 +189,21 @@ describe('ids are validated, and no finding is lost (challenger P3-03)', () => {
     expect(report.findings.map((f) => f.code)).toEqual(['sale_shared_by_orders']);
   });
 });
+
+// The coordinator's diff review at `b3719c0`, R-10. Phase 4's `sales` at
+// `93084f8` carries no order back-reference, so `CanonicalSaleRow.orderId` has
+// no source today and every real row arrives `null`. These two cases pin what
+// that means, so the day Phase 4 gains the column the suite says what changed.
+describe('the sale-side seam is stated, not assumed away (coordinator R-10)', () => {
+  it('an order bound to a sale whose row names no order reconciles CLEAN — the two sale-side findings cannot fire', () => {
+    const report = reconcileChannelOrders([{ orderId: O1, channel: 'storefront', state: 'fulfilled', saleId: S1 }], [{ saleId: S1, orderId: null }]);
+    expect(report.findings).toEqual([]);
+    expect(report.isReconciled).toBe(true);
+    expect(report.salesWithoutChannelOrigin).toBe(1);
+  });
+
+  it('and they DO fire the moment a sale names an order, so the fold itself is not the gap', () => {
+    expect(codes([], [{ saleId: S1, orderId: O1 }])).toEqual(['sale_without_order']);
+    expect(codes([{ orderId: O1, channel: 'storefront', state: 'fulfilled', saleId: S2 }], [{ saleId: S1, orderId: O1 }])).toContain('order_sale_mismatch');
+  });
+});
