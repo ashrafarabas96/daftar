@@ -72,18 +72,25 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
-import { appUrl, bootstrapUrl, borrowedSchema, connect, connectWithoutContext, ownerUrl, refusedBy, setRequestContext, strangerUrl, uuid } from './helpers/cluster';
+import {
+  appUrl,
+  bootstrapUrl,
+  borrowedSchema,
+  connect,
+  connectWithoutContext,
+  ownerUrl,
+  refusedBy,
+  setRequestContext,
+  strangerUrl,
+  uuid,
+} from './helpers/cluster';
 import { createBusiness, createDraftInvoice, insertGrant, type Scope } from './helpers/finalize';
 
 const TENANT = '7f1a0000-0000-4000-8000-000000000007';
 const OTHER_TENANT = '7f1a0000-0000-4000-8000-00000000000a';
 const T1 = '2026-02-01T00:00:00.000Z';
 
-const SCOPED_TABLES = [
-  'platform_credit_adjustments',
-  'subscription_invoices',
-  'subscription_charge_attempts',
-] as const;
+const SCOPED_TABLES = ['platform_credit_adjustments', 'subscription_invoices', 'subscription_charge_attempts'] as const;
 
 let owner: Client;
 
@@ -114,9 +121,10 @@ describe('the policies are the house pattern, read from the catalogue', () => {
       const mine = r.rows.filter((row) => row.tablename === table);
       const restrictive = mine.filter((row) => row.permissive === 'RESTRICTIVE');
       const permissive = mine.filter((row) => row.permissive === 'PERMISSIVE');
-      expect(restrictive.map((row) => row.policyname), `${table} has no RESTRICTIVE policy, so it is not default-deny`).toStrictEqual([
-        `${table.startsWith('platform_credit') ? 'pca' : table.startsWith('subscription_invoices') ? 'si' : 'sca'}_business_isolation`,
-      ]);
+      expect(
+        restrictive.map((row) => row.policyname),
+        `${table} has no RESTRICTIVE policy, so it is not default-deny`,
+      ).toStrictEqual([`${table.startsWith('platform_credit') ? 'pca' : table.startsWith('subscription_invoices') ? 'si' : 'sca'}_business_isolation`]);
       expect(permissive.length, `${table} has no PERMISSIVE policy, so a RESTRICTIVE one would deny everything`).toBeGreaterThanOrEqual(1);
       expect(restrictive[0]?.cmd, `${table}'s restrictive policy must cover every command`).toBe('ALL');
     }
@@ -190,7 +198,10 @@ describe('default-deny: no context, no rows', () => {
            VALUES ($1,$2,$3,'grant',100,'USD',$4,'rls','a write with no context')`,
           [uuid(), s.tenantId, s.businessId, T1],
         )
-        .then(() => '', (e: unknown) => refusedBy(e));
+        .then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        );
       expect(code, 'a session with no request context wrote a row').toBe('42501');
     } finally {
       await blind.end();
@@ -212,14 +223,17 @@ describe('default-deny: no context, no rows', () => {
            VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',100,0,100,'draft')`,
           [uuid(), s.tenantId, s.businessId],
         )
-        .then(() => '', (e: unknown) => refusedBy(e));
+        .then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        );
       expect(code, 'half a context was enough to write').toBe('42501');
     } finally {
       await half.end();
     }
   });
 
-  it("refuses a session whose tenant does not own the business it names", async () => {
+  it('refuses a session whose tenant does not own the business it names', async () => {
     const s = await freshScope();
     const outsider = await connectWithoutContext(appUrl());
     try {
@@ -231,7 +245,10 @@ describe('default-deny: no context, no rows', () => {
            VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',100,0,100,'draft')`,
           [uuid(), s.tenantId, s.businessId],
         )
-        .then(() => '', (e: unknown) => refusedBy(e));
+        .then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        );
       expect(code, 'a session wrote into a business its tenant does not own').toBe('42501');
     } finally {
       await outsider.end();
@@ -253,12 +270,11 @@ describe('default-deny: no context, no rows', () => {
     const app = await connectWithoutContext(appUrl());
     try {
       await setRequestContext(app, mine, 'session');
-      const seen = await app.query<{ business: string }>(
-        `SELECT DISTINCT business_id AS business FROM p5scratch.platform_credit_adjustments`,
-      );
-      expect(seen.rows.map((r) => r.business), 'the session read a sibling business inside its own tenant').toStrictEqual([
-        mine.businessId,
-      ]);
+      const seen = await app.query<{ business: string }>(`SELECT DISTINCT business_id AS business FROM p5scratch.platform_credit_adjustments`);
+      expect(
+        seen.rows.map((r) => r.business),
+        'the session read a sibling business inside its own tenant',
+      ).toStrictEqual([mine.businessId]);
       // And the write side of the same layer: the tenant is honest, the
       // business is the sibling's.
       const code = await app
@@ -268,7 +284,10 @@ describe('default-deny: no context, no rows', () => {
            VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',100,0,100,'draft')`,
           [uuid(), sibling.tenantId, sibling.businessId],
         )
-        .then(() => '', (e: unknown) => refusedBy(e));
+        .then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        );
       expect(code, 'a session wrote into a sibling business of its own tenant').toBe('42501');
     } finally {
       await app.end();
@@ -293,10 +312,7 @@ describe('default-deny: no context, no rows', () => {
     await insertGrant(owner, 'p5scratch', s, 1000n, T1);
     const bare = await connectWithoutContext(ownerUrl());
     try {
-      const r = await bare.query<{ n: number }>(
-        `SELECT count(*)::int AS n FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`,
-        [s.businessId],
-      );
+      const r = await bare.query<{ n: number }>(`SELECT count(*)::int AS n FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`, [s.businessId]);
       expect(r.rows[0]?.n, 'the platform principal cannot read without a context, so no platform path exists').toBe(1);
       const forced = await bare.query<{ forced: boolean }>(
         `SELECT relforcerowsecurity AS forced FROM pg_class WHERE oid = 'p5scratch.platform_credit_adjustments'::regclass`,
@@ -349,12 +365,11 @@ describe('a definer routine trusts the context, not its caller', () => {
     const app = await connectWithoutContext(appUrl());
     try {
       await setRequestContext(app, mine, 'session');
-      const refusal = await app
-        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD'])
-        .then(() => '', (e: unknown) => refusedBy(e));
-      expect(refusal, "a session locked and counted another tenant's grant rows through a definer routine").toBe(
-        '23000/lgo_scope_is_the_callers_own',
+      const refusal = await app.query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD']).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
       );
+      expect(refusal, "a session locked and counted another tenant's grant rows through a definer routine").toBe('23000/lgo_scope_is_the_callers_own');
     } finally {
       await app.end();
     }
@@ -370,12 +385,11 @@ describe('a definer routine trusts the context, not its caller', () => {
     const app = await connectWithoutContext(appUrl());
     try {
       await setRequestContext(app, mine, 'session');
-      const refusal = await app
-        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [sibling.tenantId, sibling.businessId, 'USD'])
-        .then(() => '', (e: unknown) => refusedBy(e));
-      expect(refusal, 'a session reached a sibling business through the definer routine').toBe(
-        '23000/lgo_scope_is_the_callers_own',
+      const refusal = await app.query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [sibling.tenantId, sibling.businessId, 'USD']).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
       );
+      expect(refusal, 'a session reached a sibling business through the definer routine').toBe('23000/lgo_scope_is_the_callers_own');
     } finally {
       await app.end();
     }
@@ -386,12 +400,11 @@ describe('a definer routine trusts the context, not its caller', () => {
     await insertGrant(owner, 'p5scratch', s, 300n, T1);
     const blind = await connectWithoutContext(appUrl());
     try {
-      const refusal = await blind
-        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, 'USD'])
-        .then(() => '', (e: unknown) => refusedBy(e));
-      expect(refusal, 'a context-less session called the definer routine successfully').toBe(
-        '23000/lgo_scope_is_the_callers_own',
+      const refusal = await blind.query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, 'USD']).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
       );
+      expect(refusal, 'a context-less session called the definer routine successfully').toBe('23000/lgo_scope_is_the_callers_own');
     } finally {
       await blind.end();
     }
@@ -408,21 +421,14 @@ describe('a definer routine trusts the context, not its caller', () => {
     const app = await connectWithoutContext(appUrl());
     try {
       await setRequestContext(app, s, 'session');
-      const r = await app.query<{ locked: number }>(`SELECT p5scratch.lock_grants_in_order($1, $2, $3) AS locked`, [
-        s.tenantId,
-        s.businessId,
-        'USD',
-      ]);
+      const r = await app.query<{ locked: number }>(`SELECT p5scratch.lock_grants_in_order($1, $2, $3) AS locked`, [s.tenantId, s.businessId, 'USD']);
       expect(r.rows[0]?.locked, 'the legitimate caller was refused its own scope').toBe(2);
     } finally {
       await app.end();
     }
     const asPlatform = await connectWithoutContext(ownerUrl());
     try {
-      const r = await asPlatform.query<{ locked: number }>(
-        `SELECT p5scratch.lock_grants_in_order($1, $2, $3) AS locked`,
-        [s.tenantId, s.businessId, 'USD'],
-      );
+      const r = await asPlatform.query<{ locked: number }>(`SELECT p5scratch.lock_grants_in_order($1, $2, $3) AS locked`, [s.tenantId, s.businessId, 'USD']);
       expect(r.rows[0]?.locked, 'the platform principal lost its context-free path').toBe(2);
     } finally {
       await asPlatform.end();
@@ -441,9 +447,10 @@ describe('a definer routine trusts the context, not its caller', () => {
     await insertGrant(owner, 'p5scratch', victim, 4200n, T1);
     const stranger = await connectWithoutContext(strangerUrl());
     try {
-      const refusal = await stranger
-        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD'])
-        .then(() => '', (e: unknown) => refusedBy(e));
+      const refusal = await stranger.query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD']).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       // 42501 and not the named scope refusal: the privilege check happens
       // before the body runs, which is the stronger of the two defences and
       // the one PUBLIC had been bypassing.
@@ -451,9 +458,7 @@ describe('a definer routine trusts the context, not its caller', () => {
       // And the stranger really does hold USAGE, so the refusal above is
       // about EXECUTE and not about the schema — a case that cannot tell
       // which refusal it got is the defect F-11 closed.
-      const usage = await stranger.query<{ ok: boolean }>(
-        `SELECT has_schema_privilege(current_user, 'p5scratch', 'USAGE') AS ok`,
-      );
+      const usage = await stranger.query<{ ok: boolean }>(`SELECT has_schema_privilege(current_user, 'p5scratch', 'USAGE') AS ok`);
       expect(usage.rows[0]?.ok, 'the stranger has no USAGE, so the refusal above was the wrong one').toBe(true);
     } finally {
       await stranger.end();
@@ -507,15 +512,14 @@ describe('a definer routine trusts the context, not its caller', () => {
       await attacker.query('BEGIN');
       await setRequestContext(attacker, mine, 'transaction');
       await attacker.query(`SET LOCAL lock_timeout = '2s'`);
-      const refusal = await attacker
-        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD'])
-        .then(() => '', (e: unknown) => refusedBy(e));
+      const refusal = await attacker.query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD']).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       // `55P03` here would mean the routine reached the lock before it
       // checked the caller — the cross-tenant denial of service the guard is
       // supposed to have closed, surviving behind a refusal that looks right.
-      expect(refusal, 'the routine waited on the victim\'s lock before checking the caller').toBe(
-        '23000/lgo_scope_is_the_callers_own',
-      );
+      expect(refusal, "the routine waited on the victim's lock before checking the caller").toBe('23000/lgo_scope_is_the_callers_own');
       await attacker.query('ROLLBACK');
       await holder.query('ROLLBACK');
     } finally {
@@ -543,20 +547,15 @@ describe('a definer routine trusts the context, not its caller', () => {
     await insertGrant(owner, 'p5scratch', victim, 4200n, T1);
     const mine = await freshScope();
     const su = await connectWithoutContext(bootstrapUrl());
-    const ownerName = (
-      await su.query<{ owner: string }>(
-        `SELECT pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'p5scratch'`,
-      )
-    ).rows[0]?.owner;
+    const ownerName = (await su.query<{ owner: string }>(`SELECT pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'p5scratch'`)).rows[0]
+      ?.owner;
     expect(ownerName, 'the schema has no owner, so this case cannot plant anything').toBeTruthy();
     // A role name cannot be a bind parameter in GRANT, so it is checked
     // against the shape an unquoted identifier may have before it is
     // interpolated. Both lanes' principals (`p5owner`, `daftar_platform`)
     // satisfy it, and a name that does not stops the case instead of being
     // pasted into DDL.
-    expect(ownerName ?? '', 'the schema owner is not a plain identifier; this case will not interpolate it').toMatch(
-      /^[a-z_][a-z0-9_]{0,62}$/,
-    );
+    expect(ownerName ?? '', 'the schema owner is not a plain identifier; this case will not interpolate it').toMatch(/^[a-z_][a-z0-9_]{0,62}$/);
     const pooled = await connectWithoutContext(ownerUrl());
     try {
       await su.query(`GRANT p5_app TO ${ownerName}`);
@@ -564,26 +563,24 @@ describe('a definer routine trusts the context, not its caller', () => {
       await pooled.query('BEGIN');
       await setRequestContext(pooled, mine, 'transaction');
       await pooled.query('SET LOCAL ROLE p5_app');
-      const who = await pooled.query<{ s: string; c: string; role: string }>(
-        `SELECT session_user AS s, current_user AS c, current_setting('role') AS role`,
-      );
+      const who = await pooled.query<{ s: string; c: string; role: string }>(`SELECT session_user AS s, current_user AS c, current_setting('role') AS role`);
       expect(who.rows[0]?.s, 'this case proves nothing unless the session AUTHENTICATED as the owner').toBe(ownerName);
       expect(who.rows[0]?.role, 'this case proves nothing unless the session is ACTING AS another role').toBe('p5_app');
-      const refusal = await pooled
-        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD'])
-        .then(() => '', (e: unknown) => refusedBy(e));
-      expect(refusal, 'an admin login acting as the application role reached another business').toBe(
-        '23000/lgo_scope_is_the_callers_own',
+      const refusal = await pooled.query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD']).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
       );
+      expect(refusal, 'an admin login acting as the application role reached another business').toBe('23000/lgo_scope_is_the_callers_own');
       await pooled.query('ROLLBACK');
       // The CONTROL, and it is what makes the refusal above attributable: the
       // same connection, the same foreign ids, no SET ROLE. The platform
       // principal's context-free path is exempt and still works, so the
       // refusal came from the `role` GUC and not from the scope comparison.
-      const allowed = await pooled.query<{ locked: number }>(
-        `SELECT p5scratch.lock_grants_in_order($1, $2, $3) AS locked`,
-        [victim.tenantId, victim.businessId, 'USD'],
-      );
+      const allowed = await pooled.query<{ locked: number }>(`SELECT p5scratch.lock_grants_in_order($1, $2, $3) AS locked`, [
+        victim.tenantId,
+        victim.businessId,
+        'USD',
+      ]);
       expect(allowed.rows[0]?.locked, 'the exempt admin path was refused, so the control proves nothing').toBe(1);
     } finally {
       await su.query(`REVOKE p5_app FROM ${ownerName}`);
@@ -614,12 +611,14 @@ describe('a definer routine trusts the context, not its caller', () => {
     const app = await connectWithoutContext(appUrl());
     try {
       await setRequestContext(app, mine, 'session');
-      const onForeign = await app
-        .query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [foreignInvoice])
-        .then(() => '', (e: unknown) => refusedBy(e));
-      const onAbsent = await app
-        .query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [absent])
-        .then(() => '', (e: unknown) => refusedBy(e));
+      const onForeign = await app.query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [foreignInvoice]).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
+      const onAbsent = await app.query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [absent]).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       expect(onForeign, "another tenant's invoice was accepted by the invariant").toBe('23000/si_invoice_unreadable');
       expect(onAbsent, 'a non-existent invoice was accepted by the invariant').toBe('23000/si_invoice_unreadable');
       expect(onForeign, 'the two answers differ, so the existence oracle is still open').toBe(onAbsent);
@@ -630,12 +629,11 @@ describe('a definer routine trusts the context, not its caller', () => {
     // still sees the real reason, which is where the lane asserts it. A draft
     // carries no credit, so the invariant returns for one it may read.
     await owner.query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [foreignInvoice]);
-    const ownerOnAbsent = await owner
-      .query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [absent])
-      .then(() => '', (e: unknown) => refusedBy(e));
-    expect(ownerOnAbsent, 'the owner lost the fail-closed branch as well, which is more than F-17 asked for').toBe(
-      '23000/si_invoice_unreadable',
+    const ownerOnAbsent = await owner.query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [absent]).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
     );
+    expect(ownerOnAbsent, 'the owner lost the fail-closed branch as well, which is more than F-17 asked for').toBe('23000/si_invoice_unreadable');
   });
 
   it('grants EXECUTE on no definer routine to PUBLIC', async () => {
@@ -693,10 +691,7 @@ describe('what a SESSION-scoped context does to the next request on the same con
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',100,0,100,'draft')`,
         [id, first.tenantId, first.businessId],
       );
-      const row = await owner.query<{ n: number }>(
-        `SELECT count(*)::int AS n FROM p5scratch.subscription_invoices WHERE id = $1`,
-        [id],
-      );
+      const row = await owner.query<{ n: number }>(`SELECT count(*)::int AS n FROM p5scratch.subscription_invoices WHERE id = $1`, [id]);
       expect(row.rows[0]?.n, 'the stale-context write did not land, so the hazard is not what it looks like').toBe(1);
     } finally {
       await pooled.end();
@@ -716,9 +711,7 @@ describe('what a SESSION-scoped context does to the next request on the same con
     try {
       await setRequestContext(pooled, stale, 'session');
       await pooled.query(`SELECT set_config('app.business_id', $1, false)`, [foreign.businessId]);
-      const seen = await pooled.query<{ n: number }>(
-        `SELECT count(*)::int AS n FROM p5scratch.platform_credit_adjustments`,
-      );
+      const seen = await pooled.query<{ n: number }>(`SELECT count(*)::int AS n FROM p5scratch.platform_credit_adjustments`);
       expect(seen.rows[0]?.n, "half a context reached another tenant's rows").toBe(0);
     } finally {
       await pooled.end();
@@ -768,10 +761,9 @@ describe('the context is transaction-local, as the frozen discipline requires', 
     try {
       await pooled.query('BEGIN');
       await setRequestContext(pooled, s, 'transaction');
-      const inside = await pooled.query<{ n: number }>(
-        `SELECT count(*)::int AS n FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`,
-        [s.businessId],
-      );
+      const inside = await pooled.query<{ n: number }>(`SELECT count(*)::int AS n FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`, [
+        s.businessId,
+      ]);
       expect(inside.rows[0]?.n, 'the transaction-local context did not take effect').toBe(1);
       await pooled.query('COMMIT');
       // The next transaction on the SAME connection starts blind.

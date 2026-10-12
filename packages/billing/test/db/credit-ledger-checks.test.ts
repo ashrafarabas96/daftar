@@ -222,12 +222,7 @@ describe('the remainder CHECKs, each provoked on its own', () => {
 });
 
 describe('the attempt CHECKs, each provoked on its own', () => {
-  const attempt = (overrides: {
-    readonly attemptNo?: number;
-    readonly key?: string;
-    readonly amountMinor?: number;
-    readonly outcome?: string;
-  }) => overrides;
+  const attempt = (overrides: { readonly attemptNo?: number; readonly key?: string; readonly amountMinor?: number; readonly outcome?: string }) => overrides;
 
   async function insertAttempt(g: Ground, o: ReturnType<typeof attempt>): Promise<string> {
     const attemptNo = o.attemptNo ?? 1;
@@ -310,16 +305,12 @@ describe('the invoice CHECKs, each provoked on its own', () => {
 
   it('refuses a negative charge', async () => {
     const g = await ground();
-    expect(await insertInvoice(g, { chargeMinor: -1, creditMinor: 0, totalMinor: -1 })).toBe(
-      '23514/si_charge_non_negative',
-    );
+    expect(await insertInvoice(g, { chargeMinor: -1, creditMinor: 0, totalMinor: -1 })).toBe('23514/si_charge_non_negative');
   });
 
   it('refuses a negative credit', async () => {
     const g = await ground();
-    expect(await insertInvoice(g, { chargeMinor: 100, creditMinor: -1, totalMinor: 101 })).toBe(
-      '23514/si_credit_non_negative',
-    );
+    expect(await insertInvoice(g, { chargeMinor: 100, creditMinor: -1, totalMinor: 101 })).toBe('23514/si_credit_non_negative');
   });
 
   it('refuses a currency that is not three upper-case letters, on the invoice', async () => {
@@ -349,9 +340,7 @@ describe('the invoice CHECKs, each provoked on its own', () => {
     // This case is the witness for the MASKING, which is what the lane can
     // actually observe; the red proof M39 is the witness for the masked
     // constraint itself, on a scratch copy with the bound dropped.
-    expect(await insertInvoice(g, { chargeMinor: 0, creditMinor: 1, totalMinor: -1 })).toBe(
-      '23514/si_credit_within_charge',
-    );
+    expect(await insertInvoice(g, { chargeMinor: 0, creditMinor: 1, totalMinor: -1 })).toBe('23514/si_credit_within_charge');
   });
 });
 
@@ -379,13 +368,9 @@ describe('the canonical currency set is a key, not a shape', () => {
     // decimal: JOD has three. A `/ 100` anywhere would be wrong for it,
     // and `test/currency-is-canonical.test.ts` scans `src/` for exactly
     // that. Here the fact is read from the table, where it belongs.
-    const r = await owner.query<{ code: string; minor_units: number }>(
-      `SELECT code, minor_units FROM ${borrowedSchema()}.currencies ORDER BY code`,
-    );
+    const r = await owner.query<{ code: string; minor_units: number }>(`SELECT code, minor_units FROM ${borrowedSchema()}.currencies ORDER BY code`);
     expect(r.rows.length, 'the canonical currency fixture is empty').toBe(7);
-    expect(r.rows.filter((row) => row.minor_units !== 2).map((row) => `${row.code}=${row.minor_units}`)).toStrictEqual([
-      'JOD=3',
-    ]);
+    expect(r.rows.filter((row) => row.minor_units !== 2).map((row) => `${row.code}=${row.minor_units}`)).toStrictEqual(['JOD=3']);
   });
 });
 
@@ -423,7 +408,10 @@ describe('the subscription state machine is not this slice to move', () => {
           AND NOT t.tgisinternal AND fn.nspname = 'p5scratch'`,
       [borrowedSchema()],
     );
-    expect(trgs.rows.map((row) => row.tgname), 'a trigger of this schema sits on the entitlement record').toStrictEqual([]);
+    expect(
+      trgs.rows.map((row) => row.tgname),
+      'a trigger of this schema sits on the entitlement record',
+    ).toStrictEqual([]);
     // And the probe is not vacuous: the same question about a relation this
     // schema DOES maintain finds its maintainer.
     const live = await owner.query<{ proname: string }>(
@@ -450,19 +438,11 @@ describe('the catalogue, not the file, decides which constraints exist', () => {
   // everything else about them; witnessing those is not Phase 5's job, and
   // they now live in `credit-ledger-fixture.sql` so the two sets cannot be
   // confused.
-  const P5_RELATIONS = [
-    'platform_credit_adjustments',
-    'platform_credit_grant_remainders',
-    'subscription_invoices',
-    'subscription_charge_attempts',
-  ] as const;
+  const P5_RELATIONS = ['platform_credit_adjustments', 'platform_credit_grant_remainders', 'subscription_invoices', 'subscription_charge_attempts'] as const;
 
   /** Constraints no case can provoke alone, with the defence that masks each. */
   const MASKED = new Map<string, string>([
-    [
-      'si_total_non_negative',
-      'masked by si_credit_within_charge; see the header of this file and P5-CHALLENGE-RESPONSE-2597219.md §5.3',
-    ],
+    ['si_total_non_negative', 'masked by si_credit_within_charge; see the header of this file and P5-CHALLENGE-RESPONSE-2597219.md §5.3'],
   ]);
 
   it('finds every CHECK on the requested relations named by a case, anonymous ones included', async () => {

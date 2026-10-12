@@ -423,9 +423,6 @@ describe('an unresolved debit is resolved first, whatever surrounds it', () => {
   });
 
   it('an unknown that is not last is still refused, not reconciled', () => {
-    expectRefusal(
-      () => decide([at(PERIOD_END, 'unknown'), at('2026-04-02T00:00:00.000Z', 'failed')], 'active'),
-      'billing.collection_awaiting_reconciliation',
-    );
+    expectRefusal(() => decide([at(PERIOD_END, 'unknown'), at('2026-04-02T00:00:00.000Z', 'failed')], 'active'), 'billing.collection_awaiting_reconciliation');
   });
 });

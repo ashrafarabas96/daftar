@@ -169,6 +169,44 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, public, pg_temp A
 DECLARE
   hit integer;
 BEGIN
+  -- ROUND 21, THE CHALLENGER'S B-2, A FAIL-OPEN I HAD ARGUED WAS IMPOSSIBLE.
+  --
+  -- Until this round the only advisory key on this path was taken by
+  -- `pca_chronology()`, a SIBLING constraint trigger on the same table, and
+  -- that arrangement had two defects I had written down as safe:
+  --
+  --   * it relied on `pca_chronology_trg` firing BEFORE
+  --     `pca_maintain_remainder_trg`, which is true only because PostgreSQL
+  --     fires same-event triggers in NAME order and `c` sorts before `m`;
+  --   * both were `DEFERRABLE INITIALLY IMMEDIATE`, and `SET CONSTRAINTS …
+  --     DEFERRED` needs NO privilege, so the application role could switch
+  --     the key off in one statement.
+  --
+  -- Measured by me as `p5_app` before fixing it (PG 16.15, fixture lane):
+  -- with the chronology trigger deferred the consumption INSERT succeeded
+  -- with `advisory_locks_held = 0`, where the shipped path shows 1; and two
+  -- application-role writers consuming two grants in opposite order
+  -- deadlocked (`40P01`, "while updating tuple in relation
+  -- platform_credit_grant_remainders"), while the same pair in FIFO order
+  -- did not. So the remainder row was decremented with no key held, by the
+  -- role production uses.
+  --
+  -- THE REMEDY IS THAT THIS WRITER TAKES THE KEY ITSELF. An advisory xact
+  -- lock is re-entrant, so a caller that already holds it — the finalization
+  -- path, or `lock_grants_in_order` — pays nothing, and this routine no
+  -- longer depends on a sibling trigger that someone else can defer, nor on
+  -- the alphabet. The two defence triggers are also NOT DEFERRABLE now, so
+  -- the deferral is refused BY NAME rather than silently honoured; each
+  -- defence is shown to stand alone by a pair-drop
+  -- (`P5-CHECKPOINT.md` §3, M67/M68/M69).
+  --
+  -- ONE THING THIS DOES NOT DO, stated because the review asked for it: it
+  -- does not lock several grant rows in a deterministic order, because a
+  -- `FOR EACH ROW` trigger sees exactly one row. The order in which several
+  -- consumptions take their remainder rows is the CALLER's, and the key
+  -- above is what makes that order unable to produce a cycle.
+  PERFORM pg_advisory_xact_lock(hashtext('p5scratch:' || NEW.business_id::text));
+
   IF NEW.kind = 'grant' THEN
     INSERT INTO p5scratch.platform_credit_grant_remainders
       (tenant_id, business_id, currency, grant_id, granted_minor, remaining_minor)
@@ -190,9 +228,15 @@ BEGIN
 END;
 $fn$;
 
+-- NOT DEFERRABLE, round 21: a defence the caller can postpone is a defence
+-- the caller can remove, and `SET CONSTRAINTS … DEFERRED` costs no
+-- privilege. The invariant that must stay deferred is the agreement check
+-- (`pca_credit_agrees_trg`), which is DEFERRABLE INITIALLY DEFERRED on
+-- purpose because it compares rows written in one transaction. This one has
+-- nothing to wait for.
 CREATE CONSTRAINT TRIGGER pca_maintain_remainder_trg
   AFTER INSERT ON p5scratch.platform_credit_adjustments
-  DEFERRABLE INITIALLY IMMEDIATE
+  NOT DEFERRABLE
   FOR EACH ROW EXECUTE FUNCTION p5scratch.pca_maintain_remainder();
 
 -- ── invariant (3): append-only, by the database ──────────────────────
@@ -281,9 +325,12 @@ BEGIN
 END;
 $fn$;
 
+-- NOT DEFERRABLE, round 21, for the same reason: this trigger carries the
+-- chronology refusal AND (before this round, exclusively) the advisory key,
+-- and the application role could defer both away without any privilege.
 CREATE CONSTRAINT TRIGGER pca_chronology_trg
   AFTER INSERT ON p5scratch.platform_credit_adjustments
-  DEFERRABLE INITIALLY IMMEDIATE
+  NOT DEFERRABLE
   FOR EACH ROW EXECUTE FUNCTION p5scratch.pca_chronology();
 
 -- ── invariant (5): RLS ENABLE + FORCE, deny by default ──────────────

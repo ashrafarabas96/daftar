@@ -219,7 +219,10 @@ describe('the constraint — the requested ledger cannot be overdrawn, even with
          VALUES ($1,$2,$3,'consumption',501,'USD',$4,'inv-raw','hand-written',$5,$6)`,
         [uuid(), s.tenantId, s.businessId, T1, grant, uuid()],
       )
-      .then(() => '', (e: unknown) => refusedBy(e));
+      .then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
     expect(attempt).toBe('23514/pcgr_never_overdrawn');
   });
 });
@@ -509,7 +512,10 @@ describe('FIFO is also the deadlock avoidance', () => {
            VALUES ($1,$2,$3,'consumption',100,'USD',$4,'inv-A','row-by-row allocation',$5,$6)`,
           [uuid(), s.tenantId, s.businessId, T2, newer, invA],
         )
-        .then(() => '', (e: unknown) => refusedBy(e));
+        .then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        );
       expect(await aSecond, 'A could not finish its own allocation while holding the lock').toBe('');
       expect(aPid).toBeGreaterThan(0);
 
@@ -525,7 +531,10 @@ describe('FIFO is also the deadlock avoidance', () => {
            VALUES ($1,$2,$3,'consumption',100,'USD',$4,'inv-B','row-by-row allocation',$5,$6)`,
           [uuid(), s.tenantId, s.businessId, T2, older, invB],
         )
-        .then(() => '', (e: unknown) => refusedBy(e));
+        .then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        );
 
       // 40P01 is `deadlock_detected`, and its ABSENCE is the assertion. B
       // wrote the same two grants in the reverse of the pinned order and was
@@ -727,12 +736,14 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
     const app = await connect(appUrl());
     try {
       await setRequestContext(app, s, 'session');
-      const upd = await app
-        .query(`UPDATE p5scratch.platform_credit_adjustments SET reason = 'x' WHERE business_id = $1`, [s.businessId])
-        .then(() => '', (e: unknown) => refusedBy(e));
-      const del = await app
-        .query(`DELETE FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`, [s.businessId])
-        .then(() => '', (e: unknown) => refusedBy(e));
+      const upd = await app.query(`UPDATE p5scratch.platform_credit_adjustments SET reason = 'x' WHERE business_id = $1`, [s.businessId]).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
+      const del = await app.query(`DELETE FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`, [s.businessId]).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       // 42501 is insufficient_privilege: the role has no UPDATE or DELETE
       // at all, so the append-only trigger is the SECOND line and not the
       // only one.
@@ -746,9 +757,10 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
   it('the append-only trigger refuses the owner too, so a privilege grant alone cannot reopen history', async () => {
     const s = await freshScope('p5scratch');
     await insertGrant(owner, 'p5scratch', s, 100n, T0);
-    const upd = await owner
-      .query(`UPDATE p5scratch.platform_credit_adjustments SET reason = 'x' WHERE business_id = $1`, [s.businessId])
-      .then(() => '', (e: unknown) => refusedBy(e));
+    const upd = await owner.query(`UPDATE p5scratch.platform_credit_adjustments SET reason = 'x' WHERE business_id = $1`, [s.businessId]).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
     expect(upd).toBe('23000/pca_append_only');
   });
 
@@ -761,10 +773,9 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
     const app = await connect(appUrl());
     try {
       await setRequestContext(app, mine, 'session');
-      const seen = await app.query<{ n: string }>(
-        `SELECT count(*)::text AS n FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`,
-        [theirs.businessId],
-      );
+      const seen = await app.query<{ n: string }>(`SELECT count(*)::text AS n FROM p5scratch.platform_credit_adjustments WHERE business_id = $1`, [
+        theirs.businessId,
+      ]);
       expect(seen.rows[0]?.n).toBe('0');
 
       const wrote = await app
@@ -774,7 +785,10 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
            VALUES ($1,$2,$3,'grant',50,'USD',$4,'cross','cross-business write')`,
           [uuid(), theirs.tenantId, theirs.businessId, T2],
         )
-        .then(() => '', (e: unknown) => refusedBy(e));
+        .then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        );
       // 42501 — the RLS WITH CHECK refuses it. The role is NOBYPASSRLS
       // and not a superuser, so this is a real refusal and not a
       // tautology.
@@ -787,9 +801,10 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
   it('the application role has no privilege at all on the grant remainders', async () => {
     const app = await connect(appUrl());
     try {
-      const read = await app
-        .query(`SELECT 1 FROM p5scratch.platform_credit_grant_remainders LIMIT 1`)
-        .then(() => '', (e: unknown) => refusedBy(e));
+      const read = await app.query(`SELECT 1 FROM p5scratch.platform_credit_grant_remainders LIMIT 1`).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       expect(read).toBe('42501');
     } finally {
       await app.end();
@@ -808,7 +823,10 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
          VALUES ($1,$2,$3,'consumption',50,'USD',$4,'inv','draws another business grant',$5,$6)`,
         [uuid(), mine.tenantId, mine.businessId, T1, theirGrant, uuid()],
       )
-      .then(() => '', (e: unknown) => refusedBy(e));
+      .then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
     expect(cross).toBe('23503/pca_grant_same_owner_currency_kind');
 
     const myGrant = await insertGrant(owner, 'p5scratch', mine, 100n, T0);
@@ -820,7 +838,10 @@ describe('append-only and tenant isolation, as a non-superuser', () => {
          VALUES ($1,$2,$3,'consumption',50,'EUR',$4,'inv','draws a USD grant in EUR',$5,$6)`,
         [uuid(), mine.tenantId, mine.businessId, T1, myGrant, uuid()],
       )
-      .then(() => '', (e: unknown) => refusedBy(e));
+      .then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
     expect(otherCurrency).toBe('23503/pca_grant_same_owner_currency_kind');
   });
 });
@@ -877,8 +898,14 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
       // barrier's "never waited on a lock" — which says nothing about why.
       let bSettled: string | null = null;
       const bInsert = finalizeInvoice(b, 'p5scratch', s, invB, 1000n, 'inv-B-app', T1, { withLock: false }).then(
-        (v) => { bSettled = ''; return v; },
-        (e: unknown) => { bSettled = refusedBy(e) || String(e); throw e; },
+        (v) => {
+          bSettled = '';
+          return v;
+        },
+        (e: unknown) => {
+          bSettled = refusedBy(e) || String(e);
+          throw e;
+        },
       );
       bInsert.catch(() => undefined);
       // The barrier is an OBSERVED lock wait on a named backend. If B never
@@ -887,11 +914,7 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
       try {
         await waitUntilBlocked(observer, bPid, 'second finalization, as the application role');
       } catch (barrier) {
-        throw new Error(
-          bSettled === null
-            ? `${String(barrier)}; and B had not settled either`
-            : `B did not block, it settled first with: ${bSettled}`,
-        );
+        throw new Error(bSettled === null ? `${String(barrier)}; and B had not settled either` : `B did not block, it settled first with: ${bSettled}`);
       }
 
       await a.query('COMMIT');
@@ -935,23 +958,28 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
       const bAttempt = finalizeInvoice(b, 'p5scratch', s, invoiceId, 400n, 'inv-dup-app-2', T1, {
         withLock: false,
       }).then(
-        (v) => { bSettled = ''; return v; },
-        (e: unknown) => { bSettled = refusedBy(e) || String(e); throw e; },
+        (v) => {
+          bSettled = '';
+          return v;
+        },
+        (e: unknown) => {
+          bSettled = refusedBy(e) || String(e);
+          throw e;
+        },
       );
       bAttempt.catch(() => undefined);
       try {
         await waitUntilBlocked(observer, bPid, 'duplicate finalization, as the application role');
       } catch (barrier) {
-        throw new Error(
-          bSettled === null
-            ? `${String(barrier)}; and B had not settled either`
-            : `B did not block, it settled first with: ${bSettled}`,
-        );
+        throw new Error(bSettled === null ? `${String(barrier)}; and B had not settled either` : `B did not block, it settled first with: ${bSettled}`);
       }
 
       await a.query('COMMIT');
 
-      const second = await bAttempt.then(() => '', (e: unknown) => refusedBy(e));
+      const second = await bAttempt.then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       // By NAME, not by "some error happened": the pure law bans the bare
       // form and it caught this line on the first run of this round. The
       // owner-lane case for the same race (line 407) names the same index,
@@ -984,9 +1012,7 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
       // admits it. That is a masking pair in the F-11 sense — two defences
       // for one scenario — though not an invisible one, since the
       // one-at-a-time plant above exposed the inner one immediately.
-      expect(second, 'the same invoice was finalized twice by two application sessions').toBe(
-        '23000/si_transition_allowed',
-      );
+      expect(second, 'the same invoice was finalized twice by two application sessions').toBe('23000/si_transition_allowed');
       await b.query('ROLLBACK');
     } finally {
       await a.end();
@@ -1066,18 +1092,20 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
         withLock: false,
         withGrantLocks: true,
       }).then(
-        (v) => { bSettled = ''; return v; },
-        (e: unknown) => { bSettled = refusedBy(e) || String(e); throw e; },
+        (v) => {
+          bSettled = '';
+          return v;
+        },
+        (e: unknown) => {
+          bSettled = refusedBy(e) || String(e);
+          throw e;
+        },
       );
       bRun.catch(() => undefined);
       try {
         await waitUntilBlocked(observer, bPid, 'second allocator, as the application role');
       } catch (barrier) {
-        throw new Error(
-          bSettled === null
-            ? `${String(barrier)}; and B had not settled either`
-            : `B did not block, it settled first with: ${bSettled}`,
-        );
+        throw new Error(bSettled === null ? `${String(barrier)}; and B had not settled either` : `B did not block, it settled first with: ${bSettled}`);
       }
 
       // WHICH lock held B. `advisory` is the lock the F-10 invariant says
@@ -1085,10 +1113,7 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
       // held by a remainder TUPLE lock instead and this assertion would
       // fail, which is how the case notices that the thing it is describing
       // has changed underneath it.
-      const held = await observer.query<{ locktype: string }>(
-        `SELECT locktype FROM pg_locks WHERE pid = $1 AND NOT granted`,
-        [bPid],
-      );
+      const held = await observer.query<{ locktype: string }>(`SELECT locktype FROM pg_locks WHERE pid = $1 AND NOT granted`, [bPid]);
       expect(
         held.rows.map((r) => r.locktype),
         'B was not waiting on the per-business advisory key, so the F-10 invariant no longer holds on this path',
@@ -1097,7 +1122,10 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
       await a.query('COMMIT');
 
       // No deadlock, and B is not refused: it allocates what A left.
-      const bOutcome = await bRun.then(() => '', (e: unknown) => refusedBy(e));
+      const bOutcome = await bRun.then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       expect(bOutcome, 'the second application-role allocator deadlocked or was refused').toBe('');
       await b.query('COMMIT');
     } finally {
@@ -1106,5 +1134,200 @@ describe('GAP 1 — the same races, run by the APPLICATION role instead of the p
     }
 
     expect(await consumedMinor(owner, 'p5scratch', s)).toBe(600n);
+  });
+});
+
+describe("B-2 — the advisory key is the writer's own, and the caller cannot defer it away", () => {
+  // ROUND 21, THE INDEPENDENT CHALLENGER'S B-2, A FAIL-OPEN. Round 19 of this
+  // pack concluded that the deterministic grant order was "unmeasurable
+  // without changing the schema" because "no path exists here" that reaches
+  // remainder rows without the per-business advisory key. That was false, and
+  // the path needs no DDL change and no privilege:
+  //
+  //   SET CONSTRAINTS p5scratch.pca_chronology_trg DEFERRED;
+  //
+  // `pca_chronology()` held the only key on that path; `pca_maintain_remainder()`
+  // held none of its own and ran second only because PostgreSQL fires
+  // same-event triggers in NAME order. Both were DEFERRABLE INITIALLY
+  // IMMEDIATE, so one unprivileged statement removed the key and left the
+  // remainder decrement unserialised. I reproduced it as `p5_app` in four
+  // arms before changing anything (PG 16.15):
+  //
+  //   deferred + inverted grant order      -> 40P01 deadlock, adv = 0
+  //   deferred + FIFO order                -> no deadlock,    adv = 0
+  //   shipped  + inverted order            -> no deadlock,    adv = 1
+  //   deferred + via lock_grants_in_order  -> no deadlock,    adv = 1
+  //
+  // The fourth arm is the one that keeps round 19's narrower claim true: the
+  // key inside `lock_grants_in_order` is a direct `PERFORM`, not a trigger,
+  // so `SET CONSTRAINTS` cannot touch it. What was false was the jump from
+  // "that path always holds the key" to "no path reaches the rows without
+  // it".
+  //
+  // The remedy is structural and is in the DDL: the writer takes the key
+  // itself (re-entrant, so a caller holding it pays nothing), and both
+  // defence triggers are NOT DEFERRABLE. These cases hold both halves.
+  it('refuses the deferral BY NAME, for each defence trigger, to the application role', async () => {
+    const s = await freshScope('p5scratch');
+    const c = await connect(appUrl());
+    try {
+      await c.query('BEGIN');
+      await setRequestContext(c, s, 'transaction');
+      for (const trg of ['pca_chronology_trg', 'pca_maintain_remainder_trg']) {
+        // Each attempt in its own savepoint: the refusal aborts the
+        // subtransaction, and the next attempt needs a live one.
+        await c.query('SAVEPOINT attempt');
+        const refusal = await c.query(`SET CONSTRAINTS p5scratch.${trg} DEFERRED`).then(
+          () => ({ code: '', message: '' }),
+          (e: unknown) => ({
+            code: typeof e === 'object' && e !== null && 'code' in e ? String(e.code) : '',
+            message: typeof e === 'object' && e !== null && 'message' in e ? String(e.message) : '',
+          }),
+        );
+        await c.query('ROLLBACK TO SAVEPOINT attempt');
+        // 42809 is `wrong_object_type`, which is what PostgreSQL answers for
+        // a non-deferrable constraint, and the message names the trigger —
+        // so the refusal identifies the defence, as this slice's law
+        // requires everywhere else.
+        expect({ trg, code: refusal.code }, `${trg} can still be deferred by the application role`).toStrictEqual({
+          trg,
+          code: '42809',
+        });
+        expect(refusal.message).toContain(trg);
+        expect(refusal.message).toContain('not deferrable');
+      }
+      await c.query('ROLLBACK');
+    } finally {
+      await c.end();
+    }
+  });
+
+  it('holds the key inside the writer, so two application sessions taking two grants in OPPOSITE order do not deadlock', async () => {
+    const s = await freshScope('p5scratch');
+    const g1 = await insertGrant(owner, 'p5scratch', s, 300n, T0);
+    const g2 = await insertGrant(owner, 'p5scratch', s, 300n, T1);
+    const invA = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+    const invB = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+
+    const claim = async (c: Client, invoiceId: string): Promise<void> => {
+      await c.query(
+        `UPDATE p5scratch.subscription_invoices
+            SET state = 'open', issued_at = $2, credit_minor = $3, total_minor = $4
+          WHERE id = $1`,
+        [invoiceId, T2, '200', '800'],
+      );
+    };
+    const advisoryHeld = async (c: Client): Promise<number> => {
+      const r = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory'`);
+      return r.rows[0]?.n ?? 0;
+    };
+    const tryDefer = async (c: Client): Promise<string> => {
+      await c.query('SAVEPOINT defer_attempt');
+      const outcome = await c.query('SET CONSTRAINTS p5scratch.pca_chronology_trg DEFERRED').then(
+        () => 'granted',
+        (e: unknown) => (typeof e === 'object' && e !== null && 'code' in e ? `refused:${String(e.code)}` : 'refused'),
+      );
+      if (outcome !== 'granted') await c.query('ROLLBACK TO SAVEPOINT defer_attempt');
+      return outcome;
+    };
+
+    const a = await connect(appUrl());
+    const b = await connect(appUrl());
+    try {
+      for (const c of [a, b] as const) {
+        await c.query('BEGIN');
+        await setRequestContext(c, s, 'transaction');
+        // Both sessions ATTEMPT the attack and carry on either way: refused
+        // on the fixed schema (`42809`), granted on a weakened one. The
+        // assertions are then about what the schema does, not about what the
+        // caller was allowed to ask for.
+        await tryDefer(c);
+      }
+      await claim(a, invA);
+      await claim(b, invB);
+
+      // THE INTERLEAVING IS THE CASE. A takes g1 and stops; B then takes g2
+      // and reaches for g1; A reaches for g2. With no key held that is a
+      // cycle and PostgreSQL kills one side with `40P01` — which is exactly
+      // what I measured by hand before the fix. With the key held by the
+      // writer itself, B cannot even start while A is open, so no cycle can
+      // form. My first version of this case let A finish both grants before
+      // B began, which is the non-race the challenger rejected one round ago;
+      // this one holds A between its two grants.
+      await insertConsumption(a, 'p5scratch', s, g1, 100n, invA, 'inv-order-a1', T2);
+      const advA = await advisoryHeld(a);
+
+      const bPid = await pidOf(b);
+      let bSettled: string | null = null;
+      const bRun = (async () => {
+        await insertConsumption(b, 'p5scratch', s, g2, 100n, invB, 'inv-order-b1', T2);
+        await insertConsumption(b, 'p5scratch', s, g1, 100n, invB, 'inv-order-b2', T2);
+      })().then(
+        () => {
+          bSettled = '';
+        },
+        (e: unknown) => {
+          bSettled = refusedBy(e) || String(e);
+          throw e;
+        },
+      );
+      bRun.catch(() => undefined);
+      try {
+        await waitUntilBlocked(observer, bPid, 'the inverted-order writer, as the application role');
+      } catch (barrier) {
+        throw new Error(bSettled === null ? `${String(barrier)}; and B had not settled either` : `B did not block, it settled first with: ${bSettled}`);
+      }
+
+      // A's second grant, while B is parked. On a weakened schema B holds g2
+      // and wants g1, so this is the half of the cycle that closes it.
+      const aSecond = await insertConsumption(a, 'p5scratch', s, g2, 100n, invA, 'inv-order-a2', T2).then(
+        () => '',
+        (e: unknown) => refusedBy(e) || String(e),
+      );
+      expect(aSecond, 'the first writer was refused or deadlocked while taking its second grant').toBe('');
+      await a.query('COMMIT');
+
+      const bOutcome = await bRun.then(
+        () => '',
+        (e: unknown) => refusedBy(e) || String(e),
+      );
+      expect(bOutcome, 'the inverted-order writer deadlocked or was refused').toBe('');
+      expect({ advA, advB: await advisoryHeld(b) }, 'a writer ran without the per-business advisory key').toStrictEqual({
+        advA: 1,
+        advB: 1,
+      });
+      await b.query('COMMIT');
+    } finally {
+      await a.end();
+      await b.end();
+    }
+
+    expect(await consumedMinor(owner, 'p5scratch', s)).toBe(400n);
+  });
+
+  it('reads both properties out of the live catalogue, not out of the file', async () => {
+    // The DDL text is not the live definition, and the alphabet is not a
+    // guarantee: this law is what stops the key drifting back out of the
+    // writer, or either trigger becoming deferrable again.
+    const triggers = await owner.query<{ tgname: string; deferrable: boolean }>(
+      `SELECT tgname, tgdeferrable AS deferrable
+         FROM pg_trigger
+        WHERE tgrelid = 'p5scratch.platform_credit_adjustments'::regclass
+          AND NOT tgisinternal AND tgname IN ('pca_chronology_trg', 'pca_maintain_remainder_trg')
+        ORDER BY tgname`,
+    );
+    expect(triggers.rows, 'a defence trigger is deferrable, so the caller can switch it off').toStrictEqual([
+      { tgname: 'pca_chronology_trg', deferrable: false },
+      { tgname: 'pca_maintain_remainder_trg', deferrable: false },
+    ]);
+
+    const writer = await owner.query<{ takes_key: boolean }>(
+      `SELECT prosrc LIKE '%pg_advisory_xact_lock%' AS takes_key
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'p5scratch' AND p.proname = 'pca_maintain_remainder'`,
+    );
+    expect(writer.rows, 'the remainder writer no longer takes the advisory key itself, so it depends on a sibling trigger again').toStrictEqual([
+      { takes_key: true },
+    ]);
   });
 });

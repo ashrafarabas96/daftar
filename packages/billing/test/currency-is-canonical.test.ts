@@ -137,9 +137,7 @@ describe('this package assumes no currency precision', () => {
     // broken. This is its non-vacuity witness: the same patterns, on text
     // that does scale, must find it.
     const planted = 'const major = amountMinor / 100n;\nconst back = major * 1000;\n';
-    const found = [
-      ...blankOut(planted).matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g),
-    ].map((m) => m[1]);
+    const found = [...blankOut(planted).matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)].map((m) => m[1]);
     // And the exclusion is narrow: an exponent is not a scale, but a
     // division by a power of ten right after one still is.
     expect([...blankOut('const cap = 10n ** 18n;\n').matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)].length).toBe(0);

@@ -181,13 +181,9 @@ describe('each exported union constant is the set its validator enforces', () =>
   it('BILLING_INTERVALS', () => {
     expect([...BILLING_INTERVALS]).toEqual(['month', 'year']);
     for (const interval of BILLING_INTERVALS) {
-      expect(() =>
-        billingPeriodAt({ anchorAt: '2026-01-01T00:00:00.000Z', interval }, '2026-01-15T00:00:00.000Z'),
-      ).not.toThrow();
+      expect(() => billingPeriodAt({ anchorAt: '2026-01-01T00:00:00.000Z', interval }, '2026-01-15T00:00:00.000Z')).not.toThrow();
     }
-    expect(() =>
-      billingPeriodAt({ anchorAt: '2026-01-01T00:00:00.000Z', interval: 'week' as never }, '2026-01-15T00:00:00.000Z'),
-    ).toThrow();
+    expect(() => billingPeriodAt({ anchorAt: '2026-01-01T00:00:00.000Z', interval: 'week' as never }, '2026-01-15T00:00:00.000Z')).toThrow();
   });
 
   it('DUNNING_OUTCOMES', () => {

@@ -237,7 +237,9 @@ describe('what a lost response costs, measured against the provider', () => {
     const reconcile = decide([attempt(PERIOD_END, 'unknown')], '2026-04-10T00:00:00.000Z');
     let code = 'none';
     try {
-      await provider.charge(collectionRequestFor(requestInput({ decision: reconcile, instrumentRef: 'card_lost', amount: { amountMinor: 1n, currency: 'ILS' } })));
+      await provider.charge(
+        collectionRequestFor(requestInput({ decision: reconcile, instrumentRef: 'card_lost', amount: { amountMinor: 1n, currency: 'ILS' } })),
+      );
     } catch (e) {
       code = e instanceof BillingError ? e.code : 'other';
     }

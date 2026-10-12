@@ -263,8 +263,7 @@ export function decideDunning(input: DunningInput): DunningDecision {
    * would leave the caller to re-derive the state from the same inputs — a
    * second implementation of this rule, in the caller.
    */
-  const targetState: SubscriptionState | null =
-    !dunnable || failures === 0 ? null : asOfMs >= graceEndMs ? DUNNING_SUSPENDED_STATE : DUNNING_GRACE_STATE;
+  const targetState: SubscriptionState | null = !dunnable || failures === 0 ? null : asOfMs >= graceEndMs ? DUNNING_SUSPENDED_STATE : DUNNING_GRACE_STATE;
 
   /**
    * The unknown verdict wins over every scheduled step, including an

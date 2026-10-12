@@ -50,8 +50,7 @@ export const bootstrapUrl = (): string => required('P5_DB_BOOTSTRAP_URL');
 export const borrowedSchema = (): string => process.env['P5_BORROWED_SCHEMA'] ?? 'p5scratch';
 
 /** Which of the two schemas a run measured, for the evidence line. */
-export const schemaUnderTest = (): 'fixture' | 'real' =>
-  process.env['P5_REAL_SCHEMA'] === '1' ? 'real' : 'fixture';
+export const schemaUnderTest = (): 'fixture' | 'real' => (process.env['P5_REAL_SCHEMA'] === '1' ? 'real' : 'fixture');
 
 export async function connect(url: string): Promise<Client> {
   const c = new Client({ connectionString: url });
@@ -163,10 +162,7 @@ export async function pidOf(c: Client): Promise<number> {
  * `pg_read_all_stats` membership, which is more machinery than a barrier over
  * backends this suite itself opened needs.
  */
-async function observe(
-  observer: Client,
-  pid: number,
-): Promise<{ present: boolean; visible: boolean; waiting: boolean }> {
+async function observe(observer: Client, pid: number): Promise<{ present: boolean; visible: boolean; waiting: boolean }> {
   const r = await observer.query<{ present: boolean; visible: boolean; waiting: boolean }>(
     `SELECT true AS present,
             (state IS NOT NULL) AS visible,
@@ -248,9 +244,7 @@ export function sqlstate(e: unknown): string {
  * neighbour.
  */
 export function constraintOf(e: unknown): string {
-  return typeof e === 'object' && e !== null && 'constraint' in e && typeof e.constraint === 'string'
-    ? e.constraint
-    : '';
+  return typeof e === 'object' && e !== null && 'constraint' in e && typeof e.constraint === 'string' ? e.constraint : '';
 }
 
 /**

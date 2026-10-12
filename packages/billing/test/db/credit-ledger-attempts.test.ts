@@ -49,13 +49,7 @@ interface AttemptOverrides {
  * One attempt row, named the way `src/collection.ts` names it — unless the
  * case is about a key that is named some other way.
  */
-function attemptInsert(
-  c: Client,
-  s: Scope,
-  invoiceId: string,
-  attemptNo: number,
-  o: AttemptOverrides = {},
-): Promise<unknown> {
+function attemptInsert(c: Client, s: Scope, invoiceId: string, attemptNo: number, o: AttemptOverrides = {}): Promise<unknown> {
   const outcome = o.outcome ?? 'unknown';
   const code = o.code === undefined ? (outcome === 'succeeded' || outcome === 'unknown' ? null : 'fake_card_declined') : o.code;
   return c.query(
@@ -97,10 +91,9 @@ describe('the key must name the attempt it belongs to', () => {
     const s = await freshScope();
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     await attemptInsert(owner, s, invoiceId, 1, { outcome: 'failed' });
-    const r = await owner.query<{ idempotency_key: string }>(
-      `SELECT idempotency_key FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`,
-      [invoiceId],
-    );
+    const r = await owner.query<{ idempotency_key: string }>(`SELECT idempotency_key FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [
+      invoiceId,
+    ]);
     expect(r.rows[0]?.idempotency_key).toBe(collectionAttemptKey({ invoiceId, attemptNo: 1 }));
   });
 
@@ -109,7 +102,10 @@ describe('the key must name the attempt it belongs to', () => {
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     // The defect this round is about, in its recordable form: a caller that
     // mints a UUID per call cannot write it down here at all.
-    const code = await attemptInsert(owner, s, invoiceId, 1, { key: uuid(), outcome: 'failed' }).then(() => '', (e: unknown) => refusedBy(e));
+    const code = await attemptInsert(owner, s, invoiceId, 1, { key: uuid(), outcome: 'failed' }).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
     expect(code).toBe('23514/sca_key_names_attempt');
   });
 
@@ -119,7 +115,10 @@ describe('the key must name the attempt it belongs to', () => {
     const code = await attemptInsert(owner, s, invoiceId, 2, {
       key: collectionAttemptKey({ invoiceId, attemptNo: 1 }),
       outcome: 'failed',
-    }).then(() => '', (e: unknown) => refusedBy(e));
+    }).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
     expect(code).toBe('23514/sca_key_names_attempt');
   });
 
@@ -131,7 +130,10 @@ describe('the key must name the attempt it belongs to', () => {
     const code = await attemptInsert(owner, s, second, 1, {
       key: collectionAttemptKey({ invoiceId: first, attemptNo: 1 }),
       outcome: 'failed',
-    }).then(() => '', (e: unknown) => refusedBy(e));
+    }).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
     // Refused by the key's own uniqueness or by the naming CHECK — the key
     // belongs to the other invoice on both counts.
     expect(['23505/sca_key_uq', '23514/sca_key_names_attempt']).toContain(code);
@@ -144,7 +146,10 @@ describe('no attempt while one has no verdict', () => {
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     await attemptInsert(owner, s, invoiceId, 1);
 
-    const blocked = await failed(owner, s, invoiceId, 2).then(() => '', (e: unknown) => refusedBy(e));
+    const blocked = await failed(owner, s, invoiceId, 2).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
     expect(blocked, 'the schedule advanced past an attempt with no verdict').toBe('23000/sca_no_attempt_while_unresolved');
 
     // Reconciliation: the verdict the provider always had.
@@ -155,10 +160,7 @@ describe('no attempt while one has no verdict', () => {
       [invoiceId],
     );
     await failed(owner, s, invoiceId, 2);
-    const r = await owner.query<{ n: string }>(
-      `SELECT count(*)::text AS n FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`,
-      [invoiceId],
-    );
+    const r = await owner.query<{ n: string }>(`SELECT count(*)::text AS n FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [invoiceId]);
     expect(r.rows[0]?.n).toBe('2');
   });
 
@@ -167,7 +169,10 @@ describe('no attempt while one has no verdict', () => {
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     await attemptInsert(owner, s, invoiceId, 1);
     for (const attemptNo of [1, 2, 9]) {
-      const code = await failed(owner, s, invoiceId, attemptNo).then(() => '', (e: unknown) => refusedBy(e));
+      const code = await failed(owner, s, invoiceId, attemptNo).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       // ROUND 14, the coordinator's diff-review R-4. This asserted
       // `.not.toBe('')` — any error at all, a lost connection included —
       // which is the very defect F-11 closed everywhere else, and the F-11
@@ -176,9 +181,7 @@ describe('no attempt while one has no verdict', () => {
       // shape too. Measured: all three ordinals are refused by the same
       // named guard, because the defence is "no new attempt while one is
       // unresolved", not "not this ordinal".
-      expect(code, `an attempt numbered ${attemptNo} was recorded while attempt 1 had no verdict`).toBe(
-        '23000/sca_no_attempt_while_unresolved',
-      );
+      expect(code, `an attempt numbered ${attemptNo} was recorded while attempt 1 had no verdict`).toBe('23000/sca_no_attempt_while_unresolved');
     }
   });
 
@@ -202,7 +205,10 @@ describe('no attempt while one has no verdict', () => {
       // 3 — because then nothing else in the schema objects, and the
       // merchant ends up with two outstanding requests at the provider.
       await attemptInsert(a, s, invoiceId, 2);
-      const bRun = attemptInsert(b, s, invoiceId, 3).then(() => '', (e: unknown) => refusedBy(e));
+      const bRun = attemptInsert(b, s, invoiceId, 3).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       await waitUntilBlocked(observer, bPid, 'a second unresolved attempt');
       await a.query('COMMIT');
       expect(await bRun, 'two attempts awaiting a verdict for one invoice').toBe('23505/sca_one_unresolved_per_invoice');
@@ -224,7 +230,10 @@ describe('an invoice is collected at most once', () => {
     const s = await freshScope();
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     await attemptInsert(owner, s, invoiceId, 1, { outcome: 'succeeded' });
-    const code = await attemptInsert(owner, s, invoiceId, 2, { outcome: 'succeeded' }).then(() => '', (e: unknown) => refusedBy(e));
+    const code = await attemptInsert(owner, s, invoiceId, 2, { outcome: 'succeeded' }).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
     expect(code).toBe('23505/sca_one_success_per_invoice');
   });
 
@@ -235,7 +244,10 @@ describe('an invoice is collected at most once', () => {
     await attemptInsert(owner, s, invoiceId, 2, { outcome: 'failed' });
     const code = await owner
       .query(`UPDATE p5scratch.subscription_charge_attempts SET outcome = 'succeeded' WHERE invoice_id = $1 AND attempt_no = 2`, [invoiceId])
-      .then(() => '', (e: unknown) => refusedBy(e));
+      .then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
     // Refused because a settled attempt is immutable, before the unique
     // index is even reached. Both would refuse it; the trigger is first.
     expect(code).toBe('23000/sca_verdict_immutable');
@@ -247,10 +259,9 @@ describe('reconciliation is the only write, and only once', () => {
     const s = await freshScope();
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     await attemptInsert(owner, s, invoiceId, 1);
-    await owner.query(
-      `UPDATE p5scratch.subscription_charge_attempts SET outcome = 'succeeded', provider_ref = 'fake_000042' WHERE invoice_id = $1`,
-      [invoiceId],
-    );
+    await owner.query(`UPDATE p5scratch.subscription_charge_attempts SET outcome = 'succeeded', provider_ref = 'fake_000042' WHERE invoice_id = $1`, [
+      invoiceId,
+    ]);
     const r = await owner.query<{ outcome: string; provider_ref: string }>(
       `SELECT outcome, provider_ref FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`,
       [invoiceId],
@@ -262,16 +273,14 @@ describe('reconciliation is the only write, and only once', () => {
     const s = await freshScope();
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     await attemptInsert(owner, s, invoiceId, 1);
-    const mutations = [
-      `idempotency_key = idempotency_key || 'x'`,
-      `amount_minor = amount_minor + 1`,
-      `attempt_no = attempt_no + 1`,
-      `attempted_at = now()`,
-    ];
+    const mutations = [`idempotency_key = idempotency_key || 'x'`, `amount_minor = amount_minor + 1`, `attempt_no = attempt_no + 1`, `attempted_at = now()`];
     for (const mutation of mutations) {
       const code = await owner
         .query(`UPDATE p5scratch.subscription_charge_attempts SET outcome = 'failed', provider_code = 'x', ${mutation} WHERE invoice_id = $1`, [invoiceId])
-        .then(() => '', (e: unknown) => refusedBy(e));
+        .then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        );
       expect(code, `reconciliation accepted: ${mutation}`).toBe('23000/sca_reconciliation_fields_only');
     }
   });
@@ -282,11 +291,15 @@ describe('reconciliation is the only write, and only once', () => {
     await attemptInsert(owner, s, invoiceId, 1, { outcome: 'failed' });
     const back = await owner
       .query(`UPDATE p5scratch.subscription_charge_attempts SET outcome = 'unknown', provider_code = NULL WHERE invoice_id = $1`, [invoiceId])
-      .then(() => '', (e: unknown) => refusedBy(e));
+      .then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
     expect(back).toBe('23000/sca_verdict_immutable');
-    const deleted = await owner
-      .query(`DELETE FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [invoiceId])
-      .then(() => '', (e: unknown) => refusedBy(e));
+    const deleted = await owner.query(`DELETE FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [invoiceId]).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
     expect(deleted).toBe('23000/sca_never_deleted');
   });
 
@@ -298,7 +311,10 @@ describe('reconciliation is the only write, and only once', () => {
     // has none to report.
     await attemptInsert(owner, s, invoiceId, 1, { outcome: 'unknown', code: null });
     const second = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
-    const code = await attemptInsert(owner, s, second, 1, { outcome: 'failed', code: null }).then(() => '', (e: unknown) => refusedBy(e));
+    const code = await attemptInsert(owner, s, second, 1, { outcome: 'failed', code: null }).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
     expect(code).toBe('23514/sca_code_present');
   });
 });
@@ -311,12 +327,15 @@ describe('the application role can do exactly this and no more', () => {
     try {
       await setRequestContext(app, s, 'session');
       await attemptInsert(app, s, invoiceId, 1);
-      await app.query(`UPDATE p5scratch.subscription_charge_attempts SET outcome = 'declined', provider_code = 'fake_card_declined' WHERE invoice_id = $1`, [invoiceId]);
+      await app.query(`UPDATE p5scratch.subscription_charge_attempts SET outcome = 'declined', provider_code = 'fake_card_declined' WHERE invoice_id = $1`, [
+        invoiceId,
+      ]);
       const r = await app.query<{ outcome: string }>(`SELECT outcome FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [invoiceId]);
       expect(r.rows[0]?.outcome).toBe('declined');
-      const deleted = await app
-        .query(`DELETE FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [invoiceId])
-        .then(() => '', (e: unknown) => refusedBy(e));
+      const deleted = await app.query(`DELETE FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [invoiceId]).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       // ROUND 10, F-11: the measured answer is the PRIVILEGE refusal, not
       // the trigger's. The application role has no DELETE on the relation,
       // so `42501` is reported before `sca_never_deleted` can be reached —
@@ -337,9 +356,14 @@ describe('the application role can do exactly this and no more', () => {
     const app = await connect(appUrl());
     try {
       await setRequestContext(app, mine, 'session');
-      const seen = await app.query<{ n: string }>(`SELECT count(*)::text AS n FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [theirInvoice]);
+      const seen = await app.query<{ n: string }>(`SELECT count(*)::text AS n FROM p5scratch.subscription_charge_attempts WHERE invoice_id = $1`, [
+        theirInvoice,
+      ]);
       expect(seen.rows[0]?.n, 'another business’s attempt was visible').toBe('0');
-      const wrote = await attemptInsert(app, theirs, theirInvoice, 2).then(() => '', (e: unknown) => refusedBy(e));
+      const wrote = await attemptInsert(app, theirs, theirInvoice, 2).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       // 42501 is the RLS WITH CHECK refusal: the row names a business the
       // session is not scoped to, so the policy rejects it before any
       // uniqueness or trigger is reached.

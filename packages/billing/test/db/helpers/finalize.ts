@@ -70,13 +70,7 @@ export async function readLedger(c: Client, schema: string, s: Scope): Promise<r
  * business's base currency is an OWNER question
  * (`P5-MIGRATION-PATCH-REQUEST.md` §13), not something a fixture decides.
  */
-export async function createBusiness(
-  c: Client,
-  schema: string,
-  tenantId: string,
-  businessId: string,
-  baseCurrency = 'USD',
-): Promise<void> {
+export async function createBusiness(c: Client, schema: string, tenantId: string, businessId: string, baseCurrency = 'USD'): Promise<void> {
   // ROUND 12: the column list is DISCOVERED, not written down, because this
   // same helper now creates a business in the FIXTURE copy and in the REAL
   // `businesses`, and the real one has thirteen columns to the fixture's
@@ -121,14 +115,7 @@ export async function createBusiness(
   );
 }
 
-export async function insertGrant(
-  c: Client,
-  schema: string,
-  s: Scope,
-  amountMinor: bigint,
-  occurredAt: string,
-  ref = 'plan-change',
-): Promise<string> {
+export async function insertGrant(c: Client, schema: string, s: Scope, amountMinor: bigint, occurredAt: string, ref = 'plan-change'): Promise<string> {
   const id = uuid();
   await c.query(
     `INSERT INTO ${schema}.platform_credit_adjustments
@@ -159,13 +146,7 @@ export interface FinalizationPlan {
  * `total_minor` is the whole total, and the deferred agreement trigger
  * checks that rather than assuming it.
  */
-export async function createDraftInvoice(
-  c: Client,
-  schema: string,
-  s: Scope,
-  totalMinor: bigint,
-  periodIndex?: number,
-): Promise<string> {
+export async function createDraftInvoice(c: Client, schema: string, s: Scope, totalMinor: bigint, periodIndex?: number): Promise<string> {
   const id = uuid();
   // `charge_minor` and `total_minor` are the same figure on a draft, and
   // `credit_minor` is 0: a draft claims no credit, and the deferred

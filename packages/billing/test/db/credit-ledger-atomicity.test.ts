@@ -66,9 +66,7 @@ async function invoiceRow(c: Client, id: string): Promise<{ state: string; credi
     [id],
   );
   const row = r.rows[0];
-  return row === undefined
-    ? null
-    : { state: row.state, credit: BigInt(row.credit_minor), payable: BigInt(row.total_minor) };
+  return row === undefined ? null : { state: row.state, credit: BigInt(row.credit_minor), payable: BigInt(row.total_minor) };
 }
 
 beforeAll(async () => {
@@ -82,7 +80,7 @@ afterAll(async () => {
 });
 
 describe('the deterministic grant lock order', () => {
-  it('locks the remainder rows in the ledger order, and the PLAN of the FUNCTION\'s own body says so', async () => {
+  it("locks the remainder rows in the ledger order, and the PLAN of the FUNCTION's own body says so", async () => {
     const s = await freshScope();
     await insertGrant(owner, 'p5scratch', s, 100n, T0, 'grant-older');
     await insertGrant(owner, 'p5scratch', s, 100n, T1, 'grant-newer');
@@ -101,9 +99,7 @@ describe('the deterministic grant lock order', () => {
     // defect shape this project has hit repeatedly — a law that names its
     // premise and does not read it — and it is why this reads the
     // definition instead.
-    const src = await owner.query<{ prosrc: string }>(
-      `SELECT prosrc FROM pg_proc WHERE proname = 'lock_grants_in_order'`,
-    );
+    const src = await owner.query<{ prosrc: string }>(`SELECT prosrc FROM pg_proc WHERE proname = 'lock_grants_in_order'`);
     const body = src.rows[0]?.prosrc;
     expect(typeof body).toBe('string');
     const withAt = (body ?? '').indexOf('WITH ordered AS');
@@ -119,11 +115,7 @@ describe('the deterministic grant lock order', () => {
     expect(extracted).toMatch(/FOR UPDATE OF r/);
 
     await owner.query('BEGIN');
-    const plan = await owner.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${extracted}`, [
-      s.tenantId,
-      s.businessId,
-      s.currency,
-    ]);
+    const plan = await owner.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${extracted}`, [s.tenantId, s.businessId, s.currency]);
     await owner.query('ROLLBACK');
 
     const lines = plan.rows.map((r) => r['QUERY PLAN']);
@@ -153,9 +145,10 @@ describe('the deterministic grant lock order', () => {
       // Both writers take EVERY remainder row for this business and
       // currency, up front, in `(created_at, id)` order.
       await a.query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, s.currency]);
-      const bLock = b
-        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, s.currency])
-        .then(() => '', (e: unknown) => refusedBy(e));
+      const bLock = b.query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, s.currency]).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
 
       // B cannot get past the first row A holds, so it never holds one row
       // while reaching for another — which is the cycle round 4 produced.
@@ -180,7 +173,10 @@ describe('the deterministic grant lock order', () => {
                 credit_minor=200, total_minor=0 WHERE id=$1`,
         [invB, T2],
       );
-      const bCommit = await b.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e));
+      const bCommit = await b.query('COMMIT').then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
 
       // The whole claim: no 40P01 anywhere, and both invoices are paid out
       // of credit correctly despite one of them writing backwards.
@@ -209,9 +205,10 @@ describe('the deterministic grant lock order', () => {
       await b.query('BEGIN');
       const bPid = await pidOf(b);
       await a.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`p5scratch:${s.businessId}`]);
-      const bLock = b
-        .query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`p5scratch:${s.businessId}`])
-        .then(() => '', (e: unknown) => refusedBy(e));
+      const bLock = b.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`p5scratch:${s.businessId}`]).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       await waitUntilBlocked(observer, bPid, 'B on the business advisory lock');
 
       await insertConsumption(a, 'p5scratch', s, older, 100n, invA, 'inv-A', T2);
@@ -233,7 +230,12 @@ describe('the deterministic grant lock order', () => {
                 credit_minor=200, total_minor=0 WHERE id=$1`,
         [invB, T2],
       );
-      expect(await b.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('');
+      expect(
+        await b.query('COMMIT').then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        ),
+      ).toBe('');
     } finally {
       await a.end();
       await b.end();
@@ -311,10 +313,16 @@ describe('the invoice and the ledger commit together, or not at all', () => {
                   credit_minor=500, total_minor=0 WHERE id=$1`,
           [invoiceId, T1],
         )
-        .then(() => '', (e: unknown) => refusedBy(e));
+        .then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        );
       expect(upd).toBe('');
 
-      const commit = await a.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e));
+      const commit = await a.query('COMMIT').then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       expect(commit).toBe('23000/si_credit_agrees_with_ledger');
     } finally {
       await a.end();
@@ -339,7 +347,12 @@ describe('the invoice and the ledger commit together, or not at all', () => {
                 credit_minor=500, total_minor=0 WHERE id=$1`,
         [invoiceId, T1],
       );
-      expect(await a.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('23000/si_credit_agrees_with_ledger');
+      expect(
+        await a.query('COMMIT').then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        ),
+      ).toBe('23000/si_credit_agrees_with_ledger');
     } finally {
       await a.end();
     }
@@ -357,7 +370,12 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       // A plausible invoice identity that was never written. The FK is
       // DEFERRABLE, so the INSERT succeeds and the COMMIT does not.
       await insertConsumption(a, 'p5scratch', s, grant, 300n, uuid(), 'inv-ghost', T1);
-      expect(await a.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('23503/pca_invoice_fk');
+      expect(
+        await a.query('COMMIT').then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        ),
+      ).toBe('23503/pca_invoice_fk');
     } finally {
       await a.end();
     }
@@ -382,7 +400,12 @@ describe('the invoice and the ledger commit together, or not at all', () => {
                 credit_minor=400, total_minor=0 WHERE id=$1`,
         [invoiceId, T1],
       );
-      expect(await a.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('');
+      expect(
+        await a.query('COMMIT').then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        ),
+      ).toBe('');
     } finally {
       await a.end();
     }
@@ -407,7 +430,10 @@ describe('the invoice and the ledger commit together, or not at all', () => {
       // rather than merely intended.
       const code = await finalizeInvoice(a, 'p5scratch', s, invoiceId, 500n, 'inv-A', T1, {
         withLock: false,
-      }).then(() => '', (e: unknown) => refusedBy(e));
+      }).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
       expect(code).toBe('23000/si_credit_agrees_with_ledger');
     } finally {
       await a.end();
@@ -443,7 +469,10 @@ describe('the invoice and the ledger commit together, or not at all', () => {
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,300,800,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       )
-      .then(() => '', (e: unknown) => refusedBy(e));
+      .then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
     expect(bad).toBe('23514/si_total_is_charge_minus_credit');
 
     const negative = await owner
@@ -453,7 +482,10 @@ describe('the invoice and the ledger commit together, or not at all', () => {
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,1500,-500,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       )
-      .then(() => '', (e: unknown) => refusedBy(e));
+      .then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
     expect(negative).toBe('23514/si_credit_within_charge');
   });
 
@@ -468,7 +500,12 @@ describe('the invoice and the ledger commit together, or not at all', () => {
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,400,600,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       );
-      expect(await a.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('23000/si_draft_claims_no_credit');
+      expect(
+        await a.query('COMMIT').then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        ),
+      ).toBe('23000/si_draft_claims_no_credit');
     } finally {
       await a.end();
     }
@@ -522,18 +559,12 @@ describe('the invoice and the ledger commit together, or not at all', () => {
     const app = await connect(appUrl());
     try {
       await setRequestContext(app, mine, 'session');
-      const seen = await app.query<{ n: string }>(
-        `SELECT count(*)::text AS n FROM p5scratch.subscription_invoices WHERE id = $1`,
-        [theirInvoice],
-      );
+      const seen = await app.query<{ n: string }>(`SELECT count(*)::text AS n FROM p5scratch.subscription_invoices WHERE id = $1`, [theirInvoice]);
       expect(seen.rows[0]?.n).toBe('0');
 
       // The role HOLDS the UPDATE privilege, so this is RLS refusing and
       // not a missing grant: the statement succeeds and touches no row.
-      const upd = await app.query(
-        `UPDATE p5scratch.subscription_invoices SET state='open', issued_at=$2 WHERE id = $1`,
-        [theirInvoice, T2],
-      );
+      const upd = await app.query(`UPDATE p5scratch.subscription_invoices SET state='open', issued_at=$2 WHERE id = $1`, [theirInvoice, T2]);
       expect(upd.rowCount).toBe(0);
       expect((await invoiceRow(owner, theirInvoice))?.state).toBe('draft');
     } finally {
@@ -554,7 +585,12 @@ describe('the invoice and the ledger commit together, or not at all', () => {
         withLock: true,
         withGrantLocks: true,
       });
-      expect(await app.query('COMMIT').then(() => '', (e: unknown) => refusedBy(e))).toBe('');
+      expect(
+        await app.query('COMMIT').then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        ),
+      ).toBe('');
     } finally {
       await app.end();
     }
@@ -718,9 +754,10 @@ describe('the agreement invariant refuses what it cannot verify', () => {
     // way to reach the branch while the read policies are in place — and
     // that is itself the point: no legitimate path reaches it, which the
     // other 74 cases are the check on.
-    const refusal = await owner
-      .query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [uuid()])
-      .then(() => '', (e: unknown) => refusedBy(e));
+    const refusal = await owner.query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [uuid()]).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
     expect(refusal, 'an unreadable invoice was treated as a rolled-back one').toBe('23000/si_invoice_unreadable');
   });
 
@@ -733,7 +770,10 @@ describe('the agreement invariant refuses what it cannot verify', () => {
          VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,250,750,'draft')`,
         [uuid(), s.tenantId, s.businessId],
       )
-      .then(() => '', (e: unknown) => refusedBy(e));
+      .then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
     // Three refusals share SQLSTATE 23000 inside this one function. Naming
     // them is what makes a case able to tell which of the three it got.
     expect(refusal).toBe('23000/si_draft_claims_no_credit');
