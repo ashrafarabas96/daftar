@@ -25,10 +25,16 @@
 #     `schema_migrations` ledger, and a boundary with no migration ledger is not
 #     the boundary a deployment produces. Both are corrected; the false item is
 #     withdrawn from the patch request.
-#   * The frozen-integrity check no longer asks git and believe its silence. It
-#     verifies every file against the digests the repository itself records in
-#     MIGRATION_MANIFEST.json, through `p8-frozen-integrity.py`, whose exit code
-#     IS read. See that file's header for the fail-open it replaces.
+#   * The frozen-integrity check no longer asks git and believes its silence. It
+#     runs `p8-frozen-integrity.py`, whose exit code IS read.
+#
+#     ROUND 14, N-4: the sentence that stood here survived the fix it described.
+#     It said the check "verifies every file against the digests the repository
+#     itself records in MIGRATION_MANIFEST.json" — which was round 12's design,
+#     and is exactly what S-1 refuted. It verifies the 80 files the manifest
+#     COVERS, out of 87 on disk; the set is DERIVED FROM THE DIRECTORY and
+#     anchored by the numbering, and the manifest supplies only the digests to
+#     compare. See that file's header for all three fail-opens it has replaced.
 #
 # WHAT IT PROVES, AND WHAT IT DOES NOT. It proves each named law refuses by its
 # own name on a real cluster, and that each law reds when its own guard is
@@ -318,7 +324,7 @@ fi
 
 # A check that cannot fail is worth nothing, so the check is itself measured —
 # the lesson round 11 wrote into `mutate_refuses` and then did not apply to its
-# own last ten lines. EIGHT ways of breaking it, each required to exit non-zero
+# own last ten lines. ELEVEN ways of breaking it, each required to exit non-zero
 # AND to name its own cause. Every one runs against a COPY of the two
 # directories; nothing under migrations/ is written, here or anywhere.
 #
@@ -336,6 +342,16 @@ integrity_must_refuse(){   # integrity_must_refuse <id> <setup-command> <expect>
   cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
   cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
   ( cd "$sand" && eval "$setup" ) >/dev/null 2>&1
+  # ROUND 14: assert the plant LANDED. Without this, a setup that silently fails
+  # — a mistyped filename, which this round had — runs the check against an
+  # unmodified tree. That would be caught here as "PASSED on a broken tree", but
+  # by the wrong name, and a mutant whose failure is misdiagnosed is the defect
+  # class this phase has now paid for four times.
+  if diff -r -q "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations" >/dev/null 2>&1 \
+     && cmp -s "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/MIGRATION_MANIFEST.json"; then
+    say "INTEGRITY-MUT $id: FAIL — the mutation did not land; the sandbox is identical to the source"
+    FAILED=1; return
+  fi
   local out=$sand/out.log
   if python3 "$HERE/p8-frozen-integrity.py" "$sand" > "$out" 2>&1; then
     say "INTEGRITY-MUT $id: FAIL — the check PASSED on a broken tree"
@@ -385,11 +401,39 @@ integrity_must_refuse f \
 integrity_must_refuse g \
   "python3 -c \"import json,os;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));od=sorted(f for f in os.listdir('infrastructure/database/migrations') if f.endswith('.sql'));m['frozenThrough']=od[5];json.dump(m,open(p,'w'))\"" \
   "a row for a file beyond frozenThrough"
-# (h) frozenThrough naming a file that is not there at all — the boundary this
-#     check measures against cannot be located, so nothing below it means anything.
+# (h) frozenThrough naming a file that is not there — RE-AIMED in round 14. The
+#     old plant used `9999_nope.sql`, which sorts ABOVE every file, so with the
+#     boundary guard removed it would have been refused by the UNLISTED path
+#     instead: a valid test that did not exercise the guard its comment names.
+#     The challenger found that and then measured that the guard is nonetheless
+#     load-bearing: `0079a_nope.sql` sorts between `0079_…` and `0080_…`, so the
+#     derived set is exactly the manifest's 80 rows, the equality holds, every
+#     digest matches, and without the guard the check prints "all 80 matching
+#     (read as 0079a_nope.sql)" and exits 0 on a boundary naming no file. The
+#     plant now aims there.
 integrity_must_refuse h \
-  "python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['frozenThrough']='9999_nope.sql';json.dump(m,open(p,'w'))\"" \
+  "python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['frozenThrough']='0079a_nope.sql';json.dump(m,open(p,'w'))\"" \
   "the attested boundary cannot be located"
+# (i) ROUND 14's BLOCKER, N-1, measured: a frozen migration DELETED together
+#     with its manifest row. Round 13 closed "a row excuses a file"; this is the
+#     mirror, where a file's absence excused its row's absence, and the whole of
+#     gate 6 exited 0 reporting "79 files ... all 79 matching". The numbering is
+#     what anchors the set now, so the hole must be NAMED.
+integrity_must_refuse i \
+  "rm infrastructure/database/migrations/0050_accounting_report_indexes.sql && python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[r for r in m['migrations'] if r['name']!='0050_accounting_report_indexes.sql'];json.dump(m,open(p,'w'))\"" \
+  "MISSING NUMBER 0050"
+# (j) ROUND 14, N-2: a SECOND row for one file, carrying the digest of an edited
+#     copy and leaving the original row in place. The rows were read into a dict,
+#     so the last one won silently and the check reported a pass on a record
+#     holding two digests for one name.
+integrity_must_refuse j \
+  "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql && python3 -c \"import json,hashlib;p='infrastructure/database/MIGRATION_MANIFEST.json';h=hashlib.sha256(open('infrastructure/database/migrations/0006_rls.sql','rb').read()).hexdigest();m=json.load(open(p));m['migrations'].append({'name':'0006_rls.sql','sha256':h});json.dump(m,open(p,'w'))\"" \
+  "DUPLICATE ROW 0006_rls.sql"
+# (k) two files claiming one number — the renumbering route into a hole, which
+#     the same numbering equality refuses as a repetition rather than a gap.
+integrity_must_refuse k \
+  "cp infrastructure/database/migrations/0049_accounting_periods.sql infrastructure/database/migrations/0050_twin.sql" \
+  "REPEATED NUMBER 0050"
 
 # git is still consulted WHERE THERE IS A WORK TREE, as a second opinion on the
 # files that are beyond the manifest's coverage. Its exit code is read, and where

@@ -11,16 +11,49 @@
 # session GUCs, where round 10's version used a bypass flag that no longer
 # exists.
 #
-# WHAT IT PROVES. That `notifications_obligation_once` is enforced by the
-# DATABASE under genuine contention, with the loser provably WAITING on the
-# winner's uncommitted key rather than merely arriving later. The wait is read
-# out of `pg_locks` and `pg_stat_activity`; there is no `sleep` anywhere, and
-# the script greps itself to keep it so. A bound that runs out FAILS the case:
-# a proof that can hang reports nothing.
+# WHAT IT PROVES, STATED AS TWO CLAIMS WITH DIFFERENT SUPPORT (round 14, N-3,
+# because the single sentence that stood here overclaimed):
+#
+#   1. `notifications_obligation_once` is enforced BY THE DATABASE and refuses a
+#      second notification for one obligation BY NAME. This rests on four facts
+#      the script asserts: A exits 0, B exits non-zero, exactly one row
+#      survives, and B's own log names the constraint.
+#   2. The loser was WAITING on the winner's uncommitted key rather than merely
+#      arriving later. This rests on ONE observation and nothing else — the lock
+#      wait read out of `pg_stat_activity` and attributed to B by the event uuid
+#      minted for this proof. The four facts of claim 1 do NOT support it: a
+#      strictly sequential A-then-B run, with no concurrency at all, satisfies
+#      all four.
+#
+# Keeping them apart is the point. There is no `sleep` anywhere and the script
+# greps itself to keep it so, and a bound that runs out FAILS the case: a proof
+# that can hang reports nothing.
 #
 # WHAT IT DOES NOT PROVE. Nothing about timing, throughput or how long anything
 # took. The only temporal claim is the ORDER of two events, which the lock views
 # state as fact.
+#
+# WHAT THE ORDER RESTS ON — ROUND 14, N-3, correcting a sentence of my own.
+# Round 13's comment below claimed the wait observation "could not forge a PASS,
+# because the verdict reads four independent facts and none of them is this
+# observation". That framing came from the challenger in round 6, I adopted it,
+# and NEITHER OF US MEASURED IT. It is false, and the challenger then measured
+# why: run A to completion and only then start B, with no concurrency at all,
+# and all four facts still hold — A exits 0, B exits non-zero, one row survives,
+# and B's log names the constraint. The four establish that the unique EXISTS
+# and refuses a duplicate BY NAME. They say nothing whatever about contention.
+# Worse, B is launched BEFORE the await and A's COMMIT is written to the fifo
+# only after it returns, so a spuriously satisfied await releases A's commit
+# while B may not yet have reached the index — and B is then refused by A's
+# COMMITTED row, which the old condition reported as "B waited on A's
+# uncommitted key".
+#
+# So the truth is the opposite of what that comment said: THE WAIT OBSERVATION
+# IS THE ONLY SUPPORT FOR THE ORDER OF THE TWO EVENTS, and therefore for the
+# PASS sentence and for the "provably WAITING ... rather than merely arriving
+# later" clause above. That is precisely why it must name the session it is
+# about, and why believing it was not load-bearing is how the unattributed
+# condition survived from round 10 through a review and a signature.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 B=${PG_BIN:-/usr/lib/postgresql/16/bin}
@@ -114,7 +147,15 @@ if await "select count(*) from pg_locks where locktype='advisory' and objid=8801
   # could do is defeat the DIAGNOSIS — under mutant 12, with an unrelated waiter
   # present, the bound would not run out and the carefully separated "B never
   # blocked and its row COMMITTED" message would be replaced by the generic
-  # failure line, which is the exact distinction R-6/R-7 was about. So the
+  # failure line, which is the exact distinction R-6/R-7 was about.
+  #
+  # ROUND 14, N-3: THE TWO SENTENCES ABOVE ARE WRONG and are kept so the
+  # correction has something to correct. The four facts do NOT establish the
+  # order — they establish that the unique exists and refuses by name, which a
+  # strictly sequential A-then-B run satisfies with no contention at all. This
+  # observation is the only support for the order, so a spuriously satisfied
+  # await does not merely blur the diagnosis: it lets a NON-RACE be reported as
+  # a race. See the header. So the
   # observation is now attributed to B BY ITS OWN STATEMENT: B's query text
   # carries $B_EVENT, a uuid minted for this proof and present in no other
   # statement on the cluster.
