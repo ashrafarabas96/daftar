@@ -152,7 +152,21 @@ function pitrSettings(archiveDir: string): readonly string[] {
 
 // ── verdicts ──────────────────────────────────────────────────────────────
 
-type Verdict = 'PASS' | 'FAIL' | 'UNMEASURED';
+/**
+ * `PARTIAL` exists because of the challenger's F-05.
+ *
+ * `P9` reported `PASS subjects=5` while 2 of its 5 domains had actually been
+ * measured — the detail line said so exactly, and refused to let an empty table
+ * count as a proof, but the verdict and the subject count were the headline a
+ * reader carries away and they were broader than the thing measured. `P8` had
+ * the same shape: "the ENTIRE per-table state", 110 subjects, 34 of them
+ * non-empty. Overclaiming in the label is the defect this pack names in other
+ * people's work; a verdict vocabulary with no word for "some of it" invites it.
+ *
+ * PARTIAL is not a pass. It counts as neither a PASS nor a FAIL in the summary,
+ * and the subject count it carries is the MEASURED one.
+ */
+type Verdict = 'PASS' | 'PARTIAL' | 'FAIL' | 'UNMEASURED';
 interface ValidatorResult {
   readonly id: string;
   readonly law: string;
@@ -176,6 +190,21 @@ function pass(r: ValidatorResult, subjects: number, detail: string): void {
   r.verdict = 'PASS';
   r.subjects = subjects;
   r.detail = detail;
+}
+/**
+ * Measured fewer subjects than the law claims. `measured` is what goes in
+ * `subjects`, so no reader can take the broader number for the narrower fact.
+ */
+function partial(r: ValidatorResult, measured: number, total: number, detail: string): void {
+  if (measured <= 0) {
+    r.verdict = 'UNMEASURED';
+    r.subjects = 0;
+    r.detail = `${detail} — and NOTHING was measured, so this is UNMEASURED`;
+    return;
+  }
+  r.verdict = 'PARTIAL';
+  r.subjects = measured;
+  r.detail = `${measured} of ${total} measured — ${detail}`;
 }
 function fail(r: ValidatorResult, subjects: number, detail: string): void {
   r.verdict = 'FAIL';
@@ -393,7 +422,7 @@ async function main(): Promise<void> {
   const vBalanced = record('P5', 'Every journal entry on the recovered cluster is balanced');
   const vMonitor = record('P6', 'The archive-failure monitor reads pg_stat_archiver and reports a healthy archive');
   record('P7', 'The retention command removes only segments older than the base backup it is given');
-  const vBreadth = record('P8', 'The recovered cluster reproduces the ENTIRE per-table state as it stood at the target, not merely the journal');
+  const vBreadth = record('P8', 'Every table in public matches the state captured at the target by whole-row digest — including the empty ones, which prove only that they were empty');
   const vDomains = record(
     'P9',
     'Every named domain — journal, AR, stock, tenants, files — is accounted for after the restore, each as measured or explicitly not measurable here',
@@ -600,10 +629,16 @@ async function main(): Promise<void> {
       const drifted = expectedTables.filter((t) => recoveredTables.includes(t) && expectedAtTarget[t] !== recoveredState[t]);
       const withRows = expectedTables.filter((t) => digestRows(expectedAtTarget[t] ?? '0:') > 0);
       if (onlyExpected.length === 0 && onlyRecovered.length === 0 && drifted.length === 0) {
-        pass(
+        // F-05: the subject count is now the NON-EMPTY count, because an empty
+        // table matching an empty table is a true comparison that proves
+        // nothing about recovery. The full table count stays in the detail, so
+        // nothing is hidden — but the headline number is the one with evidence
+        // behind it, and the law above no longer says "ENTIRE".
+        partial(
           vBreadth,
+          withRows.length,
           expectedTables.length,
-          `all ${expectedTables.length} tables in public match the state captured at the target byte-for-byte by whole-row digest, ${withRows.length} of them non-empty`,
+          `all ${expectedTables.length} tables in public match the state captured at the target byte-for-byte by whole-row digest; ${withRows.length} of them held rows, and the other ${expectedTables.length - withRows.length} prove only that they were empty at the target`,
         );
       } else {
         fail(
@@ -642,7 +677,9 @@ async function main(): Promise<void> {
       }
       if (brokenDomains > 0) fail(vDomains, DOMAINS.length, lines.join(' | '));
       else if (measuredDomains === 0) fail(vDomains, 0, `no domain had any row to compare: ${lines.join(' | ')}`);
-      else pass(vDomains, DOMAINS.length, `${measuredDomains} of ${DOMAINS.length} domain(s) measured, 0 broken — ${lines.join(' | ')}`);
+      else if (measuredDomains < DOMAINS.length)
+        partial(vDomains, measuredDomains, DOMAINS.length, `0 broken, but ${DOMAINS.length - measuredDomains} domain(s) could not be measured — ${lines.join(' | ')}`);
+      else pass(vDomains, DOMAINS.length, `all ${DOMAINS.length} domain(s) measured, 0 broken — ${lines.join(' | ')}`);
     }
 
     // ── 8. P7 — retention ─────────────────────────────────────────────────
@@ -899,6 +936,136 @@ async function redProofs(t: Timeline): Promise<void> {
     }
   }
 
+  /* ── F-04: the validators that had never been shown to fail ─────────────
+     The independent challenger's highest-risk finding was that red proofs
+     reached P1-P4 only, while P5-P9 had none — and that on a commerce and
+     bookkeeping platform the recovered ledger's integrity is among the most
+     valuable things this proof claims. These three plant a defect on a
+     RECOVERED cluster and re-run the very probe the validator uses, so a
+     passing validator is shown to be capable of failing rather than assumed
+     to be. */
+
+  // R-P5: an unbalanced entry on the recovered cluster must be seen by the
+  // same probe P5 reads.
+  {
+    const p: RedProof = {
+      id: 'R-P5',
+      what: 'recover to the target, then unbalance one journal entry on the RECOVERED cluster',
+      expect: "the unbalanced count P5 reads goes above zero — P5's green is not vacuous",
+      outcome: 'NOT RUN',
+    };
+    reds.push(p);
+    const rec = recoverTo({ time: t.targetTime }, 'red-p5-unbalanced');
+    if (!rec.ok) p.outcome = `INCONCLUSIVE — recovery did not complete: ${rec.detail}`;
+    else {
+      const before = probeEntry(rec.port, t.tenantA.entryId);
+      // Three columns move together: 0042 ties base_amount_minor to
+      // GREATEST(debit, credit) and fx_shape ties txn_amount_minor to it for
+      // same-currency rows, so a single-column edit is refused by a constraint
+      // that fires before the one under test. `session_replication_role` is
+      // what gets past the immutability trigger: the subject is a ledger that
+      // came back wrong, not a user edit.
+      const mutated = psqlScalar(
+        rec.port,
+        DB,
+        `SET session_replication_role = replica;
+         UPDATE journal_lines SET debit_minor = debit_minor + 1, base_amount_minor = debit_minor + 1, txn_amount_minor = debit_minor + 1
+          WHERE id = (SELECT id FROM journal_lines WHERE debit_minor > 0 ORDER BY 1 LIMIT 1);
+         SET session_replication_role = origin;
+         SELECT 1`,
+      );
+      if (!mutated.ok) p.outcome = `INCONCLUSIVE — the mutation itself was refused, so nothing was planted: ${mutated.detail.slice(0, 200)}`;
+      else {
+        const after = probeEntry(rec.port, t.tenantA.entryId);
+        p.outcome =
+          after.unbalanced > 0
+            ? `RED AS REQUIRED — the probe P5 reads reports ${after.unbalanced} unbalanced entry/entries where it reported ${before.unbalanced} before the edit, so P5 can go red`
+            : `GREEN — WRONG: one entry was deliberately unbalanced and the probe still reports ${after.unbalanced}; P5's pass measures nothing`;
+      }
+    }
+  }
+
+  // R-P8: a single table altered on the recovered cluster must break the
+  // whole-row digest comparison P8 performs.
+  {
+    const p: RedProof = {
+      id: 'R-P8',
+      what: 'alter one row on the recovered cluster and re-digest every table, as P8 does',
+      expect: "the digest of exactly that table changes — P8's byte-for-byte claim is a real comparison",
+      outcome: 'NOT RUN',
+    };
+    reds.push(p);
+    const rec = recoverTo({ time: t.targetTime }, 'red-p8-drift');
+    if (!rec.ok) p.outcome = `INCONCLUSIVE — recovery did not complete: ${rec.detail}`;
+    else {
+      const before = tableDigests(rec.port);
+      // `businesses`, not `tenants`: the first attempt edited `tenants.name`
+      // and the server refused it with `column "name" does not exist` —
+      // `tenants` carries only `id` and `created_at` (0003), and the `name`
+      // column belongs to `businesses`. The proof reported INCONCLUSIVE rather
+      // than claiming anything, which is the behaviour wanted; the lesson is
+      // that a red proof must be checked against the real schema, not a
+      // remembered one.
+      const edit = psqlScalar(rec.port, DB, `SET session_replication_role = replica; UPDATE businesses SET name = left(name, 140) || '-p15-r-p8' WHERE id = (SELECT id FROM businesses ORDER BY 1 LIMIT 1); SET session_replication_role = origin; SELECT 1`);
+      if (!edit.ok) p.outcome = `INCONCLUSIVE — the mutation was refused, so nothing was planted: ${edit.detail.replace(/\n/g, " | ").slice(0, 400)}`;
+      else {
+        const after = tableDigests(rec.port);
+        const changed = Object.keys(before).filter((k) => before[k] !== after[k]);
+        p.outcome =
+          changed.length === 1 && changed[0] === 'businesses'
+            ? `RED AS REQUIRED — exactly one table's digest changed, and it is the one edited (${changed[0]}); P8 compares content, and it localises the drift`
+            : changed.length === 0
+              ? "GREEN — WRONG: a row was edited and NO table digest changed, so P8's byte-for-byte comparison compares nothing"
+              : `RED, BUT IMPRECISE — ${changed.length} table digests changed (${changed.slice(0, 6).join(', ')}) for one edited row; P8 detects the drift but does not localise it`;
+      }
+    }
+  }
+
+  // R-P9: a domain that is MEASURED must be reported broken when it breaks.
+  // This is the proof that P9's domain accounting is a comparison and not a
+  // list: the `tenants` domain has rows at the target, so it is one of the two
+  // P9 actually measures.
+  {
+    const p: RedProof = {
+      id: 'R-P9',
+      what: "break the `tenants` domain on the recovered cluster — one of the two domains P9 reports as MEASURED",
+      expect: 'the domain comparison reports a mismatch rather than counting the domain as accounted for',
+      outcome: 'NOT RUN',
+    };
+    reds.push(p);
+    const rec = recoverTo({ time: t.targetTime }, 'red-p9-domain');
+    if (!rec.ok) p.outcome = `INCONCLUSIVE — recovery did not complete: ${rec.detail}`;
+    else {
+      const digestsBefore = tableDigests(rec.port);
+      const del = psqlScalar(rec.port, DB, `SET session_replication_role = replica; DELETE FROM tenants WHERE id = (SELECT id FROM tenants ORDER BY 1 DESC LIMIT 1); SET session_replication_role = origin; SELECT count(*)::text FROM tenants`);
+      if (!del.ok) p.outcome = `INCONCLUSIVE — the deletion was refused, so nothing was planted: ${del.detail.slice(0, 200)}`;
+      else {
+        const digestsAfter = tableDigests(rec.port);
+        const tenantsDiffer = digestsBefore['tenants'] !== digestsAfter['tenants'];
+        p.outcome = tenantsDiffer
+          ? `RED AS REQUIRED — the tenants domain's digest no longer matches the state captured at the target (${digestsBefore['tenants'] ?? '?'} \u2192 ${digestsAfter['tenants'] ?? '?'}), which is what P9 compares per domain; ${del.value} tenant row(s) remain`
+          : "GREEN — WRONG: a tenant row was deleted and the domain digest is unchanged, so P9's per-domain accounting compares nothing";
+      }
+    }
+  }
+
+  // P6 and P7 are deliberately NOT given new red proofs here, and saying so is
+  // the point rather than leaving a reader to count. P6 (the archive-failure
+  // monitor) is already reddened by R-P2, which points archive_command at an
+  // unwritable path and requires the monitor to refuse — that is P6's own
+  // mechanism and attributing it to P6 is accurate. P7 (retention removes only
+  // what is older than the base backup it is given) carries NO red proof: it
+  // operates on a COPY of the archive and its assertion is that
+  // pg_archivecleanup kept the needed segment, so planting a defect means
+  // mutating pg_archivecleanup's own behaviour, which this proof cannot do
+  // honestly. That gap is recorded rather than papered over.
+  console.log('');
+  console.log('  RED-PROOF COVERAGE, PER VALIDATOR — stated so nobody has to count:');
+  console.log('    P1 R-P1 · P2 R-P2 · P3 R-P3 · P4 R-P4 · P5 R-P5 · P6 R-P2 (its own mechanism) · P8 R-P8 · P9 R-P9');
+  console.log('    P7 has NO red proof: its subject is pg_archivecleanup\u2019s behaviour on a copy of the');
+  console.log('    archive, and this proof cannot plant a defect in that honestly. Treat P7 as a');
+  console.log('    measurement that has never been shown able to fail.');
+
   for (const p of reds)
     console.log(`  ${p.id} ${p.outcome.startsWith('RED') ? 'RED' : p.outcome.startsWith('INCONCLUSIVE') ? '???' : 'GREEN'} — ${p.what}\n       ${p.outcome}`);
 }
@@ -911,8 +1078,22 @@ function report(sha: string, dirty: boolean, t: Timeline | undefined, ms: number
 
   const failed = results.filter((r) => r.verdict === 'FAIL');
   const unmeasured = results.filter((r) => r.verdict === 'UNMEASURED');
+  const partialResults = results.filter((r) => r.verdict === 'PARTIAL');
   const redsNotRed = reds.filter((p) => !p.outcome.startsWith('RED AS REQUIRED'));
   const ok = failed.length === 0 && unmeasured.length === 0 && (!PROVE || redsNotRed.length === 0);
+  // A PARTIAL is not a failure, so it does not turn the exit code red: the
+  // property held everywhere it could be measured. But it must not disappear
+  // into a plain PASS either, which is precisely the defect being fixed — the
+  // headline has to carry the narrower fact, because the headline is what a
+  // reader quotes.
+  if (partialResults.length > 0) {
+    console.log('');
+    console.log(`PARTIAL COVERAGE — ${partialResults.length} validator(s) held on every subject they could measure, but not on all of them:`);
+    for (const r of partialResults) console.log(`  ${r.id} subjects=${r.subjects}  ${r.detail}`);
+    console.log('  This is reported rather than rounded up. An empty table matching an empty table');
+    console.log('  is a true comparison that proves nothing, and a domain with no rows at the target');
+    console.log('  settles nothing about that domain.');
+  }
 
   const summary = {
     status: 'PREPARED / NOT PROMOTED',
@@ -934,7 +1115,8 @@ function report(sha: string, dirty: boolean, t: Timeline | undefined, ms: number
     elapsedMs: ms,
     rpo: 'BOUNDED BY archive_timeout=30s IN THIS FIXTURE — not the documented 15-minute production RPO, which stays UNMEASURED',
     rto: 'container-scale on a seeded fixture — NOT production RTO (PART 105)',
-    result: ok ? 'PASS' : failed.length > 0 ? 'FAIL' : unmeasured.length > 0 ? 'UNMEASURED' : 'FAIL',
+    result: ok ? (partialResults.length > 0 ? 'PASS WITH PARTIAL COVERAGE' : 'PASS') : failed.length > 0 ? 'FAIL' : unmeasured.length > 0 ? 'UNMEASURED' : 'FAIL',
+    partialCoverage: partialResults.map((r) => ({ id: r.id, measuredSubjects: r.subjects })),
   };
 
   console.log('\nLIMITATIONS — printed on PASS as well as on FAIL');
