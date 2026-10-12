@@ -93,7 +93,13 @@ function packState(): readonly { readonly file: string; readonly bytes: number; 
     // invalidate a digest recorded for it here, and a digest table that is
     // known-stale by construction teaches a reader to ignore digest tables.
     // One file, one indexing authority.
-    .filter((f) => /^P15-.*\.(md|json)$/.test(f.trim()) && f.trim() !== 'P15-HANDOFF-MANIFEST.md')
+    .filter((f) => /^P15-.*\.(md|json)$/.test(f.trim()) && f.trim() !== 'P15-HANDOFF-MANIFEST.md' && f.trim() !== 'P15-RESUME-CHECKPOINT.md')
+    // This file is excluded too, and for a harder reason than the manifest: a
+    // file cannot carry its own digest. Including itself made every write change
+    // the digest it had just recorded, so the output was non-deterministic no
+    // matter how the timestamp was derived. Its own integrity is the manifest's
+    // to record, which is the same one-file-one-authority rule running the other
+    // way.
     .map((f) => f.trim())
     .map((f) => {
       const b = readFileSync(join(PACK, f));
@@ -140,12 +146,33 @@ function main(): number {
   const head = facts.find((f) => f.what.startsWith('HEAD'))?.value ?? 'UNKNOWN';
   const pack = packState();
   const bs = blockers();
-  const now = new Date().toISOString();
+  // DETERMINISM: the time is the HEAD COMMIT's date, not the clock.
+  //
+  // This file was stamped with `new Date().toISOString()`, and the handoff
+  // manifest digest-indexes it — so two consecutive runs produced two different
+  // digests and `verify:handoff-manifest` went stale every time the checkpoint
+  // was regenerated. The independent challenger measured it: the two gates
+  // could never both be green, permanently. A digest gate over a
+  // self-regenerating file measures the clock rather than the content, and a
+  // gate people learn to silence with `--rewrite` is worse than no gate.
+  //
+  // The commit date is the right clock anyway: this file describes a HEAD, so
+  // its content should change when the HEAD changes and at no other time.
+  // Regenerating at an unchanged head is now byte-identical, which is what
+  // makes the digest meaningful.
+  const commitDate = git(['show', '-s', '--format=%cI', 'HEAD']).out;
+  const now = commitDate.length > 0 ? `${commitDate}  (the HEAD commit's date — this file is deterministic at a given head, by design)` : 'UNKNOWN — the commit date could not be read';
 
   const lines: string[] = [];
   lines.push('# P15 — RESUMABLE CHECKPOINT (PART 22)');
   lines.push('');
-  lines.push('**Generated, not written.** `npm run checkpoint:phase15` rewrites this file from');
+  lines.push('**Generated, not written, and deterministic.** `npm run checkpoint:phase15` rewrites this');
+  lines.push('file from measurement, and at an unchanged head it rewrites it **byte-identically** — its');
+  lines.push('timestamp is the HEAD commit\'s date, not the clock, so the manifest can digest-index it');
+  lines.push('without the two gates fighting. It still changes when another pack document changes,');
+  lines.push('because §6 digests them, and that is real content drift rather than a moving clock.');
+  lines.push('');
+  lines.push('`npm run checkpoint:phase15` rewrites this file from');
   lines.push('measurement; `npm run checkpoint:phase15 -- --check` exits 1 when HEAD has moved past it.');
   lines.push('A position stated here was true at the timestamp below and nowhere else.');
   lines.push('');
@@ -220,7 +247,10 @@ function main(): number {
   lines.push('These documents are **not in Git at any head**. They live in a directory other sessions');
   lines.push('write to, so these digests describe this instant only — which is why `--check` exists.');
   lines.push('');
-  lines.push('`P15-HANDOFF-MANIFEST.md` is deliberately **absent** from this table: its digest table is');
+  lines.push('Two files are deliberately **absent** from this table. This checkpoint itself, because a');
+  lines.push('file cannot carry its own digest — including itself made every write invalidate the digest');
+  lines.push('it had just recorded; its integrity is recorded in the manifest instead. And');
+  lines.push('`P15-HANDOFF-MANIFEST.md`, because its digest table is');
   lines.push('rewritten as the last action of a round, so any digest recorded for it here would be stale');
   lines.push('by construction. It is verified by its own gate, `npm run verify:handoff-manifest`. One');
   lines.push('file, one indexing authority.');

@@ -66,7 +66,7 @@ const CASES: readonly Case[] = [
       const r = doc.rules[0];
       if (r !== undefined) r['receiver'] = 'oncall-placeholder';
     },
-    expect: /receiver claim is STALE/i,
+    expect: /receiver claim is STALE or UNVERIFIABLE/i,
   },
   {
     id: 'R2',
@@ -75,7 +75,25 @@ const CASES: readonly Case[] = [
       const r = doc.rules[3];
       if (r !== undefined) r['notification_channel'] = 'ops-room';
     },
-    expect: /receiver claim is STALE/i,
+    expect: /receiver claim is STALE or UNVERIFIABLE/i,
+  },
+  {
+    id: 'R2b',
+    what: "a routing key OUTSIDE any routing vocabulary (`alert_sink`) — the challenger's round-2 N-03, which the vocabulary version missed and exited 0 on",
+    plant: (doc) => {
+      const r = doc.rules[7];
+      if (r !== undefined) r['alert_sink'] = 'ops-team@example.invalid';
+    },
+    expect: /STALE or UNVERIFIABLE/i,
+  },
+  {
+    id: 'R2c',
+    what: 'a key that is neither routing-shaped nor in the schema (`owner_notes`) — it must ALSO redden, because an unclassified key cannot be assumed harmless',
+    plant: (doc) => {
+      const r = doc.rules[9];
+      if (r !== undefined) r['owner_notes'] = 'a schema addition nobody classified';
+    },
+    expect: /schema does not account for/i,
   },
   {
     id: 'R3',

@@ -82,11 +82,36 @@ interface Rule {
 }
 
 /**
- * The words a routing destination would be called, if one were ever added.
- * Matched against the rule's OWN keys, so a key this script has never heard of
- * still registers as routing when it is named like routing.
+ * The rule schema's KNOWN-BENIGN keys: every key a rule is expected to carry,
+ * none of which routes anything anywhere.
+ *
+ * This list, and not a routing vocabulary, is what `receiverOf` matches
+ * against — because the challenger's round 2 broke the vocabulary version in
+ * one move. It planted `alert_sink: "ops-team@example.invalid"`, a key no
+ * routing word matches, and the check printed `alert_sink` in the key union,
+ * then "keys that name a routing destination: NONE", "UNDECIDED: 23 of 23", and
+ * exited 0. The claim it is defending is «no receiver exists anywhere», so a
+ * miss is in the UNSAFE direction: a routing key nobody listed reads as no
+ * routing at all.
+ *
+ * Inverted, the failure mode changes sides. An unrecognised key cannot be
+ * assumed harmless, so it is reported and it reddens the check until a human
+ * classifies it — fail-closed (PART 18). A legitimately new non-routing field
+ * therefore costs one edit to this list, deliberately: a schema change that
+ * nobody noticed is the thing being prevented.
  */
-const ROUTING_KEYS = ['receiver', 'receivers', 'route', 'routing', 'destination', 'notify', 'notification', 'target', 'channel', 'recipient', 'webhook', 'pagerduty', 'email', 'oncall', 'on_call'] as const;
+const SCHEMA_KEYS = [
+  'id', 'title', 'signal', 'signal_source', 'condition', 'for', 'severity',
+  'slo_id', 'runbook_step', 'false_positive_notes', 'exists_today', 'resolution',
+] as const;
+
+/**
+ * Words a routing destination would be called. No longer the detection
+ * mechanism — `SCHEMA_KEYS` is — this only lets an unrecognised key be reported
+ * as PROBABLE ROUTING rather than merely unrecognised, which tells a reader
+ * whether they are looking at a schema addition or at a receiver appearing.
+ */
+const ROUTING_WORDS = ['receiver', 'route', 'routing', 'destination', 'notify', 'notification', 'target', 'channel', 'recipient', 'webhook', 'pagerduty', 'opsgenie', 'email', 'mail', 'sink', 'oncall', 'on_call', 'page', 'alert_to', 'escalat', 'slack', 'sms', 'phone', 'subscriber', 'audience'] as const;
 
 /**
  * DERIVE a rule's receiver from the rule object. Never a constant.
@@ -102,21 +127,30 @@ const ROUTING_KEYS = ['receiver', 'receivers', 'route', 'routing', 'destination'
  * ("a constant column proved nothing") and then shipped it here.
  *
  * So: read the rule's keys, and report what is there. UNDECIDED is now a
- * CONCLUSION from a key set, and it changes the moment the key set does.
+ * CONCLUSION from a key set, and it changes the moment the key set does —
+ * whatever the new key is called.
  */
-function receiverOf(r: Rule): { readonly value: string; readonly keys: readonly string[] } {
-  const keys = Object.keys(r).filter((k) => ROUTING_KEYS.some((w) => k.toLowerCase() === w || k.toLowerCase().includes(w)));
-  if (keys.length === 0) return { value: 'UNDECIDED', keys: [] };
-  // A routing key that is present but empty is NOT a receiver: an empty string
-  // routes nowhere, and reporting it as a destination would be the overclaim
-  // this instrument exists to prevent.
-  const named = keys.filter((k) => {
+function receiverOf(r: Rule): { readonly value: string; readonly unrecognised: readonly string[]; readonly probableRouting: readonly string[] } {
+  const unrecognised = Object.keys(r).filter((k) => !SCHEMA_KEYS.some((known) => known === k));
+  const probableRouting = unrecognised.filter((k) => ROUTING_WORDS.some((w) => k.toLowerCase().includes(w)));
+
+  if (unrecognised.length === 0) return { value: 'UNSET', unrecognised, probableRouting };
+
+  // A key that is present but empty routes nowhere. Reporting it as a
+  // destination would be the overclaim this instrument exists to prevent; it is
+  // still reported as unrecognised, because an empty routing field is a
+  // half-made decision and not an absent one.
+  const named = unrecognised.filter((k) => {
     const v = r[k];
     if (typeof v === 'string') return v.trim().length > 0;
     if (Array.isArray(v)) return v.length > 0;
     return v !== null && v !== undefined && v !== false;
   });
-  return named.length === 0 ? { value: `EMPTY:${keys.join(',')}`, keys } : { value: `SET:${named.join(',')}`, keys: named };
+  return {
+    value: named.length === 0 ? `EMPTY:${unrecognised.join(',')}` : `SET:${named.join(',')}`,
+    unrecognised,
+    probableRouting,
+  };
 }
 
 /**
@@ -405,37 +439,52 @@ function main(): number {
   // enumerated it in prose and the prose was already wrong: it omitted
   // `resolution`, which had been added to every rule hours earlier.
   const keyUnion = [...new Set(rules.flatMap((r) => Object.keys(r)))].sort();
-  const withRouting = rules.filter((r) => receiverOf(r).keys.length > 0);
-  const undecided = [...receivers.values()].filter((v) => v === 'UNDECIDED').length;
+  const unexpected = rules.flatMap((r) => {
+    const d = receiverOf(r);
+    return d.unrecognised.map((key) => ({ rule: r.id, key, routing: d.probableRouting.includes(key) }));
+  });
+  const unset = [...receivers.values()].filter((v) => v === 'UNSET').length;
 
   console.log('RECEIVER, DERIVED FROM THE RULE OBJECTS (not asserted)');
   console.log(`  the key set actually present on the ${rules.length} rules, read from the file:`);
   console.log(`    ${keyUnion.join(', ')}`);
-  console.log(`  of those, keys that name a routing destination: ${withRouting.length === 0 ? 'NONE' : withRouting.map((r) => r.id).join(', ')}`);
-  console.log(`  rules whose receiver is therefore UNDECIDED: ${undecided} of ${rules.length}`);
+  console.log(`  keys the rule SCHEMA accounts for: ${SCHEMA_KEYS.join(', ')}`);
+  console.log(`  keys it does NOT account for: ${unexpected.length === 0 ? 'NONE' : unexpected.map((u) => `${u.key} (on ${u.rule}${u.routing ? ', PROBABLE ROUTING' : ''})`).join('; ')}`);
+  console.log(`  rules whose receiver is therefore UNSET: ${unset} of ${rules.length}`);
+  console.log('');
+  console.log('  This matches against the SCHEMA\u2019s known-benign keys, not against a list of routing');
+  console.log('  words. The vocabulary version was broken in one move: a planted `alert_sink` matched');
+  console.log('  no routing word, so the check printed it in the key union and still reported NONE and');
+  console.log('  exited 0. The claim being defended is that NO receiver exists anywhere, so a miss is');
+  console.log('  in the unsafe direction. Inverted, an unrecognised key reddens the check until a human');
+  console.log('  classifies it, and a new non-routing field costs one edit to SCHEMA_KEYS \u2014 on purpose.');
+  console.log('');
 
   const destinations: string[] = [];
   for (const d of DESTINATION_PATTERNS) {
     const hit = grepTree(d.re);
     if (hit !== null) destinations.push(`${d.what} — ${hit}`);
   }
-  console.log(`  destination configuration in the repository: ${destinations.length === 0 ? `NONE FOUND — ${DESTINATION_PATTERNS.length} patterns searched over the tracked tree (${DESTINATION_PATTERNS.map((d) => d.what).join(', ')}), excluding this script's own file, which defines them` : destinations.join('; ')}`);
+  console.log(`  destination configuration in the repository: ${destinations.length === 0 ? `NONE FOUND \u2014 ${DESTINATION_PATTERNS.length} patterns searched over the TRACKED tree (${DESTINATION_PATTERNS.map((d) => d.what).join(', ')}), excluding this script's own file, which defines them` : destinations.join('; ')}`);
+  console.log('  Two bounds on that search, stated because they are the ways it can be wrong:');
+  console.log('    \u00b7 `git grep` reads TRACKED files only, so an uncommitted destination is invisible to it;');
+  console.log('    \u00b7 the six patterns are a list, and a destination configured some other way is not in it.');
+  console.log('  Neither bound affects the key-set check above, which is exhaustive over the rules.');
   console.log('');
-  console.log('  §22.2 forbids choosing a recipient, a subscription or a retention here, so this');
-  console.log('  stays with the owner. What changed in this round is that the column is now a');
-  console.log('  CONCLUSION rather than a constant: a routing key appearing on a rule, or a');
-  console.log('  destination appearing in the tree, changes the value AND the exit code below.');
-  console.log('  A rule with a condition and no receiver is a rule that fires into nothing.');
+  console.log('  \u00a722.2 forbids choosing a recipient, a subscription or a retention here, so this stays');
+  console.log('  with the owner. A rule with a condition and no receiver is a rule that fires into nothing.');
   console.log('');
 
   // The claim is now falsifiable in both directions, which is what makes it a
   // measurement. Routing that appears without the owner's decision being
   // recorded is a change this instrument must not pass over in silence.
-  if (withRouting.length > 0 || destinations.length > 0) {
+  if (unexpected.length > 0 || destinations.length > 0) {
+    const routing = unexpected.filter((u) => u.routing);
     resolutionProblems.push(
-      `the receiver claim is STALE: ${withRouting.length} rule(s) now carry a routing key and ${destinations.length} destination pattern(s) match the tree. B-15 says no receiver exists anywhere; re-state it against this before any handoff repeats it.`,
+      `the receiver claim is STALE or UNVERIFIABLE: ${unexpected.length} key(s) the schema does not account for (${unexpected.map((u) => `${u.rule}.${u.key}`).join(', ')})${routing.length > 0 ? ` \u2014 ${routing.length} of them named like routing` : ''}, and ${destinations.length} destination pattern(s) match the tree. B-15 says no receiver exists anywhere; an unclassified key cannot be assumed to be nothing, so classify each one in SCHEMA_KEYS or record the receiver before any handoff repeats that claim.`,
     );
   }
+
 
   /* ── the resolution model, re-derived rather than trusted ─────────────── */
   console.log('RESOLUTION IS NOW MODELLED — and this section CHECKS the model instead of reading it.');

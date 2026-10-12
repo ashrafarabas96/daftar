@@ -4,8 +4,23 @@
  * and a control proving a planted attribute is actually caught.
  */
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { prepareClusterDir, startCluster, stopCluster, PG_SUPERPASS, type ClusterSpec } from './pg-cluster';
+
+/**
+ * The repository root, DERIVED from this file's own location.
+ *
+ * It was `cwd: '/home/user/daftar'`, hard-coded. The independent challenger
+ * showed what that costs: in any other checkout the three spawned controls died
+ * with `ERR_MODULE_NOT_FOUND` and the proof printed `3 CONTROL(S) FAILED` and
+ * exit 1 — indistinguishable from three controls that genuinely failed. That is
+ * the PART 18 law this round quotes elsewhere in its own words: "I could not
+ * look" and "I looked and it is clean" must never print the same way, and the
+ * inverse holds too — a proof that could not run must not print as a proof that
+ * failed. It also meant the proof could not run on the final exact SHA anywhere
+ * but one box, which is exactly where §79 requires it to run.
+ */
+const ROOT = resolve(__dirname, '../..');
 
 const DIR = '/tmp/daftar-p15-roleread';
 const PORT = 55487;
@@ -19,19 +34,26 @@ function psqlRun(sql: string): void {
   if (r.status !== 0) throw new Error(`psql failed: ${r.stderr?.slice(0, 300) ?? ''}`);
 }
 
-function readAttributes(url: string): { status: number | null; out: string } {
-  const r = spawnSync('npx', ['tsx', 'scripts/phase15/role-attribute-read.ts'], {
-    cwd: '/home/user/daftar',
+function readAttributes(url: string): { status: number | null; out: string; spawned: boolean } {
+  const r = spawnSync('npx', ['tsx', join(ROOT, 'scripts/phase15/role-attribute-read.ts')], {
+    cwd: ROOT,
     encoding: 'utf8',
     env: { ...process.env, P15_ROLE_READ_URL: url },
   });
-  return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  // A module that cannot be loaded is not a verdict about role attributes. The
+  // check's own exit codes are 0 (clean), 1 (an unauthorised attribute) and 2
+  // (not measured); anything else, or a loader error in the output, means the
+  // control never ran and must be reported as such rather than as a failure.
+  const spawned = r.error === undefined && r.status !== null && !/ERR_MODULE_NOT_FOUND|Cannot find module|ERR_UNKNOWN_FILE_EXTENSION/.test(out);
+  return { status: r.status, out, spawned };
 }
 
 function main(): number {
   prepareClusterDir(DIR);
   startCluster(spec);
   let failures = 0;
+  let notRun = 0;
   try {
     psqlRun("CREATE ROLE daftar_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'p15app'");
     psqlRun("CREATE ROLE daftar_reconciler LOGIN NOSUPERUSER BYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD 'p15rec'");
@@ -44,8 +66,13 @@ function main(): number {
     const c1 = readAttributes(readerUrl);
     console.log(c1.out);
     const c1ok = c1.status === 0 && c1.out.includes('no UNAUTHORISED elevated attribute') && c1.out.includes('is_superuser=off') && c1.out.includes('daftar_reconciler holds BYPASSRLS');
-    console.log(`CONTROL 1: ${c1ok ? 'PASS' : 'FAIL'} (exit ${String(c1.status)})`);
-    if (!c1ok) failures += 1;
+    if (!c1.spawned) {
+      console.log(`CONTROL 1: NOT MEASURED — the check could not be started (exit ${String(c1.status)}). This is NOT a failed control.`);
+      notRun += 1;
+    } else {
+      console.log(`CONTROL 1: ${c1ok ? 'PASS' : 'FAIL'} (exit ${String(c1.status)})`);
+      if (!c1ok) failures += 1;
+    }
 
     console.log('='.repeat(78));
     console.log('CONTROL 2 (NEGATIVE) — plant BYPASSRLS on daftar_app: expect exit 1 naming it');
@@ -53,8 +80,13 @@ function main(): number {
     const c2 = readAttributes(readerUrl);
     console.log(c2.out);
     const c2ok = c2.status === 1 && c2.out.includes('daftar_app holds BYPASSRLS') && c2.out.includes('IMMEDIATE BLOCKER');
-    console.log(`CONTROL 2: ${c2ok ? 'PASS' : 'FAIL'} (exit ${String(c2.status)})`);
-    if (!c2ok) failures += 1;
+    if (!c2.spawned) {
+      console.log(`CONTROL 2: NOT MEASURED — the check could not be started (exit ${String(c2.status)}). This is NOT a failed control.`);
+      notRun += 1;
+    } else {
+      console.log(`CONTROL 2: ${c2ok ? 'PASS' : 'FAIL'} (exit ${String(c2.status)})`);
+      if (!c2ok) failures += 1;
+    }
 
     console.log('='.repeat(78));
     console.log('CONTROL 3 (NEGATIVE) — plant CREATEROLE on the RECONCILER, whose BYPASSRLS is');
@@ -64,8 +96,13 @@ function main(): number {
     const c3 = readAttributes(readerUrl);
     console.log(c3.out);
     const c3ok = c3.status === 1 && c3.out.includes('daftar_reconciler holds CREATEROLE') && c3.out.includes('daftar_reconciler holds BYPASSRLS');
-    console.log(`CONTROL 3: ${c3ok ? 'PASS' : 'FAIL'} (exit ${String(c3.status)})`);
-    if (!c3ok) failures += 1;
+    if (!c3.spawned) {
+      console.log(`CONTROL 3: NOT MEASURED — the check could not be started (exit ${String(c3.status)}). This is NOT a failed control.`);
+      notRun += 1;
+    } else {
+      console.log(`CONTROL 3: ${c3ok ? 'PASS' : 'FAIL'} (exit ${String(c3.status)})`);
+      if (!c3ok) failures += 1;
+    }
 
     console.log('='.repeat(78));
     console.log('CONTROL 4 — the read is genuinely READ ONLY: a write attempt under the same');
@@ -102,6 +139,13 @@ function main(): number {
     stopCluster(spec);
   }
   console.log('='.repeat(78));
+  if (notRun > 0) {
+    console.log(`EXIT 2 — NOT MEASURED: ${notRun} control(s) could not be started, so this proof says nothing`);
+    console.log('  about whether the check works. An unrunnable proof and a failing proof are');
+    console.log('  different facts, and conflating them is what let a hard-coded path look like');
+    console.log('  three real failures.');
+    return 2;
+  }
   console.log(failures === 0 ? 'ALL FOUR CONTROLS PASSED' : `${failures} CONTROL(S) FAILED`);
   return failures === 0 ? 0 : 1;
 }
