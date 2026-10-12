@@ -1382,24 +1382,53 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   // under the replay it was absorbed, and the change had not been recorded.
   //
   // The bound is the row's own magnitude, less whatever earlier corrections of
-  // it have already given back. It is NOT a partial-return rule: `§5.7.4`
+  // it have already moved — see `F-23` below for why "the row's own magnitude"
+  // and not "what a negative row took", which is what this first fix compared. It is NOT a partial-return rule: `§5.7.4`
   // leaves the quantity of a partial return to configuration, and this refuses
   // only a quantity larger than the movement it names. A `grant_over_restored`
   // guard exists in the patch request for the remainder relation, not for the
   // ledger, so the ledger-level counterpart is raised in §A.3c.3 too.
-  if (corrected.pointsDelta < 0n) {
-    const taken = -corrected.pointsDelta;
-    const alreadyRestored = ledger.movements
-      .filter((m) => m.correctsId === corrected.id && m.pointsDelta > 0n)
-      .reduce((acc, m) => acc + m.pointsDelta, 0n);
-    if (alreadyRestored + request.points > taken) {
-      refuseLoyalty('loyalty.corrects_more_than_target', 'a correction may not restore more than the movement it corrects took', {
-        correctsId: request.correctsId,
-        taken: String(taken),
-        alreadyRestored: String(alreadyRestored),
-        requested: String(request.points),
-      });
-    }
+  // `F-23` — AND THE BOUND IS ON THE MAGNITUDE, NOT ON THE TARGET'S SIGN.
+  //
+  // The bound above was written inside `if (corrected.pointsDelta < 0n)`, so it
+  // only ever compared a correction of a DRAW. `§1.4` lets `correctsId` name any
+  // movement the ledger holds, and `validateDraft` admits it, so a correction
+  // naming a POSITIVE row walked straight past the comparison and restored the
+  // defect the bound was added for. A seventh challenge round measured it
+  // through this very function, and both figures are reproduced in the suite:
+  // naming the `earn` of a 100-earn / 40-consume ledger, 1 000 000 points were
+  // ACCEPTED and the fold reported `balancePoints` **1 000 060** — byte for byte
+  // the figure `F-21` was raised for; naming a standing grant of 10, 999 999
+  // were accepted and the balance read **1 000 009**.
+  //
+  // The shape is not contrived: a merchant who UNDER-awarded on a sale has an
+  // obvious reason to book a positive correction naming that earn. One further
+  // fact that belongs with it, because no caller could discover it here: such a
+  // correction is WITHHELD by the fold — an earn is in no draw, so there is
+  // nothing to attribute it through — and it therefore credits the customer
+  // nothing spendable. The route that works for an under-award is `§2.3`'s
+  // standing grant, a positive `manual_adjustment` with `correctsId === null`,
+  // which this writer deliberately does not build.
+  //
+  // So the bound is taken on the MAGNITUDE of the row named, whatever its sign,
+  // less what every earlier correction of that row has already moved **in
+  // either direction**. Counting both directions is the conservative reading
+  // and it is deliberate: a quantity taken, given back and taken again leaves
+  // this writer refusing a third movement against the same row, and the lawful
+  // remedy there is a fresh grant rather than another correction of a row whose
+  // own quantity is already accounted for twice over.
+  const moved = corrected.pointsDelta < 0n ? -corrected.pointsDelta : corrected.pointsDelta;
+  const alreadyMoved = ledger.movements
+    .filter((m) => m.correctsId === corrected.id)
+    .reduce((acc, m) => acc + (m.pointsDelta < 0n ? -m.pointsDelta : m.pointsDelta), 0n);
+  if (alreadyMoved + request.points > moved) {
+    refuseLoyalty('loyalty.corrects_more_than_target', 'a correction may not move more than the movement it corrects moved', {
+      correctsId: request.correctsId,
+      correctedPointsDelta: String(corrected.pointsDelta),
+      moved: String(moved),
+      alreadyMoved: String(alreadyMoved),
+      requested: String(request.points),
+    });
   }
 
   const draft: LoyaltyMovementDraft = {

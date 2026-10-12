@@ -1987,6 +1987,147 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     expect(buildReversalMovement(half, { ...request, points: 10n, movementId: 'r2', sourceId: 'desk-2' }).pointsDelta).toBe(10n);
   });
 
+  it('F-23 — the bound is on the MAGNITUDE of the row named, at every sign', () => {
+    // The seventh round found the `F-21` bound written inside
+    // `if (corrected.pointsDelta < 0n)`, so it compared a correction of a DRAW
+    // and nothing else. `§1.4` lets `correctsId` name any movement the ledger
+    // holds, so a correction naming a POSITIVE row walked past the comparison
+    // and restored the defect the bound was added for. Reproduced here before
+    // the fix, through this writer, to the digit: naming the earn, 1,000,000
+    // points were accepted and the fold read `1000060 / 0 / 60 / 0 / 1000000 /
+    // 60`; naming a standing grant of 10, 999,999 were accepted and it read
+    // `1000009 / 0 / 10 / 10 / 999999 / 10`. The first is byte for byte the
+    // figure `F-21` was raised for, through the function that now refuses it.
+    const base = (() => {
+      let l = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'));
+      l = appendMovement(l, buildSaleConsumptionMovement(l, sale(40n, '2026-01-02', 'c1'))).ledger;
+      return l;
+    })();
+    const ask = (ledger: LoyaltyLedger, correctsId: string, points: bigint, id = 'x1') =>
+      buildReversalMovement(ledger, {
+        businessId: BUSINESS, customerId: CUSTOMER, sourceId: `desk-${id}`, correctsId, points,
+        asOf: '2026-01-03', movementId: id, reason: 'desk correction',
+      });
+
+    // A NEGATIVE target: the law as it already stood.
+    expect(ask(base, 'c1', 40n).pointsDelta).toBe(40n);
+    expect(refusalCodeOf(() => ask(base, 'c1', 41n))).toBe('loyalty.corrects_more_than_target');
+
+    // A POSITIVE target — the earn. The bound is its own magnitude, 100.
+    expect(refusalCodeOf(() => ask(base, 'e1', 1000000n))).toBe('loyalty.corrects_more_than_target');
+    expect(refusalCodeOf(() => ask(base, 'e1', 101n))).toBe('loyalty.corrects_more_than_target');
+    expect(ask(base, 'e1', 100n).pointsDelta).toBe(100n);
+    // And it counts what earlier corrections of that row already moved.
+    const after60 = appendMovement(base, ask(base, 'e1', 60n, 'x1')).ledger;
+    expect(refusalCodeOf(() => ask(after60, 'e1', 41n, 'x2'))).toBe('loyalty.corrects_more_than_target');
+    expect(ask(after60, 'e1', 40n, 'x2').pointsDelta).toBe(40n);
+
+    // A POSITIVE target — a standing grant, the other shape measured.
+    const withGrant = appendMovement(base, adjust('g1', 10n, '2026-01-02', 'merchant goodwill')).ledger;
+    expect(refusalCodeOf(() => ask(withGrant, 'g1', 999999n))).toBe('loyalty.corrects_more_than_target');
+    expect(refusalCodeOf(() => ask(withGrant, 'g1', 11n))).toBe('loyalty.corrects_more_than_target');
+    expect(ask(withGrant, 'g1', 10n).pointsDelta).toBe(10n);
+
+    // AND IT COUNTS BOTH DIRECTIONS, which is the conservative reading and is
+    // deliberate. A negative hand correction naming the draw (A-16's own desk
+    // correction, admitted by `validateDraft`) has already moved that row's
+    // quantity, so this writer refuses a further movement against it rather
+    // than letting the same 40 be accounted for twice over; the lawful remedy
+    // there is a fresh grant. A mutation that counts only the positive
+    // direction is caught here and nowhere else.
+    const twiceMoved: LoyaltyLedger = {
+      movements: [
+        ...base.movements,
+        {
+          id: 'd1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
+          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-d1',
+          pointsDelta: -40n, expiresOn: null, effectiveOn: '2026-01-02',
+          reason: 'a second desk movement against the same consumption', correctsId: 'c1',
+        },
+      ],
+    };
+    expect(refusalCodeOf(() => ask(twiceMoved, 'c1', 1n))).toBe('loyalty.corrects_more_than_target');
+
+    // A ZERO target. `validateDraft` refuses a zero delta, so such a row exists
+    // only past the writer — and a correction of a row that moved nothing is
+    // refused by the same bound, which is what "the magnitude of the row named"
+    // means when that magnitude is 0.
+    const withZero: LoyaltyLedger = {
+      movements: [
+        ...base.movements,
+        {
+          id: 'z1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
+          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-z1',
+          pointsDelta: 0n, expiresOn: null, effectiveOn: '2026-01-02',
+          reason: 'a row the ledger itself would refuse', correctsId: null,
+        },
+      ],
+    };
+    expect(refusalCodeOf(() => appendMovement(base, {
+      id: 'z9', businessId: BUSINESS, customerId: CUSTOMER, movementKind: 'adjust',
+      sourceType: 'manual_adjustment', sourceId: 'adj-z9', pointsDelta: 0n,
+      expiresOn: null, effectiveOn: '2026-01-02', reason: 'nothing', correctsId: null,
+    }))).toBe('loyalty.movement_would_be_zero');
+    expect(refusalCodeOf(() => ask(withZero, 'z1', 1n))).toBe('loyalty.corrects_more_than_target');
+  });
+
+  it('F-23 RED PROOF — the sign gate restored, and the defect comes back to the digit', () => {
+    // `P13-S0 §5`'s canary requirement: the case above must be able to tell the
+    // fixed writer from the broken one. `broken` is the bound exactly as it was
+    // written — inside the target's sign — and it is asked the same question.
+    const base = (() => {
+      let l = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'));
+      l = appendMovement(l, buildSaleConsumptionMovement(l, sale(40n, '2026-01-02', 'c1'))).ledger;
+      return l;
+    })();
+    const broken = (ledger: LoyaltyLedger, correctsId: string, points: bigint): string => {
+      const corrected = must(ledger.movements.find((m) => m.id === correctsId), 'the corrected row');
+      if (corrected.pointsDelta < 0n) {
+        const taken = -corrected.pointsDelta;
+        const alreadyRestored = ledger.movements
+          .filter((m) => m.correctsId === corrected.id && m.pointsDelta > 0n)
+          .reduce((acc, m) => acc + m.pointsDelta, 0n);
+        if (alreadyRestored + points > taken) return 'loyalty.corrects_more_than_target';
+      }
+      return '(accepted)';
+    };
+    // The broken bound refuses the draw and waves the earn through.
+    expect(broken(base, 'c1', 41n)).toBe('loyalty.corrects_more_than_target');
+    expect(broken(base, 'e1', 1000000n)).toBe('(accepted)');
+    // The real one refuses both, by name.
+    expect(refusalCodeOf(() => buildReversalMovement(base, {
+      businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1', correctsId: 'e1',
+      points: 1000000n, asOf: '2026-01-03', movementId: 'x1', reason: 'desk correction',
+    }))).toBe('loyalty.corrects_more_than_target');
+
+    // AND THE FIGURE THE BROKEN WRITER PRODUCED, which is still what the
+    // relation permits past this package: 1,000,000 points naming the earn.
+    const byHand: LoyaltyLedger = {
+      movements: [
+        ...base.movements,
+        {
+          id: 'x1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
+          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-x1',
+          pointsDelta: 1000000n, expiresOn: null, effectiveOn: '2026-01-03',
+          reason: 'a desk correction naming the earn', correctsId: 'e1',
+        },
+      ],
+    };
+    const fold = foldExpiry(byHand, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(fold.balancePoints).toBe(1000060n);
+    expect(fold.expiringPoints).toBe(0n);
+    expect(fold.spendablePoints).toBe(60n);
+    expect(fold.unhorizonedPoints).toBe(0n);
+    expect(fold.unattributablePoints).toBe(1000000n);
+    // Redemption is unmoved, which is why this is a reporting defect and not a
+    // money one — and why the whole quantity is withheld: an earn is in no
+    // draw, so a correction naming one credits NOTHING spendable. The route
+    // that works for an under-award is §2.3's standing grant.
+    expect(eligiblePoints(byHand, BUSINESS, CUSTOMER, '2026-06-01')).toBe(60n);
+    const grantRoute = appendMovement(base, adjust('g9', 1000000n, '2026-01-03', 'the under-award, as a grant')).ledger;
+    expect(eligiblePoints(grantRoute, BUSINESS, CUSTOMER, '2026-06-01')).toBe(1000060n);
+  });
+
   it('withholds the excess when an over-restoration is written past the writer', () => {
     // The fold must still be sound over a ledger the writer would refuse, and
     // this is the arm that keeps it measured: hand-built, because
