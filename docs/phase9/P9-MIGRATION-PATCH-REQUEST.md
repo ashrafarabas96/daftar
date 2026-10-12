@@ -514,7 +514,7 @@ money-shaped column reached the schema.
 
 ## 9. EVIDENCE
 
-**81 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
+**82 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
 PostgreSQL 16.15 cluster at `en_US.utf8`** (and again on 18.4 at `C` as a comparison), with the
 spec applied in one transaction as the non-superuser deployment principal
 `daftar_migrator` on top of the sealed Phase 3 head.

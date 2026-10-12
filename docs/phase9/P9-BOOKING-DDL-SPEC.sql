@@ -207,7 +207,16 @@
 --          change again (`booking.immutable_settlement`), and it may only
 --          become non-NULL in the same statement that leaves `'booked'`
 --          (`booking.settlement_without_close`) — settling a booking that is
---          still standing is a contradiction, not a closure.
+--          still standing is a contradiction, not a closure — and it may
+--          never be ADDED to a booking that is already closed
+--          (`booking.settlement_after_close`), because a field written later
+--          inherits the `settled_at` of the closure and reads as if it had
+--          been recorded there. That third refusal was missing while this
+--          sentence already claimed it: the challenger's second pass at
+--          `76ab277` added a reason to a `completed` and to a `no_show`
+--          booking after close, with no refusal, because `settle_reason` is
+--          required by CHECK only for `'cancelled'`. The law was right and
+--          the code was narrower than the law, so the code changed.
 --
 -- R-P9-10  Every refusal is `'<domain>.<snake_case_condition>: sentence'`
 --          with `ERRCODE = 'P0001'`, the convention of every migration from
@@ -982,6 +991,32 @@ BEGIN
     RAISE EXCEPTION 'booking.settlement_without_close: booking % is still booked — a settlement record is written by the statement that settles it', OLD.id USING ERRCODE = 'P0001';
   END IF;
 
+  -- (a4) R-P9-15, the other half of (a3) — and the half that was missing.
+  --      (a2) refuses a REWRITE and (a3) refuses a write to a STANDING
+  --      booking, which between them left the one shape that matters most:
+  --      a field still NULL on an already-CLOSED booking, written later.
+  --      The two shape CHECKs cover most of it by accident —
+  --      `bookings_settle_shape_ck` forces settled_at and
+  --      settled_by_user_id to be non-NULL at close, and
+  --      `bookings_reschedule_shape_ck` forces the forward link — but
+  --      `settle_reason` is required only for 'cancelled', so on
+  --      'completed' and 'no_show' it may legitimately be NULL at close and
+  --      was then writable afterwards. The late reason inherited the
+  --      `settled_at` written at closure and read as if it had been recorded
+  --      then: on a no-show, the state most likely to be disputed, the
+  --      account of what happened could be composed after the fact.
+  --      Found by the independent challenger's second pass at `76ab277`,
+  --      by execution: refusal=(NONE), on both states. R-P9-15's sentence
+  --      already said this; only the code was narrower than the sentence,
+  --      so the code is what changed.
+  IF OLD.state <> 'booked'
+     AND ((OLD.settled_at IS NULL AND NEW.settled_at IS NOT NULL)
+          OR (OLD.settled_by_user_id IS NULL AND NEW.settled_by_user_id IS NOT NULL)
+          OR (OLD.settle_reason IS NULL AND NEW.settle_reason IS NOT NULL)
+          OR (OLD.rescheduled_to_id IS NULL AND NEW.rescheduled_to_id IS NOT NULL)) THEN
+    RAISE EXCEPTION 'booking.settlement_after_close: booking % was closed as %; its settlement record is written at closure and never added to afterwards', OLD.id, OLD.state USING ERRCODE = 'P0001';
+  END IF;
+
   -- (b) The state machine. 'booked' is the only state anything leaves.
   IF OLD.state <> 'booked' AND NEW.state IS DISTINCT FROM OLD.state THEN
     RAISE EXCEPTION 'booking.state_terminal: % is a terminal state and cannot become %', OLD.state, NEW.state USING ERRCODE = 'P0001';
@@ -993,7 +1028,7 @@ BEGIN
   RETURN NEW;
 END $$;
 COMMENT ON FUNCTION bookings_transition() IS
-  'P9-S1, R-P9-08 and R-P9-15. BEFORE UPDATE guard on `bookings`: refuses any change to the identity, the held time or the buffers (booking.immutable), refuses to rewrite a settlement field once it is non-NULL (booking.immutable_settlement), refuses to write one while the booking is still ''booked'' (booking.settlement_without_close), refuses to leave a terminal state (booking.state_terminal) and refuses to re-enter ''booked'' (booking.state_not_reopenable). SECURITY INVOKER — it compares OLD to NEW and reads no relation.';
+  'P9-S1, R-P9-08 and R-P9-15. BEFORE UPDATE guard on `bookings`: refuses any change to the identity, the held time or the buffers (booking.immutable), refuses to rewrite a settlement field once it is non-NULL (booking.immutable_settlement), refuses to write one while the booking is still ''booked'' (booking.settlement_without_close), refuses to ADD one to a booking that is already closed (booking.settlement_after_close), refuses to leave a terminal state (booking.state_terminal) and refuses to re-enter ''booked'' (booking.state_not_reopenable). SECURITY INVOKER — it compares OLD to NEW and reads no relation.';
 REVOKE ALL ON FUNCTION bookings_transition() FROM PUBLIC;
 
 CREATE TRIGGER bookings_transition_only

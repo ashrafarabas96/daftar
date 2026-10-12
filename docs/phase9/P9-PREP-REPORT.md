@@ -22,13 +22,13 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 588 | 7 cases: each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
 | `tests/phase9-prep/p9-booking-time.test.ts` | 621 | 21 cases: the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan at one-day granularity, and the two defects V3 named |
-| `tests/phase9-prep/p9-booking-integrity.test.ts` | 240 | 5 cases: the closure record is write-once (R-P9-15) — the two defects the independent challenger found, and the non-vacuity that keeps the guard honest |
+| `tests/phase9-prep/p9-booking-integrity.test.ts` | 275 | 6 cases: the closure record is write-once (R-P9-15) — the two defects the independent challenger found, and the non-vacuity that keeps the guard honest |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 350 | 10 cases: the schema attacked as the real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | 206 | the spec loader, the state contract parser, and the non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**81 of 81 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`**
+**82 of 82 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`**
 — over seven suites, and again on PostgreSQL 18.4 at `C` as the comparison the mission permits.
 A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
@@ -333,6 +333,51 @@ roadmap predecessor is not sealed, no migration number exists, and two signature
 three are owed. The D11 PART 117 label for the same state is `PREPARED / NOT PROMOTED`; the
 two are the same claim, and this report uses both so neither vocabulary has to be guessed
 at.
+
+### 3c.13 The challenger's SECOND pass at `76ab277` — PASS-WITH-SCOPE, and the residual closed
+
+The same independent challenger re-ran the work at `76ab277` in its own container, on
+PostgreSQL 16.15 at `en_US.utf8` under **Node 24.12.0**, and re-planted every mutation rather
+than reading the answers. Verdict: **PASS-WITH-SCOPE**, 81 of 81 with exit code 0, all six
+round-1 findings confirmed fixed, and **one residual P2**. Its report is
+`/mnt/project-files/phase9/P9-CHALLENGE-76ab277.md`.
+
+**The Node 24 run is the challenger's, not this phase's.** Its re-run was on 24.12.0 at this
+subject's parent SHA, so Node 24 behaviour now has an independent measurement. That is cited
+as the challenger's measurement. PART 7.6's rerun *from this phase's own container* is still
+owed: the container ships 22.22.0.
+
+**The residual: R-P9-15's words were wider than its code.** Guard (a2) refused a REWRITE and
+(a3) refused a write to a STANDING booking. Between them they left the one shape that
+matters most — a field still NULL on a booking that is **already closed**, written later. The
+shape CHECKs hide most of it by accident: `settled_at` and `settled_by_user_id` must be
+non-NULL at close, and the forward link is forced by `bookings_reschedule_shape_ck`. But
+`bookings_cancel_reason_ck` requires `settle_reason` only for `'cancelled'`, so on
+`'completed'` and `'no_show'` it may legitimately be NULL at close — and was then writable.
+The challenger measured it on both states: *refusal=(NONE)*. The late reason inherited the
+`settled_at` written at closure, so nothing in the row distinguished it from one recorded
+there, on a no-show, the state most likely to be disputed.
+
+Closed as block **(a4)**, `booking.settlement_after_close`: once a booking is not `'booked'`,
+no settlement field may go from NULL to non-NULL. The law's sentence needed no rewriting —
+only the code was narrower than the law, so the code is what changed. Two red proofs land it,
+one per state, each asserting that the reason is legitimately NULL at close first (so the
+case is about the hole and not about a CHECK), then the refusal by name, then that neither
+the reason nor `settled_at` moved. The non-vacuity case gains a `no_show` closed WITH its
+reason in one statement, because a refusal of (a4) and a refusal of that lawful shape would
+otherwise be indistinguishable.
+
+**Two things the challenger withdrew or corrected, recorded because it did so in writing.**
+It verified this round's NEW premise rather than accepting it — "no zone has ever
+transitioned twice within one day" — by enumerating every transition window at one-day
+granularity and then scanning each one hourly: 41 999 windows across 330 zones, a maximum of
+one transition per 24 hours, no window with more than one. And it retracted a finding of its
+own: its first probe read "reassign closer → (NONE)", which was its own bug — it passed the
+same user id, so `IS DISTINCT FROM` correctly permitted a no-op. Retested with a different
+user, it is refused by name.
+
+**The run after this fix.** `tests/phase9-prep`, 7 files, **82 of 82 cases, exit code 0**, on
+PostgreSQL 16.15 at `en_US.utf8`, and again on 18.4 at `C` as the comparison.
 
 ### 3c.12 The INDEPENDENT CHALLENGER's REJECT at `51626e1`, answered
 

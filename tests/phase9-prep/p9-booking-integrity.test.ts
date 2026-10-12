@@ -30,14 +30,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ScratchDb } from '../helpers/scratch-db';
-import {
-  INSERT_BOOKING,
-  INSERT_BOOKING_WITH_BACKLINK,
-  type BookingWorld,
-  bookingParams,
-  uuid,
-  withBookingDb,
-} from './p9-booking-world';
+import { INSERT_BOOKING, INSERT_BOOKING_WITH_BACKLINK, type BookingWorld, bookingParams, uuid, withBookingDb } from './p9-booking-world';
 
 /** A quiet June day, far from any transition: this file is not about clocks. */
 const AT = (h: string): string => `2026-06-10T${h}:00:00+00`;
@@ -109,10 +102,7 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
     await withBookingDb('daftar_p9_integrity_2', async (db, world) => {
       await book(db, world, 1, '09', '10');
       // The real successor, carrying the backlink that makes the pair a chain.
-      await db.pool.query(INSERT_BOOKING_WITH_BACKLINK, [
-        ...bookingParams({ world, id: uuid(2), startsAt: AT('11'), endsAt: AT('12') }),
-        uuid(1),
-      ]);
+      await db.pool.query(INSERT_BOOKING_WITH_BACKLINK, [...bookingParams({ world, id: uuid(2), startsAt: AT('11'), endsAt: AT('12') }), uuid(1)]);
       await book(db, world, 3, '13', '14');
 
       await db.pool.query(
@@ -128,11 +118,7 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       // booking replaced which, with the backlink frozen and the forward link
       // free. The shape CHECK cannot see this — both states are 'rescheduled'
       // with a non-NULL link, so the shape still agrees with itself.
-      const said = await refused(
-        db,
-        `UPDATE bookings SET rescheduled_to_id = $2 WHERE business_id = $1 AND id = $3`,
-        [world.businessId, uuid(3), uuid(1)],
-      );
+      const said = await refused(db, `UPDATE bookings SET rescheduled_to_id = $2 WHERE business_id = $1 AND id = $3`, [world.businessId, uuid(3), uuid(1)]);
       expect(said).toMatch(/booking\.immutable_settlement/);
 
       // The chain still closes on itself, in both directions.
@@ -155,15 +141,8 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       // `IS DISTINCT FROM` on both sides of the guard is deliberate: erasing
       // who closed a booking is the same loss as replacing them, and a guard
       // written with `<>` would have let this through on the NULL.
-      for (const set of [
-        `settle_reason = NULL`,
-        `settled_at = NULL, state = 'booked'`,
-        `settled_by_user_id = NULL, state = 'booked'`,
-      ]) {
-        const said = await refused(db, `UPDATE bookings SET ${set} WHERE business_id = $1 AND id = $2`, [
-          world.businessId,
-          uuid(1),
-        ]);
+      for (const set of [`settle_reason = NULL`, `settled_at = NULL, state = 'booked'`, `settled_by_user_id = NULL, state = 'booked'`]) {
+        const said = await refused(db, `UPDATE bookings SET ${set} WHERE business_id = $1 AND id = $2`, [world.businessId, uuid(1)]);
         expect(said).toMatch(/booking\.(immutable_settlement|state_not_reopenable)/);
       }
 
@@ -187,11 +166,10 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       // 'rescheduled' — but NOTHING ties `settle_reason` to a closed booking,
       // so a standing booking could carry the reason it was cancelled for
       // while still holding its hour. (a3) refuses it by name.
-      const said = await refused(
-        db,
-        `UPDATE bookings SET settle_reason = 'cancelled, allegedly' WHERE business_id = $1 AND id = $2`,
-        [world.businessId, uuid(1)],
-      );
+      const said = await refused(db, `UPDATE bookings SET settle_reason = 'cancelled, allegedly' WHERE business_id = $1 AND id = $2`, [
+        world.businessId,
+        uuid(1),
+      ]);
       expect(said).toMatch(/booking\.settlement_without_close/);
 
       const row = await db.pool.query<{ state: string; reason: string | null }>(
@@ -200,6 +178,56 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       );
       expect(row.rows[0]?.state).toBe('booked');
       expect(row.rows[0]?.reason).toBeNull();
+    });
+  });
+
+  it('a reason cannot be ADDED to an already-closed booking: `completed` and `no_show` leave settle_reason NULL at close', async () => {
+    await withBookingDb('daftar_p9_integrity_6', async (db, world) => {
+      // The hole the challenger's SECOND pass found at `76ab277`, after the
+      // first four cases were green. (a2) refused a rewrite and (a3) refused a
+      // write to a standing booking; neither saw a field that was still NULL
+      // on a booking that was already closed. The two shape CHECKs hide most
+      // of it — settled_at and settled_by_user_id must be non-NULL at close,
+      // and the forward link is forced by `bookings_reschedule_shape_ck` — but
+      // `bookings_cancel_reason_ck` requires `settle_reason` only for
+      // 'cancelled'. So these two states, and only these two, could be given
+      // their account of what happened afterwards.
+      const states = ['completed', 'no_show'] as const;
+      for (const [n, state] of states.entries()) {
+        await book(db, world, 10 + n, `0${8 + n}`, `0${9 + n}`);
+        await db.pool.query(
+          `UPDATE bookings SET state = $4, settled_at = now(), settled_by_user_id = $2
+            WHERE business_id = $1 AND id = $3`,
+          [world.businessId, world.userId, uuid(10 + n), state],
+        );
+        const closed = await db.pool.query<{ at: string; reason: string | null }>(
+          `SELECT settled_at::text AS at, settle_reason AS reason FROM bookings WHERE business_id = $1 AND id = $2`,
+          [world.businessId, uuid(10 + n)],
+        );
+        // The premise of the whole case: the reason IS legitimately NULL here.
+        expect(closed.rows[0]?.reason).toBeNull();
+
+        // AT 76ab277 THIS SUCCEEDED, on both states. The challenger's output:
+        //   [D1/completed] refusal=(NONE) | reason now = 'customer confirmed
+        //                  they never arrived' | settled_at unchanged
+        // The late reason inherited the `settled_at` written at closure, so
+        // nothing in the row distinguished it from one recorded there — on a
+        // no-show, the state most likely to be disputed.
+        const said = await refused(
+          db,
+          `UPDATE bookings SET settle_reason = 'customer confirmed they never arrived'
+            WHERE business_id = $1 AND id = $2`,
+          [world.businessId, uuid(10 + n)],
+        );
+        expect(said).toMatch(/booking\.settlement_after_close/);
+
+        const after = await db.pool.query<{ at: string; reason: string | null }>(
+          `SELECT settled_at::text AS at, settle_reason AS reason FROM bookings WHERE business_id = $1 AND id = $2`,
+          [world.businessId, uuid(10 + n)],
+        );
+        expect(after.rows[0]?.reason).toBeNull();
+        expect(after.rows[0]?.at).toBe(closed.rows[0]?.at);
+      }
     });
   });
 
@@ -219,21 +247,28 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
         [world.businessId, world.userId, uuid(2)],
       );
 
+      // A `no_show` closed WITH its reason in the same statement: (a4) refuses
+      // a reason ADDED after close, and would be indistinguishable from a
+      // refusal of this if this case did not exist.
+      await book(db, world, 5, '17', '18');
+      await db.pool.query(
+        `UPDATE bookings SET state = 'no_show', settled_at = now(), settled_by_user_id = $2,
+           settle_reason = 'did not arrive, front desk waited 20 minutes' WHERE business_id = $1 AND id = $3`,
+        [world.businessId, world.userId, uuid(5)],
+      );
+
       await book(db, world, 3, '13', '14');
-      await db.pool.query(INSERT_BOOKING_WITH_BACKLINK, [
-        ...bookingParams({ world, id: uuid(4), startsAt: AT('15'), endsAt: AT('16') }),
-        uuid(3),
-      ]);
+      await db.pool.query(INSERT_BOOKING_WITH_BACKLINK, [...bookingParams({ world, id: uuid(4), startsAt: AT('15'), endsAt: AT('16') }), uuid(3)]);
       await db.pool.query(
         `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
            settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
         [world.businessId, world.userId, uuid(4), uuid(3)],
       );
 
-      const states = await db.pool.query<{ state: string }>(
-        `SELECT state FROM bookings WHERE business_id = $1 AND id = ANY($2::uuid[]) ORDER BY id`,
-        [world.businessId, [uuid(1), uuid(2), uuid(3)]],
-      );
+      const states = await db.pool.query<{ state: string }>(`SELECT state FROM bookings WHERE business_id = $1 AND id = ANY($2::uuid[]) ORDER BY id`, [
+        world.businessId,
+        [uuid(1), uuid(2), uuid(3)],
+      ]);
       expect(states.rows.map((r) => r.state)).toEqual(['cancelled', 'completed', 'rescheduled']);
     });
   });
