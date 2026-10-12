@@ -47,6 +47,14 @@ not the same fact:
 | the commit is readable and the **manifest is absent** in it (a deletion, or a rename) | the revision is **skipped and recorded** | the revisions BEFORE it are readable, and so is the digest the report was received with. A deletion erases nothing |
 | the commit is readable, the path is there, the **blob** cannot be read | `NOT CHECKED` | unreadable is unreadable |
 
+> **ANNOTATED AT ROUND 12 (`R12-P1-01`, BLOCKING).** The third row of that table was **the
+> design, not the code**. The walk asked `git cat-file -e <rev>:<path>`, which fails for the
+> second row and the third row alike, so a tree entry with an unavailable blob was recorded as a
+> deletion and the history still printed *checked*. The table was a sentence wider than the
+> measurement under it; the discrimination it describes is enforced from
+> `P14-AMENDMENT-17-CHALLENGE-ROUND-12.md` onward, by asking `git ls-tree` instead. Read this
+> table as the intent of that commit and not as its behaviour.
+
 The history line now also says how many revisions the manifest is absent in and names them, so a
 drop and re-add is visible to the reader rather than inferred: *"checked over every revision …
 and the manifest is ABSENT in 1 of them (a43f7894dca5) — removed and re-added, which does not

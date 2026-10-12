@@ -36,6 +36,15 @@ cleanup() {
   [ -f "$T/rep.bak" ]   && cp "$T/rep.bak" "$PACK/P14-CHALLENGE-7af6438.md" 2>/dev/null
   [ -f "$T/coord.bak" ] && cp "$T/coord.bak" "$PACK/P14-COORD-DIFF-REVIEW-c812aa5.md" 2>/dev/null
   [ -n "${WT2:-}" ] && git -C "$REPO" worktree remove --force "$WT2" >/dev/null 2>&1
+  # CHALLENGE R12-P3-01: the pack's FILES were inside the trap and the CLUSTER
+  # was not. `no-cluster` stops the cluster and `rolecount-discriminates` renames
+  # p14_merchant, so an interrupted sweep left one of those behind and the NEXT
+  # sweep measured the residue -- one of the two causes behind the unexplained
+  # red at 20:24:17Z. Restoring both costs these lines.
+  if [ -n "${PGSTOPPED:-}" ] || [ -n "${PGRENAMED:-}" ]; then
+    su claude -s /bin/bash -c "/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/p14pg/data -o \"-p 54314 -c listen_addresses='' -k /tmp/p14pg/sock -c fsync=off\" -w start" >/dev/null 2>&1
+    [ -n "${PGRENAMED:-}" ] && su claude -s /bin/bash -c "/usr/lib/postgresql/16/bin/psql -h /tmp/p14pg/sock -p 54314 -U p14super -d postgres -qc 'ALTER ROLE p14_merchant_x RENAME TO p14_merchant'" >/dev/null 2>&1
+  fi
   rm -rf "$WT" "$T"
   return 0
 }
@@ -414,6 +423,47 @@ if [ -d "$SW2/shallow/.git" ]; then
     "python3 -I $HERE/manifest-digests.py $SWM --witness $SW2/counterpart --check --allow-unverified-history"
   named shallow-no-witness-names-the-clone 1 "visible in the revisions this clone has" \
     "python3 -I $HERE/manifest-digests.py $SWM --witness $EMPTYW2 --check"
+  # CHALLENGE R12-P2-01, a FAIL-OPEN: `HISTORY NOT VERIFIED` fired only while a
+  # reviewer row SURVIVED in the manifest, and the detector that would have
+  # caught the deletion (`SIGNED ROW REMOVED`) reads the history the same
+  # NOT CHECKED empties. Both protections were switched off by one condition, so
+  # "this manifest never had a reviewer row" and "every one was just deleted"
+  # were indistinguishable and the permissive reading won: every reviewer row and
+  # file removed in a depth-1 clone answered 0, "every artifact row matches",
+  # while the counterpart directory held all of them unread. The refusal now
+  # consults that directory, so the removal is refused by what was received.
+  RD=$(mktemp -d); cp -r "$SW2/shallow" "$RD/shallow" >/dev/null 2>&1
+  cp -r "$PACK" "$RD/counterpart" >/dev/null 2>&1; rm -rf "$RD/counterpart/.git"
+  RDN=$(python3 - "$RD/shallow" <<'STRIP'
+import os,re,sys
+d=sys.argv[1]; man=os.path.join(d,'P14-HANDOFF-MANIFEST.md')
+pre=('P14-CHALLENGE-','P14-COORD-DIFF-REVIEW-')
+L=open(man,encoding='utf-8').read().split('\n'); keep=[]; n=0
+for l in L:
+    m=re.match(r'^\| `([^`]+)`', l)
+    if m and m.group(1).startswith(pre):
+        n+=1
+        try: os.remove(os.path.join(d,m.group(1)))
+        except OSError: pass
+        continue
+    keep.append(l)
+open(man,'w',encoding='utf-8').write('\n'.join(keep))
+print(n)
+STRIP
+)
+  RDM="--manifest $RD/shallow/P14-HANDOFF-MANIFEST.md --dir $RD/shallow"
+  if [ -d "$RD/shallow/.git" ] && [ "${RDN:-0}" -ge 10 ] \
+     && ! ls "$RD/shallow"/P14-CHALLENGE-* >/dev/null 2>&1; then
+    named shallow-every-review-deleted 1 "HISTORY NOT VERIFIED" \
+      "python3 -I $HERE/manifest-digests.py $RDM --witness $RD/counterpart --check"
+    named shallow-every-review-deleted-names-them 1 "have NO ROW here" \
+      "python3 -I $HERE/manifest-digests.py $RDM --witness $RD/counterpart --check"
+  else
+    printf 'FAIL  %-26s the world was not built (%s row(s) stripped) — nothing was proved\n' \
+           shallow-every-review-deleted "${RDN:-<none>}"
+    fail=$((fail+1))
+  fi
+  rm -rf "$RD"
 else
   printf 'FAIL  %-26s the shallow clone with a counterpart was not created — nothing was proved\n' shallow-counterpart-refused
   fail=$((fail+1))
@@ -445,12 +495,59 @@ if [ "$(cd "$DR/pack" && git rev-list --count HEAD)" = 4 ]; then
     "python3 -I $HERE/manifest-digests.py $DRM --witness $DR/counterpart --check"
   named manifest-dropped-and-readded-write 1 "REWRITTEN IN HISTORY" \
     "python3 -I $HERE/manifest-digests.py $DRM --witness $DR/counterpart --write"
+  # CHALLENGE R12-P1-01's control: a GENUINE deletion revision must still be
+  # SKIPPED AND RECORDED, not read as an unreadable record. This is the half of
+  # the discrimination that the blobless proof below cannot show.
+  named deletion-revision-still-skipped 1 "ABSENT in 1 of them" \
+    "python3 -I $HERE/manifest-digests.py $DRM --witness $DR/counterpart --check"
 else
   printf 'FAIL  %-26s the drop/re-add world was not built (%s commits) — nothing was proved\n' \
          manifest-dropped-and-readded "$(cd "$DR/pack" && git rev-list --count HEAD 2>/dev/null)"
   fail=$((fail+1))
 fi
 rm -rf "$DR"
+
+# CHALLENGE R12-P1-01, which BLOCKED: the remedy for P2-01-bis asked git ONE
+# question -- `git cat-file -e <rev>:<path>` -- that fails for TWO reasons, "the
+# path is not in that tree" and "the path is there but its BLOB is not
+# available". Reading the second as a deletion skipped the revision, kept
+# walking, and printed "checked over every revision ... ABSENT in 1 of them":
+# two false sentences, the witness erased, and a forged reviewer row at rc 0
+# with no flag and no limit announced. A --filter=blob:none clone whose promisor
+# cannot be reached is that world, and it is a normal CI shape. Built here as a
+# real partial clone, with the premise asserted before anything is judged.
+BLW=$(mktemp -d); cp -r "$PACK" "$BLW/origin"
+( cd "$BLW/origin" && rm -rf .git && git init -q . && git config uploadpack.allowFilter true \
+  && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' ) >/dev/null 2>&1
+forge "$BLW/origin"
+( cd "$BLW/origin" && git -c user.email=p14@local -c user.name=p14 commit -qam 'forge the row to match' ) >/dev/null 2>&1
+git clone -q --filter=blob:none "file://$BLW/origin" "$BLW/partial" >/dev/null 2>&1
+git -C "$BLW/partial" remote set-url origin "file://$BLW/promisor-that-is-not-there" >/dev/null 2>&1
+cp -r "$BLW/partial" "$BLW/counterpart"; rm -rf "$BLW/counterpart/.git"
+BLM="--manifest $BLW/partial/P14-HANDOFF-MANIFEST.md --dir $BLW/partial --witness $BLW/counterpart"
+BLOLD=$(git -C "$BLW/partial" rev-list HEAD 2>/dev/null | tail -1)
+# The premise of this proof is a tree entry WITH an unreadable blob. If the
+# transport ignored the filter, or the promisor is still reachable, the world is
+# a different one and nothing is proved -- so say that instead of a verdict.
+if [ -n "$BLOLD" ] \
+   && [ -n "$(git -C "$BLW/partial" ls-tree --name-only "$BLOLD" -- P14-HANDOFF-MANIFEST.md 2>/dev/null)" ] \
+   && ! git -C "$BLW/partial" show "$BLOLD:./P14-HANDOFF-MANIFEST.md" >/dev/null 2>&1; then
+  named blobless-clone-refused 1 "unreachable" \
+    "python3 -I $HERE/manifest-digests.py $BLM --check"
+  named blobless-clone-write-refused 1 "unreachable" \
+    "python3 -I $HERE/manifest-digests.py $BLM --write"
+  # ...and the limit is still PRINTED when the caller accepts it deliberately,
+  # so the opt-in cannot be used to make the tool say "checked".
+  named blobless-optin-prints-the-limit 0 "its content could not be read" \
+    "python3 -I $HERE/manifest-digests.py $BLM --check --allow-unverified-history"
+else
+  printf 'FAIL  %-26s the blobless world was not built (oldest=%s, tree entry=%s) — nothing was proved\n' \
+         blobless-clone-refused "${BLOLD:-<none>}" \
+         "$(git -C "$BLW/partial" ls-tree --name-only "${BLOLD:-HEAD}" -- P14-HANDOFF-MANIFEST.md 2>/dev/null | head -1)"
+  fail=$((fail+1))
+fi
+rm -rf "$BLW"
 rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"
 
 red retracted-claim-planted \
@@ -468,27 +565,45 @@ rm -rf "$T" "$FR" "$NR" "$ER" "$OP"
 # cluster is STOPPED and the script is REQUIRED to fail.
 if [ "$NODB" = 0 ] && [ -d /tmp/p14pg/data ]; then
   PGC="su claude -s /bin/bash -c"
+  PGSTOPPED=1
   $PGC "/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/p14pg/data -m fast -w stop" >/dev/null 2>&1
   # COORD DIFF REVIEW AT c812aa5, R-05: this proof required only "non-zero", so
   # the lock refusal (exit 4) or a missing `flock` (exit 5) satisfied it without
   # anything being measured -- a red proof passing for the wrong reason, which is
   # the defect this proof exists to fence. It requires exit 1 and the no-cluster
   # CAUSE sentence, so only the arms actually failing to connect can satisfy it.
+  # CHALLENGE R12-P2-02: the stop's exit code was never read and nothing was
+  # asked afterwards, while the RESTART two lines down IS verified with
+  # `select 1`. So this proof's own premise -- that nothing is listening -- was
+  # the one thing it did not measure, and when the stop did not take hold the
+  # FAIL line below reported a code and a missing sentence with no cause. That
+  # is the shape of the unexplained red at 20:24:17Z. Assert the premise first,
+  # and when the cluster still answers say THAT instead of judging the preflight.
+  if $PGC "/usr/lib/postgresql/16/bin/psql -h /tmp/p14pg/sock -p 54314 -U p14super -d postgres -qtAc 'select 1'" 2>/dev/null | grep -q 1; then
+    printf 'FAIL  %-26s the stop did not take effect — the cluster still answers `select 1`, so\n' no-cluster
+    printf '      this proof would have measured a DIFFERENT world than the one it names, and\n'
+    printf '      no verdict about the preflight is reported from here.\n'
+    fail=$((fail+1))
+  else
   out=$( "$PACK/proofs/redproof-preflight.sh" 2>&1 ); rc=$?
   if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'no cluster is listening'; then
-    printf 'ok    %-26s rc=1 with the cluster STOPPED, and it says so: "no cluster is listening"\n' no-cluster
+    printf 'ok    %-26s rc=1 with the cluster STOPPED (`select 1` refused first), and it says so: "no cluster is listening"\n' no-cluster
   else
     printf 'FAIL  %-26s rc=%s with the cluster STOPPED (required 1 and "no cluster is listening"): %s\n' \
            no-cluster "$rc" "$(printf '%s' "$out" | grep -m1 -E 'Permission denied|No such file|command not found|psql said|CAUSE:|[Ee]rror:|ERROR|FATAL|could not' | cut -c1-90)"
     fail=$((fail+1))
   fi
+  fi
   $PGC "/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/p14pg/data -o \"-p 54314 -c listen_addresses='' -k /tmp/p14pg/sock -c fsync=off\" -w start" >/dev/null 2>&1
+  PGSTOPPED=
   # R8-P3-04: the rolecount arm must be a proof about p14_resolver and not
   # about "some role". Rename a DIFFERENT one: the arm is required to FAIL.
   PSQL="/usr/lib/postgresql/16/bin/psql -h /tmp/p14pg/sock -p 54314 -U p14super -d postgres -q -c"
+  PGRENAMED=1
   $PGC "$PSQL \"ALTER ROLE p14_merchant RENAME TO p14_merchant_x\"" >/dev/null 2>&1
   out=$( "$PACK/proofs/redproof-preflight.sh" rolecount 2>&1 ); rc=$?
   $PGC "$PSQL \"ALTER ROLE p14_merchant_x RENAME TO p14_merchant\"" >/dev/null 2>&1
+  PGRENAMED=
   # R-05 again: "non-zero" was satisfiable by a lock refusal that never looked
   # at a role. Exit 1 and the arm's own "required message is absent" line.
   if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'the required message is absent'; then

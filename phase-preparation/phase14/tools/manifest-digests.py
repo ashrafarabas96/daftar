@@ -139,7 +139,17 @@ def main():
         # single truncated revision. The graft list is where the truth is.
         _bounds = set()
         if _shallow:
-            _gd = _g('rev-parse', '--absolute-git-dir').stdout.strip()
+            # FOUND BY EXECUTION in the sweep's pack-under-/tmp lane: a LINKED
+            # WORKTREE's own git dir is .git/worktrees/<name>, which holds no
+            # `shallow` file -- that file belongs to the COMMON git dir and is
+            # shared by every worktree. Reading the per-worktree dir therefore
+            # raised OSError, every revision became a boundary, and the gate
+            # answered 1 in the worktree and 0 in the main checkout on the same
+            # commit: a verdict that depended on where the pack lived. Ask for
+            # the common dir, which is the same path in both.
+            _gd = _g('rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip()
+            if not _gd:
+                _gd = _g('rev-parse', '--absolute-git-dir').stdout.strip()
             try:
                 _bounds = set(open(os.path.join(_gd, 'shallow')).read().split())
             except OSError:
@@ -184,13 +194,33 @@ def main():
             r = subprocess.run(['git','-C',_md,'show','%s:./%s' % (rev,_mb)],
                                capture_output=True, text=True)
             if r.returncode != 0:
-                if _g('cat-file', '-e', '%s:./%s' % (rev, _mb)).returncode != 0:
+                # CHALLENGE R12-P1-01, which BLOCKED: the remedy above re-opened
+                # R-08 one layer down. `git cat-file -e <rev>:<path>` fails for
+                # TWO different reasons -- the path is not in that tree, and the
+                # path IS there but the BLOB is unavailable (a blobless clone
+                # whose promisor is unreachable, a pruned or corrupt object) --
+                # and reading the second as "a deletion" skipped the revision,
+                # kept walking, and printed "CHECKED over every revision … the
+                # manifest is ABSENT in 1 of them". Measured: both sentences
+                # false, the witness erased, rc 0 on a forged row, no limit
+                # announced. `git ls-tree` discriminates because it reads the
+                # TREE and never needs the blob: empty output is a real absence,
+                # and an entry means the record exists and cannot be read.
+                # (`git rev-parse <rev>:<path>` does NOT discriminate -- it
+                # exits 0 and echoes the string for a deleted path.)
+                _lt = _g('ls-tree', '--name-only', rev, '--', _mb)
+                if _lt.returncode == 0 and not _lt.stdout.strip():
                     gaps.append(rev)      # the manifest does not exist in this revision
                     continue
-                _why = (r.stderr.strip().split('\n') or [''])[0][:120]
+                if _lt.returncode != 0:
+                    signed_history, moved = {}, {}
+                    history = ('NOT CHECKED (the tree of revision %s could not be read, so'
+                               ' whether this manifest existed in it is unknown)' % rev[:12])
+                    break
                 signed_history, moved = {}, {}
-                history = ('NOT CHECKED (revision %s of this manifest could not be read: %s)'
-                           % (rev[:12], _why or 'git show failed'))
+                history = ('NOT CHECKED (revision %s lists this manifest but its content could'
+                           ' not be read — the object is missing, pruned, or in an unreachable'
+                           ' promisor — so the record it carries cannot be compared)' % rev[:12])
                 break
             for ln in r.stdout.split('\n'):
                 m = ROW.match(ln)
@@ -314,15 +344,35 @@ def main():
     for u in unlisted: stale.append('%s: ARTIFACT WITH NO ROW' % u)
     # It fires only when there IS a reviewer row to protect, so it cannot red a
     # manifest that has none.
+    # CHALLENGE R12-P2-01, a FAIL-OPEN: this refusal fired only when a reviewer
+    # row SURVIVED in the manifest, and the other protection (SIGNED ROW
+    # REMOVED) reads `signed_history`, which NOT CHECKED empties -- so one
+    # condition disabled both, and "this manifest never had a reviewer row" was
+    # indistinguishable from "every one of them was just deleted". Measured in a
+    # depth-1 clone with all 18 reviewer rows and their files removed: rc 0,
+    # "every artifact row matches". The counterpart directory is evidence the
+    # manifest cannot erase, so it is asked: reports there with no rows here,
+    # under an unverifiable history, is the shape of the attack.
     blocked = False
+    _wdir = a.witness or witness_default()
+    try:
+        _wreports = sorted(f for f in os.listdir(_wdir) if f.startswith(REVIEWER_PREFIXES))
+    except OSError:
+        _wreports = []
+    _wmissing = [f for f in _wreports if f not in listed]
     if (history.startswith('NOT CHECKED') and not a.allow_unverified_history
-            and any(n.startswith(REVIEWER_PREFIXES) for n in listed)):
+            and (any(n.startswith(REVIEWER_PREFIXES) for n in listed) or _wreports)):
         blocked = True
-        stale.append('HISTORY NOT VERIFIED: the reviewer-row history is %s. The only witness'
-                     ' left for a reviewer row is then the copy in the other directory, which'
-                     ' the same hand writes, so nothing here can confirm what was received.'
-                     ' Fetch the full history (`fetch-depth: 0`) and re-run, or pass'
-                     ' --allow-unverified-history to accept that limit deliberately.' % history)
+        stale.append('HISTORY NOT VERIFIED: the reviewer-row history is %s, and %s. The only'
+                     ' witness left for a reviewer row is then the copy in the other directory,'
+                     ' which the same hand writes, so nothing here can confirm what was'
+                     ' received. Fetch the full history (`fetch-depth: 0`) and re-run, or pass'
+                     ' --allow-unverified-history to accept that limit deliberately.'
+                     % (history,
+                        ('%d reviewer report(s) under %s have NO ROW here (%s) — a manifest'
+                         ' cannot erase the other directory'
+                         % (len(_wmissing), _wdir, ', '.join(_wmissing[:3]))) if _wmissing
+                        else 'there are reviewer rows to protect'))
     # COORD DIFF REVIEW AT c812aa5, R-02: a whole reviewer report could be
     # deleted together with its row and this lane stayed green -- what caught it
     # was the other directory, which is a second witness and not a refusal. A

@@ -117,8 +117,22 @@ arm() { # name | setup-sql-as-p14super | db to preflight | teardown | required m
         *"already exists"*)
           printf '      CAUSE: an earlier interrupted run of THIS script left its object behind.\n'
           printf '      Clear it and re-run: psql -U p14super -d postgres -c "DROP DATABASE IF EXISTS p14wrongcoll_%s" -c "DROP DATABASE IF EXISTS p14wrongenc_%s"\n' "$RT" "$RT" ;;
-        *"could not connect"*|*"No such file or directory"*)
+        *"could not connect"*|*"No such file or directory"*|*"Connection refused"*|*"connection to server"*)
+          # FOUND BY EXECUTION while fencing R12-P2-02: this case covered the
+          # text psql prints when the socket FILE is gone, and not the text it
+          # prints when the file is still there with nothing listening behind it
+          # ("connection to server on socket ... failed: Connection refused"),
+          # which is what a stopped or killed cluster leaves on this box. So with
+          # the cluster genuinely down the script fell through this `case`, named
+          # NO cause at all, and the sweep's own FAIL line could only report a
+          # code and a missing sentence -- the 20:24:17Z disclosure. Both texts
+          # now reach the one cause that was asked and answered.
           printf '      CAUSE: no cluster is listening on %s:%s — start it before judging any proof.\n' "$SOCK" "$PORT" ;;
+        *)
+          # And a cause that was NOT matched must say so, rather than leaving the
+          # reader to infer one from the code alone.
+          printf '      CAUSE: not classified by this script — the text above is the whole of what\n'
+          printf '      psql said, and no cause is claimed for it here.\n' ;;
       esac
       fail=$((fail+1)); return 0
     fi
