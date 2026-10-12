@@ -271,7 +271,13 @@ function runCheck(subject: string, searchRoot?: string): { readonly code: number
     env: { ...process.env, P15_ALERT_RULES: subject, ...(searchRoot === undefined ? {} : { P15_SEARCH_ROOT: searchRoot }) },
     maxBuffer: 32 * 1024 * 1024,
   });
-  return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  // The gate's own codes are 0 and 1. Anything else — a crash, a missing
+  // runner, a signal — is NOT a verdict, and a case that compared it with 1
+  // would read "the check went red" from a check that never ran.
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  if (r.error !== undefined || (r.status !== 0 && r.status !== 1))
+    return { code: null, out: `${out}\n[harness] the gate did not run: exit ${String(r.status)}${r.error === undefined ? '' : ` (${String(r.error)})`}` };
+  return { code: r.status, out };
 }
 
 /**

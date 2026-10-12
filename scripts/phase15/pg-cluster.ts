@@ -263,12 +263,30 @@ export function clusterIdentity(port: number, db: string): string {
   return r.ok && r.value.length > 0 ? r.value : `UNREADABLE — the identity query failed (${r.detail.slice(0, 160)})`;
 }
 
+/**
+ * Clusters this process failed to stop. A teardown that did not happen is not
+ * a cosmetic matter: the port stays held, and the NEXT instrument to use that
+ * port either fails to bind or — worse — measures the cluster this one left
+ * behind. That is not hypothetical: in the 60458ec evidence run,
+ * `test:phase15:load-harness` found port 55432 still bound, its fixture never
+ * started, and vitest reported "No test files found", which is a setup failure
+ * wearing a filter failure's words.
+ */
+const stopFailures: string[] = [];
+export const clusterStopFailures = (): readonly string[] => stopFailures;
+
 export function stopCluster(spec: ClusterSpec): void {
   const data = join(spec.dir, 'data');
   if (!existsSync(join(data, 'PG_VERSION'))) return;
   // Immediate, not fast: the drill's clusters are disposable and a stuck
   // shutdown would hold the port for the next run.
-  asServerUser(`${PG16_BIN}/pg_ctl -D ${data} -m immediate -w stop`);
+  const r = asServerUser(`${PG16_BIN}/pg_ctl -D ${data} -m immediate -w stop`);
+  if (r.error !== undefined || r.status !== 0) {
+    const detail = `${r.stdout ?? ''}\n${r.stderr ?? ''}`.trim().split('\n').slice(-2).join(' | ');
+    const line = `${spec.label}: pg_ctl -m immediate stop exited ${String(r.status)} — port ${String(spec.port)} may still be held. ${detail}`;
+    stopFailures.push(line);
+    console.error(`  TEARDOWN NOT CLEAN — ${line}`);
+  }
 }
 
 export const adminUrl = (port: number): string => `postgresql://${PG_SUPERUSER}:${PG_SUPERPASS}@127.0.0.1:${port}/postgres`;
@@ -307,7 +325,15 @@ export function restoreGlobals(port: number, file: string): { readonly tolerated
     env: { PGPASSWORD: PG_SUPERPASS },
   });
   if (r.error) throw new ClusterError('psql (globals): could not be executed', String(r.error));
-  const lines = (r.stderr ?? '')
+  // `ON_ERROR_STOP=0` makes psql exit 0 through tolerated errors, so the code
+  // alone cannot decide this. It can still say the process never did its job:
+  // a non-zero exit with no error lines at all is psql failing to run, not a
+  // restore that went through quietly.
+  const statusCode = r.status;
+  const stderrText = r.stderr ?? '';
+  if (statusCode !== 0 && stderrText.trim().length === 0)
+    throw new ClusterError(`psql (globals): exit ${String(statusCode)} with no diagnostics`, (r.stdout ?? '').trim());
+  const lines = stderrText
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
@@ -394,6 +420,13 @@ export function restoreDatabase(port: number, db: string, file: string): void {
 
 /** The version string of the tools, recorded in the run identity. */
 export function toolVersions(): Readonly<Record<string, string>> {
-  const v = (bin: string): string => (run(`${PG16_BIN}/${bin}`, ['--version']).stdout ?? '').trim();
+  // PART 18, and the coordinator's round-7 B3: a version that could not be
+  // READ must not print as a version that is absent. The exit code decides.
+  const v = (bin: string): string => {
+    const r = run(`${PG16_BIN}/${bin}`, ['--version']);
+    if (r.error !== undefined || r.status !== 0)
+      return `UNREADABLE — ${bin} --version exited ${String(r.status)}${r.error === undefined ? '' : ` (${String(r.error)})`}`;
+    return (r.stdout ?? '').trim();
+  };
   return { initdb: v('initdb'), pg_dump: v('pg_dump'), pg_dumpall: v('pg_dumpall'), pg_restore: v('pg_restore'), psql: v('psql') };
 }

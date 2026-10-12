@@ -625,7 +625,13 @@ function armAdvisories(auditJsonPath: string | undefined): void {
       return;
     }
     // `npm audit` exits non-zero when it FINDS something, which is not a
-    // failure to measure. The distinction is whether it produced a report.
+    // failure to measure. The distinction is whether it produced a report —
+    // and its documented codes are 0 and 1, so any OTHER code with no report
+    // behind it is the command failing, never "no advisories".
+    if (status !== 0 && status !== 1 && (run.stdout ?? '').trim().length === 0) {
+      unmeasured(a, `\`npm audit --json\` exited ${String(status)} and produced no report, so no advisory count was measured`);
+      return;
+    }
     text = run.stdout ?? '';
     source = `npm audit --json (exit ${String(status)})`;
     if (text.trim() === '') {

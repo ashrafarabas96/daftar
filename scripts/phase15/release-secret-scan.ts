@@ -37,13 +37,32 @@
  *
  * On top of that it adds exactly what release scope needs:
  *
- *   1. INDEPENDENT NON-VACUITY. `scanTree` reports how many files it scanned.
- *      This script does not take that number on trust: it recomputes the
- *      inventory itself (the delivery manifest's entries, or `git ls-files`)
- *      and FAILS unless the scan's own count equals its count and both are
- *      greater than zero. A secret scan that scanned nothing is the classic
- *      vacuous green — it prints "0 findings" and exits 0 — and the only
- *      defence is a subject count measured twice, from two places.
+ *   1. INDEPENDENT NON-VACUITY, AND WHAT EACH HALF OF IT ACTUALLY MEASURES.
+ *      A secret scan that scanned nothing is the classic vacuous green — it
+ *      prints "0 findings" and exits 0 — so this script does not accept a
+ *      green without evidence that there was a subject. There are two parts,
+ *      and an earlier edition of this header claimed for the first what only
+ *      the second can establish.
+ *
+ *      (a) THE SIZE OF THE SUBJECT SET. The inventory is recomputed here (the
+ *          delivery manifest's entries, or `git ls-files`) and compared with
+ *          the count `scanTree` reports, and both must exceed a release floor.
+ *          This is a SHAPE check: it catches a scan pointed at something that
+ *          is not the artifact, and a disagreement between the two code paths
+ *          that build the list. It is NOT two independent measurements — both
+ *          numbers descend from the same inventory — and the coordinator's
+ *          round-7 B1 measured exactly what that costs: with gitleaks
+ *          repointed at an empty directory, this scan still printed
+ *          "1052 files scanned" and PASS over a tree holding a token.
+ *
+ *      (b) THAT THE SUBJECT WAS ACTUALLY READ — the positive control. A
+ *          per-run random token, of a shape the default rule set detects, is
+ *          written into the copy handed to gitleaks (never into the source
+ *          tree), is REQUIRED in gitleaks' own report, and is then subtracted
+ *          from it. This is the half that cannot pass without gitleaks having
+ *          read the files: a count cannot say that, and law 1's claim to be
+ *          "the only defence" against the vacuous green rests here, not on the
+ *          count. `scan:secrets:release:prove` carries its red proofs.
  *   2. EVERY INVENTORY ENTRY IS BOUND TO THE SOURCE TREE. At release scope a
  *      file that nothing binds to the source is a finding in itself: the
  *      archive would carry bytes no reviewed commit accounts for. WHAT the
@@ -366,17 +385,42 @@ function runTree(root: string, gitleaks: string): TreeOutcome {
   const allowlist = proveAllowlist(root);
   console.log(`  subject: ${allowlist.treeEntries} tree allowlist entries, ${allowlist.proved} proved against their content`);
 
-  const result = scanTree({ root, gitleaks });
+  const result = scanTree({ root, gitleaks, canary: true });
   checkScanIntegrity(result);
   console.log(`  gitleaks: ${result.tool.version} (sha256 ${result.tool.binarySha256.slice(0, 16)}…)`);
-  console.log(`  subject: gitleaks reports ${String(result.filesScanned)} files scanned`);
+  // The printed line says where the number comes from. It used to read
+  // "gitleaks reports N files scanned", and gitleaks reports no such thing:
+  // the number is the inventory's length, carried through the scan. A sentence
+  // that attributes a figure to the tool is read as the tool's measurement.
+  console.log(`  subject: ${String(result.filesScanned)} files handed to gitleaks (the inventory's own count, not a figure gitleaks reports)`);
+  const canary = result.canary;
+  console.log(
+    `  control: ${
+      canary === null || canary === undefined
+        ? 'NONE — no positive control was planted, so nothing here shows the files were READ'
+        : canary.reported
+          ? `the per-run token planted in the copy was REPORTED by gitleaks (${canary.file}) and subtracted — gitleaks read the subject`
+          : `the per-run token planted in the copy was NOT reported (${canary.file})`
+    }`,
+  );
 
-  // The two-sided count: the scan's own number against this script's.
+  // (a) the shape of the subject set — a code-path agreement check, not two
+  // independent measurements. Its own wording used to claim otherwise.
   if (result.filesScanned === null) fail('non-vacuity', 'the scan did not report how many files it read, so its "no findings" covers an unknown subject set');
   else if (result.filesScanned !== inventory.paths.length)
     fail(
       'non-vacuity',
-      `gitleaks scanned ${result.filesScanned} files but the inventory recomputed here holds ${inventory.paths.length}. Two independent counts of the same subject set disagree, so neither is evidence.`,
+      `gitleaks was handed ${result.filesScanned} files but the inventory recomputed here holds ${inventory.paths.length}. The two code paths that build the list disagree, so neither figure describes the subject.`,
+    );
+  // (b) the positive control — the half that establishes the files were read.
+  // A canary that was never planted is NOT a canary that passed: `null` fails
+  // here exactly as an unreported one does.
+  if (canary === null || canary === undefined)
+    fail('non-vacuity', 'no positive control was planted in the scanned copy, so a green here would rest on a file count alone — which cannot show that gitleaks read a single byte');
+  else if (!canary.reported)
+    fail(
+      'non-vacuity',
+      `the positive control planted in the scanned copy (${canary.file}) was not reported by gitleaks: whatever gitleaks read, it was not the subject this scan describes`,
     );
   if (allowlist.treeEntries !== allowlist.proved)
     fail('allowlist', `${allowlist.treeEntries - allowlist.proved} of ${allowlist.treeEntries} tree allowlist entries were not proved`);

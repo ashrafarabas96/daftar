@@ -98,7 +98,7 @@
  *
  * Exit 0 = PASS, 1 = FAIL (a finding, or any precondition not met).
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -370,6 +370,13 @@ export interface ScanResult {
   readonly commitsScanned: number | null;
   /** tree mode: the files scanned */
   readonly filesScanned: number | null;
+  /**
+   * tree mode with `canary: true`: the positive control. `reported` is whether
+   * gitleaks found the token planted in the copy it was pointed at. `null` means
+   * no canary was planted, which is NOT the same as a canary that went
+   * unreported and must never read as one.
+   */
+  readonly canary?: { readonly file: string; readonly reported: boolean } | null;
   readonly findings: number | null;
   readonly allowlisted: readonly { fingerprint: string; reason: string }[];
   readonly remaining: readonly { fingerprint: string; rule: string; file: string; line: number; commit: string | null }[];
@@ -589,6 +596,13 @@ export interface TreeScanOptions {
   /** an extracted archive (with DELIVERY_MANIFEST.json), or a checkout, whose `git ls-files` is then the inventory */
   readonly root: string;
   readonly gitleaks: string;
+  /**
+   * Plant a per-run POSITIVE CONTROL in the copy handed to gitleaks and require
+   * gitleaks to report it. Opt-in, so Phase 3's own scan behaves exactly as it
+   * did; Phase 15's release scan sets it, because at release scope the one
+   * thing a file count cannot establish is that gitleaks read the files.
+   */
+  readonly canary?: boolean;
 }
 
 interface DeliveryInventory {
@@ -630,6 +644,8 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
   const remaining: { fingerprint: string; rule: string; file: string; line: number; commit: string | null }[] = [];
   let unused = 0;
   let filesScanned: number | null = null;
+  let canaryFile: string | null = null;
+  let canaryReported = false;
 
   if (existsSync(join(root, '.gitleaks.toml')))
     problems.push('.gitleaks.toml is present: this scan runs the default gitleaks rule set and refuses a config that could replace or allowlist it');
@@ -661,6 +677,28 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
       copyFileSync(src, dst);
     }
     filesScanned = files.length;
+    // THE POSITIVE CONTROL (opt-in).
+    //
+    // A file count says what was HANDED to gitleaks; it cannot say that
+    // gitleaks read any of it. Both counts in the release scan's two-sided
+    // comparison came from this same inventory, so the comparison was
+    // tautological: repointing gitleaks at an empty directory left it printing
+    // "1052 files scanned" and PASS over a tree holding a token. The canary is
+    // the one check that cannot pass without gitleaks having read the subject:
+    // a per-run random token of a shape the DEFAULT rules detect, written into
+    // the copy, required in the report, and then subtracted from it.
+    //
+    // It is written into the throwaway copy and never into `root`, its value is
+    // new each run, and `--redact` keeps it out of the output.
+    if (opts.canary === true) {
+      // The copy directory is created per file above, so an EMPTY inventory
+      // leaves it absent — and the canary write then threw ENOENT instead of
+      // producing the refusal the empty case exists to produce. The proof's S5
+      // found this on its first run.
+      mkdirSync(copy, { recursive: true });
+      canaryFile = `.daftar-scan-canary-${randomBytes(6).toString('hex')}.env`;
+      writeFileSync(join(copy, canaryFile), `GITHUB_TOKEN=ghp_${randomBytes(21).toString('hex').slice(0, 36)}\n`);
+    }
     const noIgnore = join(work, 'no-ignore');
     mkdirSync(noIgnore);
     mkdirSync(copy, { recursive: true });
@@ -705,6 +743,13 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
   for (const problem of verified.values()) if (problem !== null) problems.push(`.gitleaksignore: ${problem}`);
   const byFingerprint = new Map(entries.map((e) => [e.fingerprint, e]));
   const seen = new Set<string>();
+  const canaryHits = canaryFile === null ? [] : (findings ?? []).filter((f) => f.File === canaryFile);
+  canaryReported = canaryHits.length > 0;
+  if (canaryFile !== null && findings !== null) findings = findings.filter((f) => f.File !== canaryFile);
+  if (canaryFile !== null && !canaryReported)
+    problems.push(
+      `the positive control planted in the scanned copy (${canaryFile}) was NOT reported by gitleaks, so this run establishes nothing about the tree: a file COUNT cannot show that the files were read`,
+    );
   for (const f of findings ?? []) {
     seen.add(f.Fingerprint);
     const entry = byFingerprint.get(f.Fingerprint);
@@ -727,6 +772,7 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
     mergesInRange: null,
     commitsScanned: null,
     filesScanned,
+    canary: canaryFile === null ? null : { file: canaryFile, reported: canaryReported },
     findings: findings === null ? null : findings.length,
     allowlisted,
     remaining,

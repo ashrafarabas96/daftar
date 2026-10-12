@@ -30,7 +30,7 @@
  * Usage: npm run scan:secrets:release:prove
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -48,6 +48,25 @@ interface Case {
    * and it reported the run as confounded rather than as evidence.
    */
   readonly refuse?: RegExp;
+  /**
+   * Run the CLONE's copy of the scanner rather than this tree's. A case that
+   * mutates the scanner itself has to: running this tree's copy would measure
+   * the unmutated code and report the plant as "did not redden".
+   */
+  readonly viaClone?: boolean;
+}
+
+/** Commit whatever a plant changed, so the tree stays clean and only ONE law can speak. */
+function commitInClone(clone: string, message: string): void {
+  sh(clone, 'git', ['config', 'user.email', 'proof@localhost']);
+  sh(clone, 'git', ['config', 'user.name', 'p15 proof']);
+  const add = sh(clone, 'git', ['add', '-A']);
+  if (add.status !== 0) throw new Error(`could not stage the plant: ${add.out.slice(0, 200)}`);
+  const ci = sh(clone, 'git', ['commit', '-q', '-m', message]);
+  if (ci.status !== 0) throw new Error(`could not commit the plant: ${ci.out.slice(0, 200)}`);
+  const dirty = sh(clone, 'git', ['status', '--porcelain']);
+  if (dirty.status !== 0 || dirty.out.trim().length !== 0)
+    throw new Error(`the clone is still dirty after the commit, so the binding law would speak instead: ${dirty.out.slice(0, 200)}`);
 }
 
 function sh(cwd: string, cmd: string, args: readonly string[]): { status: number | null; out: string } {
@@ -159,6 +178,42 @@ const CASES: readonly Case[] = [
     expect: /below the MIN_RELEASE_FILES floor/,
     refuse: /\[source-binding\]/,
   },
+  {
+    id: 'S7',
+    viaClone: true,
+    what:
+      'the coordinator\u2019s round-7 B1, as a case: gitleaks is pointed at an EMPTY directory while the tree still ' +
+      'holds its files. Both halves of the old law survived this untouched \u2014 the inventory count and the scan\u2019s ' +
+      'own count are the same computation, so the scan printed "1051 files scanned" and PASS over a tree it had ' +
+      'not read. Only the positive control can speak here',
+    plant: (clone) => {
+      const f = join(clone, 'scripts/phase3-secret-scan.ts');
+      const s = readFileSync(f, 'utf8');
+      const broken = s.replace('{ cwd: copy, encoding: \'utf8\', env, maxBuffer: 64 * 1024 * 1024 },', '{ cwd: mkdtempSync(join(tmpdir(), \'p15-blind-\')), encoding: \'utf8\', env, maxBuffer: 64 * 1024 * 1024 },');
+      if (broken === s) throw new Error('could not blind gitleaks: the scan no longer runs it with `cwd: copy` in the shape this plant edits');
+      writeFileSync(f, broken);
+      commitInClone(clone, 'point gitleaks at an empty directory');
+    },
+    expect: /positive control planted in the scanned copy/,
+    refuse: /\[source-binding\]/,
+  },
+  {
+    id: 'S8',
+    viaClone: true,
+    what:
+      'the control is not REQUESTED at all. A canary that was never planted must fail exactly as an unreported ' +
+      'one does: `null` is "I did not look", and the whole round is about those two never printing the same way',
+    plant: (clone) => {
+      const f = join(clone, 'scripts/phase15/release-secret-scan.ts');
+      const s = readFileSync(f, 'utf8');
+      const broken = s.replace('scanTree({ root, gitleaks, canary: true })', 'scanTree({ root, gitleaks })');
+      if (broken === s) throw new Error('could not remove the canary request: the release scan no longer asks for it in the shape this plant edits');
+      writeFileSync(f, broken);
+      commitInClone(clone, 'stop asking for a positive control');
+    },
+    expect: /no positive control was planted in the scanned copy/,
+    refuse: /\[source-binding\]/,
+  },
 ];
 
 function freshClone(): string {
@@ -171,8 +226,9 @@ function freshClone(): string {
   return clone;
 }
 
-function runScan(clone: string): { status: number | null; out: string } {
-  return sh(ROOT, 'npx', ['tsx', join(ROOT, 'scripts/phase15/release-secret-scan.ts'), `--root=${clone}`]);
+function runScan(clone: string, viaClone = false): { status: number | null; out: string } {
+  const script = join(viaClone ? clone : ROOT, 'scripts/phase15/release-secret-scan.ts');
+  return sh(ROOT, 'npx', ['tsx', script, `--root=${clone}`]);
 }
 
 function main(): number {
@@ -213,7 +269,7 @@ function main(): number {
       failures += 1;
       continue;
     }
-    const got = runScan(clone);
+    const got = runScan(clone, c.viaClone === true);
     const red = got.status !== 0;
     const named = c.expect.test(got.out);
     const unconfounded = c.refuse === undefined ? true : !c.refuse.test(got.out);
@@ -243,7 +299,8 @@ function main(): number {
   }
   console.log(`ALL ${CASES.length} RED PROOFS TURNED THE SCAN RED, EACH NAMING ITS OWN DEFECT.`);
   console.log('  All THREE of the laws the scan declares now have one: binding (S1, S2), rule integrity');
-  console.log('  (S3, S4) and independent non-vacuity (S5, S6). The last of those is the one the scan\u2019s own');
+  console.log('  (S3, S4) and independent non-vacuity (S5, S6 for the subject set, S7 and S8 for the');
+  console.log('  positive control, which is the half that shows the files were READ). The last of those is the one the scan\u2019s own');
   console.log('  header calls its only defence against reading nothing and printing a clean nothing, and it');
   console.log('  was the one with no proof behind it until round 7 asked — a guard nobody can delete by');
   console.log('  accident is a guard with a case protecting it, not a guard with a comment.');

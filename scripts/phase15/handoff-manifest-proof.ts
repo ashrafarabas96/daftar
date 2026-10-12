@@ -44,7 +44,12 @@ function direction4(dir: string): { readonly text: string; readonly contradictio
   // spoke. But a gate that did not run at all must never read as "nothing
   // contradicted": that is the fail-open this whole round is about.
   const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
-  if (r.error !== undefined || !out.includes('DIRECTION 4')) return { text: out.slice(-600), contradictions: 0, ran: false };
+  // The gate's own codes are 0 and 1. Any other code is the runner failing to
+  // start it, which must not reach the marker test at all: `ran: false` is the
+  // only honest answer, and it is the answer the exit code gives here.
+  if (r.error !== undefined || (r.status !== 0 && r.status !== 1))
+    return { text: `${out.slice(-500)}\n[harness] the gate did not run: exit ${String(r.status)}`, contradictions: 0, ran: false };
+  if (!out.includes('DIRECTION 4')) return { text: out.slice(-600), contradictions: 0, ran: false };
   const block = out.slice(out.indexOf('DIRECTION 4'));
   return { text: block, contradictions: (block.match(/CONTRADICTED /g) ?? []).length, ran: true };
 }
@@ -58,6 +63,22 @@ interface Plant {
 }
 
 const reports = (dir: string): string[] => readdirSync(dir).filter((f) => /^P15-CHALLENGE-[0-9a-f]{7,40}\.md$/.test(f)).sort();
+
+/**
+ * Run the gate's own sanctioned regeneration against a copy. `--rewrite` adds
+ * every P15-* file in the directory to the digest table, which is exactly what
+ * made B2's fail-open invisible: M2 plants an unnamed report but never
+ * regenerates, so it never reached the state a real handoff is left in.
+ */
+function rewrite(dir: string): void {
+  const r = spawnSync('npx', ['tsx', join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts'), `--dir=${dir}`, '--rewrite'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.error !== undefined || (r.status !== 0 && r.status !== 1))
+    throw new Error(`--rewrite did not run: exit ${String(r.status)}${r.error === undefined ? '' : ` (${String(r.error)})`}`);
+}
 
 const PLANTS: readonly Plant[] = [
   {
@@ -115,6 +136,22 @@ const PLANTS: readonly Plant[] = [
         : d.contradictions === 0
           ? null
           : 'a correction QUOTING the claim it retracts was failed as if it were repeating it. Punish that and the next author stops recording the correction at all',
+  },
+  {
+    id: 'M5',
+    what: 'an unrecorded round, THEN the sanctioned --rewrite — the index must not become the record',
+    plant: (dir) => {
+      writeFileSync(join(dir, 'P15-CHALLENGE-0bada55.md'), '# planted round\nThis file exists only inside a throwaway copy.\n');
+      rewrite(dir);
+      const digested = readFileSync(join(dir, MANIFEST), 'utf8').includes('P15-CHALLENGE-0bada55.md');
+      if (!digested) throw new Error('--rewrite did not add the planted report to the digest table, so this plant does not reach the state B2 describes');
+    },
+    expect: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.contradictions > 0
+          ? null
+          : 'after its own --rewrite the gate counted the planted report as NAMED, because the digest row it had just written looked like a record. An index proves a file exists, which is the one thing never in doubt',
   },
 ];
 

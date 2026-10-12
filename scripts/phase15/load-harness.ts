@@ -462,7 +462,12 @@ export function decideVerdict(input: VerdictInput): VerdictResult {
 export function foreignPostmasters(ownDataDir: string): readonly string[] {
   const ps = spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' });
   const status = ps.status;
-  if (status !== 0 || typeof ps.stdout !== 'string') return [];
+  // R5 of the coordinator's round-7 review: an empty list IS the "the box is
+  // exclusive" claim, so a `ps` that did not run must not produce one. The
+  // sentinel is a member of the list, which makes the box NOT exclusive and
+  // the measurement invalid — the fail-closed direction.
+  if (status !== 0 || typeof ps.stdout !== 'string')
+    return [`UNMEASURED — ps exited ${String(status)}, so whether another postmaster shares this host is unknown`];
   return ps.stdout
     .split('\n')
     .map((l) => l.trim())

@@ -197,7 +197,31 @@ function checkChallenges(manifest: string, dir: string): Challenge {
     .map((f) => /^P15-CHALLENGE-([0-9a-f]{7,40})\.md$/.exec(f)?.[1])
     .filter((x): x is string => x !== undefined)
     .sort();
-  const named = [...manifest.matchAll(/P15-CHALLENGE-([0-9a-f]{7,40})\.md/g)].map((m) => m[1] ?? '');
+  // NAMED MEANS NAMED IN THE NARRATIVE — the coordinator's round-7 B2.
+  //
+  // This used to read the WHOLE file, digest table included. The digest table
+  // is written by this gate's own `--rewrite`, which adds every P15-* file in
+  // the directory: so the sanctioned regeneration made an unrecorded round
+  // count as "named", and a copy holding the round-7 report verified clean
+  // while §8 still read "RUN six times". The index proved the file's existence,
+  // which is the one thing never in doubt.
+  //
+  // A digest row is a table row carrying a 64-hex digest. Nothing else in this
+  // document has that shape, and the narrative rows of §8 — which carry report
+  // filenames and no digest — are kept.
+  const narrative = manifest
+    .split('\n')
+    .filter((l) => !(l.trim().startsWith('|') && /\b[0-9a-f]{64}\b/.test(l)))
+    .join('\n');
+  const named = [...narrative.matchAll(/P15-CHALLENGE-([0-9a-fA-F]{7,40})\.md/g)].map((m) => (m[1] ?? '').toLowerCase());
+  // A report named with something that is not a SHA cannot be matched against
+  // the disk at all, so it is a failure rather than a silent non-match: it
+  // would otherwise read as "this round is recorded".
+  for (const m of narrative.matchAll(/P15-CHALLENGE-([0-9A-Za-z._-]+)\.md/g)) {
+    const token = m[1] ?? '';
+    if (!/^[0-9a-fA-F]{7,40}$/.test(token))
+      problems.push(`this file names P15-CHALLENGE-${token}.md, whose name is not a commit SHA — a report nobody can match to a head is not a record of a round`);
+  }
   // Two things are removed before the phrase test, and for different reasons.
   // The digest-table filenames are an index, not a claim about rounds. And text
   // inside guillemets is a QUOTATION: this file records the sentence «NOT RUN on
@@ -206,7 +230,7 @@ function checkChallenges(manifest: string, dir: string): Challenge {
   // error — the same trap a red proof in this pack fell into when its refusal
   // pattern matched the fix's own disclaimer. A quotation is still visible to the
   // reader; it is simply not an assertion.
-  const body = manifest.replace(/P15-CHALLENGE-[0-9a-f]{7,40}\.md/g, '').replace(/\u00ab[^\u00bb]*\u00bb/g, '');
+  const body = narrative.replace(/P15-CHALLENGE-[0-9a-fA-F]{7,40}\.md/g, '').replace(/\u00ab[^\u00bb]*\u00bb/g, '');
 
   for (const sha of onDisk)
     if (!named.includes(sha))
