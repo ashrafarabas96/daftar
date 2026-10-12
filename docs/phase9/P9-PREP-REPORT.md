@@ -30,7 +30,7 @@ head of `main`.
 | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | 240 | the model, and why it has this shape |
 | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 1995 | the schema and its physical invariants — **not a migration** |
 | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 616 | what the Migration Owner is asked to allocate |
-| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 404 | the PART 13 handoff gate, with a SHA256 per artifact |
+| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 532 | the PART 13 handoff gate, with a SHA256 per artifact |
 | `tests/phase9-prep/p9-booking-schema.test.ts` | 359 | 18 cases: shape, security, grants, end state, the state contract, the chain guard's events and WHEN clause, collation independence |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 602 | 7 cases: each invariant removed, and the damage measured |
