@@ -139,6 +139,7 @@ class ScopeAndSchemaTest {
             QueueEvent.Send(digest, bob),
             QueueEvent.ResolveByMerchant(true, bob),
             QueueEvent.ResolveByMerchant(false, bob),
+            QueueEvent.RestorePayload(digest, bob),
         )
         for (event in attempted) {
             val step = captured.step(event)
@@ -146,7 +147,7 @@ class ScopeAndSchemaTest {
             assertEquals("offline.scope_switched", step.code, "$event was refused for the wrong reason")
             assertEquals(P7Laws.NO_CROSS_ACCOUNT_SEND.id, step.law)
         }
-        assertEquals(5, attempted.size, "every session-originated event must be covered")
+        assertEquals(6, attempted.size, "every session-originated event must be covered")
     }
 
     /**
@@ -164,14 +165,15 @@ class ScopeAndSchemaTest {
             QueueEvent.Send(digest, bob),
             QueueEvent.ResolveByMerchant(true, bob),
             QueueEvent.ResolveByMerchant(false, bob),
+            QueueEvent.RestorePayload(digest, bob),
         )
         // `label` below is a `when` over the sealed hierarchy with no `else`,
-        // so a sixth `ByScope` event does not fail this assertion — it fails
+        // so a seventh `ByScope` event does not fail this assertion — it fails
         // to COMPILE, which is the stronger guard and needs no reflection on
         // the test classpath. The assertion's job is the other direction: that
         // the list actually exercises every arm `label` can reach.
         assertEquals(
-            setOf("Release", "CancelByMerchant", "Send", "ResolveByMerchant"),
+            setOf("Release", "CancelByMerchant", "Send", "ResolveByMerchant", "RestorePayload"),
             byScope.map { label(it) }.toSet(),
             "a session-originated event exists that no scope test covers",
         )
@@ -194,6 +196,7 @@ class ScopeAndSchemaTest {
         is QueueEvent.CancelByMerchant -> "CancelByMerchant"
         is QueueEvent.Send -> "Send"
         is QueueEvent.ResolveByMerchant -> "ResolveByMerchant"
+        is QueueEvent.RestorePayload -> "RestorePayload"
     }
 
     @Test

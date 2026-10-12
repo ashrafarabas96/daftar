@@ -59,6 +59,8 @@ class QueueModelCheckTest {
             add(QueueEvent.Send(wrongDigest, acting))
             add(QueueEvent.ResolveByMerchant(true, acting))
             add(QueueEvent.ResolveByMerchant(false, acting))
+            add(QueueEvent.RestorePayload(digest, acting))
+            add(QueueEvent.RestorePayload(wrongDigest, acting))
         }
         add(QueueEvent.ProcessDeath)
         add(QueueEvent.RetentionDeadlineReached)
@@ -70,7 +72,7 @@ class QueueModelCheckTest {
 
     private fun fingerprint(op: Operation, h: History): String =
         "${op.id}|${op.scope}|${op.effect}|${op.payloadDigest}|${op.state}|${op.attempts}|${op.lastCode}|" +
-            "${op.replayed}|${h.serverCommitted}|${h.everSent}"
+            "${op.replayed}|${op.payloadMinimized}|${h.serverCommitted}|${h.everSent}"
 
     @Test
     fun `every reachable configuration honours every invariant`() {
@@ -226,6 +228,42 @@ class QueueModelCheckTest {
                                 )
                             }
 
+                            // INV-11: the defect V2 found in L16, closed over
+                            // the whole reachable space rather than argued.
+                            // A minimized row has no bytes to send, so an
+                            // attempt from one would either burn the key on
+                            // different bytes or have no digest at all. The
+                            // reducer has no explicit guard in the `Send` arm
+                            // on purpose — one would be unreachable code, and
+                            // unreachable code is not evidence. What makes the
+                            // property true is that the only exit from a
+                            // minimized row goes through a restore, and only
+                            // a search over every path can say that.
+                            if (op.payloadMinimized) {
+                                assertTrue(
+                                    sends.isEmpty(),
+                                    "an attempt was made from a minimized row: $op on $event " +
+                                        "(${P7Laws.PAYLOAD_FROZEN_AT_CAPTURE.id})",
+                                )
+                            }
+
+                            // INV-12: a restore gives back the bytes and
+                            // changes nothing else. It is not a second
+                            // capture: no new key, no new digest, no state
+                            // move, no attempt consumed.
+                            if (event is QueueEvent.RestorePayload) {
+                                assertTrue(
+                                    !next.payloadMinimized,
+                                    "a restore left the row minimized: $op -> $next",
+                                )
+                                assertEquals(
+                                    op.state, next.state,
+                                    "a restore moved the operation: $op -> $next",
+                                )
+                                assertEquals(op.attempts, next.attempts, "a restore consumed an attempt")
+                                assertEquals(op.lastCode, next.lastCode, "a restore forgot the server's reason")
+                            }
+
                             // INV-4: the local row is cleared only once there is
                             // nothing left that could exist only on the device.
                             if (step.effects.any { it is SideEffect.ClearLocalRow }) {
@@ -258,7 +296,7 @@ class QueueModelCheckTest {
         assertEquals(
             setOf(
                 "Release", "CancelByMerchant", "Send", "ProcessDeath", "Observe",
-                "ResolveByMerchant", "RetentionDeadlineReached",
+                "ResolveByMerchant", "RetentionDeadlineReached", "RestorePayload",
             ),
             eventsThatMoved,
             "some event never moved anything, so its transitions were never checked",

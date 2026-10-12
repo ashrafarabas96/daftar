@@ -125,6 +125,20 @@ sealed interface QueueEvent {
      * untouched, and only what is STORED about it shrinks.
      */
     data object RetentionDeadlineReached : QueueEvent
+
+    /**
+     * The approved payload has been fetched back from wherever policy keeps it,
+     * so a minimized operation can be settled under its ORIGINAL key.
+     *
+     * `digestNow` is compared against the digest frozen at capture, so a
+     * restore that produces different bytes is refused rather than sent: a
+     * restored payload that is not byte-identical is not the payload this key
+     * is bound to, and the server would refuse the key forever.
+     */
+    data class RestorePayload(
+        val digestNow: String,
+        override val actingScope: OwnerScope,
+    ) : ByScope
 }
 
 /** The outcome of applying one event. */
@@ -169,6 +183,17 @@ class Operation private constructor(
     val replayed: Boolean,
     /** The row layout this operation was written under (L14). */
     val schemaVersion: Int = QueueSchema.CURRENT,
+    /**
+     * Whether the stored payload has been reduced by a retention expiry (L16).
+     *
+     * This flag exists because the first version of L16 created a defect: an
+     * expired row could be sent back to QUEUED by a merchant resolve, and then
+     * the sender had no payload to send. It would either send different bytes
+     * under the original key — burning that key permanently — or be unable to
+     * produce a digest at all, leaving a material operation that can never be
+     * settled. Minimizing storage must not make settlement impossible.
+     */
+    val payloadMinimized: Boolean = false,
 ) {
     companion object {
         /**
@@ -195,7 +220,13 @@ class Operation private constructor(
         attempts: Int = this.attempts,
         lastCode: String? = this.lastCode,
         replayed: Boolean = this.replayed,
-    ): Operation = Operation(id, scope, effect, payloadDigest, state, attempts, lastCode, replayed, schemaVersion)
+    ): Operation = Operation(
+        id, scope, effect, payloadDigest, state, attempts, lastCode, replayed, schemaVersion, payloadMinimized,
+    )
+
+    private fun withPayloadMinimized(minimized: Boolean): Operation = Operation(
+        id, scope, effect, payloadDigest, state, attempts, lastCode, replayed, schemaVersion, minimized,
+    )
 
     val isTerminal: Boolean
         get() = state == OperationState.SYNCED || state == OperationState.DISCARDED
@@ -297,6 +328,23 @@ class Operation private constructor(
                 Step.Moved(this, emptyList())
             }
 
+        is QueueEvent.RestorePayload ->
+            if (!payloadMinimized) {
+                Step.Refused(
+                    "offline.payload_was_never_minimized",
+                    P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id,
+                )
+            } else if (event.digestNow != payloadDigest) {
+                Step.Refused(
+                    "offline.restored_payload_does_not_match_capture",
+                    P7Laws.PAYLOAD_FROZEN_AT_CAPTURE.id,
+                )
+            } else {
+                // Nothing else moves: same state, same key, same digest. The
+                // row is simply storable-and-sendable again.
+                Step.Moved(withPayloadMinimized(false), emptyList())
+            }
+
         is QueueEvent.RetentionDeadlineReached ->
             if (state != OperationState.NEEDS_ATTENTION) {
                 // Everywhere else the row is either moving or already terminal.
@@ -311,7 +359,7 @@ class Operation private constructor(
                 // thing: the state does not move, the row is not cleared, and
                 // the operation stays exactly as owed as it was.
                 Step.Moved(
-                    this,
+                    withPayloadMinimized(true),
                     listOf(
                         SideEffect.MinimizePayload(
                             "offline.retention_window_elapsed",
@@ -334,6 +382,18 @@ class Operation private constructor(
                 // merchant a retry would be offering them a button that cannot
                 // work; this needs a developer, and says so.
                 Step.Refused("offline.divergence_needs_a_fix", P7Laws.PAYLOAD_FROZEN_AT_CAPTURE.id)
+            } else if (event.keep && payloadMinimized) {
+                // The bytes this key is bound to no longer exist on the device.
+                // Sending anything else under it would burn the key for good,
+                // and L3 would refuse it at the wire anyway — so say the real
+                // reason here instead of letting it surface as a digest
+                // mismatch two steps later. The approved payload must be
+                // restored first, which is a settlement path that needs no new
+                // intent and no new key.
+                Step.Refused(
+                    "offline.payload_minimized_cannot_resend",
+                    P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id,
+                )
             } else if (event.keep) {
                 // Try the SAME operation again — same key, same payload. A
                 // stated refusal means the server committed nothing, so this
@@ -354,5 +414,5 @@ class Operation private constructor(
 
     override fun toString(): String =
         "Operation(id=$id, scope=$scope, effect=$effect, state=$state, attempts=$attempts, " +
-            "lastCode=$lastCode, replayed=$replayed, schema=$schemaVersion)"
+            "lastCode=$lastCode, replayed=$replayed, schema=$schemaVersion, minimized=$payloadMinimized)"
 }

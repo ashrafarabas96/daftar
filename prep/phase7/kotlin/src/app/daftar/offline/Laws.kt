@@ -25,7 +25,7 @@ data class OfflineLaw(
 /**
  * The absolute law of the Tech Lead's directive — an offline device is never
  * canonical financial authority, and there is no silent conflict resolution
- * for money or stock — together with the fifteen laws it implies once the LIVE
+ * for money or stock — together with the seventeen laws it implies once the LIVE
  * server contract is read rather than assumed and the Tech Lead's rulings on
  * effect classification (§34) and local data security (PART 40) are applied.
  *
@@ -160,6 +160,53 @@ object P7Laws {
         "Retention is bounded by minimizing the stored payload and escalating the obligation, never by discarding it: on expiry a waiting operation's personal and price data is reduced while its identity, amount and server refusal code are retained, the local row is not cleared, and a material operation is never silently dropped.",
     )
 
+    /**
+     * Master Continuous Mission **V2** §14, which corrected the L15 I wrote
+     * last round: "نتيجة ABSENT لمجرد عدم وجود صف الآن لا تثبت انتهاء طلب قديم
+     * ما زال in-flight؛ نفذ settled absence/fencing أو إعادة الأمر بالمفتاح
+     * نفسه حسب العقد، وأثبت سباق lookup مع late commit حتى لا تُنشأ عمليتان."
+     *
+     * L15 treated a bare ABSENT as settling the original, and that is a race.
+     * The lookup answers a question about an INSTANT; the original request may
+     * still be in flight somewhere between the device, the proxy and the
+     * server, and may commit a second after the device was told there was
+     * nothing there. The device then holds a permission that was true when it
+     * was granted and false when it was used, and the second commit lands
+     * under a key no reconciliation can pair with the first.
+     *
+     * An absence settles the original only if the original can no longer
+     * arrive — that is what FENCING means, and it is a property of the server,
+     * not of the answer's wording.
+     */
+    val AN_UNFENCED_ABSENCE_SETTLES_NOTHING = OfflineLaw(
+        "P7-L17-AN-UNFENCED-ABSENCE-SETTLES-NOTHING",
+        "A report that no operation exists for a key states a fact about the instant it was asked and does not establish that an in-flight original has ended, so a new key may follow an absence only where the original key is fenced against a later arrival; an unfenced absence is refused exactly as an unreadable receipt is.",
+    )
+
+    /**
+     * The positive half of the same ruling — "أو إعادة الأمر بالمفتاح نفسه" —
+     * and the better half, because it needs nothing from the server that the
+     * server does not already do.
+     *
+     * Resending the ORIGINAL key is safe under every possible answer,
+     * including no answer at all: `deriveSourceId(business, key)` makes the
+     * ledger's own `(business, source_type, source_id)` uniqueness decide it.
+     * If the original committed, the resend returns the stored truth with
+     * `replayed: true` and writes nothing; if it did not, it commits exactly
+     * once. So where the original key AND its frozen bytes can be recovered,
+     * the race does not need to be won — it does not exist, and no receipt
+     * lookup and no fence are required.
+     *
+     * This is why provenance is worth engineering: recovering the original
+     * identity is not a convenience, it is the one resolution that is proven
+     * against the LIVE contract. Fencing, by contrast, is a server capability
+     * that does not exist yet and is carried as SPEC ONLY.
+     */
+    val THE_ORIGINAL_KEY_OUTRANKS_A_NEW_ONE = OfflineLaw(
+        "P7-L18-THE-ORIGINAL-KEY-OUTRANKS-A-NEW-ONE",
+        "Where an operation's original key and the exact bytes frozen with it can be recovered, the operation is resent under that key and never re-entered under a new one, because the server's own source uniqueness settles a resend with no receipt lookup, no fence and no possibility of a second commit.",
+    )
+
     /** Every stated law, for the completeness proof. */
     val ALL: List<OfflineLaw> = listOf(
         DEVICE_NOT_AUTHORITY,
@@ -178,5 +225,7 @@ object P7Laws {
         UNKNOWN_QUEUE_SCHEMA_REFUSED,
         NO_REENTRY_BEFORE_THE_ORIGINAL_IS_SETTLED,
         EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION,
+        AN_UNFENCED_ABSENCE_SETTLES_NOTHING,
+        THE_ORIGINAL_KEY_OUTRANKS_A_NEW_ONE,
     )
 }

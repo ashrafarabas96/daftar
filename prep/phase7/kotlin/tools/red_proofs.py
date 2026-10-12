@@ -70,8 +70,14 @@ PROOFS: list[Proof] = [
     Proof(
         law="P7-L3-PAYLOAD-FROZEN-AT-CAPTURE",
         path="src/app/daftar/offline/Queue.kt",
-        find="            } else if (event.digestNow != payloadDigest) {",
-        replace="            } else if (false) {",
+        find="""            } else if (event.digestNow != payloadDigest) {
+                // Loud, local, and before the wire: the server would answer
+                // this with a permanent key conflict.
+                Step.Refused("offline.payload_changed_after_capture", P7Laws.PAYLOAD_FROZEN_AT_CAPTURE.id)""",
+        replace="""            } else if (false) {
+                // Loud, local, and before the wire: the server would answer
+                // this with a permanent key conflict.
+                Step.Refused("offline.payload_changed_after_capture", P7Laws.PAYLOAD_FROZEN_AT_CAPTURE.id)""",
         expect_red="a payload recomputed at send time is refused here, not by the server",
         why="a payload rebuilt at send time goes out under the original key, which the server then refuses forever",
     ),
@@ -206,8 +212,8 @@ PROOFS: list[Proof] = [
     Proof(
         law="P7-L15-NO-REENTRY-UNDER-A-NEW-KEY-BEFORE-THE-ORIGINAL-IS-SETTLED",
         path="src/app/daftar/offline/Reconciliation.kt",
-        find="        PriorOutcome.UNKNOWN -> when (lookup) {",
-        replace="        PriorOutcome.UNKNOWN -> when (ReceiptLookup.ABSENT) {",
+        find="            Provenance.ORIGINAL_LOST -> when (lookup) {",
+        replace="            Provenance.ORIGINAL_LOST -> when (ReceiptLookup.ABSENT_FENCED) {",
         expect_red="a wiped device may not re-enter an unknown sale while the receipt cannot be read",
         why="an unreachable server is treated as settling the original, so a wiped device re-enters a sale the server may already hold, under a new key that no later reconciliation can match to the first",
     ),
@@ -215,7 +221,7 @@ PROOFS: list[Proof] = [
         law="P7-L16-EXPIRY-MINIMIZES-THE-PAYLOAD-NEVER-THE-OBLIGATION",
         path="src/app/daftar/offline/Queue.kt",
         find="""                Step.Moved(
-                    this,
+                    withPayloadMinimized(true),
                     listOf(
                         SideEffect.MinimizePayload(""",
         replace="""                Step.Moved(
@@ -233,6 +239,58 @@ PROOFS: list[Proof] = [
         replace="        // add(QueueEvent.RetentionDeadlineReached)",
         expect_red="every reachable configuration honours every invariant",
         why="the search stops exercising the retention deadline, so INV-10 holds vacuously; only the counted event and effect sets notice that the minimize-versus-delete invariant was never tested",
+    ),
+    Proof(
+        law="P7-L17-AN-UNFENCED-ABSENCE-SETTLES-NOTHING",
+        path="src/app/daftar/offline/Reconciliation.kt",
+        find="            Provenance.ORIGINAL_LOST -> when (lookup) {",
+        replace="            Provenance.ORIGINAL_LOST -> when (if (lookup == ReceiptLookup.ABSENT_UNFENCED) ReceiptLookup.ABSENT_FENCED else lookup) {",
+        expect_red="an absence settles the original only when the original key is fenced",
+        why="an absence that the original can still contradict is treated as settling it, which is the exact race V2 named: the device mints a new key on an answer that was true when it was given and false when it was used",
+    ),
+    Proof(
+        law="P7-L18-THE-ORIGINAL-KEY-OUTRANKS-A-NEW-ONE",
+        path="src/app/daftar/offline/Reconciliation.kt",
+        find="        PriorOutcome.UNKNOWN -> when (provenance) {",
+        replace="        PriorOutcome.UNKNOWN -> when (Provenance.ORIGINAL_LOST) {",
+        expect_red="a recoverable original is resent under its own key whatever the receipt says",
+        why="a recoverable original is sent down the lookup path instead of being resent under its own key, which throws away the one resolution that is safe with no receipt and no fence and puts the race back in front of a case that did not have one",
+    ),
+    Proof(
+        law="P7-L16-MINIMIZATION-MUST-NOT-MAKE-SETTLEMENT-IMPOSSIBLE",
+        path="src/app/daftar/offline/Queue.kt",
+        find="            } else if (event.keep && payloadMinimized) {",
+        replace="            } else if (false && payloadMinimized) {",
+        expect_red="a minimized operation cannot be resent until its approved payload is back",
+        why="this restores the defect V2 found in my own L16: an expired row goes back to QUEUED with no payload, so the sender either sends different bytes under the original key and burns it forever or cannot produce a digest at all, leaving money that can never be settled",
+    ),
+    Proof(
+        law="P7-L3-PAYLOAD-FROZEN-AT-CAPTURE-ACROSS-A-RESTORE",
+        path="src/app/daftar/offline/Queue.kt",
+        find="""            } else if (event.digestNow != payloadDigest) {
+                Step.Refused(
+                    "offline.restored_payload_does_not_match_capture",""",
+        replace="""            } else if (event.digestNow != event.digestNow) {
+                Step.Refused(
+                    "offline.restored_payload_does_not_match_capture",""",
+        expect_red="a restore that does not reproduce the captured bytes is refused",
+        why="a restore accepts bytes that are not the ones the key is bound to, which converts a recoverable obligation into a permanently refused key — the one outcome the restore path exists to avoid",
+    ),
+    Proof(
+        law="HARNESS-THE-RACE-TEST-MUST-DETECT-A-SECOND-COMMIT",
+        path="test/app/daftar/offline/ReentryAndRetentionTest.kt",
+        find="            if (key in fenced) return false",
+        replace="            if (false) return false",
+        expect_red="no interleaving of a lookup and a late commit ever creates two operations",
+        why="the fake server stops honouring its own fence, so an original that lands after a fenced answer commits anyway; if the race test cannot see the second operation appear here, it was never proving that two are not created",
+    ),
+    Proof(
+        law="HARNESS-THE-SEARCH-CANNOT-STOP-OFFERING-A-RESTORE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="            add(QueueEvent.RestorePayload(digest, acting))",
+        replace="            // add(QueueEvent.RestorePayload(digest, acting))",
+        expect_red="every reachable configuration honours every invariant",
+        why="the search stops exercising the restore, so INV-11 and INV-12 hold vacuously: no minimized row is ever offered a way forward, and only the counted event set notices that the settlement path was never walked",
     ),
 ]
 

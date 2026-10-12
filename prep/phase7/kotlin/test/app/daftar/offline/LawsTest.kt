@@ -49,6 +49,10 @@ class LawsTest {
             "ReentryAndRetentionTest.a wiped device may not re-enter an unknown sale while the receipt cannot be read",
         P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id to
             "ReentryAndRetentionTest.expiry never clears the row, never discards the operation and never forgets why",
+        P7Laws.AN_UNFENCED_ABSENCE_SETTLES_NOTHING.id to
+            "ReentryAndRetentionTest.an absence settles the original only when the original key is fenced",
+        P7Laws.THE_ORIGINAL_KEY_OUTRANKS_A_NEW_ONE.id to
+            "ReentryAndRetentionTest.a recoverable original is resent under its own key whatever the receipt says",
     )
 
     @Test
@@ -56,7 +60,7 @@ class LawsTest {
         val stated = P7Laws.ALL.map { it.id }.toSet()
         assertEquals(stated, defendedBy.keys, "the law table and the coverage map have drifted apart")
         assertEquals(P7Laws.ALL.size, stated.size, "two laws share an id")
-        assertTrue(stated.size >= 16, "only ${stated.size} laws are stated")
+        assertTrue(stated.size >= 18, "only ${stated.size} laws are stated")
     }
 
     @Test
@@ -78,7 +82,7 @@ class LawsTest {
     fun `the defenders are distinct, so no one test is credited with every law`() {
         val distinct = defendedBy.values.distinct()
         assertTrue(
-            distinct.size >= 13,
+            distinct.size >= 14,
             "only ${distinct.size} distinct tests defend ${defendedBy.size} laws — a single test credited " +
                 "with several laws is how an undefended law reads as covered",
         )
