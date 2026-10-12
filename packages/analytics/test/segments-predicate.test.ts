@@ -10,7 +10,6 @@ import {
   SHAPE_BOUNDS,
   type AttrName,
   type Comparator,
-  type CostClass,
   type Predicate,
   authoritiesUsed,
   collectLeaves,

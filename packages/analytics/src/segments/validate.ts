@@ -27,10 +27,10 @@
  * (`segment.predicate_too_complex`, `segment.attribute_unknown`,
  * `segment.operator_not_applicable`, `segment.literal_invalid`,
  * `segment.predicate_not_servable`). The live catalogue in `src/errors.ts` has
- * none of those; it has `analytics.predicate_not_serveable`
- * (`src/errors.ts:36-37`, and note the different spelling of "serveable"). That
+ * none of those; it has `analytics.predicate_not_servable`
+ * (`src/errors.ts:36-37`, and the spelling is now aligned on "servable"). That
  * file is not this agent's to edit, so every admissibility refusal here is
- * raised as `analytics.predicate_not_serveable` and carries the design's own
+ * raised as `analytics.predicate_not_servable` and carries the design's own
  * code in `context.designCode`, so that the specific law is still named in the
  * refusal and a later catalogue entry is a rename and not a rediscovery.
  */
@@ -157,7 +157,7 @@ export type SegmentDesignCode =
   | 'segment.predicate_not_servable';
 
 function refuseAdmissibility(designCode: SegmentDesignCode, message: string, context: Record<string, string> = {}): never {
-  refuse('analytics.predicate_not_serveable', message, { designCode, ...context });
+  refuse('analytics.predicate_not_servable', message, { designCode, ...context });
 }
 
 function refuseAbsentAuthority(message: string, context: Record<string, string> = {}): never {
@@ -210,7 +210,7 @@ export function validatePredicate(predicate: Predicate, input: ValidationInput):
 }
 
 /**
- * Admissible AND serveable on this branch.
+ * Admissible AND servable on this branch.
  *
  * Kept separate from admissibility on purpose: whether a predicate is a legal
  * audience definition is a property of the predicate, while whether its

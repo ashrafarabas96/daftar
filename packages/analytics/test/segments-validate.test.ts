@@ -115,7 +115,7 @@ describe('RED PROOF: the absence-shaped consent predicate is refused', () => {
   it('refuses `{consent.opt_out_count, eq, 0}` as an unregistered attribute', () => {
     const absenceWearingACount = leaf('consent.opt_out_count' as AttrName, 'eq', 0);
     const r = refusalOf(() => validatePredicate(absenceWearingACount, INPUT));
-    expect(r.code).toBe('analytics.predicate_not_serveable');
+    expect(r.code).toBe('analytics.predicate_not_servable');
     expect(r.context['designCode']).toBe('segment.attribute_unknown');
     expect(r.context['attr']).toBe('consent.opt_out_count');
   });
@@ -140,7 +140,7 @@ describe('RED PROOF: the absence-shaped consent predicate is refused', () => {
 describe('RED PROOF: a negation may not turn the positive consent leaf into an absence predicate', () => {
   it('refuses `none_of [ {consent.state, eq, opted_in} ]`', () => {
     const r = refusalOf(() => validatePredicate(noneOf(OPTED_IN), INPUT));
-    expect(r.code).toBe('analytics.predicate_not_serveable');
+    expect(r.code).toBe('analytics.predicate_not_servable');
     expect(r.context['law']).toBe('consent.positive_state_only');
     expect(r.context['attr']).toBe('consent.state');
     expect(r.context['negationsAbove']).toBe('1');
@@ -225,7 +225,7 @@ describe('RED PROOF: the shape bounds refuse, and they refuse at the right place
 describe('RED PROOF: a predicate with no cost bound supplied is refused', () => {
   it('refuses when the caller supplies no bounds object at all', () => {
     const r = refusalOf(() => validatePredicate(STATUS_ACTIVE, undefined as unknown as ValidationInput));
-    expect(r.code).toBe('analytics.predicate_not_serveable');
+    expect(r.code).toBe('analytics.predicate_not_servable');
     expect(r.context['bound']).toBe('candidateCeiling');
   });
 
@@ -268,7 +268,7 @@ describe('RED PROOF: a predicate that would re-derive money is refused', () => {
     const r = refusalOf(() =>
       assertNoFinancialRederivation('insight.planted_recomputed_total', planted({ kind: 'recomputed_in_crm' })),
     );
-    expect(r.code).toBe('analytics.predicate_not_serveable');
+    expect(r.code).toBe('analytics.predicate_not_servable');
     expect(r.context['law']).toBe('no_financial_rederivation');
     expect(r.context['origin']).toBe('recomputed_in_crm');
   });
@@ -493,7 +493,7 @@ describe('a stored definition is revalidated on every evaluation', () => {
 
   it('refuses malformed JSON and a non-object root', () => {
     expect(refusalOf(() => validateSerialisedDefinition('{not json', INPUT)).code).toBe(
-      'analytics.predicate_not_serveable',
+      'analytics.predicate_not_servable',
     );
     expect(refusalOf(() => validateSerialisedDefinition('[]', INPUT)).context['designCode']).toBe(
       'segment.literal_invalid',

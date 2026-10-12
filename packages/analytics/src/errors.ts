@@ -34,11 +34,63 @@ export const ANALYTICS_REFUSALS = {
    */
   'analytics.scope_narrower_than_requested': 422,
   /** A segment predicate the reader cannot serve inside its cost bound. */
-  'analytics.predicate_not_serveable': 422,
+  'analytics.predicate_not_servable': 422,
   /** An export was asked for while the configuration that bounds it is absent. */
   'analytics.export_unconfigured': 422,
   /** A surface whose integrated upstream does not exist yet. Shows nothing. */
   'analytics.waiting_for_integrated_surface': 503,
+
+  /* ---------------------------------------------------------------- *
+   * Loyalty.
+   *
+   * These lived in a second catalogue inside the loyalty module for as long as
+   * it took to notice. One package with two refusal registries is the same
+   * defect as one figure with two definitions: a caller cannot tell which
+   * registry a code came from, and the day a code appears in both, nothing
+   * decides which status wins. Folded here on 2026-10-12, with the loyalty
+   * module's names kept as narrowings of this one set rather than as a parallel
+   * catalogue.
+   * ---------------------------------------------------------------- */
+
+  /** A conversion or earning rate was required and the configuration was absent or empty. */
+  'loyalty.unconfigured': 422,
+  /** A supplied rate is not a usable positive rational. */
+  'loyalty.rate_not_positive': 422,
+  /** The award or conversion result is zero; a zero-delta movement has no row. */
+  'loyalty.movement_would_be_zero': 422,
+  /** Outside the ledger's range. A wrapped balance is a silent wrong number. */
+  'loyalty.points_out_of_range': 422,
+  /** The movement's sign contradicts its kind's registered sign. */
+  'loyalty.sign_violates_kind': 422,
+  /** The (source type, kind) pair is not one the least-authority registry admits. */
+  'loyalty.source_kind_pair_unregistered': 422,
+  /** An adjustment without a reason, where the kind requires one. */
+  'loyalty.reason_required': 422,
+  /** A horizon on a non-earn row, or a missing one on an earn row. */
+  'loyalty.horizon_shape_invalid': 422,
+  /** A horizon on or before the day earned — the shape of a horizon-of-zero bug. */
+  'loyalty.horizon_not_after_effective': 422,
+  /** A correction naming a row that is not in the ledger. */
+  'loyalty.correction_target_unknown': 422,
+  /** A date that is not a civil date. Refused, never coerced. */
+  'loyalty.date_not_civil': 422,
+  /** Fewer eligible points than the consumption asks for. */
+  'loyalty.insufficient_eligible_points': 422,
+  /** A redemption value or line figure that is not usable integer minor units. */
+  'loyalty.allocation_value_invalid': 422,
+  /** A redemption with no lines to split across. */
+  'loyalty.allocation_no_lines': 422,
+  /** A redemption larger than the sale lines can absorb. NEVER clamped: a clamp
+   *  would be a money computation this phase does not own. */
+  'loyalty.allocation_exceeds_capacity': 422,
+  /** The split did not reconcile. This is 500 on purpose — it means this code is
+   *  wrong, not that the caller asked for something impossible. */
+  'loyalty.allocation_remainder_unplaceable': 500,
+  /** An allocation indexed a line that is not there. 500 for the same reason:
+   *  the caller cannot cause it, so it means this code is wrong. It exists
+   *  because the repository forbids the non-null assertion that would
+   *  otherwise paper over exactly this case. */
+  'loyalty.allocation_index_out_of_range': 500,
 } as const;
 
 export type AnalyticsRefusalCode = keyof typeof ANALYTICS_REFUSALS;
