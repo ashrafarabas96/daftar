@@ -1,7 +1,12 @@
 -- NEW FINDING against my own §11.1: the column-scoped merchant INSERT set is
--- UNSATISFIABLE. secret_sha256 is NOT NULL and is not in the merchant's INSERT
+-- UNSATISFIABLE. Several NOT NULL columns sit outside the merchant's INSERT
 -- set, so there is NO merchant INSERT that both respects the grant and the
--- constraint. A grant matrix must be satisfiable, not merely safe.
+-- constraints. A grant matrix must be satisfiable, not merely safe.
+--
+-- CHALLENGE P3-08: this comment used to name secret_sha256 as the blocking
+-- column. The constraint that actually fires first is subject_user_id's, which
+-- is why the second branch below is EXECUTED separately rather than inferred —
+-- a refusal test asserting only "it failed" can pass on the wrong constraint.
 DO $$
 DECLARE st TEXT; msg TEXT;
 BEGIN

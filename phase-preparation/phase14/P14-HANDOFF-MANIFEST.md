@@ -22,7 +22,7 @@ Required by Directive 11 **PART 13** (handoff integrity, a required gate) and
 | | |
 |---|---|
 | Phase | 14 — Integrations, Public API, Developer Platform (roadmap PARTs 90–100 of Directive 11) |
-| Status | **`PREPARED / NOT PROMOTED`** · **DOCS ONLY** · **ALL GATES UNMEASURED** |
+| Status | **`PREPARED` · `CHALLENGED` · `NOT PROMOTED`** · **DOCS ONLY** · **ALL GATES UNMEASURED** (43 law proofs executed; no gate measured) |
 | `READY_TO_PROMOTE` | **NO** — Phase 13 is not PASS, and promotion is serial (PART 4) |
 | Exact prep base SHA | `93084f8` (remote head of `phase/4-sales-pos-customers-receivables`, read 2026-10-07 and re-verified 2026-10-12) |
 | `origin/main` at preparation | `6fc505d` |
@@ -36,7 +36,7 @@ Required by Directive 11 **PART 13** (handoff integrity, a required gate) and
 
 ## 2. Artifacts — location, hash, state
 
-All **15** live at **`/mnt/project-files/phase14/`** — the shared project folder,
+All **17** live at **`/mnt/project-files/phase14/`** — the shared project folder,
 which outlives this container. All are **uncommitted / off-Git**, so PART 13's
 SHA256 requirement applies to every row. **Regenerated, not patched**, after the
 Master Continuous Mission **V3** amendment of 2026-10-12: every hash below was computed
@@ -50,14 +50,16 @@ from the file as it now stands, so a stale digest cannot survive an edit.
 | `P14-AMENDMENT-04-MISSION-V2.md` | Amendment 04 (Master Continuous Mission V2): the six V1 fixes confirmed closed; 8 new review findings, 6 of them real defects here and 4 of those written the same morning; 5 new laws (AL-33…37); ruling TL-P14-SEC-02 on the delivery/source link; early migration numbering withdrawn | `c76296e0ce59856292f5fa5b085ca731867b66253485bd7dc9ef32ceb3a3646f` | 12,050 |
 | `P14-AMENDMENT-05-MISSION-V3.md` | Amendment 05 (Master Continuous Mission V3): the Amendment 04 fixes accepted; 3 findings — the grants matrix not receiving §1’s ten columns, GET /stock mapped to a LOWER permission than the live guard requires (a cashier privilege escalation), and replay after purge undefined; 2 new laws (AL-38, AL-39); 3 gate tasks | `39fc7bdabab241217bb6966f9b3814ed34f1d647c52456ce831b5d3a0bd5b1a2` | 9,203 |
 | `P14-CONTRACT-PACK.md` | Public API contract: routes with owning slice and publication state, headers, refusal codes, pagination, webhook event catalogue and receiver contract (freshness tolerance now configured, not a literal) | `aee22cf0efa111d799ace38382ddbfcf4fbae2848348aaa9018422ee53c681a3` | 17,003 |
-| `P14-MIGRATION-PATCH-REQUEST.md` | MIGRATION PATCH REQUEST: 8 new relations, columns, CHECKs, keys, indexes, RLS policies, the per-relation/per-operation grants matrix (§11), the Security Owner ruling request (§11a), the attack matrix (§11b), triggers, tests. NO number, NO filename, NO example | `9f24683f785dced586acf6732c689ea4452a0afc81a526e2c14cb58b1f9f58bd` | 87,988 |
+| `P14-MIGRATION-PATCH-REQUEST.md` | MIGRATION PATCH REQUEST: 8 new relations, columns, CHECKs, keys, indexes, RLS policies, the per-relation/per-operation grants matrix (§11), the Security Owner ruling request (§11a), the attack matrix (§11b), triggers, tests. NO number, NO filename, NO example | `ace2f1652a8a83998a40e7279ae0aa486deaaaf35353b4f34b1bc273e6bbd0e8` | 92,654 |
 | `P14-OPEN-DECISIONS-AR.md` | The decisions (Arabic): the original 8 all settled, plus OD-P14-09 (retention), OD-P14-10 (signature freshness tolerance) and OD-P14-11 (the last_used_at write interval, added by CHALLENGE P2-04) — operational, blocking production launch and not review | `86ea1302702e471fbf75e0b0b26bda42812ce9fa6a496245bc46ced6dba2589c` | 22,581 |
 | `P14-OPENAPI-SKELETON.yaml` | OpenAPI 3.1 skeleton, 8 paths / 9 operations, published subset only. DESIGN ONLY — the final document is generated | `0e2476dbb7685a608a130c6059227db153fbc7391942bee43ddc0db219b27f5f` | 11,169 |
 | `P14-S0-ARCHITECTURE-LOCK.md` | Architecture lock: **39** numbered laws (P14-AL-01…39), verified-fact table, 14-path pre-mortem, done-definition (CHALLENGE P3-07: this row read 32 while the hashed file carried 39 — a correct digest beside a wrong description, which a reader checking the hash would conclude was verified) | `5c3327b6c7e49c68193469e0f41058b91ce9cef47230cbe3493483c0123e59a3` | 49,364 |
 | `P14-TASK-DAG.md` | 34 tasks with dependencies, allowed files, DB impact, risk, tests, acceptance; shared-file ownership; review routing; honest concurrency ceiling | `15b9dab7fb6229fdca4e40fc5e37955d721a582a592c039859d7819e7cadb0c0` | 21,361 |
 | `P14-CHALLENGE-2026-10-12.md` | The independent challenge, authored by a session that wrote no part of this pack. Verdict **REJECT**: 1 P1 in the auth path, 3 P2, 3 P3; manifest integrity PASS; 9 executable proofs run on PostgreSQL 16.15 @ en_US.utf8, 9 PASS for the pack. Hashed here as received and **not edited by this thread** | `2ea7bbf6669b865a52149d13177c179c021f3d9657c8a6125c0302b1f7f35ab9` | 26,126 |
-| `P14-AMENDMENT-06-INDEPENDENT-CHALLENGE.md` | Amendment 06: the response. All 7 findings re-verified against `93084f8` before any edit and all 7 real; P1-01 settled at EIGHT columns on §1's own derivation rule (the defect was in §1/§11.1, not §3); GATE-033 restated to scan for grant statements rather than name sections; `sales.create` reachability stated; 3 further findings this thread's own execution added. **Does not sign the pack** | `9f9c4c2ef44c8a806c49d75a758092992add3fc4c2b563568391267059addc24` | 9,115 |
-| `P14-EVIDENCE-2026-10-12.md` | **EXECUTED evidence**, the first in this phase's history: 45 runs with run IDs and exit codes on PostgreSQL 16.15 @ `en_US.utf8` as non-superuser roles, 9 case families C1–C9, red proofs on C1/C2/C3/C9, and the two wrong runs kept rather than deleted. No migration number, no frozen migration touched, no timing claim | `fb7eef8b65650c16b5a71d860abf4499a4e318e4e7ca96404d31d9a270da55eb` | 14,761 |
+| `P14-AMENDMENT-06-INDEPENDENT-CHALLENGE.md` | Amendment 06: the response. All 7 findings re-verified against `93084f8` before any edit and all 7 real; P1-01 settled at EIGHT columns on §1's own derivation rule (the defect was in §1/§11.1, not §3); GATE-033 restated to scan for grant statements rather than name sections; `sales.create` reachability stated; 3 further findings this thread's own execution added. **Does not sign the pack** | `c1a9faea07a3776eedf1c3c83dd91bf8f64e35c2ff0f231cdfe3ae8f7c9bc7e5` | 10,014 |
+| `P14-EVIDENCE-2026-10-12.md` | **EXECUTED evidence**, the first in this phase's history: 43 runs with run IDs and exit codes on PostgreSQL 16.15 @ `en_US.utf8` as non-superuser roles, 9 case families C1–C9, red proofs on C1/C2/C3/C9, and the two wrong runs kept rather than deleted. No migration number, no frozen migration touched, no timing claim | `83bfac06d0ad62a203727703c3d56ee23831620df54a71cc04c5e7ab581caceb` | 18,543 |
+| `P14-CHALLENGE-08d23da.md` | The independent challenge, round 2 at `08d23da`. Verdict **PASS-WITH-SCOPE**: all 7 round-1 findings closed and all 3 of this thread's new findings reproduced, against 1 P1 (the evidence pack was not reproducible — `C8`'s constraint existed in no committed script), 4 P2 and 2 P3. The challenger re-ran all 34 committed cases and re-read `pg_roles` itself. Hashed as received and **not edited by this thread** | `ae87a5cac2d6d1bbd65a00d0fa0d660227ee3373e13095966d08140a5ff524b2` | 25,792 |
+| `P14-AMENDMENT-07-CHALLENGE-ROUND-2.md` | Amendment 07: the round-2 response. P1-02 and P2-03 closed **by construction** — the 4 missing mutations are now scripts with proof-of-proof, the case id is derived from the script path, and the evidence is one clean replay; the law citation re-grounded on `P14-AL-29` with its *"to decide usability"* qualifier restored; `TL-P14-SEC-02` repriced to **5** options with (C) corrected from "unavailable" to "not Phase 14's to write" and coupled to `TL-P14-SEC-01`; §11.1a records the unenumerated `INSERT` cell. **Does not sign the pack** | `aa364a5154c204698999a42ff2c084e54517495e5903b5c309298a883c86b13b` | 10,966 |
 | `README-AR.md` | Arabic index of the pack and what needs the owner’s attention | `b203e7fbbdfaf070ce5726cdb5f55cb67a0964da6231f2e22ae6c81f98c6af7e` | 9,576 |
 
 Every row is **present**. No artifact is missing, so this handoff is
@@ -86,8 +88,15 @@ byte-identical duplicate of any artifact in this pack.
 
 ## 5. Tests and evidence
 
-**None. Every gate is `UNMEASURED`** (PART 15), and that is the correct state
-for a DOCS-ONLY phase: nothing has been executed, so nothing is claimed. The
+**No gate has been measured. 43 law proofs HAVE been executed** — see
+`P14-EVIDENCE-2026-10-12.md`. The distinction is exact and the earlier wording
+erased it (CHALLENGE R2 P2-07): the **gates** are tasks 002/007/013/023/025 and
+`P14-GATE-032`/`033`/`034`, and every one of them remains `UNMEASURED`, which is
+the correct state for a DOCS-ONLY phase. What was executed is the **laws** the
+request states, on scratch objects, with no migration number. The previous
+revision said *"nothing has been executed, so nothing is claimed"* on the same
+page that describes a 45-run evidence document, and that clause survived an edit
+to the sentence beside it. The
 gates this phase owes, each with its red-proof obligation, are listed in
 `P14-TASK-DAG.md` §2 (tasks 002, 007, 013, 023, 025). No timing or performance
 number appears anywhere in the pack (PART 10/16: this container is not the

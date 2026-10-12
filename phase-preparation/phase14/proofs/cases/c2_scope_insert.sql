@@ -1,4 +1,11 @@
--- owner: the fix — INSERT scoped to the columns the merchant may actually set
+-- owner: the fix — INSERT scoped to columns the merchant may actually set.
+-- CHALLENGE P3-08: this set is ILLUSTRATIVE and is deliberately NOT quoted as
+-- §11.1's, because §11.1's daftar_app INSERT cell reads "see below" and the
+-- prose below it never enumerates a set — it says only what is NOT in it. That
+-- gap is recorded in §11.1 itself and routed with TL-P14-SEC-01, since "which
+-- principal may write a key digest" is the same question as "which principal
+-- holds the plaintext". What this case proves is scope-independent: narrowing
+-- INSERT by column refuses the forgery that an unqualified grant permits.
 DELETE FROM p14s.api_keys WHERE name = 'FORGED-BY-MERCHANT';
 REVOKE INSERT ON p14s.api_keys FROM p14_merchant;
 GRANT INSERT (tenant_id, business_id, name, expires_at) ON p14s.api_keys TO p14_merchant;

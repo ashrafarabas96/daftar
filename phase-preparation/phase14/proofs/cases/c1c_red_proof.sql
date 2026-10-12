@@ -1,4 +1,6 @@
--- owner: red proof — withdraw ONLY the lookup column and the arm that just
+-- owner: red proof — withdraw ONE column the eight-column resolver genuinely
+-- uses (`secret_sha256`, the digest it compares; NOT the lookup column, which
+-- is `key_id` — CHALLENGE P3-08 corrected this comment) and the arm that just
 -- passed must turn red, proving the arm tests the grant and nothing else
 REVOKE SELECT (secret_sha256) ON p14s.api_keys FROM p14_resolver;
 DO $$

@@ -111,7 +111,7 @@ read.
 
    | Column | Why the resolver must not read it |
    |---|---|
-   | `revoke_scheduled` | `P14-AL-11` states no reader may consult it to decide usability. A resolver that selects it is a reader of it. The earlier revision listed it here **and** forbade reading it in the same pack — the contradiction was this document's, not §3's |
+   | `revoke_scheduled` | **`P14-AL-29`** (not `P14-AL-11`, which is idempotency — misattributed in the previous revision, CHALLENGE R2 (a)): *a boolean of intent is written at write time and **never read to decide usability***. The resolver's only purpose in reading this row **is** to decide usability, so for the resolver the two are the same act — which is why the exclusion follows from the law **for this principal only**. It does not follow for `daftar_app`, which §11.1 grants `SELECT` and `UPDATE` on this column so the management surface can display and set the intent: that is a reader, and a permitted one. **The independent reformulation "a resolver that selects it is a reader of it" dropped the qualifier and would have invalidated that grant two sections later.** The qualifier is the law. Independently of it, the exclusion stands on the same ground as `name`: minimal reach for the one principal that reads every key digest in every business |
    | `name` | management data. Error and audit context is read in the business transaction by `daftar_app`, which already holds it. Granting it to the one role that can read **every** key row's digest across **every** business widens the blast radius of the most privileged principal in the pack for no authentication purpose |
 
    The previous revision listed neither `key_id` nor `id`, so the resolver as
@@ -672,12 +672,30 @@ abstract:
 
 | Option | What it costs |
 |---|---|
-| (A) invoker-rights assertion + `GRANT SELECT ON outbox_events` | the writing role reads a **global** event ledger across every business — measured above, not hypothesised |
+| (A) invoker-rights assertion + `GRANT SELECT ON outbox_events` | **depends entirely on which principal `TL-P14-SEC-01` names, and the two rulings are therefore COUPLED, not independent** — see the paragraph below. For `daftar_worker` it costs **nothing new**; for a dedicated internal role it costs the measured global read |
 | (B) `SECURITY DEFINER` assertion reading only the one row | violates `P14-AL-22` (no new `SECURITY DEFINER`), so it needs an explicit exemption with its own search-path and ownership discipline |
-| (C) a `(business_id, id)` unique on `outbox_events` and a composite FK | the correct fix, and it is **not available**: `outbox_events` is `id UUID PRIMARY KEY` with a nullable `business_id` at the base and the relation is inside frozen `0004` |
+| (C) a `(business_id, id)` unique on `outbox_events` and a composite FK | **the correct fix, and it is NOT unavailable — it is not Phase 14's to write, which is a different ruling and precisely the one being asked for.** Corrected in round 2 (CHALLENGE R2 (b)): what is forbidden is **altering** frozen `0004`, and a `UNIQUE (business_id, id)` added by an **appended** migration alters no frozen file — this section's own earlier paragraph already allows *"appending one to a table this phase does not own"* (`:602`). The previous revision collapsed *"I may not write it"* into *"it cannot be done"* and so took the best option off the menu. Mechanically it works: the child's `business_id` is `NOT NULL`, so under `MATCH SIMPLE` the composite FK is **always** checked and a `NULL`-business parent can never be named — no trigger, no grant, no exemption. The cost is that it belongs to the **Outbox and Migration Owners**, and it touches a relation six other phases read |
 | (D) no database invariant; the application binds the pair | the honest DESIGN-ONLY answer, and it must then be **stated** as the only guard, as §3 now does for `subject_user_id` |
+| (E) a relation **Phase 14 owns**, keyed `(business_id, outbox_event_id)`, populated at fan-out where the business is already known, policed by this phase's own RLS, with `webhook_deliveries` carrying a composite FK to **it** | **added in round 2 (CHALLENGE R2 (b)); this request had missed it.** The composite key is kept, no frozen relation changes, no `SECURITY DEFINER` exemption, no global read grant, and the invariant stays inside the phase that owns it. The cost is a second relation and a write at fan-out whose own correctness must then be proved — the binding is only as good as the moment it is recorded |
 
-This request states the four and decides none. **No DDL for
+**Why (A)'s price is `TL-P14-SEC-01`'s answer, measured at `93084f8`.**
+`0010_db_roles.sql:36-39` is `CREATE POLICY outbox_worker ON outbox_events USING
+(current_user = 'daftar_worker')` — **PERMISSIVE, with no business predicate** —
+together with `GRANT SELECT, UPDATE ON outbox_events TO daftar_worker`. So if the
+Security Owner names `daftar_worker` as the delivery principal, that role
+**already** reads every business's outbox rows and the assertion is **already
+operable for it at no new cost**. If a dedicated internal role is chosen
+instead, the cost measured in `C7d` applies in full.
+
+That cuts both ways and the owner should have it in those words: the fact that
+`daftar_worker` already holds a global read is itself **an argument against
+naming it** the delivery principal, and it belongs to `TL-P14-SEC-01`. §11a
+already observes that `daftar_worker` reaches credential deliveries and
+invitations; this is a **third** instance of the same reach, and unlike the
+first two it is measurable rather than rhetorical. **The two rulings must be
+answered together, and the previous revision presented them as independent.**
+
+This request states the five and decides none. **No DDL for
 `webhook_deliveries` is written until the ruling returns.**
 
 ## §8. `webhook_inbound_events`
@@ -778,7 +796,7 @@ the `PUBLIC` row is empty by construction and is not repeated per table.
 
 | Role | SELECT | INSERT | UPDATE | DELETE |
 |---|---|---|---|---|
-| `daftar_app` | all columns **except** `secret_sha256` | **see below — not an unqualified “yes”** | `name`, `revoked_at`, `revoked_by_user_id`, `revoked_reason`, `revoke_scheduled`, `last_used_at` only | — |
+| `daftar_app` | all columns **except** `secret_sha256` | **NOT ENUMERATED — see §11.1a, this is a gap and not a scoping** | `name`, `revoked_at`, `revoked_by_user_id`, `revoked_reason`, `revoke_scheduled`, `last_used_at` only | — |
 | `daftar_identity` | `key_id`, `id`, `tenant_id`, `business_id`, `subject_user_id`, `secret_sha256`, `expires_at`, `revoked_at` — **eight columns, matching §1 and §3 exactly** (CHALLENGE P1-01: this row read ten while §3 granted eight; the ten-column query is refused with `42501`, executed as `C9a`. `revoke_scheduled` and `name` are excluded by derivation, not trimmed — see §1) | — | — | — |
 | `daftar_worker` | — | — | — | — |
 | `daftar_platform` | per the accepted platform bypass policy | " | " | — |
@@ -795,6 +813,25 @@ the `PUBLIC` row is empty by construction and is not repeated per table.
 - `daftar_app`'s UPDATE is **column-scoped**, not whole-row. The immutability
   trigger (`P14-AL-08`) is the second line of defence, not the first: a grant
   that cannot name the column is better than a trigger that must refuse it.
+**§11.1a — the `INSERT` cell is not enumerated anywhere, and that is a gap
+(CHALLENGE R2 P3-08, found indirectly).** This row read *"see below — not an
+unqualified yes"*, and the prose below it says only what is **not** in the set.
+A matrix that declares itself authoritative must state the set, so the honest
+record is that it does not yet, rather than a set invented here. The two
+candidate resolutions:
+
+| | |
+|---|---|
+| (i) `daftar_app` holds **no** `INSERT` on `api_keys` | key creation is a distinct minting principal's, the only one holding the plaintext. This follows from `C2d` below and is this request's reading |
+| (ii) `daftar_app` holds a column-scoped `INSERT` and a second write supplies the digest | two statements where one fact is created, so the row exists briefly without its digest — which needs its own invariant |
+
+**This is routed with `TL-P14-SEC-01` rather than decided here**, because
+*"which principal may write a key digest"* is the same question as *"which
+principal holds the plaintext"*, and the Security Owner is already being asked
+the second. No DDL for `api_keys` grants is written until it returns. The proof
+case for this area (`c2_scope_insert.sql`) therefore states in its own comment
+that its column set is **illustrative**, not a quotation of this matrix.
+
 **The column-scoped `INSERT` for `daftar_app` is NOT satisfiable as a direct
 statement, and that is a property of this matrix, not a defect to repair by
 widening it (EXECUTED, case `C2d`, exit 0).** `secret_sha256` and

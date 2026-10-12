@@ -41,10 +41,23 @@ recurrence rather than at this instance of it.
 The challenger asked that eight-or-ten be settled on §1's own derivation rule
 rather than by copying ten into §3. Applying that rule:
 
-**`P14-AL-11` states that `revoke_scheduled` is a write-time assertion of intent
-that no reader may consult to decide usability. A resolver that selects it is a
-reader of it.** The earlier revision therefore forbade and required the same
-read inside one pack. `name` is management data; error and audit context is read
+**`P14-AL-29` states that a boolean of intent is written at write time and
+*never read to decide usability*.** The resolver's only purpose in reading the
+key row **is** to decide usability, so for that principal reading and consulting
+are the same act, and the exclusion follows from the law **for the resolver
+alone**.
+
+> **Corrected in round 2 (CHALLENGE R2 (a)):** this paragraph originally cited
+> `P14-AL-11`, which is `IDEMPOTENCY FOLLOWS THE REPOSITORY'S CONVENTION`
+> (`P14-S0-ARCHITECTURE-LOCK.md:268`) and says nothing about this column. The
+> misattribution was real and is corrected in all three places it appeared. It
+> also stated the rule as *"a resolver that selects it is a reader of it"*,
+> dropping *to decide usability* — and in that broader form the rule would have
+> invalidated §11.1's own grant of `SELECT` and `UPDATE` on this column to
+> `daftar_app`, which the management surface needs. The qualifier is the law.
+> One correction in the other direction: the rule **is** numbered — it is the
+> third sentence of `P14-AL-29` — rather than unnumbered prose, so a gate
+> asserting derivations against numbered laws can reach it. `name` is management data; error and audit context is read
 in the business transaction by `daftar_app`, which already holds it, and granting
 it to the one role that can read every key row's digest across every business
 widens the blast radius of the pack's most privileged principal for no
