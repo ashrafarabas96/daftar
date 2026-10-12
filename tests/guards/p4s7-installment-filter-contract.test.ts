@@ -407,15 +407,33 @@ describe('P4-S7 the installment.* rendering contract', () => {
     //
     //    THE PROPERTY IT MEANT TO RECORD IS TRUE, AND IT IS A THEOREM OF THE
     //    OLD STRUCTURE RATHER THAN A MEASUREMENT, SO IT IS STATED AND NOT
-    //    ASSERTED. Round 17's scope was `lines[0]` where `lines` is
-    //    `r.logged` FILTERED on one message string. A plant placed under
-    //    ANOTHER message can therefore never be the line that scope reads,
-    //    and a plant placed under the SAME message still leaves the shipped
-    //    line first — so NO index and NO re-filtering makes such an arm able
-    //    to fail. `R74` §3 is where that reasoning is ruled on, and it is
-    //    also why the round-18 challenger's proposed `[0]` → `[1]` was
-    //    refused: `[1]` would assert that round 17 read a line its own filter
-    //    excluded, which is false.
+    //    ASSERTED — AND THE STRUCTURE IS TWO CASES, NOT ONE. Round 17's
+    //    scope was `lines[0]` where `lines` is `r.logged` FILTERED on one
+    //    message string, and THIS BLOCK'S PLANT CARRIES A DIFFERENT MESSAGE,
+    //    so it can never be the line that scope reads: round 17's filter
+    //    yields the shipped line ALONE and its `lines[0]` IS
+    //    `plantedSecondLine[0]`. That is the whole of the other-message
+    //    case, and it is a theorem of filter-then-`[0]`.
+    //
+    //    A PLANT CARRYING THE SAME MESSAGE IS REFUSED BY A DIFFERENT ARM OF
+    //    ROUND 17 — its `expect(lines).toHaveLength(1)` pin at its own
+    //    `:321`, which reds BEFORE its scope reads `lines[0]` at all — and
+    //    NOT by any ordering of the log. No ordering is asserted here and
+    //    none is available: `filter` preserves emission order and nothing
+    //    orders the shipped `logger.error` call first, so a same-message
+    //    plant emitted FIRST would be `lines[0]`. A paragraph that stood
+    //    here asserted the opposite ordering and WAS FALSE; it is withdrawn.
+    //    `TL-P4-COORD-R76` §2 and ordered item 1 are where that is ruled on
+    //    and where the withdrawal is recorded — cite that, NOT `R74` §3,
+    //    whose clause is corrected in place there.
+    //
+    //    So for the fixture THIS block builds, no subscript that faithfully
+    //    models round 17 can fail. That conclusion stands on the
+    //    other-message case alone, and it is also why the round-18
+    //    challenger's proposed `[0]` → `[1]` was refused: `[1]` would assert
+    //    that round 17 read a line its own filter excluded, which is false.
+    //    The round-19 challenger withdrew that proposal and upheld the
+    //    refusal.
     //
     //    THAT ROUND 17'S SCOPE REALLY DID PASS THIS PLANT IS MEASURED, BUT
     //    NOT HERE AND NOT BY THIS SLICE'S AUTHOR: the round-17 challenger ran

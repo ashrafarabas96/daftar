@@ -2339,13 +2339,20 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
   //    access path must record the path and the inputs that chose it, or the
   //    next round inherits an unexplained movement -- which `R59` calls worse
   //    than a known one.
+  //    AND THE CAPTURE CARRIES THE ISOLATION LEVEL IT RAN AT, read and not
+  //    assumed (`TL-P4-COORD-R76` ordered item 2). `stats_rows` here is the
+  //    FIRST of two reads of the same premise; the second is taken after the
+  //    last plan reading of this section and the pair is what the guard
+  //    asserts. A re-read is only a read if the two statements take
+  //    different snapshots, so the level is recorded rather than assumed.
   M['R7_cost_inputs'] = (
     await sup.query(
       `SELECT c.relname::text AS rel, c.relpages::int AS relpages, c.reltuples::text AS reltuples,
               pg_relation_size(c.oid)::text AS bytes,
               (SELECT count(*)::int FROM installment_plans) AS plan_rows,
               (SELECT count(*)::int FROM installments) AS schedule_rows,
-              (SELECT count(*)::int FROM pg_stats WHERE schemaname = 'public' AND tablename = c.relname) AS stats_rows
+              (SELECT count(*)::int FROM pg_stats WHERE schemaname = 'public' AND tablename = c.relname) AS stats_rows,
+              current_setting('transaction_isolation') AS iso
          FROM pg_class c WHERE c.oid = 'public.installment_plans'::regclass`,
     )
   ).rows[0];
@@ -2517,6 +2524,22 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         });
       }
     } finally {
+      // ── THE PREMISE IS RE-READ HERE: IMMEDIATELY AFTER THE LAST PLAN
+      //    READING OF THIS SECTION AND BEFORE THE CLEANUP BELOW TOUCHES
+      //    ANYTHING (`TL-P4-COORD-R76` ordered item 2, F19-3). The loop
+      //    above takes the last `planOf` of §R7, so this is the first
+      //    statement after it; the `stats_after` reading in the restore
+      //    record below is taken LATER, after a `DELETE` and a `VACUUM`,
+      //    and certifies the readings that come AFTER the sweep instead.
+      //    This capture is in a `finally` so that it is taken on the error
+      //    path too: a premise read only when the body succeeded is a
+      //    premise unread on the run that most needs it.
+      M['R7_stats_after_last_plan'] = (
+        await sup.query<{ stats_rows: number; iso: string }>(
+          `SELECT (SELECT count(*)::int FROM pg_stats WHERE schemaname = 'public' AND tablename = 'installment_plans') AS stats_rows,
+                  current_setting('transaction_isolation') AS iso`,
+        )
+      ).rows[0];
       // THE RESTORE HAS THREE PARTS AND THE THIRD IS THE ONE THIS ROUND
       // LEARNED. Deleting the filler rows does NOT give the physical size
       // back: a `DELETE` leaves the pages in the relation, so the planner's
@@ -3955,11 +3978,64 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // `false`. The two plans are different plans, measured, not assumed.
     expect(planForced, 'the forced plan is the same as the free one, so the pair measures nothing').not.toBe(planFree);
     expect(planForced).toContain('Index');
-    // AND THE PLANNER HAD NO STATISTICS, so the page count is the cost input
-    // that can move — which is what the sweep varies.
+    // ── AND NO `ANALYZE` OF THIS RELATION COMPLETED ACROSS THESE PLAN
+    //    READINGS, so the page count is the cost input that can move — which
+    //    is what the sweep varies. THE PREMISE IS READ TWICE AND BOTH READS
+    //    ARE REQUIRED (`TL-P4-COORD-R76` §3 and ordered item 2, F19-3).
+    //
+    //    WHAT WAS WRONG BEFORE, stated because it was wrong HERE: round 19
+    //    asserted only the capture taken STRICTLY BEFORE the plan readings,
+    //    under a message claiming something about the readings — "every plan
+    //    reading above is on statistics" — that one capture cannot
+    //    establish, and under a comment claiming flatly that the planner HAD
+    //    no statistics. An analyzer landing in the gap between that capture
+    //    and the readings left this guard GREEN over plans taken on
+    //    statistics. The premise was read before the readings and never
+    //    after: a guard naming a premise it does not read at the time it
+    //    certifies, which is this phase's tracked shape inside the evidence
+    //    suite itself.
+    //
+    //    WHAT THE PAIR ESTABLISHES, AND ALL IT ESTABLISHES: no `pg_statistic`
+    //    row for `installment_plans` existed immediately BEFORE the first
+    //    plan reading of this section, nor immediately AFTER the last one in
+    //    the sweep. What runs BETWEEN the two captures is the filler
+    //    `INSERT`s, the `EXPLAIN`s and the `SELECT`s of these readings, and
+    //    none of them writes or removes a `pg_statistic` row; an `ANALYZE`
+    //    does write one, and such a row is not removed by anything in this
+    //    section. So zero at BOTH ends means no `ANALYZE` of this relation
+    //    COMPLETED across the readings — which the first capture alone
+    //    could not say. The sweep's `DELETE` and its PLAIN `VACUUM` run
+    //    AFTER the second capture, not between them, and it is the restore
+    //    record's own `stats_after` reading that covers those. This pair
+    //    establishes NOTHING about plan readings taken before the first
+    //    capture or after the sweep, and it does not claim to.
+    //
+    //    AND THE CONDITION THAT MAKES THE SECOND READ A READ IS ITSELF READ,
+    //    NOT ASSUMED. `pg_stats` is a view over the CATALOGUE
+    //    `pg_statistic`, so a re-read is governed by the transaction's
+    //    SNAPSHOT — not by `stats_fetch_consistency`, which governs the
+    //    CUMULATIVE `pg_stat_*` views, and not by
+    //    `pg_stat_clear_snapshot()`, which discards the cumulative snapshot
+    //    and does nothing for this quantity. Under REPEATABLE READ the two
+    //    captures would share one snapshot and be equal BY CONSTRUCTION,
+    //    which would make this pair an assertion that cannot fail. So the
+    //    isolation level EACH capture actually ran at is recorded beside it
+    //    and pinned here, and the pair is red-proved by an `ANALYZE` planted
+    //    in the gap (the author's round-20 report, ordered item 2).
+    const statsBefore = M['R7_cost_inputs'] as Record<string, unknown>;
+    const statsAfter = M['R7_stats_after_last_plan'] as Record<string, unknown>;
+    expect(statsAfter, 'the premise was never re-read after the last plan reading').toBeTruthy();
     expect(
-      Number((M['R7_cost_inputs'] as Record<string, unknown>)['stats_rows']),
-      'this fixture has been ANALYZEd, so every plan reading above is on statistics',
+      [String(statsBefore['iso']), String(statsAfter['iso'])],
+      'the two captures of the premise did not both run at READ COMMITTED, so a re-read may be equal to the first read by construction and this pair may be unable to fail',
+    ).toStrictEqual(['read committed', 'read committed']);
+    expect(
+      Number(statsBefore['stats_rows']),
+      'a pg_statistic row for installment_plans existed BEFORE the first plan reading of this section, so those plans are on statistics',
+    ).toBe(0);
+    expect(
+      Number(statsAfter['stats_rows']),
+      'a pg_statistic row for installment_plans existed AFTER the last plan reading of this section, so an ANALYZE completed across the readings and those plans may be on statistics',
     ).toBe(0);
     // ── THE CONTROLLED VARIATION. The page count is varied and NOTHING else;
     //    what moved and what did not is read off the sweep rather than
