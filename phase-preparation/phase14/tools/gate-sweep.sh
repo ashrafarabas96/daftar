@@ -55,7 +55,7 @@ gate() { # name | command (absolute paths only)
       # already has (the gate failed), the cause is what they need. Preferring
       # `FAIL` over `psql said:` cost me a diagnosis within the hour of fixing
       # R10-P3-01, which is the same defect one layer in.
-      out1=$(printf '%s' "$o" | grep -m1 -E 'Permission denied|No such file|command not found|psql said|CAUSE:|ERROR|[Ee]rror:|FATAL|could not' | cut -c1-120)
+      out1=$(printf '%s' "$o" | grep -m1 -E 'Permission denied|No such file|command not found|psql said|CAUSE:|''Permission denied|No such file|command not found|[Ee]rror:|ERROR|FATAL|WARNING|could not' | cut -c1-120)
       [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 -E 'FAIL|STALE|CONFIGURATION ERROR|MEASUREMENT|ABORTED' | cut -c1-120)
       [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 . | cut -c1-120)
     fi
@@ -348,7 +348,7 @@ if [ "$NODB" = 0 ] && [ -d /tmp/p14pg/data ]; then
     # A refusal that names a cause must have asked it. So ask the cluster.
     if $PGC "/usr/lib/postgresql/16/bin/psql -h /tmp/p14pg/sock -p 54314 -U p14super -d postgres -qtAc 'select 1'" 2>/dev/null | grep -q 1; then
       printf 'FAIL  %-26s rc=%s while the cluster ANSWERS select 1 — so this is not the cluster: %s\n' \
-             no-cluster-revert "$rc" "$(printf '%s' "$out" | grep -m1 -E 'FAIL|Permission|denied|No such' | cut -c1-90)"
+             no-cluster-revert "$rc" "$(printf '%s' "$out" | grep -m1 -E 'Permission denied|No such file|command not found|[Ee]rror:|ERROR|FATAL|WARNING|could not' | cut -c1-90)"
     else
       printf 'FAIL  %-26s rc=%s and the cluster does not answer — the sweep left the box broken\n' no-cluster-revert "$rc"
     fi

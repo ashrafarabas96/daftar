@@ -75,7 +75,17 @@ arm() { # name | setup-sql-as-p14super | db to preflight | teardown | required m
     serr=$(psql_as p14super postgres "-c \"$setup\"" 2>&1); src=$?
     if [ "$src" -ne 0 ]; then
       printf 'FAIL  %-12s the MUTATION did not apply, so nothing was proved\n' "$name"
-      printf '      psql said: %s\n' "$(printf '%s' "$serr" | grep -m1 -E 'ERROR|FATAL|could not' | cut -c1-130)"
+      # ROUND-10 NARROW CHECK, one layer in again: this grep had only
+      # 'ERROR|FATAL|could not', and psql prints "psql: error: connection to
+      # server ... failed: No such file or directory" -- zero matches, so the
+      # line read "psql said:" with an EMPTY payload while the same failure
+      # under replay was correctly labelled UNRUNNABLE. Second time this
+      # pattern was fixed in one place and left in another, so it is written
+      # the same way in every filter in this pack, and an empty match never
+      # prints: the raw first line beats a blank claim.
+      psqlsaid=$(printf '%s' "$serr" | grep -m1 -E 'Permission denied|No such file|command not found|[Ee]rror:|ERROR|FATAL|WARNING|could not' | cut -c1-130)
+      [ -z "$psqlsaid" ] && psqlsaid=$(printf '%s' "$serr" | grep -m1 . | cut -c1-130)
+      printf '      psql said: %s\n' "${psqlsaid:-<no output at all>}"
       case "$serr" in
         *pg_database_datname_index*|*"unique constraint"*)
           # The discriminator the ROUND-10 ADDENDUM measured: residue gives
@@ -108,7 +118,9 @@ arm() { # name | setup-sql-as-p14super | db to preflight | teardown | required m
   esac
   if ! printf '%s' "$out" | grep -q "$want"; then
     printf 'FAIL  %-12s exit=%s but the required message is absent: %s\n' "$name" "$rc" "$want"
-    printf '      got: %s\n' "$(printf '%s' "$out" | grep -m1 -E 'ERROR|FATAL|WARNING' | cut -c1-120)"
+    got=$(printf '%s' "$out" | grep -m1 -E 'Permission denied|No such file|command not found|[Ee]rror:|ERROR|FATAL|WARNING|could not' | cut -c1-120)
+    [ -z "$got" ] && got=$(printf '%s' "$out" | grep -m1 . | cut -c1-120)
+    printf '      got: %s\n' "${got:-<no output at all>}"
     fail=$((fail+1)); return 0
   fi
   printf 'ok    %-12s preflight exit=%s  %s\n' "$name" "$rc" \

@@ -95,6 +95,23 @@ whole output, preferring an error (`Permission denied`, `No such file`, `FAIL`,
 `ERROR`, `FATAL`, `STALE`, `CONFIGURATION`, `MEASUREMENT`) over a banner. It was
 fail-closed either way; it is now also diagnosable.
 
+### The same defect twice more, in a filter I had already fixed elsewhere
+
+The narrow check of `5c9ae3a` found it again: `arm()`'s inner grep still read
+only `ERROR|FATAL|could not`, and psql prints *"psql: error: connection to
+server on socket … failed: No such file or directory"* — **zero matches**, so
+with the cluster stopped the line printed `psql said:` with an **empty
+payload** while `replay`, failing for the same reason, was correctly labelled
+`UNRUNNABLE`. I had fixed that pattern in the sweep and left it in the arm.
+
+So the pattern is now written the same way in **every** filter in the pack
+(`Permission denied|No such file|command not found|[Ee]rror:|ERROR|FATAL|WARNING|could not`),
+and no filter prints a diagnosis line with an empty payload: the raw first line
+beats a blank claim, and `<no output at all>` beats both when there is nothing.
+Measured with the cluster stopped: `psql said: psql: error: connection to server
+on socket "/tmp/p14pg/sock/.s.PGSQL.54314" failed: No such file or directory`,
+then the `CAUSE:` line, exit **1**.
+
 ### And one layer in, within the hour
 
 The same defect bit me again while fixing it. My pattern list preferred `FAIL`
