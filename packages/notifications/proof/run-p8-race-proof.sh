@@ -32,6 +32,12 @@ mkdir -p "$OUT"
 status=0
 say(){ echo "[$RUN] $*"; }
 
+# EVERY OBSERVATION below is made as p8super, while the CONTENTION is between
+# two real `daftar_app` sessions with real session GUCs (sixth challenge S-3,
+# recorded although it is not a defect). That split is deliberate: the role under
+# test does the writing, and the superuser only READS `pg_locks` and
+# `pg_stat_activity`, which a tenant role cannot see in full. No statement that
+# is part of the race itself runs with elevated authority.
 sup(){ "$B/psql" -h "$D" -p "$P" -U p8super -d daftar -qAt -c "$1"; }
 
 T=11111111-1111-4111-8111-111111111111
@@ -96,7 +102,23 @@ if await "select count(*) from pg_locks where locktype='advisory' and objid=8801
   BPID=$!
   # B is now provably BLOCKED on A's uncommitted key, not merely slower. This is
   # the whole difference between a race proof and a coincidence.
-  if await "select count(*) from pg_stat_activity where datname='daftar' and wait_event_type='Lock'" "B to block on the key"; then
+  # ROUND 13, SIXTH CHALLENGE S-3: this condition used to be
+  #   datname='daftar' AND wait_event_type='Lock'
+  # which ANY backend in the database waiting on ANY lock satisfies — the
+  # challenger measured it reading 1 with no race running at all and one
+  # unrelated waiter present, and the identical condition was in round 10's
+  # version, which was reviewed and signed without either of us noticing. It
+  # could not forge a PASS, because the verdict below reads four independent
+  # facts and none of them is this observation: A rc=0, B rc!=0, exactly one
+  # survivor, and B's own log naming `notifications_obligation_once`. What it
+  # could do is defeat the DIAGNOSIS — under mutant 12, with an unrelated waiter
+  # present, the bound would not run out and the carefully separated "B never
+  # blocked and its row COMMITTED" message would be replaced by the generic
+  # failure line, which is the exact distinction R-6/R-7 was about. So the
+  # observation is now attributed to B BY ITS OWN STATEMENT: B's query text
+  # carries $B_EVENT, a uuid minted for this proof and present in no other
+  # statement on the cluster.
+  if await "select count(*) from pg_stat_activity where datname='daftar' and wait_event_type='Lock' and query like '%$B_EVENT%'" "B itself to block on the key"; then
     printf '%s\n' "SELECT pg_advisory_unlock(8801);" "COMMIT;" >&3
     exec 3>&-
     wait $APID; ARC=$?

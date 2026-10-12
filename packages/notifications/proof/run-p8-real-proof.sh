@@ -240,7 +240,11 @@ mutate_race(){     # mutate_race <id> — the RACE must fail, not a case file
     say "MUT $id: FAIL — the race PASSED with the key it contends for removed"
     FAILED=1
   else
-    say "MUT $id: RED — the race fails without notifications_obligation_once: $(grep -o 'I1-conc FAIL.*' "$md/race.log" | head -1)"
+    # The LAST I1-conc FAIL line, not the first: the first is the bound running
+    # out, the last is the DIAGNOSIS that says which of the two meanings it had.
+    # Sixth challenge S-3 is about keeping those two apart, so the summary line
+    # carries the diagnosis.
+    say "MUT $id: RED — the race fails without notifications_obligation_once: $(grep -o 'I1-conc FAIL.*' "$md/race.log" | tail -1)"
   fi
 }
 
@@ -314,9 +318,15 @@ fi
 
 # A check that cannot fail is worth nothing, so the check is itself measured —
 # the lesson round 11 wrote into `mutate_refuses` and then did not apply to its
-# own last ten lines. Four ways of breaking it, each required to exit non-zero
+# own last ten lines. EIGHT ways of breaking it, each required to exit non-zero
 # AND to name its own cause. Every one runs against a COPY of the two
 # directories; nothing under migrations/ is written, here or anywhere.
+#
+# ROUND 13, S-1: four of these eight are new, and (e) is the one that matters —
+# round 12's check iterated the MANIFEST, so editing a frozen file AND deleting
+# its row passed green, with the edited file silently re-counted as "beyond".
+# The check now derives the required set from the DIRECTORY, so a row can no
+# longer excuse a file. (g) and (h) close the same door on `frozenThrough`.
 integrity_must_refuse(){   # integrity_must_refuse <id> <setup-command> <expect>
   local id=$1
   local setup=$2
@@ -344,11 +354,11 @@ say "=== the integrity check, measured against itself ==="
 # (a) a frozen file edited by one byte — the case the whole check exists for
 integrity_must_refuse a \
   "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql" \
-  "MODIFIED  0006_rls.sql"
-# (b) a frozen file deleted
+  "MODIFIED      0006_rls.sql"
+# (b) a frozen file deleted, its manifest row left behind
 integrity_must_refuse b \
   "rm infrastructure/database/migrations/0013_security_boundary.sql" \
-  "MISSING   0013_security_boundary.sql"
+  "ORPHANED ROW  0013_security_boundary.sql — NO SUCH FILE"
 # (c) the manifest itself gone — round 11's shape of failure, where the tool the
 #     check depends on cannot answer. It must now refuse, not reassure.
 integrity_must_refuse c \
@@ -358,10 +368,38 @@ integrity_must_refuse c \
 integrity_must_refuse d \
   "printf '{}' > infrastructure/database/MIGRATION_MANIFEST.json" \
   "not the shape this check reads"
+# (e) ROUND 13's BLOCKER, S-1, measured: a frozen file edited AND its manifest
+#     row deleted. Round 12's check reported "79 of 87 verified … rc=0" on
+#     exactly this, and re-labelled 0006_rls.sql — the file that creates RLS —
+#     as one of the files past the attested range. It must now refuse BY NAME.
+integrity_must_refuse e \
+  "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql && python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[r for r in m['migrations'] if r['name']!='0006_rls.sql'];json.dump(m,open(p,'w'))\"" \
+  "UNLISTED      0006_rls.sql"
+# (f) an extra file planted INSIDE the attested range with no row of its own —
+#     the same bypass arriving by addition rather than by deletion.
+integrity_must_refuse f \
+  "cp infrastructure/database/migrations/0006_rls.sql infrastructure/database/migrations/0006a_sneak.sql" \
+  "UNLISTED      0006a_sneak.sql"
+# (g) frozenThrough moved BACKWARDS to a file that does exist, which would
+#     shrink the attested set without touching a single digest.
+integrity_must_refuse g \
+  "python3 -c \"import json,os;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));od=sorted(f for f in os.listdir('infrastructure/database/migrations') if f.endswith('.sql'));m['frozenThrough']=od[5];json.dump(m,open(p,'w'))\"" \
+  "a row for a file beyond frozenThrough"
+# (h) frozenThrough naming a file that is not there at all — the boundary this
+#     check measures against cannot be located, so nothing below it means anything.
+integrity_must_refuse h \
+  "python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['frozenThrough']='9999_nope.sql';json.dump(m,open(p,'w'))\"" \
+  "the attested boundary cannot be located"
 
 # git is still consulted WHERE THERE IS A WORK TREE, as a second opinion on the
-# files the manifest cannot attest to (Phase 4's unsealed range). Its exit code
-# is read, and where there is no work tree that is reported rather than passed.
+# files that are beyond the manifest's coverage. Its exit code is read, and where
+# there is no work tree that is reported rather than passed.
+#
+# ROUND 13, S-2: this comment used to call that set "Phase 4's unsealed range".
+# It is not. The manifest's attested range ALREADY INCLUDES six Phase 4 files
+# (0074…0079) while Phase 4 is unmerged with its PR open, so the manifest
+# attests BYTES against a record and says nothing about sealing. Where the
+# sealing boundary lies is the Migration Owner's to state, not this runner's.
 if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   GIT_OUT=$(git -C "$REPO" status --porcelain -- infrastructure/database/migrations 2>&1)
   GIT_RC=$?
