@@ -61,10 +61,27 @@ export interface Heard {
   readonly confidence: number;
 }
 
+/**
+ * The mint mark — CHALLENGE round 2, F-10.
+ *
+ * `ReviewPresentation` was a structural type, so a hand-rolled `{ step: 'review', intent,
+ * resolvedEntityId }` was accepted and reached a committed result. The comment above `afterReview`
+ * claimed "only `afterListen` mints one" and **nothing enforced that sentence** — a claim in a code
+ * file that the code does not keep, which is the same defect class as a false coverage claim in a
+ * document.
+ *
+ * This symbol is module-private and deliberately not exported: outside this file the property
+ * cannot be named, so the type cannot be satisfied, so the sentence is now true rather than
+ * asserted. The alternative was to soften the comment; the stronger closure is cheap here and the
+ * claim is worth keeping.
+ */
+const MINTED_BY_AFTER_LISTEN: unique symbol = Symbol('voice-flow.mintedByAfterListen');
+
 export interface ReviewPresentation {
   readonly step: 'review';
   readonly intent: string;
   readonly resolvedEntityId: string;
+  readonly [MINTED_BY_AFTER_LISTEN]: true;
 }
 
 /** A question put back to the member. It carries the candidates, so the member picks — not the model. */
@@ -95,7 +112,7 @@ export function afterListen(heard: Heard, confidenceFloor: number): Decision<Lis
   }
   const only = heard.candidates[0];
   if (only === undefined) return deny(refuse('ai_intent.entity_not_found'));
-  return allow({ kind: 'review', review: { step: 'review', intent: heard.intent, resolvedEntityId: only } });
+  return allow({ kind: 'review', review: { step: 'review', intent: heard.intent, resolvedEntityId: only, [MINTED_BY_AFTER_LISTEN]: true } });
 }
 
 /**
@@ -153,7 +170,8 @@ export type ResultPresentation =
  * the same sentence to a merchant.
  */
 export function afterReview(reviewed: ReviewPresentation | undefined, commit: ServerCommit): Decision<ResultPresentation> {
-  if (reviewed === undefined || reviewed.step !== 'review') {
+  // The runtime check as well as the type: a JavaScript caller, or one that casts, reaches this.
+  if (reviewed === undefined || reviewed.step !== 'review' || reviewed[MINTED_BY_AFTER_LISTEN] !== true) {
     // The listen → result edge, attempted. It refuses at the type's own boundary.
     return deny(refuse('ai_draft.wrong_state', { field: 'review', detail: 'result requires a completed review step' }));
   }

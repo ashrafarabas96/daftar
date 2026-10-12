@@ -105,7 +105,18 @@ describe('listen never produces a result, and ambiguity ASKS rather than guessin
   });
 });
 
-const REVIEWED: ReviewPresentation = { step: 'review', intent: 'sale.create', resolvedEntityId: 'cust-1' };
+/**
+ * The review artefact can only be obtained the way a caller must obtain it: from `afterListen`.
+ * Round 2 of the challenge (F-10) found the type was structural, so this fixture used to be a
+ * hand-rolled literal — which was itself the evidence that the law was not enforced.
+ */
+function mintReview(): ReviewPresentation {
+  const listened = afterListen({ transcriptPresent: true, intent: 'sale.create', candidates: ['cust-1'], confidence: 0.99 }, 0.8);
+  if (!listened.ok || listened.value.kind !== 'review') throw new Error('fixture: afterListen did not mint a review');
+  return listened.value.review;
+}
+
+const REVIEWED: ReviewPresentation = mintReview();
 
 describe('a result is never presented as committed before the server committed', () => {
   it('refuses to reach a result without a completed review', () => {
@@ -128,6 +139,24 @@ describe('a result is never presented as committed before the server committed',
       expect(decision.ok).toBe(true);
     }
     expect(afterReview(undefined, { committed: true, businessTransactionId: 'tx1' }).ok).toBe(false);
+  });
+
+  it('F-10: a hand-rolled review artefact does not type-check — the mint mark is module-private', () => {
+    // The claim "only afterListen mints one" is now enforced rather than asserted in a comment. If
+    // the mark is ever removed, this line stops being an error and the directive below reds the
+    // typecheck, so the law cannot be dropped silently.
+    // @ts-expect-error the review artefact carries a mark no caller outside voice-flow.ts can name
+    const forged: ReviewPresentation = { step: 'review', intent: 'sale.create', resolvedEntityId: 'cust-1' };
+    expect(forged.resolvedEntityId).toBe('cust-1');
+  });
+
+  it('F-10: an artefact forged past the type at runtime is still refused — the mark is checked, not assumed', () => {
+    // A JavaScript caller, or a TypeScript one that casts, reaches the function with an object the
+    // compiler never saw. The type is the first line, not the only one.
+    const forged = { step: 'review', intent: 'sale.create', resolvedEntityId: 'cust-1' } as unknown as ReviewPresentation;
+    const decision = afterReview(forged, { committed: true, businessTransactionId: 'tx1' });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.field).toBe('review');
   });
 
   it('presents a committed result only with a transaction identity in hand', () => {
