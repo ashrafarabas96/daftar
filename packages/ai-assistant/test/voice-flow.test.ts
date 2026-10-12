@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { afterListen, afterReview, mayPresentAsCommitted, stepTransitionAllowed, VOICE_STEPS, type Heard } from '../src/voice-flow';
+import { afterListen, afterReview, entityForDraft, mayPresentAsCommitted, stepTransitionAllowed, VOICE_STEPS, type Heard } from '../src/voice-flow';
 
 const FLOOR = 0.8;
 
@@ -147,5 +147,46 @@ describe('a result is never presented as committed before the server committed',
     ];
     const committed = shapes.filter((d) => d.ok && mayPresentAsCommitted(d.value));
     expect(committed).toHaveLength(1);
+  });
+});
+
+describe('ambiguity has no route to execution (Mission V2 §19)', () => {
+  it('yields the resolved id when the listen step resolved exactly one candidate', () => {
+    const outcome = afterListen(heard(), FLOOR);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      const entity = entityForDraft(outcome.value);
+      expect(entity.ok).toBe(true);
+      if (entity.ok) expect(entity.value).toBe('c1');
+    }
+  });
+
+  it('REFUSES to yield any entity from an ask, so a caller cannot take candidates[0]', () => {
+    // Returning a question is necessary but not sufficient: a caller holding the outcome could still
+    // index into the candidate list. This is the only route out, and it refuses.
+    const outcome = afterListen(heard({ candidates: ['c1', 'c2'] }), FLOOR);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      const entity = entityForDraft(outcome.value);
+      expect(entity.ok).toBe(false);
+      if (!entity.ok) {
+        expect(entity.refusal.code).toBe('ai_intent.ambiguous_entity');
+        expect(entity.refusal.field).toBe('entity');
+        expect(entity.refusal.detail).toContain('2');
+      }
+    }
+  });
+
+  it('refuses at confidence 1.0 with two candidates — a high score buys no execution either', () => {
+    const outcome = afterListen(heard({ candidates: ['c1', 'c2'], confidence: 1 }), FLOOR);
+    if (outcome.ok) expect(entityForDraft(outcome.value).ok).toBe(false);
+  });
+
+  it('the ask shape carries NO resolved entity field at all', () => {
+    const outcome = afterListen(heard({ candidates: ['c1', 'c2'] }), FLOOR);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok && outcome.value.kind === 'ask') {
+      expect(Object.keys(outcome.value.question).sort()).toEqual(['ask', 'candidates', 'field', 'step']);
+    }
   });
 });

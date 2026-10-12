@@ -99,6 +99,31 @@ export function afterListen(heard: Heard, confidenceFloor: number): Decision<Lis
 }
 
 /**
+ * The entity a draft may be built on.
+ *
+ * Mission V2 §19 asks for proof that *"ambiguity does not lead to executing a guess"*. Returning a
+ * question from `afterListen` is necessary but not sufficient on its own: a caller holding the
+ * `ListenOutcome` could still read `question.candidates[0]` and carry it forward. So the route into a
+ * draft goes through this function, which is the ONLY way to get an entity id out of a listen
+ * outcome, and which refuses `ai_intent.ambiguous_entity` on the ask branch.
+ *
+ * The ask shape carries no `resolvedEntityId` at all — the candidates are there for the member to
+ * choose from, not for a caller to index into. The refusal is what makes that a law rather than a
+ * convention about how to read the type.
+ */
+export function entityForDraft(outcome: ListenOutcome): Decision<string> {
+  if (outcome.kind === 'ask') {
+    return deny(
+      refuse('ai_intent.ambiguous_entity', {
+        field: outcome.question.field,
+        detail: `${String(outcome.question.candidates.length)} candidates await the member`,
+      }),
+    );
+  }
+  return allow(outcome.review.resolvedEntityId);
+}
+
+/**
  * What the `result` step is allowed to say.
  *
  * `committed` means the server's transaction committed and returned an identity. Nothing else sets

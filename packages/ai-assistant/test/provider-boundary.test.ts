@@ -274,3 +274,37 @@ describe('one tenant per inference call — no mixed context (Mission §19)', ()
     if (!decision.ok) expect(decision.refusal.detail).toContain('empty');
   });
 });
+
+describe('every fragment CARRIES a tenant and a business (Mission V2 §19)', () => {
+  const actor = { tenantId: 't1', businessId: 'b1' };
+
+  it.each([
+    ['no tenant', { tenantId: '', businessId: 'b1', label: 'blank.tenant' }],
+    ['no business', { tenantId: 't1', businessId: '', label: 'blank.business' }],
+    ['whitespace for a tenant', { tenantId: '  ', businessId: 'b1', label: 'ws.tenant' }],
+  ])('refuses a fragment with %s, naming it', (_label, fragment) => {
+    const decision = assertSingleTenantContext(actor, [fragment]);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.refusal.field).toBe(fragment.label);
+      expect(decision.refusal.detail).toContain('carries no tenant or business');
+    }
+  });
+
+  it('refuses a BLANK ACTING IDENTITY — a comparison is only as strong as both sides', () => {
+    // The hazard an equality test alone leaves open: if the acting identity were itself blank, blank
+    // fragments would compare equal and the check would pass while nothing was scoped to anyone.
+    const decision = assertSingleTenantContext({ tenantId: '', businessId: '' }, [{ tenantId: '', businessId: '', label: 'blank.all' }]);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.refusal.field).toBe('actor');
+      expect(decision.refusal.detail).toContain('acting identity');
+    }
+  });
+
+  it('checks the actor BEFORE the fragments, so the blank-on-blank case cannot pass as a match', () => {
+    const decision = assertSingleTenantContext({ tenantId: 't1', businessId: '   ' }, [{ tenantId: 't1', businessId: 'b1', label: 'fine' }]);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.field).toBe('actor');
+  });
+});

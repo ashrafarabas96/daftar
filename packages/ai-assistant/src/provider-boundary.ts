@@ -131,7 +131,17 @@ export function assertSingleTenantContext(
   if (fragments.length === 0) {
     return deny(refuse('ai_provider.tenant_context_mixed', { detail: 'empty context — nothing to send, which is an upstream defect' }));
   }
+  // The ACTOR is checked first, and this is not defensive noise. Mission V2 §19 asks to prove that
+  // every fragment *carries* a tenant and a business, and an equality test alone does not: if the
+  // acting identity were itself blank, blank fragments would compare equal and the whole check would
+  // pass while nothing was scoped to anyone. A comparison is only as strong as both of its sides.
+  if (actor.tenantId.trim().length === 0 || actor.businessId.trim().length === 0) {
+    return deny(refuse('ai_provider.tenant_context_mixed', { field: 'actor', detail: 'acting identity carries no tenant or business' }));
+  }
   for (const fragment of fragments) {
+    if (fragment.tenantId.trim().length === 0 || fragment.businessId.trim().length === 0) {
+      return deny(refuse('ai_provider.tenant_context_mixed', { field: fragment.label, detail: 'fragment carries no tenant or business' }));
+    }
     if (fragment.tenantId !== actor.tenantId || fragment.businessId !== actor.businessId) {
       return deny(
         refuse('ai_provider.tenant_context_mixed', {
