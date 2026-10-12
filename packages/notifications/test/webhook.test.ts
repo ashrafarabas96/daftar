@@ -140,15 +140,26 @@ describe('PART 48 — replay, monotonicity and what is kept', () => {
 });
 
 describe('PART 44 — a VERIFIED callback is what resolves an ambiguous delivery', () => {
-  it('a verified callback with a provider message id proves the provider has it', () => {
-    expect(reconcileFromCallback(callback(), signed(), verifier)).toEqual({ found: true, providerMessageId: 'wamid.A' });
+  // The fourth argument is the delivery this reconciliation is ABOUT. See
+  // `test/challenge-01e85f7.test.ts` F-2 for why it is required: without it, a
+  // verified callback about ANOTHER message discharged this delivery.
+  const about = { deliveryKey: 'ob::whatsapp', expectedProviderMessageId: 'wamid.A' };
+
+  it('a verified callback with a MATCHING provider message id proves the provider has it', () => {
+    expect(reconcileFromCallback(callback(), signed(), verifier, about)).toEqual({ found: true, providerMessageId: 'wamid.A' });
   });
 
   it('an UNVERIFIED callback resolves nothing — it cannot silence a real notification', () => {
-    expect(reconcileFromCallback(callback(), { rawBody: body, signatureHeader: 'sha256=00' }, verifier)).toEqual({ inconclusive: true });
+    expect(reconcileFromCallback(callback(), { rawBody: body, signatureHeader: 'sha256=00' }, verifier, about)).toEqual({
+      inconclusive: true,
+      reason: 'signature_unverified',
+    });
   });
 
   it('a verified callback with no provider message id is still inconclusive', () => {
-    expect(reconcileFromCallback(callback({ providerMessageId: '  ' }), signed(), verifier)).toEqual({ inconclusive: true });
+    expect(reconcileFromCallback(callback({ providerMessageId: '  ' }), signed(), verifier, about)).toEqual({
+      inconclusive: true,
+      reason: 'provider_message_id_mismatch',
+    });
   });
 });

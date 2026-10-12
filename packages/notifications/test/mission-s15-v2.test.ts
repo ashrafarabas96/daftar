@@ -204,7 +204,7 @@ describe('V2 §15 — every obligation gets a NAMED outcome, including the dupli
 
     expect(outcomes).toHaveLength(owed.length);
     expect(outcomes.map((o) => o.result)).toEqual(['delivered', 'already_owed', 'already_owed']);
-    for (const o of outcomes) expect('obligation' in o ? o.obligation : undefined).toBe('event:ev-1|invoice_issued|customer:c-1');
+    for (const o of outcomes) expect('obligation' in o ? o.obligation : undefined).toBe('b-1|event:ev-1|invoice_issued|customer:c-1');
     // The whole point of collapsing them: one customer message, not three.
     expect(provider.acceptedCount()).toBe(1);
   });

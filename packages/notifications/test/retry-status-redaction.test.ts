@@ -45,10 +45,21 @@ describe('delivery status', () => {
     expect(applyStatus('delivered', 'delivered')).toEqual({ applied: false, reason: 'duplicate' });
   });
 
-  it('keeps failed terminal', () => {
-    for (const next of ['queued', 'sent', 'delivered', 'read'] as const) {
+  // CORRECTED after the independent challenge at `01e85f7`. This case used to
+  // assert that NOTHING leaves `failed`, including `delivered` and `read`.
+  // That half of "failed is terminal" was unsafe: a delivery left in `failed`
+  // is released to the next channel by `blocksAnotherChannel`, so refusing a
+  // later arrival meant a second message to someone already holding the first.
+  // What is terminal is the ARRIVAL. See `test/challenge-01e85f7.test.ts` F-1.
+  it('keeps failed terminal in the direction that matters: nothing goes BACKWARD from it', () => {
+    for (const next of ['queued', 'sent'] as const) {
       expect(applyStatus('failed', next)).toEqual({ applied: false, reason: 'notification.status_regression' });
     }
+  });
+
+  it('but an ARRIVAL after a reported failure is applied, because it is evidence the message landed', () => {
+    expect(applyStatus('failed', 'delivered')).toEqual({ applied: true, status: 'delivered' });
+    expect(applyStatus('failed', 'read')).toEqual({ applied: true, status: 'read' });
   });
 
   it('refuses a status the provider invented', () => {
@@ -59,9 +70,21 @@ describe('delivery status', () => {
     expect(applyStatus('sent', '__proto__')).toEqual({ applied: false, reason: 'notification.status_unknown' });
   });
 
-  it('accepts failure from any non-terminal state', () => {
-    for (const from of ['queued', 'sent', 'delivered', 'read'] as DeliveryStatus[]) {
+  // CORRECTED after the independent challenge. This case used to include
+  // `delivered` and `read` in the list of states a `failed` may be accepted
+  // from — it was ASSERTING the defect, which is why the suite stayed green
+  // while a customer could be messaged twice. Third time an assertion in this
+  // package has encoded a defect rather than caught it; each time it was a
+  // case written to describe the code instead of the requirement.
+  it('accepts failure only BEFORE an arrival', () => {
+    for (const from of ['queued', 'sent'] as DeliveryStatus[]) {
       expect(applyStatus(from, 'failed')).toEqual({ applied: true, status: 'failed' });
+    }
+  });
+
+  it('refuses a failure AFTER an arrival, in either arrival state', () => {
+    for (const from of ['delivered', 'read'] as DeliveryStatus[]) {
+      expect(applyStatus(from, 'failed')).toEqual({ applied: false, reason: 'notification.status_regression' });
     }
   });
 });

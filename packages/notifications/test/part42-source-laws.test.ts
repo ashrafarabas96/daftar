@@ -62,8 +62,40 @@ export function sourceViolations(files: Record<string, string> = readSource()): 
     // L-P42-3: a provider adapter must DECLARE its idempotency semantics. An
     // adapter that forgets to would default to `undefined`, which `mayAutoRetry`
     // reads as "no guarantee" — safe, but silent. Say it out loud.
-    if (file.startsWith('providers/') && /implements NotificationProvider/.test(body) && !/serverSideIdempotency/.test(body)) {
+    //
+    // Scoped by what the file IS, not by where it sits. The directory test
+    // `file.startsWith('providers/')` let an adapter at `src/sms-twilio.ts`
+    // escape the law entirely, so the one thing the law exists to prevent — a
+    // silent `undefined` — was reachable by putting a file in the obvious
+    // place instead of the conventional one.
+    if (/implements NotificationProvider/.test(body) && !/serverSideIdempotency/.test(body)) {
       found.push({ law: 'L-P42-3 an adapter declares its idempotency semantics', file, detail: 'no serverSideIdempotency declaration' });
+    }
+
+    // L-F5-1: the dispatcher must DECIDE the channel fallback by asking
+    // `blocksAnotherChannel`, and must not re-derive it.
+    //
+    // The challenger found `blocksAnotherChannel` — the rule Mission V3
+    // corrected, and the application-side twin of the partial unique index —
+    // with no caller in `src/` at all: the dispatcher used its own
+    // `next.action === 'retry'` latch instead. The two agreed by coincidence,
+    // so the rule that was fixed was not the rule that ran, and no behavioural
+    // test could tell. Only a law over the source can hold them together,
+    // which is why this one is written here rather than as a case over outputs.
+    if (file === 'dispatch.ts') {
+      if (!/blocksAnotherChannel\(/.test(body)) {
+        found.push({ law: 'L-F5-1 the dispatcher asks blocksAnotherChannel', file, detail: 'no call to blocksAnotherChannel' });
+      }
+      if (/next\.action === 'retry'/.test(body)) {
+        found.push({ law: 'L-F5-1 the dispatcher asks blocksAnotherChannel', file, detail: 'the fallback is re-derived from next.action' });
+      }
+    }
+
+    // L-F5-2: one rejection policy. `classifySend` must ask `retry.ts` rather
+    // than carry a second copy of the attempt limit — the two differed only by
+    // which field they read, and nothing made a divergence visible.
+    if (file === 'delivery.ts' && !/nextStepAfterFailure\(/.test(body)) {
+      found.push({ law: 'L-F5-2 one rejection policy, in retry.ts', file, detail: 'classifySend does not ask nextStepAfterFailure' });
     }
 
     // L-P48-1: no caller-supplied verification flag. A boolean a caller can set
@@ -112,6 +144,8 @@ const LAWS = [
   'L-P48-1 no caller-supplied signatureVerified',
   'L-M15-1 the engine cannot cancel a sale',
   'L-M15V2-1 shipped limits declare their policy source',
+  'L-F5-1 the dispatcher asks blocksAnotherChannel',
+  'L-F5-2 one rejection policy, in retry.ts',
 ] as const;
 
 describe('PART 42/48 — laws read over the live source', () => {
@@ -124,6 +158,38 @@ describe('PART 42/48 — laws read over the live source', () => {
     expect(files).toContain('providers/whatsapp-cloud.ts');
     expect(files).toContain('providers/fake-provider.ts');
     expect(files.length).toBeGreaterThan(15);
+  });
+
+  it('L-F5-1 reds when the dispatcher decides the fallback itself again', () => {
+    const files = readSource();
+    const planted = {
+      ...files,
+      'dispatch.ts': fileOf(files, 'dispatch.ts')
+        .replace(/blocksAnotherChannel\(\{ state: classified\.state \}\)/, "classified.next.action === 'retry'")
+        .replace(/import \{ blocksAnotherChannel, /, 'import { '),
+    };
+    expect(fileOf(planted, 'dispatch.ts'), 'the mutation must land').not.toMatch(/blocksAnotherChannel\(/);
+    expect(sourceViolations(planted).map((v) => v.law)).toContain('L-F5-1 the dispatcher asks blocksAnotherChannel');
+  });
+
+  it('L-F5-2 reds when classifySend carries its own copy of the attempt limit again', () => {
+    const files = readSource();
+    const planted = {
+      ...files,
+      'delivery.ts': fileOf(files, 'delivery.ts').replace(/nextStepAfterFailure\(/g, 'ownCopyOfThePolicy('),
+    };
+    expect(fileOf(planted, 'delivery.ts'), 'the mutation must land').not.toMatch(/nextStepAfterFailure\(/);
+    expect(sourceViolations(planted).map((v) => v.law)).toContain('L-F5-2 one rejection policy, in retry.ts');
+  });
+
+  it('L-P42-3 catches an adapter placed OUTSIDE providers/, which the directory test missed', () => {
+    const files = readSource();
+    // The escape the challenger found: an adapter in `src/` rather than in
+    // `src/providers/`. It declares nothing, so `mayAutoRetry` would read
+    // `undefined` and silently treat an ambiguous send as non-idempotent.
+    const planted = { ...files, 'sms-twilio.ts': 'export class TwilioProvider implements NotificationProvider {\n  readonly name = "twilio";\n}\n' };
+    expect(fileOf(planted, 'sms-twilio.ts'), 'the mutation must land').toMatch(/implements NotificationProvider/);
+    expect(sourceViolations(planted).map((v) => v.law)).toContain('L-P42-3 an adapter declares its idempotency semantics');
   });
 
   it('L-P42-1 reds when the conflated name returns', () => {
@@ -218,6 +284,8 @@ describe('PART 42/48 — laws read over the live source', () => {
       'L-P48-1 no caller-supplied signatureVerified',
       'L-M15-1 the engine cannot cancel a sale',
       'L-M15V2-1 shipped limits declare their policy source',
+      'L-F5-1 the dispatcher asks blocksAnotherChannel',
+      'L-F5-2 one rejection policy, in retry.ts',
     ]);
     for (const law of LAWS) expect(proved.has(law), law).toBe(true);
     expect(proved.size).toBe(LAWS.length);

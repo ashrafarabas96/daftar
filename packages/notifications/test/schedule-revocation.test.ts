@@ -93,7 +93,7 @@ describe('PART 7.5 — the occurrence is supplied, so a re-run is not a second m
     const keyOf = (plan: typeof first) => {
       const intent = plan.intents[0];
       if (!intent) throw new Error('no intent');
-      return obligationKey(intent.origin, intent.kind, ref);
+      return obligationKey(intent.businessId, intent.origin, intent.kind, ref);
     };
     expect(keyOf(second)).toBe(keyOf(first));
     // Which is what makes the second firing `already_owed` in the dispatcher
@@ -109,7 +109,7 @@ describe('PART 7.5 — the occurrence is supplied, so a re-run is not a second m
     const a = sep.intents[0];
     const b = oct.intents[0];
     if (!a || !b) throw new Error('no intent');
-    expect(obligationKey(b.origin, b.kind, ref)).not.toBe(obligationKey(a.origin, a.kind, ref));
+    expect(obligationKey(b.businessId, b.origin, b.kind, ref)).not.toBe(obligationKey(a.businessId, a.origin, a.kind, ref));
   });
 
   it('an empty occurrence is refused: it would collapse every run into one obligation', () => {

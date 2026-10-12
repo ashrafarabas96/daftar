@@ -33,15 +33,24 @@ describe('consent', () => {
     expect(evaluateConsent({ consent: 'transactional', channel: 'inapp', preferences: p, nowMinuteOfDay: 10 })).toEqual({ decision: 'allow' });
   });
 
+  // The deferral says WHICH 07:00 — see F-8 in `test/challenge-01e85f7.test.ts`.
+  // A bare minute from a window that wraps midnight can be earlier than now,
+  // and a scheduler reading it as "today" fires immediately, inside quiet hours.
   it('defers inside quiet hours and names the minute it becomes deliverable', () => {
     const p = prefs({ quietHours: { startMinuteOfDay: 1320, endMinuteOfDay: 420 } }); // 22:00 → 07:00
+
+    // 03:00 — the window's end is later TODAY.
     expect(evaluateConsent({ consent: 'transactional', channel: 'whatsapp', preferences: p, nowMinuteOfDay: 180 })).toEqual({
       decision: 'defer',
       deferUntilMinuteOfDay: 420,
+      deferToNextDay: false,
     });
+
+    // 22:30 — the same minute, but it is TOMORROW's 07:00.
     expect(evaluateConsent({ consent: 'transactional', channel: 'whatsapp', preferences: p, nowMinuteOfDay: 1350 })).toEqual({
       decision: 'defer',
       deferUntilMinuteOfDay: 420,
+      deferToNextDay: true,
     });
   });
 

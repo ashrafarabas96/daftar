@@ -91,7 +91,7 @@ describe('§15.1 — consent is read live, at enqueue AND before the send', () =
       {
         result: 'suppressed',
         kind: 'invoice_issued',
-        obligation: 'event:ev-1|invoice_issued|customer:c-1',
+        obligation: 'b-1|event:ev-1|invoice_issued|customer:c-1',
         channel: 'whatsapp',
         code: 'notification.consent_withdrawn',
         detail: 'notification.channel_blocked',
@@ -401,6 +401,10 @@ describe('§15.5 — lost-ack acceptance, end to end', () => {
       { providerMessageId: 'wamid.LOST', status: 'delivered' },
       { rawBody: body, signatureHeader: signature },
       verifier,
+      // The lost ack DID return this id before the connection was lost, so the
+      // delivery can be correlated. An id that was never learned cannot be, and
+      // no callback may close it — see F-2.
+      { deliveryKey: 'ob::whatsapp', expectedProviderMessageId: 'wamid.LOST' },
     );
     expect(reconciliation).toEqual({ found: true, providerMessageId: 'wamid.LOST' });
 
@@ -411,8 +415,11 @@ describe('§15.5 — lost-ack acceptance, end to end', () => {
 
   it('an UNVERIFIED callback cannot close a lost-ack delivery — it would be a silencing attack', () => {
     const body = JSON.stringify({ id: 'wamid.LOST', status: 'delivered' });
-    const forged = reconcileFromCallback({ providerMessageId: 'wamid.LOST', status: 'delivered' }, { rawBody: body, signatureHeader: 'sha256=00' }, verifier);
-    expect(forged).toEqual({ inconclusive: true });
-    expect(resolveUnknown(forged)).toEqual({ state: 'unknown', next: { action: 'reconcile', reason: 'reconciliation inconclusive' } });
+    const forged = reconcileFromCallback({ providerMessageId: 'wamid.LOST', status: 'delivered' }, { rawBody: body, signatureHeader: 'sha256=00' }, verifier, {
+      deliveryKey: 'ob::whatsapp',
+      expectedProviderMessageId: 'wamid.LOST',
+    });
+    expect(forged).toEqual({ inconclusive: true, reason: 'signature_unverified' });
+    expect(resolveUnknown(forged)).toEqual({ state: 'unknown', next: { action: 'reconcile', reason: 'signature_unverified' } });
   });
 });

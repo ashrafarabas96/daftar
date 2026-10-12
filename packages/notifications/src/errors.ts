@@ -69,6 +69,14 @@ export type NotificationRefusalCode =
    * A limit whose origin is unstated cannot be approved, so it is not usable.
    */
   | 'notification.limits_policy_unstated'
+  /**
+   * A field composed into an identity key is empty, or carries one of the
+   * separators the key is built from. Refused rather than escaped: two keys
+   * that differ only in which field a `|` sits in would otherwise be the same
+   * string, and every reader of the key — the database's UNIQUE constraint
+   * included — would have to share a decoder to tell them apart.
+   */
+  | 'notification.obligation_key_field_invalid'
   // Provider edge
   | 'notification.provider_not_configured'
   | 'notification.provider_template_required'

@@ -63,9 +63,9 @@ describe('dispatch — obligations', () => {
       result: 'delivered',
       kind: 'invoice_issued',
       channel: 'whatsapp',
-      obligation: 'event:ev-1|invoice_issued|customer:c-1',
-      delivery: 'event:ev-1|invoice_issued|customer:c-1::whatsapp@daftar_invoice_issued',
-      attempt: 'event:ev-1|invoice_issued|customer:c-1::whatsapp@daftar_invoice_issued#1',
+      obligation: 'b-1|event:ev-1|invoice_issued|customer:c-1',
+      delivery: 'b-1|event:ev-1|invoice_issued|customer:c-1::whatsapp@daftar_invoice_issued',
+      attempt: 'b-1|event:ev-1|invoice_issued|customer:c-1::whatsapp@daftar_invoice_issued#1',
     });
     expect(provider.deliveryCount()).toBe(1);
     expect(provider.deliveries()[0]?.rendered.providerTemplate?.name).toBe('daftar_invoice_issued');
@@ -82,14 +82,14 @@ describe('dispatch — obligations', () => {
     const outcomes = await dispatchIntent(intentOf(), ports({ provider, hydrator: hydratorOf(owed) }));
     expect(outcomes).toHaveLength(3);
     expect(new Set(outcomes.map((o) => (o.result === 'delivered' ? o.obligation : '')))).toEqual(
-      new Set(['event:ev-1|invoice_issued|customer:c-1', 'event:ev-1|invoice_issued|customer:c-2', 'event:ev-1|invoice_issued|user:u-9']),
+      new Set(['b-1|event:ev-1|invoice_issued|customer:c-1', 'b-1|event:ev-1|invoice_issued|customer:c-2', 'b-1|event:ev-1|invoice_issued|user:u-9']),
     );
     expect(provider.deliveryCount()).toBe(3);
   });
 
   it('two recipients differing only in id are two obligations, not one', async () => {
-    const a = obligationKey({ source: 'event', eventId: 'ev-1' }, 'invoice_issued', { kind: 'customer', customerId: 'c-1' });
-    const b = obligationKey({ source: 'event', eventId: 'ev-1' }, 'invoice_issued', { kind: 'customer', customerId: 'c-2' });
+    const a = obligationKey('b-1', { source: 'event', eventId: 'ev-1' }, 'invoice_issued', { kind: 'customer', customerId: 'c-1' });
+    const b = obligationKey('b-1', { source: 'event', eventId: 'ev-1' }, 'invoice_issued', { kind: 'customer', customerId: 'c-2' });
     expect(a).not.toBe(b);
   });
 
@@ -104,7 +104,7 @@ describe('dispatch — obligations', () => {
     // Another sink failed, so the publisher retries the WHOLE event. The
     // notification sink is handed the same row again.
     const second = await dispatchIntent(intent, ports({ provider, obligationsAlreadyRecorded: recorded }));
-    expect(second).toEqual([{ result: 'already_owed', kind: 'invoice_issued', obligation: 'event:ev-1|invoice_issued|customer:c-1' }]);
+    expect(second).toEqual([{ result: 'already_owed', kind: 'invoice_issued', obligation: 'b-1|event:ev-1|invoice_issued|customer:c-1' }]);
     expect(provider.deliveryCount()).toBe(1);
   });
 
@@ -126,7 +126,7 @@ describe('dispatch — obligations', () => {
       ports({ provider, hydrator: hydratorOf([obligation({ recipient: recipient({ businessId: 'b-OTHER' }) })]) }),
     );
     expect(outcomes).toEqual([
-      { result: 'refused', kind: 'invoice_issued', obligation: 'event:ev-1|invoice_issued|customer:c-1', code: 'notification.recipient_business_mismatch' },
+      { result: 'refused', kind: 'invoice_issued', obligation: 'b-1|event:ev-1|invoice_issued|customer:c-1', code: 'notification.recipient_business_mismatch' },
     ]);
     expect(provider.deliveryCount()).toBe(0);
   });
@@ -159,7 +159,7 @@ describe('dispatch — obligations', () => {
       {
         result: 'suppressed',
         kind: 'invoice_issued',
-        obligation: 'event:ev-1|invoice_issued|customer:c-1',
+        obligation: 'b-1|event:ev-1|invoice_issued|customer:c-1',
         channel: 'whatsapp',
         code: 'notification.channel_not_eligible',
         detail: 'outside the service window',
@@ -191,9 +191,11 @@ describe('dispatch — obligations', () => {
       {
         result: 'deferred',
         kind: 'invoice_issued',
-        obligation: 'event:ev-1|invoice_issued|customer:c-1',
+        obligation: 'b-1|event:ev-1|invoice_issued|customer:c-1',
         channel: 'whatsapp',
         untilMinuteOfDay: 420,
+        // now is 02:00, so the window's 07:00 end is later the SAME day.
+        untilNextDay: false,
         stage: 'enqueue',
       },
     ]);
@@ -202,7 +204,7 @@ describe('dispatch — obligations', () => {
 
   it('numbers the attempt from the history it is given', async () => {
     const provider = new FakeNotificationProvider({ channels: ['whatsapp'], failWith: ['PROVIDER_TIMEOUT'] });
-    const key = 'event:ev-1|invoice_issued|customer:c-1';
+    const key = 'b-1|event:ev-1|invoice_issued|customer:c-1';
     const outcomes = await dispatchIntent(
       intentOf(),
       ports({
@@ -265,7 +267,12 @@ describe('dispatch — obligations', () => {
   it('refuses a channel order the kind does not allow at all', async () => {
     const outcomes = await dispatchIntent(intentOf(), ports({ hydrator: hydratorOf([obligation({ channelOrder: ['sms' as Channel] })]) }));
     expect(outcomes).toEqual([
-      { result: 'refused', kind: 'invoice_issued', obligation: 'event:ev-1|invoice_issued|customer:c-1', code: 'notification.channel_not_supported_for_kind' },
+      {
+        result: 'refused',
+        kind: 'invoice_issued',
+        obligation: 'b-1|event:ev-1|invoice_issued|customer:c-1',
+        code: 'notification.channel_not_supported_for_kind',
+      },
     ]);
   });
 

@@ -52,7 +52,7 @@ import type { ChannelEligibility } from './eligibility';
 import { assertWithinLimits, DefaultChannelLimits, type ChannelLimits } from './limits';
 import { renderNotification } from './render';
 import { sendThroughProvider, type NotificationProvider } from './provider';
-import { classifySend, type DeliveryAction, type DeliveryState } from './delivery';
+import { blocksAnotherChannel, classifySend, type DeliveryAction, type DeliveryState } from './delivery';
 import { backoffSeconds, MAX_ATTEMPTS } from './retry';
 import { recipientId, type Channel, type DateFormatter, type MoneyFormatter, type Recipient, type TemplateVars } from './types';
 
@@ -92,6 +92,8 @@ export type DispatchOutcome =
       readonly obligation: string;
       readonly channel: Channel;
       readonly untilMinuteOfDay: number;
+      /** True when that minute is tomorrow's — see `deferToNextDay`. */
+      readonly untilNextDay: boolean;
       readonly stage: ConsentStage;
     }
   | {
@@ -186,7 +188,7 @@ function assertRecipientBelongs(intent: DispatchIntent, recipient: Recipient): v
 
 type GateVerdict =
   | { readonly verdict: 'allow' }
-  | { readonly verdict: 'defer'; readonly untilMinuteOfDay: number }
+  | { readonly verdict: 'defer'; readonly untilMinuteOfDay: number; readonly untilNextDay: boolean }
   | { readonly verdict: 'refuse'; readonly code: NotificationRefusalCode; readonly detail?: string };
 
 /**
@@ -205,7 +207,9 @@ function evaluateGate(stage: ConsentStage, intent: DispatchIntent, owed: Hydrate
   if (consent.decision === 'refuse') {
     return { verdict: 'refuse', code: stage === 'send' ? 'notification.consent_withdrawn' : consent.code, detail: consent.code };
   }
-  if (consent.decision === 'defer') return { verdict: 'defer', untilMinuteOfDay: consent.deferUntilMinuteOfDay };
+  if (consent.decision === 'defer') {
+    return { verdict: 'defer', untilMinuteOfDay: consent.deferUntilMinuteOfDay, untilNextDay: consent.deferToNextDay };
+  }
 
   // §40/PART 48: internal consent is not provider or legal permission. Asked
   // for every channel, and `inapp` is answered `eligible` by the port itself —
@@ -225,7 +229,12 @@ async function dispatchOne(intent: DispatchIntent, owed: HydratedObligation, por
   const entry = catalogEntry(intent.kind);
   if (!entry) return [{ result: 'refused', kind: intent.kind, code: 'notification.kind_unknown' }];
 
-  const obligation = obligationKey(intent.origin, intent.kind, owed.recipient.ref);
+  // The tenant in the key comes from the INTENT, not from the hydrated
+  // recipient. The recipient's `businessId` is a claim made by the hydrator,
+  // and `assertRecipientBelongs` below is what proves it matches; keying on it
+  // would let a hydrator file an obligation under any tenant it named, which is
+  // the cross-tenant mixing this key was given a tenant to prevent.
+  const obligation = obligationKey(intent.businessId, intent.origin, intent.kind, owed.recipient.ref);
 
   try {
     assertRecipientBelongs(intent, owed.recipient);
@@ -282,7 +291,15 @@ async function dispatchOne(intent: DispatchIntent, owed: HydratedObligation, por
       continue;
     }
     if (atEnqueue.verdict === 'defer') {
-      outcomes.push({ result: 'deferred', kind: intent.kind, obligation, channel, untilMinuteOfDay: atEnqueue.untilMinuteOfDay, stage: 'enqueue' });
+      outcomes.push({
+        result: 'deferred',
+        kind: intent.kind,
+        obligation,
+        channel,
+        untilMinuteOfDay: atEnqueue.untilMinuteOfDay,
+        untilNextDay: atEnqueue.untilNextDay,
+        stage: 'enqueue',
+      });
       continue;
     }
 
@@ -315,7 +332,15 @@ async function dispatchOne(intent: DispatchIntent, owed: HydratedObligation, por
         continue;
       }
       if (atSend.verdict === 'defer') {
-        outcomes.push({ result: 'deferred', kind: intent.kind, obligation, channel, untilMinuteOfDay: atSend.untilMinuteOfDay, stage: 'send' });
+        outcomes.push({
+          result: 'deferred',
+          kind: intent.kind,
+          obligation,
+          channel,
+          untilMinuteOfDay: atSend.untilMinuteOfDay,
+          untilNextDay: atSend.untilNextDay,
+          stage: 'send',
+        });
         continue;
       }
 
@@ -392,8 +417,17 @@ async function dispatchOne(intent: DispatchIntent, owed: HydratedObligation, por
       // channel; another channel now would make two. A `dead` delivery is
       // different — proven not sent, and nothing further will be attempted —
       // so the next channel may be tried and exactly one message can result.
-      if (classified.next.action === 'retry') {
-        pendingDelivery = { channel, why: 'has a retry scheduled for the same delivery' };
+      //
+      // The decision is `blocksAnotherChannel`'s, not this loop's. It used to
+      // be `classified.next.action === 'retry'` here, a second copy of the
+      // rule: the challenger found that `blocksAnotherChannel` — the rule
+      // Mission V3 corrected, and the application-side twin of the partial
+      // unique index — had NO caller in `src/` at all, so the rule that was
+      // fixed was not the rule that ran. They agreed by coincidence. Now the
+      // index, the spec and this loop are one rule, and correcting it once
+      // corrects it everywhere.
+      if (blocksAnotherChannel({ state: classified.state })) {
+        pendingDelivery = { channel, why: `is in state ${classified.state}, which still holds the obligation` };
       }
     } catch (err) {
       if (err instanceof NotificationRefusal) {
@@ -427,7 +461,7 @@ export async function dispatchIntent(intent: DispatchIntent, ports: DispatchPort
     // with nothing saying why: exactly the "vanished without a reason" case the
     // law forbids, in the one place the law itself did not read.
     if (seen.has(key)) {
-      outcomes.push({ result: 'already_owed', kind: intent.kind, obligation: obligationKey(intent.origin, intent.kind, one.recipient.ref) });
+      outcomes.push({ result: 'already_owed', kind: intent.kind, obligation: obligationKey(intent.businessId, intent.origin, intent.kind, one.recipient.ref) });
       continue;
     }
     seen.add(key);

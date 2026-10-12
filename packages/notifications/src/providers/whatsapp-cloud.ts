@@ -45,7 +45,20 @@ export interface WhatsAppCredentials {
   readonly baseUrl?: string;
 }
 
-/** Minimal HTTP port: no fetch, no axios, no network inside this package. */
+/**
+ * Minimal HTTP port: no fetch, no axios, no network inside this package.
+ *
+ * **Contract an adapter author must know:** whether a failed send is treated as
+ * a proven non-send (retryable) or as ambiguous (never retried, reconciled)
+ * depends on a transport code — `ECONNREFUSED`, `ENOTFOUND` and the rest.
+ * `classifyTransportThrow` looks for it on the thrown value and walks its
+ * `cause` chain, which covers Node's own `fetch` (it throws
+ * `TypeError: fetch failed` with the code on `cause`). An adapter that
+ * swallows the code entirely — rethrowing a bare `new Error('request failed')`
+ * — is not wrong, but it converts every outage into an ambiguous delivery that
+ * is reconciled rather than retried. Preserve the code, or set `cause` to the
+ * original error.
+ */
 export interface HttpPort {
   postJson(url: string, headers: Readonly<Record<string, string>>, body: unknown): Promise<{ readonly status: number; readonly body: unknown }>;
 }

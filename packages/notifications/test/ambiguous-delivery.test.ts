@@ -113,7 +113,12 @@ describe('PART 44 — an ambiguous result is never auto-resent', () => {
   it('reconciliation resolves an unknown three ways, and only one of them sends', () => {
     expect(resolveUnknown({ found: true, providerMessageId: 'wamid.X' })).toEqual({ state: 'accepted', next: { action: 'none' } });
     expect(resolveUnknown({ found: false })).toEqual({ state: 'retry_scheduled', next: { action: 'retry', afterSeconds: 0 } });
-    expect(resolveUnknown({ inconclusive: true })).toEqual({ state: 'unknown', next: { action: 'reconcile', reason: 'reconciliation inconclusive' } });
+    // The reason is carried through, so the reconciliation queue entry says
+    // what would actually settle it rather than a constant string.
+    expect(resolveUnknown({ inconclusive: true, reason: 'lookup_failed' })).toEqual({
+      state: 'unknown',
+      next: { action: 'reconcile', reason: 'lookup_failed' },
+    });
   });
 
   it('a connection that was never made is a PROVEN rejection; a mid-flight loss is not', () => {

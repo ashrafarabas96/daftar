@@ -137,14 +137,56 @@ export function applyProviderCallback(
 }
 
 /**
- * PART 44's other half: a VERIFIED callback correlated to the logical delivery
- * is authoritative evidence that the provider has the message, so it resolves a
- * `delivery_unknown` without a status lookup and without a resend. An
- * unverified callback resolves nothing — it must not be able to, or an attacker
- * could silence a real notification by posting a fake `delivered`.
+ * What a logical delivery knows about its own send, and the only thing that
+ * lets a callback be matched to it.
+ *
+ * `expectedProviderMessageId` is OPTIONAL in the type and REQUIRED in effect:
+ * omitting it does not relax the check, it makes reconciliation by callback
+ * impossible, because an id that was never learned cannot be correlated
+ * against. That is the `invalid_success_response` case — a 2xx whose body
+ * carried no usable id — and it is settled by a provider status LOOKUP keyed on
+ * the recipient and the send window, never by an incoming callback.
  */
-export function reconcileFromCallback(callback: ProviderCallback, request: RawWebhookRequest, verifier: WebhookVerifier): Reconciliation {
-  if (!verifier.verify(request).verified) return { inconclusive: true };
-  if (callback.providerMessageId.trim() === '') return { inconclusive: true };
-  return { found: true, providerMessageId: callback.providerMessageId };
+export interface DeliveryCorrelation {
+  /** The stable logical delivery key this reconciliation is about. */
+  readonly deliveryKey: string;
+  /** The id the provider returned for THIS send, where one was returned. */
+  readonly expectedProviderMessageId?: string;
+}
+
+/**
+ * PART 44's other half: a VERIFIED callback **correlated to this logical
+ * delivery** is authoritative evidence that the provider has the message, so it
+ * resolves a `delivery_unknown` without a status lookup and without a resend.
+ *
+ * The correlation is a required parameter, not a docstring. The earlier
+ * signature took three arguments and named correlation as its premise without
+ * reading it, so any verified callback with a non-empty id returned
+ * `{ found: true }` — and `resolveUnknown` turns that into `accepted`, which
+ * discharges the obligation and guarantees no send. The challenger proved it:
+ * a correctly signed callback about `wamid.SOMEONE-ELSE` closed this delivery,
+ * so the provider redelivering an unrelated event — or anyone holding a valid
+ * signature — could silence a real notification. Verifying the signature only
+ * proves the message came from the provider; it says nothing about WHICH send
+ * it describes.
+ *
+ * Fourth instance in this package of a law that names its premise and does not
+ * read it, and the fix is the same each time: make the premise an argument the
+ * caller cannot omit.
+ */
+export function reconcileFromCallback(
+  callback: ProviderCallback,
+  request: RawWebhookRequest,
+  verifier: WebhookVerifier,
+  correlation: DeliveryCorrelation,
+): Reconciliation {
+  if (!verifier.verify(request).verified) return { inconclusive: true, reason: 'signature_unverified' };
+  const incoming = callback.providerMessageId.trim();
+  if (incoming === '') return { inconclusive: true, reason: 'provider_message_id_mismatch' };
+  const expected = correlation.expectedProviderMessageId?.trim() ?? '';
+  // Fail CLOSED on an id we never learned: there is nothing to compare, so no
+  // callback may discharge this delivery. A lookup must.
+  if (expected === '') return { inconclusive: true, reason: 'provider_message_id_never_learned' };
+  if (incoming !== expected) return { inconclusive: true, reason: 'provider_message_id_mismatch' };
+  return { found: true, providerMessageId: incoming };
 }

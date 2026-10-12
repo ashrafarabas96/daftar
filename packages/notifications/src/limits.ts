@@ -81,8 +81,13 @@ export class DefaultChannelLimits implements ChannelLimits {
   }
 }
 
-/** A template parameter may not carry a newline or a tab: Meta refuses it. */
-const FORBIDDEN_IN_PARAMETER = /[\n\r\t]/;
+/**
+ * A parameter allows NO control character at all — not even the three a body
+ * may carry. Kept as a named empty set rather than an inline `new Set()` so the
+ * intent is legible at the call site and a future edit has to change something
+ * named.
+ */
+const EMPTY_ALLOWED_CONTROLS: ReadonlySet<number> = new Set<number>();
 
 /**
  * Control characters, tested by CODE POINT rather than by a regular
@@ -158,10 +163,31 @@ export function assertWithinLimits(rendered: RenderedMessage, limits: ChannelLim
     if (max !== undefined && parameter.length > max) {
       refuse('notification.parameter_invalid', `${rendered.channel}/param${index}/${parameter.length}>${max}`);
     }
-    if (FORBIDDEN_IN_PARAMETER.test(parameter)) {
+    // The template parameter is the STRICTER surface, not the looser one.
+    //
+    // The earlier code checked the body with `hasForbiddenControl` and `isBlank`
+    // and checked parameters with a three-character regex and `=== ''`. On the
+    // WhatsApp Cloud path the body is never transmitted — the payload is built
+    // from the template name, locale and parameters — so the strict law covered
+    // text that does not leave and the lax one covered the text that does. NUL,
+    // C1 and DEL were refused in a body and accepted in a parameter, and a
+    // whitespace-only parameter passed the very check whose comment says an
+    // empty one "would render an approved template with a hole in it".
+    //
+    // The refusal code stays `parameter_invalid` rather than becoming the
+    // body's `content_invalid`/`content_empty`: it says WHICH surface refused,
+    // and the finding was that the parameter check was lax, not that it was
+    // named wrongly. Only the strictness changes.
+    //
+    // `new Set()` allows NOTHING: a parameter is a single value substituted into
+    // one line of an approved template, so newline, carriage return and tab do
+    // not belong in it either — which is also what `FORBIDDEN_IN_PARAMETER`
+    // said, now as the floor rather than the ceiling.
+    if (hasForbiddenControl(parameter, EMPTY_ALLOWED_CONTROLS)) {
       refuse('notification.parameter_invalid', `${rendered.channel}/param${index}/control_character`);
     }
-    // An empty parameter would render an approved template with a hole in it.
-    if (parameter === '') refuse('notification.parameter_invalid', `${rendered.channel}/param${index}/empty`);
+    // An empty parameter would render an approved template with a hole in it,
+    // and so would a parameter that is only whitespace.
+    if (isBlank(parameter)) refuse('notification.parameter_invalid', `${rendered.channel}/param${index}/blank`);
   }
 }

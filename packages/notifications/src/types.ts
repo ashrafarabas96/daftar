@@ -45,6 +45,11 @@ export type ConsentClass = 'transactional' | 'operational' | 'marketing';
  *
  * `businessId` is part of the recipient, not context around it: a recipient
  * that does not name its business cannot be proven to belong to this tenant.
+ * Note WHERE it sits: on `Recipient` below, and NOT on the bare `RecipientRef`,
+ * which is only the id pair. Anything deriving a tenant-scoped value from a ref
+ * must therefore be given the business as its own argument — `obligationKey`
+ * does — because the ref cannot supply it. This comment used to sit above
+ * `RecipientRef` and read as though it could.
  */
 export type RecipientRef = { readonly kind: 'customer'; readonly customerId: string } | { readonly kind: 'user'; readonly userId: string };
 

@@ -17,6 +17,8 @@
  * result unless the provider's own semantics make a resend harmless.
  */
 import type { ProviderSendResult } from './provider';
+import { arrivalWasRecorded } from './status';
+import { nextStepAfterFailure } from './retry';
 
 export type DeliveryState =
   /** Owed, nothing attempted. */
@@ -113,7 +115,15 @@ export interface ChannelBlockInput {
 export function blocksAnotherChannel(input: ChannelBlockInput): boolean {
   const { state, finalStatus, finalStatusVerified } = input;
   if (RELEASES_THE_OBLIGATION.includes(state)) return false;
-  if (state === 'closed' && finalStatus === 'failed' && finalStatusVerified === true) return false;
+  if (state === 'closed' && finalStatus === 'failed' && finalStatusVerified === true) {
+    // The premise, READ rather than assumed: this release is only safe while a
+    // `failed` status is unreachable after an arrival. `status.ts` guarantees
+    // that by ranking `failed` below `delivered`; if someone reorders that
+    // ladder, this release stops happening instead of silently producing the
+    // duplicate the challenger proved. Fail closed on a changed premise.
+    if (arrivalWasRecorded('failed')) return true;
+    return false;
+  }
   // Fail closed: anything not named above blocks, including a state added to
   // this union later and a value that reached here from untyped JavaScript.
   return true;
@@ -168,10 +178,25 @@ export function classifySend(input: ClassifyInput): SendOutcome {
     return { state: 'retry_scheduled', next: { action: 'retry', afterSeconds: backoffSeconds(attemptsMade) } };
   }
 
+  // An adapter that says a class is not retryable stops the delivery whatever
+  // the class-level policy thinks. This is the narrower of the two, so it runs
+  // first.
   if (!result.retryable) return { state: 'dead', next: { action: 'stop', reason: result.code } };
-  if (attemptsMade >= maxAttempts) return { state: 'dead', next: { action: 'stop', reason: 'attempt limit reached' } };
-  return { state: 'retry_scheduled', next: { action: 'retry', afterSeconds: backoffSeconds(attemptsMade) } };
+  // PART 8, single authority: the attempt limit and the backoff live in
+  // `retry.ts`, and this asks them. The two used to be written out here as
+  // well — the same policy twice, with nothing holding the copies together.
+  const step = nextStepAfterFailure(attemptsMade - 1, result.code, { maxAttempts, backoff: backoffSeconds });
+  if (step.step === 'dead') return { state: 'dead', next: { action: 'stop', reason: 'attempt limit reached' } };
+  return { state: 'retry_scheduled', next: { action: 'retry', afterSeconds: step.afterSeconds } };
 }
+
+/** Why a reconciliation settled nothing. Each one implies different next work. */
+export type ReconciliationGap =
+  | 'signature_unverified'
+  | 'provider_message_id_mismatch'
+  | 'provider_message_id_never_learned'
+  | 'lookup_failed'
+  | 'lookup_unsupported';
 
 /** How an `unknown` was resolved, once something authoritative arrived. */
 export type Reconciliation =
@@ -179,12 +204,24 @@ export type Reconciliation =
   | { readonly found: true; readonly providerMessageId: string }
   /** The provider authoritatively has no such message: nothing was sent. */
   | { readonly found: false }
-  /** The lookup itself failed or is unsupported — still unknown. */
-  | { readonly inconclusive: true };
+  /**
+   * Nothing authoritative arrived about THIS delivery — still unknown.
+   *
+   * `reason` is required because the three ways of being inconclusive need
+   * different work: an unverified callback is discarded, a mismatched one
+   * belongs to another delivery and must not be applied to this one, and an id
+   * that was never learned can only be settled by a provider status LOOKUP —
+   * no callback can ever settle it, so a worker that waits for one waits
+   * forever.
+   */
+  | { readonly inconclusive: true; readonly reason: ReconciliationGap };
 
 export function resolveUnknown(reconciliation: Reconciliation): SendOutcome {
   if ('inconclusive' in reconciliation) {
-    return { state: 'unknown', next: { action: 'reconcile', reason: 'reconciliation inconclusive' } };
+    // The reason is carried through, so the queue entry says what would settle
+    // it. `provider_message_id_never_learned` in particular is NOT waiting for
+    // a callback: it needs a lookup by the recipient and the send window.
+    return { state: 'unknown', next: { action: 'reconcile', reason: reconciliation.reason } };
   }
   if (reconciliation.found) {
     // It WAS sent. The obligation is discharged; no resend, ever.

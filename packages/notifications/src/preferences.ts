@@ -36,7 +36,19 @@ export interface RecipientPreferences {
 
 export type ConsentDecision =
   | { readonly decision: 'allow' }
-  | { readonly decision: 'defer'; readonly deferUntilMinuteOfDay: number }
+  | {
+      readonly decision: 'defer';
+      readonly deferUntilMinuteOfDay: number;
+      /**
+       * Whether that minute is on the NEXT day. A quiet window that wraps
+       * midnight (22:00 → 07:00) ends at a minute EARLIER than now, so a
+       * scheduler reading a bare minute as "today at 420" fires immediately —
+       * inside quiet hours, which is the one thing the deferral exists to
+       * prevent. The package stays clock-free: it does not say when 07:00 is,
+       * only that this one is tomorrow's.
+       */
+      readonly deferToNextDay: boolean;
+    }
   | { readonly decision: 'refuse'; readonly code: NotificationRefusalCode };
 
 function stateOf(prefs: RecipientPreferences, channel: Channel): PreferenceState {
@@ -79,7 +91,11 @@ export function evaluateConsent(req: ConsentRequest): ConsentDecision {
 
   const q = preferences.quietHours;
   if (q && inQuietWindow(nowMinuteOfDay, q)) {
-    return { decision: 'defer', deferUntilMinuteOfDay: q.endMinuteOfDay % 1440 };
+    const until = q.endMinuteOfDay % 1440;
+    // `until <= now` can only happen for a window that wrapped midnight, and
+    // then the end is tomorrow's. Derived from the two numbers rather than from
+    // a clock, so the package still reads no time.
+    return { decision: 'defer', deferUntilMinuteOfDay: until, deferToNextDay: until <= nowMinuteOfDay };
   }
   return { decision: 'allow' };
 }

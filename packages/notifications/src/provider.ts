@@ -89,13 +89,41 @@ const DEFINITE_REFUSALS: readonly ProviderErrorCode[] = [
 const PRE_SEND_FAILURES: readonly string[] = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH'];
 
 /**
+ * Find a transport code anywhere in the `cause` chain.
+ *
+ * `HttpPort` is `postJson(url, headers, body)` and says nothing about how it
+ * must throw, and the obvious adapter — Node's own `fetch` (undici) — throws
+ * `TypeError: fetch failed` with the real code on `err.cause`, not on the error
+ * itself. The earlier code read the top level only, so a `fetch` adapter turned
+ * EVERY connection-refused failure into `{ outcome: 'unknown' }`: a full stop
+ * with no retry and no fallback channel, a reconciliation entry forever, for a
+ * request that never left the building. The fail-safe direction was right — it
+ * never produced a duplicate — but the cost was a silently undelivered
+ * notification whenever the provider was simply down, which is the common case.
+ *
+ * The chain is walked with a depth bound and a seen-set, because an adapter can
+ * hand us a cycle and a worker loop must not hang on one.
+ */
+function transportCodeOf(err: unknown): string {
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  for (let depth = 0; depth < 8 && current !== null && typeof current === 'object'; depth += 1) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string' && code !== '') return code;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return '';
+}
+
+/**
  * Classify a transport THROW. The distinction that matters: a connection that
  * was never established cannot have delivered anything (rejected, retryable),
  * while a timeout or a reset mid-flight may have (unknown).
  */
 export function classifyTransportThrow(err: unknown): ProviderSendResult {
-  const e = err as { code?: unknown };
-  const transport = typeof e?.code === 'string' ? e.code : '';
+  const transport = transportCodeOf(err);
   const code = classifyProviderError(err);
   if (PRE_SEND_FAILURES.includes(transport)) return { outcome: 'rejected', code, retryable: true };
   if (code === 'PROVIDER_TIMEOUT') return { outcome: 'unknown', code, reason: 'timeout_after_send' };
