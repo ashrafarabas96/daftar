@@ -966,7 +966,12 @@ const TOLERATED_NONZERO: readonly { readonly script: string; readonly reason: st
   {
     script: 'verify:gap-list:static',
     reason:
-      'the static mode measures what it can read and reports the rest as UNMEASURED; its exit 1 says "one of five items is not decidable from source", which is a statement about coverage of the check and not a failure of the subject. Its FINDINGs are carried as named open items (G5 is the owner-decided scanner block)',
+      'the static mode measures what it can read and reports the rest as UNMEASURED; its exit 2 says "something here could not be measured at all" and its exit 1 "everything was measured and a gap was found" (round-8 R3), neither of which is a failure of the pack\u2019s own code. Its FINDINGs are carried as named open items (G5 is the owner-decided scanner block)',
+  },
+  {
+    script: 'verify:gap-list',
+    reason:
+      "the same instrument against a live cluster. From round-8 R3 a measured FINDING reaches its exit code, which is the point of that fix: G5 — the production malware-scanner fail-open the owner ruled a promotion blocker on 2026-10-12 — used to be printed over an exit 0. The findings are named open items in §9, and a gap in another phase's code is not a defect in this pack",
   },
   {
     script: 'audit:deps:phase15',
@@ -974,6 +979,91 @@ const TOLERATED_NONZERO: readonly { readonly script: string; readonly reason: st
       "a FAILURE inherited from main's lockfile a8fecd0, with HIGH advisories this branch neither authored nor changes. It blocks PROMOTION and is recorded as §6.3; the floor stays at moderate and nothing is allowlisted",
   },
 ];
+
+/**
+ * THE REPOSITORY'S OWN GATES, RUN AND RECORDED BESIDE THE INSTRUMENTS
+ *
+ * The coordinator's round-8 addition (c), and the reason for it is the worst
+ * finding of the round: `npm run format` — the repository's own gate, run by
+ * `ci.yml` — had been RED on committed Phase 15 files since `2c0abec`, and
+ * nothing in this record ran it. Three reviews and eight challenge rounds read
+ * a pack whose own repo gate was failing, because the record only ever carried
+ * THIS phase's instruments. A head that turns a repo gate red carries no
+ * signature (`P4 r20`), so the gates belong in the same table as everything
+ * else, with the engine printed by the same command that runs them.
+ *
+ * A gate is TOLERATED only when its red is inherited from `main` and named
+ * here with that reason — the same rule as `TOLERATED_NONZERO`, and no wider.
+ * Phase-owned lint is deliberately NOT tolerated: `scripts/phase15` and the
+ * one shared file this phase edits are this phase's to keep green.
+ */
+const REPO_GATES: readonly { readonly name: string; readonly command: string; readonly tolerated: string | null }[] = [
+  { name: 'format (prettier --check .)', command: 'npm run format', tolerated: null },
+  {
+    name: 'lint, phase-owned (eslint scripts/phase15 + the one shared file)',
+    command: 'npx eslint scripts/phase15 scripts/phase3-secret-scan.ts --max-warnings 0',
+    tolerated: null,
+  },
+  { name: 'typecheck, root tsconfig (tsc --noEmit)', command: 'npx tsc -p tsconfig.json --noEmit', tolerated: null },
+  {
+    name: 'lint, whole repo (eslint .)',
+    command: 'npm run lint',
+    tolerated:
+      "inherited from main and not this phase's: every error is in apps/ and packages/ and is the cold-tree shape (`a type that cannot be resolved`), which needs the workspace packages built. None is in scripts/phase15 — that is the gate above, and it is not tolerated",
+  },
+  {
+    name: 'typecheck, workspaces then root (npm run typecheck)',
+    command: 'npm run typecheck',
+    tolerated:
+      'inherited from main and tracked as G6 in the CI-owner queue: the root script builds nothing first, so workspace packages resolve to their sources. The root tsconfig alone is the gate above, and it is not tolerated',
+  },
+];
+
+interface GateResult {
+  readonly name: string;
+  readonly command: string;
+  readonly exitCode: number | null;
+  /** Decided where the command ran, not inferred from the record later. */
+  readonly ok: boolean;
+  readonly engine: string;
+  readonly tolerated: string | null;
+  readonly tail: string;
+}
+
+/**
+ * Each gate runs with `node --version` in the SAME command, so the engine in
+ * the record is the engine the gate ran on rather than the one this process
+ * happens to be using.
+ */
+function runRepoGates(): readonly GateResult[] {
+  const out: GateResult[] = [];
+  for (const g of REPO_GATES) {
+    const r = spawnSync('sh', ['-lc', `node --version && ${g.command}`], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      env: { ...process.env },
+    });
+    // DECIDED HERE, where the command ran: the exit code is compared in the
+    // same function that produced it rather than stored for a later `!== 0`
+    // three functions away. The exit-code sweep reported this file for exactly
+    // that on its first draft, which is the instrument working.
+    const code = r.status;
+    const ok = code === 0;
+    const text = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    const engine = /^(v\d+\.\d+\.\d+)/m.exec(text)?.[1] ?? 'UNREADABLE — the command printed no node version';
+    out.push({
+      name: g.name,
+      command: g.command,
+      exitCode: code,
+      ok,
+      engine,
+      tolerated: g.tolerated,
+      tail: text.trim().split('\n').slice(-3).join(' | ').slice(0, 300),
+    });
+  }
+  return out;
+}
 
 function main(): number {
   const quick = process.argv.includes('--quick');
@@ -1141,6 +1231,7 @@ function main(): number {
   //   1 = an instrument that was run returned no exit code of its own
   //   3 = an instrument crashed BEFORE measuring, so its code is not a verdict
   //   4 = the coverage claim is incomplete or could not be computed
+  //   6 = one of the REPOSITORY's own gates is red at this head
   //   5 = an instrument measured and returned a non-zero code that no named
   //       exclusion accounts for (round-8 R2)
   //   2 = an environment precondition was unmet, so an instrument was not run
@@ -1196,6 +1287,18 @@ function main(): number {
     }
   }
 
+  // ── the repository's own gates, beside the instruments ────────────────
+  const gates = runRepoGates();
+  console.log("THE REPOSITORY'S OWN GATES at this head, with the engine each one ran on");
+  for (const g of gates)
+    console.log(
+      `  exit ${String(g.exitCode)}  ${g.engine}  ${g.name}${g.ok ? '' : g.tolerated === null ? '  — NOT TOLERATED' : '  — tolerated: inherited from main'}`,
+    );
+  const gatesRed = gates.filter((g) => !g.ok && g.tolerated === null);
+  const gatesInherited = gates.filter((g) => !g.ok && g.tolerated !== null);
+  for (const g of gatesInherited) console.log(`  ${g.name} — ${g.tolerated ?? ''}`);
+  console.log('');
+
   // R2 — a measured non-zero that nothing in this list accounts for.
   const tolerated = new Map(TOLERATED_NONZERO.map((t) => [t.script, t.reason]));
   const redInstruments = results.filter((r) => r.ran && r.exitCode !== 0 && r.exitCode !== null);
@@ -1205,6 +1308,13 @@ function main(): number {
     console.log(`${excused.length} instrument(s) returned a non-zero code this runner TOLERATES, each named in its source with a reason:`);
     for (const r of excused) console.log(`  ${r.instrument.script} exit ${String(r.exitCode)} — ${tolerated.get(r.instrument.script) ?? ''}`);
     console.log('');
+  }
+  if (gatesRed.length > 0) {
+    console.log(`EXIT 6: ${gatesRed.length} of the repository's own gates are RED at this head:`);
+    for (const g of gatesRed) console.log(`  ${g.command} exit ${String(g.exitCode)} on ${g.engine} — ${g.tail}`);
+    console.log('  A head that turns a repo gate red carries no signature, and a record that does not run');
+    console.log('  the gate cannot notice: `npm run format` was red on committed files for six rounds.');
+    return 6;
   }
   if (unexcused.length > 0) {
     console.log(`EXIT 5: ${unexcused.length} instrument(s) measured and returned a non-zero exit code that nothing here accounts for:`);
