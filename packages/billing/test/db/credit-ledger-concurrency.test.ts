@@ -563,6 +563,77 @@ describe('the pure core and the requested DDL agree', () => {
   });
 });
 
+describe('one lock order for every path', () => {
+  /**
+   * ROUND 9, the independent challenger's F-10, a P2 found on round 8's own
+   * fix. Round 8 closed the chronology race (F-03) by taking the
+   * per-business advisory lock INSIDE the `AFTER INSERT` trigger. That is
+   * after any row lock the calling transaction already holds — and
+   * `lock_grants_in_order` exists, in its own comment, precisely to serve a
+   * path that does NOT take the advisory lock first. So on that one path the
+   * order inverts and two writers can form a cycle:
+   *
+   *   T1  lock_grants_in_order  → holds remainder ROW locks, no advisory
+   *   T2  INSERT a consumption  → trigger takes the ADVISORY, then wants
+   *                               T1's remainder row lock → blocks
+   *   T1  INSERT a consumption  → trigger wants the advisory T2 holds → cycle
+   *
+   * Round 8's own comment claimed "no path in this slice does that". That was
+   * wrong: `finalizeInvoice({ withLock: false, withGrantLocks: true })` is
+   * supported and is exactly that path. None of the other cases covers it,
+   * because every concurrent case in this lane takes the advisory lock first.
+   *
+   * The fix is one statement: `lock_grants_in_order` takes the SAME key
+   * before any row lock, so every path in the schema orders advisory then
+   * rows. This case reds without it, with `40P01`.
+   */
+  it('the grant-lock path and the trigger path cannot deadlock each other', async () => {
+    const s = await freshScope('p5scratch');
+    const older = await insertGrant(owner, 'p5scratch', s, 1000n, T0, 'fifo-older');
+    await insertGrant(owner, 'p5scratch', s, 1000n, T1, 'fifo-newer');
+
+    const a = await connect(ownerUrl());
+    const b = await connect(ownerUrl());
+    try {
+      await a.query('BEGIN');
+      await b.query('BEGIN');
+      const bPid = await pidOf(b);
+      const invA = await createDraftInvoice(owner, 'p5scratch', s, 200n);
+      const invB = await createDraftInvoice(owner, 'p5scratch', s, 200n);
+
+      // T1 takes the remainder ROW locks and NOT the advisory lock — the
+      // path `lock_grants_in_order` was written for.
+      await a.query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, s.currency]);
+
+      // T2 writes a row. Its chronology trigger fires before its remainder
+      // trigger (AFTER triggers fire in name order, and
+      // `pca_chronology_trg` sorts before `pca_maintain_remainder_trg`), so
+      // T2 holds the advisory and then wants a row lock T1 holds.
+      const bRun = insertConsumption(b, 'p5scratch', s, older, 100n, invB, 'inv-B', T2).then(
+        () => '',
+        (e: unknown) => sqlstate(e),
+      );
+      await waitUntilBlocked(observer, bPid, 'T2 reaching for the remainder row lock T1 holds');
+
+      // T1 now writes, and its trigger reaches for the advisory T2 holds.
+      // Without the fix this closes the cycle and PostgreSQL kills one of
+      // them; with it, T1 already holds the key and there is no cycle.
+      const aRun = await insertConsumption(a, 'p5scratch', s, older, 100n, invA, 'inv-A', T2).then(
+        () => '',
+        (e: unknown) => sqlstate(e),
+      );
+
+      expect(aRun, 'the grant-lock path deadlocked against the trigger path').not.toBe('40P01');
+      await a.query('ROLLBACK').catch(() => undefined);
+      expect(await bRun, 'the trigger path was deadlocked by the grant-lock path').not.toBe('40P01');
+      await b.query('ROLLBACK').catch(() => undefined);
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  });
+});
+
 describe('the ordering conflict, resolved at the write', () => {
   /**
    * ROUND 8, the independent challenger's F-03, a P2. The case below was

@@ -214,9 +214,20 @@ CREATE TRIGGER pca_append_only_trg
 -- would still not see it; a serializable caller needs
 -- `pg_advisory_xact_lock` before it opens its statement, not inside a
 -- trigger. A transaction that holds remainder row locks WITHOUT having taken
--- this key and then inserts a grant can now deadlock with a finalization —
--- PostgreSQL detects it and aborts one of them, which is a refusal and not a
--- corruption, and no path in this slice does that.
+-- this key and then inserts a grant could deadlock with a finalization.
+--
+-- ROUND 9 CORRECTION. That paragraph used to end "and no path in this slice
+-- does that", which was false: `lock_grants_in_order` takes remainder row
+-- locks without this key, and `finalizeInvoice({ withLock: false,
+-- withGrantLocks: true })` is a supported caller of it. The independent
+-- challenger measured the cycle (F-10, `40P01`) and this thread reproduced
+-- it before fixing it. It is closed by taking the same key at the top of
+-- `lock_grants_in_order`, so the schema now has ONE lock order on every
+-- path: the per-business advisory lock before any row lock. The reasoning is
+-- written there, and a case reds without it.
+--
+-- The lesson is about the sentence, not the lock: "no path does that" was a
+-- claim about code, offered where a measurement belonged.
 CREATE FUNCTION p5scratch.pca_chronology() RETURNS trigger
 LANGUAGE plpgsql AS $fn$
 DECLARE
@@ -295,6 +306,38 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, pg_temp AS $fn$
 DECLARE
   locked integer;
 BEGIN
+  -- ROUND 9, the independent challenger's F-10, a P2 found on round 8's own
+  -- fix. Round 8 closed the chronology race by taking the per-business
+  -- advisory lock inside `pca_chronology()`, which is an AFTER INSERT
+  -- trigger — so it is acquired AFTER any row lock the calling transaction
+  -- already holds. This function exists to serve a path that does NOT take
+  -- the advisory lock first, which is exactly where that inverts:
+  --
+  --   T1  this function     → holds remainder ROW locks, no advisory
+  --   T2  INSERT a row      → the trigger takes the ADVISORY, then wants
+  --                           T1's remainder row lock → blocks
+  --   T1  INSERT a row      → the trigger wants the advisory T2 holds → cycle
+  --
+  -- Round 8's comment on `pca_chronology()` claimed "no path in this slice
+  -- does that". That was wrong — `finalizeInvoice({ withLock: false,
+  -- withGrantLocks: true })` is supported and is that path — and it was a
+  -- claim about code rather than a measurement, which is why it survived
+  -- until somebody measured it. Reproduced here as `40P01` before the fix.
+  --
+  -- So the SAME key is taken here, before any row lock, and the invariant
+  -- is now stated once for the whole schema: **every path takes the
+  -- per-business advisory lock before it takes any row lock.** The key
+  -- matches `pca_chronology()`'s and the finalization path's exactly, and an
+  -- advisory lock is re-entrant within a transaction, so a caller that
+  -- already holds it pays nothing.
+  --
+  -- Two properties of the key that are coarser than necessary and never
+  -- incorrect, recorded so nobody reads them as defects: `hashtext` is
+  -- 32-bit, so two businesses can collide on one lock word; and the key omits
+  -- the currency, while the invariants it protects are per business AND
+  -- currency. Both only serialize more than strictly needed.
+  PERFORM pg_advisory_xact_lock(hashtext('p5scratch:' || p_business::text));
+
   -- `FOR UPDATE OF r` sits above the sort in the plan, so the rows are
   -- locked in sorted order and not in whatever order the scan found
   -- them. `test/db/credit-ledger-atomicity.test.ts` reads the plan and
