@@ -115,7 +115,7 @@ export function prepareClusterDir(dir: string): void {
  * runtime roles to prove their privileges survived, and `trust` would let any
  * password through and prove nothing.
  */
-export function startCluster(spec: ClusterSpec): void {
+export function startCluster(spec: ClusterSpec, extraSettings: readonly string[] = []): void {
   const data = join(spec.dir, 'data');
   const pwfile = join(spec.dir, 'superuser.pw');
   writeFileSync(pwfile, `${PG_SUPERPASS}\n`, { mode: 0o600 });
@@ -127,8 +127,96 @@ export function startCluster(spec: ClusterSpec): void {
   must(asServerUser(`${PG16_BIN}/initdb -D ${data} -U ${PG_SUPERUSER} --auth=md5 --pwfile=${pwfile} -E UTF8 --locale=C`), `initdb (${spec.label})`);
   // Written AFTER initdb so the generated file is not overwritten.
   const conf = join(data, 'postgresql.conf');
-  writeFileSync(conf, `${readFileSync(conf, 'utf8')}\nport=${spec.port}\nlisten_addresses='127.0.0.1'\nfsync=off\nmax_connections=200\n`);
+  // `extraSettings` are appended LAST, so a caller can override a default
+  // above it: PostgreSQL takes the final assignment of a setting in the file.
+  // The PITR proof uses this to turn `fsync` back on, because a recovery claim
+  // made on a cluster that was never durable proves nothing.
+  writeFileSync(
+    conf,
+    `${readFileSync(conf, 'utf8')}\nport=${spec.port}\nlisten_addresses='127.0.0.1'\nfsync=off\nmax_connections=200\n${extraSettings.map((l) => `${l}\n`).join('')}`,
+  );
   must(asServerUser(`${PG16_BIN}/pg_ctl -D ${data} -l ${join(spec.dir, 'server.log')} -w start`), `pg_ctl start (${spec.label})`);
+}
+
+/**
+ * A directory the server account can write to — the WAL archive and the base
+ * backup both need this, and `archive_command` failing on permissions looks
+ * exactly like archiving being broken.
+ */
+export function prepareServerWritableDir(dir: string): void {
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  chmodSync(dir, 0o755);
+  if (userInfo().username !== SERVER_OS_USER) {
+    const uid = Number(must(run('id', ['-u', SERVER_OS_USER]), 'id -u postgres').trim());
+    const gid = Number(must(run('id', ['-g', SERVER_OS_USER]), 'id -g postgres').trim());
+    chownSync(dir, uid, gid);
+  }
+}
+
+/**
+ * `pg_basebackup -Fp -X stream` — a PHYSICAL backup, which is the thing a
+ * logical dump is not. PITR replays archived WAL on top of one of these; a
+ * `pg_dump` has no LSN to replay onto.
+ */
+export function baseBackup(port: number, outDir: string): void {
+  prepareServerWritableDir(outDir);
+  must(
+    asServerUser(
+      `PGPASSWORD='${PG_SUPERPASS}' ${PG16_BIN}/pg_basebackup -h 127.0.0.1 -p ${port} -U ${PG_SUPERUSER} -D ${outDir} -Fp -X stream -c fast --no-sync`,
+    ),
+    `pg_basebackup (:${port})`,
+  );
+}
+
+/**
+ * Lay a base backup down as a new data directory and arm it for recovery.
+ *
+ * `recovery.signal` + `restore_command` + a recovery target is the whole of
+ * PITR's interface. `recovery_target_action='promote'` so the cluster comes up
+ * read-write once it reaches the target, instead of pausing and leaving the
+ * caller unable to tell "paused" from "finished".
+ */
+export function armRecovery(
+  dataDir: string,
+  backupDir: string,
+  opts: { readonly restoreCommand: string; readonly targetTime?: string; readonly targetLsn?: string },
+): void {
+  rmSync(dataDir, { recursive: true, force: true });
+  must(asServerUser(`cp -a ${backupDir} ${dataDir}`), `copy base backup to ${dataDir}`);
+  must(asServerUser(`chmod 700 ${dataDir}`), `chmod 700 ${dataDir}`);
+  const target = opts.targetTime !== undefined ? `recovery_target_time='${opts.targetTime}'` : `recovery_target_lsn='${opts.targetLsn ?? ''}'`;
+  const conf = join(dataDir, 'postgresql.auto.conf');
+  must(
+    asServerUser(
+      `cat >> ${conf} <<'P15EOF'
+restore_command='${opts.restoreCommand}'
+${target}
+recovery_target_action='promote'
+P15EOF`,
+    ),
+    'write recovery settings',
+  );
+  must(asServerUser(`touch ${join(dataDir, 'recovery.signal')}`), 'touch recovery.signal');
+}
+
+/** Start a cluster that is already laid down on disk (a recovery target). */
+export function startExisting(dir: string, label: string): SpawnSyncReturns<string> {
+  return asServerUser(`${PG16_BIN}/pg_ctl -D ${join(dir, 'data')} -l ${join(dir, 'server.log')} -w -t 120 start`);
+}
+
+/** The server log, for reading why a recovery refused. */
+export function serverLog(dir: string): string {
+  const f = join(dir, 'server.log');
+  return existsSync(f) ? readFileSync(f, 'utf8') : '';
+}
+
+/** `psql -c`, as the superuser, returning one scalar — used during recovery. */
+export function psqlScalar(port: number, db: string, sql: string): { readonly ok: boolean; readonly value: string; readonly detail: string } {
+  const r = run(`${PG16_BIN}/psql`, ['-h', '127.0.0.1', '-p', String(port), '-U', PG_SUPERUSER, '-d', db, '-At', '-v', 'ON_ERROR_STOP=1', '-c', sql], {
+    env: { PGPASSWORD: PG_SUPERPASS },
+  });
+  return { ok: r.status === 0, value: (r.stdout ?? '').trim(), detail: `${r.stdout ?? ''}\n${r.stderr ?? ''}`.trim() };
 }
 
 export function stopCluster(spec: ClusterSpec): void {

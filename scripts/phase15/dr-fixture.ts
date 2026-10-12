@@ -201,34 +201,56 @@ async function postEntry(
   }
 }
 
-/** Seed two tenants, each with one posted balanced entry. */
-export async function seedFixture(ownerPool: Pool, appUrl: string): Promise<Fixture> {
+/**
+ * Seed ONE tenant with one posted balanced entry, through the real boundary.
+ *
+ * Extracted from `seedFixture` so the PITR proof can post its two entries at
+ * two separate moments with a recovery target between them — which is the only
+ * way to show a point-in-time cut actually cuts. `seedFixture` still posts both
+ * in one call, so the DR drill is unchanged.
+ */
+export async function seedOneTenant(
+  ownerPool: Pool,
+  appUrl: string,
+  opts: { readonly label: string; readonly slug: string; readonly amountMinor: bigint; readonly entryDate: string },
+): Promise<SeededTenant> {
   const one = async (sql: string, params: unknown[] = []): Promise<string> =>
     must((await ownerPool.query<{ id: string }>(sql, params)).rows[0], `row from ${sql.slice(0, 40)}`).id;
+  const tenantId = await one(`INSERT INTO tenants DEFAULT VALUES RETURNING id`);
+  const businessId = await one(
+    `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+       VALUES ($1, $2, $3, 'PS', $4, $5) RETURNING id`,
+    [tenantId, opts.label, opts.slug, BASE_CURRENCY, TIMEZONE],
+  );
+  const userId = await one(`INSERT INTO users (email, password_hash, display_name) VALUES ($1, 'x', $2) RETURNING id`, [
+    `${opts.slug}@dr.daftar.local`,
+    `Poster ${opts.label}`,
+  ]);
+  const branchId = await one(`INSERT INTO branches (business_id, name, is_default) VALUES ($1, 'Main', true) RETURNING id`, [businessId]);
+  const warehouseId = await one(`INSERT INTO warehouses (business_id, branch_id, name, is_default) VALUES ($1, $2, 'Main WH', true) RETURNING id`, [
+    businessId,
+    branchId,
+  ]);
+  const entryId = await postEntry(appUrl, { tenantId, businessId, userId }, opts.entryDate, opts.amountMinor);
+  return { tenantId, businessId, userId, branchId, warehouseId, slug: opts.slug, entryId, amountMinor: opts.amountMinor.toString() };
+}
+
+/** Seed two tenants, each with one posted balanced entry. */
+export async function seedFixture(ownerPool: Pool, appUrl: string): Promise<Fixture> {
   const entryDate = await todayInBusinessTimezone(ownerPool);
   const stamp = Date.now();
   const amounts = [150000n, 275500n];
   const tenants: SeededTenant[] = [];
 
   for (const [i, amount] of amounts.entries()) {
-    const slug = `p15dr-${i + 1}-${stamp}`;
-    const tenantId = await one(`INSERT INTO tenants DEFAULT VALUES RETURNING id`);
-    const businessId = await one(
-      `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
-       VALUES ($1, $2, $3, 'PS', $4, $5) RETURNING id`,
-      [tenantId, `DR Fixture ${i + 1}`, slug, BASE_CURRENCY, TIMEZONE],
+    tenants.push(
+      await seedOneTenant(ownerPool, appUrl, {
+        label: `DR Fixture ${i + 1}`,
+        slug: `p15dr-${i + 1}-${stamp}`,
+        amountMinor: amount,
+        entryDate,
+      }),
     );
-    const userId = await one(`INSERT INTO users (email, password_hash, display_name) VALUES ($1, 'x', $2) RETURNING id`, [
-      `${slug}@dr.daftar.local`,
-      `DR Poster ${i + 1}`,
-    ]);
-    const branchId = await one(`INSERT INTO branches (business_id, name, is_default) VALUES ($1, 'Main', true) RETURNING id`, [businessId]);
-    const warehouseId = await one(`INSERT INTO warehouses (business_id, branch_id, name, is_default) VALUES ($1, $2, 'Main WH', true) RETURNING id`, [
-      businessId,
-      branchId,
-    ]);
-    const entryId = await postEntry(appUrl, { tenantId, businessId, userId }, entryDate, amount);
-    tenants.push({ tenantId, businessId, userId, branchId, warehouseId, slug, entryId, amountMinor: amount.toString() });
   }
 
   if (tenants.length < 2) throw new Error('dr-fixture: the isolation probe needs at least two tenants; refusing to report a one-tenant fixture');
