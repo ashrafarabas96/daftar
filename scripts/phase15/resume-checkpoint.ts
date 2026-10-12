@@ -87,7 +87,13 @@ function packState(): readonly { readonly file: string; readonly bytes: number; 
   const names = spawnSync('ls', ['-1', PACK], { encoding: 'utf8' });
   return (names.stdout ?? '')
     .split('\n')
-    .filter((f) => /^P15-.*\.(md|json)$/.test(f.trim()))
+    // The handoff manifest is EXCLUDED, and its own gate is cited instead.
+    // Otherwise the two indexes are circular: the manifest's digest table must
+    // be rewritten as the LAST action of a round, which would immediately
+    // invalidate a digest recorded for it here, and a digest table that is
+    // known-stale by construction teaches a reader to ignore digest tables.
+    // One file, one indexing authority.
+    .filter((f) => /^P15-.*\.(md|json)$/.test(f.trim()) && f.trim() !== 'P15-HANDOFF-MANIFEST.md')
     .map((f) => f.trim())
     .map((f) => {
       const b = readFileSync(join(PACK, f));
@@ -213,6 +219,11 @@ function main(): number {
   lines.push('');
   lines.push('These documents are **not in Git at any head**. They live in a directory other sessions');
   lines.push('write to, so these digests describe this instant only — which is why `--check` exists.');
+  lines.push('');
+  lines.push('`P15-HANDOFF-MANIFEST.md` is deliberately **absent** from this table: its digest table is');
+  lines.push('rewritten as the last action of a round, so any digest recorded for it here would be stale');
+  lines.push('by construction. It is verified by its own gate, `npm run verify:handoff-manifest`. One');
+  lines.push('file, one indexing authority.');
   lines.push('');
   lines.push('| file | bytes | sha256 |');
   lines.push('|---|---|---|');
