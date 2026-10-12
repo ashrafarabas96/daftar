@@ -25,6 +25,11 @@ if [ -z "$FILTER" ]; then
      -c 'DROP DATABASE IF EXISTS $DB' -c 'CREATE DATABASE $DB OWNER p14_owner'" || exit 1
   su claude -s /bin/bash -c "$BIN/psql -h $SOCK -p $PORT -U p14_owner -d $DB \
      -v ON_ERROR_STOP=1 -q -f $HERE/fixture.sql" || exit 1
+  echo "== preflight: asserting the run-identity claims against the cluster"
+  su claude -s /bin/bash -c "$BIN/psql -h $SOCK -p $PORT -U p14_owner -d $DB \
+     -v ON_ERROR_STOP=1 -q -f $HERE/preflight.sql" || {
+       echo "REPLAY ABORTED: a run-identity claim is false. The evidence may not be"
+       echo "produced on a runtime it misdescribes."; exit 1; }
   : > "$OUT/evidence.psv"
 fi
 

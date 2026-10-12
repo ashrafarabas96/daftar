@@ -35,6 +35,19 @@ That is round-2 `P1-02`'s species living inside the harness built to close it:
 **a recipe that lives in prose drifts from the driver actually used.** The fix
 is to commit the driver, not to correct the prose.
 
+`replay.sh` first runs **`preflight.sql`**, which asserts the evidence's own
+run-identity claims **against the cluster** and aborts the replay if any is
+false: PostgreSQL 16, `UTF8`, `datcollate = datctype = en_US.utf8`, and all four
+roles under test present, `NOSUPERUSER` and `NOBYPASSRLS`. Those claims used to
+live only in the evidence document's prose, verified by hand — **which is
+exactly the shape that failed twice**, as ad-hoc mutations and then an ad-hoc
+driver. The evidence can no longer be produced on a runtime it misdescribes.
+
+The preflight is itself red-proofed, because an assertion that has never failed
+is an unfenced assertion: `ALTER ROLE p14_worker BYPASSRLS` makes the replay
+abort with `PRINCIPAL CLAIM FALSE: p14_worker has BYPASSRLS` and exit 1, and it
+returns to 43/43 once reverted.
+
 `replay.sh` also **enforces the verdict**: a normal case must exit 0 and a red
 proof must exit 3, and it exits non-zero if any case missed its required code,
 so a replay cannot look successful while a red proof fails to turn red.
