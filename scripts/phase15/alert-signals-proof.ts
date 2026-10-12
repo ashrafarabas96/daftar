@@ -96,6 +96,53 @@ const CASES: readonly Case[] = [
     expect: /schema does not account for/i,
   },
   {
+    id: 'R2d',
+    what:
+      "the independent challenger's own Z-01: a destination planted INSIDE the accounted `resolution` object. " +
+      'This exited 0 for a whole round, with `RECEIVER UNSET` printed while the destination sat in the rule, ' +
+      'because the key walk stopped at the top level while the output claimed to be exhaustive over the rules',
+    plant: (doc) => {
+      const r = doc.rules[0];
+      const res = r?.['resolution'];
+      if (res === null || typeof res !== 'object' || Array.isArray(res))
+        throw new Error('no resolution object on the first rule: the Z-01 proof cannot be run as written, and a proof that cannot run says nothing');
+      (res as Record<string, unknown>)['receiver'] = 'pagerduty:ops-primary';
+    },
+    expect: /resolution\.receiver/i,
+  },
+  {
+    id: 'R2f',
+    what:
+      'the challenger\u2019s round-4 plant: a nested receiver in ALL 23 rules, not one. It graded the single-rule ' +
+      'version P3 and then found that the set-wide version made the checker print "no receiver" 23 times while ' +
+      'pagerduty sat in every rule. The proof is the SET, because a per-rule plant can pass a check that a ' +
+      'uniform one defeats',
+    plant: (doc) => {
+      let planted = 0;
+      for (const r of doc.rules) {
+        const res = r['resolution'];
+        if (res === null || typeof res !== 'object' || Array.isArray(res)) continue;
+        (res as Record<string, unknown>)['receiver'] = 'pagerduty:ops-primary';
+        planted += 1;
+      }
+      if (planted !== doc.rules.length)
+        throw new Error(`planted into ${planted} of ${doc.rules.length} rules: a set-wide proof that is not set-wide proves something else`);
+    },
+    expect: /rules whose receiver is therefore UNSET: 0 of \d+/,
+  },
+  {
+    id: 'R2e',
+    what:
+      'a NEW nested object whose sub-schema nobody declared (`notification_policy: { receiver: … }`). The walk ' +
+      'has no declaration for that level, and the fail-closed arm must treat everything inside it as unaccounted ' +
+      'rather than skipping a level it cannot describe',
+    plant: (doc) => {
+      const r = doc.rules[3];
+      if (r !== undefined) r['notification_policy'] = { receiver: 'slack:#ops', escalate_after: '15m' };
+    },
+    expect: /notification_policy/i,
+  },
+  {
     id: 'R3',
     what: 'one rule loses its `resolution` object entirely',
     plant: (doc) => {

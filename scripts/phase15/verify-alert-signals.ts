@@ -106,6 +106,50 @@ const SCHEMA_KEYS = [
 ] as const;
 
 /**
+ * The accounted keys of each NESTED object, keyed by the path that reaches it.
+ *
+ * Round 3 of the independent challenge (Z-01) looked one level below the fix:
+ * it planted `"receiver": "pagerduty:ops-primary"` INSIDE the accounted
+ * `resolution` object and the check exited 0, printing `RECEIVER UNSET` while
+ * that destination sat in the rule. The inversion was sound; the walk was one
+ * level deep, and the output's own sentence said the key-set check was
+ * "exhaustive over the rules" when it was exhaustive over each rule's
+ * TOP-LEVEL keys. A sentence that claims more than the code does is the defect
+ * this instrument was rewritten to stop, so the sentence was not the thing to
+ * fix on its own.
+ *
+ * So the walk now descends, and the schema is declared per level. A key path
+ * with NO declared sub-schema is itself unrecognised rather than skipped: an
+ * object nobody has described is exactly where a destination would hide, and
+ * failing closed there costs one edit to this map when the schema grows,
+ * which is the cost already accepted for `SCHEMA_KEYS`.
+ */
+const NESTED_SCHEMA_KEYS: Readonly<Record<string, readonly string[]>> = {
+  resolution: ['class', 'derivation', 'clearing_is_a_fix', 'closure_requirement', 'closure_recorded_today'],
+};
+
+/**
+ * Every key path in a rule, descending through objects and through objects
+ * inside arrays, paired with whether the schema accounts for it. `path` is
+ * dotted, with `[]` for an array hop, so a reader can find what was named.
+ */
+function keyPaths(value: unknown, prefix: string): { readonly path: string; readonly accounted: boolean; readonly value: unknown }[] {
+  if (Array.isArray(value)) return value.flatMap((v) => keyPaths(v, `${prefix}[]`));
+  if (value === null || typeof value !== 'object') return [];
+  const declared: readonly string[] | undefined = prefix === '' ? SCHEMA_KEYS : NESTED_SCHEMA_KEYS[prefix];
+  const out: { path: string; accounted: boolean; value: unknown }[] = [];
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const path = prefix === '' ? k : `${prefix}.${k}`;
+    // With no declaration for this level, nothing here is accounted for. That
+    // is the fail-closed arm: an undeclared sub-object cannot vouch for its
+    // own contents.
+    out.push({ path, accounted: declared !== undefined && declared.includes(k), value: v });
+    out.push(...keyPaths(v, path));
+  }
+  return out;
+}
+
+/**
  * Words a routing destination would be called. No longer the detection
  * mechanism — `SCHEMA_KEYS` is — this only lets an unrecognised key be reported
  * as PROBABLE ROUTING rather than merely unrecognised, which tells a reader
@@ -131,7 +175,10 @@ const ROUTING_WORDS = ['receiver', 'route', 'routing', 'destination', 'notify', 
  * whatever the new key is called.
  */
 function receiverOf(r: Rule): { readonly value: string; readonly unrecognised: readonly string[]; readonly probableRouting: readonly string[] } {
-  const unrecognised = Object.keys(r).filter((k) => !SCHEMA_KEYS.some((known) => known === k));
+  // Every key path, not just the top level — Z-01. A nested destination is the
+  // same defect one level down, and it exited 0 before this walk existed.
+  const walked = keyPaths(r, '');
+  const unrecognised = walked.filter((e) => !e.accounted).map((e) => e.path);
   const probableRouting = unrecognised.filter((k) => ROUTING_WORDS.some((w) => k.toLowerCase().includes(w)));
 
   if (unrecognised.length === 0) return { value: 'UNSET', unrecognised, probableRouting };
@@ -140,8 +187,9 @@ function receiverOf(r: Rule): { readonly value: string; readonly unrecognised: r
   // destination would be the overclaim this instrument exists to prevent; it is
   // still reported as unrecognised, because an empty routing field is a
   // half-made decision and not an absent one.
+  const valueAt = new Map(walked.map((e) => [e.path, e.value]));
   const named = unrecognised.filter((k) => {
-    const v = r[k];
+    const v = valueAt.get(k);
     if (typeof v === 'string') return v.trim().length > 0;
     if (Array.isArray(v)) return v.length > 0;
     return v !== null && v !== undefined && v !== false;
@@ -166,13 +214,26 @@ function receiverOf(r: Rule): { readonly value: string; readonly unrecognised: r
  * the working tree is not a destination this repository configures.
  */
 function grepTree(re: RegExp): string | null {
-  // This file is EXCLUDED from its own search. The patterns are written out
-  // here in full, so without the exclusion every one of them matched its own
-  // definition and the check reported six destinations that do not exist — a
-  // red result for the wrong reason, which is as useless as a green one. The
-  // exclusion is stated in the output so a reader knows the one file the search
-  // does not cover is the searcher.
-  const r = spawnSync('git', ['grep', '-nIE', '--', re.source, ':(exclude)scripts/phase15/verify-alert-signals.ts'], { cwd: ROOT, encoding: 'utf8' });
+  // The MEASUREMENT APPARATUS is excluded from the search, and nothing else is.
+  //
+  // This file has to be: the patterns are written out here in full, so without
+  // the exclusion every one of them matched its own definition and the check
+  // reported six destinations that do not exist — a red result for the wrong
+  // reason, which is as useless as a green one.
+  //
+  // The red-proof harness had to be added for the same reason, one round later
+  // and the hard way. Its Z-01 case plants `pagerduty:ops-primary` inside a
+  // rule, as a STRING LITERAL in its source, and the moment that literal
+  // existed the search found it and the harness's own BASELINE went red — so
+  // every plant below it was invalid. A destination in a file whose only job is
+  // to fabricate destinations is a fixture, not a configuration this
+  // repository carries.
+  //
+  // The exclusion is kept to those two files, printed in the output, and it is
+  // the only exemption: a destination anywhere else in the tracked tree,
+  // including in any other test, still reddens this check. An apparatus
+  // exemption that grew would be a way to hide a real destination.
+  const r = spawnSync('git', ['grep', '-nIE', '--', re.source, ...APPARATUS.map((f) => `:(exclude)${f}`)], { cwd: ROOT, encoding: 'utf8' });
   // git grep exits 1 for "no match", which is the expected answer here; any
   // other non-zero is a failed search, and a failed search must not read as a
   // clean one.
@@ -181,6 +242,15 @@ function grepTree(re: RegExp): string | null {
   const first = (r.stdout ?? '').split('\n').find((l) => l.trim().length > 0);
   return first === undefined ? null : first.slice(0, 120);
 }
+
+/**
+ * The only files exempt from the destination search: this checker and its red
+ * -proof harness. Both contain destination-shaped literals BY NECESSITY — the
+ * patterns themselves, and the plants that prove the patterns fire — and a
+ * search that counts them is measuring its own apparatus. Printed in the
+ * output, and deliberately short.
+ */
+const APPARATUS = ['scripts/phase15/verify-alert-signals.ts', 'scripts/phase15/alert-signals-proof.ts'] as const;
 
 const DESTINATION_PATTERNS: readonly { readonly what: string; readonly re: RegExp }[] = [
   { what: 'alertmanager configuration', re: /alertmanager|alert_manager/i },
@@ -465,11 +535,19 @@ function main(): number {
     const hit = grepTree(d.re);
     if (hit !== null) destinations.push(`${d.what} — ${hit}`);
   }
-  console.log(`  destination configuration in the repository: ${destinations.length === 0 ? `NONE FOUND \u2014 ${DESTINATION_PATTERNS.length} patterns searched over the TRACKED tree (${DESTINATION_PATTERNS.map((d) => d.what).join(', ')}), excluding this script's own file, which defines them` : destinations.join('; ')}`);
+  console.log(`  destination configuration in the repository: ${destinations.length === 0 ? `NONE FOUND \u2014 ${DESTINATION_PATTERNS.length} patterns searched over the TRACKED tree (${DESTINATION_PATTERNS.map((d) => d.what).join(', ')}), excluding only the ${APPARATUS.length} apparatus file(s) that contain destination literals by necessity (${APPARATUS.join(', ')})` : destinations.join('; ')}`);
   console.log('  Two bounds on that search, stated because they are the ways it can be wrong:');
   console.log('    \u00b7 `git grep` reads TRACKED files only, so an uncommitted destination is invisible to it;');
-  console.log('    \u00b7 the six patterns are a list, and a destination configured some other way is not in it.');
-  console.log('  Neither bound affects the key-set check above, which is exhaustive over the rules.');
+  console.log('    \u00b7 the six patterns are a list, and a destination configured some other way is not in it;');
+  console.log('    \u00b7 the apparatus exemption above is the only one. It covers this checker, which writes the');
+  console.log('      patterns out, and the red-proof harness, which plants destinations to prove they fire —');
+  console.log('      the harness\u2019s own baseline went red the moment a plant literal existed. Any OTHER file');
+  console.log('      in the tracked tree, tests included, still reddens this check.');
+  console.log('  Neither bound affects the key-set check above, which walks EVERY key path in each');
+  console.log('  rule — through nested objects and through objects inside arrays — and treats a key');
+  console.log('  path with no declared sub-schema as unaccounted. It said "exhaustive over the rules"');
+  console.log('  for a round while walking only the top level, which is how a receiver planted inside');
+  console.log('  `resolution` exited 0 (Z-01). The sentence and the walk now agree.');
   console.log('');
   console.log('  \u00a722.2 forbids choosing a recipient, a subscription or a retention here, so this stays');
   console.log('  with the owner. A rule with a condition and no receiver is a rule that fires into nothing.');

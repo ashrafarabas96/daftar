@@ -94,7 +94,8 @@
     "rehearse:phase3:deployed": "tsx scripts/phase3-deployed-rehearsal.ts",
     "gate:browser": "tsx tests/browser/gate.ts",
     "verify:alert-signals:prove": "tsx scripts/phase15/alert-signals-proof.ts",
-    "checkpoint:phase15": "tsx scripts/phase15/resume-checkpoint.ts"
+    "checkpoint:phase15": "tsx scripts/phase15/resume-checkpoint.ts",
+    "checkpoint:phase15:prove": "tsx scripts/phase15/checkpoint-proof.ts"
   },
   "engines": {
     "node": ">=24 <25"

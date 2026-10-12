@@ -42,7 +42,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const ROOT = resolve(__dirname, '../..');
@@ -55,7 +55,189 @@ interface Instrument {
   readonly cluster: boolean;
   /** what a non-zero exit means FOR THIS INSTRUMENT — recorded, never assumed. */
   readonly nonZeroMeans: string;
+  /** the ids of the preconditions this instrument needs; see PRECONDITIONS. */
+  readonly requires?: readonly string[];
 }
+
+/**
+ * THE PRECONDITIONS, DECLARED AND MEASURED — B-21
+ * ---------------------------------------------------------------------------
+ * The independent challenger's F-08: three preconditions were undeclared and
+ * unchecked, and the worst consequence was not the omission. `npm run build`
+ * is one of them: without it `verify:gap-list:static` dies with
+ * MODULE_NOT_FOUND — because its import chain reaches `@daftar/accounting`,
+ * which resolves to `packages/accounting/dist` — and exits **1**. The same
+ * instrument exits **1** when it ran perfectly and found one item UNMEASURED.
+ * So a run that never began and a run that completed and reported a gap were
+ * indistinguishable in the record, and §8b's only non-zero entry is in exactly
+ * that class.
+ *
+ * Two things follow, and the runner can do both:
+ *
+ *   1. Each precondition is DECLARED here with the measurement that settles
+ *      it, and is measured before anything runs. An instrument whose
+ *      precondition is unmet is NOT RUN, and the record says so instead of
+ *      carrying an exit code that would be read as a verdict.
+ *   2. A non-zero exit is CLASSIFIED (see `outcomeClass`) by whether the
+ *      instrument reached its own summary line. A crash before measuring and
+ *      a measured-but-adverse run are different facts and now print
+ *      differently, with distinct runner exit codes.
+ *
+ * What this does NOT claim to fix: the instruments' own exit codes still
+ * collide. Giving `verify:gap-list:static` a distinct code for "crashed" is
+ * its own change, and one this runner must not make on its behalf. What is
+ * fixed is the RECORD — the thing B-21 says a handoff has to carry.
+ *
+ * `kind` matters. An `environment` precondition ought to hold and its absence
+ * is a defect in the run: it makes this runner exit 2. A `caller-supplied`
+ * one cannot hold without a caller naming a subject — a database URL, a load
+ * profile — and an instrument that refuses to invent one is behaving
+ * correctly; it is recorded as NOT RUN, DECLARED, and does not fail the
+ * runner. Flattening those two would either hide a missing build or
+ * manufacture a failure out of a question nobody asked.
+ */
+interface Precondition {
+  readonly id: string;
+  readonly kind: 'environment' | 'caller-supplied';
+  readonly what: string;
+  readonly how: string;
+  readonly measure: () => { readonly met: boolean; readonly detail: string };
+}
+
+const PRECONDITIONS: readonly Precondition[] = [
+  {
+    id: 'build-accounting',
+    kind: 'environment',
+    what: 'packages/accounting is built — the dist `verify:gap-list` reaches through apps/api/src/config',
+    how: "packages/accounting/package.json main, checked for existence on disk; plus a non-blocking survey of every workspace package",
+    measure: () => {
+      // NARROW ON PURPOSE. The first version of this precondition required
+      // EVERY workspace package to be built, and it immediately blocked
+      // `verify:gap-list:static` because `packages/design-system/dist` is
+      // absent in this container — a package that instrument does not import.
+      // Reporting NOT RUN for an instrument that would have run and measured
+      // is the same class of error as the one B-21 is about, pointing the
+      // other way: it manufactures an absence of evidence. So the BLOCKING
+      // criterion is the dist actually in the import chain
+      // (config.ts imports @daftar/accounting), and the survey of the rest is
+      // information printed beside it.
+      const survey: string[] = [];
+      try {
+        for (const name of readdirSync(join(ROOT, 'packages'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)) {
+          const pkgPath = join(ROOT, 'packages', name, 'package.json');
+          if (!existsSync(pkgPath)) continue;
+          let main: unknown;
+          try {
+            main = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { main?: unknown }).main;
+          } catch {
+            survey.push(`${name}: package.json unreadable`);
+            continue;
+          }
+          if (typeof main !== 'string') continue;
+          survey.push(`${name}${existsSync(join(ROOT, 'packages', name, main)) ? '' : ' NOT BUILT'}`);
+        }
+      } catch {
+        return { met: false, detail: 'packages/ could not be read, so the build state is UNKNOWN — which is not the same as built' };
+      }
+      const acc = join(ROOT, 'packages/accounting');
+      let accMain = 'dist/index.js';
+      try {
+        const m = (JSON.parse(readFileSync(join(acc, 'package.json'), 'utf8')) as { main?: unknown }).main;
+        if (typeof m === 'string') accMain = m;
+      } catch {
+        return { met: false, detail: 'packages/accounting/package.json is unreadable, so the dist it declares is UNKNOWN' };
+      }
+      const built = existsSync(join(acc, accMain));
+      const surveyLine = `survey of every workspace package: ${survey.join(', ')} (only accounting blocks, the rest is information)`;
+      return built
+        ? { met: true, detail: `packages/accounting → ${accMain} exists. ${surveyLine}` }
+        : {
+            met: false,
+            detail:
+              `packages/accounting → ${accMain} is MISSING. Run \`npm run build\`. Without it the gap-list instruments die with ` +
+              `MODULE_NOT_FOUND and exit 1, which reads in a log exactly like a measured finding. ${surveyLine}`,
+          };
+    },
+  },
+  {
+    id: 'phase4-ref',
+    kind: 'environment',
+    what: 'the Phase 4 candidate ref is present in THIS clone',
+    how: "git rev-parse --verify on 969b8605, then origin/phase/4-sales-pos-customers-receivables",
+    measure: () => {
+      for (const ref of ['969b8605', 'origin/phase/4-sales-pos-customers-receivables']) {
+        const r = spawnSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: ROOT, encoding: 'utf8' });
+        if (r.status === 0) return { met: true, detail: `${ref} resolves to ${(r.stdout ?? '').trim()}` };
+      }
+      return {
+        met: false,
+        detail:
+          'neither 969b8605 nor origin/phase/4-sales-pos-customers-receivables resolves here. The candidate-train probes have no subject, so what they report is about this clone’s absence, not about the candidate.',
+      };
+    },
+  },
+  {
+    id: 'locale',
+    kind: 'environment',
+    what: 'the OS carries an en_US.utf8 locale, which TL-P4-S3-R4 makes the deploy collation',
+    how: 'locale -a, matched case-insensitively against en_US.utf8 / en_US.UTF-8',
+    measure: () => {
+      const r = spawnSync('locale', ['-a'], { encoding: 'utf8' });
+      if (r.status !== 0) return { met: false, detail: '`locale -a` did not run, so the available collations are UNKNOWN' };
+      const hit = (r.stdout ?? '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => /^en_US\.utf-?8$/i.test(l));
+      return hit.length > 0
+        ? { met: true, detail: `locale -a lists ${hit.join(', ')}` }
+        : {
+            met: false,
+            detail:
+              'no en_US.utf8 in `locale -a`. A cluster initialised without it is not the settled deploy collation, so a result measured on it is off-target (localedef can generate it).',
+          };
+    },
+  },
+  {
+    id: 'role-read-url',
+    kind: 'caller-supplied',
+    what: 'P15_ROLE_READ_URL names a database whose role attributes are to be read',
+    how: 'process.env.P15_ROLE_READ_URL',
+    measure: () => {
+      const url = process.env['P15_ROLE_READ_URL'];
+      return url === undefined || url === ''
+        ? {
+            met: false,
+            detail:
+              'P15_ROLE_READ_URL is unset. The instrument reads pg_roles on a database the CALLER names; it refuses to pick one, which is right — a role report attributed to a database nobody asked about is worse than no report.',
+          }
+        : { met: true, detail: 'P15_ROLE_READ_URL is set (its value is a credential and is not printed)' };
+    },
+  },
+  {
+    id: 'rc-archive',
+    kind: 'caller-supplied',
+    what: 'a release-candidate archive or extracted tree is named for the identity check to verify',
+    how: '--archive=<zip> or --dir=<tree>, which `npm run verify:rc-identity` alone does not supply',
+    measure: () => ({
+      met: false,
+      detail:
+        'no archive or directory is named. The instrument prints UNMEASURED and exits 1, so recording that 1 as its exit code in a handoff would present a refusal to guess as a measurement that failed.',
+    }),
+  },
+  {
+    id: 'load-profile',
+    kind: 'caller-supplied',
+    what: 'a load profile id is named on the command line',
+    how: '--profile <id>, which `npm run load:harness` alone does not supply',
+    measure: () => ({
+      met: false,
+      detail:
+        'no profile is named. `load:harness` refuses with NO-PROFILE-NAMED rather than choosing one, so running it bare would record a refusal as though it were a load measurement. `npm run load:profiles` lists the declared ids.',
+    }),
+  },
+];
+
+const preconditionState = new Map<string, { readonly met: boolean; readonly detail: string }>();
 
 const INSTRUMENTS: readonly Instrument[] = [
   {
@@ -63,6 +245,7 @@ const INSTRUMENTS: readonly Instrument[] = [
     what: 'the four historical gap items that need no cluster',
     cluster: false,
     nonZeroMeans: 'at least one item is UNMEASURED — not that an item failed',
+    requires: ['build-accounting'],
   },
   {
     script: 'verify:alert-signals',
@@ -71,30 +254,152 @@ const INSTRUMENTS: readonly Instrument[] = [
     nonZeroMeans: 'a rule claim and the tree disagree',
   },
   {
-    script: 'verify:handoff-manifest',
-    what: "this pack's digests, both directions",
+    script: 'verify:alert-signals:prove',
+    what: 'the nine planted defects the alert check must redden on, including the challenger’s nested destination',
     cluster: false,
-    nonZeroMeans: 'a digest is stale or an artifact is unlisted',
+    nonZeroMeans: 'a planted defect did NOT redden the check, so the check’s laws are unproved',
+  },
+  {
+    script: 'verify:handoff-manifest',
+    what: "this pack's digests, both directions, and whether its header is current",
+    cluster: false,
+    nonZeroMeans: 'a digest is stale, an artifact is unlisted, or a header claim no longer matches the branch',
+  },
+  {
+    script: 'checkpoint:phase15',
+    what: 'the PART 22 resumable checkpoint, re-checked (read-only: this runner never regenerates it)',
+    cluster: false,
+    nonZeroMeans: 'the checkpoint on disk does not match what this head would generate',
+  },
+  {
+    script: 'checkpoint:phase15:prove',
+    what: 'the five planted defects the checkpoint currency check must redden on, including the deleted pack',
+    cluster: false,
+    nonZeroMeans: '1 = a planted defect did not redden the check; 2 = the proof could not be set up, which is not a failure',
+  },
+  {
+    script: 'audit:deps:phase15',
+    what: 'the dependency advisories at the declared severity floor',
+    cluster: false,
+    nonZeroMeans: 'advisories at or above the floor exist — a substantive finding, not an unmeasured one',
+  },
+  {
+    script: 'scan:secrets:release',
+    what: 'the whole shipped tree for secrets, with every file bound to its index blob OID',
+    cluster: false,
+    nonZeroMeans: '1 = a finding OR an UNMEASURED scan (the tool could not be obtained); the summary line says which',
+  },
+  {
+    script: 'verify:rc-identity',
+    what: 'the release-candidate identity claims, over an archive the CALLER names',
+    cluster: false,
+    nonZeroMeans: '1 = an identity claim and the tree disagree, OR no archive was named and nothing was checked',
+    requires: ['rc-archive'],
+  },
+  {
+    script: 'verify:role-attributes',
+    what: 'elevated attributes on daftar_% roles, read from pg_roles on a database the CALLER names',
+    cluster: false,
+    nonZeroMeans: '1 = an unauthorised attribute; 2 = NOT MEASURED',
+    requires: ['role-read-url'],
+  },
+  {
+    script: 'verify:role-attributes:prove',
+    what: 'four controls on a disposable cluster proving the attribute read catches what it claims to',
+    cluster: true,
+    nonZeroMeans: '1 = a control failed; 2 = a control could not be STARTED, which is not a failure',
+    requires: ['locale'],
   },
   {
     script: 'verify:gap-list',
     what: 'all five historical gap items; G4 starts its own cluster',
     cluster: true,
     nonZeroMeans: 'at least one item is UNMEASURED',
+    requires: ['build-accounting', 'locale'],
   },
   {
     script: 'verify:pg-matrix',
     what: 'the three measured contexts and the candidate train',
     cluster: true,
     nonZeroMeans: '1 = a probe was not measured; 2 = a divergence the tree does not account for',
+    requires: ['locale', 'phase4-ref'],
   },
   {
     script: 'verify:role-convergence',
     what: '§10.0 on the candidate blobs',
     cluster: true,
     nonZeroMeans: 'a case could not be measured, which is not a clean bill',
+    requires: ['locale'],
+  },
+  {
+    script: 'dr:proof',
+    what: 'the nine backup/restore validators on a real cluster',
+    cluster: true,
+    nonZeroMeans: 'a validator failed or could not be measured; the report names which',
+    requires: ['locale'],
+  },
+  {
+    script: 'dr:proof:prove',
+    what: 'the planted defects every DR validator must redden on',
+    cluster: true,
+    nonZeroMeans: 'a validator did not redden on its own planted defect',
+    requires: ['locale'],
+  },
+  {
+    script: 'pitr:proof',
+    what: 'the PITR validators, with PARTIAL coverage reported where it is partial',
+    cluster: true,
+    nonZeroMeans: 'a validator failed or could not be measured',
+    requires: ['locale'],
+  },
+  {
+    script: 'pitr:proof:prove',
+    what: 'the planted defects the PITR validators must redden on',
+    cluster: true,
+    nonZeroMeans: 'a validator did not redden on its own planted defect',
+    requires: ['locale'],
+  },
+  {
+    script: 'test:phase15:load-harness',
+    what: 'the load harness’s own laws, as unit cases',
+    cluster: false,
+    nonZeroMeans: 'a case failed',
+  },
+  {
+    script: 'load:harness',
+    what: 'a named load profile against a database — the measurement itself, not its laws',
+    cluster: true,
+    nonZeroMeans: 'the harness refused (no profile named) or the run was invalid',
+    requires: ['load-profile'],
   },
 ];
+
+/**
+ * COVERAGE — B-20
+ * ---------------------------------------------------------------------------
+ * The challenger's F-06: this runner drove SIX of the pack's instruments, so
+ * the handoff's exit-code table omitted thirteen — including
+ * `audit:deps:phase15`, the only one failing for a substantive reason. The
+ * list above is now every Phase 15 script key in `package.json` except this
+ * runner itself, which cannot run itself.
+ *
+ * The count is not taken on trust either: `checkCoverage` below reads the
+ * script keys out of `package.json` and reports any Phase 15 instrument this
+ * list does not name. A coverage claim that cannot notice a new instrument is
+ * the same defect as a count nobody measured.
+ */
+function checkCoverage(): { readonly total: number; readonly missing: readonly string[] } {
+  try {
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+    const scripts = pkg.scripts ?? {};
+    const phase15 = Object.keys(scripts).filter(
+      (k) => /scripts\/phase15\//.test(scripts[k] ?? '') && k !== 'verify:evidence-log' && k !== 'load:profiles',
+    );
+    return { total: phase15.length, missing: phase15.filter((k) => !INSTRUMENTS.some((i) => i.script === k)) };
+  } catch {
+    return { total: -1, missing: ['package.json could not be read, so coverage is UNKNOWN'] };
+  }
+}
 
 const sha256 = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
 
@@ -124,6 +429,10 @@ interface Result {
   readonly logSha: string;
   readonly logBytes: number;
   readonly ran: boolean;
+  /** set when a declared precondition was unmet, so the instrument was NOT executed. */
+  readonly notRunReason: string | null;
+  /** the instrument's own stdout+stderr, kept so the crash/measured split has evidence. */
+  readonly output: string;
   /** PART 19: counts read FROM THE OUTPUT, never asserted. */
   readonly counts: Counts;
   /** PART 19: database version/collation, execution role and fixture identity. */
@@ -282,7 +591,21 @@ function run(inst: Instrument, src: ReturnType<typeof sourceIdentity>, i: number
   const logPath = join(LOG_DIR, `${inst.script.replace(/[:]/g, '_')}.${runId}.log`);
   const startedAt = new Date();
   const started = Date.now();
-  const r = spawnSync('npm', ['run', '-s', inst.script], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  // P15_PROVE_CRASH names ONE instrument to be run with a poisoned loader, so
+  // the CRASHED-BEFORE-MEASURING arm can be proved with a real module error
+  // rather than a hand-written Result. The law B-21 is about — a crash and a
+  // measured-but-adverse run must not print the same way — is otherwise a
+  // claim about a code path nobody has seen taken. The variable only ever adds
+  // a NODE_OPTIONS that cannot resolve; it changes no instrument's arguments
+  // and is printed below when it is in effect.
+  const poison = process.env['P15_PROVE_CRASH'] === inst.script;
+  if (poison) console.log('  ! P15_PROVE_CRASH is set for this instrument: it runs with an unresolvable --import, on purpose');
+  const r = spawnSync('npm', ['run', '-s', inst.script], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    env: poison ? { ...process.env, NODE_OPTIONS: `${process.env['NODE_OPTIONS'] ?? ''} --import=./p15-no-such-module.mjs`.trim() } : process.env,
+  });
   const ms = Date.now() - started;
   const endedAt = new Date();
   // The log is the stdout and stderr as the process produced them, plus a header
@@ -300,6 +623,8 @@ function run(inst: Instrument, src: ReturnType<typeof sourceIdentity>, i: number
   return {
     instrument: inst,
     runId,
+    notRunReason: null,
+    output: `${r.stdout ?? ''}${r.stderr ?? ''}`,
     startedUtc: startedAt.toISOString(),
     endedUtc: endedAt.toISOString(),
     counts: scrape(`${r.stdout ?? ''}${r.stderr ?? ''}`),
@@ -314,6 +639,88 @@ function run(inst: Instrument, src: ReturnType<typeof sourceIdentity>, i: number
     // return a code of its own, or did it die on a signal / fail to spawn?
     ran: r.error === undefined && r.status !== null,
   };
+}
+
+/**
+ * An instrument that was NOT executed, recorded as such. It carries no exit
+ * code, no duration and no log, because inventing any of those is exactly the
+ * fabrication the evidence rules forbid: "I could not look" and "I looked and
+ * it is clean" must never print the same way.
+ */
+function notRun(inst: Instrument, reason: string): Result {
+  const now = new Date().toISOString();
+  return {
+    instrument: inst,
+    runId: 'NOT RUN',
+    notRunReason: reason,
+    output: '',
+    startedUtc: now,
+    endedUtc: now,
+    counts: { measured: null, unmeasured: null, findings: null, skips: null, dirtyTreeDeclared: false, readFrom: null },
+    subject: { servers: [], principal: null, declaresFixture: false },
+    exitCode: null,
+    signal: null,
+    ms: 0,
+    logPath: 'none — nothing ran, so there is no log',
+    logSha: 'none',
+    logBytes: 0,
+    ran: false,
+  };
+}
+
+/**
+ * WAS THIS EXIT CODE A VERDICT AT ALL? — B-21
+ *
+ * `verify:gap-list:static` exits 1 when it ran and found an item UNMEASURED,
+ * and exits 1 when it never ran because `@daftar/accounting` was not built.
+ * The number cannot tell those apart, but the OUTPUT can: an instrument that
+ * reached its own summary line measured something, and one that died in the
+ * module loader did not. So the classification is made from evidence in the
+ * log rather than from the code, and it is a statement about the RUN — the
+ * same charter `validity` has — not a re-grading of the instrument's verdict.
+ *
+ * A fourth case is kept distinct deliberately: non-zero, no crash marker, and
+ * no summary line this runner recognises. Calling that "measured" would be a
+ * guess, so it is named as unclassified and the log is the only recourse.
+ */
+const CRASH_MARKERS = /ERR_MODULE_NOT_FOUND|Cannot find module|ERR_UNKNOWN_FILE_EXTENSION|ERR_REQUIRE_ESM|SyntaxError:|ERR_INVALID_ARG|MODULE_NOT_FOUND/;
+
+/**
+ * An instrument's own closing VERDICT line, which is evidence that it reached
+ * its end — separate from the count scrape, which stays deliberately narrow
+ * because it feeds numbers into a handoff.
+ *
+ * The first version of this classification had only the count scrape to work
+ * with, so five instruments that had plainly finished — each printing its own
+ * `PHASE 15 …: FAIL` or `EXIT 1 — THE CHECKPOINT IS STALE` — were reported as
+ * UNCLASSIFIED NON-ZERO. Honest, but useless: the record said "only the log
+ * settles it" about five runs whose logs settle it in one line. The patterns
+ * below are measured from what those instruments actually print, and anything
+ * they do not match still falls through to UNCLASSIFIED rather than being
+ * assumed to have finished.
+ */
+const VERDICT_LINE = /^(?:EXIT\s+\d+\s+[—-]|PHASE\s+15\s+[A-Z0-9 /-]+:\s*(?:PASS|FAIL|VERIFIED|UNMEASURED|REJECT)|P15[A-Z0-9_ ]*:\s*\{)/m;
+
+function reachedVerdict(r: Result): string | null {
+  const line = r.output
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => VERDICT_LINE.test(l));
+  return line === undefined ? null : line.slice(0, 110);
+}
+
+function outcomeClass(r: Result): string {
+  if (r.notRunReason !== null) return `NOT RUN — ${r.notRunReason}`;
+  if (!r.ran) return 'NO RESULT — the process returned no exit code of its own';
+  if (r.exitCode === 0) return 'COMPLETED, exit 0';
+  const crashed = CRASH_MARKERS.test(r.output);
+  if (crashed && r.counts.readFrom === null)
+    return 'CRASHED BEFORE MEASURING — a loader/parse error and no summary line, so this exit code is NOT a verdict about the subject';
+  if (crashed) return 'REACHED ITS SUMMARY BUT ALSO EMITTED A LOADER/PARSE ERROR — read the log before trusting either';
+  if (r.counts.readFrom !== null) return 'MEASURED, THEN EXITED NON-ZERO — the instrument reached its own summary line, so the code is its verdict';
+  const verdict = reachedVerdict(r);
+  if (verdict !== null) return `MEASURED, THEN EXITED NON-ZERO — it printed its own verdict line (“${verdict}”), so the code is its verdict`;
+  return 'UNCLASSIFIED NON-ZERO — no crash marker, no summary line and no verdict line this runner recognises; only the log settles it';
 }
 
 /**
@@ -354,13 +761,57 @@ function main(): number {
   }
   console.log('');
 
+  // ── coverage, measured from package.json rather than claimed ──────────
+  const coverage = checkCoverage();
+  console.log('COVERAGE (B-20) — measured against package.json, not declared');
+  console.log(`  ${INSTRUMENTS.length} instrument(s) in this runner's inventory; ${coverage.total} Phase 15 script key(s) in package.json`);
+  if (coverage.missing.length > 0) {
+    console.log(`  ! ${coverage.missing.length} instrument(s) this runner does NOT drive: ${coverage.missing.join(', ')}`);
+    console.log('    An instrument outside the inventory carries no exit code in this record, which is');
+    console.log('    the gap B-20 named. It is printed rather than left to a reader to notice.');
+  } else {
+    console.log('  every Phase 15 instrument is in the inventory (verify:evidence-log cannot run itself;');
+    console.log('  load:profiles is a listing, not a measurement).');
+  }
+  console.log('');
+
+  // ── preconditions, declared above and measured now ────────────────────
+  console.log('PRECONDITIONS (B-21) — declared, measured, and named before anything runs');
+  for (const pre of PRECONDITIONS) {
+    const m = pre.measure();
+    preconditionState.set(pre.id, m);
+    console.log(`  ${m.met ? 'MET    ' : 'NOT MET'}  ${pre.id} (${pre.kind})  — ${pre.what}`);
+    console.log(`            how: ${pre.how}`);
+    console.log(`            ${m.detail}`);
+  }
+  console.log('');
+
+  const unmetBlocking = (inst: Instrument): { readonly reason: string; readonly kind: Precondition['kind'] } | null => {
+    for (const id of inst.requires ?? []) {
+      const pre = PRECONDITIONS.find((x) => x.id === id);
+      const state = preconditionState.get(id);
+      if (pre === undefined || state === undefined) return { reason: `precondition "${id}" is referenced but not declared`, kind: 'environment' };
+      if (!state.met) return { reason: `precondition "${id}" is NOT MET — ${state.detail}`, kind: pre.kind };
+    }
+    return null;
+  };
+
   const chosen = INSTRUMENTS.filter((i) => !quick || !i.cluster);
   const results: Result[] = [];
+  let blockedByEnvironment = 0;
   for (const [i, inst] of chosen.entries()) {
+    const blocked = unmetBlocking(inst);
+    if (blocked !== null) {
+      console.log(`→ npm run ${inst.script}  NOT RUN (${blocked.kind} precondition)`);
+      console.log(`  ${blocked.reason}`);
+      if (blocked.kind === 'environment') blockedByEnvironment += 1;
+      results.push(notRun(inst, blocked.reason));
+      continue;
+    }
     console.log(`→ npm run ${inst.script}  (${inst.cluster ? 'starts a cluster' : 'no cluster'})`);
     const res = run(inst, src, i);
     console.log(
-      `  exit ${res.exitCode === null ? `KILLED (${String(res.signal)})` : String(res.exitCode)}  ${(res.ms / 1000).toFixed(1)}s  log ${res.logBytes} bytes`,
+      `  exit ${res.exitCode === null ? `KILLED (${String(res.signal)})` : String(res.exitCode)}  ${(res.ms / 1000).toFixed(1)}s  log ${res.logBytes} bytes  ${outcomeClass(res)}`,
     );
     results.push(res);
   }
@@ -369,7 +820,7 @@ function main(): number {
   console.log('-'.repeat(78));
   console.log('COMMAND                          EXIT   DURATION   RUN ID');
   for (const r of results) {
-    const exit = r.exitCode === null ? `KILL` : String(r.exitCode);
+    const exit = r.notRunReason !== null ? '—' : r.exitCode === null ? `KILL` : String(r.exitCode);
     console.log(`${`npm run ${r.instrument.script}`.padEnd(32)} ${exit.padEnd(6)} ${`${(r.ms / 1000).toFixed(1)}s`.padEnd(10)} ${r.runId}`);
   }
   console.log('-'.repeat(78));
@@ -409,18 +860,49 @@ function main(): number {
     console.log(`     read from: ${r.counts.readFrom === null ? 'no summary line this runner recognises \u2014 so NO count is reported, rather than one scavenged from the body' : `\u201c${r.counts.readFrom}\u201d`}`);
     console.log(`     log      : ${r.logPath}`);
     console.log(`                sha256 ${r.logSha}  (${r.logBytes} bytes)`);
+    console.log(`     outcome  : ${outcomeClass(r)}`);
     console.log(`     validity : ${validity(r, src)}`);
   }
   console.log('');
 
-  const notRun = results.filter((r) => !r.ran);
-  if (notRun.length > 0) {
-    console.log(`EXIT 1: ${notRun.length} instrument(s) did not return an exit code of their own:`);
-    for (const r of notRun) console.log(`  ${r.instrument.script} — ${r.signal === null ? 'failed to spawn' : `killed by ${r.signal}`}`);
+  // ── this runner's own exit code ───────────────────────────────────────
+  // Distinct codes, because B-21 is precisely about a single code carrying
+  // several different facts. Worst first.
+  //   1 = an instrument that was run returned no exit code of its own
+  //   3 = an instrument crashed BEFORE measuring, so its code is not a verdict
+  //   2 = an environment precondition was unmet, so an instrument was not run
+  //   0 = every instrument either ran and returned its own code, or was not
+  //       run for a caller-supplied precondition it correctly refused to invent
+  const noResult = results.filter((r) => r.notRunReason === null && !r.ran);
+  const crashed = results.filter((r) => outcomeClass(r).startsWith('CRASHED BEFORE MEASURING'));
+  const skipped = results.filter((r) => r.notRunReason !== null);
+
+  if (skipped.length > 0) {
+    console.log(`${skipped.length} instrument(s) were NOT RUN, and carry no exit code here:`);
+    for (const r of skipped) console.log(`  ${r.instrument.script} — ${r.notRunReason ?? ''}`);
+    console.log('');
+  }
+  if (noResult.length > 0) {
+    console.log(`EXIT 1: ${noResult.length} instrument(s) did not return an exit code of their own:`);
+    for (const r of noResult) console.log(`  ${r.instrument.script} — ${r.signal === null ? 'failed to spawn' : `killed by ${r.signal}`}`);
     console.log('  A killed run is NOT a result, whatever its log says before the kill.');
     return 1;
   }
-  console.log('EVERY INSTRUMENT RAN AND RETURNED ITS OWN EXIT CODE.');
+  if (crashed.length > 0) {
+    console.log(`EXIT 3: ${crashed.length} instrument(s) CRASHED BEFORE MEASURING, so their exit codes are not verdicts:`);
+    for (const r of crashed) console.log(`  ${r.instrument.script} — exit ${String(r.exitCode)}, no summary line, loader/parse error in the output`);
+    console.log('  This is the collision B-21 named: the same exit 1 means "I measured and found a gap"');
+    console.log('  and "I never started". A record that cannot tell them apart is not evidence.');
+    return 3;
+  }
+  if (blockedByEnvironment > 0) {
+    console.log(`EXIT 2: ${blockedByEnvironment} instrument(s) were not run because an ENVIRONMENT precondition was unmet.`);
+    console.log('  Nothing is claimed about them. This is a defect in the RUN, not in the subject, and');
+    console.log('  it is a different fact from any instrument’s own exit code.');
+    return 2;
+  }
+  console.log('EVERY INSTRUMENT RAN AND RETURNED ITS OWN EXIT CODE, OR WAS NOT RUN FOR A');
+  console.log('CALLER-SUPPLIED PRECONDITION IT CORRECTLY REFUSED TO INVENT.');
   console.log('  This runner asserts nothing beyond that. The exit codes above are the evidence');
   console.log('  V3 §9 asks a handoff to carry; what each one means is the reader’s to weigh.');
   return 0;

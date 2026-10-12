@@ -40,7 +40,13 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const ROOT = resolve(__dirname, '../..');
-const PACK = '/mnt/project-files/phase15';
+/**
+ * The pack directory. Overridable ONLY so the red proof can plant a deletion
+ * in a COPY: the shared directory is never written by a proof, and a run
+ * against anything but the default says so in its own output.
+ */
+const PACK = process.env['P15_PACK_DIR'] ?? '/mnt/project-files/phase15';
+const DEFAULT_PACK = '/mnt/project-files/phase15';
 const OUT = join(PACK, 'P15-RESUME-CHECKPOINT.md');
 const BRANCH = 'claude/project-thread-n5qrtj';
 const BASE = 'origin/main';
@@ -125,11 +131,64 @@ function checkMode(): number {
   const head = git(['rev-parse', 'HEAD']).out;
   const stated = /checkpoint HEAD\s*\|\s*`([0-9a-f]{40})`/.exec(text);
   console.log('P15 RESUME CHECKPOINT — CURRENCY CHECK');
+  if (PACK !== DEFAULT_PACK) console.log(`  ! NOT THE DEFAULT PACK: ${PACK}`);
   console.log(`  checkpoint says : ${stated?.[1] ?? 'NO HEAD RECORDED'}`);
   console.log(`  HEAD is now     : ${head}`);
-  if (stated?.[1] === head) {
-    console.log('  CURRENT — the checkpoint describes this head.');
+  // A HEAD MATCH IS NOT CURRENCY — the challenger's round-4 finding.
+  //
+  // This check compared the recorded head to HEAD and nothing else, so with all
+  // fourteen pack documents DELETED it printed CURRENT: the head had not moved,
+  // and absence was invisible to it. A checkpoint exists to tell a resuming
+  // session whether the documents it is about to trust are the ones the last
+  // session wrote, and a document that is gone fails that question harder than
+  // one that drifted. So the recorded digest table is re-read against the disk,
+  // and a missing file, a changed digest and a document the table never
+  // recorded are each named.
+  const rows = [...text.matchAll(/^\|\s*`(P15-[^`]+)`\s*\|\s*([\d,]+)\s*\|\s*`([0-9a-f]{64})`\s*\|/gm)].map((m) => ({
+    file: m[1] ?? '',
+    bytes: Number((m[2] ?? '0').replace(/,/g, '')),
+    sha: m[3] ?? '',
+  }));
+  const missing: string[] = [];
+  const drifted: string[] = [];
+  for (const row of rows) {
+    const onDisk = join(PACK, row.file);
+    if (!existsSync(onDisk)) {
+      missing.push(row.file);
+      continue;
+    }
+    const b = readFileSync(onDisk);
+    const sha = createHash('sha256').update(b).digest('hex');
+    if (sha !== row.sha) drifted.push(`${row.file} (recorded ${row.sha.slice(0, 12)}, on disk ${sha.slice(0, 12)}, ${row.bytes} \u2192 ${b.length} bytes)`);
+  }
+  const recorded = new Set(rows.map((r) => r.file));
+  const unrecorded = packState()
+    .map((e) => e.file)
+    .filter((f) => !recorded.has(f));
+
+  console.log(`  pack documents  : ${rows.length} recorded; ${missing.length} MISSING, ${drifted.length} DRIFTED, ${unrecorded.length} on disk but unrecorded`);
+  if (rows.length === 0) {
+    console.log('');
+    console.log('EXIT 1 — THE CHECKPOINT RECORDS NO DOCUMENT AT ALL. Whatever head it names, it');
+    console.log('  indexes nothing, so it cannot tell a resuming session that anything is intact.');
+    return 1;
+  }
+  for (const f of missing) console.log(`    MISSING  ${f} — recorded here, not on disk`);
+  for (const d of drifted) console.log(`    DRIFTED  ${d}`);
+  for (const f of unrecorded) console.log(`    UNRECORDED ${f} — on disk, absent from this checkpoint's table`);
+
+  if (stated?.[1] === head && missing.length === 0 && drifted.length === 0 && unrecorded.length === 0) {
+    console.log('  CURRENT — the checkpoint describes this head, and every document it records is on');
+    console.log('  disk with the digest it recorded.');
     return 0;
+  }
+  if (stated?.[1] === head) {
+    console.log('');
+    console.log('EXIT 1 — THE HEAD MATCHES BUT THE PACK DOES NOT. A currency check that only compared');
+    console.log('  heads reported CURRENT with every document deleted, because absence moves no SHA.');
+    console.log('  A checkpoint answers "are the documents I am about to trust the ones the last');
+    console.log('  session wrote", and for a file that is gone the answer is no, not silence.');
+    return 1;
   }
   console.log('');
   console.log('EXIT 1 — THE CHECKPOINT IS STALE. It describes a head that is not this one, so a');
