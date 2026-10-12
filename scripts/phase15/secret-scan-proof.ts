@@ -151,7 +151,12 @@ const CASES: readonly Case[] = [
       if (left.length !== 0) throw new Error(`the clone still tracks ${left.split('\n').length} file(s), so this plant is not the empty-inventory case`);
     },
     expect: /lists 0 files/,
-    refuse: /\[source-binding\]/,
+    // The challenger's round-7 note, and it is the `refuse` idea one level
+    // DOWN: 0 is also below the floor of 200, so if both arms could speak this
+    // red would not attribute to the arm S5 exists to prove. The arms are
+    // `if`/`else if` and therefore exclusive — but that is read from the
+    // source, and this line MEASURES it.
+    refuse: /\[source-binding\]|below the MIN_RELEASE_FILES floor/,
   },
   {
     id: 'S6',
@@ -176,7 +181,9 @@ const CASES: readonly Case[] = [
       if (ci.status !== 0) throw new Error(`could not commit the shrunken tree: ${ci.out.slice(0, 200)}`);
     },
     expect: /below the MIN_RELEASE_FILES floor/,
-    refuse: /\[source-binding\]/,
+    // The same assertion from the other side: the empty-inventory arm must be
+    // silent here, or the floor is not what this case proves.
+    refuse: /\[source-binding\]|lists 0 files/,
   },
   {
     id: 'S7',
