@@ -1,6 +1,6 @@
 # P11 — CONSERVATION LAWS AND THEIR RED PROOFS
 
-**status** `PREPARED / NOT PROMOTED`. **revised 2026-10-08** under `TL-P11-R1` … `TL-P11-R7`: L-P11-02 now names the snapshot case (§55) and a new law **C-REP-03** carries the double-consumption correction (§60, `TL-P11-R7`). **Every verdict in this document is `SPEC ONLY` or `UNMEASURED`, never two classes in one sentence (§82)**: no law here has been executed, because none of its subject exists yet. This is the proof *plan*, written before the implementation so the implementation cannot choose its own bar. No timing or performance claim appears anywhere in it.
+**status** `PREPARED / NOT PROMOTED`. **revised 2026-10-12** on the per-phase directive: §0a now states **every red proof's mutation target** (PART 6's corrective law — a proof that needs frozen history modified is wrongly designed), `C-REP-03` carries PART 67's one-time full-quantity rule and the two added binding conditions, and two laws are new — `C-REP-04` (no repair money balance, PART 69) and `C-WAR-01` (append-only warranty lifecycle, PART 70). **revised 2026-10-08** under `TL-P11-R1` … `TL-P11-R7`: L-P11-02 now names the snapshot case (§55) and a new law **C-REP-03** carries the double-consumption correction (§60, `TL-P11-R7`). **Every verdict in this document is `SPEC ONLY` or `UNMEASURED`, never two classes in one sentence (§82)**: no law here has been executed, because none of its subject exists yet. This is the proof *plan*, written before the implementation so the implementation cannot choose its own bar. No timing or performance claim appears anywhere in it.
 
 ---
 
@@ -16,7 +16,33 @@ Five rules this project paid for, and which this plan obeys:
 4. **A comment citing a check is evidence of nothing.** Three times in one day a comment named a check that did not exist. No law below is satisfied by a comment.
 5. **A green vitest suite is not a typecheck**, and a skipped step is `UNMEASURED`, never green. The gate runs format, lint and typecheck as their own named steps, in the exact form they were run.
 
-Evidence classes are never mixed in one sentence: `PROVEN IN LIVE CODE` / `PROVEN BY TEST` / `PROVEN BY DATABASE CATALOGUE` / `DESIGN ONLY` / `SPEC ONLY` / `UNMEASURED` / `BLOCKED`.
+Evidence classes are never mixed in one sentence: `PROVEN IN LIVE CODE` / `PROVEN BY TEST` / `PROVEN BY DATABASE CATALOGUE` / `DESIGN ONLY` / `SPEC ONLY` / `UNMEASURED` / `BLOCKED` / `WAITING_FOR_INTEGRATED_SURFACE` / `INTEGRATION_PENDING`.
+
+---
+
+## 0a. Where every mutation lands (PART 6)
+
+The frozen-migration law is now explicit that a red proof **must never mutate a frozen migration, even temporarily**, and that **a proof requiring frozen-history modification is wrongly designed.** This project has already paid for that once: in Phase 5 a mutation harness wrote a planted defect into the real tree and only a landing check caught it, and a second harness left a frozen migration dirty while printing "tree clean" because its clean-check was narrower than its mutations.
+
+So the mutation target of every proof below is named here, before any of them is written. Admissible targets are exactly four: a **scratch copy of Phase 11's own DDL or source text**, a **synthetic fixture**, a **temporary generated tree**, a **throwaway non-canonical clone**. `0000`–`0079` stay byte-identical on disk in this working tree; `0080`–`0086` are Phase 4's live candidates and are not mutated either.
+
+| proof | what is mutated | where it lives |
+|---|---|---|
+| `R-L02` | a column added to Phase 11's own DDL text | scratch copy of the Phase 11 DDL |
+| `R-SER-01` … `R-SER-03` | rows, inside a transaction | scratch cluster (data, not files) |
+| `R-SER-04` | the `FOR UPDATE` on `stock_serials` — which is in **Phase 11's `CREATE OR REPLACE` body** (patch request §4), not in the frozen definition | scratch copy of the Phase 11 DDL, applied over an **unmodified** frozen prefix |
+| `R-LOT-01` … `R-LOT-03` | rows and cache values | scratch cluster |
+| `R-LOT-04` | the outbound pricing expression — again **Phase 11's replacement body**, never the frozen original | scratch copy of the Phase 11 DDL, over an unmodified frozen prefix |
+| `R-FEFO-01` | `inventory_pick_lots`, a Phase 11 routine | scratch copy of the Phase 11 DDL |
+| `R-REP-01` | a source-type registration attempt | scratch cluster |
+| `R-REP-02`, `R-REP-03` | Phase 11 TypeScript modules and zod schemas | scratch copy of the Phase 11 source |
+| `R-REP-04` | a Phase 11 relation definition | scratch copy of the Phase 11 DDL |
+| `R-WAR-01` | the warranty triggers and chain, Phase 11's own | scratch copy of the Phase 11 DDL |
+| `R-APP-01` | the canonicalization trigger, Phase 11's own | scratch copy of the Phase 11 DDL |
+
+**The two that needed checking were `R-SER-04` and `R-LOT-04`**, because both mutate the behaviour of `inventory_apply_stock_movements`, whose current definition is in a frozen migration. They are admissible — the writer is re-created by Phase 11's own `CREATE OR REPLACE`, and that text is what the mutation edits — but they were admissible by accident until this section said so. The scratch cluster is built in two steps and the order is the proof: apply the frozen prefix **unmodified**, then apply the **mutated** Phase 11 DDL.
+
+**And the harness check, learned the hard way:** the clean-check must be at least as wide as the mutations. Every proof run ends with a digest comparison over the **whole accepted prefix** plus `git status --porcelain` over the **whole tree**, not over the directory the harness happened to touch, and the gate's `frozen-prefix` arm runs **after** the suites rather than before them.
 
 ---
 
@@ -84,11 +110,24 @@ Evidence classes are never mixed in one sentence: `PROVEN IN LIVE CODE` / `PROVE
 **Red proof R-REP-02.** Add a direct `INSERT INTO stock_movements` to a Phase 11 module in a scratch copy; the arm must name that file and line.
 
 ### C-REP-03 — billing a repair part moves no stock and posts no second COGS
-**The law the first draft needed and did not have (§60, `TL-P11-R7`).** Billing a consumed part through a preconsumed sale-line binding produces **zero** additional `stock_movements` rows and **zero** additional COGS postings, and a binding cannot exist without the consumption it names.
+**The law the first draft needed and did not have (§60, `TL-P11-R7`); extended 2026-10-12 on PART 67.** Billing a consumed part through a preconsumed sale-line binding produces **zero** additional `stock_movements` rows and **zero** additional COGS postings; a binding cannot exist without the consumption it names; and **one consumption is billed at most once, for its full consumed quantity** — partial split billing of one consumption row is unrepresentable in v1, not merely refused.
 **How it is checked.** Four executed cases on a live cluster, each counting rows **before and after** rather than inspecting code: bill a consumed part and require the movement count and the COGS posting count for that variant to be unchanged; attempt a **second** binding for the same consumption and require the primary key to refuse it; attempt a binding whose qty differs from the consumption and require `repair.billing_qty_mismatch`; attempt a binding **before** any consumption exists and require `repair.billing_without_consumption`.
+**Three more cases, added on PART 67**, each for a condition the first eight did not carry: a binding whose ticket is **not** the ticket the consumption belongs to must be refused (`repair.billing_ticket_mismatch`) — and the fixture needs **two tickets**, because one ticket cannot fail this way; a binding whose **customer / custody context** differs from the consumption's must be refused (`repair.billing_custody_context_mismatch`), with a fixture carrying **two customers**, which is the case a single-customer fixture is structurally blind to; and a **partial** claim — `billed_qty` less than the consumption's `qty` — must be refused by the same `repair.billing_qty_mismatch`, with the structural half proved separately: the relation has **no quantity-claimed column** and is keyed one row per consumption, so a partial claim has nowhere to live. The structural half is the one that matters, because a refusal can be forgotten on a path while an absent column cannot.
 **Red proof R-REP-03.** Put the part on an ordinary sale line instead of a binding — the exact defect of the first draft — and require the movement-count case to red naming **two** movements where one was expected. A test that merely asserts "the invoice was created" passes through this defect without noticing, which is how the draft got as far as it did.
 **And the arm that matters most:** the request schema must have **no property** by which a client could supply a binding (conditions 1 and 2 of `P11-AL-21`). The proof is not that a supplied value is refused but that it is **unrepresentable**: add the property to the zod schema in a scratch copy and require a gate arm to name it. A refusal can be forgotten on one path; an absent field cannot.
 **This is now the third law a challenger should attack**, alongside C-SER-03 and C-LOT-03 — and unlike those two, its failure mode is free inventory rather than a drifting count.
+
+### C-REP-04 — no Phase 11 relation holds a customer money balance
+**New, on PART 69.** A repair deposit is **canonical Phase 4 money** — an unapplied customer payment or a customer credit liability under the sealed Phase 4 contract — applied later to the repair sale through the canonical payment/credit allocation. Phase 11 creates **no deposit relation**, no repair receivable, no repair payment and no repair balance.
+**How it is checked.** Absence again, and absence is checked structurally because it is the easiest thing to claim falsely: (a) the migration end-state assertion enumerates every relation Phase 11 created and requires that **none** carries a column matching `%amount%minor`, `%balance%`, `%deposit%`, `%paid%` or `%due%` — the same `pg_attribute` query that carries `L-P11-02`, widened; (b) a gate arm over the Phase 11 DDL text and source tree reds on a relation or module name containing `deposit`, `prepayment`, `advance` or `balance`; (c) a source arm asserting **zero** Phase 11 writes to any Phase 4 money relation (`payments`, `customer_credits`, `invoices`, `invoice_allocations`) — the repair module reads the customer's unapplied balance and writes none of it.
+**Red proof R-REP-04.** Three mutations. (a) Add `repair_deposits (business_id, ticket_id, amount_minor, …)` to the Phase 11 DDL in a scratch copy: both the catalogue arm and the text arm must red, naming that relation and that column. (b) Add a Phase 11 module that inserts a `payments` row directly: the source arm must name the file and line. (c) Allocate a deposit to a **repair ticket id** rather than a committed invoice: the Phase 4 allocation path must refuse it, and the proof must show the refusal comes from **Phase 4's own authority**, not from a check Phase 11 added — because a Phase 11 check here would itself be the second authority the law forbids.
+**The honest limit, stated rather than hidden:** Phase 4's payment and credit contract is not sealed, so (c) is `WAITING_FOR_INTEGRATED_SURFACE`. The design is settled; the surface it binds to is not, and this document does not call an unexecuted case proved.
+
+### C-WAR-01 — a warranty is anchored, and its history is append-only
+**New, on PART 70.** A warranty row exists only against a **committed sale**, one of **its own sale lines**, and the **serial/item where applicable**. Its issuance facts (`sale_id`, `sale_line_id`, `serial_id`, `starts_on`, `ends_on`, `source`) are never updated and the row is never deleted; a cancellation, an expiry or a return records a **new event** in an append-only chain whose transitions are a closed set — `issued` → `cancelled` | `ended` | `voided-by-return` — and the current state is derived from the chain's last event.
+**How it is checked.** The anchoring is structural, not validated: composite `FOREIGN KEY (business_id, sale_id, sale_line_id)` to the sale line, so an unanchored warranty is unrepresentable, plus a trigger requiring the sale's status to be committed at issuance. Append-only is a BEFORE UPDATE/DELETE trigger refusing both (`warranty.history_immutable`), the `0060` identity-lock precedent reused. The chain is the `repair_device_custody_events` shape: gap-free `event_seq` from 1, a closed transition set, terminal states terminal, current state equal to the last event — a deferred COMMIT trigger, and the derived `current_state` column proved against its fold exactly as the stock caches are.
+**Red proof R-WAR-01.** Six mutations, six named refusals. (a) Issue a warranty against a **draft** sale → refused. (b) Issue one whose `sale_line_id` belongs to a **different** sale → refused by the composite FK, and the proof must show it is the **FK** that refuses, not a trigger, because an FK cannot be bypassed by a new writer. (c) `UPDATE` an issuance fact → `warranty.history_immutable`. (d) `DELETE` the row on a return path — **the exact defect of the first draft** → the same refusal, and the proof asserts that after the return the row is **still there** with a `voided-by-return` event appended, because "the return succeeded" is what a test would otherwise check while the history quietly vanished. (e) A transition out of a terminal state → refused. (f) Perturb `current_state` directly as the internal owner → the fold comparison reds naming the warranty.
+**This is the law whose failure is silent.** A deleted warranty row breaks nothing today; it breaks the claim six months from now, when the only question that matters is whether this unit was ever under warranty, and nothing in the database can answer it any more.
 
 ### C-APP-01 — the variant matrix is closed, canonical and unique
 **Statement.** A matrix product's variant `attributes` is exactly its registered axis set, every value is a registered active value, the canonical form is unique per product, and base variants stay `'{}'`.
@@ -107,6 +146,10 @@ Arms, each stated as what it would detect:
 |---|---|
 | `frozen-prefix` | any accepted migration differs by a byte from its accepted digest, or the manifest disagrees; `frozenThrough` is a **floor** |
 | `no-money` | L-P11-02: a monetary column or a monetary computation in Phase 11 DDL or source, **including one commented as report-only** |
+| `no-money-balance` | C-REP-04: a Phase 11 relation or module names a deposit, prepayment, advance or customer balance, or a Phase 11 module writes a Phase 4 money relation |
+| `warranty-append-only` | C-WAR-01: a `warranties` UPDATE/DELETE path exists, an issuance fact is nullable where the anchor must be composite, or the lifecycle transition set is open |
+| `one-billing-binding` | C-REP-03: `repair_part_billing_bindings` carries a quantity-claimed column or a key admitting two rows per consumption — i.e. v1 partial billing became representable |
+| `mutation-scope` | §0a: a proof harness's mutation path resolves inside `infrastructure/database/migrations/` rather than a scratch copy, or a run ends without the whole-tree clean-check |
 | `no-client-binding` | a request schema exposes a property by which a client could supply a preconsumed billing binding (`P11-AL-21` conditions 1–2) |
 | `expiry-no-override` | `products.expiry_policy`'s CHECK admits more than one value, or an override path exists (`TL-P11-R4`) |
 | `roster-parse` | a rostered suite does not **parse** — the only arm that detects a file broken so it cannot compile |

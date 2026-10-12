@@ -1,6 +1,7 @@
 # P11-S0 — PHASE 11 VERTICAL-PACK ARCHITECTURE (Apparel · Electronics · Repair · Lot/Expiry)
 
 **status** `PREPARED / NOT PROMOTED` — `DESIGN / SPEC ONLY` (Tech Lead §52 of the 2026-10-08 audited directive)
+**second directive received and applied 2026-10-12** the per-phase directive (PARTs 62–71 are Phase 11's; PARTs 6, 13, 115, 116, 117, 118 are common). It is **additive**: it contradicts nothing ruled on 2026-10-08, confirms Option B and the no-money law, and adds four requirements this draft did not have — PART 67's V1 one-time full-quantity billing rule and two missing binding conditions, PART 68's blocked-subfeature scope, PART 69's canonical repair deposit, and PART 70's append-only warranty lifecycle. See §1c.
 **rulings received and applied 2026-10-08** `TL-P11-R1` … `TL-P11-R7`, plus §55, §60, §62 and §63. **ADJ-P11-01 is CLOSED: Option B.** Two real defects in the first draft were returned with the ruling and are corrected here — the serial cost snapshot (§55) and the repair-part double consumption (§60). See §1b.
 **authority of this document** preparation only. It allocates no migration number, creates no product code, changes no frozen artefact and claims no gate result.
 **base SHA** `93084f8` — branch `phase/4-sales-pos-customers-receivables` (read 2026-10-07; `git fetch` of that branch, head `93084f8 fix(p4s1-gate): a delegator may not also compute`)
@@ -110,6 +111,26 @@ The first draft said a repair is billed by issuing a Phase 4 sales invoice "whos
 
 ---
 
+## 1c. The 2026-10-12 per-phase directive, and what it changed here
+
+Read from the directive itself (PARTs 62–71 verbatim), not from a summary of it. **PARTs 62–66 confirm what is already built here** and change nothing: `PREPARED / NOT PROMOTED` and `DESIGN/SPEC ONLY` (62); no `unit_cost` snapshot, no valuation amount, no average cost and no financial carrying column inside any Phase 11 lot/serial relation, reports deriving from canonical history instead (63 — already law `L-P11-02`, already red-proved by `R-L02`); serial uniqueness per business + kind + normalized value, countable-integer on-hand, deferred-constraint/fold/cache conservation proof, the validator's subject derived from the authoritative movement identity, and **never `count(*) == 0` as proof of absence under RLS** (64 — already `P11-AL-15`, `C-SER-01`, and the explicit prohibition in `P11-AL-14`); expired-lot consumption refused with no generic override and no silent substitution (65 — already `P11-AL-09`/`TL-P11-R4`); repair labour a service product depending on sealed Phase 10 `SERVICE`, no new money line type, no inventory effect (66 — already `P11-AL-11`).
+
+**Four things are new, and three of them are defects in this draft rather than additions to it.**
+
+**PART 67 — the binding was under-specified in two ways.** `P11-AL-21` listed eight conditions; the directive names ten, and the two this draft was missing are the **exact repair ticket** and the **same customer/custody context where applicable**. Both matter for the same reason: a binding pinned only to a consumption row could bill a part consumed on one customer's device against another customer's invoice, and nothing in the eight conditions would have refused it. The directive also fixes a **V1 simplification** this draft left open: **one repair consumption item is billed at most once for its full consumed quantity**, and partial split billing of one consumption row is **not supported in v1** — it would require its own allocation ledger, i.e. a second allocation authority next to the Phase 4 one. Condition 4 ("exact qty") already refused a *different* quantity, so the shape was compatible; what was missing was the statement that the full quantity is the only admissible one, and the reason, which is that partial billing is an authority question and not a convenience.
+
+**PART 68 — the blocked-subfeature scope was not stated.** This draft already required the Accounting Owner to rule the posting map before `repair_part_consumption` goes live (§62, `P11-AL-11`). The directive adds what happens if the accounting model is **not yet settled**: **only this subfeature is blocked, not the rest of Phase 11 preparation.** That is a scoping rule this draft did not have, and without it an unsettled posting map would have read as a phase-wide `BLOCKED`. It also names the five things the ruling must establish, one of which — **`moving-average valuation source`** — this draft had as "the valuation comes from the canonical moving average" and which is now an explicit item of the owner's ruling rather than an assumption of ours. New decision `P11-AL-24`.
+
+**PART 69 — the repair deposit had no decision of its own.** `P11-AL-11` said in one clause that "an intake deposit is a Phase 4 customer payment or customer credit". The directive makes it a requirement with four named prohibitions — not a fake sale, not a fake paid invoice, not a repair-owned money balance, and specifically **no repair-specific deposit ledger, no allocation to a nonexistent invoice, no double AR reduction** — under the **sealed Phase 4 unapplied customer payment / customer credit liability authority**. A clause in another decision is not enough protection for a trap of this class: the easiest way to build a repair deposit is a `repair_deposits` table, and that table *is* a second money truth. New decision `P11-AL-22`, with its own law and red proof.
+
+**PART 70 — warranty history could have been deleted.** `P11-AL-12` recorded `source`, `starts_on`, `ends_on` explicitly and refused any accounting provision, which the directive confirms. What it did **not** state is the lifecycle: warranty issuance must **anchor to a committed sale, a sale line and the serial/item where applicable**, and a return or reversal **must not delete warranty history** — the transition is **append-only** (`cancelled` / `ended` / `voided-by-return`) under an explicit domain rule, with no mutation hiding historical issuance. As drafted, `warranties` was a plain row a return path could have `DELETE`d, which would erase the fact that a warranty was ever issued. New decision `P11-AL-23`, with law `C-WAR-01`.
+
+**PART 6 — and one compliance check on this draft's own proofs.** The frozen-migration law now says in terms that a red proof must **never** mutate a frozen migration even temporarily, and that **a proof requiring frozen-history modification is wrongly designed**. Two of this draft's proofs mutate "the writer" (`R-SER-04` removes a `FOR UPDATE`; `R-LOT-04` makes the outbound price from the lot's own receipt cost). The writer `inventory_apply_stock_movements` is defined in a frozen migration — so the question is real, and the answer is that both mutations target the **Phase 11 replacement body specified in the patch request**, which is Phase 11's own text, in a scratch copy. That was true but unstated, and unstated is not good enough for a law of this class: `P11-AL-25` now states the mutation target of every red proof, and the conservation document carries a per-proof table of targets.
+
+**PART 13 — the handoff manifest.** Now a required gate for every Phase 5–15 preparation. `P11-HANDOFF-MANIFEST.md` is new, and its absence would have been `HANDOFF INCOMPLETE`.
+
+---
+
 ## 2. Architecture decisions (P11-AL)
 
 These are proposals for the Tech Lead. None is ratified.
@@ -169,24 +190,29 @@ A repair intake records a device the business does **not own**. It therefore nev
 - **Before `repair_part_consumption` goes live** (§62) the **Accounting Owner** must verify the debit account, the inventory credit, that the valuation comes from the canonical moving average, the correction/reversal path, and that no duplicate COGS arises at invoice time. **Repairs author no journal logic.** If the current inventory posting map cannot represent repair consumption safely, this becomes an **Accounting-owner Contract Diff**, not a Phase 11 workaround.
 
 ### P11-AL-21 — the preconsumed sale-line binding (`TL-P11-R7`)
-A **new additive Phase 11 contract extension** — added by Phase 11, **not** by Phase 10, and **not registered dead in Phase 10** — created only once a real repair writer exists. A sale line may be marked as billing stock that was already consumed elsewhere, under all eight conditions together:
+*Extended 2026-10-12 on PART 67: two conditions were missing and the v1 billing granularity was not stated.*
+A **new additive Phase 11 contract extension** — added by Phase 11, **not** by Phase 10, and **not registered dead in Phase 10** — created only once a real repair writer exists. A sale line may be marked as billing stock that was already consumed elsewhere, under all **ten** conditions together:
 
 | # | condition | why it is load-bearing |
 |---|---|---|
 | 1 | **server-derived** | the binding is computed from the repair record, never accepted as a field |
 | 2 | **the client cannot choose it** | otherwise any client could bill a tracked item with no stock effect — a free-inventory hole |
-| 3 | names the **exact repair part source** | so the binding is to one identified consumption, not to a quantity that looks similar |
+| 3 | names the **exact repair part source** — the exact consumed part entry, and its **exact product/variant** | so the binding is to one identified consumption, not to a quantity that looks similar |
+| 3a | names the **exact repair ticket** (PART 67) | a binding pinned only to a consumption row carries no evidence of *which job* it belongs to; the ticket is what a reversal, a warranty claim and an audit all read |
+| 3b | **the same customer / custody context, where applicable** (PART 67) | without it, a part consumed on one customer's device could be billed on another customer's invoice and every other condition would still hold. This is the condition whose absence is invisible in a single-customer test fixture |
 | 4 | **exact qty** | a binding for less or more than was consumed is refused, not reconciled |
 | 5 | **same business** | the tenant and business pair is pinned structurally, like every other relation |
-| 6 | **one billing binding** | a consumption may be billed once; the second attempt is refused, enforced by a uniqueness constraint rather than by a check in code |
+| 6 | **one billing binding, for the full consumed quantity** | a consumption may be billed **once, for its whole quantity**; the second attempt is refused by a uniqueness constraint rather than by a check in code. See the v1 rule below |
 | 7 | **a prior canonical stock movement exists** | a binding with no movement behind it is refused — the fail-open case, and the one a test must plant |
 | 8 | **zero second movement, zero second COGS**; revenue/AR/cash still through the sales authority | the whole point of the extension |
 
-Condition 7 is the one to attack first: a binding that can be created *before* the consumption exists re-opens §60 by another door.
+Condition 7 is the one to attack first: a binding that can be created *before* the consumption exists re-opens §60 by another door. Condition 3b is the one most likely to pass review unnoticed, because a fixture with one customer in it cannot fail that way.
+
+**V1 simplification (PART 67), binding:** **one repair consumption item is billed at most once, for its full consumed quantity.** Partial split billing of a single consumption row is **not supported in v1**. The reason is not effort: splitting one consumption across several bindings needs a ledger that records how much of it each binding claims and refuses the sum exceeding the whole — which is **an allocation authority**, and the project already has exactly one of those, in Phase 4 for payments and credits. A second one next to it is a second truth about how much of something has been applied. So the structure is deliberately unable to express a partial claim: `repair_part_billing_bindings` is keyed `(business_id, repair_part_id)` — **one row per consumption, no quantity-claimed column** — and `billed_qty` must equal the consumption's `qty` exactly (`repair.billing_qty_mismatch`). A business that genuinely needs to bill half a consumption consumes half, which is a real inventory fact, rather than claiming half of one, which is an accounting fiction. If partial billing is ever wanted, it is a **future phase with an allocation ledger of its own**, not a column added here.
 
 ### P11-AL-12 — warranty is a record, not an accounting estimate
 *Ruled: `TL-P11-R5` — record `source` (business or vendor), `starts_on` and `ends_on` explicitly; **no warranty inferred from a product category**; no accounting provision or accrual in Phase 11.*
-`warranties (business_id, id, sale_id, sale_line_id, serial_id NULL, starts_on, ends_on, source IN ('business','vendor'), terms_translations JSONB)`, plus `warranty_claims` linking a claim to a repair ticket. Phase 11 gives warranty **no financial effect**: no warranty provision, no accrual, no liability. A warranty-covered repair is a repair whose parts still post COGS and whose invoice total may be zero-rated by a business decision at the sale, through the ordinary Phase 4 path. A warranty provision is a future accounting phase decision, not this one.
+`warranties (business_id, id, sale_id, sale_line_id, serial_id NULL, starts_on, ends_on, source IN ('business','vendor'), terms_translations JSONB)`, plus `warranty_claims` linking a claim to a repair ticket. Phase 11 gives warranty **no financial effect**: no warranty provision, no accrual, no liability. A warranty-covered repair is a repair whose parts still post COGS and whose invoice total may be zero-rated by a business decision at the sale, through the ordinary Phase 4 path. A warranty provision is a future accounting phase decision, not this one. **The lifecycle is `P11-AL-23`** — as drafted above, `warranties` was a plain row that a return path could delete, which PART 70 forbids.
 
 ### P11-AL-13 — migration discipline
 No number. `P11-MIGRATION-PATCH-REQUEST.md` is the deliverable; the Migration Owner reads the live prefix, allocates serially and creates the files when Phase 11 is actually authorized (Master Part 10). Phase 11's DDL cannot be written against `0086` as a predecessor, because `0080`–`0086` are unfrozen candidates and may still change: the patch request states its predecessor as "the live effective definition at allocation time", and every function it needs to re-create is listed with the reason, the way P4-S7 learned to (reading the live definition, not a stale number).
@@ -215,6 +241,45 @@ Every law in §3 gets a named red proof that is shown red by a *minimal* mutatio
 ### P11-AL-20 — localization and UX bar
 Every new surface is ar/en/tr with correct RTL and LTR, phone/tablet/desktop, no placeholder, no dead button (Master Part 74). Business-authored names — axis names, axis values, lot labels, warranty terms — are **data**, so they carry `translations JSONB` like `products.translations` (`0005:14-35`) rather than translation-file keys. Product-independent chrome (column headers, refusal messages, repair statuses) are translation-file keys in all three locales.
 
+### P11-AL-22 — a repair deposit is canonical Phase 4 money, and Phase 11 owns no money balance
+*New, on PART 69. The first draft carried this as one clause inside `P11-AL-11`; it needs its own decision because the obvious implementation is a table and that table is a second money truth.*
+
+A customer deposit taken **before** the final repair invoice exists is **not** a sale, **not** a paid invoice, and **not** a repair-owned money balance. It is received, recorded and later applied through the **sealed Phase 4 unapplied customer payment / customer credit liability authority**, exactly as that contract defines it, and applied to the repair sale later through the **canonical payment/credit allocation** path.
+
+Four prohibitions, each naming the shortcut it closes:
+
+| forbidden | what it would otherwise be built as | why it is wrong |
+|---|---|---|
+| **no repair-specific deposit ledger** | `repair_deposits (business_id, ticket_id, amount_minor, …)` | a second place where customer money is owed. Two balances for one liability drift the moment one of them is written without the other, and nothing in the schema would say which is right |
+| **no fake sale / no fake paid invoice** | issue a zero-line invoice at intake and mark it paid | revenue recognized before anything was sold, and an invoice that no sale line explains |
+| **no allocation to a nonexistent invoice** | allocate the deposit to the repair "ticket" | the allocation target must be a committed invoice; a ticket is not a receivable |
+| **no double AR reduction** | reduce AR at intake *and* again when the deposit is applied | the same money reduces the same receivable twice |
+
+Phase 11 therefore specifies **no deposit relation at all**. The repair ticket may *display* the customer's unapplied payment / credit balance, read from the Phase 4 authority — a read, never a store. Until Phase 4's payment and credit contract is sealed, the deposit flow is `WAITING_FOR_INTEGRATED_SURFACE`: the design is settled, the surface it binds to is not. Law `C-REP-04`.
+
+### P11-AL-23 — warranty issuance is anchored, and its lifecycle is append-only
+*New, on PART 70. Confirms `TL-P11-R5` and adds what it did not cover.*
+
+**Anchored.** A warranty row may exist only against a **committed sale**, a **sale line** of that sale, and the **serial/item where applicable** — composite FKs, not nullable hints, so an unanchored warranty is unrepresentable rather than merely discouraged. `(business_id, sale_id, sale_line_id)` must resolve to a real line of a **committed** sale; a draft sale issues no warranty.
+
+**Append-only.** A return or reversal **must not delete warranty history.** `warranties` rows are never `DELETE`d and never `UPDATE`d in their issuance facts (`sale_id`, `sale_line_id`, `serial_id`, `starts_on`, `ends_on`, `source`); the state change is recorded as a **new row in an append-only `warranty_lifecycle_events` chain** whose transitions are an explicit closed set — `issued` → `cancelled` | `ended` | `voided-by-return` — with the current state derived from the chain's last event, exactly as `repair_device_custody_events` carries custody (`C-SER-02`'s shape, reused rather than reinvented). An UPDATE or DELETE of an issuance fact is refused by trigger; the terminal transitions are terminal.
+
+**Why it matters, concretely:** a device sold with a warranty and later returned leaves a trace that a warranty *was* issued and then voided by that return. A design that deletes the row cannot answer "was this unit ever under warranty?" — and that is the question a warranty claim six months later asks. The directive's phrase is exact: **no mutation hiding historical issuance.** Still no accounting provision, no accrual, no liability (`TL-P11-R5` unchanged). Law `C-WAR-01`.
+
+### P11-AL-24 — an unsettled accounting model blocks one subfeature, not the phase
+*New, on PART 68; it scopes what §62 already required.*
+
+Before `repair_part_consumption` is registered, the **Accounting Owner** must rule and prove its posting map, and must establish all five of: the **inventory credit**; the **correct expense / COGS / WIP debit according to the accepted accounting model**; the **moving-average valuation source**; the **correction / reversal path**; and that **no duplicate COGS arises at invoice time**. **Phase 11 does not guess the debit** — not even as a default to be corrected later, because a posting map that ships wrong is corrected by a journal, not by a migration. **The repair module never authors journal lines itself**; it reaches the existing accounting bridge or it does nothing.
+
+The scoping rule, which this draft lacked: **if the accounting model is not yet settled, only this subfeature is blocked — not the rest of Phase 11 preparation.** Apparel, lot/expiry, serial tracking, custody, warranty and the billing binding's *structure* all proceed and may seal. What waits is the registration of the consumption movement kind and anything that posts through it. The honest label for that one item is `BLOCKED`, and for the phase it is unchanged. If the current inventory posting map cannot represent repair consumption safely, the output is an **Accounting-owner Contract Diff**, never a Phase 11 workaround.
+
+### P11-AL-25 — every red proof's mutation target is named, and it is never frozen history
+*New, on PART 6's corrective law after the Phase 5 mutation-harness incident.*
+
+A red proof mutates exactly one of: **a scratch copy of Phase 11's own DDL or source text**, **a synthetic fixture**, **a temporary generated tree**, or **a throwaway non-canonical clone**. `0000`–`0079` stay **byte-identical on disk in this working tree**, and `0080`–`0086` — unfrozen S4 candidates owned by Phase 4 — are not mutated either, because they are another thread's live work. **A proof that requires modifying frozen history to prove itself is wrongly designed, and the response is to redesign the proof, not to make an exception for it.**
+
+The two proofs where this is a live question are `R-SER-04` and `R-LOT-04`, both of which mutate the behaviour of `inventory_apply_stock_movements` — a routine whose current definition lives in a frozen migration. Their target is the **`CREATE OR REPLACE` body specified in `P11-MIGRATION-PATCH-REQUEST.md` §4**, which is Phase 11's own text: the scratch cluster is built by applying the frozen prefix **unmodified** and then Phase 11's DDL **mutated**. The frozen file is read, never written. `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` §0 carries the per-proof table, and the gate's `frozen-prefix` arm is what detects a violation after the fact — digest comparison over the accepted prefix, run **after** the proof suites, so a harness whose clean-check is narrower than its mutations (the Phase 5 contamination) cannot print "clean".
+
 ---
 
 ## 3. The laws this phase lives or dies by
@@ -235,9 +300,12 @@ Stated here, specified with their red proofs in `P11-CONSERVATION-LAWS-AND-RED-P
 | C-FEFO-01 | `inventory_pick_lots` is a function of `(key, qty, as_of, policy)` only — deterministic, machine-clock-free, and refuses rather than partially picking | determinism |
 | C-REP-01 | no `stock_movements` row ever has a repair-intake source; the customer's device is not stock | structural (registry absence + red proof) |
 | C-REP-02 | a repair part consumption appears exactly once in the ledger, under the five-part identity, and its COGS posts through the existing accounting bridge | integration |
+| C-REP-03 | billing a consumed repair part produces zero additional `stock_movements` rows and zero additional COGS postings; one consumption is billed at most once, for its full quantity | integration, counted before/after |
+| C-REP-04 | no Phase 11 relation holds a customer money balance; a repair deposit exists only as canonical Phase 4 unapplied payment / customer credit | structural (absence) |
+| C-WAR-01 | a warranty is anchored to a committed sale, sale line and serial/item where applicable, and its issuance facts are never deleted or updated — the lifecycle is an append-only chain | append-only chain invariant |
 | C-APP-01 | `product_variants.attributes` of a matrix product is a closed canonical map over the business's registered axes, unique per product; base variants stay `'{}'` | catalog invariant |
 
-Two of these are the ones a challenger should attack first, because they are the ones that would corrupt data rather than merely annoy a user: **C-SER-03** (if the deferred trigger is satisfiable by zero events on some path, the overlay silently drifts from on-hand for ever) and **C-LOT-03** (a per-lot cache that can disagree with `stock_levels` is a second quantity truth wearing a cache's clothes).
+Three of these are the ones a challenger should attack first, because they are the ones that would corrupt data rather than merely annoy a user: **C-SER-03** (if the deferred trigger is satisfiable by zero events on some path, the overlay silently drifts from on-hand for ever) **C-LOT-03** (a per-lot cache that can disagree with `stock_levels` is a second quantity truth wearing a cache's clothes) and **C-REP-03** (whose failure mode is free inventory, and which is the law that exists only because the first draft got it wrong).
 
 ---
 
@@ -319,7 +387,29 @@ A domain module in this repo is not a directory; it is a fixed list of edits acr
 | `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | every law of §3 with its executable check and its named red proof |
 | `P11-TASK-DAG.md` | the task DAG (`P11-…` ids) with dependencies, file ownership and the parallelism map |
 | `P11-OPEN-DECISIONS.md` | the owner decisions (OD-P11-01 … OD-P11-07) with a recommendation each |
+| `P11-HANDOFF-MANIFEST.md` | **required gate (PART 13)** — phase, exact prep SHA, branch, status, every artifact with its location and whether it is committed, SHA256 for the off-Git copies, evidence files, the migration patch request, shared-file patch requests, open decisions, Challenger and Coordinator state, unresolved blockers |
 | `P11-S0-REPORT-AR.md` | the Arabic report for the Tech Lead |
+
+---
+
+## 7a. Pre-mortem (PART 115)
+
+Asked before promotion, not after. Ten questions, each answered with the structure that answers it — a prose assurance is not an answer.
+
+| how could this… | the honest answer today |
+|---|---|
+| **duplicate money?** | The only place it could is repair billing, and it is exactly where the first draft did (§60). Now: one physical consumption, one binding per consumption keyed by PK, `qty` equal to the consumption's, the bound sale line proved to carry no movement, and revenue/AR/cash untouched in the sales authority. The deposit adds no second money truth because Phase 11 creates no money relation at all (`C-REP-04`). **Residual:** the Accounting Owner's posting map is unruled, so duplicate COGS at invoice time is `UNMEASURED`, not closed — which is why `P11-REP-008` blocks that subfeature. |
+| **lose money?** | A warranty row deleted on a return would lose the *record*, not the money, and `C-WAR-01` makes it append-only. Valuation cannot drift because the overlay carries no value and `C-LOT-04` compares against the pre-Phase-11 oracle rather than against itself. |
+| **leak tenant data?** | Every new relation gets `ENABLE`+`FORCE`, `tenant_membership` with both clauses, restrictive `business_isolation`, a denormalized `tenant_id` with the composite FK, and its `*_internal_read` policy **in the same migration** that enables RLS — the P4-S7 lesson, where a relation with RLS and zero policies made its validator refuse everything. T4 proves it from a non-superuser session. **The guard shape is the risk:** no Phase 11 guard is written as `IF count(*) = 0 THEN allow`, because under RLS absent and invisible are one answer. |
+| **duplicate stock?** | `stock_movements_identity_uq` under the five-part identity makes replay structural, and Phase 11 writes no movement itself — one writer, no second path, proved by a source arm asserting zero Phase 11 writes to `stock_movements`. The billing binding is the case where a second effect was *designed in* once; `C-REP-03` counts rows before and after rather than reading code. |
+| **deadlock?** | Phase 9 found this by execution, not reading (`40P01`). The lock order here is a **suffix** of the existing one — stock targets, then lots by `lot_id` ascending, then serials by id ascending — never an interleave, and the deadlock test runs **both** orders. |
+| **replay twice?** | The server mints no identity Phase 11 owns; the five-part identity is the inventory authority's. Offline capture is input only (`P11-AL-17`), and Phase 7 found the live `ApiClient` mints its key at **send** time — a defect that belongs to Phase 7's promotion, recorded here so Phase 11 does not assume otherwise. |
+| **fail upgrade?** | The patch request names no number and re-reads the live effective definition at allocation time, so it cannot be built against a stale predecessor. T2 applies it **as `daftar_migrator`**, and the §12 lesson from Phase 4 is honoured: a fresh install and a real upgrade from the frozen head are proved **before** anything else is signed, because proving the migration applies is what makes a candidate a candidate. |
+| **create second truth?** | The question this whole phase is organized around. Three places it could: the costing key (answered by Option B — overlays carry no value), the per-lot quantity cache (`C-LOT-03` folds it against `stock_levels`), and money (`C-REP-04` — no deposit ledger, no repair balance). A fourth was almost created and is now forbidden: a partial-billing allocation ledger (PART 67's v1 rule). |
+| **silently drop rows?** | The aging-bucket off-by-one in Phase 4's `aging()` is the house precedent: a silent `continue` on an impossible value. Every Phase 11 fold and chain **fails loudly** — gap-free `event_seq` checked rather than assumed, an unknown transition refused rather than ignored, and no `continue` on an unexpected row anywhere. |
+| **create cross-container false evidence?** | This container is not the authoritative box. No timing or performance number appears in any Phase 11 document, and none was measured; the budget *lane* is owed from the Performance Owner on the exclusive box. A finding from here about another thread's tree is a **lead**, never a verdict (`TL-P4-COORD-R39`), and every claim in these six documents is labelled with one evidence class and never two. |
+
+Promotion waits for closure of these, not for their enumeration.
 
 ---
 
