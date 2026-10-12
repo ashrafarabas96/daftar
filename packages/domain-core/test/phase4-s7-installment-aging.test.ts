@@ -4524,4 +4524,236 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(matchers.length, 'the matcher list shrank').toBeGreaterThanOrEqual(13);
     expect(sql).toContain('pg_catalog.sha256');
   });
+
+  /**
+   * ── H16 THE FILE'S OWN READINESS HEADER IS UNDER A LAW NOW
+   *    (`TL-P4-COORD-R63` ordered item 3 — the structural fix, and the reason
+   *    round 16 exists) ─────────────────────────────────────────────────────
+   *
+   * WHY THIS LAW EXISTS. For fifteen rounds the specification's own header box
+   * said, in the present tense, that the file «has never been applied to a
+   * cluster, never parsed by PostgreSQL and never executed», that «the two
+   * constraint triggers have never fired», that `installment_schedule_verify()`
+   * «has never been compiled by the parser» and that «at the DATABASE level,
+   * not in TypeScript only» was NOT MET. Four integration suites apply the
+   * whole file to a real cluster; the aging-db suite passes a case asserting
+   * the routine WAS compiled and that THREE constraint triggers run it. Five
+   * independent challengers read this file and none found it, and the reason is
+   * structural rather than careless: every text law of this file looks at its
+   * DDL, its projection sketch, its end-state block and its digests — and none
+   * looked at the paragraph a reader actually consults to decide whether the
+   * file is ready. `R62` §2 said the specification's laws are blind outside the
+   * specification. They were also blind to its own header.
+   *
+   * WHAT THIS LAW CAN CATCH:
+   *   * a readiness claim that CONTRADICTS a measurement this tree makes — the
+   *     four refuted claims above, each keyed to the thing that refutes it;
+   *   * a header that has gone SILENT or VAGUE: the five positive claims below
+   *     are MANDATORY, and their subjects are derived from the tree (the suite
+   *     file names are discovered by scanning for the statement that applies
+   *     the file; the trigger counts are counted out of the specification), so
+   *     a paragraph that says nothing specific fails exactly as one that says
+   *     something false does;
+   *   * drift: a suite renamed, deleted, or stopping applying the file, and a
+   *     constraint trigger added or removed, all move the derived facts and the
+   *     header must move with them.
+   *
+   * WHAT THIS LAW CANNOT CATCH, STATED SO IT IS NOT TAKEN FOR MORE:
+   *   * it does not run those suites and cannot know they PASS. It reads that
+   *     they exist and that they apply this file; their verdict is their own
+   *     exit code, in CI, and this law would stay green against four suites
+   *     that all failed. That is deliberate: a pure-function test may not
+   *     depend on a cluster (this file creates none).
+   *   * it is scoped to the readiness paragraph. Prose elsewhere in the
+   *     specification, and in the API or the suites, is outside it — the three
+   *     stale sentences round 16 corrected in `selling-errors.ts` and in the
+   *     concurrency suite would NOT have been caught here.
+   *   * it is keyed to the claims that have actually been made false. A NEW
+   *     false readiness claim, about a mechanism nobody has keyed a measurement
+   *     to, passes. This is a ratchet over known falsehoods plus a floor of
+   *     mandatory specifics, not a truth oracle over English.
+   *   * it reads the file, not a cluster. It cannot tell whether a deployed
+   *     database carries any of this, which is why «no deployed cluster carries
+   *     any of it» is required to STAY in the paragraph as the `SPEC ONLY` half.
+   *   * it cannot tell a QUOTATION from an ASSERTION. The refuted sentences may
+   *     not appear in the readiness paragraph at all, not even as history of
+   *     what the paragraph used to say — and the first draft of round 16's own
+   *     header tripped this law for exactly that, which is the one case of it
+   *     going red that was not planted. The strictness is kept rather than
+   *     relaxed: «I was only quoting it» is the escape hatch a law over English
+   *     cannot afford, and the history belongs in the round report, which is
+   *     where it now is.
+   */
+  it('H16 THE READINESS HEADER IS READ BY A LAW: a stale readiness claim REDS, and so does a vague one', () => {
+    // ── THE SUBJECT: the readiness paragraph of the header box, sliced on its
+    //    own heading and the box's closing border. A missing heading is a
+    //    FINDING and never an empty subject — deleting the paragraph must red.
+    const HEADING = 'WHAT THIS FILE IS, MEASURED';
+    const readinessSection = (spec: string): string | null => {
+      const a = spec.indexOf(`-- │ ${HEADING}`);
+      if (a < 0) return null;
+      const b = spec.indexOf('\n-- └', a);
+      if (b < 0) return null;
+      return spec.slice(a, b);
+    };
+    // The box frame is removed and the lines are joined before anything is
+    // matched, so no claim of this law depends on where a sentence happens to
+    // wrap inside the box. A predicate that broke when one word moved to the
+    // next line would be a law about formatting.
+    const flatten = (s: string): string =>
+      s
+        .split('\n')
+        .map((l) =>
+          l
+            .replace(/^--\s*│/, '')
+            .replace(/│\s*$/, '')
+            .trim(),
+        )
+        .join(' ')
+        .replace(/\s+/g, ' ');
+
+    // ── THE FACTS, DERIVED FROM THE TREE AND NEVER TYPED HERE ────────────
+    //
+    // (1) WHICH SUITES APPLY THE WHOLE FILE. Discovered by reading every
+    //     integration suite and keeping the ones that execute `SPEC` itself.
+    //     The round-15 challenger said three; it is FOUR — the live suite
+    //     applies it as the routines' owner with `ownerPool().query(SPEC)`,
+    //     which is why the pattern is the CALL and not one spelling of the
+    //     pool variable.
+    const INTEGRATION = join(REPO, 'tests', 'integration');
+    const appliers = readdirSync(INTEGRATION)
+      .filter((f) => f.endsWith('.test.ts'))
+      .filter((f) => /\.query\(SPEC\)/.test(readFileSync(join(INTEGRATION, f), 'utf8')))
+      .sort();
+    expect(appliers.length, 'no integration suite applies the specification, so this law has no subject').toBeGreaterThan(0);
+    // (2) THE CONSTRAINT TRIGGERS, COUNTED OUT OF THE SPECIFICATION. The
+    //     statement and the function it runs are read together, because the
+    //     header's falsehood was a COUNT: it said two, and three run the
+    //     schedule verifier while five constraint triggers exist in all.
+    const constraintTriggers = [...SPEC.matchAll(/CREATE CONSTRAINT TRIGGER\s+(\w+)[\s\S]*?EXECUTE FUNCTION\s+(\w+)\(\)/g)].map((m) => ({
+      name: m[1] as string,
+      fn: m[2] as string,
+    }));
+    const scheduleTriggers = constraintTriggers.filter((t) => t.fn === 'installment_schedule_verify');
+    expect(constraintTriggers.length, 'no CREATE CONSTRAINT TRIGGER in the specification').toBeGreaterThan(0);
+    expect(scheduleTriggers.length, 'no constraint trigger runs the schedule verifier').toBeGreaterThan(0);
+    // (3) AND THE CASES THE HEADER LEANS ON REALLY EXIST, read as test titles
+    //     out of the suite that owns them. A header may claim the parser
+    //     compiled the routine only while a case says so.
+    const agingDb = readFileSync(join(INTEGRATION, 'phase4-s7-installment-aging-db.test.ts'), 'utf8');
+    const compiledCase = /it\('`installment_schedule_verify\(\)` was COMPILED/.test(agingDb);
+    const triggerCase = /it\('the THREE constraint triggers EXIST/.test(agingDb);
+    expect(compiledCase, 'the aging-db suite no longer carries the COMPILED case the header cites').toBe(true);
+    expect(triggerCase, 'the aging-db suite no longer carries the constraint-trigger case the header cites').toBe(true);
+
+    const WORDS = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'] as const;
+    const word = (n: number): string => WORDS[n] ?? String(n);
+
+    // ── THE LAW ──────────────────────────────────────────────────────────
+    //
+    // Two halves, and the second is what stops a vague paragraph passing:
+    // REFUTED claims may not appear, and MANDATORY specifics must.
+    const REFUTED: readonly { readonly kind: string; readonly re: RegExp; readonly refutedBy: string }[] = [
+      {
+        kind: 'refuted/never-applied',
+        re: /never (?:been )?applied to a cluster/i,
+        refutedBy: `${String(appliers.length)} integration suite(s) execute the whole file: ${appliers.join(', ')}`,
+      },
+      { kind: 'refuted/never-parsed', re: /never parsed by PostgreSQL/i, refutedBy: 'the same suites apply it, and the aging-db COMPILED case reads pg_proc' },
+      { kind: 'refuted/never-executed', re: /never executed/i, refutedBy: 'the live suite fires the schedule verifier at COMMIT in four directions' },
+      { kind: 'refuted/never-fired', re: /triggers? (?:have|has) never fired/i, refutedBy: 'the live and concurrency suites fire them' },
+      { kind: 'refuted/never-compiled', re: /never been compiled/i, refutedBy: 'the aging-db suite reads prosecdef and the owner out of pg_proc' },
+      { kind: 'refuted/not-met', re: /is NOT\s+MET/, refutedBy: '«at the DATABASE level» is met for the obligations the live suite fires' },
+      {
+        kind: 'refuted/trigger-count',
+        re: /the two constraint triggers/i,
+        refutedBy: `${word(scheduleTriggers.length)} constraint triggers run installment_schedule_verify()`,
+      },
+      {
+        kind: 'refuted/every-statement-spec-only',
+        re: /EVERY STATEMENT BELOW IS `SPEC ONLY`/,
+        refutedBy: 'the statements below are applied, parsed and executed',
+      },
+    ];
+    const MANDATORY: readonly { readonly kind: string; readonly holds: (s: string) => boolean; readonly want: string }[] = [
+      {
+        kind: 'unspecific/appliers',
+        holds: (s) => appliers.every((f) => s.includes(f)),
+        want: `every suite that applies this file, by name: ${appliers.join(', ')}`,
+      },
+      {
+        kind: 'unspecific/applier-count',
+        holds: (s) => new RegExp(`${word(appliers.length)} integration suites`).test(s),
+        want: `the count of applying suites, as «${word(appliers.length)} integration suites»`,
+      },
+      {
+        kind: 'unspecific/parsed',
+        holds: (s) => s.includes('installment_schedule_verify()') && /COMPILED/.test(s),
+        want: 'that `installment_schedule_verify()` is COMPILED',
+      },
+      {
+        kind: 'unspecific/trigger-count',
+        holds: (s) => s.includes(`${word(scheduleTriggers.length)} run`) && s.includes(`${word(constraintTriggers.length)} \`CREATE CONSTRAINT TRIGGER\``),
+        want: `both counts: ${word(scheduleTriggers.length)} running the verifier, ${word(constraintTriggers.length)} constraint triggers in all`,
+      },
+      {
+        kind: 'unspecific/spec-only',
+        holds: (s) => /SPEC ONLY/.test(s) && s.includes('migrations/') && s.includes('manifest') && s.includes('PR-6') && s.includes('PR-8'),
+        want: 'what is STILL `SPEC ONLY`, naming `migrations/`, the manifest, PR-6 and PR-8',
+      },
+    ];
+    const findings = (section: string | null): readonly string[] => {
+      if (section === null) return ['missing/section: the readiness paragraph is not in the header box at all'];
+      const text = flatten(section);
+      const out: string[] = [];
+      for (const r of REFUTED) if (r.re.test(text)) out.push(`${r.kind}: the header claims ${String(r.re)} — refuted by ${r.refutedBy}`);
+      for (const m of MANDATORY) if (!m.holds(text)) out.push(`${m.kind}: the header does not state ${m.want}`);
+      return out;
+    };
+
+    // ── (i) THE SHIPPED HEADER IS CLEAN ──────────────────────────────────
+    const live = readinessSection(SPEC);
+    expect(live, 'the readiness paragraph could not be sliced').not.toBeNull();
+    expect(findings(live)).toEqual([]);
+
+    // ── (ii) RED PROOF, THE STALE-CLAIM ARM: the exact sentences that stood
+    //         in this box for fifteen rounds, planted back one at a time.
+    for (const [planted, kind] of [
+      ['This file has never been applied to a cluster, never parsed by PostgreSQL and never executed.', 'refuted/never-applied'],
+      ['So the two constraint triggers have never fired.', 'refuted/trigger-count'],
+      ['«at the DATABASE level, not in TypeScript only» is NOT MET.', 'refuted/not-met'],
+      ['`installment_schedule_verify()` has never been compiled by the parser.', 'refuted/never-compiled'],
+      ['EVERY STATEMENT BELOW IS `SPEC ONLY`.', 'refuted/every-statement-spec-only'],
+    ] as const) {
+      const stale = `${String(live)}\n-- │ ${planted}`;
+      const got = findings(stale);
+      expect(
+        got.some((f) => f.startsWith(kind)),
+        `planting «${planted}» did not red the law; findings: ${got.join(' | ')}`,
+      ).toBe(true);
+    }
+
+    // ── (iii) RED PROOF, THE VAGUENESS ARM — the escape a ratchet over
+    //          falsehoods alone would leave open. A paragraph that asserts
+    //          nothing checkable must fail too, and it fails on FOUR of the
+    //          five mandatory specifics at once.
+    const vague = `-- │ ${HEADING}: readiness is a matter for the reader; see the suites.`;
+    const vagueFindings = findings(vague);
+    expect(vagueFindings.length, `a vague header produced only: ${vagueFindings.join(' | ')}`).toBeGreaterThanOrEqual(4);
+    for (const kind of ['unspecific/appliers', 'unspecific/parsed', 'unspecific/trigger-count', 'unspecific/spec-only']) {
+      expect(
+        vagueFindings.some((f) => f.startsWith(kind)),
+        `a vague header passed ${kind}`,
+      ).toBe(true);
+    }
+    // ...and a header that was DELETED outright is a finding and not a pass.
+    expect(findings(readinessSection('-- nothing here\n'))).toEqual(['missing/section: the readiness paragraph is not in the header box at all']);
+
+    // ── (iv) RED PROOF, THE DRIFT ARM: the facts move with the tree, so a
+    //         fifth suite that applied the file would red the header until the
+    //         header named it. Simulated by naming a suite the section cannot
+    //         contain, which is exactly what a rename produces.
+    const drifted = [...appliers, 'phase4-s7-installment-not-yet-written-db.test.ts'];
+    expect(drifted.every((f) => String(live).includes(f))).toBe(false);
+  });
 });

@@ -776,12 +776,27 @@ export const INSTALLMENT_INTERNAL_INVARIANT_CODES: readonly string[] = [...INSTA
  * ORDINARY OPERATIONS: a `DELETE` of an active plan took the plan row (rank 6)
  * and then needed the invoice row (rank 3), while an ordinary invoice write
  * held the invoice row and then cancelled that plan through the documented
- * route. Round 15 CLOSES that cycle structurally -- the one-active exclusion
- * trigger now fires `BEFORE DELETE` too and takes the invoice row first, so
- * every plan transition takes rank 3 before rank 6 -- and `40P01` remains
- * reachable for the shapes `P4-AL-41` leaves to the CALLER (several invoices
- * in opposite order, and the multi-row plan statement whose row order is the
- * planner's). A rendering is owed to the shapes that remain.
+ * route. THAT CYCLE IS NOT CLOSED STRUCTURALLY, AND ROUND 15 MEASURED WHY
+ * (round 16 correcting round 15's own sentence, `TL-P4-COORD-R63` item 1). A
+ * `BEFORE DELETE` arm on the one-active exclusion trigger, taking the invoice
+ * row first, WAS built and the race was re-run against it: the deleter still
+ * held the plan row while awaiting the invoice row and still got `40P01`,
+ * because for a `BEFORE ROW DELETE` trigger the executor produces `OLD`
+ * through `GetTupleForTrigger`, which LOCKS that tuple before the trigger
+ * body runs. No code in such an arm can take rank 3 first, so the arm was
+ * removed in the same commit that built it; the shipped trigger is
+ * `BEFORE INSERT OR UPDATE ON installment_plans` and nothing else, and part
+ * 12 of the specification's end-state block refuses the DELETE bit by name.
+ *
+ * SO THE DELETE PATH'S ORDER IS A CALLER OBLIGATION, with a MEASURED remedy:
+ * the deleter takes the invoice row `FOR NO KEY UPDATE` itself, first, in its
+ * own transaction, before the `DELETE` -- measured both ways in the
+ * concurrency suite's section G1. `P4-AL-41` rank 3 states the obligation;
+ * section 3a-ter of `p4s7-installment-aging.spec.sql` states the remedy. So
+ * `40P01` remains reachable on that path and for the shapes `P4-AL-41`
+ * leaves to the CALLER (several invoices in opposite order, and the
+ * multi-row plan statement whose row order is the planner's). A rendering is
+ * owed to every one of them.
  *
  * WHAT IS OWED, AND WHY 409 AND NOT 500 OR 503. The request was well formed,
  * the server is healthy, and the transaction was rolled back whole: nothing
@@ -791,8 +806,17 @@ export const INSTALLMENT_INTERNAL_INVARIANT_CODES: readonly string[] = [...INSTA
  * is true. `[[daftar-lock-order-not-retry]]` is not weakened by this: a retry
  * HERE is a retry at the caller's own transaction boundary, which is the
  * standard contract for these SQLSTATEs, and it is NOT a retry loop inside a
- * writer and NOT a licence to leave a lock-order defect in place -- which is
- * why round 15 changed the order rather than only the rendering.
+ * writer and NOT a licence to leave a lock-order defect in place. What makes
+ * the retry contract honest is NOT a repair of the order -- there is none to
+ * point at, and the paragraph above measures that no trigger in this slice
+ * can make one. It is that the transaction was rolled back WHOLE, so a retry
+ * resumes from a state nothing partial was committed into; and that the
+ * lock-order defect is not left unowned either: on the DELETE path it is
+ * declared a `P4-AL-41` rank-3 obligation of the CALLER, in section 3a-ter,
+ * with the one remedy that was MEASURED to reach it (the deleter takes the
+ * invoice row `FOR NO KEY UPDATE` first, in its own transaction). A
+ * declaration with a measured remedy is the honest state; a sentence
+ * claiming a repair that does not exist is the defect this one replaces.
  *
  * NO MERCHANT MESSAGE KEY IS ADDED. `details.contention` is a machine word for
  * a client's retry logic, not a string to render, so there is no

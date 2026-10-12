@@ -34,25 +34,59 @@
 -- │ TABLE` list at all — that is a 42P13 — so the claim was false. §25       │
 -- │ requires the shape be KEPT, and it is.                                   │
 -- │                                                                          │
--- │ WHAT STILL BLOCKS THIS FILE, AND S7-1 IS THE BIGGEST OF IT:             │
+-- │ WHAT THIS FILE IS, MEASURED (round 16; `TL-P4-COORD-R63` items 2, 3):    │
 -- │                                                                          │
--- │  * EVERY STATEMENT BELOW IS `SPEC ONLY`. This file has never been        │
--- │    applied to a cluster, never parsed by PostgreSQL and never executed.  │
--- │    The suite that judges it reads it with `readFileSync` and analyses it │
--- │    as TEXT. So the two constraint triggers have never fired,             │
--- │    `installment_schedule_verify()` has never been compiled by the        │
--- │    parser, and «at the DATABASE level, not in TypeScript only» is NOT    │
--- │    MET. The 265-day golden is proved against the reference model, not    │
--- │    against this routine. A SPECIFICATION IS DESIGN UNTIL A PARSER HAS    │
--- │    HAD AN OPINION (challenger S7-1, CRITICAL). The author has been       │
--- │    careful about the one trap this estate records — `pg_catalog.coalesce`│
--- │    is impossible, because `COALESCE` is syntax and cannot be             │
--- │    schema-qualified — and care is not a substitute for the parser.       │
--- │  * no migration number, not in `migrations/`, not in the manifest, and   │
--- │    S7 is CHALLENGER REJECTED with `READY_TO_PROMOTE = NO`.               │
--- │  * TWO authority/command changes that are NOT the author's to make:      │
--- │    PR-6, the `GRANT EXECUTE` on `supplier_ap_release` (section 5), and   │
--- │    PR-8, the plan-creation status precondition (section 3(f)).           │
+-- │  * IT IS APPLIED, PARSED AND EXECUTED. FOUR integration suites execute   │
+-- │    the whole of this file against a real PostgreSQL cluster, each with   │
+-- │    its own principal: `phase4-s7-installment-aging-db.test.ts` (as       │
+-- │    `daftar_migrator`, which is not a superuser and does not bypass row   │
+-- │    security), `phase4-s7-installment-fact-db.test.ts`,                   │
+-- │    `phase4-s7-installment-concurrency-db.test.ts`, and                   │
+-- │    `phase4-s7-installment-aging-live.test.ts` (as the routines' owner,   │
+-- │    against a real invoice committed through `POST /v1/sales`). So the    │
+-- │    parser has had its opinion: `installment_schedule_verify()` is        │
+-- │    COMPILED and not merely written, and the aging-db suite reads its     │
+-- │    `prosecdef` and its owner out of `pg_proc` to say so.                 │
+-- │  * THE CONSTRAINT TRIGGERS FIRE, AND THERE ARE NOT TWO OF THEM. FIVE     │
+-- │    `CREATE CONSTRAINT TRIGGER` statements are below: THREE run           │
+-- │    `installment_schedule_verify()`, one per relation the equality reads  │
+-- │    (`installment_plans`, `installments`, `invoices`), and two run the    │
+-- │    fact verifier. The live suite fires the schedule three in every       │
+-- │    direction the sum can be broken -- below the total, above it, a row   │
+-- │    DELETED out of a complete schedule, a non-contiguous `seq_no` -- AT   │
+-- │    COMMIT and not at the statement, and the concurrency suite fires      │
+-- │    them with the deferral removed by `SET CONSTRAINTS ALL IMMEDIATE`.    │
+-- │    «At the DATABASE level, not in TypeScript only» is therefore MET for  │
+-- │    those obligations, and the 265-day counterexample runs THROUGH this   │
+-- │    routine in PostgreSQL (live suite section E) and not only against     │
+-- │    the reference model.                                                  │
+-- │  * WHAT IS STILL `SPEC ONLY`, AND IT IS NOT NOTHING. Those suites are    │
+-- │    the only thing that applies this file. It carries no migration        │
+-- │    number, it is not in `migrations/`, it is not in the manifest, and    │
+-- │    nothing here is applied by `npm run migrate` -- NO DEPLOYED CLUSTER   │
+-- │    CARRIES ANY OF IT. S7 is CHALLENGER REJECTED with                     │
+-- │    `READY_TO_PROMOTE = NO`.                                              │
+-- │  * TWO authority/command changes that are NOT the author's to make --    │
+-- │    and the first is PRE-APPLIED in every fixture and disclosed, which    │
+-- │    makes every aging figure measured here CONDITIONAL on it: PR-6, the   │
+-- │    `GRANT EXECUTE` on `supplier_ap_release` (section 5), and PR-8, the   │
+-- │    plan-creation status precondition (section 3(f)).                     │
+-- │  * STILL UNMEASURED, named rather than left to be found: the PHYSICAL    │
+-- │    half of the index gap, whose decider is `REINDEX` at apply time and   │
+-- │    in CI (section 3); `TRUNCATE installment_plans`, declared and with    │
+-- │    no instrument; and the reachability of an unenforcing index state by  │
+-- │    any route that is not a superuser writing `pg_index`.                 │
+-- │  * A SPECIFICATION IS DESIGN UNTIL A PARSER HAS HAD AN OPINION           │
+-- │    (challenger S7-1, CRITICAL). It has had one. AND THIS PARAGRAPH IS    │
+-- │    ITSELF UNDER A TEST NOW: `phase4-s7-installment-aging.test.ts` in     │
+-- │    `packages/domain-core/test`, law H16, reads these readiness claims,   │
+-- │    refuses the ones that contradict what the suites measure, and         │
+-- │    refuses a paragraph that retreats into vagueness instead. It is       │
+-- │    under one because what stood here was false for fifteen rounds and    │
+-- │    five challengers, while every other text law of this file looked      │
+-- │    outward and none looked at its own header. H16 will not accept the    │
+-- │    old sentences even as a quotation of themselves, so what they said    │
+-- │    is in `P4-S7-R16-AUTHOR-*.md` and not here.                           │
 -- └─────────────────────────────────────────────────────────────────────────┘
 --
 -- THE SETTLEMENT ORDER IS A DECLARED POLICY, NOT A DERIVATION.
@@ -817,9 +851,30 @@ BEGIN
     FROM public.installments n
    WHERE n.business_id = v_business AND n.plan_id = v_plan;
 
-  -- ---- AND BEFORE ANY OF (a) TO (d) STATES A FIGURE, THE INDEXES OF BOTH
+  -- ---- BEFORE (a), (b) OR (c) REFUSES ON A FIGURE, THE INDEXES OF BOTH
   --      RELATIONS ARE READ (`TL-P4-COORD-R59` ordered item 8, F14-9).
   --
+  -- THE SCOPE IS (a), (b) AND (c), AND NOT (d), AND NOT EVERY EXIT ABOVE --
+  -- NARROWED BY MEASUREMENT IN ROUND 16 (`TL-P4-COORD-R63` item 5, F15-4).
+  -- The earlier heading said «any of (a) to (d)» and the refusal below said
+  -- «no obligation of this slice», and both claimed more than this gate
+  -- reads. Measured as byte offsets into this routine's own body -- which is
+  -- byte-identical to its stored `prosrc`, as the `c_bodies` digests of part
+  -- 9 certify -- the gate's `IF` is at 13358 and it is reached by NONE of:
+  --   * the `invoices`-arm refusal of (a) at 5100, which fires when the
+  --     invoice row says a plan is active and this routine can read none. It
+  --     states «the fact and the read disagree or this read is blinded» and
+  --     reads no flag, so it does not name the cause this gate exists for;
+  --   * the three `RETURN NULL` exits above it -- the invoice row not read
+  --     (4241), the flag read false (4557) and the plan row not read (5919)
+  --     -- each of which is an EMPTY SUBJECT rather than a judgement, but
+  --     the last of which is also a vacuous pass of all four obligations,
+  --     taken on a primary-key read of the plan row that this gate's own
+  --     message names as a premise and that this gate sits BELOW;
+  --   * obligation (d) at 23699, whose ceiling is not one of the four
+  --     conditions of the `IF` -- the string `60` does not occur in it.
+  -- The `RAISE` the gate takes was already honest about this («(a) to (c)»);
+  -- the comment and the heading were not, and they are the ones that moved.
   -- THE THREE RUNTIME `pg_index` READINGS OF THIS SLICE ALL COVERED
   -- `installment_plans` AND NONE COVERED `installments`, which was read at
   -- APPLY TIME ONLY (part 9a). And the sum immediately above is
@@ -853,8 +908,21 @@ BEGIN
   -- installs all five indexes of the two relations carry the three flags true.
   -- The direction it covers is the only one a missing index entry can produce:
   -- entries can only be ABSENT, so a sum read through an unenforcing index can
-  -- only UNDER-report, which makes an obligation FAIL -- it can never make one
-  -- pass that should have failed.
+  -- only UNDER-report, which makes (a), (b) and (c) FAIL -- it can never make
+  -- one of those three pass when it should have failed.
+  --
+  -- (d) IS THE EXCEPTION, AND THE PREMISE THAT SAVES IT IS NAMED RATHER THAN
+  -- LEFT IMPLICIT (`TL-P4-COORD-R63` item 5; an unnamed premise is this
+  -- phase's signature defect). Taken ALONE, (d) runs the other way: an
+  -- UNDER-reported `v_rows` makes `v_rows > 60` PASS a schedule that is over
+  -- the ceiling. What stops that is not this gate, which (d) never reaches,
+  -- but `installments.amount_txn_minor BIGINT NOT NULL CHECK
+  -- (amount_txn_minor >= 1)` in section 2: every instalment carries at least
+  -- one minor unit, so an absent index entry lowers `v_sched` as surely as it
+  -- lowers `v_rows`, obligation (a)'s EQUALITY therefore fails in the same
+  -- reading, and the gate is entered before (d) is ever evaluated. THE
+  -- PREMISE IS THAT CHECK. Relax it to `>= 0` and (d) is unprotected, which
+  -- is why this paragraph names it instead of resting on it silently.
   --
   -- WHAT THIS DOES **NOT** CLOSE, STATED RATHER THAN LEFT TO BE FOUND. This
   -- reads the three FLAGS. It cannot see the state where the flags are
@@ -887,7 +955,7 @@ BEGIN
      WHERE x.indrelid IN ('public.installments'::regclass, 'public.installment_plans'::regclass)
        AND NOT (x.indisvalid AND x.indisready AND x.indislive);
     IF v_unenforcing IS NOT NULL THEN
-      RAISE EXCEPTION 'installment.plan_index_unenforcing: the schedule of plan %/% does not satisfy obligation (a) to (c) AS THIS ROUTINE READ IT -- down payment plus schedule % against an invoice total of %, % instalment row(s), max seq_no % -- AND pg_index says these indexes are not enforcing: %. EVERY FIGURE IN THE SENTENCE BEFORE THIS ONE MAY BE AN ARTIFACT OF THAT. The schedule sum is taken WHERE business_id and plan_id, which is the leading pair of installments_plan_schedule_idx, and the plan row is read by primary key, which is served by installment_plans_pkey; an index that is present and not maintained by DML makes either read MISS rows that exist, so a sum read through it UNDER-reports and this routine would otherwise refuse a schedule that is correct, or accept one that is not. No obligation of this slice is judged while an index of either relation is unenforcing. REINDEX the named indexes and retry; this is the state an interrupted CREATE INDEX CONCURRENTLY or REINDEX CONCURRENTLY leaves, and pg_indexes renders it identically to a correct index',
+      RAISE EXCEPTION 'installment.plan_index_unenforcing: the schedule of plan %/% does not satisfy obligation (a) to (c) AS THIS ROUTINE READ IT -- down payment plus schedule % against an invoice total of %, % instalment row(s), max seq_no % -- AND pg_index says these indexes are not enforcing: %. EVERY FIGURE IN THE SENTENCE BEFORE THIS ONE MAY BE AN ARTIFACT OF THAT. The schedule sum is taken WHERE business_id and plan_id, which is the leading pair of installments_plan_schedule_idx, and the plan row is read by primary key, which is served by installment_plans_pkey; an index that is present and not maintained by DML makes either read MISS rows that exist, so a sum read through it UNDER-reports and this routine would otherwise refuse a schedule that is correct, or accept one that is not. Obligations (a), (b) and (c) are not judged on these figures while an index of either relation is unenforcing, and the schedule-length ceiling (d) is not reached past this point: any entry an unenforcing index is missing lowers the schedule SUM as well as the row count, because amount_txn_minor is CHECKed >= 1, so obligation (a) fails on the same reading and arrives here first. REINDEX the named indexes and retry; this is the state an interrupted CREATE INDEX CONCURRENTLY or REINDEX CONCURRENTLY leaves, and pg_indexes renders it identically to a correct index',
         v_business, v_plan, v_down + v_sched, v_total, v_rows, v_max_seq, v_unenforcing USING ERRCODE = 'P0001';
     END IF;
   END IF;
@@ -909,11 +977,35 @@ BEGIN
   --     issue, which removes this trigger's deferral and fires it at the end of
   --     the PLAN INSERT STATEMENT -- before any `installments` row can exist,
   --     because `installments.plan_id` references the plan and the plan must be
-  --     there first. Five of five lawful plan writes were refused that way, and
-  --     the message sent their reader to look at a schedule that was never
-  --     wrong. Section 3a-quater states why no reordering can eliminate this
+  --     there first. THE ROUND-14 CHALLENGER MEASURED FIVE OF FIVE lawful plan
+  --     writes refused that way (`TL-P4-COORD-R59` section 4), and the message
+  --     sent their reader to look at a schedule that was never wrong. THAT
+  --     FIGURE IS A QUOTATION AND NOT THIS TREE'S OWN READING, and round 16
+  --     says so rather than carry a bare count whose instrument was replaced
+  --     (`TL-P4-COORD-R63` item 7): no instrument at this SHA reproduces the
+  --     five. What the tree's own suites measure is THREE refusals carrying
+  --     this two-cause text -- the fact suite's sections R1 and R1b and the
+  --     concurrency suite's section G2 -- and those three are PROVEN BY TEST
+  --     while the five is PROVEN BY A ROUND-14 MEASUREMENT this tree does not
+  --     repeat. Section 3a-quater states why no reordering can eliminate this
   --     the way the fact hazard was eliminated, and the remedy below is the one
   --     that DOES reach it and is MEASURED.
+  --
+  --     AND WHO READS THE REMEDY IS NOW SETTLED RATHER THAN ASSUMED
+  --     (`TL-P4-COORD-R63` item 4, F15-5). `installment.schedule_incomplete`
+  --     is a REGISTERED installment invariant, so `GlobalExceptionFilter`
+  --     answers it `500 INTERNAL_ERROR` with a generic body and NO `details`:
+  --     none of this text may reach a caller, and none of it does. Until
+  --     round 16 it reached NOBODY AT ALL -- the log line carried the
+  --     invariant NAME alone, so the two causes and the CTE spelling were
+  --     visible only to someone holding a psql session. The filter now logs
+  --     the refusal's FIRST LINE beside the name, under `refusal`, and the
+  --     first line of this refusal is the whole of it. THE BODY IS
+  --     UNCHANGED. So the reader of this remedy is an OPERATOR READING A LOG,
+  --     and a reader of this specification -- never the caller -- and
+  --     `tests/guards/p4s7-installment-filter-contract.test.ts` asserts both
+  --     halves: the sentence present in the log line, and absent from the
+  --     response body.
   IF v_down + v_sched <> v_total THEN
     IF v_rows = 0 AND TG_TABLE_NAME = 'installment_plans' AND TG_OP = 'INSERT' THEN
       RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to % and the invoice total is %, and this plan carries NO instalment row at all while its own INSERT is the event being judged. TWO STATES REACH THIS AND THE REMEDY DIFFERS. (1) THE DEFERRAL WAS REMOVED: this verifier is created DEFERRABLE INITIALLY DEFERRED and SET CONSTRAINTS ALL IMMEDIATE -- unprivileged SQL either app role may issue -- makes it fire at the end of the plan INSERT statement instead of at COMMIT, which is BEFORE any installments row can exist, because installments.plan_id references the plan and the plan must be written first. NOTHING IS WRONG WITH THE SCHEDULE IN THAT CASE and no data is bad: either stop issuing SET CONSTRAINTS ALL IMMEDIATE before a plan write, or issue it AFTER the write, or write the plan and its whole schedule in ONE statement (a data-modifying CTE), which this verifier accepts under the removed deferral because both relations'' AFTER-ROW events then belong to the same statement. (2) THE PLAN REALLY HAS NO SCHEDULE: write its instalments in this same transaction, summing with down_payment_minor to the invoice total exactly. This refusal cannot tell the two apart -- PostgreSQL exposes no reading of whether SET CONSTRAINTS has been issued -- so it names both instead of asserting one, which is TL-P4-COORD-R46 F-4''s rule',
@@ -4077,7 +4169,7 @@ DECLARE
     ['public.installment_plan_fact_sync()',                       '613fd36bae4ab68830f0d8167fedf1eafe17729839579d13a7edcbefec72acf1'],
     ['public.installment_plan_fact_verify()',                     'd83b0657a3b9896eccfb66313ad5ca2bf9080158739bf5a9d1e6cb553e423f7c'],
     ['public.installment_plan_active_exclusive()',                '972604870115f80909906ebf4a184d2de56f3c3568c91d0a7b66d288778515c2'],
-    ['public.installment_schedule_verify()',                      '3c380419082f58d7f48a85f3c9abfb0f9bacc137595ed1b2ba7c7de703306473'],
+    ['public.installment_schedule_verify()',                      '988239ccdb31768b9791ab0b8f1d18617be5d1ee5934f2a2439b478dcf3aed2f'],
     ['public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)', '61d797de3fcb5f8e7fdb687414e09a2d734de630bdd954c48995661708b122f6'],
     ['public.customer_ar_aging(uuid,uuid,date,integer[])',        '67a3dc0b0bff28b65d4472bdda8c8856e7bc90009d4c9cb1d589c56c1df1eefc']];
   -- The six routine NAMES of the list above, for part 6c's overload law. A

@@ -128,36 +128,91 @@ function endStateBlock(): string {
 }
 
 /**
+ * THE SHIPPED STATEMENT WHOSE TEXT BEGINS WITH `head`, SLICED OUT OF THE
+ * SPECIFICATION RATHER THAN RETYPED, AND CERTIFIED NON-VACUOUS BY `mustMatch`.
+ *
+ * ROUND 16, FINISHING THE SWEEP ROUND 15 DECLARED COMPLETE
+ * (`TL-P4-COORD-R63` item 6, F15-6). Round 15 repaired §B6, §E4 and §R3 and
+ * said the sweep had found all of them; it had not. §B2 retyped the partial
+ * unique index and §D4 retyped the fact-sync trigger, and the restrictive read
+ * policies were retyped in this file and in the fact suite. Each retyped copy
+ * MATCHED the spec, so nothing was downgraded -- the hazard was LATENT, and
+ * latent is not absent: it is one spec edit away from being the §B6 failure
+ * again, and that one cost nine reds none of which were about their own
+ * subject.
+ *
+ * `mustMatch` is the non-vacuity of the SLICE and deliberately not a copy of
+ * the statement: it pins the properties the case depends on and nothing else,
+ * so a legitimate spec change travels into the fixture while a slice that
+ * caught the wrong statement throws instead of restoring something weaker.
+ */
+function shippedStatement(head: string, mustMatch: readonly RegExp[]): string {
+  const a = SPEC.indexOf(head);
+  if (a < 0) throw new Error(`the shipped statement ${head} is not in the specification`);
+  const b = SPEC.indexOf(';', a);
+  if (b < 0) throw new Error(`the shipped statement ${head} is unterminated in the specification`);
+  const stmt = SPEC.slice(a, b);
+  for (const re of mustMatch) {
+    if (!re.test(stmt)) throw new Error(`the sliced statement does not satisfy ${String(re)}: ${stmt}`);
+  }
+  return stmt;
+}
+
+/** The shipped partial unique index §B2 drops and must put back. */
+function shippedActivePlanIndex(): string {
+  return shippedStatement('CREATE UNIQUE INDEX installment_plans_one_active_per_invoice_uq', [
+    /ON installment_plans \(business_id, invoice_id\)/,
+    /WHERE status = 'active'/,
+  ]);
+}
+
+/** The shipped fact-sync trigger §D4 drops and must put back. */
+function shippedFactSyncTrigger(): string {
+  return shippedStatement('CREATE TRIGGER installment_plans_fact_sync', [
+    /AFTER [A-Z ]*ON installment_plans/,
+    /FOR EACH ROW EXECUTE FUNCTION installment_plan_fact_sync\(\)/,
+  ]);
+}
+
+/** The shipped restrictive read policy on `installment_plans`, for every §C restore. */
+function shippedPlanReadPolicy(): string {
+  return shippedStatement('CREATE POLICY business_isolation_read ON installment_plans', [
+    /AS RESTRICTIVE FOR SELECT/,
+    /app_bypass\(\)/,
+    /daftar_accounting_internal/,
+    /business_id = nullif\(app_business\(\), ''\)::uuid/,
+  ]);
+}
+
+/**
  * THE SHIPPED `CREATE TRIGGER` FOR `installment_plans_active_exclusive`, SLICED
  * OUT OF THE SPECIFICATION RATHER THAN RETYPED.
  *
  * §B6 drops that trigger and must put it back. Round 14's version of §B6 put
  * back a trigger it had typed into the test -- `BEFORE INSERT OR UPDATE` --
- * which was the shipped shape at the time. Round 15's spec adds `OR DELETE`,
- * and the retyped copy silently became a DOWNGRADE that every later case in
- * this file then inherited. Reading the statement out of `SPEC` makes the
- * restore track the spec by construction, so the next event added to that
- * trigger cannot repeat it.
+ * which was and still is the shipped shape (section 3a-bis of
+ * `p4s7-installment-aging.spec.sql`; `tgtype = 23`, the DELETE bit absent).
+ * Round 15 then DRAFTED an `OR DELETE` arm on that very trigger, measured that
+ * no `BEFORE DELETE` arm can take the invoice row first
+ * (`GetTupleForTrigger` locks `OLD` before the body runs) and REMOVED it again
+ * in the same commit -- so the event list was one measurement away from
+ * moving, and the retyped copy was one commit away from being a silent
+ * DOWNGRADE that every later case in this file would have inherited. Reading
+ * the statement out of `SPEC` makes the restore track the spec by
+ * construction, so neither that near miss nor the next event actually added to
+ * the trigger can produce one.
+ *
+ * THE NON-VACUITY DELIBERATELY DOES NOT PIN THE EVENT LIST. Whether the
+ * trigger fires on DELETE is a decision of the specification, and a restore
+ * that tracked a hard-coded event list is the defect this helper exists to
+ * prevent. What is pinned is that the slice is the whole-row BEFORE trigger
+ * running THIS function.
  */
 function shippedExclusiveTrigger(): string {
-  const a = SPEC.indexOf('CREATE TRIGGER installment_plans_active_exclusive');
-  if (a < 0) throw new Error('the shipped active-exclusive trigger could not be sliced');
-  const b = SPEC.indexOf(';', a);
-  if (b < 0) throw new Error('the shipped active-exclusive trigger is unterminated');
-  const stmt = SPEC.slice(a, b);
-  // Non-vacuity of the slice: it must be the whole-row BEFORE trigger on all
-  // three events running the function this case is about. If the spec ever
-  // stops saying so, this throws instead of restoring something weaker.
-  // The non-vacuity check deliberately does NOT pin the EVENT LIST: whether
-  // the trigger fires on DELETE is a decision of the spec (round 15 built a
-  // DELETE arm, measured that it cannot fix the lock order, and removed it
-  // again), and a restore that tracked a hard-coded event list is the very
-  // defect this helper exists to prevent. What it pins is that the slice is
-  // the whole-row BEFORE trigger running THIS function.
-  if (!/BEFORE [A-Z ]*ON installment_plans/.test(stmt)) throw new Error(`the sliced trigger is not a BEFORE trigger on installment_plans: ${stmt}`);
-  if (!/FOR EACH ROW EXECUTE FUNCTION installment_plan_active_exclusive\(\)/.test(stmt))
-    throw new Error(`the sliced trigger does not run the shipped function: ${stmt}`);
-  return stmt;
+  return shippedStatement('CREATE TRIGGER installment_plans_active_exclusive', [
+    /BEFORE [A-Z ]*ON installment_plans/,
+    /FOR EACH ROW EXECUTE FUNCTION installment_plan_active_exclusive\(\)/,
+  ]);
 }
 
 interface Outcome {
@@ -760,11 +815,17 @@ describe('P4-S7 §B the apply-time laws, each with its planted defect', () => {
   });
 
   it('B2 part 9 still refuses the index being GONE, and the dropped index is restored', async () => {
-    M['B2_drop'] = await ddl(`DROP INDEX installment_plans_one_active_per_invoice_uq`);
-    M['B2_ratchet'] = await ratchet();
-    M['B2_recreate'] = await ddl(
-      `CREATE UNIQUE INDEX installment_plans_one_active_per_invoice_uq ON installment_plans (business_id, invoice_id) WHERE status = 'active'`,
-    );
+    // ROUND 16 (`TL-P4-COORD-R63` item 6): the re-creation was RETYPED and
+    // outside a `finally`, which is §B6's defect in a second place. It now
+    // reads the shipped statement out of `SPEC` and runs in a `finally`, so a
+    // failed assertion in this arm cannot leave every later case in this file
+    // without the partial unique index the one-active exclusion rests on.
+    try {
+      M['B2_drop'] = await ddl(`DROP INDEX installment_plans_one_active_per_invoice_uq`);
+      M['B2_ratchet'] = await ratchet();
+    } finally {
+      M['B2_recreate'] = await ddl(shippedActivePlanIndex());
+    }
     M['B2_after'] = await ratchet();
     expect(String(M['B2_ratchet'])).toContain('installment_plans_one_active_per_invoice_uq');
     expect(M['B2_after']).toBeNull();
@@ -921,8 +982,14 @@ $fn$;`;
 
 const BLIND_STATUS_POLICY = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
    USING (app_bypass() OR status <> 'active')`;
-const RESTORE_PLAN_READ = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
-   USING (app_bypass() OR current_user IN ('daftar_inventory_internal','daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid)`;
+/**
+ * THE RESTRICTIVE READ POLICY AS THE SPECIFICATION SHIPS IT -- SLICED, NOT
+ * RETYPED (`TL-P4-COORD-R63` item 6). The retyped literal that stood here
+ * matched the spec semantically and differed from it in whitespace, so it was
+ * latent rather than live; the next edit to the shipped policy is what made it
+ * live, which is the whole lesson of §B6.
+ */
+const RESTORE_PLAN_READ = shippedPlanReadPolicy();
 
 describe('P4-S7 §C F-3, answered by EXECUTION and by catalogue DATA', () => {
   it('C0 the planted body is the renamed one and carries no comment and no dead code', () => {
@@ -1146,12 +1213,14 @@ describe('P4-S7 §D the runtime guard at READ time — the premises the arithmet
   });
 
   it('D4 a DROPPED trigger refuses at read time too, not only a disabled one', async () => {
-    M['D4_drop'] = await sudo(`DROP TRIGGER installment_plans_fact_sync ON installment_plans`);
-    M['D4_read'] = await aging();
-    M['D4_recreate'] = await sudo(
-      `CREATE TRIGGER installment_plans_fact_sync AFTER INSERT OR UPDATE OR DELETE ON installment_plans
-         FOR EACH ROW EXECUTE FUNCTION installment_plan_fact_sync()`,
-    );
+    // ROUND 16 (`TL-P4-COORD-R63` item 6): retyped and outside a `finally`,
+    // the same shape as §B2 and §B6. Sliced and bracketed now.
+    try {
+      M['D4_drop'] = await sudo(`DROP TRIGGER installment_plans_fact_sync ON installment_plans`);
+      M['D4_read'] = await aging();
+    } finally {
+      M['D4_recreate'] = await sudo(shippedFactSyncTrigger());
+    }
     M['D4_read_after'] = await aging();
     expect(String((M['D4_read'] as Outcome).error)).toContain('installment.plan_fact_untrusted');
     expect((M['D4_read_after'] as Outcome).error).toBeNull();

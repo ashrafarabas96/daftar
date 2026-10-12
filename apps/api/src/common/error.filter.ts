@@ -180,9 +180,34 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       //     so the answer named a cause that cannot apply. The registry is
       //     explicit: the migration-time end-state codes of that same prefix
       //     are NOT in it and keep the unaudited rendering.
+      //     AND THE REFUSAL'S OWN SENTENCE GOES TO THE LOG WITH THE NAME
+      //     (`TL-P4-COORD-R63` ordered item 4, F15-5). Until this line it did
+      //     not: the log carried `{ invariant }` ALONE. Several of these
+      //     refusals are written for a reader who has to DO something —
+      //     `installment.schedule_incomplete` names the TWO states that reach
+      //     it and the remedy of each, including the data-modifying-CTE
+      //     spelling, in about eleven hundred characters — and that text
+      //     reached nobody: not the body, which is generic by contract, and
+      //     not the log, which held only the name. «A declaration whose
+      //     reader can do nothing is worse than no declaration.»
+      //
+      //     WHAT IS LOGGED IS THE FIRST LINE OF THE MESSAGE AND NOTHING
+      //     ELSE. `pg` sets `message` to the routine's primary message; the
+      //     `CONTEXT:` and `STATEMENT:` frames arrive on their own fields
+      //     (`where`, `internalQuery`) and are NOT logged here, so no SQL and
+      //     no stack joins the line even when a caller hands us an error
+      //     whose `message` has those frames concatenated into it.
+      //
+      //     THE BODY IS UNCHANGED AND MUST STAY UNCHANGED: this is an
+      //     internal sentence, the invariant vocabulary is in no localization
+      //     catalogue, and the leak class it belongs to is the one the
+      //     `40P01` rendering below is careful about. The guard suite asserts
+      //     both halves — the sentence present in the log, and absent from
+      //     the body.
       const installment = parseDatabaseInstallmentInternalCode(exception);
       if (installment !== null && isInstallmentInternalInvariant(installment)) {
-        this.logger.error({ requestId, invariant: installment }, 'phase 4 installment invariant violated');
+        const refusal = (exception instanceof Error ? exception.message : String(exception)).split('\n')[0] ?? '';
+        this.logger.error({ requestId, invariant: installment, refusal }, 'phase 4 installment invariant violated');
         body('INTERNAL_ERROR', 'Internal error', HttpStatus.INTERNAL_SERVER_ERROR);
         return;
       }

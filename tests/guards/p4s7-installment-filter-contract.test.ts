@@ -227,6 +227,84 @@ describe('P4-S7 the installment.* rendering contract', () => {
     }
   });
 
+  /**
+   * ── THE REFUSAL'S OWN SENTENCE REACHES AN OPERATOR, AND STILL NOT A CALLER
+   *    (`TL-P4-COORD-R63` ordered item 4, F15-5) ─────────────────────────────
+   *
+   * Round 15 added an eleven-hundred-character two-cause remedy to
+   * `installment.schedule_incomplete` — the two states that reach it, the
+   * remedy of each, the data-modifying-CTE spelling — and the round-15
+   * challenger measured that it reached NOBODY: the body is generic by
+   * contract (correctly), and the log line carried `{ invariant }` alone, so
+   * the text was visible only to someone holding a psql session. «A
+   * declaration whose reader can do nothing is worse than no declaration.»
+   *
+   * The repair is one field on the log line, and this case pins BOTH halves of
+   * it, because the half that is easy to lose is the second: the sentence is
+   * an INTERNAL one, and an internal sentence in a response body is the leak
+   * class the `40P01` rendering one file away was careful about.
+   */
+  it('the refusal SENTENCE is logged beside the invariant name, and still reaches no response body', () => {
+    // THE REAL SHAPE: the two-cause remedy as the specification writes it,
+    // read OUT OF THE SPECIFICATION rather than retyped, so this case cannot
+    // pass against a sentence that no longer ships. The remedy is one SQL
+    // string literal; `''` is SQL's escape for an apostrophe inside it.
+    const spec = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'), 'utf8');
+    const open = spec.indexOf(
+      "RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to % and the invoice total is %, and this plan carries NO",
+    );
+    expect(open, 'the two-cause remedy is no longer in the specification').toBeGreaterThan(-1);
+    // The literal ends at the FIRST `',` that closes it — `''` is an escaped
+    // apostrophe inside it and never a terminator, so the terminator is looked
+    // for as the quote-comma-newline the statement actually ends its message
+    // argument with.
+    const close = spec.indexOf("',\n", open);
+    expect(close, 'the two-cause remedy literal is unterminated').toBeGreaterThan(open);
+    const sentence = spec.slice(spec.indexOf("'", open) + 1, close).replace(/''/g, "'");
+    expect(sentence.length, 'the sliced remedy is too short to be the two-cause message').toBeGreaterThan(800);
+    for (const phrase of ['TWO STATES REACH THIS', 'SET CONSTRAINTS ALL IMMEDIATE', 'data-modifying CTE', 'NO instalment row at all']) {
+      expect(sentence, `the sliced remedy does not contain ${phrase}`).toContain(phrase);
+    }
+
+    // AS `pg` DELIVERS IT: the SQLSTATE on `code`, the routine's primary
+    // message on `message`, and the frames on their own fields.
+    const r = render(pgError('P0001', sentence, { where: POISON.frame, internalQuery: POISON.sql }));
+
+    // (1) THE LOG CARRIES THE NAME **AND** THE SENTENCE. Before this round the
+    //     second assertion failed: the field did not exist.
+    const lines = r.logged.filter((l) => l.message === 'phase 4 installment invariant violated');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.fields['invariant']).toBe('installment.schedule_incomplete');
+    expect(String(lines[0]?.fields['refusal'])).toBe(sentence);
+    for (const phrase of ['TWO STATES REACH THIS', 'data-modifying CTE', 'SET CONSTRAINTS ALL IMMEDIATE']) {
+      expect(String(lines[0]?.fields['refusal']), `the remedy's «${phrase}» did not reach the log`).toContain(phrase);
+    }
+
+    // (2) AND THE BODY IS UNTOUCHED — 500, generic, no `details`, and not one
+    //     word of the sentence, the frames or the SQL.
+    expect(r.status).toBe(500);
+    expect(r.payload.error.code).toBe('INTERNAL_ERROR');
+    expect(r.payload.error.message).toBe('Internal error');
+    expect(r.payload.error.details).toBeUndefined();
+    const body = JSON.stringify(r.payload);
+    for (const leak of ['TWO STATES REACH THIS', 'data-modifying CTE', 'SET CONSTRAINTS', 'installment.schedule_incomplete', POISON.frame, POISON.sql]) {
+      expect(body, `the body leaked ${leak}`).not.toContain(leak);
+    }
+
+    // (3) THE FRAMES DO NOT JOIN THE LOG LINE EITHER. `pg` puts `CONTEXT:` and
+    //     `STATEMENT:` on `where`/`internalQuery`, but a caller that
+    //     concatenated them into `message` must not push SQL into the log, so
+    //     only the FIRST LINE is taken — asserted against a message shaped
+    //     exactly that way.
+    const framed = render(refusal('installment.schedule_incomplete'));
+    const framedLine = framed.logged.filter((l) => l.message === 'phase 4 installment invariant violated')[0];
+    expect(String(framedLine?.fields['refusal'])).not.toContain(POISON.sql);
+    expect(String(framedLine?.fields['refusal'])).not.toContain('CONTEXT:');
+    expect(String(framedLine?.fields['refusal'])).toContain('installment.schedule_incomplete:');
+    // NON-VACUITY: the fixture really does carry the frames that had to be cut.
+    expect(refusal('installment.schedule_incomplete').message).toContain(POISON.sql);
+  });
+
   it('REGRESSION: an unknown P0001, an unregistered installment.* and a 42501 are all still 403', () => {
     // The three things the round-11 branch was added BEFORE the historical
     // fallback in order NOT to change. A registry that became a prefix test

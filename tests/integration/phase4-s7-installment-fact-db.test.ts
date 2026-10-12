@@ -316,9 +316,44 @@ ${SYNC_TAIL.replace(
     END IF;`,
 )}`;
 
+/**
+ * THE SHIPPED STATEMENT WHOSE TEXT BEGINS WITH `head`, SLICED OUT OF THE
+ * SPECIFICATION RATHER THAN RETYPED, AND CERTIFIED NON-VACUOUS BY `mustMatch`.
+ *
+ * ROUND 16, FINISHING ROUND 15'S SWEEP (`TL-P4-COORD-R63` item 6, F15-6). The
+ * two restrictive read policies this file restores were RETYPED: they matched
+ * the specification semantically and differed in whitespace, so nothing was
+ * downgraded and the hazard was LATENT -- one spec edit away from §B6's
+ * failure in the concurrency suite, where a retyped restore silently put back
+ * a weaker object for every later case in the file. `mustMatch` pins the
+ * properties these cases depend on and not a copy of the statement, so a
+ * legitimate spec change travels into the fixture while a slice that caught
+ * the wrong statement throws instead of restoring something weaker.
+ */
+function shippedStatement(head: string, mustMatch: readonly RegExp[]): string {
+  const a = SPEC.indexOf(head);
+  if (a < 0) throw new Error(`the shipped statement ${head} is not in the specification`);
+  const b = SPEC.indexOf(';', a);
+  if (b < 0) throw new Error(`the shipped statement ${head} is unterminated in the specification`);
+  const stmt = SPEC.slice(a, b);
+  for (const re of mustMatch) {
+    if (!re.test(stmt)) throw new Error(`the sliced statement does not satisfy ${String(re)}: ${stmt}`);
+  }
+  return stmt;
+}
+
+/** The shipped restrictive read policy of `rel`, sliced out of the specification. */
+function shippedReadPolicy(rel: 'installment_plans' | 'installments'): string {
+  return shippedStatement(`CREATE POLICY business_isolation_read ON ${rel}`, [
+    /AS RESTRICTIVE FOR SELECT/,
+    /app_bypass\(\)/,
+    /daftar_accounting_internal/,
+    /business_id = nullif\(app_business\(\), ''\)::uuid/,
+  ]);
+}
+
 /** The restrictive read policy as the specification ships it. */
-const RESTORE_PLANS_READ_SQL = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT
-     USING (app_bypass() OR current_user IN ('daftar_inventory_internal','daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid)`;
+const RESTORE_PLANS_READ_SQL = shippedReadPolicy('installment_plans');
 /** Hidden from EVERYBODY, which is what §F1-b and §F1-c use. */
 const BLIND_PLANS_SQL = `CREATE POLICY business_isolation_read ON installment_plans AS RESTRICTIVE FOR SELECT USING (false)`;
 /**
@@ -657,8 +692,8 @@ beforeAll(async () => {
   M['F1a_counterfactual_rewrote'] =
     R8_BODY !== NEW_BODY && !R8_BODY.includes('visible_total <>') && R8_BODY.includes('NOT EXISTS (SELECT 1 FROM public.installments');
 
-  const RESTORE_INSTALLMENTS_READ = `CREATE POLICY business_isolation_read ON installments AS RESTRICTIVE FOR SELECT
-       USING (app_bypass() OR current_user IN ('daftar_inventory_internal','daftar_accounting_internal') OR business_id = nullif(app_business(), '')::uuid)`;
+  // Sliced, not retyped (`TL-P4-COORD-R63` item 6) -- see `shippedReadPolicy`.
+  const RESTORE_INSTALLMENTS_READ = shippedReadPolicy('installments');
 
   //    BOTH HALVES OF THE SCHEDULE, SEPARATELY. The challenger disclosed that
   //    under the existence test hiding the OTHER instalment changed nothing
