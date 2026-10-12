@@ -12,6 +12,7 @@
  *    not equal its own lines is refused, in both directions, and the refusal
  *    names both figures.
  */
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   NO_QUOTE_EXPIRY,
@@ -579,5 +580,116 @@ describe('the domain null and the relation infinity are one mapping (challenger 
     // the law is executed and not only compiled.
     expect(approve(OPEN_ENDED).confirmation.confirmedQuoteExpiresAt).toBe(NO_QUOTE_EXPIRY);
     expect(approve(OPEN_ENDED).confirmation.confirmedQuoteExpiresAt).not.toBeNull();
+  });
+});
+
+describe('the gate proves LAWFULNESS, not only integrity (round-2 challenge P1-01)', () => {
+  // `canonicalQuoteBytes` is exported, so anyone can give a hand-built object a
+  // valid digest. Each case below forges a quote that is self-consistent — its
+  // digest really is the digest of its own bytes, asserted first so the forgery
+  // is proved to have landed — and then breaks one law the builder enforces.
+  function forge(fields: Omit<CommercialQuote, 'digest'>): CommercialQuote {
+    const digest = createHash('sha256').update(canonicalQuoteBytes(fields), 'utf8').digest('hex');
+    return { ...fields, digest };
+  }
+
+  const LINE = INPUT.lines[0] as (typeof INPUT.lines)[number];
+  const ONE_LINE: Omit<CommercialQuote, 'digest'> = { ...INPUT, lines: [{ ...LINE, lineTotalMinor: '1000' }], displayedTotalMinor: '1000' };
+
+  it('a forged quote really does carry a valid digest — otherwise these cases prove nothing', () => {
+    const forged = forge({ ...ONE_LINE, displayedTotalMinor: '999999' });
+    const { digest, ...rest } = forged;
+    expect(createHash('sha256').update(canonicalQuoteBytes(rest), 'utf8').digest('hex')).toBe(digest);
+  });
+
+  it('refuses a displayed total that does not equal its own lines, even with a valid digest', () => {
+    // The challenger's case: the builder refuses 999999 against lines summing
+    // to 1000, and the hand-built quote carrying that same illegal total used to
+    // pass the gate, build an intent, AND have the zero tolerance measured
+    // against the forged figure — so the honest recomputation of 1000 was the
+    // one refused as a divergence.
+    const forged = forge({ ...ONE_LINE, displayedTotalMinor: '999999' });
+    expect(() => assertQuoteIntact(forged)).toThrowError(expect.objectContaining({ code: 'order.quote_total_mismatch' }));
+    expect(() => assertQuoteApproved(approve(forged), ORDER)).toThrowError(expect.objectContaining({ code: 'order.quote_total_mismatch' }));
+    expect(() => assertCommitWithinConfirmedQuote(approve(forged), ORDER, '999999')).toThrowError(
+      expect.objectContaining({ code: 'order.quote_total_mismatch' }),
+    );
+  });
+
+  it('refuses a forged negative quantity', () => {
+    const forged = forge({ ...ONE_LINE, lines: [{ ...LINE, lineTotalMinor: '1000', quantity: '-5.0000' }] });
+    expect(() => assertQuoteIntact(forged)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+  });
+
+  it('refuses a forged duplicate stock key, which used to collapse the hand-off per-key map', () => {
+    // Two lines on one stock key: `new Map(lines.map(...))` keeps the LAST, so a
+    // quote whose first line granted 0 and whose second granted 77 admitted a
+    // requested 77 while the size check still agreed with one position.
+    const forged = forge({
+      ...INPUT,
+      lines: [
+        { ...LINE, discountMinor: '0', lineTotalMinor: '1000' },
+        { ...LINE, discountMinor: '77', lineTotalMinor: '1000' },
+      ],
+      displayedTotalMinor: '2000',
+    });
+    expect(() => assertQuoteIntact(forged)).toThrowError(expect.objectContaining({ code: 'order.quote_line_duplicate' }));
+  });
+
+  it('refuses a forged non-canonical digest representation and a forged bad currency', () => {
+    expect(() => assertQuoteIntact(forge({ ...ONE_LINE, currency: 'ils' }))).toThrowError(expect.objectContaining({ code: 'order.quote_amount_invalid' }));
+    expect(() => assertQuoteIntact(forge({ ...ONE_LINE, version: 0 }))).toThrowError(expect.objectContaining({ code: 'order.quote_version_invalid' }));
+  });
+
+  it('still accepts the quote its own builder produced, and still catches an EDIT', () => {
+    // Both halves of the claim: lawfulness does not reject what is lawful, and
+    // the digest check still speaks for the storage.
+    expect(() => assertQuoteIntact(QUOTED)).not.toThrow();
+    expect(() => assertQuoteIntact({ ...QUOTED, issuedAt: '2026-10-01T08:00:00Z' })).toThrowError(expect.objectContaining({ code: 'order.quote_tampered' }));
+  });
+});
+
+describe('confirmedAt is validated and compared to the window (round-2 challenge P1-02)', () => {
+  function confirmedAtOf(value: string): ConfirmedQuoteApproval {
+    const honest = approve(QUOTED);
+    return { ...honest, confirmation: { ...honest.confirmation, confirmedAt: value } };
+  }
+
+  it.each(['', 'not-a-date', '2026-13-45T99:99:99Z', '2026-10-01', '2026-10-01T09:30:00.000Z', '2026-10-01T09:30:00+02:00'])(
+    'refuses a confirmedAt of %s rather than reading it as an instant',
+    (value) => {
+      expect(() => assertQuoteApproved(confirmedAtOf(value), ORDER)).toThrowError(expect.objectContaining({ code: 'order.occurred_at_invalid' }));
+    },
+  );
+
+  it('refuses a confirmation dated before the quote was issued', () => {
+    expect(() => assertQuoteApproved(confirmedAtOf('2020-01-01T00:00:00Z'), ORDER)).toThrowError(
+      expect.objectContaining({ code: 'order.quote_expiry_invalid' }),
+    );
+    // The issue instant itself is admitted: agreeing the moment you are quoted
+    // is not an error.
+    expect(() => assertQuoteApproved(confirmedAtOf('2026-10-01T09:00:00Z'), ORDER)).not.toThrow();
+  });
+
+  it('I6.4a — the three instants around the expiry, named one by one', () => {
+    // The quote expires at 10:00:00Z.
+    expect(() => assertQuoteApproved(confirmedAtOf('2026-10-01T09:59:59Z'), ORDER)).not.toThrow();
+    expect(() => assertQuoteApproved(confirmedAtOf('2026-10-01T10:00:00Z'), ORDER)).toThrowError(expect.objectContaining({ code: 'order.quote_expired' }));
+    expect(() => assertQuoteApproved(confirmedAtOf('2026-10-01T10:00:01Z'), ORDER)).toThrowError(expect.objectContaining({ code: 'order.quote_expired' }));
+  });
+
+  it('refuses the challenger thirteen-hours-late confirmation, and gives it no divergence verdict either', () => {
+    const late = confirmedAtOf('2026-10-01T23:00:00Z');
+    expect(() => assertQuoteApproved(late, ORDER)).toThrowError(expect.objectContaining({ code: 'order.quote_expired' }));
+    expect(() => assessQuoteDivergence(late, ORDER, '3799')).toThrowError(expect.objectContaining({ code: 'order.quote_expired' }));
+  });
+
+  it('a quote with no expiry is confirmable at any instant from its issue onward', () => {
+    const openEnded = buildCommercialQuote({ ...INPUT, expiresAt: null });
+    const honest = approve(openEnded);
+    const far = { ...honest, confirmation: { ...honest.confirmation, confirmedAt: '2099-01-01T00:00:00Z' } };
+    expect(() => assertQuoteApproved({ ...far, asOf: '2099-01-01T00:00:00Z' }, ORDER)).not.toThrow();
+    const early = { ...honest, confirmation: { ...honest.confirmation, confirmedAt: '2026-10-01T08:59:59Z' } };
+    expect(() => assertQuoteApproved(early, ORDER)).toThrowError(expect.objectContaining({ code: 'order.quote_expiry_invalid' }));
   });
 });

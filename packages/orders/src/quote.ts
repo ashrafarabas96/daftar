@@ -296,11 +296,46 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
  * rather than the system carrying on with a snapshot that is no longer the one
  * the shopper confirmed.
  */
-export function assertQuoteIntact(quote: CommercialQuote): void {
+export function assertQuoteIntact(quote: CommercialQuote, checks?: CommercialQuoteChecks): void {
   const { digest, ...rest } = quote;
   const recomputed = digestOf(rest);
   if (recomputed !== digest) {
     throw new OrderError('order.quote_tampered', 'the quote does not match its own digest', { quoteId: quote.quoteId });
+  }
+
+  // INTEGRITY IS NOT LAWFULNESS, and for one revision this function conflated
+  // them. Recomputing the digest proves only that nobody edited the quote since
+  // its bytes were written; it proves nothing about whether those bytes were
+  // ever admissible. `canonicalQuoteBytes` is exported, so ANY self-consistent
+  // object carries a valid digest — and the independent challenger measured the
+  // cost: a hand-built quote whose displayed total was 999999 against lines
+  // summing to 1000 passed this check, passed the approval gate, built a sale
+  // commit intent, and then had PART 33's zero tolerance measured against the
+  // forged figure, so the HONEST recomputation of 1000 was the one refused as a
+  // divergence. A forged duplicate stock key was worse: it collapsed the
+  // hand-off's per-key map and handed the last duplicate's discount to a
+  // checkout the other line had priced at zero.
+  //
+  // So lawfulness is re-established by RE-RUNNING THE BUILDER over the quote's
+  // own fields. The builder is the only definition of a lawful quote, and this
+  // cannot drift from it, because it IS it: a law added there is enforced here
+  // on the next call with no second site to remember. Its refusal is rethrown
+  // as itself — `order.quote_total_mismatch`, `order.quote_line_duplicate`,
+  // `order.quote_quantity_invalid` — rather than flattened into "tampered",
+  // because the caller deserves to know WHICH law the quote breaks.
+  //
+  // A quote read back from the relation carries its stored digest, so the digest
+  // check above speaks for the storage and this check speaks for the content.
+  // `I6.2` would refuse an unlawful sum in the relation too, but the DDL is
+  // `SPEC ONLY` until the Migration Owner applies it, so today this is the only
+  // layer that holds.
+  const rebuilt = buildCommercialQuote(rest, checks);
+  if (rebuilt.digest !== digest) {
+    // Unreachable while the digest is a pure function of the fields: the bytes
+    // were just proved to hash to `digest`. Stated as a refusal rather than
+    // assumed, so a future change to the builder that alters the stream cannot
+    // pass silently.
+    throw new OrderError('order.quote_tampered', 'the quote rebuilt from its own fields does not reproduce its digest', { quoteId: quote.quoteId });
   }
 }
 
@@ -438,6 +473,42 @@ export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: s
       quoteId: quote.quoteId,
       confirmedExpiresAt: confirmation.confirmedQuoteExpiresAt,
       expiresAt: quoteExpiryText(quote),
+    });
+  }
+
+  // `confirmedAt` — the instant the shopper AGREED — was previously validated
+  // and compared nowhere in this package. The DTO's own doc said it must fall
+  // strictly before the quote's expiry, and the field was read by nothing: the
+  // challenger stored a confirmation dated thirteen hours after the window shut
+  // and had it approved, along with `''`, `'not-a-date'`,
+  // `'2026-13-45T99:99:99Z'`, a bare `'2026-10-01'`, and one dated 2020, before
+  // the quote existed. `c_half_open_window_ck` does enforce it in the relation —
+  // measured, strictly, infinity included — but this function exists precisely
+  // because a pure function does not consult the relation.
+  //
+  // Three laws, in the order a reader would ask them:
+  if (!isCanonicalInstant(confirmation.confirmedAt)) {
+    throw new OrderError('order.occurred_at_invalid', 'confirmedAt must be a canonical RFC3339 UTC instant at second precision', {
+      confirmationId: confirmation.confirmationId,
+      stated: confirmation.confirmedAt,
+    });
+  }
+  if (compareCanonical(confirmation.confirmedAt, quote.issuedAt) < 0) {
+    throw new OrderError('order.quote_expiry_invalid', 'a confirmation cannot predate the instant its quote was issued', {
+      confirmedAt: confirmation.confirmedAt,
+      issuedAt: quote.issuedAt,
+    });
+  }
+  // HALF-OPEN, written as `>=` so equality is admitted by nothing: a
+  // confirmation AT the expiry instant is outside the window, exactly as
+  // `asOf === expiresAt` is (PART 34, `I6.4a`). A quote with no expiry is open
+  // at every instant — `'infinity'` is the relation's spelling of this same
+  // sentence, and `quoteExpiryText` is where the two meet.
+  if (quote.expiresAt !== null && compareCanonical(confirmation.confirmedAt, quote.expiresAt) >= 0) {
+    throw new OrderError('order.quote_expired', 'the confirmation was recorded at or after the instant the quote expired', {
+      confirmationId: confirmation.confirmationId,
+      confirmedAt: confirmation.confirmedAt,
+      expiresAt: quote.expiresAt,
     });
   }
 
