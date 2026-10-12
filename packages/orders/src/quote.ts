@@ -270,6 +270,68 @@ const CANONICAL_LINE_FIELDS: readonly (keyof QuoteLineSnapshot)[] = Object.freez
   'lineTotalMinor',
 ]);
 
+/**
+ * Every key an object carries ITSELF that the allow-list does not cover —
+ * `Reflect.ownKeys`, not `Object.keys`.
+ *
+ * The independent challenger handed me this before round 11 and I measured it
+ * on the built package: with `Object.keys`, an undeclared field reaches a quote
+ * three ways the check could not see — on the PROTOTYPE, as an own
+ * NON-ENUMERABLE property, or through a class ACCESSOR — and each stayed
+ * readable as `'5'` while `assertQuoteIntact` answered ACCEPTED. The line level
+ * bit the same way, which the report did not cover. The coordinator ruled it a
+ * FAIL-OPEN of the guard F-34 exists for: an "untampered" verdict for bytes
+ * nobody attested to is the whole defect, whatever the money impact.
+ *
+ * `Reflect.ownKeys` closes the own half — non-enumerable properties AND SYMBOL
+ * keys, which neither review had listed. The prototype half cannot be closed by
+ * listing keys at all, because the field is not the object's own; that is what
+ * `assertPlainCarrier` is for.
+ */
+function undeclaredKeys(carrier: object, allowed: ReadonlySet<string>): string[] {
+  return Reflect.ownKeys(carrier)
+    .filter((key) => typeof key !== 'string' || !allowed.has(key))
+    .map((key) => String(key))
+    .sort();
+}
+
+/**
+ * Refuse a carrier whose prototype is not `Object.prototype`.
+ *
+ * A class instance, or any object whose prototype carries data, can answer for
+ * a field that is nowhere in its own keys: `Reflect.ownKeys` cannot see it, and
+ * a getter can return anything on each read. So the SHAPE of the carrier is
+ * checked, not only its keys.
+ *
+ * WHAT THIS COSTS, stated rather than discovered: an `Object.create(null)`
+ * carrier is refused too, as is an ORM entity or any class instance. `JSON.parse`
+ * yields `Object.prototype`, so the ordinary storage path — read the row, parse
+ * or project it, hand it in — is unaffected. A layer that materialises rows into
+ * CLASS INSTANCES must project to a plain object first, which is the same
+ * obligation `P6-INTEGRATION-PATCH-REQUEST.md` §6 already states for a row that
+ * carries its own columns.
+ *
+ * WHY THIS IS NOT MERELY DEFENCE IN DEPTH ON THE INPUT PATH. A quote the builder
+ * produced cannot carry either shape — `{ ...carrier }` copies own enumerable
+ * properties only, measured: a prototype field and a non-enumerable field each
+ * come out `undefined` with the digest unchanged. The reachable path is a carrier
+ * the CALLER builds and hands straight to `assertQuoteIntact`. The input path is
+ * guarded to the same standard anyway, because a field this package would
+ * silently drop is exactly the thing `R-16` was about.
+ */
+function assertPlainCarrier(carrier: object, subject: string, lineIndex: number | null): void {
+  if (Object.getPrototypeOf(carrier) !== Object.prototype) {
+    throw new OrderError(
+      'order.quote_field_undeclared',
+      `${subject} is not a plain object, so a field it answers for need not be among its own keys and nothing can attest to it`,
+      {
+        ...(lineIndex === null ? {} : { lineIndex: String(lineIndex) }),
+        prototype: Object.getPrototypeOf(carrier) === null ? 'null' : 'not Object.prototype',
+      },
+    );
+  }
+}
+
 /** The input reduced to exactly the fields the digest covers, lines included. */
 function canonicalCarrier(input: CommercialQuoteInput): CommercialQuoteInput {
   const lines = input.lines.map((line) => {
@@ -309,8 +371,9 @@ function canonicalCarrier(input: CommercialQuoteInput): CommercialQuoteInput {
  * in `P6-INTEGRATION-PATCH-REQUEST.md` §6, and it fails closed.
  */
 function assertCanonicalInput(input: CommercialQuoteInput): void {
+  assertPlainCarrier(input, 'the quote input', null);
   const allowed = new Set<string>(CANONICAL_QUOTE_FIELDS as readonly string[]);
-  const extra = Object.keys(input).filter((key) => !allowed.has(key));
+  const extra = undeclaredKeys(input, allowed);
   if (extra.length > 0) {
     throw new OrderError(
       'order.quote_field_undeclared',
@@ -325,7 +388,8 @@ function assertCanonicalInput(input: CommercialQuoteInput): void {
   const lines = Array.isArray(input.lines) ? input.lines : [];
   for (const [index, line] of lines.entries()) {
     if (line === null || typeof line !== 'object') continue;
-    const extraLine = Object.keys(line).filter((key) => !allowedLine.has(key));
+    assertPlainCarrier(line, 'a quote input LINE', index);
+    const extraLine = undeclaredKeys(line, allowedLine);
     if (extraLine.length > 0) {
       throw new OrderError('order.quote_field_undeclared', 'a quote input LINE carries a field this package does not price or digest', {
         quoteId: String((input as { quoteId?: unknown }).quoteId),
@@ -351,8 +415,9 @@ function assertCanonicalInput(input: CommercialQuoteInput): void {
  * the cost of the immutability claim being checkable, and it fails closed.
  */
 function assertCanonicalCarrier(quote: CommercialQuote): void {
+  assertPlainCarrier(quote, 'a quote', null);
   const allowed = new Set<string>([...CANONICAL_QUOTE_FIELDS, 'digest']);
-  const extra = Object.keys(quote).filter((key) => !allowed.has(key));
+  const extra = undeclaredKeys(quote, allowed);
   if (extra.length > 0) {
     throw new OrderError('order.quote_field_undeclared', 'a quote carries a field the canonical stream does not cover, so nothing attests to it', {
       quoteId: String(quote.quoteId),
@@ -361,7 +426,8 @@ function assertCanonicalCarrier(quote: CommercialQuote): void {
   }
   const allowedLine = new Set<string>(CANONICAL_LINE_FIELDS);
   for (const [index, line] of quote.lines.entries()) {
-    const extraLine = Object.keys(line).filter((key) => !allowedLine.has(key));
+    assertPlainCarrier(line, 'a quote LINE', index);
+    const extraLine = undeclaredKeys(line, allowedLine);
     if (extraLine.length > 0) {
       throw new OrderError('order.quote_field_undeclared', 'a quote LINE carries a field the canonical stream does not cover, so nothing attests to it', {
         quoteId: String(quote.quoteId),

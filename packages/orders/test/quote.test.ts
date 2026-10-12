@@ -992,8 +992,15 @@ describe('the carrier is the digested stream, not a superset of it (round-10 F-3
       expiresAt: null,
       lines: [INPUT.lines[1], INPUT.lines[0]],
     };
-    for (const [field, value] of Object.entries(moved)) {
-      expect(canonicalQuoteBytes({ ...(carried as CommercialQuoteInput), [field]: value })).not.toBe(base);
+    // DRIVEN FROM THE DECLARED LIST, not from this map. The independent
+    // challenger's point before round 11: iterating the map checks only the
+    // fields someone remembered to put in it, so a field added to the carrier
+    // list with no entry here went unperturbed and its digest-relevance was
+    // never asserted. Now a missing entry is a FAILURE, so the map cannot fall
+    // behind the list in silence.
+    for (const field of Object.keys(carried)) {
+      expect(Object.keys(moved), `no perturbation is declared for the carried field ${field}`).toContain(field);
+      expect(canonicalQuoteBytes({ ...(carried as CommercialQuoteInput), [field]: moved[field] })).not.toBe(base);
     }
     for (const field of Object.keys(QUOTED.lines[0] as object)) {
       const line = { ...(INPUT.lines[0] as (typeof INPUT.lines)[number]) } as Record<string, unknown>;
@@ -1023,5 +1030,110 @@ describe('the carrier is the digested stream, not a superset of it (round-10 F-3
     expect(() => assertQuoteIntact(QUOTED)).not.toThrow();
     expect(() => assertQuoteApproved(APPROVAL, ORDER)).not.toThrow();
     expect(() => assertQuoteIntact({ ...QUOTED, currency: 'USD' })).toThrowError(expect.objectContaining({ code: 'order.quote_tampered' }));
+  });
+  // THE CARRIER'S SHAPE, not only its keys (the challenger's pre-round-11
+  // measurement, ruled a FAIL-OPEN by the coordinator). With `Object.keys`,
+  // three shapes answered for an undeclared field that the check could not see,
+  // and `assertQuoteIntact` said ACCEPTED while the field read back as '5'.
+  // `Reflect.ownKeys` closes the own half (non-enumerable AND symbol keys);
+  // the prototype half needs the carrier's SHAPE, because the field is not the
+  // object's own key at all.
+  describe("the carrier's SHAPE is checked, not only its keys", () => {
+    const refusal = (carrier: unknown): OrderError => {
+      try {
+        assertQuoteIntact(carrier as CommercialQuote);
+      } catch (error) {
+        return error as OrderError;
+      }
+      throw new Error('a wider carrier was accepted as intact');
+    };
+
+    it('an own NON-ENUMERABLE field is refused, and named', () => {
+      const forged = { ...QUOTED };
+      Object.defineProperty(forged, 'documentFeeMinor', { value: '5', enumerable: false });
+      expect((forged as { documentFeeMinor?: string }).documentFeeMinor).toBe('5');
+      const error = refusal(forged);
+      expect(error.code).toBe('order.quote_field_undeclared');
+      expect(error.details?.fields).toBe('documentFeeMinor');
+    });
+
+    it('a SYMBOL-keyed field is refused — neither review had listed it', () => {
+      const key = Symbol('documentFeeMinor');
+      const forged = { ...QUOTED, [key]: '5' };
+      expect((forged as Record<symbol, string>)[key]).toBe('5');
+      expect(refusal(forged).details?.fields).toBe('Symbol(documentFeeMinor)');
+    });
+
+    it('a field on the PROTOTYPE is refused — it is not an own key, so no key list can see it', () => {
+      const forged = Object.assign(Object.create({ documentFeeMinor: '5' }), QUOTED) as CommercialQuote & { documentFeeMinor: string };
+      expect(forged.documentFeeMinor).toBe('5');
+      const error = refusal(forged);
+      expect(error.code).toBe('order.quote_field_undeclared');
+      expect(error.details?.prototype).toBe('not Object.prototype');
+    });
+
+    it('a CLASS INSTANCE with an accessor is refused — a getter can answer differently on each read', () => {
+      class Forged {
+        get documentFeeMinor(): string {
+          return '5';
+        }
+      }
+      const forged = Object.assign(new Forged(), QUOTED) as unknown as CommercialQuote;
+      expect((forged as unknown as { documentFeeMinor: string }).documentFeeMinor).toBe('5');
+      expect(refusal(forged).details?.prototype).toBe('not Object.prototype');
+    });
+
+    it('a NULL-prototype carrier is refused too, and that is a STATED cost, not an oversight', () => {
+      // JSON.parse yields Object.prototype, so the ordinary storage path is
+      // unaffected; a layer that builds carriers with Object.create(null) must
+      // project. Named here so the cost is in the suite and not only in a
+      // comment.
+      const forged = Object.assign(Object.create(null), QUOTED) as CommercialQuote;
+      expect(refusal(forged).details?.prototype).toBe('null');
+    });
+
+    it('a LINE carrying it on its prototype is refused, with the line index', () => {
+      const line = Object.assign(Object.create({ surcharge: '7' }), QUOTED.lines[0]);
+      const error = refusal({ ...QUOTED, lines: [line, QUOTED.lines[1]] });
+      expect(error.code).toBe('order.quote_field_undeclared');
+      expect(error.details?.lineIndex).toBe('0');
+    });
+
+    it('the INPUT is held to the same standard, so neither shape can even reach the builder', () => {
+      const protoInput = Object.assign(Object.create({ documentFeeMinor: '5' }), INPUT) as CommercialQuoteInput;
+      const neInput = { ...INPUT };
+      Object.defineProperty(neInput, 'documentFeeMinor', { value: '5', enumerable: false });
+      for (const [input, named] of [
+        [protoInput, 'prototype'],
+        [neInput, 'fields'],
+      ] as const) {
+        try {
+          buildCommercialQuote(input);
+          throw new Error('a wider input was accepted by the builder');
+        } catch (error) {
+          expect((error as OrderError).code).toBe('order.quote_field_undeclared');
+          expect((error as OrderError).details?.[named]).toBeDefined();
+        }
+      }
+    });
+
+    it('and a spread rebuild would have DROPPED both anyway — which is why this is the caller boundary', () => {
+      // The severity split, measured as plain JavaScript rather than asserted:
+      // `{ ...input }` copies own ENUMERABLE properties only, so a quote the
+      // builder produced could never have carried either shape even before the
+      // guard above. What the guard closes is the carrier a CALLER builds and
+      // hands straight to `assertQuoteIntact` — a storage read, a deserializer,
+      // a class instance — and the input half closes the silent DROP that
+      // `R-16` was about.
+      const proto = Object.assign(Object.create({ documentFeeMinor: '5' }), { quoteId: QUOTE });
+      const ne = { quoteId: QUOTE };
+      Object.defineProperty(ne, 'documentFeeMinor', { value: '5', enumerable: false });
+      expect((proto as { documentFeeMinor?: string }).documentFeeMinor).toBe('5');
+      expect(({ ...proto } as { documentFeeMinor?: string }).documentFeeMinor).toBeUndefined();
+      expect((ne as { documentFeeMinor?: string }).documentFeeMinor).toBe('5');
+      expect(({ ...ne } as { documentFeeMinor?: string }).documentFeeMinor).toBeUndefined();
+      // A lawful plain input still builds and still verifies.
+      expect(() => assertQuoteIntact(buildCommercialQuote(INPUT))).not.toThrow();
+    });
   });
 });
