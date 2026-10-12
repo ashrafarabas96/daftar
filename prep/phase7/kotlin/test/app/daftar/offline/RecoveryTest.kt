@@ -3,6 +3,7 @@ package app.daftar.offline
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -37,7 +38,27 @@ class RecoveryTest {
         // A restore handed back bytes that are not the captured ones, which
         // means the restore path itself is wrong.
         "offline.restored_payload_does_not_match_capture" to "the restore returned the wrong bytes",
+        // J-01. A result for a row nothing was ever sent from, and a result
+        // for an attempt this kernel already settled with the server's own
+        // refusal, are both the transport out of step with the queue. There is
+        // nothing for the merchant to do and nothing for them to wait for,
+        // which is why these two stopped sharing a code — and a view — with a
+        // late answer for an attempt that really is out.
+        "offline.no_attempt_was_ever_made" to "an answer arrived for a row nothing was ever sent from",
+        "offline.attempt_already_resolved" to "an answer arrived for an attempt already settled by refusal",
     ).keys
+
+    /**
+     * The captured facts per effect class. Challenger finding J-02: only a
+     * FINANCIAL capture has an amount in minor units and a currency, and a
+     * fixture that gave an inventory count some was denominating stock in a
+     * currency.
+     */
+    private fun amountFor(effect: EffectClass): Long? =
+        if (effect == EffectClass.FINANCIAL) 12_500 else null
+
+    private fun currencyFor(effect: EffectClass): String? =
+        if (effect == EffectClass.FINANCIAL) "SAR" else null
 
     private fun kernelSources(): List<File> {
         val root = File(System.getProperty("p7.src") ?: "prep/phase7/kotlin/src")
@@ -225,10 +246,69 @@ class RecoveryTest {
         assertEquals(RecoveryAction.RETRY_THE_SAME_OPERATION, benign.action)
     }
 
+    /**
+     * Challenger finding J-01, by name, for every refusal it reaches.
+     *
+     * A refusal's code decides what a person is told, and four facts used to
+     * share two codes whose view said "wait": a row that was abandoned, a row
+     * the server had already recorded, a row waiting on a decision, and a
+     * result for an attempt that was never made. The harm I-01 described was
+     * the ACTION — `WAIT_IT_IS_IN_PROGRESS`, whose own documentation says the
+     * device is working — and the first version of INV-9b judged the message,
+     * so three of these survived it. Each is named here, and the model check
+     * asserts the general rule over every reachable configuration: a view may
+     * instruct a wait only where something is genuinely pending.
+     */
+    @Test
+    fun `a refusal never tells the merchant to wait for a device that has finished`() {
+        val abandoned = operationIn(OperationState.DISCARDED, EffectClass.FINANCIAL)
+        val recorded = operationIn(OperationState.SYNCED, EffectClass.FINANCIAL)
+        val awaitingAPerson = operationIn(OperationState.NEEDS_ATTENTION, EffectClass.FINANCIAL)
+        val captured = operationIn(OperationState.CAPTURED, EffectClass.FINANCIAL)
+        val anAnswer = QueueEvent.Observe(AttemptResult.Answered(201, null, false, null))
+
+        val expected: List<Triple<Operation, QueueEvent, String>> = listOf(
+            // Abandoned: I-01's own case, and the two events beside it.
+            Triple(abandoned, QueueEvent.Release(scope), "offline.already_abandoned"),
+            Triple(abandoned, QueueEvent.CancelByMerchant(scope), "offline.already_abandoned"),
+            Triple(abandoned, anAnswer, "offline.already_abandoned"),
+            // Recorded by the server: not "already confirmed, wait for it".
+            Triple(recorded, QueueEvent.Release(scope), "offline.already_recorded"),
+            Triple(recorded, QueueEvent.CancelByMerchant(scope), "offline.already_recorded"),
+            Triple(recorded, anAnswer, "offline.already_recorded"),
+            // Waiting on a decision: telling the person to wait would be
+            // telling them to wait for themselves.
+            Triple(awaitingAPerson, QueueEvent.Release(scope), "offline.waiting_on_a_person"),
+            Triple(awaitingAPerson, QueueEvent.CancelByMerchant(scope), "offline.waiting_on_a_person"),
+            // The transport out of step with the queue, in both directions.
+            Triple(captured, anAnswer, "offline.no_attempt_was_ever_made"),
+            Triple(awaitingAPerson, anAnswer, "offline.attempt_already_resolved"),
+        )
+
+        for ((op, event, code) in expected) {
+            val step = op.step(event)
+            assertIs<Step.Refused>(step, "${op.state} moved on $event")
+            assertEquals(code, step.code, "a ${op.state} row refused $event as ${step.code}")
+            val view = Recovery.explain(step.code)
+            assertTrue(
+                view.action != RecoveryAction.WAIT_IT_IS_IN_PROGRESS,
+                "a ${op.state} row tells the merchant to wait: $code -> ${view.message}",
+            )
+            assertTrue(!view.showsMoneyAsTaken)
+        }
+
+        // Non-vacuity, and the other half of the rule: where something IS
+        // pending, the wait is the honest instruction and is still given.
+        val queued = operationIn(OperationState.QUEUED, EffectClass.FINANCIAL)
+        val again = assertIs<Step.Refused>(queued.step(QueueEvent.Release(scope)))
+        assertEquals("offline.already_released", again.code)
+        assertEquals(RecoveryAction.WAIT_IT_IS_IN_PROGRESS, Recovery.explain(again.code).action)
+    }
+
     // ── fixtures, built through the real reducer, never hand-constructed ──
 
     private fun needingAttention(effect: EffectClass, lastCode: String): Operation {
-        var op = Operation.capture(key, scope, effect, digest, 12_500, "SAR")
+        var op = Operation.capture(key, scope, effect, digest, amountFor(effect), currencyFor(effect))
         op = (op.step(QueueEvent.Release(scope)) as Step.Moved).operation
         op = (op.step(QueueEvent.Send(digest, scope)) as Step.Moved).operation
         val step = op.step(QueueEvent.Observe(AttemptResult.Answered(409, lastCode, null, null))) as Step.Moved
@@ -250,7 +330,7 @@ class RecoveryTest {
      * configuration the kernel cannot produce.
      */
     private fun operationIn(state: OperationState, effect: EffectClass): Operation {
-        var op = Operation.capture(key, scope, effect, digest, 12_500, "SAR")
+        var op = Operation.capture(key, scope, effect, digest, amountFor(effect), currencyFor(effect))
         if (state == OperationState.CAPTURED) return op
         if (state == OperationState.DISCARDED) {
             return (op.step(QueueEvent.CancelByMerchant(scope)) as Step.Moved).operation

@@ -471,42 +471,34 @@ PROOFS: list[Proof] = [
     Proof(
         law="INV-14-THE-RECORD-NAMES-THE-ACTOR-NOT-THE-ROW",
         path="src/app/daftar/offline/Queue.kt",
-        find="                    id, scope, event.actingScope, event::class.simpleName.orEmpty(),",
-        replace="                    id, scope, scope, event::class.simpleName.orEmpty(),",
+        find="                id, scope, event.actingScope, event::class.simpleName.orEmpty(),",
+        replace="                id, scope, scope, event::class.simpleName.orEmpty(),",
         expect_red="every reachable configuration honours every invariant",
         why="the plausible version of the same defect: the record is emitted, in the right places and with the right shape, and names the capturer twice. An audit trail that records every custody action and attributes all of them to the person who did not perform them is worse than none, because it reads as evidence",
     ),
     Proof(
         law="P7-L20-AN-ABANDONED-ROW-IS-NOT-A-SENT-ONE",
         path="src/app/daftar/offline/Queue.kt",
-        find='                Step.Refused("offline.already_abandoned", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)',
-        replace='                Step.Refused("offline.cancel_after_send", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)',
+        find='            Step.Refused("offline.already_abandoned", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)',
+        replace='            Step.Refused("offline.cancel_after_send", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)',
         expect_red="every reachable configuration honours every invariant",
         why="challenger finding I-01, restored exactly: the second cancel of a row that was abandoned before anything was sent is answered with the code whose merchant view says an attempt is out and to wait for it. The cashier \u2014 who may be the colleague of whoever abandoned it seconds earlier \u2014 is told to wait for a sale that will never arrive, which is the re-key harm the merchant-view work exists to prevent. G-03 proved every code HAS a view; this is the next clause, that a code can have a view and still be the wrong code",
     ),
     Proof(
         law="INV-14-THE-RECORD-SAYS-WHAT-WAS-DONE",
         path="src/app/daftar/offline/Queue.kt",
-        find='                        id, scope, event.actingScope, event::class.simpleName.orEmpty(),',
-        replace='                        id, scope, event.actingScope, "CancelByMerchant",',
+        find='                id, scope, event.actingScope, event::class.simpleName.orEmpty(),',
+        replace='                id, scope, event.actingScope, "CancelByMerchant",',
         expect_red="every reachable configuration honours every invariant",
         why="challenger finding I-02: three of the record\u2019s fields were asserted and the fourth \u2014 the one that says what was done \u2014 was not, so a constant label passed the whole suite and recorded a foreign SEND as a cancel. The expectation now comes from a literal per event rather than from the kernel\u2019s own expression, because a check that re-derives its answer the way the subject does agrees with any edit to it",
     ),
     Proof(
         law="P7-L20-THE-RECORD-SAYS-WHAT-WAS-LOST",
         path="src/app/daftar/offline/Queue.kt",
-        find="                        payloadDigest, effect, amountMinorUnits, currency,",
-        replace="                        payloadDigest, effect, null, currency,",
+        find="                payloadDigest, effect, amountMinorUnits, currency,",
+        replace="                payloadDigest, effect, null, currency,",
         expect_red="a capture the previous shift never released can be abandoned by the next one, never confirmed",
         why="challenger finding I-04: the record names the person and the key and cannot say how much was destroyed. The row is erased in the same step, so this is the only surviving description of the capture, and an audit that can establish that Bob abandoned something of Alice\u2019s but never that it was a sale she had taken cash for cannot be repaired afterwards",
-    ),
-    Proof(
-        law="P7-L20-THE-RECORD-PRECEDES-THE-ERASE",
-        path="src/app/daftar/offline/Queue.kt",
-        find="                ) + step.effects,",
-        replace="                ).let { step.effects + it },",
-        expect_red="a capture the previous shift never released can be abandoned by the next one, never confirmed",
-        why="I-04\u2019s second half. The record is appended after the arm\u2019s own effects, so a caller performing them in order within one transaction clears the local row first and writes the record second \u2014 and a failure between the two leaves a capture destroyed and undescribed. Ordering is the only part of fail-closed a pure decision function owns, so it is asserted here and stated as a caller obligation",
     ),
     Proof(
         law="INV-13-A-TERMINAL-ROW-IS-NOT-CANCELLED-TWICE",
@@ -515,6 +507,58 @@ PROOFS: list[Proof] = [
         replace="            if (attempts == 0) {",
         expect_red="a capture the previous shift never released can be abandoned by the next one, never confirmed",
         why="challenger finding I-03, which was a missing proof rather than a defect: `attempts == 0` masks `!isTerminal` on the path a reviewer checks (SYNCED is unreachable with no attempt), so the only state the second condition defends is DISCARDED \u2014 and nothing covered it. Mutated, a second cancel moves again and emits a second clear and a second custody record for one key, which an audit with no sequence on the record cannot tell from one cancel",
+    ),
+    Proof(
+        law="P7-L20-A-FINISHED-ROW-DOES-NOT-SAY-WAIT",
+        path="src/app/daftar/offline/Queue.kt",
+        find=(
+            "                refusalForAFinishedRow()\n"
+            "                    ?: refusalForARowAwaitingAPerson()\n"
+            '                    ?: Step.Refused("offline.already_released", P7Laws.KEY_MINTED_AT_CAPTURE.id)'
+        ),
+        replace='                Step.Refused("offline.already_released", P7Laws.KEY_MINTED_AT_CAPTURE.id)',
+        expect_red="a refusal never tells the merchant to wait for a device that has finished",
+        why="challenger finding J-01, restored exactly: a release of a row that was abandoned, or that the server has already recorded, or that is waiting on a person, is answered \u201calready confirmed, wait for it\u201d. On the shared till H-01 opened, that is I-01 one button over \u2014 Bob abandons Alice\u2019s capture, somebody presses confirm, and the till says the sale exists and to wait for it, both halves false, same row, same double tap",
+    ),
+    Proof(
+        law="INV-9B-THE-ACTION-IS-WHAT-INSTRUCTS-THE-MERCHANT",
+        path="src/app/daftar/offline/Recovery.kt",
+        find='            view(MerchantMessage.SALE_NEEDS_YOUR_ATTENTION, RecoveryAction.SEE_WHAT_THIS_OPERATION_NEEDS)',
+        replace='            view(MerchantMessage.SALE_NEEDS_YOUR_ATTENTION, RecoveryAction.WAIT_IT_IS_IN_PROGRESS)',
+        expect_red="every reachable configuration honours every invariant",
+        why="J-01 at the layer the first version of INV-9b could not see: the message stays honest and the ACTION tells the merchant to wait for a device that has finished with the row. INV-9b judged the message only, and three codes survived it; it judges the instruction now, over every reachable configuration rather than the states somebody thought to list",
+    ),
+    Proof(
+        law="P7-L20-A-STOCKTAKE-IS-NOT-DENOMINATED",
+        path="src/app/daftar/offline/Queue.kt",
+        find="            if (effect == EffectClass.FINANCIAL) {",
+        replace="            if (effect.isMaterial) {",
+        expect_red="a sale states what it is worth, a stocktake has nothing to state, and neither value is judged",
+        why="challenger finding J-02, restored exactly: `isMaterial` is FINANCIAL or INVENTORY, and an inventory capture is a movement or a stocktake count \u2014 a quantity and a unit, with no minor units and no currency. Requiring them makes fabricating a currency a precondition of storing a stocktake, which is what my own fixtures did: seven units of stock denominated in riyals in one file and lira in another, in the field the record exists to add",
+    ),
+    Proof(
+        law="P7-L20-THE-KERNEL-DOES-NOT-JUDGE-A-TOTAL",
+        path="src/app/daftar/offline/Queue.kt",
+        find='                require(amountMinorUnits != null) {',
+        replace='                require(amountMinorUnits != null && amountMinorUnits != 0L) {',
+        expect_red="a sale states what it is worth, a stocktake has nothing to state, and neither value is judged",
+        why="challenger finding J-05, taken as a decision rather than a defect and therefore planted: refusing a zero total is the plausible reading of \u201cguard the amount the way you guarded the currency\u201d, and it refuses a fully discounted sale, which is a legitimate zero. Which totals are permissible is the selling surface\u2019s business and the server\u2019s; a device that refused one would be asserting a total of its own",
+    ),
+    Proof(
+        law="P7-L20-THE-ERASE-CARRIES-ITS-RECORD",
+        path="src/app/daftar/offline/Queue.kt",
+        find=(
+            "            val effects = if (step.effects.any { it is SideEffect.ClearLocalRow }) {\n"
+            "                step.effects.map {\n"
+            "                    if (it is SideEffect.ClearLocalRow) SideEffect.ClearLocalRowRecording(record) else it\n"
+            "                }\n"
+            "            } else {\n"
+            "                listOf(record) + step.effects\n"
+            "            }"
+        ),
+        replace="            val effects = listOf(record) + step.effects",
+        expect_red="a capture the previous shift never released can be abandoned by the next one, never confirmed",
+        why="challenger finding J-04: the record goes back to being a separate effect that merely PRECEDES the erase, which is an obligation on whoever performs the list and nothing a type can hold them to. Fused, the permission to destroy another member\u2019s capture and the description of what is destroyed are one value; unfused, a caller that performs the erase and drops the record is doing something the kernel permitted",
     ),
 ]
 

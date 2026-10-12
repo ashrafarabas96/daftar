@@ -66,6 +66,13 @@ enum class RecoveryAction {
     SIGN_IN_AGAIN,
 
     /**
+     * Open this operation and see what it is waiting for. The device has
+     * finished with it and a decision is owed — so telling the person to wait
+     * would be telling them to wait for themselves (J-01).
+     */
+    SEE_WHAT_THIS_OPERATION_NEEDS,
+
+    /**
      * A person with more authority than a cashier must look at this. The
      * operation is owed and the till cannot resolve it alone.
      */
@@ -97,6 +104,7 @@ enum class MerchantMessage {
     ALREADY_CONFIRMED,
     CANNOT_CANCEL_AFTER_SENDING,
     ALREADY_ABANDONED_NOTHING_WAS_SENT,
+    ALREADY_RECORDED_NOTHING_TO_DO,
     NOT_READY_TO_SEND,
     DETAILS_CHANGED_SINCE_CAPTURE,
     DETAILS_ARCHIVED_RESTORE_FIRST,
@@ -260,6 +268,20 @@ object Recovery {
         "offline.already_abandoned" ->
             view(MerchantMessage.ALREADY_ABANDONED_NOTHING_WAS_SENT, RecoveryAction.NOTHING_IT_IS_DONE)
 
+        // Challenger finding J-01, the other finished state. A row the server
+        // has already recorded is not "already confirmed, wait for it" and not
+        // "you cannot cancel, an attempt is out": it is done, and the only
+        // honest instruction is that there is nothing to do.
+        "offline.already_recorded" ->
+            view(MerchantMessage.ALREADY_RECORDED_NOTHING_TO_DO, RecoveryAction.NOTHING_IT_IS_DONE)
+
+        // J-01 again, and the reason the code was split. A result for a row
+        // nothing was ever sent from, and a result for an attempt this kernel
+        // has already settled with the server's own refusal, are both the
+        // device out of step with itself — not something a merchant waits for.
+        "offline.no_attempt_was_ever_made", "offline.attempt_already_resolved" ->
+            view(MerchantMessage.DEVICE_SOFTWARE_PROBLEM, RecoveryAction.THIS_NEEDS_A_DEVELOPER)
+
         "offline.not_sendable" -> view(MerchantMessage.NOT_READY_TO_SEND, RecoveryAction.CONFIRM_THE_CAPTURE)
 
         "offline.no_attempt_in_flight" ->
@@ -278,8 +300,13 @@ object Recovery {
         "offline.payload_minimized_cannot_resend" ->
             view(MerchantMessage.DETAILS_ARCHIVED_RESTORE_FIRST, RecoveryAction.RESTORE_THE_APPROVED_PAYLOAD)
 
+        // J-01: nothing was archived, so nothing is being fetched back and
+        // there is nothing in progress to wait for. A surface that offered a
+        // restore for a row whose payload was never minimized offered an
+        // action that does not apply, which is its defect and not the
+        // merchant's problem to wait out.
         "offline.payload_was_never_minimized" ->
-            view(MerchantMessage.NOTHING_TO_RESTORE, RecoveryAction.WAIT_IT_IS_IN_PROGRESS)
+            view(MerchantMessage.NOTHING_TO_RESTORE, RecoveryAction.THIS_NEEDS_A_DEVELOPER)
 
         // The quiet one that matters most on a shared till: two staff logins,
         // and one of them is looking at the other's captures.
@@ -293,6 +320,12 @@ object Recovery {
 
         "offline.nothing_to_resolve", "offline.nothing_awaiting_a_person" ->
             view(MerchantMessage.NOTHING_WAITING_ON_YOU, RecoveryAction.NOTHING_IT_IS_DONE)
+
+        // J-01. A row the server has refused is waiting on a decision, not on
+        // the network, so neither a release nor a cancel may answer it with
+        // "wait": the thing being waited for is the person reading the message.
+        "offline.waiting_on_a_person" ->
+            view(MerchantMessage.SALE_NEEDS_YOUR_ATTENTION, RecoveryAction.SEE_WHAT_THIS_OPERATION_NEEDS)
 
         "offline.material_cannot_be_abandoned" ->
             view(MerchantMessage.CANNOT_BE_DISCARDED_IT_IS_OWED, RecoveryAction.ESCALATE_TO_A_SUPERVISOR)

@@ -271,7 +271,15 @@ class ScopeAndSchemaTest {
 
         // And it is recorded against Bob, because the row names only Alice and
         // is about to be cleared — this is the one moment the actor is known.
-        val record = cancelled.effects.filterIsInstance<SideEffect.RecordCustodyAction>().single()
+        // J-04: the record is not beside the erase, it is INSIDE it, so the
+        // permission to destroy the capture cannot be held without its
+        // description.
+        assertTrue(
+            cancelled.effects.none { it is SideEffect.ClearLocalRow },
+            "the next shift was handed a bare erase, so the capture can be destroyed undescribed",
+        )
+        val erase = cancelled.effects.filterIsInstance<SideEffect.ClearLocalRowRecording>().single()
+        val record = erase.record
         assertEquals(alice, record.capturedBy)
         assertEquals(bob, record.actedBy)
         assertEquals(captured.id, record.idempotencyKey)
@@ -286,18 +294,6 @@ class ScopeAndSchemaTest {
         assertEquals(EffectClass.FINANCIAL, record.effect)
         assertEquals(amount, record.amountMinorUnits, "the record cannot say how much was lost")
         assertEquals(currency, record.currency)
-
-        // And it is written BEFORE the row is erased. A caller that performs a
-        // step's effects in order, in one transaction, therefore cannot erase a
-        // capture it failed to record.
-        val recordAt = cancelled.effects.indexOfFirst { it is SideEffect.RecordCustodyAction }
-        val clearAt = cancelled.effects.indexOfFirst { it is SideEffect.ClearLocalRow }
-        assertTrue(clearAt >= 0, "the cancel did not clear the local row at all")
-        assertTrue(
-            recordAt < clearAt,
-            "the row is erased at effect $clearAt and recorded at $recordAt, so a failed write of " +
-                "the record would leave the capture destroyed and undescribed",
-        )
 
         // Challenger finding I-01: and a second cancel is told the truth. The
         // row was abandoned, nothing was ever sent, and the one thing the
@@ -325,9 +321,13 @@ class ScopeAndSchemaTest {
             )
         }
 
-        // Alice's own cancel is not a custody action: she is the row.
+        // Alice's own cancel is not a custody action: she is the row. Hers is
+        // the plain erase, because the row names her and the server's absence
+        // of any attempt is the whole record there is to keep.
         val byAlice = assertIs<Step.Moved>(captured.step(QueueEvent.CancelByMerchant(alice)))
         assertTrue(byAlice.effects.none { it is SideEffect.RecordCustodyAction })
+        assertTrue(byAlice.effects.none { it is SideEffect.ClearLocalRowRecording })
+        assertTrue(byAlice.effects.any { it is SideEffect.ClearLocalRow })
 
         // And the exit closes the moment anything has left the device: after a
         // send there is a server truth that a local cancel could contradict,

@@ -107,6 +107,31 @@ class QueueModelCheckTest {
     ).keys
 
     /**
+     * The states in which a wait is an honest instruction, each with the thing
+     * that is actually pending.
+     *
+     * Challenger finding J-01. The first version of INV-9b judged the
+     * MESSAGE and the harm I-01 described was the ACTION:
+     * `WAIT_IT_IS_IN_PROGRESS`, whose own documentation reads "Nothing yet. The
+     * device is working, or waiting for its turn". Judged on the action, three
+     * codes still told a merchant to wait for something that was not coming —
+     * a release of an abandoned row answering "already confirmed, wait" being
+     * I-01 one button over, reachable because H-01 put a second person in front
+     * of the same row.
+     *
+     * The rule is not "never wait before an attempt", because a released row
+     * waiting its turn is genuinely waiting and saying so is true. It is that
+     * something must actually be pending, which is a fact about the state and
+     * not about who is holding the till — so the invariant does not look at
+     * the acting scope, and L20's second clause no longer does either.
+     */
+    private val somethingIsGenuinelyPending = mapOf(
+        OperationState.QUEUED to "released and waiting its turn or its backoff delay",
+        OperationState.IN_FLIGHT to "an attempt is out and its answer has not been seen",
+        OperationState.UNKNOWN_OUTCOME to "an attempt's answer was lost and the device will ask again",
+    ).keys
+
+    /**
      * The captured facts, DIFFERENT for each effect class on purpose.
      *
      * Challenger finding I-04 asks that the custody record describe what was
@@ -116,16 +141,19 @@ class QueueModelCheckTest {
      * three amounts and three currencies mean a constant can match at most one
      * of them.
      */
-    private fun amountFor(effect: EffectClass): Long = when (effect) {
+    private fun amountFor(effect: EffectClass): Long? = when (effect) {
         EffectClass.FINANCIAL -> 12_500
-        EffectClass.INVENTORY -> 7
-        EffectClass.BENIGN -> 0
+        // Challenger finding J-02: a stocktake count has no minor units, and a
+        // fixture that gave it some denominated seven units of stock in a
+        // currency. An inventory capture carries neither, which is also what
+        // makes a planted constant visible here — a record that hardcoded any
+        // amount would disagree with two of these three roots.
+        EffectClass.INVENTORY, EffectClass.BENIGN -> null
     }
 
-    private fun currencyFor(effect: EffectClass): String = when (effect) {
+    private fun currencyFor(effect: EffectClass): String? = when (effect) {
         EffectClass.FINANCIAL -> "SAR"
-        EffectClass.INVENTORY -> "TRY"
-        EffectClass.BENIGN -> "USD"
+        EffectClass.INVENTORY, EffectClass.BENIGN -> null
     }
 
     /** One representative answer per branch of the classifier. */
@@ -180,6 +208,7 @@ class QueueModelCheckTest {
         var custodyRecords = 0
         var refusalsWithNothingSent = 0
         var custodyRecordsBeforeAnErase = 0
+        var waitsJudged = 0
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
 
@@ -226,15 +255,26 @@ class QueueModelCheckTest {
                             // space because "which states can be refused with
                             // nothing sent" is exactly the kind of question a
                             // later edit changes without noticing.
-                            if (op.attempts == 0) {
-                                refusalsWithNothingSent++
-                                val view = Recovery.explain(step.code)
+                            val view = Recovery.explain(step.code)
+                            if (view.action == RecoveryAction.WAIT_IT_IS_IN_PROGRESS ||
+                                view.message in assertsSomethingLeftTheDevice
+                            ) {
+                                waitsJudged++
                                 assertTrue(
-                                    view.message !in assertsSomethingLeftTheDevice,
+                                    op.state in somethingIsGenuinelyPending,
+                                    "a ${op.state} row refused ${step.code}, which tells the merchant to " +
+                                        "wait (${view.message} / ${view.action}) while nothing is pending: " +
+                                        "$op on $event",
+                                )
+                            }
+                            if (view.message in assertsSomethingLeftTheDevice) {
+                                assertTrue(
+                                    op.attempts > 0,
                                     "a refusal with nothing sent (${step.code}) is shown as " +
                                         "${view.message}, which asserts a transmission: $op on $event",
                                 )
                             }
+                            if (op.attempts == 0) refusalsWithNothingSent++
 
                             // INV-7: a refusal moves nothing and cites a law.
                             assertTrue(
@@ -320,7 +360,14 @@ class QueueModelCheckTest {
                             // a cancel clears the row immediately, so there is
                             // no later moment at which it could be recovered.
                             if (event is QueueEvent.ByScope && event.actingScope != op.scope) {
-                                val records = step.effects.filterIsInstance<SideEffect.RecordCustodyAction>()
+                                // J-04: the record is either an effect of its
+                                // own, or it is INSIDE the effect that erases
+                                // the row — there is no third place, and the
+                                // count is over both so that fusing one path
+                                // cannot quietly drop the record from it.
+                                val records = step.effects.filterIsInstance<SideEffect.RecordCustodyAction>() +
+                                    step.effects.filterIsInstance<SideEffect.ClearLocalRowRecording>()
+                                        .map { it.record }
                                 assertEquals(
                                     1, records.size,
                                     "a foreign-session move produced ${records.size} custody records: " +
@@ -357,24 +404,29 @@ class QueueModelCheckTest {
                                     op.currency, record.currency,
                                     "the record names the wrong currency: $op on $event",
                                 )
-                                // I-04's second half: the record is only an
-                                // audit of a destruction if it exists before
-                                // the destruction. A caller performing these in
-                                // order within one transaction cannot erase a
-                                // row it failed to record; a record appended
-                                // after the erase would reverse that, and the
-                                // ordering is the only part of it this kernel
-                                // owns.
-                                val recordAt = step.effects.indexOfFirst {
-                                    it is SideEffect.RecordCustodyAction
-                                }
-                                val clearAt = step.effects.indexOfFirst { it is SideEffect.ClearLocalRow }
-                                if (clearAt >= 0) {
-                                    assertTrue(
-                                        recordAt < clearAt,
-                                        "the local row is erased at effect $clearAt and the custody " +
-                                            "record written at $recordAt, so the erase is not fail-closed: " +
-                                            "$op on $event",
+                                // I-04's second half, now as a structure
+                                // rather than an order (J-04). A record that
+                                // merely precedes the erase in a list is an
+                                // obligation on whoever performs the list; a
+                                // record the erase CARRIES cannot be omitted by
+                                // anyone, because the permission to erase is
+                                // the same value as the description of what is
+                                // being erased. So no step by a foreign session
+                                // may contain a bare `ClearLocalRow` at all.
+                                assertTrue(
+                                    step.effects.none { it is SideEffect.ClearLocalRow },
+                                    "a session that is not the row's own was handed a bare erase, so the " +
+                                        "capture can be destroyed without its description: $op on $event",
+                                )
+                                val fused = step.effects.filterIsInstance<SideEffect.ClearLocalRowRecording>()
+                                if (fused.isNotEmpty()) {
+                                    assertEquals(
+                                        1, fused.size,
+                                        "the row was erased ${fused.size} times in one step: $op on $event",
+                                    )
+                                    assertEquals(
+                                        record, fused.single().record,
+                                        "the erase carries a different record from the one this step made",
                                     )
                                     custodyRecordsBeforeAnErase++
                                 }
@@ -448,7 +500,9 @@ class QueueModelCheckTest {
                             val minimized = step.effects.filterIsInstance<SideEffect.MinimizePayload>()
                             if (minimized.isNotEmpty()) {
                                 assertTrue(
-                                    step.effects.none { it is SideEffect.ClearLocalRow },
+                                    step.effects.none {
+                                        it is SideEffect.ClearLocalRow || it is SideEffect.ClearLocalRowRecording
+                                    },
                                     "a payload was minimized AND the row cleared: $op on $event " +
                                         "(${P7Laws.EXPIRY_MINIMIZES_THE_PAYLOAD_AND_NEVER_THE_OBLIGATION.id})",
                                 )
@@ -501,7 +555,10 @@ class QueueModelCheckTest {
 
                             // INV-4: the local row is cleared only once there is
                             // nothing left that could exist only on the device.
-                            if (step.effects.any { it is SideEffect.ClearLocalRow }) {
+                            if (step.effects.any {
+                                    it is SideEffect.ClearLocalRow || it is SideEffect.ClearLocalRowRecording
+                                }
+                            ) {
                                 assertTrue(
                                     next.state == OperationState.SYNCED || next.state == OperationState.DISCARDED,
                                     "the local row was cleared in state ${next.state} " +
@@ -543,7 +600,10 @@ class QueueModelCheckTest {
             "some event never moved anything, so its transitions were never checked",
         )
         assertEquals(
-            setOf("SendAttempt", "Alert", "ClearLocalRow", "MinimizePayload", "RecordCustodyAction"),
+            setOf(
+                "SendAttempt", "Alert", "ClearLocalRow", "MinimizePayload", "RecordCustodyAction",
+                "ClearLocalRowRecording",
+            ),
             effectsSeen,
             "some side effect was never produced, so its invariant was never exercised",
         )
@@ -570,8 +630,12 @@ class QueueModelCheckTest {
         )
         assertTrue(
             custodyRecordsBeforeAnErase > 0,
-            "no foreign-session move ever erased the local row, so the ordering half of INV-14 " +
-                "is vacuous: the path I-04 is about was never explored",
+            "no foreign-session move ever erased the local row, so the fused half of INV-14 " +
+                "is vacuous: the path I-04 and J-04 are about was never explored",
+        )
+        assertTrue(
+            waitsJudged > 0,
+            "no refusal anywhere told the merchant to wait, so INV-9b judged nothing",
         )
         assertTrue(
             refusalsWithNothingSent > 0,

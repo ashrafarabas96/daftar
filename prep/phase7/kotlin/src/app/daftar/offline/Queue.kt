@@ -144,6 +144,26 @@ sealed interface SideEffect {
     data object ClearLocalRow : SideEffect
 
     /**
+     * Remove the local row, and here is the record of what is being removed.
+     *
+     * Challenger finding J-04, and the reason it is a type and not a sentence.
+     * The obligation — never erase a capture you failed to record — was true
+     * and was stated in prose, and prose gives a caller nothing to be held to:
+     * no value represented the boundary, no test of theirs could assert
+     * against it, and no type would notice a caller that erased without
+     * recording. `QueueEvent.Send` carries `actingScope` as a required
+     * argument for exactly this reason, and this kernel makes L2 and L3
+     * structural by refusing to compile the alternative. So on the one path
+     * where another member's capture is destroyed, the permission to erase and
+     * the description of what was erased are **one value**: a caller cannot
+     * obtain the first without holding the second.
+     *
+     * `ClearLocalRow` survives for the path alongside SYNCED, where the
+     * server's own truth is the record and no custody action exists or should.
+     */
+    data class ClearLocalRowRecording(val record: RecordCustodyAction) : SideEffect
+
+    /**
      * Reduce what is stored for this operation to the minimum that keeps the
      * obligation legible: its identity, its amount and the server's refusal
      * code. The personal and price detail of the payload goes.
@@ -315,20 +335,45 @@ class Operation private constructor(
             scope: OwnerScope,
             effect: EffectClass,
             payloadDigest: String,
-            amountMinorUnits: Long? = null,
-            currency: String? = null,
+            amountMinorUnits: Long?,
+            currency: String?,
         ): Operation {
             require(key.length in 8..200 && key.all { it.code in 0x20..0x7e }) {
                 "an idempotency key must be 8 to 200 printable ASCII characters, as the merchant API requires"
             }
             require(payloadDigest.isNotEmpty()) { "a captured payload must have a digest" }
-            // Fail closed, at the only moment the facts exist. A material
-            // capture that cannot say what it is worth cannot be described
-            // after it is destroyed (I-04), and the surface that captured it is
-            // the only thing that knows. A BENIGN operation moves no money by
-            // definition, so it may leave both absent; stating an amount for
-            // one is allowed and recorded as given.
-            if (effect.isMaterial) {
+            // Fail closed, at the only moment the facts exist. A capture that
+            // moves money and cannot say how much cannot be described after it
+            // is destroyed (I-04), and the surface that captured it is the only
+            // thing that knows.
+            //
+            // FINANCIAL and not `isMaterial`, which is challenger finding
+            // J-02. `isMaterial` is FINANCIAL or INVENTORY, and an inventory
+            // operation is a movement, a transfer, an adjustment or a
+            // stocktake count: it has a quantity and a unit, and no amount in
+            // minor units and no currency at all. Requiring them of it made
+            // fabricating a currency a precondition of storing a stocktake —
+            // my own fixtures denominated seven units of stock in riyals in
+            // one file and in lira in another, in the field this record exists
+            // to add. An inventory capture is described by its digest and its
+            // effect class, which is what L20 now says; whether such a record
+            // should carry a quantity and a unit of its own is OD-P7-09, owed
+            // to the inventory authority and not invented here.
+            //
+            // The VALUE is never judged (J-05). A fully discounted sale may be
+            // a legitimate zero and a refund may be negative, and deciding
+            // which totals are permissible is the selling surface's business
+            // and the server's, never this kernel's: a device that refused a
+            // total would be asserting a total of its own. The currency is
+            // checked for blankness and not merely for null because blank is
+            // what an unset string decays to, and a blank currency names
+            // nothing; there is no equivalent in-band "unset" for the amount
+            // now that the parameter carries no default, so `0` reaching here
+            // is a stated zero and is recorded as one. A surface that has not
+            // totalled the basket yet must not capture: `P7-S1` §10 carries
+            // that as the surface's obligation, because the kernel cannot
+            // distinguish it from a sale that is genuinely free.
+            if (effect == EffectClass.FINANCIAL) {
                 require(amountMinorUnits != null) {
                     "a $effect capture must state what it is worth; a destroyed row cannot be described later"
                 }
@@ -361,6 +406,46 @@ class Operation private constructor(
 
     val isTerminal: Boolean
         get() = state == OperationState.SYNCED || state == OperationState.DISCARDED
+
+    /**
+     * The refusal a finished row gives, whatever was asked of it.
+     *
+     * Challenger finding J-01. A refusal's code decides what a person is told,
+     * and three codes told a merchant to wait for something that was not
+     * coming: a release of an abandoned row answered "already confirmed, wait",
+     * which on the one path H-01 opened means a second cashier is told a sale
+     * exists when a colleague has just abandoned it. A finished row has nothing
+     * pending by definition, so it answers in its own terms — recorded, or
+     * abandoned — and never with a sequencing refusal that implies the device
+     * is still working.
+     */
+    private fun refusalForAFinishedRow(): Step.Refused? = when (state) {
+        OperationState.SYNCED ->
+            Step.Refused("offline.already_recorded", P7Laws.DEVICE_NOT_AUTHORITY.id)
+
+        OperationState.DISCARDED ->
+            Step.Refused("offline.already_abandoned", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)
+
+        else -> null
+    }
+
+    /**
+     * The refusal a row waiting on a PERSON gives to an attempt to move it.
+     *
+     * J-01's second case, found by the strengthened invariant rather than by
+     * the review. A `NEEDS_ATTENTION` row answered a release with "already
+     * confirmed, wait for it" and a cancel with "an attempt is out, wait for
+     * it". The first halves are arguable; the instruction is false in both. The
+     * device has finished with this row and is waiting for a decision, so
+     * telling a cashier to wait for the device is telling them to wait for
+     * themselves.
+     */
+    private fun refusalForARowAwaitingAPerson(): Step.Refused? =
+        if (state == OperationState.NEEDS_ATTENTION) {
+            Step.Refused("offline.waiting_on_a_person", P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)
+        } else {
+            null
+        }
 
     /** Sendable states: an attempt may be made from here. */
     val isSendable: Boolean
@@ -398,21 +483,23 @@ class Operation private constructor(
         // nothing to record; what is recorded is every MOVE caused by a session
         // that is not the row's own (H-01).
         if (event is QueueEvent.ByScope && event.actingScope != scope && step is Step.Moved) {
-            return Step.Moved(
-                step.operation,
-                // The record goes FIRST, ahead of whatever the arm produced,
-                // because one of the things an arm produces is `ClearLocalRow`
-                // and the record is the only description of the row that
-                // survives it. A caller that performs effects in order and
-                // treats the step as one transaction therefore cannot erase a
-                // capture it failed to record.
-                listOf(
-                    SideEffect.RecordCustodyAction(
-                        id, scope, event.actingScope, event::class.simpleName.orEmpty(),
-                        payloadDigest, effect, amountMinorUnits, currency,
-                    ),
-                ) + step.effects,
+            val record = SideEffect.RecordCustodyAction(
+                id, scope, event.actingScope, event::class.simpleName.orEmpty(),
+                payloadDigest, effect, amountMinorUnits, currency,
             )
+            // Where this move erases the row, the erase and the record become
+            // one value (J-04), so that the permission to destroy the capture
+            // cannot be held without its description. Where it erases nothing,
+            // the record simply goes first — there is nothing it has to
+            // survive, and ordering is all that is left to say.
+            val effects = if (step.effects.any { it is SideEffect.ClearLocalRow }) {
+                step.effects.map {
+                    if (it is SideEffect.ClearLocalRow) SideEffect.ClearLocalRowRecording(record) else it
+                }
+            } else {
+                listOf(record) + step.effects
+            }
+            return Step.Moved(step.operation, effects)
         }
         return step
     }
@@ -422,7 +509,15 @@ class Operation private constructor(
             if (state == OperationState.CAPTURED) {
                 Step.Moved(moved(OperationState.QUEUED), emptyList())
             } else {
-                Step.Refused("offline.already_released", P7Laws.KEY_MINTED_AT_CAPTURE.id)
+                // A finished row first (J-01): "already confirmed, wait for it"
+                // is false about a row that was abandoned and false about one
+                // the server has already recorded. Everywhere else it is true —
+                // the row is in the queue, in flight, or resolving a lost
+                // answer — and the merchant is told to wait because something
+                // genuinely is.
+                refusalForAFinishedRow()
+                    ?: refusalForARowAwaitingAPerson()
+                    ?: Step.Refused("offline.already_released", P7Laws.KEY_MINTED_AT_CAPTURE.id)
             }
 
         is QueueEvent.CancelByMerchant ->
@@ -436,7 +531,7 @@ class Operation private constructor(
             // knows that.
             if (attempts == 0 && !isTerminal) {
                 Step.Moved(moved(OperationState.DISCARDED), listOf(SideEffect.ClearLocalRow))
-            } else if (attempts == 0) {
+            } else {
                 // Challenger finding I-01. `!isTerminal` above does its work on
                 // exactly one state: SYNCED is unreachable with attempts == 0,
                 // because the only road to it passes through an attempt, so the
@@ -447,10 +542,12 @@ class Operation private constructor(
                 // them, and waiting for a sale that will never arrive is the
                 // re-key harm the merchant-view work exists to prevent. The
                 // code is distinct because the view must be, and nothing was
-                // ever sent here.
-                Step.Refused("offline.already_abandoned", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)
-            } else {
-                Step.Refused("offline.cancel_after_send", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)
+                // ever sent here. J-01 widened it to the other finished state:
+                // "you cannot cancel, an attempt is out" is equally false about
+                // a sale the server has already recorded.
+                refusalForAFinishedRow()
+                    ?: refusalForARowAwaitingAPerson()
+                    ?: Step.Refused("offline.cancel_after_send", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)
             }
 
         is QueueEvent.Send ->
@@ -469,7 +566,21 @@ class Operation private constructor(
 
         is QueueEvent.Observe ->
             if (state != OperationState.IN_FLIGHT) {
-                Step.Refused("offline.no_attempt_in_flight", P7Laws.DEVICE_NOT_AUTHORITY.id)
+                // Three different facts used to share one code and one view
+                // that said "wait" (J-01). A finished row answers in its own
+                // terms; a row nothing was ever sent from is a device out of
+                // step with itself, and so is an answer for an attempt this
+                // kernel has already settled with the server's own refusal;
+                // only a row that is queued or resolving a lost answer is
+                // genuinely waiting for something.
+                refusalForAFinishedRow()
+                    ?: if (attempts == 0) {
+                        Step.Refused("offline.no_attempt_was_ever_made", P7Laws.DEVICE_NOT_AUTHORITY.id)
+                    } else if (state == OperationState.NEEDS_ATTENTION) {
+                        Step.Refused("offline.attempt_already_resolved", P7Laws.DEVICE_NOT_AUTHORITY.id)
+                    } else {
+                        Step.Refused("offline.no_attempt_in_flight", P7Laws.DEVICE_NOT_AUTHORITY.id)
+                    }
             } else {
                 when (val decision = Outcome.classify(event.result, id, attempts)) {
                     is Decision.Synced -> Step.Moved(

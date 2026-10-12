@@ -255,14 +255,33 @@ object P7Laws {
      * for.
      *
      * So the record is part of the act, not a report about it: it carries the
-     * actor, the capture's digest, its effect class and what it was worth, and
-     * it is written before the row can go. Until Phase 4's authority model
-     * exposes a role (OD-P7-08), this record is the only thing standing
-     * between a shared till and an unexplainable gap.
+     * actor, the capture's digest, its effect class and, where the capture
+     * moves money, what it was worth — and on the path that erases the row it
+     * IS the permission to erase, one value, because an obligation stated in
+     * prose gives a caller nothing to be held to (J-04). Until Phase 4's
+     * authority model exposes a role (OD-P7-08), this record is the only thing
+     * standing between a shared till and an unexplainable gap; and since no
+     * owner holds its storage yet, that is an intention and not yet a
+     * mechanism.
+     *
+     * Two corrections from the fifth review are in the statement rather than
+     * only in the code. **J-02**: an inventory operation has a quantity and a
+     * unit and no currency at all, so requiring an amount in minor units of it
+     * made a fabricated currency the price of storing a stocktake; the
+     * description of an inventory capture is its digest and its effect class,
+     * and whether such a record should carry a quantity and a unit of its own
+     * is OD-P7-09. **J-01**: the second clause used to be scoped to a foreign
+     * session's move, and there is no reason a law about telling a merchant
+     * the truth should depend on who is holding the till — the invariant that
+     * enforces it never looked at the scope, so the law no longer does either.
+     * What makes a wait honest is that something is pending on the device, not
+     * that nothing has been sent: a released row waiting its turn is genuinely
+     * waiting, and a row the server has refused is waiting on the person
+     * reading the message.
      */
     val A_DESTRUCTION_IS_RECORDED_BEFORE_IT_HAPPENS = OfflineLaw(
         "P7-L20-A-DESTRUCTION-IS-RECORDED-BEFORE-IT-HAPPENS",
-        "A session that is not the one a row was captured under moves that row only with a record of who acted, what the capture was and what it was worth, written before any effect that erases the row, so that a capture destroyed on a shared till can still be described afterwards; and a refusal of such a move never tells the merchant to wait for something no attempt was ever made for.",
+        "A session that is not the one a row was captured under moves that row only with a record of who acted, what the capture was and — where the capture moves money — what it was worth; the permission to erase such a row is that same record, so it cannot be held without it, and a capture destroyed on a shared till can still be described afterwards. And no refusal tells the merchant that something is in progress, or to wait for it, unless something is genuinely pending on the device.",
     )
 
     /** Every stated law, for the completeness proof. */

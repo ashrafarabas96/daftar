@@ -2,6 +2,7 @@ package app.daftar.offline
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -138,7 +139,7 @@ class CrashSafetyTest {
 
     @Test
     fun `a stock conflict waits for a person and keeps the server's own words`() {
-        var (op, _) = moved(Operation.capture(key, scope, EffectClass.INVENTORY, digest, 7, "SAR"), QueueEvent.Release(scope))
+        var (op, _) = moved(Operation.capture(key, scope, EffectClass.INVENTORY, digest, null, null), QueueEvent.Release(scope))
         op = moved(op, QueueEvent.Send(digest, scope)).first
         val (refused, effects) = moved(
             op, QueueEvent.Observe(AttemptResult.Answered(409, "inventory.insufficient_stock", null, null)),
@@ -178,7 +179,7 @@ class CrashSafetyTest {
 
     @Test
     fun `a benign refusal may be let go, and only a benign one`() {
-        var (op, _) = moved(Operation.capture(key, scope, EffectClass.BENIGN, digest), QueueEvent.Release(scope))
+        var (op, _) = moved(Operation.capture(key, scope, EffectClass.BENIGN, digest, null, null), QueueEvent.Release(scope))
         op = moved(op, QueueEvent.Send(digest, scope)).first
         op = moved(op, QueueEvent.Observe(AttemptResult.Answered(422, "VALIDATION_FAILED", null, null))).first
         assertEquals(OperationState.NEEDS_ATTENTION, op.state)
@@ -200,8 +201,112 @@ class CrashSafetyTest {
     fun `an outcome cannot be recorded for an attempt that was never made`() {
         val step = captureSale().step(QueueEvent.Observe(AttemptResult.Answered(200, null, null, null)))
         assertIs<Step.Refused>(step)
-        assertEquals("offline.no_attempt_in_flight", step.code)
+        // J-01: a result for a row nothing was ever sent from had the same
+        // code, and the same "wait for it" view, as a result arriving late for
+        // an attempt that really is out. It is the device out of step with
+        // itself, and it says so now.
+        assertEquals("offline.no_attempt_was_ever_made", step.code)
+        assertEquals(RecoveryAction.THIS_NEEDS_A_DEVELOPER, Recovery.explain(step.code).action)
         assertEquals(P7Laws.DEVICE_NOT_AUTHORITY.id, step.law)
+    }
+
+    /**
+     * Challenger findings J-02, J-03 and J-05 — what a capture must say about
+     * what it is worth, and what the kernel refuses to decide about it.
+     */
+    @Test
+    fun `a sale states what it is worth, a stocktake has nothing to state, and neither value is judged`() {
+        // J-02. INVENTORY is "a movement, a transfer, an adjustment, a
+        // stocktake count": a quantity and a unit, never minor units and never
+        // a currency. Requiring them made fabricating a currency a
+        // precondition of storing a stocktake — which my own fixtures did, in
+        // two different currencies for the same seven units of stock.
+        for (effect in listOf(EffectClass.INVENTORY, EffectClass.BENIGN)) {
+            val op = Operation.capture(key, scope, effect, digest, null, null)
+            assertEquals(null, op.amountMinorUnits, "a $effect capture was made to carry an amount")
+            assertEquals(null, op.currency)
+        }
+
+        // A sale, by contrast, must say both, and each is its own refusal so
+        // that neither can mask the other.
+        val noAmount = assertFailsWith<IllegalArgumentException> {
+            Operation.capture(key, scope, EffectClass.FINANCIAL, digest, null, "SAR")
+        }
+        assertTrue(
+            noAmount.message!!.contains("what it is worth"),
+            "the refusal does not name the missing amount: ${noAmount.message}",
+        )
+        for (blank in listOf(null, "", "   ")) {
+            val noCurrency = assertFailsWith<IllegalArgumentException> {
+                Operation.capture(key, scope, EffectClass.FINANCIAL, digest, 12_500, blank)
+            }
+            assertTrue(
+                noCurrency.message!!.contains("currency"),
+                "the refusal does not name the missing currency: ${noCurrency.message}",
+            )
+        }
+
+        // J-05, written down because it is a decision and not an oversight: the
+        // kernel does not judge the VALUE. A fully discounted sale may be a
+        // legitimate zero and a refund may be negative, and a device that
+        // refused a total would be asserting a total of its own. What reaches
+        // the custody record is what was captured, unaltered — and the
+        // obligation not to capture a basket that has not been totalled yet is
+        // the selling surface's, recorded in `P7-S1` §10.
+        for (amount in listOf(0L, -999L, Long.MAX_VALUE)) {
+            val op = Operation.capture(key, scope, EffectClass.FINANCIAL, digest, amount, "SAR")
+            assertEquals(amount, op.amountMinorUnits, "the kernel altered a captured total")
+            val bob = OwnerScope(scope.tenantId, scope.businessId, "member-bob")
+            val step = op.step(QueueEvent.CancelByMerchant(bob)) as Step.Moved
+            val erase = step.effects.filterIsInstance<SideEffect.ClearLocalRowRecording>().single()
+            assertEquals(amount, erase.record.amountMinorUnits, "the record did not say what was lost")
+            assertEquals("SAR", erase.record.currency)
+        }
+    }
+
+    /**
+     * Challenger finding J-03 — the property no runtime test can hold.
+     *
+     * `amountMinorUnits` and `currency` arrived with `= null` defaults, so a
+     * capture written before this round compiled unchanged and threw the first
+     * time it ran. The compiler is the one thing that could have enumerated
+     * every call site, and a default switches it off. This kernel already has
+     * the idiom twice over — `EffectClass` has no default anywhere, and
+     * `QueueEvent.Send` takes `actingScope` as a required argument because
+     * "there is no overload that lets it" be skipped — so the guard is the
+     * same shape as the one that forbids a defaulted `EffectClass`: a textual
+     * sweep that proves it can see a planted default.
+     */
+    @Test
+    fun `the facts a capture must state cannot be omitted by a caller`() {
+        val root = java.io.File(System.getProperty("p7.src") ?: "prep/phase7/kotlin/src")
+        assertTrue(root.isDirectory, "the kernel source was not found at ${root.absolutePath}")
+        val queue = root.walkTopDown().first { it.isFile && it.name == "Queue.kt" }.readText()
+
+        val forbidden = listOf(
+            Regex("""amountMinorUnits:\s*Long\?\s*=\s*"""),
+            Regex("""currency:\s*String\?\s*=\s*"""),
+            Regex("""effect:\s*EffectClass\s*=\s*"""),
+        )
+        val offenders = forbidden.mapNotNull { it.find(queue)?.value }
+        assertEquals(
+            emptyList(), offenders,
+            "a fact a capture must state has a default, so a call site that omits it compiles and " +
+                "fails at run time instead",
+        )
+
+        // And the guard can see what it is looking for.
+        val plants = listOf(
+            "amountMinorUnits: Long? = null,",
+            "currency: String? = null,",
+            "effect: EffectClass = EffectClass.BENIGN,",
+        )
+        for (plant in plants) {
+            assertTrue(
+                forbidden.any { it.containsMatchIn(plant) },
+                "the guard cannot see the default '$plant', so its verdict means nothing",
+            )
+        }
     }
 
     @Test
