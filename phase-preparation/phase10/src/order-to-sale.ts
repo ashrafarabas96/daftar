@@ -40,12 +40,15 @@
  */
 
 import type { RecipeBinding } from './recipe-binding';
+import { QUANTITY_SCALE, halfEvenDiv } from './recipe-version';
 
 export type OrderToSaleRefusalCode =
   | 'restaurant.order.no_billable_line'
   | 'restaurant.order.quantity_not_positive'
   | 'restaurant.order.sale_line_budget_exceeded'
-  | 'restaurant.order.modifier_price_not_catalogued';
+  | 'restaurant.order.modifier_price_not_catalogued'
+  /** A priced modifier's quantity scaled to zero or less; it is not billed as nothing. */
+  | 'restaurant.order.modifier_quantity_rounds_to_zero';
 
 export class OrderToSaleRefusal extends Error {
   constructor(
@@ -230,15 +233,32 @@ export function aggregateToSaleLines(orderLines: readonly RestaurantOrderLine[])
         );
       }
       // A modifier's quantity multiplies with the line's: two lattes with an
-      // extra shot each is two extra shots.
-      add(
-        modifier.productId,
-        modifier.variantId,
-        (modifier.quantityQ4 * line.quantityQ4) / 10_000n,
-        line.orderLineId,
-        modifier.modifierId,
-        modifier.recipeBinding,
-      );
+      // extra shot each is two extra shots. Two Q4 quantities multiply to a Q8
+      // product, so coming back to Q4 is a DIVISION, and a division needs the
+      // pack's one stated rounding rule. `halfEvenDiv`, not `/`: bare BigInt
+      // division truncates toward zero, which silently loses up to one Q4 step
+      // off a BILLED quantity and would make this the only place in the pack
+      // that rounds a quantity by a different rule than `expandRecipe` does.
+      const scaledQuantityQ4 = halfEvenDiv(modifier.quantityQ4 * line.quantityQ4, QUANTITY_SCALE);
+      if (scaledQuantityQ4 <= 0n) {
+        // Named apart from the line's own non-positive refusal, which this
+        // would otherwise be reported as. The ORDER LINE's quantity is fine;
+        // it is the modifier that vanished under scaling, and an operator sent
+        // to correct the line would find nothing wrong with it. `expandRecipe`
+        // makes the same distinction for a component.
+        throw new OrderToSaleRefusal(
+          'restaurant.order.modifier_quantity_rounds_to_zero',
+          `Modifier ${modifier.label} scales to ${scaledQuantityQ4} on order line ${line.orderLineId}; a priced modifier that rounds away is not billed as nothing`,
+          {
+            orderLineId: line.orderLineId,
+            modifierId: modifier.modifierId,
+            modifierQuantityQ4: modifier.quantityQ4.toString(),
+            lineQuantityQ4: line.quantityQ4.toString(),
+            scaledQuantityQ4: scaledQuantityQ4.toString(),
+          },
+        );
+      }
+      add(modifier.productId, modifier.variantId, scaledQuantityQ4, line.orderLineId, modifier.modifierId, modifier.recipeBinding);
     }
   }
 

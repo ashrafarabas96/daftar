@@ -21,7 +21,7 @@
  * plausible one, and the quiet failure it allows is stock that never left.
  */
 
-import { expandRecipe, type ExpandedComponent, type RecipeVersion } from './recipe-version';
+import { expandRecipe, isRepresentableAtPrecision, nearestRepresentableQuantity, type ExpandedComponent, type RecipeVersion } from './recipe-version';
 
 export const STOCK_EFFECT_MODES = ['direct', 'service', 'composed'] as const;
 export type StockEffectMode = (typeof STOCK_EFFECT_MODES)[number];
@@ -37,10 +37,14 @@ export type StockEffectRefusalCode =
   | 'restaurant_stock_effect.component_variant_mismatch'
   | 'restaurant_stock_effect.component_quantity_mismatch'
   | 'restaurant_stock_effect.direct_movement_set_invalid'
+  /** A direct line's quantity is finer than the stock product's own grain. */
+  | 'restaurant_stock_effect.direct_quantity_not_representable'
   | 'restaurant_stock_effect.service_consumed_stock'
   | 'restaurant_stock_effect.recipe_version_mismatch'
   /** A movement named a version without its recipe, or a recipe without its version. */
-  | 'restaurant_stock_effect.recipe_identity_incomplete';
+  | 'restaurant_stock_effect.recipe_identity_incomplete'
+  /** A composed line is bound to no recipe version at all, so nothing can be matched. */
+  | 'restaurant_stock_effect.recipe_binding_absent';
 
 export class StockEffectRefusal extends Error {
   constructor(
@@ -59,6 +63,19 @@ export interface SoldProductFacts {
   /** The STOCK variant, when the product is stock-tracked. */
   readonly stockVariantId: string | null;
   readonly stockTracked: boolean;
+  /**
+   * `products.unit_decimals` (0..4) for the stock-tracked product, or null when
+   * the product is not stock-tracked.
+   *
+   * Carried here because §57's grain law has to apply on the DIRECT path too,
+   * and without this field the check could not even be written. Every composed
+   * component is checked twice against its own grain; a direct line was checked
+   * not at all, and the canonical writer
+   * (`inventory_quantity_is_representable`) refuses either of them the same way
+   * — at sale commit, after the item has been served, which is the outcome the
+   * refuse-before-service rule exists to prevent.
+   */
+  readonly stockUnitDecimals: number | null;
   /** The recipe version bound to this sale line, or null. */
   readonly recipeVersion: RecipeVersion | null;
   /** The merchant declared this a service that consumes no inventory. */
@@ -119,6 +136,29 @@ export function expectedMovementsFor(facts: SoldProductFacts, soldQuantityQ4: bi
         'restaurant_stock_effect.direct_movement_set_invalid',
         `Product ${facts.productId} is stock-tracked but names no stock variant`,
         { productId: facts.productId },
+      );
+    }
+    const unitDecimals = facts.stockUnitDecimals;
+    if (unitDecimals === null || !Number.isInteger(unitDecimals) || unitDecimals < 0 || unitDecimals > 4) {
+      throw new StockEffectRefusal(
+        'restaurant_stock_effect.direct_movement_set_invalid',
+        `Product ${facts.productId} is stock-tracked but declares no usable unit precision (${String(unitDecimals)}), so whether its quantity is representable cannot be decided`,
+        { productId: facts.productId, stockUnitDecimals: unitDecimals },
+      );
+    }
+    if (!isRepresentableAtPrecision(soldQuantityQ4, unitDecimals)) {
+      // Refused here, before service, rather than by the canonical writer at
+      // commit. The column is NUMERIC(18,4); the GRAIN is the product's own
+      // `unit_decimals`, and the two are not the same thing.
+      throw new StockEffectRefusal(
+        'restaurant_stock_effect.direct_quantity_not_representable',
+        `Product ${facts.productId} is held to ${unitDecimals} decimal(s) but the line sells ${soldQuantityQ4} (Q4), which that grain cannot represent`,
+        {
+          productId: facts.productId,
+          stockUnitDecimals: unitDecimals,
+          soldQuantityQ4: soldQuantityQ4.toString(),
+          nearestRepresentableQ4: nearestRepresentableQuantity(soldQuantityQ4, unitDecimals).toString(),
+        },
       );
     }
     return Object.freeze([Object.freeze({ componentProductId: facts.productId, componentVariantId: facts.stockVariantId, quantityQ4: soldQuantityQ4 })]);
@@ -185,6 +225,18 @@ export function assertMovementSetComplete(
   options: { readonly boundRecipes?: readonly { readonly recipeId: string; readonly version: number }[] } = {},
 ): void {
   const bound = options.boundRecipes;
+  if (bound !== undefined && bound.length === 0 && actual.length > 0) {
+    // An empty bound set used to DISABLE the law; it must refuse instead. The
+    // empty array is reachable through the pack's own helper — `boundRecipesOf`
+    // returns `[]` for a draft whose contributions are all unbound — so a line
+    // with no recorded preparation would have accepted a movement stamped with
+    // anyone's recipe. "I know of no recipe for this line" is not permission.
+    throw new StockEffectRefusal(
+      'restaurant_stock_effect.recipe_binding_absent',
+      `A composed line with ${actual.length} movement(s) is bound to no recipe version, so no movement can be shown to be its own`,
+      { movementCount: actual.length },
+    );
+  }
   const boundKeys = bound === undefined ? null : new Set(bound.map((b) => `${b.recipeId}@${b.version}`));
   const describe = (b: readonly { readonly recipeId: string; readonly version: number }[]): string =>
     b.map((one) => `${one.recipeId} v${one.version}`).join(', ');
@@ -198,7 +250,14 @@ export function assertMovementSetComplete(
       });
     }
     actualByKey.set(k, movement);
-    if (bound !== undefined && boundKeys !== null && bound.length > 0 && (movement.recipeVersion !== undefined || movement.recipeId !== undefined)) {
+    if (bound !== undefined && boundKeys !== null) {
+      // The law applies because the CALLER said this is a composed line, never
+      // because the movement volunteered an identity. Guarding on the movement
+      // was fail-open in the one direction that matters: a writer that simply
+      // forgets to stamp provenance produces a movement naming neither half,
+      // and such a movement would have passed as a fully attributed one. A
+      // movement belonging to no recipe version cannot be shown to be one of
+      // THIS line's, which is the whole of §48's exact-set law.
       if (movement.recipeId === undefined || movement.recipeVersion === undefined) {
         throw new StockEffectRefusal(
           'restaurant_stock_effect.recipe_identity_incomplete',

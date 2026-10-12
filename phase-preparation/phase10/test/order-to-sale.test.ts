@@ -175,3 +175,82 @@ describe('kitchenInstructionsFor — unpriced modifiers exist for the kitchen al
     expect(at(tickets, Number(0)).instructions).toEqual(['no ice']);
   });
 });
+
+describe('P1-01 — a modifier is scaled by the pack’s one rounding rule', () => {
+  const QQ = (q4: number): bigint => BigInt(q4);
+
+  const scaled = (lineQ4: bigint, modQ4: bigint): bigint => {
+    const drafts = aggregateToSaleLines([
+      line({
+        orderLineId: 'o1',
+        productId: 'latte',
+        quantityQ4: lineQ4,
+        modifiers: [modifier({ modifierId: 'm1', label: 'syrup', priced: true, productId: 'syrup', quantityQ4: modQ4 })],
+      }),
+    ]);
+    const found = drafts.find((d) => d.productId === 'syrup');
+    if (found === undefined) throw new Error('the modifier produced no sale line');
+    return found.quantityQ4;
+  };
+
+  it('rounds HALF_EVEN rather than truncating a billed quantity toward zero', () => {
+    // 0.1234 x 0.5678 = 0.07006652, which is 700.6652 Q4 steps. Truncation
+    // bills 700 and loses a step in silence; the pack's rule bills 701.
+    expect(scaled(QQ(5678), QQ(1234))).toBe(701n);
+  });
+
+  it('rounds a tie to the even step, as every other quantity division in the pack does', () => {
+    // 0.0005 x 1 = 5000 / 10000 in Q8 terms: exactly half a step, to the even one.
+    expect(scaled(QQ(10_000), QQ(5))).toBe(5n);
+    // 1.5 steps worth: 0.0003 x 0.5 = 1.5 Q4 steps, HALF_EVEN gives 2.
+    expect(scaled(QQ(5_000), QQ(3))).toBe(2n);
+    // 2.5 steps worth: 0.0005 x 0.5 -> 2.5, HALF_EVEN gives 2, not 3.
+    expect(scaled(QQ(5_000), QQ(5))).toBe(2n);
+  });
+
+  it('leaves whole-unit multiplication exactly where it was', () => {
+    expect(scaled(Q(2), Q(1))).toBe(Q(2));
+    expect(scaled(Q(3), Q(2))).toBe(Q(6));
+  });
+
+  it('refuses a modifier that scales away, and names the MODIFIER rather than the line', () => {
+    // The order line's own quantity is 1 and is perfectly valid. Reporting this
+    // as the line's non-positive quantity would send an operator to correct
+    // something that is already correct.
+    try {
+      scaled(QQ(1), QQ(1));
+      throw new Error('expected a refusal, none was thrown');
+    } catch (error) {
+      if (!(error instanceof OrderToSaleRefusal)) throw error;
+      expect(error.code).toBe('restaurant.order.modifier_quantity_rounds_to_zero');
+      expect(error.details?.modifierId).toBe('m1');
+      expect(error.details?.lineQuantityQ4).toBe('1');
+      expect(error.details?.scaledQuantityQ4).toBe('0');
+    }
+  });
+
+  it('never silently loses a step across a grid of line and modifier quantities', () => {
+    // A bounded sweep, not a proof: it states that on this grid the result is
+    // the pack's own HALF_EVEN of the Q8 product, so a return to truncation is
+    // seen even where the two rules agree on most inputs.
+    const expectedHalfEven = (a: bigint, b: bigint): bigint => {
+      const n = a * b;
+      const q = n / 10_000n;
+      const r = n % 10_000n;
+      const twice = r * 2n;
+      if (twice > 10_000n) return q + 1n;
+      if (twice < 10_000n) return q;
+      return q % 2n === 0n ? q : q + 1n;
+    };
+    let checked = 0;
+    for (let lineQ4 = 1; lineQ4 <= 40_000; lineQ4 += 997) {
+      for (let modQ4 = 1; modQ4 <= 40_000; modQ4 += 1013) {
+        const want = expectedHalfEven(BigInt(lineQ4), BigInt(modQ4));
+        if (want <= 0n) continue;
+        expect(scaled(BigInt(lineQ4), BigInt(modQ4))).toBe(want);
+        checked += 1;
+      }
+    }
+    expect(checked).toBeGreaterThan(1_500);
+  });
+});

@@ -10,6 +10,7 @@ import {
 } from '../src/recipe-version';
 import {
   STOCK_EFFECT_MODES,
+  StockEffectRefusal,
   type ActualMovement,
   assertMovementSetComplete,
   expectedMovementsFor,
@@ -37,6 +38,7 @@ const facts = (over: Partial<SoldProductFacts> = {}): SoldProductFacts => ({
   productId: 'cappuccino',
   stockVariantId: null,
   stockTracked: false,
+  stockUnitDecimals: null,
   recipeVersion: CAPPUCCINO,
   declaredService: false,
   ...over,
@@ -77,7 +79,7 @@ describe('§46 — exactly three stock-effect modes, and no fourth', () => {
   });
 
   it('refuses a tracked product with no stock variant rather than moving nothing', () => {
-    expect(() => expectedMovementsFor(facts({ stockTracked: true, recipeVersion: null }), Q(1))).toThrowError(
+    expect(() => expectedMovementsFor(facts({ stockTracked: true, stockUnitDecimals: 0, recipeVersion: null }), Q(1))).toThrowError(
       expect.objectContaining({ code: 'restaurant_stock_effect.direct_movement_set_invalid' }),
     );
   });
@@ -363,7 +365,8 @@ describe('SERVICE — a non-stock service consumes nothing (§46)', () => {
 });
 
 describe('DIRECT — a stock-tracked line consumes itself (§46)', () => {
-  const directFacts = facts({ productId: 'bottled-water', stockTracked: true, stockVariantId: 'water-500', recipeVersion: null });
+  // A bottled item is whole-counted: `unit_decimals = 0` is its real grain.
+  const directFacts = facts({ productId: 'bottled-water', stockTracked: true, stockVariantId: 'water-500', stockUnitDecimals: 0, recipeVersion: null });
 
   it('expects exactly one movement of itself, at the sold quantity', () => {
     const expected = expectedMovementsFor(directFacts, Q(3));
@@ -574,5 +577,87 @@ describe("§57 — the grain is the component's own unit_decimals, not Q4", () =
     for (const component of half) {
       expect(isRepresentableAtPrecision(component.quantityQ4, 3)).toBe(true);
     }
+  });
+});
+
+describe('P2-03 — the identity law applies because the line is composed, not because a movement volunteered one', () => {
+  const bound = [{ recipeId: 'r-cappuccino', version: 3 }];
+  const expected = [{ componentProductId: 'beans', componentVariantId: 'beans-kg', quantityQ4: Q(0.018) }];
+
+  it('refuses a movement that names NEITHER half of a recipe identity', () => {
+    // The fail-open case: a writer that simply forgets to stamp provenance.
+    // Previously admitted as a fully attributed movement.
+    expect(() => assertMovementSetComplete(expected, [{ ...at(expected, 0) }], { boundRecipes: bound })).toThrowError(
+      expect.objectContaining({ code: 'restaurant_stock_effect.recipe_identity_incomplete' }),
+    );
+  });
+
+  it('still refuses a movement that names half an identity', () => {
+    expect(() => assertMovementSetComplete(expected, [{ ...at(expected, 0), recipeVersion: 3 }], { boundRecipes: bound })).toThrowError(
+      expect.objectContaining({ code: 'restaurant_stock_effect.recipe_identity_incomplete' }),
+    );
+  });
+
+  it('accepts the complete, matching identity, so the law did not simply become a refusal', () => {
+    expect(() =>
+      assertMovementSetComplete(expected, [{ ...at(expected, 0), recipeId: 'r-cappuccino', recipeVersion: 3 }], { boundRecipes: bound }),
+    ).not.toThrow();
+  });
+
+  it('refuses an EMPTY bound set rather than letting it disable the law', () => {
+    // Reachable through the pack's own `boundRecipesOf`, which returns [] for a
+    // draft whose contributions are all unbound. "I know of no recipe for this
+    // line" is not permission to accept anyone's movement.
+    expect(() =>
+      assertMovementSetComplete(expected, [{ ...at(expected, 0), recipeId: 'r-SOMEONE-ELSE', recipeVersion: 99 }], { boundRecipes: [] }),
+    ).toThrowError(expect.objectContaining({ code: 'restaurant_stock_effect.recipe_binding_absent' }));
+  });
+
+  it('leaves a line with no movements at all unaffected by the empty bound set', () => {
+    expect(() => assertMovementSetComplete([], [], { boundRecipes: [] })).not.toThrow();
+  });
+
+  it('leaves the direct and service paths, which pass no bound set, exactly as they were', () => {
+    expect(() => assertMovementSetComplete(expected, [{ ...at(expected, 0) }])).not.toThrow();
+  });
+});
+
+describe('P2-04 — a DIRECT line is held to the stock product’s grain, before service', () => {
+  const whole = facts({ productId: 'bottled-water', stockTracked: true, stockVariantId: 'water-500', stockUnitDecimals: 0, recipeVersion: null });
+
+  it('accepts a quantity the product’s own precision can represent', () => {
+    expect(expectedMovementsFor(whole, Q(3))).toEqual([{ componentProductId: 'bottled-water', componentVariantId: 'water-500', quantityQ4: Q(3) }]);
+  });
+
+  it('refuses a half bottle on a whole-counted product, naming the nearest representable quantity', () => {
+    try {
+      expectedMovementsFor(whole, Q(0.5));
+      throw new Error('expected a refusal, none was thrown');
+    } catch (error: unknown) {
+      if (!(error instanceof StockEffectRefusal)) throw error;
+      expect(error.code).toBe('restaurant_stock_effect.direct_quantity_not_representable');
+      expect(error.details?.soldQuantityQ4).toBe('5000');
+      expect(error.details?.nearestRepresentableQ4).toBe('0');
+    }
+  });
+
+  it('holds at every precision the catalogue allows', () => {
+    const finerThanGrain: Record<number, bigint> = { 0: Q(0.5), 1: Q(0.05), 2: Q(0.005), 3: Q(0.0005) };
+    for (const [decimals, quantity] of Object.entries(finerThanGrain)) {
+      const product = facts({ productId: 'p', stockTracked: true, stockVariantId: 'v', stockUnitDecimals: Number(decimals), recipeVersion: null });
+      expect(() => expectedMovementsFor(product, quantity)).toThrowError(
+        expect.objectContaining({ code: 'restaurant_stock_effect.direct_quantity_not_representable' }),
+      );
+    }
+    // 4 places is the column's own grain: nothing finer exists to refuse.
+    const finest = facts({ productId: 'p', stockTracked: true, stockVariantId: 'v', stockUnitDecimals: 4, recipeVersion: null });
+    expect(() => expectedMovementsFor(finest, 1n)).not.toThrow();
+  });
+
+  it('refuses a stock-tracked product that declares no usable precision at all', () => {
+    const noGrain = facts({ productId: 'p', stockTracked: true, stockVariantId: 'v', stockUnitDecimals: null, recipeVersion: null });
+    expect(() => expectedMovementsFor(noGrain, Q(1))).toThrowError(expect.objectContaining({ code: 'restaurant_stock_effect.direct_movement_set_invalid' }));
+    const outOfRange = facts({ productId: 'p', stockTracked: true, stockVariantId: 'v', stockUnitDecimals: 5, recipeVersion: null });
+    expect(() => expectedMovementsFor(outOfRange, Q(1))).toThrowError(expect.objectContaining({ code: 'restaurant_stock_effect.direct_movement_set_invalid' }));
   });
 });
