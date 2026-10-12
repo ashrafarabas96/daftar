@@ -8,7 +8,7 @@
  * WHAT THIS FILE IS AND IS NOT
  * ----------------------------
  * `P13-LOYALTY-DESIGN §1.5` puts the ONE definition of a point balance in SQL,
- * as `loyalty_points_balance/3`, and gives the reason: *a figure with two
+ * as `loyalty_points_as_of/3`, and gives the reason: *a figure with two
  * implementations has two answers*. This file is therefore NOT a second
  * definition of the balance and must never be presented as one. It is the
  * **fold these rows obey**, written here so that the fold's laws — the sign
@@ -599,7 +599,7 @@ export function validateDraft(ledger: LoyaltyLedger, draft: LoyaltyMovementDraft
  * ------------------------------------------------------------------ */
 
 /**
- * The fold's answer, shaped exactly as `loyalty_points_balance/3` returns it.
+ * The fold's answer, shaped exactly as `loyalty_points_as_of/3` returns it.
  *
  * `balancePoints` is the whole sum with **no predicate** — no `WHERE NOT
  * reversed`, no `WHERE status = 'active'`, nothing to forget. The component
