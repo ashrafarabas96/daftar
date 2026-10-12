@@ -117,8 +117,11 @@ export interface ChannelReconciliationReport {
    * a defect of this function, and the honest thing is to SAY SO in the report
    * rather than to let an empty findings list read as coverage.
    *
-   * It is DERIVED from the input, never hard-coded: if a single supplied sale
-   * names an order, both checks were live and this list is empty. So when Phase
+   * It is DERIVED from the input, never hard-coded, and EACH CODE IS JUDGED ON
+   * ITS OWN reachability (the challenger's `F-44`): `sale_without_order` needs a
+   * sale that names an order, `order_sale_mismatch` needs one that names an
+   * order this input carries. A sale naming an ABSENT order fires the first and
+   * never reaches the second, so the two are not blind together. So when Phase
    * 4 gains the back-reference, the list empties itself with no edit here.
    */
   blindChecks: readonly ReconciliationFindingCode[];
@@ -200,6 +203,7 @@ export function reconcileChannelOrders(orders: readonly ChannelOrderRow[], sales
 
   let salesWithoutChannelOrigin = 0;
   let salesNamingAnOrder = 0;
+  let salesMatchedToAnOrder = 0;
   for (const sale of sales) {
     if (sale.orderId === null) {
       salesWithoutChannelOrigin += 1;
@@ -207,6 +211,7 @@ export function reconcileChannelOrders(orders: readonly ChannelOrderRow[], sales
     }
     salesNamingAnOrder += 1;
     const order = orderById.get(sale.orderId);
+    if (order !== undefined) salesMatchedToAnOrder += 1;
     if (order === undefined) {
       findings.push({ code: 'sale_without_order', orderId: sale.orderId, saleId: sale.saleId, counterpartId: null });
       continue;
@@ -223,8 +228,19 @@ export function reconcileChannelOrders(orders: readonly ChannelOrderRow[], sales
     findings: Object.freeze(findings),
     // Both of these read `sale.orderId`, and nothing else does. If no supplied
     // sale named an order, neither could have fired, whatever the findings say.
+    // Each code is judged on its OWN reachability, which is the challenger's
+    // F-44: `sale_without_order` needs a sale that names an order at all, while
+    // `order_sale_mismatch` needs one that names an order this input CARRIES —
+    // a sale naming an absent order fires the first and never reaches the
+    // second. Reporting them together said the second had been judged when it
+    // had not. It was never a fail-open (that state always comes with a
+    // finding, so `isReconciled` is already false); it was an imprecise
+    // coverage statement, and coverage is the one thing this field is for.
     blindChecks: Object.freeze(
-      salesNamingAnOrder === 0 ? (['sale_without_order', 'order_sale_mismatch'] as const).slice() : [],
+      [
+        ...(salesNamingAnOrder === 0 ? (['sale_without_order'] as const) : []),
+        ...(salesMatchedToAnOrder === 0 ? (['order_sale_mismatch'] as const) : []),
+      ].sort(),
     ) as readonly ReconciliationFindingCode[],
     isReconciled: findings.length === 0,
   };

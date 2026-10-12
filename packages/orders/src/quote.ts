@@ -56,6 +56,7 @@
  * is the price surprise §27 exists to prevent.
  */
 import { createHash } from 'node:crypto';
+import { types as nodeTypes } from 'node:util';
 import { assertQuantityRepresentable, formatQuantity, parseQuantity } from '@daftar/inventory';
 import { stockKeyOf } from './cart';
 import { NO_QUOTE_EXPIRY, type OrderQuoteConfirmationDto } from './contracts';
@@ -296,20 +297,71 @@ function undeclaredKeys(carrier: object, allowed: ReadonlySet<string>): string[]
 }
 
 /**
+ * Refuse a PROXY, at every level.
+ *
+ * The challenger's `F-41`, ruled blocking by the coordinator: a Proxy forwards
+ * `getPrototypeOf`, `isArray` and `ownKeys` to its target, so it passes every
+ * structural check here and a `get` trap can still answer an undeclared field —
+ * readable, through `assertQuoteIntact` and `assertQuoteApproved`. It is the
+ * same fail-open as `F-34` and `F-40`, one indirection out.
+ *
+ * WHY `node:util`'s `types.isProxy` AND NOT A DEEP COPY. Two remedies were on
+ * the table. A deep copy would have to be built before any check and compared
+ * against the original, which means this package would carry its own structural
+ * equality for a quote — a second definition of what a quote IS, beside the
+ * canonical stream, to be kept in step with it forever. That is the "second
+ * money truth" shape this phase refuses elsewhere. `types.isProxy` asks the
+ * runtime the question directly and cannot drift. The package already depends on
+ * Node built-ins (`node:crypto` for the digest), so the runtime requirement is
+ * not new, and `packages/orders` is a server-side library — it is not bundled
+ * for a browser.
+ *
+ * It is also the honest one: it answers the question that was asked (is this
+ * object a Proxy?) rather than answering a different question well.
+ */
+function assertNotProxy(carrier: object, subject: string, lineIndex: number | null): void {
+  if (nodeTypes.isProxy(carrier)) {
+    throw new OrderError('order.quote_field_undeclared', `${subject} is a Proxy, which can answer for a field that is in no byte of the digest`, {
+      ...(lineIndex === null ? {} : { lineIndex: String(lineIndex) }),
+      carrier: 'proxy',
+    });
+  }
+}
+
+/**
  * Refuse a carrier whose prototype is not `Object.prototype`.
  *
  * A class instance, or any object whose prototype carries data, can answer for
  * a field that is nowhere in its own keys: `Reflect.ownKeys` cannot see it, and
- * a getter can return anything on each read. So the SHAPE of the carrier is
- * checked, not only its keys.
+ * a getter can return anything on each read. So the carrier's prototype is
+ * checked as well as its keys.
+ *
+ * WHAT THIS CHECK CANNOT SEE, and the unqualified sentence that used to stand
+ * here is withdrawn (challenger `F-41`): a **Proxy** over a plain object
+ * forwards both `getPrototypeOf` and `ownKeys` to its target, so it passes both
+ * guards and can still answer an undeclared field from a `get` trap. Measured at
+ * `7902cc0`. Nothing a key list or a prototype comparison can do detects that —
+ * a Proxy is designed to be transparent — so this is NOT claimed to be closed.
+ * What closes the ONE thing that matters for money is elsewhere and is measured:
+ * the closing rebuild in `assertQuoteIntact` re-digests the values it reads, so a
+ * trap that changes a DIGESTED field is refused as `order.quote_tampered` on
+ * every re-entry (the challenger measured this on `assertQuoteIntact`,
+ * `assertQuoteApproved` and `assessQuoteDivergence`). An UNDECLARED field
+ * answered by a trap is outside the digest and therefore outside what this
+ * package can attest to, which is a statement about the caller's object, not a
+ * property of this function.
  *
  * WHAT THIS COSTS, stated rather than discovered: an `Object.create(null)`
  * carrier is refused too, as is an ORM entity or any class instance. `JSON.parse`
- * yields `Object.prototype`, so the ordinary storage path — read the row, parse
- * or project it, hand it in — is unaffected. A layer that materialises rows into
- * CLASS INSTANCES must project to a plain object first, which is the same
- * obligation `P6-INTEGRATION-PATCH-REQUEST.md` §6 already states for a row that
- * carries its own columns.
+ * yields `Object.prototype` **in the same realm**, so the ordinary storage path —
+ * read the row, parse or project it, hand it in — is unaffected; a CROSS-REALM
+ * plain object (`vm.runInNewContext`, a worker) has a different
+ * `Object.prototype` and IS refused, with `prototype: 'not Object.prototype'`
+ * (challenger `F-42`, measured). A layer that materialises rows into CLASS
+ * INSTANCES, or that parses them in another realm, must project to a plain
+ * object in this one, which is the same obligation
+ * `P6-INTEGRATION-PATCH-REQUEST.md` §6 already states for a row that carries its
+ * own columns.
  *
  * WHY THIS IS NOT MERELY DEFENCE IN DEPTH ON THE INPUT PATH. A quote the builder
  * produced cannot carry either shape — `{ ...carrier }` copies own enumerable
@@ -320,6 +372,7 @@ function undeclaredKeys(carrier: object, allowed: ReadonlySet<string>): string[]
  * silently drop is exactly the thing `R-16` was about.
  */
 function assertPlainCarrier(carrier: object, subject: string, lineIndex: number | null): void {
+  assertNotProxy(carrier, subject, lineIndex);
   if (Object.getPrototypeOf(carrier) !== Object.prototype) {
     throw new OrderError(
       'order.quote_field_undeclared',
@@ -332,9 +385,75 @@ function assertPlainCarrier(carrier: object, subject: string, lineIndex: number 
   }
 }
 
+/**
+ * Refuse a `lines` CONTAINER that is anything but a plain array of its lines.
+ *
+ * The challenger's `F-40`, and it was a P1 fail-open one container up. The quote
+ * was guarded and each LINE was guarded; the array BETWEEN them was neither
+ * key-checked nor shape-checked, so every one of these answered an undeclared
+ * field while `assertQuoteIntact` said ACCEPTED and the field read back as
+ * `'500000'` — measured at `7902cc0`:
+ *
+ *   - `Object.assign([...lines], { documentFeeMinor: '500000' })`
+ *   - the same field defined NON-ENUMERABLE on the array
+ *   - an Array SUBCLASS with a getter on its prototype
+ *   - a non-array object carrying `length`, `entries`, `map` and
+ *     `Symbol.iterator` — `Array.isArray` was asserted on the INPUT path only,
+ *     so a hand-built quote could hand in any iterable
+ *
+ * So the container is held to the same standard as the things on either side of
+ * it: it is an array, its prototype is `Array.prototype`, and its own keys are
+ * nothing but the index keys and `length`. An extra key is NAMED, like any other
+ * undeclared field.
+ *
+ * `length` is accepted because an array cannot exist without it, and index keys
+ * are accepted by POSITION rather than by count, so a sparse or out-of-order
+ * array is refused rather than silently read.
+ *
+ * As with `assertPlainCarrier`, a PROXY over a lawful array forwards
+ * `isArray`, `getPrototypeOf` and `ownKeys` and is NOT detected here; see that
+ * function's note on `F-41`.
+ */
+function assertPlainLineArray(lines: unknown, subject: string): readonly QuoteLineSnapshot[] {
+  const refuse = (reason: string, detail?: Record<string, string>): never => {
+    throw new OrderError('order.quote_field_undeclared', `${subject} lines container ${reason}, so nothing can attest to what it carries`, {
+      container: reason,
+      ...detail,
+    });
+  };
+  if (!Array.isArray(lines)) refuse('is not an array');
+  const array = lines as unknown[];
+  assertNotProxy(array, `${subject} lines container`, null);
+  if (Object.getPrototypeOf(array) !== Array.prototype) refuse('is not a plain array');
+  const own = Reflect.ownKeys(array);
+  const expected = new Set<string>(['length', ...Array.from({ length: array.length }, (_unused, index) => String(index))]);
+  const extra = own
+    .filter((key) => typeof key !== 'string' || !expected.has(key))
+    .map((key) => String(key))
+    .sort();
+  if (extra.length > 0) refuse('carries keys that are not its own indices', { fields: extra.join(',') });
+  // The indices are judged by POSITION and by PRESENCE, so a SPARSE array —
+  // whose holes are not own keys at all — is refused rather than walked with
+  // `undefined` lines. `length` alone would not have caught it.
+  const ownStrings = new Set(own.filter((key): key is string => typeof key === 'string'));
+  for (const key of expected) {
+    if (!ownStrings.has(key)) refuse('is sparse', { missingIndex: key });
+  }
+  return array as readonly QuoteLineSnapshot[];
+}
+
 /** The input reduced to exactly the fields the digest covers, lines included. */
 function canonicalCarrier(input: CommercialQuoteInput): CommercialQuoteInput {
-  const lines = input.lines.map((line) => {
+  // `[...input.lines]` first, NOT `input.lines.map(...)`. `Array.prototype.map`
+  // honours `Symbol.species`, so mapping an Array SUBCLASS returns an instance
+  // of that subclass — and the builder's own output would then carry whatever
+  // the subclass's prototype answers for, readable, outside the digest, with
+  // both gates still accepting it (challenger `F-45`, ruled blocking). The
+  // input guard refuses such an input before this line is reached, measured, so
+  // this is the second layer; it is here because the sentence this function's
+  // header makes about its own output should be true of THIS function and not
+  // only true because something upstream checked.
+  const lines = [...input.lines].map((line) => {
     const kept: Partial<QuoteLineSnapshot> = {};
     for (const field of CANONICAL_LINE_FIELDS) kept[field] = line[field] as never;
     return Object.freeze(kept as QuoteLineSnapshot);
@@ -385,7 +504,7 @@ function assertCanonicalInput(input: CommercialQuoteInput): void {
     );
   }
   const allowedLine = new Set<string>(CANONICAL_LINE_FIELDS as readonly string[]);
-  const lines = Array.isArray(input.lines) ? input.lines : [];
+  const lines = assertPlainLineArray(input.lines, 'the quote input');
   for (const [index, line] of lines.entries()) {
     if (line === null || typeof line !== 'object') continue;
     assertPlainCarrier(line, 'a quote input LINE', index);
@@ -407,7 +526,15 @@ function assertCanonicalInput(input: CommercialQuoteInput): void {
  * such a field off a quote has NO tamper evidence for it, while the quote's own
  * digest check answers "untampered" — which is worse than no evidence, because
  * the check was consulted and said yes. So an undeclared field is refused
- * rather than ignored, and the refusal names it.
+ * rather than ignored, and the refusal names it — at the quote level, on each
+ * LINE, and on the lines CONTAINER between them (`assertPlainLineArray`; the
+ * container was unguarded until the challenger's `F-40`).
+ *
+ * THE ONE QUALIFICATION, because the unqualified sentence was false: a PROXY
+ * over a lawful carrier forwards `getPrototypeOf`, `isArray` and `ownKeys`, so
+ * it passes every guard here and can answer an undeclared field from a `get`
+ * trap. That is not closed and is not claimed to be — see `assertPlainCarrier`
+ * for what the closing rebuild does and does not buy (`F-41`).
  *
  * This is deliberately strict about one thing in particular: a storage layer
  * that reads a quote back with its own columns attached (`created_at`, a row
@@ -425,7 +552,7 @@ function assertCanonicalCarrier(quote: CommercialQuote): void {
     });
   }
   const allowedLine = new Set<string>(CANONICAL_LINE_FIELDS);
-  for (const [index, line] of quote.lines.entries()) {
+  for (const [index, line] of assertPlainLineArray(quote.lines, 'a quote').entries()) {
     assertPlainCarrier(line, 'a quote LINE', index);
     const extraLine = undeclaredKeys(line, allowedLine);
     if (extraLine.length > 0) {

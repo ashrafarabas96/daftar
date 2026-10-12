@@ -227,6 +227,17 @@ describe('the sale-side seam is stated, not assumed away (coordinator R-10)', ()
     expect(mixed.salesWithoutChannelOrigin).toBe(1);
   });
 
+  it('F-44: each code is judged on its OWN reachability — an ABSENT order leaves only the mismatch check blind', () => {
+    // The challenger's F-44. A sale naming an order this input does not carry
+    // FIRES sale_without_order and never reaches order_sale_mismatch, so
+    // reporting the two as blind together said the first had not been judged
+    // when it had.
+    const report = reconcileChannelOrders([], [{ saleId: S1, orderId: O1 }]);
+    expect(report.findings.map((f) => f.code)).toEqual(['sale_without_order']);
+    expect(report.blindChecks).toEqual(['order_sale_mismatch']);
+    expect(report.isReconciled).toBe(false);
+  });
+
   it('R-19: an EMPTY sale list is blind too — nothing judged it, so nothing may be claimed', () => {
     const report = reconcileChannelOrders([{ orderId: O1, channel: 'storefront', state: 'placed', saleId: null }], []);
     expect(report.isReconciled).toBe(true);

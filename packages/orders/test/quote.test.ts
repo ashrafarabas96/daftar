@@ -31,6 +31,7 @@ import {
   type CommercialQuoteInput,
   type ConfirmedQuoteApproval,
   type OrderQuoteConfirmationDto,
+  type QuoteLineSnapshot,
   type UnitPrecisionDeclaration,
 } from '../src';
 
@@ -1097,6 +1098,143 @@ describe('the carrier is the digested stream, not a superset of it (round-10 F-3
       const error = refusal({ ...QUOTED, lines: [line, QUOTED.lines[1]] });
       expect(error.code).toBe('order.quote_field_undeclared');
       expect(error.details?.lineIndex).toBe('0');
+    });
+
+    // F-40, the challenger's P1: the quote was guarded and each LINE was
+    // guarded, and the ARRAY between them was neither. Every shape below
+    // answered an undeclared field while assertQuoteIntact said ACCEPTED and
+    // the field read back as '500000'.
+    it('F-40: the lines CONTAINER is held to the same standard as the things on either side of it', () => {
+      const withOwn = Object.assign([...QUOTED.lines], { documentFeeMinor: '500000' });
+      expect(refusal({ ...QUOTED, lines: withOwn }).details?.fields).toBe('documentFeeMinor');
+
+      const withNonEnumerable = [...QUOTED.lines];
+      Object.defineProperty(withNonEnumerable, 'documentFeeMinor', { value: '500000', enumerable: false });
+      expect(refusal({ ...QUOTED, lines: withNonEnumerable }).details?.fields).toBe('documentFeeMinor');
+
+      class Lines extends Array {
+        get documentFeeMinor(): string {
+          return '500000';
+        }
+      }
+      const subclass = Lines.from(QUOTED.lines) as unknown as readonly QuoteLineSnapshot[];
+      expect((subclass as unknown as { documentFeeMinor: string }).documentFeeMinor).toBe('500000');
+      expect(refusal({ ...QUOTED, lines: subclass }).details?.container).toBe('is not a plain array');
+
+      // Array.isArray was asserted on the INPUT path only, so a hand-built
+      // quote could hand in any iterable and every line check still ran over it.
+      const iterable = {
+        length: 1,
+        0: QUOTED.lines[0],
+        documentFeeMinor: '500000',
+        entries: Array.prototype.entries,
+        map: Array.prototype.map,
+        [Symbol.iterator]: Array.prototype[Symbol.iterator],
+      };
+      expect(refusal({ ...QUOTED, lines: iterable }).details?.container).toBe('is not an array');
+    });
+
+    it('F-40: a SPARSE array is refused — its holes are not own keys, so walking it would read undefined lines', () => {
+      const sparse: unknown[] = [];
+      sparse[2] = QUOTED.lines[0];
+      const error = refusal({ ...QUOTED, lines: sparse });
+      expect(error.details?.container).toBe('is sparse');
+      expect(error.details?.missingIndex).toBe('0');
+    });
+
+    it('F-40: and a lawful lines array still passes, frozen or not', () => {
+      expect(() => assertQuoteIntact({ ...QUOTED, lines: [...QUOTED.lines] })).not.toThrow();
+      expect(() => assertQuoteIntact({ ...QUOTED, lines: Object.freeze([...QUOTED.lines]) })).not.toThrow();
+      expect(() => assertQuoteIntact(QUOTED)).not.toThrow();
+    });
+
+    // F-41, ruled blocking by the coordinator: a Proxy forwards
+    // getPrototypeOf, isArray and ownKeys, so every structural check here
+    // passes while a get trap answers an undeclared field. Refused by name
+    // through node:util types.isProxy, at every level.
+    it('F-41: a Proxy over the QUOTE is refused by name, trap or no trap', () => {
+      expect(refusal(new Proxy({ ...QUOTED }, {})).details?.carrier).toBe('proxy');
+      const trapped = new Proxy(
+        { ...QUOTED },
+        {
+          get(target, key) {
+            return key === 'documentFeeMinor' ? '500000' : (Reflect.get(target, key) as unknown);
+          },
+        },
+      );
+      expect((trapped as unknown as { documentFeeMinor: string }).documentFeeMinor).toBe('500000');
+      expect(refusal(trapped).details?.carrier).toBe('proxy');
+    });
+
+    it('F-41: a Proxy over a LINE is refused, with the line index', () => {
+      const line = new Proxy(
+        { ...(QUOTED.lines[0] as object) },
+        {
+          get(target, key) {
+            return key === 'surcharge' ? '7' : (Reflect.get(target, key) as unknown);
+          },
+        },
+      ) as unknown as QuoteLineSnapshot;
+      const error = refusal({ ...QUOTED, lines: [line] });
+      expect(error.details?.carrier).toBe('proxy');
+      expect(error.details?.lineIndex).toBe('0');
+    });
+
+    it('F-41: a Proxy over the lines CONTAINER is refused too', () => {
+      const container = new Proxy([...QUOTED.lines], {
+        get(target, key) {
+          return key === 'documentFeeMinor' ? '500000' : (Reflect.get(target, key) as unknown);
+        },
+      });
+      expect((container as unknown as { documentFeeMinor: string }).documentFeeMinor).toBe('500000');
+      expect(refusal({ ...QUOTED, lines: container }).details?.carrier).toBe('proxy');
+    });
+
+    it('and the closing rebuild still refuses a trap over a DIGESTED field, which is the money half', () => {
+      // The challenger measured this before the Proxy guard existed: a trap
+      // that changes a digested value is refused as order.quote_tampered on
+      // every re-entry, because assertQuoteIntact re-digests what it reads.
+      // Now the Proxy is refused one step earlier, so this asserts the ORDER of
+      // the two guards rather than letting the earlier one hide the later.
+      const target = { ...QUOTED, displayedTotalMinor: '999999' };
+      expect(refusal(target).code).toBe('order.quote_tampered');
+    });
+
+    it('F-45: a fee on the INPUT lines array is refused by name, not silently dropped', () => {
+      // The ACC-REQ-P6-03 claim is "fail-closed in BOTH directions". It was
+      // false for this one shape: a fee on the input's lines ARRAY was accepted
+      // and dropped, so the caller learned nothing.
+      const lines = Object.assign([...INPUT.lines], { documentFeeMinor: '5000' });
+      try {
+        buildCommercialQuote({ ...INPUT, lines });
+        throw new Error('a fee on the input lines array was accepted');
+      } catch (error) {
+        expect((error as OrderError).code).toBe('order.quote_field_undeclared');
+        expect((error as OrderError).details?.fields).toBe('documentFeeMinor');
+      }
+    });
+
+    it('F-45: the BUILDER emits a plain Array, so Symbol.species cannot ride on its own output', () => {
+      // Array.prototype.map honours Symbol.species, so mapping a subclass used
+      // to return that subclass and the builder's OWN output carried a readable
+      // field the digest does not cover. Two things are asserted: the subclass
+      // input is refused, and the container the builder emits for a lawful
+      // input is a plain Array.
+      class Lines extends Array {
+        get documentFeeMinor(): string {
+          return '5000';
+        }
+      }
+      try {
+        buildCommercialQuote({ ...INPUT, lines: Lines.from(INPUT.lines) as unknown as readonly QuoteLineSnapshot[] });
+        throw new Error('an Array subclass input was accepted');
+      } catch (error) {
+        expect((error as OrderError).details?.container).toBe('is not a plain array');
+      }
+      const built = buildCommercialQuote(INPUT);
+      expect(Object.getPrototypeOf(built.lines)).toBe(Array.prototype);
+      expect(built.lines.constructor).toBe(Array);
+      expect(() => assertQuoteIntact(built)).not.toThrow();
     });
 
     it('the INPUT is held to the same standard, so neither shape can even reach the builder', () => {
