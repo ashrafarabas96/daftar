@@ -1020,11 +1020,26 @@ A scope never reaches a relation directly, because the public request runs as
   'payments.collect']` (`permissions.ts:214`) — and `inventory.view` only to
   manager and owner (`permissions.ts:179`). **The earlier revision of this
   paragraph said the cashier held `catalog.view` alone and cited `:149` and
-  `:144`; both line numbers and the list were wrong (CHALLENGE P2-02).** `:146`
-  is `isSensitivePermission()` and `:144` is the tail of
-  `SENSITIVE_PERMISSIONS`, not a role list; the single-permission set is the
-  **Phase 1** cashier as it stood before Phase 4 appended to it, described by
-  the comment at `:206`, and was read as the current one. Verified at `93084f8`.
+  `:144`; both are wrong **at the declared base** (CHALLENGE P2-02), and the
+  corrected values above are verified at `93084f8`.
+
+  **The cause was not what either review supposed, and it matters more than the
+  correction (CHALLENGE R2 P3-09, re-diagnosed).** The round-1 review concluded
+  that the Phase 1 cashier set had been read as the current one. It had not. At
+  **`6fc505d`** — the tree this container has checked out, and the commit this
+  pack's own branch descends from — `:149` **is** `cashier: ['catalog.view']`
+  and `:144` **is** `'inventory.view'` inside the manager block. **Both original
+  citations were exactly right for the tree they were read from and exactly
+  wrong for the base this pack declares.** `permissions.ts` differs between the
+  two trees by 66 lines, and Phase 4 appended four permissions to the cashier in
+  that gap.
+
+  So this was never a misreading of a comment. It is the base-tree trap, and the
+  trap produces findings that look like carelessness and are not — which is why
+  it is now treated as a root cause with a per-citation provenance table (§15),
+  rather than as a disclosed footnote. The independent challenger could not have
+  seen this, because it read only a `93084f8` worktree, where the original
+  citations are simply wrong.
   Had a key been scoped per this table, a
   cashier-delegated key would have read stock levels **that the same cashier
   cannot read in the application** — the public API granting what the business
@@ -1356,3 +1371,48 @@ built-in delegating principal can sell.
 
 *`PREPARED / NOT PROMOTED`. No number allocated. Prepared 2026-10-07 from
 `93084f8`.*
+
+## §15. Live-code citation provenance
+
+**Every citation in this request is verified at the declared base `93084f8`.**
+The tree this container has checked out is **`6fc505d`**, which is `93084f8`'s
+**ancestor** — so the declared base is **not in the history of the commit
+carrying this pack**, and a reader who verifies a citation against the branch
+they checked out may get a different file. `git merge-base --is-ancestor
+93084f8 <head>` fails by design here.
+
+**Six of the fourteen cited files differ between the two trees**, not one. The
+earlier disclosure named `database.ts` only, which understated the trap:
+
+| Cited file | `6fc505d` vs `93084f8` |
+|---|---|
+| `apps/api/src/infra/database.ts` | **DIFFERS** (190+/15−) |
+| `packages/domain-core/src/permissions.ts` | **DIFFERS** (66+/1−) — the P2-02 root cause |
+| `apps/api/src/modules/selling/customers.controller.ts` | **DIFFERS** (113+/0−) |
+| `apps/api/src/modules/inventory/inventory-authorization.ts` | **DIFFERS** (117+/1−) |
+| `apps/api/src/modules/pos/pos-permissions.ts` | **DIFFERS** (138+/0−) |
+| `apps/api/src/modules/pos/pos-cart-routes.ts` | **DIFFERS** (212+/0−) |
+| `apps/api/src/modules/outbox/publisher.ts` | identical |
+| `apps/api/src/modules/inventory/inventory-reads.controller.ts` | identical |
+| `0004_infra.sql`, `0006_rls.sql`, `0010_db_roles.sql`, `0014_branch_scopes.sql`, `0020_credential_delivery_outbox.sql`, `0045_accounting_post_entry.sql` | **all identical** — every cited frozen migration is byte-identical at both trees, so no RLS, grant or policy citation is exposed to this trap |
+
+**The two remediations, and why neither is taken.**
+
+1. **Cut this pack's branch from `93084f8` instead of from `6fc505d`.** This was
+   available at cut time and was not done — and the designated-branch rule
+   constrains the branch's *name*, not the commit it is cut from, so that rule is
+   no answer to this finding and is not offered as one. The reason not to do it
+   is different and is an engineering one: `93084f8` carries **327 files and
+   133,615 insertions** of Phase 4's work, which is **unmerged and unsigned**
+   (PR #6, with `S7 C1` open). A docs-only Phase 14 branch that contained it
+   would misrepresent itself as carrying another phase's unreviewed state, and
+   merging it in now has the same effect.
+2. **Rewrite the branch's history.** Forbidden outright, and not proposed.
+
+**So the fix is this table plus a gate obligation**, not a different commit:
+every live-code citation in this pack names the tree it was verified in, and
+`P14-GATE-032` is extended to **assert each citation against `93084f8`
+explicitly** rather than against whatever tree the runner happens to have —
+because a citation verified against the wrong tree is not a typo, it is a
+coherent reading of the wrong world, and it will keep producing findings that
+look like carelessness.

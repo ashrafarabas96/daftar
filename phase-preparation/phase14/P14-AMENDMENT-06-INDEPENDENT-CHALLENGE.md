@@ -84,7 +84,15 @@ blind to the next section added, which is precisely how this defect arrived.
 ## 3. P2-02 — the cashier, corrected, and `sales.create` named
 
 Line numbers and the permission list are corrected in both the patch request and
-the architecture lock. The escalation conclusion **survives**: the cashier does
+the architecture lock.
+
+> **Re-diagnosed in round 2.** This amendment accepted the round-1 reading that
+> a historical set had been read as the current one. That was wrong. At
+> `6fc505d` — this container's checked-out tree — `:149` **is**
+> `cashier: ['catalog.view']` and `:144` **is** `'inventory.view'` in the manager
+> block, so both original citations were right for the tree they were read from
+> and wrong for the declared base. The cause is the base-tree trap, now treated
+> as a root cause in §15 of the patch request rather than as a footnote. The escalation conclusion **survives**: the cashier does
 not hold `inventory.view`, so mapping `GET /stock` to `catalog.view` was a real
 privilege escalation and `P14-AL-39` and `P14-GATE-032` stand.
 

@@ -145,13 +145,37 @@ two, it is measurable. **The two rulings must be answered together.**
   **routed with `TL-P14-SEC-01`**, because *"which principal may write a key
   digest"* is the same question as *"which principal holds the plaintext"*. The
   proof case now states that its own column set is **illustrative**.
-- **P3-09** — `08d23da`'s parent is `6fc505d`, and `git merge-base 08d23da
-  93084f8` is `6fc505d`, so the declared base is **not** an ancestor of the
-  commit and the checked-out tree is 205 lines of `database.ts` behind it. No
-  citation is wrong because of it — every one was written against a `93084f8`
-  worktree and the challenger verified them there — but a future reader who
-  checks a citation against the branch they checked out gets a different file.
-  The evidence document's run-identity table now says so in those words.
+- **P3-09 — and this one turned out to be the root cause of P2-02, so it is
+  treated as a section rather than a footnote (new §15).** The finding is about
+  the commit this pack was **cut from**, not about the branch's name:
+  `git merge-base --is-ancestor 93084f8 <head>` fails, so the declared base is
+  not in this commit's history. My first answer pointed at the designated-branch
+  rule, which was a non-answer — **that rule constrains the branch's name, not
+  the commit it is cut from**, and the challenger was right to refuse it.
+
+  Investigating it properly produced something neither review had: **six of the
+  fourteen cited files differ between the two trees**, not just `database.ts`
+  as the manifest disclosed — and one of them is `permissions.ts`, by 66 lines.
+  **At `6fc505d`, `:149` *is* `cashier: ['catalog.view']` and `:144` *is*
+  `'inventory.view'` in the manager block.** So the round-1 P2-02 citations were
+  **exactly right for the tree they were read from and exactly wrong for the
+  base this pack declares**, and round 1's diagnosis — a historical set read as
+  the current one — is wrong. The challenger could not have seen this, having
+  read only a `93084f8` worktree where those citations are simply wrong.
+
+  That reframes the trap: **a citation verified against the wrong tree is not a
+  typo, it is a coherent reading of the wrong world**, and it produces findings
+  that look like carelessness. Every cited frozen migration is byte-identical at
+  both trees, so no RLS, grant or policy citation is exposed.
+
+  **Neither remediation is taken, and §15 says why in full.** Cutting the branch
+  from `93084f8` was available and was not done — but doing it now, or merging,
+  pulls **327 files and 133,615 insertions** of Phase 4's **unmerged, unsigned**
+  work (PR #6, `S7 C1` open) into a docs-only branch, which would misrepresent
+  it as carrying another phase's unreviewed state. Rewriting history is
+  forbidden. The fix is §15's per-citation provenance table plus an extension to
+  `P14-GATE-032`: every citation is asserted against `93084f8` **explicitly**,
+  not against whatever tree the runner happens to have.
 
 ## 6. What round 2 confirmed and should not be reopened
 

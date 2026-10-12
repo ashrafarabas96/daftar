@@ -663,10 +663,14 @@ the migration request while the contract pack and the OpenAPI skeleton said
 (`inventory-reads.controller.ts:60-61`). That was not a typo: the cashier holds
 `catalog.view` and **not** `inventory.view` (`permissions.ts:214`, `:179`), so a
 cashier-delegated key would have read stock the cashier cannot read in the app.
-**Line numbers and the cashier's permission list corrected (CHALLENGE P2-02):**
-the earlier text cited `:144`/`:149`, which are the tail of
-`SENSITIVE_PERMISSIONS` and `isSensitivePermission()`, and said the cashier held
-`catalog.view` alone. At `93084f8` the cashier holds **five** —
+**Line numbers and the cashier's permission list corrected (CHALLENGE P2-02),
+and the cause re-diagnosed in round 2:** the earlier text cited `:144`/`:149`
+and said the cashier held `catalog.view` alone. That is **correct at `6fc505d`**,
+the tree this container has checked out, and **wrong at `93084f8`**, the base
+this pack declares — `permissions.ts` differs by 66 lines between them and Phase
+4 appended four permissions to the cashier in that gap. It was not a misread
+comment; it was a citation against the wrong tree. See §15 of the migration
+patch request. At `93084f8` the cashier holds **five** —
 `['catalog.view', 'sales.view', 'sales.create', 'customers.view',
 'payments.collect']` (`:214`) — of which four are published v1 scopes and one,
 `sales.create`, is a **write**: a cashier-delegated v1 key can commit a sale
