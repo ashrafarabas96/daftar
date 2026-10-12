@@ -46,7 +46,14 @@ gate() { # name | command (absolute paths only)
   for d in $DIRS; do
     local o
     o=$( cd "$d" && eval "$@" 2>&1 ); rc=$?
-    [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 . | cut -c1-120)
+    # ROUND-10 CHALLENGE P3-01: this kept only the FIRST line, and the two
+    # database gates print a banner first, so a permission failure under them
+    # still read "consistent, but FAILING". The diagnostic line is chosen from
+    # the WHOLE output, preferring an error over a banner.
+    if [ -z "$out1" ]; then
+      out1=$(printf '%s' "$o" | grep -m1 -E 'Permission denied|No such file|command not found|FAIL|ERROR|FATAL|STALE|CONFIGURATION|MEASUREMENT' | cut -c1-120)
+      [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 . | cut -c1-120)
+    fi
     # COORDINATOR RELAY round 8: an exit code recorded without the path it was
     # measured from is not a property of the commit. My 0 and the challenger's 1
     # at the same head were both true -- my clone is outside /tmp, theirs inside
@@ -247,6 +254,41 @@ fi
 cp "$RB/rep.bak" "$PACK/P14-CHALLENGE-7af6438.md"; cp "$RB/man.bak" "$PACK/P14-HANDOFF-MANIFEST.md"; rm -rf "$RB"
 rc=$( cd /tmp && python3 -I "$HERE/manifest-digests.py" --dir "$PACK" --check >/dev/null 2>&1; echo $? )
 [ "$rc" = 0 ] || { printf 'FAIL  %-26s rc=%s — the proof did not restore the pack\n' reviewer-row-restore "$rc"; fail=$((fail+1)); }
+
+# ROUND-10 CHALLENGE P2-01, which BLOCKED: both round-9 proofs covered only
+# UNCOMMITTED transitions, so one ordinary `git commit -am` of the UNSIGNED row
+# made the rule disable itself, and the non-repository route stayed open. The
+# rule now rests on the two-directory witness and on the WHOLE history, and all
+# three routes are proved here, each by its own refusal sentence.
+RW=$(mktemp -d); cp -r "$PACK" "$RW/pack"; cp -r "$PACK" "$RW/witness"
+( cd "$RW/pack" && git init -q . && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' ) >/dev/null 2>&1
+printf '\n\nthe three absent ones are cited only for Phase 4 surface facts\n' >> "$RW/pack/P14-CHALLENGE-7af6438.md"
+RWM="--manifest $RW/pack/P14-HANDOFF-MANIFEST.md --dir $RW/pack"
+named reviewer-row-two-dirs 1 "REVIEWER COPIES DIFFER" \
+  "python3 -I $HERE/manifest-digests.py $RWM --witness $RW/witness --write"
+# now the round-10 bypass itself: both cells set to UNSIGNED and COMMITTED, so
+# HEAD carries the placeholder, with no counterpart directory to fall back on.
+python3 - "$RW/pack/P14-HANDOFF-MANIFEST.md" <<'UNSIGN'
+import re,sys
+p=sys.argv[1]; L=open(p,encoding='utf-8').read().split('\n')
+for k,l in enumerate(L):
+    if l.startswith('| `P14-CHALLENGE-7af6438.md`'):
+        l=re.sub(r'`[0-9a-f]{64}`','`UNSIGNED`',l)
+        L[k]=re.sub(r'\| [0-9,]+ \|$','| UNSIGNED |',l); break
+open(p,'w',encoding='utf-8').write('\n'.join(L))
+UNSIGN
+( cd "$RW/pack" && git -c user.email=p14@local -c user.name=p14 commit -qam 'unsign the row' ) >/dev/null 2>&1
+EMPTYW=$(mktemp -d)
+named reviewer-row-committed-unsign 1 "a signed reviewer row does not move" \
+  "python3 -I $HERE/manifest-digests.py $RWM --witness $EMPTYW --write"
+# and the non-repository route, which round 9 disclosed and did not close.
+cp -r "$RW/pack" "$RW/norepo"; rm -rf "$RW/norepo/.git"
+named reviewer-row-no-repo 1 "REVIEWER COPIES DIFFER" \
+  "python3 -I $HERE/manifest-digests.py --manifest $RW/norepo/P14-HANDOFF-MANIFEST.md --dir $RW/norepo --witness $RW/witness --write"
+named reviewer-row-no-witness 1 "NO WITNESS" \
+  "python3 -I $HERE/manifest-digests.py --manifest $RW/norepo/P14-HANDOFF-MANIFEST.md --dir $RW/norepo --witness $EMPTYW --write"
+rm -rf "$RW" "$EMPTYW"
 
 red retracted-claim-planted \
   "printf '\n\nthe three absent ones are cited only for Phase 4 surface facts\n' >> '$PACK/README-AR.md'" \

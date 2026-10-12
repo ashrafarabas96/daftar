@@ -32,6 +32,8 @@ def main():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap.add_argument('--manifest', default=os.path.join(here,'P14-HANDOFF-MANIFEST.md'))
     ap.add_argument('--dir', default='/mnt/project-files/phase14')
+    ap.add_argument('--witness', help='directory holding the second copy of each'
+                    ' reviewer report; defaults to the counterpart of --dir')
     ap.add_argument('--write', action='store_true')
     ap.add_argument('--check', action='store_true')
     a = ap.parse_args()
@@ -57,14 +59,40 @@ def main():
     # as a STATED LIMIT rather than silently skipped -- a verdict that changes
     # with the location is round 8's defect, and a limit that is announced is
     # not one.
-    head_rows, history = {}, 'checked'
+    # ROUND-10 CHALLENGE P2-01, which BLOCKED: round 9's guard compared a
+    # reviewer's row against HEAD only, so one ordinary `git commit -am` of the
+    # UNSIGNED row made HEAD carry the placeholder and the rule DISABLED ITSELF
+    # -- while still printing "reviewer-row history checked". HEAD is written by
+    # the same hand that writes the row, and a handoff IS a commit, so that is
+    # the normal path, not an exotic one. Outside a repository the two-step
+    # bypass survived too, disclosed but unclosed.
+    #
+    # For the third round running the protection was in fact being carried by
+    # the one-manifest-two-directories construction, so that construction is now
+    # the RULE and not a happy accident: a reviewer's report is checked against
+    # the copy in the OTHER directory, which the author's own commits cannot
+    # rewrite. The git history is still consulted, but over EVERY revision of
+    # the manifest rather than HEAD, so a committed placeholder no longer erases
+    # a digest that was once recorded.
+    def witness_default():
+        d = os.path.abspath(a.dir)
+        shared = '/mnt/project-files/phase14'
+        return os.path.dirname(os.path.abspath(a.manifest)) if d == os.path.abspath(shared) else shared
+
+    signed_history, history = {}, 'checked over every revision of the manifest'
     _md = os.path.dirname(os.path.abspath(a.manifest))
-    _r = subprocess.run(['git','-C',_md,'show','HEAD:./%s' % os.path.basename(a.manifest)],
-                        capture_output=True, text=True)
-    if _r.returncode == 0:
-        for ln in _r.stdout.split('\n'):
-            m = ROW.match(ln)
-            if m: head_rows[m.group(1)] = m.group(3)
+    _mb = os.path.basename(a.manifest)
+    _revs = subprocess.run(['git','-C',_md,'rev-list','HEAD','--',_mb],
+                           capture_output=True, text=True)
+    if _revs.returncode == 0 and _revs.stdout.strip():
+        for rev in _revs.stdout.split():           # newest first
+            r = subprocess.run(['git','-C',_md,'show','%s:./%s' % (rev,_mb)],
+                               capture_output=True, text=True)
+            if r.returncode != 0: continue
+            for ln in r.stdout.split('\n'):
+                m = ROW.match(ln)
+                if m and m.group(3) != PLACEHOLDER:
+                    signed_history.setdefault(m.group(1), m.group(3))
     else:
         history = 'NOT CHECKED (the manifest is not in a git repository here)'
     listed, out, stale, refused = [], [], [], []
@@ -106,22 +134,41 @@ def main():
         # either direction -- including back to the unsigned placeholder, which
         # is how the one-step bypass worked. `--write` leaves such a row exactly
         # as it found it and fails.
-        was = head_rows.get(name)
-        if (name.startswith('P14-CHALLENGE-') and was and was != PLACEHOLDER
-                and dig != was):
-            stale.append('%s: this reviewer\'s row carried %s at HEAD and now carries %s —'
-                         ' a signed reviewer row does not move, in either direction. Restore'
-                         ' the row, or the reviewer\'s file, whichever was changed.'
-                         % (name, was[:12], dig[:12] if dig != PLACEHOLDER else PLACEHOLDER))
-            refused.append(name)
-            out.append(ln); continue
-        unsigned = (dig == PLACEHOLDER and size == PLACEHOLDER)
-        if a.write and drifted and name.startswith('P14-CHALLENGE-') and not unsigned:
-            stale.append('%s: REFUSING to re-sign a challenge report\'s row — the file under'
-                         ' %s no longer matches the digest committed when it was received.'
-                         ' Restore the reviewer\'s file; do not update the row.' % (name, a.dir))
-            refused.append(name)
-            out.append(ln); continue
+        # ---- a reviewer's report, and the three witnesses it is held to.
+        if name.startswith('P14-CHALLENGE-'):
+            wdir = a.witness or witness_default()
+            wpath = os.path.join(wdir, name)
+            wh = (hashlib.sha256(open(wpath,'rb').read()).hexdigest()
+                  if os.path.isfile(wpath) else None)
+            sig = signed_history.get(name)
+            why = None
+            if wh and wh != h:
+                why = ('REVIEWER COPIES DIFFER: %s hashes %s under %s but %s under %s. Two'
+                       ' directories disagree about a reviewer\'s report, so neither can be'
+                       ' signed from here. Restore the copy that was changed.'
+                       % (name, h[:12], a.dir, wh[:12], wdir))
+            elif sig and h != sig:
+                why = ('%s: a signed reviewer row does not move. Some revision of this manifest'
+                       ' recorded %s for it and the file under %s now hashes %s — a committed'
+                       ' placeholder does not erase that. Restore the reviewer\'s file.'
+                       % (name, sig[:12], a.dir, h[:12]))
+            elif wh is None and sig is None:
+                why = ('NO WITNESS for %s: it has no digest in any revision of this manifest and'
+                       ' no counterpart under %s, so nothing here can confirm what was received.'
+                       ' Place the reviewer\'s report in both directories before signing its row.'
+                       % (name, wdir))
+            if why:
+                stale.append(why); refused.append(name); out.append(ln); continue
+            # Only a row that is unsigned in BOTH cells may be signed, and only
+            # with a witness agreeing (checked above). A drifted signed row is
+            # never rewritten: a digest that no longer matches means the FILE
+            # changed (ROUND-8, pair-drop 4).
+            unsigned = (dig == PLACEHOLDER and size == PLACEHOLDER)
+            if a.write and drifted and not unsigned:
+                stale.append('%s: REFUSING to re-sign a challenge report\'s row — the file under'
+                             ' %s no longer matches the digest it was received with. Restore the'
+                             ' reviewer\'s file; do not update the row.' % (name, a.dir))
+                refused.append(name); out.append(ln); continue
         out.append('| `%s` | %s | `%s` | %s |' % (name, desc, h, format(len(b),',')))
 
     on_disk = sorted(f for f in os.listdir(a.dir)

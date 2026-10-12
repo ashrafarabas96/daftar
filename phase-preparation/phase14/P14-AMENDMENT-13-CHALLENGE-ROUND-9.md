@@ -32,6 +32,19 @@ Two remedies, both taken, and the coordinator's wording is the stronger rule:
 **any transition of an already-signed reviewer row is a refusal, in either
 direction.**
 
+> **CORRECTED BY `CHALLENGE R10 P2-01` (BLOCKING).** That sentence, and point 2
+> below — *"a **committed** reviewer digest may not move"* — were **wider than
+> what was enforced**. The guard compared the row against **HEAD** only, so one
+> ordinary `git commit -am` of the `UNSIGNED` row made HEAD carry the
+> placeholder and the rule **disabled itself**, while still printing
+> *"reviewer-row history checked"*; and outside a repository the two-step bypass
+> survived as a disclosed-but-open limit. Both round-9 red proofs covered only
+> **uncommitted** transitions, which is why the gap was invisible from here. The
+> rule as now enforced, and as measured, is in
+> `P14-AMENDMENT-14-CHALLENGE-ROUND-10.md`: a reviewer's report is held to the
+> copy in the **other directory** and to **every revision** of the manifest, and
+> with neither witness available nothing may be signed at all.
+
 1. The placeholder is now the literal `UNSIGNED`, in **both** cells, which
    corrupting a digest cannot produce. A row with one placeholder cell and one
    real one is not a placeholder — the tell the reviewer measured was exactly
