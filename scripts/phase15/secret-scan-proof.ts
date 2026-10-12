@@ -60,18 +60,36 @@ interface Case {
 function commitInClone(clone: string, message: string): void {
   sh(clone, 'git', ['config', 'user.email', 'proof@localhost']);
   sh(clone, 'git', ['config', 'user.name', 'p15 proof']);
-  const add = sh(clone, 'git', ['add', '-A']);
-  if (add.status !== 0) throw new Error(`could not stage the plant: ${add.out.slice(0, 200)}`);
-  const ci = sh(clone, 'git', ['commit', '-q', '-m', message]);
-  if (ci.status !== 0) throw new Error(`could not commit the plant: ${ci.out.slice(0, 200)}`);
+  sh(clone, 'git', ['add', '-A']);
+  sh(clone, 'git', ['commit', '-q', '-m', message]);
   const dirty = sh(clone, 'git', ['status', '--porcelain']);
-  if (dirty.status !== 0 || dirty.out.trim().length !== 0)
+  if (dirty.out.trim().length !== 0)
     throw new Error(`the clone is still dirty after the commit, so the binding law would speak instead: ${dirty.out.slice(0, 200)}`);
 }
 
-function sh(cwd: string, cmd: string, args: readonly string[]): { status: number | null; out: string } {
+/**
+ * A command in the clone, which DECIDES on its own exit code.
+ *
+ * Round-8 N1: this helper used to hand `{ status, out }` outward, and twelve of
+ * its call sites dropped the status on the floor — `sh(clone, 'git', ['add',
+ * '-f', …])` whose failure would leave the plant unplanted, and
+ * `sh(clone, 'git', ['ls-files']).out` whose failure would read as "the index
+ * is empty". The old exit-code sweep credited the whole family with a
+ * comparison made on an unrelated `r` in another function, so nothing here was
+ * ever measured. A proof harness is the worst place for that: a plant that
+ * silently did not happen makes a red proof go green.
+ *
+ * So the helper refuses instead of reporting: a non-zero exit, or a process
+ * that never started, throws with the command and its output. The returned
+ * `status` is therefore always 0, and the callers that still compare it are
+ * comparing a value this function has already decided upon.
+ */
+function sh(cwd: string, cmd: string, args: readonly string[]): { status: number; out: string } {
   const r = spawnSync(cmd, [...args], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  if (r.error !== undefined) throw new Error(`${cmd} ${args.join(' ')} could not start in ${cwd}: ${r.error.message}`);
+  if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} exited ${String(r.status)} in ${cwd}: ${out.slice(0, 300).trim()}`);
+  return { status: 0, out };
 }
 
 const CASES: readonly Case[] = [
@@ -189,6 +207,48 @@ const CASES: readonly Case[] = [
     refuse: /\[source-binding\]|lists 0 files/,
   },
   {
+    id: 'S9',
+    viaClone: true,
+    what:
+      'round-8 N2, as a case: a real token in a TRACKED file of a class gitleaks\u2019 default allowlist skips ' +
+      '(`package-lock.json`). The canary is reported either way, the file count is unchanged, and before the ' +
+      'coverage law this run came back PASS \u2014 the scan said "no findings" about a file it had never read',
+    plant: (clone) => {
+      const f = join(clone, 'package-lock.json');
+      const s = readFileSync(f, 'utf8');
+      // A fake token of the shape the DEFAULT rule set detects, placed in a
+      // value so the file stays valid JSON: the case is about the path class,
+      // not about a parse error.
+      const token = `ghp_${'a1b2c3d4e5'.repeat(4).slice(0, 36)}`;
+      const broken = s.replace('{\n', `{\n  "daftarProofToken": "${token}",\n`);
+      if (broken === s) throw new Error('could not plant a token in package-lock.json: the file does not start with an object');
+      writeFileSync(f, broken);
+      commitInClone(clone, 'plant a token in a tracked file of an allowlisted class');
+    },
+    expect: /package-lock\.json/,
+    // The dirty-tree and inventory laws must stay silent: this red is about
+    // coverage of an allowlisted path, or it attributes to nothing.
+    refuse: /\[source-binding\]|lists 0 files|below the MIN_RELEASE_FILES floor/,
+  },
+  {
+    id: 'S10',
+    viaClone: true,
+    what:
+      'the coverage law\u2019s own apparatus: the second pass stops copying the files it is meant to read. Every ' +
+      'allowlisted file is then UNSCANNED while the first pass and both counts look exactly as they do on a good ' +
+      'run \u2014 so the allowlisted-class control is what has to speak',
+    plant: (clone) => {
+      const f = join(clone, 'scripts/phase3-secret-scan.ts');
+      const s = readFileSync(f, 'utf8');
+      const broken = s.replace('          copyFileSync(join(copy, pth), join(twins, name));', '          void name;');
+      if (broken === s) throw new Error('could not break the twin pass: it no longer copies each skipped file in the shape this plant edits');
+      writeFileSync(f, broken);
+      commitInClone(clone, 'stop the second pass from copying what it scans');
+    },
+    expect: /NOT reported through its twin|not reported through its twin/,
+    refuse: /lists 0 files|below the MIN_RELEASE_FILES floor/,
+  },
+  {
     id: 'S7',
     viaClone: true,
     what:
@@ -201,7 +261,11 @@ const CASES: readonly Case[] = [
       const s = readFileSync(f, 'utf8');
       const broken = s.replace(
         "{ cwd: copy, encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024 },",
-        "{ cwd: mkdtempSync(join(tmpdir(), 'p15-blind-')), encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024 },",
+        // The throwaway directory removes ITSELF at exit (round-8 R8): the
+        // earlier form left a `p15-blind-*` directory in /tmp behind every run
+        // of this proof, which is a proof harness littering the box it shares
+        // with the authoritative runs.
+        "{ cwd: ((): string => { const d = mkdtempSync(join(tmpdir(), 'p15-blind-')); process.on('exit', () => rmSync(d, { recursive: true, force: true })); return d; })(), encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024 },",
       );
       if (broken === s) throw new Error('could not blind gitleaks: the scan no longer runs it with `cwd: copy` in the shape this plant edits');
       writeFileSync(f, broken);
@@ -219,7 +283,7 @@ const CASES: readonly Case[] = [
     plant: (clone) => {
       const f = join(clone, 'scripts/phase15/release-secret-scan.ts');
       const s = readFileSync(f, 'utf8');
-      const broken = s.replace('scanTree({ root, gitleaks, canary: true })', 'scanTree({ root, gitleaks })');
+      const broken = s.replace('scanTree({ root, gitleaks, canary: true, coverage: true })', 'scanTree({ root, gitleaks, coverage: true })');
       if (broken === s) throw new Error('could not remove the canary request: the release scan no longer asks for it in the shape this plant edits');
       writeFileSync(f, broken);
       commitInClone(clone, 'stop asking for a positive control');
@@ -234,14 +298,25 @@ function freshClone(): string {
   const clone = join(dir, 'daftar');
   // --no-hardlinks on purpose: a sandbox that shares an inode with the
   // original is not a sandbox, and this pack's rules say so explicitly.
-  const r = sh(dir, 'git', ['clone', '--no-hardlinks', '--quiet', ROOT, clone]);
-  if (r.status !== 0) throw new Error(`clone failed: ${r.out.slice(0, 300)}`);
+  sh(dir, 'git', ['clone', '--no-hardlinks', '--quiet', ROOT, clone]);
   return clone;
 }
 
+/**
+ * The scan under test, whose non-zero exit is the MEASUREMENT this harness
+ * makes — so it cannot go through `sh()`, which refuses one.
+ *
+ * The distinction is the point of round-8 N1 rather than a way around it: for
+ * every setup command a non-zero exit means the plant did not happen and the
+ * case is void, which is why `sh()` throws; for THIS command the exit code is
+ * the observation, and every caller below compares it.
+ */
 function runScan(clone: string, viaClone = false): { status: number | null; out: string } {
   const script = join(viaClone ? clone : ROOT, 'scripts/phase15/release-secret-scan.ts');
-  return sh(ROOT, 'npx', ['tsx', script, `--root=${clone}`]);
+  const r = spawnSync('npx', ['tsx', script, `--root=${clone}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (r.error !== undefined) throw new Error(`the scan under test could not start: ${r.error.message}`);
+  if (r.status === null) throw new Error(`the scan under test was killed by ${r.signal ?? 'an unknown signal'}, so there is no measurement here`);
+  return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
 
 function main(): number {

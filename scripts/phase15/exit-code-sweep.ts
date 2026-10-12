@@ -14,8 +14,11 @@
  *   `spawnSync` in the pack and reports each one whose exit code is never read.
  *
  * WHAT COUNTS AS READ
- *   1. The call's own result is bound to a name and that name's `.status` is
- *      COMPARED within the following 28 lines; or
+ *   1. The call's own result is bound to a name, and the `.status` of THAT
+ *      DECLARATION is COMPARED somewhere inside the function it lives in —
+ *      resolved through the scope chain on the TypeScript AST, so a
+ *      comparison made on a different variable of the same name, in another
+ *      function or after a re-binding, credits nothing (round-8 N1); or
  *   2. `.status` is compared on the spot, on the call expression itself; or
  *   3. the call sits in ARGUMENT position inside a wrapper that decides on the
  *      code itself; or
@@ -47,15 +50,17 @@
  *   That a tool reads an exit code does not make the tool correct; it only
  *   removes one way for it to be silently wrong. And this sweep is a text
  *   reading of the pack, not of the program's behaviour: `npm run
- *   verify:exit-codes:phase15 -- --prove` is what shows it can go red.
+ *   verify:exit-codes:phase15 -- --prove` is what shows it can go red. It reads
+ *   the pack's SYNTAX, not its types: no program is executed and no symbol is
+ *   resolved through a type checker.
  */
 import { cpSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
+import ts from 'typescript';
 
 const ROOT = process.cwd();
 const PACK = process.env.P15_SWEEP_DIR ?? join(ROOT, 'scripts/phase15');
-const WINDOW = 28;
 
 /**
  * THE ONE EXEMPTION, AND WHY IT IS NOT A HOLE
@@ -115,167 +120,334 @@ const sources = (dir: string): ReadonlyMap<string, readonly string[]> => {
   return out;
 };
 
-/**
- * A `.status` COMPARISON on `name` within `text`, or null — and the matched
- * text, so the verdict prints what was actually matched.
- *
- * The coordinator's round-7 B3(i): the old qualification accepted `.error`
- * alone while the report printed "reads r.status" unconditionally, so a
- * wrapper that could not tell exit 1 from exit 0 went on excusing every call
- * it covered, under a sentence that said otherwise. An `.error` test answers
- * "did the process start"; only a `.status` comparison answers "did it
- * succeed". B3(iii): a MENTION is not a reading either — `${name}.status`
- * inside a message string is how X3 got through — so the code must appear in
- * a comparison or a condition.
- */
-function statusDecision(name: string, text: string): string | null {
-  const n = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`\\b${n}\\.status\\s*(?:===|!==|==|!=|>=|<=|>|<)\\s*[^;)\\n]{0,24}|if\\s*\\(\\s*!?\\s*${n}\\.status\\s*\\)`);
-  const m = re.exec(text);
-  return m === null ? null : m[0].replace(/\s+/g, ' ').trim();
-}
-
-/** `<expr>.status` compared on the spot, where the expr is the call itself. */
-function inlineDecision(text: string): string | null {
-  const m = /\)\s*\.status\s*(?:===|!==|==|!=|>=|<=|>|<)\s*[^;)\n]{0,24}/.exec(text);
-  return m === null ? null : m[0].replace(/\s+/g, ' ').trim();
-}
+/* ── scope-correct reading, through the TypeScript AST ────────────────────── */
 
 /**
- * The line with its STRINGS, TEMPLATES and trailing comment removed.
+ * WHY THIS IS AN AST AND NOT A WINDOW OF TEXT
+ *   The coordinator's round-8 N1 measured the cost of deciding by text
+ *   proximity. The old rule accepted any `<name>.status <op>` within the next
+ *   28 lines, matching on the NAME alone: function boundaries and re-bindings
+ *   were invisible to it. So `secret-scan-proof.ts`'s `sh()` — which binds
+ *   `const r = spawnSync(…)` and forwards it — was credited with a comparison
+ *   made on a completely different `r`, eighteen lines later, inside another
+ *   function's arrow body. Renaming that unrelated `r` turned the sweep red,
+ *   which is the proof that the green verdict was resting on it. Two
+ *   neighbouring shapes passed for the same reason: a same-named binding in
+ *   the next function, and an unrelated spawn sitting within three lines of a
+ *   `must(` call it was never an argument to.
  *
- * A text sweep that reads prose as code reports the word "run (" in a comment
- * as a call site, and then names a defect that does not exist. Dropping the
- * quoted spans is not a softening: nothing inside them executes.
+ *   A name is not a variable. So every decision below is bound to a
+ *   DECLARATION: an identifier is resolved by walking its own scope chain, and
+ *   only a `.status` read whose subject resolves to the SAME declaration as the
+ *   spawn's result counts. Argument position is settled the same way — the
+ *   spawn call must be a syntactic descendant of the wrapper call's arguments,
+ *   not merely near it in the text.
+ *
+ *   The one approximation left, and it is named rather than hidden: `var`
+ *   hoisting is not modelled, because the pack contains no `var`. A `var`
+ *   declared in a nested block and read in its enclosing function would not
+ *   resolve. That is a direction this sweep under-credits, never over-credits.
  */
-function codeOnly(line: string): string {
-  if (/^\s*(?:\*|\/\/)/.test(line)) return '';
-  return line
-    .replace(/`[^`]*`/g, '``')
-    .replace(/'[^']*'/g, "''")
-    .replace(/"[^"]*"/g, '""')
-    .replace(/\/\/.*$/, '');
+const COMPARISONS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.GreaterThanToken,
+  ts.SyntaxKind.LessThanToken,
+  ts.SyntaxKind.GreaterThanEqualsToken,
+  ts.SyntaxKind.LessThanEqualsToken,
+]);
+
+const parsed = new Map<string, ts.SourceFile>();
+function ast(key: string, text: string): ts.SourceFile {
+  const have = parsed.get(key);
+  if (have !== undefined) return have;
+  const sf = ts.createSourceFile(key, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+  parsed.set(key, sf);
+  return sf;
 }
 
-interface Decl {
-  readonly name: string;
-  readonly line: number; // 0-based
-  readonly sig: string;
-  readonly body: string;
-  /** Whether this declaration is a FUNCTION: only a function can forward. */
-  readonly isFunction: boolean;
+const lineOf = (sf: ts.SourceFile, n: ts.Node): number => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line;
+const textOf = (sf: ts.SourceFile, n: ts.Node): string => n.getText(sf).replace(/\s+/g, ' ').trim().slice(0, 60);
+
+const isScope = (n: ts.Node): boolean =>
+  ts.isSourceFile(n) ||
+  ts.isBlock(n) ||
+  ts.isModuleBlock(n) ||
+  ts.isCaseBlock(n) ||
+  ts.isForStatement(n) ||
+  ts.isForOfStatement(n) ||
+  ts.isForInStatement(n) ||
+  ts.isFunctionLike(n);
+
+function bindingHas(name: ts.BindingName, want: string): boolean {
+  if (ts.isIdentifier(name)) return name.text === want;
+  return name.elements.some((el) => !ts.isOmittedExpression(el) && bindingHas(el.name, want));
 }
 
-function declarations(lines: readonly string[]): readonly Decl[] {
-  const out: Decl[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const code = codeOnly(lines[i] ?? '');
-    const decl = /(?:function\s+(\w+)|const\s+(\w+)\s*=)/.exec(code);
-    const name = decl?.[1] ?? decl?.[2];
-    if (name === undefined) continue;
-    const isFunction = /\bfunction\s+\w+|=\s*(?:async\s*)?\(|=\s*(?:async\s*)?\w+\s*=>|=\s*(?:async\s*)?function/.test(code);
-    out.push({ name, line: i, sig: lines.slice(i, i + 4).join('\n'), body: lines.slice(i, i + 30).join('\n'), isFunction });
+/** A function-like node's block body, when it has one. */
+function bodyBlockOf(n: ts.Node): ts.Block | null {
+  if (!ts.isFunctionLike(n)) return null;
+  const body = (n as ts.FunctionLikeDeclarationBase).body;
+  return body !== undefined && ts.isBlock(body) ? body : null;
+}
+
+/** The declarations this scope introduces ITSELF — not those of nested scopes. */
+function declaredDirectly(scope: ts.Node, want: string): ts.Node | null {
+  if (ts.isFunctionLike(scope)) for (const p of scope.parameters) if (bindingHas(p.name, want)) return p;
+  if (
+    (ts.isForStatement(scope) || ts.isForOfStatement(scope) || ts.isForInStatement(scope)) &&
+    scope.initializer !== undefined &&
+    ts.isVariableDeclarationList(scope.initializer)
+  )
+    for (const d of scope.initializer.declarations) if (bindingHas(d.name, want)) return d;
+  const statements: readonly ts.Statement[] =
+    ts.isSourceFile(scope) || ts.isBlock(scope) || ts.isModuleBlock(scope)
+      ? scope.statements
+      : ts.isCaseBlock(scope)
+        ? scope.clauses.flatMap((c) => [...c.statements])
+        : (bodyBlockOf(scope)?.statements ?? []);
+  for (const st of statements) {
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) if (bindingHas(d.name, want)) return d;
+    } else if (ts.isFunctionDeclaration(st) && st.name !== undefined && st.name.text === want) return st;
   }
+  return null;
+}
+
+/** The declaration an identifier refers to, by its own scope chain. */
+function resolve(id: ts.Identifier): ts.Node | null {
+  for (let n: ts.Node | undefined = id.parent; n !== undefined; n = n.parent) {
+    if (!isScope(n)) continue;
+    const hit = declaredDirectly(n, id.text);
+    if (hit !== null) return hit;
+  }
+  return null;
+}
+
+/** The function a node sits in, or the source file when it sits at top level. */
+function enclosingFunction(n: ts.Node): ts.Node {
+  for (let p: ts.Node | undefined = n.parent; p !== undefined; p = p.parent) if (ts.isFunctionLike(p) || ts.isSourceFile(p)) return p;
+  return n.getSourceFile();
+}
+
+/** Every identifier in `scope` that resolves to `decl`, excluding its own name. */
+function usesOf(decl: ts.Node, want: string, scope: ts.Node): ts.Identifier[] {
+  const out: ts.Identifier[] = [];
+  const walk = (n: ts.Node): void => {
+    if (ts.isIdentifier(n) && n.text === want && n.parent !== decl && resolve(n) === decl) out.push(n);
+    n.forEachChild(walk);
+  };
+  walk(scope);
   return out;
+}
+
+/** Is this expression used as a DECISION — compared, negated, or a condition? */
+function decidedHere(e: ts.Expression, sf: ts.SourceFile): string | null {
+  const p = e.parent;
+  if (ts.isBinaryExpression(p) && COMPARISONS.has(p.operatorToken.kind)) return textOf(sf, p);
+  if (ts.isPrefixUnaryExpression(p) && p.operator === ts.SyntaxKind.ExclamationToken) return textOf(sf, p);
+  if (ts.isIfStatement(p) && p.expression === e) return `if (${textOf(sf, e)})`;
+  if (ts.isConditionalExpression(p) && p.condition === e) return `${textOf(sf, e)} ? … : …`;
+  if (ts.isWhileStatement(p) && p.expression === e) return `while (${textOf(sf, e)})`;
+  if (ts.isDoStatement(p) && p.expression === e) return `do … while (${textOf(sf, e)})`;
+  if (ts.isSwitchStatement(p) && p.expression === e) return `switch (${textOf(sf, e)})`;
+  if (ts.isCaseClause(p) && p.expression === e) return `case ${textOf(sf, e)}`;
+  if (ts.isParenthesizedExpression(p)) return decidedHere(p, sf);
+  return null;
+}
+
+/**
+ * A decision on the exit code of the value `decl` holds, or null.
+ *
+ * Only `<id>.status` where `<id>` resolves to `decl` counts, searched inside
+ * the function `decl` lives in. One alias hop is allowed and measured: `const
+ * code = r.status;` followed by a decision on `code` IS a decision on the exit
+ * code, and refusing it would push the pack toward shapes chosen to satisfy
+ * this sweep rather than to be read. A mention inside a template literal or a
+ * message string is not a decision: it reaches none of the positions above.
+ */
+function statusDecisionOf(decl: ts.Node, want: string, sf: ts.SourceFile): string | null {
+  const scope = enclosingFunction(decl);
+  for (const id of usesOf(decl, want, scope)) {
+    const p = id.parent;
+    if (!ts.isPropertyAccessExpression(p) || p.expression !== id || p.name.text !== 'status') continue;
+    const direct = decidedHere(p, sf);
+    if (direct !== null) return direct;
+    // the one alias hop, both halves measured
+    if (ts.isVariableDeclaration(p.parent) && ts.isIdentifier(p.parent.name)) {
+      const alias = p.parent;
+      const aliasName = alias.name.getText(sf);
+      for (const use of usesOf(alias, aliasName, enclosingFunction(alias))) {
+        const viaAlias = decidedHere(use, sf);
+        if (viaAlias !== null) return `${want}.status → ${aliasName}: ${viaAlias}`;
+      }
+    }
+  }
+  return null;
 }
 
 /** Wrappers whose own body DECIDES on the exit code of the result handed to them. */
 function wrappersIn(src: ReadonlyMap<string, readonly string[]>): readonly Wrapper[] {
   const found: Wrapper[] = [];
-  for (const [file, lines] of src)
-    for (const d of declarations(lines)) {
-      const param = /(\w+)\s*:\s*(?:SpawnSyncReturns|ReturnType<typeof spawnSync>)/.exec(d.sig)?.[1];
-      if (param === undefined) continue;
-      const matched = statusDecision(param, d.body);
-      if (matched !== null) found.push({ name: d.name, file, line: d.line + 1, param, matched });
-    }
+  for (const [file, lines] of src) {
+    const sf = ast(file, lines.join('\n'));
+    const walk = (n: ts.Node): void => {
+      if (ts.isFunctionLike(n)) {
+        const takes = n.parameters.find(
+          (p) => p.type !== undefined && /\bSpawnSyncReturns\b|ReturnType<typeof spawnSync>/.test(p.type.getText(sf)) && ts.isIdentifier(p.name),
+        );
+        const name = functionNameOf(n, sf);
+        if (takes !== undefined && name !== null) {
+          const param = takes.name.getText(sf);
+          const matched = statusDecisionOf(takes, param, sf);
+          if (matched !== null) found.push({ name, file, line: lineOf(sf, n) + 1, param, matched });
+        }
+      }
+      n.forEachChild(walk);
+    };
+    walk(sf);
+  }
   return found;
 }
 
-/** The declaration a line sits inside: the nearest one at or above it. */
-function enclosing(decls: readonly Decl[], line: number): Decl | null {
-  let best: Decl | null = null;
-  for (const d of decls) if (d.isFunction && d.line <= line && (best === null || d.line > best.line)) best = d;
-  return best;
+/** The name a function is known by: its own, or the const it is assigned to. */
+function functionNameOf(fn: ts.Node, sf: ts.SourceFile): string | null {
+  if (ts.isFunctionDeclaration(fn) && fn.name !== undefined) return fn.name.text;
+  if (ts.isMethodDeclaration(fn) && ts.isIdentifier(fn.name)) return fn.name.text;
+  const p = fn.parent;
+  if (p !== undefined && ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
+  if (p !== undefined && ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) return p.name.text;
+  void sf;
+  return null;
 }
 
+/** Calls to `producer` in this file: `spawnSync(…)`, or a forwarder's name. */
+function producerCalls(sf: ts.SourceFile, producer: string): ts.CallExpression[] {
+  const out: ts.CallExpression[] = [];
+  const walk = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const callee = n.expression;
+      const named = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : null;
+      if (named === producer) out.push(n);
+    }
+    n.forEachChild(walk);
+  };
+  walk(sf);
+  return out;
+}
+
+const unwrap = (e: ts.Expression): ts.Expression => {
+  let x = e;
+  for (;;) {
+    if (ts.isParenthesizedExpression(x)) x = x.expression;
+    else if (ts.isAwaitExpression(x)) x = x.expression;
+    else if (ts.isAsExpression(x) || ts.isNonNullExpression(x)) x = x.expression;
+    else return x;
+  }
+};
+
 /**
- * Does this declaration hand the exit code OUTWARD instead of deciding on it?
+ * Does the function this call sits in hand the result OUTWARD instead of
+ * deciding on it?
  *
- * B3(ii): the old sweep exempted any spawn line containing `return` or `=>`
- * outright, an exemption the header never declared. `pg-cluster.ts`'s `run()`
- * is exactly that shape, and two of its callers discarded the code — so the
- * exemption was certifying the defect class the sweep exists to catch.
- * Forwarding is legitimate, but it only MOVES the decision: so the forwarder
- * is named here, its call sites are measured below, and it is excused only
- * when every one of them decides.
+ * B3(ii): forwarding is legitimate, but it only MOVES the decision — so the
+ * forwarder is named, its call sites are measured, and it is excused only when
+ * every one of them decides. The shapes are measured on the AST: a `return` of
+ * the call itself, a concise arrow body that IS the call, a `return` of the
+ * bound name, or a returned object literal carrying that result or its status.
  */
-function forwards(d: Decl, boundName: string | null, producer: string): string | null {
-  const pr = producer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (new RegExp(`return\\s+${pr}\\(`).test(d.body)) return `return ${producer}(…)`;
-  if (new RegExp(`=>\\s*${pr}\\(`).test(d.body)) return `=> ${producer}(…)`;
-  if (boundName !== null) {
-    const n = boundName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp(`return\\s+${n}\\s*;`).test(d.body)) return `return ${boundName};`;
-    if (new RegExp(`status\\s*:\\s*${n}\\.status`).test(d.body)) return `return { status: ${boundName}.status, … }`;
-  }
-  if (/return\s*\{[^}]*status\s*:/.test(d.body)) return 'return { status: … }';
-  return null;
+function forwarderFor(call: ts.CallExpression, bound: ts.VariableDeclaration | null, sf: ts.SourceFile): string | null {
+  const fn = enclosingFunction(call);
+  if (ts.isSourceFile(fn)) return null;
+  const name = functionNameOf(fn, sf);
+  if (name === null) return null;
+  const body = ts.isFunctionLike(fn) ? ((fn as ts.FunctionLikeDeclarationBase).body ?? null) : null;
+  if (body === null) return null;
+  if (!ts.isBlock(body)) return unwrap(body) === call || mentions(body, call, bound, sf) ? name : null;
+  let forwards = false;
+  const walk = (n: ts.Node): void => {
+    if (forwards) return;
+    if (ts.isFunctionLike(n) && n !== fn) return; // a nested function returns to ITS caller
+    if (ts.isReturnStatement(n) && n.expression !== undefined && mentions(n.expression, call, bound, sf)) forwards = true;
+    n.forEachChild(walk);
+  };
+  walk(body);
+  return forwards ? name : null;
 }
 
+/** Does this returned expression hand out the call's result, or its status? */
+function mentions(e: ts.Expression, call: ts.CallExpression, bound: ts.VariableDeclaration | null, sf: ts.SourceFile): boolean {
+  const x = unwrap(e);
+  if (x === call) return true;
+  if (bound !== null && ts.isIdentifier(bound.name)) {
+    const want = bound.name.text;
+    let hit = false;
+    const walk = (n: ts.Node): void => {
+      if (hit) return;
+      if (ts.isIdentifier(n) && n.text === want && resolve(n) === bound) hit = true;
+      n.forEachChild(walk);
+    };
+    walk(x);
+    if (hit) return true;
+  }
+  if (ts.isObjectLiteralExpression(x)) return x.properties.some((p) => ts.isPropertyAssignment(p) && p.name.getText(sf) === 'status');
+  return false;
+}
+
+type Decision = { readonly kind: 'read'; readonly how: string } | { readonly kind: 'defer'; readonly to: string } | null;
+
 /**
- * Is the value a producer (`spawnSync` itself, or a forwarder) yields at THIS
- * call site decided? Returns a reason when it is, a forwarder name when the
- * decision is deferred to one, or null when the code is discarded.
+ * Is the value this call yields decided upon? A reason when it is, a forwarder
+ * name when the decision is deferred to one, null when the code is discarded.
  */
-function decideAt(
-  lines: readonly string[],
-  i: number,
-  producer: string,
-  wrappers: readonly Wrapper[],
-  file: string,
-  decls: readonly Decl[],
-): { readonly kind: 'read'; readonly how: string } | { readonly kind: 'defer'; readonly to: string } | null {
-  const line = lines[i] ?? '';
-  const window = lines.slice(i, i + WINDOW).join('\n');
-  const near = lines.slice(i, i + 3).join('\n');
+function decideCall(call: ts.CallExpression, sf: ts.SourceFile, wrappers: readonly Wrapper[], file: string): Decision {
+  // 1. bound to a name, and that DECLARATION's own .status decided upon
+  const parent = call.parent;
   const bound =
-    new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*(?::[^=]+)?=\\s*(?:await\\s+)?${producer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\(`).exec(line)?.[1] ?? null;
-  if (bound !== null) {
-    const own = statusDecision(bound, window);
-    if (own !== null) return { kind: 'read', how: `${bound}: ${own}` };
-    // THROUGH ONE ALIAS. `const status = r.status;` followed by `if (status
-    // !== 0)` is a decision on the exit code, and refusing it would push the
-    // pack toward a shape chosen to satisfy this sweep rather than to be read.
-    // The alias is measured, not assumed: the copy and the comparison must
-    // both be in the window.
-    const alias = new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*(?::[^=\\n]+)?=\\s*${bound}\\.status\\b`).exec(window)?.[1];
-    if (alias !== undefined) {
-      const a = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const viaAlias = new RegExp(`\\b${a}\\s*(?:===|!==|==|!=|>=|<=|>|<)\\s*[^;)\\n]{0,24}|if\\s*\\(\\s*!?\\s*${a}\\s*\\)`).exec(window);
-      if (viaAlias !== null) return { kind: 'read', how: `${bound}.status → ${alias}: ${viaAlias[0].replace(/\s+/g, ' ').trim()}` };
+    parent !== undefined &&
+    ts.isVariableDeclaration(parent) &&
+    ts.isIdentifier(parent.name) &&
+    parent.initializer !== undefined &&
+    unwrap(parent.initializer) === call
+      ? parent
+      : null;
+  if (bound !== null && ts.isIdentifier(bound.name)) {
+    const want = bound.name.text;
+    const own = statusDecisionOf(bound, want, sf);
+    if (own !== null) return { kind: 'read', how: `${want}: ${own}` };
+    // handed to a wrapper that decides
+    for (const id of usesOf(bound, want, enclosingFunction(bound))) {
+      const p = id.parent;
+      if (!ts.isCallExpression(p) || !p.arguments.includes(id)) continue;
+      const callee = ts.isIdentifier(p.expression) ? p.expression.text : null;
+      const w = wrappers.filter((x) => x.name === callee);
+      const via = w.find((x) => x.file === file) ?? w[0];
+      if (via !== undefined) return { kind: 'read', how: `${want} → ${via.name}() at ${via.file}:${via.line}` };
     }
-    const toWrapper = wrappers.find((w) => new RegExp(`\\b${w.name}\\(\\s*${bound}\\b`).test(window));
-    if (toWrapper !== undefined) return { kind: 'read', how: `${bound} → ${toWrapper.name}() at ${toWrapper.file}:${toWrapper.line}` };
-    const d = enclosing(decls, i);
-    if (d !== null) {
-      const f = forwards(d, bound, producer);
-      if (f !== null) return { kind: 'defer', to: d.name };
-    }
+  }
+  // 2. decided on the spot, on the call expression itself
+  const spot = (() => {
+    const p = call.parent;
+    if (p !== undefined && ts.isPropertyAccessExpression(p) && p.expression === call && p.name.text === 'status') return decidedHere(p, sf);
     return null;
+  })();
+  if (spot !== null) return { kind: 'read', how: `on the spot: ${spot}` };
+  // 3. ARGUMENT POSITION — the call must be a descendant of the wrapper call's
+  //    own arguments. N1's p2 passed on text proximity alone: a `must(` three
+  //    lines up excused a spawn that was never inside its parentheses.
+  for (let n: ts.Node | undefined = call.parent; n !== undefined; n = n.parent) {
+    if (!ts.isCallExpression(n)) continue;
+    if (!n.arguments.some((a) => a.pos <= call.pos && call.end <= a.end)) continue;
+    const callee = ts.isIdentifier(n.expression) ? n.expression.text : ts.isPropertyAccessExpression(n.expression) ? n.expression.name.text : null;
+    const w = wrappers.filter((x) => x.name === callee);
+    const via = w.find((x) => x.file === file) ?? w[0];
+    if (via !== undefined) return { kind: 'read', how: `argument to ${via.name}() at ${via.file}:${via.line}` };
   }
-  const inline = inlineDecision(near);
-  if (inline !== null) return { kind: 'read', how: `on the spot: ${inline}` };
-  const back = lines.slice(Math.max(0, i - 3), i + 1).join('\n');
-  const matches = wrappers.filter((w) => new RegExp(`\\b${w.name}\\(`).test(back));
-  const via = matches.find((w) => w.file === file) ?? matches[0];
-  if (via !== undefined) return { kind: 'read', how: `argument to ${via.name}() at ${via.file}:${via.line}` };
-  const d = enclosing(decls, i);
-  if (d !== null) {
-    const f = forwards(d, null, producer);
-    if (f !== null) return { kind: 'defer', to: d.name };
-  }
-  return null;
+  // 4. forwarded outward
+  const to = forwarderFor(call, bound, sf);
+  return to === null ? null : { kind: 'defer', to };
 }
 
 interface Forwarder {
@@ -292,20 +464,30 @@ interface SweepResult {
 }
 
 function sweep(dir: string): SweepResult {
+  parsed.clear(); // each pack copy is parsed on its own bytes
   const src = new Map(sources(dir));
   const apparatusProblem = apparatusIsInert(dir);
   if (apparatusProblem === null) src.delete(APPARATUS);
+  const emptyPack: Site[] = [];
+  if (src.size === 0)
+    emptyPack.push({
+      file: basename(dir),
+      line: 0,
+      text: 'the pack directory holds no TypeScript source at all: a sweep over nothing is not a clean sweep (residual R5)',
+      bound: null,
+      via: null,
+      how: null,
+    });
   const wrappers = wrappersIn(src);
-  const decls = new Map<string, readonly Decl[]>([...src].map(([f, l]) => [f, declarations(l)]));
-  const declsOf = (f: string): readonly Decl[] => decls.get(f) ?? [];
+  const sfOf = (file: string): ts.SourceFile => ast(file, (src.get(file) ?? []).join('\n'));
 
-  type Raw = { file: string; line: number; text: string; d: ReturnType<typeof decideAt> };
+  type Raw = { file: string; line: number; text: string; d: Decision };
   const raws: Raw[] = [];
-  for (const [file, lines] of src)
-    for (let i = 0; i < lines.length; i += 1) {
-      if (!codeOnly(lines[i] ?? '').includes('spawnSync(')) continue;
-      raws.push({ file, line: i, text: (lines[i] ?? '').trim().slice(0, 78), d: decideAt(lines, i, 'spawnSync', wrappers, file, declsOf(file)) });
-    }
+  for (const [file] of src) {
+    const sf = sfOf(file);
+    for (const call of producerCalls(sf, 'spawnSync'))
+      raws.push({ file, line: lineOf(sf, call), text: (src.get(file)?.[lineOf(sf, call)] ?? '').trim().slice(0, 78), d: decideCall(call, sf, wrappers, file) });
+  }
 
   // Call sites of every forwarder a spawn site defers to, measured the same way.
   //
@@ -318,21 +500,24 @@ function sweep(dir: string): SweepResult {
   const tokens = new Set<string>();
   const keyOf = (file: string, token: string): string => `${file}::${token}`;
   for (const r of raws) if (r.d?.kind === 'defer') tokens.add(keyOf(r.file, r.d.to));
-  const sitesOf = new Map<string, { file: string; line: number; text: string; d: ReturnType<typeof decideAt> }[]>();
+  const sitesOf = new Map<string, { file: string; line: number; text: string; d: Decision }[]>();
+  const imports = (sf: ts.SourceFile, token: string): boolean =>
+    sf.statements.some((st) => {
+      if (!ts.isImportDeclaration(st)) return false;
+      const named = st.importClause?.namedBindings;
+      return named !== undefined && ts.isNamedImports(named) && named.elements.some((el) => el.name.text === token);
+    });
   const addToken = (key: string): void => {
     if (sitesOf.has(key)) return;
     const [home, token] = key.split('::') as [string, string];
-    const sites: { file: string; line: number; text: string; d: ReturnType<typeof decideAt> }[] = [];
-    const call = new RegExp(`\\b${token}\\s*\\(`);
-    const own = new RegExp(`\\b(?:function|const|let|var)\\s+${token}\\b`);
-    const imports = new RegExp(`^import\\s*\\{[^}]*\\b${token}\\b[^}]*\\}`, 'm');
-    for (const [file, lines] of src) {
-      if (file !== home && !imports.test(lines.join('\n'))) continue;
-      for (let i = 0; i < lines.length; i += 1) {
-        const line = codeOnly(lines[i] ?? '');
-        if (!call.test(line) || own.test(line) || /^import\s/.test(line)) continue;
-        const d = decideAt(lines, i, token, wrappers, file, declsOf(file));
-        sites.push({ file, line: i, text: (lines[i] ?? '').trim().slice(0, 78), d });
+    const sites: { file: string; line: number; text: string; d: Decision }[] = [];
+    for (const [file] of src) {
+      const sf = sfOf(file);
+      if (file !== home && !imports(sf, token)) continue;
+      for (const call of producerCalls(sf, token)) {
+        const d = decideCall(call, sf, wrappers, file);
+        const line = lineOf(sf, call);
+        sites.push({ file, line, text: (src.get(file)?.[line] ?? '').trim().slice(0, 78), d });
         if (d?.kind === 'defer') tokens.add(keyOf(file, d.to));
       }
     }
@@ -353,7 +538,7 @@ function sweep(dir: string): SweepResult {
         safe.add(key);
     }
 
-  const unchecked: Site[] = [];
+  const unchecked: Site[] = [...emptyPack];
   const read: Site[] = [];
   for (const r of raws) {
     const site = (how: string | null, note?: string): Site => ({
@@ -591,6 +776,83 @@ const PLANTS: readonly Plant[] = [
           ? null
           : 'the forwarder was reported but the call site that discards its code was not named'
         : 'a forwarder with a discarding caller was exempted — the decision was moved, not made',
+  },
+  {
+    id: 'X10',
+    what: "N1's p1 — a discarded spawn in one function, and a same-named variable compared in the NEXT one",
+    plant: (dir) => {
+      const f = join(dir, 'planted-x10.ts');
+      writeFileSync(
+        f,
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'export function dirty(): boolean {',
+          "  const r = spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim().length > 0;",
+          '}',
+          'export function head(): string {',
+          "  const r = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  if (r.status !== 0) throw new Error('git rev-parse failed');",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'planted-x10.ts' && s.line === 3)
+        ? null
+        : "the discarded spawn in dirty() was credited with head()'s comparison on a different `r` of the same name",
+  },
+  {
+    id: 'X11',
+    what: "N1's p2 — a spawn three lines below a `must(` call it is not an argument to",
+    plant: (dir) => {
+      const f = join(dir, 'planted-x11.ts');
+      writeFileSync(
+        f,
+        [
+          "import { spawnSync, type SpawnSyncReturns } from 'node:child_process';",
+          'function insist(r: SpawnSyncReturns<string>, what: string): string {',
+          '  if (r.status !== 0) throw new Error(`${what}: exit ${String(r.status)}`);',
+          "  return r.stdout ?? '';",
+          '}',
+          "export const ok = insist(spawnSync('true', [], { encoding: 'utf8' }), 'true');",
+          "export const listed = (spawnSync('git', ['ls-files'], { encoding: 'utf8' }).stdout ?? '').trim();",
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'planted-x11.ts' && s.line === 7)
+        ? null
+        : 'a spawn that is not inside the wrapper call’s parentheses was excused by its nearness to one',
+  },
+  {
+    id: 'X12',
+    what: "N1's third shape — the name is RE-BOUND in a nested scope, and the comparison belongs to the new binding",
+    plant: (dir) => {
+      const f = join(dir, 'planted-x12.ts');
+      writeFileSync(
+        f,
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'export function probe(paths: readonly string[]): readonly string[] {',
+          "  const r = spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' });",
+          "  const lines = (r.stdout ?? '').split('\\n');",
+          '  return paths.filter((p) => {',
+          "    const r = spawnSync('git', ['ls-files', '--error-unmatch', p], { encoding: 'utf8' });",
+          '    return r.status === 0 && lines.length >= 0;',
+          '  });',
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'planted-x12.ts' && s.line === 3)
+        ? null
+        : "the outer spawn was credited with the inner binding's comparison: a re-bound name is a different variable",
   },
   {
     id: 'X9',

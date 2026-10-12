@@ -1161,7 +1161,12 @@ function report(sha: string, dirty: boolean, t: Timeline | undefined, ms: number
     '  · RPO/RTO above are fixture numbers on a container. PART 105 requires production-like dataset, storage, network and topology for the real ones.',
   );
   console.log('  · The recovery target is a TIME. Recovery to an LSN or a named restore point is supported by the same path and is not exercised here.');
-  if (!PROVE) console.log('  · --prove-detection was NOT passed, so the four red proofs did not run and these validators are unproved.');
+  // The count is GONE rather than corrected, which is the round-8 N3 remedy
+  // applied to code: this line said "the four red proofs" while seven were
+  // declared below it, and in the branch that prints it none of them has run,
+  // so there is nothing here to count from. A figure no run produced is a
+  // figure that drifts the next time one is added.
+  if (!PROVE) console.log('  · --prove-detection was NOT passed, so the red proofs did not run and these validators are unproved.');
 
   writeFileSync(join(EVIDENCE, 'pitr-run-identity.json'), `${JSON.stringify({ ...summary, tools: toolVersions(), loadavg: loadavg() }, null, 2)}\n`);
   console.log(`\nP15_PITR_PROOF: ${JSON.stringify(summary)}`);

@@ -698,9 +698,31 @@ function main(): number {
   console.log('another branch: a finding from a prep container is a lead for the tree’s');
   console.log('owner (TL-P4-COORD-R39). Each one above names the file and line that');
   console.log('produces it so the owner can reproduce it without this script.');
+  // THE EXIT CODE CARRIES BOTH FACTS, AND IT USED TO CARRY ONLY ONE.
+  //
+  // The coordinator's round-8 R3: a FINDING — a named, reproducible gap in this
+  // tree — never reached the exit code. Only UNMEASURED did. So a run that
+  // measured every item and found a production fail-open printed its finding in
+  // the body and exited 0, and a reader who takes the exit code as the verdict
+  // read "no gaps". G5 is exactly that case: the disabled malware scanner
+  // composed unconditionally in production, which the owner has since ruled a
+  // promotion blocker (his message of 2026-10-12 21:38). A gap that is real
+  // belongs in the code this runner returns.
+  //
+  // The two facts stay distinguishable: 2 = something could not be measured,
+  // which is the worse state because nothing is known; 1 = everything was
+  // measured and a gap was found.
   if (counts.UNMEASURED > 0) {
     console.log('');
-    console.log(`EXIT 1: ${counts.UNMEASURED} item(s) UNMEASURED — the Mission’s question is unanswered for those.`);
+    console.log(`EXIT 2: ${counts.UNMEASURED} item(s) UNMEASURED — the Mission’s question is unanswered for those.`);
+    if (counts.FINDING > 0) console.log(`  ${counts.FINDING} item(s) also carry a FINDING, which on its own would be EXIT 1.`);
+    return 2;
+  }
+  if (counts.FINDING > 0) {
+    console.log('');
+    console.log(`EXIT 1: ${counts.FINDING} item(s) carry a FINDING — a named, reproducible gap in this tree.`);
+    console.log('  Each is listed above with its file and line. A finding printed over an exit 0 is a');
+    console.log('  finding the handoff loses, because a reader takes the code as the verdict.');
     return 1;
   }
   return 0;

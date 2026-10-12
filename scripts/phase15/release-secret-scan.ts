@@ -60,9 +60,25 @@
  *          written into the copy handed to gitleaks (never into the source
  *          tree), is REQUIRED in gitleaks' own report, and is then subtracted
  *          from it. This is the half that cannot pass without gitleaks having
- *          read the files: a count cannot say that, and law 1's claim to be
- *          "the only defence" against the vacuous green rests here, not on the
- *          count. `scan:secrets:release:prove` carries its red proofs.
+ *          RUN OVER THIS COPY and being able to report a token in a file of
+ *          the control's own class. It is NOT a statement that gitleaks read
+ *          the inventory, and round-8 N2 measured the difference: gitleaks'
+ *          DEFAULT config carries a global `[allowlist] paths`, so
+ *          `package-lock.json`, `*.svg`, `*.png` and `node_modules/` are
+ *          skipped in silence — a tree with three tracked files holding tokens
+ *          came back PASS with the control reported.
+ *
+ *      (c) THAT EVERY INVENTORY FILE WAS READ — coverage, and this is the half
+ *          that speaks about the subject. gitleaks runs at `--log-level trace`,
+ *          which names each file it reads and each one it skips; the union must
+ *          equal the inventory, every skipped file is scanned again under a
+ *          neutrally-named twin, and a finding in a twin is reported against
+ *          the real path. A file that nothing read is reported UNSCANNED,
+ *          which is a failure and not a clean result. A second control, planted
+ *          in an allowlisted class, must be skipped by the first pass AND
+ *          reported through its twin, so both halves of the measurement are
+ *          witnessed every run. `scan:secrets:release:prove` carries the red
+ *          proofs.
  *   2. EVERY INVENTORY ENTRY IS BOUND TO THE SOURCE TREE. At release scope a
  *      file that nothing binds to the source is a finding in itself: the
  *      archive would carry bytes no reviewed commit accounts for. WHAT the
@@ -396,7 +412,7 @@ function runTree(root: string, gitleaks: string): TreeOutcome {
   const allowlist = proveAllowlist(root);
   console.log(`  subject: ${allowlist.treeEntries} tree allowlist entries, ${allowlist.proved} proved against their content`);
 
-  const result = scanTree({ root, gitleaks, canary: true });
+  const result = scanTree({ root, gitleaks, canary: true, coverage: true });
   checkScanIntegrity(result);
   console.log(`  gitleaks: ${result.tool.version} (sha256 ${result.tool.binarySha256.slice(0, 16)}…)`);
   // The printed line says where the number comes from. It used to read
@@ -410,10 +426,40 @@ function runTree(root: string, gitleaks: string): TreeOutcome {
       canary === null || canary === undefined
         ? 'NONE — no positive control was planted, so nothing here shows the files were READ'
         : canary.reported
-          ? `the per-run token planted in the copy was REPORTED by gitleaks (${canary.file}) and subtracted — gitleaks read the subject`
+          ? `the per-run token planted in the copy was REPORTED by gitleaks (${canary.file}) and subtracted — gitleaks RAN over this copy and reports a token in a file of that class; which inventory files it read is law 1(c), below`
           : `the per-run token planted in the copy was NOT reported (${canary.file})`
     }`,
   );
+
+  // (c) coverage — the only figure in this law that gitleaks itself produced.
+  const cov = result.coverage;
+  if (cov === null || cov === undefined)
+    fail('non-vacuity', 'coverage was not measured, so which of the inventory files gitleaks read is unknown; a canary in one file cannot stand for a tree');
+  else {
+    console.log(
+      `  coverage: gitleaks reported reading ${String(cov.read)} path(s) of the ${String(cov.inventory)} handed to it; ${String(cov.skipped.length)} skipped by its default allowlist, ${String(cov.coveredByTwin.length)} of those read through a neutrally-named twin`,
+    );
+    for (const sk of cov.skipped.slice(0, 10))
+      console.log(`            allowlisted by the default config, scanned as data instead: ${sk}${cov.coveredByTwin.includes(sk) ? '' : '  — UNSCANNED'}`);
+    const second = cov.allowlistedCanary;
+    console.log(
+      `  control2: ${
+        second === null
+          ? 'NONE — no allowlisted-class control was planted'
+          : `${second.file} was ${second.skippedInPass1 ? 'SKIPPED by the first pass' : 'NOT skipped by the first pass'} and ${second.reportedInTwin ? 'REPORTED through its twin' : 'NOT reported through its twin'}`
+      }`,
+    );
+    if (cov.uncovered.length > 0)
+      fail(
+        'non-vacuity',
+        `${String(cov.uncovered.length)} inventory file(s) were handed to gitleaks and nothing read them (${cov.uncovered.slice(0, 5).join(', ')}${cov.uncovered.length > 5 ? ', …' : ''}): "no findings" over a file that was never read is a statement about nothing`,
+      );
+    if (second !== null && !second.reportedInTwin)
+      fail(
+        'non-vacuity',
+        `the allowlisted-class control (${second.file}) was not reported through its twin, so the second pass is not reading what it copies and every allowlisted file is UNSCANNED`,
+      );
+  }
 
   // (a) the shape of the subject set — a code-path agreement check, not two
   // independent measurements. Its own wording used to claim otherwise.

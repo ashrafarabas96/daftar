@@ -222,7 +222,22 @@ function checkChallenges(manifest: string, dir: string): Challenge {
     .split('\n')
     .filter((l) => !(l.trim().startsWith('|') && /\b[0-9a-f]{64}\b/.test(l)))
     .join('\n');
-  const named = [...narrative.matchAll(/P15-CHALLENGE-([0-9a-fA-F]{7,40})\.md/g)].map((m) => (m[1] ?? '').toLowerCase());
+  // NAMED MEANS NAMED IN §8's REPORTS ROW — the coordinator's round-8 N4.
+  //
+  // «Named anywhere in the narrative» was still too wide, and the review
+  // measured the cost in a pack copy: one appended sentence — "Pending, not yet
+  // read by this author: P15-CHALLENGE-211b0b7.md" — made the gate print
+  // "8 challenge round(s) recorded" while §8 went on saying "RUN seven times",
+  // listed seven reports, and gave the signature as covering an older head. A
+  // round is recorded where a reader looks for the list of rounds, which is
+  // §8's Reports row; a mention in a sentence about what has NOT been read is
+  // the opposite of a record.
+  const reportsRow = narrative.split('\n').filter((l) => /^\|\s*\*\*Reports/.test(l.trim()));
+  if (reportsRow.length === 0)
+    problems.push(
+      '§8 carries no «Reports» row, so this file lists the challenge rounds nowhere a reader would look for them; the gate reads that row and nothing else',
+    );
+  const named = [...reportsRow.join('\n').matchAll(/P15-CHALLENGE-([0-9a-fA-F]{7,40})\.md/g)].map((m) => (m[1] ?? '').toLowerCase());
   // A report named with something that is not a SHA cannot be matched against
   // the disk at all, so it is a failure rather than a silent non-match: it
   // would otherwise read as "this round is recorded".
@@ -246,7 +261,15 @@ function checkChallenges(manifest: string, dir: string): Challenge {
   for (const sha of onDisk)
     if (!named.includes(sha))
       problems.push(
-        `a challenge report for ${sha} is on disk and this file never names it — a round that happened and went unrecorded is how "NOT RUN" survived six of them`,
+        `a challenge report for ${sha} is on disk and §8's Reports row does not list it — a round that happened and went unrecorded is how "NOT RUN" survived six of them, and a mention elsewhere in the prose is not the list`,
+      );
+  // A name in the prose that is NOT in the Reports row: the round is either
+  // recorded in the list or it is not recorded.
+  const inProse = [...narrative.matchAll(/P15-CHALLENGE-([0-9a-fA-F]{7,40})\.md/g)].map((m) => (m[1] ?? '').toLowerCase());
+  for (const sha of new Set(inProse))
+    if (!named.includes(sha))
+      problems.push(
+        `P15-CHALLENGE-${sha}.md is named in the prose but not in §8's Reports row, so the round is mentioned and not recorded — which is exactly how a pack can name a round only in a sentence about what nobody has read yet`,
       );
   for (const sha of new Set(named))
     if (!onDisk.includes(sha))

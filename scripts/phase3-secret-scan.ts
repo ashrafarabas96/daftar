@@ -377,6 +377,21 @@ export interface ScanResult {
    * unreported and must never read as one.
    */
   readonly canary?: { readonly file: string; readonly reported: boolean } | null;
+  /**
+   * tree mode with `coverage: true`: which inventory files gitleaks itself
+   * reported reading, which its default allowlist skipped, which were covered
+   * by a neutrally-named twin instead, and which were covered by nothing.
+   * `null` means coverage was not measured, which is not the same as coverage
+   * being complete.
+   */
+  readonly coverage?: {
+    readonly inventory: number;
+    readonly read: number;
+    readonly skipped: readonly string[];
+    readonly coveredByTwin: readonly string[];
+    readonly uncovered: readonly string[];
+    readonly allowlistedCanary: { readonly file: string; readonly skippedInPass1: boolean; readonly reportedInTwin: boolean } | null;
+  } | null;
   readonly findings: number | null;
   readonly allowlisted: readonly { fingerprint: string; reason: string }[];
   readonly remaining: readonly { fingerprint: string; rule: string; file: string; line: number; commit: string | null }[];
@@ -603,6 +618,25 @@ export interface TreeScanOptions {
    * thing a file count cannot establish is that gitleaks read the files.
    */
   readonly canary?: boolean;
+  /**
+   * MEASURE WHICH FILES GITLEAKS ACTUALLY READ, and scan the ones its default
+   * allowlist skips through neutrally-named twins.
+   *
+   * Round-8 N2: the canary proves only that gitleaks ran over the copy and can
+   * report a token in a file of the canary's own class. It cannot see that
+   * gitleaks' DEFAULT config carries a global `[allowlist] paths`, which
+   * silently skips `package-lock.json`, `*.svg`, `*.png`, `node_modules/` and
+   * more. The coordinator measured the consequence: a tree where three tracked
+   * files held tokens came back PASS, canary reported, 0 findings. A file count
+   * said 8; gitleaks had read 5.
+   *
+   * With this on, gitleaks runs at `--log-level trace`, which names every file
+   * it reads and every one it skips; the union must equal the inventory, each
+   * skipped file is scanned again under a neutral name, and a finding in a twin
+   * is reported against the real path. Opt-in, so Phase 3's own scan behaves
+   * exactly as it did.
+   */
+  readonly coverage?: boolean;
 }
 
 interface DeliveryInventory {
@@ -646,6 +680,8 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
   let filesScanned: number | null = null;
   let canaryFile: string | null = null;
   let canaryReported = false;
+  let coverage: ScanResult['coverage'] = null;
+  let allowlistedCanaryFile: string | null = null;
 
   if (existsSync(join(root, '.gitleaks.toml')))
     problems.push('.gitleaks.toml is present: this scan runs the default gitleaks rule set and refuses a config that could replace or allowlist it');
@@ -699,6 +735,21 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
       canaryFile = `.daftar-scan-canary-${randomBytes(6).toString('hex')}.env`;
       writeFileSync(join(copy, canaryFile), `GITHUB_TOKEN=ghp_${randomBytes(21).toString('hex').slice(0, 36)}\n`);
     }
+    // THE SECOND CONTROL, for the gap the first one cannot see (round-8 N2).
+    //
+    // `.svg` is in gitleaks' default global allowlist. This token must therefore
+    // be SKIPPED by the first pass and REPORTED through its neutrally-named
+    // twin — which measures, per run, both that the blind class is real and
+    // that the twin pass closes it. A run where this file is reported directly
+    // means the allowlist changed; a run where it is reported nowhere means the
+    // twin pass is not scanning what it copies.
+    if (opts.coverage === true) {
+      allowlistedCanaryFile = `.daftar-scan-canary-${randomBytes(6).toString('hex')}.svg`;
+      writeFileSync(
+        join(copy, allowlistedCanaryFile),
+        `<svg xmlns="http://www.w3.org/2000/svg"><!-- GITHUB_TOKEN=ghp_${randomBytes(21).toString('hex').slice(0, 36)} --></svg>\n`,
+      );
+    }
     const noIgnore = join(work, 'no-ignore');
     mkdirSync(noIgnore);
     mkdirSync(copy, { recursive: true });
@@ -722,6 +773,7 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
         'json',
         '--report-path',
         report,
+        ...(opts.coverage === true ? ['--log-level', 'trace'] : []),
         '.',
       ],
       { cwd: copy, encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024 },
@@ -733,6 +785,119 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
         const file = f.File.replace(/^\.\//, '') === IGNORE_FILE_AS_DATA ? '.gitleaksignore' : f.File.replace(/^\.\//, '');
         return { ...f, File: file, Fingerprint: `${file}:${f.RuleID}:${f.StartLine}` };
       });
+    }
+    // ── COVERAGE, FROM GITLEAKS' OWN LOG, AND A SECOND PASS FOR WHAT IT SKIPS ──
+    //
+    // `--log-level trace` writes one `Scanning path path=<p>` line per file it
+    // reads and one `Skipping … due to global allowlist path=<p>` per file or
+    // directory its default config excludes. Both go to stderr. This is the
+    // only figure in this scan that gitleaks itself produces: `filesScanned`
+    // is the inventory's own length and says nothing about reading.
+    if (opts.coverage === true && run.status === 0) {
+      const asData = (n: number): string => `daftar-unallowlisted-${String(n)}.scanned-as-data`;
+      const handed = files.map((f) => (f.path === '.gitleaksignore' ? IGNORE_FILE_AS_DATA : f.path));
+      const readPaths = new Set<string>();
+      const skippedRaw: string[] = [];
+      for (const line of (run.stderr ?? '').split('\n')) {
+        const scanned = /Scanning path\s+path=(.+?)\s*$/.exec(line);
+        if (scanned !== null) {
+          readPaths.add((scanned[1] ?? '').replace(/^\.\//, ''));
+          continue;
+        }
+        const skipped = /Skipping (?:file|directory) due to global allowlist\s+path=(.+?)\s*$/.exec(line);
+        if (skipped !== null) skippedRaw.push((skipped[1] ?? '').replace(/^\.\//, ''));
+      }
+      if (readPaths.size === 0 && skippedRaw.length === 0)
+        problems.push(
+          'gitleaks printed no per-file trace line at --log-level trace, so which files it read is UNMEASURED: coverage cannot be asserted from a count the scanner itself did not produce',
+        );
+      // A skipped DIRECTORY stands for every inventory file under it.
+      const skippedSet = new Set<string>();
+      for (const sk of skippedRaw) for (const h of handed) if (h === sk || h.startsWith(`${sk}/`)) skippedSet.add(h);
+      for (const sk of skippedRaw) if (handed.includes(sk)) skippedSet.add(sk);
+      const skippedFiles = handed.filter((h) => skippedSet.has(h) && h !== allowlistedCanaryFile);
+      const allowlistedCanarySkipped = allowlistedCanaryFile !== null && skippedRaw.includes(allowlistedCanaryFile);
+      // SECOND PASS — each skipped file copied under a name no allowlist rule
+      // matches, so the bytes are actually read. A finding in a twin is
+      // reported against the real path, which is what makes this a scan and
+      // not a disclosure.
+      const twinTargets = [...skippedFiles, ...(allowlistedCanaryFile !== null ? [allowlistedCanaryFile] : [])];
+      const twinOf = new Map<string, string>();
+      const coveredByTwin: string[] = [];
+      let twinCanaryReported = false;
+      if (twinTargets.length > 0) {
+        const twins = join(work, 'twins');
+        mkdirSync(twins, { recursive: true });
+        twinTargets.forEach((pth, i) => {
+          const name = asData(i);
+          twinOf.set(name, pth);
+          copyFileSync(join(copy, pth), join(twins, name));
+        });
+        const twinReport = join(work, 'twin-report.json');
+        const twinRun = spawnSync(
+          opts.gitleaks,
+          [
+            'dir',
+            '--no-banner',
+            '--no-color',
+            '--redact',
+            '--ignore-gitleaks-allow',
+            '--gitleaks-ignore-path',
+            noIgnore,
+            '--exit-code',
+            '0',
+            '--report-format',
+            'json',
+            '--report-path',
+            twinReport,
+            '--log-level',
+            'trace',
+            '.',
+          ],
+          { cwd: twins, encoding: 'utf8', env, maxBuffer: 64 * 1024 * 1024 },
+        );
+        if (twinRun.status !== 0)
+          problems.push(
+            `the second pass over the ${String(twinTargets.length)} file(s) gitleaks' default allowlist skips exited ${String(twinRun.status)}, so those files are UNSCANNED`,
+          );
+        else {
+          for (const line of (twinRun.stderr ?? '').split('\n')) {
+            const scanned = /Scanning path\s+path=(.+?)\s*$/.exec(line);
+            if (scanned === null) continue;
+            const real = twinOf.get((scanned[1] ?? '').replace(/^\.\//, ''));
+            if (real !== undefined && real !== allowlistedCanaryFile) coveredByTwin.push(real);
+          }
+          const twinFindings = (JSON.parse(readFileSync(twinReport, 'utf8')) as GitleaksFinding[]).map((f) => {
+            const real = twinOf.get(f.File.replace(/^\.\//, '')) ?? f.File.replace(/^\.\//, '');
+            return { ...f, File: real, Fingerprint: `${real}:${f.RuleID}:${f.StartLine}` };
+          });
+          twinCanaryReported = twinFindings.some((f) => f.File === allowlistedCanaryFile);
+          findings = [...(findings ?? []), ...twinFindings.filter((f) => f.File !== allowlistedCanaryFile)];
+        }
+      }
+      const covered = new Set<string>([...readPaths, ...coveredByTwin]);
+      const uncovered = handed.filter((h) => h !== allowlistedCanaryFile && !covered.has(h));
+      for (const u of uncovered.slice(0, 20))
+        problems.push(`${u} was handed to gitleaks and gitleaks never reported reading it, and no twin covered it: UNSCANNED, which is not clean`);
+      if (uncovered.length > 20) problems.push(`and ${String(uncovered.length - 20)} further file(s) handed to gitleaks that nothing read`);
+      if (allowlistedCanaryFile !== null && !allowlistedCanarySkipped && !twinCanaryReported)
+        problems.push(
+          `the allowlisted-class control (${allowlistedCanaryFile}) was neither skipped by the first pass nor reported by the second, so neither half of the coverage measurement is behaving as this run assumes`,
+        );
+      if (allowlistedCanaryFile !== null && allowlistedCanarySkipped && !twinCanaryReported)
+        problems.push(
+          `the allowlisted-class control (${allowlistedCanaryFile}) was skipped by gitleaks' default allowlist and NOT reported through its twin, so the second pass is not reading the files it copies and every skipped file is UNSCANNED`,
+        );
+      if (allowlistedCanaryFile !== null && findings !== null) findings = findings.filter((f) => f.File !== allowlistedCanaryFile);
+      coverage = {
+        inventory: handed.length,
+        read: readPaths.size,
+        skipped: skippedFiles,
+        coveredByTwin,
+        uncovered,
+        allowlistedCanary:
+          allowlistedCanaryFile === null ? null : { file: allowlistedCanaryFile, skippedInPass1: allowlistedCanarySkipped, reportedInTwin: twinCanaryReported },
+      };
     }
   } finally {
     rmSync(work, { recursive: true, force: true });
@@ -773,6 +938,7 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
     commitsScanned: null,
     filesScanned,
     canary: canaryFile === null ? null : { file: canaryFile, reported: canaryReported },
+    coverage,
     findings: findings === null ? null : findings.length,
     allowlisted,
     remaining,

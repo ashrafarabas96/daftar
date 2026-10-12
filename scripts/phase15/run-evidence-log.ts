@@ -940,6 +940,41 @@ function engineVerdict(): { readonly declared: string | null; readonly running: 
 /** The collation the deployment line runs at (`TL-P4-S3-R4`). */
 const SETTLED_COLLATION = 'en_US.utf8';
 
+/**
+ * THE NON-ZERO EXIT CODES THIS RUNNER TOLERATES — NAMED, WITH THEIR REASONS
+ *
+ * The coordinator's round-8 R2, ruled blocking: this runner returned 0 whatever
+ * its instruments returned, while «runner rc 0 across 25 instruments» was being
+ * cited in the handoff as evidence about the SUBJECT. Both halves were true of
+ * the run and false of the subject, and an aggregate that cannot go red is not
+ * a verdict.
+ *
+ * So a measured non-zero now makes this runner exit 5, unless the instrument is
+ * named here with the reason its non-zero is not a defect in Phase 15's own
+ * code. The list is short, printed with the verdict, and it is NOT a severity
+ * floor or an allowlist of findings: each entry names a specific instrument
+ * whose exit 1 carries a fact the record states elsewhere, and the instrument
+ * still prints everything it found.
+ *
+ * A consequence worth stating, because it changes how a handoff run is made:
+ * the two INDEX instruments are deliberately absent from this list. They are
+ * regenerated AFTER a run — an index is stale while its own regeneration is
+ * pending — so a pre-regeneration run exits 5 by design, and the run whose rc
+ * is quotable is the confirmation run made after the documents are rewritten.
+ */
+const TOLERATED_NONZERO: readonly { readonly script: string; readonly reason: string }[] = [
+  {
+    script: 'verify:gap-list:static',
+    reason:
+      'the static mode measures what it can read and reports the rest as UNMEASURED; its exit 1 says "one of five items is not decidable from source", which is a statement about coverage of the check and not a failure of the subject. Its FINDINGs are carried as named open items (G5 is the owner-decided scanner block)',
+  },
+  {
+    script: 'audit:deps:phase15',
+    reason:
+      "a FAILURE inherited from main's lockfile a8fecd0, with HIGH advisories this branch neither authored nor changes. It blocks PROMOTION and is recorded as §6.3; the floor stays at moderate and nothing is allowlisted",
+  },
+];
+
 function main(): number {
   const quick = process.argv.includes('--quick');
   const authoritative = process.argv.includes('--authoritative');
@@ -1106,6 +1141,8 @@ function main(): number {
   //   1 = an instrument that was run returned no exit code of its own
   //   3 = an instrument crashed BEFORE measuring, so its code is not a verdict
   //   4 = the coverage claim is incomplete or could not be computed
+  //   5 = an instrument measured and returned a non-zero code that no named
+  //       exclusion accounts for (round-8 R2)
   //   2 = an environment precondition was unmet, so an instrument was not run
   //   0 = every instrument either ran and returned its own code, or was not
   //       run for a caller-supplied precondition it correctly refused to invent
@@ -1157,6 +1194,25 @@ function main(): number {
     } else {
       emitSection(path, results, src, runtimeIdentity(), coverage, preconditionState);
     }
+  }
+
+  // R2 — a measured non-zero that nothing in this list accounts for.
+  const tolerated = new Map(TOLERATED_NONZERO.map((t) => [t.script, t.reason]));
+  const redInstruments = results.filter((r) => r.ran && r.exitCode !== 0 && r.exitCode !== null);
+  const excused = redInstruments.filter((r) => tolerated.has(r.instrument.script));
+  const unexcused = redInstruments.filter((r) => !tolerated.has(r.instrument.script));
+  if (excused.length > 0) {
+    console.log(`${excused.length} instrument(s) returned a non-zero code this runner TOLERATES, each named in its source with a reason:`);
+    for (const r of excused) console.log(`  ${r.instrument.script} exit ${String(r.exitCode)} — ${tolerated.get(r.instrument.script) ?? ''}`);
+    console.log('');
+  }
+  if (unexcused.length > 0) {
+    console.log(`EXIT 5: ${unexcused.length} instrument(s) measured and returned a non-zero exit code that nothing here accounts for:`);
+    for (const r of unexcused) console.log(`  ${r.instrument.script} exit ${String(r.exitCode)} — ${outcomeClass(r)}`);
+    console.log("  This runner's own code is now a verdict about its instruments, not only about whether they ran");
+    console.log('  (coordinator round-8 R2). An index instrument red BEFORE its regeneration is the expected');
+    console.log('  case: regenerate the documents, then make the confirmation run whose rc can be quoted.');
+    return 5;
   }
 
   if (!engine.satisfied) {

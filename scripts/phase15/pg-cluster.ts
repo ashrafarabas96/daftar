@@ -297,6 +297,30 @@ export function clusterIdentity(port: number, db: string): string {
 const stopFailures: string[] = [];
 export const clusterStopFailures = (): readonly string[] => stopFailures;
 
+/**
+ * AND SOMETHING HAS TO READ THEM — the coordinator's round-8 R4.
+ *
+ * The list above was written and never read: `clusterStopFailures()` had no
+ * call site anywhere in the pack, so a teardown that left a port held was
+ * recorded in memory and lost at exit. That is the §8j defect one level down —
+ * the next instrument then fails for a held port and says something else
+ * entirely ("No test files found").
+ *
+ * Every instrument that touches a cluster imports this module, so the reading
+ * belongs here rather than in each of them: at process exit the failures are
+ * printed, and a process that was otherwise going to succeed exits 7 instead.
+ * An instrument's own verdict is never overwritten — a non-zero code already
+ * set stands, because a teardown note must not mask a measurement.
+ */
+process.on('exit', () => {
+  if (stopFailures.length === 0) return;
+  console.log('');
+  console.log(`TEARDOWN NOT CLEAN — ${stopFailures.length} cluster(s) did not stop cleanly in this process:`);
+  for (const f of stopFailures) console.log(`  ${f}`);
+  console.log('  A held port makes the NEXT instrument fail in words that describe something else.');
+  if (process.exitCode === undefined || process.exitCode === 0) process.exitCode = 7;
+});
+
 export function stopCluster(spec: ClusterSpec): void {
   const data = join(spec.dir, 'data');
   if (!existsSync(join(data, 'PG_VERSION'))) return;

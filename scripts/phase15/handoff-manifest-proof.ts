@@ -158,6 +158,21 @@ const PLANTS: readonly Plant[] = [
           : 'a correction QUOTING the claim it retracts was failed as if it were repeating it. Punish that and the next author stops recording the correction at all',
   },
   {
+    id: 'M8',
+    what: 'round-8 N4: a round on disk named ONLY in a sentence about what nobody has read yet — mentioned, not recorded',
+    plant: (dir) => {
+      const f = join(dir, MANIFEST);
+      writeFileSync(join(dir, MANIFEST), `${readFileSync(f, 'utf8')}\n\nPending, not yet read by this author: P15-CHALLENGE-0bada55.md.\n`);
+      writeFileSync(join(dir, 'P15-CHALLENGE-0bada55.md'), '# planted round\nThis file exists only inside a throwaway copy.\n');
+    },
+    expect: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.contradictions > 0
+          ? null
+          : 'a round on disk, named only in a sentence saying it has NOT been read, counted as recorded — which made the gate print one more round than §8 lists',
+  },
+  {
     id: 'M5',
     what: 'an unrecorded round, THEN the sanctioned --rewrite — the index must not become the record',
     plant: (dir) => {
