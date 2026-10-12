@@ -200,9 +200,18 @@ P15EOF`,
   must(asServerUser(`touch ${join(dataDir, 'recovery.signal')}`), 'touch recovery.signal');
 }
 
-/** Start a cluster that is already laid down on disk (a recovery target). */
+/**
+ * Start a cluster that is already laid down on disk (a recovery target).
+ *
+ * The caller gets the raw result rather than a `must()`, because a recovery
+ * that refuses to start is an OUTCOME this drill measures, not an error it
+ * should die on. `label` names which cluster in the returned stderr, so a
+ * caller handling several does not have to guess.
+ */
 export function startExisting(dir: string, label: string): SpawnSyncReturns<string> {
-  return asServerUser(`${PG16_BIN}/pg_ctl -D ${join(dir, 'data')} -l ${join(dir, 'server.log')} -w -t 120 start`);
+  const r = asServerUser(`${PG16_BIN}/pg_ctl -D ${join(dir, 'data')} -l ${join(dir, 'server.log')} -w -t 120 start`);
+  if (r.status !== 0) return { ...r, stderr: `[${label}] ${r.stderr ?? ''}` };
+  return r;
 }
 
 /** The server log, for reading why a recovery refused. */
