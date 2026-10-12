@@ -823,7 +823,7 @@ candidate resolutions:
 | | |
 |---|---|
 | (i) `daftar_app` holds **no** `INSERT` on `api_keys` | key creation is a distinct minting principal's, the only one holding the plaintext. This follows from `C2d` below and is this request's reading |
-| (ii) `daftar_app` holds a column-scoped `INSERT` and a second write supplies the digest | two statements where one fact is created, so the row exists briefly without its digest — which needs its own invariant |
+| (ii) `daftar_app` holds a column-scoped `INSERT` and a second write supplies the digest | two statements where one fact is created, so the row exists briefly without its digest — which needs its own invariant. **And the obvious way to express that invariant does not exist (EXECUTED, CHALLENGE R3 P3-04).** `secret_sha256` is `NOT NULL`, and in PostgreSQL 16 **neither `NOT NULL` nor `CHECK` can be `DEFERRABLE`**: both `b TEXT CHECK (b IS NOT NULL) DEFERRABLE` and `b TEXT NOT NULL DEFERRABLE` are refused with `SQLSTATE 42601, misplaced DEFERRABLE clause`. The **only** deferral route is a `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED`, which the same run confirmed is accepted. So (ii) is not simply costlier than (i) — as stated it is **unimplementable**, and it survives only if it is restated with a deferred constraint trigger, which is a new trigger this request would then owe |
 
 **This is routed with `TL-P14-SEC-01` rather than decided here**, because
 *"which principal may write a key digest"* is the same question as *"which

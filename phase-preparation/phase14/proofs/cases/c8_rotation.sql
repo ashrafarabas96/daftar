@@ -1,3 +1,17 @@
+-- PREREQUISITE: cases/c8_setup_fk.sql  (creates p14s.api_keys) — the COMPOSITE FK this case tests is created there, not here
+-- Declared and ASSERTED because round-3 CHALLENGE P2-02 found the C7 family is
+-- a continuation of C3 and nothing in the pack said so: run in isolation it
+-- failed with a bare "relation does not exist", and its own proof-of-proof
+-- could not detect a missing base table because it only inspected the
+-- constraint it adds. An ordering precondition that only ORDER's line numbers
+-- encode is an undeclared dependency.
+DO $$
+BEGIN
+  IF to_regclass('p14s.api_keys') IS NULL THEN
+    RAISE EXCEPTION 'PREREQUISITE NOT MET: p14s.api_keys does not exist — run cases/c8_setup_fk.sql first';
+  END IF;
+END $$;
+
 -- LAW: rotation and revocation across the four instants, evaluated AT a fixed
 -- instant and never at a moving now(). Plus the composite FK on the rotation link.
 DO $$

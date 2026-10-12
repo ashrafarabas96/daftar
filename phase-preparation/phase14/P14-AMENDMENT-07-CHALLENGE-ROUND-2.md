@@ -201,3 +201,21 @@ two, it is measurable. **The two rulings must be answered together.**
 - **The challenger's signature. This thread does not sign its own pack**, and
   round 2 is the second consecutive round in which an independent reviewer found
   a defect class my own review did not.
+
+---
+
+## 8. Round 3's correction to round 2, recorded here because it touches §3 above
+
+The challenger's round-3 report **retracts** one claim of its own round-2 P1-01:
+that *"there is no numbered law for the `revoke_scheduled` read rule at all —
+only unnumbered prose at `P14-S0:563`"*. `:563` is a line **inside `P14-AL-29`'s
+body** (`:558-568`), which carries both the rule and the *"to decide usability"*
+qualifier, exactly as §3 above states. The challenger recorded the retraction
+rather than dropping it quietly.
+
+**The two load-bearing halves of that finding stand and are not reopened:** the
+`P14-AL-11` misattribution was real, and the reformulation that dropped the
+qualifier would have invalidated §11.1's own grant. Only the "no numbered law"
+claim falls. Noted because a future reader comparing round 2's report with this
+amendment would otherwise see a contradiction and have no way to tell which side
+was corrected.

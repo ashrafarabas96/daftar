@@ -1,43 +1,48 @@
-p14_owner    cases/c1_grant_narrow.sql
-p14_resolver cases/c1a_restrict_column_refused.sql
-p14_owner    cases/c1_grant_full.sql
-p14_resolver cases/c1b_lookup_succeeds.sql
-p14_owner    cases/c1c_red_proof.sql
-p14_resolver cases/c1b_lookup_succeeds.sql|REDPROOF|c1c_redproof_expect_3
-p14_owner    cases/c2_grant_table_insert.sql
-p14_merchant cases/c2a_forgery_succeeds.sql
-p14_owner    cases/c2_scope_insert.sql
-p14_merchant cases/c2b_forgery_refused.sql
-p14_merchant cases/c2d_matrix_unsatisfiable.sql
-p14_owner    cases/c2c_rewiden_insert.sql
-p14_merchant cases/c2b_forgery_refused.sql|REDPROOF|c2c_redproof_expect_3
-p14_owner    cases/c2_scope_insert.sql
-p14_owner    cases/c3_setup.sql
-p14_owner    cases/c3_fence.sql
-p14_worker   cases/c3a_permissive_inert.sql
-p14_owner    cases/c3_add_disjunct_using_only.sql
-p14_worker   cases/c3b_using_reads_check_refuses.sql
-p14_owner    cases/c3_restore.sql
-p14_owner    cases/c3c_readd_disjunct.sql
-p14_worker   cases/c3a_permissive_inert.sql|REDPROOF|c3c_redproof_expect_3
-p14_owner    cases/c3_restore.sql
-p14_owner    cases/c4_predicate.sql
-p14_owner    cases/c5_boundary.sql
-p14_owner    cases/c6_setup.sql
-p14_owner    cases/c6a_unrelated_update_fails.sql
-p14_owner    cases/c6_fix.sql
-p14_owner    cases/c6b_intent_scoped.sql
-p14_owner    cases/c7_setup.sql
-p14_merchant cases/c7a_fk_bypasses_privilege.sql
-p14_owner    cases/c7_fix.sql
-p14_merchant cases/c7c_assertion_inoperable.sql
-p14_owner    cases/c7d_setup_grant.sql
-p14_merchant cases/c7d_grant_cost.sql
-p14_merchant cases/c7b_refused_after_grant.sql
-p14_owner    cases/c8_setup_fk.sql
-p14_owner    cases/c8_rotation.sql
-p14_owner    cases/c9_setup_eight.sql
-p14_resolver cases/c9a_ten_column_query_fails.sql
-p14_resolver cases/c9b_eight_column_resolver_works.sql
-p14_owner    cases/c9c_redproof.sql
-p14_resolver cases/c9b_eight_column_resolver_works.sql|REDPROOF|c9c_redproof_expect_3
+# Phase 14 proof replay order.  role  script  [redproof-alias]
+# A third field marks a RED PROOF: the named script is an earlier GREEN arm
+# re-run after its mutation, recorded under that alias, and exit 3 is REQUIRED.
+# Prerequisites between families are declared in each script's own header and
+# asserted by the script itself; this file encodes the order, not the contract.
+p14_owner     cases/c1_grant_narrow.sql
+p14_resolver  cases/c1a_restrict_column_refused.sql
+p14_owner     cases/c1_grant_full.sql
+p14_resolver  cases/c1b_lookup_succeeds.sql
+p14_owner     cases/c1c_red_proof.sql
+p14_resolver  cases/c1b_lookup_succeeds.sql                 c1c_redproof_expect_3
+p14_owner     cases/c2_grant_table_insert.sql
+p14_merchant  cases/c2a_forgery_succeeds.sql
+p14_owner     cases/c2_scope_insert.sql
+p14_merchant  cases/c2b_forgery_refused.sql
+p14_merchant  cases/c2d_matrix_unsatisfiable.sql
+p14_owner     cases/c2c_rewiden_insert.sql
+p14_merchant  cases/c2b_forgery_refused.sql                 c2c_redproof_expect_3
+p14_owner     cases/c2_scope_insert.sql
+p14_owner     cases/c3_setup.sql
+p14_owner     cases/c3_fence.sql
+p14_worker    cases/c3a_permissive_inert.sql
+p14_owner     cases/c3_add_disjunct_using_only.sql
+p14_worker    cases/c3b_using_reads_check_refuses.sql
+p14_owner     cases/c3_restore.sql
+p14_owner     cases/c3c_readd_disjunct.sql
+p14_worker    cases/c3a_permissive_inert.sql                c3c_redproof_expect_3
+p14_owner     cases/c3_restore.sql
+p14_owner     cases/c4_predicate.sql
+p14_owner     cases/c5_boundary.sql
+p14_owner     cases/c6_setup.sql
+p14_owner     cases/c6a_unrelated_update_fails.sql
+p14_owner     cases/c6_fix.sql
+p14_owner     cases/c6b_intent_scoped.sql
+p14_owner     cases/c7_setup.sql
+p14_merchant  cases/c7a_fk_bypasses_privilege.sql
+p14_owner     cases/c7_fix.sql
+p14_merchant  cases/c7c_assertion_inoperable.sql
+p14_owner     cases/c7d_setup_grant.sql
+p14_merchant  cases/c7d_grant_cost.sql
+p14_merchant  cases/c7b_refused_after_grant.sql
+p14_owner     cases/c8_setup_fk.sql
+p14_owner     cases/c8_rotation.sql
+p14_owner     cases/c9_setup_eight.sql
+p14_resolver  cases/c9a_ten_column_query_fails.sql
+p14_resolver  cases/c9b_eight_column_resolver_works.sql
+p14_owner     cases/c9c_redproof.sql
+p14_resolver  cases/c9b_eight_column_resolver_works.sql     c9c_redproof_expect_3
