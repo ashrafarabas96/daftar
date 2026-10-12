@@ -324,8 +324,19 @@ fi
 
 # A check that cannot fail is worth nothing, so the check is itself measured —
 # the lesson round 11 wrote into `mutate_refuses` and then did not apply to its
-# own last ten lines. ELEVEN ways of breaking it, each required to exit non-zero
-# AND to name its own cause. Every one runs against a COPY of the two
+# own last ten lines. TWELVE ways of breaking it, each required to exit non-zero
+# AND to name its own cause.
+#
+# ROUND 14 ALSO RE-AIMED TWO OF THEM, and the reason is this phase's own lesson
+# (a guard in front of a guard is evidence about the OUTER one). N-1's numbering
+# law runs BEFORE the row/file equality, so it masked (b) and (f): a deleted
+# file is now diagnosed as a HOLE rather than as an orphaned row, and an extra
+# file planted inside the range necessarily collides with a number, because the
+# range is contiguous. Rather than relabel them and lose the witnesses, (b) and
+# (f) are re-aimed at paths only they reach, and (l) is added for the orphaned
+# row. What is no longer reachable is stated plainly: UNLISTED cannot be reached
+# by ADDING a file inside the range any more, only by deleting a row — which is
+# mutant (e), the one place it matters. Every one runs against a COPY of the two
 # directories; nothing under migrations/ is written, here or anywhere.
 #
 # ROUND 13, S-1: four of these eight are new, and (e) is the one that matters —
@@ -371,10 +382,14 @@ say "=== the integrity check, measured against itself ==="
 integrity_must_refuse a \
   "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql" \
   "MODIFIED      0006_rls.sql"
-# (b) a frozen file deleted, its manifest row left behind
+# (b) a frozen file deleted, its manifest row left behind. RE-AIMED in round 14:
+#     this used to be the ORPHANED ROW witness, and the numbering law now
+#     diagnoses it earlier and more precisely as a hole. Kept as its own plant
+#     because it witnesses something (i) does not: deletion is caught whether or
+#     not the row goes with it.
 integrity_must_refuse b \
   "rm infrastructure/database/migrations/0013_security_boundary.sql" \
-  "ORPHANED ROW  0013_security_boundary.sql — NO SUCH FILE"
+  "MISSING NUMBER 0013"
 # (c) the manifest itself gone — round 11's shape of failure, where the tool the
 #     check depends on cannot answer. It must now refuse, not reassure.
 integrity_must_refuse c \
@@ -391,11 +406,15 @@ integrity_must_refuse d \
 integrity_must_refuse e \
   "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql && python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[r for r in m['migrations'] if r['name']!='0006_rls.sql'];json.dump(m,open(p,'w'))\"" \
   "UNLISTED      0006_rls.sql"
-# (f) an extra file planted INSIDE the attested range with no row of its own —
-#     the same bypass arriving by addition rather than by deletion.
+# (f) an extra file planted INSIDE the attested range with no row of its own.
+#     RE-AIMED in round 14: `0006a_sneak.sql` now trips the numbering law as a
+#     REPEATED NUMBER (which (k) already witnesses), because every number in the
+#     range is taken. So this plant is aimed at the one way an extra file can
+#     arrive inside the range without colliding — carrying no number at all.
+#     `000a_sneak.sql` sorts below `0079_…` and its prefix is not four digits.
 integrity_must_refuse f \
-  "cp infrastructure/database/migrations/0006_rls.sql infrastructure/database/migrations/0006a_sneak.sql" \
-  "UNLISTED      0006a_sneak.sql"
+  "cp infrastructure/database/migrations/0006_rls.sql infrastructure/database/migrations/000a_sneak.sql" \
+  "UNNUMBERED    000a_sneak.sql"
 # (g) frozenThrough moved BACKWARDS to a file that does exist, which would
 #     shrink the attested set without touching a single digest.
 integrity_must_refuse g \
@@ -434,6 +453,13 @@ integrity_must_refuse j \
 integrity_must_refuse k \
   "cp infrastructure/database/migrations/0049_accounting_periods.sql infrastructure/database/migrations/0050_twin.sql" \
   "REPEATED NUMBER 0050"
+# (l) a manifest row for a file that does not exist, inside the range — the
+#     ORPHANED ROW witness that (b) used to carry before the numbering law
+#     diagnosed (b)'s plant earlier. A ghost row leaves the directory untouched,
+#     so it reaches the equality rather than the numbering law.
+integrity_must_refuse l \
+  "python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations'].append({'name':'0013a_ghost.sql','sha256':'0'*64});json.dump(m,open(p,'w'))\"" \
+  "ORPHANED ROW  0013a_ghost.sql — NO SUCH FILE"
 
 # git is still consulted WHERE THERE IS A WORK TREE, as a second opinion on the
 # files that are beyond the manifest's coverage. Its exit code is read, and where
