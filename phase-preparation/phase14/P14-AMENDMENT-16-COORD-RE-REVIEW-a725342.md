@@ -44,7 +44,7 @@ not the same fact:
 | what the walk meets | what it does | why |
 |---|---|---|
 | the revision's **commit object** is missing (graft boundary, unfetched, corrupt) | `NOT CHECKED`, and the witness is **discarded** | the records at and below it are genuinely gone; the oldest digest visible may already be a forgery |
-| the commit is readable and the **manifest is absent** in it (a deletion, or a rename) | the revision is **skipped and recorded** | the revisions BEFORE it are readable, and so is the digest the report was received with. A deletion erases nothing |
+| the commit is readable and the **manifest is absent** in it (a deletion — **and NOT a rename: see the round-14 annotation below**) | the revision is **skipped and recorded** | the revisions BEFORE it are readable, and so is the digest the report was received with. A deletion erases nothing |
 | the commit is readable, the path is there, the **blob** cannot be read | `NOT CHECKED` | unreadable is unreadable |
 
 > **ANNOTATED AT ROUND 12 (`R12-P1-01`, BLOCKING).** The third row of that table was **the
@@ -54,6 +54,15 @@ not the same fact:
 > measurement under it; the discrimination it describes is enforced from
 > `P14-AMENDMENT-17-CHALLENGE-ROUND-12.md` onward, by asking `git ls-tree` instead. Read this
 > table as the intent of that commit and not as its behaviour.
+
+> **ANNOTATED AT ROUND 14 (`COORD-DIFF-REVIEW 03b3a0b`, `B2`, which BLOCKED).** The row above
+> said "a deletion, **or a rename**". A rename revision was never *visited*: the walk asked
+> `git rev-list HEAD -- <the manifest's current path>`, so after one ordinary commit that
+> `git mv`s the pack the forging commit was the only revision at the new path — its parent holds
+> no file there, which the completeness test read as *the commit that added it* — and the forged
+> digest became the witness while 19 earlier received records were never read. rc 0, in both
+> lanes and with no counterpart. The walk is anchored to the manifest's **name** anywhere in the
+> tree from `P14-AMENDMENT-19-COORD-DIFF-REVIEW-03b3a0b.md` onward, so a move keeps its history.
 
 The history line now also says how many revisions the manifest is absent in and names them, so a
 drop and re-add is visible to the reader rather than inferred: *"checked over every revision …

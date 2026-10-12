@@ -117,6 +117,15 @@ arm() { # name | setup-sql-as-p14super | db to preflight | teardown | required m
         *"already exists"*)
           printf '      CAUSE: an earlier interrupted run of THIS script left its object behind.\n'
           printf '      Clear it and re-run: psql -U p14super -d postgres -c "DROP DATABASE IF EXISTS p14wrongcoll_%s" -c "DROP DATABASE IF EXISTS p14wrongenc_%s"\n' "$RT" "$RT" ;;
+        *FATAL*|*"no pg_hba.conf entry"*|*"password authentication failed"*|*"role \""*)
+          # COORD-DIFF-REVIEW 03b3a0b, R-3: a connection-time FATAL from a
+          # cluster that IS listening (pg_hba reject, authentication, a missing
+          # role) was swallowed by the pattern below and reported as "no cluster
+          # is listening" -- a refusal naming a cause that is measurably not the
+          # cause, the class this pack has met eight times. A FATAL means
+          # something answered, so it can never be "nothing is listening".
+          printf '      CAUSE: a cluster ANSWERED and refused this connection (the FATAL above is\n'
+          printf '      its own words, not a missing socket). Fix the connection, not the cluster.\n' ;;
         *"could not connect"*|*"No such file or directory"*|*"Connection refused"*|*"connection to server"*)
           # FOUND BY EXECUTION while fencing R12-P2-02: this case covered the
           # text psql prints when the socket FILE is gone, and not the text it

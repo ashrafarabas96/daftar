@@ -90,15 +90,21 @@ reading won.
 it now **reads** it. When the history is `NOT CHECKED`, the gate refuses if that directory holds
 reviewer reports at all, and names how many of them have no row here.
 
-**Measured, by me**, on the challenger's world — a depth-1 clone with all **18** reviewer rows and
-their 18 files removed, counterpart intact:
+**Measured, by me**, on the challenger's world — a depth-1 clone with **every** reviewer row and
+its file removed, counterpart intact. The number the strip removes is not written here: it is
+whatever `tools/gate-sweep.sh`'s `shallow-every-review-deleted` proof strips at the head being
+measured, and it rises with each review this pack receives. (`R13-P3-01`: the figure first typed
+here was **18**, the count at the previous head, and this commit's own row for the round-12 report
+made it **19** before the sentence was read. A count committed into a document is one commit
+stale by construction.)
 
 | code under test | rc | what it printed |
 |---|---|---|
 | **`8f6c849`** | **0** | *every artifact row matches the file on disk*, **24** rows / 24 files |
-| **this head** | **1** | `HISTORY NOT VERIFIED: … and 18 reviewer report(s) under <counterpart> have NO ROW here (P14-CHALLENGE-08d23da…) — a manifest cannot erase the other directory` |
+| **this head** | **1** | `HISTORY NOT VERIFIED: … and N reviewer report(s) under <counterpart> have NO ROW here (P14-CHALLENGE-08d23da…) — a manifest cannot erase the other directory`, where N is every reviewer report the pack holds at the head measured |
 
-The challenger's figures (0 / 24 rows on the old tool, 18 removals) reproduced exactly. Fenced by
+The challenger's figures on the old tool (rc **0**, *every artifact row matches*, **24** rows)
+reproduced exactly. Fenced by
 `shallow-every-review-deleted` and `shallow-every-review-deleted-names-them`.
 
 ## 3. `R12-P2-02` — the `no-cluster` proof never asserted its own premise

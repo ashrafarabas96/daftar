@@ -100,8 +100,13 @@ def main():
     # the same species one step over. The witness is now the OLDEST recorded
     # digest, which is the one the report was RECEIVED with and which no later
     # commit can erase, and any LATER revision that records a different digest
-    # for the same report is itself a refusal. What a commit can still do is
-    # rewrite history, and that is named as a limit rather than guarded here.
+    # for the same report is itself a refusal. COORD-DIFF-REVIEW AT 03b3a0b, B2:
+    # this comment used to end "what a commit can still do is rewrite history,
+    # and that is named as a limit rather than guarded here" -- which was false,
+    # because one ordinary commit could also MOVE the pack and start a fresh
+    # first revision at the new path. That route is closed below by anchoring
+    # the walk to the manifest's NAME. Rewriting the manifest's own history
+    # remains named as a limit rather than guarded.
     # R-08: a shallow clone and an unreadable revision are now NOT CHECKED, and
     # NOT CHECKED discards the history witness entirely instead of trusting the
     # fragment that happens to be present -- an incomplete history can begin at
@@ -115,10 +120,44 @@ def main():
     history = 'checked over every revision of the manifest, OLDEST first'
     _md = os.path.dirname(os.path.abspath(a.manifest))
     _mb = os.path.basename(a.manifest)
-    _revs = subprocess.run(['git','-C',_md,'rev-list','HEAD','--',_mb],
-                           capture_output=True, text=True)
     def _g(*argv):
         return subprocess.run(['git','-C',_md] + list(argv), capture_output=True, text=True)
+    # COORDINATOR DIFF REVIEW AT 03b3a0b, B2 (P2-01-ter), which BLOCKED: this
+    # walk asked `git rev-list HEAD -- P14-HANDOFF-MANIFEST.md`, keyed to the
+    # manifest's CURRENT path and blind to renames. ONE ordinary commit that
+    # `git mv`s the pack directory while forging a reviewer row made the forging
+    # commit the only -- and therefore the "oldest" -- revision at the new path:
+    # its parent holds no file THERE, which the completeness test below read as
+    # "the commit that added it". The forged digest became the witness, all
+    # earlier received records at the old path were never read, and the tool
+    # answered 0 while printing "checked over every revision of the manifest" --
+    # in both lanes and with no counterpart at all. This is the fourth round of
+    # one species: the witness anchored to something one commit can change. The
+    # anchor is now the manifest's NAME anywhere in the tree, so a move keeps
+    # the same history. `--follow` is NOT used: it finds a move only when git
+    # scores the file as a rename, and a promotion commit that also rewrites the
+    # manifest can fall under that score.
+    _PS = ':(top,glob)**/%s' % _mb
+    def _paths_at(rev):
+        '''Every path in `rev` whose basename is the manifest's, with its mode.
+        None means the tree itself could not be read -- never "no such path".'''
+        # `ls-tree` does not accept `glob` pathspec magic ("pathspec magic not
+        # supported by this command"), measured; so the whole tree is listed and
+        # filtered here by basename. `rev-list` does accept it, which is what
+        # selects the revisions.
+        r = _g('ls-tree', '-r', '--full-tree', '--format=%(objectmode) %(path)', rev)
+        if r.returncode != 0:
+            return None
+        out = []
+        for ln in r.stdout.split('\n'):
+            ln = ln.strip()
+            if not ln:
+                continue
+            mode, _, path = ln.partition(' ')
+            if os.path.basename(path) == _mb:
+                out.append((mode, path))
+        return out
+    _revs = _g('rev-list', 'HEAD', '--', _PS)
     # R-08, measured rather than asserted: "every revision" is a claim about
     # REACHABILITY, and this container's own clone is shallow. The flag is not
     # the question -- a truncated history is harmless for a file whose FIRST
@@ -131,8 +170,18 @@ def main():
     _incomplete = None
     if _revs.returncode == 0 and _revs.stdout.strip():
         _oldest = _revs.stdout.split()[-1]
+        # COORD-DIFF-REVIEW 03b3a0b, R-4: these two return codes were unread.
+        # A failed `^@` printed nothing and read as "a root commit", and a
+        # failed `--is-shallow-repository` read as "not shallow" -- both the
+        # permissive value. A question git refused to answer is unknown.
         _par = _g('rev-parse', '%s^@' % _oldest)
-        _shallow = (_g('rev-parse', '--is-shallow-repository').stdout.strip() == 'true')
+        _sh = _g('rev-parse', '--is-shallow-repository')
+        if _par.returncode != 0 or _sh.returncode != 0:
+            _incomplete = ('git could not say %s for revision %s, so whether an earlier record'
+                           ' of this manifest exists cannot be decided here'
+                           % ('what its parents are' if _par.returncode != 0
+                              else 'whether this clone is shallow', _oldest[:12]))
+        _shallow = (_sh.stdout.strip() == 'true')
         # A grafted commit reports NO PARENTS, exactly like a true root commit,
         # so "the parents are readable" cannot see a `--depth 1` clone at all:
         # measured, that clone answered "checked over every revision" over a
@@ -150,10 +199,17 @@ def main():
             _gd = _g('rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip()
             if not _gd:
                 _gd = _g('rev-parse', '--absolute-git-dir').stdout.strip()
-            try:
-                _bounds = set(open(os.path.join(_gd, 'shallow')).read().split())
-            except OSError:
+            # R-4 again: an EMPTY answer here used to make os.path.join produce
+            # the bare name "shallow", read relative to this process's cwd --
+            # a file in some unrelated directory deciding a boundary. If git
+            # will not name its own directory, the boundary is unreadable.
+            if not _gd:
                 _bounds = {'<unreadable>'}
+            else:
+                try:
+                    _bounds = set(open(os.path.join(_gd, 'shallow')).read().split())
+                except OSError:
+                    _bounds = {'<unreadable>'}
         if _oldest in _bounds or '<unreadable>' in _bounds:
             _incomplete = ('revision %s is the shallow boundary of this clone, so the history'
                            ' below it was never fetched and the oldest digest here need not be'
@@ -163,12 +219,26 @@ def main():
                 _incomplete = ('revision %s is a boundary commit%s, so an earlier record of this'
                                ' manifest may exist and cannot be read'
                                % (_oldest[:12], ' of a shallow clone' if _shallow else ''))
-            elif _g('cat-file', '-e', '%s:./%s' % (_p, _mb)).returncode == 0:
+            elif _paths_at(_p):
                 _incomplete = ('the oldest revision of this manifest reachable here (%s) is a'
                                ' modification, not the commit that added it, so the digest a'
                                ' report was received with may be out of reach' % _oldest[:12])
     if _revs.returncode != 0 or not _revs.stdout.strip():
-        history = 'NOT CHECKED (the manifest is not in a git repository here)'
+        # COORD-DIFF-REVIEW 03b3a0b, R-2: one sentence covered two different
+        # facts -- there is no repository here, and there IS one but it could
+        # not answer (a treeless clone, an unfetchable tree, a refused command).
+        # The refusal is written from what was actually read.
+        _inrepo = _g('rev-parse', '--is-inside-work-tree')
+        if _inrepo.returncode != 0 or _inrepo.stdout.strip() != 'true':
+            history = 'NOT CHECKED (the manifest is not in a git repository here)'
+        elif _revs.returncode != 0:
+            history = ('NOT CHECKED (this is a git repository, but it could not list the'
+                       ' revisions of this manifest: %s)'
+                       % ((_revs.stderr.strip().split('\n') or [''])[0][:120] or 'no reason given'))
+        else:
+            history = ('NOT CHECKED (this is a git repository and no revision of a file named'
+                       ' %s is reachable from HEAD, so nothing here records what was received)'
+                       % _mb)
     elif _incomplete:
         history = 'NOT CHECKED (%s)' % _incomplete
     else:
@@ -191,45 +261,60 @@ def main():
                 history = ('NOT CHECKED (the commit object %s is not in this repository, so the'
                            ' records at and below it cannot be read)' % rev[:12])
                 break
-            r = subprocess.run(['git','-C',_md,'show','%s:./%s' % (rev,_mb)],
-                               capture_output=True, text=True)
-            if r.returncode != 0:
-                # CHALLENGE R12-P1-01, which BLOCKED: the remedy above re-opened
-                # R-08 one layer down. `git cat-file -e <rev>:<path>` fails for
-                # TWO different reasons -- the path is not in that tree, and the
-                # path IS there but the BLOB is unavailable (a blobless clone
-                # whose promisor is unreachable, a pruned or corrupt object) --
-                # and reading the second as "a deletion" skipped the revision,
-                # kept walking, and printed "CHECKED over every revision … the
-                # manifest is ABSENT in 1 of them". Measured: both sentences
-                # false, the witness erased, rc 0 on a forged row, no limit
-                # announced. `git ls-tree` discriminates because it reads the
-                # TREE and never needs the blob: empty output is a real absence,
-                # and an entry means the record exists and cannot be read.
-                # (`git rev-parse <rev>:<path>` does NOT discriminate -- it
-                # exits 0 and echoes the string for a deleted path.)
-                _lt = _g('ls-tree', '--name-only', rev, '--', _mb)
-                if _lt.returncode == 0 and not _lt.stdout.strip():
-                    gaps.append(rev)      # the manifest does not exist in this revision
-                    continue
-                if _lt.returncode != 0:
-                    signed_history, moved = {}, {}
-                    history = ('NOT CHECKED (the tree of revision %s could not be read, so'
-                               ' whether this manifest existed in it is unknown)' % rev[:12])
-                    break
+            # CHALLENGE R12-P1-01, which BLOCKED: `git cat-file -e <rev>:<path>`
+            # fails BOTH when the path is not in that tree and when the path IS
+            # there with its BLOB unavailable (a blobless clone whose promisor
+            # is unreachable, a pruned or corrupt object), and reading the second
+            # as "a deletion" skipped the revision and still printed "checked ...
+            # ABSENT in 1 of them". The TREE answers the first question without
+            # needing any blob. (`git rev-parse <rev>:<path>` does NOT
+            # discriminate -- it exits 0 and echoes the string for a deleted
+            # path.)
+            _pl = _paths_at(rev)
+            if _pl is None:
                 signed_history, moved = {}, {}
-                history = ('NOT CHECKED (revision %s lists this manifest but its content could'
-                           ' not be read — the object is missing, pruned, or in an unreachable'
-                           ' promisor — so the record it carries cannot be compared)' % rev[:12])
+                history = ('NOT CHECKED (the tree of revision %s could not be read, so'
+                           ' whether this manifest existed in it is unknown)' % rev[:12])
                 break
-            for ln in r.stdout.split('\n'):
-                m = ROW.match(ln)
-                if not m or m.group(3) == PLACEHOLDER: continue
-                nm, dg = m.group(1), m.group(3)
-                if nm not in signed_history:
-                    signed_history[nm] = dg
-                elif dg != signed_history[nm] and nm not in moved:
-                    moved[nm] = (signed_history[nm], dg, rev)
+            if not _pl:
+                gaps.append(rev)      # the manifest does not exist in this revision
+                continue
+            # CHALLENGE R13-P2-01: the walk assumed a REGULAR FILE. Committed as
+            # a SYMLINK (mode 120000) every revision reads as the link TEXT, no
+            # row parses, the witness stays empty -- and the line still said
+            # "checked over every revision". The mode is read for every revision
+            # and a non-blob is NOT CHECKED.
+            _bad = [(m, pth) for m, pth in _pl if m not in ('100644', '100755')]
+            if _bad:
+                signed_history, moved = {}, {}
+                history = ('NOT CHECKED (revision %s records this manifest at %s with mode %s,'
+                           ' not a regular file, so what it holds is not the manifest\'s rows'
+                           ' and no digest in it can be read)'
+                           % (rev[:12], _bad[0][1], _bad[0][0]))
+                break
+            _texts, _unreadable = [], None
+            for _m, _pth in _pl:
+                r = _g('show', '%s:%s' % (rev, _pth))
+                if r.returncode != 0:
+                    _unreadable = _pth
+                    break
+                _texts.append(r.stdout)
+            if _unreadable is not None:
+                signed_history, moved = {}, {}
+                history = ('NOT CHECKED (revision %s lists this manifest at %s but its content'
+                           ' could not be read — the object is missing, pruned, or in an'
+                           ' unreachable promisor — so the record it carries cannot be'
+                           ' compared)' % (rev[:12], _unreadable))
+                break
+            for _txt in _texts:
+                for ln in _txt.split('\n'):
+                    m = ROW.match(ln)
+                    if not m or m.group(3) == PLACEHOLDER: continue
+                    nm, dg = m.group(1), m.group(3)
+                    if nm not in signed_history:
+                        signed_history[nm] = dg
+                    elif dg != signed_history[nm] and nm not in moved:
+                        moved[nm] = (signed_history[nm], dg, rev)
         if gaps and history.startswith('checked'):
             history += (', and the manifest is ABSENT in %d of them (%s) — removed and re-added,'
                         ' which does not erase the records before it'
@@ -354,14 +439,54 @@ def main():
     # manifest cannot erase, so it is asked: reports there with no rows here,
     # under an unverifiable history, is the shape of the attack.
     blocked = False
+    # CHALLENGE R13-P2-01's wider half: a walk that read EVERY revision and
+    # parsed ZERO rows printed the same words as a walk that verified nineteen.
+    # "checked" is a claim about what was found, not only about what was read,
+    # so when reviewer rows exist here and no revision of this manifest recorded
+    # a digest for any of them, the history is NO RECORD IN ANY REVISION and it
+    # refuses -- the honest sentence for an empty-but-complete history too.
+    # (Measured while fencing this: `signed_history` carries EVERY row a revision
+    # recorded, amendments included, so "it is empty" is not the question. The
+    # question is whether any revision recorded a digest for a REVIEWER report,
+    # which is what this refusal is about.)
+    if (history.startswith('checked')
+            and not any(n.startswith(REVIEWER_PREFIXES) for n in signed_history)
+            and any(n.startswith(REVIEWER_PREFIXES) for n in listed)):
+        history = ('NO RECORD IN ANY REVISION (%d revision(s) of this manifest were read and not'
+                   ' one of them carries a digest for any reviewer report, so the history'
+                   ' confirms nothing about what was received)'
+                   % len(_revs.stdout.split()))
+        blocked = True
+        stale.append('%s. This manifest lists reviewer report(s), and a history that was read'
+                     ' in full and holds no record is not a history that'
+                     ' agrees — the only witness left is the copy in the other directory, which'
+                     ' the same hand writes. This refusal cannot be cleared from here: it is'
+                     ' cleared by a revision that records the rows as received.' % history)
     _wdir = a.witness or witness_default()
+    # COORDINATOR DIFF REVIEW AT 03b3a0b, B3, which BLOCKED: `os.listdir` raising
+    # was mapped to `[]`, so "the counterpart could not be read" became "the
+    # counterpart holds no reports" and the tool printed success. Measured: a
+    # depth-1 clone with all reviewer rows and files removed answered 0 whenever
+    # the counterpart was ABSENT, a regular file, or an empty directory -- and
+    # absent is the CI shape (no shared folder, `actions/checkout` at depth 1).
+    # An exception must not resolve to the permissive value: under an
+    # unverifiable history a counterpart that cannot be read is NO witness, not
+    # an empty one.
+    _wfail = None
     try:
         _wreports = sorted(f for f in os.listdir(_wdir) if f.startswith(REVIEWER_PREFIXES))
-    except OSError:
-        _wreports = []
+    except OSError as e:
+        _wreports, _wfail = [], '%s (%s)' % (_wdir, e.__class__.__name__)
     _wmissing = [f for f in _wreports if f not in listed]
-    if (history.startswith('NOT CHECKED') and not a.allow_unverified_history
-            and (any(n.startswith(REVIEWER_PREFIXES) for n in listed) or _wreports)):
+    # B3 again, one shape further: an EMPTY counterpart directory still answered
+    # 0 when every reviewer row had also been deleted, because then nothing was
+    # left to name -- and "this manifest never had a review" is exactly what a
+    # deletion of every review looks like. The one thing that could tell them
+    # apart is the history, and the history is NOT CHECKED. So an unverifiable
+    # history certifies nothing at all: it refuses, and the sentence says which
+    # of the four states it is in. `--allow-unverified-history` remains the way
+    # to accept the limit deliberately, and it still prints it.
+    if history.startswith('NOT CHECKED') and not a.allow_unverified_history:
         blocked = True
         stale.append('HISTORY NOT VERIFIED: the reviewer-row history is %s, and %s. The only'
                      ' witness left for a reviewer row is then the copy in the other directory,'
@@ -372,7 +497,16 @@ def main():
                         ('%d reviewer report(s) under %s have NO ROW here (%s) — a manifest'
                          ' cannot erase the other directory'
                          % (len(_wmissing), _wdir, ', '.join(_wmissing[:3]))) if _wmissing
-                        else 'there are reviewer rows to protect'))
+                        else ('no counterpart could be read at %s, so there is no second'
+                              ' witness either — and a manifest that lists no reviewer row'
+                              ' under an unreadable history is indistinguishable from one'
+                              ' whose rows were just deleted' % _wfail) if _wfail
+                        else ('this manifest lists reviewer report(s) and the other directory'
+                              ' holds none, so nothing here can confirm what was received')
+                        if any(n.startswith(REVIEWER_PREFIXES) for n in listed)
+                        else ('neither this manifest nor %s holds a reviewer report, and an'
+                              ' unreadable history cannot tell "never had one" from "every one'
+                              ' was just deleted"' % _wdir)))
     # COORD DIFF REVIEW AT c812aa5, R-02: a whole reviewer report could be
     # deleted together with its row and this lane stayed green -- what caught it
     # was the other directory, which is a second witness and not a refusal. A

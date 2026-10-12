@@ -66,6 +66,18 @@ two-directory witness is the only one left, and no claim made after promotion sh
 a second witness. A gate that runs this check in CI needs `fetch-depth: 0` **and**
 `--require-history`.
 
+> **ANNOTATED AT ROUND 14 (`COORD-DIFF-REVIEW 03b3a0b`, `B1`, which BLOCKED).** Three things in
+> the paragraph above never existed in any tool: the red proof
+> `shallow-with-counterpart-passes`, the red proof `shallow-require-history-refuses`, and the flag
+> `--require-history` (passing it exits **2**, `unrecognized arguments`, so a CI job following
+> this instruction would break the gate it runs). They describe the **first attempt** at
+> `R11-P2-01`, which had the flag as an opt-**in**; Amendment 16 §2 reversed that default and the
+> flag is `--allow-unverified-history`. And the fourth claim is now false as well: in a truncated
+> clone with a counterpart in step the forgery does **not** answer 0 — it refuses at rc **1**
+> (`HISTORY NOT VERIFIED`), red-proofed as `shallow-counterpart-refused`. Read this paragraph as
+> the state at `c812aa5` and nothing later. All four strings carry rows in
+> `tools/RETRACTED-CLAIMS.tsv` so they cannot return.
+
 **The limit that remains, stated and not guarded:** rewriting the manifest's own history.
 
 > **ANNOTATION (`COORD-DIFF-REVIEW a725342 P2-01-bis`, which BLOCKED).** The sentence that stood
@@ -198,7 +210,7 @@ the same world, which is stronger than my own proof of it.
 
 | # | finding | what I did |
 |---|---|---|
-| `R11-P2-01` | in a `--depth 1` clone **with** a matching counterpart the forgery answers 0 again; announced and red-proofed, but the consequence was stated nowhere, and my own §7 evidence row dropped the qualifier §1 carried | **Closed.** The consequence is stated in §1, the row is corrected, the case is red-proofed as it is (`shallow-with-counterpart-passes`, rc 0 **with** `NOT CHECKED`), and `--require-history` refuses for a caller that needs the guarantee (`shallow-require-history-refuses`) |
+| `R11-P2-01` (**round-14 annotation: the proof name and the flag in this row never existed, and the world refuses at 1 since `8f6c849`**) | in a `--depth 1` clone **with** a matching counterpart the forgery answers 0 again; announced and red-proofed, but the consequence was stated nowhere, and my own §7 evidence row dropped the qualifier §1 carried | **Closed.** The consequence is stated in §1, the row is corrected, the case is red-proofed as it is (`shallow-with-counterpart-passes`, rc 0 **with** `NOT CHECKED`), and `--require-history` refuses for a caller that needs the guarantee (`shallow-require-history-refuses`) |
 | `R11-P2-02` | the `NO WITNESS` sentence said *no digest in any revision of this manifest* in a clone that cannot see seventeen revisions that do record one. The **sixth** instance of one class | **Closed.** The refusal is written from the variable it read: when `history` is `NOT CHECKED` it says *no digest for it is visible in the revisions this clone has*, and points at `fetch-depth: 0`. Red proof `shallow-no-witness-names-the-clone` |
 | `R11-P3-01` | the `moved` refusal printed *restore the row to the digest the report arrived with* — which the reviewer had already done; the refusal is permanent by design | **Closed as a sentence.** It now says the refusal **cannot be cleared from here**, that this is deliberate because the forging revision stays in the record, and what can be done instead: say so in the handoff and have the reviewer re-send the report |
 | `R11-P3-02` | `R10-ADD-01` is load-bearing, not theoretical | **Recorded** in §1 and in §6: whenever history is `NOT CHECKED` the two-directory witness is the only one, and it is not to be called a second witness in any post-promotion claim |
@@ -230,7 +242,7 @@ Host `vm`. Pack `/home/user/daftar/phase-preparation/phase14`, repository `/home
 | `manifest-digests.py --check`, pack and shared folder | `/home/user/daftar/phase-preparation/phase14`, `/mnt/project-files/phase14` | **0** / **0**, 39 rows each, both directories byte-identical |
 | the committed-forgery worlds (§1), `--check` and `--write` | scratch repositories under the session scratchpad | **1** / **1** in both witness shapes; a `--depth 1` clone **with no counterpart** answers `NO WITNESS`, and **with a matching counterpart answers 0** with `NOT CHECKED` printed (`CHALLENGE R11-P2-01`: this row read as a property of the clone, and it is a property of that constructed world) |
 | the `R-06` handler, both shapes in one script | `p14scratch` on the cluster | old: `LAW UNPROVED … P0001`; new: `ERROR: LAW VIOLATED`, exit **3** |
-| the three shallow-clone worlds (§6a) | scratch clones under the session scratchpad | counterpart in step → **0** with `NOT CHECKED`; `--require-history` → **1**; no counterpart → **1**, naming the clone |
+| the three shallow-clone worlds (§6a) — **see the round-14 annotation above: the flag named here never existed, and the first world refuses at 1 since `8f6c849`** | scratch clones under the session scratchpad | counterpart in step → **0** with `NOT CHECKED`; `--require-history` → **1**; no counterpart → **1**, naming the clone |
 
 **Order of the record.** The sweep above ran after the last content edit; the manifest digests
 and the shared-folder copies were then regenerated, and the sweep was run again with the same
