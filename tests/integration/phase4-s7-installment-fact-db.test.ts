@@ -111,7 +111,32 @@ DECLARE
   v_invoices UUID[];
   v_invoice  UUID;
   v_state    BOOLEAN;
-  v_rows     INTEGER;`;
+  v_rows     INTEGER;
+  v_seq      BIGINT;`;
+
+/**
+ * THE ONE STATEMENT THE COUNTERFACTUALS CARRY THAT THEIR OWN ROUND DID NOT,
+ * AND WHY (`TL-P4-COORD-R52` ordered item 2; DISCLOSED).
+ *
+ * This round's `installment_plan_fact_verify()` refuses
+ * `installment.plan_fact_unordered` when it has been fired for more plan row
+ * events than the sync has — which is how `SET CONSTRAINTS ALL IMMEDIATE` is
+ * detected. A planted sync that does not stamp the counter is indistinguishable
+ * from a sync that did not run, so WITHOUT this statement every counterfactual
+ * below is refused at COMMIT for a reason that has nothing to do with the
+ * defect it exists to reproduce — measured: all twelve of §F1-b, §F1-c, §F1-c′,
+ * §F5 and §F6's arms went red on `plan_fact_unordered` the first time this
+ * suite ran against the repair.
+ *
+ * So the counterfactuals vary ONE thing — the fact derivation — and keep this
+ * round's envelope. That is what a counterfactual is for; the alternative is a
+ * measurement of the envelope dressed as a measurement of the derivation. The
+ * bodies are otherwise still quoted verbatim rather than derived by regex, and
+ * the checks that they DIFFER from the shipped body and carry (or lack) their
+ * own round's markers are unchanged.
+ */
+const SYNC_STAMP = `  v_seq := coalesce(nullif(pg_catalog.current_setting('installment.plan_fact_sync_events', true), '')::BIGINT, 0) + 1;
+  PERFORM pg_catalog.set_config('installment.plan_fact_sync_events', v_seq::TEXT, true);`;
 const SYNC_TAIL = `  FOREACH v_invoice IN ARRAY v_invoices LOOP
     SELECT EXISTS (SELECT 1 FROM public.installment_plans p
                     WHERE p.business_id = v_business AND p.invoice_id = v_invoice
@@ -132,6 +157,7 @@ $fn$;`;
 
 const SYNC_R8 = `${SYNC_HEAD}
 BEGIN
+${SYNC_STAMP}
   IF TG_OP = 'INSERT' THEN
     v_business := NEW.business_id;
     v_invoices := ARRAY[NEW.invoice_id];
@@ -150,6 +176,7 @@ ${SYNC_TAIL.replace('__FLOOR__\n', '')}`;
 const SYNC_R9 = `${SYNC_HEAD}
   v_asserted UUID;
 BEGIN
+${SYNC_STAMP}
   IF TG_OP = 'INSERT' THEN
     v_business := NEW.business_id;
     v_invoices := ARRAY[NEW.invoice_id];
@@ -201,6 +228,7 @@ const SYNC_R9_RENAMED = `${SYNC_HEAD}
   v_floor      UUID;
   v_old_active BOOLEAN;
 BEGIN
+${SYNC_STAMP}
   IF TG_OP = 'INSERT' THEN
     v_business := NEW.business_id;
     v_invoices := ARRAY[NEW.invoice_id];
@@ -1566,6 +1594,464 @@ beforeAll(async () => {
     )
   ).rows[0]?.n;
 
+  // ══════════════════════════════════════════════════════════════════════
+  // §R13 THE FOUR DEFECTS BESIDE THE REPAIR (`TL-P4-COORD-R52` ordered
+  //      items 1, 2, 3 and 4). Every arm has its control adjacent.
+  // ══════════════════════════════════════════════════════════════════════
+  //
+  // THE END-STATE BLOCK, RE-RUNNABLE. Part 9's laws answer ONCE inside the
+  // migration, so the only way to ask them about a state the migration never
+  // saw is to run the block again over the live catalogue. It is sliced from
+  // the specification rather than re-typed, because a re-typed law is a
+  // different law.
+  const END_BLOCK = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+  const R7_PLANS: readonly string[] = [randomUUID(), randomUUID()];
+  const ratchet = async (): Promise<string | null> => {
+    try {
+      await mig.query(END_BLOCK);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  };
+  M['R13_block_sliced'] = END_BLOCK.includes('c_bodies') && END_BLOCK.includes('EXPLAIN (COSTS OFF)') && END_BLOCK.trimEnd().endsWith('$end$;');
+  M['R13_ratchet_control'] = await ratchet();
+
+  // ── §R1 `SET CONSTRAINTS ALL IMMEDIATE` (item 2, F-1).
+  //    UNPRIVILEGED SQL. Which roles may issue it is read first, because the
+  //    finding's weight is that nobody needs a privilege for it.
+  M['R1_who'] = {} as Record<string, string | null>;
+  for (const [role, pool] of [
+    ['daftar_app', app],
+    ['daftar_migrator', mig],
+  ] as const) {
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+      (M['R1_who'] as Record<string, string | null>)[role] = null;
+    } catch (e) {
+      (M['R1_who'] as Record<string, string | null>)[role] = err(e);
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      c.release();
+    }
+  }
+  M['R1_reset'] = await resetInvoice();
+  //    THE CONTROL: the identical write, with nothing extra.
+  const r1a = await commitPlan(APP_CTX());
+  M['R1_control'] = r1a.error;
+  M['R1_control_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['R1_reset_b'] = await resetInvoice();
+  //    THE ATTACK: the same write after ONE extra statement.
+  const immediateFirst = async (status = 'active'): Promise<string | null> => {
+    const planId = randomUUID();
+    const c = await mig.connect();
+    try {
+      await c.query('BEGIN');
+      for (const [k, v] of Object.entries(APP_CTX())) await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
+      await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+      await c.query(
+        `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+         VALUES ($1,$2,$3,$4,$5,$6,100000,'2026-01-02'::DATE,$7,gen_random_uuid())`,
+        [world.tenantId, world.businessId, planId, world.invoiceId, world.customerId, status, world.userId],
+      );
+      await c.query(
+        `INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+         VALUES ($1,$2,gen_random_uuid(),$3,1,'2026-02-02'::DATE,400000),($1,$2,gen_random_uuid(),$3,2,'2026-06-02'::DATE,400000)`,
+        [world.tenantId, world.businessId, planId],
+      );
+      await c.query('COMMIT');
+      return null;
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      return err(e);
+    } finally {
+      c.release();
+    }
+  };
+  M['R1_attack'] = await immediateFirst();
+  M['R1_attack_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  //    AND THE SAME STATEMENT ISSUED **AFTER** THE WRITE STILL COMMITS, which
+  //    is the shape every existing use of it in this estate's helpers has. A
+  //    repair that refused that too would be a worse defect than the one it
+  //    fixed.
+  const immediateLast = async (): Promise<string | null> => {
+    const planId = randomUUID();
+    const c = await mig.connect();
+    try {
+      await c.query('BEGIN');
+      for (const [k, v] of Object.entries(APP_CTX())) await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
+      await c.query(
+        `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+         VALUES ($1,$2,$3,$4,$5,'active',100000,'2026-01-02'::DATE,$6,gen_random_uuid())`,
+        [world.tenantId, world.businessId, planId, world.invoiceId, world.customerId, world.userId],
+      );
+      await c.query(
+        `INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+         VALUES ($1,$2,gen_random_uuid(),$3,1,'2026-02-02'::DATE,400000),($1,$2,gen_random_uuid(),$3,2,'2026-06-02'::DATE,400000)`,
+        [world.tenantId, world.businessId, planId],
+      );
+      await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+      await c.query('COMMIT');
+      return null;
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      return err(e);
+    } finally {
+      c.release();
+    }
+  };
+  M['R1_reset_c'] = await resetInvoice();
+  M['R1_immediate_after_write'] = await immediateLast();
+  M['R1_immediate_after_write_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  //    THE FIRE ORDER, FROM THE CATALOGUE: the verifier does sort first.
+  M['R1_order'] = (
+    await sup.query<{ tgname: string; tgdeferrable: boolean; tginitdeferred: boolean }>(
+      `SELECT t.tgname, t.tgdeferrable, t.tginitdeferred FROM pg_trigger t
+        WHERE t.tgrelid = 'public.installment_plans'::regclass AND NOT t.tgisinternal ORDER BY t.tgname`,
+    )
+  ).rows;
+
+  // ── §R2 THE COUNT'S QUERY PLAN (item 1, F-2), read as two roles and with
+  //    the planner pushed at the index.
+  const COUNT_IX = `SELECT pg_catalog.count(*) FROM public.installment_plans p
+     WHERE p.business_id = $1 AND p.invoice_id = $2 AND p.status = 'active'`;
+  const COUNT_HEAP = `SELECT pg_catalog.count(*) FILTER (WHERE p.status = 'active') FROM public.installment_plans p
+     WHERE p.business_id = $1 AND p.invoice_id = $2`;
+  const explainAs = async (role: string, sql: string, knobs: string): Promise<string> => {
+    const c = await sup.connect();
+    try {
+      await c.query('BEGIN');
+      for (const [k, v] of Object.entries(APP_CTX())) await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
+      if (knobs !== '') await c.query(knobs);
+      await c.query(`SET LOCAL ROLE ${role}`);
+      const r = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [world.businessId, world.invoiceId]);
+      await c.query('ROLLBACK');
+      return r.rows.map((x) => x['QUERY PLAN']).join('\n');
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      return `ERROR ${err(e)}`;
+    } finally {
+      c.release();
+    }
+  };
+  M['R2_plans'] = {} as Record<string, string>;
+  for (const [label, sql] of [
+    ['ix', COUNT_IX],
+    ['heap', COUNT_HEAP],
+  ] as const) {
+    for (const role of ['daftar_accounting_internal', 'daftar_app']) {
+      (M['R2_plans'] as Record<string, string>)[`${label}_${role}_default`] = await explainAs(role, sql, '');
+      (M['R2_plans'] as Record<string, string>)[`${label}_${role}_noseq`] = await explainAs(role, sql, 'SET LOCAL enable_seqscan = off');
+    }
+  }
+
+  // ── §R3 `indisready = false` ALONE, which is the variant the previous
+  //    round's own evidence never exercised: setting `indisvalid = false` too
+  //    is what forced the planner OFF the index and made its green readings
+  //    an artifact.
+  M['R3_reset'] = await resetInvoice();
+  M['R3_first'] = (await commitPlan(APP_CTX())).error;
+  M['R3_unready'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query(`UPDATE pg_index SET indisready = false WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R3_flags'] = (
+    await sup.query(
+      `SELECT indisvalid, indisready, indislive, indcheckxmin FROM pg_index WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`,
+    )
+  ).rows[0];
+  //    WITH THE BEFORE TRIGGER STILL THERE the recheck answers, which is the
+  //    round-12 bound and is re-measured rather than quoted.
+  M['R3_second_with_trigger'] = (await commitPlan(APP_CTX())).error;
+  M['R3_drop_excl'] = await ddl('DROP TRIGGER installment_plans_active_exclusive ON installment_plans');
+  //    AND NOW THE ROUND-11 HARM'S OWN ROUTE. At `6acd17b` this COMMITTED.
+  M['R3_second_no_trigger'] = (await commitPlan(APP_CTX())).error;
+  M['R3_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['R3_counts'] = (
+    await sup.query(
+      `SELECT (SELECT count(*)::text FROM installment_plans p WHERE p.invoice_id = $1 AND p.status = 'active') AS via_predicate,
+              (SELECT count(*)::text FROM installment_plans p WHERE p.invoice_id = $1) AS all_rows`,
+      [world.invoiceId],
+    )
+  ).rows[0];
+  M['R3_aging'] = await aging(app, APP_CTX());
+  M['R3_restore_ready'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query(`UPDATE pg_index SET indisready = true WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R3_restore_trigger'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query(
+        `CREATE TRIGGER installment_plans_active_exclusive BEFORE INSERT OR UPDATE ON installment_plans
+           FOR EACH ROW EXECUTE FUNCTION installment_plan_active_exclusive()`,
+      );
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R3_ratchet_after_restore'] = await ratchet();
+  M['R3_reset_after'] = await resetInvoice();
+
+  // ── §R4 THE COMPENSATION ATTACK ON THE READ-TIME TRIGGER LAW (item 3, F-3).
+  M['R4_plan'] = (await commitPlan(APP_CTX())).error;
+  M['R4_aging_control'] = await aging(app, APP_CTX());
+  M['R4_extra_trigger'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query(`CREATE TRIGGER zzr13_compensator AFTER INSERT ON installments FOR EACH ROW EXECUTE FUNCTION installment_schedule_verify()`);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R4_disable_one'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query('ALTER TABLE installment_plans DISABLE TRIGGER installment_plans_fact_agrees');
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  //    THE OLD INSTRUMENT'S OWN READING in exactly this state: SEVEN. That is
+  //    the compensation, measured with the retired expression itself.
+  M['R4_old_count'] = (
+    await sup.query<{ n: string }>(
+      `SELECT greatest(0, 7 - count(*))::text AS n FROM pg_trigger t JOIN pg_proc f ON f.oid = t.tgfoid
+         JOIN pg_namespace fn ON fn.oid = f.pronamespace
+        WHERE NOT t.tgisinternal AND t.tgenabled = 'O' AND fn.nspname = 'public'
+          AND f.proname IN ('installment_plan_fact_sync','installment_plan_fact_verify',
+                            'installment_plan_active_exclusive','installment_schedule_verify')`,
+    )
+  ).rows[0]?.n;
+  M['R4_total_triggers'] = (
+    await sup.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM pg_trigger t JOIN pg_proc f ON f.oid = t.tgfoid
+         JOIN pg_namespace fn ON fn.oid = f.pronamespace
+        WHERE NOT t.tgisinternal AND fn.nspname = 'public'
+          AND f.proname IN ('installment_plan_fact_sync','installment_plan_fact_verify',
+                            'installment_plan_active_exclusive','installment_schedule_verify')`,
+    )
+  ).rows[0]?.n;
+  M['R4_aging_compensated'] = await aging(app, APP_CTX());
+  M['R4_enable'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query('ALTER TABLE installment_plans ENABLE TRIGGER installment_plans_fact_agrees');
+      await sup.query('DROP TRIGGER zzr13_compensator ON installments');
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R4_aging_restored'] = await aging(app, APP_CTX());
+
+  // ── §R5 THE ROUTINE THE DIGEST LIST DID NOT COVER (item 4, F-6). A stub
+  //    conforming to every attribute part 7 pins, installed as the one
+  //    principal that can: the superuser.
+  const ASSERT_STUB = `CREATE OR REPLACE FUNCTION public.installment_plan_fact_assert(p_unreadable_plan BIGINT,
+                                                        p_unflagged_plan BIGINT,
+                                                        p_unreadable_schedule BIGINT,
+                                                        p_unbounded_plan BIGINT,
+                                                        p_untrusted_fact BIGINT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = pg_catalog, public, pg_temp AS $stub$
+BEGIN RETURN true; END;
+$stub$`;
+  const ASSERT_REAL = (
+    await sup.query<{ d: string }>(`SELECT pg_get_functiondef('public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)'::regprocedure) AS d`)
+  ).rows[0]?.d as string;
+  M['R5_stub_install'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query(ASSERT_STUB);
+      await sup.query(`ALTER FUNCTION public.installment_plan_fact_assert(BIGINT,BIGINT,BIGINT,BIGINT,BIGINT) OWNER TO daftar_accounting_internal`);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R5_stub_meta'] = (
+    await sup.query(
+      `SELECT pg_get_userbyid(p.proowner) AS owner, p.provolatile::text, p.prosecdef, p.proconfig
+         FROM pg_proc p WHERE p.oid = 'public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)'::regprocedure`,
+    )
+  ).rows[0];
+  M['R5_ratchet_with_stub'] = await ratchet();
+  M['R5_restore'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query(ASSERT_REAL);
+      await sup.query(`ALTER FUNCTION public.installment_plan_fact_assert(BIGINT,BIGINT,BIGINT,BIGINT,BIGINT) OWNER TO daftar_accounting_internal`);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R5_ratchet_restored'] = await ratchet();
+
+  // ── §R6 AN OVERLOAD OF A PINNED SIGNATURE, which a digest of a signature
+  //    cannot see (part 6c).
+  M['R6_overload_install'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query(`CREATE FUNCTION public.installment_plan_fact_assert(p_a INT, p_b INT, p_c INT, p_d INT, p_e INT)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R6_ratchet_with_overload'] = await ratchet();
+  M['R6_drop'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query('DROP FUNCTION public.installment_plan_fact_assert(int,int,int,int,int)');
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R6_ratchet_restored'] = await ratchet();
+
+  // ── §R7 THE READER'S OWN HALF OF F-2, and the only way to ask it.
+  //
+  //    The write path now REFUSES the second active plan in every route
+  //    measured, so the two-active-plans state cannot be reached through it
+  //    at all -- which means the reader's `unbounded_plan` can only be asked
+  //    about that state by building it through the escape section 2c
+  //    DECLARES: `ALTER TABLE ... DISABLE TRIGGER USER`, owner-only. The
+  //    index is left UNENFORCING while it is built, because that is the state
+  //    in which the retired spelling of this count read ONE and served a
+  //    figure.
+  M['R7_reset'] = await resetInvoice();
+  M['R7_unready'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query(`UPDATE pg_index SET indisready = false WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R7_off'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query('ALTER TABLE installment_plans DISABLE TRIGGER USER');
+      await sup.query('ALTER TABLE invoices DISABLE TRIGGER USER');
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R7_build'] = await inCtx(sup, APP_CTX(), [
+    ...[0, 1].flatMap((k) => [
+      {
+        sql: `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+              VALUES ($1,$2,$3,$4,$5,'active',100000,'2026-01-02'::DATE,$6,gen_random_uuid())`,
+        params: [world.tenantId, world.businessId, R7_PLANS[k] as string, world.invoiceId, world.customerId, world.userId],
+      },
+      {
+        sql: `INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+              VALUES ($1,$2,gen_random_uuid(),$3,1,'2026-02-02'::DATE,400000),($1,$2,gen_random_uuid(),$3,2,'2026-06-02'::DATE,400000)`,
+        params: [world.tenantId, world.businessId, R7_PLANS[k] as string],
+      },
+    ]),
+    { sql: `UPDATE invoices SET has_active_installment_plan = true WHERE id = $1`, params: [world.invoiceId] },
+  ]);
+  M['R7_on'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query('ALTER TABLE installment_plans ENABLE TRIGGER USER');
+      await sup.query('ALTER TABLE invoices ENABLE TRIGGER USER');
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  //    THE STATE: two active plans in the heap, ONE of them in the index,
+  //    every trigger back on, the flag true. The retired spelling of the
+  //    reader's count is answered from the index and reads ONE.
+  M['R7_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['R7_two_readings'] = (
+    await sup.query(
+      `SELECT (SELECT count(*)::text FROM (SELECT v2.invoice_id FROM installment_plans v2
+                 WHERE v2.business_id = $1 AND v2.status = 'active' AND v2.invoice_id = $2
+                 GROUP BY v2.invoice_id HAVING count(*) > 1) z) AS retired_spelling,
+              (SELECT count(*)::text FROM (SELECT p2.invoice_id FROM installment_plans p2
+                 WHERE p2.business_id = $1 AND p2.invoice_id = $2
+                 GROUP BY p2.invoice_id HAVING count(*) FILTER (WHERE p2.status = 'active') > 1) z) AS shipped_spelling`,
+      [world.businessId, world.invoiceId],
+    )
+  ).rows[0];
+  M['R7_aging'] = await aging(app, APP_CTX());
+  M['R7_triggers_all_enabled'] = (
+    await sup.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM pg_trigger t JOIN pg_proc f ON f.oid = t.tgfoid
+         JOIN pg_namespace fn ON fn.oid = f.pronamespace
+        WHERE NOT t.tgisinternal AND fn.nspname = 'public' AND t.tgenabled = 'O'
+          AND f.proname IN ('installment_plan_fact_sync','installment_plan_fact_verify',
+                            'installment_plan_active_exclusive','installment_schedule_verify')`,
+    )
+  ).rows[0]?.n;
+  //    AND THE TEARDOWN GOES THROUGH THE SAME ESCAPE, because the write path
+  //    now refuses to touch a state its own premise forbids.
+  //    ── §R8 AND THE STATE IN WHICH THE BOUND ITSELF IS WHAT ANSWERS.
+  //
+  //    With the index UNREADY, the two rows are absent FROM IT, so every
+  //    index-served read of the reader sees none of them and
+  //    `plan_fact_unreadable` is the arm that refuses -- fail closed, and the
+  //    honest reading is that the name depends on which arm sees the state
+  //    first. To ask `unbounded_plan` itself, the index is DROPPED instead,
+  //    which is the state round 11's challenger reached: then every path sees
+  //    BOTH rows, the three earlier counts are all zero, and the bound is the
+  //    only thing left to object.
+  M['R8_unready_back'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query(`UPDATE pg_index SET indisready = true WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`);
+      await sup.query('DROP INDEX public.installment_plans_one_active_per_invoice_uq');
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R8_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['R8_two_readings'] = (
+    await sup.query(
+      `SELECT (SELECT count(*)::text FROM (SELECT v2.invoice_id FROM installment_plans v2
+                 WHERE v2.business_id = $1 AND v2.status = 'active' AND v2.invoice_id = $2
+                 GROUP BY v2.invoice_id HAVING count(*) > 1) z) AS retired_spelling,
+              (SELECT count(*)::text FROM (SELECT p2.invoice_id FROM installment_plans p2
+                 WHERE p2.business_id = $1 AND p2.invoice_id = $2
+                 GROUP BY p2.invoice_id HAVING count(*) FILTER (WHERE p2.status = 'active') > 1) z) AS shipped_spelling`,
+      [world.businessId, world.invoiceId],
+    )
+  ).rows[0];
+  M['R8_aging'] = await aging(app, APP_CTX());
+  M['R8_teardown'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query('ALTER TABLE installment_plans DISABLE TRIGGER USER');
+      await sup.query('ALTER TABLE installments DISABLE TRIGGER USER');
+      await sup.query('ALTER TABLE invoices DISABLE TRIGGER USER');
+      await sup.query(`DELETE FROM installments WHERE plan_id = ANY($1::uuid[])`, [R7_PLANS]);
+      await sup.query(`DELETE FROM installment_plans WHERE id = ANY($1::uuid[])`, [R7_PLANS]);
+      await sup.query(`UPDATE invoices SET has_active_installment_plan = false WHERE id = $1`, [world.invoiceId]);
+      await sup.query('ALTER TABLE installment_plans ENABLE TRIGGER USER');
+      await sup.query('ALTER TABLE installments ENABLE TRIGGER USER');
+      await sup.query('ALTER TABLE invoices ENABLE TRIGGER USER');
+      await sup.query(`CREATE UNIQUE INDEX installment_plans_one_active_per_invoice_uq ON installment_plans (business_id, invoice_id) WHERE status = 'active'`);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R8_ratchet_after'] = await ratchet();
+  M['R8_state_after'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+
+  M['R13_teardown'] = await resetInvoice();
+  M['R13_teardown_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+
   writeFileSync('/tmp/claude-0/s7f1-fact.json', JSON.stringify(M, null, 2));
 }, 1800000);
 
@@ -2405,5 +2891,231 @@ describe('P4-S7 §G the end state, from the catalogue', () => {
     // five numbers name no row, no business and no tenant.
     expect(g['assert_argtypes']).toBe('20 20 20 20 20');
     expect(g['assert_is_invoker']).toBe(true);
+  });
+});
+
+/**
+ * ── §R13 THE FOUR DEFECTS BESIDE THE REPAIR (`TL-P4-COORD-R52`) ──────────
+ *
+ * `TL-P4-COORD-R52` accepted that the `R50` repair HELD under attack and
+ * rejected the round for four defects beside it. Each one is measured here
+ * with its control adjacent, because a suite that only asserts refusals
+ * cannot tell a working guard from one that refuses everything.
+ */
+describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the sixth digest', () => {
+  it('the end-state block is re-runnable and OK over the state the migration left', () => {
+    expect(M['R13_block_sliced'], 'the DO $end$ slice is not the whole block').toBe(true);
+    expect(M['R13_ratchet_control'], 'the shipped end state does not satisfy its own block').toBeNull();
+  });
+
+  /**
+   * F-1. `SET CONSTRAINTS ALL IMMEDIATE` needs no privilege, removes the
+   * verifier's deferral, and PostgreSQL then fires the two immediate `AFTER
+   * ROW` triggers in TRIGGER-NAME ORDER — `installment_plans_fact_agrees`
+   * before `installment_plans_fact_sync`. At `6acd17b` a LAWFUL write was
+   * refused `installment.plan_fact_desynchronised`: a FALSE name, and one of
+   * the registered internal invariants, so a 500 on a lawful sale.
+   */
+  it('R1 BOTH APP ROLES MAY ISSUE IT, and the verifier does sort before the writer', () => {
+    expect(M['R1_who']).toStrictEqual({ daftar_app: null, daftar_migrator: null });
+    const order = (M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).map((t) => t.tgname);
+    expect(order.indexOf('installment_plans_fact_agrees')).toBeLessThan(order.indexOf('installment_plans_fact_sync'));
+    expect(
+      (M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_agrees')?.tgdeferrable,
+    ).toBe(true);
+  });
+
+  it('R1 THE CONTROL COMMITS, the attack is refused by a name that is TRUE, and nothing commits', () => {
+    // CONTROL
+    expect(M['R1_control'], `the control write was refused: ${String(M['R1_control'])}`).toBeNull();
+    expect(M['R1_control_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
+    // ATTACK: refused, and NOT under the false name
+    const e = String(M['R1_attack']);
+    expect(e).toContain('installment.plan_fact_unordered');
+    expect(e, 'the false diagnosis is back').not.toContain('installment.plan_fact_desynchronised');
+    // the message names the cause, the statement and the remedy
+    expect(e).toContain('SET CONSTRAINTS ALL IMMEDIATE');
+    expect(e).toContain('TRIGGER-NAME ORDER');
+    expect(e).toContain('Nothing is desynchronised and no data is wrong');
+    // IT FAILS CLOSED
+    expect(M['R1_attack_state']).toStrictEqual({ flag: 'false', truth: 'false', plans: '0' });
+    expect(parseDatabaseInstallmentInternalCode(new Error(e))).toBe('installment.plan_fact_unordered');
+    expect(isInstallmentInternalInvariant('installment.plan_fact_unordered')).toBe(true);
+    expect(INSTALLMENT_INTERNAL_INVARIANT_CODES).toContain('installment.plan_fact_unordered');
+  });
+
+  it('R1 AND THE SAME STATEMENT AFTER THE WRITE STILL COMMITS — the repair did not break the lawful use', () => {
+    expect(M['R1_immediate_after_write'], `a SET CONSTRAINTS issued after the write was refused: ${String(M['R1_immediate_after_write'])}`).toBeNull();
+    expect(M['R1_immediate_after_write_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
+  });
+
+  /**
+   * F-2. The guard built not to presuppose the index was ANSWERED FROM IT.
+   * This is the plan, read from the live planner — the control half that a
+   * migration cannot carry, because it depends on the planner choosing
+   * between usable indexes.
+   */
+  it('R2 THE SHIPPED COUNT IS NEVER PLANNED ON THE PARTIAL UNIQUE INDEX, and the retired spelling ALWAYS IS', () => {
+    const plans = M['R2_plans'] as Record<string, string>;
+    const IX = 'installment_plans_one_active_per_invoice_uq';
+    // NON-VACUITY: the retired spelling is planned on that index in both
+    // roles and with the planner left alone AND pushed at it.
+    for (const k of ['ix_daftar_accounting_internal_default', 'ix_daftar_accounting_internal_noseq', 'ix_daftar_app_default', 'ix_daftar_app_noseq']) {
+      expect(plans[k], `${k}: the control is not index-served, so this reading proves nothing`).toContain(IX);
+      expect(plans[k]).toMatch(/Index (Only )?Scan using/);
+    }
+    // THE LAW: the shipped spelling names it nowhere.
+    for (const k of ['heap_daftar_accounting_internal_default', 'heap_daftar_accounting_internal_noseq', 'heap_daftar_app_default', 'heap_daftar_app_noseq']) {
+      expect(plans[k], `${k}: the shipped count is answered from the index it measures`).not.toContain(IX);
+      expect(plans[k], `${k}: EXPLAIN did not answer`).toContain('installment_plans');
+    }
+  });
+
+  it('R3 WITH indisready=false ALONE AND THE BEFORE TRIGGER DROPPED, the second active plan is REFUSED and nothing commits', () => {
+    expect(M['R3_first'], 'the first plan was refused').toBeNull();
+    expect(M['R3_unready']).toBeNull();
+    // THE VARIANT THAT DISTINGUISHES A GUARD FROM AN ARTIFACT: `indisvalid`
+    // stays TRUE, which is what keeps the planner on the index.
+    expect(M['R3_flags']).toMatchObject({ indisvalid: true, indisready: false, indislive: true });
+    // the round-12 bound, re-measured: with the BEFORE trigger present the
+    // recheck answers.
+    expect(String(M['R3_second_with_trigger'])).toContain('installment.plan_active_conflict');
+    expect(M['R3_drop_excl']).toBeNull();
+    // AND THE ROUND-11 HARM'S OWN ROUTE, WHICH COMMITTED AT `6acd17b`.
+    const e = String(M['R3_second_no_trigger']);
+    expect(e, 'the second active plan committed again').toContain('installment.plan_index_disagrees');
+    expect(e).toContain('PRESENT AND NOT ENFORCING');
+    expect(M['R3_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
+    // and the two readings of the heap really did disagree in that state,
+    // which is what the refusal says
+    expect(M['R3_counts']).toStrictEqual({ via_predicate: '1', all_rows: '1' });
+    // the reader is not serving a figure over a corrupt state either
+    expect(errOf(M['R3_aging'])).not.toBe('');
+    expect(M['R3_restore_ready']).toBeNull();
+    expect(M['R3_restore_trigger']).toBeNull();
+    expect(M['R3_ratchet_after_restore'], 'the restored state does not satisfy the end-state block').toBeNull();
+    expect(parseDatabaseInstallmentInternalCode(new Error(e))).toBe('installment.plan_index_disagrees');
+    expect(INSTALLMENT_INTERNAL_INVARIANT_CODES).toContain('installment.plan_index_disagrees');
+  });
+
+  /**
+   * F-3. A COUNT IS NOT AN IDENTITY. One conforming extra trigger paid for
+   * one disabled real one and the reader served the full figure in the exact
+   * state it refuses seven times out of seven.
+   */
+  it('R4 THE COMPENSATION STATE READS SEVEN ON THE RETIRED COUNT, and the enumeration REFUSES it', () => {
+    expect(M['R4_plan']).toBeNull();
+    // CONTROL: the figure, served.
+    expect(errOf(M['R4_aging_control'])).toBe('');
+    expect(rows(M['R4_aging_control']).length).toBeGreaterThan(0);
+    expect(M['R4_extra_trigger']).toBeNull();
+    expect(M['R4_disable_one']).toBeNull();
+    // THE COMPENSATION, MEASURED WITH THE RETIRED EXPRESSION ITSELF: eight
+    // triggers, one of the seven disabled, and the old guard reads ZERO
+    // missing.
+    expect(M['R4_total_triggers']).toBe('8');
+    expect(M['R4_old_count'], 'the retired count no longer demonstrates the compensation').toBe('0');
+    // AND THE ENUMERATION REFUSES.
+    const e = errOf(M['R4_aging_compensated']);
+    expect(e, 'the reader served a figure in the compensated state').toContain('installment.plan_fact_untrusted');
+    expect(e).toContain('1 of the seven');
+    expect(M['R4_enable']).toBeNull();
+    // RESTORED: it serves again, so the law discriminates.
+    expect(errOf(M['R4_aging_restored'])).toBe('');
+    expect(rows(M['R4_aging_restored']).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * F-6. `installment_plan_fact_assert` raises five of the reader's refusals
+   * and was the one routine the digest list did not cover.
+   */
+  it('R5 A PART-7-CONFORMING STUB OF installment_plan_fact_assert IS NOW REFUSED BY THE DIGEST', () => {
+    expect(M['R5_stub_install'], 'the stub did not install, so this measures nothing').toBeNull();
+    // IT CONFORMS TO EVERY ATTRIBUTE PART 7 PINS, which is why the shape laws
+    // passed it at `6acd17b`.
+    expect(M['R5_stub_meta']).toMatchObject({
+      owner: 'daftar_accounting_internal',
+      provolatile: 's',
+      prosecdef: false,
+      proconfig: ['search_path=pg_catalog, public, pg_temp'],
+    });
+    const e = String(M['R5_ratchet_with_stub']);
+    expect(e, 'the stub passed the whole end-state block again').toContain('installment.migration_end_state_invalid');
+    expect(e).toContain('installment_plan_fact_assert');
+    expect(e).toContain('sha256');
+    // and the real body restores it to OK, so the law is an identity test and
+    // not a refusal of everything.
+    expect(M['R5_restore']).toBeNull();
+    expect(M['R5_ratchet_restored']).toBeNull();
+  });
+
+  it('R6 AN OVERLOAD OF A PINNED SIGNATURE IS REFUSED, which a digest of a signature cannot see', () => {
+    expect(M['R6_overload_install'], 'the overload did not install, so this measures nothing').toBeNull();
+    const e = String(M['R6_ratchet_with_overload']);
+    expect(e).toContain('installment.migration_end_state_invalid');
+    expect(e).toContain('routines named installment_plan_fact_assert');
+    expect(M['R6_drop']).toBeNull();
+    expect(M['R6_ratchet_restored']).toBeNull();
+  });
+
+  /**
+   * F-2, THE READER'S HALF. The write path now refuses the second active plan
+   * by every route measured, so this state can only be built through the
+   * escape section 2c DECLARES — which is also why it is still an escape and
+   * is not claimed shut.
+   */
+  it('R7 WITH TWO ACTIVE PLANS IN THE HEAP AND ONE IN THE INDEX, the retired spelling reads ZERO and the reader REFUSES', () => {
+    expect(M['R7_unready']).toBeNull();
+    expect(M['R7_off']).toBeNull();
+    expect(errOf(M['R7_build']), `the two-plan state did not build: ${errOf(M['R7_build'])}`).toBe('');
+    expect(M['R7_on']).toBeNull();
+    // THE STATE: two active plans in the HEAP, the flag true, and every one
+    // of the seven triggers back ON. `truth` reads FALSE here, which is the
+    // finding in one word: that reading is an `EXISTS` over
+    // `status = 'active'` and it is answered FROM the index, which holds
+    // NEITHER row — both were written while it was not being maintained.
+    expect(M['R7_state']).toStrictEqual({ flag: 'true', truth: 'false', plans: '2' });
+    expect(M['R7_triggers_all_enabled']).toBe('7');
+    // THE MEASUREMENT THAT IS THE WHOLE OF F-2: the RETIRED spelling of the
+    // reader's bound count, run against this very state, finds NOTHING, while
+    // the shipped spelling finds the invoice. One query text, one state, two
+    // answers — and the only difference between them is which access path the
+    // planner may use.
+    expect(M['R7_two_readings']).toStrictEqual({ retired_spelling: '0', shipped_spelling: '1' });
+    // AND THE READER REFUSES RATHER THAN SERVING A FIGURE. The arm that
+    // answers here is `plan_fact_unreadable`, not the bound: with the index
+    // unmaintained, the reader's own `visible_plan` sees NEITHER plan and the
+    // first count fires first. That is fail-closed and it is reported as what
+    // it is rather than as the refusal one might prefer; §R8 builds the state
+    // in which the bound itself is the only thing left to object.
+    const e = errOf(M['R7_aging']);
+    expect(e, 'the reader served a figure over two active plans again').toContain('installment.plan_fact_unreadable');
+    expect(rows(M['R7_aging'])).toHaveLength(0);
+  });
+
+  /**
+   * F-2, THE ROUND-11 STATE ITSELF: the index GONE, so every access path sees
+   * both rows and the three counts before the bound are all zero. This is the
+   * state in which the reader served the pre-installment figure with no
+   * refusal at all.
+   */
+  it('R8 WITH THE INDEX GONE AND TWO ACTIVE PLANS VISIBLE, the reader refuses on the BOUND and serves nothing', () => {
+    expect(M['R8_unready_back']).toBeNull();
+    expect(M['R8_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '2' });
+    // with no index at all, BOTH spellings see it — which is why this arm
+    // measures the bound and §R7 measures the access path.
+    expect(M['R8_two_readings']).toStrictEqual({ retired_spelling: '1', shipped_spelling: '1' });
+    const e = errOf(M['R8_aging']);
+    expect(e, 'the reader served a figure over two active plans').toContain('installment.plan_active_unbounded');
+    expect(rows(M['R8_aging'])).toHaveLength(0);
+    // teardown, and the end state satisfies its own block again
+    expect(M['R8_teardown'], `the teardown failed: ${String(M['R8_teardown'])}`).toBeNull();
+    expect(M['R8_ratchet_after']).toBeNull();
+    expect(M['R8_state_after']).toStrictEqual({ flag: 'false', truth: 'false', plans: '0' });
+  });
+
+  it('R13 THE FIXTURE IS LEFT AS THE INDUCTION FOUND IT', () => {
+    expect(M['R13_teardown']).toBeNull();
+    expect(M['R13_teardown_state']).toStrictEqual({ flag: 'false', truth: 'false', plans: '0' });
   });
 });

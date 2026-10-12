@@ -599,6 +599,13 @@ export const SELLING_INTERNAL_INVARIANT_CODES: readonly string[] = [...SELLING_I
  *   - `installment.schedule_incomplete` — `installment_schedule_verify()`,
  *     three DEFERRED constraint triggers, fired at the COMMIT of a plan
  *     writer's own transaction;
+ *   - `installment.plan_index_disagrees` and
+ *     `installment.plan_fact_unordered` — `installment_plan_fact_sync()` and
+ *     `installment_plan_fact_verify()` again (`TL-P4-COORD-R52` ordered items
+ *     1 and 2): an index that is present and not enforcing, measured as a
+ *     disagreement between two access paths, and a deferred verifier that ran
+ *     before the writer because `SET CONSTRAINTS ALL IMMEDIATE` removed its
+ *     deferral;
  *   - `installment.plan_fact_blind` and
  *     `installment.plan_fact_desynchronised` —
  *     `installment_plan_fact_sync()` and
@@ -674,6 +681,36 @@ const INSTALLMENT_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
   // and gets no `SELLING_STATUS` entry.
   'installment.plan_active_unbounded',
   'installment.plan_fact_untrusted',
+  // `TL-P4-COORD-R52` ordered items 1 and 2. Both are raised from a FUNCTION
+  // BODY on the plan WRITE path -- `installment_plan_fact_sync()` and
+  // `installment_plan_fact_verify()` -- so a request can reach them, and both
+  // join this set in the same commit as the construction that raises them,
+  // which is what the paragraph above requires of an entry here.
+  //
+  // `plan_index_disagrees`: two readings of the SAME rows in the same
+  // transaction disagree -- one taken by an access path
+  // `installment_plans_one_active_per_invoice_uq` can serve and one it cannot
+  // -- which means the index holds no entry for a row that qualifies for it.
+  // That is an index that is PRESENT AND NOT ENFORCING, and it is the runtime
+  // detector for the state in which the round-11 harm was reachable while
+  // every apply-time flag read TRUE. It is an estate defect and never
+  // something a merchant did.
+  //
+  // `plan_fact_unordered`: the deferred fact verifier was fired for a plan row
+  // event before the immediate writer was, which is what `SET CONSTRAINTS ALL
+  // IMMEDIATE` -- UNPRIVILEGED SQL that `daftar_app` and `daftar_migrator` are
+  // both permitted to issue -- produces, because the deferral then goes and
+  // immediate `AFTER ROW` triggers fire in TRIGGER-NAME ORDER with
+  // `installment_plans_fact_agrees` sorting before
+  // `installment_plans_fact_sync`. Before this commit that state was refused
+  // as `installment.plan_fact_desynchronised`, which was a FALSE diagnosis of
+  // a LAWFUL write; it is now refused under a name that is true of it. It
+  // still renders 500 with the code in the log, because the cause is a
+  // session, pooler or migration helper having changed the rules the triggers
+  // fire under and not anything the merchant can supply -- and it FAILS
+  // CLOSED: no wrong fact commits.
+  'installment.plan_index_disagrees',
+  'installment.plan_fact_unordered',
 ]);
 
 /** The installment invariant codes, in registry order — the list a contract test enumerates. */

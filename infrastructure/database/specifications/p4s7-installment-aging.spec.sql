@@ -1064,7 +1064,56 @@ DECLARE
   -- from TWO, and this derivation's totality is exactly the claim that there
   -- is never more than one.
   v_active   BIGINT;
+  -- THE SAME COUNT TAKEN BY THE ACCESS PATH THE PARTIAL UNIQUE INDEX CAN
+  -- SERVE (`TL-P4-COORD-R52` ordered item 1, F-2). The two are compared, and
+  -- a disagreement is the one runtime reading that distinguishes «the index
+  -- holds an entry for every qualifying row» from «the index is present».
+  v_active_ix BIGINT;
+  -- THE WRITER'S OWN PASSAGE THROUGH THIS EVENT, STAMPED SO THE DEFERRED
+  -- VERIFIER CAN SEE THAT IT RAN FIRST (`TL-P4-COORD-R52` ordered item 2,
+  -- F-1). Section 3a-ter states what it is for.
+  v_seq      BIGINT;
 BEGIN
+  -- ---- THE WRITER STAMPS THIS EVENT BEFORE IT DOES ANYTHING ELSE
+  --      (`TL-P4-COORD-R52` ordered item 2, F-1).
+  --
+  -- `SET CONSTRAINTS ALL IMMEDIATE` IS UNPRIVILEGED SQL and both app roles
+  -- may issue it -- MEASURED, `daftar_app` and `daftar_migrator` both
+  -- succeed. It converts `installment_plans_fact_agrees` from a commit-time
+  -- constraint trigger into an ordinary immediate `AFTER ... FOR EACH ROW`
+  -- trigger, and PostgreSQL fires immediate `AFTER ROW` triggers on one
+  -- relation IN TRIGGER-NAME ORDER. `installment_plans_fact_agrees` sorts
+  -- BEFORE `installment_plans_fact_sync`, so THE VERIFIER THEN RUNS BEFORE
+  -- THE WRITER, reads a flag this routine has not written yet, and refuses a
+  -- LAWFUL plan write under `installment.plan_fact_desynchronised` -- a name
+  -- that is FALSE of that state and that renders `500 INTERNAL_ERROR`.
+  -- MEASURED at `6acd17b`: the identical insert commits in the control and is
+  -- refused after that one extra statement.
+  --
+  -- The trigger site's own comment named this hazard («a deferred writer and
+  -- a deferred verifier on the same event would be ordered by name rather
+  -- than by meaning») AND NOTHING ANYWHERE READ IT. That is the shape of
+  -- every defect of the last four rounds: a rationale that names its premise
+  -- and does not measure it.
+  --
+  -- SO THE ORDER IS MEASURED RATHER THAN BELIEVED. This routine counts its
+  -- own invocations in a TRANSACTION-LOCAL setting, and
+  -- `installment_plan_fact_verify()` counts its own and refuses when it is
+  -- ahead. It is a COUNTER and not a flag because both triggers fire ONCE PER
+  -- ROW and a transaction may write many plan rows: «the writer ran for this
+  -- event» is `verify_events <= sync_events` and nothing weaker.
+  --
+  -- `set_config(..., true)` IS TRANSACTION-LOCAL, so it is discarded with the
+  -- transaction and with any subtransaction that aborts -- and a
+  -- subtransaction that aborts discards its deferred trigger events too, so
+  -- the two stay in step. It is a CUSTOM setting with a dotted name, which
+  -- any role may set (MEASURED, as `daftar_app` and as
+  -- `daftar_accounting_internal`); and `current_setting(name, true)` yields
+  -- NULL before the name exists and the EMPTY STRING after a
+  -- transaction-local value has been reset, which is why both are folded to
+  -- zero here rather than only the first.
+  v_seq := coalesce(nullif(pg_catalog.current_setting('installment.plan_fact_sync_events', true), '')::BIGINT, 0) + 1;
+  PERFORM pg_catalog.set_config('installment.plan_fact_sync_events', v_seq::TEXT, true);
   -- `OLD` IS NOT ASSIGNED ON AN INSERT AND `NEW` IS NOT ASSIGNED ON A DELETE,
   -- and plpgsql raises «record "old" is not assigned yet» on the attribute
   -- rather than yielding NULL — so the three cases are branched explicitly
@@ -1343,10 +1392,73 @@ BEGIN
     PERFORM 1 FROM public.invoices i
       WHERE i.business_id = v_business AND i.id = v_invoice
       FOR NO KEY UPDATE;
-    SELECT pg_catalog.count(*) INTO v_active
+    -- ---- A `count(*)` IS NOT AN INSTRUMENT; A `count(*)` PLUS A QUERY PLAN
+    --      IS (`TL-P4-COORD-R52` ordered item 1, F-2).
+    --
+    -- THIS COUNT USED TO BE ANSWERED FROM THE VERY INDEX IT WAS BUILT NOT TO
+    -- PRESUPPOSE. `EXPLAIN (COSTS OFF)` of the previous text -- `WHERE
+    -- business_id = ? AND invoice_id = ? AND status = 'active'` -- is
+    -- `Index Only Scan using installment_plans_one_active_per_invoice_uq`,
+    -- identically with `enable_seqscan = off`, because THE PREDICATE IS THE
+    -- INDEX'S DEFINITION. So with the index present and `indisready = false`
+    -- ALONE -- `indisvalid` and `indislive` still true, which is what lets
+    -- the planner keep using it -- the count read 1 while the heap held 2, a
+    -- second ACTIVE plan COMMITTED through the ordinary route, part 9's three
+    -- flags all read TRUE, the whole end-state block reported OK, and the
+    -- reader served a figure over a state a `REINDEX` then refused `23505`.
+    -- And the previous round's own green readings for this guard were an
+    -- ARTIFACT of also setting `indisvalid = false`, which is precisely the
+    -- flag that forces the planner OFF the index: the evidence never
+    -- exercised the path it was offered for.
+    --
+    -- THE REPAIR IS TO TAKE THE COUNT BY A PATH THE PARTIAL INDEX CANNOT
+    -- SERVE, AND THAT IS A LAW AND NOT A PREFERENCE. A partial index may be
+    -- used only for a query whose own qualifiers IMPLY the index predicate;
+    -- a query that does not restrict `status` needs rows the index does not
+    -- contain, so no planner of any version may answer it from there. The
+    -- status test therefore moves OUT of the `WHERE` and INTO a `FILTER` on
+    -- the aggregate, which is evaluated above the scan and cannot be the
+    -- source of such an implication. MEASURED: `Bitmap Heap Scan on
+    -- installment_plans`, with and without `enable_seqscan`, as the definer
+    -- owner and as `daftar_app`, and the index named NOWHERE in the plan.
+    -- Section 2b part 9c reads that plan AT APPLY TIME, in every cluster, and
+    -- `tests/integration/phase4-s7-installment-fact-db.test.ts` reads it in
+    -- CI with the control beside it -- because a premise nothing reads is the
+    -- defect this round is repairing, and a planner change must not be able
+    -- to reintroduce it silently.
+    SELECT pg_catalog.count(*) INTO v_active_ix
       FROM public.installment_plans p
      WHERE p.business_id = v_business AND p.invoice_id = v_invoice
        AND p.status = 'active';
+    SELECT pg_catalog.count(*) FILTER (WHERE p.status = 'active') INTO v_active
+      FROM public.installment_plans p
+     WHERE p.business_id = v_business AND p.invoice_id = v_invoice;
+    -- ---- AND THE DISAGREEMENT BETWEEN THE TWO PATHS IS ITSELF THE
+    --      INSTRUMENT FOR THE STATE PART 9 CAN ONLY ASK ABOUT ONCE.
+    --
+    -- The index-served reading can only UNDER-report relative to the heap
+    -- reading, and it under-reports in exactly one circumstance that matters:
+    -- the index is not holding an entry for a row that qualifies for it. That
+    -- is «present but not enforcing», measured at RUNTIME, over the rows this
+    -- transaction can see, and it is the sentence part 9's three catalogue
+    -- flags are not. Row security cannot manufacture it either: a policy
+    -- subtracts the same rows from both readings.
+    --
+    -- THE SECOND CAUSE IS NAMED BECAUSE IT IS REAL. The two readings are two
+    -- statements, and at `READ COMMITTED` each takes a fresh snapshot -- so a
+    -- plan committed by another transaction BETWEEN them also produces a
+    -- disagreement, in the same direction. It cannot happen while this
+    -- transaction holds the invoice row (taken immediately above, and by the
+    -- BEFORE trigger before that), because every plan writer on this invoice
+    -- must take that row first; it can happen when
+    -- `installment_plans_active_exclusive` has been dropped AND this
+    -- routine's own lock found no row to take. Both causes are in the
+    -- message, with the remedy of each, because a refusal that prescribes one
+    -- remedy for two causes sends half its readers to the wrong place.
+    IF v_active_ix IS DISTINCT FROM v_active THEN
+      RAISE EXCEPTION 'installment.plan_index_disagrees: invoice %/% carries % plan(s) with status = ''active'' when counted over the rows themselves and % when counted through installment_plans_one_active_per_invoice_uq, and the two readings are of the same rows in the same transaction. The index-served reading can only under-report, and it does so when the index holds no entry for a row that qualifies for it -- which is an index that is PRESENT AND NOT ENFORCING (indisready false, the state an interrupted CREATE INDEX CONCURRENTLY or REINDEX CONCURRENTLY leaves, which pg_indexes renders identically to the correct one) and which REINDEX will refuse. TWO STATES REACH THIS AND THE REMEDY DIFFERS: if the index is unenforcing, nothing may be derived from the bound it is supposed to hold and the index must be rebuilt before any plan is written; if installment_plans_active_exclusive has been dropped, another transaction may have committed a plan on this invoice between these two readings and the remedy is to restore that trigger so that a plan write takes the invoice row first',
+        v_business, v_invoice, v_active, v_active_ix USING ERRCODE = 'P0001';
+    END IF;
     v_state := (v_active > 0);
     -- ---- THE DERIVATION'S OWN PREMISE, CHECKED AGAINST THE ROWS
     --      (`TL-P4-COORD-R50` ordered item 1).
@@ -1407,7 +1519,7 @@ BEGIN
         v_business, v_invoice USING ERRCODE = 'P0001';
     END IF;
     IF v_value AND NOT v_state THEN
-      RAISE EXCEPTION 'installment.plan_fact_blind: the status transition this transaction wrote on invoice %/% determines has_active_installment_plan = true, and a recomputation over installment_plans then found no active plan there. This statement just wrote that plan, so the recomputation is blinded rather than the plan absent, and writing from it would commit a fact that can never heal',
+      RAISE EXCEPTION 'installment.plan_fact_blind: the status transition this transaction wrote on invoice %/% determines has_active_installment_plan = true, and a recomputation over installment_plans then found no active plan there. This statement just wrote that plan, so the plan is not absent. THE CAUSE IS ROW SECURITY ON installment_plans AND NOT A STALE INDEX: that recomputation is taken over the rows themselves and NOT through installment_plans_one_active_per_invoice_uq, and the same count taken through the index agreed with it one statement earlier -- a disagreement there is installment.plan_index_disagrees and names the index. installment_plans carries FORCE ROW LEVEL SECURITY, so a policy can hide this row from this routine''s own reads; look in pg_policy and not in pg_index. Writing from a blinded read would commit a fact that can never heal',
         v_business, v_invoice USING ERRCODE = 'P0001';
     END IF;
 
@@ -1437,7 +1549,71 @@ DECLARE
   v_flag     BOOLEAN;
   v_state    BOOLEAN;
   v_active   BIGINT;
+  -- The same count through the index, for the comparison the sync makes and
+  -- for the same reason (`TL-P4-COORD-R52` ordered item 1, F-2).
+  v_active_ix BIGINT;
+  -- This routine's own passage through this event, and the writer's
+  -- (`TL-P4-COORD-R52` ordered item 2, F-1).
+  v_seq      BIGINT;
+  v_sync     BIGINT;
 BEGIN
+  -- ---- THE DEFERRAL IS NOT ASSUMED. IT IS MEASURED, PER EVENT
+  --      (`TL-P4-COORD-R52` ordered item 2, F-1).
+  --
+  -- This trigger is `DEFERRABLE INITIALLY DEFERRED` so that it reads the END
+  -- of the transaction, and `installment_plan_fact_sync()` is NOT deferred so
+  -- that it has written the fact by the time this looks. `SET CONSTRAINTS ALL
+  -- IMMEDIATE` is UNPRIVILEGED SQL that both app roles may issue, and it
+  -- removes that deferral: this trigger then fires as an ordinary immediate
+  -- `AFTER ... FOR EACH ROW` trigger, in TRIGGER-NAME ORDER, and
+  -- `installment_plans_fact_agrees` sorts BEFORE
+  -- `installment_plans_fact_sync`. The verifier then runs BEFORE the writer
+  -- and refuses a LAWFUL write under `installment.plan_fact_desynchronised`,
+  -- which is a FALSE name for that state and renders `500 INTERNAL_ERROR`.
+  --
+  -- THE ORDERING CANNOT BE MADE NOT TO MATTER, and that is said plainly
+  -- rather than repaired by a rename. Renaming this trigger to sort after the
+  -- sync would fix THIS pair and would leave
+  -- `installment_plans_schedule_complete` firing before the `installments`
+  -- rows of the same transaction exist -- a deferred verifier whose premise
+  -- IS the end of the transaction cannot survive being made immediate by any
+  -- naming. So the immediate case is DETECTED and refused under a name that
+  -- is TRUE of it, which is the other half of what `TL-P4-COORD-R52` ordered
+  -- item 2 permits, and it still fails CLOSED: no wrong fact commits.
+  --
+  -- WHY A COUNTER AND NOT A FLAG: both triggers fire ONCE PER ROW, so a
+  -- transaction that writes three plan rows reaches here three times. «The
+  -- writer ran for this event» is therefore `verify_events <= sync_events`
+  -- and not «the writer ran at all».
+  --
+  -- WHY THE SYNC TRIGGER IS READ FROM THE CATALOGUE BEFORE THIS REFUSES. A
+  -- sync that is DISABLED or DROPPED also leaves `sync_events` at zero, and
+  -- that state is NOT this refusal: it is the escape section 2c declares and
+  -- `customer_ar_aging`'s `plan_fact_untrusted` refuses at read time, and the
+  -- flag comparison below already answers it under a name of its own. A
+  -- refusal must be true of every state that reaches it, so the catalogue
+  -- read is the difference between «the writer did not run» and «there is no
+  -- writer», and only the first reaches the raise.
+  --
+  -- THE `invoices` SIDE IS NOT COUNTED. No sync runs for an invoice-side
+  -- event -- an invoice may be born carrying `false` with no plan at all --
+  -- so there is no order there to invert.
+  IF TG_TABLE_NAME = 'installment_plans' THEN
+    v_sync := coalesce(nullif(pg_catalog.current_setting('installment.plan_fact_sync_events', true), '')::BIGINT, 0);
+    v_seq  := coalesce(nullif(pg_catalog.current_setting('installment.plan_fact_verify_events', true), '')::BIGINT, 0) + 1;
+    PERFORM pg_catalog.set_config('installment.plan_fact_verify_events', v_seq::TEXT, true);
+    IF v_seq > v_sync
+       AND EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t
+                     JOIN pg_catalog.pg_proc f ON f.oid = t.tgfoid
+                     JOIN pg_catalog.pg_namespace fn ON fn.oid = f.pronamespace
+                    WHERE t.tgrelid = 'public.installment_plans'::regclass
+                      AND NOT t.tgisinternal AND fn.nspname = 'public'
+                      AND f.proname = 'installment_plan_fact_sync'
+                      AND t.tgenabled = 'O') THEN
+      RAISE EXCEPTION 'installment.plan_fact_unordered: this verifier has been fired for % plan row event(s) of this transaction while installment_plan_fact_sync -- which is installed on installment_plans and enabled, read from pg_trigger inside this very event -- has been fired for only %, so THE VERIFIER RAN BEFORE THE WRITER for this event and the fact it would judge has not been written yet. This verifier is created DEFERRABLE INITIALLY DEFERRED precisely so that it reads the end of the transaction; SET CONSTRAINTS ALL IMMEDIATE removes that deferral, after which PostgreSQL fires both triggers in TRIGGER-NAME ORDER and installment_plans_fact_agrees sorts before installment_plans_fact_sync. Nothing is desynchronised and no data is wrong: this transaction has changed the rules the triggers fire under. Do not issue SET CONSTRAINTS ALL IMMEDIATE before a plan write -- issued AFTER the write, or at COMMIT where it belongs, this slice''s deferred verifiers fire in a transaction state they can judge and the same write commits',
+        v_seq, v_sync USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
   IF TG_TABLE_NAME = 'invoices' THEN
     -- The invoice side. `0075`'s `invoices_no_delete` refuses every DELETE on
     -- this relation, so `NEW` is always assigned here.
@@ -1548,10 +1724,29 @@ BEGIN
     -- -- and, if that is bypassed too, the READER's own count, which runs in
     -- a later transaction and is therefore total. Section 3a-ter's table
     -- states which mechanism answers at which isolation level.
-    SELECT pg_catalog.count(*) INTO v_active
+    -- AND IT IS TAKEN BY THE PATH THE PARTIAL UNIQUE INDEX CANNOT SERVE,
+    -- TWICE, FOR THE REASON THE SYNC STATES AT LENGTH (`TL-P4-COORD-R52`
+    -- ordered item 1, F-2). The previous text's plan was `Index Only Scan
+    -- using installment_plans_one_active_per_invoice_uq`, so this count --
+    -- the COMMIT-time half of the premise check -- was answered from the
+    -- index whose enforcement it exists to measure. The status test is in a
+    -- `FILTER` and not in the `WHERE`, which makes the index UNUSABLE for the
+    -- query by the implication rule and not by the planner's preference; the
+    -- index-served reading is taken as well, and a disagreement is refused as
+    -- `installment.plan_index_disagrees` -- a runtime detector for an index
+    -- that is present and not enforcing, in the one direction row security
+    -- cannot manufacture.
+    SELECT pg_catalog.count(*) INTO v_active_ix
       FROM public.installment_plans p
      WHERE p.business_id = v_business AND p.invoice_id = v_invoice
        AND p.status = 'active';
+    SELECT pg_catalog.count(*) FILTER (WHERE p.status = 'active') INTO v_active
+      FROM public.installment_plans p
+     WHERE p.business_id = v_business AND p.invoice_id = v_invoice;
+    IF v_active_ix IS DISTINCT FROM v_active THEN
+      RAISE EXCEPTION 'installment.plan_index_disagrees: invoice %/% ends this transaction carrying % plan(s) with status = ''active'' when counted over the rows themselves and % when counted through installment_plans_one_active_per_invoice_uq. Two readings of the same rows in the same transaction disagree, and the index-served one can only under-report: the index holds no entry for a row that qualifies for it, which is an index that is PRESENT AND NOT ENFORCING (indisready false, the state an interrupted CREATE INDEX CONCURRENTLY or REINDEX CONCURRENTLY leaves) and which REINDEX will refuse. The bound installment_plan_fact_sync derives the invoice-borne fact from is therefore not being held, and it must be rebuilt before any further plan is written',
+        v_business, v_invoice, v_active, v_active_ix USING ERRCODE = 'P0001';
+    END IF;
     v_state := (v_active > 0);
     IF v_active > 1 THEN
       RAISE EXCEPTION 'installment.plan_active_unbounded: invoice %/% ends this transaction carrying % plans with status = ''active'' at once, and installment_plans_one_active_per_invoice_uq admits at most one. invoices.has_active_installment_plan is ONE BIT and cannot carry which of them customer_ar_aging should age across, so the aging would read one invoice''s outstanding through two schedules; a count can only UNDER-report under row security, so this is not a blinded reading. The index is present-but-unenforcing or gone',
@@ -1683,10 +1878,21 @@ BEGIN
   --
   --     invoice row  ->  plan row  ->  partial unique index entry
   --
-  -- and the rows this takes are taken ASCENDING BY `id`, which is `P4-AL-41`
-  -- rank 3's own qualifier («`invoices` -- ascending by `id` where several are
-  -- touched»). An `UPDATE` that moves a plan between two invoices of one
-  -- business touches two of them, which is the only shape that needs it.
+  -- and THE ROWS THIS ONE INVOCATION TAKES are taken ASCENDING BY `id`,
+  -- which is `P4-AL-41` rank 3's own qualifier («`invoices` -- ascending by
+  -- `id` where several are touched»). The shape that takes two of them in one
+  -- invocation is an `UPDATE` that moves an active plan between two invoices
+  -- of one business.
+  --
+  -- THE SCOPE IS ONE INVOCATION AND THE PREVIOUS ROUND DECLARED IT WITHOUT
+  -- ONE (`TL-P4-COORD-R52` ordered item 5, F-5). A `BEFORE ... FOR EACH ROW`
+  -- trigger cannot order across its own invocations, so a STATEMENT that
+  -- touches plans on several invoices takes those invoice rows in ROW ORDER
+  -- and not in `id` order -- MEASURED, `FOR NO KEY UPDATE NOWAIT` refused
+  -- `55P03` in BOTH heap orders, with the statement holding the higher `id`
+  -- while waiting on the lower one in one of them. Section 3a-ter declares
+  -- that shape as a `P4-AL-41` rank 3 obligation this slice does not
+  -- discharge, rather than leaving a declaration the code does not keep.
   --
   -- WHAT IT BUYS BESIDES THE ORDER, AND IT IS THE LARGER HALF. `FOR NO KEY
   -- UPDATE` on the invoice row makes THE INVOICE ROW the serialization point
@@ -1786,6 +1992,20 @@ $fn$;
 -- THE SYNC IS NOT DEFERRED. It must have run before the verifier looks, and a
 -- deferred writer and a deferred verifier on the same event would be ordered
 -- by name rather than by meaning.
+--
+-- AND THAT HAZARD IS NOW READ RATHER THAN NAMED (`TL-P4-COORD-R52` ordered
+-- item 2, F-1). This comment considered a DEFERRED WRITER. The exposure that
+-- existed is a NON-DEFERRED VERIFIER, which `SET CONSTRAINTS ALL IMMEDIATE`
+-- -- unprivileged SQL, permitted to `daftar_app` and to `daftar_migrator`,
+-- MEASURED -- produces from any session: the deferral goes, both AFTER ROW
+-- triggers fire in TRIGGER-NAME ORDER, `installment_plans_fact_agrees` sorts
+-- before `installment_plans_fact_sync`, and a LAWFUL plan write was refused
+-- `installment.plan_fact_desynchronised` -- a false name, rendered `500
+-- INTERNAL_ERROR`. `SET CONSTRAINTS` occurred ZERO times in this
+-- specification and in each of its four test files. The order is now MEASURED
+-- per event by the two routines themselves and the inverted case is refused
+-- as `installment.plan_fact_unordered`, whose message is true of it; section
+-- 3a-ter declares the exposure, and it is NOT claimed shut.
 CREATE TRIGGER installment_plans_fact_sync
   AFTER INSERT OR UPDATE OR DELETE ON installment_plans
   FOR EACH ROW EXECUTE FUNCTION installment_plan_fact_sync();
@@ -1822,12 +2042,12 @@ GRANT EXECUTE ON FUNCTION installment_plan_fact_sync() TO daftar_accounting_inte
 GRANT EXECUTE ON FUNCTION installment_plan_fact_verify() TO daftar_accounting_internal;
 GRANT EXECUTE ON FUNCTION installment_plan_active_exclusive() TO daftar_accounting_internal;
 COMMENT ON FUNCTION installment_plan_fact_sync() IS
-  'P4-S7 (TL-P4-COORD-R38 direction (d); TL-P4-COORD-R43 F1-c and F1-c-prime). The ONLY writer of invoices.has_active_installment_plan. An ordinary AFTER ROW trigger on installment_plans — not deferred, so the column is right as soon as the statement completes and the deferred verifier has something to check at COMMIT. THE WRITE SET IS DERIVED FROM THE HANDED ROW''S STATUS TRANSITION AND FROM NOTHING ELSE: NEW.status, OLD.status and the two invoice_ids are fields of records this trigger was given, which no policy can hide, and installment_plans_one_active_per_invoice_uq makes the derivation TOTAL — at most one active plan exists per invoice, so a row that BECAME active determines true, a row that LOST active determines false because it was the only active one there was, and a row that was not and is not active determines NOTHING and is NOT WRITTEN. THAT PREMISE IS NOW MEASURED AND NO LONGER ASSUMED (TL-P4-COORD-R50 ordered item 1): the cross-check is a count(*) and not an EXISTS, and more than one active plan on one invoice RAISES installment.plan_active_unbounded instead of being folded into the same answer as one — because an EXISTS cannot distinguish the state the premise forbids from the state the premise asserts, which is the one distinction the derivation depends on. The refusal is in the only direction blindness cannot manufacture: row security can only SUBTRACT rows, so a blinded count can only UNDER-report and two visible active plans are two active plans. With the index present but indisvalid/indisready false — the state an interrupted CREATE INDEX CONCURRENTLY leaves, which pg_indexes renders identically to the correct one — two ORDINARY CONCURRENT plan creations committed two active plans and customer_ar_aging then served the pre-installment figure byte-identical to the no-plan answer with no refusal at all, and the apply-time end-state ratchet certified that state as sound. That empty write set is F1-c''s repair: round 9 derived a floor from NEW but let a blindable recomputation decide the value for every transition, so a NON-ACTIVE plan write — the ordinary re-planned receivable, which the PARTIAL unique index permits — carried no floor and still overwrote the fact. THE RECOMPUTATION IS KEPT AND MAY ONLY REFUSE: EXISTS over status = ''active'' is compared against the derived value and a disagreement is never evidence of absence. THE TWO DIRECTIONS CARRY DIFFERENT NAMES BECAUSE THEY HAVE DIFFERENT CAUSES (TL-P4-COORD-R46, F-4): a blinded EXISTS can only read false, so derived-false-recomputed-true cannot be blindness and raises installment.plan_active_conflict (another plan of this invoice is active, from a single statement that moved active between two plans or from a dropped unique index) while derived-true-recomputed-false is the blind direction and keeps installment.plan_fact_blind. THE SINGLE-STATEMENT MOVE IS NOT JUDGED HERE ANY MORE (TL-P4-COORD-R46, F-4): installment_plan_active_exclusive() refuses it BEFORE the row is written, as installment.plan_active_conflict, in every row order, because judging it here was row-order dependent and named a blinded policy that had not been touched. AND THE WRITER DETECTS A BLINDING THAT HIDES THE ROW IT WAS HANDED: on every INSERT and UPDATE it reads that row by primary key — a row that exists in this snapshot because this statement just wrote it — and raises installment.plan_fact_blind when it cannot find it, which is F1-c-prime, the one principal round 9''s floor could not watch. ITS SCOPE IS THAT AND NOT MORE (TL-P4-COORD-R46, F-3, correcting a claim that said every INSERT and every UPDATE whatever the transition): a policy predicated on status <> ''active'' leaves a non-active handed row VISIBLE, so the probe passes while the recomputation is blind, and what closes that direction is the EMPTY write set rather than the probe — measured, with round 9''s INSERT branch committing {flag: false, active plans: 1} on exactly that construction and this body refusing it. The DELETE direction carries no such probe and needs none, because no read enters its derived value. It refuses a plan that changes business. It carries NO ''WHERE value IS DISTINCT FROM'' guard, deliberately: ROW_COUNT <> 1 must mean "I could not reach the invoice row" and not "it was already correct", and it RAISES installment.plan_fact_unwritable on it. SECURITY DEFINER owned by daftar_accounting_internal, which holds the unconditional accounting_validator read on both relations and the column-level UPDATE on invoices; the UPDATE still passes through invoices'' own tenant_membership and business_isolation_update policies, so a writer must carry the invoice''s app.tenant_id and app.business_id. Pinned search_path. No EXECUTE grantee but its owner.';
+  'P4-S7 (TL-P4-COORD-R38 direction (d); TL-P4-COORD-R43 F1-c and F1-c-prime). The ONLY writer of invoices.has_active_installment_plan. An ordinary AFTER ROW trigger on installment_plans — not deferred, so the column is right as soon as the statement completes and the deferred verifier has something to check at COMMIT. THE WRITE SET IS DERIVED FROM THE HANDED ROW''S STATUS TRANSITION AND FROM NOTHING ELSE: NEW.status, OLD.status and the two invoice_ids are fields of records this trigger was given, which no policy can hide, and installment_plans_one_active_per_invoice_uq makes the derivation TOTAL — at most one active plan exists per invoice, so a row that BECAME active determines true, a row that LOST active determines false because it was the only active one there was, and a row that was not and is not active determines NOTHING and is NOT WRITTEN. THAT PREMISE IS NOW MEASURED AND NO LONGER ASSUMED (TL-P4-COORD-R50 ordered item 1): the cross-check is a count(*) and not an EXISTS, and more than one active plan on one invoice RAISES installment.plan_active_unbounded instead of being folded into the same answer as one — because an EXISTS cannot distinguish the state the premise forbids from the state the premise asserts, which is the one distinction the derivation depends on. The refusal is in the only direction blindness cannot manufacture: row security can only SUBTRACT rows, so a blinded count can only UNDER-report and two visible active plans are two active plans. With the index present but indisvalid/indisready false — the state an interrupted CREATE INDEX CONCURRENTLY leaves, which pg_indexes renders identically to the correct one — two ORDINARY CONCURRENT plan creations committed two active plans and customer_ar_aging then served the pre-installment figure byte-identical to the no-plan answer with no refusal at all, and the apply-time end-state ratchet certified that state as sound. That empty write set is F1-c''s repair: round 9 derived a floor from NEW but let a blindable recomputation decide the value for every transition, so a NON-ACTIVE plan write — the ordinary re-planned receivable, which the PARTIAL unique index permits — carried no floor and still overwrote the fact. THE RECOMPUTATION IS KEPT AND MAY ONLY REFUSE: EXISTS over status = ''active'' is compared against the derived value and a disagreement is never evidence of absence. THE TWO DIRECTIONS CARRY DIFFERENT NAMES BECAUSE THEY HAVE DIFFERENT CAUSES (TL-P4-COORD-R46, F-4): a blinded EXISTS can only read false, so derived-false-recomputed-true cannot be blindness and raises installment.plan_active_conflict (another plan of this invoice is active, from a single statement that moved active between two plans or from a dropped unique index) while derived-true-recomputed-false is the blind direction and keeps installment.plan_fact_blind. THE SINGLE-STATEMENT MOVE IS NOT JUDGED HERE ANY MORE (TL-P4-COORD-R46, F-4): installment_plan_active_exclusive() refuses it BEFORE the row is written, as installment.plan_active_conflict, in every row order, because judging it here was row-order dependent and named a blinded policy that had not been touched. AND THE WRITER DETECTS A BLINDING THAT HIDES THE ROW IT WAS HANDED: on every INSERT and UPDATE it reads that row by primary key — a row that exists in this snapshot because this statement just wrote it — and raises installment.plan_fact_blind when it cannot find it, which is F1-c-prime, the one principal round 9''s floor could not watch. ITS SCOPE IS THAT AND NOT MORE (TL-P4-COORD-R46, F-3, correcting a claim that said every INSERT and every UPDATE whatever the transition): a policy predicated on status <> ''active'' leaves a non-active handed row VISIBLE, so the probe passes while the recomputation is blind, and what closes that direction is the EMPTY write set rather than the probe — measured, with round 9''s INSERT branch committing {flag: false, active plans: 1} on exactly that construction and this body refusing it. The DELETE direction carries no such probe and needs none, because no read enters its derived value. IT TAKES THAT COUNT BY AN ACCESS PATH THE PARTIAL UNIQUE INDEX CANNOT SERVE, AND TAKES IT TWICE (TL-P4-COORD-R52 ordered item 1, F-2): the previous spelling put status = ''active'' in the WHERE, which IS that index''s predicate, so EXPLAIN planned the guard as an Index Only Scan on the very index whose enforcement it measures and it read ONE where the heap held TWO — with indisready false alone, a second active plan committed through the ordinary route while part 9''s three flags, the trigger count and the whole end-state block all reported OK. The status test is now in a FILTER and the scan carries no status qualifier, which makes the index unusable for the query by the implication rule rather than by the planner''s preference; the index-served reading is taken as well and a disagreement RAISES installment.plan_index_disagrees, which is a RUNTIME detector for an index that is present and not enforcing, in the one direction row security cannot manufacture. Section 2b part 9c reads that plan at apply time and the fact suite reads it in CI with the control beside it. AND IT STAMPS A TRANSACTION-LOCAL COUNTER PER PLAN ROW EVENT (TL-P4-COORD-R52 ordered item 2, F-1), so that installment_plan_fact_verify() can see whether this writer ran first: SET CONSTRAINTS ALL IMMEDIATE is unprivileged SQL that both app roles may issue, it removes the verifier''s deferral, immediate AFTER ROW triggers then fire in trigger-name order, installment_plans_fact_agrees sorts before installment_plans_fact_sync, and a lawful plan write was refused installment.plan_fact_desynchronised — a false name rendered 500 INTERNAL_ERROR. It refuses a plan that changes business. It carries NO ''WHERE value IS DISTINCT FROM'' guard, deliberately: ROW_COUNT <> 1 must mean "I could not reach the invoice row" and not "it was already correct", and it RAISES installment.plan_fact_unwritable on it. SECURITY DEFINER owned by daftar_accounting_internal, which holds the unconditional accounting_validator read on both relations and the column-level UPDATE on invoices; the UPDATE still passes through invoices'' own tenant_membership and business_isolation_update policies, so a writer must carry the invoice''s app.tenant_id and app.business_id. Pinned search_path. No EXECUTE grantee but its owner.';
 COMMENT ON FUNCTION installment_plan_fact_verify() IS
-  'P4-S7 (TL-P4-COORD-R38 direction (d)). The COMMIT-time refusal that makes invoices.has_active_installment_plan true rather than merely maintained. A DEFERRABLE INITIALLY DEFERRED constraint trigger on BOTH sides of the fact: on installment_plans for INSERT, UPDATE and DELETE, and on invoices for INSERT and for UPDATE OF that column — the INSERT arm because 0078:264''s GRANT INSERT ON invoices is table-level and therefore covers a column added later, so an invoice could be born carrying the fact with no plan behind it. It re-derives EXISTS(active plan) and refuses installment.plan_fact_desynchronised on any disagreement, and refuses rather than returning when no invoice carries the fact at all, because returning there is the vacuous pass 0075:439-441 names. Blinded, its EXISTS reads false and every state it then reports is a refusal EXCEPT a flag of false beside a hidden active plan; that one direction is quiet here and is NOT claimed unreachable (TL-P4-COORD-R43 F1-c found round 9 claiming exactly that, falsely). What is true is narrower: after F1-c''s repair a false flag can only be WRITTEN by a transition that DETERMINES false from the handed row, with no read in the value, so the writer cannot produce the state from a blinded read — while TRUNCATE and a disabled trigger still can, and in those states the READ refuses as plan_fact_unflagged. It only READS and RAISES: it writes nothing. SECURITY DEFINER owned by daftar_accounting_internal so that its reading cannot be blinded by an absent session context — the asymmetry that makes this construction sound where round 6''s DEFINER count was not: this routine is never asked what a CALLER can see, and the reader is never asked either, because the fact is on the row. Pinned search_path. No EXECUTE grantee but its owner.';
+  'P4-S7 (TL-P4-COORD-R38 direction (d)). The COMMIT-time refusal that makes invoices.has_active_installment_plan true rather than merely maintained. A DEFERRABLE INITIALLY DEFERRED constraint trigger on BOTH sides of the fact: on installment_plans for INSERT, UPDATE and DELETE, and on invoices for INSERT and for UPDATE OF that column — the INSERT arm because 0078:264''s GRANT INSERT ON invoices is table-level and therefore covers a column added later, so an invoice could be born carrying the fact with no plan behind it. It re-derives EXISTS(active plan) and refuses installment.plan_fact_desynchronised on any disagreement, and refuses rather than returning when no invoice carries the fact at all, because returning there is the vacuous pass 0075:439-441 names. Blinded, its EXISTS reads false and every state it then reports is a refusal EXCEPT a flag of false beside a hidden active plan; that one direction is quiet here and is NOT claimed unreachable (TL-P4-COORD-R43 F1-c found round 9 claiming exactly that, falsely). What is true is narrower: after F1-c''s repair a false flag can only be WRITTEN by a transition that DETERMINES false from the handed row, with no read in the value, so the writer cannot produce the state from a blinded read — while TRUNCATE and a disabled trigger still can, and in those states the READ refuses as plan_fact_unflagged. IT MEASURES ITS OWN DEFERRAL PER EVENT AND NO LONGER ASSUMES IT (TL-P4-COORD-R52 ordered item 2, F-1): SET CONSTRAINTS ALL IMMEDIATE is unprivileged SQL permitted to daftar_app and daftar_migrator, it removes this trigger''s deferral, immediate AFTER ROW triggers fire in TRIGGER-NAME ORDER and installment_plans_fact_agrees sorts BEFORE installment_plans_fact_sync — so the verifier ran before the writer and refused a LAWFUL write under installment.plan_fact_desynchronised, a FALSE name that renders 500 INTERNAL_ERROR. This routine counts its own plan-side invocations in a transaction-local setting against the sync''s, reads pg_trigger to tell «the writer did not run» from «there is no writer», and raises installment.plan_fact_unordered — true of that state, and still failing closed. The ordering cannot be made not to matter: renaming this trigger would leave installment_plans_schedule_complete firing before the transaction''s installments rows exist, and a deferred verifier whose premise IS the end of the transaction cannot survive being made immediate by any naming. Section 3a-ter declares the exposure and does not claim it shut. ITS COUNT IS ALSO TAKEN BY A PATH THE PARTIAL UNIQUE INDEX CANNOT SERVE, AND TWICE (TL-P4-COORD-R52 ordered item 1, F-2), raising installment.plan_index_disagrees on a disagreement between the two readings. It only READS and RAISES: it writes nothing. SECURITY DEFINER owned by daftar_accounting_internal so that its reading cannot be blinded by an absent session context — the asymmetry that makes this construction sound where round 6''s DEFINER count was not: this routine is never asked what a CALLER can see, and the reader is never asked either, because the fact is on the row. Pinned search_path. No EXECUTE grantee but its owner.';
 
 COMMENT ON FUNCTION installment_plan_active_exclusive() IS
-  'P4-S7 (TL-P4-COORD-R46, F-4). The one-active exclusion, refused AT THE STATEMENT and under ONE NAME. A BEFORE INSERT OR UPDATE row trigger on installment_plans: a row may not BECOME an invoice''s active plan while another plan is that invoice''s active plan in this statement''s own snapshot, and it raises installment.plan_active_conflict when one is. ITS MESSAGE NAMES BOTH CAUSES AND PRESCRIBES THE REMEDY OF EACH (TL-P4-COORD-R50 ordered item 6, F-5): the previous message said «one statement may not move active from one plan to another: cancel the outgoing plan in one statement and activate the incoming plan in a later one», and measured against a cancel UNCOMMITTED IN ANOTHER TRANSACTION every clause of it was wrong for the caller reading it — no statement had moved anything, the caller WAS the later statement, and the remedy it was handed was the thing it had just done. This routine can see that another plan is active in its own snapshot and cannot see whose statement made it so, so the message states the observable fact and lets the caller pick the remedy that belongs to its own case. It exists because the sync''s AFTER-time cross-check declared this over-strictness and the declaration was ROW-ORDER DEPENDENT and misnamed: AFTER ROW triggers fire after every row of the statement is written while the partial unique index is checked per row, so the active-row-first heap order was refused P0001 installment.plan_fact_blind (a FALSE diagnosis: no policy altered and the index present) and the cancelled-row-first order was refused 23505 on installment_plans_one_active_per_invoice_uq. Judging it BEFORE the write makes both orders, and the two-statement activate-then-cancel order, one name; cancel-then-activate in two statements still COMMITS, because the outgoing row''s cancelled status is then a visible change of an earlier command, and that is the documented route. IT ALSO TAKES THE INVOICE ROW FOR NO KEY UPDATE FIRST, ASCENDING BY id, WHICH IS THE DECLARED LOCK ORDER (section 3a-ter; TL-P4-COORD-R50 ordered item 5; P4-AL-41 ranks invoices third and installment_plans sixth, and this slice was taking rank 6 before rank 3 on every plan write). That moves the serialization point of a plan write from the index entry to the invoice row, so at READ COMMITTED two concurrent writers on one invoice meet each other HERE and the loser — whose next statement takes a fresh snapshot once the lock is granted — is refused installment.plan_active_conflict rather than a raw 23505 from the index, which is the cross-transaction race answered by the same name as the single-statement one and answered WITHOUT the index entering the argument. THE DETERMINISM CLAIM IS SCOPED ACCORDINGLY AND NOT THIRD-TIME OVER-CLAIMED: one name for a single statement in any row order and for two transactions at READ COMMITTED; 40001 at REPEATABLE READ and SERIALIZABLE, where the snapshot rules refuse the lock before this recheck runs and a retryable serialization failure is the correct answer; and 40P01 for two invoices locked in opposite order, which is a caller obligation P4-AL-41 rank 3 states and no per-row trigger can discharge. A blinded definer locks zero invoice rows and this routine does NOT raise on that, because installment_plan_fact_sync''s plan_fact_unwritable already owns it and two refusals for one state is how a caller is told the wrong cause. IT IS NOT THE MECHANISM AND DOES NOT REPLACE ONE: its read of installment_plans is blindable by FORCE ROW LEVEL SECURITY and blinded it reads nothing and PASSES, behind which stand the partial unique index, which is physical, and the sync''s cross-check. Its contribution is that the writer who meets the limit is told what the limit is. SECURITY DEFINER owned by daftar_accounting_internal, pinned search_path, no EXECUTE grantee but its owner.';
+  'P4-S7 (TL-P4-COORD-R46, F-4). The one-active exclusion, refused AT THE STATEMENT and under ONE NAME. A BEFORE INSERT OR UPDATE row trigger on installment_plans: a row may not BECOME an invoice''s active plan while another plan is that invoice''s active plan in this statement''s own snapshot, and it raises installment.plan_active_conflict when one is. ITS MESSAGE NAMES BOTH CAUSES AND PRESCRIBES THE REMEDY OF EACH (TL-P4-COORD-R50 ordered item 6, F-5): the previous message said «one statement may not move active from one plan to another: cancel the outgoing plan in one statement and activate the incoming plan in a later one», and measured against a cancel UNCOMMITTED IN ANOTHER TRANSACTION every clause of it was wrong for the caller reading it — no statement had moved anything, the caller WAS the later statement, and the remedy it was handed was the thing it had just done. This routine can see that another plan is active in its own snapshot and cannot see whose statement made it so, so the message states the observable fact and lets the caller pick the remedy that belongs to its own case. It exists because the sync''s AFTER-time cross-check declared this over-strictness and the declaration was ROW-ORDER DEPENDENT and misnamed: AFTER ROW triggers fire after every row of the statement is written while the partial unique index is checked per row, so the active-row-first heap order was refused P0001 installment.plan_fact_blind (a FALSE diagnosis: no policy altered and the index present) and the cancelled-row-first order was refused 23505 on installment_plans_one_active_per_invoice_uq. Judging it BEFORE the write makes both orders, and the two-statement activate-then-cancel order, one name; cancel-then-activate in two statements still COMMITS, because the outgoing row''s cancelled status is then a visible change of an earlier command, and that is the documented route. IT ALSO TAKES THE INVOICE ROW FOR NO KEY UPDATE FIRST — ascending by id ACROSS THE ROWS OF ONE INVOCATION, which is the whole of what a BEFORE ROW trigger can order, a statement touching plans on several invoices taking those invoice rows in ROW order (measured, 55P03 in both heap orders) and section 3a-ter declaring that shape as a P4-AL-41 rank 3 obligation this slice does not discharge (TL-P4-COORD-R52 ordered item 5) — WHICH IS THE DECLARED LOCK ORDER (section 3a-ter; TL-P4-COORD-R50 ordered item 5; P4-AL-41 ranks invoices third and installment_plans sixth, and this slice was taking rank 6 before rank 3 on every plan write). That moves the serialization point of a plan write from the index entry to the invoice row, so at READ COMMITTED two concurrent writers on one invoice meet each other HERE and the loser — whose next statement takes a fresh snapshot once the lock is granted — is refused installment.plan_active_conflict rather than a raw 23505 from the index, which is the cross-transaction race answered by the same name as the single-statement one and answered WITHOUT the index entering the argument. THE DETERMINISM CLAIM IS SCOPED ACCORDINGLY AND NOT THIRD-TIME OVER-CLAIMED: one name for a single statement in any row order and for two transactions at READ COMMITTED; 40001 at REPEATABLE READ and SERIALIZABLE, where the snapshot rules refuse the lock before this recheck runs and a retryable serialization failure is the correct answer; and 40P01 for two invoices locked in opposite order, which is a caller obligation P4-AL-41 rank 3 states and no per-row trigger can discharge. A blinded definer locks zero invoice rows and this routine does NOT raise on that, because installment_plan_fact_sync''s plan_fact_unwritable already owns it and two refusals for one state is how a caller is told the wrong cause. IT IS NOT THE MECHANISM AND DOES NOT REPLACE ONE: its read of installment_plans is blindable by FORCE ROW LEVEL SECURITY and blinded it reads nothing and PASSES, behind which stand the partial unique index, which is physical, and the sync''s cross-check. Its contribution is that the writer who meets the limit is told what the limit is. SECURITY DEFINER owned by daftar_accounting_internal, pinned search_path, no EXECUTE grantee but its owner.';
 ALTER FUNCTION installment_plan_fact_sync() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION installment_plan_fact_verify() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION installment_plan_active_exclusive() OWNER TO daftar_accounting_internal;
@@ -1859,11 +2079,51 @@ ALTER FUNCTION installment_plan_active_exclusive() OWNER TO daftar_accounting_in
 --
 -- ── THE DECLARED ORDER FOR A PLAN WRITE, AS OF THIS ROUND ────────────────
 --
---   1. `invoices`, the plan's invoice row, `FOR NO KEY UPDATE`, ASCENDING BY
---      `id` where an `UPDATE` moves a plan between two of them --
---      `P4-AL-41` rank 3 and its own qualifier. Taken in
---      `installment_plan_active_exclusive()`, a BEFORE ROW trigger, which is
---      the only point in a plan write that runs before the plan row exists.
+--   1. `invoices`, the plan's invoice row, `FOR NO KEY UPDATE` -- `P4-AL-41`
+--      rank 3. Taken in `installment_plan_active_exclusive()`, a BEFORE ROW
+--      trigger, which is the only point in a plan write that runs before the
+--      plan row exists.
+--
+--      ASCENDING BY `id` WITHIN ONE INVOCATION OF THAT TRIGGER, AND NOT
+--      ACROSS THE ROWS OF ONE STATEMENT. THE PREVIOUS ROUND DECLARED THIS
+--      ORDER WITHOUT THAT SCOPE AND THE DECLARATION WAS STRONGER THAN THE
+--      CODE (`TL-P4-COORD-R52` ordered item 5, F-5), which is worse than no
+--      declaration because the next author builds on it. What is true, and
+--      the measurement that bounds it:
+--
+--        * the `ORDER BY i.id` in that routine's own `PERFORM ... FOR NO KEY
+--          UPDATE` IS honoured, and it is the only shape that takes two
+--          invoice rows in one statement of one trigger invocation: an
+--          `UPDATE` that moves an active plan between two invoices of one
+--          business;
+--        * ACROSS THE ROWS OF ONE STATEMENT THE ORDER IS ROW ORDER AND NOT
+--          `id` ORDER. A `BEFORE ... FOR EACH ROW` trigger cannot order its
+--          own invocations: the server calls it once per row, in the order
+--          the plan produces the rows. MEASURED by the round-12 challenger
+--          and not disputed: one statement activating a plan on each of two
+--          invoices, with a holder on the invoice the row order reaches
+--          SECOND, is blocked; a third backend asking for the FIRST-row
+--          invoice `FOR NO KEY UPDATE NOWAIT` is refused `55P03` in BOTH heap
+--          orders -- so in the high-then-low run the statement held the
+--          HIGHER `id` while waiting for the lower one;
+--        * and `installment_plan_fact_sync()`'s step-4 lock is a SINGLE ROW
+--          per loop iteration over a derived array, with no ordering of its
+--          own. It adds no edge when the BEFORE trigger has pre-taken the
+--          rows and it takes them in array order when it has not.
+--
+--      SO THE MULTI-ROW PLAN STATEMENT IS A SECOND SHAPE FOR WHICH
+--      `P4-AL-41` RANK 3's ASCENDING QUALIFIER IS NOT DISCHARGED BY THIS
+--      SLICE, and it is DECLARED here rather than certified absent -- the
+--      caller cannot discharge it either, because the caller addresses PLANS
+--      and the row order is the planner's. Its deadlock consequence is
+--      DESIGN ONLY and is NOT measured: at most one plan row per invoice can
+--      be in a lock-taking transition at a time, so two such statements
+--      contend on the PLAN rows first, and the round-12 challenger's own
+--      `40P01` from two multi-row statements was attributed by the server log
+--      to a tuple of `installment_plans` and not of `invoices`. The remedy
+--      available to a caller is the one `P4-AL-41` already states and this
+--      section already declares below: ONE INVOICE PER STATEMENT, in
+--      ascending `invoices.id` order.
 --   2. the `installment_plans` row itself -- `P4-AL-41` rank 6.
 --   3. the entry in `installment_plans_one_active_per_invoice_uq`, when the
 --      row qualifies for the partial index.
@@ -1937,6 +2197,60 @@ ALTER FUNCTION installment_plan_active_exclusive() OWNER TO daftar_accounting_in
 -- ASCENDING `invoices.id` ORDER. That is the declaration; `gate:phase4:s8`
 -- owns the N-run proof of it (`P4-AL-41`), and this slice ships no plan
 -- command for it to govern yet.
+--
+-- ── `SET CONSTRAINTS ALL IMMEDIATE`: AN UNPRIVILEGED STATEMENT THAT MAKES
+--    EVERY PLAN WRITE FAIL CLOSED, DECLARED (`TL-P4-COORD-R52` ordered
+--    item 2, F-1) ─────────────────────────────────────────────────────────
+--
+-- `SET CONSTRAINTS ALL IMMEDIATE` needs no privilege and both app roles may
+-- issue it (MEASURED: `daftar_app` and `daftar_migrator` both succeed). It
+-- removes the deferral of `installment_plans_fact_agrees`,
+-- `invoices_installment_fact_agrees` and the three schedule-completeness
+-- triggers for the rest of the transaction, after which they fire as ordinary
+-- immediate `AFTER ... FOR EACH ROW` triggers, IN TRIGGER-NAME ORDER.
+--
+--   * `installment_plans_fact_agrees` sorts BEFORE
+--     `installment_plans_fact_sync`, so THE VERIFIER RUNS BEFORE THE WRITER.
+--     At `6acd17b` a lawful plan insert that commits in the control was then
+--     refused `installment.plan_fact_desynchronised` -- a name that is FALSE
+--     of the state, and one of the nine registered internal invariants, so
+--     the merchant received `500 INTERNAL_ERROR` on a lawful sale. The
+--     documented cancel route was refused with the mirror message.
+--   * `installment_plans_schedule_complete` would fire before the
+--     transaction's `installments` rows exist, and its premise IS the end of
+--     the transaction.
+--
+-- THE ORDERING CANNOT BE MADE NOT TO MATTER, AND RENAMING WOULD HIDE HALF OF
+-- IT. Renaming the fact verifier to sort after the sync fixes that one pair
+-- and leaves the schedule verifier firing into a transaction it cannot judge,
+-- under `installment.schedule_incomplete` -- true of the instant and false of
+-- the transaction, which is the misdiagnosis family this slice has now paid
+-- for four rounds running. So:
+--
+--   THE IMMEDIATE CASE IS DETECTED AND REFUSED UNDER A NAME THAT IS TRUE OF
+--   IT. `installment_plan_fact_sync()` stamps a transaction-local counter per
+--   plan row event and `installment_plan_fact_verify()` refuses
+--   `installment.plan_fact_unordered` when its own count runs ahead of the
+--   writer's while the writer is installed and enabled. The verifier sorts
+--   FIRST in the immediate case, so this refusal is what the caller meets --
+--   before the schedule verifier can offer it a second, less true cause.
+--
+-- WHAT IS NOT CLAIMED. The statement is NOT made harmless: a transaction that
+-- issues it BEFORE a plan write is refused, and refusing is the whole of the
+-- repair. It FAILS CLOSED -- no wrong fact commits in either state, measured
+-- in both. Issued AFTER the write, or not at all, the same write commits:
+-- the deferred triggers then fire on a transaction state they can judge,
+-- which is the shape every existing use of the statement in this estate's
+-- test helpers has (`tests/helpers/p3c-residue.ts`, `stock-ledger.ts`,
+-- `supplier-settlement.ts`, and `0069`'s R-94, which records the same
+-- fail-closed requirement for the P3-S8 guard).
+--
+-- AND THE PRODUCT ITSELF ISSUES IT NOWHERE: `SET CONSTRAINTS` occurs ZERO
+-- times in `apps/` and ZERO times in `packages/` (MEASURED this round, a
+-- case-insensitive sweep of both trees). Every occurrence in the repository
+-- is in `tests/` or in a migration COMMENT. That is a reading of today's tree
+-- and not a guarantee about a pooler, an ORM or a diagnostic session, which is
+-- why the detection exists rather than a note.
 --
 -- `40001` AND `40P01` ARE NOT IN THIS SLICE'S REFUSAL CATALOGUE AND MUST NOT
 -- BE. They are transaction-manager outcomes, not invariant violations, and
@@ -2682,6 +2996,17 @@ BEGIN
   -- and after `SET ROLE daftar_accounting_internal`. So no ordinary principal
   -- can turn the triggers off without `ALTER TABLE`, which needs the owner.
   --
+  -- IT IS AN ENUMERATION AND NO LONGER A COUNT (`TL-P4-COORD-R52` ordered
+  -- item 3). The caller's fifth argument used to be
+  -- `greatest(0, 7 - (the enabled triggers on the four routines))`, which
+  -- pinned neither the trigger NAME nor the RELATION -- so ONE conforming
+  -- extra trigger paid for ONE disabled real one, the number returned to 7,
+  -- and this routine passed while the mechanism was broken. A count is not an
+  -- identity. The caller now enumerates the seven `(relation, trigger name,
+  -- routine)` triples and counts the ones that are not present and
+  -- `tgenabled = 'O'`; `R` (replica-only, which is silence for every
+  -- ordinary session) and `A` are refused as deliberately as `D`.
+  --
   -- IT IS A CATALOGUE READ AND IT IS NOT THE RETIRED FAMILY. `TL-P4-COORD-R38`
   -- retired every construction that answers «CAN I SEE THE ROWS?» from inside
   -- the reader, because under row security that question has no answer a
@@ -2691,7 +3016,7 @@ BEGIN
   -- the same whoever asks. A property of the installation is not a property of
   -- the asker, and that is the whole of the distinction.
   IF p_untrusted_fact <> 0 THEN
-    RAISE EXCEPTION 'installment.plan_fact_untrusted: % of the seven triggers that maintain and verify invoices.has_active_installment_plan and section 3 obligation (a) are missing or not enabled (pg_trigger.tgenabled <> ''O''), so the column this reader ages from is no longer derived from the plan relation and the schedule it ages across is no longer judged against the invoice total. A figure read from an unmaintained fact is not a figure. This state is owner-only reachable, by ALTER TABLE ... DISABLE TRIGGER; it is declared in section 2c and it is refused here rather than served',
+    RAISE EXCEPTION 'installment.plan_fact_untrusted: % of the seven triggers that maintain and verify invoices.has_active_installment_plan and section 3 obligation (a) are not installed on their own relation under their own name against their own routine with pg_trigger.tgenabled = ''O'' -- missing, renamed, re-pointed, or carrying D (disabled), R (replica-only, which is silence for every ordinary session) or A. This count is an ENUMERATION of the seven and not a total, so an extra trigger cannot pay for a disabled one. The column this reader ages from is therefore no longer derived from the plan relation, or the schedule it ages across is no longer judged against the invoice total. A figure read from an unmaintained fact is not a figure. This state is owner-only reachable, by ALTER TABLE ... DISABLE TRIGGER or by DDL on the triggers themselves; it is declared in section 2c and it is refused here rather than served',
       p_untrusted_fact USING ERRCODE = 'P0001';
   END IF;
   RETURN true;
@@ -2863,10 +3188,35 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
            -- refuse on «two visible» and may never conclude anything from
            -- «one visible» -- the same discipline every reading in this file
            -- obeys.
+           --
+           -- AND IT NO LONGER READS `visible_plan`, WHICH IS THIS ROUND'S
+           -- REPAIR (`TL-P4-COORD-R52` ordered item 1, F-2). `visible_plan`
+           -- restricts `status = 'active'` in its `WHERE`, which is the
+           -- PREDICATE OF `installment_plans_one_active_per_invoice_uq`
+           -- ITSELF, so this count was answered FROM the partial index whose
+           -- enforcement it exists to measure: with the index present and
+           -- `indisready = false` alone it read ONE where the heap held TWO,
+           -- and this reader served a figure over two active plans with no
+           -- refusal -- the round-11 harm, alive and now invisible. The
+           -- status test is therefore in a `FILTER` and the scan carries NO
+           -- status qualifier, which makes the partial index UNUSABLE for
+           -- this query by the implication rule rather than by the planner's
+           -- preference. The arithmetic below still reads `visible_plan`,
+           -- because the arithmetic is about the plan it ages and not about
+           -- the bound; if the index under-reports there, THIS count
+           -- over-reports here and the read is REFUSED, which is the
+           -- direction that fails closed. PROVEN BY EXECUTION in
+           -- `tests/integration/phase4-s7-installment-fact-db.test.ts`: a
+           -- `RETURNS TABLE` SQL routine is not inlined, so no `EXPLAIN` of a
+           -- call shows this CTE, and the honest instrument for it is the
+           -- refusal arriving in the state that used to serve a figure.
            (SELECT pg_catalog.count(*)
-              FROM (SELECT v2.invoice_id FROM visible_plan v2
-                     GROUP BY v2.invoice_id
-                    HAVING pg_catalog.count(*) > 1) z)::BIGINT
+              FROM (SELECT p2.invoice_id
+                      FROM public.installment_plans p2
+                     WHERE p2.business_id = p_business_id
+                       AND p2.invoice_id IN (SELECT i2.invoice_id FROM invoice_fact i2)
+                     GROUP BY p2.invoice_id
+                    HAVING pg_catalog.count(*) FILTER (WHERE p2.status = 'active') > 1) z)::BIGINT
              AS unbounded_plan,
            -- THE SEVEN TRIGGERS THAT MAKE THE FACT A FACT, READ AS CATALOGUE
            -- DATA (`TL-P4-COORD-R50` ordered item 3).
@@ -2883,36 +3233,69 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
            -- does not close; it may not also certify that the escape is
            -- absent.
            --
-           -- `7 - (the enabled ones)`, FLOORED AT ZERO AND NOT AN EQUALITY.
-           -- A missing trigger and a disabled one are the same harm to this
-           -- reader and both reduce the count, so the subtraction catches
-           -- both; the `greatest` means a LATER slice that adds an eighth
-           -- trigger on one of these four routines does not red this reader,
-           -- which an `= 7` would. It refuses only in the direction that
-           -- cannot be manufactured by someone else's correct work.
+           -- A COUNT IS NOT AN IDENTITY, AND THIS USED TO BE A COUNT
+           -- (`TL-P4-COORD-R52` ordered item 3, F-3). The previous reading was
+           -- `greatest(0, 7 - (the enabled ones on these four routines))`,
+           -- which pins neither `tgname` nor `tgrelid` -- so it was defeated
+           -- by COMPENSATION: add ONE conforming extra trigger on any of the
+           -- four routines, DISABLE one of the seven real ones, and the count
+           -- returns to 7 while the mechanism is broken. The reader then
+           -- served the full schedule figure in the exact state it refuses
+           -- seven times out of seven on a clean fixture. `greatest` made the
+           -- suppression SILENT rather than noisy, and the comment that
+           -- argued for it («a LATER slice that adds an eighth trigger does
+           -- not red this reader») designed the hole in.
            --
-           -- `greatest` IS UNQUALIFIED AND MUST BE. `GREATEST` is SYNTAX and
-           -- not a function, exactly like `COALESCE`, so
-           -- `pg_catalog.greatest(...)` is a syntax error and not a hardening
-           -- -- the one trap this estate records about the pinned
-           -- `search_path` idiom, named in this file's own header.
+           -- SO THE SEVEN ARE ENUMERATED, EACH REQUIRED PRESENT AND ENABLED
+           -- ON ITS OWN RELATION AND BOUND TO ITS OWN ROUTINE. Four things
+           -- are pinned per row -- the RELATION, the TRIGGER NAME, the
+           -- ROUTINE and `tgenabled` -- and the count is of the EXPECTED rows
+           -- that are NOT satisfied. An eighth trigger pays for nothing,
+           -- because nothing is subtracted; a RENAMED trigger is caught,
+           -- because its expected name is then absent, which is the one thing
+           -- the four-routine count was chosen for and did not do either; and
+           -- an extra trigger still does not red this reader, which was the
+           -- legitimate half of the `greatest` argument and is preserved
+           -- without the hole. Section 2b part 9b refuses an eighth trigger
+           -- at apply time, where a ratchet on this file's own statements
+           -- belongs.
            --
-           -- NO `regprocedure` CAST. `'public.installment_plan_fact_sync()'::regprocedure`
-           -- RAISES when the routine is absent, which would turn a missing
-           -- routine into an unrelated `42883` from the middle of an
-           -- arithmetic CTE. Joined through `pg_proc` by name instead, so an
-           -- absent routine contributes zero triggers and is counted as the
-           -- harm it is.
-           greatest(0, 7 - (SELECT pg_catalog.count(*)
-              FROM pg_catalog.pg_trigger t
-              JOIN pg_catalog.pg_proc f ON f.oid = t.tgfoid
-              JOIN pg_catalog.pg_namespace fn ON fn.oid = f.pronamespace
-             WHERE NOT t.tgisinternal AND t.tgenabled = 'O'
-               AND fn.nspname = 'public'
-               AND f.proname IN ('installment_plan_fact_sync',
-                                 'installment_plan_fact_verify',
-                                 'installment_plan_active_exclusive',
-                                 'installment_schedule_verify')))::BIGINT
+           -- `tgenabled` HAS FOUR VALUES AND ONLY ONE PASSES, ENUMERATED
+           -- DELIBERATELY: `O` fires for an ordinary origin session, `D` is
+           -- disabled, `R` fires ONLY under `session_replication_role =
+           -- replica` -- which is silence for every ordinary session, the
+           -- harm with a different letter, and a value a `<> ''D''` law would
+           -- have admitted -- and `A` always fires, which is strictly
+           -- stronger than `O` and is nevertheless refused, because a trigger
+           -- this file did not create that way is a trigger somebody altered.
+           --
+           -- NO `regprocedure` CAST and no `regclass` cast.
+           -- `'public.installment_plan_fact_sync()'::regprocedure` RAISES when
+           -- the routine is absent, which would turn a missing routine into an
+           -- unrelated `42883` from the middle of an arithmetic CTE, and
+           -- `'public.installments'::regclass` would do the same for a missing
+           -- relation. Joined through `pg_class` and `pg_proc` BY NAME
+           -- instead, so an absent routine or relation contributes zero
+           -- satisfied rows and is counted as the harm it is.
+           (SELECT pg_catalog.count(*)
+              FROM (VALUES ('installment_plans', 'installment_plans_fact_sync',                'installment_plan_fact_sync'),
+                           ('installment_plans', 'installment_plans_active_exclusive',         'installment_plan_active_exclusive'),
+                           ('installment_plans', 'installment_plans_fact_agrees',              'installment_plan_fact_verify'),
+                           ('invoices',          'invoices_installment_fact_agrees',           'installment_plan_fact_verify'),
+                           ('installment_plans', 'installment_plans_schedule_complete',        'installment_schedule_verify'),
+                           ('installments',      'installments_schedule_complete',             'installment_schedule_verify'),
+                           ('invoices',          'invoices_installment_schedule_complete',     'installment_schedule_verify'))
+                     AS e(relname, tgname, proname)
+             WHERE NOT EXISTS (SELECT 1
+                                 FROM pg_catalog.pg_trigger t
+                                 JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                                 JOIN pg_catalog.pg_namespace cn ON cn.oid = c.relnamespace
+                                 JOIN pg_catalog.pg_proc f ON f.oid = t.tgfoid
+                                 JOIN pg_catalog.pg_namespace fn ON fn.oid = f.pronamespace
+                                WHERE NOT t.tgisinternal
+                                  AND cn.nspname = 'public' AND fn.nspname = 'public'
+                                  AND c.relname = e.relname AND t.tgname = e.tgname
+                                  AND f.proname = e.proname AND t.tgenabled = 'O'))::BIGINT
              AS untrusted_fact
       FROM invoice_fact i
       LEFT JOIN visible_plan v ON v.invoice_id = i.invoice_id
@@ -3177,20 +3560,53 @@ DECLARE
   -- `scripts/guards/p4s7-body-digests.ts`, and asserted against the file by
   -- `packages/domain-core/test/phase4-s7-installment-aging.test.ts` so that a
   -- stale constant reds a test rather than a deployment.
-  -- THE FIVE BODY DIGESTS (part 6b). `sha256` of the text between each
+  -- THE SIX BODY DIGESTS (part 6b). `sha256` of the text between each
   -- routine's `$fn$` quotes, as `pg_proc.prosrc` holds it, hex-encoded.
   -- GENERATED by `scripts/guards/p4s7-body-digests.ts` from this very file,
   -- and asserted against it by
   -- `packages/domain-core/test/phase4-s7-installment-aging.test.ts`, so a
   -- stale constant reds a test rather than a deployment.
+  --
+  -- SIX AND NOT FIVE, AND THE COMPLETENESS IS NOW ENFORCED AND NOT ASSERTED
+  -- (`TL-P4-COORD-R52` ordered item 4, F-6). This list covered FIVE of the
+  -- six routines this file installs, and the one it left out was
+  -- `installment_plan_fact_assert` -- THE SINGLE SITE OF FIVE OF THE READER'S
+  -- REFUSALS. A stub conforming to every attribute part 7 pins (plpgsql,
+  -- STABLE, SECURITY INVOKER, the pinned `search_path`, five BIGINTs, boolean
+  -- return, owned by `daftar_accounting_internal`) whose body is
+  -- `BEGIN RETURN true; END` passed every law in this block, and the reader
+  -- then served a figure with a trigger disabled. The extractor's own comment
+  -- said «a digest list that quietly covers four of five routines is worse
+  -- than none» and the list was exactly that. The extractor now READS THE
+  -- ROUTINE HEADS OUT OF THIS FILE and FAILS when it finds one this list does
+  -- not name, so the completeness is a law and not a sentence; and part 6c
+  -- below refuses an OVERLOAD of any pinned signature, which is the one shape
+  -- a digest of a signature cannot see.
   c_bodies    CONSTANT TEXT[][] := ARRAY[
-    ['public.installment_plan_fact_sync()',                       'eccf3fc6b4c224ddf7396ea5af33ca97878a24fde9544342e85a88b12f8903b5'],
-    ['public.installment_plan_fact_verify()',                     '1cd423e93ae09c58b60fed5c3be1c8b51291539bbdd31278f9a6649954a14b6a'],
-    ['public.installment_plan_active_exclusive()',                '524ef623e630e698707cd2014723f05275e1a118100e4631d1de3164dfae7662'],
+    ['public.installment_plan_fact_sync()',                       'c310fb1fabe3f274da9bc6183efac22d0465ddb8268471bfcedcce7a19503d93'],
+    ['public.installment_plan_fact_verify()',                     'a038ac1be461ce92aea8fe271e4ce9bcaac3c48d64240089761388e395043451'],
+    ['public.installment_plan_active_exclusive()',                '5907d8e69f7fe8c0ba0c785580b110a490760cc00cff4a707faa9da0cfeb4f27'],
     ['public.installment_schedule_verify()',                      '47f3edc3f9f24413f736afa562eb59fa33ed21a72da9a1d21ee71c7ceac98c32'],
-    ['public.customer_ar_aging(uuid,uuid,date,integer[])',        '3faffb9ee3521200b8cd873f0b9530d125e797e3ca4aea3ab8e6b71b4d2be380']];
+    ['public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)', '61d797de3fcb5f8e7fdb687414e09a2d734de630bdd954c48995661708b122f6'],
+    ['public.customer_ar_aging(uuid,uuid,date,integer[])',        'b5d431c53c6443993784ae2961773d9a71c5e6383a2c0e413d5e00b33a874ae8']];
+  -- The six routine NAMES of the list above, for part 6c's overload law. A
+  -- second spelling of one list is a second definition of it, so these are
+  -- the bare names and nothing else.
+  c_routines  CONSTANT TEXT[] := ARRAY['installment_plan_fact_sync', 'installment_plan_fact_verify',
+                                       'installment_plan_active_exclusive', 'installment_schedule_verify',
+                                       'installment_plan_fact_assert', 'customer_ar_aging'];
   v_sha       TEXT;
   v_i         INTEGER;
+  -- Part 9c's subject: the EXACT text of the index-independent count the sync,
+  -- the deferred verifier and the reader take, with literals in place of the
+  -- two parameters. A plan is read from it and the index must not be in it.
+  c_plan_probe CONSTANT TEXT :=
+    'EXPLAIN (COSTS OFF) SELECT pg_catalog.count(*) FILTER (WHERE p.status = ''active'')'
+    || ' FROM public.installment_plans p'
+    || ' WHERE p.business_id = ''00000000-0000-0000-0000-000000000000''::UUID'
+    || '   AND p.invoice_id = ''00000000-0000-0000-0000-000000000000''::UUID';
+  v_plan      TEXT;
+  v_line      RECORD;
 BEGIN
   -- 1. BOTH RELATIONS EXIST, row security ENABLED AND FORCED on both, and each
   --    carries tenant_id and business_id as NOT NULL columns (P4-AL-08).
@@ -3488,12 +3904,24 @@ BEGIN
   --     It also means the migration owner must transcribe these bodies
   --     BYTE-FOR-BYTE; the refusal message says so.
   --
+  --     AND THE RULING IS ABOUT THE INSTRUMENT AND NOT ABOUT THE TOKEN
+  --     (`TL-P4-COORD-R52` ordered item 7). `~~` IS `LIKE` -- the operator
+  --     the parser rewrites `LIKE` into -- `~~*` is `ILIKE`, and `SIMILAR
+  --     TO`, `~`, `!~`, `position()`, `strpos()` and a `substring()` test are
+  --     the same instrument under other names. A law that forbade the word
+  --     `LIKE` forbade one spelling of the defect, so the absence law in
+  --     `packages/domain-core/test/phase4-s7-installment-aging.test.ts` is
+  --     now over the CLASS: every one of those spellings is caught, each is
+  --     measured against the law that must catch it, and the shipped block is
+  --     the control that passes. These names appear HERE in a comment, which
+  --     is where a ruling is quoted; the law's subject is the block's SQL.
+  --
   --     AND IT IS NOT A SELF-CERTIFICATION. The constant is the digest of a
   --     body a REVIEWER read; the subject is what a cluster actually has.
   --     The two are different objects, which is why comparing them is a law
   --     at all -- unlike a `prosrc LIKE`, where both sides came out of the
   --     same text.
-  --     FIVE ROUTINES AND NOT TWO. The two text ratchets covered the sync
+  --     SIX ROUTINES AND NOT TWO. The two text ratchets covered the sync
   --     and the reader; the digest covers every routine this file installs,
   --     because the instrument costs one constant each and the two laws that
   --     used to establish `installment_schedule_verify`'s retired obligation
@@ -3508,6 +3936,33 @@ BEGIN
     IF v_sha IS DISTINCT FROM c_bodies[v_i][2] THEN
       RAISE EXCEPTION 'installment.migration_end_state_invalid: the installed body of % has sha256 % and this migration ships %, so the routine in this cluster is not the routine that was reviewed. This is an IDENTITY test on catalogue DATA and not a substring test: TL-P4-COORD-R46 ruled that a prosrc LIKE cannot establish a property of code because a comment is a string, and TL-P4-COORD-R50 §5 ruled that a prosrc NOT LIKE cannot establish an absence either, because an identifier is also a string -- a variable rename defeated the comment-stripping version of this law. A migration owner transcribing this specification must copy every routine body BYTE-FOR-BYTE between its dollar quotes. The digest does not claim the body is CORRECT and no apply-time instrument can: the behavioural proofs are the execution proofs in tests/integration/phase4-s7-installment-fact-db.test.ts, which plant round 8''s body, round 9''s body AND round 9''s body with v_asserted renamed to v_floor, and require the refusal from the shipped body and a committed wrong fact from each predecessor',
         c_bodies[v_i][1], v_sha, c_bodies[v_i][2] USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+
+  -- 6c. AND NO ROUTINE OF A PINNED NAME EXISTS THAT THE LIST DOES NOT PIN
+  --     (`TL-P4-COORD-R52` ordered item 4).
+  --
+  --     A DIGEST OF A SIGNATURE SAYS NOTHING ABOUT AN OVERLOAD OF IT, and
+  --     that is the one gap the round-12 challenger named in the digest law's
+  --     favour («nothing about an added overload of a pinned signature»). An
+  --     overload is reachable in principle by anybody who may create a
+  --     function in `public` -- which `daftar_accounting_internal` may not,
+  --     because `REVOKE CREATE ON SCHEMA public` is taken from it twice in
+  --     this file -- and an overload of `installment_plan_fact_assert` taking
+  --     five arguments of ANY type would be chosen over the pinned one by
+  --     ordinary overload resolution for a call that casts its arguments.
+  --
+  --     SO THE LAW IS A CARDINALITY ON THE NAME and not a shape test on a
+  --     signature: EXACTLY ONE routine per name in `public`, which is what
+  --     this file creates. It counts by NAME, from `c_routines`, because the
+  --     thing an overload defeats is the signature.
+  FOR v_i IN 1 .. pg_catalog.array_length(c_routines, 1) LOOP
+    SELECT pg_catalog.count(*) INTO v_n
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = c_routines[v_i];
+    IF v_n <> 1 THEN
+      RAISE EXCEPTION 'installment.migration_end_state_invalid: schema public carries % routines named %, and this file creates exactly one. Part 6b pins each routine''s body by the digest of its SIGNATURE, and an OVERLOAD of a pinned signature is invisible to that: a second installment_plan_fact_assert taking five arguments of other types would be chosen by ordinary overload resolution for a call whose arguments are cast, while every digest in this block still matched. A routine of one of these names that this file did not create is a second authority over the same decision',
+        v_n, c_routines[v_i] USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
 
@@ -3698,12 +4153,27 @@ BEGIN
   --     ratchet on THIS file's statements and not a search for the best
   --     available configuration.
   --
-  --     SEVEN, COUNTED FROM THE FOUR ROUTINES AND NOT FROM A LIST OF NAMES.
-  --     A name list would be satisfied by a renamed trigger and would miss a
-  --     trigger added on the same routine; the routines are what this file
-  --     owns. Three on `installment_schedule_verify()`, two on
-  --     `installment_plan_fact_verify()`, one on `installment_plan_fact_sync()`
-  --     and one on `installment_plan_active_exclusive()`.
+  --     SEVEN, COUNTED FROM THE FOUR ROUTINES. A count by routine catches a
+  --     trigger ADDED on one of them, which is what an apply-time ratchet on
+  --     this file's own statements is for. Three on
+  --     `installment_schedule_verify()`, two on
+  --     `installment_plan_fact_verify()`, one on
+  --     `installment_plan_fact_sync()` and one on
+  --     `installment_plan_active_exclusive()`.
+  --
+  --     AND THE READ-TIME LAW IS AN ENUMERATION, WHICH IS A DIFFERENT
+  --     SENTENCE (`TL-P4-COORD-R52` ordered item 3, F-3). This law's earlier
+  --     comment argued that a name list «would be satisfied by a renamed
+  --     trigger», and that was BACKWARDS: a count by routine is satisfied by
+  --     a renamed trigger and an enumeration by name is not. What a count
+  --     cannot do is survive COMPENSATION -- one conforming extra trigger
+  --     paying for one disabled real one, which defeated
+  --     `customer_ar_aging`'s copy of this reading and let the reader serve a
+  --     figure. The two laws are therefore different instruments and both are
+  --     kept: HERE, a cardinality on the routines, which refuses an ADDITION
+  --     at apply time; in the reader, the seven `(relation, trigger name,
+  --     routine, tgenabled)` rows enumerated, which refuses an ABSENCE at
+  --     read time and cannot be paid for.
   IF (SELECT pg_catalog.count(*) FROM pg_trigger t
         JOIN pg_proc f ON f.oid = t.tgfoid
         JOIN pg_namespace fn ON fn.oid = f.pronamespace
@@ -3738,6 +4208,59 @@ BEGIN
         WHERE NOT t.tgisinternal AND fn.nspname = 'public' AND t.tgenabled <> 'O'
           AND f.proname IN ('installment_plan_fact_sync', 'installment_plan_fact_verify',
                             'installment_plan_active_exclusive', 'installment_schedule_verify'))
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- 9c. AND THE COUNT THAT MEASURES THE INDEX IS NOT ANSWERED FROM THE INDEX
+  --     (`TL-P4-COORD-R52` ordered item 1, F-2).
+  --
+  --     A `count(*)` IS NOT AN INSTRUMENT; A `count(*)` PLUS A QUERY PLAN IS.
+  --     The three runtime counts this file added in the previous round were
+  --     planned as `Index Only Scan using
+  --     installment_plans_one_active_per_invoice_uq` -- identically with
+  --     `enable_seqscan = off` -- because their predicate WAS that index's
+  --     definition. So the guard built not to presuppose the index rested on
+  --     it: with the index present and `indisready = false` alone, the count
+  --     read ONE where the heap held TWO, a second active plan committed
+  --     through the ordinary route, part 9's three flags all read TRUE, this
+  --     whole block reported OK, and the reader served a figure over a state
+  --     `REINDEX` then refused `23505`.
+  --
+  --     THE PREDICATE NOW LIVES IN A `FILTER` AND NOT IN THE `WHERE`, so a
+  --     partial index on `status = 'active'` CANNOT answer the query: a
+  --     partial index may be used only where the query's own qualifiers IMPLY
+  --     its predicate, and a query that does not restrict `status` needs rows
+  --     the index does not contain. That is a correctness rule of every
+  --     planner and not a cost preference -- which is exactly why it may be
+  --     rested on, and exactly why it is READ HERE anyway rather than
+  --     believed. The round being repaired rested on a planner choice and
+  --     nobody had read a plan.
+  --
+  --     `enable_seqscan = off` IS SET FOR THE READING, so the planner is
+  --     pushed as hard as it can be towards an index before the question is
+  --     asked. `SET LOCAL` reverts with the migration's own transaction.
+  --
+  --     IT IS ONE-DIRECTIONAL, AND THAT IS DELIBERATE. The law is «the plan
+  --     does not name the partial unique index». The MIRROR half -- that the
+  --     index-served spelling IS planned on that index, which is what makes
+  --     this reading non-vacuous -- belongs in a test and not in a migration:
+  --     it depends on the planner choosing between usable indexes, and a
+  --     future release choosing the primary key instead would red a
+  --     deployment over a state that harms nothing.
+  --     `tests/integration/phase4-s7-installment-fact-db.test.ts` carries
+  --     that half, on a populated fixture, with both knob settings and as two
+  --     roles.
+  SET LOCAL enable_seqscan = off;
+  v_plan := '';
+  FOR v_line IN EXECUTE c_plan_probe LOOP
+    v_plan := v_plan || v_line."QUERY PLAN" || E'\n';
+  END LOOP;
+  IF pg_catalog.strpos(v_plan, 'installment_plans_one_active_per_invoice_uq') > 0 THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: the index-independent active-plan count is planned ON installment_plans_one_active_per_invoice_uq in this cluster, so the guard that measures whether that index is enforcing is answered BY that index and reports one where the rows say two. The plan read was: %',
+      v_plan USING ERRCODE = 'P0001';
+  END IF;
+  IF v_plan = '' THEN
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: EXPLAIN of the index-independent active-plan count returned no plan at all, so part 9c measured nothing. A law that cannot read its subject is not a law'
       USING ERRCODE = 'P0001';
   END IF;
 

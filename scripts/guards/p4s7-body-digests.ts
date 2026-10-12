@@ -62,11 +62,31 @@ export interface BodyDigest {
 }
 
 /**
- * The five routines, in the order the end-state block's `c_bodies` array
+ * The SIX routines, in the order the end-state block's `c_bodies` array
  * declares them. The `head` is matched literally against the file: a routine
  * whose head this list does not find is an error and never a silently skipped
  * entry, because a digest list that quietly covers four of five routines is
  * worse than none.
+ *
+ * ── AND THAT SENTENCE WAS AN ASSERTION IN A COMMENT WHILE THE LIST WAS
+ *    EXACTLY THAT (`TL-P4-COORD-R52` ordered item 4, F-6) ─────────────────
+ *
+ * The list named FIVE of the six routines the specification installs, and the
+ * one it omitted was `installment_plan_fact_assert` — THE SINGLE SITE OF ALL
+ * FIVE OF THE READER'S REFUSALS. A stub conforming to every attribute the
+ * end-state block pins (plpgsql, STABLE, SECURITY INVOKER, the pinned
+ * `search_path`, five BIGINTs, boolean return, owned by
+ * `daftar_accounting_internal`) whose entire body was `BEGIN RETURN true; END`
+ * passed every law in that block, and the reader then served a figure with one
+ * of the seven triggers disabled.
+ *
+ * So the completeness is now ENFORCED and not asserted: `routineHeads` reads
+ * every `CREATE [OR REPLACE] FUNCTION` head out of the specification itself
+ * and `bodyDigests` THROWS when the file installs a routine this list does not
+ * name, or names one the file does not install. The subject of that law is the
+ * file's own DDL heads — DATA about what is created — and not a `prosrc`
+ * substring, which `TL-P4-COORD-R46` ruled cannot establish a property of code
+ * and `TL-P4-COORD-R50` §5 ruled cannot establish an absence.
  */
 export const P4S7_PINNED_BODIES: readonly { readonly head: string; readonly signature: string }[] = [
   { head: 'CREATE OR REPLACE FUNCTION installment_plan_fact_sync() RETURNS TRIGGER', signature: 'public.installment_plan_fact_sync()' },
@@ -74,10 +94,56 @@ export const P4S7_PINNED_BODIES: readonly { readonly head: string; readonly sign
   { head: 'CREATE OR REPLACE FUNCTION installment_plan_active_exclusive() RETURNS TRIGGER', signature: 'public.installment_plan_active_exclusive()' },
   { head: 'CREATE OR REPLACE FUNCTION installment_schedule_verify() RETURNS TRIGGER', signature: 'public.installment_schedule_verify()' },
   {
+    head: 'CREATE OR REPLACE FUNCTION installment_plan_fact_assert(p_unreadable_plan BIGINT,',
+    signature: 'public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)',
+  },
+  {
     head: 'CREATE OR REPLACE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])',
     signature: 'public.customer_ar_aging(uuid,uuid,date,integer[])',
   },
 ];
+
+/**
+ * Every routine the specification INSTALLS, by bare name, read from its own
+ * `CREATE [OR REPLACE] FUNCTION` heads.
+ *
+ * ANCHORED AT THE START OF A LINE, which is what makes the subject DDL rather
+ * than prose: this file's own header discusses `CREATE OR REPLACE FUNCTION`
+ * inside a box-drawing comment, and an unanchored match would count it as a
+ * seventh routine. MEASURED: six heads at a line start, one mention inside a
+ * comment, and the law goes red if that ratio ever changes — which is the
+ * point, because a seventh routine is exactly what must not slip past the
+ * digest list.
+ */
+export function routineHeads(spec: string): readonly string[] {
+  return [...spec.matchAll(/^CREATE (?:OR REPLACE )?FUNCTION[ \t]+([a-z_][a-z0-9_]*)[ \t]*\(/gm)].map((m) => m[1] as string);
+}
+
+/** The bare routine name of a pinned `regprocedure` signature. */
+function pinnedName(signature: string): string {
+  return signature.replace(/^public\./, '').replace(/\(.*$/, '');
+}
+
+/**
+ * THE COMPLETENESS LAW. Throws when the specification installs a routine
+ * `P4S7_PINNED_BODIES` does not name, or names one the specification does not
+ * install. It is called by `bodyDigests` so that every consumer — the CLI, the
+ * digest-coupling test — enforces it without having to remember to.
+ */
+export function assertPinnedBodiesComplete(spec: string): void {
+  const installed = [...new Set(routineHeads(spec))].sort();
+  const pinned = [...new Set(P4S7_PINNED_BODIES.map((r) => pinnedName(r.signature)))].sort();
+  const unpinned = installed.filter((n) => !pinned.includes(n));
+  const absent = pinned.filter((n) => !installed.includes(n));
+  if (unpinned.length > 0 || absent.length > 0) {
+    throw new Error(
+      `p4s7-body-digests: the pinned-body list is not the set of routines the specification installs` +
+        `${unpinned.length > 0 ? `; installed and NOT pinned: ${unpinned.join(', ')}` : ''}` +
+        `${absent.length > 0 ? `; pinned and NOT installed: ${absent.join(', ')}` : ''}` +
+        `. A digest list that covers some of the routines is worse than none: the uncovered one can be replaced by a conforming stub.`,
+    );
+  }
+}
 
 export const P4S7_SPEC_PATH = join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql');
 
@@ -92,8 +158,9 @@ export function dollarQuotedBody(spec: string, head: string): string {
   return spec.slice(open + 4, close);
 }
 
-/** Every pinned body's digest, computed from `spec`. */
+/** Every pinned body's digest, computed from `spec`. Refuses an incomplete list first. */
 export function bodyDigests(spec: string): readonly BodyDigest[] {
+  assertPinnedBodiesComplete(spec);
   return P4S7_PINNED_BODIES.map((r) => {
     const body = dollarQuotedBody(spec, r.head);
     if (body.length < 200) throw new Error(`p4s7-body-digests: the body of ${r.signature} sliced to ${body.length} characters, which is not a routine`);

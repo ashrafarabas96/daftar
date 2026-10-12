@@ -629,7 +629,10 @@ DECLARE
   v_rows     INTEGER;
   v_floor    BOOLEAN;
   v_old_active BOOLEAN;
+  v_seq      BIGINT;
 BEGIN
+  v_seq := coalesce(nullif(pg_catalog.current_setting('installment.plan_fact_sync_events', true), '')::BIGINT, 0) + 1;
+  PERFORM pg_catalog.set_config('installment.plan_fact_sync_events', v_seq::TEXT, true);
   IF TG_OP = 'INSERT' THEN
     v_business := NEW.business_id;
     v_invoices := ARRAY[NEW.invoice_id];
@@ -1010,6 +1013,24 @@ describe('P4-S7 §E the runtime guard at WRITE time, and the lock order (F-1, F-
       M['E3_reenforce'] = await sudo(
         `UPDATE pg_index SET indisvalid = true, indisready = true WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`,
       );
+      // A's plan row was written while the index was NOT MAINTAINED, so it is
+      // absent from the index. Flipping the flags back does not put it there:
+      // the heap then holds one active plan on this invoice and the index
+      // holds none, and the round-13 guard in the sync and the verifier READS
+      // THAT DISAGREEMENT and refuses the next write on this invoice. Round
+      // 12's suite did not notice because its count was index-served and so
+      // agreed with the index by construction; the figures below were
+      // therefore taken on a fixture whose index did not describe its own
+      // heap, and the later cases on invoice 2 and 3 inherited it. Disclosed.
+      //
+      // The repair is the one the refusal's own message names. `REINDEX`
+      // SUCCEEDING is itself a measurement: it would raise `23505` if two
+      // active plans had actually committed, so a null here says the write
+      // path held while the index was blind.
+      M['E3_reindex'] = await sudo(`REINDEX INDEX public.installment_plans_one_active_per_invoice_uq`);
+      expect(M['E3_reindex']).toBeNull();
+      M['E3_ratchet'] = await ratchet();
+      expect(M['E3_ratchet']).toBeNull();
     }
   });
 
@@ -1089,6 +1110,11 @@ describe('P4-S7 §E the runtime guard at WRITE time, and the lock order (F-1, F-
       M['E4_reenforce'] = await sudo(
         `UPDATE pg_index SET indisvalid = true, indisready = true WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`,
       );
+      // Same disclosure as §E3: A's row was written into an unmaintained
+      // index and `REINDEX` is both the repair and the proof that only one
+      // active plan committed.
+      M['E4_reindex'] = await sudo(`REINDEX INDEX public.installment_plans_one_active_per_invoice_uq`);
+      expect(M['E4_reindex']).toBeNull();
       M['E4_ratchet'] = await ratchet();
       expect(M['E4_ratchet']).toBeNull();
     }

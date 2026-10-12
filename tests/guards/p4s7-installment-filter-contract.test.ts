@@ -116,9 +116,11 @@ const refusal = (code: string): Error & { code: string } =>
   );
 
 /**
- * THE NINE REGISTERED NAMES, WRITTEN OUT. Seven were registered in round 11;
- * `plan_active_unbounded` and `plan_fact_untrusted` join them in the commit
- * that makes them reachable (`TL-P4-COORD-R50` ordered items 1, 2 and 3).
+ * THE ELEVEN REGISTERED NAMES, WRITTEN OUT. Seven were registered in round 11;
+ * `plan_active_unbounded` and `plan_fact_untrusted` joined them in the commit
+ * that made them reachable (`TL-P4-COORD-R50` ordered items 1, 2 and 3), and
+ * `plan_index_disagrees` and `plan_fact_unordered` in this one
+ * (`TL-P4-COORD-R52` ordered items 1 and 2).
  */
 const REGISTERED: readonly string[] = [
   'installment.plan_fact_unreadable',
@@ -130,6 +132,15 @@ const REGISTERED: readonly string[] = [
   'installment.plan_active_conflict',
   'installment.plan_active_unbounded',
   'installment.plan_fact_untrusted',
+  // `TL-P4-COORD-R52` ordered items 1 and 2, registered in the same commit as
+  // the constructions that raise them: an index present and not enforcing,
+  // measured at runtime as a disagreement between two access paths over the
+  // same rows; and a deferred fact verifier fired BEFORE the immediate writer,
+  // which `SET CONSTRAINTS ALL IMMEDIATE` -- unprivileged SQL permitted to
+  // both app roles -- produces. The second replaces a FALSE
+  // `plan_fact_desynchronised` on a LAWFUL write.
+  'installment.plan_index_disagrees',
+  'installment.plan_fact_unordered',
 ];
 
 /**
