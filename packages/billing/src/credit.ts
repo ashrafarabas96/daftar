@@ -34,12 +34,34 @@
  * asserts this module's own source contains no such symbol, so the absence is
  * a law rather than a current fact.
  *
- * ── What is deliberately NOT here ─────────────────────────────────────
+ * ── Applying a balance to an invoice: RULED ON, and it lives next door ──
  *
- * Applying a balance to an invoice. The ledger shape supports it —
- * `consumption` is a kind — but which invoice consumes which credit, and in
- * what order, is a commercial decision this prep has no ruling for. The fold
- * is ready for it; nothing here decides it.
+ * Round 2 left this absent because no ruling existed. `TL-P5-R5` (PART 25)
+ * now supplies one — apply automatically at invoice finalization, oldest
+ * grant first — and it is implemented in `credit-application.ts`, which is a
+ * separate module because allocation is a different question from solvency
+ * and because this module must stay readable as the balance authority alone.
+ *
+ * ── What `TL-P5-R5` forced to change in THIS file ───────────────────────
+ *
+ * Two things, and both closed a hole rather than adding a feature.
+ *
+ * `same platform customer/business only` and `no transfer between
+ * businesses`: the ledger now carries `businessId` and the fold is scoped to
+ * one. Before the ruling, the comment on `foldCreditBalance` claimed that
+ * refusing an out-of-order ledger would catch "a caller that merged two
+ * businesses' ledgers" — **and it would not have.** There was no business
+ * identifier anywhere in the type, so two ledgers interleaved in correct time
+ * order folded to one balance without complaint. That is the project's own
+ * recurring defect — a comment citing a check that does not exist — written
+ * by this module's author, in this module.
+ *
+ * `allocation order, oldest eligible grant first`: an allocation that can be
+ * audited has to say which grant funded which invoice, so a `consumption`
+ * now names the grant it draws down (`appliesToGrantId`) and the fold reports
+ * a REMAINDER PER GRANT. Without that, FIFO allocation is unverifiable: the
+ * totals alone cannot tell a correct allocation from one that drained the
+ * newest grant first.
  */
 import { refuse } from './errors';
 import { MAX_BILLING_MINOR } from './types';
@@ -50,6 +72,12 @@ export type CreditAdjustmentKind = (typeof CREDIT_ADJUSTMENT_KINDS)[number];
 export interface CreditAdjustment {
   /** The adjustment's own identity. An identifier; never interpreted here. */
   readonly id: string;
+  /**
+   * Whose credit it is. `TL-P5-R5`: one business only, and no transfer
+   * between businesses — a rule the fold can only keep if the rows say whose
+   * they are.
+   */
+  readonly businessId: string;
   readonly kind: CreditAdjustmentKind;
   /** Always POSITIVE. The kind carries the direction. */
   readonly amountMinor: bigint;
@@ -65,15 +93,53 @@ export interface CreditAdjustment {
    * rounding adjustment.
    */
   readonly reason: string;
+  /**
+   * Which grant this consumption draws down. REQUIRED on a `consumption` and
+   * FORBIDDEN on a `grant`, and it must name a grant that appears earlier in
+   * the same ledger.
+   *
+   * It exists so FIFO allocation is auditable. `TL-P5-R5` fixes the order —
+   * oldest grant first — and the totals alone cannot distinguish a correct
+   * allocation from one that drained the newest grant first, because with no
+   * expiry and no write-off every grant is otherwise fungible.
+   */
+  readonly appliesToGrantId?: string;
+}
+
+/**
+ * What a balance is scoped to. A record rather than two parameters, so
+ * `foldCreditBalance` keeps the arity its own test pins — and so that no
+ * caller can ever pass a balance in, which is `TL-P5-R3`'s "no manually
+ * writable balance authority" expressed in the signature.
+ */
+export interface CreditLedgerScope {
+  readonly businessId: string;
+  readonly currency: string;
+}
+
+/** One grant and how much of it is still unspent. */
+export interface GrantRemainder {
+  readonly grantId: string;
+  readonly occurredAt: string;
+  readonly grantedMinor: bigint;
+  readonly remainingMinor: bigint;
 }
 
 export interface CreditBalance {
+  readonly businessId: string;
   readonly currency: string;
   readonly grantedMinor: bigint;
   readonly consumedMinor: bigint;
   /** `granted − consumed`. Never negative: an overdraw is refused, not clamped. */
   readonly balanceMinor: bigint;
   readonly adjustmentCount: number;
+  /**
+   * Every grant in ledger order with its unspent remainder, zero remainders
+   * included. The allocator reads this; it is reported in full rather than
+   * filtered so that "this grant is exhausted" is a visible fact and not an
+   * absence a caller has to infer.
+   */
+  readonly grants: readonly GrantRemainder[];
 }
 
 /**
@@ -84,9 +150,13 @@ export interface CreditBalance {
  * and the running balance — which is what the overdraw check is about — is
  * only meaningful in the order the adjustments actually happened.
  */
-export function foldCreditBalance(adjustments: readonly CreditAdjustment[], currency: string): CreditBalance {
+export function foldCreditBalance(adjustments: readonly CreditAdjustment[], scope: CreditLedgerScope): CreditBalance {
+  const currency = scope?.currency;
   if (typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency)) {
     refuse('billing.payload_invalid', 'a credit balance is stated in one three-letter currency');
+  }
+  if (typeof scope.businessId !== 'string' || scope.businessId.trim().length === 0) {
+    refuse('billing.payload_invalid', 'a credit balance belongs to exactly one business, which must be named');
   }
   // Typed before it is validated: `Array.isArray` widens its argument to
   // `any[]` (see the note in `invoice.ts`).
@@ -100,6 +170,9 @@ export function foldCreditBalance(adjustments: readonly CreditAdjustment[], curr
   let running = 0n;
   let previousMs = -Infinity;
   const seen = new Set<string>();
+  /** Grant id → its index in `remainders`, so a draw-down is O(1) to place. */
+  const grantIndex = new Map<string, number>();
+  const remainders: Array<{ grantId: string; occurredAt: string; grantedMinor: bigint; remainingMinor: bigint }> = [];
 
   for (let i = 0; i < list.length; i++) {
     const a = list[i];
@@ -124,6 +197,13 @@ export function foldCreditBalance(adjustments: readonly CreditAdjustment[], curr
     if (typeof a.reason !== 'string' || a.reason.trim().length === 0 || a.reason.trim().length > 500) {
       refuse('billing.credit_reason_required', 'a credit adjustment must state why it exists', { attemptNo: n });
     }
+    if (a.businessId !== scope.businessId) {
+      // `TL-P5-R5`: no transfer between businesses. Two ledgers interleaved in
+      // correct time order are the shape this catches, and nothing else does:
+      // the instants are monotone, the ids are distinct, and the balance comes
+      // out plausible.
+      refuse('billing.credit_business_mismatch', "a credit ledger may not mix two businesses' adjustments", { attemptNo: n });
+    }
     if (a.currency !== currency) {
       refuse('billing.credit_currency_mismatch', 'a credit balance may not mix currencies', { attemptNo: n, currency });
     }
@@ -146,13 +226,53 @@ export function foldCreditBalance(adjustments: readonly CreditAdjustment[], curr
     previousMs = atMs;
 
     if (a.kind === 'grant') {
+      if (a.appliesToGrantId !== undefined) {
+        refuse('billing.payload_invalid', 'a grant does not draw down another grant', { attemptNo: n });
+      }
       granted += a.amountMinor;
       running += a.amountMinor;
+      grantIndex.set(a.id, remainders.length);
+      remainders.push({ grantId: a.id, occurredAt: a.occurredAt, grantedMinor: a.amountMinor, remainingMinor: a.amountMinor });
     } else {
+      if (typeof a.appliesToGrantId !== 'string' || a.appliesToGrantId.trim().length === 0) {
+        refuse('billing.payload_invalid', 'a consumption must name the grant it draws down', { attemptNo: n });
+      }
+      const at = grantIndex.get(a.appliesToGrantId);
+      if (at === undefined) {
+        // Forward references and unknown grants are the same refusal on
+        // purpose: an append-only ledger in which a consumption can precede
+        // its grant has no order worth folding.
+        refuse('billing.credit_grant_unknown', 'this consumption draws down a grant that is not earlier in this ledger', { attemptNo: n });
+      }
+      const target = remainders[at];
+      if (!target) {
+        refuse('billing.invariant_violated', 'a grant index pointed outside the grant list', { invariant: 'grant_index_within_bounds', currency });
+      }
+      if (a.amountMinor > target.remainingMinor) {
+        // Per-grant overdraw. It is distinct from the balance-level overdraw
+        // below and strictly stronger: a ledger can hold enough credit in
+        // total while one grant is drawn past its own amount, and only the
+        // per-grant check sees that.
+        refuse('billing.credit_grant_overdrawn', 'this consumption draws more than the named grant still holds', { attemptNo: n, currency });
+      }
+      target.remainingMinor -= a.amountMinor;
       consumed += a.amountMinor;
       running -= a.amountMinor;
       if (running < 0n) {
-        refuse('billing.credit_overdrawn', 'this consumption spends credit the ledger does not hold', {
+        // UNREACHABLE BY CONSTRUCTION, and kept deliberately as a second
+        // witness rather than deleted.
+        //
+        // Every consumption is bounded by its own grant's remainder above, so
+        // the consumptions can never sum past the grants, so `running` can
+        // never go below zero. It is therefore an INVARIANT of this module
+        // and not a business outcome, and it is refused as one — the earlier
+        // draft raised `billing.credit_overdrawn` here, which made that code
+        // a refusal with no reachable raise site the moment per-grant
+        // attribution arrived. A code that cannot be raised is a dead
+        // constant authority, so it was removed from the union, and
+        // `test/error-codes-are-live.test.ts` now reds on the next one.
+        refuse('billing.invariant_violated', 'the running credit balance went below zero', {
+          invariant: 'balance_never_negative',
           attemptNo: n,
           currency,
         });
@@ -173,5 +293,31 @@ export function foldCreditBalance(adjustments: readonly CreditAdjustment[], curr
     });
   }
 
-  return { currency, grantedMinor: granted, consumedMinor: consumed, balanceMinor: running, adjustmentCount: list.length };
+  // A second, independent witness for the per-grant split: the remainders
+  // must sum to the balance. The loop above maintained them separately from
+  // `running`, so this compares two accumulations rather than one with
+  // itself — the same discipline as the line above.
+  let remainderSum = 0n;
+  for (const r of remainders) {
+    if (r.remainingMinor < 0n) {
+      refuse('billing.invariant_violated', 'a grant remainder went negative', { invariant: 'grant_remainder_non_negative', currency });
+    }
+    remainderSum += r.remainingMinor;
+  }
+  if (remainderSum !== running) {
+    refuse('billing.invariant_violated', 'the grant remainders do not sum to the balance', {
+      invariant: 'remainders_sum_to_balance',
+      currency,
+    });
+  }
+
+  return {
+    businessId: scope.businessId,
+    currency,
+    grantedMinor: granted,
+    consumedMinor: consumed,
+    balanceMinor: running,
+    adjustmentCount: list.length,
+    grants: remainders.map((r) => ({ ...r })),
+  };
 }

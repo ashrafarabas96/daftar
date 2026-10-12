@@ -114,6 +114,64 @@ describe('§16 — no posting vocabulary appears in this package code', () => {
   });
 });
 
+describe('PART 26 — a missing credential can never become a fake success', () => {
+  /**
+   * The ruling: "Missing credential: external activation pending, not a
+   * reason to fake provider success."
+   *
+   * The structural guarantee is that NOTHING in `src/` chooses a provider.
+   * `PaymentProviderPort` is an interface, `FakePaymentProvider` is a class a
+   * caller must name, and there is no factory, no registry and no default. So
+   * there is no code path along which an absent credential could fall back to
+   * the fake — the fall-back would have to be written at the call site, in
+   * daylight, by someone typing the fake's name.
+   */
+  it('contains no provider factory, registry or default', () => {
+    const offences: string[] = [];
+    for (const [file, source] of SOURCES) {
+      const code = blankOut(source);
+      for (const w of ['createProvider', 'getProvider', 'resolveProvider', 'defaultProvider', 'providerFor', 'PROVIDER_REGISTRY', 'process.env']) {
+        if (code.includes(w)) offences.push(`${file}: ${w}`);
+      }
+    }
+    expect(offences, 'src/ selects a provider, so a missing credential has somewhere to fall back to').toEqual([]);
+  });
+
+  it('nothing but the fake module mentions the fake', () => {
+    // If a real code path named `FakePaymentProvider`, that path is the
+    // fall-back this rule forbids.
+    const leaks: string[] = [];
+    for (const [file, source] of SOURCES) {
+      if (file === 'fake-provider.ts' || file === 'index.ts') continue;
+      if (blankOut(source).includes('FakePaymentProvider')) leaks.push(file);
+    }
+    expect(leaks, 'a module other than the fake itself reaches for the fake').toEqual([]);
+  });
+
+  it('the port carries no credential, endpoint or test-mode field', () => {
+    // A port with a credential field is a port that can be constructed
+    // without one, and "constructed without one" is where a fake success
+    // comes from.
+    const code = blankOut(readFileSync(join(SRC, 'ports.ts'), 'utf8'));
+    for (const w of ['apiKey', 'secret', 'token', 'credential', 'endpoint', 'baseUrl', 'testMode', 'sandbox']) {
+      expect(code, `${w} appears in the payment port`).not.toContain(w);
+    }
+  });
+
+  it('a declined or failed charge is a RESULT, and unreachability throws', () => {
+    // The distinction PART 26 depends on: a provider that could not be
+    // reached must not look like a provider that answered. A decline is data
+    // on the result; unreachability is an exception, and it records nothing.
+    const ports = blankOut(readFileSync(join(SRC, 'ports.ts'), 'utf8'));
+    expect(ports).toContain('CHARGE_OUTCOMES');
+    expect(stringLiteralsOf(readFileSync(join(SRC, 'ports.ts'), 'utf8'))).toContain('declined');
+    // And there is no refusal code for a decline, because a decline is not a
+    // refusal — `test/error-codes-are-live.test.ts` found the dead code that
+    // claimed otherwise.
+    expect(stringLiteralsOf(readFileSync(join(SRC, 'errors.ts'), 'utf8'))).not.toContain('billing.provider_declined');
+  });
+});
+
 describe('§17 / TL-P5-R2 — platform SaaS tax stays unsupported', () => {
   it('states tax as a structural zero that a caller cannot change', () => {
     // Already enforced in `invoice.test.ts` by calling the composer; this case

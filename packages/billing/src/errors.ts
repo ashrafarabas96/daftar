@@ -73,8 +73,24 @@ export type BillingErrorCode =
   | 'billing.credit_reason_required'
   | 'billing.credit_currency_mismatch'
   | 'billing.credit_ledger_out_of_order'
-  /** A consumption beyond the balance. Refused, never clamped to zero. */
-  | 'billing.credit_overdrawn'
+  /**
+   * `TL-P5-R5` (PART 25) — the credit APPLICATION law. One business only, no
+   * transfer between businesses, allocation oldest grant first, up to the
+   * invoice amount only, payable never negative, exact conservation.
+   */
+  | 'billing.credit_business_mismatch'
+  | 'billing.credit_grant_unknown'
+  /**
+   * A consumption drawing more than the grant it names still holds. Refused,
+   * never clamped to zero: clamping would spend credit that does not exist
+   * and leave a balance that looks correct.
+   *
+   * This is the ONLY overdraw refusal. A balance-level one existed until
+   * per-grant attribution arrived and made it unreachable — see the note at
+   * its site in `credit.ts`.
+   */
+  | 'billing.credit_grant_overdrawn'
+  | 'billing.credit_application_ids_exhausted'
   // Dunning — the retry/grace schedule.
   | 'billing.dunning_policy_invalid'
   | 'billing.dunning_attempt_out_of_order'
@@ -83,7 +99,16 @@ export type BillingErrorCode =
   | 'billing.provider_idempotency_conflict'
   | 'billing.provider_amount_invalid'
   | 'billing.provider_unavailable'
-  | 'billing.provider_declined'
+  /*
+   * There is deliberately no `billing.provider_declined`. A decline is a
+   * RESULT on `ChargeResult.outcome`, never an exception, so a refusal code
+   * for it had no raise site anywhere in this package — it was declared for a
+   * charge-orchestration layer that does not exist here yet, which makes it a
+   * dead constant authority (PART 17). `test/error-codes-are-live.test.ts`
+   * found it. The orchestration layer will need a refusal of its own when it
+   * is built, and `P5-S0-CONTRACT-PACK.md` records that under `P5-BIL-001`
+   * rather than reserving the word here.
+   */
   // An invariant this package states about its OWN arithmetic. It is not a
   // payload complaint and not a business outcome: it means a result this
   // module computed violated a law this module promises, which a caller must

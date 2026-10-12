@@ -27,6 +27,7 @@ function base(fromMinor: bigint, toMinor: bigint): PlanChangeInput {
     changeAt: MID,
     from: { amountMinor: fromMinor, currency: 'ILS' },
     to: { amountMinor: toMinor, currency: 'ILS' },
+    businessId: 'biz-1',
     fromPlanKey: 'PLAN_BASIC',
     toPlanKey: 'PLAN_PRO',
     adjustmentId: 'adj-0001',
@@ -81,6 +82,9 @@ describe('composePlanChangeBilling', () => {
     expect(result.adjustment.currency).toBe('ILS');
     expect(result.adjustment.occurredAt).toBe(MID);
     expect(result.adjustment.id).toBe('adj-0001');
+    expect(result.adjustment.businessId).toBe('biz-1');
+    // A grant does not draw down another grant.
+    expect(result.adjustment.appliesToGrantId).toBeUndefined();
     expect(result.adjustment.reason).toBe('mid-period downgrade proration');
     // There is no invoice on this branch at all — not a zero one, not an
     // empty one. The shape is the enforcement.
@@ -93,7 +97,7 @@ describe('composePlanChangeBilling', () => {
     // them that could change a sign.
     const result = composePlanChangeBilling(base(30_000n, 10_000n));
     if (result.outcome !== 'credit') throw new Error('expected a credit');
-    const balance = foldCreditBalance([result.adjustment], 'ILS');
+    const balance = foldCreditBalance([result.adjustment], { businessId: 'biz-1', currency: 'ILS' });
     expect(balance.balanceMinor).toBe(10_000n);
     expect(balance.grantedMinor).toBe(10_000n);
     expect(balance.consumedMinor).toBe(0n);
@@ -140,6 +144,7 @@ describe('composePlanChangeBilling', () => {
   });
 
   it('refuses a change that does not name its plans, its adjustment identity or its reason', () => {
+    expectRefusal(() => composePlanChangeBilling({ ...base(10n, 20n), businessId: '' }), 'billing.payload_invalid');
     expectRefusal(() => composePlanChangeBilling({ ...base(10n, 20n), fromPlanKey: ' ' }), 'billing.payload_invalid');
     expectRefusal(() => composePlanChangeBilling({ ...base(10n, 20n), toPlanKey: '' }), 'billing.payload_invalid');
     expectRefusal(() => composePlanChangeBilling({ ...base(10n, 20n), adjustmentId: '' }), 'billing.payload_invalid');

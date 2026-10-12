@@ -170,6 +170,75 @@ describe('the measured set, read from the live entitlement engine', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('would see a fourth measured key, and a renamed one, proved against synthetic sources', () => {
+    // PART 6's corrective law, applied beyond frozen migrations: a red proof
+    // does not mutate a tree this thread does not own, even a non-frozen one.
+    // `measuredLimitKeys` takes a SOURCE STRING, so its sensitivity is proved
+    // against synthetic engines and the live `entitlements.service.ts` is
+    // never touched. Two mutations of that live file have been retired from
+    // the harness in favour of these cases.
+    const engine = (cases: readonly string[]): string =>
+      [
+        'class S {',
+        '  async getUsage(c: PoolClient, businessId: string, limitKey: LimitKey): Promise<number> {',
+        '    switch (limitKey) {',
+        ...cases.map((k) => `      case '${k}':\n        return 1;`),
+        '      default:',
+        '        return 0;',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n');
+
+    // A fourth key appears: the live equality above is what would red.
+    expect(measuredLimitKeys(engine(['MAX_USERS', 'MAX_BRANCHES', 'MAX_PRODUCTS', 'MAX_STORAGE']))).toEqual([
+      'MAX_BRANCHES',
+      'MAX_PRODUCTS',
+      'MAX_STORAGE',
+      'MAX_USERS',
+    ]);
+    // A key is renamed, so the set loses one.
+    expect(measuredLimitKeys(engine(['MAX_USERS', 'MAX_PRODUCTS']))).toEqual(['MAX_PRODUCTS', 'MAX_USERS']);
+    // And a fourth measured key would empty the §21 gap for that key, which
+    // is the consequence that matters: it becomes sellable.
+    const withStorage = measuredLimitKeys(engine(['MAX_USERS', 'MAX_BRANCHES', 'MAX_PRODUCTS', 'MAX_STORAGE']));
+    expect(REGISTERED.filter((k) => !withStorage.includes(k))).not.toContain('MAX_STORAGE');
+  });
+
+  it('refuses to extract from an engine that has no switch or no default branch', () => {
+    // The two shapes that would make the extraction meaningless rather than
+    // wrong. A silent empty set here is how every §21 refusal below would
+    // pass while asserting nothing.
+    const noSwitch = 'class S {\n  async getUsage(c: C): Promise<number> {\n    return 0;\n  }\n}';
+    const noDefault =
+      "class S {\n  async getUsage(c: C): Promise<number> {\n    switch (limitKey) {\n      case 'MAX_USERS':\n        return 1;\n    }\n  }\n}";
+    expect(() => measuredLimitKeys(noSwitch)).toThrow();
+    expect(() => measuredLimitKeys(noDefault)).toThrow();
+  });
+
+  it('finds the end of getUsage by brace depth, not by the first closing brace', () => {
+    // The live body contains object and template literals, so a walk that
+    // stopped at the first `}` would read a truncated body and miss case
+    // labels. A synthetic body with nested braces pins the walk.
+    const nested = [
+      'class S {',
+      '  async getUsage(c: C): Promise<number> {',
+      '    switch (limitKey) {',
+      "      case 'MAX_USERS': {",
+      '        const q = { a: { b: 1 } };',
+      '        return q.a.b;',
+      '      }',
+      "      case 'MAX_BRANCHES':",
+      '        return 2;',
+      '      default:',
+      '        return 0;',
+      '    }',
+      '  }',
+      '}',
+    ].join('\n');
+    expect(measuredLimitKeys(nested)).toEqual(['MAX_BRANCHES', 'MAX_USERS']);
+  });
+
   it('is not an empty extraction', () => {
     // Guards the one way every other case in this file could pass vacuously.
     expect(MEASURED.length).toBe(3);

@@ -33,6 +33,7 @@ export * from './proration';
 export * from './addons';
 export * from './invoice';
 export * from './credit';
+export * from './credit-application';
 export * from './plan-change';
 export * from './dunning';
 export * from './ports';

@@ -54,6 +54,12 @@ export const PLAN_CHANGE_OUTCOMES = ['invoice', 'credit', 'nothing'] as const;
 export type PlanChangeOutcome = (typeof PLAN_CHANGE_OUTCOMES)[number];
 
 export interface PlanChangeInput extends ProrationInput {
+  /**
+   * Whose subscription is changing. Carried onto the credit adjustment,
+   * because `TL-P5-R5` scopes a credit ledger to one business and the fold
+   * refuses a ledger that mixes two.
+   */
+  readonly businessId: string;
   /** The plan being left. An identifier; it becomes the credit line's `ref`. */
   readonly fromPlanKey: string;
   /** The plan being joined. An identifier; it becomes the charge line's `ref`. */
@@ -81,7 +87,10 @@ export type PlanChangeBilling =
  * that cannot see both sides of it has to be answered by reading code.
  */
 export function composePlanChangeBilling(input: PlanChangeInput): PlanChangeBilling {
-  if (typeof input?.fromPlanKey !== 'string' || input.fromPlanKey.trim().length === 0) {
+  if (typeof input?.businessId !== 'string' || input.businessId.trim().length === 0) {
+    refuse('billing.payload_invalid', 'a plan change must name the business whose subscription changes');
+  }
+  if (typeof input.fromPlanKey !== 'string' || input.fromPlanKey.trim().length === 0) {
     refuse('billing.payload_invalid', 'a plan change must name the plan being left');
   }
   if (typeof input.toPlanKey !== 'string' || input.toPlanKey.trim().length === 0) {
@@ -112,6 +121,7 @@ export function composePlanChangeBilling(input: PlanChangeInput): PlanChangeBill
     }
     const adjustment: CreditAdjustment = {
       id: input.adjustmentId,
+      businessId: input.businessId,
       kind: 'grant',
       amountMinor,
       currency: proration.currency,
