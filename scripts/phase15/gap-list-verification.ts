@@ -48,7 +48,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, normalize, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { startCluster, stopCluster, prepareClusterDir, psqlScalar, createEmptyDatabase, PG_SUPERPASS, PG16_BIN, type ClusterSpec } from './pg-cluster';
+import { startCluster, stopCluster, prepareClusterDir, psqlScalar, createEmptyDatabase, clusterIdentity, PG_SUPERPASS, PG16_BIN, type ClusterSpec } from './pg-cluster';
 // G3 runs the REAL validator rather than reading it, so it is imported here
 // and not re-implemented: a paraphrase of a rule is not the rule.
 import { loadConfig } from '../../apps/api/src/config';
@@ -465,6 +465,11 @@ function verifyG4(runCluster: boolean): void {
     // here lets the WHOLE file apply, so the verdict below carries no
     // partial-apply caveat.
     createEmptyDatabase(spec.port, 'daftar');
+
+    // PART 19: the database version, collation and execution role belong in the
+    // record of this proof, and on a disposable cluster nobody can recover them
+    // later. See the same note in verify-role-convergence.ts.
+    console.log(`CLUSTER: ${clusterIdentity(spec.port, 'daftar')}`);
 
     const before = Object.fromEntries(
       subjects.map((role) => [role, psqlScalar(spec.port, 'postgres', `SELECT rolbypassrls FROM pg_roles WHERE rolname='${role}'`).value]),

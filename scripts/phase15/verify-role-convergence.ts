@@ -62,7 +62,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { startCluster, stopCluster, prepareClusterDir, psqlScalar, createEmptyDatabase, dbUrl, PG_SUPERPASS, PG16_BIN, type ClusterSpec } from './pg-cluster';
+import { startCluster, stopCluster, prepareClusterDir, psqlScalar, createEmptyDatabase, clusterIdentity, dbUrl, PG_SUPERPASS, PG16_BIN, type ClusterSpec } from './pg-cluster';
 // The candidate runtime is built by the APPLICATION'S OWN migrator, not by a
 // loop of `psql -f`.
 //
@@ -208,6 +208,15 @@ async function main(): Promise<number> {
     }
     startCluster(spec, ["fsync='off'", "full_page_writes='off'"]);
     createEmptyDatabase(spec.port, DB);
+
+    // PART 19 requires the database version, its collation and the execution
+    // role in the record of every proof. This run is on a disposable cluster,
+    // so the fact is only knowable if the run states it; printing it here is
+    // what lets `verify:evidence-log` carry it instead of recording that the
+    // instrument never said. The collation matters as much as the version:
+    // the settled deployment target is the PG16 family AT `en_US.utf8`
+    // (TL-P4-S3-R4), and this container's default locale is `C`.
+    console.log(`CLUSTER: ${clusterIdentity(spec.port, DB)}`);
 
     /* ── the candidate runtime: bootstrap, then the whole train ──────────── */
     const b0 = psqlFile(bootPath, DB);

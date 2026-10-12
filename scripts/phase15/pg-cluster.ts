@@ -228,6 +228,41 @@ export function psqlScalar(port: number, db: string, sql: string): { readonly ok
   return { ok: r.status === 0, value: (r.stdout ?? '').trim(), detail: `${r.stdout ?? ''}\n${r.stderr ?? ''}`.trim() };
 }
 
+/**
+ * The identity of the cluster a proof ran against: server version, collation,
+ * ctype, encoding and the principal the SQL was executed as.
+ *
+ * HIGH-VELOCITY PART 19 requires the database version and collation, and the
+ * execution role, in the record of every proof. `run-evidence-log.ts` reads
+ * those from each instrument's own output rather than declaring them on the
+ * instrument's behalf — so an instrument that starts a cluster and never names
+ * it leaves a hole in its own record, and the evidence log prints
+ * `NOT STATED BY THE INSTRUMENT` where the fact should be. Two instruments did
+ * exactly that until this helper existed.
+ *
+ * It is one `SELECT` and it is read-only. The collation is read from
+ * `pg_database` for the database actually in use, not from the cluster default,
+ * because the deployment target is settled on a COLLATION as well as a major
+ * (`TL-P4-S3-R4`: the PostgreSQL 16 family at `en_US.utf8`), and a run that
+ * names only its version does not say whether it was on target.
+ */
+export function clusterIdentity(port: number, db: string): string {
+  const r = psqlScalar(
+    port,
+    db,
+    `SELECT current_setting('server_version') || ' (server_version_num ' || current_setting('server_version_num') || ')'
+         || ', collate ' || d.datcollate || ', ctype ' || d.datctype
+         || ', encoding ' || pg_encoding_to_char(d.encoding)
+         || ', read as ' || current_user
+         || ' (is_superuser=' || current_setting('is_superuser') || ')'
+       FROM pg_database d WHERE d.datname = current_database()`,
+  );
+  // An unreadable identity is reported as unreadable. PART 18: "I could not
+  // look" and "I looked" must never print the same way, and this is the line a
+  // reader uses to decide whether the result is on the deployment target at all.
+  return r.ok && r.value.length > 0 ? r.value : `UNREADABLE — the identity query failed (${r.detail.slice(0, 160)})`;
+}
+
 export function stopCluster(spec: ClusterSpec): void {
   const data = join(spec.dir, 'data');
   if (!existsSync(join(data, 'PG_VERSION'))) return;
