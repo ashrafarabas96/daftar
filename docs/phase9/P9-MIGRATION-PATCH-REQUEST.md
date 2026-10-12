@@ -533,7 +533,7 @@ money-shaped column reached the schema.
 
 ## 9. EVIDENCE
 
-**102 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
+**109 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
 PostgreSQL 16.15 cluster at `en_US.utf8` under Node v24.21.0** (and again on 18.4 at `C` as a comparison), with the
 spec applied in one transaction as the non-superuser deployment principal
 `daftar_migrator` on top of the sealed Phase 3 head.
@@ -543,7 +543,7 @@ is mixed, and nothing is claimed in a stronger class than it was measured in.
 
 | suite | cases | class |
 |---|---|---|
-| `p9-booking-schema.test.ts` | 18 | PROVEN BY DATABASE CATALOGUE |
+| `p9-booking-schema.test.ts` | 25 | PROVEN BY DATABASE CATALOGUE, with red proofs on the end-state gate |
 | `p9-booking-concurrency.test.ts` | 11 | PROVEN BY TEST (real concurrency) |
 | `p9-booking-negative-controls.test.ts` | 7 | PROVEN BY TEST (red proofs) |
 | `p9-booking-multi-resource.test.ts` | 10 | PROVEN BY TEST (real concurrency) |

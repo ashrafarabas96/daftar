@@ -310,7 +310,13 @@ describe('P9 bookings — negative controls: the invariant is what is doing the 
       // signatures were given on runs where the coincidence held. Corrected
       // to what the harness can prove; nothing about the invariant is relaxed,
       // and the three assertions that carry the law are untouched.
-      expect(outcome.blocked).toBeGreaterThanOrEqual(1);
+      // Only the upper bound is asserted here. Round 8 pointed out that a
+      // `>= 1` at this call site cannot fail — `blocked` IS `awaitBlocked`'s
+      // return value and it throws unless it reaches one — so an assertion
+      // sitting among three that carry the law, and unable to fail, reads as a
+      // fourth and is worse than nothing. The lower bound is enforced, by that
+      // throw; what needs saying here is that the count never exceeds the
+      // racers, which can fail.
       expect(outcome.blocked).toBeLessThanOrEqual(careless.length);
       // Without the lock the loser's code may be the invariant's own or the
       // deadlock detector's — CONTROL 6 is about exactly that difference — but

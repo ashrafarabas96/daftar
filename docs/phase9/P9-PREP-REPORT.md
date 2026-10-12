@@ -28,27 +28,30 @@ head of `main`.
 | file | lines | what it is |
 |---|---|---|
 | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | 240 | the model, and why it has this shape |
-| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 1995 | the schema and its physical invariants — **not a migration** |
+| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 2012 | the schema and its physical invariants — **not a migration** |
 | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 616 | what the Migration Owner is asked to allocate |
 | `docs/phase9/P9-HANDOFF-MANIFEST.md` | 532 | the PART 13 handoff gate, with a SHA256 per artifact |
-| `tests/phase9-prep/p9-booking-schema.test.ts` | 359 | 18 cases: shape, security, grants, end state, the state contract, the chain guard's events and WHEN clause, collation independence |
+| `tests/phase9-prep/p9-booking-schema.test.ts` | 569 | 25 cases: shape, security, grants, ownership, the state contract, collation independence, and the end state — both deferred guards pinned as one row, with a red proof for each of the three wrong triggers round 8 landed and a deletion proof per condition |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
-| `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 602 | 7 cases: each invariant removed, and the damage measured |
+| `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 608 | 7 cases: each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
 | `tests/phase9-prep/p9-booking-time.test.ts` | 621 | 21 cases: the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan at one-day granularity, and the two defects V3 named |
 | `tests/phase9-prep/p9-booking-integrity.test.ts` | 1289 | 24 cases: the closure record is write-once (R-P9-15), a booking is born standing (R-P9-16), the reschedule chain agrees with itself (R-P9-17) and ends in a booking that is kept (R-P9-18) — every one of them an executed defect the challenger found, with each law's red proof and its non-vacuity |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 571 | 11 cases: the schema attacked as the real runtime roles, no superuser |
-| `tests/phase9-prep/p9-booking-spec.ts` | 210 | the spec loader, the state contract parser, and the non-vacuity guards |
+| `tests/phase9-prep/p9-booking-spec.ts` | 247 | the spec loader, the state contract parser, and the non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | 315 | the fixture, applied as `daftar_migrator`, and the one-transaction reschedule |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
 Every number in that table was re-measured at this tree with `wc -l` and a count of `it(`
 sites, after round 7 found two stale counts in these documents at an earlier round. The seven
-suite counts sum to **102** (18 + 11 + 7 + 10 + 21 + 24 + 11), which is the number the run
+suite counts sum to **109** (25 + 11 + 7 + 10 + 21 + 24 + 11), which is the number the run
 reports: a count that does not add up to its own run is the first thing a reader should be able
-to check.
+to check. One caution for anyone checking it with `grep -c 'it('`: that gives 106, not 109,
+because three `it` sites in the schema suite are parameterised over the two deferred guards and
+run once for each. The runtime count is the authority and the discrepancy is named here rather
+than left for a reader to trip over.
 
-**102 of 102 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
+**109 of 109 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
 — over seven suites, and again on PostgreSQL 18.4 at `C` as the comparison the mission permits.
 A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
@@ -359,6 +362,107 @@ actual-diff review — is still owed. The D11 PART 117 label for the same state 
 `PREPARED / NOT PROMOTED`; it names the promotion state, not the ladder rung, and this
 report uses both so neither vocabulary has to be guessed at.
 
+### 3c.21 The challenger's EIGHTH pass at `b6d6101` — REJECT, on a gate of mine that failed open
+
+**REJECT on one P1.** `/mnt/project-files/phase9/P9-CHALLENGE-b6d6101.md`
+(`3815e04b9420077e4b7868a655fa44a5edcc27c8eeaae18c7803e29cb48177b9`). Everything else in the
+round it measured good: **102 of 102, exit code 0** on its own fresh PostgreSQL 16.15 at
+`en_US.utf8` under Node v24.12.0 applied as `daftar_migrator`, with `prettier --check .` and
+`eslint . --max-warnings 0` both **exit 0** at the subject.
+
+**C8-P9-01 (P1) — `(h3)` FAILED OPEN, and I asked for exactly this.** My own request to the
+challenger was to land a trigger that passes `(h3)` and is still the wrong trigger. It landed
+**three**, and in each one the 2-ring commits with no refusal at all and two rows survive:
+
+- the **shipped trigger** after `ALTER TABLE bookings DISABLE TRIGGER bookings_chain_agrees` —
+  `tgtype`, `tgdeferrable`, `tginitdeferred` and `pg_get_triggerdef` all unchanged, every
+  assertion passing, and the guard simply does not run;
+- the right **name, events, deferral and a WHEN clause the server renders character for
+  character**, executing a do-nothing function;
+- **no trigger on `bookings` at all**, and one of the same name on a decoy table.
+
+Three facts were unpinned — `tgrelid`, `tgfoid`, `tgenabled` — and underneath them a defect of
+kind rather than of coverage: **the four checks were separate `NOT EXISTS` clauses over a name,
+so they need not be satisfied by the same row.** A conjunction of existence tests is not a test
+of one object. My sentence "the definition itself is pinned" was false as measured, and the
+paragraph in §3c.20 that congratulated the gate for being pinned was written about a gate that
+was not. The challenger also measured what the gate DOES catch, which is what it was written
+for and nothing more: UPDATE-only, no WHEN clause, a WHEN clause on the wrong column, a WHEN
+clause narrowed with an extra `AND`, and a non-deferrable trigger each fail, by the right
+assertion.
+
+**The same gap in a second place, which is what makes it a class.**
+`bookings_buffers_are_the_service_s` was keyed on `tgname AND tgdeferrable AND tginitdeferred`
+and nothing else: it passed while disabled, and passed as an `AFTER INSERT` constraint trigger
+executing a do-nothing function. Round 8 found it by looking for the pattern rather than for the
+instance, which is the better way to read a finding and is recorded here as such.
+
+**Answered.** Both guards are now ONE `NOT EXISTS` over a single joined row: `pg_class` on
+`tgrelid` for the table and its schema, `pg_proc` on `tgfoid` for the function and its schema,
+`tgenabled = 'O'`, `tgconstraint <> 0`, the exact `tgtype` (21 for the chain guard, 5 for the
+buffer guard — ROW + INSERT + UPDATE and ROW + INSERT, AFTER being the absence of the BEFORE
+bit, both measured on the server) and the stored `WHEN` clause through `pg_get_triggerdef`. The
+remedy is the challenger's, which it measured before offering — a reviewer's SQL is a claim too
+— and the shape of its measurement is reproduced here as cases of my own:
+
+- **Three red proofs per guard, six in all.** Each plants one of round 8's wrong triggers,
+  re-runs the **migration's own end-state block**, and asserts the refusal by name, then
+  restores the trigger from the definition the server itself rendered and asserts the gate is
+  green again. The block is **extracted from the spec, never retyped**: a second copy of the
+  gate in the test file would be a second implementation, and a test that plants a wrong trigger
+  and then asks its own copy about it proves nothing about the migration. The extractor refuses
+  rather than returning a short string if the block it finds does not mention every fact the
+  suite believes is pinned.
+- **The A1 case also measures the premise**: with the trigger disabled, `pg_get_triggerdef`
+  renders text identical to what it rendered before, and only `tgenabled` moves — measured
+  here, not taken from the manual, because the whole finding rests on it.
+- **Each new condition is proved load-bearing by deleting it.** The gate could refuse all three
+  for one over-strict reason. So `tgenabled`, `tgfoid` and `tgrelid` are each cut out of the
+  extracted block in turn and the wrong trigger that condition was added for is then measured
+  **passing**. A condition whose deletion changes nothing is not doing work, and there is no
+  other way to tell.
+
+**C7-P9-01 / B-1 is CLOSED**, on the challenger's measurement and not on mine:
+`git log -1 --format=%H -- docs/phase9/P9-HANDOFF-MANIFEST.md` resolved to `eb1046c` and the
+published command gave **6 of 6 SAME**. It then did the thing I had not: **made the gate red
+three ways** — run from a `99695bb` checkout it says DIFFERENT on the four documents that moved
+and SAME on the two that did not; a planted stale spec reds with both hashes printed; a missing
+mirror reds with an empty hash. A gate that has only ever said SAME has not been shown to look.
+It planted against a scratch copy with one token of the command changed, so nothing other
+sessions read was mutated.
+
+**CONTROL 2 — ruled NOT a weakening, and not taken on trust.** It wrote its own formulation and
+ran eight races, recording what the first poll that sees anyone blocked actually saw: **a count
+of 1 seven times and a count of 2 once**. And with `bookings_no_overlap` dropped, the INSERTs
+are accepted 2 / refused 0 / blocked-seen 0, so `committed`, `refused` and `awaitBlocked`'s own
+throw all red — the replacement reds too, which is the part that makes it a law and not a
+formality. Its P3 residual is right and is fixed here: `toBeGreaterThanOrEqual(1)` at that call
+site **cannot fail**, because `blocked` is `awaitBlocked`'s return value and it throws unless it
+reaches one, so an unfailable assertion sitting among three that carry the law is worse than
+nothing. Dropped, with the reason in place; the upper bound stays, because it can fail.
+
+**Two P3 residuals on the manifest, both fixed in this commit.** It published **two different
+SHA256s for `P9-PREP-REPORT.md`** — the mirror table at `eb1046c`, the artifact table at
+`b6d6101`, and the artifact column naming no commit at all — which happened because the manifest
+used to land in a commit after the one it describes. The documents and the manifest now go in
+**one** commit, so the two tables cannot disagree, and both columns name the commit they mean.
+And the re-measure command **looped only over the committed documents**, so a renamed or deleted
+document would leave an orphan mirror that nothing ever visits; the command now walks the mirror
+directory too and flags an orphan, skipping the off-Git artifacts that have no counterpart by
+design.
+
+**The ring completeness result was re-measured at `b6d6101`, all four steps, nothing carried
+forward** — the same refusals by name as at `01f7c2d`. The challenger adds one qualification it
+owes to its own P1, and it is the right one: "a ring fits only in one transaction" is a statement
+about the schema this spec **applies**, and under its three wrong triggers the ring commits. That
+is the argument for pinning the end state, stated as a limit on the completeness result rather
+than as an extra claim.
+
+**Signatures withdrawn.** Under the Phase 4 round-20 ruling the challenger has **withdrawn its
+round-6 signature at `0f4f0e4` and its round-7 signature at `01f7c2d`**, because
+`prettier --check .` was red at both. Its signatures at `9a64289` and `903e1f4` stand. See the
+correction inside §3c.20: the red entered at `0f4f0e4`, one subject earlier than I reported.
+
 ### 3c.20 The COORDINATOR's actual-diff review of `9a64289..01f7c2d`, and two defects I found while answering it
 
 **ACCEPT-WITH-RESIDUALS on the schema and the suite; the PART 13 handoff gate NOT ACCEPTED.**
@@ -427,6 +531,16 @@ Its P3 residuals, each answered in this commit:
    this commit with `prettier --write` on those files, and `prettier --check .` is **exit code 0**
    at this tree. Two of the three files were untouched by this round's work, which is how long
    the red had been sitting there.
+
+   **Corrected by round 8, against this paragraph.** I wrote that the red sat at `99695bb` and
+   left it to be inferred how far back it went. The challenger measured the gate in a clean
+   worktree at every candidate SHA: **exit 0 at `9a64289`, `903e1f4`, `6e339bf` and `b6d6101`;
+   exit 1 at `0f4f0e4`, `01f7c2d` and `99695bb`** — the same three files and nothing else, at
+   each of them. So the red entered at **`0f4f0e4`**, one subject earlier than I said, and it
+   covers the heads that rounds 6 and 7 and the coordinator's review all named. The challenger
+   has **withdrawn its round-6 and round-7 signatures** under the Phase 4 round-20 ruling; its
+   signatures at `9a64289` and `903e1f4` stand. That is the correct accounting and it is worse
+   than mine was.
 2. **One assertion in the signed suite was a scheduling coincidence, and it failed.** CONTROL 2
    of the negative controls asserted `expect(outcome.blocked).toBe(1)` — the number of backends
    the server happened to report blocked at the instant of one `pg_blocking_pids` poll. The
@@ -1397,6 +1511,27 @@ Stated as limitations rather than left to be discovered.
     `daftar_booking_internal` and `daftar_migrator` may UPDATE `bookings` at all — `daftar_app`
     and `daftar_platform` both get "permission denied for table bookings" — so there is no
     app-role path to the walk, and neither of us makes a timing claim from a container.
+24. **The pinned end state is the MIGRATION's end state, and it does not pin a function BODY.**
+    Round 8's finding is answered by identifying the trigger completely — table, function,
+    schema, enabled, events, deferral, WHEN clause, all in one row. What that still does not
+    see is a function with the right name, schema and owner whose BODY is not the body this
+    spec wrote: the gate would pass it. Two things bound the exposure and neither closes it.
+    The migration runs in one transaction, so a body swap inside it is not a realistic attack
+    on the gate; and a swapped body IS caught behaviourally, by the red proofs that mutate
+    `prosrc` and measure the ring committing. But a gate that pins a name and not a body is
+    exactly the shape of defect round 8 found one level up, so it is written down here rather
+    than argued away. I have not built a digest of `prosrc` into the end state: comparing the
+    body to the spec's own text would be a file checking itself, and I would rather the
+    challenger rule on what the right instrument is than invent one unasked. **Open for round
+    9.**
+25. **A gate's own completeness is never proved, only attacked.** The one-row predicate refuses
+    every wrong trigger round 8 built, and each of its new conditions is proved load-bearing by
+    deletion. That is evidence that the conditions work, not evidence that the list is
+    complete: `tgisinternal`, `tgconstrrelid`, `tgargs` and the `tgenabled` values `'R'` and
+    `'A'` are not asserted, and I do not claim to know they cannot matter. This is recorded as
+    the standing invitation it is, after a round in which my own claim to have pinned a
+    definition was measured false.
+
 17. **The lock-set collision case is reasoned, not measured.** Two distinct resources
     hashing to one key would merge their locks, which broadens exclusion and cannot
     narrow it; no fixture constructs such a collision, because constructing one against

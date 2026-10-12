@@ -1727,6 +1727,7 @@ DECLARE
   v_priv  TEXT;
   v_tbl   TEXT;
   v_n     INTEGER;
+  v_g     RECORD;
 BEGIN
   -- (a) The invariant exists, is an exclusion constraint, is partial, and
   --     looks at the blocking window. A test proves it bites; this proves it
@@ -1925,55 +1926,71 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- (h) The deferred buffer guard is actually deferred, and actually a
-  --     constraint trigger.
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'bookings_buffers_are_the_service_s' AND tgdeferrable AND tginitdeferred) THEN
-    RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_buffers_are_the_service_s is not a DEFERRABLE INITIALLY DEFERRED constraint trigger' USING ERRCODE = 'P0001';
-  END IF;
-  -- (h2) So is the deferred chain guard — and this one has to be deferred to
-  --      be correct at all: evaluated per statement it would refuse the
-  --      lawful reschedule, whose halves are symmetric only once both are
-  --      written (R-P9-17). A migration that landed it as a plain AFTER
-  --      trigger would break every reschedule, so the assertion is on the
-  --      deferral and not merely on the trigger's existence.
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'bookings_chain_agrees' AND tgdeferrable AND tginitdeferred) THEN
-    RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_chain_agrees is not a DEFERRABLE INITIALLY DEFERRED constraint trigger (R-P9-17)' USING ERRCODE = 'P0001';
-  END IF;
-
-  -- (h3) And the deferral is not the only thing a migration could drop. The
-  --      check above passes a trigger that fires on UPDATE alone, or one with
-  --      no WHEN clause, or one whose WHEN clause watches the wrong column —
-  --      and each of those is a different schema. INSERT carries the
-  --      successor-committed-alone refusal, and the WHEN clause is what keeps
-  --      the guard off every booking that has no reschedule link at all. So
-  --      the definition itself is pinned: the event mask through `tgtype` and
-  --      the condition through `pg_get_triggerdef`, which renders the WHEN
-  --      clause the server actually stored. Raised as F-09 by the
-  --      coordinator's actual-diff review of `01f7c2d`: the end state was
-  --      asserted, and this part of it was not.
+  -- (h) BOTH deferred guards, pinned by every fact that identifies them, in
+  --     ONE row each.
   --
-  --      tgtype is a bitmask: 1 = ROW, 4 = INSERT, 16 = UPDATE. A constraint
-  --      trigger is AFTER, which is the absence of bit 2 (BEFORE), so
-  --      ROW + INSERT + UPDATE = 21 and the mask is asserted exactly, not
-  --      with `&`, because an extra event is also a change of schema.
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'bookings_chain_agrees' AND tgtype = 21) THEN
-    RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_chain_agrees does not fire AFTER INSERT OR UPDATE FOR EACH ROW (R-P9-17)' USING ERRCODE = 'P0001';
-  END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger t
-     WHERE t.tgname = 'bookings_chain_agrees'
-       -- The paren nesting is the SERVER's rendering, measured and not
-       -- guessed: PostgreSQL wraps the whole WHEN expression once more than
-       -- the source does. The first draft of this assertion assumed two and
-       -- refused the migration, which is how a pattern written from memory
-       -- announces itself — and is why this is a LIKE over the catalogue's own
-       -- text rather than a re-read of the file above.
-       AND pg_get_triggerdef(t.oid) LIKE '%WHEN (((new.rescheduled_to_id IS NOT NULL) OR (new.rescheduled_from_id IS NOT NULL)))%') THEN
-    RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_chain_agrees does not carry its WHEN clause over both reschedule links (R-P9-17)' USING ERRCODE = 'P0001';
-  END IF;
+  --     This block used to ask four separate questions about `tgname` —
+  --     deferral, then the event mask, then the WHEN clause — and an earlier
+  --     draft of this comment claimed "the definition itself is pinned". That
+  --     was FALSE as measured, and the eighth independent pass landed three
+  --     wrong triggers that passed every one of those questions while the
+  --     2-ring committed with no refusal at all (C8-P9-01):
+  --
+  --       * the shipped trigger after `ALTER TABLE bookings DISABLE TRIGGER
+  --         bookings_chain_agrees` — `tgtype`, `tgdeferrable`, `tginitdeferred`
+  --         and `pg_get_triggerdef` all unchanged, and the guard does not run;
+  --       * the right name, events, deferral and a WHEN clause the server
+  --         renders character for character, executing a do-nothing function;
+  --       * NO trigger on `bookings` at all, and one of the same name on
+  --         another table — because nothing here mentioned `tgrelid`.
+  --
+  --     Three facts were unpinned: WHICH table the trigger is on (`tgrelid`),
+  --     WHICH function it executes (`tgfoid`), and whether it is ENABLED
+  --     (`tgenabled`). And separate `NOT EXISTS` clauses over a name need not
+  --     be satisfied by the SAME ROW, which is the deeper defect: a conjunction
+  --     of existence tests is not a test of one object. So each guard is now
+  --     one `NOT EXISTS` over a single joined row — `pg_class` on `tgrelid` for
+  --     the table AND its schema, `pg_proc` on `tgfoid` for the function,
+  --     `tgenabled = 'O'` beside the shape — and a trigger that fails any one
+  --     of them is not the trigger this spec installed.
+  --
+  --     The per-guard numbers are the SERVER's, measured rather than written
+  --     from memory: `tgtype` 21 is ROW + INSERT + UPDATE for the chain guard
+  --     and 5 is ROW + INSERT for the buffer guard (AFTER being the absence of
+  --     the BEFORE bit), asserted exactly because an extra event is also a
+  --     change of schema; and the WHEN renderings carry the paren nesting and
+  --     the `::text` cast the server actually stores, which differ between the
+  --     two because one expression is an OR and the other is a comparison.
+  FOR v_g IN
+    SELECT * FROM (VALUES
+      ('bookings_buffers_are_the_service_s', 'bookings_buffers_match_service', 5,
+       '%WHEN ((new.kind = ''appointment''::text))%', ''),
+      ('bookings_chain_agrees', 'bookings_chain_symmetric', 21,
+       '%WHEN (((new.rescheduled_to_id IS NOT NULL) OR (new.rescheduled_from_id IS NOT NULL)))%', ' (R-P9-17)')
+    ) AS g(tgname, proname, tgtype, whenlike, rule)
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1
+        FROM pg_trigger tg
+        JOIN pg_class     c ON c.oid = tg.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_proc      p ON p.oid = tg.tgfoid
+        JOIN pg_namespace pn ON pn.oid = p.pronamespace
+       WHERE tg.tgname       = v_g.tgname
+         AND c.relname       = 'bookings'
+         AND n.nspname       = 'public'
+         AND p.proname       = v_g.proname
+         AND pn.nspname      = 'public'
+         AND tg.tgenabled    = 'O'
+         AND tg.tgtype       = v_g.tgtype
+         AND tg.tgdeferrable
+         AND tg.tginitdeferred
+         AND tg.tgconstraint <> 0
+         AND pg_get_triggerdef(tg.oid) LIKE v_g.whenlike
+    ) THEN
+      RAISE EXCEPTION 'booking.migration_end_state_invalid: % is not the enabled DEFERRABLE INITIALLY DEFERRED constraint trigger this spec installs on public.bookings executing public.%()%', v_g.tgname, v_g.proname, v_g.rule USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
 
   -- (i) The ownership-transfer authority of §0 did not survive.
   IF has_schema_privilege('daftar_booking_internal', 'public', 'CREATE') THEN

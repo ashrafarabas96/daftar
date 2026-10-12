@@ -184,6 +184,43 @@ export function loadSpec(): string {
 }
 
 /**
+ * The spec's END-STATE block, extracted from the document so that a test can
+ * re-run the migration's OWN assertions after planting something wrong.
+ *
+ * It is extracted and not retyped: a copy of the block in this file would be a
+ * second implementation, and a test that plants a wrong trigger and then asks
+ * its own copy of the gate about it proves nothing about the migration. Every
+ * failure path below throws rather than returning a shorter string, because an
+ * extractor that silently returns less than the block makes every red proof
+ * built on it vacuous.
+ */
+export function endStateBlock(text: string = loadSpec()): string {
+  const needle = 'booking.migration_end_state_invalid';
+  const at = text.indexOf(needle);
+  if (at < 0) throw new Error('P9 spec no longer raises booking.migration_end_state_invalid — there is no end-state block to re-run');
+  const open = text.lastIndexOf('DO $$', at);
+  if (open < 0) throw new Error('could not find the DO block that contains the end-state assertions');
+  const close = text.indexOf('END $$;', open);
+  if (close < 0) throw new Error('the end-state DO block is not terminated by END $$;');
+  const block = text.slice(open, close + 'END $$;'.length);
+  // What the block must contain to be the gate this suite believes it is.
+  for (const fact of [
+    'tgrelid',
+    'tgfoid',
+    'tgenabled',
+    'tgdeferrable',
+    'tginitdeferred',
+    'pg_get_triggerdef',
+    'bookings_chain_agrees',
+    'bookings_buffers_are_the_service_s',
+  ]) {
+    if (!block.includes(fact)) throw new Error(`the extracted end-state block does not mention ${fact}, so it is not the block that pins the deferred guards`);
+  }
+  if (block.split('DO $$').length !== 2) throw new Error('the extracted end-state block contains more than one DO $$ — the slice is wrong');
+  return block;
+}
+
+/**
  * The deployment-administrator statements this schema needs and
  * `bootstrap.sql` does not yet carry.
  *
