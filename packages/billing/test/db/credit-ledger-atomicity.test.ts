@@ -641,7 +641,7 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
       // answer to the fail-closed branch, because the restrictive policy I
       // wrote scoped the definer's reads to the session too. The LIVE
       // frozen policies — read out of `pg_policies`, not out of
-      // `0006_rls.sql`'s three-redefinitions-stale text — admit the
+      // `0006_rls.sql`'s five-redefinitions-stale text — admit the
       // internal principal BY NAME inside the restrictive policy, so the
       // invariant's own reads do NOT move with the caller's context, and
       // the ARITHMETIC branch answers here as it did in round 9. The

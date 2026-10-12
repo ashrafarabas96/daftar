@@ -25,9 +25,13 @@
  * ONE OF THE THREE PREMISES IS CORRECTED HERE, and the correction is owed
  * back to the challenger and to every phase reading `0006_rls.sql` as the
  * live pattern. 0006 defines `app_bypass()` over the GUC `app.bypass_rls`;
- * that text is three redefinitions stale. 0013 redefined it as
- * `current_user = 'daftar_platform'` and 0052 hardened the same test with
- * `OPERATOR(pg_catalog.=)` and a schema-qualified `name` cast. The live
+ * that text is FIVE redefinitions stale — 0010 (the GUC and a role
+ * exclusion), 0013 (a pure role test, `current_user = 'daftar_platform'`),
+ * 0030 (widened to the provisioner), 0032 (narrowed back) and 0052 (the
+ * same predicate hardened with `OPERATOR(pg_catalog.=)` and a
+ * schema-qualified `name` cast). This file first said THREE; the
+ * independent challenger counted the chain and the count is its own claim,
+ * so it was re-grepped here before being adopted. The live
  * bodies were read out of `pg_proc` on a cluster carrying the real history,
  * and the policies here are the live SHAPE read out of `pg_policies` on
  * `journal_lines`, not the migration's prose: a permissive tenant clause
@@ -40,6 +44,17 @@
  * only `app.business_id` satisfies the restrictive half and FAILS the
  * permissive one, so it can do nothing at all. The lane's own cases were
  * doing exactly that until this round. The context is now set as a pair.
+ *
+ * WHICH CONNECTION CARRIES AN ISOLATION CLAIM, and it is not the owner's.
+ * The challenger's round-11 observation, adopted: in the real-schema lane
+ * the schema owner IS `daftar_platform`, for whom `app_bypass()` is TRUE, so
+ * every policy's first disjunct is satisfied and ANY isolation claim made on
+ * that connection is vacuous by construction. The cases that carry weight
+ * are the `p5_app` ones — exactly the six that go red when the three
+ * `*_business_isolation` policies are dropped. The owner connection is used
+ * here for catalogue reads, for fixtures, and for ONE case that asserts the
+ * bypass itself; it is never the subject of a default-deny claim. It also
+ * narrows what gap 1's separate verification principal would be FOR.
  *
  * Class: `PROVEN BY EXECUTION AGAINST THE REQUESTED DDL (SCRATCH CLUSTER)`.
  * The policies are copies of the frozen pattern; nothing here is a claim
@@ -251,10 +266,9 @@ describe('default-deny: no context, no rows', () => {
     // back with `set_config('app.bypass_rls', 'true')`. Both halves were
     // wrong, and the reason is worth more than the case: `0006_rls.sql`'s
     // text defines `app_bypass()` over the GUC `app.bypass_rls`, but that
-    // text is THREE REDEFINITIONS STALE. 0013 redefined the function as
-    // `current_user = 'daftar_platform'` and 0052 hardened the same test
-    // against search_path. I read the live bodies out of `pg_proc` on a
-    // cluster carrying the real history, not out of 0006.
+    // text is FIVE REDEFINITIONS STALE (0010, 0013, 0030, 0032, 0052 —
+    // the chain is in this file's header). I read the live bodies out of
+    // `pg_proc` on a cluster carrying the real history, not out of 0006.
     //
     // So in the house pattern the bypass is a ROLE, and the only principal
     // that holds it is the platform role — here `p5owner`, which this lane

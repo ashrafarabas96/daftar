@@ -69,10 +69,16 @@ CREATE TABLE p5scratch.business_entitlements (
 --
 -- ROUND 12 FIRST COPIED `0006_rls.sql` and that was WRONG, which the
 -- real-schema lane found within its first run. `app_bypass()` has been
--- redefined three times since 0006: at `0013_security_boundary.sql` it
--- stopped being a session setting and became a ROLE TEST
--- (`current_user = 'daftar_platform'`), and `0052_accounting_journal_lines_rls_performance.sql`
--- hardened the same predicate with `pg_catalog` qualification. The live
+-- redefined FIVE times since 0006, and the whole chain matters because
+-- `CREATE OR REPLACE FUNCTION` leaves nothing at the original site, so the
+-- first definition still reads as current however many supersede it:
+--   0006  the GUC `app.bypass_rls`
+--   0010_db_roles.sql                      the GUC AND current_user <> 'daftar_app'
+--   0013_security_boundary.sql             a ROLE test, current_user = 'daftar_platform'
+--   0030_provisioner_role.sql              widened to include daftar_provisioner
+--   0032_provisioner_narrow_functions.sql  narrowed back to the platform role
+--   0052_accounting_…_rls_performance.sql  the same predicate hardened
+-- The live
 -- body, read from `pg_proc` on a cluster with the whole history applied, is
 --
 --     RETURN CURRENT_USER OPERATOR(pg_catalog.=) 'daftar_platform'::pg_catalog.name

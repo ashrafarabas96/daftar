@@ -78,7 +78,7 @@ MIGRATE_RC=$?
 echo "MIGRATE_RC=$MIGRATE_RC (applied before this run: ${APPLIED_BEFORE:-0})"
 [ "$MIGRATE_RC" = "0" ] || { tail -15 "$W/migrate.log"; exit 1; }
 psql -tA "$DAFTAR_SUPER" -c \
-  "SELECT 'MIGRATIONS=' || count(*) || ' TABLES=' || (SELECT count(*) FROM information_schema.tables WHERE table_schema='public') FROM schema_migrations"
+  "SELECT 'MIGRATIONS=' || count(*) || ' TABLES=' || (SELECT count(*) FROM information_schema.tables WHERE table_schema='public') || ' (information_schema.tables, schema public, INCLUDING views and schema_migrations)' FROM schema_migrations"
 
 export P5_DB_BOOTSTRAP_URL="postgresql://postgres@localhost:$PGPORT_P5/daftar"
 # THE PLATFORM PRINCIPAL IS A ROLE, SO THE REAL LANE MUST BE THAT ROLE.

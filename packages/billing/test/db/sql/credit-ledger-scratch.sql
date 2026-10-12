@@ -286,11 +286,14 @@ ALTER TABLE p5scratch.platform_credit_grant_remainders FORCE ROW LEVEL SECURITY;
 -- one would have made this lane prove something the deployment does not do:
 --
 --   1. `app_bypass()` is a ROLE TEST, not a session setting. 0006 defined
---      it as `app.bypass_rls = 'true'`; `0013_security_boundary.sql`
---      redefined it as `current_user = 'daftar_platform'` and
---      `0052_accounting_journal_lines_rls_performance.sql` hardened the
---      same predicate. A lane that copied 0006 would have granted itself a
---      bypass with a GUC that the deployed function ignores.
+--      it as `app.bypass_rls = 'true'`, and FIVE redefinitions follow —
+--      0010 (the GUC and a role exclusion), 0013 (a pure role test,
+--      `current_user = 'daftar_platform'`), 0030 (widened to the
+--      provisioner), 0032 (narrowed back) and 0052 (the same predicate
+--      hardened with `pg_catalog` qualification). A lane that copied 0006
+--      would have granted itself a bypass with a GUC the deployed function
+--      ignores, and the count was first written here as three: the
+--      challenger counted the chain and was right.
 --   2. A table that carries its own `tenant_id` compares it DIRECTLY —
 --      `tenant_id = NULLIF(app_tenant(), '')::uuid` — instead of running a
 --      correlated EXISTS over `businesses`. 0052 made that change
