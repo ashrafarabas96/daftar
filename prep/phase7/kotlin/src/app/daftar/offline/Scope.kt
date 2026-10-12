@@ -64,17 +64,21 @@ data class OwnerScope(
      *
      * The member is different, by this file's own header: "the server resolves
      * membership itself and is the authority on it, so the member is not a
-     * security boundary here". It is compared for the three events a PERSON
-     * originates — releasing, cancelling, resolving, restoring — because one
-     * cashier must not act on another's captures. It is NOT compared for a
-     * send, because a send asserts nothing about who the actor is: the server
-     * authorizes the sending session on its own, and the row names its
-     * capturer for the audit either way.
+     * security boundary here". It is compared for the three events that DECIDE
+     * something about money — cancelling a capture, resolving a refusal on one,
+     * restoring the bytes behind one — because one cashier must not settle
+     * another's sale. It is not compared for the two that only move the
+     * operation along the path it was already on: a send asserts nothing about
+     * who the actor is, since the server authorizes the sending session itself,
+     * and a release of an unsent capture asserts nothing about who took the
+     * money. The row names its capturer for the audit either way.
      *
-     * So a till can finish Alice's sale after Alice has gone home, into the
-     * same business, under the same key, with the same bytes — and still
-     * cannot touch it from the wrong business, and still cannot let Bob cancel
-     * what Alice captured.
+     * So a till can finish Alice's sale after Alice has gone home — including
+     * a sale she captured and never released, which is finding G-02 and the
+     * state this comment described before the code reached it — into the same
+     * business, under the same key, with the same bytes. It still cannot touch
+     * the row from the wrong business, and it still cannot let Bob cancel or
+     * settle what Alice captured.
      */
     fun mayAct(owner: OwnerScope, event: QueueEvent.ByScope): Boolean {
         // Never relaxed, for any event: this is the half the server cannot check.
