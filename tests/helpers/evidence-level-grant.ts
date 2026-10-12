@@ -3,14 +3,14 @@
  *
  * ## The failure this module exists to prevent
  *
- * `tests/integration/p4s6-level-f-spec-executed.test.ts` gated its thirteen
+ * `tests/integration/p4s6-level-f-spec-executed.test.ts` gated its eleven
  * live-database cases on `process.env['P4S6_LEVEL_F'] === '1'`, and that
  * string existed in exactly one file in the repository. The rationale was
  * correct — the coordinator's standing ruling puts S6 at levels A-E, and a
  * level-F suite running green in ordinary CI would assert a maturity level
  * nobody granted — but the MECHANISM had no other side:
  *
- * > **When the grant moves to F, nothing reddens and the thirteen cases stay
+ * > **When the grant moves to F, nothing reddens and the eleven cases stay
  * > dark forever.**
  *
  * A ratchet has two sides. A gate that correctly refuses to over-claim today
@@ -41,11 +41,20 @@ export const EVIDENCE_LEVELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'] as const;
 export type EvidenceLevel = (typeof EVIDENCE_LEVELS)[number];
 
 /**
- * THE GRANTED LEVEL. Coordinator ruling; nothing else may set it.
+ * THE GRANTED LEVEL. Coordinator ruling, and the ruling is READ: this value
+ * must equal the level recorded in `docs/PHASE_4_DECISION_REGISTER.md` §15
+ * (`TL-P4-COORD-R66`), which is coordinator-owned and is not part of this
+ * slice. `tests/integration/p4s6-level-f-spec-executed.test.ts` extracts that
+ * figure and asserts this constant against it in an UNCONDITIONAL case, so
+ * raising this line alone reddens on every ordinary run — with no cluster and
+ * no flag — instead of silently opening a level-gated suite. The claim is
+ * exactly that and no more: there is no `CODEOWNERS` in this repository, so
+ * the register is not beyond the reach of anyone who can commit; what is
+ * closed is the one-file over-claim, which was the hazard.
  *
- * Raising this is the ONLY supported way to enable a level-gated suite by
- * default. Do not add a second constant, and do not read a suite's override
- * variable anywhere but through `levelDefaultEnabled`.
+ * Raising the grant therefore takes TWO edits, this one and the register's.
+ * Do not add a second constant, and do not read a suite's override variable
+ * anywhere but through `levelDefaultEnabled`.
  */
 export const GRANTED_EVIDENCE_LEVEL: EvidenceLevel = 'E';
 

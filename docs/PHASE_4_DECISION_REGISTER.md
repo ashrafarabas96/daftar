@@ -893,3 +893,39 @@ narrow this, and S4 may proceed while runtime tenant isolation, cross-business
 isolation, role shape, `SET ROLE` refusal, ACL restrictions, the definer
 boundary, the cross-tenant attack tests, accounting integrity and RLS/FORCE
 integrity all remain green.
+
+---
+
+## 15. `TL-P4-COORD-R66` — THE GRANTED EVIDENCE LEVEL, RECORDED IN-REPO SO A GATE CAN READ IT
+
+**Status: RECORDED. This section is the authority for the evidence level Phase 4's slice S6 may
+claim, and it is coordinator-owned like the rest of this register.**
+
+**GRANTED EVIDENCE LEVEL (P4-S6): `E`**
+
+The ladder is `A` (weakest) through `G`, and the grant means levels `A`–`E` and no more. A suite
+that asserts level `F` therefore does not run by default; this is the standing position
+`TL-P4-COORD-R28` accepted as honest, and it is not changed here.
+
+**Why the figure is written here rather than only in a test helper.** `TL-P4-COORD-R28` left owed
+the connection between the gate and the grant, and `ac0da4d` discharged it by deriving the gate's
+default from a TypeScript constant, `tests/helpers/evidence-level-grant.ts`
+`GRANTED_EVIDENCE_LEVEL`. The independent challenger of that commit found that the constant's own
+docstring claimed *"Coordinator ruling; nothing else may set it"* while **nothing read a
+coordinator act**: there is no `CODEOWNERS` in this repository, and the constant sits in the
+slice's own test tree, so one character `'E'` → `'F'` would have opened the gate by **declaring**
+the grant instead of by holding it. `TL-P4-COORD-R66` ordered the structural close rather than the
+deletion of the sentence.
+
+**What reads it.** `tests/integration/p4s6-level-f-spec-executed.test.ts` parses the level out of
+the line above with its `extractOne` extractor — the same mechanism by which that suite treats
+`docs/PHASE_4_S6_DDL_SPECIFICATION.md` as its subject — and one **unconditional** case asserts
+`GRANTED_EVIDENCE_LEVEL` equals it. The extractor throws on zero matches and on more than one, so
+deleting or duplicating the line reddens the suite rather than silently disabling the check.
+
+**The consequence, stated plainly.** Raising the grant now takes two edits in two files, one of
+them this coordinator-owned register, and a mismatch between them reddens an unconditional case on
+every ordinary run — no cluster and no flag involved. This does not make the register
+unforgeable by anyone who can commit; there is no `CODEOWNERS` and this section does not invent
+one. What it removes is the *silent* one-character over-claim: the grant can no longer be raised
+inside the slice's own test tree alone.

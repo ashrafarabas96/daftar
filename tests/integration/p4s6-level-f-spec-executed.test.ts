@@ -48,7 +48,7 @@
  * default verdict stays honest about what it has proved.
  *
  * What is NOT opt-in, deliberately, is the EXTRACTION GUARD: the `extractOne`
- * calls are top-level and the first two cases are unconditional, so a document
+ * calls are top-level and the extraction cases are unconditional, so a document
  * edited away from what this file proves reddens on every ordinary run, with no
  * cluster involved and no flag set.
  *
@@ -56,7 +56,7 @@
  * `tests/helpers/evidence-level-grant.ts`, not from this file's own reading
  * of an environment variable. That is the other side of the ratchet: the
  * first draft of this gate was correct to refuse to over-claim, but nothing
- * in it would have reddened when the grant moved to F, so the thirteen cases
+ * in it would have reddened when the grant moved to F, so the eleven cases
  * below would have stayed dark forever (`TL-P4-COORD-R28`). The variable
  * survives only as an owner's PRE-GRANT override.
  *
@@ -66,7 +66,7 @@
  *     npx vitest run tests/integration/p4s6-level-f-spec-executed.test.ts
  *
  * The skip is itself guarded: `it('the opt-in gate is not vacuous')` below
- * fails if the flag is set and the cluster never came up, so "skipped" and
+ * fails if the gate is open and the cluster never came up, so "skipped" and
  * "passed" can never be confused for each other.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -85,6 +85,7 @@ const ENABLED = levelEnabled('F', process.env['P4S6_LEVEL_F']);
 const DOCS = join(__dirname, '../../docs');
 const DDL_SPEC = readFileSync(join(DOCS, 'PHASE_4_S6_DDL_SPECIFICATION.md'), 'utf8');
 const LEVEL_UQ = readFileSync(join(DOCS, 'PHASE_4_S6_LEVEL_UNIQUENESS.md'), 'utf8');
+const DECISION_REGISTER = readFileSync(join(DOCS, 'PHASE_4_DECISION_REGISTER.md'), 'utf8');
 
 // ──────────────────────────────────────────────────────────────────────────
 // 0. The extractor. The document is the subject; nothing here is retyped.
@@ -111,6 +112,25 @@ function extractOne(doc: string, label: string, anchor: RegExp): string {
   if (text.length === 0) throw new Error(`P4-S6 level F: the anchor for ${label} matched an EMPTY body`);
   return text;
 }
+
+/**
+ * THE COORDINATOR'S OWN RECORD OF THE GRANTED LEVEL, read the same way every
+ * other subject of this suite is read.
+ *
+ * `tests/helpers/evidence-level-grant.ts` declares the granted level as a
+ * constant in THIS SLICE's own test tree, and its docstring says a coordinator
+ * ruling is the only thing that may set it. This is the line that makes that
+ * sentence true of the tree: the level is extracted from the coordinator-owned
+ * decision register (§15, `TL-P4-COORD-R66`), and the unconditional case below
+ * asserts the constant against it. `extractOne` throws on zero matches and on
+ * more than one, so deleting or duplicating the register's line reddens the
+ * suite instead of quietly disabling the check.
+ */
+const RECORDED_GRANT = extractOne(
+  DECISION_REGISTER,
+  'the coordinator-recorded granted evidence level (decision register §15)',
+  /\*\*GRANTED EVIDENCE LEVEL \(P4-S6\): `([A-G])`\*\*/g,
+);
 
 /** The repaired expressions of DDL spec §2A.1 — the single fenced block that carries all three. */
 const REPAIRED_BLOCK = extractOne(
@@ -342,10 +362,21 @@ describe('P4-S6 level F — the specification executed', () => {
       expect(levelDefaultEnabled('F', 'F', override)).toBe(true);
     }
     expect(levelDefaultEnabled('E', 'F', '1')).toBe(true);
-    // And the ladder is ordered, so `levelReached` cannot be satisfied by a
-    // string comparison that happens to agree on these two letters.
-    expect(EVIDENCE_LEVELS.indexOf(GRANTED_EVIDENCE_LEVEL)).toBeGreaterThanOrEqual(0);
+    // The ladder's contents and order are pinned, and that is the whole of
+    // what this asserts: a reordering of `EVIDENCE_LEVELS` reds here.
+    expect([...EVIDENCE_LEVELS]).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G']);
     expect(ENABLED).toBe(levelDefaultEnabled(GRANTED_EVIDENCE_LEVEL, 'F', process.env['P4S6_LEVEL_F']));
+  });
+
+  it('the granted level is the one the coordinator RECORDED, not one this slice declared', () => {
+    // `TL-P4-COORD-R66` F2. The declaration lives in `tests/helpers/`, which
+    // is this slice's own file; the decision register is not. A one-character
+    // edit to `GRANTED_EVIDENCE_LEVEL` alone reds HERE, so the gate can no
+    // longer be opened by DECLARING the grant rather than by holding it.
+    // This claims nothing more than that the two must agree: there is no
+    // CODEOWNERS in this repository, so the register is not unforgeable by
+    // anyone who can commit — only the SILENT one-file over-claim is closed.
+    expect(GRANTED_EVIDENCE_LEVEL).toBe(RECORDED_GRANT);
   });
 
   it('the opt-in gate is not vacuous: asked to run, it RAN', () => {
