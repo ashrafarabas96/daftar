@@ -1,0 +1,46 @@
+=== 1. drop and recreate the database ===
+=== 2. bootstrap.sql (six runtime roles + extensions), as the deployment administrator ===
+psql:/var/tmp/p11s/sql/bootstrap.rendered.sql:297: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_accounting_internal" by role "postgres"
+psql:/var/tmp/p11s/sql/bootstrap.rendered.sql:298: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_platform" by role "postgres"
+psql:/var/tmp/p11s/sql/bootstrap.rendered.sql:304: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_inventory_internal" by role "postgres"
+psql:/var/tmp/p11s/sql/bootstrap.rendered.sql:314: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_catalog_internal" by role "postgres"
+psql:/var/tmp/p11s/sql/bootstrap.rendered.sql:315: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_provisioning_internal" by role "postgres"
+=== 3. migrations 0000..0086 as daftar_migrator (NOT superuser) ===
+APPLIED 87/87 as daftar_migrator
+LAST: 0086_phase4_rls_quals_once_per_query.sql
+=== 4. Pack A, unnumbered, as daftar_migrator ===
+PACK A APPLIED, end-state assertion passed
+=== 5. the world ===
+    step     
+-------------
+ WORLD BUILT
+(1 row)
+
+=== 6. proofs ===
+case                                                                     verdict                      detail
+--------------------------------------------------------------------------------------------------------------------------------------------
+happy path: a registered combination is accepted                         GREEN                        {"size": "s", "color": "red"}
+jsonb itself canonicalizes key order, which is what makes the index work GREEN                        t
+attributes is an array, not an object                                    RED (refused as required)    catalog.variant_attributes_shape_invalid
+attributes has a nested value                                            RED (refused as required)    catalog.variant_attributes_shape_invalid
+attributes has a non-text value                                          RED (refused as required)    catalog.variant_attributes_shape_invalid
+an axis the product's matrix does not register                           RED (refused as required)    catalog.variant_axis_unregistered
+a value that exists but is archived                                      RED (refused as required)    catalog.variant_axis_value_unregistered
+a value that does not exist at all                                       RED (refused as required)    catalog.variant_axis_value_unregistered
+a partial combination (one of two registered axes)                       RED (refused as required)    catalog.variant_axis_set_incomplete
+a product with no registered axes cannot carry attributes                RED (refused as required)    catalog.variant_axis_unregistered
+a base variant write is refused by the pre-existing authority, not by Pack A RED (refused as required)    catalog.base_variant_not_mutable
+the same combination twice                                               RED (refused as required)    product_variants_matrix_uq
+the same combination with the keys written in the other order            RED (refused as required)    product_variants_matrix_uq
+attributes changed on a variant that has stock history                   RED (refused as required)    catalog.variant_matrix_locked
+as daftar_app in business B, business A's axes are invisible             GREEN                        0
+as daftar_app in business B, inserting an axis FOR business A is refused RED (refused as required)    row-level security
+as daftar_app in business B, business A's matrix rows are invisible      GREEN                        0
+with business A's own context the same rows ARE visible (the read is not broken, it is scoped) GREEN                        2
+business A's context with the WRONG tenant sees nothing (tenant_membership, not only business_isolation) GREEN                        0
+daftar_app does not bypass RLS                                           GREEN                        f
+
+TOTAL 20 cases, 0 failed
+=== 7. the frozen tree, after the run ===
+tracked changes under infrastructure/database: 0
+frozenThrough: 0079_phase4_pos_till_sessions_cart.sql | frozen entries: 80 | digest mismatches: []

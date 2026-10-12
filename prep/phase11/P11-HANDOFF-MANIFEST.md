@@ -9,7 +9,7 @@
 | field | value |
 |---|---|
 | **phase** | 11 — Apparel · Electronics · Repair · Lot/Expiry vertical packs (Master Part 31) |
-| **status** | **`PREPARED / NOT PROMOTED`** — `DESIGN / SPEC ONLY`. One subfeature is separately `BLOCKED` (repair-part accounting, PART 68) and two are `WAITING_FOR_INTEGRATED_SURFACE` (the preconsumed billing binding and the repair deposit, both on unsealed Phase 4 surfaces). PART 117 states the law this obeys: never call `PREPARED` complete, never call a local test CI, never call a spec a DB proof. |
+| **status** | **`PREPARED / NOT PROMOTED`**, and on the Master Continuous Mission's ladder (`PREPARED → CHALLENGED → READY_TO_PROMOTE → PROMOTION_IN_PROGRESS → ACCEPTED / SEALED`) at **`PREPARED`** — no independent challenger has read it. **Pack A (apparel) now has an executed scratch proof** (see §3) — `DESIGN / SPEC ONLY`. One subfeature is separately `BLOCKED` (repair-part accounting, PART 68) and two are `WAITING_FOR_INTEGRATED_SURFACE` (the preconsumed billing binding and the repair deposit, both on unsealed Phase 4 surfaces). PART 117 states the law this obeys: never call `PREPARED` complete, never call a local test CI, never call a spec a DB proof. |
 | **base read** | `93084f8` on `phase/4-sales-pos-customers-receivables` (`fix(p4s1-gate): a delegator may not also compute`) |
 | **own branch** | `claude/phase11-prep-re0epv`, cut from that head. Nothing has been pushed to `phase/4-sales-pos-customers-receivables` or to `main`, and no pull request exists. |
 | **worktree** | the session's primary checkout at `/home/user/daftar`; no separate git worktree was created |
@@ -24,16 +24,18 @@
 
 ## 2. Artifacts
 
-Each document exists in **two places**: the shared project-files location (the canonical working copy) and `prep/phase11/` in Git on the prep branch. The SHA256 is of the shared copy as of this revision; the Git copies are byte-identical, which is what the commit proves.
+Each document exists in **two places**: the shared project-files location (the canonical working copy) and `prep/phase11/` in Git on the prep branch. The SHA256 is of the shared copy as of this revision (2026-10-12, after the Pack A proof run); the Git copies are byte-identical, which is what the commit proves.
 
 | artifact | shared location | in Git | SHA256 (shared copy) |
 |---|---|---|---|
-| `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `f07fb2213cf63581c91110a93cdc39a0e879c9abb3e13869b8ebcab603882eea` |
+| `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `390ce7f6e6e31a52d08ff7978dbc1d02eeeacba61ca9e661be49386d9e4bfca1` |
 | `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `487811213a39b7ce5c4cf1d604e6089e5a221aab93038bb27cd196e1cc21cefc` |
-| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `23decb052b80ce342e44f7cc46f6ba28ec9af41cc455fbe526d6d26afc1fbe87` |
-| `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `5f0875dff1fc1e2ef3aaadc7c12851a9bd604ab8ad934069ec6c553c3472e24f` |
+| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `9c712442a421bdfc8de32bb9a529cde06f800f31f184d9e305eac9c1a0f9c56b` |
+| `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `13bd80fd3f912271d205b499c075a42f999e8c95fc70543855fb54e179f19994` |
 | `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `4f34ccc48036aee0270beac7545428fce844811c6746f3973d665dc9f795f6bf` |
-| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `30aa4a4e1af18d5b0263b7d809a0e8dafbd1aed58a2732bf21eae29ca421eb1b` |
+| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `5a7f67904df76065249679fbd513f9261eaef6d85486c16e9dd0d63051e3d6ec` |
+| `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `2b9920c78598ea596213b180f9debbcea879d65e31d1aabe37b633887e640df5`|
+| `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
 | `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
 
 **Nothing is uncommitted.** The working tree is clean at the preparation SHA, and the shared copies are the same bytes. Note that `/mnt/project-files/` is **not in Git**: the Git copies under `prep/phase11/` are the durable ones, and that duplication exists precisely because this container is ephemeral.
@@ -44,7 +46,22 @@ Each document exists in **two places**: the shared project-files location (the c
 
 ## 3. Evidence files
 
-**There are none, and that is the honest state.** No DDL has been applied to a cluster, no suite has been executed, no gate script exists, and no CI run is attached. Every verdict in every Phase 11 document is labelled `SPEC ONLY`, `DESIGN ONLY`, `UNMEASURED`, `BLOCKED` or `WAITING_FOR_INTEGRATED_SURFACE`, never two classes in one sentence (§82).
+**Pack A (apparel) has executed evidence as of 2026-10-12; the other three packs have none.** The Master Continuous Mission's §18 required the unnumbered scratch proof, and it ran.
+
+| artifact | what it is |
+|---|---|
+| `P11-LIVE-DDL-PROOF.md` | the proof's report, and the **six defects** it found — four of them in this preparation's own specification |
+| `prep/phase11/ddl/p11-pack-a-apparel.sql` | the **unnumbered** Pack A DDL, as applied |
+| `prep/phase11/harness/rebuild_and_prove.sh` | the one script that does every step from zero on every run |
+| `prep/phase11/harness/run_migrations.py` | a faithful reproduction of the house runner's contract (per-file transaction, ownership-handover bracket, checksum history) for a container with no `node_modules` |
+| `prep/phase11/harness/world.sql`, `proofs.py` | the world and the 20 cases |
+| `prep/phase11/harness/RUN-EVIDENCE-2026-10-12.txt` | the captured output of a run |
+
+**Measured, in the form it ran in:** PostgreSQL 16.15 scratch cluster; `bootstrap.sql` as the deployment administrator; **migrations 0000→0086, 87/87, as `daftar_migrator` and not as a superuser**; Pack A applied unnumbered with its end-state assertion passing; **20 proof cases, 0 failed, twice consecutively**; and after the run, **0 tracked changes under `infrastructure/database`, `frozenThrough = 0079`, 80 frozen entries, 0 digest mismatches**.
+
+**What is NOT evidence, stated so no reader promotes it:** no npm workspace suite ran at all — this container has **Node 22.22.0 while the repository requires `>=24 <25`** and has no `node_modules`, so `format`, `lint`, `typecheck` and every Vitest suite are `UNMEASURED`. There is **no CI run** for any of this and a local green is never reported as CI. There is **no timing or performance number**, measured or claimed. Lot, serial and repair remain `SPEC ONLY`. There is **no challenger signature**.
+
+Every other verdict in every Phase 11 document remains labelled `SPEC ONLY`, `DESIGN ONLY`, `UNMEASURED`, `BLOCKED` or `WAITING_FOR_INTEGRATED_SURFACE`, never two classes in one sentence (§82).
 
 What is owed, and by whom, is in `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` §3 as a T0–T7 estate. The first execution step is fixed by §12 of the master directive and by `P11-AL-19`: apply the Phase 11 DDL **as `daftar_migrator`, the application role and the internal roles — never superuser-only** — on a scratch cluster and read the earliest error, *before* any TypeScript. The nearby precedent is the one that justifies the order: eight of twelve defects in a comparable slice were found that way, two of them exactly the shapes this DDL invites (a constraint trigger created above its function, and RLS forced with no policy so the validator refuses everything rather than only the incomplete cases).
 
