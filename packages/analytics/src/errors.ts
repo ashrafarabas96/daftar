@@ -92,6 +92,8 @@ export const ANALYTICS_REFUSALS = {
   /** `F-21`: a correction may not give back more than the row it corrects ever took. */
   'loyalty.corrects_more_than_target': 422,
   'loyalty.corrects_chain_unreadable': 422,
+  'loyalty.ledger_count_not_stated': 422,
+  'loyalty.ledger_not_party_complete': 422,
   'loyalty.corrects_cycle': 422,
     /** `F-22`: a correction may not be dated before the row it corrects. */
   'loyalty.corrects_out_of_order': 422,

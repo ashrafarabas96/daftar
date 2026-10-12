@@ -70,6 +70,20 @@ function refusalCodeOf(run: () => unknown): string {
 const BUSINESS = '11111111-1111-4111-8111-111111111111';
 const CUSTOMER = '22222222-2222-4222-8222-222222222222';
 
+/**
+ * The `partyMovementCount` a caller must state (C-2), derived from the ledger
+ * being handed over. In a test the two agree by construction, which is the
+ * point: the check exists for real call sites, and the one case that exercises
+ * a DISAGREEMENT states the count by hand.
+ */
+const partyCount = (
+  l: LoyaltyLedger, businessId: string = BUSINESS, customerId: string = CUSTOMER,
+): { partyMovementCount: number } => ({
+  partyMovementCount: l.movements.filter(
+    (m) => m.businessId === businessId && m.customerId === customerId,
+  ).length,
+});
+
 const earn = (id: string, points: bigint, effectiveOn: string, expiresOn: string): LoyaltyMovementDraft => ({
   id,
   businessId: BUSINESS,
@@ -1045,7 +1059,7 @@ describe('buildReversalMovement — F-11, a reversal cannot omit what it correct
 
   it('always writes `correctsId`, because it is a required field of its request', () => {
     const ledger = base();
-    const draft = buildReversalMovement(ledger, {
+    const draft = buildReversalMovement(ledger, { ...partyCount(ledger), 
       businessId: BUSINESS,
       customerId: CUSTOMER,
       sourceId: 'sale-c1',
@@ -1080,10 +1094,10 @@ describe('buildReversalMovement — F-11, a reversal cannot omit what it correct
       movementId: 'r1',
       reason: 'sale fully reversed',
     };
-    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...request, correctsId: 'nope' }))).toBe(
+    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, correctsId: 'nope' }))).toBe(
       'loyalty.corrects_unknown_movement',
     );
-    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...request, correctsId: 'r1' }))).toBe(
+    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, correctsId: 'r1' }))).toBe(
       'loyalty.corrects_self',
     );
   });
@@ -1122,7 +1136,7 @@ describe('buildReversalMovement — F-11, a reversal cannot omit what it correct
     // that does not name one is indistinguishable from a grant.
     const named = appendMovement(
       base(),
-      buildReversalMovement(base(), {
+      buildReversalMovement(base(), { ...partyCount(base()), 
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId: 'sale-c1',
@@ -1162,7 +1176,7 @@ describe('eligiblePoints — F-13, a lawful reversal withholds its own quantity 
     const ledger = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'), consume('c1', 40n, '2026-03-01'));
     return appendMovement(
       ledger,
-      buildReversalMovement(ledger, {
+      buildReversalMovement(ledger, { ...partyCount(ledger), 
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId: 'sale-c1',
@@ -1279,7 +1293,7 @@ describe('eligiblePoints — F-13, a lawful reversal withholds its own quantity 
     const reverse = (ledger: LoyaltyLedger, target: string, points: bigint, id: string, day: string) =>
       appendMovement(
         ledger,
-        buildReversalMovement(ledger, {
+        buildReversalMovement(ledger, { ...partyCount(ledger), 
           businessId: BUSINESS,
           customerId: CUSTOMER,
           sourceId: `sale-${target}`,
@@ -1358,7 +1372,7 @@ describe('foldExpiry — F-14, a reversal withholds only the part its target dre
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(spend, '2026-01-03', 'c1'))).ledger;
     return appendMovement(
       ledger,
-      buildReversalMovement(ledger, {
+      buildReversalMovement(ledger, { ...partyCount(ledger), 
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId: 'sale-c1',
@@ -1480,7 +1494,7 @@ describe('foldExpiry — F-14, a reversal withholds only the part its target dre
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-02', 'c1'))).ledger;
     ledger = appendMovement(
       ledger,
-      buildReversalMovement(ledger, {
+      buildReversalMovement(ledger, { ...partyCount(ledger), 
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId: 'sale-c1',
@@ -1529,7 +1543,7 @@ describe('foldExpiry — F-14, a reversal withholds only the part its target dre
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(45n, '2026-01-03', 'c1'))).ledger;
     ledger = appendMovement(
       ledger,
-      buildReversalMovement(ledger, {
+      buildReversalMovement(ledger, { ...partyCount(ledger), 
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId: 'sale-c1',
@@ -1824,7 +1838,7 @@ describe('foldExpiry — the property the challenge probed, as a deterministic c
             if (ledger.movements.some((m) => m.correctsId === target.id)) continue;
             ledger = appendMovement(
               ledger,
-              buildReversalMovement(ledger, {
+              buildReversalMovement(ledger, { ...partyCount(ledger), 
                 businessId: BUSINESS,
                 customerId: CUSTOMER,
                 sourceId: target.sourceId,
@@ -1910,15 +1924,15 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       reason: 'sale fully reversed',
     };
     for (const points of [41n, 50n, 500n, 1000000n]) {
-      expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...request, points }))).toBe(
+      expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points }))).toBe(
         'loyalty.corrects_more_than_target',
       );
     }
     // The bound is the row's own magnitude and not a partial-return rule:
     // `§5.7.4` leaves the quantity of a partial return to configuration, so
     // anything up to what the row took is still built.
-    expect(buildReversalMovement(ledger, { ...request, points: 40n }).pointsDelta).toBe(40n);
-    expect(buildReversalMovement(ledger, { ...request, points: 1n }).pointsDelta).toBe(1n);
+    expect(buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points: 40n }).pointsDelta).toBe(40n);
+    expect(buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points: 1n }).pointsDelta).toBe(1n);
 
     // F-22 — AND THE DATE. This case exists because a mutation run found the
     // ordering guard was written with no case behind it: removing it reddened
@@ -1927,12 +1941,12 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // visible at a date its target is not, so the fold reads a restoration of a
     // draw that has not happened yet and withholds the whole quantity — the
     // conservative answer to a row that should not exist.
-    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...request, points: 40n, asOf: '2026-01-01' }))).toBe(
+    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points: 40n, asOf: '2026-01-01' }))).toBe(
       'loyalty.corrects_out_of_order',
     );
     // The boundary itself is lawful: a correction ON its target's own date is
     // built, because §4.1's dates are civil dates and carry no time of day.
-    expect(buildReversalMovement(ledger, { ...request, points: 40n, asOf: '2026-01-02' }).pointsDelta).toBe(40n);
+    expect(buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points: 40n, asOf: '2026-01-02' }).pointsDelta).toBe(40n);
 
     // AND THE HARM THE GUARD STOPS, hand-built because the writer now refuses
     // it and the DDL still permits it. The challenge measured a consumption
@@ -1979,12 +1993,12 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // partial restorations cannot together exceed the whole.
     const half = appendMovement(
       ledger,
-      buildReversalMovement(ledger, { ...request, points: 30n, movementId: 'r1', sourceId: 'desk-1' }),
+      buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points: 30n, movementId: 'r1', sourceId: 'desk-1' }),
     ).ledger;
-    expect(refusalCodeOf(() => buildReversalMovement(half, { ...request, points: 11n, movementId: 'r2', sourceId: 'desk-2' }))).toBe(
+    expect(refusalCodeOf(() => buildReversalMovement(half, { ...partyCount(half),  ...request, points: 11n, movementId: 'r2', sourceId: 'desk-2' }))).toBe(
       'loyalty.corrects_more_than_target',
     );
-    expect(buildReversalMovement(half, { ...request, points: 10n, movementId: 'r2', sourceId: 'desk-2' }).pointsDelta).toBe(10n);
+    expect(buildReversalMovement(half, { ...partyCount(half),  ...request, points: 10n, movementId: 'r2', sourceId: 'desk-2' }).pointsDelta).toBe(10n);
   });
 
   it('F-23 — the bound is on the MAGNITUDE of the row named, at every sign', () => {
@@ -2004,7 +2018,7 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       return l;
     })();
     const ask = (ledger: LoyaltyLedger, correctsId: string, points: bigint, id = 'x1') =>
-      buildReversalMovement(ledger, {
+      buildReversalMovement(ledger, { ...partyCount(ledger), 
         businessId: BUSINESS, customerId: CUSTOMER, sourceId: `desk-${id}`, correctsId, points,
         asOf: '2026-01-03', movementId: id, reason: 'desk correction',
       });
@@ -2093,7 +2107,7 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     let ledger = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'));
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-02', 'c1'))).ledger;
     const link = (l: LoyaltyLedger, correctsId: string, id: string, points: bigint) =>
-      buildReversalMovement(l, {
+      buildReversalMovement(l, { ...partyCount(l), 
         businessId: BUSINESS, customerId: CUSTOMER, sourceId: `desk-${id}`, correctsId, points,
         asOf: '2026-01-03', movementId: id, reason: 'desk correction',
       });
@@ -2255,7 +2269,7 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
 
     // The chain invariant refuses the SECOND link of that same chain, by name.
     const twoRows: LoyaltyLedger = { movements: [must(rows[0], 'the earn'), must(rows[1], 'the first link')] };
-    expect(refusalCodeOf(() => buildReversalMovement(twoRows, {
+    expect(refusalCodeOf(() => buildReversalMovement(twoRows, { ...partyCount(twoRows), 
       businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-2', correctsId: 'n0',
       points: 1n, asOf: '2026-01-03', movementId: 'n1', reason: 'desk correction',
     }))).toBe('loyalty.corrects_more_than_target');
@@ -2263,12 +2277,12 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // And the other figure the per-link bound produced: two links on a lawful
     // 1,000,000-point earn, which is the one that needs no patience at all.
     const bigEarn = ledgerOf(earn('e9', 1000000n, '2026-01-01', '2027-01-01'));
-    const one = appendMovement(bigEarn, buildReversalMovement(bigEarn, {
+    const one = appendMovement(bigEarn, buildReversalMovement(bigEarn, { ...partyCount(bigEarn), 
       businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-b1', correctsId: 'e9',
       points: 1000000n, asOf: '2026-01-03', movementId: 'b1', reason: 'desk correction',
     })).ledger;
     expect(perLink(one.movements, 'b1', 1000000n)).toBe('(accepted)');
-    expect(refusalCodeOf(() => buildReversalMovement(one, {
+    expect(refusalCodeOf(() => buildReversalMovement(one, { ...partyCount(one), 
       businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-b2', correctsId: 'b1',
       points: 1000000n, asOf: '2026-01-03', movementId: 'b2', reason: 'desk correction',
     }))).toBe('loyalty.corrects_more_than_target');
@@ -2293,7 +2307,7 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       reason: delta < 0n ? null : 'desk', correctsId,
     });
     const ask = (ledger: LoyaltyLedger, points: bigint) =>
-      buildReversalMovement(ledger, {
+      buildReversalMovement(ledger, { ...partyCount(ledger), 
         businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1', correctsId: 'm1', points,
         asOf: '2026-01-03', movementId: 'r1', reason: 'desk correction',
       });
@@ -2325,6 +2339,111 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     expect(refusalCodeOf(() => ask(otherCustomer, 40n))).toBe('loyalty.corrects_unknown_movement');
   });
 
+  it('C-2 — a narrowed ledger over-reports, and the writer refuses the narrowing by name', () => {
+    // The coordinator's review measured the sentence "breaking the obligation is
+    // a refusal, never a pass" FALSE, and it was. The chain is read through the
+    // array this writer is handed, so a missing ANCESTOR is refused
+    // `loyalty.corrects_chain_unreadable` — but a missing LATER correction is
+    // simply not there to see. Reproduced here first, with the guard disabled by
+    // stating the narrowed count: the full ledger refuses the second 40 with
+    // `loyalty.corrects_more_than_target`, the narrowed one ACCEPTS it, and the
+    // displayed balance then reads 140 for a customer who earned 100.
+    //
+    // Eligible points are NOT over-reported — they stay at 60 — so redemption
+    // was never exposed; the harm is a displayed figure, which is the F-21/F-25
+    // over-report class, not a spend of points that do not exist.
+    const base = (() => {
+      let l = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'));
+      l = appendMovement(l, buildSaleConsumptionMovement(l, sale(40n, '2026-01-02', 'c1'))).ledger;
+      return l;
+    })();
+    const first = buildReversalMovement(base, {
+      ...partyCount(base), businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1',
+      correctsId: 'c1', points: 40n, asOf: '2026-01-03', movementId: 'r1', reason: 'first',
+    });
+    const full = appendMovement(base, first).ledger;
+    const second = (ledger: LoyaltyLedger, count: number) =>
+      buildReversalMovement(ledger, {
+        partyMovementCount: count, businessId: BUSINESS, customerId: CUSTOMER,
+        sourceId: 'desk-2', correctsId: 'c1', points: 40n, asOf: '2026-01-05',
+        movementId: 'r2', reason: 'second',
+      });
+
+    // The full ledger refuses it: the chain has already moved the root's 40.
+    expect(refusalCodeOf(() => second(full, 3))).toBe('loyalty.corrects_more_than_target');
+
+    // The narrowed ledger, with the count stated to MATCH the narrowing so the
+    // new guard stands aside, accepts it — this is the defect, measured.
+    const narrowed: LoyaltyLedger = { movements: full.movements.filter((m) => m.id !== 'r1') };
+    const accepted = second(narrowed, 2);
+    expect(accepted.pointsDelta).toBe(40n);
+    const over = appendMovement(full, accepted).ledger;
+    expect(foldBalance(over, BUSINESS, CUSTOMER, '2026-01-06').balancePoints).toBe(140n);
+    expect(eligiblePoints(over, BUSINESS, CUSTOMER, '2026-01-06')).toBe(60n);
+
+    // And the guard: the ledger handed over is checked against the count the
+    // caller states from the store, so the narrowing itself is refused by name.
+    expect(refusalCodeOf(() => second(narrowed, 3))).toBe('loyalty.ledger_not_party_complete');
+    expect(refusalCodeOf(() => second(full, 4))).toBe('loyalty.ledger_not_party_complete');
+    expect(refusalCodeOf(() => second(full, -1))).toBe('loyalty.ledger_count_not_stated');
+    expect(refusalCodeOf(() => second(full, 1.5))).toBe('loyalty.ledger_count_not_stated');
+
+    // Its limit, stated: this catches a NARROWED ledger, not a caller that
+    // miscounts in the same direction as its narrowing or states a false count.
+    // Only the database can close that, and §A.3c.3 asks for the bound there.
+    expect(second(narrowed, 2).pointsDelta).toBe(40n);
+  });
+
+  it('F-33 — the two party filters are load-bearing TOGETHER, and neither is witnessable alone', () => {
+    // The chain is collected by a `correctsId -> children` index and its net is
+    // summed from the ledger, and BOTH steps filter on the declared key. Drop
+    // either one alone and nothing reds: the index admits a foreign row into
+    // `chain`, and the sum then discards it; or the sum admits it, and it was
+    // never in `chain`. Each defence masks the other, which is the `P5 R9`
+    // lesson — a one-at-a-time sweep cannot see two defences that mask each
+    // other, so the honest proof is a PAIR-DROP and an assertion by name.
+    //
+    // Measured: dropping `sameParty` from the index alone leaves 230 passed,
+    // rc 0. Dropping it from BOTH the index and the sum reds `F-26` above and
+    // this case, 1 failed / 229 passed, rc 1. So neither filter is reported as
+    // witnessed on its own, and both are reported as witnessed together.
+    const row = (businessId: string, id: string, seq: bigint, delta: bigint, correctsId: string | null = null): LoyaltyMovement => ({
+      id, businessId, customerId: CUSTOMER, pointSeq: seq,
+      movementKind: delta < 0n ? 'consume' : 'adjust',
+      sourceType: delta < 0n ? 'sale' : 'manual_adjustment', sourceId: `src-${businessId}-${id}`,
+      pointsDelta: delta, expiresOn: null, effectiveOn: '2026-01-02',
+      reason: delta < 0n ? null : 'desk', correctsId,
+    });
+
+    // One id, two parties (`§1.3`: the relation is keyed `(business_id, id)` and
+    // there is no global unique on `id`) — and the foreign side carries a whole
+    // CHAIN hanging off this party's root: a child and a grandchild. The
+    // grandchild is the leg the index's own walk is needed for: a one-generation
+    // reach would not find it even with the filter gone.
+    const ledger: LoyaltyLedger = {
+      movements: [
+        row(BUSINESS, 'm1', 1n, -100n),
+        row('biz-2', 'm1', 1n, -100n),
+        row('biz-2', 'f1', 2n, 60n, 'm1'),
+        row('biz-2', 'f2', 3n, 40n, 'f1'),
+        { ...row(BUSINESS, 'm1', 1n, -100n), id: 'm2', customerId: 'cust-other' },
+        row('biz-2', 'f3', 4n, 25n, 'm2'),
+      ],
+    };
+    const ask = (points: bigint) =>
+      buildReversalMovement(ledger, { ...partyCount(ledger), 
+        businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1', correctsId: 'm1', points,
+        asOf: '2026-01-03', movementId: 'r1', reason: 'desk correction',
+      });
+
+    // This party's own chain is empty, so its whole 100 is available: the
+    // foreign 60 + 40 + 25 move nothing here. With both filters dropped the
+    // chain's net reads 100 and even 1 point is refused.
+    expect(ask(1n).pointsDelta).toBe(1n);
+    expect(ask(100n).pointsDelta).toBe(100n);
+    expect(refusalCodeOf(() => ask(101n))).toBe('loyalty.corrects_more_than_target');
+  });
+
   it('F-23 RED PROOF — the sign gate restored, and the defect comes back to the digit', () => {
     // `P13-S0 §5`'s canary requirement: the case above must be able to tell the
     // fixed writer from the broken one. `broken` is the bound exactly as it was
@@ -2349,7 +2468,7 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     expect(broken(base, 'c1', 41n)).toBe('loyalty.corrects_more_than_target');
     expect(broken(base, 'e1', 1000000n)).toBe('(accepted)');
     // The real one refuses both, by name.
-    expect(refusalCodeOf(() => buildReversalMovement(base, {
+    expect(refusalCodeOf(() => buildReversalMovement(base, { ...partyCount(base), 
       businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1', correctsId: 'e1',
       points: 1000000n, asOf: '2026-01-03', movementId: 'x1', reason: 'desk correction',
     }))).toBe('loyalty.corrects_more_than_target');
@@ -2574,7 +2693,7 @@ describe('foldExpiry — a target cannot fund two restorations with the same poi
     );
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-03', 'c1'))).ledger;
     const reversal = (movementId: string, asOf: string, sourceId: string, points: bigint) =>
-      buildReversalMovement(ledger, {
+      buildReversalMovement(ledger, { ...partyCount(ledger), 
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId,

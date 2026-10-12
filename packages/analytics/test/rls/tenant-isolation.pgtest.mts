@@ -967,7 +967,14 @@ async function main(): Promise<number> {
   console.log(`merge base vs main : ${gitFact(['merge-base', 'HEAD', 'origin/main'])}`);
   const dirty = gitFact(['status', '--porcelain']);
   console.log(`tree status        : ${dirty === '' ? 'clean' : `${dirty.split('\n').length} changed path(s) — RESULT IS NOT SHA-BOUND`}`);
-  console.log(`migrations touched : ${gitFact(['diff', '--shortstat', 'HEAD', '--', 'infrastructure/database/migrations']) || '0 lines'}`);
+  // C-5: measured against the MERGE-BASE with `main`, not against `HEAD`.
+  // `git diff HEAD -- …` compares the worktree with the last commit, so it
+  // cannot see a migration changed in a commit ON this branch -- the figure was
+  // 0 lines and the sentence it supported, that the frozen migrations are
+  // untouched, was a claim the measurement could not make. The conclusion was
+  // true and the coverage was not, which is the class this round is about.
+  const mergeBase = gitFact(['merge-base', 'HEAD', 'main']);
+  console.log(`migrations touched : ${gitFact(['diff', '--shortstat', mergeBase, '--', 'infrastructure/database/migrations']) || '0 lines'} (worktree vs merge-base with main ${mergeBase.slice(0, 7)}, so a commit on this branch is included)`);
   console.log(`node               : ${process.version}`);
   console.log(`database           : ${serverVersion}`);
   console.log(`collation          : ${collation}`);

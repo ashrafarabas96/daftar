@@ -24,10 +24,15 @@
  *
  * - It is NOT a measurement of performance. This container is not a
  *   measurement box and nothing here claims a duration.
- * - It is NOT a measurement of the REAL schema. The DDL is scratch, there is
- *   no RLS on it, there is no official sale command behind it, and the
- *   official authority that would own the consumption seam does not exist on
- *   `main` at all. Those belong to integration and stay
+ * - It is NOT a measurement of the REAL schema. The DDL is scratch, there is no
+ *   official sale command behind it, and the official authority that would own
+ *   the consumption seam does not exist on `main` at all. (R-7: this header read
+ *   "there is no RLS on it" long after the fixture began to ENABLE and FORCE row
+ *   level security on every table and run every racing connection as a
+ *   NOSUPERUSER NOBYPASSRLS role. It UNDERSTATED the proof rather than
+ *   overstating it, which is the harmless direction and still a false sentence
+ *   in a header a reader trusts. What the fixture does and does not exercise is
+ *   stated where the policies are created.) Those belong to integration and stay
  *   `WAITING_FOR_INTEGRATED_SURFACE`.
  *
  * WHICH CLUSTER, AND WHY IT MATTERS
@@ -589,9 +594,16 @@ begin
   loop
     execute format('alter table p13_proof.%I enable row level security', r.relname);
     execute format('alter table p13_proof.%I force row level security', r.relname);
-    -- PERMISSIVE for membership, RESTRICTIVE for the business boundary: the
-    -- same two-policy shape the live migrations use, so a result here is about
-    -- that shape and not about a simpler one invented for the test.
+    -- PERMISSIVE for membership, RESTRICTIVE for the business boundary -- the
+    -- two-policy SHAPE the live migrations use. Its limit, stated (R-3, the
+    -- coordinator's review at 12fe9a4): the permissive half here is
+    -- using (true), where the live permissive policy compares the tenant
+    -- directly, so what this fixture exercises is the RESTRICTIVE layer and the
+    -- shape of the pair -- not the permissive predicate. A result here is
+    -- therefore about the restrictive boundary holding under concurrency, and is
+    -- NOT evidence about tenant membership. Modelling the permissive predicate
+    -- needs a membership relation this fixture does not have, and inventing one
+    -- would make the result about the invention.
     execute format(
       'create policy tenant_membership on p13_proof.%I for all to daftar_app_proof '
       'using (true) with check (true)', r.relname);
@@ -2275,7 +2287,14 @@ async function main(): Promise<number> {
   console.log(`base SHA (main)    : ${gitFact(['rev-parse', 'origin/main'])}`);
   console.log(`merge base vs main : ${gitFact(['merge-base', 'HEAD', 'origin/main'])}`);
   console.log(`tree status        : ${dirty === '' ? 'clean' : `${dirty.split('\n').length} changed path(s) — RESULT IS NOT SHA-BOUND`}`);
-  console.log(`migrations touched : ${gitFact(['diff', '--shortstat', 'HEAD', '--', 'infrastructure/database/migrations']) || '0 lines'}`);
+  // C-5: measured against the MERGE-BASE with `main`, not against `HEAD`.
+  // `git diff HEAD -- …` compares the worktree with the last commit, so it
+  // cannot see a migration changed in a commit ON this branch -- the figure was
+  // 0 lines and the sentence it supported, that the frozen migrations are
+  // untouched, was a claim the measurement could not make. The conclusion was
+  // true and the coverage was not, which is the class this round is about.
+  const mergeBase = gitFact(['merge-base', 'HEAD', 'main']);
+  console.log(`migrations touched : ${gitFact(['diff', '--shortstat', mergeBase, '--', 'infrastructure/database/migrations']) || '0 lines'} (worktree vs merge-base with main ${mergeBase.slice(0, 7)}, so a commit on this branch is included)`);
   console.log(`node               : ${process.version}`);
   console.log(`database           : ${serverVersionLine}`);
   console.log(`collation          : ${collationLine}`);

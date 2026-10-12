@@ -1299,6 +1299,26 @@ export interface ReversalRequest {
   readonly asOf: CivilDate;
   readonly movementId: string;
   readonly reason: string;
+  /**
+   * How many movements the STORE holds for this `(businessId, customerId)`,
+   * counted by the caller without an `asOf` or any other filter.
+   *
+   * C-2. The chain bound is computed from the ledger this function is handed, so
+   * a caller that narrows it hands over a chain with rows missing. A missing
+   * ANCESTOR is refused `loyalty.corrects_chain_unreadable`; a missing LATER
+   * correction is invisible in the array, and that was measured: a ledger with
+   * one 40-point correction dropped ACCEPTS a second 40 against a 40-point draw
+   * that the full ledger refuses `loyalty.corrects_more_than_target`, and the
+   * displayed balance reads 140 for a customer who earned 100.
+   *
+   * There is no way to see an absent row in an array, so the obligation is made
+   * a statement the caller must put a number to, and the number is checked
+   * against the rows handed over. Its limit, stated: this catches a ledger that
+   * is narrowed, not a caller that miscounts or lies, and only the database can
+   * close that -- `P13-MIGRATION-PATCH-REQUEST.md` §A.3c.3 asks for the bound as
+   * a trigger, where the relation cannot be narrowed by a caller at all.
+   */
+  readonly partyMovementCount: number;
 }
 
 /**
@@ -1350,6 +1370,24 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   }
   if (request.correctsId === request.movementId) {
     refuseLoyalty('loyalty.corrects_self', 'a movement cannot correct itself', { movementId: request.movementId });
+  }
+  // C-2: the ledger must be the party's whole ledger, and that is now a checked
+  // statement rather than a sentence in a comment. The count is the caller's,
+  // taken from the store with no filter; the rows are what this call was given.
+  if (!Number.isSafeInteger(request.partyMovementCount) || request.partyMovementCount < 0) {
+    refuseLoyalty('loyalty.ledger_count_not_stated',
+      'a reversal must state how many movements the store holds for this party', {
+        partyMovementCount: String(request.partyMovementCount),
+      });
+  }
+  const heldForParty = ledger.movements.filter(
+    (m) => m.businessId === request.businessId && m.customerId === request.customerId,
+  ).length;
+  if (heldForParty !== request.partyMovementCount) {
+    refuseLoyalty('loyalty.ledger_not_party_complete',
+      'the ledger handed to this writer is not the whole of this party\'s ledger', {
+        stated: String(request.partyMovementCount), handedOver: String(heldForParty),
+      });
   }
   // `F-26` — THE TARGET IS FOUND BY THE DECLARED KEY, NOT BY `id` ALONE.
   //
@@ -1542,6 +1580,25 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
       siblings.push(m);
     }
   }
+  // F-33, and the two mutations behind it. BOTH this index and the sum below
+  // filter on the declared key, and each masks the other: drop `sameParty` from
+  // either one alone and nothing reds (measured: 231 passed, rc 0, both ways),
+  // because a foreign row the index admits is discarded by the sum, and one the
+  // sum would admit was never in `chain`. Dropping it from BOTH reds this case
+  // and `F-26` (2 failed / 229 passed, rc 1). So the pair is reported as
+  // witnessed and neither filter is reported as witnessed alone -- the `P5 R9`
+  // lesson, that a one-at-a-time sweep cannot see two defences that mask each
+  // other.
+  //
+  // The `chain.has` guard on the next line is defence in depth and is
+  // UNWITNESSABLE, which is said here rather than left as a surviving mutation
+  // that reads like a hole: removing it leaves 231 passed and does not hang.
+  // `correctsId` is single-valued, so the children relation is a FOREST -- no row
+  // has two parents and none is reachable twice -- and a cycle cannot hang below
+  // a root at all, because a cycle's members have no path to a row with
+  // `correctsId === null` and the upward walk above refuses `loyalty.corrects_cycle`
+  // first. Termination comes from the forest, not from this set, and no ledger
+  // distinguishes the two.
   const chain = new Set<string>([root.id]);
   for (const queue = [root.id]; queue.length > 0; ) {
     const parent = queue.pop();
