@@ -176,3 +176,53 @@ describe('the whole mapping, enumerated — no unpaid path reaches a committed s
     expect(requireSettlementTruth('credit', CREDIT_AUTHORIZED, CUSTOMER).establishedByUserId).toBe(MANAGER);
   });
 });
+
+describe('the guest ruling — cash on delivery, until the payment seam is defined', () => {
+  // Ashraf's ruling of 2026-10-12, on the decision card that followed the
+  // measurement in the contract pack §9: until the Sales + Accounting
+  // authorities define the merchant payment and tender seam, a guest pays on
+  // delivery. No storefront card payment for a guest, and no account forced on
+  // a one-visit shopper either.
+  //
+  // The gate already produced this outcome before the ruling — credit refuses a
+  // null customer and `payment_verified` is refused outright — so this block
+  // adds no behaviour. It states the ruling as an EXECUTED law rather than an
+  // emergent one, enumerating EVERY evidence kind against a guest so that a
+  // fourth kind cannot quietly open a second guest path: a new kind must either
+  // refuse a null customer or be added to this table deliberately.
+  const GUEST = null;
+
+  const EXPECTED_FOR_A_GUEST: Readonly<Record<string, 'cash' | 'refused'>> = {
+    cash_collected_on_handover: 'cash',
+    payment_verified: 'refused',
+    authorized_customer_credit: 'refused',
+  };
+
+  it('covers every declared evidence kind, so a new one cannot slip past this ruling', () => {
+    expect(Object.keys(EXPECTED_FOR_A_GUEST).sort()).toEqual([...ORDER_SETTLEMENT_EVIDENCE_KINDS].sort());
+  });
+
+  it('establishes a cash sale for a guest ONLY from cash actually collected at handover', () => {
+    const established = requireSettlementTruth('cash', CASH_COLLECTED, GUEST);
+    expect(established).toEqual({
+      mode: 'cash',
+      evidenceKind: 'cash_collected_on_handover',
+      establishedByUserId: STAFF,
+      customerId: null,
+    });
+  });
+
+  it('refuses every other path for a guest, each with its own reason', () => {
+    // A guest card payment: no seam exists, so the surface refusal wins. This is
+    // the case the ruling is ABOUT, and it must stay refused rather than become
+    // a cash sale by another name.
+    expect(() => requireSettlementTruth('cash', PAYMENT_VERIFIED, GUEST)).toThrowError(
+      expect.objectContaining({ code: 'order.payment_surface_not_integrated' }),
+    );
+    // A guest on credit: an anonymous receivable, forbidden by TL-P6-R3/R4. The
+    // refusal is the answer; no customer row is invented to make it work.
+    expect(() => requireSettlementTruth('credit', CREDIT_AUTHORIZED, GUEST)).toThrowError(
+      expect.objectContaining({ code: 'order.checkout_customer_required' }),
+    );
+  });
+});
