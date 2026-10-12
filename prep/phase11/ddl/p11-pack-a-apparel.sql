@@ -182,35 +182,68 @@ BEGIN
       USING ERRCODE = 'P0001';
   END IF;
 
-  -- Identity-shaping facts stop being editable once stock exists: history
-  -- recorded against one combination cannot be reinterpreted as another.
-  -- The precedent is product_variants_20_stock_identity_lock (0060).
-  IF TG_OP = 'UPDATE'
-     AND NEW.attributes <> OLD.attributes
-     AND EXISTS (SELECT 1 FROM stock_levels sl
-                            WHERE sl.business_id = OLD.business_id
-                              AND sl.variant_id  = OLD.id) THEN
-    RAISE EXCEPTION 'catalog.variant_matrix_locked: this variant has stock history; its attributes are fixed'
+  -- ── The combination is immutable, and the reason is a measured race ──────
+  -- The first draft made this conditional: attributes were fixed only once
+  -- `stock_levels` carried a row for the variant, on the
+  -- product_variants_20_stock_identity_lock precedent (0060). V2 of the
+  -- Master Continuous Mission ordered the race proved, and it failed:
+  --   T1  UPDATE attributes  -- reads stock_levels, sees no row, allows it
+  --   T2  INSERT the variant's FIRST stock_levels row
+  --   both COMMIT  ->  a variant whose combination changed AND has stock
+  -- A cross-table read of an ABSENT row cannot be locked: there is no row to
+  -- lock, and only SERIALIZABLE gives a predicate lock. The lock that would
+  -- serialize it has to be taken by whoever creates the first stock row, and
+  -- that path belongs to the inventory authority, not to this pack.
+  --
+  -- So the invariant is made unconditional instead, which Pack A owns
+  -- entirely: **a non-base variant's combination never changes.** The cell
+  -- IS the identity. A mistyped combination on a variant with no history is
+  -- archived (product_variants_30_archive_requires_zero_stock already allows
+  -- that at zero stock) and replaced, which costs a merchant one extra tap
+  -- and removes a whole class of concurrency failure. No cross-table read,
+  -- nothing to race, no second authority asked for anything.
+  IF TG_OP = 'UPDATE' AND NEW.attributes <> OLD.attributes THEN
+    RAISE EXCEPTION 'catalog.variant_matrix_immutable: a variant''s combination is its identity and never changes; archive it and create the right one'
       USING ERRCODE = 'P0001';
   END IF;
 
+  -- ── Each registry row is LOCKED, not merely read ────────────────────────
+  -- Also a measured race. Reading the registry and then trusting the read is
+  -- a snapshot promise: T1 deleted an axis of this product while T2 inserted
+  -- a variant naming it, and both committed, leaving a committed variant
+  -- whose attributes named an axis the matrix no longer registers. `FOR KEY
+  -- SHARE` makes the concurrent DELETE wait instead, so one of the two
+  -- transactions sees the other's outcome and the closure invariant survives
+  -- both orderings. The matching structural half is
+  -- product_matrix_axes_10_axis_in_use() below.
   FOR v_axis, v_value IN SELECT e.key, e.value #>> '{}' FROM jsonb_each(v_canonical) e LOOP
-    IF NOT EXISTS (SELECT 1 FROM product_matrix_axes ma
-                              WHERE ma.business_id = NEW.business_id
-                                AND ma.product_id  = NEW.product_id
-                                AND ma.axis_code   = v_axis) THEN
+    PERFORM 1 FROM product_matrix_axes ma
+      WHERE ma.business_id = NEW.business_id
+        AND ma.product_id  = NEW.product_id
+        AND ma.axis_code   = v_axis
+      FOR KEY SHARE;
+    IF NOT FOUND THEN
       RAISE EXCEPTION 'catalog.variant_axis_unregistered: axis % is not an axis of this product''s matrix', v_axis
         USING ERRCODE = 'P0001';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM product_attribute_values av
-                              WHERE av.business_id = NEW.business_id
-                                AND av.axis_code   = v_axis
-                                AND av.value_code  = v_value
-                                AND av.status      = 'active') THEN
+    PERFORM 1 FROM product_attribute_values av
+      WHERE av.business_id = NEW.business_id
+        AND av.axis_code   = v_axis
+        AND av.value_code  = v_value
+        AND av.status      = 'active'
+      FOR KEY SHARE;
+    IF NOT FOUND THEN
       RAISE EXCEPTION 'catalog.variant_axis_value_unregistered: % is not an active value of axis %', v_value, v_axis
         USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
+
+  -- The axis COUNT is read under the same lock discipline: counting rows a
+  -- concurrent transaction is deleting is the same snapshot promise one line
+  -- further down.
+  PERFORM 1 FROM product_matrix_axes ma
+    WHERE ma.business_id = NEW.business_id AND ma.product_id = NEW.product_id
+    FOR KEY SHARE;
 
   SELECT count(*) INTO v_registered FROM product_matrix_axes ma
    WHERE ma.business_id = NEW.business_id
@@ -232,6 +265,34 @@ $$;
 CREATE TRIGGER product_variants_40_matrix_canonical
   BEFORE INSERT OR UPDATE OF attributes, is_base, product_id ON product_variants
   FOR EACH ROW EXECUTE FUNCTION product_variants_40_matrix_canonical();
+
+-- ── The structural half of the axis race ───────────────────────────────────
+-- A lock makes the two transactions serialize; this makes the losing order
+-- REFUSE rather than succeed. Without it, the axis delete simply wins after
+-- the variant insert waits, and the committed state is still inconsistent —
+-- and worse, it orphans variants that were already there, which is not even
+-- a race but an unguarded delete.
+CREATE FUNCTION product_matrix_axes_10_axis_in_use()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM product_variants v
+              WHERE v.business_id = OLD.business_id
+                AND v.product_id  = OLD.product_id
+                AND NOT v.is_base
+                AND v.attributes ? OLD.axis_code) THEN
+    RAISE EXCEPTION 'catalog.matrix_axis_in_use: axis % is named by existing variants of this product and cannot be removed', OLD.axis_code
+      USING ERRCODE = 'P0001';
+  END IF;
+  RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER product_matrix_axes_10_axis_in_use
+  BEFORE DELETE ON product_matrix_axes
+  FOR EACH ROW EXECUTE FUNCTION product_matrix_axes_10_axis_in_use();
 
 -- One variant per combination. The trigger has already rewritten
 -- `attributes` into canonical form, so the expression is a canonicalization
@@ -346,6 +407,9 @@ BEGIN
 
   IF (SELECT count(*) FROM pg_trigger WHERE tgname = 'product_variants_40_matrix_canonical' AND NOT tgisinternal) <> 1 THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: the canonicalization trigger is absent' USING ERRCODE='P0001';
+  END IF;
+  IF (SELECT count(*) FROM pg_trigger WHERE tgname = 'product_matrix_axes_10_axis_in_use' AND NOT tgisinternal) <> 1 THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: the axis-in-use guard is absent' USING ERRCODE='P0001';
   END IF;
   IF (SELECT count(*) FROM pg_class WHERE relname = 'product_variants_matrix_uq' AND relkind = 'i') <> 1 THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: the matrix uniqueness index is absent' USING ERRCODE='P0001';

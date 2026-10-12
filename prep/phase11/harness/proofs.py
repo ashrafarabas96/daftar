@@ -77,9 +77,12 @@ case("the same combination with the keys written in the other order",
 # needs the session's business context set — which is the documented design,
 # and the test's first shape (no context) was wrong, not the pack.
 pre_lock = f"SET app.tenant_id='{TA}'; SET app.business_id='{A}'; INSERT INTO branches (business_id,id,name) VALUES ('{A}','{A}','BR') ON CONFLICT DO NOTHING; INSERT INTO warehouses (business_id,id,branch_id,name) VALUES ('{A}','{A}','{A}','WH') ON CONFLICT DO NOTHING; SET ROLE daftar_inventory_internal; INSERT INTO stock_levels (tenant_id,business_id,warehouse_id,variant_id,on_hand,valuation_base_minor,last_stock_seq) VALUES ('{TA}','{A}','{A}','f0000001-0000-0000-0000-000000000001',1,0,0) ON CONFLICT DO NOTHING; RESET ROLE;"
-case("attributes changed on a variant that has stock history",
+case("attributes changed at all (the combination is the identity)",
      f"UPDATE product_variants SET attributes='{{\"size\":\"m\",\"color\":\"red\"}}'::jsonb WHERE id='f0000001-0000-0000-0000-000000000001';",
-     "catalog.variant_matrix_locked", pre=pre_lock)
+     "catalog.variant_matrix_immutable", pre=pre_lock)
+case("an axis named by existing variants cannot be removed",
+     f"DELETE FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PA}' AND axis_code='color';",
+     "catalog.matrix_axis_in_use")
 
 # 8 RLS, attacked from the application role with another business's context
 rls_pre=f"SET app.tenant_id='{TB}'; SET app.business_id='{B}';"
