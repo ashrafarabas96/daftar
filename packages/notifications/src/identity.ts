@@ -109,6 +109,35 @@ export function originKeyFieldsAreValid(origin: NotificationOrigin): { readonly 
   }
 }
 
+/**
+ * Assert the law on the COMPOSED key, which is where it actually applies —
+ * third challenge, N-7.
+ *
+ * `assertKeyField` tests each field in isolation, and that is not the same
+ * rule. An occurrence key of `:00` carries no `::` of its own, and the
+ * composition `schedule:<id>:<occurrence>` supplies the first colon, so
+ * `schedule:s1::00` passed every field check while containing the one sequence
+ * `deliveryKey` reserves. Nothing in this package parses these keys — they are
+ * opaque strings — so no message was duplicated by it; what it broke is the
+ * structural guarantee the `:` relaxation's own safety argument rests on, and
+ * any future reader that splits a delivery key on the separator this module
+ * declares for exactly that purpose.
+ *
+ * Checking the composition rather than the parts is the shape this package
+ * prefers, for the same reason the quote gate in another phase had to rebuild
+ * rather than re-hash: a law proved over the inputs is not proved over the
+ * thing the inputs make.
+ */
+function assertComposedKey(name: string, composed: string): string {
+  for (const separator of SEPARATORS_REFUSED_EVERYWHERE) {
+    if (separator === '|') continue; // `|` is the composition's own separator
+    if (composed.includes(separator)) {
+      throw new NotificationRefusal('notification.obligation_key_field_invalid', `${name}/composed_${separator === '::' ? 'double_colon' : separator}`);
+    }
+  }
+  return composed;
+}
+
 function originKey(origin: NotificationOrigin): string {
   if (origin.source === 'event') {
     assertKeyField('eventId', origin.eventId);
@@ -117,7 +146,9 @@ function originKey(origin: NotificationOrigin): string {
   assertKeyField('scheduleId', origin.scheduleId);
   // The occurrence is last in this segment, so a `:` inside it is unambiguous.
   assertKeyField('occurrenceKey', origin.occurrenceKey, { allowSegmentSeparator: true });
-  return `schedule:${origin.scheduleId}:${origin.occurrenceKey}`;
+  // ...but a leading or trailing `:` in the occurrence forms `::` AT THE JOIN,
+  // which the field checks cannot see. The segment is checked as a segment.
+  return assertComposedKey('originKey', `schedule:${origin.scheduleId}:${origin.occurrenceKey}`);
 }
 
 /**
@@ -146,7 +177,10 @@ export function obligationKey(businessId: string, origin: NotificationOrigin, ki
   assertKeyField('businessId', businessId);
   assertKeyField('kind', kind);
   assertKeyField('recipient', recipientId(recipient));
-  return `${businessId}|${originKey(origin)}|${kind}|${recipient.kind}:${recipientId(recipient)}`;
+  // And again over the whole key: `originKey` guards its own segment, this
+  // guards every join this function makes. Both are cheap and neither implies
+  // the other.
+  return assertComposedKey('obligationKey', `${businessId}|${originKey(origin)}|${kind}|${recipient.kind}:${recipientId(recipient)}`);
 }
 
 /**

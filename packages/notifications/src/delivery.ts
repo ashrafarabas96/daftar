@@ -18,7 +18,7 @@
  */
 import type { ProviderSendResult } from './provider';
 import { arrivalWasRecorded } from './status';
-import { nextStepAfterFailure } from './retry';
+import { nextStepAfterFailure, type StopCause } from './retry';
 
 export type DeliveryState =
   /** Owed, nothing attempted. */
@@ -143,7 +143,13 @@ export type DeliveryAction =
   | { readonly action: 'retry'; readonly afterSeconds: number }
   /** Ask the provider what happened, or wait for a verified callback. */
   | { readonly action: 'reconcile'; readonly reason: string }
-  | { readonly action: 'stop'; readonly reason: string };
+  /**
+   * `cause` and `attempts` are carried because `reason` alone cannot say
+   * whether the schedule was exhausted or the class was never retryable
+   * (third challenge, N-8). `cause` comes from `retry.ts`, which owns the
+   * policy, rather than being re-derived from the code here.
+   */
+  | { readonly action: 'stop'; readonly reason: string; readonly cause: StopCause; readonly attempts: number };
 
 export interface SendOutcome {
   readonly state: DeliveryState;
@@ -182,7 +188,12 @@ export function classifySend(input: ClassifyInput): SendOutcome {
     if (!mayAutoRetry(result, idempotent)) {
       return { state: 'unknown', next: { action: 'reconcile', reason: result.reason } };
     }
-    if (attemptsMade >= maxAttempts) return { state: 'unknown', next: { action: 'stop', reason: 'attempt limit reached while the outcome is unknown' } };
+    if (attemptsMade >= maxAttempts) {
+      return {
+        state: 'unknown',
+        next: { action: 'stop', reason: 'attempt limit reached while the outcome is unknown', cause: 'attempt_limit', attempts: attemptsMade },
+      };
+    }
     return { state: 'retry_scheduled', next: { action: 'retry', afterSeconds: backoffSeconds(attemptsMade) } };
   }
 
@@ -197,7 +208,11 @@ export function classifySend(input: ClassifyInput): SendOutcome {
   // `retry.ts`'s docstring says the two must agree. Where they disagree the
   // delivery stops, which is the safe direction and is now what the code does
   // rather than what a comment claimed.
-  if (!result.retryable) return { state: 'dead', next: { action: 'stop', reason: result.code } };
+  // The ADAPTER's veto. It is a terminal class by the adapter's own reading of
+  // the response, whatever attempt number it arrived on.
+  if (!result.retryable) {
+    return { state: 'dead', next: { action: 'stop', reason: result.code, cause: 'terminal_class', attempts: attemptsMade } };
+  }
   // PART 8, single authority: the attempt limit and the backoff live in
   // `retry.ts`, and this asks them. The two used to be written out here as
   // well — the same policy twice, with nothing holding the copies together.
@@ -208,7 +223,7 @@ export function classifySend(input: ClassifyInput): SendOutcome {
     // by its error class on attempt 1 of 8 reported a limit that was nowhere
     // near reached — a falsehood in the one field an operator reads to find out
     // why a customer was not told something.
-    return { state: 'dead', next: { action: 'stop', reason: step.reason } };
+    return { state: 'dead', next: { action: 'stop', reason: step.reason, cause: step.cause, attempts: step.attempts } };
   }
   return { state: 'retry_scheduled', next: { action: 'retry', afterSeconds: step.afterSeconds } };
 }

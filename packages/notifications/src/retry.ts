@@ -22,9 +22,24 @@ export function backoffSeconds(attempts: number): number {
   return Math.min(2 ** attempts * 5, 3600);
 }
 
+/**
+ * Why a delivery stopped. The CAUSE is decided here, where the policy lives,
+ * and not inferred by whoever reads the result — third challenge, N-8. Carrying
+ * only the error code made an exhausted retry schedule and a first-attempt
+ * terminal class report the same shape, so an operator had to know the class
+ * table to tell them apart. That is the same inference the second challenge
+ * objected to in the other direction, when a constant "attempt limit reached"
+ * was reported for a rejection that never reached the limit.
+ */
+export type StopCause =
+  /** the class is not worth retrying at all; the attempt number is incidental */
+  | 'terminal_class'
+  /** a transient class that ran out of attempts */
+  | 'attempt_limit';
+
 export type NextStep =
   | { readonly step: 'retry'; readonly attempts: number; readonly afterSeconds: number }
-  | { readonly step: 'dead'; readonly attempts: number; readonly reason: ProviderErrorCode };
+  | { readonly step: 'dead'; readonly attempts: number; readonly reason: ProviderErrorCode; readonly cause: StopCause };
 
 /** Limits a caller may inject, so there is one policy and not one per caller. */
 export interface RetryLimits {
@@ -48,7 +63,7 @@ export function nextStepAfterFailure(attemptsBefore: number, code: ProviderError
   const max = limits.maxAttempts ?? MAX_ATTEMPTS;
   const backoff = limits.backoff ?? backoffSeconds;
   const attempts = attemptsBefore + 1;
-  if (!isTransient(code)) return { step: 'dead', attempts, reason: code };
-  if (attempts >= max) return { step: 'dead', attempts, reason: code };
+  if (!isTransient(code)) return { step: 'dead', attempts, reason: code, cause: 'terminal_class' };
+  if (attempts >= max) return { step: 'dead', attempts, reason: code, cause: 'attempt_limit' };
   return { step: 'retry', attempts, afterSeconds: backoff(attempts) };
 }

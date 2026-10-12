@@ -92,13 +92,13 @@ describe('PART 44 — an ambiguous result is never auto-resent', () => {
     const exhausted = classifySend({ result: unknown, providerServerSideIdempotency: true, attemptsMade: 8, maxAttempts: 8, backoffSeconds });
     // Still `unknown`: the limit says stop trying, not "it was never sent".
     expect(exhausted.state).toBe('unknown');
-    expect(exhausted.next).toEqual({ action: 'stop', reason: 'attempt limit reached while the outcome is unknown' });
+    expect(exhausted.next).toEqual({ action: 'stop', reason: 'attempt limit reached while the outcome is unknown', cause: 'attempt_limit', attempts: 8 });
   });
 
   it('a terminal rejection dies; a transient one retries; the limit dead-letters', () => {
     expect(classifySend({ result: rejectedTerminal, providerServerSideIdempotency: false, attemptsMade: 1, maxAttempts: 8, backoffSeconds })).toEqual({
       state: 'dead',
-      next: { action: 'stop', reason: 'RECIPIENT_REJECTED' },
+      next: { action: 'stop', reason: 'RECIPIENT_REJECTED', cause: 'terminal_class', attempts: 1 },
     });
     expect(classifySend({ result: rejectedTransient, providerServerSideIdempotency: false, attemptsMade: 2, maxAttempts: 8, backoffSeconds })).toEqual({
       state: 'retry_scheduled',
@@ -111,7 +111,7 @@ describe('PART 44 — an ambiguous result is never auto-resent', () => {
     // See `test/challenge-4302cd5.test.ts` N-2.
     expect(classifySend({ result: rejectedTransient, providerServerSideIdempotency: false, attemptsMade: 8, maxAttempts: 8, backoffSeconds })).toEqual({
       state: 'dead',
-      next: { action: 'stop', reason: 'PROVIDER_UNAVAILABLE' },
+      next: { action: 'stop', reason: 'PROVIDER_UNAVAILABLE', cause: 'attempt_limit', attempts: 8 },
     });
   });
 

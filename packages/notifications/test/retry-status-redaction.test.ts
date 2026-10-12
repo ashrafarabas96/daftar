@@ -18,12 +18,19 @@ describe('retry policy', () => {
 
   it('retries a transient class and dead-letters at the limit', () => {
     expect(nextStepAfterFailure(0, 'PROVIDER_TIMEOUT')).toEqual({ step: 'retry', attempts: 1, afterSeconds: 10 });
-    expect(nextStepAfterFailure(MAX_ATTEMPTS - 1, 'PROVIDER_RATE_LIMITED')).toEqual({ step: 'dead', attempts: MAX_ATTEMPTS, reason: 'PROVIDER_RATE_LIMITED' });
+    // `cause` distinguishes an exhausted schedule from a class that was never
+    // retryable (third challenge, N-8); the two used to be the same shape.
+    expect(nextStepAfterFailure(MAX_ATTEMPTS - 1, 'PROVIDER_RATE_LIMITED')).toEqual({
+      step: 'dead',
+      attempts: MAX_ATTEMPTS,
+      reason: 'PROVIDER_RATE_LIMITED',
+      cause: 'attempt_limit',
+    });
   });
 
   it('dead-letters a terminal class on the first failure — no rate-limit burning', () => {
     for (const code of ['PROVIDER_AUTH_FAILED', 'RECIPIENT_REJECTED', 'TEMPLATE_REJECTED', 'PROVIDER_NOT_CONFIGURED'] as const) {
-      expect(nextStepAfterFailure(0, code)).toEqual({ step: 'dead', attempts: 1, reason: code });
+      expect(nextStepAfterFailure(0, code)).toEqual({ step: 'dead', attempts: 1, reason: code, cause: 'terminal_class' });
       expect(isTransient(code)).toBe(false);
     }
   });

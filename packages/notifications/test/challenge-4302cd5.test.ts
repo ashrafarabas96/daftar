@@ -160,7 +160,7 @@ describe('N-2 — a stop reason is carried, never substituted', () => {
       backoffSeconds,
     });
     expect(out.state).toBe('dead');
-    expect(out.next).toEqual({ action: 'stop', reason: 'RECIPIENT_REJECTED' });
+    expect(out.next).toEqual({ action: 'stop', reason: 'RECIPIENT_REJECTED', cause: 'terminal_class', attempts: 1 });
     if (out.next.action === 'stop') expect(out.next.reason).not.toMatch(/attempt limit/);
   });
 
@@ -175,7 +175,7 @@ describe('N-2 — a stop reason is carried, never substituted', () => {
     expect(out.state).toBe('dead');
     // The reason names the class that was being retried, which is what an
     // operator needs; the limit is implied by the attempt count beside it.
-    expect(out.next).toEqual({ action: 'stop', reason: 'PROVIDER_UNAVAILABLE' });
+    expect(out.next).toEqual({ action: 'stop', reason: 'PROVIDER_UNAVAILABLE', cause: 'attempt_limit', attempts: 8 });
   });
 
   it('either veto stops the delivery: the adapter`s flag OR the class policy', () => {
@@ -186,7 +186,7 @@ describe('N-2 — a stop reason is carried, never substituted', () => {
       maxAttempts: 8,
       backoffSeconds,
     });
-    expect(byAdapter).toEqual({ state: 'dead', next: { action: 'stop', reason: 'PROVIDER_UNAVAILABLE' } });
+    expect(byAdapter).toEqual({ state: 'dead', next: { action: 'stop', reason: 'PROVIDER_UNAVAILABLE', cause: 'terminal_class', attempts: 1 } });
     const bothAgreeRetry = classifySend({
       result: { outcome: 'rejected', code: 'PROVIDER_UNAVAILABLE', retryable: true },
       providerServerSideIdempotency: false,
