@@ -198,6 +198,27 @@ describe('PART 7.7 — exactly once', () => {
   });
 });
 
+describe('PART 7.7 — a record is judged against its own line', () => {
+  it("refuses a record judged against another line's fate", () => {
+    // The slot is keyed on the record's line; the obligation came from the
+    // fate's line. Unbound, a caller could clear line A — which owes nothing —
+    // by handing in line B's sold fate.
+    const ledger = new ConsumptionLedger();
+    const otherLine: OrderLineFate = { ...COMPOSED_SOLD, orderLineId: 'ol-2' };
+    expect(codeOf(() => ledger.record(otherLine, sale('ol-1', 'cmd-a')))).toBe('restaurant.consumption.record_fate_line_mismatch');
+    expect(ledger.hasConsumed('ol-1')).toBe(false);
+    expect(ledger.hasConsumed('ol-2')).toBe(false);
+  });
+
+  it('refuses it even when the borrowed fate would make the record look owed', () => {
+    const ledger = new ConsumptionLedger();
+    const queuedVoid: OrderLineFate = { orderLineId: 'ol-queued', mode: 'composed', outcome: 'cancelled', stateAtCancellation: 'queued' };
+    // ol-queued owes nothing. Judged against ol-1's sold fate it would read as owed.
+    expect(codeOf(() => ledger.record(COMPOSED_SOLD, sale('ol-queued', 'cmd-a')))).toBe('restaurant.consumption.record_fate_line_mismatch');
+    expect(codeOf(() => ledger.record(queuedVoid, sale('ol-queued', 'cmd-a')))).toBe('restaurant.consumption.occasion_not_owed');
+  });
+});
+
 describe('PART 8 — one writer, and no second valuation', () => {
   it('refuses a movement made by anyone but the inventory authority', () => {
     const ledger = new ConsumptionLedger();

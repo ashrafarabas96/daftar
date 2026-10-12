@@ -140,6 +140,32 @@ describe('P2-05 — a cancellation wastes a SET, not a boolean', () => {
     );
   });
 
+  it('refuses a direct waste that names no stock product rather than substituting the order-line id', () => {
+    const nameless = composed({
+      orderLineId: 'ol-nameless',
+      mode: 'direct',
+      recipeBinding: null,
+      stockProductId: null,
+      stockVariantId: 'water-500',
+      stockUnitDecimals: 0,
+      quantityQ4: Q(2),
+    });
+    expect(codeOf(() => expectedWasteMovements(nameless, lookup))).toBe('restaurant_waste.stock_product_absent');
+  });
+
+  // The narrowed catch around `assertBindingGoverns` is DEFENSIVE and claims
+  // no law: from this call graph the binding is non-null and that function
+  // raises only its own two mismatch refusals, so the rethrow branch is not
+  // reachable and no red proof is offered for it. What IS reachable is a
+  // recipe store that fails on the read, and this is that case: it must
+  // surface as itself rather than as a statement about the recipe's version.
+  it('lets a failing recipe read surface as itself, not as a version mismatch', () => {
+    const exploding = (): RecipeVersion => {
+      throw new Error('the recipe store refused this reader');
+    };
+    expect(() => expectedWasteMovements(composed(), exploding)).toThrowError('the recipe store refused this reader');
+  });
+
   it('refuses to waste a service line', () => {
     expect(codeOf(() => expectedWasteMovements(composed({ mode: 'service' }), lookup))).toBe('restaurant_waste.service_cannot_waste');
   });

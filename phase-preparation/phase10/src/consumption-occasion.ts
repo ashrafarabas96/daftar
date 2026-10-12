@@ -102,6 +102,8 @@ export type ConsumptionRefusalCode =
   | 'restaurant.consumption.occasion_not_owed'
   /** A movement was recorded on the wrong occasion for this line's fate. */
   | 'restaurant.consumption.occasion_mismatch'
+  /** The record and the fate it was judged against name different order lines. */
+  | 'restaurant.consumption.record_fate_line_mismatch'
   /** Someone other than the inventory authority moved the stock. */
   | 'restaurant.consumption.authority_not_canonical'
   /** The record carried a cost or a value; valuation is not this pack's. */
@@ -225,6 +227,19 @@ export class ConsumptionLedger {
     }
     assertNoLocalValuation(record);
 
+    if (record.orderLineId !== fate.orderLineId) {
+      // The slot is keyed on the RECORD's line and the obligation is derived
+      // from the FATE's line. Nothing tied the two together, so a caller could
+      // judge line A's record against line B's fate: A owes nothing, B is
+      // sold, and the record is accepted into A's slot. The ledger answers
+      // "has THIS line consumed", so the two ids are one line or neither.
+      throw new ConsumptionRefusal(
+        'restaurant.consumption.record_fate_line_mismatch',
+        `A ${record.occasion} consumption for line ${record.orderLineId} was judged against the fate of line ${fate.orderLineId}; a record is only ever judged against its own line`,
+        { recordOrderLineId: record.orderLineId, fateOrderLineId: fate.orderLineId },
+      );
+    }
+
     const owed = occasionOwedBy(fate);
     if (owed === null) {
       throw new ConsumptionRefusal(
@@ -306,11 +321,19 @@ export function assertNoLocalValuation(record: ConsumptionRecord): void {
   // The keys are the five the contract declares. Now their SHAPES, because
   // `Object.keys` governs names and a valuation hides just as well inside a
   // value: `movementCount: { value: 3, costMinor: 500n }` has an allowed key
-  // and smuggles the same cost past the allow-list, and so does an
-  // orderLineId of `'o1|costMinor=500'` if anything downstream splits it. The
-  // reason this check exists at runtime at all is that an excess property
-  // survives the crossing from a bridge — and a wrong-SHAPED property survives
-  // it in exactly the same way.
+  // and smuggles the same cost past the allow-list. The reason this check
+  // exists at runtime at all is that an excess property survives the crossing
+  // from a bridge — and a wrong-SHAPED property survives it in exactly the
+  // same way.
+  //
+  // WHAT THIS DOES NOT COVER, deliberately: a payload inside a well-typed
+  // STRING, such as `orderLineId: 'o1|costMinor=500'`. That is a string, it
+  // passes, and it is named here as the motivation for the shape check rather
+  // than as a case the shape check closes. Reading string CONTENTS for
+  // valuation spellings would rebuild the deny-list this contract just
+  // removed, one layer down, and a deny-list cannot enforce a categorical
+  // law. What an id string means is the reader's business: an integrator that
+  // splits ids owes its own grammar for them.
   //
   // Only the five declared fields are checked, and only against the contract's
   // own types. This is not a schema validator and does not try to be one; a

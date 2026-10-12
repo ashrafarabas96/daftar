@@ -44,7 +44,9 @@ Usage, from the repository root:
     python3 phase-preparation/phase10/proofs/red-proofs.py
 Exit code 0 means every law is proven to red on its own defect.
 """
+import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -54,6 +56,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 BASE = ROOT / "phase-preparation" / "phase10"
 VITEST = ROOT / "node_modules" / ".bin" / "vitest"
 CONFIG = "phase-preparation/phase10/vitest.config.ts"
+
+# The floor on the law count. `--check-doc` only proves the document matches
+# the table; it cannot see a law deleted from both. A floor turns a quiet
+# subtraction into a red gate. Raise it when laws are added; lowering it is an
+# edit a reviewer can see.
+MIN_LAWS = 88
 
 # (law, file, find, replace, the test title that must fail)
 MUTATIONS = [
@@ -673,7 +681,74 @@ MUTATIONS = [
         "  if (true) badly.push(`orderLineId (${typeOf(record.orderLineId)}, expected string)`);",
         "accepts the five fields in their declared shapes, so the check is not a blanket refusal",
     ),
+    (
+        "P3-05 — a record is judged only against its own line's fate",
+        "src/consumption-occasion.ts",
+        "    if (record.orderLineId !== fate.orderLineId) {",
+        "    if (false) {",
+        "refuses a record judged against another line's fate",
+    ),
+    (
+        "P3-06 — a direct waste never substitutes the order-line id for a missing stock product",
+        "src/waste-expansion.ts",
+        "    if (line.stockProductId === null) {",
+        "    if (false) {",
+        "refuses a direct waste that names no stock product rather than substituting the order-line id",
+    ),
 ]
+
+
+# `package.json` declares `"engines": { "node": ">=24 <25" }`.
+ENGINES_MIN_MAJOR = 24
+
+
+def gate_env() -> dict[str, str]:
+    """The environment every vitest run below is made in.
+
+    It used to be written from scratch, with `PATH` set to
+    `/usr/bin:/bin:/usr/local/bin`. That discarded whatever Node the caller had
+    put in front — the run recorder prepends `--node`'s directory precisely so
+    the gates use it — and `node_modules/.bin/vitest` then resolved
+    `#!/usr/bin/env node` against the system directories instead. The coordinator
+    diff review at `09b9a9d` measured it: the header said v24.12.0 while these
+    86 laws most likely ran on the image's v22.22.0, outside `engines`. The
+    numbers were not wrong; the sentence beside them was. So the caller's
+    environment is inherited, and the runtime is no longer anyone's claim —
+    `child_node()` reads it out of the same environment the suite runs in and
+    prints it into the log.
+    """
+    env = dict(os.environ)
+    env["CI"] = "1"
+    env["FORCE_COLOR"] = "0"
+    return env
+
+
+def child_node() -> tuple[str, str]:
+    """The node the suite will actually resolve, and its version, from inside
+    the gate environment — not from this process's own PATH."""
+    env = gate_env()
+    exe = shutil.which("node", path=env.get("PATH", ""))
+    if exe is None:
+        return "", ""
+    version = subprocess.run([exe, "-v"], capture_output=True, text=True, check=False, env=env).stdout.strip()
+    return exe, version
+
+
+def assert_runtime() -> int:
+    """Refuse to produce evidence on a runtime `engines` forbids."""
+    exe, version = child_node()
+    if exe == "" or not re.match(r"^v\d+\.", version):
+        print(f"FAIL: no usable node inside the gate environment (resolved {exe or 'nothing'}, version {version or 'unreadable'})", file=sys.stderr)
+        return 2
+    major = int(version[1:].split(".")[0])
+    # Printed, not asserted, so the log carries the runtime the laws saw rather
+    # than a runtime stated next to them. `record-run.py` parses this line back
+    # out of the log into the run-identity table.
+    print(f"node_in_child: {version} ({exe})")
+    if major < ENGINES_MIN_MAJOR:
+        print(f"FAIL: the laws would run on {version}, below the engines floor of v{ENGINES_MIN_MAJOR}; evidence made here would not describe the supported runtime", file=sys.stderr)
+        return 2
+    return 0
 
 
 def run_suite() -> tuple[int, str]:
@@ -682,7 +757,7 @@ def run_suite() -> tuple[int, str]:
         cwd=ROOT,
         capture_output=True,
         text=True,
-        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "CI": "1", "FORCE_COLOR": "0", "HOME": str(pathlib.Path.home())},
+        env=gate_env(),
     )
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -729,6 +804,15 @@ def main() -> int:
     if not VITEST.exists():
         print(f"FAIL: no vitest at {VITEST}; run `npm ci` first", file=sys.stderr)
         return 2
+    if len(MUTATIONS) < MIN_LAWS:
+        print(f"FAIL: {len(MUTATIONS)} law(s) in the table, below this pack's floor of {MIN_LAWS}", file=sys.stderr)
+        print("      A gate that prints PASS for any number of laws, zero included, cannot tell a", file=sys.stderr)
+        print("      shrinking suite from a passing one. Deleting a law is a decision, so it is", file=sys.stderr)
+        print("      made here, in the open, and not by a quiet subtraction elsewhere.", file=sys.stderr)
+        return 2
+    rc = assert_runtime()
+    if rc != 0:
+        return rc
 
     baseline_rc, baseline_out = run_suite()
     if baseline_rc != 0:

@@ -21,7 +21,12 @@ cluster, and it answers them against the LIVE sale contract's real constraints.
 | `src/order-to-sale.ts` | aggregating order lines and priced modifiers into the sale lines the sale authority will accept, and the kitchen's separate view |
 | `src/recipe-version.ts` | immutable recipe versions and their deterministic expansion: Q4 quantities, HALF_EVEN scaling, and a refusal rather than a dropped component when one scales to zero (§49) |
 | `src/stock-effect.ts` | the three stock-effect modes — direct, service, composed, and no fourth — and the completeness verifier that requires exact-set equality rather than a count (§46, §48) |
+| `src/recipe-binding.ts` | the version bound to a line at `queued -> start`, and the readers that may only ever use the bound one |
+| `src/aggregate-consumption.ts` | folding one sale line's contributions into one movement per component, on the component's own grain |
+| `src/consumption-occasion.ts` | PART 7.7: which single occasion owes a line its stock, replay keyed on the command, one writer, and no valuation |
+| `src/waste-expansion.ts` | the exact component set a cancellation wastes, expanded under the line's own bound version |
 | `proofs/red-proofs.py` | plants the minimal defect for each law and requires the suite to red AND name the right case |
+| `proofs/record-run.py` | runs the six gates as one identified run, derives the handoff's run-identity and digest tables from the log it produced, and `--self-test`s its own gates |
 
 Run from the repository root:
 
@@ -32,7 +37,18 @@ npm ci
 ./node_modules/.bin/tsc -p phase-preparation/phase10/tsconfig.json --noEmit
 ./node_modules/.bin/vitest run --config phase-preparation/phase10/vitest.config.ts
 python3 phase-preparation/phase10/proofs/red-proofs.py
+python3 phase-preparation/phase10/proofs/record-run.py --self-test
 ```
+
+The six gates are run together, and the run recorded, with:
+
+```
+python3 phase-preparation/phase10/proofs/record-run.py --run --node /path/to/node24/bin/node
+```
+
+`--run` exits non-zero if any gate fails or the tree does not end as it started.
+`package.json` declares `engines: node >=24 <25`, and the red-proof harness
+refuses to produce evidence on anything below it.
 
 The design, the laws these modules enforce, and the architectural finding that
 gates the whole phase are in the project's shared folder under `phase10/`.

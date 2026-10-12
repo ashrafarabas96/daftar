@@ -31,7 +31,7 @@
  */
 
 import { cancellationWastesStock, type PreparationState } from './preparation-state';
-import { assertBindingGoverns, type RecipeBinding } from './recipe-binding';
+import { assertBindingGoverns, RecipeBindingRefusal, type RecipeBinding } from './recipe-binding';
 import { expandRecipe, type RecipeVersion } from './recipe-version';
 import { expectedMovementsFor, type ExpectedMovement, type StockEffectMode } from './stock-effect';
 
@@ -45,7 +45,9 @@ export type WasteRefusalCode =
   /** The bound version could not be read; a bound version is never substituted. */
   | 'restaurant_waste.bound_version_unavailable'
   /** A service line cannot waste: it never consumed anything to waste. */
-  | 'restaurant_waste.service_cannot_waste';
+  | 'restaurant_waste.service_cannot_waste'
+  /** A direct stock line names no stock product; the order-line id is never substituted. */
+  | 'restaurant_waste.stock_product_absent';
 
 export class WasteRefusal extends Error {
   constructor(
@@ -99,11 +101,24 @@ export function expectedWasteMovements(line: CancelledLine, lookup: RecipeVersio
   }
 
   if (line.mode === 'direct') {
+    if (line.stockProductId === null) {
+      // The pack's own rule is "never substitute". Falling back to the
+      // order-line id here produced an expected movement whose
+      // componentProductId was an order line — a movement set that looks
+      // complete and names a product that does not exist. A stock-tracked
+      // line with no stock product is an inconsistency upstream, and the
+      // only honest answer is a refusal.
+      throw new WasteRefusal(
+        'restaurant_waste.stock_product_absent',
+        `Line ${line.orderLineId} is a direct stock line cancelled in state ${line.stateAtCancellation} but names no stock product; the order line's own id is never substituted for one`,
+        { orderLineId: line.orderLineId, stockVariantId: line.stockVariantId },
+      );
+    }
     // Delegated rather than re-derived, so the direct path's grain check (§57)
     // applies to a wasted bottle exactly as it does to a sold one.
     return expectedMovementsFor(
       {
-        productId: line.stockProductId ?? line.orderLineId,
+        productId: line.stockProductId,
         stockVariantId: line.stockVariantId,
         stockTracked: true,
         stockUnitDecimals: line.stockUnitDecimals,
@@ -137,7 +152,14 @@ export function expectedWasteMovements(line: CancelledLine, lookup: RecipeVersio
   }
   try {
     assertBindingGoverns('cancellation_waste', binding, recipe.recipeId, recipe.version);
-  } catch {
+  } catch (error) {
+    // Only the binding's OWN mismatch is re-worded here. Catching every error
+    // and reporting it as a version mismatch would relabel an unrelated
+    // failure — a reader that is not permitted, a lookup that threw — as a
+    // fact about the recipe, which is a false diagnosis in the one place a
+    // reader looks for the true one.
+    if (!(error instanceof RecipeBindingRefusal)) throw error;
+    if (error.code !== 'restaurant_recipe_binding.recipe_mismatch' && error.code !== 'restaurant_recipe_binding.version_mismatch') throw error;
     throw new WasteRefusal(
       'restaurant_waste.recipe_not_the_bound_version',
       `Line ${line.orderLineId} is bound to ${binding.recipeId} v${binding.version} but the recipe read back was ${recipe.recipeId} v${recipe.version}`,
