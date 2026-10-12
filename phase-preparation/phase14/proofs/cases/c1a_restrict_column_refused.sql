@@ -31,6 +31,13 @@ BEGIN
     RAISE EXCEPTION 'LAW VIOLATED: lookup on an ungranted column SUCCEEDED, returned %', got;
   EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS st = RETURNED_SQLSTATE;
+    -- COORD DIFF REVIEW AT c812aa5, R-06: `WHEN OTHERS` also catches the
+    -- `LAW VIOLATED` raise directly above it, which is P0001 -- so a LAW
+    -- VIOLATION was relabelled "LAW UNPROVED ... SQLSTATE P0001". The exit code
+    -- was 3 either way, so it failed closed, but a violation reported as an
+    -- unproved law is a false sentence in the log, and this pack's own rule is
+    -- that a refusal names its real cause. The violation is re-raised as itself.
+    IF st = 'P0001' THEN RAISE; END IF;
     IF st <> '42501' THEN
       RAISE EXCEPTION 'LAW UNPROVED: the lookup failed with SQLSTATE %, not 42501 — a failure for another reason is not this law', st;
     END IF;

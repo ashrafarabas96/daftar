@@ -55,7 +55,7 @@ gate() { # name | command (absolute paths only)
       # already has (the gate failed), the cause is what they need. Preferring
       # `FAIL` over `psql said:` cost me a diagnosis within the hour of fixing
       # R10-P3-01, which is the same defect one layer in.
-      out1=$(printf '%s' "$o" | grep -m1 -E 'Permission denied|No such file|command not found|psql said|CAUSE:|''Permission denied|No such file|command not found|[Ee]rror:|ERROR|FATAL|WARNING|could not' | cut -c1-120)
+      out1=$(printf '%s' "$o" | grep -m1 -E 'Permission denied|No such file|command not found|psql said|CAUSE:|[Ee]rror:|ERROR|FATAL|WARNING|could not' | cut -c1-120)
       [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 -E 'FAIL|STALE|CONFIGURATION ERROR|MEASUREMENT|ABORTED' | cut -c1-120)
       [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 . | cut -c1-120)
     fi
@@ -163,6 +163,26 @@ red() { # name | mutate | command | expected-rc | restore | [file the mutation m
 T=$(mktemp -d)
 cp "$DOC" "$T/doc.bak"; cp "$PACK/P14-HANDOFF-MANIFEST.md" "$T/man.bak"
 cp "$PACK/README-AR.md" "$T/ar.bak"
+cp "$PACK/P14-CHALLENGE-7af6438.md" "$T/rep.bak"
+cp "$PACK/P14-COORD-DIFF-REVIEW-c812aa5.md" "$T/coord.bak" 2>/dev/null
+# COORD DIFF REVIEW AT c812aa5, R-11: the red proofs mutate the LIVE pack, and
+# every restore was a line at the end of its own proof -- so a Ctrl-C or a
+# killed container between the mutation and the restore left a reviewer's report
+# tampered and the manifest edited, with nothing saying so. The next run reds,
+# which is fail-closed, but the pack is the handoff and it is not left in a
+# state nobody chose. Every file any proof touches is backed up here and put
+# back on EXIT, INT, TERM and HUP, and the worktree is removed by the same hand.
+cleanup() {
+  cp "$T/doc.bak" "$DOC" 2>/dev/null
+  cp "$T/man.bak" "$PACK/P14-HANDOFF-MANIFEST.md" 2>/dev/null
+  cp "$T/ar.bak"  "$PACK/README-AR.md" 2>/dev/null
+  cp "$T/rep.bak" "$PACK/P14-CHALLENGE-7af6438.md" 2>/dev/null
+  [ -f "$T/coord.bak" ] && cp "$T/coord.bak" "$PACK/P14-COORD-DIFF-REVIEW-c812aa5.md" 2>/dev/null
+  [ -n "${WT2:-}" ] && git -C "$REPO" worktree remove --force "$WT2" >/dev/null 2>&1
+  [ -n "${WT:-}" ] && rm -rf "$WT"
+  return 0
+}
+trap cleanup EXIT INT TERM HUP
 
 red provenance-stale \
   "sed -i 's/\*\*DIFFERS\*\*/identical/' '$DOC'" \
@@ -301,6 +321,77 @@ named reviewer-row-no-witness 1 "NO WITNESS" \
   "python3 -I $HERE/manifest-digests.py --manifest $RW/norepo/P14-HANDOFF-MANIFEST.md --dir $RW/norepo --witness $EMPTYW --write"
 rm -rf "$RW" "$EMPTYW"
 
+# COORD DIFF REVIEW AT c812aa5, P2-01, which BLOCKED: round 10 closed the
+# committed-PLACEHOLDER route and left the committed-FORGERY route open -- the
+# revision walk was newest-first with setdefault, so the witness was whatever
+# HEAD last recorded, and a tampered report plus a hand-forged row plus one
+# `git commit -am` returned 0 while printing "checked over every revision". The
+# witness is now the OLDEST recorded digest. Both shapes the reviewer measured
+# are proved here, and so are the two protections that were resting on the
+# two-directory construction (R-02, R-03) and the incomplete-history case (R-08).
+FW=$(mktemp -d); cp -r "$PACK" "$FW/pack"; cp -r "$PACK" "$FW/witness"
+( cd "$FW/pack" && git init -q . && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' ) >/dev/null 2>&1
+FWM="--manifest $FW/pack/P14-HANDOFF-MANIFEST.md --dir $FW/pack"
+EMPTYW=$(mktemp -d)
+forge() { # tamper one reviewer report and hand-forge its row to match, in $1
+  local d="$1" rep=P14-CHALLENGE-7af6438.md
+  printf '\n\nan appended line nobody received\n' >> "$d/$rep"
+  python3 - "$d/$rep" "$d/P14-HANDOFF-MANIFEST.md" <<'FORGE'
+import hashlib,os,re,sys
+rep,man=sys.argv[1],sys.argv[2]
+b=open(rep,'rb').read(); h=hashlib.sha256(b).hexdigest()
+L=open(man,encoding='utf-8').read().split('\n')
+for k,l in enumerate(L):
+    if l.startswith('| `%s`' % os.path.basename(rep)):
+        l=re.sub(r'`[0-9a-f]{64}`','`%s`' % h,l)
+        L[k]=re.sub(r'\| [0-9,]+ \|$','| %s |' % format(len(b),','),l); break
+open(man,'w',encoding='utf-8').write('\n'.join(L))
+FORGE
+}
+forge "$FW/pack"
+( cd "$FW/pack" && git -c user.email=p14@local -c user.name=p14 commit -qam 'forge the row to match' ) >/dev/null 2>&1
+named reviewer-row-committed-forgery 1 "REWRITTEN IN HISTORY" \
+  "python3 -I $HERE/manifest-digests.py $FWM --witness $EMPTYW --write"
+# ...and with the counterpart changed in step, which is the shape that defeats
+# the two-directory witness and leaves the history as the only one left.
+cp "$FW/pack/P14-CHALLENGE-7af6438.md" "$FW/witness/P14-CHALLENGE-7af6438.md"
+named reviewer-row-forged-both-dirs 1 "REWRITTEN IN HISTORY" \
+  "python3 -I $HERE/manifest-digests.py $FWM --witness $FW/witness --write"
+# R-02: a received review deleted together with its row.
+DW=$(mktemp -d); cp -r "$PACK" "$DW/pack"
+( cd "$DW/pack" && git init -q . && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' ) >/dev/null 2>&1
+rm -f "$DW/pack/P14-CHALLENGE-7af6438.md"
+grep -v '^| `P14-CHALLENGE-7af6438.md` |' "$DW/pack/P14-HANDOFF-MANIFEST.md" > "$DW/m" \
+  && mv "$DW/m" "$DW/pack/P14-HANDOFF-MANIFEST.md"
+named reviewer-row-deleted 1 "SIGNED REVIEWER ROW REMOVED" \
+  "python3 -I $HERE/manifest-digests.py --manifest $DW/pack/P14-HANDOFF-MANIFEST.md --dir $DW/pack --witness $EMPTYW --check"
+# R-03: a coordinator's review is a review. Tampered in one directory only, so
+# the refusal must come from the reviewer-row rules and not from a stale digest.
+CW=$(mktemp -d); cp -r "$PACK" "$CW/pack"; cp -r "$PACK" "$CW/witness"
+printf '\n\nan appended line nobody received\n' >> "$CW/pack/P14-COORD-DIFF-REVIEW-583a4a0.md"
+named coord-review-protected 1 "REVIEWER COPIES DIFFER" \
+  "python3 -I $HERE/manifest-digests.py --manifest $CW/pack/P14-HANDOFF-MANIFEST.md --dir $CW/pack --witness $CW/witness --write"
+# R-08: an incomplete history must not answer. A grafted commit reports no
+# parents exactly as a root commit does, so a `--depth 1` clone looks complete
+# until the graft list is read -- measured, such a clone printed "checked over
+# every revision" over ONE truncated revision. The witness is now discarded
+# there, which makes every reviewer row with no counterpart NO WITNESS: loud and
+# fail-closed, instead of quietly trusting the oldest digest that survived.
+SW=$(mktemp -d)
+( cd "$FW/pack" && git -c user.email=p14@local -c user.name=p14 commit -qam 'another revision' \
+    --allow-empty ) >/dev/null 2>&1
+git clone -q --depth 1 "file://$FW/pack" "$SW/shallow" >/dev/null 2>&1
+if [ -d "$SW/shallow/.git" ]; then
+  named history-truncated-not-checked 1 "shallow boundary" \
+    "python3 -I $HERE/manifest-digests.py --manifest $SW/shallow/P14-HANDOFF-MANIFEST.md --dir $SW/shallow --witness $EMPTYW --check"
+else
+  printf 'FAIL  %-26s the shallow clone was not created — nothing was proved\n' history-truncated-not-checked
+  fail=$((fail+1))
+fi
+rm -rf "$FW" "$DW" "$CW" "$SW" "$EMPTYW"
+
 red retracted-claim-planted \
   "printf '\n\nthe three absent ones are cited only for Phase 4 surface facts\n' >> '$PACK/README-AR.md'" \
   "python3 -I $HERE/retracted-claims.py --pack $PACK --check" 1 \
@@ -317,25 +408,34 @@ rm -rf "$T" "$FR" "$NR" "$ER" "$OP"
 if [ "$NODB" = 0 ] && [ -d /tmp/p14pg/data ]; then
   PGC="su claude -s /bin/bash -c"
   $PGC "/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/p14pg/data -m fast -w stop" >/dev/null 2>&1
-  rc=$( "$PACK/proofs/redproof-preflight.sh" >/dev/null 2>&1; echo $? )
-  if [ "$rc" = 0 ]; then
-    printf 'FAIL  %-26s rc=0 with the cluster STOPPED — "cannot connect" is being read as a refusal\n' no-cluster
-    fail=$((fail+1))
+  # COORD DIFF REVIEW AT c812aa5, R-05: this proof required only "non-zero", so
+  # the lock refusal (exit 4) or a missing `flock` (exit 5) satisfied it without
+  # anything being measured -- a red proof passing for the wrong reason, which is
+  # the defect this proof exists to fence. It requires exit 1 and the no-cluster
+  # CAUSE sentence, so only the arms actually failing to connect can satisfy it.
+  out=$( "$PACK/proofs/redproof-preflight.sh" 2>&1 ); rc=$?
+  if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'no cluster is listening'; then
+    printf 'ok    %-26s rc=1 with the cluster STOPPED, and it says so: "no cluster is listening"\n' no-cluster
   else
-    printf 'ok    %-26s rc=%s with the cluster STOPPED (required non-zero)\n' no-cluster "$rc"
+    printf 'FAIL  %-26s rc=%s with the cluster STOPPED (required 1 and "no cluster is listening"): %s\n' \
+           no-cluster "$rc" "$(printf '%s' "$out" | grep -m1 -E 'Permission denied|No such file|command not found|psql said|CAUSE:|[Ee]rror:|ERROR|FATAL|could not' | cut -c1-90)"
+    fail=$((fail+1))
   fi
   $PGC "/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/p14pg/data -o \"-p 54314 -c listen_addresses='' -k /tmp/p14pg/sock -c fsync=off\" -w start" >/dev/null 2>&1
   # R8-P3-04: the rolecount arm must be a proof about p14_resolver and not
   # about "some role". Rename a DIFFERENT one: the arm is required to FAIL.
   PSQL="/usr/lib/postgresql/16/bin/psql -h /tmp/p14pg/sock -p 54314 -U p14super -d postgres -q -c"
   $PGC "$PSQL \"ALTER ROLE p14_merchant RENAME TO p14_merchant_x\"" >/dev/null 2>&1
-  rc=$( "$PACK/proofs/redproof-preflight.sh" rolecount >/dev/null 2>&1; echo $? )
+  out=$( "$PACK/proofs/redproof-preflight.sh" rolecount 2>&1 ); rc=$?
   $PGC "$PSQL \"ALTER ROLE p14_merchant_x RENAME TO p14_merchant\"" >/dev/null 2>&1
-  if [ "$rc" = 0 ]; then
-    printf 'FAIL  %-26s rc=0 after renaming p14_merchant — the arm cannot tell which role it removed\n' rolecount-discriminates
-    fail=$((fail+1))
+  # R-05 again: "non-zero" was satisfiable by a lock refusal that never looked
+  # at a role. Exit 1 and the arm's own "required message is absent" line.
+  if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'the required message is absent'; then
+    printf 'ok    %-26s rc=1 after renaming a DIFFERENT role, and the arm says its own message is absent\n' rolecount-discriminates
   else
-    printf 'ok    %-26s rc=%s after renaming a DIFFERENT role (required non-zero)\n' rolecount-discriminates "$rc"
+    printf 'FAIL  %-26s rc=%s after renaming p14_merchant (required 1 and "the required message is absent"): %s\n' \
+           rolecount-discriminates "$rc" "$(printf '%s' "$out" | grep -m1 . | cut -c1-90)"
+    fail=$((fail+1))
   fi
   out=$( "$PACK/proofs/redproof-preflight.sh" 2>&1 ); rc=$?
   if [ "$rc" = 0 ]; then
@@ -347,8 +447,14 @@ if [ "$NODB" = 0 ] && [ -d /tmp/p14pg/data ]; then
     # real cause was that the unprivileged account could not READ the pack.
     # A refusal that names a cause must have asked it. So ask the cluster.
     if $PGC "/usr/lib/postgresql/16/bin/psql -h /tmp/p14pg/sock -p 54314 -U p14super -d postgres -qtAc 'select 1'" 2>/dev/null | grep -q 1; then
+      # COORD DIFF REVIEW AT c812aa5, R-07: this was the one filter left without
+      # a fallback, so an exit-4 refusal (which matches none of the patterns)
+      # printed the sentence with an empty payload -- the very claim Amendment
+      # 14 made about every filter. The raw first line beats a blank claim.
+      said=$(printf '%s' "$out" | grep -m1 -E 'Permission denied|No such file|command not found|psql said|CAUSE:|REFUSING|[Ee]rror:|ERROR|FATAL|WARNING|could not' | cut -c1-90)
+      [ -z "$said" ] && said=$(printf '%s' "$out" | grep -m1 . | cut -c1-90)
       printf 'FAIL  %-26s rc=%s while the cluster ANSWERS select 1 — so this is not the cluster: %s\n' \
-             no-cluster-revert "$rc" "$(printf '%s' "$out" | grep -m1 -E 'Permission denied|No such file|command not found|[Ee]rror:|ERROR|FATAL|WARNING|could not' | cut -c1-90)"
+             no-cluster-revert "$rc" "${said:-<no output at all>}"
     else
       printf 'FAIL  %-26s rc=%s and the cluster does not answer — the sweep left the box broken\n' no-cluster-revert "$rc"
     fi

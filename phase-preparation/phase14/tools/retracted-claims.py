@@ -43,13 +43,41 @@ def main():
         return 2
 
     # Every document in the pack, and the proofs' README, which is prose too.
+    # COORD DIFF REVIEW AT c812aa5, R-01: this skip was a SUBSTRING test on the
+    # absolute path, so every document of a pack checked out under any path
+    # containing `/tools` was skipped and the tool reported "across 0 pack
+    # document(s)" with exit 0 -- a gate component whose verdict depended on
+    # where the repository happened to sit, which is round 8's defect again.
+    # The skip is now relative to the pack, and a run that scanned NO document
+    # refuses: measuring nothing is not a pass.
     files = []
     for root, _dirs, names in os.walk(a.pack):
-        if os.sep + 'tools' in root + os.sep:
+        relroot = os.path.relpath(root, a.pack)
+        if relroot == 'tools' or relroot.startswith('tools' + os.sep):
             continue                      # the list itself quotes every claim
         for n in sorted(names):
             if n.endswith(('.md', '.yaml')):
                 files.append(os.path.join(root, n))
+    if not files:
+        print('%s: no .md or .yaml document was found under --pack (%s), so no retracted claim'
+              ' was looked for. An empty population is not a pass.' % (a.list, a.pack),
+              file=sys.stderr)
+        return 2
+
+    # COORD DIFF REVIEW AT c812aa5, R-10: an allow-list entry named a file that
+    # does not exist (`P14-AMENDMENT-11-CHALLENGE-ROUND-7.md`, whose real name
+    # ends `-AND-COORD-REVIEW.md`). It failed closed -- the exemption simply did
+    # not apply -- but an exemption nobody can reach is a line of this list that
+    # says something false, and the next one might be a real exemption silently
+    # not granted. Every allowed name must be a document this run actually
+    # scanned.
+    basenames = {os.path.basename(f) for f in files}
+    ghosts = sorted({n for _c, allowed, _w in claims for n in allowed if n not in basenames})
+    if ghosts:
+        print('%s: the allowed list names %d document(s) that are not under --pack (%s): %s. An'
+              ' exemption that names no file is not an exemption; correct the name or drop it.'
+              % (a.list, len(ghosts), a.pack, ', '.join(ghosts)), file=sys.stderr)
+        return 2
 
     bad = 0; exempt = 0
     for path in sorted(files):
@@ -59,7 +87,12 @@ def main():
         # byte-for-byte as received. Editing one to satisfy this check would be
         # falsifying a review, so they are exempt in code rather than by being
         # listed one at a time.
-        if base.startswith('P14-CHALLENGE-'):
+        # COORD DIFF REVIEW AT c812aa5: a coordinator's review is a reviewer's
+        # words committed unedited for the same reason a challenge report is,
+        # and it QUOTES the sentences this list retracts -- that is what a
+        # review does. Editing one to satisfy this check would be falsifying a
+        # review. (`citation-provenance.py` already excluded both.)
+        if base.startswith(('P14-CHALLENGE-', 'P14-COORD-DIFF-REVIEW-')):
             exempt += 1          # ROUND-8 P3-01: counted separately, not as enforced
             continue
         for claim, allowed, why in claims:
@@ -79,7 +112,8 @@ def main():
     # defect round 6 found in the provenance generator, here in the tool written
     # to fence prose. Enforced and exempt are counted separately.
     print('%d retracted claim(s) enforced across %d pack document(s); %d challenge report(s)'
-          ' exempt in code (a reviewer\'s words are the record of what was claimed).'
+          ' exempt in code (a reviewer\'s words, challenger or coordinator, are the record of'
+          ' what was claimed).'
           % (len(claims), len(files) - exempt, exempt))
     if bad:
         print('%d occurrence(s) of a retracted claim survive outside the files that record the'

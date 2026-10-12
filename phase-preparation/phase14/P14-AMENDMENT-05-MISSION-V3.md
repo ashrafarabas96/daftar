@@ -5,6 +5,8 @@
 migration number — and none may be allocated before Phase 13 seals.** No timing
 or performance claim is made anywhere in this pack.
 
+> **ANNOTATION (`COORD-DIFF-REVIEW c812aa5 P2-03`).** This header's branch name and *no commits* are **false now and were false from `08d23da` onward**: the real branch is `claude/project-thread-1zqgj8`, cut from `6fc505d`, and the pack is committed and pushed on it. The line is left as written because an amendment is dated evidence; what it says about the branch is corrected here and in `P14-HANDOFF-MANIFEST.md` §1.
+
 Source: the owner's *Master Continuous Mission, Phases 4–15, **V3*** (2026-10-12),
 `## 21. Phase 14 — Public API / Integrations`, read in the original and verified
 against the coordinator's delta in

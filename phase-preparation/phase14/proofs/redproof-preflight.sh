@@ -32,9 +32,27 @@ RT=$$
 # run is editing. `flock` and not a PostgreSQL advisory lock, because every
 # psql invocation here is its own session and a session lock would be released
 # the moment the statement taking it returned.
-mkdir -p /tmp/p14pg 2>/dev/null
+# COORD DIFF REVIEW AT c812aa5, R-04, the FIFTH instance of the wrong-cause
+# class: whatever went wrong here -- an unwritable lock directory, a bad file
+# descriptor, no `flock` on PATH -- this script printed "another red-proof run
+# holds the lock" and exited 4. It failed closed and misnamed the cause, which
+# is exactly the defect the CAUSE: lines below were written to stop. Each step
+# is now checked and says what it found.
 LOCK=/tmp/p14pg/redproof.lock
-exec 9>"$LOCK"
+if ! command -v flock >/dev/null 2>&1; then
+  echo "REFUSING TO MEASURE: \`flock\` is not on PATH, so these runs cannot be serialised."
+  echo "They mutate the same roles, and an unserialised pair measures each other's world."
+  exit 5
+fi
+if ! mkerr=$(mkdir -p /tmp/p14pg 2>&1); then
+  echo "REFUSING TO MEASURE: /tmp/p14pg could not be created: ${mkerr:-<no output at all>}"
+  exit 5
+fi
+if ! exec 9>"$LOCK" 2>/dev/null; then
+  echo "REFUSING TO MEASURE: the lock file $LOCK could not be opened for writing. This is"
+  echo "not another run holding it; it is this run unable to take it at all."
+  exit 5
+fi
 if ! flock -n 9; then
   echo "REFUSING TO MEASURE: another red-proof run holds $LOCK. These arms mutate the"
   echo "same roles, so concurrent runs would each red on the other's mutation and the"
@@ -176,5 +194,14 @@ arm rolecount \
 # cluster of a different major version, which this container does not have. It
 # is recorded as UNFENCED rather than described as proved.
 
+# COORD DIFF REVIEW AT c812aa5, R-09: an unknown arm name ran NOTHING and
+# exited 0 -- "0 arm(s), 0 not red" read as a pass, and this pack's own driver
+# refuses a no-match (`replay.sh` exits 2). A measurement of nothing is not a
+# pass here either.
+if [ "$n" -eq 0 ]; then
+  echo "REFUSING TO MEASURE: no arm is named \"$WANT\". Nothing ran, and nothing ran is not a pass."
+  echo "Arms: collation, encoding, bypassrls, superuser, rolecount (or no argument for all of them)."
+  exit 2
+fi
 echo "== $n arm(s), $fail not red.  The version arm is UNFENCED (needs a second cluster)."
 [ "$fail" -eq 0 ] || exit 1

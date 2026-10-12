@@ -48,10 +48,21 @@ What failed open was the refusal credited with the protection. So the
 construction that has been doing the work three rounds in a row is now **the
 rule itself**:
 
+> **ANNOTATION (`COORD-DIFF-REVIEW c812aa5 P2-01`, which BLOCKED).** The column header below
+> said *why the author cannot rewrite it*, and for the second row that was **false as measured**:
+> walking newest-first with `setdefault` keeps the NEWEST committed digest, so whenever HEAD
+> carried one the witness **was** HEAD. A tampered report, a hand-forged row and one
+> `git commit -am` returned **0** from both `--check` and `--write` while printing *checked over
+> every revision*. Round 10 closed the committed-PLACEHOLDER route and I wrote the rule as though
+> it closed the committed-FORGERY route too. The table is left as written, with this annotation,
+> and what is enforced now is in `P14-AMENDMENT-15-COORD-DIFF-REVIEW-c812aa5.md`: the **OLDEST**
+> recorded digest is the witness, a later revision that disagrees with it is itself a refusal, and
+> a truncated history is NOT CHECKED rather than checked.
+
 | witness | what it is | why the author cannot rewrite it |
 |---|---|---|
 | the **other directory** | the same report under `/mnt/project-files/phase14` (or, when `--dir` is the shared folder, under the pack) | a commit does not touch it; forging requires changing both copies in step |
-| **every revision** of the manifest | the first non-placeholder digest found walking `git rev-list HEAD -- <manifest>` newest-first | a committed placeholder no longer erases a digest that was once recorded |
+| **every revision** of the manifest | the first non-placeholder digest found walking `git rev-list HEAD -- <manifest>` newest-first | a committed placeholder no longer erases a digest that was once recorded — **but a committed forgery did, see the annotation above** |
 | *neither* | — | then **nothing may be signed**: `NO WITNESS` |
 
 Measured, each refusal by its own sentence, in constructed worlds:
@@ -106,7 +117,13 @@ payload** while `replay`, failing for the same reason, was correctly labelled
 
 So the pattern is now written the same way in **every** filter in the pack
 (`Permission denied|No such file|command not found|[Ee]rror:|ERROR|FATAL|WARNING|could not`),
-and no filter prints a diagnosis line with an empty payload: the raw first line
+and no filter prints a diagnosis line with an empty payload:
+
+> **ANNOTATION (`COORD-DIFF-REVIEW c812aa5 R-07`).** *Every* was wrong by one:
+> `tools/gate-sweep.sh`'s `no-cluster-revert` line used the unified pattern with **no fallback**,
+> so an exit-4 refusal — which matches none of those words — printed the sentence with an empty
+> payload. The third time this same pattern was fixed in one place and left in another. Fixed in
+> Amendment 15, and the claim here is what the fix was measured against. the raw first line
 beats a blank claim, and `<no output at all>` beats both when there is nothing.
 Measured with the cluster stopped: `psql said: psql: error: connection to server
 on socket "/tmp/p14pg/sock/.s.PGSQL.54314" failed: No such file or directory`,
@@ -169,6 +186,14 @@ sentence).
 **It hid no fail-open** — the loser exits non-zero and says nothing was proved,
 and each arm still requires its own sentence, so a connect failure cannot read
 as a red.
+
+> **ANNOTATION (`COORD-DIFF-REVIEW c812aa5 R-05`).** True of the arms, and **not** of two red
+> proofs in the sweep: `no-cluster` and `rolecount-discriminates` required only *non-zero*, so the
+> lock's own exit 4 satisfied them without anything being measured. Reaching it needs a second run
+> holding the lock across exactly those two proofs, which the sweep cannot create itself — but a
+> red proof that a refusal can satisfy is a red proof for the wrong reason, and that is the defect
+> this harness exists to prevent. Both now require exit **1** and their own sentence
+> (Amendment 15).
 
 ---
 

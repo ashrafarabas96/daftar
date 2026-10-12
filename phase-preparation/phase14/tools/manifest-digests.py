@@ -26,6 +26,10 @@ import argparse, hashlib, os, re, subprocess, sys
 # a placeholder at all.
 ROW = re.compile(r'^\| `(P14-[^`]+|README-AR\.md)` \| (.*?) \| `([0-9a-f]{64}|UNSIGNED)` \| ([0-9,]+|UNSIGNED) \|$')
 PLACEHOLDER = 'UNSIGNED'
+# COORD DIFF REVIEW AT c812aa5, R-03: only names beginning P14-CHALLENGE- were held
+# to the reviewer-row rules, so a coordinator's review could be tampered with and
+# re-signed. A review is a review whoever wrote it.
+REVIEWER_PREFIXES = ('P14-CHALLENGE-', 'P14-COORD-DIFF-REVIEW-')
 
 def main():
     ap = argparse.ArgumentParser()
@@ -70,31 +74,96 @@ def main():
     # For the third round running the protection was in fact being carried by
     # the one-manifest-two-directories construction, so that construction is now
     # the RULE and not a happy accident: a reviewer's report is checked against
-    # the copy in the OTHER directory, which the author's own commits cannot
-    # rewrite. The git history is still consulted, but over EVERY revision of
-    # the manifest rather than HEAD, so a committed placeholder no longer erases
-    # a digest that was once recorded.
+    # the copy in the OTHER directory. The git history is still consulted, but
+    # over EVERY revision of the manifest rather than HEAD.
+    # COORDINATOR DIFF REVIEW AT c812aa5, P2-01, which BLOCKED: walking the
+    # revisions newest-first with setdefault kept the NEWEST committed digest,
+    # so whenever HEAD carried a digest the witness WAS HEAD -- and one ordinary
+    # `git commit -am` of a tampered report plus a hand-forged row returned 0
+    # while printing "checked over every revision". Round 10 closed the
+    # committed-PLACEHOLDER route and left the committed-FORGERY route open:
+    # the same species one step over. The witness is now the OLDEST recorded
+    # digest, which is the one the report was RECEIVED with and which no later
+    # commit can erase, and any LATER revision that records a different digest
+    # for the same report is itself a refusal. What a commit can still do is
+    # rewrite history, and that is named as a limit rather than guarded here.
+    # R-08: a shallow clone and an unreadable revision are now NOT CHECKED, and
+    # NOT CHECKED discards the history witness entirely instead of trusting the
+    # fragment that happens to be present -- an incomplete history can begin at
+    # a forged revision, so a partial walk must not be allowed to answer.
     def witness_default():
         d = os.path.abspath(a.dir)
         shared = '/mnt/project-files/phase14'
         return os.path.dirname(os.path.abspath(a.manifest)) if d == os.path.abspath(shared) else shared
 
-    signed_history, history = {}, 'checked over every revision of the manifest'
+    signed_history, moved = {}, {}
+    history = 'checked over every revision of the manifest, OLDEST first'
     _md = os.path.dirname(os.path.abspath(a.manifest))
     _mb = os.path.basename(a.manifest)
     _revs = subprocess.run(['git','-C',_md,'rev-list','HEAD','--',_mb],
                            capture_output=True, text=True)
+    def _g(*argv):
+        return subprocess.run(['git','-C',_md] + list(argv), capture_output=True, text=True)
+    # R-08, measured rather than asserted: "every revision" is a claim about
+    # REACHABILITY, and this container's own clone is shallow. The flag is not
+    # the question -- a truncated history is harmless for a file whose FIRST
+    # record is still present, and fatal for one whose is not, because then the
+    # oldest digest visible here is simply the oldest SURVIVING one and may
+    # already be a forgery. So the test is whether the oldest listed revision
+    # is the one that ADDED the manifest: every parent of it must be readable
+    # and must not contain the file. Anything else is NOT CHECKED, and NOT
+    # CHECKED discards the history witness entirely.
+    _incomplete = None
     if _revs.returncode == 0 and _revs.stdout.strip():
-        for rev in _revs.stdout.split():           # newest first
+        _oldest = _revs.stdout.split()[-1]
+        _par = _g('rev-parse', '%s^@' % _oldest)
+        _shallow = (_g('rev-parse', '--is-shallow-repository').stdout.strip() == 'true')
+        # A grafted commit reports NO PARENTS, exactly like a true root commit,
+        # so "the parents are readable" cannot see a `--depth 1` clone at all:
+        # measured, that clone answered "checked over every revision" over a
+        # single truncated revision. The graft list is where the truth is.
+        _bounds = set()
+        if _shallow:
+            _gd = _g('rev-parse', '--absolute-git-dir').stdout.strip()
+            try:
+                _bounds = set(open(os.path.join(_gd, 'shallow')).read().split())
+            except OSError:
+                _bounds = {'<unreadable>'}
+        if _oldest in _bounds or '<unreadable>' in _bounds:
+            _incomplete = ('revision %s is the shallow boundary of this clone, so the history'
+                           ' below it was never fetched and the oldest digest here need not be'
+                           ' the first' % _oldest[:12])
+        for _p in (_par.stdout.split() if _par.returncode == 0 else []):
+            if _g('rev-parse', '--verify', '--quiet', '%s^{commit}' % _p).returncode != 0:
+                _incomplete = ('revision %s is a boundary commit%s, so an earlier record of this'
+                               ' manifest may exist and cannot be read'
+                               % (_oldest[:12], ' of a shallow clone' if _shallow else ''))
+            elif _g('cat-file', '-e', '%s:./%s' % (_p, _mb)).returncode == 0:
+                _incomplete = ('the oldest revision of this manifest reachable here (%s) is a'
+                               ' modification, not the commit that added it, so the digest a'
+                               ' report was received with may be out of reach' % _oldest[:12])
+    if _revs.returncode != 0 or not _revs.stdout.strip():
+        history = 'NOT CHECKED (the manifest is not in a git repository here)'
+    elif _incomplete:
+        history = 'NOT CHECKED (%s)' % _incomplete
+    else:
+        for rev in reversed(_revs.stdout.split()):           # OLDEST first
             r = subprocess.run(['git','-C',_md,'show','%s:./%s' % (rev,_mb)],
                                capture_output=True, text=True)
-            if r.returncode != 0: continue
+            if r.returncode != 0:
+                _why = (r.stderr.strip().split('\n') or [''])[0][:120]
+                signed_history, moved = {}, {}
+                history = ('NOT CHECKED (revision %s of this manifest could not be read: %s)'
+                           % (rev[:12], _why or 'git show failed'))
+                break
             for ln in r.stdout.split('\n'):
                 m = ROW.match(ln)
-                if m and m.group(3) != PLACEHOLDER:
-                    signed_history.setdefault(m.group(1), m.group(3))
-    else:
-        history = 'NOT CHECKED (the manifest is not in a git repository here)'
+                if not m or m.group(3) == PLACEHOLDER: continue
+                nm, dg = m.group(1), m.group(3)
+                if nm not in signed_history:
+                    signed_history[nm] = dg
+                elif dg != signed_history[nm] and nm not in moved:
+                    moved[nm] = (signed_history[nm], dg, rev)
     listed, out, stale, refused = [], [], [], []
     for ln in lines:
         m = ROW.match(ln)
@@ -135,22 +204,31 @@ def main():
         # is how the one-step bypass worked. `--write` leaves such a row exactly
         # as it found it and fails.
         # ---- a reviewer's report, and the three witnesses it is held to.
-        if name.startswith('P14-CHALLENGE-'):
+        if name.startswith(REVIEWER_PREFIXES):
             wdir = a.witness or witness_default()
             wpath = os.path.join(wdir, name)
             wh = (hashlib.sha256(open(wpath,'rb').read()).hexdigest()
                   if os.path.isfile(wpath) else None)
             sig = signed_history.get(name)
+            mv = moved.get(name)
             why = None
             if wh and wh != h:
                 why = ('REVIEWER COPIES DIFFER: %s hashes %s under %s but %s under %s. Two'
                        ' directories disagree about a reviewer\'s report, so neither can be'
                        ' signed from here. Restore the copy that was changed.'
                        % (name, h[:12], a.dir, wh[:12], wdir))
+            elif mv:
+                why = ('REVIEWER ROW REWRITTEN IN HISTORY: %s was recorded as %s when it was'
+                       ' received, and a later revision of this manifest (%s) records %s for it'
+                       ' instead. A signed reviewer row does not move, and a later commit does not'
+                       ' get to redefine what was received. Restore the row to the digest the'
+                       ' report arrived with.'
+                       % (name, mv[0][:12], mv[2][:12], mv[1][:12]))
             elif sig and h != sig:
-                why = ('%s: a signed reviewer row does not move. Some revision of this manifest'
-                       ' recorded %s for it and the file under %s now hashes %s — a committed'
-                       ' placeholder does not erase that. Restore the reviewer\'s file.'
+                why = ('%s: a signed reviewer row does not move. The OLDEST revision of this'
+                       ' manifest that records it recorded %s, and the file under %s now hashes %s — neither a'
+                       ' committed placeholder nor a committed forgery erases the digest the report'
+                       ' was received with. Restore the reviewer\'s file.'
                        % (name, sig[:12], a.dir, h[:12]))
             elif wh is None and sig is None:
                 why = ('NO WITNESS for %s: it has no digest in any revision of this manifest and'
@@ -177,6 +255,15 @@ def main():
     missing  = [n for n in listed if not os.path.exists(os.path.join(a.dir,n))]
 
     for u in unlisted: stale.append('%s: ARTIFACT WITH NO ROW' % u)
+    # COORD DIFF REVIEW AT c812aa5, R-02: a whole reviewer report could be
+    # deleted together with its row and this lane stayed green -- what caught it
+    # was the other directory, which is a second witness and not a refusal. A
+    # name that any revision of this manifest signed must keep its row here.
+    for nm in sorted(signed_history):
+        if nm not in listed:
+            stale.append('%s: SIGNED REVIEWER ROW REMOVED — this manifest signed it in an earlier'
+                         ' revision (%s) and it has no row now. A received review is not deleted;'
+                         ' restore the row and the file.' % (nm, signed_history[nm][:12]))
     print('manifest: %d artifact row(s) + the manifest itself; %d file(s) in %s;'
           ' reviewer-row history %s'
           % (len(listed), len(on_disk), a.dir, history))

@@ -253,11 +253,31 @@ def main():
             # can add up is not a measurement. So: membership is computed on the
             # UNFOLDED token set with a strict priority, folding is for DISPLAY
             # only, and the totals are ASSERTED to partition the set.
+            # COORD DIFF REVIEW AT c812aa5, P2-02, which BLOCKED: the three
+            # directories here were a HAND-KEPT LIST -- the very thing round 6
+            # said it had replaced with measurement -- and `tools` was not on
+            # it, so `citation-provenance.py`, `gate-sweep.sh` and
+            # `retracted-claims.py` were generated into the bucket of "files
+            # this phase PROPOSES and that correctly do not exist yet" while
+            # sitting in the pack being run by the gate that printed it. Adding
+            # 'tools' would have fixed those three and left the next directory
+            # to be found by the next reviewer, so the list is gone: the pack is
+            # WALKED, and a token belongs to the pack when it is a real file
+            # under it, at any depth, matched at a path boundary.
+            pack_rel = set()
+            for _root, _dirs, _files in os.walk(a.pack):
+                _dirs[:] = [d for d in _dirs if d != '.git']
+                for _f in _files:
+                    pack_rel.add(os.path.relpath(os.path.join(_root, _f), a.pack))
             def in_pack(tok):
                 if os.path.isabs(tok):
                     return False          # not ours to resolve on this host
-                return any(os.path.exists(os.path.join(a.pack, d, tok))
-                           for d in ('', 'proofs', 'proofs/cases'))
+                # `./redproof-preflight.sh` is cited with its `./` because the
+                # file is mode 100644 and must be run through bash; it is the
+                # same file either way, and normalising is what keeps a live
+                # pack file out of the DELETED bucket.
+                tok = os.path.normpath(tok)
+                return any(rp == tok or rp.endswith(os.sep + tok) for rp in pack_rel)
             # ROUND-7 P2-01, second remedy, taken as well as the first: a
             # pathspec that leaves the repository must FAIL LOUDLY. Answering
             # False turns a misconfiguration into a silent misclassification,
@@ -270,14 +290,22 @@ def main():
                       % (a.pack, a.repo), file=sys.stderr)
                 return 2
             def was_in_pack(tok):
+                # Same defect, same remedy: a glob pathspec over the WHOLE pack
+                # instead of three named directories. `rel/**/tok` matches the
+                # pack root as well as any depth under it.
                 if os.path.isabs(tok):
                     return False
-                for d in ('', 'proofs', 'proofs/cases'):
-                    r = git(a.repo, 'log', '--all', '--oneline', '-1', '--',
-                            os.path.join(rel, d, tok))
-                    if r.returncode == 0 and r.stdout.strip():
-                        return True
-                return False
+                tok = os.path.normpath(tok)
+                r = git(a.repo, 'log', '--all', '--oneline', '-1', '--',
+                        ':(glob)%s/**/%s' % (rel, tok))
+                if r.returncode != 0:
+                    print('CONFIGURATION ERROR: `git log` refused the pathspec for %r under %s'
+                          ' (%s), so no token can be classified as one this pack deleted and the'
+                          ' bucket below would be silently wrong.'
+                          % (tok, rel, (r.stderr.strip().split(chr(10)) or [''])[0][:160]),
+                          file=sys.stderr)
+                    raise SystemExit(2)
+                return bool(r.stdout.strip())
 
             fold = lambda xs: sorted(x for x in xs
                                      if not any(y != x and y.endswith('/'+x) for y in xs))
@@ -301,7 +329,7 @@ def main():
             fp, fd, fa, fo, ff = (fold(proofs), fold(deleted), fold(abspath),
                                   fold(otherdocs), fold(future))
             print('\n**Cited tokens that are not live code at `%s`, classified.** Each token is in'
-                  ' exactly one bucket, and the generator asserts the four add up to the %d'
+                  ' exactly one bucket, and the generator asserts that all five add up to the %d'
                   ' unresolved tokens. The counts below are of FILES (spellings of one path folded'
                   ' together); the token count is given beside each, because an earlier edition'
                   ' counted tokens while saying files and the buckets summed to one more than'

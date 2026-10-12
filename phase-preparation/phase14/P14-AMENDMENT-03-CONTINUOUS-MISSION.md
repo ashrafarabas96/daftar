@@ -4,6 +4,8 @@
 **Base: `93084f8`. Branch `claude/phase14-prep-1zqgj8`, no commits, no code, no
 migration number. No timing or performance claim is made anywhere in this pack.**
 
+> **ANNOTATION (`COORD-DIFF-REVIEW c812aa5 P2-03`).** This header's branch name and *no commits* are **false now and were false from `08d23da` onward**: the real branch is `claude/project-thread-1zqgj8`, cut from `6fc505d`, and the pack is committed and pushed on it. The line is left as written because an amendment is dated evidence; what it says about the branch is corrected here and in `P14-HANDOFF-MANIFEST.md` §1.
+
 Source: the owner's *Master Continuous Mission, Phases 4 to 15* (2026-10-12),
 `## 21. Phase 14 — Public API / Integrations` of the uploaded original, read in
 full and verified line by line against the coordinator's extraction in
@@ -157,7 +159,7 @@ While verifying the new citations, the working tree was found to be at
 **`6fc505d`** (`main`) while this pack declares its base as **`93084f8`**, and
 the Phase 14 prep branch is checked out in a different worktree. `93084f8` is a
 descendant of `6fc505d`, so the tree is *behind* the declared base, and
-`apps/api/src/infra/database.ts` differs between them by 205 lines.
+`apps/api/src/infra/database.ts` differs between the two trees; **the line counts are generated** and not typed here — the table in §15 of `P14-MIGRATION-PATCH-REQUEST.md` carries them, produced by `tools/citation-provenance.py` (`COORD-DIFF-REVIEW c812aa5 P2-03`: this line said *205 lines*, a figure copied out of its generator).
 
 Consequences, measured:
 
