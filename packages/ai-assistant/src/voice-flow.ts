@@ -74,6 +74,17 @@ export interface Heard {
  * cannot be named, so the type cannot be satisfied, so the sentence is now true rather than
  * asserted. The alternative was to soften the comment; the stronger closure is cheap here and the
  * claim is worth keeping.
+ *
+ * **What the mark is NOT, written here so nobody later reads it as more.** It defends against an
+ * accidental literal, a cast, and a JavaScript caller. It is **not a security boundary**: in-process
+ * code holding a legitimately minted review can read the symbol with `Object.getOwnPropertySymbols`
+ * and copy it onto another object (measured by the challenger at this head). That costs an attacker
+ * nothing they did not already have — such code can call `afterListen` itself — so it is a bound on
+ * the claim, not a defect. If this comment is ever widened from "only `afterListen` mints one" into
+ * a statement about an adversary, that is the sentence to re-check first.
+ *
+ * `Symbol()` rather than `Symbol.for()` is load-bearing: a registry symbol would be reachable by
+ * description from anywhere, which is the one route that would make the type satisfiable again.
  */
 const MINTED_BY_AFTER_LISTEN: unique symbol = Symbol('voice-flow.mintedByAfterListen');
 
