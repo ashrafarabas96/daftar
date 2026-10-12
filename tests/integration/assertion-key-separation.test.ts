@@ -55,6 +55,10 @@ const MERCHANT_PROD: NodeJS.ProcessEnv = {
   INVENTORY_ASSERTION_KID: 'inv1',
   JWT_SECRET: 'production-secret-with-at-least-32-characters',
   MEDIA_STORAGE: 's3',
+  // Fail-closed uploads (owner ruling 2026-10-12): a production merchant
+  // surface does not start with the disabled malware-scanner placeholder.
+  MALWARE_SCANNER: 'clamav',
+  MALWARE_SCANNER_URL: 'clamav://clamd.internal:3310',
   S3_ENDPOINT: 'https://s3.example.com',
   S3_BUCKET: 'daftar-media',
   S3_ACCESS_KEY_ID: 'AKIAEXAMPLE',
