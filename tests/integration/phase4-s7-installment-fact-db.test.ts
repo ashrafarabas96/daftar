@@ -4016,12 +4016,42 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     //    SNAPSHOT — not by `stats_fetch_consistency`, which governs the
     //    CUMULATIVE `pg_stat_*` views, and not by
     //    `pg_stat_clear_snapshot()`, which discards the cumulative snapshot
-    //    and does nothing for this quantity. Under REPEATABLE READ the two
-    //    captures would share one snapshot and be equal BY CONSTRUCTION,
-    //    which would make this pair an assertion that cannot fail. So the
-    //    isolation level EACH capture actually ran at is recorded beside it
-    //    and pinned here, and the pair is red-proved by an `ANALYZE` planted
-    //    in the gap (the author's round-20 report, ordered item 2).
+    //    and does nothing for this quantity.
+    //
+    //    AND WHAT MAKES THE SECOND CAPTURE A SECOND READ IS A TRANSACTION
+    //    BOUNDARY, NOT AN ISOLATION LEVEL (`TL-P4-COORD-R79` §2 and §3,
+    //    F21-4). These two captures are bare `sup.query` on a `Pool` with NO
+    //    `BEGIN` on `sup` anywhere, so EACH IS ITS OWN TRANSACTION and takes
+    //    its own snapshot. THAT is why this pair can fail, and it is the
+    //    whole of the reason.
+    //
+    //    A clause stood here naming THESE TWO CAPTURES as its subject and
+    //    saying that at REPEATABLE READ they would read one and the same
+    //    snapshot, so that comparing them could not fail. It is withdrawn as
+    //    FALSE of that subject, because they are autocommit statements:
+    //    snapshot sharing comes from the transaction boundary and not from
+    //    the level, so at REPEATABLE READ each of these two statements is
+    //    still its own transaction with its own snapshot. The claim is true
+    //    only of two captures taken INSIDE ONE REPEATABLE READ TRANSACTION,
+    //    and that is not what these are. `R79` is where the withdrawal is
+    //    ruled on, and the `R76` addendum this paragraph used to rest on is
+    //    corrected there — cite `R79`.
+    //
+    //    THE ISOLATION PIN STAYS, AND WHAT IT DOES NOT READ IS SAID. The
+    //    level each capture ran at is still recorded beside it and pinned,
+    //    because enclosing this section in ONE `BEGIN` at REPEATABLE READ is
+    //    the change that WOULD make the pair vacuous, and the pin refuses
+    //    the level half of that change. It does NOT read whether a `BEGIN`
+    //    encloses the two captures; that half is established by READING THE
+    //    CODE — no `BEGIN` on `sup` — and is not asserted here. A pin that
+    //    named both halves and read one is the shape this slice rejects, so
+    //    the unread half is named rather than implied.
+    //
+    //    The pair is red-proved by an `ANALYZE` planted in the gap (the
+    //    author's round-20 report, ordered item 2) — which proves the pair
+    //    can fail on STATISTICS appearing across the readings, and settles
+    //    NOTHING about the isolation level: that plant is the same session's
+    //    own write and is visible to it at every level.
     const statsBefore = M['R7_cost_inputs'] as Record<string, unknown>;
     const statsAfter = M['R7_stats_after_last_plan'] as Record<string, unknown>;
     expect(statsAfter, 'the premise was never re-read after the last plan reading').toBeTruthy();
