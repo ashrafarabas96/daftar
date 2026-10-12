@@ -506,24 +506,39 @@ BEGIN
   SELECT i.credit_minor, i.state INTO claimed, invoice_state
     FROM p5scratch.subscription_invoices i WHERE i.id = p_invoice;
   IF claimed IS NULL THEN
-    -- The invoice does not exist: the transaction rolled it back, or never
-    -- wrote it. `pca_invoice_fk` is the constraint that reports that, and it
-    -- is PROVEN to: "consumption rows with no invoice at all cannot commit
-    -- either" in `credit-ledger-atomicity.test.ts` reddens when that key is
-    -- dropped (round 7's mutation M28). So this RETURN hands the case to a
-    -- constraint that is measured, not to an assumption.
+    -- FAIL CLOSED. This used to `RETURN`, on the reasoning that NULL means
+    -- "the invoice was rolled back or never written" and `pca_invoice_fk`
+    -- reports that case. Both halves of that were true and the conclusion
+    -- was still wrong: it made "I cannot see the row" and "the row does not
+    -- exist" the same answer, and the first of those is what F-01 exploited.
     --
-    -- Under definer rights, NULL now means "no such row" and nothing else.
-    -- Before round 8 it also meant "a row I am not allowed to see", and
-    -- those two are not the same thing — which is the whole of F-01.
-    RETURN;
+    -- Definer rights alone do not fix it, and that is MEASURED, not
+    -- reasoned: with this function owned by a non-superuser role — which is
+    -- the deploy shape — removing its two read policies leaves it unable to
+    -- see the invoice again, and a `RETURN` here would go straight back to
+    -- passing silently. Phase 13's challenger measured the same thing on
+    -- PG 16.15, and Phase 11 measured SECURITY DEFINER actively DISABLING a
+    -- guard whose restrictive policy the function owner did not satisfy. A
+    -- keyword is not a defence; refusing what it cannot verify is.
+    --
+    -- Cost: a transaction whose invoice genuinely does not exist is now
+    -- refused HERE rather than by `pca_invoice_fk`. Both are refusals, both
+    -- at COMMIT, and the 74 cases in this lane are the check that no
+    -- legitimate path reaches this branch.
+    --
+    -- The refusal carries its own CONSTRAINT name so a case can assert WHICH
+    -- refusal it got: a case that asserts only that something was refused
+    -- passes in both of two opposite worlds, which is how Phase 13's
+    -- equivalent test proved nothing.
+    RAISE EXCEPTION 'the agreement invariant cannot read invoice %, so it refuses rather than assume', p_invoice
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'si_invoice_unreadable';
   END IF;
   IF invoice_state = 'draft' THEN
     -- A draft carries no credit. Checked rather than assumed, because a
     -- draft with a non-zero figure would otherwise pass unexamined.
     IF claimed <> 0 THEN
       RAISE EXCEPTION 'a draft invoice may not claim applied credit: % claims %', p_invoice, claimed
-        USING ERRCODE = 'integrity_constraint_violation';
+        USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'si_draft_claims_no_credit';
     END IF;
     RETURN;
   END IF;
@@ -533,7 +548,7 @@ BEGIN
   IF claimed <> consumed THEN
     RAISE EXCEPTION 'invoice % claims % of applied credit but its consumption rows sum to %',
       p_invoice, claimed, consumed
-      USING ERRCODE = 'integrity_constraint_violation';
+      USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'si_credit_agrees_with_ledger';
   END IF;
 END;
 $fn$;

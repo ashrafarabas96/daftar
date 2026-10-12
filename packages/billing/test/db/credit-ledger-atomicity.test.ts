@@ -34,7 +34,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
-import { appUrl, connect, isBlocked, ownerUrl, pidOf, sqlstate, uuid, waitUntilBlocked } from './helpers/cluster';
+import { appUrl, connect, constraintOf, isBlocked, ownerUrl, pidOf, sqlstate, uuid, waitUntilBlocked } from './helpers/cluster';
 import {
   consumedMinor,
   createDraftInvoice,
@@ -600,9 +600,12 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
       // on before COMMIT. No privilege is needed that the role does not hold.
       await c.query(`SELECT set_config('app.business_id', $1, false)`, [moveContextTo]);
     }
-    const code = await c.query('COMMIT').then(() => '', (e: unknown) => sqlstate(e));
+    const refusal = await c.query('COMMIT').then(
+      () => '',
+      (e: unknown) => `${sqlstate(e)}/${constraintOf(e)}`,
+    );
     await c.query('ROLLBACK').catch(() => undefined);
-    return code;
+    return refusal;
   }
 
   it('refuses an invoice that claims more credit than its consumption rows hold', async () => {
@@ -611,8 +614,12 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
     const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
     const app = await connect(appUrl());
     try {
-      // The CONTROL. 23000 is the agreement trigger's own refusal.
-      expect(await underfundedFinalization(app, s, invoiceId, grant)).toBe('23000');
+      // The CONTROL. The refusal is asserted BY NAME: a case that asserts
+      // only that something was refused passes in both of two opposite
+      // worlds — the invariant catching the shortfall, and the invariant
+      // refusing because it could not read the invoice at all. Those are the
+      // same SQLSTATE and they are not the same result.
+      expect(await underfundedFinalization(app, s, invoiceId, grant)).toBe('23000/si_credit_agrees_with_ledger');
     } finally {
       await app.end();
     }
@@ -628,7 +635,9 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
       // The ATTACK. Before round 8 this COMMITTED and left the invoice
       // claiming 500 against 300.
       const code = await underfundedFinalization(app, s, invoiceId, grant, OTHER_BUSINESS);
-      expect(code, 'an invoice claiming unbacked platform credit was committed').toBe('23000');
+      // The SAME named refusal as the control, which is the whole point: the
+      // session's RLS context did not change which invariant answered.
+      expect(code, 'an invoice claiming unbacked platform credit was committed').toBe('23000/si_credit_agrees_with_ledger');
     } finally {
       await app.end();
     }
@@ -653,5 +662,50 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
     } finally {
       await app.end();
     }
+  });
+});
+
+describe('the agreement invariant refuses what it cannot verify', () => {
+  /**
+   * ROUND 8, after a cross-phase lead. The challenger's F-01 remedy was one
+   * keyword, `SECURITY DEFINER`, and two other phases have since measured
+   * that the keyword is not the defence: Phase 13's challenger found that on
+   * PG 16.15 with a NON-superuser function owner — the deploy shape — definer
+   * rights do not make an RLS-hidden row readable, and Phase 11 measured
+   * SECURITY DEFINER actively DISABLING a guard whose restrictive policy the
+   * function owner did not satisfy. This thread measured the same thing from
+   * the other side: with the function owned by the schema owner, the mutation
+   * removing its read policies came back GREEN, because the owner was still
+   * a superuser.
+   *
+   * So the invariant now REFUSES when it cannot read the invoice, instead of
+   * treating "not visible" as "deleted". The refusal names itself, because
+   * Phase 13's equivalent test asserted only that a refusal happened and
+   * therefore passed in both opposite cases.
+   */
+  it('refuses, by name, when the invoice it must compare cannot be read', async () => {
+    // Called directly with an invoice that does not exist, which is the only
+    // way to reach the branch while the read policies are in place — and
+    // that is itself the point: no legitimate path reaches it, which the
+    // other 74 cases are the check on.
+    const refusal = await owner
+      .query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [uuid()])
+      .then(() => '', (e: unknown) => `${sqlstate(e)}/${constraintOf(e)}`);
+    expect(refusal, 'an unreadable invoice was treated as a rolled-back one').toBe('23000/si_invoice_unreadable');
+  });
+
+  it('a draft that claims credit is refused by its own named invariant, not by this one', async () => {
+    const s = await freshScope();
+    const refusal = await owner
+      .query(
+        `INSERT INTO p5scratch.subscription_invoices
+           (id, tenant_id, business_id, period_index, currency, charge_minor, credit_minor, total_minor, state)
+         VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,250,750,'draft')`,
+        [uuid(), s.tenantId, s.businessId],
+      )
+      .then(() => '', (e: unknown) => `${sqlstate(e)}/${constraintOf(e)}`);
+    // Three refusals share SQLSTATE 23000 inside this one function. Naming
+    // them is what makes a case able to tell which of the three it got.
+    expect(refusal).toBe('23000/si_draft_claims_no_credit');
   });
 });
