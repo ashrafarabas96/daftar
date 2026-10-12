@@ -44,12 +44,32 @@
  *      greater than zero. A secret scan that scanned nothing is the classic
  *      vacuous green — it prints "0 findings" and exits 0 — and the only
  *      defence is a subject count measured twice, from two places.
- *   2. MANIFEST DIGEST COVERAGE. `scanTree` checks a file against its
- *      recorded SHA-256 when the manifest records one. At release scope an
- *      inventory entry with NO recorded digest is itself a finding: the
- *      archive would then contain a file nothing binds to the source tree.
- *      So every entry must carry a 64-hex digest, and the count of verified
- *      digests is printed.
+ *   2. EVERY INVENTORY ENTRY IS BOUND TO THE SOURCE TREE. At release scope a
+ *      file that nothing binds to the source is a finding in itself: the
+ *      archive would carry bytes no reviewed commit accounts for. WHAT the
+ *      binding is depends on which inventory is in use, and this is the part
+ *      an earlier edition of this header got wrong.
+ *
+ *      With a `DELIVERY_MANIFEST.json`, the binding is the recorded SHA-256:
+ *      every entry must carry a 64-hex digest, and an entry without one
+ *      fails.
+ *
+ *      With `git ls-files` — the mode that actually runs in this repository —
+ *      there is no manifest and so no recorded SHA-256, and the header used
+ *      to claim the digest law anyway. The result was the report line
+ *      "0 with a recorded SHA-256" beside a PASS: a coverage figure of zero
+ *      printed as though it were a measurement, while the law it belonged to
+ *      silently did not apply. That is the pack's own "a constant is not a
+ *      measurement" defect wearing a different hat, and the independent
+ *      challenger raised it as B-24.
+ *
+ *      The binding in that mode is git's own object id. Every path carries
+ *      the blob OID the index records, that count is what `digestsRecorded`
+ *      now reports, and a path whose WORKING-TREE content differs from the
+ *      committed blob is a `source-binding` finding — because a release scan
+ *      read bytes that no commit contains, so whatever it certifies is not
+ *      what would ship. The report names the binding it used, so a zero can
+ *      no longer pass for coverage.
  *   3. AN INVENTORY-WIDE CONFIG REFUSAL. Phase 3 refuses a `.gitleaks.toml`
  *      at the scanned root. A release archive is a whole tree, so this script
  *      refuses one ANYWHERE in the inventory, and refuses any `.gitleaksignore`
@@ -168,10 +188,44 @@ function independentInventory(root: string): { readonly source: string; readonly
     });
     return { source: 'DELIVERY_MANIFEST.json', paths, withDigest, head: manifest.sourceCommit ?? null };
   }
-  const listed = git(root, ['ls-files', '-z'])
+  // No delivery manifest: the inventory is the index, and the binding is the
+  // blob OID the index records rather than a SHA-256 somebody wrote down.
+  // `ls-files -s` gives both in one command: "<mode> <oid> <stage>\t<path>".
+  const staged = git(root, ['ls-files', '-s', '-z'])
     .split('\0')
-    .filter((f) => f.length > 0 && existsSync(join(root, f)));
-  return { source: 'git ls-files -z', paths: listed, withDigest: 0, head: git(root, ['rev-parse', 'HEAD']) };
+    .filter((line) => line.length > 0);
+  const oidOf = new Map<string, string>();
+  for (const line of staged) {
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const oid = line.slice(0, tab).split(' ')[1] ?? '';
+    const path = line.slice(tab + 1);
+    if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(oid)) oidOf.set(path, oid);
+  }
+  const listed = [...oidOf.keys()].filter((f) => existsSync(join(root, f)));
+  let bound = 0;
+  for (const f of listed) if (oidOf.has(f)) bound += 1;
+  for (const f of listed)
+    if (!oidOf.has(f))
+      fail(
+        'source-binding',
+        `${f} is in the inventory with no blob OID in the index, so nothing binds the bytes this scan read to any commit.`,
+      );
+
+  // A tracked file whose working-tree content differs from the committed blob
+  // was READ BY THE SCAN in its modified form. The scan's verdict then
+  // describes bytes that are not in any commit and would not ship.
+  const dirty = git(root, ['diff-index', '--name-only', '-z', 'HEAD', '--'])
+    .split('\0')
+    .filter((f) => f.length > 0 && oidOf.has(f));
+  for (const f of dirty)
+    fail(
+      'source-binding',
+      `${f} differs from the blob the index records for it (${(oidOf.get(f) ?? '').slice(0, 12)}). ` +
+        `The scan read the working-tree bytes, so its verdict is about content no commit holds — a release scan has to be run on a clean tree or it certifies something that will not ship.`,
+    );
+
+  return { source: 'git ls-files -s -z (binding: index blob OID)', paths: listed, withDigest: bound, head: git(root, ['rev-parse', 'HEAD']) };
 }
 
 /**
@@ -255,6 +309,7 @@ interface TreeOutcome {
   readonly inventoryFiles: number;
   readonly filesScanned: number | null;
   readonly digestsRecorded: number;
+  readonly binding: string;
   readonly head: string | null;
   readonly allowlist: { present: boolean; total: number; treeEntries: number; proved: number };
   readonly gitleaksFindings: number | null;
@@ -265,7 +320,17 @@ interface TreeOutcome {
 function runTree(root: string, gitleaks: string): TreeOutcome {
   const inventory = independentInventory(root);
   console.log(`  inventory source: ${inventory.source}`);
-  console.log(`  subject: ${inventory.paths.length} files in the inventory, ${inventory.withDigest} with a recorded SHA-256`);
+  const bindingKind = inventory.source.startsWith('git ls-files') ? 'bound to an index blob OID' : 'with a recorded SHA-256';
+  console.log(`  subject: ${inventory.paths.length} files in the inventory, ${inventory.withDigest} ${bindingKind}`);
+  // The coverage figure is only evidence if it covers the whole subject set.
+  // Printing it without this comparison is how "0 with a recorded SHA-256"
+  // sat beside a PASS for a whole round (B-24).
+  if (inventory.withDigest !== inventory.paths.length)
+    fail(
+      'source-binding',
+      `${inventory.paths.length - inventory.withDigest} of ${inventory.paths.length} inventory entries are not ${bindingKind}. ` +
+        `A release scan may not certify a file that nothing binds to the source tree, and a coverage count below the subject count is not a pass however the scan itself exited.`,
+    );
 
   if (inventory.paths.length === 0)
     fail(
@@ -311,6 +376,7 @@ function runTree(root: string, gitleaks: string): TreeOutcome {
     inventoryFiles: inventory.paths.length,
     filesScanned: result.filesScanned,
     digestsRecorded: inventory.withDigest,
+    binding: bindingKind,
     head: inventory.head ?? result.head,
     allowlist,
     gitleaksFindings: result.findings,
