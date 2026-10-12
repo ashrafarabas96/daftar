@@ -189,6 +189,31 @@ export function checkStructuralZeroTax(preview: Preview): Decision<true> {
  * executing something nobody approved, however arithmetically better it is.
  */
 /**
+ * Every field of a line, rendered for comparison — COORDINATOR C-7.
+ *
+ * Same construction as the scalars below and for the same reason: keyed by `keyof PreviewLine`, so
+ * adding a field to a line without comparing it is a **compile error**. The line comparison was the
+ * one place where the guarantee still stopped and a hand-written sequence continued, which is
+ * precisely the shape F-01 was.
+ */
+const LINE_RENDERERS: { readonly [K in keyof PreviewLine]-?: (l: PreviewLine) => string } = {
+  lineNo: (l) => String(l.lineNo),
+  productId: (l) => esc(l.productId),
+  variantId: (l) => escOptional(l.variantId),
+  quantity: (l) => esc(l.quantity),
+  unitPriceMinor: (l) => l.unitPriceMinor.toString(),
+  lineTotalMinor: (l) => l.lineTotalMinor.toString(),
+};
+
+const LINE_FIELDS = Object.keys(LINE_RENDERERS) as readonly (keyof PreviewLine)[];
+
+/** The line comparison's subjects are exactly the line type's fields. Asserted by a test. */
+export function lineComparisonCoversLine(sample: PreviewLine): boolean {
+  const compared = new Set<string>(LINE_FIELDS);
+  return Object.keys(sample).every((k) => compared.has(k)) && Object.keys(sample).length === compared.size;
+}
+
+/**
  * Every digest-covered scalar, rendered for comparison — CHALLENGE F-01.
  *
  * The independent challenge measured that `checkRecomputation` compared 13 of the 18 digest-covered
@@ -260,12 +285,14 @@ export function checkRecomputation(confirmed: Preview, recomputed: Preview): Dec
     // noUncheckedIndexedAccess: both are in range by the length check above, but an unchecked read
     // is exactly the shape that hides an off-by-one, so it is checked rather than asserted.
     if (c === undefined || r === undefined) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}]` }));
-    if (c.lineNo !== r.lineNo) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].lineNo` }));
-    if (c.productId !== r.productId) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].productId` }));
-    if (c.variantId !== r.variantId) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].variantId` }));
-    if (c.quantity !== r.quantity) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].quantity` }));
-    if (c.unitPriceMinor !== r.unitPriceMinor) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].unitPriceMinor` }));
-    if (c.lineTotalMinor !== r.lineTotalMinor) return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].lineTotalMinor` }));
+    // Driven by LINE_RENDERERS for the same reason the scalars are — COORDINATOR C-7. The
+    // compile-time guarantee stopped at the preview level while the line comparison was still a
+    // hand-written sequence, which is where F-01 lived one level up.
+    for (const field of LINE_FIELDS) {
+      if (LINE_RENDERERS[field](c) !== LINE_RENDERERS[field](r)) {
+        return deny(refuse('ai_draft.recomputation_diverged', { field: `lines[${String(i)}].${field}` }));
+      }
+    }
   }
   return allow(true);
 }

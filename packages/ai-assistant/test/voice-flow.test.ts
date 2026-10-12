@@ -159,6 +159,25 @@ describe('a result is never presented as committed before the server committed',
     if (!decision.ok) expect(decision.refusal.field).toBe('review');
   });
 
+  it('C-5: a SPREAD copy of a genuine review does not carry the mark — the accidental forgery refuses', () => {
+    // { ...review, resolvedEntityId: 'x' } is what a well-meaning refactor writes, and it was the
+    // one route still open: spread copies own ENUMERABLE symbols, so an enumerable mark travelled
+    // with it. The mark is defined non-enumerable, so the copy is refused.
+    const substituted = { ...REVIEWED, resolvedEntityId: 'somebody-else' };
+    const decision = afterReview(substituted, { committed: true, businessTransactionId: 'tx1' });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.field).toBe('review');
+  });
+
+  it('C-5: a JSON round-trip of a genuine review is refused for the same reason', () => {
+    const roundTripped = JSON.parse(JSON.stringify(REVIEWED)) as ReviewPresentation;
+    expect(afterReview(roundTripped, { committed: true, businessTransactionId: 'tx1' }).ok).toBe(false);
+  });
+
+  it('C-5: the genuine artefact itself still passes, so the two cases above fail for their own reason', () => {
+    expect(afterReview(REVIEWED, { committed: true, businessTransactionId: 'tx1' }).ok).toBe(true);
+  });
+
   it('presents a committed result only with a transaction identity in hand', () => {
     const decision = afterReview(REVIEWED, { committed: true, businessTransactionId: 'tx1' });
     expect(decision.ok).toBe(true);

@@ -75,13 +75,21 @@ export interface Heard {
  * asserted. The alternative was to soften the comment; the stronger closure is cheap here and the
  * claim is worth keeping.
  *
+ * The mark is defined **non-enumerable** (COORDINATOR C-5). That is not a detail: a spread copy,
+ * `{ ...genuineReview, resolvedEntityId: 'somebody-else' }`, copies own *enumerable* symbols, so
+ * with an enumerable mark the single most likely accidental forgery — the one a well-meaning
+ * refactor writes — carried the mark and passed. A non-enumerable mark is dropped by spread and by
+ * `JSON.parse(JSON.stringify(…))`, so the copy refuses. The accidental route was exactly the route
+ * the mark exists for, and it was the one still open.
+ *
  * **What the mark is NOT, written here so nobody later reads it as more.** It defends against an
- * accidental literal, a cast, and a JavaScript caller. It is **not a security boundary**: in-process
- * code holding a legitimately minted review can read the symbol with `Object.getOwnPropertySymbols`
- * and copy it onto another object (measured by the challenger at this head). That costs an attacker
- * nothing they did not already have — such code can call `afterListen` itself — so it is a bound on
- * the claim, not a defect. If this comment is ever widened from "only `afterListen` mints one" into
- * a statement about an adversary, that is the sentence to re-check first.
+ * accidental literal, a spread or JSON round-trip, a cast, and a JavaScript caller. It is **not a
+ * security boundary**: in-process code can still read the symbol with
+ * `Object.getOwnPropertySymbols` and attach it deliberately. That costs an attacker nothing they
+ * did not already have — such code can call `afterListen` itself — so it is a bound on the claim,
+ * not a defect. The claim is "only `afterListen` mints one, and no copy of one carries the mark by
+ * accident"; it is **not** "no adversary can forge one". If this comment is ever widened into the
+ * second sentence, that is the first thing to re-check.
  *
  * `Symbol()` rather than `Symbol.for()` is load-bearing: a registry symbol would be reachable by
  * description from anywhere, which is the one route that would make the type satisfiable again.
@@ -93,6 +101,17 @@ export interface ReviewPresentation {
   readonly intent: string;
   readonly resolvedEntityId: string;
   readonly [MINTED_BY_AFTER_LISTEN]: true;
+}
+
+/**
+ * The only place a `ReviewPresentation` comes into existence. The mark is attached with
+ * `defineProperty` so it is **non-enumerable**: see the note on the symbol above for why a spread
+ * copy must not carry it.
+ */
+function mintReview(intent: string, resolvedEntityId: string): ReviewPresentation {
+  const review = { step: 'review' as const, intent, resolvedEntityId };
+  Object.defineProperty(review, MINTED_BY_AFTER_LISTEN, { value: true, enumerable: false, writable: false, configurable: false });
+  return review as ReviewPresentation;
 }
 
 /** A question put back to the member. It carries the candidates, so the member picks — not the model. */
@@ -123,7 +142,7 @@ export function afterListen(heard: Heard, confidenceFloor: number): Decision<Lis
   }
   const only = heard.candidates[0];
   if (only === undefined) return deny(refuse('ai_intent.entity_not_found'));
-  return allow({ kind: 'review', review: { step: 'review', intent: heard.intent, resolvedEntityId: only, [MINTED_BY_AFTER_LISTEN]: true } });
+  return allow({ kind: 'review', review: mintReview(heard.intent, only) });
 }
 
 /**

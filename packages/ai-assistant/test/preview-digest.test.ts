@@ -11,6 +11,7 @@ import {
   checkRecomputation,
   checkStructuralZeroTax,
   DIGEST_COVERED_FIELDS,
+  lineComparisonCoversLine,
   recomputationCoversDigest,
   previewDigest,
   verifyDigest,
@@ -245,6 +246,14 @@ describe('F-01: recomputation divergence is enumerated from the law, not hand-wr
       if (field === 'lines') expect(decision.refusal.field?.startsWith('lines')).toBe(true);
       else expect(decision.refusal.field).toBe(field);
     }
+  });
+
+  it('C-7: the LINE comparison covers exactly the fields of a line', () => {
+    // The compile-time guarantee used to stop at the preview level while the line comparison was a
+    // hand-written sequence — the same shape as F-01, one level down.
+    const line = preview().lines[0];
+    expect(line).toBeDefined();
+    if (line !== undefined) expect(lineComparisonCoversLine(line)).toBe(true);
   });
 
   it('NON-VACUITY: two identical previews still pass, so the cases above are caused by their own divergence', () => {
