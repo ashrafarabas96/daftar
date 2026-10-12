@@ -27,7 +27,7 @@ first (PART 4), a migration number must be allocated by the one Migration Owner
 ## Exact prep SHA
 
 ```
-5f15601b6b0382baf3110c38688f8843efdafaf8
+e1b201e0e8917e540b5a4173f8232bfa4a422905
 ```
 
 Branch: `claude/project-thread-4i752q`
@@ -42,7 +42,7 @@ head IS this manifest naming that subject. The two can never be the same string,
 whole difference between them is one file:
 
 ```
-git diff --stat 5f15601 <head>
+git diff --stat e1b201e <head>
  docs/phase9/P9-HANDOFF-MANIFEST.md | (this manifest only)
  1 file changed
 ```
@@ -55,19 +55,20 @@ relation, not as "the same commit".
 
 ## Artifacts
 
-All six are **committed** to the branch above. The copies under
+All seven are **committed** to the branch above. The copies under
 `/mnt/project-files/phase9/` are off-Git and carry the same bytes; their hashes are
 the same values, recorded here because PART 13 asks for a hash on anything that does
 not live in Git.
 
 | artifact | location | committed | SHA256 |
 |---|---|---|---|
-| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `fbf2f133c53f57f3dc3805e050c8725391359769c3a155bbc5b4e92a2c770c58` |
-| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `c514faae093c29ccfd254f812a0edeb1fd9e1c2219c3a5dcace4d0bf25475521` |
+| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `80e654ce944a9fac64e9052bb187eca55668b50730b288c3c4ebaf9b05a1ccb4` |
+| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `0a0634709734469d488e960785fc7a76d2165d29086e3be4c4ce04409190f2e9` |
 | Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
-| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `7081fcc689def82822f59f298f93c3b87461a1bf8aca52431ae3bee0a54c9220` |
+| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `e1af7bbc61cf735d1ec0aabcf4a4224ca3c05581152ea259e3246b92609553e5` |
 | Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
-| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `1a642d12de1ddd9b51e12760b29a86d36277b84a8cb8ab6e6313ad36379a4898` |
+| Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `e5f2367037806a305c997086e0577a6694a6fa99bc451501775d11dd07649336` |
+| Independent challenger's PASS-WITH-SCOPE at `76ab277` | `/mnt/project-files/phase9/P9-CHALLENGE-76ab277.md` | **no — off-Git** | `67742ec1c85916505af86f1bb3a9699833af604e77e899ef9ca8bd653ac532a6` |
 | Independent challenger's REJECT at `51626e1` | `/mnt/project-files/phase9/P9-CHALLENGE-51626e1.md` | **no — off-Git** | `d5b751c6a6da094d9ccb428414ec886d27c45b2a0a2011351e17bb9f50c8d577` |
 | This manifest | `docs/phase9/P9-HANDOFF-MANIFEST.md` | yes (next commit) | — |
 
@@ -83,21 +84,21 @@ byte-identical duplicates to canonicalize (PART 14).
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 7 | each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 10 | the global lock order (PART 50), idempotent retries and the replay (PART 53) |
 | `tests/phase9-prep/p9-booking-time.test.ts` | 21 | the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan at one-day granularity, and the two defects V3 named |
-| `tests/phase9-prep/p9-booking-integrity.test.ts` | 5 | the closure record is write-once (R-P9-15) — the two defects the independent challenger found, and the non-vacuity that keeps the guard honest |
+| `tests/phase9-prep/p9-booking-integrity.test.ts` | 6 | the closure record is write-once (R-P9-15) — the two defects the independent challenger found, and the non-vacuity that keeps the guard honest |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 10 | the schema attacked as the six real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | — | the spec loader and its non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | — | the race harness: `pg_blocking_pids`, never a sleep |
 
-**81 of 81 green, EXIT CODE 0**, on the APPROVED TARGET — a live PostgreSQL **16.15**
+**82 of 82 green, EXIT CODE 0**, on the APPROVED TARGET — a live PostgreSQL **16.15**
 cluster whose `datcollate` and `datctype` are both **`en_US.utf8`** (HIGH-VELOCITY V1 PART
 1.3; PART 19 requires the version and the collation) — with the spec applied in one
 transaction as the non-superuser deployment principal `daftar_migrator` on top of the sealed
 Phase 3 head. Run with `npx vitest run tests/phase9-prep`, `PG_DIR=/tmp/daftar-pg16
-PG_PORT=55433`, started 2026-10-12T14:54:33Z, finished 14:57:05Z.
+PG_PORT=55433`, started 2026-10-12T15:19:41Z, finished 15:22:21Z.
 
-The same set was then run on PostgreSQL 18.4 at collation `C` — **81 of 81, EXIT CODE 0**,
-14:57:05Z to 15:00:32Z — and that run is a COMPARISON and nothing more, which is all PART
+The same set was then run on PostgreSQL 18.4 at collation `C` — **82 of 82, EXIT CODE 0**,
+15:22:21Z to 15:25:51Z — and that run is a COMPARISON and nothing more, which is all PART
 1.3 permits it to be. No schema, invariant, routine or policy behaved differently between
 the two; the one case that ever did was a harness defect in the suite's own text ordering,
 found by the first target run and reported independently as C-P9-01.
@@ -171,7 +172,24 @@ Items 1 and 3 are not owner-only escalations under PART 116; item 4 is.
 
 ## Challenger state
 
-**RUN ONCE, VERDICT REJECT — and NOT RE-RUN on this round.** An independent challenger
+**RUN TWICE. Round 1 REJECT; round 2 PASS-WITH-SCOPE; this round's fix NOT yet re-challenged.**
+
+Round 2, at `76ab277`: the same independent challenger re-ran the suite in its own container
+on PostgreSQL 16.15 at `en_US.utf8` under **Node 24.12.0** — 81 of 81, exit code 0 — and
+re-planted every mutation rather than reading the answers. All six round-1 findings confirmed
+fixed. It verified this round's NEW premise instead of accepting it (41 999 one-day windows
+across 330 zones scanned hourly: never more than one transition in 24 hours) and retracted one
+probe of its own as its own bug. It left **one residual P2**: R-P9-15's words were wider than
+its code, and a settlement reason could still be ADDED to a `completed` or `no_show` booking
+after close. That is closed at the subject SHA above as block (a4),
+`booking.settlement_after_close`, with a red proof per state — and **this round has not been
+challenged**. Report: `/mnt/project-files/phase9/P9-CHALLENGE-76ab277.md`.
+
+The challenger's round-2 run is also the only Node 24 measurement in existence for this work.
+It is cited as the CHALLENGER's measurement, at `76ab277`, not as this phase's: PART 7.6 asks
+for a rerun from this phase's own container, and that container ships 22.22.0.
+
+Round 1, at `51626e1`: **RUN ONCE, VERDICT REJECT.** An independent challenger
 reviewed `51626e1` in its own container on PostgreSQL 16.15 at `en_US.utf8` under Node
 24.12.0, read the whole diff against `6fc505d`, verified the digests of all five committed
 artifacts, and wrote four probes of its own. Its report is
@@ -179,17 +197,23 @@ artifacts, and wrote four probes of its own. Its report is
 **REJECT**, six findings C-P9-01 … C-P9-06, of which two (C-P9-02, C-P9-03) were real
 schema defects it proved by execution.
 
-All six are answered at the subject SHA above and each answer is recorded in §3c.12 of the
-prep report. **This round carries NO challenger signature**: the challenger has not seen it,
-and PART 15 forbids the author signing their own work as challenger. PART 114's three
-signatures therefore stand at **one of three**: author only. That is the largest gap in this
-handoff and it is stated here rather than implied by silence.
+All six were answered at `5f15601` / `76ab277` and each answer is recorded in §3c.12 of the
+prep report; the challenger then confirmed all six fixed in round 2.
+
+**No signature stands on the SUBJECT SHA of this handoff.** Round 2 passed-with-scope at
+`76ab277`, and `e1b201e` is the commit that closes its residual, which the challenger has not
+seen. PART 15 forbids the author signing their own work as challenger, so PART 114's three
+signatures stand at **one of three**: author only. That, and PART 7.6's Node 24 run from this
+container, are the two gaps in this handoff, stated here rather than implied by silence.
 
 What the challenger recorded as SOUND is listed in its own report and is not re-litigated
 here: the no-double-booking invariant, the multi-resource lock order, the CHECK-pinned
 blocking window, the replay and its scope boundary, the DST resolver's three branches and
 its enforced range, tenant isolation without superuser, resurrection and tampering, and the
-absence of the "it merely threw" pattern anywhere but C-P9-04.
+absence of the "it merely threw" pattern anywhere but C-P9-04. Round 2 adds to that list
+every tampering route it re-planted against R-P9-15 — rewriting the reason, backdating
+`settled_at`, clearing a field to NULL, reassigning the closer, repointing the successor and
+settling a standing booking — all refused by name, with the lawful closures still passing.
 
 ## Coordinator state
 
@@ -210,12 +234,13 @@ step, and the Challenger and Coordinator signatures.
 * No timing or performance number from this container, anywhere (PART 20, PART 123).
 * No evidence class mixed: see §3b of the prep report.
 * No progress percentage, and no progress claim derived from the case count, the line
-  counts or the number of agents (Mission, cross-phase). 81 green cases say what was
+  counts or the number of agents (Mission, cross-phase). 82 green cases say what was
   measured, not how much of Phase 9 exists.
 * **Not Node 24.** The container ships v22.22.0 against an `engines` of `>=24 <25`. PART
   7.6's rerun on Node 24 is UNMEASURED and owed at final integration. The challenger's run
   was on v24.12.0, but of `51626e1` — it is not this round's Node 24 evidence.
-* **Not a challenger pass.** See the Challenger state above.
+* **Not a challenger pass ON THIS SHA.** Round 2 passed-with-scope at the parent commit; the
+  commit that closes its residual has not been challenged. See the Challenger state above.
 * Business isolation of a registry read is enforced by `booking_replay_result` itself and
   not by row security — a different kind of guarantee from a policy, stated as limitation
   15 of the prep report because the executed attack is what revealed it.
