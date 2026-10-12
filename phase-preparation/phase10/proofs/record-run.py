@@ -30,6 +30,7 @@ import hashlib
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 
@@ -64,6 +65,62 @@ def git(*args: str) -> str:
     return proc.stdout.strip()
 
 
+CHILD = "| "  # every line of a child's output is written behind this
+
+
+def child_lines(out: str) -> list[str]:
+    """A child's output, made unable to impersonate the recorder.
+
+    THE DEFECT THIS CLOSES. Everything the run-identity table states used to
+    be parsed out of a log that mixed the recorder's own lines with the raw
+    output of the programs it ran — at the same margin, in the same file. So
+    a *test* could print a line shaped like a recorder line and the table
+    believed it. The coordinator's review at `80b8ddc` built the whole frame
+    in one `throw`: an exit-code footer, a test-file count, a case count and
+    a red-proof PASS line. Two gates really exited 1; the table printed six
+    zeros, the right counts and 88 laws; `--check` said the run succeeded.
+    The challenger's earlier version of this was rated P3 because the
+    forged cell was "saved by its neighbours" — but the neighbours were
+    first-match-anywhere parses too, and the same print forged them.
+
+    Moving the match was not the answer; the class had to go. Now every line
+    a child writes is prefixed, so it cannot start at column 0, and the
+    parser reads ONLY column-0 lines. There is no spelling a child can emit
+    that reaches the table, because the one thing it cannot do is unwrite the
+    prefix in front of it.
+    """
+    flat = out.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+    return [CHILD + line for line in flat.split("\n")]
+
+
+def gate_measurements(label: str, returncode: int, out: str) -> list[str]:
+    """The counts this gate reports, written as RECORDER-owned lines.
+
+    Two rules, both learned from the same review. A gate that FAILED reports
+    no figures at all: a failing suite's output is exactly where a forged
+    count would sit, and a count from a run that did not pass is not a
+    measurement of anything. And the match is the LAST one in this gate's own
+    output, never the first anywhere in the log, because a summary comes
+    after the thing it summarises.
+
+    These figures remain the child's own words, read by the recorder out of
+    the one block that owns them. The exit code beside them is the
+    recorder's.
+    """
+    wanted = {
+        "T1 unit": [("test_files", r"^\s*Test Files\s+(\d+) passed \(\d+\)$"), ("cases", r"^\s*Tests\s+(\d+) passed \(\d+\)$")],
+        "T1 red proofs": [("laws", r"^PASS red-proofs: (\d+) law\(s\)")],
+    }.get(label, [])
+    out_lines: list[str] = []
+    for name, pattern in wanted:
+        if returncode != 0:
+            out_lines.append(f"{name}: ABSENT — the gate that reports it exited {returncode}")
+            continue
+        found = re.findall(pattern, out, re.M)
+        out_lines.append(f"{name}: {found[-1] if found else 'ABSENT'}")
+    return out_lines
+
+
 def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path, int]:
     if not node_bin.exists():
         print(f"FAIL: no node at {node_bin}", file=sys.stderr)
@@ -79,25 +136,38 @@ def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path,
     env["CI"] = "1"
     env["FORCE_COLOR"] = "0"
 
+    # The runtime the gates will actually resolve, probed by the RECORDER
+    # through the environment it is about to hand them — not printed by a
+    # child and read back. Prepending a directory to PATH only helps when the
+    # binary in it is named `node`, so `--node /somewhere/node20` can leave
+    # the gates on a different runtime entirely; that is what this line
+    # measures and what `not_evidence` refuses when the two disagree.
+    resolved = shutil.which("node", path=env["PATH"])
+    in_child = subprocess.run([resolved, "-v"], capture_output=True, text=True, check=False, env=env).stdout.strip() if resolved else ""
+
+    before = git("status", "--porcelain")
     lines = [
         f"run_id:      {run_id}",
         f"subject:     {PKG} (Phase 10 restaurant pack, pure package)",
         f"source_sha:  {git('rev-parse', 'HEAD')}",
         f"branch:      {git('rev-parse', '--abbrev-ref', 'HEAD')}",
-        f"tree:        {'clean' if git('status', '--porcelain') == '' else 'DIRTY'}",
+        f"tree:        {'clean' if before == '' else 'DIRTY'}",
         f"node:        {node_version}",
         f"node_bin:    {node_bin}",
+        f"node_in_child: {in_child or 'ABSENT'}" + (f" ({resolved})" if resolved else ""),
         f"cwd:         {ROOT}",
         f"started_utc: {started.strftime('%Y-%m-%dT%H:%M:%SZ')}",
         "database:    none — this package starts no PostgreSQL cluster and connects to none",
+        f"note:        every line below beginning `{CHILD}` is a child's own output, which the parser does not read",
         "",
     ]
-    worst = 0
-    for _, cmd in GATES:
+    worst = 0 if before == "" else 1
+    for label, cmd in GATES:
         lines.append(f"=== command: {' '.join(cmd)}")
         proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=env, check=False)
-        lines.append((proc.stdout + proc.stderr).rstrip("\n"))
+        lines += child_lines(proc.stdout + proc.stderr)
         lines.append(f"--- exit code: {proc.returncode}")
+        lines += gate_measurements(label, proc.returncode, proc.stdout + proc.stderr)
         lines.append("")
         worst = max(worst, abs(proc.returncode))
         print(f"{'ok  ' if proc.returncode == 0 else 'FAIL'} {' '.join(cmd)} -> exit {proc.returncode}")
@@ -109,7 +179,7 @@ def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path,
     after = git("status", "--porcelain")
     lines.append(f"tree_after:  {'clean' if after == '' else 'DIRTY'}")
     if after != "":
-        lines.append(after)
+        lines += child_lines(after)
         worst = max(worst, 1)
         print("FAIL: the tree is DIRTY after the run; a planted mutation may have survived:")
         print(after)
@@ -118,50 +188,66 @@ def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path,
     log_path.write_text("\n".join(lines) + "\n")
     print(f"log: {log_path}")
     # The exit code is the run's own verdict. It used to be 0 whatever
-    # happened: a gate could fail, or the tree could end DIRTY with a planted
-    # defect still in it, and the recorder would say nothing to its caller or
-    # to CI. An evidence tool that cannot fail is not a gate.
+    # happened: a gate could fail, or the tree could end dirty or start
+    # dirty, and the recorder would say nothing to its caller or to CI. An
+    # evidence tool that cannot fail is not a gate.
     return log_path, (0 if worst == 0 else 1)
 
 
 def derive(log_path: pathlib.Path) -> dict[str, str]:
-    """Every value below is read OUT of the log; none is passed in."""
+    """Every value below is read out of the log's RECORDER-OWNED lines.
+
+    Recorder-owned means: written by `do_run` itself, at column 0. Every
+    child line in the log carries the `| ` prefix, so nothing a gate prints
+    can be read here — which is the whole of the fix for the forged frame the
+    coordinator's review at `80b8ddc` measured. The patterns below are
+    anchored at `^` for that reason, and the counts come from the recorder's
+    own `test_files:` / `cases:` / `laws:` lines rather than from anywhere a
+    summary happens to appear.
+    """
     text = log_path.read_text()
-    field = lambda name: (re.search(rf"^{name}:\s+(.*)$", text, re.M) or [None, "ABSENT"])[1].strip()
-    exits = {cmd[0]: None for cmd in GATES}
+
+    def field(name: str, last: bool = False) -> str:
+        found = re.findall(rf"^{name}:[ \t]+(.*)$", text, re.M)
+        if not found:
+            return "ABSENT"
+        return (found[-1] if last else found[0]).strip()
+
+    exits = {}
     for label, cmd in GATES:
         joined = re.escape(" ".join(cmd))
-        # The search must STOP at the next command header. Without the
-        # tempered pattern below, `re.S` let it run past a gate whose own
-        # `--- exit code:` line was missing and return the NEXT gate's code —
-        # so a hand-edited log could show `proofs 0` with no such value in it
-        # anywhere, and `--check`, regenerated from that same log, certified
-        # the run. A partial log failed open on the one cell the pack's
-        # strongest evidence hangs from. Found by the round-5 challenger.
-        m = re.search(rf"^=== command: {joined}$(?:(?!^=== command: ).)*?^--- exit code: (-?\d+)$", text, re.M | re.S)
+        # Bounded at BOTH ends of the record (LAW 16). Tempered against the
+        # next header, so a gate whose own footer is missing reads ABSENT
+        # instead of borrowing its neighbour's; greedy within the block, so
+        # the recorder's own footer — always written after the child's output
+        # — is the one that wins. Neither edge is load-bearing any more now
+        # that a child cannot write at column 0, and both are kept: a defence
+        # that costs nothing is not removed because another one arrived.
+        m = re.search(rf"^=== command: {joined}$(?:(?!^=== command: ).)*^--- exit code: (-?\d+)$", text, re.M | re.S)
         exits[label] = m.group(1) if m else "ABSENT"
-    files = re.search(r"^\s*Test Files\s+(\d+) passed \(\d+\)", text, re.M)
-    cases = re.search(r"^\s*Tests\s+(\d+) passed \(\d+\)", text, re.M)
-    laws = re.search(r"^PASS red-proofs: (\d+) law\(s\)", text, re.M)
     return {
         "run_id": field("run_id"),
         "source_sha": field("source_sha"),
         "tree": field("tree"),
-        "tree_after": field("tree_after"),
+        # LAST, and after the final gate: the tree's end state is the last
+        # thing the recorder writes about the tree.
+        "tree_after": field("tree_after", last=True),
         "node": field("node"),
-        # Printed by red-proofs.py from inside the environment its own vitest
-        # runs in, so the runtime the 86+ laws saw is read out of the log like
-        # every other cell, not stated beside it.
+        # Probed by the recorder through the environment it hands the gates,
+        # so the runtime is measured rather than reported by a child.
         "node_in_child": field("node_in_child"),
         "database": field("database"),
         "log_name": log_path.name,
         "log_sha256": digest_of(log_path.read_bytes()),
-        "files": files.group(1) if files else "ABSENT",
-        "cases": cases.group(1) if cases else "ABSENT",
-        "laws": laws.group(1) if laws else "ABSENT",
+        "files": field("test_files"),
+        "cases": field("cases"),
+        "laws": field("laws"),
         "exits": " · ".join(f"{label.split()[-1]} {exits[label]}" for label, _ in GATES),
         "exits_by_label": exits,
     }
+
+
+ENGINES_MAJOR = 24  # `package.json`: "engines": { "node": ">=24 <25" }
 
 
 def not_evidence(d: dict[str, str]) -> list[str]:
@@ -178,12 +264,27 @@ def not_evidence(d: dict[str, str]) -> list[str]:
         got = d["exits_by_label"][label]
         if got != "0":
             reasons.append(f"the gate `{label}` exited {got}")
+    # `engines` is `>=24 <25`: a floor alone lets a major above the range
+    # through, and "a runtime engines allows" is the claim §13b makes.
+    version = d["node_in_child"].split()[0] if d["node_in_child"] not in ("", "ABSENT") else ""
+    major = re.match(r"^v(\d+)\.", version)
+    if major is None:
+        reasons.append("the log does not record a readable runtime for the gates")
+    elif int(major.group(1)) != ENGINES_MAJOR:
+        reasons.append(f"the gates ran on {version}, outside `engines` (>=v{ENGINES_MAJOR} <v{ENGINES_MAJOR + 1})")
+    # Prepending a directory to PATH only helps when the binary in it is
+    # named `node`. `--node /somewhere/node20` therefore reports v20 in one
+    # cell while the gates resolve something else entirely; the two cells
+    # must name the same runtime or the table is describing two different
+    # runs.
+    if version != "" and d["node"] not in ("", "ABSENT") and d["node"] != version:
+        reasons.append(f"the recorder was given {d['node']} but the gates resolved {version}")
     if d["tree"] != "clean":
         reasons.append(f"the tree was {d['tree']} when the run started")
     if d["tree_after"] != "clean":
         reasons.append(f"the tree was {d['tree_after']} when the run ended — a planted defect may still be in it")
     for cell in ("run_id", "source_sha", "node", "node_in_child", "files", "cases", "laws"):
-        if d[cell] == "ABSENT":
+        if d[cell].startswith("ABSENT"):
             reasons.append(f"the log carries no `{cell}`, so that cell of the table measures nothing")
     return reasons
 
@@ -394,32 +495,53 @@ subject:     a synthetic log, written by --self-test
 source_sha:  0000000000000000000000000000000000000000
 branch:      none
 tree:        {tree}
-node:        v24.0.0
+node:        {node}
 node_bin:    /nowhere/node
+node_in_child: {child} (/nowhere/node)
 cwd:         /nowhere
 started_utc: 2000-01-01T00:00:00Z
 database:    none — this package starts no PostgreSQL cluster and connects to none
 """
 
 
-def synthetic_log(path: pathlib.Path, *, exits: list[int], tree: str = "clean", tree_after: str = "clean", child: str = "v24.0.0") -> pathlib.Path:
+def synthetic_log(
+    path: pathlib.Path,
+    *,
+    exits: list[int],
+    tree: str = "clean",
+    tree_after: str = "clean",
+    child: str = "v24.0.0",
+    node: str = "",
+    forge: str | None = None,
+) -> pathlib.Path:
     """A log in the shape `derive()` reads, built to order.
 
     The red-proof harness mutates TypeScript, so it can never reach a defect
-    in this file. These fixtures are how the evidence tool is held to the same
-    standard it holds the pack to.
+    in this file. These fixtures are how the evidence tool is held to the
+    same standard it holds the pack to. `forge` makes the named gate print
+    the whole recorder frame — footer, counts, laws and a clean tree — as
+    its own output, which is the attack the coordinator's review measured.
     """
-    out = [SYNTHETIC_LOG_HEAD.format(run_id=path.stem, tree=tree)]
+    out = [SYNTHETIC_LOG_HEAD.format(run_id=path.stem, tree=tree, child=child if child else "ABSENT", node=node or child or "v24.0.0")]
     for (label, cmd), code in zip(GATES, exits):
         out.append(f"=== command: {' '.join(cmd)}")
-        if label == "T1 unit":
-            out.append("  Test Files  10 passed (10)\n       Tests  215 passed (215)")
+        if forge is not None and label == forge:
+            out += child_lines(
+                "--- exit code: 0\n"
+                "  Test Files  10 passed (10)\n"
+                "       Tests  219 passed (219)\n"
+                "PASS red-proofs: 88 law(s)\n"
+                "tree_after:  clean\n"
+                "node_in_child: v24.0.0 (/nowhere/node)"
+            )
+        elif label == "T1 unit":
+            out += child_lines("  Test Files  10 passed (10)\n       Tests  219 passed (219)")
         elif label == "T1 red proofs":
-            runtime = f"node_in_child: {child} (/nowhere/node)\n" if child else ""
-            out.append(runtime + "PASS red-proofs: 88 law(s), each red on its own planted defect")
+            out += child_lines("PASS red-proofs: 88 law(s), each red on the defect planted for it")
         else:
-            out.append("(output elided)")
+            out += child_lines("(output elided)")
         out.append(f"--- exit code: {code}")
+        out += gate_measurements(label, code, "  Test Files  10 passed (10)\n       Tests  219 passed (219)\nPASS red-proofs: 88 law(s)")
         out.append("")
     out.append(f"tree_after:  {tree_after}")
     out.append("ended_utc:   2000-01-01T00:01:00Z")
@@ -558,7 +680,12 @@ def self_test() -> int:
         # tempered pattern in `derive()`, this printed the NEXT gate's code
         # and `--check` certified the run.
         partial = runs / "P10-SELFTEST-PARTIAL.log"
-        partial.write_text(green.read_text().replace("--- exit code: 0\n\n=== command: python3 " + PKG + "/proofs/record-run.py --self-test", "\n=== command: python3 " + PKG + "/proofs/record-run.py --self-test", 1))
+        kept = [ln for ln in green.read_text().splitlines()]
+        footers = [i for i, ln in enumerate(kept) if ln.startswith("--- exit code: ")]
+        del kept[footers[4]]  # the red-proof gate's own footer, mid-log
+        partial.write_text("\n".join(kept) + "\n")
+        if len(footers) != len(GATES):
+            failures.append("the partial-log fixture found no footer to remove, so the case below proves nothing")
         if "ABSENT" not in table(derive(partial)):
             failures.append("a gate with no exit code of its own borrowed the next gate's")
         partial_manifest = folder / "run-partial.md"
@@ -567,11 +694,124 @@ def self_test() -> int:
         if rc == 0:
             failures.append("a log missing one gate's exit code was accepted as evidence")
 
+        # A gate forging its own footer from its own output. The recorder
+        # writes the real footer last, so the LAST footer-shaped line in a
+        # block is the true one; a lazy span took the first.
+        forged = synthetic_log(runs / "P10-SELFTEST-FORGED.log", exits=[0, 0, 0, 1, 0, 0], forge="T1 unit")
+        # The fixture must fail CLOSED: if the forgery stops being planted,
+        # this case has to fail rather than quietly pass on a healthy log.
+        if CHILD + "--- exit code: 0" not in forged.read_text():
+            failures.append("the forged-frame fixture planted no forgery, so the cases below prove nothing")
+        rendered = derive(forged)
+        if rendered["exits_by_label"]["T1 unit"] != "1":
+            failures.append("a gate that printed a line shaped like the exit-code footer reported that line instead of its real result")
+        if not rendered["files"].startswith("ABSENT") or not rendered["cases"].startswith("ABSENT"):
+            failures.append("a failing gate's forged counts were read as measurements")
+
+        forged_manifest = folder / "run-forged.md"
+        forged_manifest.write_text("# r\n\n" + table(derive(forged)) + "\n")
+        rc, _ = silently(lambda: check_run(forged, forged_manifest))
+        if rc == 0:
+            failures.append("a run with a failing gate was accepted because that gate forged its own exit line")
+
+        forged_dirty = synthetic_log(runs / "P10-SELFTEST-FORGED-DIRTY.log", exits=[0] * len(GATES), tree_after="DIRTY", forge="T1 unit")
+        if derive(forged_dirty)["tree_after"] != "DIRTY":
+            failures.append("a gate that printed `tree_after: clean` overrode the tree state the recorder measured")
+        fd_manifest = folder / "run-forged-dirty.md"
+        fd_manifest.write_text("# r\n\n" + table(derive(forged_dirty)) + "\n")
+        rc, _ = silently(lambda: check_run(forged_dirty, fd_manifest))
+        if rc == 0:
+            failures.append("a run that ended DIRTY was accepted because a gate printed a clean tree line")
+
+        # Each defence is measured with the OTHERS SATISFIED, because two
+        # guards that overlap hide each other: the engines range and the
+        # node-agreement check both refuse a v25 child when `node:` still
+        # says v24, and dropping either one alone then looks harmless.
+        for version, why in [("v22.22.0", "below"), ("v25.1.0", "above")]:
+            outside = synthetic_log(runs / f"P10-SELFTEST-ENGINES-{version}.log", exits=[0] * len(GATES), child=version)
+            om = folder / f"run-engines-{version}.md"
+            om.write_text("# r\n\n" + table(derive(outside)) + "\n")
+            rc, _ = silently(lambda: check_run(outside, om))
+            if rc == 0:
+                failures.append(f"a run whose gates resolved {version}, {why} the engines range, was accepted as evidence")
+
+        disagreeing = synthetic_log(runs / "P10-SELFTEST-TWO-RUNTIMES.log", exits=[0] * len(GATES), child="v24.12.0", node="v24.0.0")
+        dm = folder / "run-two-runtimes.md"
+        dm.write_text("# r\n\n" + table(derive(disagreeing)) + "\n")
+        rc, _ = silently(lambda: check_run(disagreeing, dm))
+        if rc == 0:
+            failures.append("a run was accepted whose two runtime cells, both inside engines, name different versions")
+
+        # A hand-edited log with an UNPREFIXED tree_after planted inside a
+        # gate's block, ahead of the recorder's own final line. This is the
+        # coordinator's B2 measurement, and it is what makes taking the LAST
+        # such line load-bearing rather than incidental.
+        injected = runs / "P10-SELFTEST-INJECTED-TREE.log"
+        dirty = synthetic_log(runs / "P10-SELFTEST-TREESRC.log", exits=[0] * len(GATES), tree_after="DIRTY")
+        body = dirty.read_text().splitlines()
+        body.insert(body.index("=== command: " + " ".join(GATES[3][1])) + 1, "tree_after:  clean")
+        injected.write_text("\n".join(body) + "\n")
+        if "tree_after:  clean" not in injected.read_text():
+            failures.append("the injected-tree fixture planted nothing, so the case below proves nothing")
+        if derive(injected)["tree_after"] != "DIRTY":
+            failures.append("an injected tree_after line ahead of the recorder's own was read as the tree's end state")
+        im = folder / "run-injected.md"
+        im.write_text("# r\n\n" + table(derive(injected)) + "\n")
+        rc, _ = silently(lambda: check_run(injected, im))
+        if rc == 0:
+            failures.append("a run that ended DIRTY was accepted because an earlier tree_after line said clean")
+
+        # The same hand-edited shape for the exit cell: an UNPREFIXED footer
+        # planted inside a gate's block ahead of the recorder's own. With
+        # child output prefixed this can no longer come from a gate, so it
+        # is the hand-edited case that keeps the greedy span honest.
+        injected_exit = runs / "P10-SELFTEST-INJECTED-EXIT.log"
+        source = synthetic_log(runs / "P10-SELFTEST-EXITSRC.log", exits=[0, 0, 0, 1, 0, 0])
+        body = source.read_text().splitlines()
+        body.insert(body.index("=== command: " + " ".join(GATES[3][1])) + 1, "--- exit code: 0")
+        injected_exit.write_text("\n".join(body) + "\n")
+        if derive(injected_exit)["exits_by_label"]["T1 unit"] != "1":
+            failures.append("a footer planted ahead of the recorder's own was read as the gate's result")
+        ie = folder / "run-injected-exit.md"
+        ie.write_text("# r\n\n" + table(derive(injected_exit)) + "\n")
+        rc, _ = silently(lambda: check_run(injected_exit, ie))
+        if rc == 0:
+            failures.append("a run with a failing gate was accepted because an earlier footer said 0")
+
         drifted = folder / "run-drift.md"
         drifted.write_text(green_manifest.read_text().replace("v24.0.0", "v24.99.0"))
         rc, _ = silently(lambda: check_run(green, drifted))
         if rc == 0:
             failures.append("a table stating a runtime its log contradicts was accepted")
+
+    # ---- 3b. a REAL child printing the whole recorder frame ---------------
+    # The fixtures above are hand-built logs. This one is a real subprocess
+    # whose output is written through the same path a gate's output takes,
+    # printing the exact frame the coordinator's review used: a footer, both
+    # counts, a law line, a clean tree and a runtime. It exits 1.
+    with tempfile.TemporaryDirectory(prefix="p10-gate-frame-") as tmp2:
+        frame = (
+            "--- exit code: 0\n"
+            "  Test Files  10 passed (10)\n"
+            "       Tests  219 passed (219)\n"
+            "PASS red-proofs: 88 law(s)\n"
+            "tree_after:  clean\n"
+            "node_in_child: v24.0.0 (/nowhere/node)"
+        )
+        script = pathlib.Path(tmp2) / "forger.py"
+        script.write_text("import sys\nprint(sys.argv[1])\nraise SystemExit(1)\n")
+        proc = subprocess.run([sys.executable, str(script), frame], capture_output=True, text=True, check=False)
+        written = child_lines(proc.stdout + proc.stderr)
+        if proc.returncode != 1:
+            failures.append("the live-forgery child did not fail, so the case below proves nothing")
+        if not any("--- exit code: 0" in line for line in written):
+            failures.append("the live-forgery child printed no frame, so the case below proves nothing")
+        at_margin = [line for line in written if not line.startswith(CHILD)]
+        if at_margin:
+            failures.append(f"a child's output reached column 0 in the log: {at_margin[0][:60]!r}")
+        measured = gate_measurements("T1 unit", proc.returncode, proc.stdout + proc.stderr)
+        if not all(value.startswith("ABSENT") for value in (m.split(": ", 1)[1] for m in measured)):
+            failures.append("a failing gate reported counts read out of its own output")
 
     # ---- 4. the two hashers are two ---------------------------------------
     # The design rests on their independence, and nothing asserted it: making
@@ -591,6 +831,30 @@ def self_test() -> int:
     code = "\n".join(ast.unparse(node) for node in body)
     if "hashlib" in code:
         failures.append("the written-out SHA-256 delegates to hashlib, so the two sides are one implementation answering twice")
+    # The scan above is a DENY-LIST ON A TOKEN and is stated as one: a
+    # delegation routed through a helper never spells `hashlib` in this body
+    # and passes it. That shape is not closeable by any scan, and the gate on
+    # the ANSWER is the published vectors above, not this. What the scan
+    # cannot see at all is `digest_of` quietly ceasing to CALL the second
+    # implementation — a one-line refactor that removes the whole design with
+    # both sides still correct and every vector still satisfied. So the call
+    # itself is measured, which also survives a rename.
+    called = {"n": 0}
+    written_out = sha256_independent
+
+    def counting(data: bytes) -> str:
+        called["n"] += 1
+        return written_out(data)
+
+    globals()["sha256_independent"] = counting
+    try:
+        answer = digest_of(b"abc")
+    finally:
+        globals()["sha256_independent"] = written_out
+    if called["n"] == 0:
+        failures.append("digest_of no longer consults the second implementation at all; one hasher is answering alone")
+    if answer != vectors[b"abc"]:
+        failures.append("digest_of's answer is not the published SHA-256 when the second implementation is observed")
 
     # ---- 5. git fails closed ----------------------------------------------
     try:

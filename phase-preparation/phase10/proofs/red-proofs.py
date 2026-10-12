@@ -700,6 +700,7 @@ MUTATIONS = [
 
 # `package.json` declares `"engines": { "node": ">=24 <25" }`.
 ENGINES_MIN_MAJOR = 24
+ENGINES_MAX_MAJOR = 24  # `>=24 <25` is a RANGE; a floor alone admits v25
 
 
 def gate_env() -> dict[str, str]:
@@ -741,6 +742,10 @@ def assert_runtime() -> int:
         print(f"FAIL: no usable node inside the gate environment (resolved {exe or 'nothing'}, version {version or 'unreadable'})", file=sys.stderr)
         return 2
     major = int(version[1:].split(".")[0])
+    if major > ENGINES_MAX_MAJOR:
+        print(f"node_in_child: {version} ({exe})")
+        print(f"FAIL: the laws would run on {version}, above the engines ceiling of v{ENGINES_MAX_MAJOR}; `engines` is a range and evidence outside it describes an unsupported runtime", file=sys.stderr)
+        return 2
     # Printed, not asserted, so the log carries the runtime the laws saw rather
     # than a runtime stated next to them. `record-run.py` parses this line back
     # out of the log into the run-identity table.
@@ -803,6 +808,24 @@ def main() -> int:
         return check_doc(pathlib.Path(sys.argv[sys.argv.index("--check-doc") + 1]))
     if not VITEST.exists():
         print(f"FAIL: no vitest at {VITEST}; run `npm ci` first", file=sys.stderr)
+        return 2
+    # A floor counts ROWS, and nothing compared a row with another. A row
+    # duplicating one of its neighbours in every measurable field passed, and
+    # the gate then printed "88 law(s), each red on its own planted defect,
+    # each naming its own case" — an assertion of distinctness that nothing
+    # measured. Found in round 6, by asking what MIN_LAWS can be satisfied by.
+    seen: dict[tuple[str, str, str, str], str] = {}
+    duplicates: list[str] = []
+    for law, rel, find, replace, title in MUTATIONS:
+        key = (rel, find, replace, title)
+        if key in seen:
+            duplicates.append(f"{law!r} is identical to {seen[key]!r} in file, defect and named case")
+        else:
+            seen[key] = law
+    if duplicates:
+        print(f"FAIL: {len(duplicates)} law(s) are a duplicate of another row, so the count is padded", file=sys.stderr)
+        for d in duplicates:
+            print(f"  - {d}", file=sys.stderr)
         return 2
     if len(MUTATIONS) < MIN_LAWS:
         print(f"FAIL: {len(MUTATIONS)} law(s) in the table, below this pack's floor of {MIN_LAWS}", file=sys.stderr)
@@ -871,7 +894,18 @@ def main() -> int:
         for f in failures:
             print(f"  - {f}")
         return 1
-    print(f"\nPASS red-proofs: {len(MUTATIONS)} law(s), each red on its own planted defect, each naming its own case")
+    # Figures, not adjectives. Four rows share a defect and eight share a
+    # named case — deliberately, because each of those rows proves that a
+    # DIFFERENT test fires on it — so "each on its own defect, each naming its
+    # own case" was not true under a strict reading even before a duplicate
+    # could be planted. A number nobody can pad beats an adjective nobody
+    # measures.
+    defects = len({(rel, find, replace) for _law, rel, find, replace, _title in MUTATIONS})
+    cases = len({title for *_rest, title in MUTATIONS})
+    print(
+        f"\nPASS red-proofs: {len(MUTATIONS)} law(s), each red on the defect planted for it and named by the case declared for it"
+        f" — {len(MUTATIONS)} rows · {defects} distinct defects · {cases} distinct named cases, no row duplicating another"
+    )
     return 0
 
 

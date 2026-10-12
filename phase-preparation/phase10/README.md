@@ -32,7 +32,7 @@ Run from the repository root:
 
 ```
 npm ci
-./node_modules/.bin/prettier --check "phase-preparation/phase10/**/*.ts"
+./node_modules/.bin/prettier --check phase-preparation/phase10
 ./node_modules/.bin/eslint phase-preparation/phase10 --max-warnings 0
 ./node_modules/.bin/tsc -p phase-preparation/phase10/tsconfig.json --noEmit
 ./node_modules/.bin/vitest run --config phase-preparation/phase10/vitest.config.ts
@@ -46,9 +46,17 @@ The six gates are run together, and the run recorded, with:
 python3 phase-preparation/phase10/proofs/record-run.py --run --node /path/to/node24/bin/node
 ```
 
-`--run` exits non-zero if any gate fails or the tree does not end as it started.
-`package.json` declares `engines: node >=24 <25`, and the red-proof harness
-refuses to produce evidence on anything below it.
+`--run` exits non-zero if any gate fails, if the tree is dirty when the run
+starts, or if it is dirty when the run ends. `package.json` declares
+`engines: node >=24 <25`, which is a RANGE: the red-proof harness refuses to
+produce evidence below it or above it, and `--check` refuses a log whose
+gates resolved anything outside it.
+
+Every line a child process writes is recorded behind a `| ` prefix, and the
+parser reads only lines at column 0. That is what stops a test from printing
+a line shaped like a recorder line and having it believed; logs written
+before that change cannot be verified by the current `--check`, which is
+correct, since their cells were parsed from text a child could have written.
 
 The design, the laws these modules enforce, and the architectural finding that
 gates the whole phase are in the project's shared folder under `phase10/`.
