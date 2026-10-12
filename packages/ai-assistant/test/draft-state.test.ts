@@ -15,6 +15,7 @@ import {
   DRAFT_STATES,
   isTerminal,
   transition,
+  type ConfirmerBinding,
   type ConfirmRequest,
   type DraftState,
   type DraftTransitionRow,
@@ -87,9 +88,16 @@ describe('expiry uses the supplied transaction clock', () => {
   });
 });
 
+/**
+ * The binding the security authority has not yet ruled on (CHALLENGE F-04, OD-P12-06). The cases
+ * below pass the permissive one so each is testing its own subject; the binding has its own cases.
+ */
+const ANY_CONFIRMER: ConfirmerBinding = { confirmerMustBeDrafter: false };
+const DRAFTER_ONLY: ConfirmerBinding = { confirmerMustBeDrafter: true };
+
 describe('decideConfirm — an unfetched draft refuses, never proceeds (Law P12-L4)', () => {
   it('refuses ai_draft.not_visible when the row was not fetched — never proceeds as if absent', () => {
-    const decision = decideConfirm(undefined, request(), NOW, true);
+    const decision = decideConfirm(undefined, request(), NOW, true, ANY_CONFIRMER);
     expect(decision.ok).toBe(false);
     if (!decision.ok) {
       expect(decision.refusal.code).toBe('ai_draft.not_visible');
@@ -98,25 +106,25 @@ describe('decideConfirm — an unfetched draft refuses, never proceeds (Law P12-
   });
 
   it('refuses a draft belonging to another tenant without revealing more', () => {
-    const decision = decideConfirm(draft({ tenantId: 't2' }), request(), NOW, true);
+    const decision = decideConfirm(draft({ tenantId: 't2' }), request(), NOW, true, ANY_CONFIRMER);
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.refusal.code).toBe('ai_draft.not_visible');
   });
 
   it('refuses a draft belonging to another business', () => {
-    const decision = decideConfirm(draft({ businessId: 'b2' }), request(), NOW, true);
+    const decision = decideConfirm(draft({ businessId: 'b2' }), request(), NOW, true, ANY_CONFIRMER);
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.refusal.code).toBe('ai_draft.not_visible');
   });
 
   it('TOCTOU: authority held at draft time and revoked by confirm time refuses', () => {
-    const decision = decideConfirm(draft(), request(), NOW, false);
+    const decision = decideConfirm(draft(), request(), NOW, false, ANY_CONFIRMER);
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.refusal.code).toBe('ai_draft.authority_revoked');
   });
 
   it('replay returns the ORIGINAL transaction id rather than re-executing', () => {
-    const decision = decideConfirm(draft(), request(), NOW, true, 'txn-original');
+    const decision = decideConfirm(draft(), request(), NOW, true, ANY_CONFIRMER, 'txn-original');
     expect(decision.ok).toBe(false);
     if (!decision.ok) {
       expect(decision.refusal.code).toBe('ai_draft.already_executed');
@@ -125,13 +133,13 @@ describe('decideConfirm — an unfetched draft refuses, never proceeds (Law P12-
   });
 
   it('refuses a second confirm of an executed draft', () => {
-    const decision = decideConfirm(draft({ state: 'executed' }), request(), NOW, true);
+    const decision = decideConfirm(draft({ state: 'executed' }), request(), NOW, true, ANY_CONFIRMER);
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.refusal.code).toBe('ai_draft.already_executed');
   });
 
   it('refuses a stale version, naming the version field', () => {
-    const decision = decideConfirm(draft({ version: 2 }), request({ submittedVersion: 1 }), NOW, true);
+    const decision = decideConfirm(draft({ version: 2 }), request({ submittedVersion: 1 }), NOW, true, ANY_CONFIRMER);
     expect(decision.ok).toBe(false);
     if (!decision.ok) {
       expect(decision.refusal.code).toBe('ai_draft.preview_digest_mismatch');
@@ -140,7 +148,7 @@ describe('decideConfirm — an unfetched draft refuses, never proceeds (Law P12-
   });
 
   it('refuses a mismatched digest, naming the digest field', () => {
-    const decision = decideConfirm(draft(), request({ submittedDigest: 'tampered' }), NOW, true);
+    const decision = decideConfirm(draft(), request({ submittedDigest: 'tampered' }), NOW, true, ANY_CONFIRMER);
     expect(decision.ok).toBe(false);
     if (!decision.ok) {
       expect(decision.refusal.code).toBe('ai_draft.preview_digest_mismatch');
@@ -149,19 +157,19 @@ describe('decideConfirm — an unfetched draft refuses, never proceeds (Law P12-
   });
 
   it('refuses an expired draft before looking at the digest', () => {
-    const decision = decideConfirm(draft({ expiresAt: NOW }), request(), LATER, true);
+    const decision = decideConfirm(draft({ expiresAt: NOW }), request(), LATER, true, ANY_CONFIRMER);
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.refusal.code).toBe('ai_draft.expired');
   });
 
   it('refuses a draft in a state that cannot be confirmed', () => {
-    const decision = decideConfirm(draft({ state: 'created' }), request(), NOW, true);
+    const decision = decideConfirm(draft({ state: 'created' }), request(), NOW, true, ANY_CONFIRMER);
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.refusal.code).toBe('ai_draft.wrong_state');
   });
 
   it('allows exactly the sound case', () => {
-    const decision = decideConfirm(draft(), request(), NOW, true);
+    const decision = decideConfirm(draft(), request(), NOW, true, ANY_CONFIRMER);
     expect(decision.ok).toBe(true);
     if (decision.ok) {
       expect(decision.value.nextState).toBe('confirmed');
@@ -169,9 +177,40 @@ describe('decideConfirm — an unfetched draft refuses, never proceeds (Law P12-
     }
   });
 
+  // ---- CHALLENGE F-04 and F-07 ----
+
+  it('F-04: under a drafter-only binding, another member of the same tenant cannot confirm', () => {
+    const decision = decideConfirm(draft({ actorUserId: 'u1' }), request({ actorUserId: 'u2' }), NOW, true, DRAFTER_ONLY);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.refusal.code).toBe('ai_draft.confirmer_not_drafter');
+      expect(decision.refusal.field).toBe('actorUserId');
+    }
+  });
+
+  it('F-04: under the permissive binding the same input is allowed — the binding decides, not this function', () => {
+    // Both cases are needed: one alone would leave it unknown whether the argument is read at all.
+    expect(decideConfirm(draft({ actorUserId: 'u1' }), request({ actorUserId: 'u2' }), NOW, true, ANY_CONFIRMER).ok).toBe(true);
+  });
+
+  it('F-04: the drafter confirming their own draft is allowed under the strict binding', () => {
+    expect(decideConfirm(draft({ actorUserId: 'u1' }), request({ actorUserId: 'u1' }), NOW, true, DRAFTER_ONLY).ok).toBe(true);
+  });
+
+  it('F-07: a REVOKED actor replaying an executed draft is refused for authority, and is told no transaction id', () => {
+    // The replay detail carries the original businessTransactionId. Ordering is the whole guard: an
+    // actor who has lost authority must not receive a transaction identity as a consolation.
+    const decision = decideConfirm(draft(), request(), NOW, false, ANY_CONFIRMER, 'txn-original');
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.refusal.code).toBe('ai_draft.authority_revoked');
+      expect(decision.refusal.detail).not.toBe('txn-original');
+    }
+  });
+
   it('NON-VACUITY: the sound case passes, so every refusal above is caused by its own defect', () => {
     // Without this, each refusal case could be passing because the sound path refuses too.
-    expect(decideConfirm(draft(), request(), NOW, true).ok).toBe(true);
+    expect(decideConfirm(draft(), request(), NOW, true, ANY_CONFIRMER).ok).toBe(true);
   });
 });
 

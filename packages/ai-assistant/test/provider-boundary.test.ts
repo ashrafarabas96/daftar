@@ -308,3 +308,23 @@ describe('every fragment CARRIES a tenant and a business (Mission V2 §19)', () 
     if (!decision.ok) expect(decision.refusal.field).toBe('actor');
   });
 });
+
+describe('F-09: a retention period must be a positive whole number of days', () => {
+  it.each([
+    ['zero purges everything including today', 0],
+    ['negative purges the future', -1],
+    ['fractional is not a period anyone configured', 2.5],
+  ])('%s — reported as unconfigured, not ready', (_why, days) => {
+    const readiness = retentionReadiness({ keepAudio: false, transcriptDays: days });
+    expect(readiness.ready).toBe(false);
+    if (!readiness.ready) expect(readiness.unconfigured).toContain('transcriptDays');
+  });
+
+  it('a positive whole number is ready — so the cases above are refused for their own reason', () => {
+    expect(retentionReadiness({ keepAudio: false, transcriptDays: 30 }).ready).toBe(true);
+  });
+
+  it('audio needs the same shape when audio is kept', () => {
+    expect(retentionReadiness({ keepAudio: true, transcriptDays: 30, audioDays: 0 }).ready).toBe(false);
+  });
+});

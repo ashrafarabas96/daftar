@@ -217,10 +217,23 @@ export type RetentionReadiness = { readonly ready: true } | { readonly ready: fa
  * Returns the unconfigured items by name rather than a bare `false`: "not ready" is not actionable,
  * "transcriptDays is unconfigured" is. Audio retention needs a period only when audio is kept.
  */
+/**
+ * A configured period is a **positive whole number of days** — CHALLENGE F-09.
+ *
+ * `undefined` was the only unconfigured value, so `0`, `-1` and `2.5` all read as ready and
+ * `planPurge` carried them through as a cutoff. A cutoff of `0` purges everything including today's
+ * rows; a negative one purges the future; a fractional one is not a period anyone configured on
+ * purpose. Each is a nonsense value reaching a destructive operation, which is the one place a
+ * permissive read is least affordable.
+ */
+function periodIsConfigured(days: number | undefined): boolean {
+  return days !== undefined && Number.isInteger(days) && days > 0;
+}
+
 export function retentionReadiness(policy: RetentionPolicy): RetentionReadiness {
   const unconfigured: string[] = [];
-  if (policy.transcriptDays === undefined) unconfigured.push('transcriptDays');
-  if (policy.keepAudio && policy.audioDays === undefined) unconfigured.push('audioDays');
+  if (!periodIsConfigured(policy.transcriptDays)) unconfigured.push('transcriptDays');
+  if (policy.keepAudio && !periodIsConfigured(policy.audioDays)) unconfigured.push('audioDays');
   if (unconfigured.length > 0) return { ready: false, unconfigured };
   return { ready: true };
 }

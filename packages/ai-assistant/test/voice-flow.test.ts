@@ -7,7 +7,16 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { afterListen, afterReview, entityForDraft, mayPresentAsCommitted, stepTransitionAllowed, VOICE_STEPS, type Heard } from '../src/voice-flow';
+import {
+  afterListen,
+  afterReview,
+  entityForDraft,
+  mayPresentAsCommitted,
+  stepTransitionAllowed,
+  VOICE_STEPS,
+  type Heard,
+  type ReviewPresentation,
+} from '../src/voice-flow';
 
 const FLOOR = 0.8;
 
@@ -96,9 +105,11 @@ describe('listen never produces a result, and ambiguity ASKS rather than guessin
   });
 });
 
+const REVIEWED: ReviewPresentation = { step: 'review', intent: 'sale.create', resolvedEntityId: 'cust-1' };
+
 describe('a result is never presented as committed before the server committed', () => {
   it('refuses to reach a result without a completed review', () => {
-    const decision = afterReview(false, { committed: true, businessTransactionId: 'tx1' });
+    const decision = afterReview(undefined, { committed: true, businessTransactionId: 'tx1' });
     expect(decision.ok).toBe(false);
     if (!decision.ok) {
       expect(decision.refusal.code).toBe('ai_draft.wrong_state');
@@ -106,8 +117,21 @@ describe('a result is never presented as committed before the server committed',
     }
   });
 
+  it('F-03: a result needs the review ARTEFACT, not a boolean — the listen → result edge is unexpressible', () => {
+    // With a bare boolean, `afterReview(true, …)` reached a committed result with no review step in
+    // existence. The artefact can only come from `afterListen`, so the edge is now closed by the
+    // type as well as by the check.
+    const listened = afterListen({ transcriptPresent: true, intent: 'sale.create', candidates: ['cust-1'], confidence: 0.99 }, 0.8);
+    expect(listened.ok).toBe(true);
+    if (listened.ok && listened.value.kind === 'review') {
+      const decision = afterReview(listened.value.review, { committed: true, businessTransactionId: 'tx1' });
+      expect(decision.ok).toBe(true);
+    }
+    expect(afterReview(undefined, { committed: true, businessTransactionId: 'tx1' }).ok).toBe(false);
+  });
+
   it('presents a committed result only with a transaction identity in hand', () => {
-    const decision = afterReview(true, { committed: true, businessTransactionId: 'tx1' });
+    const decision = afterReview(REVIEWED, { committed: true, businessTransactionId: 'tx1' });
     expect(decision.ok).toBe(true);
     if (decision.ok) {
       expect(decision.value.presentation).toBe('committed');
@@ -118,7 +142,7 @@ describe('a result is never presented as committed before the server committed',
   it('reports PENDING when the server said committed but returned NO transaction id', () => {
     // "The server said ok" is not "the server committed", and to a merchant they are the same
     // sentence. The missing identity decides it, not the flag.
-    const decision = afterReview(true, { committed: true, businessTransactionId: undefined });
+    const decision = afterReview(REVIEWED, { committed: true, businessTransactionId: undefined });
     expect(decision.ok).toBe(true);
     if (decision.ok) {
       expect(decision.value.presentation).toBe('pending');
@@ -127,23 +151,23 @@ describe('a result is never presented as committed before the server committed',
   });
 
   it('reports PENDING when nothing committed', () => {
-    const decision = afterReview(true, { committed: false, businessTransactionId: undefined });
+    const decision = afterReview(REVIEWED, { committed: false, businessTransactionId: undefined });
     expect(decision.ok).toBe(true);
     if (decision.ok) expect(mayPresentAsCommitted(decision.value)).toBe(false);
   });
 
   it('refuses to treat a transaction id without a commit as success', () => {
-    const decision = afterReview(true, { committed: false, businessTransactionId: 'tx1' });
+    const decision = afterReview(REVIEWED, { committed: false, businessTransactionId: 'tx1' });
     expect(decision.ok).toBe(true);
     if (decision.ok) expect(mayPresentAsCommitted(decision.value)).toBe(false);
   });
 
   it('NON-VACUITY: mayPresentAsCommitted is true for exactly one of the shapes above', () => {
     const shapes = [
-      afterReview(true, { committed: true, businessTransactionId: 'tx1' }),
-      afterReview(true, { committed: true, businessTransactionId: undefined }),
-      afterReview(true, { committed: false, businessTransactionId: undefined }),
-      afterReview(true, { committed: false, businessTransactionId: 'tx1' }),
+      afterReview(REVIEWED, { committed: true, businessTransactionId: 'tx1' }),
+      afterReview(REVIEWED, { committed: true, businessTransactionId: undefined }),
+      afterReview(REVIEWED, { committed: false, businessTransactionId: undefined }),
+      afterReview(REVIEWED, { committed: false, businessTransactionId: 'tx1' }),
     ];
     const committed = shapes.filter((d) => d.ok && mayPresentAsCommitted(d.value));
     expect(committed).toHaveLength(1);

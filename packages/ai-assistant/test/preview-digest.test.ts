@@ -11,6 +11,7 @@ import {
   checkRecomputation,
   checkStructuralZeroTax,
   DIGEST_COVERED_FIELDS,
+  recomputationCoversDigest,
   previewDigest,
   verifyDigest,
   type Preview,
@@ -219,5 +220,93 @@ describe('recomputation divergence names the diverging field (§5.3)', () => {
     // A Decision<true> carries no value on the deny branch, so there is no route by which a caller
     // can execute the recomputed total. The type is the enforcement.
     if (!decision.ok) expect(Object.keys(decision)).toEqual(['ok', 'refusal']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CHALLENGE F-01 — the recomputation comparison has the same 18 subjects as the digest
+// ---------------------------------------------------------------------------
+
+describe('F-01: recomputation divergence is enumerated from the law, not hand-written', () => {
+  it('the comparison covers exactly DIGEST_COVERED_FIELDS', () => {
+    // The hand-written list compared 13 of 18. warehouseId, branchId, intent, draftId and
+    // draftVersion diverged silently — warehouseId being the stock location a draw-down hits.
+    expect(recomputationCoversDigest()).toBe(true);
+  });
+
+  it.each(DIGEST_COVERED_FIELDS)('refuses a divergence in %s and names it', (field) => {
+    const tamper = TAMPERINGS[field];
+    expect(tamper).toBeDefined();
+    const decision = checkRecomputation(preview(), preview(tamper));
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.refusal.code).toBe('ai_draft.recomputation_diverged');
+      // `lines` is compared element by element, so it names `lines.length` or `lines[i].x`.
+      if (field === 'lines') expect(decision.refusal.field?.startsWith('lines')).toBe(true);
+      else expect(decision.refusal.field).toBe(field);
+    }
+  });
+
+  it('NON-VACUITY: two identical previews still pass, so the cases above are caused by their own divergence', () => {
+    expect(checkRecomputation(preview(), preview()).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CHALLENGE F-02 — the canonical encoding is injective
+// ---------------------------------------------------------------------------
+
+describe('F-02: two different previews cannot canonicalize to the same string', () => {
+  it('a delimiter inside a productId cannot forge an extra line', () => {
+    // Measured by the challenger on the previous encoding: these two canonicalized IDENTICALLY, so
+    // one digest stood for two different sets of goods. The forged id below is written against the
+    // CURRENT rendering of every neighbouring field, so the case stays a real collision attempt and
+    // does not pass for an incidental reason.
+    const twoLines = preview({
+      lines: [
+        { lineNo: 1, productId: 'p1', variantId: null, quantity: '1', unitPriceMinor: 100n, lineTotalMinor: 100n },
+        { lineNo: 2, productId: 'p2', variantId: null, quantity: '1', unitPriceMinor: 100n, lineTotalMinor: 100n },
+      ],
+    });
+    const forgedId = 'p1;variantId=\\0;quantity=1;unitPriceMinor=100;lineTotalMinor=100|lineNo=2;productId=p2';
+    const oneForgedLine = preview({
+      lines: [{ lineNo: 1, productId: forgedId, variantId: null, quantity: '1', unitPriceMinor: 100n, lineTotalMinor: 100n }],
+    });
+    expect(canonicalizePreview(oneForgedLine)).not.toBe(canonicalizePreview(twoLines));
+    expect(previewDigest(oneForgedLine)).not.toBe(previewDigest(twoLines));
+  });
+
+  it('every delimiter is escaped where it appears inside a value, not merely rendered', () => {
+    // Pinned to the escape itself. Without it the assertions above could pass because of how some
+    // neighbouring field happens to render, which is how an encoding defect survives a test.
+    const canon = canonicalizePreview(preview({ customerId: 'a;b|c=d[e]f' }));
+    expect(canon).not.toContain('a;b');
+    expect(canon).toContain('customerId=a\\sb\\pc\\ed\\ke\\Kf');
+  });
+
+  it('null and the empty string are different values on every optional field', () => {
+    for (const field of ['customerId', 'branchId', 'warehouseId', 'dueDate'] as const) {
+      const asNull = preview({ [field]: null } as Partial<Preview>);
+      const asEmpty = preview({ [field]: '' } as Partial<Preview>);
+      expect(previewDigest(asNull)).not.toBe(previewDigest(asEmpty));
+    }
+  });
+
+  it('a value carrying the field separator cannot impersonate the next field', () => {
+    const forged = preview({ customerId: 'c1\nbranchId=br9' });
+    expect(previewDigest(forged)).not.toBe(previewDigest(preview({ branchId: 'br9' })));
+    expect(previewDigest(forged)).not.toBe(previewDigest(preview()));
+  });
+
+  it('the escape itself is unambiguous — a literal backslash does not collide with an escaped delimiter', () => {
+    // `esc` replaces the backslash FIRST, which is what makes the mapping reversible. Were it last,
+    // a productId of `\s` and one of `;` would both render as `\s`.
+    const literal = preview({ customerId: '\\s' });
+    const delimiter = preview({ customerId: ';' });
+    expect(previewDigest(literal)).not.toBe(previewDigest(delimiter));
+  });
+
+  it('NON-VACUITY: identical previews still share a digest, so the cases above are not simply all-different', () => {
+    expect(previewDigest(preview())).toBe(previewDigest(preview()));
   });
 });

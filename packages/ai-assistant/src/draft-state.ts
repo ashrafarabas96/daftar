@@ -105,25 +105,53 @@ export interface ConfirmRequest {
  * measures exactly this, including a red proof that replaces the positive fetch with an existence
  * test.
  */
+/**
+ * Is the confirming member required to be the member who drafted? — CHALLENGE F-04.
+ *
+ * `FetchedDraft` and `ConfirmRequest` both carry `actorUserId` and nothing compared them: a second
+ * member of the same tenant could confirm another member's draft, `ok=true`. That may well be the
+ * intended workflow — a supervisor confirming a clerk's draft is an ordinary thing in a shop — and
+ * that is exactly the objection: a field carried on both sides and compared on neither states
+ * nothing, and the pack said nothing either.
+ *
+ * Phase 12 does not decide it. Deciding here would be Phase 12 inventing a permission rule, which
+ * PART 8 forbids and which belongs to the security authority with Q1–Q7. So the binding is a
+ * **required argument with no default**, on the same reasoning as the voice confidence floor: a
+ * policy that can be omitted becomes a policy someone forgot. The owner register carries it as
+ * OD-P12-06, and until it is answered a caller must state which rule it is operating under.
+ */
+export interface ConfirmerBinding {
+  readonly confirmerMustBeDrafter: boolean;
+}
+
 export function decideConfirm(
   fetched: FetchedDraft | undefined,
   request: ConfirmRequest,
   txNow: Date,
   stillAuthorized: boolean,
+  confirmerBinding: ConfirmerBinding,
   alreadyExecutedTransactionId?: string,
 ): Decision<{ readonly nextState: DraftState; readonly draft: FetchedDraft }> {
   if (fetched === undefined) return deny(refuse('ai_draft.not_visible', { detail: request.draftId }));
   if (fetched.tenantId !== request.tenantId || fetched.businessId !== request.businessId) {
     return deny(refuse('ai_draft.not_visible', { detail: request.draftId }));
   }
+  // Authority is re-evaluated at confirmation time against freshly loaded rows: a permission held at
+  // draft time and revoked since must refuse (contract §3.3, proof plan T1).
+  //
+  // It is checked BEFORE the replay answer — CHALLENGE F-07. The replay refusal carries the original
+  // `businessTransactionId` in its detail, and answering a revoked actor with it hands a transaction
+  // identity to someone who no longer holds the authority to see it. A replay answer is a
+  // convenience; the authority check is not.
+  if (!stillAuthorized) return deny(refuse('ai_draft.authority_revoked'));
+  if (confirmerBinding.confirmerMustBeDrafter && fetched.actorUserId !== request.actorUserId) {
+    return deny(refuse('ai_draft.confirmer_not_drafter', { field: 'actorUserId', detail: request.draftId }));
+  }
   // The replay answer carries the ORIGINAL transaction id: a retry is answered, not re-executed.
   if (alreadyExecutedTransactionId !== undefined) {
     return deny(refuse('ai_draft.already_executed', { detail: alreadyExecutedTransactionId }));
   }
   if (fetched.state === 'executed') return deny(refuse('ai_draft.already_executed', { detail: fetched.draftId }));
-  // Authority is re-evaluated at confirmation time against freshly loaded rows: a permission held at
-  // draft time and revoked since must refuse (contract §3.3, proof plan T1).
-  if (!stillAuthorized) return deny(refuse('ai_draft.authority_revoked'));
   const notExpired = checkNotExpired(fetched.expiresAt, txNow);
   if (!notExpired.ok) return notExpired;
   if (fetched.version !== request.submittedVersion) {

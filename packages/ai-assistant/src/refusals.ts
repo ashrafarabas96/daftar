@@ -34,6 +34,10 @@ export const REFUSAL_CODES = [
   'ai_draft.recomputation_diverged',
   'ai_draft.authority_revoked',
   'ai_draft.already_executed',
+  // CHALLENGE F-04: the confirming member is not the drafting member, under a binding that requires
+  // them to be. A separate code from `not_permitted`, because the actor may hold every permission
+  // and still not be the drafter — an auditor must be able to tell the two apart.
+  'ai_draft.confirmer_not_drafter',
   'ai_draft.tax_non_zero_refused',
   // PART 76: an execution-affecting field that is neither digest-covered nor server-recomputed. The
   // dangerous field is not the one classified wrongly — it is the one nobody classified.

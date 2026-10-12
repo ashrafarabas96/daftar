@@ -172,12 +172,18 @@ export function gateToolCall(name: string, authority: AuthorityOracle): Decision
 }
 
 /**
- * Argument validation: an unknown field is a refusal, never ignored.
+ * Reject arguments the tool does not declare. An unknown field is a refusal, never ignored.
  *
  * Silently dropping an unexpected field is how an injected argument becomes invisible rather than
  * refused, so the unknown-field branch is the point of this function, not a courtesy.
+ *
+ * It was called `validateArgs`, and the name over-claimed — CHALLENGE F-06: `{}` passes against any
+ * allowlist and any value of any shape passes, because this checks **keys only**. Required keys and
+ * value shapes belong to each tool's own schema, which Phase 12 does not define while the surfaces
+ * are unreachable. The name now says exactly what the function does, so no caller reads it as
+ * validation it does not perform.
  */
-export function validateArgs(allowedFields: readonly string[], args: Readonly<Record<string, unknown>>): Decision<true> {
+export function rejectUnknownArgs(allowedFields: readonly string[], args: Readonly<Record<string, unknown>>): Decision<true> {
   const allowed = new Set(allowedFields);
   for (const key of Object.keys(args)) {
     if (!allowed.has(key)) return deny(refuse('ai_tool.args_invalid', { field: key, detail: 'unknown field' }));

@@ -189,3 +189,25 @@ describe('the purge erases no FINANCIAL FACT either (Mission §19)', () => {
     if (!decision.ok) expect(decision.refusal.field).toBe('totalMinor');
   });
 });
+
+describe('F-09: a nonsense retention period never reaches the purge as a cutoff', () => {
+  it.each([0, -1, 2.5])('transcriptDays=%s refuses ai.retention_unconfigured before any cutoff is derived', (days) => {
+    const decision = planPurge({
+      scope: { tenantId: 't1', businessId: 'b1' },
+      redactFields: ['transcriptText'],
+      policy: { keepAudio: false, transcriptDays: days },
+    });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.code).toBe('ai.retention_unconfigured');
+  });
+
+  it('a configured period still plans — the refusals above are about the value, not the path', () => {
+    const decision = planPurge({
+      scope: { tenantId: 't1', businessId: 'b1' },
+      redactFields: ['transcriptText'],
+      policy: { keepAudio: false, transcriptDays: 30 },
+    });
+    expect(decision.ok).toBe(true);
+    if (decision.ok) expect(decision.value.transcriptCutoffDays).toBe(30);
+  });
+});

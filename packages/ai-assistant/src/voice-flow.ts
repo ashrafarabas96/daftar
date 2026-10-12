@@ -141,12 +141,19 @@ export type ResultPresentation =
 /**
  * `review` → `result`, and only with the member's confirmation in hand.
  *
+ * It takes the **ReviewPresentation itself**, not a boolean — CHALLENGE F-03. With a bare boolean,
+ * law 1's "the listen → result edge is not expressible" was false: `afterReview(true, …)` expressed
+ * it, with no review step in existence anywhere. That is the same defect `entityForDraft` was
+ * introduced to fix ("returning a question is necessary but not sufficient"), and the seam reasoning
+ * had not been carried here. A caller must now hold the artefact a review produced; `afterListen` is
+ * the only thing that mints one.
+ *
  * Returns the presentation the surface MAY render. A commit with no transaction identity is reported
  * as **pending**, not as success: "the server said ok" is not "the server committed", and the two are
  * the same sentence to a merchant.
  */
-export function afterReview(reviewed: boolean, commit: ServerCommit): Decision<ResultPresentation> {
-  if (!reviewed) {
+export function afterReview(reviewed: ReviewPresentation | undefined, commit: ServerCommit): Decision<ResultPresentation> {
+  if (reviewed === undefined || reviewed.step !== 'review') {
     // The listen → result edge, attempted. It refuses at the type's own boundary.
     return deny(refuse('ai_draft.wrong_state', { field: 'review', detail: 'result requires a completed review step' }));
   }

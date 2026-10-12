@@ -16,7 +16,7 @@ import {
   lookupTool,
   SURFACES,
   TOOL_REGISTRY,
-  validateArgs,
+  rejectUnknownArgs,
   validateRegistry,
   type AuthorityBinding,
   type ToolSpec,
@@ -95,7 +95,7 @@ describe('injected content cannot widen the tool layer (TL §73)', () => {
   });
 
   it('cannot inject unknown arguments', () => {
-    const decision = validateArgs(['query'], { query: 'cable', __proto__hack: 1, provider: 'evil.example' });
+    const decision = rejectUnknownArgs(['query'], { query: 'cable', __proto__hack: 1, provider: 'evil.example' });
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.refusal.code).toBe('ai_tool.args_invalid');
   });
@@ -216,9 +216,9 @@ describe('gateToolCall — the authoritative check', () => {
   });
 });
 
-describe('validateArgs', () => {
+describe('rejectUnknownArgs', () => {
   it('refuses an unknown field and names it', () => {
-    const decision = validateArgs(['query'], { query: 'x', tenant_id: 'other' });
+    const decision = rejectUnknownArgs(['query'], { query: 'x', tenant_id: 'other' });
     expect(decision.ok).toBe(false);
     if (!decision.ok) {
       expect(decision.refusal.code).toBe('ai_tool.args_invalid');
@@ -227,6 +227,13 @@ describe('validateArgs', () => {
   });
 
   it('accepts exactly the allowed fields', () => {
-    expect(validateArgs(['query', 'limit'], { query: 'x' }).ok).toBe(true);
+    expect(rejectUnknownArgs(['query', 'limit'], { query: 'x' }).ok).toBe(true);
+  });
+
+  it('F-06: checks KEYS ONLY — an empty object and any value shape pass, which the name now says', () => {
+    // Recorded as a case rather than left implicit: the old name `validateArgs` read as a guarantee
+    // about required keys and value types, and a caller relying on that would be relying on nothing.
+    expect(rejectUnknownArgs(['query'], {}).ok).toBe(true);
+    expect(rejectUnknownArgs(['query'], { query: { nested: ['anything'] } }).ok).toBe(true);
   });
 });
