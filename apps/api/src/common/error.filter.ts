@@ -8,6 +8,7 @@ import { getContext } from '../infra/request-context';
 import type { Logger } from '../infra/logger';
 import { inventoryRefusal, parseDatabaseInventoryCode } from '../modules/inventory/inventory-errors';
 import {
+  installmentRemedyReference,
   isInstallmentInternalInvariant,
   isSellingCode,
   isSellingInternalInvariant,
@@ -180,34 +181,63 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       //     so the answer named a cause that cannot apply. The registry is
       //     explicit: the migration-time end-state codes of that same prefix
       //     are NOT in it and keep the unaudited rendering.
-      //     AND THE REFUSAL'S OWN SENTENCE GOES TO THE LOG WITH THE NAME
-      //     (`TL-P4-COORD-R63` ordered item 4, F15-5). Until this line it did
-      //     not: the log carried `{ invariant }` ALONE. Several of these
-      //     refusals are written for a reader who has to DO something —
-      //     `installment.schedule_incomplete` names the TWO states that reach
-      //     it and the remedy of each, including the data-modifying-CTE
-      //     spelling, in about eleven hundred characters — and that text
-      //     reached nobody: not the body, which is generic by contract, and
-      //     not the log, which held only the name. «A declaration whose
-      //     reader can do nothing is worse than no declaration.»
       //
-      //     WHAT IS LOGGED IS THE FIRST LINE OF THE MESSAGE AND NOTHING
-      //     ELSE. `pg` sets `message` to the routine's primary message; the
-      //     `CONTEXT:` and `STATEMENT:` frames arrive on their own fields
-      //     (`where`, `internalQuery`) and are NOT logged here, so no SQL and
-      //     no stack joins the line even when a caller hands us an error
-      //     whose `message` has those frames concatenated into it.
+      //     AND THE LOG CARRIES THE NAME AND A STATIC REMEDY REFERENCE --
+      //     NEVER THE MESSAGE (`TL-P4-COORD-R69` §1 and ordered item 1,
+      //     which NARROWS `TL-P4-COORD-R63` item 4, F15-5).
       //
-      //     THE BODY IS UNCHANGED AND MUST STAY UNCHANGED: this is an
-      //     internal sentence, the invariant vocabulary is in no localization
-      //     catalogue, and the leak class it belongs to is the one the
-      //     `40P01` rendering below is careful about. The guard suite asserts
-      //     both halves — the sentence present in the log, and absent from
-      //     the body.
+      //     THE RULE THIRTY LINES ABOVE GOVERNS THIS LINE, AND IT STANDS.
+      //     `:148-152` says «SQL, THE ROUTINE'S MESSAGE AFTER THE COLON, AN
+      //     AMOUNT, a journal entry id, an assertion body and a stack never
+      //     leave the process». A LOG LINE LEAVES THE PROCESS -- that is what
+      //     a log is for -- so «never leaves the process» governs what is
+      //     logged here, and `R69` refuses the amendment that would have let
+      //     the message through: a slice may not relax an estate boundary to
+      //     deliver its own ordered repair.
+      //
+      //     WHAT ROUND 16 LOGGED AND WHY IT IS GONE. It logged the refusal's
+      //     FIRST LINE, under `refusal`. The first line IS the routine's
+      //     message after the colon, and it is not generic: EIGHT of the
+      //     thirteen registered `installment.*` names have a `RAISE` that
+      //     substitutes `business_id` plus an invoice or plan UUID into that
+      //     line, and `installment.schedule_incomplete`'s two-cause line
+      //     substitutes TWO AMOUNTS. So the round-16 field emitted exactly
+      //     the artefacts this file's own rule names, and its comment
+      //     reasoned entirely about the BODY. The field is removed.
+      //
+      //     WHAT IS LOGGED NOW. The invariant NAME and `remedy`: a STATIC
+      //     reference, `installmentRemedyReference()`'s value, a function of
+      //     the name ALONE -- identical for every occurrence of that
+      //     invariant, with no identifier, no amount, no count and no
+      //     fragment of the message in it. THE DYNAMIC MESSAGE NOW LEAVES THE
+      //     PROCESS IN NEITHER THE BODY NOR THE LOG.
+      //
+      //     AND THE PROSE IS NOT LOST, WHICH IS WHAT `R63` ITEM 4 WAS FOR: it
+      //     lives where the reference points -- section 3b of
+      //     `p4s7-installment-aging.spec.sql`, the operator's remedy index,
+      //     one anchored entry per registered invariant, carrying the two
+      //     causes and the data-modifying-CTE spelling in full. The operator
+      //     reads a name and an anchor and follows it; nothing about the
+      //     particular refusal is needed to find the remedy, because the
+      //     remedy is a property of the invariant and not of the row.
+      //
+      //     THE BODY IS UNCHANGED AND MUST STAY UNCHANGED: 500,
+      //     `INTERNAL_ERROR`, the generic sentence, no `details`, and the
+      //     invariant vocabulary is in no localization catalogue.
+      //
+      //     THE GUARD IS PINNED ON THE HALF THAT CAN FAIL. Round 16's case
+      //     pinned `schedule_incomplete`, the one registered message whose
+      //     first line carries no identifier, and asserted the sentence was
+      //     PRESENT in the log -- the half that cannot exhibit the class.
+      //     `tests/guards/p4s7-installment-filter-contract.test.ts` now
+      //     DERIVES, out of the specification, which registered invariants
+      //     substitute an identifier, pins the case on one of those, and
+      //     asserts the identifiers and the message appear NOWHERE in the log
+      //     line or the body while the reference does.
       const installment = parseDatabaseInstallmentInternalCode(exception);
       if (installment !== null && isInstallmentInternalInvariant(installment)) {
-        const refusal = (exception instanceof Error ? exception.message : String(exception)).split('\n')[0] ?? '';
-        this.logger.error({ requestId, invariant: installment, refusal }, 'phase 4 installment invariant violated');
+        const remedy = installmentRemedyReference(installment);
+        this.logger.error({ requestId, invariant: installment, remedy }, 'phase 4 installment invariant violated');
         body('INTERNAL_ERROR', 'Internal error', HttpStatus.INTERNAL_SERVER_ERROR);
         return;
       }

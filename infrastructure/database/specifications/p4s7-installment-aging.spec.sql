@@ -860,18 +860,31 @@ BEGIN
   -- «no obligation of this slice», and both claimed more than this gate
   -- reads. Measured as byte offsets into this routine's own body -- which is
   -- byte-identical to its stored `prosrc`, as the `c_bodies` digests of part
-  -- 9 certify -- the gate's `IF` is at 13358 and it is reached by NONE of:
+  -- 9 certify -- the gate's `IF` is at 14235 and it is reached by NONE of:
   --   * the `invoices`-arm refusal of (a) at 5100, which fires when the
   --     invoice row says a plan is active and this routine can read none. It
   --     states «the fact and the read disagree or this read is blinded» and
   --     reads no flag, so it does not name the cause this gate exists for;
-  --   * the three `RETURN NULL` exits above it -- the invoice row not read
-  --     (4241), the flag read false (4557) and the plan row not read (5919)
-  --     -- each of which is an EMPTY SUBJECT rather than a judgement, but
-  --     the last of which is also a vacuous pass of all four obligations,
-  --     taken on a primary-key read of the plan row that this gate's own
-  --     message names as a premise and that this gate sits BELOW;
-  --   * obligation (d) at 23699, whose ceiling is not one of the four
+  --   * the FOUR `RETURN NULL` exits above it -- the invoice row not read
+  --     (4241), the flag read false (4557), the plan row not read (5919) and
+  --     the plan not active (6172) -- each of which is an EMPTY SUBJECT
+  --     rather than a judgement, but the THIRD of which is also a vacuous
+  --     pass of all four obligations, taken on a primary-key read of the plan
+  --     row that this gate's own message names as a premise and that this
+  --     gate sits BELOW. ROUND 16 ENUMERATED THREE AND THERE ARE FOUR
+  --     (`TL-P4-COORD-R69` item 3, R16-3): the `IF v_status <> 'active'`
+  --     exit at 6172 was unlisted, and that count had already moved three
+  --     times, every time because it was taken from a SENTENCE rather than
+  --     from this body. IT IS TAKEN FROM THE BODY NOW, AND SO ARE THE
+  --     NUMBERS (`TL-P4-COORD-R69` item 5, R16-6): law H17 of
+  --     `packages/domain-core/test/phase4-s7-installment-aging.test.ts`
+  --     derives every offset in this paragraph and the exit COUNT out of
+  --     this routine's own dollar-quoted body and reds when any of them
+  --     disagrees with it, so an edit
+  --     that moves these numbers reds there instead of leaving them silently
+  --     stale -- which is the hole round 16 named in its own report and
+  --     could only name;
+  --   * obligation (d) at 25769, whose ceiling is not one of the four
   --     conditions of the `IF` -- the string `60` does not occur in it.
   -- The `RAISE` the gate takes was already honest about this («(a) to (c)»);
   -- the comment and the heading were not, and they are the ones that moved.
@@ -991,21 +1004,38 @@ BEGIN
   --     the way the fact hazard was eliminated, and the remedy below is the one
   --     that DOES reach it and is MEASURED.
   --
-  --     AND WHO READS THE REMEDY IS NOW SETTLED RATHER THAN ASSUMED
-  --     (`TL-P4-COORD-R63` item 4, F15-5). `installment.schedule_incomplete`
-  --     is a REGISTERED installment invariant, so `GlobalExceptionFilter`
-  --     answers it `500 INTERNAL_ERROR` with a generic body and NO `details`:
-  --     none of this text may reach a caller, and none of it does. Until
-  --     round 16 it reached NOBODY AT ALL -- the log line carried the
-  --     invariant NAME alone, so the two causes and the CTE spelling were
-  --     visible only to someone holding a psql session. The filter now logs
-  --     the refusal's FIRST LINE beside the name, under `refusal`, and the
-  --     first line of this refusal is the whole of it. THE BODY IS
-  --     UNCHANGED. So the reader of this remedy is an OPERATOR READING A LOG,
-  --     and a reader of this specification -- never the caller -- and
-  --     `tests/guards/p4s7-installment-filter-contract.test.ts` asserts both
-  --     halves: the sentence present in the log line, and absent from the
-  --     response body.
+  --     AND WHO READS THE REMEDY IS SETTLED, AND WHAT REACHES THEM IS A
+  --     REFERENCE AND NOT THIS TEXT (`TL-P4-COORD-R69` §1 and item 1, which
+  --     NARROWS `TL-P4-COORD-R63` item 4, F15-5).
+  --     `installment.schedule_incomplete` is a REGISTERED installment
+  --     invariant, so `GlobalExceptionFilter` answers it
+  --     `500 INTERNAL_ERROR` with a generic body and NO `details`: none of
+  --     this text may reach a caller, and none of it does. Round 16 made it
+  --     reach an operator by logging the refusal's FIRST LINE beside the
+  --     name, and THAT WAS A LEAK OF THE CLASS THE FILTER'S OWN RULE NAMES:
+  --     `apps/api/src/common/error.filter.ts:148-152` says «SQL, THE
+  --     ROUTINE'S MESSAGE AFTER THE COLON, AN AMOUNT, a journal entry id, an
+  --     assertion body and a stack never leave the process», a log line
+  --     leaves the process, EIGHT of the thirteen registered `installment.*`
+  --     names substitute `business_id` plus an invoice or plan UUID into that
+  --     first line, and the first line of THIS refusal substitutes TWO
+  --     AMOUNTS. The rule stands and the field is gone. THE DYNAMIC MESSAGE
+  --     NOW LEAVES THE PROCESS IN NEITHER THE BODY NOR THE LOG. What the log
+  --     carries beside the invariant name is a STATIC REMEDY REFERENCE --
+  --     identical for every occurrence of the invariant, resolved from a
+  --     table in `apps/api/src/modules/selling/selling-errors.ts`, carrying
+  --     no identifier, no amount and no fragment of this sentence -- and THE
+  --     PROSE LIVES WHERE THE REFERENCE POINTS: section 3b of this file,
+  --     anchor `p4s7-remedy-04`, which states both causes and the
+  --     data-modifying-CTE spelling in full. So the reader of this remedy is
+  --     an OPERATOR WHO FOLLOWS A REFERENCE, and a reader of this
+  --     specification -- never the caller -- and
+  --     `tests/guards/p4s7-installment-filter-contract.test.ts` asserts the
+  --     half that can fail: the reference present in the log, the anchor
+  --     resolving to section 3b, and NEITHER this message NOR the
+  --     identifiers a refusal substitutes anywhere in the log line or the
+  --     body, pinned on an invariant whose first line DOES carry an
+  --     identifier.
   IF v_down + v_sched <> v_total THEN
     IF v_rows = 0 AND TG_TABLE_NAME = 'installment_plans' AND TG_OP = 'INSERT' THEN
       RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to % and the invoice total is %, and this plan carries NO instalment row at all while its own INSERT is the event being judged. TWO STATES REACH THIS AND THE REMEDY DIFFERS. (1) THE DEFERRAL WAS REMOVED: this verifier is created DEFERRABLE INITIALLY DEFERRED and SET CONSTRAINTS ALL IMMEDIATE -- unprivileged SQL either app role may issue -- makes it fire at the end of the plan INSERT statement instead of at COMMIT, which is BEFORE any installments row can exist, because installments.plan_id references the plan and the plan must be written first. NOTHING IS WRONG WITH THE SCHEDULE IN THAT CASE and no data is bad: either stop issuing SET CONSTRAINTS ALL IMMEDIATE before a plan write, or issue it AFTER the write, or write the plan and its whole schedule in ONE statement (a data-modifying CTE), which this verifier accepts under the removed deferral because both relations'' AFTER-ROW events then belong to the same statement. (2) THE PLAN REALLY HAS NO SCHEDULE: write its instalments in this same transaction, summing with down_payment_minor to the invoice total exactly. This refusal cannot tell the two apart -- PostgreSQL exposes no reading of whether SET CONSTRAINTS has been issued -- so it names both instead of asserting one, which is TL-P4-COORD-R46 F-4''s rule',
@@ -2833,6 +2863,214 @@ ALTER FUNCTION installment_plan_active_exclusive() OWNER TO daftar_accounting_in
 REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 
 
+-- ── 3b. THE OPERATOR'S REMEDY INDEX — WHERE A LOGGED REFERENCE POINTS ────
+--
+-- WHY THIS SECTION EXISTS (`TL-P4-COORD-R69` §1 and ordered item 1, which
+-- NARROWS `TL-P4-COORD-R63` item 4). `R63` item 4 found that the remedies
+-- written into these refusals reached nobody: `GlobalExceptionFilter` answers
+-- every registered `installment.*` name `500 INTERNAL_ERROR` with a generic
+-- body and no `details` — correctly, none of this vocabulary is in any
+-- localization catalogue — and the log line carried the invariant NAME alone.
+-- Round 16 repaired that by logging the refusal's FIRST LINE, and that is a
+-- leak of a class the filter's own rule names thirty lines above the branch
+-- that logged it (`apps/api/src/common/error.filter.ts:148-152`): «SQL, THE
+-- ROUTINE'S MESSAGE AFTER THE COLON, AN AMOUNT, a journal entry id, an
+-- assertion body and a stack never leave the process». A LOG LINE LEAVES THE
+-- PROCESS. EIGHT of the thirteen registered names substitute `business_id`
+-- plus an invoice or plan UUID into that first line, and
+-- `installment.schedule_incomplete`'s two-cause line substitutes TWO AMOUNTS.
+--
+-- SO THE LOG CARRIES A NAME AND AN ANCHOR, AND THE PROSE LIVES HERE. The
+-- anchor is STATIC — identical for every occurrence of the invariant, a
+-- function of the name alone, resolved from a table in
+-- `apps/api/src/modules/selling/selling-errors.ts` — so an operator reading
+-- `{ invariant, remedy }` has the whole remedy one lookup away and the
+-- refusal's own figures never leave the process at all.
+--
+-- WHAT IS MEASURED ABOUT THIS SECTION, AND WHAT IS NOT. That every registered
+-- invariant HAS an entry, that each anchor occurs EXACTLY ONCE in this file,
+-- inside this section, on a line that also names its invariant, and that the
+-- rendered log line carries the reference while neither the message nor the
+-- identifiers reach the log or the body — all of that is asserted by
+-- `tests/guards/p4s7-installment-filter-contract.test.ts`. THE REMEDIES
+-- THEMSELVES ARE PROSE AND NO INSTRUMENT EXECUTES THEM: each is derived from
+-- what this file's own refusal says and from the mechanism the surrounding
+-- section states, and each is therefore DESIGN ONLY as a procedure. An
+-- operator is told what state was observed and what the shipped mechanism
+-- says about it; nobody has run these steps against a cluster as a drill.
+--
+-- [p4s7-remedy-01] installment.plan_fact_unreadable
+--   OBSERVED: open invoices of this customer carry
+--   `has_active_installment_plan` true while this caller can read no active
+--   plan for them, so their schedules cannot be aged — and must not be aged
+--   at the invoice due date instead, which is the silent omission the column
+--   alone would leave.
+--   DO: list those invoices, then read `installment_plans` for an active plan
+--   under the same `business_id` as a principal that bypasses row security.
+--   IF THE PLAN IS THERE, the caller's policies are subtracting it: compare
+--   `app_business()` against the invoice's `business_id` and check section
+--   2a's policies are the shipped ones. IF THERE IS NO PLAN, the fact is
+--   stale, which section 3a's deferred verifier refuses at COMMIT — so a
+--   write reached the column without the triggers: go to
+--   `p4s7-remedy-09`.
+--
+-- [p4s7-remedy-02] installment.plan_fact_unflagged
+--   OBSERVED: an active plan this caller CAN read whose own invoice carries
+--   `has_active_installment_plan` false, which would age the schedule and the
+--   whole figure both — the double count.
+--   DO: section 3a's deferred verifier makes this state unreachable at COMMIT,
+--   so a live occurrence is evidence that the fact triggers were not firing
+--   when the plan was written. Go to `p4s7-remedy-09`, then re-derive the
+--   column for the affected invoices in one transaction so the verifier
+--   judges the end state.
+--
+-- [p4s7-remedy-03] installment.plan_schedule_unreadable
+--   OBSERVED: an active plan this caller can read does not satisfy section 3
+--   obligation (a) over the rows it can read — either no `installments` row
+--   is readable at all, or the readable down payment plus instalments does
+--   not equal the invoice's own `total_txn_minor`.
+--   DO: re-take the same sum as the routines' owner. IF IT SUMS, the caller's
+--   row security is hiding instalment rows (section 2a). IF IT DOES NOT, the
+--   invoice total moved after the schedule was last judged — which the
+--   `invoices` arm of section 3 now governs — so correct the schedule or the
+--   total in ONE transaction, exactly to the equality; obligation (a) is an
+--   `<>` comparison and refuses both directions.
+--
+-- [p4s7-remedy-04] installment.schedule_incomplete
+--   OBSERVED: one of (a) the exact sum law, (b) at least one instalment row,
+--   (c) `seq_no` contiguous from 1, (d) the declared ceiling of 60. The
+--   message names which.
+--   DO, FOR (a) WITH NO INSTALMENT ROW AT ALL ON A PLAN'S OWN `INSERT`: TWO
+--   STATES REACH IT AND THE REMEDY DIFFERS, and PostgreSQL exposes no reading
+--   that tells them apart, which is why this entry names both instead of
+--   asserting one.
+--     (1) THE DEFERRAL WAS REMOVED. This verifier is created DEFERRABLE
+--         INITIALLY DEFERRED, and `SET CONSTRAINTS ALL IMMEDIATE` —
+--         unprivileged SQL either app role may issue — makes it fire at the
+--         end of the plan INSERT statement instead of at COMMIT, which is
+--         BEFORE any `installments` row can exist, because
+--         `installments.plan_id` references the plan and the plan must be
+--         written first. NOTHING IS WRONG WITH THE SCHEDULE IN THAT CASE and
+--         no data is bad. Either stop issuing `SET CONSTRAINTS ALL IMMEDIATE`
+--         before a plan write, or issue it AFTER the write, or write the plan
+--         and its whole schedule in ONE statement — a DATA-MODIFYING CTE —
+--         which this verifier accepts under the removed deferral because both
+--         relations' AFTER-ROW events then belong to the same statement.
+--     (2) THE PLAN REALLY HAS NO SCHEDULE. Write its instalments in the same
+--         transaction, summing with `down_payment_minor` to the invoice total
+--         exactly.
+--   DO, FOR (a) OTHERWISE: the schedule and the invoice total disagree. Fix
+--   whichever is wrong in one transaction; see `p4s7-remedy-03`.
+--   DO, FOR (b): an active plan with no instalments is not a schedule; write
+--   them or cancel the plan.
+--   DO, FOR (c): `seq_no` must be contiguous from 1 within the plan.
+--   DO, FOR (d): the ceiling is the DECLARED policy constant of section 3(e)
+--   and not a convention; a longer schedule needs that policy changed, not
+--   this routine relaxed.
+--
+-- [p4s7-remedy-05] installment.plan_fact_blind
+--   OBSERVED: this transaction wrote a plan and the verifier can read neither
+--   it nor its index-independent count — with the index explanation EXCLUDED
+--   by a `pg_index` reading taken inside the same event, which is why this
+--   name and not `p4s7-remedy-12`.
+--   DO: the remaining candidate is row security on `installment_plans` for
+--   the writing principal. Check that section 2a's policies are the shipped
+--   ones and that `app_business()` is set to the plan's own `business_id` for
+--   the connection that wrote it. Nothing committed.
+--
+-- [p4s7-remedy-06] installment.plan_fact_desynchronised
+--   OBSERVED: at COMMIT, `invoices.has_active_installment_plan` disagrees
+--   with `installment_plans` for that invoice.
+--   DO: nothing partial committed — the transaction is refused whole. Find
+--   the statement that moved one side without the other; a direct
+--   `UPDATE invoices SET has_active_installment_plan` outside section 3a's
+--   sync is the usual cause, and section 2c grants that column to
+--   `daftar_accounting_internal` precisely so the sync is the only writer.
+--
+-- [p4s7-remedy-07] installment.plan_active_conflict
+--   OBSERVED: the status transition this transaction wrote leaves the
+--   invoice's plan population and its fact disagreeing, or a second plan
+--   active on one invoice.
+--   DO: complete or cancel the existing active plan in the SAME transaction
+--   before activating another; section 3a-bis's exclusion refuses the overlap
+--   at the statement and the fact verifier refuses it at COMMIT.
+--
+-- [p4s7-remedy-08] installment.plan_active_unbounded
+--   OBSERVED: an invoice carries MORE THAN ONE active plan that this caller
+--   can read, and `installment_plans_one_active_per_invoice_uq` admits at
+--   most one. A count can only UNDER-report under row security, so this is
+--   never a blinded reading: the partial unique index is present-but-
+--   unenforcing (`indisvalid`/`indisready` false) or gone.
+--   DO: `REINDEX INDEX installment_plans_one_active_per_invoice_uq` — or
+--   re-create it if it is absent — then reduce each affected invoice to ONE
+--   active plan. The reader's per-plan arithmetic is predicated on the bound:
+--   with two plans the schedule union overshoots the invoice total, the
+--   settlement levels saturate at it, and every share after the first
+--   collapses to zero, which serves the PRE-INSTALLMENT figure silently.
+--
+-- [p4s7-remedy-09] installment.plan_fact_untrusted
+--   OBSERVED: one or more of the SEVEN triggers that maintain and verify
+--   `invoices.has_active_installment_plan` and section 3 obligation (a) is
+--   not installed on its own relation under its own name against its own
+--   routine with `pg_trigger.tgenabled = 'O'` — missing, renamed,
+--   re-pointed, or carrying `D`, `R` (replica-only, which is silence for
+--   every ordinary session) or `A`.
+--   DO: compare `pg_trigger` against the seven `(relation, trigger name,
+--   routine)` triples section 2b part 9 enumerates, and re-create or
+--   `ENABLE` the one that differs. This state is OWNER-ONLY reachable, by
+--   `ALTER TABLE ... DISABLE TRIGGER` or by DDL on the triggers themselves,
+--   so what produced it is a DDL change and not anything a request did. The
+--   figure is refused rather than served while it holds, and an extra
+--   conforming trigger cannot pay for a disabled real one because the
+--   reading is an ENUMERATION and not a total.
+--
+-- [p4s7-remedy-10] installment.plan_index_disagrees
+--   OBSERVED: two readings of the SAME rows in the same transaction disagree
+--   — one taken by an access path the partial index can serve and one it
+--   cannot — which means the index holds no entry for a row that qualifies
+--   for it. That is an index PRESENT AND NOT ENFORCING while every flag reads
+--   true.
+--   DO: `REINDEX INDEX installment_plans_one_active_per_invoice_uq` and
+--   retry. Nothing committed. The instrument works because that index is
+--   PARTIAL; it does not transfer to `installments_plan_schedule_idx`, whose
+--   physical half is apply-time and CI `REINDEX` (section 3).
+--
+-- [p4s7-remedy-11] installment.plan_fact_unordered
+--   OBSERVED: read out of `pg_trigger` inside the event, the enabled trigger
+--   that executes `installment_plan_fact_sync` on `installment_plans` sorts
+--   AFTER the deferred fact verifier's trigger. With the deferral removed by
+--   `SET CONSTRAINTS ALL IMMEDIATE`, PostgreSQL fires one relation's
+--   immediate AFTER ROW triggers in TRIGGER-NAME ORDER, so the verifier runs
+--   before the writer and would refuse a LAWFUL write under
+--   `p4s7-remedy-06`'s name.
+--   DO: it FAILS CLOSED — no wrong fact commits. Either stop issuing
+--   `SET CONSTRAINTS ALL IMMEDIATE` around a plan write, or restore the
+--   shipped trigger NAMES so the writer sorts first. The subject is catalogue
+--   data no session can write; only DDL by the table owner moves it.
+--
+-- [p4s7-remedy-12] installment.plan_index_unenforcing
+--   OBSERVED: an index of `installment_plans` or of `installments` carries
+--   `indisvalid`, `indisready` or `indislive` false, read out of `pg_index`
+--   inside the failing event. Every figure in the sentence that precedes this
+--   one in the refusal may be an artifact of that: entries can only be
+--   ABSENT, so a sum read through such an index UNDER-reports.
+--   DO: `REINDEX` the indexes the refusal names, then retry. This is the
+--   state an interrupted `CREATE INDEX CONCURRENTLY` or
+--   `REINDEX CONCURRENTLY` leaves, and `pg_indexes` renders it IDENTICALLY to
+--   a correct index — which is why the state is refused rather than inferred
+--   from a figure.
+--
+-- [p4s7-remedy-13] installment.plan_fact_unwritable
+--   OBSERVED: section 3a's sync could not write the fact — either the plan
+--   was moved between businesses, which the invoice that carries its fact is
+--   keyed on and which is therefore refused outright, or the write of
+--   `invoices.has_active_installment_plan` did not land.
+--   DO: for the move, re-create the plan under the right business rather than
+--   re-keying it. For the write, check section 2c's COLUMN grant of
+--   `has_active_installment_plan` to `daftar_accounting_internal`: without it
+--   the sync can never land and every plan write refuses.
+--
+
 -- ── 4. WHAT THIS SPECIFICATION DELIBERATELY DOES NOT CREATE ──────────────
 --
 --   * NO accounting source type. Neither relation carries an
@@ -4169,7 +4407,7 @@ DECLARE
     ['public.installment_plan_fact_sync()',                       '613fd36bae4ab68830f0d8167fedf1eafe17729839579d13a7edcbefec72acf1'],
     ['public.installment_plan_fact_verify()',                     'd83b0657a3b9896eccfb66313ad5ca2bf9080158739bf5a9d1e6cb553e423f7c'],
     ['public.installment_plan_active_exclusive()',                '972604870115f80909906ebf4a184d2de56f3c3568c91d0a7b66d288778515c2'],
-    ['public.installment_schedule_verify()',                      '988239ccdb31768b9791ab0b8f1d18617be5d1ee5934f2a2439b478dcf3aed2f'],
+    ['public.installment_schedule_verify()',                      'de84a53494b068ab2066736731ce492e9a759e7ea6dddab4803da341ddefe786'],
     ['public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)', '61d797de3fcb5f8e7fdb687414e09a2d734de630bdd954c48995661708b122f6'],
     ['public.customer_ar_aging(uuid,uuid,date,integer[])',        '67a3dc0b0bff28b65d4472bdda8c8856e7bc90009d4c9cb1d589c56c1df1eefc']];
   -- The six routine NAMES of the list above, for part 6c's overload law. A

@@ -51,6 +51,9 @@ import type { Logger } from '../../apps/api/src/infra/logger';
 import {
   CONTENTION_SQLSTATE_CODES,
   INSTALLMENT_INTERNAL_INVARIANT_CODES,
+  INSTALLMENT_REMEDY_ANCHOR_IDS,
+  INSTALLMENT_REMEDY_SPEC,
+  installmentRemedyReference,
   isInstallmentInternalInvariant,
   parseDatabaseContention,
 } from '../../apps/api/src/modules/selling/selling-errors';
@@ -228,81 +231,195 @@ describe('P4-S7 the installment.* rendering contract', () => {
   });
 
   /**
-   * ── THE REFUSAL'S OWN SENTENCE REACHES AN OPERATOR, AND STILL NOT A CALLER
-   *    (`TL-P4-COORD-R63` ordered item 4, F15-5) ─────────────────────────────
+   * ── THE LOG CARRIES A NAME AND A STATIC REFERENCE, AND THE MESSAGE LEAVES
+   *    THE PROCESS NOWHERE (`TL-P4-COORD-R69` §1 and ordered item 1, which
+   *    NARROWS `TL-P4-COORD-R63` item 4, F15-5) ─────────────────────────────
    *
-   * Round 15 added an eleven-hundred-character two-cause remedy to
-   * `installment.schedule_incomplete` — the two states that reach it, the
-   * remedy of each, the data-modifying-CTE spelling — and the round-15
-   * challenger measured that it reached NOBODY: the body is generic by
-   * contract (correctly), and the log line carried `{ invariant }` alone, so
-   * the text was visible only to someone holding a psql session. «A
-   * declaration whose reader can do nothing is worse than no declaration.»
+   * THE HISTORY, BECAUSE IT IS THE WHOLE POINT OF THE SHAPE OF THIS CASE.
+   * `R63` item 4 found that round 15's two-cause remedy reached nobody: the
+   * body is generic by contract and the log line carried `{ invariant }`
+   * alone. Round 16 logged the refusal's FIRST LINE — and the first line IS
+   * «the routine's message after the colon», which `error.filter.ts:148-152`
+   * says never leaves the process, alongside SQL and AN AMOUNT. A log line
+   * leaves the process. `R69` §1 refused the amendment and ordered the
+   * narrowing: the log carries the invariant NAME and a STATIC remedy
+   * REFERENCE, the dynamic message leaves in neither the body nor the log, and
+   * the prose lives where the reference points.
    *
-   * The repair is one field on the log line, and this case pins BOTH halves of
-   * it, because the half that is easy to lose is the second: the sentence is
-   * an INTERNAL one, and an internal sentence in a response body is the leak
-   * class the `40P01` rendering one file away was careful about.
+   * AND ROUND 16'S CASE WAS PINNED ON THE HALF THAT CANNOT FAIL. It chose
+   * `installment.schedule_incomplete`'s two-cause sentence — the one
+   * registered first line that carries NO identifier — and asserted the
+   * sentence was PRESENT in the log. So the class that was actually leaking
+   * (`business_id` plus an invoice or plan UUID) could not appear in its
+   * fixture at all. This case therefore DERIVES, out of the specification,
+   * which registered invariants substitute an identifier into their primary
+   * message, and pins itself on one of THOSE — the subject is read, not
+   * chosen.
    */
-  it('the refusal SENTENCE is logged beside the invariant name, and still reaches no response body', () => {
-    // THE REAL SHAPE: the two-cause remedy as the specification writes it,
-    // read OUT OF THE SPECIFICATION rather than retyped, so this case cannot
-    // pass against a sentence that no longer ships. The remedy is one SQL
-    // string literal; `''` is SQL's escape for an apostrophe inside it.
+  it('the log carries the invariant NAME and a STATIC remedy reference, and the message and its identifiers leave the process in neither the log nor the body', () => {
     const spec = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'), 'utf8');
-    const open = spec.indexOf(
-      "RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to % and the invoice total is %, and this plan carries NO",
-    );
-    expect(open, 'the two-cause remedy is no longer in the specification').toBeGreaterThan(-1);
-    // The literal ends at the FIRST `',` that closes it — `''` is an escaped
-    // apostrophe inside it and never a terminator, so the terminator is looked
-    // for as the quote-comma-newline the statement actually ends its message
-    // argument with.
-    const close = spec.indexOf("',\n", open);
-    expect(close, 'the two-cause remedy literal is unterminated').toBeGreaterThan(open);
-    const sentence = spec.slice(spec.indexOf("'", open) + 1, close).replace(/''/g, "'");
-    expect(sentence.length, 'the sliced remedy is too short to be the two-cause message').toBeGreaterThan(800);
-    for (const phrase of ['TWO STATES REACH THIS', 'SET CONSTRAINTS ALL IMMEDIATE', 'data-modifying CTE', 'NO instalment row at all']) {
-      expect(sentence, `the sliced remedy does not contain ${phrase}`).toContain(phrase);
+
+    // ── (0) THE SUBJECT, DERIVED. Each `RAISE EXCEPTION` of this file is
+    //    paired with ITS OWN ARGUMENT LIST — the text between the end of the
+    //    message literal and `USING ERRCODE` — and a registered invariant is
+    //    counted when one of its raises substitutes a business, invoice or
+    //    plan key into the message. `''` is SQL's escaped apostrophe and never
+    //    a terminator.
+    const HEAD = "RAISE EXCEPTION '";
+    const IDENT = /v_business|v_invoice|v_plan\b|NEW\.id|OLD\.id|NEW\.business_id/;
+    const substituting = new Set<string>();
+    for (let i = 0; ; ) {
+      const a = spec.indexOf(HEAD, i);
+      if (a < 0) break;
+      const from = a + HEAD.length;
+      let j = from;
+      for (;;) {
+        j = spec.indexOf("'", j);
+        if (j < 0) break;
+        if (spec.startsWith("''", j)) {
+          j += 2;
+          continue;
+        }
+        break;
+      }
+      if (j < 0) break;
+      const message = spec.slice(from, j);
+      const u = spec.indexOf('USING ERRCODE', j);
+      const args = u > j && u - j < 3000 ? spec.slice(j, u) : '';
+      const code = /^(installment\.[a-z_]+):/.exec(message)?.[1];
+      if (code !== undefined && REGISTERED.includes(code) && IDENT.test(args)) substituting.add(code);
+      i = j + 1;
     }
+    const identifierBearing = [...substituting].sort();
+    expect(identifierBearing.length, 'no registered invariant substitutes an identifier, so this case has no subject').toBeGreaterThan(0);
 
-    // AS `pg` DELIVERS IT: the SQLSTATE on `code`, the routine's primary
-    // message on `message`, and the frames on their own fields.
-    const r = render(pgError('P0001', sentence, { where: POISON.frame, internalQuery: POISON.sql }));
+    // ── AND THE FILTER'S OWN COMMENT STATES THAT COUNT, so the sentence that
+    //    justifies removing round 16's field is READ rather than believed.
+    const WORDS = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN'] as const;
+    const word = (n: number): string => WORDS[n] ?? String(n);
+    const filterSrc = readFileSync(join(__dirname, '..', '..', 'apps', 'api', 'src', 'common', 'error.filter.ts'), 'utf8')
+      .replace(/^\s*\/\/ ?/gm, '')
+      .replace(/\s+/g, ' ');
+    expect(
+      new RegExp(`${word(identifierBearing.length)} of the ${word(REGISTERED.length)} registered`, 'i').test(filterSrc),
+      `the filter's comment does not state the derived count: ${word(identifierBearing.length)} of ${word(REGISTERED.length)}`,
+    ).toBe(true);
 
-    // (1) THE LOG CARRIES THE NAME **AND** THE SENTENCE. Before this round the
-    //     second assertion failed: the field did not exist.
+    // ── (1) THE PINNED INVARIANT IS ONE THAT CAN EXHIBIT THE CLASS.
+    const PINNED = 'installment.plan_index_unenforcing';
+    expect(identifierBearing, `${PINNED} does not substitute an identifier, so it is the wrong subject for this case`).toContain(PINNED);
+
+    // ── (2) RENDERED AS `pg` DELIVERS IT, with real keys and real amounts in
+    //    the message and the frames on their own fields.
+    const AMOUNT = '910000';
+    const message =
+      `${PINNED}: the schedule of plan ${POISON.business}/${POISON.invoice} does not satisfy obligation (a) to (c) AS THIS ROUTINE READ IT` +
+      ` -- down payment plus schedule ${AMOUNT} against an invoice total of 100000 -- AND pg_index says these indexes are not enforcing:` +
+      ' installment_plans_pkey on installment_plans (indisvalid=false, indisready=true, indislive=true). REINDEX the named indexes and retry';
+    const r = render(pgError('P0001', message, { where: POISON.frame, internalQuery: POISON.sql }));
     const lines = r.logged.filter((l) => l.message === 'phase 4 installment invariant violated');
     expect(lines).toHaveLength(1);
-    expect(lines[0]?.fields['invariant']).toBe('installment.schedule_incomplete');
-    expect(String(lines[0]?.fields['refusal'])).toBe(sentence);
-    for (const phrase of ['TWO STATES REACH THIS', 'data-modifying CTE', 'SET CONSTRAINTS ALL IMMEDIATE']) {
-      expect(String(lines[0]?.fields['refusal']), `the remedy's «${phrase}» did not reach the log`).toContain(phrase);
-    }
+    const fields = lines[0]?.fields ?? {};
 
-    // (2) AND THE BODY IS UNTOUCHED — 500, generic, no `details`, and not one
-    //     word of the sentence, the frames or the SQL.
+    // ── (3) WHAT THE LOG CARRIES IS EXACTLY THREE FIELDS: the request id, the
+    //    invariant NAME and the STATIC reference. The field set is pinned, so
+    //    a fourth field carrying anything dynamic reds here.
+    expect(Object.keys(fields).sort()).toStrictEqual(['invariant', 'remedy', 'requestId']);
+    expect(fields['invariant']).toBe(PINNED);
+    expect(fields['remedy']).toBe(installmentRemedyReference(PINNED));
+    expect(String(fields['remedy'])).toContain(INSTALLMENT_REMEDY_SPEC);
+    // ROUND 16'S FIELD IS GONE.
+    expect(fields).not.toHaveProperty('refusal');
+
+    // ── (4) THE HALF THAT CAN FAIL: neither the message, nor the identifiers
+    //    it substitutes, nor the amount, nor a frame, nor the SQL appears
+    //    ANYWHERE in the log line — or in the body.
+    const loggedText = JSON.stringify(lines[0]);
+    const body = JSON.stringify(r.payload);
+    for (const leak of [
+      POISON.business,
+      POISON.invoice,
+      POISON.frame,
+      POISON.sql,
+      AMOUNT,
+      'the schedule of plan',
+      'REINDEX the named indexes',
+      'indisvalid=false',
+      'CONTEXT:',
+    ]) {
+      expect(loggedText, `the LOG line leaked ${leak}`).not.toContain(leak);
+      expect(body, `the BODY leaked ${leak}`).not.toContain(leak);
+    }
+    expect(body, 'the body leaked the invariant name').not.toContain(PINNED);
+    // NON-VACUITY: the fixture really does carry every one of those.
+    for (const present of [POISON.business, POISON.invoice, AMOUNT, 'the schedule of plan', 'indisvalid=false']) {
+      expect(message, `the fixture does not contain ${present}, so the absence above proves nothing`).toContain(present);
+    }
     expect(r.status).toBe(500);
     expect(r.payload.error.code).toBe('INTERNAL_ERROR');
     expect(r.payload.error.message).toBe('Internal error');
     expect(r.payload.error.details).toBeUndefined();
-    const body = JSON.stringify(r.payload);
-    for (const leak of ['TWO STATES REACH THIS', 'data-modifying CTE', 'SET CONSTRAINTS', 'installment.schedule_incomplete', POISON.frame, POISON.sql]) {
-      expect(body, `the body leaked ${leak}`).not.toContain(leak);
-    }
 
-    // (3) THE FRAMES DO NOT JOIN THE LOG LINE EITHER. `pg` puts `CONTEXT:` and
-    //     `STATEMENT:` on `where`/`internalQuery`, but a caller that
-    //     concatenated them into `message` must not push SQL into the log, so
-    //     only the FIRST LINE is taken — asserted against a message shaped
-    //     exactly that way.
-    const framed = render(refusal('installment.schedule_incomplete'));
-    const framedLine = framed.logged.filter((l) => l.message === 'phase 4 installment invariant violated')[0];
-    expect(String(framedLine?.fields['refusal'])).not.toContain(POISON.sql);
-    expect(String(framedLine?.fields['refusal'])).not.toContain('CONTEXT:');
-    expect(String(framedLine?.fields['refusal'])).toContain('installment.schedule_incomplete:');
-    // NON-VACUITY: the fixture really does carry the frames that had to be cut.
-    expect(refusal('installment.schedule_incomplete').message).toContain(POISON.sql);
+    // ── (5) THE REFERENCE IS STATIC: the same invariant raised with DIFFERENT
+    //    keys and different figures logs the IDENTICAL reference. A reference
+    //    that varied with the row would be the leak in another costume.
+    const second = render(
+      pgError('P0001', `${PINNED}: the schedule of plan 11111111-2222-4000-8000-333333333333/44444444-5555-4000-8000-666666666666 reads 7 rows`),
+    );
+    const secondFields = second.logged.filter((l) => l.message === 'phase 4 installment invariant violated')[0]?.fields ?? {};
+    expect(secondFields['remedy']).toBe(fields['remedy']);
+    expect(JSON.stringify(secondFields)).not.toContain('11111111-2222-4000-8000-333333333333');
+
+    // ── (6) AND THE REFERENCE RESOLVES. For EVERY registered invariant: a
+    //    reference exists; its anchor occurs EXACTLY ONCE in the
+    //    specification, in its bracketed defining form; that occurrence is
+    //    inside section 3b; and the line it is on also names the invariant.
+    //    A reference into prose nobody checked is the defect this estate
+    //    rejects for, so the destination is read and not assumed.
+    const s3b = spec.indexOf("-- ── 3b. THE OPERATOR'S REMEDY INDEX");
+    expect(s3b, 'the specification carries no section 3b for the references to point at').toBeGreaterThan(-1);
+    const s3bEnd = spec.indexOf('\n-- ── 4. WHAT THIS SPECIFICATION DELIBERATELY DOES NOT CREATE', s3b);
+    expect(s3bEnd, 'section 3b is unterminated').toBeGreaterThan(s3b);
+    const index3b = spec.slice(s3b, s3bEnd);
+    const seen = new Set<string>();
+    for (const code of REGISTERED) {
+      const ref = installmentRemedyReference(code);
+      expect(ref, `${code} has no remedy reference`).not.toBeNull();
+      const anchor = String(ref).split('#')[1] ?? '';
+      expect(anchor, `${code}'s reference carries no anchor`).toMatch(/^p4s7-remedy-\d\d$/);
+      expect(seen.has(anchor), `${anchor} is the anchor of two invariants`).toBe(false);
+      seen.add(anchor);
+      const defining = `[${anchor}]`;
+      expect(spec.split(defining).length - 1, `${defining} does not occur exactly once in the specification`).toBe(1);
+      expect(index3b, `${defining} is not inside section 3b`).toContain(defining);
+      const at = index3b.indexOf(defining);
+      const line = index3b.slice(index3b.lastIndexOf('\n', at) + 1, index3b.indexOf('\n', at));
+      expect(line, `${defining} is not on a line that names ${code}`).toContain(code);
+    }
+    expect(seen.size).toBe(REGISTERED.length);
+    expect([...INSTALLMENT_REMEDY_ANCHOR_IDS].sort()).toStrictEqual([...seen].sort());
+
+    // ── (7) AND THE PROSE IS ACTUALLY THERE — the thing `R63` item 4 wanted a
+    //    reader to be able to DO. The entry the schedule_incomplete reference
+    //    points at carries both causes and the CTE spelling, and it is the
+    //    place the two-cause text now lives, since the message no longer
+    //    reaches anybody outside the process.
+    const scheduleAnchor = String(installmentRemedyReference('installment.schedule_incomplete')).split('#')[1] ?? '';
+    const entryAt = index3b.indexOf(`[${scheduleAnchor}]`);
+    const nextAt = index3b.indexOf('-- [p4s7-remedy-', entryAt + 1);
+    // The comment frame is removed and the lines joined before anything is
+    // matched, so no phrase of this law depends on where a sentence wraps in a
+    // SQL comment.
+    const entry = index3b
+      .slice(entryAt, nextAt < 0 ? index3b.length : nextAt)
+      .replace(/^-- ?/gm, '')
+      .replace(/\s+/g, ' ');
+    for (const phrase of ['TWO STATES REACH IT', 'DATA-MODIFYING CTE', 'SET CONSTRAINTS ALL IMMEDIATE', 'summing with `down_payment_minor`']) {
+      expect(entry, `the remedy index entry for schedule_incomplete does not carry ${phrase}`).toContain(phrase);
+    }
+    // ...and it does NOT reach the caller, which the generic body above already
+    // establishes for this refusal and which every registered code is held to
+    // by the case before this one.
   });
 
   it('REGRESSION: an unknown P0001, an unregistered installment.* and a 42501 are all still 403', () => {

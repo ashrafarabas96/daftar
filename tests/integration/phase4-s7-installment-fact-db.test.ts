@@ -342,14 +342,33 @@ function shippedStatement(head: string, mustMatch: readonly RegExp[]): string {
   return stmt;
 }
 
-/** The shipped restrictive read policy of `rel`, sliced out of the specification. */
-function shippedReadPolicy(rel: 'installment_plans' | 'installments'): string {
-  return shippedStatement(`CREATE POLICY business_isolation_read ON ${rel}`, [
+/**
+ * THE PROPERTIES A READ-POLICY SLICE MUST HAVE, FOR THE RELATION ASKED FOR,
+ * AS A NAMED FUNCTION SO THE RED PROOF USES THE SHIPPED LIST
+ * (`TL-P4-COORD-R69` ordered item 4, R16-4).
+ *
+ * THE RELATION IS PINNED IN THE PATTERNS AND NOT ONLY IN THE HEAD. The finding
+ * was filed against the concurrency suite's copy of this helper and it was
+ * true of this one too: the other four properties hold of BOTH read policies
+ * -- which is why one function takes the relation as a parameter -- so without
+ * the first pattern a slice that landed on the other relation would be
+ * certified and restored, which is the exact failure the helper exists to
+ * prevent. §A4 applies THIS list to the wrong relation and requires a throw,
+ * so deleting the relation pattern reds §A4.
+ */
+function readPolicyMustMatch(rel: 'installment_plans' | 'installments'): readonly RegExp[] {
+  return [
+    new RegExp(`ON ${rel}\\b`),
     /AS RESTRICTIVE FOR SELECT/,
     /app_bypass\(\)/,
     /daftar_accounting_internal/,
     /business_id = nullif\(app_business\(\), ''\)::uuid/,
-  ]);
+  ];
+}
+
+/** The shipped restrictive read policy of `rel`, sliced out of the specification. */
+function shippedReadPolicy(rel: 'installment_plans' | 'installments'): string {
+  return shippedStatement(`CREATE POLICY business_isolation_read ON ${rel}`, readPolicyMustMatch(rel));
 }
 
 /** The restrictive read policy as the specification ships it. */
@@ -2689,6 +2708,38 @@ describe('P4-S7 §A the specification applies', () => {
 
   it('the whole specification creates, applied as daftar_migrator', () => {
     expect(specError, `the specification did not apply: ${specError ?? ''}`).toBeNull();
+  });
+
+  /**
+   * A4 — THE SLICER'S NON-VACUITY, EXECUTED (`TL-P4-COORD-R69` ordered item 4,
+   * R16-4). The finding was filed against the concurrency suite's copy of this
+   * helper and it was true of this one as well: the four properties round 16
+   * pinned hold of BOTH read policies, so the relation was carried by the HEAD
+   * alone and a slice that caught the other relation would have been certified
+   * and restored. Round 16 declared the arms DESIGN ONLY; they are executed
+   * here, in the shipped suite, every run.
+   */
+  it('A4 the read-policy slicer pins its RELATION: the wrong one throws and both right ones do not', () => {
+    // (a) THE GAP ITSELF: the other relation's policy satisfies every property
+    //     round 16 pinned -- measured, not argued -- so the relation pattern
+    //     is the only thing that can refuse it.
+    const other = shippedStatement('CREATE POLICY business_isolation_read ON installments', []);
+    for (const re of [/AS RESTRICTIVE FOR SELECT/, /app_bypass\(\)/, /daftar_accounting_internal/, /business_id = nullif\(app_business\(\), ''\)::uuid/]) {
+      expect(re.test(other), `round 16's pattern ${String(re)} is NOT true of the installments policy`).toBe(true);
+    }
+    // THE SHIPPED LIST ITSELF refuses the wrong relation -- delete the
+    // relation pattern from `readPolicyMustMatch` and this goes red.
+    expect(() => shippedStatement('CREATE POLICY business_isolation_read ON installments', readPolicyMustMatch('installment_plans'))).toThrow(
+      /does not satisfy/,
+    );
+    // (b) an unsatisfiable pattern throws, and an absent head throws.
+    expect(() => shippedStatement('CREATE POLICY business_isolation_read ON installment_plans', [/__NO_SUCH_TEXT__/])).toThrow(/does not satisfy/);
+    expect(() => shippedStatement('CREATE POLICY no_such_policy ON installments', [])).toThrow(/is not in the specification/);
+    // (c) THE CONTROL: both shipped slices certify, and each lands on its own
+    //     relation rather than on the other.
+    expect(shippedReadPolicy('installment_plans')).toContain('ON installment_plans');
+    expect(shippedReadPolicy('installments')).toContain('ON installments');
+    expect(shippedReadPolicy('installments')).not.toContain('ON installment_plans');
   });
 });
 

@@ -174,14 +174,37 @@ function shippedFactSyncTrigger(): string {
   ]);
 }
 
+/**
+ * THE PROPERTIES THE PLAN READ POLICY'S SLICE MUST HAVE, AS A NAMED LIST SO
+ * THE RED PROOF USES THE SHIPPED ONE (`TL-P4-COORD-R69` ordered item 4,
+ * R16-4).
+ *
+ * THE RELATION IS PINNED HERE AND NOT ONLY IN THE HEAD. The other four
+ * patterns are ALL TRUE of the `installments` read policy as well -- it is
+ * restrictive FOR SELECT, it names `app_bypass()`, it names
+ * `daftar_accounting_internal`, and it carries the same `business_id`
+ * predicate -- so the helper's stated purpose, «a slice that caught the WRONG
+ * STATEMENT throws instead of restoring something weaker», was satisfied by the
+ * wrong statement. Non-vacuity that leans on the head cannot certify that the
+ * head found the right thing, which is the one question it exists to answer.
+ *
+ * IT IS A CONSTANT RATHER THAN AN INLINE LITERAL BECAUSE §A3 APPLIES THIS VERY
+ * LIST to the other relation and requires a throw. Round 16 declared its
+ * `mustMatch` arms DESIGN ONLY; the round-16 challenger executed them and
+ * found this gap. Now deleting the relation pattern from this list REDS §A3,
+ * which is the difference between a certified property and a described one.
+ */
+const PLAN_READ_POLICY_MUST_MATCH: readonly RegExp[] = [
+  /ON installment_plans\b/,
+  /AS RESTRICTIVE FOR SELECT/,
+  /app_bypass\(\)/,
+  /daftar_accounting_internal/,
+  /business_id = nullif\(app_business\(\), ''\)::uuid/,
+];
+
 /** The shipped restrictive read policy on `installment_plans`, for every §C restore. */
 function shippedPlanReadPolicy(): string {
-  return shippedStatement('CREATE POLICY business_isolation_read ON installment_plans', [
-    /AS RESTRICTIVE FOR SELECT/,
-    /app_bypass\(\)/,
-    /daftar_accounting_internal/,
-    /business_id = nullif\(app_business\(\), ''\)::uuid/,
-  ]);
+  return shippedStatement('CREATE POLICY business_isolation_read ON installment_plans', PLAN_READ_POLICY_MUST_MATCH);
 }
 
 /**
@@ -787,6 +810,64 @@ describe('P4-S7 §A the parser, and the end-state block is NOT VACUOUS', () => {
     for (const token of ['indisvalid', 'indisready', 'indislive', 'tgenabled', 'c_bodies', 'sha256']) {
       expect(b, `the sliced block does not contain ${token}`).toContain(token);
     }
+  });
+
+  /**
+   * A3 — `mustMatch` IS LOAD-BEARING, AND THE PROOF IS EXECUTED RATHER THAN
+   * DECLARED (`TL-P4-COORD-R69` ordered item 4, R16-4).
+   *
+   * Round 16 shipped `shippedStatement(head, mustMatch)` and said plainly that
+   * its non-vacuity arms had NO EXECUTED RED PROOF — DESIGN ONLY. The round-16
+   * challenger built the proof and three of its four results were in the
+   * round's favour; the fourth was not: `shippedPlanReadPolicy`'s four
+   * patterns were all true of the `installments` policy, so a slice that
+   * caught the WRONG RELATION threw nothing. «DESIGN ONLY is a disclosure and
+   * not a pass» — so the proof lives here now, in the shipped suite, and it
+   * runs every time this file runs.
+   *
+   * Four arms, and the first is the one that was open:
+   *   (a) the wrong-relation slice THROWS, now that the relation is pinned;
+   *   (b) an unsatisfiable pattern THROWS, for each of the four heads this
+   *       file slices, so the mechanism is not decorative on any of them;
+   *   (c) an absent head THROWS rather than returning an empty string;
+   *   (d) and the four shipped helpers do NOT throw, which is the control that
+   *       stops (a) to (c) passing for want of a working slicer.
+   */
+  it('A3 mustMatch is load-bearing: the wrong relation, an unsatisfiable pattern and an absent head each THROW', () => {
+    // (a) THE ROUND-16 GAP, EXECUTED. The `installments` read policy satisfies
+    //     every property the plan policy's old patterns pinned, so this slice
+    //     is the one the helper promised to refuse and did not.
+    expect(() => shippedStatement('CREATE POLICY business_isolation_read ON installments', PLAN_READ_POLICY_MUST_MATCH)).toThrow(/does not satisfy/);
+    // ...and it is THE SHIPPED LIST that refuses it, not a list written here:
+    // delete the relation pattern from `PLAN_READ_POLICY_MUST_MATCH` and the
+    // assertion above goes red. That is what makes this a certification of the
+    // helper rather than a demonstration beside it.
+    // ...and the thing that makes (a) a REAL gap rather than a contrived one:
+    // the four patterns round 16 shipped are each TRUE of that other policy,
+    // measured here and not argued.
+    const other = shippedStatement('CREATE POLICY business_isolation_read ON installments', []);
+    for (const re of [/AS RESTRICTIVE FOR SELECT/, /app_bypass\(\)/, /daftar_accounting_internal/, /business_id = nullif\(app_business\(\), ''\)::uuid/]) {
+      expect(re.test(other), `round 16's pattern ${String(re)} is NOT true of the installments policy`).toBe(true);
+    }
+    // (b) AN UNSATISFIABLE PATTERN THROWS, on every head this file slices.
+    for (const head of [
+      'CREATE UNIQUE INDEX installment_plans_one_active_per_invoice_uq',
+      'CREATE TRIGGER installment_plans_fact_sync',
+      'CREATE POLICY business_isolation_read ON installment_plans',
+      'CREATE TRIGGER installment_plans_active_exclusive',
+    ]) {
+      expect(() => shippedStatement(head, [/__NO_SUCH_TEXT_IN_THE_SPECIFICATION__/]), head).toThrow(/does not satisfy/);
+      // and each head occurs EXACTLY ONCE, so the slice cannot land on prose.
+      expect(SPEC.split(head).length - 1, `${head} is not unique in the specification`).toBe(1);
+    }
+    // (c) AN ABSENT HEAD THROWS.
+    expect(() => shippedStatement('CREATE POLICY no_such_policy ON installment_plans', [])).toThrow(/is not in the specification/);
+    // (d) THE CONTROL: the four shipped helpers slice and certify.
+    expect(() => shippedActivePlanIndex()).not.toThrow();
+    expect(() => shippedFactSyncTrigger()).not.toThrow();
+    expect(() => shippedPlanReadPolicy()).not.toThrow();
+    expect(() => shippedExclusiveTrigger()).not.toThrow();
+    expect(shippedPlanReadPolicy(), 'the plan read policy sliced the wrong relation').toContain('ON installment_plans');
   });
 });
 

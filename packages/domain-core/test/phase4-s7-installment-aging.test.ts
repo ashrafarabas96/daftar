@@ -4663,7 +4663,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
       { kind: 'refuted/never-executed', re: /never executed/i, refutedBy: 'the live suite fires the schedule verifier at COMMIT in four directions' },
       { kind: 'refuted/never-fired', re: /triggers? (?:have|has) never fired/i, refutedBy: 'the live and concurrency suites fire them' },
       { kind: 'refuted/never-compiled', re: /never been compiled/i, refutedBy: 'the aging-db suite reads prosecdef and the owner out of pg_proc' },
-      { kind: 'refuted/not-met', re: /is NOT\s+MET/, refutedBy: '«at the DATABASE level» is met for the obligations the live suite fires' },
+      { kind: 'refuted/not-met', re: /is NOT\s+MET/i, refutedBy: '«at the DATABASE level» is met for the obligations the live suite fires' },
       {
         kind: 'refuted/trigger-count',
         re: /the two constraint triggers/i,
@@ -4671,35 +4671,90 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
       },
       {
         kind: 'refuted/every-statement-spec-only',
-        re: /EVERY STATEMENT BELOW IS `SPEC ONLY`/,
+        re: /EVERY STATEMENT BELOW IS `SPEC ONLY`/i,
         refutedBy: 'the statements below are applied, parsed and executed',
       },
     ];
-    const MANDATORY: readonly { readonly kind: string; readonly holds: (s: string) => boolean; readonly want: string }[] = [
+    // ── THE SECOND HALF NOW ASSERTS THE **CLAIMS** AND NOT THE TOKENS
+    //    (`TL-P4-COORD-R69` ordered item 2, R16-1) ───────────────────────
+    //
+    // Round 16's five `MANDATORY` predicates tested TOKEN PRESENCE, and the
+    // round-16 challenger replicated them and passed a header through that was
+    // specific, mandatory-complete and the EXACT NEGATION of the truth:
+    // `/COMPILED/` matches «NOT COMPILED», `s.includes('THREE run')` matches
+    // «THREE run … ON PAPER ONLY», and naming the four suites in order to DENY
+    // them satisfied `appliers.every(…)`. Zero findings. So the floor meant to
+    // stop a vague header passing constrained VOCABULARY and not TRUTH on the
+    // five facts this law derives from the tree, and `R67` §3's reading of item
+    // 3 as the structural fix was withdrawn until this was repaired.
+    //
+    // Each predicate below requires the AFFIRMATIVE PROPOSITION: the verb
+    // phrase, not the noun. «FOUR integration suites EXECUTE THE WHOLE OF THIS
+    // FILE» rather than «FOUR integration suites»; «`installment_schedule_verify()`
+    // IS COMPILED» rather than the token `COMPILED`; «THE CONSTRAINT TRIGGERS
+    // FIRE» in terms; «NO DEPLOYED CLUSTER CARRIES ANY OF IT» in terms. Arm (vi)
+    // below is the negation header itself, as a permanent red proof.
+    //
+    // AND EVERY PREDICATE IS CASE-INSENSITIVE, which is `R69` item 2's third
+    // clause (R16-5): round 16's predicates reded a TRUE header written in
+    // lowercase on two of five, and a law that polices capitalisation while
+    // passing a negation is measuring the wrong thing. Arm (v) is a true
+    // lowercase header and it must produce NO finding.
+    //
+    // WHAT THIS STILL DOES NOT ESTABLISH, said plainly rather than left for a
+    // sixth challenger: these are predicates over PHRASING. A header that
+    // asserts each proposition in these words and then appends a defeater to
+    // it -- «… on paper» after the claim rather than inside it -- satisfies
+    // them. What is established is that the proposition must be ASSERTED and
+    // that its negation in place of the assertion REDS, which is the class the
+    // challenger exhibited; English is not decidable and this law does not
+    // pretend to decide it.
+    const CLAIMS: readonly { readonly kind: string; readonly holds: (s: string) => boolean; readonly want: string }[] = [
       {
-        kind: 'unspecific/appliers',
+        kind: 'claim/applied-parsed-executed',
+        holds: (s) => /IT IS APPLIED, PARSED AND EXECUTED/i.test(s),
+        want: 'in terms, that the file IS APPLIED, PARSED AND EXECUTED',
+      },
+      {
+        kind: 'claim/appliers',
         holds: (s) => appliers.every((f) => s.includes(f)),
         want: `every suite that applies this file, by name: ${appliers.join(', ')}`,
       },
       {
-        kind: 'unspecific/applier-count',
-        holds: (s) => new RegExp(`${word(appliers.length)} integration suites`).test(s),
-        want: `the count of applying suites, as «${word(appliers.length)} integration suites»`,
+        kind: 'claim/applier-count',
+        holds: (s) => new RegExp(`(?:${word(appliers.length)}|${String(appliers.length)}) integration suites execute the whole of this file`, 'i').test(s),
+        want: `the ASSERTION «${word(appliers.length)} integration suites execute the whole of this file», and not merely the count`,
       },
       {
-        kind: 'unspecific/parsed',
-        holds: (s) => s.includes('installment_schedule_verify()') && /COMPILED/.test(s),
-        want: 'that `installment_schedule_verify()` is COMPILED',
+        kind: 'claim/parsed',
+        holds: (s) => /`?installment_schedule_verify\(\)`? is\s+COMPILED/i.test(s),
+        want: 'that `installment_schedule_verify()` IS COMPILED — the assertion, not the token, which «NOT COMPILED» also carries',
       },
       {
-        kind: 'unspecific/trigger-count',
-        holds: (s) => s.includes(`${word(scheduleTriggers.length)} run`) && s.includes(`${word(constraintTriggers.length)} \`CREATE CONSTRAINT TRIGGER\``),
-        want: `both counts: ${word(scheduleTriggers.length)} running the verifier, ${word(constraintTriggers.length)} constraint triggers in all`,
+        kind: 'claim/triggers-fire',
+        holds: (s) => /THE CONSTRAINT TRIGGERS FIRE/i.test(s),
+        want: 'in terms, that THE CONSTRAINT TRIGGERS FIRE',
       },
       {
-        kind: 'unspecific/spec-only',
-        holds: (s) => /SPEC ONLY/.test(s) && s.includes('migrations/') && s.includes('manifest') && s.includes('PR-6') && s.includes('PR-8'),
-        want: 'what is STILL `SPEC ONLY`, naming `migrations/`, the manifest, PR-6 and PR-8',
+        kind: 'claim/trigger-count',
+        holds: (s) =>
+          new RegExp(
+            `(?:${word(constraintTriggers.length)}|${String(constraintTriggers.length)}) \`CREATE CONSTRAINT TRIGGER\` statements are below`,
+            'i',
+          ).test(s) &&
+          new RegExp(`(?:${word(scheduleTriggers.length)}|${String(scheduleTriggers.length)}) run\\s+\`installment_schedule_verify\\(\\)\``, 'i').test(s),
+        want: `both counts AS CLAIMS: «${word(constraintTriggers.length)} \`CREATE CONSTRAINT TRIGGER\` statements are below» and «${word(scheduleTriggers.length)} run \`installment_schedule_verify()\`»`,
+      },
+      {
+        kind: 'claim/spec-only',
+        holds: (s) =>
+          /SPEC ONLY/i.test(s) &&
+          /migrations\//i.test(s) &&
+          /manifest/i.test(s) &&
+          /PR-6/i.test(s) &&
+          /PR-8/i.test(s) &&
+          /NO DEPLOYED CLUSTER CARRIES ANY OF IT/i.test(s),
+        want: 'what is STILL `SPEC ONLY`, naming `migrations/`, the manifest, PR-6 and PR-8, AND the assertion that NO DEPLOYED CLUSTER CARRIES ANY OF IT',
       },
     ];
     const findings = (section: string | null): readonly string[] => {
@@ -4707,7 +4762,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
       const text = flatten(section);
       const out: string[] = [];
       for (const r of REFUTED) if (r.re.test(text)) out.push(`${r.kind}: the header claims ${String(r.re)} — refuted by ${r.refutedBy}`);
-      for (const m of MANDATORY) if (!m.holds(text)) out.push(`${m.kind}: the header does not state ${m.want}`);
+      for (const m of CLAIMS) if (!m.holds(text)) out.push(`${m.kind}: the header does not assert ${m.want}`);
       return out;
     };
 
@@ -4740,7 +4795,15 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     const vague = `-- │ ${HEADING}: readiness is a matter for the reader; see the suites.`;
     const vagueFindings = findings(vague);
     expect(vagueFindings.length, `a vague header produced only: ${vagueFindings.join(' | ')}`).toBeGreaterThanOrEqual(4);
-    for (const kind of ['unspecific/appliers', 'unspecific/parsed', 'unspecific/trigger-count', 'unspecific/spec-only']) {
+    for (const kind of [
+      'claim/appliers',
+      'claim/parsed',
+      'claim/trigger-count',
+      'claim/spec-only',
+      'claim/applied-parsed-executed',
+      'claim/triggers-fire',
+      'claim/applier-count',
+    ]) {
       expect(
         vagueFindings.some((f) => f.startsWith(kind)),
         `a vague header passed ${kind}`,
@@ -4755,5 +4818,196 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     //         contain, which is exactly what a rename produces.
     const drifted = [...appliers, 'phase4-s7-installment-not-yet-written-db.test.ts'];
     expect(drifted.every((f) => String(live).includes(f))).toBe(false);
+
+    // ── (v) THE ORTHOGRAPHY SENSITIVITY IS GONE (`TL-P4-COORD-R69` item 2,
+    //         R16-5): the shipped header, true, written in lower case,
+    //         produces NO finding. Round 16's predicates reded it on two of
+    //         five.
+    expect(findings(String(live).toLowerCase()), 'a TRUE header in lower case reds, which is a law about capitalisation').toEqual([]);
+
+    // ── (vi) RED PROOF, THE NEGATION ARM — THE SIXTH ONE, AND THE ONE THIS
+    //          ROUND EXISTS FOR (`TL-P4-COORD-R69` item 2, R16-1).
+    //
+    //  A header that is SPECIFIC, carries every mandatory subject, names all
+    //  four suites, and asserts the EXACT NEGATION of all five derived facts.
+    //  The round-16 challenger fed exactly this to round 16's predicates and
+    //  got ZERO findings. Here it must red, and it must red on the CLAIMS it
+    //  negates and not merely somewhere: that is the difference between
+    //  asserting a proposition and mentioning its vocabulary. The subjects are
+    //  derived, so this arm tracks the tree with the law.
+    const negation =
+      `-- │ ${HEADING}, NEGATED:\n` +
+      `-- │ ${word(appliers.length)} integration suites exist -- ${appliers.join(', ')} -- and NOT ONE OF THEM\n` +
+      `-- │ reaches a cluster; the parser has never had sight of this file, so\n` +
+      `-- │ \`installment_schedule_verify()\` is NOT COMPILED and could not be.\n` +
+      `-- │ ${word(constraintTriggers.length)} \`CREATE CONSTRAINT TRIGGER\` statements are written below and\n` +
+      `-- │ ${word(scheduleTriggers.length)} run the schedule verifier ON PAPER ONLY; none has ever fired.\n` +
+      `-- │ What is SPEC ONLY is all of it: no \`migrations/\` entry, no manifest\n` +
+      `-- │ entry, PR-6 and PR-8 outstanding.`;
+    const negationFindings = findings(negation);
+    for (const kind of [
+      'claim/applied-parsed-executed',
+      'claim/applier-count',
+      'claim/parsed',
+      'claim/triggers-fire',
+      'claim/trigger-count',
+      'claim/spec-only',
+    ]) {
+      expect(
+        negationFindings.some((f) => f.startsWith(kind)),
+        `the NEGATION header satisfied ${kind}; findings: ${negationFindings.join(' | ')}`,
+      ).toBe(true);
+    }
+    // AND THE NEGATION PASSES `claim/appliers` ON PURPOSE, recorded rather
+    // than hidden: naming the four suites is what that predicate asks, and a
+    // header may name them in order to deny them. The denial is caught by the
+    // five claims above, which is where it belongs — a NAME is not a CLAIM.
+    expect(negationFindings.some((f) => f.startsWith('claim/appliers'))).toBe(false);
+  });
+
+  /**
+   * ── H17 THE GATE PARAGRAPH'S OFFSETS AND ITS EXIT COUNT ARE READ OUT OF
+   *    THE BODY (`TL-P4-COORD-R69` ordered items 3 and 5; R16-3 and R16-6) ──
+   *
+   * WHY THIS LAW EXISTS. Section 3's gate paragraph locates itself and four
+   * other sites by BYTE OFFSET into `installment_schedule_verify()`'s own
+   * dollar-quoted body, and it ENUMERATES the `RETURN NULL` exits above the
+   * gate. Round 16 typed both: six offsets it had to iterate to a fixed point
+   * (writing the numbers into the body moves the body, and therefore the
+   * numbers) and a count of «three» exits when there are FOUR — the
+   * `IF v_status <> 'active'` exit was unlisted. That count had moved three
+   * times by then, every time because it was read off a sentence. Round 16
+   * disclosed the offset hole in its own report and said plainly that NO LAW
+   * READ THEM; the round-16 challenger measured that all six were correct at
+   * that SHA and that the exposure was any future edit above offset 6172.
+   *
+   * SO THE PARAGRAPH IS NOW A SUBJECT AND NOT AN ASSERTION. Every number in
+   * it, and the count word, are derived here out of the body text and compared
+   * against what the paragraph says. An edit anywhere in this routine that
+   * moves any landmark reds HERE, in a pure-function suite that needs no
+   * cluster, instead of leaving a stale number for a sixth challenger.
+   *
+   * THE PREMISE THIS LAW DEPENDS ON, NAMED. The offsets are offsets into the
+   * `$fn$`-quoted body as the FILE ships it. That the installed `prosrc` is
+   * byte-identical to that text is a separate claim, and it is established by
+   * a separate instrument — the `c_bodies` digest coupling, asserted in both
+   * directions by the digest laws of this same file. This law establishes the
+   * paragraph against the FILE and claims nothing about a cluster.
+   *
+   * WHAT IT DOES NOT CATCH: it reads the four landmarks the paragraph names.
+   * A landmark the paragraph stops naming altogether is caught (the slice
+   * fails), but a NEW site the paragraph should have named and does not is
+   * outside it — except for the exit enumeration, which IS exhaustive, because
+   * every `RETURN NULL` occurrence above the gate must be one of the exits it
+   * lists.
+   */
+  it('H17 THE GATE PARAGRAPH IS READ: every printed offset and the exit COUNT are derived from the routine body', () => {
+    // ── THE BODY, sliced exactly as the digest extractor slices it: the
+    //    characters between the opening and closing dollar quotes of this one
+    //    routine, taken literally and never normalised.
+    const head = 'CREATE OR REPLACE FUNCTION installment_schedule_verify() RETURNS TRIGGER';
+    const h = SPEC.indexOf(head);
+    expect(h, 'the schedule verifier is no longer in the specification').toBeGreaterThan(-1);
+    const open = SPEC.indexOf('$fn$', h);
+    const close = SPEC.indexOf('$fn$', open + 4);
+    expect(close, 'the schedule verifier body is not dollar-quoted').toBeGreaterThan(open);
+    const body = SPEC.slice(open + 4, close);
+    expect(body.length, 'the sliced body is too short to be this routine').toBeGreaterThan(5000);
+
+    // ── THE LANDMARKS, DERIVED. Each is located by the text of the statement
+    //    itself, never by a number.
+    const gate = body.indexOf('IF v_down + v_sched <> v_total OR v_rows < 1');
+    const ceiling = body.indexOf('IF v_rows > 60');
+    const invoiceArm = body.indexOf("RAISE EXCEPTION 'installment.schedule_incomplete: (a) invoice");
+    for (const [name, at] of [
+      ['the gate IF', gate],
+      ['obligation (d)', ceiling],
+      ['the invoices-arm refusal of (a)', invoiceArm],
+    ] as const) {
+      expect(at, `${name} is not in the body, so this law has no subject`).toBeGreaterThan(-1);
+    }
+    const inComment = (at: number): boolean => {
+      const ls = body.lastIndexOf('\n', at) + 1;
+      return body.slice(ls, at).trimStart().startsWith('--');
+    };
+    const guardedExits = [...body.matchAll(/IF[^\n]*RETURN NULL;/g)].map((m) => m.index ?? -1).filter((at) => !inComment(at));
+    const exitsAboveGate = guardedExits.filter((at) => at < gate).sort((a, b) => a - b);
+    expect(exitsAboveGate.length, 'no guarded RETURN NULL exit above the gate').toBeGreaterThan(0);
+    // AND THE ENUMERATION IS EXHAUSTIVE OVER THE TOKEN, which is the half the
+    // count kept failing: EVERY `RETURN NULL` occurrence above the gate must
+    // be one of the guarded exits, so a new unguarded one cannot hide.
+    // The scan is over the CODE and not the comments: this very paragraph
+    // writes the token `RETURN NULL` in prose, and a law that counted its own
+    // subject's description would be measuring itself.
+    const everyReturnNull = [...body.matchAll(/RETURN NULL/g)].map((m) => m.index ?? -1).filter((at) => at < gate && !inComment(at));
+    expect(
+      everyReturnNull.every((at) => exitsAboveGate.some((e) => at >= e && at <= e + 60)),
+      'a RETURN NULL above the gate is not one of the guarded exits the paragraph enumerates',
+    ).toBe(true);
+    expect(everyReturnNull.length, 'the token scan and the guarded-exit scan disagree above the gate').toBe(exitsAboveGate.length);
+    expect(ceiling, 'obligation (d) is not below the gate, so the paragraph describes a different routine').toBeGreaterThan(gate);
+
+    // ── THE PARAGRAPH, SLICED on its own heading and its last bullet.
+    const pa = body.indexOf('-- THE SCOPE IS (a), (b) AND (c), AND NOT (d), AND NOT EVERY EXIT ABOVE');
+    expect(pa, 'the gate paragraph is no longer in the body').toBeGreaterThan(-1);
+    const pb = body.indexOf('conditions of the `IF`', pa);
+    expect(pb, 'the gate paragraph does not reach its obligation-(d) bullet').toBeGreaterThan(pa);
+    const para = body.slice(pa, pb);
+
+    // ── AND NOW THE COMPARISONS. Printed against derived, one landmark at a
+    //    time, with the finding naming both numbers.
+    const printed = (re: RegExp, what: string): number => {
+      const m = re.exec(para);
+      expect(m, `the gate paragraph no longer states ${what}`).not.toBeNull();
+      return Number((m as RegExpExecArray)[1]);
+    };
+    expect(printed(/the gate's `IF` is at (\d+)/, "the gate's own offset"), "the gate's printed offset").toBe(gate);
+    expect(printed(/refusal of \(a\) at (\d+)/, "the invoices-arm refusal's offset"), "the (a) arm's printed offset").toBe(invoiceArm);
+    expect(printed(/obligation \(d\) at (\d+)/, "obligation (d)'s offset"), "obligation (d)'s printed offset").toBe(ceiling);
+
+    // THE EXIT LIST: the parenthesised offsets of the enumeration bullet, in
+    // the order it writes them, against the derived exits in body order.
+    const bullet = para.slice(para.indexOf('`RETURN NULL` exits above it'));
+    const printedExits = [...bullet.matchAll(/\((\d{3,6})\)/g)].map((m) => Number(m[1]));
+    expect(printedExits, 'the enumerated exit offsets disagree with the body').toEqual(exitsAboveGate);
+
+    // AND THE COUNT WORD, which is the number R16-3 found wrong — taken from
+    // the body here and not from the sentence.
+    const WORDS = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'] as const;
+    const countWord = /the (ZERO|ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE) `RETURN NULL` exits above it/i.exec(para);
+    expect(countWord, 'the gate paragraph no longer states the exit count as a word').not.toBeNull();
+    expect(String((countWord as RegExpExecArray)[1]).toUpperCase(), 'the printed exit COUNT disagrees with the body').toBe(
+      WORDS[exitsAboveGate.length] ?? String(exitsAboveGate.length),
+    );
+
+    // ── RED PROOFS, IN MEMORY: the law must red on a stale number, on a stale
+    //    COUNT, and on a dropped exit — the three ways this paragraph has
+    //    actually gone wrong.
+    const findingsOf = (p: string): readonly string[] => {
+      const out: string[] = [];
+      const g = /the gate's `IF` is at (\d+)/.exec(p);
+      if (g === null || Number(g[1]) !== gate) out.push('stale/gate');
+      const d = /obligation \(d\) at (\d+)/.exec(p);
+      if (d === null || Number(d[1]) !== ceiling) out.push('stale/ceiling');
+      const b = p.slice(p.indexOf('`RETURN NULL` exits above it'));
+      const pe = [...b.matchAll(/\((\d{3,6})\)/g)].map((m) => Number(m[1]));
+      if (pe.length !== exitsAboveGate.length || pe.some((v, i) => v !== exitsAboveGate[i])) out.push('stale/exits');
+      const cw = /the (ZERO|ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE) `RETURN NULL` exits above it/i.exec(p);
+      if (cw === null || String(cw[1]).toUpperCase() !== (WORDS[exitsAboveGate.length] ?? '')) out.push('stale/count');
+      return out;
+    };
+    // The live paragraph is clean, which is the control that stops the three
+    // arms below passing for want of a working predicate.
+    expect(findingsOf(para)).toEqual([]);
+    expect(findingsOf(para.replace(`is at ${String(gate)}`, `is at ${String(gate + 1)}`))).toContain('stale/gate');
+    expect(findingsOf(para.replace(`obligation (d) at ${String(ceiling)}`, `obligation (d) at ${String(ceiling - 7)}`))).toContain('stale/ceiling');
+    // THE ROUND-16 DEFECT ITSELF, planted back: the count said THREE and the
+    // last exit was not listed. Both arms must fire.
+    const asRound16 = para
+      .replace(/the FOUR `RETURN NULL` exits above it/i, 'the THREE `RETURN NULL` exits above it')
+      .replace(` and\n  --     the plan not active (${String(exitsAboveGate[exitsAboveGate.length - 1] ?? 0)})`, '');
+    const r16 = findingsOf(asRound16);
+    expect(r16, `round 16's own enumeration did not red; findings: ${r16.join(' | ')}`).toContain('stale/count');
+    expect(r16, `dropping the fourth exit did not red; findings: ${r16.join(' | ')}`).toContain('stale/exits');
   });
 });

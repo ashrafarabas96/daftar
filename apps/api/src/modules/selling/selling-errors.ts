@@ -759,6 +759,78 @@ const INSTALLMENT_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
 export const INSTALLMENT_INTERNAL_INVARIANT_CODES: readonly string[] = [...INSTALLMENT_INTERNAL_INVARIANTS];
 
 /**
+ * ── THE STATIC REMEDY REFERENCE, ONE PER REGISTERED INVARIANT
+ *    (`TL-P4-COORD-R69` §1 and ordered item 1, which NARROWS
+ *    `TL-P4-COORD-R63` item 4) ──────────────────────────────────────────────
+ *
+ * WHAT ROUND 16 DID AND WHY IT WAS WRONG. `R63` item 4 found that the remedy
+ * written into `installment.schedule_incomplete` reached NOBODY: the body is
+ * generic by contract and the log line carried the invariant NAME alone.
+ * Round 16 repaired it by logging the refusal's FIRST LINE — and
+ * `error.filter.ts:148-152`, thirty lines above the branch that logs it and
+ * untouched since, states the estate's boundary in terms: «SQL, THE ROUTINE'S
+ * MESSAGE AFTER THE COLON, AN AMOUNT, a journal entry id, an assertion body
+ * and a stack never leave the process». The first line IS the routine's
+ * message after the colon. A LOG LINE LEAVES THE PROCESS — that is what a log
+ * is for — so the rule governs it, and the rule stands: `R69` refuses the
+ * amendment that would have let the message through.
+ *
+ * SO WHAT LEAVES IS A REFERENCE AND NEVER PROSE. The log carries the
+ * invariant NAME and the STATIC reference below: a stable anchor into
+ * `infrastructure/database/specifications/p4s7-installment-aging.spec.sql`,
+ * IDENTICAL FOR EVERY OCCURRENCE of that invariant, carrying no identifier,
+ * no amount, no count and no fragment of the message. The prose the operator
+ * needs — the two causes of `schedule_incomplete`, the `REINDEX` of an
+ * unenforcing index, the seven triggers — lives in SECTION 3b of that file,
+ * at the anchor, which is `R63` item 4's second option arriving by the front
+ * door.
+ *
+ * THE ANCHOR IS NOT DERIVED FROM THE CODE, deliberately: this is a TABLE and
+ * a missing entry is a `null` the guard suite reds on, not a string composed
+ * out of the name that would resolve to nothing and look fine.
+ *
+ * WHAT READS THIS, so the table is not a claim about a destination nobody
+ * checks: `tests/guards/p4s7-installment-filter-contract.test.ts` requires
+ * every registered invariant to have an entry, requires each anchor to occur
+ * EXACTLY ONCE in the specification, inside section 3b, on a line that also
+ * names that invariant — and requires the rendered log line to carry the
+ * reference while neither the message nor the identifiers it substitutes
+ * appear anywhere in the log line or the body.
+ */
+const INSTALLMENT_REMEDY_ANCHORS: ReadonlyMap<string, string> = new Map([
+  ['installment.plan_fact_unreadable', 'p4s7-remedy-01'],
+  ['installment.plan_fact_unflagged', 'p4s7-remedy-02'],
+  ['installment.plan_schedule_unreadable', 'p4s7-remedy-03'],
+  ['installment.schedule_incomplete', 'p4s7-remedy-04'],
+  ['installment.plan_fact_blind', 'p4s7-remedy-05'],
+  ['installment.plan_fact_desynchronised', 'p4s7-remedy-06'],
+  ['installment.plan_active_conflict', 'p4s7-remedy-07'],
+  ['installment.plan_active_unbounded', 'p4s7-remedy-08'],
+  ['installment.plan_fact_untrusted', 'p4s7-remedy-09'],
+  ['installment.plan_index_disagrees', 'p4s7-remedy-10'],
+  ['installment.plan_fact_unordered', 'p4s7-remedy-11'],
+  ['installment.plan_index_unenforcing', 'p4s7-remedy-12'],
+  ['installment.plan_fact_unwritable', 'p4s7-remedy-13'],
+]);
+
+/** The specification the remedy anchors live in, as the logged reference spells it. */
+export const INSTALLMENT_REMEDY_SPEC = 'p4s7-installment-aging.spec.sql';
+
+/**
+ * The STATIC remedy reference for a registered `installment.*` invariant, or
+ * null when the registry holds a name this table does not. It is a function of
+ * the NAME alone: no request, no row, no figure and no message text can change
+ * what it returns, which is the whole of why it may be logged.
+ */
+export function installmentRemedyReference(code: string): string | null {
+  const anchor = INSTALLMENT_REMEDY_ANCHORS.get(code);
+  return anchor === undefined ? null : `${INSTALLMENT_REMEDY_SPEC}#${anchor}`;
+}
+
+/** The anchor ids, in registry order — the list the guard suite resolves against the specification. */
+export const INSTALLMENT_REMEDY_ANCHOR_IDS: readonly string[] = [...INSTALLMENT_REMEDY_ANCHORS.values()];
+
+/**
  * ── THE TRANSACTION-MANAGER OUTCOMES, CLASSIFIED SO THEY STOP BEING AN
  *    UNNAMED 500 (`TL-P4-COORD-R59` ordered item 2, F14-2) ─────────────────
  *
