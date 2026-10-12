@@ -238,7 +238,7 @@ read it (end-state check (f)).
 |---|---|---|---|
 | `booking_resource_lock_key(UUID, UUID)` | `sql IMMUTABLE STRICT`, owned by `daftar_booking_internal`, pinned path | — | — |
 | `booking_lock_resources(UUID, UUID[])` | `plpgsql VOLATILE`, owned, pinned path | — | `booking.lock_set_invalid` |
-| `booking_resolve_local(TEXT, TIMESTAMP, INTERVAL)` | `plpgsql STABLE`, owned, pinned path | — | `booking.local_time_nonexistent`, `booking.local_time_ambiguous`, `booking.local_time_offset_mismatch`, `booking.timezone_unknown`, `booking.local_time_unresolvable` |
+| `booking_resolve_local(TEXT, TIMESTAMP, INTERVAL)` | `plpgsql STABLE`, owned, pinned path | — | `booking.local_time_nonexistent`, `booking.local_time_ambiguous`, `booking.local_time_offset_mismatch`, `booking.timezone_unknown`, `booking.local_time_unresolvable`, `booking.local_time_not_finite`, `booking.local_time_out_of_supported_range` |
 | `booking_replay_result(UUID, UUID, TEXT, TEXT)` | `plpgsql STABLE`, SECURITY INVOKER, owned, pinned path | — | `booking.replay_lookup_invalid`, `booking.replay_scope_mismatch`, `booking.operation_conflict`, `booking.operation_intent_conflict` |
 | `bookings_no_delete()` | raise-only, not a definer | `bookings_no_deletion` BEFORE DELETE | `booking.not_deletable` |
 | `bookings_transition()` | raise-only, not a definer | `bookings_transition_only` BEFORE UPDATE | `booking.immutable`, `booking.state_terminal`, `booking.state_not_reopenable` |
@@ -514,7 +514,7 @@ money-shaped column reached the schema.
 
 ## 9. EVIDENCE
 
-**70 cases over six suites, all green, on a live PostgreSQL 18.4 cluster**, with the
+**75 cases over six suites, all green with EXIT CODE 0, on a live PostgreSQL 18.4 cluster**, with the
 spec applied in one transaction as the non-superuser deployment principal
 `daftar_migrator` on top of the sealed Phase 3 head.
 
@@ -527,7 +527,7 @@ is mixed, and nothing is claimed in a stronger class than it was measured in.
 | `p9-booking-concurrency.test.ts` | 11 | PROVEN BY TEST (real concurrency) |
 | `p9-booking-negative-controls.test.ts` | 7 | PROVEN BY TEST (red proofs) |
 | `p9-booking-multi-resource.test.ts` | 10 | PROVEN BY TEST (real concurrency) |
-| `p9-booking-time.test.ts` | 16 | PROVEN BY TEST |
+| `p9-booking-time.test.ts` | 21 | PROVEN BY TEST |
 | `p9-booking-runtime-attack.test.ts` | 10 | PROVEN BY EXECUTED ATTACK (no superuser) |
 | any retention period, or an erasure path | — | **UNMEASURED** — owner-only; nothing deletable today |
 | the command layer | — | **SPEC ONLY** — not written |
@@ -578,7 +578,11 @@ is mixed, and nothing is claimed in a stronger class than it was measured in.
   name; the resolver's `STABLE` volatility asserted and PostgreSQL's own refusal to
   index it; and the soundness sweep over 14 000+ inputs across ten transition days in two
   zones, with an independent round-trip oracle, together with the control that shows
-  `AT TIME ZONE` failing that same sweep.
+  `AT TIME ZONE` failing that same sweep. The scan's width is ±1440 minutes, measured
+  over all 598 zones across the supported range in both directions, and the supported
+  range `1970-01-01`–`2100-01-01` is enforced by its own refusal. A copy of the earlier
+  ±180 scan is built in the scratch database to prove what it did wrong: it resolved
+  Antarctica/Vostok's 420-minute repeat silently instead of refusing it.
 
 Waits are observed through `pg_blocking_pids` against a separate observer connection,
 never slept for, and every barrier is explicit (PART 18). No timing or performance

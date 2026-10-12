@@ -21,13 +21,13 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 588 | 7 cases: each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
-| `tests/phase9-prep/p9-booking-time.test.ts` | 471 | 18 cases: the timezone / DST law (PART 51), its soundness sweep, and the measured tz bound |
+| `tests/phase9-prep/p9-booking-time.test.ts` | 574 | 21 cases: the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan and the two defects V3 named |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 350 | 10 cases: the schema attacked as the real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | 206 | the spec loader, the state contract parser, and the non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**72 of 72 cases green**, over six suites, on a live PostgreSQL 18.4 cluster. A case count is
+**75 of 75 cases green**, over six suites, on a live PostgreSQL 18.4 cluster. A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
 not how much of Phase 9 exists.
 
@@ -287,6 +287,12 @@ than it would be resolved silently, which is the one thing R-P9-13 exists to pre
 LIMITATION 12 now says exactly that, and the sentence it replaces was wider than its
 evidence.
 
+**V3 then went one step further, and it was right to.** Documenting a limitation is not the
+same as fixing it: a repeat wider than the bound was still being resolved silently in the
+historical range, and "bookings are future-dated" is a mitigation, not a law. V3 asked for
+the supported range to be declared with an enforced guard and for the claim **or the
+algorithm** to be fixed. Both were fixed — §3c.10.
+
 ### 3c.6 Retention — the rules that ARE approved, and the one that is not
 
 The rules the schema enforces today, which need no owner decision because they follow from
@@ -323,6 +329,44 @@ three are owed. The D11 PART 117 label for the same state is `PREPARED / NOT PRO
 two are the same claim, and this report uses both so neither vocabulary has to be guessed
 at.
 
+### 3c.10 Mission V3 — the scan fixed, and the exit code proved
+
+**1. The ±180 window was a defect, not a documented limit.** Measured: Antarctica/Vostok
+went from +07:00 to +00:00 on 1994-01-31, so seven wall-clock hours occur twice. At ±180
+the second occurrence is outside the scan, the time looks unambiguous, and the resolver
+**silently picked one** — the single thing R-P9-13 exists to prevent. The suite proves this
+against a COPY of the old scan created in the scratch database, so the defect is
+demonstrated rather than described, and nothing in the document is mutated to show it.
+
+The fix is in the algorithm, not in the prose:
+
+* the scan is **±1440 minutes**, measured to cover every transition in the supported range
+  in both directions;
+* the candidates are the **zone's own offsets**, read out of the zone with their seconds,
+  rather than whole-minute shifts of PostgreSQL's answer — the whole-minute premise is
+  measured false inside the range (Africa/Monrovia, -00:44:30 until 1972). No wrong answer
+  was found from that premise, so the suite and the spec both call it a premise removed and
+  not a defect repaired;
+* the **round-trip filter** is why widening is safe at all: a candidate survives only if
+  mapping it back into the zone returns exactly the wall clock asked for, so a wider scan
+  cannot invent a candidate.
+
+**2. The supported range is enforced.** `1970-01-01` to `2100-01-01`, refused by its own
+name (`booking.local_time_out_of_supported_range`), and it is exactly the span the scan's
+width is measured over. The inside edges are asserted to answer, so it is a boundary with
+evidence behind it and not the blanket ban on distant dates V3 warned against.
+
+**3. The run's exit code and identity are proved, not implied.** V3 observed that the
+previous log's ending did not show Vitest closing successfully — correct: vitest prints a
+"close timed out / something prevents Vite server from exiting" teardown warning after a
+successful run whose worker still holds the PostgreSQL pool, and that trailer is the last
+thing in the log. The stored artifact now opens with a run-identity header: subject SHA, a
+clean-tree count at run time, the command, start and finish in UTC, **EXIT CODE 0**, the
+node, vitest and PostgreSQL versions, and the result lines — plus the explanation of that
+trailer. The header also records that the container ships **Node 22.22.0 while this
+repository's `engines` requires >=24 <25**: the suites pass under 22, but a run on the
+declared version is owed at promotion, and that is stated rather than left to be inferred.
+
 ### 3c.9 Mission V2 — the four items it adds beyond V1
 
 1. **Evidence subject reconciled with the head.** V2 asks for `e077daa` (the subject the
@@ -351,7 +395,7 @@ at.
 
 ### 3c.8 The prep cases are not a sealed phase
 
-72 green cases say that the invariants in this document hold on a live server. They do not
+75 green cases say that the invariants in this document hold on a live server. They do not
 say Phase 9 exists: there is no command layer, no surface, no migration number, and these
 suites are not in required CI. §4 states that in full, and nothing in this report may be
 read as a promotion claim (PART 83).
@@ -442,21 +486,22 @@ Stated as limitations rather than left to be discovered.
     this slice after the Phase 4 candidates, and when Phase 4 is sealed these suites can be
     re-run against that head unchanged to confirm it.
 
-12. **The local-time scan is bounded to ±180 minutes**, and that bound is now MEASURED
-    rather than asserted — V2 of the Mission asked for the real resolver bound against
-    the lawful IANA transition, and the measurement corrected the claim that used to
-    stand here. Across all 598 zones this server knows, sampled every twelve hours over
-    2024–2030, the widest transition in either direction is **120 minutes**
-    (Antarctica/Troll). Over 1970–2040 the historical record is **wider than the bound**:
-    a 1440-minute date-line move (Kwajalein, 1993) and a 420-minute repeat
-    (Antarctica/Vostok). The two directions fail differently and the claim is now stated
-    that way: a GAP wider than the bound is still refused (measured on Kwajalein's
-    skipped day — the safe side, and the same answer a wider scan would give), while a
-    REPEAT wider than the bound would be resolved as unambiguous instead of refused,
-    which is the silent choice R-P9-13 exists to prevent. No such repeat exists in
-    2024–2030, and a booking is a future appointment — so the law holds where bookings
-    live, and that sentence is the honest width of it. The old wording ("every transition
-    is far inside the bound") was wider than its evidence and is withdrawn.
+12. **The local-time scan is bounded to ±1440 minutes over a declared range, and the
+    earlier ±180 claim was WRONG, not merely narrow.** V3 of the Mission said the ±180
+    window could pick an occurrence inside a longer historical repeat, and it was right:
+    Antarctica/Vostok moved from +07:00 to +00:00 on 1994-01-31, so seven wall-clock hours
+    occur twice, and at ±180 the old scan resolved such a time **silently** instead of
+    refusing it as ambiguous. That is proved against a copy of the old scan, and it is the
+    one defect in this phase that was found by a directive rather than by the suite. The
+    scan is now ±1440 minutes — measured to cover every transition in the supported range
+    in both directions (widest gap 1440, Kwajalein's 1993 date-line move; widest repeat
+    420, Vostok) — and the candidates are the zone's own offsets rather than whole-minute
+    shifts, because the whole-minute premise is measured false inside the range
+    (Africa/Monrovia, -00:44:30 until 1972; no wrong answer was found from it, so that part
+    is a premise removed and not a defect repaired). The supported range **1970-01-01 to
+    2100-01-01 is enforced** and refused by its own name. What remains limited: outside that
+    range the routine answers nothing, by design, and widening it means re-running the
+    measurement rather than editing a comment.
 13. **The DST cases depend on the server's tz database**, so the suite asserts the
     occurrence counts of its four moments from the server before relying on them. A tz
     update that moved a rule reds the suite rather than silently making its proofs

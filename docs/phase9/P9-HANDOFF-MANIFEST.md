@@ -77,21 +77,27 @@ byte-identical duplicates to canonicalize (PART 14).
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 11 | no double booking under real concurrency |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 7 | each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 10 | the global lock order (PART 50), idempotent retries and the replay (PART 53) |
-| `tests/phase9-prep/p9-booking-time.test.ts` | 18 | the timezone / DST law (PART 51), its soundness sweep, and the ±180 bound measured over every zone |
+| `tests/phase9-prep/p9-booking-time.test.ts` | 21 | the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan, and the two defects V3 named |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 10 | the schema attacked as the six real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | — | the spec loader and its non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | — | the race harness: `pg_blocking_pids`, never a sleep |
 
-**72 of 72 green**, on a live PostgreSQL 18.4 cluster, the spec applied in one
+**75 of 75 green, EXIT CODE 0**, on a live PostgreSQL 18.4 cluster, the spec applied in one
 transaction as the non-superuser deployment principal on top of the sealed Phase 3
 head. Run with `npx vitest run tests/phase9-prep`.
 
 The run's own output is stored as `/mnt/project-files/phase9/P9-RUN-LOG.txt` and hashed
 above, because Mission V2 asks for harness and logs to be retrieved rather than recreated.
 It is the verbose reporter's output for the whole set at the evidence SHA, with the
-PostgreSQL server's own log lines removed so that the artifact is the test record itself. A
-run is reproduced by the command above, at the SHA above.
+PostgreSQL server's own log lines removed so that the artifact is the test record itself,
+and it opens with a run-identity header: subject SHA, clean-tree count, command, start and
+finish in UTC, **EXIT CODE 0**, and the node, vitest and PostgreSQL versions. V3 observed
+that the previous log's ending did not prove a successful close — vitest prints a teardown
+warning after a successful run whose worker still holds the database pool, and the exit code
+is what settles it. The header also records that the container ships **Node 22.22.0 while
+this repository's `engines` requires >=24 <25**, so a run on the declared version is owed at
+promotion. A run is reproduced by the command above, at the SHA above.
 Per PART 16, a result at any other SHA does not prove this one, and per PART 15 a green
 local run is a record and not CI.
 
@@ -174,7 +180,7 @@ step, and the Challenger and Coordinator signatures.
 * No timing or performance number from this container, anywhere (PART 20, PART 123).
 * No evidence class mixed: see §3b of the prep report.
 * No progress percentage, and no progress claim derived from the case count, the line
-  counts or the number of agents (Mission, cross-phase). 72 green cases say what was
+  counts or the number of agents (Mission, cross-phase). 75 green cases say what was
   measured, not how much of Phase 9 exists.
 * Business isolation of a registry read is enforced by `booking_replay_result` itself and
   not by row security — a different kind of guarantee from a policy, stated as limitation
