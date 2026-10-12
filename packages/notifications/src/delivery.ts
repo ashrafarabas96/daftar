@@ -32,7 +32,23 @@ export type DeliveryState =
   /** Terminal: no further attempt will be made. */
   | 'dead'
   /** Terminal: the provider reported a final status (delivered/read/failed). */
-  | 'closed';
+  | 'closed'
+  /**
+   * Terminal, and nothing was attempted: an earlier channel of this obligation
+   * holds an attempt that may still land (Mission §15). Recorded rather than
+   * omitted — a channel absent from the ledger looks unconfigured.
+   */
+  | 'withheld'
+  /**
+   * Terminal, and nothing was attempted: a gate refused this channel before
+   * any provider call (consent, eligibility, address, render, limits).
+   *
+   * Mission V3 named the conflict this resolves: the DDL spec's state list
+   * carried `withheld` and `suppressed` while this type did not, so the schema
+   * held two states no code path could write and this type reasoned over seven
+   * where the database held nine. One vocabulary, both sides.
+   */
+  | 'suppressed';
 
 /**
  * PART 46: these states are OPEN WORK. A caller that asks "is anything left to
@@ -43,6 +59,64 @@ const OPEN: readonly DeliveryState[] = ['queued', 'sending', 'unknown', 'retry_s
 
 export function isOpenWork(state: DeliveryState): boolean {
   return OPEN.includes(state);
+}
+
+/** Every state, so a test can prove a new one was classified rather than forgotten. */
+export const ALL_DELIVERY_STATES: readonly DeliveryState[] = [
+  'queued',
+  'sending',
+  'accepted',
+  'unknown',
+  'retry_scheduled',
+  'dead',
+  'closed',
+  'withheld',
+  'suppressed',
+];
+
+/** The provider's last word on a delivery it had accepted. */
+export type FinalProviderStatus = 'delivered' | 'read' | 'failed';
+
+/**
+ * Mission V3 §15 — WHICH states forbid opening another channel of the same
+ * obligation. This is the application-side twin of the partial unique index the
+ * migration patch request asks for, so the rule is executable here and not only
+ * asserted in a spec nobody can run.
+ *
+ * V3's finding: the index's predicate listed the OPEN states only, so it did
+ * not constrain an `accepted` delivery — the very case where a second message
+ * is most harmful, and the one a replay or a hand-written INSERT would hit.
+ * Worse, an inclusion list fails OPEN: a state added later is outside it and
+ * silently permits a duplicate. So the rule is stated as the SHORT list of
+ * states that release the obligation, and everything else blocks.
+ *
+ * `closed` is split, because it collapses two opposite facts. A delivery closed
+ * on `delivered`/`read` was received, so another channel would duplicate it. A
+ * delivery closed on `failed` was accepted and then reported NOT delivered, so
+ * the notification is still owed and a fallback yields exactly one message —
+ * the same reasoning that lets a `dead` rejection fall through.
+ *
+ * And that release requires a **verified** landing: an unverified callback
+ * claiming `failed` would let an attacker manufacture a second message, which
+ * is the mirror of the attack I-12b already refuses in the other direction.
+ */
+const RELEASES_THE_OBLIGATION: readonly DeliveryState[] = ['dead', 'withheld', 'suppressed'];
+
+export interface ChannelBlockInput {
+  readonly state: DeliveryState;
+  /** The provider's final status, where the state is `closed`. */
+  readonly finalStatus?: FinalProviderStatus;
+  /** Whether that final status arrived on a VERIFIED provider landing. */
+  readonly finalStatusVerified?: boolean;
+}
+
+export function blocksAnotherChannel(input: ChannelBlockInput): boolean {
+  const { state, finalStatus, finalStatusVerified } = input;
+  if (RELEASES_THE_OBLIGATION.includes(state)) return false;
+  if (state === 'closed' && finalStatus === 'failed' && finalStatusVerified === true) return false;
+  // Fail closed: anything not named above blocks, including a state added to
+  // this union later and a value that reached here from untyped JavaScript.
+  return true;
 }
 
 /** What the worker should do next. `reconcile` never means "send again". */
