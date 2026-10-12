@@ -129,6 +129,94 @@ const NESTED_SCHEMA_KEYS: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
+ * THE DOCUMENT'S OWN TOP LEVEL — challenge round 6, H-01.
+ *
+ * The inversion was applied to a RULE and then to a rule's nested objects, and
+ * both times the next round found it one level further out. H-01 is the last
+ * level there is: an Alertmanager `route:` / `receivers:` block as a SIBLING of
+ * the rules array, in a file called `P15-ALERT-RULES.json`. Every rule-shaped
+ * walk misses it by construction, because it never leaves the rules — the
+ * per-rule table printed `RECEIVER UNSET` for 23 of 23 and was, as a statement
+ * about the rules, correct.
+ *
+ * The tree-text search does catch that plant (it reads the whole file), so the
+ * check reddens. But a table that says UNSET while a receiver sits beside it is
+ * reporting the narrow truth and letting the reader take the wide one, and the
+ * challenger's standing point is that the claim B-15 makes — «no receiver
+ * exists» — is about the file, the document around it, the tracked tree and the
+ * SPELLING, all at once. So the document level is declared here and walked in
+ * its own right, fail-closed like the others: a top-level key nobody has
+ * declared is UNACCOUNTED, and an undeclared sub-object cannot vouch for its
+ * own contents.
+ */
+const DOC_KEYS = [
+  'generatedAt', 'status', 'repository', 'designDocument', 'sloCatalogue',
+  'notPromotedMeaning', 'bindingRules', 'severityContract', 'labelSafety',
+  'rules', 'resolutionContract',
+] as const;
+
+/** Declared sub-schemas at the document level, by the path that reaches them. */
+const DOC_NESTED_SCHEMA_KEYS: Readonly<Record<string, readonly string[]>> = {
+  severityContract: ['page', 'ticket'],
+  resolutionContract: ['why', 'classes', 'derivedFrom', 'closureRecordedToday', 'counts', 'forbidden', 'redProof'],
+};
+
+/**
+ * The resolution classes, as `deriveResolutionClass` can return them. Written
+ * once and used twice: these are the only legal keys of the two OPEN MAPS below.
+ */
+const RESOLUTION_CLASSES = ['cannot_fire_no_threshold', 'self_clearing_window', 'state_based_clears_on_no_traffic', 'state_based'] as const;
+
+/**
+ * OPEN MAPS, and why they are not an exemption.
+ *
+ * `resolutionContract.classes` and `.counts` are keyed by resolution CLASS, so
+ * their keys are data and cannot be enumerated in a schema. Declaring them as
+ * accounted-whatever-they-contain would be the fail-open this instrument exists
+ * to prevent, so instead each one declares the SET its keys must come from: a
+ * key outside that set is unaccounted exactly as any other undeclared key is.
+ * A `route` or a `receiver` planted in either map is therefore still caught —
+ * it is not a resolution class.
+ */
+const DOC_OPEN_MAPS: Readonly<Record<string, readonly string[]>> = {
+  'resolutionContract.classes': RESOLUTION_CLASSES,
+  'resolutionContract.counts': RESOLUTION_CLASSES,
+};
+
+/**
+ * The document's key paths, EXCLUDING the rules array, which `keyPaths` covers
+ * rule by rule. Everything else in the document is walked with the same
+ * fail-closed rule.
+ */
+function documentKeyPaths(doc: unknown): { readonly path: string; readonly accounted: boolean }[] {
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return [{ path: '(the document is not an object)', accounted: false }];
+  const out: { path: string; accounted: boolean }[] = [];
+  const walk = (value: unknown, prefix: string): void => {
+    if (Array.isArray(value)) {
+      for (const v of value) walk(v, `${prefix}[]`);
+      return;
+    }
+    if (value === null || typeof value !== 'object') return;
+    const declared: readonly string[] | undefined =
+      prefix === ''
+        ? DOC_KEYS
+        : Object.hasOwn(DOC_OPEN_MAPS, prefix)
+          ? DOC_OPEN_MAPS[prefix]
+          : Object.hasOwn(DOC_NESTED_SCHEMA_KEYS, prefix)
+            ? DOC_NESTED_SCHEMA_KEYS[prefix]
+            : undefined;
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const path = prefix === '' ? k : `${prefix}.${k}`;
+      if (path === 'rules') continue; // walked rule by rule, with the rule schema
+      out.push({ path, accounted: declared !== undefined && declared.includes(k) });
+      walk(v, path);
+    }
+  };
+  walk(doc, '');
+  return out;
+}
+
+/**
  * Every key path in a rule, descending through objects and through objects
  * inside arrays, paired with whether the schema accounts for it. `path` is
  * dotted, with `[]` for an array hop, so a reader can find what was named.
@@ -263,7 +351,15 @@ function grepTree(re: RegExp): string | null {
   // the only exemption: a destination anywhere else in the tracked tree,
   // including in any other test, still reddens this check. An apparatus
   // exemption that grew would be a way to hide a real destination.
-  const r = spawnSync('git', ['grep', '-nIE', '-i', '--', re.source, ...APPARATUS.map((f) => `:(exclude)${f}`)], { cwd: ROOT, encoding: 'utf8' });
+  // SEARCH_ROOT exists so the case-sensitivity law can be PROVED. `-i` was added
+  // on the coordinator's F-2 and the comment below says what it costs to omit —
+  // but a law with no red proof is a comment, and round 6 (H-02) asked for the
+  // proof, not the flag. The search cannot be proved against this repository
+  // without committing a fake destination to it, so the proof builds a scratch
+  // git repository, commits an UPPER-CASE destination there, and points this
+  // search at it. The default is this repository, and the output states which
+  // tree was searched whenever it is not.
+  const r = spawnSync('git', ['grep', '-nIE', '-i', '--', re.source, ...APPARATUS.map((f) => `:(exclude)${f}`)], { cwd: SEARCH_ROOT, encoding: 'utf8' });
   // `-i` is not cosmetic. Without it the patterns are case-sensitive, and the
   // coordinator's F-2 showed what that costs: `PAGERDUTY_ROUTING_KEY` and
   // `SLACK_WEBHOOK_URL` in a tracked file both gave exit 0 and `NONE FOUND`.
@@ -276,7 +372,16 @@ function grepTree(re: RegExp): string | null {
   if (r.status === 1) return null;
   if (r.status !== 0) return `SEARCH FAILED (${(r.stderr ?? '').slice(0, 80).trim()}) — not a statement that nothing matches`;
   const first = (r.stdout ?? '').split('\n').find((l) => l.trim().length > 0);
-  return first === undefined ? null : first.slice(0, 120);
+  if (first === undefined) return null;
+  // POSITION, NOT CONTENT. The rule-file search was hardened to print the key
+  // and the line numbers and never the value, because a routing value is a
+  // credential — a webhook URL with a token in its path, a pager key — and this
+  // output goes into a handoff that gets attached and quoted. The tree search
+  // was still returning git grep's whole matching line, which is the same leak
+  // from the other half of the same conclusion. `file:line` is enough to find
+  // it and leaks nothing.
+  const m = /^([^:]+):(\d+):/.exec(first);
+  return m === null ? `a match whose position could not be parsed from git grep's output (${first.length} bytes, not printed)` : `${m[1]}:${m[2]}`;
 }
 
 /**
@@ -287,6 +392,9 @@ function grepTree(re: RegExp): string | null {
  * output, and deliberately short.
  */
 const APPARATUS = ['scripts/phase15/verify-alert-signals.ts', 'scripts/phase15/alert-signals-proof.ts'] as const;
+
+/** The tree the destination search reads. See `grepTree`. */
+const SEARCH_ROOT = process.env['P15_SEARCH_ROOT'] ?? ROOT;
 
 /**
  * THE PAIR-DROP — G-01, and the finding neither check could have caught alone.
@@ -334,7 +442,7 @@ function destinationsInRuleFile(raw: string): readonly string[] {
       // this output goes into a handoff. The pattern, the key name and the line
       // numbers are enough to find it and leak nothing. The key is printed only
       // when the line actually names one.
-      const key = /"([A-Za-z0-9_.\-]{1,60})"\s*:/.exec(line);
+      const key = /"([A-Za-z0-9_.-]{1,60})"\s*:/.exec(line);
       const label = `${d.what} in ${key === null ? 'a line naming no key' : `key \`${key[1] ?? '?'}\``}`;
       grouped.set(label, [...(grouped.get(label) ?? []), n + 1]);
     }
@@ -630,6 +738,10 @@ function main(): number {
     return d.unrecognised.map((key) => ({ rule: r.id, key, routing: d.probableRouting.includes(key) }));
   });
   const unset = [...receivers.values()].filter((v) => v === 'UNSET').length;
+  // H-01: the level above the rules. Reported separately, because a key beside
+  // the rules is not a key ON a rule and conflating the two is how the previous
+  // two rounds' sentences came to claim more than their walk.
+  const docUnaccounted = documentKeyPaths(parsed).filter((k) => !k.accounted);
 
   console.log('RECEIVER, DERIVED FROM THE RULE OBJECTS (not asserted)');
   console.log(`  the key set actually present on the ${rules.length} rules, read from the file:`);
@@ -637,6 +749,17 @@ function main(): number {
   console.log(`  keys the rule SCHEMA accounts for: ${SCHEMA_KEYS.join(', ')}`);
   console.log(`  keys it does NOT account for: ${unexpected.length === 0 ? 'NONE' : unexpected.map((u) => `${u.key} (on ${u.rule}${u.routing ? ', PROBABLE ROUTING' : ''})`).join('; ')}`);
   console.log(`  rules whose receiver is therefore UNSET: ${unset} of ${rules.length}`);
+  console.log('');
+  console.log('  THE DOCUMENT AROUND THE RULES (challenge round 6, H-01)');
+  console.log(`    top-level keys the DOCUMENT schema accounts for: ${DOC_KEYS.join(', ')}`);
+  console.log(
+    `    key paths beside the rules that it does NOT account for: ${docUnaccounted.length === 0 ? 'NONE' : docUnaccounted.map((k) => k.path).join(', ')}`,
+  );
+  console.log('    An Alertmanager `route:`/`receivers:` block as a SIBLING of the rules list is the');
+  console.log('    one shape every rule-shaped walk misses by construction, and it is the literal');
+  console.log('    structure of an Alertmanager config in a file named for alert rules. The per-rule');
+  console.log('    table above would say UNSET for all of them and be right about the rules, which is');
+  console.log('    the narrow truth a reader would take for the wide one.');
   console.log('');
   console.log('  This matches against the SCHEMA\u2019s known-benign keys, not against a list of routing');
   console.log('  words. The vocabulary version was broken in one move: a planted `alert_sink` matched');
@@ -668,6 +791,7 @@ function main(): number {
   console.log('    and no single-check mutation can reach it. Values and whole lines are never printed:');
   console.log('    a routing value may carry a credential and this output goes into a handoff.');
   console.log('  Bounds on these searches, stated because they are the ways they can be wrong:');
+  if (SEARCH_ROOT !== ROOT) console.log(`    ! THE TREE SEARCHED IS NOT THIS REPOSITORY: ${SEARCH_ROOT}`);
   console.log('    \u00b7 `git grep` reads TRACKED files only, so an uncommitted destination is invisible to it;');
   console.log('    \u00b7 the six patterns are a list, and a destination configured some other way is not in it;');
   console.log('    \u00b7 the apparatus exemption above is the only one. It covers this checker, which writes the');
@@ -696,10 +820,10 @@ function main(): number {
     console.log(`  ! ${searchFailures.length} SEARCH(ES) FAILED. Every statement of absence in this run is unestablished:`);
     for (const f of searchFailures) console.log(`    ${f}`);
   }
-  if (unexpected.length > 0 || destinations.length > 0) {
+  if (unexpected.length > 0 || destinations.length > 0 || docUnaccounted.length > 0) {
     const routing = unexpected.filter((u) => u.routing);
     resolutionProblems.push(
-      `the receiver claim is STALE or UNVERIFIABLE: ${unexpected.length} key(s) the schema does not account for (${unexpected.map((u) => `${u.rule}.${u.key}`).join(', ')})${routing.length > 0 ? ` \u2014 ${routing.length} of them named like routing` : ''}, and ${destinations.length} destination pattern(s) match the tree. B-15 says no receiver exists anywhere; an unclassified key cannot be assumed to be nothing, so classify each one in SCHEMA_KEYS or record the receiver before any handoff repeats that claim.`,
+      `the receiver claim is STALE or UNVERIFIABLE: ${docUnaccounted.length} key path(s) BESIDE the rules that the document schema does not account for (${docUnaccounted.map((k) => k.path).join(', ') || 'none'}), ${unexpected.length} key(s) the rule schema does not account for (${unexpected.map((u) => `${u.rule}.${u.key}`).join(', ')})${routing.length > 0 ? ` \u2014 ${routing.length} of them named like routing` : ''}, and ${destinations.length} destination pattern(s) match the tree. B-15 says no receiver exists anywhere; an unclassified key cannot be assumed to be nothing, so classify each one in SCHEMA_KEYS or record the receiver before any handoff repeats that claim.`,
     );
   }
 

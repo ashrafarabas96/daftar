@@ -33,7 +33,6 @@
  *   reading of the pack, not of the program's behaviour: `npm run
  *   verify:exit-codes:phase15 -- --prove` is what shows it can go red.
  */
-import type { SpawnSyncReturns } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
@@ -52,7 +51,7 @@ const WINDOW = 28;
  *
  *   An exemption taken on trust is how a sweep comes to certify the thing it
  *   was built to catch, so this one is MEASURED, not asserted: the file does not
- *   import `spawnSync` as a value (only the `SpawnSyncReturns` type), therefore
+ *   import `spawnSync` as a value, therefore
  *   it cannot call it, therefore it has no exit code to discard. That is checked
  *   below against this file's own bytes at every run, and the exemption is
  *   printed with the verdict. If a later edit makes this file actually run a
@@ -159,8 +158,8 @@ function sweep(dir: string): { readonly unchecked: readonly Site[]; readonly via
 function report(dir: string, r: ReturnType<typeof sweep>): void {
   console.log(`  pack ${dir}`);
   console.log(`  exempt ${APPARATUS} — this instrument's own source, which carries the TEXT of the`);
-  console.log("         defects its red proofs plant. Measured inert: it imports only the");
-  console.log('         SpawnSyncReturns type, never spawnSync as a value, so it runs no command.');
+  console.log('         defects its red proofs plant. Measured inert at every run: it does not import');
+  console.log('         spawnSync as a value, so it cannot run a command and has no code to discard.');
   console.log('');
   console.log('  WRAPPERS THAT READ THE EXIT CODE THEMSELVES (measured in their own body, not assumed)');
   if (r.wrappers.length === 0) console.log('    none — so no call is excused by argument position');
@@ -203,7 +202,7 @@ const PLANTS: readonly Plant[] = [
         f,
         [
           "import { spawnSync } from 'node:child_process';",
-          'function textOf(r: SpawnSyncReturns<string>): string {',
+          'function textOf(r: ReturnType<typeof spawnSync>): string {',
           '  return (r.stdout ?? "").toString();',
           '}',
           'export const dirty = textOf(',

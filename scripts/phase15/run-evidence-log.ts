@@ -44,6 +44,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { type Counts, outcomeClass, scrape } from './outcome-class';
 
 const ROOT = resolve(__dirname, '../..');
 const LOG_DIR = process.env.P15_EVIDENCE_LOG_DIR ?? '/tmp/daftar-p15-evidence';
@@ -282,6 +283,12 @@ const INSTRUMENTS: readonly Instrument[] = [
     nonZeroMeans: 'a digest is stale, an artifact is unlisted, or a header claim no longer matches the branch',
   },
   {
+    script: 'verify:outcome-class:prove',
+    what: "what a non-zero exit code means, measured from real process output — a crash before measuring, a crash after the totals print, and the two controls",
+    cluster: false,
+    nonZeroMeans: "the record cannot tell a crash from a verdict, so every outcome class in this log is a label rather than a reading",
+  },
+  {
     script: 'verify:handoff-manifest:prove',
     what: "the ways the manifest's prose and the challenge reports on disk can disagree, and the one way they only appear to",
     cluster: false,
@@ -510,62 +517,14 @@ interface Result {
  * instrument whose summary this does not recognise reports NOT STATED rather
  * than a number scavenged from its body.
  */
-interface Counts {
-  readonly measured: number | null;
-  readonly unmeasured: number | null;
-  readonly findings: number | null;
-  readonly skips: number | null;
-  readonly dirtyTreeDeclared: boolean;
-  /** the exact line the numbers were read from, so they can be checked. */
-  readonly readFrom: string | null;
-}
+
 
 /**
  * The summary shapes the instruments in this pack actually print. Each is
  * start-anchored so an item id (`G4`, `V1`) can never be read as a count.
  */
-const SUMMARY_LINE = /^(?:measured\s+\d+\s+of\s+\d+:|\d+\s+probes?:|\d+\s+(?:case|check|rule|item)s?:)/i;
 
-function scrape(out: string): Counts {
-  const full = out;
-  const line = out.split('\n').map((l) => l.trim()).find((l) => SUMMARY_LINE.test(l));
 
-  if (line === undefined) {
-    return { measured: null, unmeasured: null, findings: null, skips: null, dirtyTreeDeclared: /PLUS UNCOMMITTED CHANGES|THE TREE IS NOT CLEAN/.test(full), readFrom: null };
-  }
-
-  const num = (re: RegExp): number | null => {
-    const m = re.exec(line);
-    return m?.[1] === undefined ? null : Number(m[1]);
-  };
-  return {
-    // `measured N of M` and `N probes: N MEASURED` are the two shapes in use.
-    measured: num(/^measured\s+(\d+)\s+of\s+\d+/i) ?? num(/(\d+)\s+MEASURED/),
-    unmeasured: num(/(\d+)\s+UNMEASURED/),
-    findings: num(/(\d+)\s+FINDING/),
-    // A skip is the one count whose ABSENCE is the good news, so it is scraped
-    // from an explicit statement only. PART 12: a PASS that contains mandatory
-    // skips is not a PASS, and silence about skips is not a statement of none.
-    skips: num(/(\d+)\s+skip/i),
-    dirtyTreeDeclared: /PLUS UNCOMMITTED CHANGES|THE TREE IS NOT CLEAN/.test(full),
-    readFrom: line,
-  };
-}
-
-/**
- * PART 19 also requires the DATABASE VERSION AND COLLATION, the EXECUTION ROLE
- * and the FIXTURE IDENTITY of each proof. Those are facts about what the
- * instrument did, so they are read from what the instrument SAID, never
- * declared here on its behalf: this runner does not know another script's
- * subject, and a runner that invents one is manufacturing the provenance the
- * record exists to carry.
- *
- * Where an instrument states nothing, the field prints
- * `NOT STATED BY THE INSTRUMENT` rather than blank. That is the honest reading
- * and it is also useful: a cluster instrument that never names its server or
- * its principal has a gap in its own record, and the gap should be visible in
- * the handoff instead of being quietly filled in by the runner.
- */
 interface Subject {
   /** every distinct "<version>, collate <x>" the output names, in order of appearance. */
   readonly servers: readonly string[];
@@ -577,7 +536,7 @@ interface Subject {
 
 function scrapeSubject(out: string): Subject {
   const servers: string[] = [];
-  const re = /((?:\d+\.\d+[^,\n]*?))(?:\s*\(server_version_num\s*(\d+)\))?,\s*collate\s+([A-Za-z0-9_.\-]+)/g;
+  const re = /((?:\d+\.\d+[^,\n]*?))(?:\s*\(server_version_num\s*(\d+)\))?,\s*collate\s+([A-Za-z0-9_.-]+)/g;
   for (let m = re.exec(out); m !== null; m = re.exec(out)) {
     const label = `PostgreSQL ${m[1]?.trim() ?? '?'}${m[2] === undefined ? '' : ` (num ${m[2]})`} @ collate ${m[3] ?? '?'}`;
     if (!servers.includes(label)) servers.push(label);
@@ -674,7 +633,7 @@ function run(inst: Instrument, src: ReturnType<typeof sourceIdentity>, i: number
         return null;
       }
     })();
-    const target = cmd === null ? null : /(?:^|\s)(scripts\/phase15\/[A-Za-z0-9_.\-]+\.ts)/.exec(cmd)?.[1] ?? null;
+    const target = cmd === null ? null : /(?:^|\s)(scripts\/phase15\/[A-Za-z0-9_.-]+\.ts)/.exec(cmd)?.[1] ?? null;
     if (target === null) {
       console.log(`  ! P15_PROVE_CRASH names ${inst.script}, but its command is not a single scripts/phase15 entry point, so it cannot be poisoned in its own process. NOT POISONED.`);
     } else {
@@ -778,7 +737,6 @@ function notRun(inst: Instrument, reason: string): Result {
  * guess, so it is named as unclassified and the log is the only recourse.
  */
 /** A loader or parse failure: the instrument never began its own work. */
-const LOADER_MARKERS = /ERR_MODULE_NOT_FOUND|Cannot find module|ERR_UNKNOWN_FILE_EXTENSION|ERR_REQUIRE_ESM|SyntaxError:|ERR_INVALID_ARG|MODULE_NOT_FOUND/;
 
 /**
  * An UNCAUGHT RUNTIME failure, which can happen at any point — including
@@ -792,7 +750,6 @@ const LOADER_MARKERS = /ERR_MODULE_NOT_FOUND|Cannot find module|ERR_UNKNOWN_FILE
  * has to be able to say "it measured, and then it threw", which is a third
  * thing.
  */
-const RUNTIME_MARKERS = /(?:^|\n)\s*(?:Uncaught )?(?:TypeError|RangeError|ReferenceError|AssertionError|Error):|\n\s+at [^\n]*\(?[^\n]*:\d+:\d+\)?|UnhandledPromiseRejection|FATAL ERROR:|Segmentation fault/;
 
 /**
  * An instrument's own closing VERDICT line, which is evidence that it reached
@@ -808,34 +765,10 @@ const RUNTIME_MARKERS = /(?:^|\n)\s*(?:Uncaught )?(?:TypeError|RangeError|Refere
  * they do not match still falls through to UNCLASSIFIED rather than being
  * assumed to have finished.
  */
-const VERDICT_LINE = /^(?:EXIT\s+\d+\s+[—-]|PHASE\s+15\s+[A-Z0-9 /-]+:\s*(?:PASS|FAIL|VERIFIED|UNMEASURED|REJECT)|P15[A-Z0-9_ ]*:\s*\{)/m;
 
-function reachedVerdict(r: Result): string | null {
-  const line = r.output
-    .split('\n')
-    .map((l) => l.trim())
-    .find((l) => VERDICT_LINE.test(l));
-  return line === undefined ? null : line.slice(0, 110);
-}
 
-function outcomeClass(r: Result): string {
-  if (r.notRunReason !== null) return `NOT RUN — ${r.notRunReason}`;
-  if (!r.ran) return 'NO RESULT — the process returned no exit code of its own';
-  if (r.exitCode === 0) return 'COMPLETED, exit 0';
-  const loader = LOADER_MARKERS.test(r.output);
-  const threw = RUNTIME_MARKERS.test(r.output);
-  const reached = r.counts.readFrom !== null || reachedVerdict(r) !== null;
-  if (loader && !reached)
-    return 'CRASHED BEFORE MEASURING — a loader/parse error and no summary line, so this exit code is NOT a verdict about the subject';
-  if (threw && !reached)
-    return 'CRASHED BEFORE MEASURING — an uncaught runtime error with no summary line, so this exit code is NOT a verdict about the subject';
-  if (loader || threw)
-    return 'MEASURED, THEN THREW — it reached its own summary AND died on an uncaught error, so its totals describe an INCOMPLETE run and the exit code is not a verdict either';
-  if (r.counts.readFrom !== null) return 'MEASURED, THEN EXITED NON-ZERO — the instrument reached its own summary line, so the code is its verdict';
-  const verdict = reachedVerdict(r);
-  if (verdict !== null) return `MEASURED, THEN EXITED NON-ZERO — it printed its own verdict line (“${verdict}”), so the code is its verdict`;
-  return 'UNCLASSIFIED NON-ZERO — no crash marker, no summary line and no verdict line this runner recognises; only the log settles it';
-}
+
+
 
 /**
  * PART 19's last field: MEASUREMENT VALIDITY. This is the one judgement the

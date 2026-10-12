@@ -48,6 +48,14 @@ interface Case {
    */
   readonly writeEnv?: Record<string, string>;
   readonly refuse?: RegExp;
+  /**
+   * When set, the generator case is about a REFUSAL: the write must exit
+   * non-zero, the document on disk must be byte-identical afterwards, and
+   * `expect` is matched against the generator's OUTPUT instead of the document.
+   * A refusal that still wrote something is not a refusal, so the bytes are
+   * compared rather than assumed.
+   */
+  readonly mustRefuseToWrite?: boolean;
 }
 
 const CASES: readonly Case[] = [
@@ -101,16 +109,28 @@ const CASES: readonly Case[] = [
       'file as the last known-good release SHA — and exited 0. The migrations fact was worse: a `git diff` that ' +
       'exited 128 filtered to nothing and the file recorded "the frozen set is untouched"',
     writeEnv: { P15_BASE_REF: 'refs/p15-proof/does-not-exist' },
+    mustRefuseToWrite: true,
     plant: () => {
-      /* nothing to plant: the defect is in what the GENERATOR writes */
+      /* nothing to plant: the defect is in what the GENERATOR does */
     },
-    expect: /UNMEASURED — `git rev-parse refs\/p15-proof\/does-not-exist` exited/,
+    // ROUND 6, H-03 — THE LAW GOT STRICTER, SO THIS CASE DID.
+    //
+    // The first fix made the four base facts say UNMEASURED instead of echoing
+    // the ref name, and this case checked the written document for that text.
+    // The challenger's round-6 measurement went one step further and was right:
+    // `--write` still exited 0 and PERSISTED a document whose base, merge-base,
+    // commits-ahead and migration diff all read "could not look". A checkpoint
+    // is a position to resume from; that document is not one, and exit 0 told
+    // the next reader it was. So the law is now a REFUSAL, and what this case
+    // measures is the refusal: non-zero, every unmeasured base fact named, and
+    // the document on disk byte-identical afterwards.
+    expect: /NOTHING WAS WRITTEN[\s\S]*last known good SHA on the base/,
     // Anchored to the AFFIRMATIVE claim. A first version of this pattern was
     // just "the frozen set is untouched", and it matched the fix's own
     // disclaimer — "This is NOT a statement that the frozen set is untouched" —
     // so a correct document failed its own proof. A refusal pattern has to
     // name the sentence it refuses, not a phrase inside it.
-    refuse: /NONE — the frozen set is untouched|`refs\/p15-proof\/does-not-exist`\s*\|/,
+    refuse: /NONE — the frozen set is untouched/,
   },
   {
     id: 'C5',
@@ -192,6 +212,7 @@ function main(): number {
       continue;
     }
     c.plant(dir);
+    const before = c.writeEnv === undefined ? '' : readFileSync(join(dir, 'P15-RESUME-CHECKPOINT.md'), 'utf8');
     if (c.writeEnv !== undefined) {
       // A GENERATOR case: rewrite the copy with the extra environment, then
       // read the DOCUMENT rather than the check's verdict, because the defect
@@ -202,6 +223,26 @@ function main(): number {
         env: { ...process.env, P15_PACK_DIR: dir, ...c.writeEnv },
       });
       const doc = readFileSync(join(dir, 'P15-RESUME-CHECKPOINT.md'), 'utf8');
+      if (c.mustRefuseToWrite === true) {
+        const out = `${w.stdout ?? ''}${w.stderr ?? ''}`;
+        const refusedToRun = w.status !== null && w.status !== 0;
+        const unchanged = doc === before;
+        const saidWhy = c.expect.test(out);
+        const noFalseClaim = c.refuse === undefined ? true : !c.refuse.test(out);
+        const ok = refusedToRun && unchanged && saidWhy && noFalseClaim;
+        if (!ok) failures += 1;
+        console.log(`${c.id} ${ok ? 'REFUSED AS REQUIRED' : 'DID NOT PROVE ITS LAW'}  generator exit ${String(w.status)}`);
+        console.log(`   planted : ${c.what}`);
+        console.log(`   required: non-zero exit, the document byte-identical, and each unmeasured base fact named`);
+        console.log(`   measured: exit ${String(w.status)}, document ${unchanged ? 'UNCHANGED' : 'REWRITTEN'}, reason ${saidWhy ? 'named' : 'NOT named'}`);
+        if (!ok)
+          console.log(
+            `   PROBLEM : ${!refusedToRun ? 'it exited 0, so a position nobody can resume from was published as one' : !unchanged ? 'it refused and wrote anyway, which is not a refusal' : 'it refused without naming which positions it could not measure'}`,
+          );
+        rmSync(dir, { recursive: true, force: true });
+        console.log('');
+        continue;
+      }
       const named = c.expect.test(doc);
       const refused = c.refuse === undefined ? true : !c.refuse.test(doc);
       console.log(`${c.id} ${named && refused ? 'PROVED' : 'DID NOT PROVE ITS LAW'}  generator exit ${String(w.status)}`);
@@ -244,7 +285,13 @@ function main(): number {
     console.log('how a checkpoint came to print CURRENT with every document deleted.');
     return 1;
   }
-  console.log(`ALL ${CASES.length} RED PROOFS TURNED THE CURRENCY CHECK RED, EACH NAMING ITS OWN DEFECT.`);
+  // Not all of them redden a CHECK any more: one of them requires the GENERATOR
+  // to refuse to write at all, which is a different law and says so. A closing
+  // line that totalled them under the wrong verb would be the same small
+  // untruth this pack keeps finding in its own prose.
+  console.log(
+    `ALL ${CASES.length} CASES BEHAVED: ${CASES.filter((c) => c.mustRefuseToWrite !== true).length} turned the currency check RED naming their own defect, and ${CASES.filter((c) => c.mustRefuseToWrite === true).length} made the generator REFUSE to write, leaving the document byte-identical.`,
+  );
   console.log('  So "CURRENT" is a measurement over the pack and not only over the head: absence,');
   console.log('  drift, an unrecorded document and an empty table each change the verdict.');
   return 0;

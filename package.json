@@ -99,7 +99,8 @@
     "scan:secrets:release:prove": "tsx scripts/phase15/secret-scan-proof.ts",
     "verify:exit-codes:phase15": "tsx scripts/phase15/exit-code-sweep.ts",
     "verify:exit-codes:phase15:prove": "tsx scripts/phase15/exit-code-sweep.ts --prove",
-    "verify:handoff-manifest:prove": "tsx scripts/phase15/handoff-manifest-proof.ts"
+    "verify:handoff-manifest:prove": "tsx scripts/phase15/handoff-manifest-proof.ts",
+    "verify:outcome-class:prove": "tsx scripts/phase15/outcome-class-proof.ts"
   },
   "engines": {
     "node": ">=24 <25"

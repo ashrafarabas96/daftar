@@ -320,6 +320,33 @@ function main(): number {
   }
 
   const facts = measure();
+
+  // H-03: REFUSE TO WRITE A POSITION NOBODY CAN RESUME FROM.
+  //
+  // With `origin/main` unreachable, every base-derived fact is honestly
+  // UNMEASURED — the shape check above saw to that — and the write path then
+  // persisted the document anyway and exited 0. A checkpoint exists to be
+  // resumed from; a checkpoint whose base, merge-base, commits-ahead and
+  // migration diff are all "could not look" is not a position, and persisting it
+  // with exit 0 tells the next reader there is one. The pushed-head fact has had
+  // this arm since round 3 ("a local head nobody else can read is not a
+  // checkpoint"); the base facts had none, which is the half the challenger
+  // found. Fetch the base and run again: that is one command, and it is cheaper
+  // than a plausible document.
+  const BASE_FACTS = ['base', 'last known good SHA on the base', 'commits ahead of the base', 'migrations allocated or edited by this branch'];
+  const unresolvedBase = facts.filter((f) => BASE_FACTS.includes(f.what) && f.value.startsWith('UNMEASURED'));
+  if (unresolvedBase.length > 0) {
+    console.log('');
+    console.log(`EXIT 1 \u2014 NOTHING WAS WRITTEN. The base ref \`${BASE}\` could not be resolved, so ${unresolvedBase.length} of this`);
+    console.log('  checkpoint\u2019s positions are UNMEASURED:');
+    for (const f of unresolvedBase) console.log(`    \u00b7 ${f.what} \u2014 ${f.value.slice(0, 160)}`);
+    console.log('  A checkpoint is a position to resume from. One whose base nobody can resolve is not');
+    console.log('  a position, and writing it with exit 0 would tell the next reader that there is one.');
+    console.log(`  Fetch the base and run again: \`git fetch origin ${BASE.replace(/^origin\//, '')}\`. P15_BASE_REF names a different one.`);
+    console.log('  The document on disk is UNCHANGED, so whatever position it already records still stands.');
+    return 1;
+  }
+
   const head = facts.find((f) => f.what.startsWith('HEAD'))?.value ?? 'UNKNOWN';
   const pack = packState();
   const bs = blockers();
@@ -361,9 +388,15 @@ function main(): number {
   lines.push('`npm run checkpoint:phase15:prove` plants each of those five cases and requires this check to');
   lines.push('go red naming it.');
   lines.push('');
-  lines.push('`npm run checkpoint:phase15` rewrites this file from');
-  lines.push('measurement; `npm run checkpoint:phase15 -- --check` exits 1 when HEAD has moved past it.');
-  lines.push('A position stated here was true at the timestamp below and nowhere else.');
+  // H-05: this block used to say `checkpoint:phase15` rewrites the file and that
+  // `--check` exits 1 when HEAD has moved past it. Both stopped being true two
+  // commits apart — the read-only verb became the default, and `--check` grew to
+  // re-read §6 against the disk — and the commit whose purpose was to correct the
+  // prose left this sentence standing three lines under its replacement. Two
+  // paragraphs describing one mechanism is how that happens, so there is now one.
+  lines.push('A position stated here was true at the timestamp below and nowhere else. `--write` refuses');
+  lines.push(`to run at all when the base ref cannot be resolved: it would otherwise persist a document whose`);
+  lines.push('base, merge-base and commits-ahead all read UNMEASURED, which is not a position to resume from.');
   lines.push('');
   lines.push('| | |');
   lines.push('|---|---|');

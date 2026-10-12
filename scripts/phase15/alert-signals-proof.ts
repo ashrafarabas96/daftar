@@ -42,9 +42,9 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const ROOT = resolve(__dirname, '../..');
 const DEFAULT_RULES = '/mnt/project-files/phase15/P15-ALERT-RULES.json';
@@ -53,7 +53,7 @@ interface Case {
   readonly id: string;
   readonly what: string;
   /** mutate the parsed rule set in place. */
-  readonly plant: (doc: { rules: Record<string, unknown>[] }) => void;
+  readonly plant: (doc: { rules: Record<string, unknown>[] } & Record<string, unknown>) => void;
   /** the finding text the check must produce. */
   readonly expect: RegExp;
 }
@@ -195,6 +195,35 @@ const CASES: readonly Case[] = [
     expect: /constructor/,
   },
   {
+    id: 'R2k',
+    what:
+      'challenge round 6, H-01: an Alertmanager `route:` / `receivers:` block as a SIBLING of the rules ' +
+      'list — the literal structure of an Alertmanager config, in a file named for alert rules. Every ' +
+      'rule-shaped walk misses it by construction. The expectation is deliberately the DOCUMENT-LEVEL ' +
+      'line and not a bare non-zero exit: the tree-text search also reddens on this plant, and a case ' +
+      'that accepted that red would pass while the level it exists to cover stayed unwalked',
+    plant: (doc) => {
+      doc['route'] = { receiver: 'daftar-oncall', group_by: ['alertname'] };
+      doc['receivers'] = [{ name: 'daftar-oncall', pagerduty_configs: [{ routing_key: 'abc' }] }];
+    },
+    expect: /does NOT account for:[^\n]*\broute\b[^\n]*receivers/,
+  },
+  {
+    id: 'R2l',
+    what:
+      'a receiver hidden in an OPEN MAP — `resolutionContract.counts`, whose keys are resolution class ' +
+      'names and so cannot be enumerated in a schema. Declaring such a map accounted-whatever-it-holds ' +
+      'is the fail-open this instrument exists to prevent, so its keys are checked against the class set',
+    plant: (doc) => {
+      const rc = doc['resolutionContract'];
+      if (rc === null || typeof rc !== 'object') throw new Error('R2l cannot plant: the document has no resolutionContract object');
+      const counts = (rc as Record<string, unknown>)['counts'];
+      if (counts === null || typeof counts !== 'object') throw new Error('R2l cannot plant: resolutionContract.counts is not an object');
+      (counts as Record<string, unknown>)['receiver'] = 'pagerduty:daftar-oncall';
+    },
+    expect: /does NOT account for:[^\n]*resolutionContract\.counts\.receiver/,
+  },
+  {
     id: 'R3',
     what: 'one rule loses its `resolution` object entirely',
     plant: (doc) => {
@@ -235,14 +264,70 @@ const CASES: readonly Case[] = [
   },
 ];
 
-function runCheck(subject: string): { readonly code: number | null; readonly out: string } {
+function runCheck(subject: string, searchRoot?: string): { readonly code: number | null; readonly out: string } {
   const r = spawnSync('npx', ['tsx', 'scripts/phase15/verify-alert-signals.ts'], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, P15_ALERT_RULES: subject },
+    env: { ...process.env, P15_ALERT_RULES: subject, ...(searchRoot === undefined ? {} : { P15_SEARCH_ROOT: searchRoot }) },
     maxBuffer: 32 * 1024 * 1024,
   });
   return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+}
+
+/**
+ * THE SPELLING — challenge round 6, H-02.
+ *
+ * The destination search is case-insensitive, and the flag that makes it so was
+ * added on the coordinator's F-2 with a comment saying what omitting it costs.
+ * A law defended by a comment is not defended: round 6 asked for the proof.
+ *
+ * It cannot be planted in THIS repository — committing a real-looking
+ * destination to it to prove a search would be a fixture nobody could tell from
+ * a configuration later. So the proof builds a scratch git repository, commits
+ * an UPPER-CASE destination there, and points the search at it with
+ * `P15_SEARCH_ROOT`. Both directions are measured: upper case must be found
+ * (the law), and a tree with nothing in it must come back clean (the control,
+ * so a red cannot be an artefact of the scratch repository itself).
+ */
+interface TreeCase {
+  readonly id: string;
+  readonly what: string;
+  readonly file: string | null; // null = plant nothing: the control
+  readonly contents: string;
+  readonly mustFind: boolean;
+}
+
+const TREE_CASES: readonly TreeCase[] = [
+  { id: 'T0', what: 'a scratch repository with no destination in it — the control', file: null, contents: '', mustFind: false },
+  {
+    id: 'T1',
+    what: 'an UPPER-CASE PagerDuty routing key, the spelling a deployment actually uses for an environment variable',
+    file: 'deploy/alerts.env',
+    contents: 'PAGERDUTY_ROUTING_KEY=abc123\n',
+    mustFind: true,
+  },
+  { id: 'T2', what: 'an UPPER-CASE Alertmanager URL', file: 'deploy/alerts.env', contents: 'ALERTMANAGER_URL=https://am.internal/api/v2/alerts\n', mustFind: true },
+  { id: 'T3', what: 'an UPPER-CASE Opsgenie key', file: 'deploy/alerts.env', contents: 'OPSGENIE_API_KEY=xxxx\n', mustFind: true },
+  { id: 'T4', what: 'the same key in lower case — the control for the control', file: 'deploy/alerts.env', contents: 'pagerduty_routing_key=abc123\n', mustFind: true },
+];
+
+function scratchRepo(file: string | null, contents: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'p15-tree-'));
+  const git = (...args: string[]): void => {
+    const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ${args[0] ?? ''} in the scratch repository exited ${String(r.status)}: ${(r.stderr ?? '').trim().slice(0, 160)}`);
+  };
+  git('init', '-q');
+  git('config', 'user.email', 'proof@localhost');
+  git('config', 'user.name', 'p15 proof');
+  writeFileSync(join(dir, 'README'), 'a scratch tree, built by the Phase 15 alert red proofs\n');
+  if (file !== null) {
+    mkdirSync(join(dir, dirname(file)), { recursive: true });
+    writeFileSync(join(dir, file), contents);
+  }
+  git('add', '-A');
+  git('commit', '-q', '-m', 'scratch');
+  return dir;
 }
 
 function main(): number {
@@ -275,7 +360,7 @@ function main(): number {
     console.log('');
 
     for (const c of CASES) {
-      const doc = JSON.parse(pristine) as { rules: Record<string, unknown>[] };
+      const doc = JSON.parse(pristine) as { rules: Record<string, unknown>[] } & Record<string, unknown>;
       c.plant(doc);
       writeFileSync(subject, JSON.stringify(doc, null, 2));
       const got = runCheck(subject);
@@ -297,6 +382,40 @@ function main(): number {
       console.log('');
     }
 
+    // THE SPELLING (H-02). Each case gets its own scratch repository, and the
+    // SUBJECT is the pristine copy throughout: the only thing that varies is
+    // the tree the destination search reads.
+    writeFileSync(subject, pristine);
+    console.log('THE TREE SEARCH AND THE SPELLING (H-02) — a scratch repository per case, this one untouched');
+    for (const t of TREE_CASES) {
+      let repo: string | null = null;
+      try {
+        repo = scratchRepo(t.file, t.contents);
+        const got = runCheck(subject, repo);
+        const found = /destination configuration in the repository: (?!NONE FOUND)/.test(got.out);
+        const ok = found === t.mustFind;
+        if (!ok) failures += 1;
+        console.log(`${t.id} ${ok ? (t.mustFind ? 'FOUND AS REQUIRED' : 'CLEAN AS REQUIRED') : 'FAILED'}  exit ${String(got.code)}`);
+        console.log(`   planted : ${t.what}`);
+        if (!ok)
+          console.log(
+            `   ! ${t.mustFind ? 'the destination was NOT found — the search is defeated by this spelling, and its NONE FOUND is a statement about what it can read, not about the tree' : 'a tree with no destination in it reported one, so every FOUND above may be an artefact of the scratch repository'}`,
+          );
+        else if (t.mustFind) {
+          const line = got.out.split('\n').find((l) => l.includes('destination configuration in the repository:'));
+          if (line !== undefined) console.log(`   it said : ${line.trim().slice(0, 150)}`);
+        }
+        console.log('');
+      } catch (e) {
+        failures += 1;
+        console.log(`${t.id} FAILED    ${t.what}`);
+        console.log(`   ! the scratch repository could not be built, so this law is UNPROVED here: ${(e as Error).message}`);
+        console.log('');
+      } finally {
+        if (repo !== null) rmSync(repo, { recursive: true, force: true });
+      }
+    }
+
     // The copy is restored and re-checked, so the proof ends by showing the
     // subject green again: a mutation left behind would make every later run a
     // measurement of this proof's leftovers.
@@ -311,7 +430,7 @@ function main(): number {
 
   console.log('='.repeat(78));
   if (failures === 0) {
-    console.log(`ALL ${CASES.length} RED PROOFS TURNED THE CHECK RED, EACH NAMING ITS OWN DEFECT.`);
+    console.log(`ALL ${CASES.length} RED PROOFS TURNED THE CHECK RED, EACH NAMING ITS OWN DEFECT, AND ALL ${TREE_CASES.length} TREE CASES BEHAVED.`);
     console.log('  So the receiver and resolution claims are measurements: they can fail, and what');
     console.log('  makes them fail is known. UNDECIDED is now a conclusion from the rule set’s key');
     console.log('  set — if a receiver is ever recorded, R1 and R2 are what will notice.');
