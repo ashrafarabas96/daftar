@@ -55,7 +55,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -289,7 +289,7 @@ function addSuccessorMigration(root: string, name?: string): string {
   const next = String(Number(head.slice(0, 4)) + 1).padStart(4, '0');
   const file = name ?? `${next}_forward_evolution_probe.sql`;
   const body = `-- A synthetic successor migration, written by ${__filename.split('/').slice(-1)[0] ?? ''}.\nSELECT 1;\n`;
-  writeFileSync(join(root, MIGRATIONS, file), body);
+  rewrite(root, join(MIGRATIONS, file), body);
   const manifest = JSON.parse(readFileSync(join(root, MANIFEST), 'utf8')) as Manifest;
   manifest.migrations.push({ name: file, sha256: createHash('sha256').update(body).digest('hex') });
   manifest.frozenThrough = file;
@@ -740,4 +740,63 @@ describe('P4-AL-61: the candidate tense is confined to the slice currently open'
     const problems = estate.flatMap((rel) => forbiddenShapeProblems(rel, readFileSync(join(REPO, rel), 'utf8'), headNumber));
     expect(problems).toEqual([]);
   });
+});
+
+describe('the scratch tree never writes through a hard link', () => {
+  /**
+   * `copyTree` HARD-LINKS every delivered file, so the copy and this checkout
+   * share an inode and a write through the copy IS a write to the original.
+   * `rewrite` unlinks before it writes — "the unlink is what protects the
+   * original" — and every write into the copy must go through it.
+   *
+   * `addSuccessorMigration` used a bare `writeFileSync`. That was safe only
+   * because its call sites all take the DEFAULT name, one past the head, which
+   * is a path the copy does not have. Its `name` parameter is optional, and the
+   * first caller to pass the name of a file that DOES exist would have
+   * truncated the shared inode and mutated a frozen migration in this working
+   * tree — forbidden even temporarily, whatever the harness then reports.
+   *
+   * The subject is an inert scratch file, linked into the copy exactly as
+   * `copyTree` links a delivered one and never a migration: the mechanism under
+   * proof is identical, and a red run cannot damage anything that matters. Its
+   * name is deliberately not digit-prefixed, so the subject of a proof about
+   * hard links is not also a literal migration number in this file.
+   */
+  it('a write to a path the copy already has breaks the link instead of truncating the original', () => {
+    const root = copyTree('hardlink');
+
+    // THE PREMISE, read-only on this checkout: the copy really does share
+    // inodes, so there is a hazard here to close at all.
+    const copied = statSync(join(root, SELF));
+    expect(copied.ino, `${SELF} is not hard-linked into the copy, so this proof has no subject`).toBe(statSync(join(REPO, SELF)).ino);
+    expect(copied.nlink, `${SELF} in the copy shares its inode with nothing, so this proof has no subject`).toBeGreaterThanOrEqual(2);
+
+    // THE SUBJECT: an inert file outside this checkout, linked into the copy's
+    // migration directory under a name the copy therefore already has.
+    const origin = mkdtempSync(join(tmpdir(), 'p4-forward-hardlink-origin-'));
+    temporaries.push(origin);
+    const subject = join(origin, 'inert-hardlink-subject.txt');
+    const before = '-- an inert subject: not a migration, not load-bearing, outside this checkout\n';
+    writeFileSync(subject, before);
+    const name = 'zzzz_inert_hardlink_subject.sql';
+    const inCopy = join(root, MIGRATIONS, name);
+    linkSync(subject, inCopy);
+    const originalIno = statSync(subject).ino;
+    expect(statSync(subject).nlink, 'the subject is not shared with the copy, so this proof has no subject').toBe(2);
+
+    // THE WRITE, through the real code path, naming a path that already exists.
+    expect(addSuccessorMigration(root, name)).toBe(name);
+
+    // THE PROPERTY, by CONTENT and by MECHANISM — the bytes could match by
+    // accident, the inode and the link count cannot.
+    expect(readFileSync(subject, 'utf8'), `the write reached the original ${subject}: a write into the hard-linked copy truncated the shared inode`).toBe(
+      before,
+    );
+    expect(statSync(subject).nlink, `the original still shares its inode with ${name} in the copy: the write did not unlink first`).toBe(1);
+    expect(statSync(inCopy).ino, `${name} in the copy still carries the original's inode: the link was not broken before the write`).not.toBe(originalIno);
+
+    // And the write DID land in the copy, so the three assertions above are not
+    // passing on a write that never happened.
+    expect(readFileSync(inCopy, 'utf8'), `the successor body never reached ${name} in the copy`).toContain('synthetic successor migration');
+  }, 120_000);
 });
