@@ -26,19 +26,22 @@
  * whose parameter decorators the plain `tsx` transform refuses, and a DR drill
  * must not need the web framework to run.
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { Client, Pool } from 'pg';
 import { mintAccountingAssertion, type AccountingAssertionKey } from '../../packages/accounting/src/assertion';
 import { computeCommandFingerprint } from '../../packages/accounting/src/post';
 
 /** The fixture's own assertion key. A throwaway cluster's secret, never a deployment's. */
 export const DR_ASSERTION_KID = 'p15dr';
-export const DR_ASSERTION_SECRET = Buffer.alloc(32, 'P');
+// PART 103: minted per run, not committed. The key is installed into the
+// disposable cluster and used to mint assertions in this same process, so a
+// fixed value bought nothing and only added secret-shaped source material.
+export const DR_ASSERTION_SECRET = randomBytes(32);
 const DR_KEY: AccountingAssertionKey = { kid: DR_ASSERTION_KID, secret: DR_ASSERTION_SECRET };
 
 /** The runtime role the posting path uses, with the throwaway cluster's fixture password. */
 export const APP_ROLE = 'daftar_app';
-export const APP_PASSWORD = 'test_app_password_123';
+export const APP_PASSWORD = `p15_app_${randomBytes(18).toString('base64url')}`; // PART 103: per run, never committed.
 
 export interface SeededTenant {
   readonly tenantId: string;

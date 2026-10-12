@@ -100,7 +100,7 @@
 import { protectFailingExitCode } from '../../tests/helpers/exit-code';
 
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus, loadavg, totalmem, arch, platform, release, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -653,6 +653,25 @@ function argOf(argv: readonly string[], name: string): string | null {
   return inline === undefined ? null : inline.slice(name.length + 3);
 }
 
+// ── PART 103 — ephemeral credentials, generated fresh on every run ─────────
+//
+// A fixture password committed as a literal is secret-shaped source material
+// even when it opens nothing that outlives the run: a scanner cannot tell the
+// difference, so every release scan needs an allowlist entry to stay green,
+// and `.gitleaksignore` is a shared file this phase does not own. Generating
+// the values per run removes the source material instead of excusing it —
+// there is no committed credential to allowlist and no entry to maintain.
+//
+// This is NOT scanner evasion. Evasion reshapes a value so a rule stops
+// matching while the value stays in the tree, leaving a real finding
+// unexamined in a file that now looks clean. Here the value never enters the
+// tree at all: it is 18 random bytes, minted after the process starts, used
+// only by the disposable cluster this run creates and then drops.
+function ephemeralPassword(role: string): string {
+  // base64url, so the value is safe inside a single-quoted SQL literal.
+  return `p15_${role}_${randomBytes(18).toString('base64url')}`;
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const command = `${process.argv[0] ?? 'node'} ${process.argv.slice(1).join(' ')}`;
@@ -701,7 +720,8 @@ async function main(): Promise<number> {
   );
 
   ensureEmbeddedPgBinariesExecutable();
-  const pg = new EmbeddedPostgres({ databaseDir: dataDir, user: 'postgres', password: 'postgres', port, persistent: false });
+  const superPassword = ephemeralPassword('super');
+  const pg = new EmbeddedPostgres({ databaseDir: dataDir, user: 'postgres', password: superPassword, port, persistent: false });
   const pools: Pool[] = [];
   const startedAt = new Date().toISOString();
   let migrationsApplied = 0;
@@ -710,23 +730,37 @@ async function main(): Promise<number> {
     await pg.initialise();
     await pg.start();
     await pg.createDatabase('daftar');
-    const owner = `postgresql://postgres:postgres@localhost:${port}/daftar`;
+    const owner = `postgresql://postgres:${encodeURIComponent(superPassword)}@localhost:${port}/daftar`;
 
     // The bootstrap + migration sequence `scripts/db-from-zero.ts:63-71` runs,
     // from the same two sources, so the cluster measured against is the one a
     // deployment administrator would have produced.
     let bootstrap = readFileSync(join(ROOT, 'infrastructure/database/bootstrap.sql'), 'utf8');
-    for (const [placeholder, value] of Object.entries({
-      __APP_DB_PASSWORD__: 'p15_app_pw_123456',
-      __PLATFORM_DB_PASSWORD__: 'p15_platform_pw_123456',
-      __WORKER_DB_PASSWORD__: 'p15_worker_pw_123456',
-      __RESOLVER_DB_PASSWORD__: 'p15_resolver_pw_123456',
-      __IDENTITY_DB_PASSWORD__: 'p15_identity_pw_123456',
-      __PROVISIONER_DB_PASSWORD__: 'p15_provisioner_pw_123456',
-      __RECONCILER_DB_PASSWORD__: 'p15_reconciler_pw_123456',
-      __MIGRATOR_DB_PASSWORD__: 'p15_migrator_pw_123456',
-    })) {
+    // Every role's password is minted here, per run — see ephemeralPassword().
+    // The placeholder names come from `infrastructure/database/bootstrap.sql`;
+    // a placeholder left unsubstituted would reach PostgreSQL verbatim, so the
+    // substitution is verified below rather than assumed.
+    const roleCredentials = Object.fromEntries(
+      [
+        '__APP_DB_PASSWORD__',
+        '__PLATFORM_DB_PASSWORD__',
+        '__WORKER_DB_PASSWORD__',
+        '__RESOLVER_DB_PASSWORD__',
+        '__IDENTITY_DB_PASSWORD__',
+        '__PROVISIONER_DB_PASSWORD__',
+        '__RECONCILER_DB_PASSWORD__',
+        '__MIGRATOR_DB_PASSWORD__',
+      ].map((placeholder) => [placeholder, ephemeralPassword(placeholder.slice(2, -13).toLowerCase())]),
+    );
+    for (const [placeholder, value] of Object.entries(roleCredentials)) {
       bootstrap = bootstrap.replaceAll(placeholder, value);
+    }
+    const unsubstituted = Object.keys(roleCredentials).filter((placeholder) => bootstrap.includes(placeholder));
+    if (unsubstituted.length > 0) {
+      refuse(
+        `bootstrap.sql still contains ${unsubstituted.length} unsubstituted password placeholder(s) after substitution: ${unsubstituted.join(', ')}. ` +
+          'A placeholder reaching PostgreSQL verbatim would become a known, committed password for a role of this cluster, which is the very thing PART 103 forbids. Refusing rather than proceeding.',
+      );
     }
     const admin = new Pool({ connectionString: owner, max: 2 });
     admin.on('error', () => undefined);

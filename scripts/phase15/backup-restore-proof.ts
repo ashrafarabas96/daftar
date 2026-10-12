@@ -88,6 +88,8 @@ import {
   dropDatabase,
   dumpDatabase,
   dumpGlobals,
+  PG_SUPERPASS,
+  PG_SUPERUSER,
   prepareClusterDir,
   restoreDatabase,
   restoreGlobals,
@@ -1166,6 +1168,11 @@ async function main(): Promise<void> {
       stopCluster(TARGET);
     } else {
       console.log(`\n(--keep) clusters left running: source :${SOURCE.port}, target :${TARGET.port}`);
+      // PART 103: the superuser password is minted per run and is in no file,
+      // so kept clusters would be unreachable unless this run prints it. The
+      // clusters die with the next `--keep`-less run; the value opens nothing
+      // else and is deliberately NOT written to disk.
+      console.log(`(--keep) superuser: ${PG_SUPERUSER} / ${PG_SUPERPASS} — minted for this run only, recorded nowhere`);
     }
   }
 }

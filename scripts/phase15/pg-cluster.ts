@@ -34,6 +34,7 @@
  * run without compiling the application.
  */
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { chmodSync, chownSync, existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
@@ -41,7 +42,22 @@ import { join } from 'node:path';
 /** The one PostgreSQL installation whose server and client tools match. */
 export const PG16_BIN = '/usr/lib/postgresql/16/bin';
 export const PG_SUPERUSER = 'postgres';
-export const PG_SUPERPASS = 'postgres';
+
+// ── PART 103 — the superuser password is minted per run, never committed ───
+//
+// Both clusters this module creates are disposable and live only as long as
+// the drill, so their superuser password has no reason to exist in the tree.
+// Committing one as a literal would make it secret-shaped source material that
+// a release scan must then be told to ignore, in a shared file this phase does
+// not own. Minting it at module load removes the material rather than excusing
+// it, and is not scanner evasion: the value never enters the tree at all.
+//
+// Module scope, so SOURCE and TARGET share one value within a run — the DR
+// drill's globals restore carries the source roles' password hashes into the
+// target, and V8 then authenticates `daftar_app` against them, which only
+// agrees if both clusters were built from the same in-process secret. With
+// `--keep`, the drill prints this value so the kept clusters stay reachable.
+export const PG_SUPERPASS = `p15_super_${randomBytes(18).toString('base64url')}`;
 
 /** The OS account the server runs as (`initdb` refuses root). */
 const SERVER_OS_USER = 'postgres';
