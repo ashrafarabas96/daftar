@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { attemptIdentity, obligationKey, type NotificationOrigin } from '../src/identity';
+import { attemptIdentity, deliveryKey, obligationKey, type NotificationOrigin } from '../src/identity';
 
 const event: NotificationOrigin = { source: 'event', eventId: 'ev-1' };
 const schedule: NotificationOrigin = { source: 'schedule', scheduleId: 'p8.statement.monthly', occurrenceKey: '2026-09' };
 
-describe('TL-P8-R1 — the two identities are never the same string', () => {
+describe('TL-P8-R2 — three identities, and no two of them are the same string', () => {
   it('an obligation names origin, kind AND recipient', () => {
     expect(obligationKey(event, 'invoice_issued', { kind: 'customer', customerId: 'c-1' })).toBe('event:ev-1|invoice_issued|customer:c-1');
     expect(obligationKey(schedule, 'customer_statement', { kind: 'customer', customerId: 'c-1' })).toBe(
@@ -50,17 +50,47 @@ describe('TL-P8-R1 — the two identities are never the same string', () => {
     expect(october).not.toBe(september);
   });
 
-  it('an attempt identity extends an obligation with channel and attempt number', () => {
+  it('a logical delivery extends an obligation with the channel, and separates channels', () => {
     const o = obligationKey(event, 'invoice_issued', { kind: 'customer', customerId: 'c-1' });
-    expect(attemptIdentity(o, 'whatsapp', 1)).toBe('event:ev-1|invoice_issued|customer:c-1#whatsapp#1');
-    expect(attemptIdentity(o, 'whatsapp', 2)).not.toBe(attemptIdentity(o, 'whatsapp', 1));
-    expect(attemptIdentity(o, 'email', 1)).not.toBe(attemptIdentity(o, 'whatsapp', 1));
-    // And an attempt identity is never equal to the obligation it belongs to.
-    expect(attemptIdentity(o, 'whatsapp', 1)).not.toBe(o);
+    expect(deliveryKey(o, 'whatsapp')).toBe('event:ev-1|invoice_issued|customer:c-1::whatsapp');
+    expect(deliveryKey(o, 'email')).not.toBe(deliveryKey(o, 'whatsapp'));
+    expect(deliveryKey(o, 'whatsapp')).not.toBe(o);
+  });
+
+  it('PART 42 — the logical delivery key is INVARIANT across attempts of the same send', () => {
+    const o = obligationKey(event, 'invoice_issued', { kind: 'customer', customerId: 'c-1' });
+    const first = deliveryKey(o, 'whatsapp', 'p8_invoice_issued_ar');
+    const afterARetry = deliveryKey(o, 'whatsapp', 'p8_invoice_issued_ar');
+    expect(afterARetry).toBe(first);
+    // ...and the attempt keys built on it are NOT invariant, which is exactly
+    // why the attempt key may never be the provider's idempotency key.
+    expect(attemptIdentity(first, 2)).not.toBe(attemptIdentity(first, 1));
+  });
+
+  it('a stable provider/template context separates deliveries; an empty one is omitted, never silently varied', () => {
+    const o = obligationKey(event, 'invoice_issued', { kind: 'customer', customerId: 'c-1' });
+    expect(deliveryKey(o, 'whatsapp', 'tpl_ar')).not.toBe(deliveryKey(o, 'whatsapp', 'tpl_en'));
+    expect(deliveryKey(o, 'whatsapp', '')).toBe(deliveryKey(o, 'whatsapp'));
+    expect(deliveryKey(o, 'whatsapp', undefined)).toBe(deliveryKey(o, 'whatsapp'));
+  });
+
+  it('an attempt identity extends a LOGICAL DELIVERY with the attempt number, and is never the delivery itself', () => {
+    const o = obligationKey(event, 'invoice_issued', { kind: 'customer', customerId: 'c-1' });
+    const d = deliveryKey(o, 'whatsapp');
+    expect(attemptIdentity(d, 1)).toBe('event:ev-1|invoice_issued|customer:c-1::whatsapp#1');
+    expect(attemptIdentity(d, 1)).not.toBe(d);
+    expect(attemptIdentity(d, 1)).not.toBe(o);
   });
 
   it('refuses an attempt number that is not a positive integer', () => {
+    const d = deliveryKey(obligationKey(event, 'invoice_issued', { kind: 'customer', customerId: 'c-1' }), 'sms');
+    for (const n of [0, -1, 1.5, Number.NaN]) expect(() => attemptIdentity(d, n)).toThrow();
+  });
+
+  it('the three layers are three distinct strings for one owed notification', () => {
     const o = obligationKey(event, 'invoice_issued', { kind: 'customer', customerId: 'c-1' });
-    for (const n of [0, -1, 1.5, Number.NaN]) expect(() => attemptIdentity(o, 'sms', n)).toThrow();
+    const d = deliveryKey(o, 'whatsapp', 'tpl_ar');
+    const a = attemptIdentity(d, 1);
+    expect(new Set([o, d, a]).size).toBe(3);
   });
 });

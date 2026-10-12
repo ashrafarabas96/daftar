@@ -13,6 +13,14 @@
  * API accepts nothing else, and a notification engine cannot know from here
  * whether a window is open — so the safe shape is the only shape.
  *
+ * PART 42 (a HIGH finding against the earlier version of this file): the custom
+ * request header below is NOT a Meta server-side idempotency mechanism. Meta
+ * does not interpret it. The earlier code passed an ATTEMPT key in it and the
+ * engine then treated an ambiguous timeout as retryable, which is a duplicate
+ * customer message. So this adapter now declares `serverSideIdempotency =
+ * false`, carries the STABLE logical delivery key for correlation only, and
+ * never reports an acceptance it cannot evidence.
+ *
  * Status (§36, stated narrowly): WHATSAPP ADAPTER CORE PREPARED / TESTED IN
  * ISOLATION. Phase 8 is NOT engineering-complete, and this adapter is not
  * either in any sense beyond its own unit tests: no credentials exist in this
@@ -21,8 +29,8 @@
  * signatures all remain owed.
  */
 import { refuse } from '../errors';
-import type { NotificationProvider, OutgoingMessage, ProviderSendResult } from '../provider';
-import { classifyProviderError } from '../redaction';
+import { classifyTransportThrow, type NotificationProvider, type OutgoingMessage, type ProviderSendResult } from '../provider';
+import { classifyProviderError, isTransient } from '../redaction';
 import type { Channel } from '../types';
 
 /** The only hosts Meta serves the Cloud API from. */
@@ -46,6 +54,13 @@ export class WhatsAppCloudProvider implements NotificationProvider {
   readonly name = 'whatsapp_cloud';
   readonly channels: readonly Channel[] = ['whatsapp'];
   readonly requiresApprovedTemplate = true;
+  /**
+   * PART 42. Meta's Cloud API offers no idempotency key the server honours, so
+   * an ambiguous result here may NEVER be auto-resent. Declaring this false is
+   * what makes `mayAutoRetry` refuse; a `true` here would be a lie that costs a
+   * customer a second message.
+   */
+  readonly serverSideIdempotency = false;
 
   private readonly endpoint: string;
   private readonly token: string;
@@ -104,18 +119,29 @@ export class WhatsAppCloudProvider implements NotificationProvider {
         {
           authorization: `Bearer ${this.token}`,
           'content-type': 'application/json',
-          // Meta does not offer a server-side idempotency key; the key travels
-          // for correlation and the engine's own dedupe is authoritative.
-          'x-daftar-idempotency-key': message.idempotencyKey,
+          // CORRELATION ONLY (PART 42). Meta does not interpret this header, so
+          // it confers no idempotency. It carries the STABLE logical delivery
+          // key — not an attempt key — so that a support trace of a retried
+          // send groups under one value instead of looking like two sends.
+          'x-daftar-delivery-key': message.deliveryKey,
         },
         payload,
       );
       if (response.status >= 200 && response.status < 300) {
-        return { accepted: true, providerMessageId: readMessageId(response.body) };
+        const id = readMessageId(response.body);
+        // PART 45: a 2xx without a valid non-empty provider message id is NOT
+        // a delivery. It is not a failure either — the message may well have
+        // been sent. Returning `unknown` is the only honest answer, and it is
+        // what stops both a fabricated success and a blind resend.
+        if (id === '') return { outcome: 'unknown', code: 'DELIVERY_FAILED', reason: 'invalid_success_response' };
+        return { outcome: 'accepted', providerMessageId: id };
       }
-      return { accepted: false, code: classifyProviderError({ status: response.status, message: readErrorMessage(response.body) }) };
+      // A non-2xx from Meta is an answer: the message was definitively not
+      // accepted. Only the transient classes may be attempted again.
+      const code = classifyProviderError({ status: response.status, message: readErrorMessage(response.body) });
+      return { outcome: 'rejected', code, retryable: isTransient(code) };
     } catch (err) {
-      return { accepted: false, code: classifyProviderError(err) };
+      return classifyTransportThrow(err);
     }
   }
 }
@@ -128,7 +154,7 @@ function readMessageId(body: unknown): string {
       const first: unknown = messages[0];
       if (typeof first === 'object' && first !== null && 'id' in first) {
         const id = (first as { id: unknown }).id;
-        if (typeof id === 'string' && id !== '') return id;
+        if (typeof id === 'string' && id.trim() !== '') return id;
       }
     }
   }

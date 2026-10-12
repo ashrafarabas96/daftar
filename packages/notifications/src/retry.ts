@@ -4,6 +4,13 @@
  * and NEVER a silent drop. A transient class retries; a terminal class
  * (auth, rejected recipient, rejected template) dead-letters on the first
  * failure, because retrying it only burns the provider's rate limit.
+ *
+ * PART 44 narrowed this module's authority. `nextStepAfterFailure` answers only
+ * for a PROVEN REJECTION — a result the provider definitively did not accept.
+ * It must never be asked about an ambiguous outcome: an `unknown` has no retry
+ * step at all, and `delivery.ts` (`mayAutoRetry`, `classifySend`) is the single
+ * place allowed to decide a resend. Routing an ambiguous timeout through a
+ * failure policy is exactly how a customer gets the message twice.
  */
 import { isTransient, type ProviderErrorCode } from './redaction';
 
@@ -19,6 +26,11 @@ export type NextStep =
   | { readonly step: 'retry'; readonly attempts: number; readonly afterSeconds: number }
   | { readonly step: 'dead'; readonly attempts: number; readonly reason: ProviderErrorCode };
 
+/**
+ * For a PROVEN rejection only (`{ outcome: 'rejected' }`). `retryable` on the
+ * result and `isTransient` on the class must agree; where an adapter says a
+ * class is not retryable, the caller stops regardless of what this returns.
+ */
 export function nextStepAfterFailure(attemptsBefore: number, code: ProviderErrorCode): NextStep {
   const attempts = attemptsBefore + 1;
   if (!isTransient(code)) return { step: 'dead', attempts, reason: code };

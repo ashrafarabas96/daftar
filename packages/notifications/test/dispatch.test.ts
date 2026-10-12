@@ -63,7 +63,8 @@ describe('dispatch — obligations', () => {
       kind: 'invoice_issued',
       channel: 'whatsapp',
       obligation: 'event:ev-1|invoice_issued|customer:c-1',
-      attempt: 'event:ev-1|invoice_issued|customer:c-1#whatsapp#1',
+      delivery: 'event:ev-1|invoice_issued|customer:c-1::whatsapp@daftar_invoice_issued',
+      attempt: 'event:ev-1|invoice_issued|customer:c-1::whatsapp@daftar_invoice_issued#1',
     });
     expect(provider.deliveryCount()).toBe(1);
     expect(provider.deliveries()[0]?.rendered.providerTemplate?.name).toBe('daftar_invoice_issued');
@@ -195,16 +196,23 @@ describe('dispatch — obligations', () => {
     const key = 'event:ev-1|invoice_issued|customer:c-1';
     const outcomes = await dispatchIntent(
       intentOf(),
-      ports({ provider, hydrator: hydratorOf([obligation({ channelOrder: ['whatsapp'] })]), attemptsSoFar: new Map([[`${key}#whatsapp`, 2]]) }),
+      ports({
+        provider,
+        hydrator: hydratorOf([obligation({ channelOrder: ['whatsapp'] })]),
+        // Keyed on the LOGICAL DELIVERY, which is what a retry re-uses.
+        attemptsSoFar: new Map([[`${key}::whatsapp@daftar_invoice_issued`, 2]]),
+      }),
     );
     expect(outcomes).toEqual([
       {
         result: 'failed',
         kind: 'invoice_issued',
         obligation: key,
+        delivery: `${key}::whatsapp@daftar_invoice_issued`,
         channel: 'whatsapp',
-        attempt: `${key}#whatsapp#3`,
-        next: { step: 'retry', attempts: 3, afterSeconds: 40 },
+        attempt: `${key}::whatsapp@daftar_invoice_issued#3`,
+        state: 'retry_scheduled',
+        next: { action: 'retry', afterSeconds: 40 },
       },
     ]);
   });
@@ -212,19 +220,19 @@ describe('dispatch — obligations', () => {
   it('turns a transient provider failure into a retry, not a loss', async () => {
     const provider = new FakeNotificationProvider({ channels: ['whatsapp'], failWith: ['PROVIDER_TIMEOUT'] });
     const outcomes = await dispatchIntent(intentOf(), ports({ provider, hydrator: hydratorOf([obligation({ channelOrder: ['whatsapp'] })]) }));
-    expect(outcomes[0]).toMatchObject({ result: 'failed', next: { step: 'retry', attempts: 1, afterSeconds: 10 } });
+    expect(outcomes[0]).toMatchObject({ result: 'failed', state: 'retry_scheduled', next: { action: 'retry', afterSeconds: 10 } });
   });
 
   it('dead-letters a terminal provider failure immediately', async () => {
     const provider = new FakeNotificationProvider({ channels: ['whatsapp'], failWith: ['PROVIDER_AUTH_FAILED'] });
     const outcomes = await dispatchIntent(intentOf(), ports({ provider, hydrator: hydratorOf([obligation({ channelOrder: ['whatsapp'] })]) }));
-    expect(outcomes[0]).toMatchObject({ result: 'failed', next: { step: 'dead', attempts: 1, reason: 'PROVIDER_AUTH_FAILED' } });
+    expect(outcomes[0]).toMatchObject({ result: 'failed', state: 'dead', next: { action: 'stop', reason: 'PROVIDER_AUTH_FAILED' } });
   });
 
   it('classifies an adapter THROW instead of letting it escape', async () => {
     const provider = new FakeNotificationProvider({ channels: ['whatsapp'], throwOn: [Object.assign(new Error('rate limit reached'), { status: 429 })] });
     const outcomes = await dispatchIntent(intentOf(), ports({ provider, hydrator: hydratorOf([obligation({ channelOrder: ['whatsapp'] })]) }));
-    expect(outcomes[0]).toMatchObject({ result: 'failed', next: { step: 'retry', attempts: 1 } });
+    expect(outcomes[0]).toMatchObject({ result: 'failed', state: 'retry_scheduled', next: { action: 'retry', afterSeconds: 10 } });
   });
 
   it('refuses when hydration cannot complete — never a blank notification', async () => {

@@ -1,0 +1,164 @@
+/**
+ * PART 42, as executable laws over this package's own source.
+ *
+ * The HIGH finding this round closes was not a missing test — it was a NAME.
+ * One field called `idempotencyKey`, filled with an attempt key, read by an
+ * adapter as if it were an idempotency authority. A law that reads the source
+ * is what stops that name coming back, in this adapter or the next one.
+ *
+ * Each law is a pure function over a file map, so a planted violation can be
+ * fed to the same scanner the live tree is fed to — and every red proof below
+ * asserts that its mutation actually LANDED in the copy it scans.
+ */
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+const SRC = join(__dirname, '..', 'src');
+
+function readSource(dir = SRC): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of readdirSync(dir)) {
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) Object.assign(out, readSource(full));
+    else if (name.endsWith('.ts')) out[relative(SRC, full)] = readFileSync(full, 'utf8');
+  }
+  return out;
+}
+
+/** Strip comments, so a law reads CODE and never a comment that mentions a word. */
+function code(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
+/** A missing file is a broken law, not an optional one: say so loudly. */
+function fileOf(files: Record<string, string>, name: string): string {
+  const content = files[name];
+  if (content === undefined) throw new Error(`the law's subject is missing: ${name}`);
+  return content;
+}
+
+type Violation = { readonly law: string; readonly file: string; readonly detail: string };
+
+export function sourceViolations(files: Record<string, string> = readSource()): readonly Violation[] {
+  const found: Violation[] = [];
+  for (const [file, raw] of Object.entries(files)) {
+    const body = code(raw);
+
+    // L-P42-1: the conflated name is gone. There is no field, argument or
+    // property called `idempotencyKey` anywhere in this package's code.
+    if (/\bidempotencyKey\b/.test(body)) {
+      found.push({ law: 'L-P42-1 no conflated idempotencyKey', file, detail: 'the name `idempotencyKey` is back in code' });
+    }
+
+    // L-P42-2: nothing hands an ATTEMPT key to a provider as an idempotency
+    // key. Any line mentioning both `attemptKey` and `idempotency` is one.
+    for (const line of body.split('\n')) {
+      if (/attemptKey/.test(line) && /idempotenc/i.test(line)) {
+        found.push({ law: 'L-P42-2 an attempt key is not an idempotency key', file, detail: line.trim().slice(0, 120) });
+      }
+    }
+
+    // L-P42-3: a provider adapter must DECLARE its idempotency semantics. An
+    // adapter that forgets to would default to `undefined`, which `mayAutoRetry`
+    // reads as "no guarantee" — safe, but silent. Say it out loud.
+    if (file.startsWith('providers/') && /implements NotificationProvider/.test(body) && !/serverSideIdempotency/.test(body)) {
+      found.push({ law: 'L-P42-3 an adapter declares its idempotency semantics', file, detail: 'no serverSideIdempotency declaration' });
+    }
+
+    // L-P48-1: no caller-supplied verification flag. A boolean a caller can set
+    // is a boolean an attacker can set.
+    if (/\bsignatureVerified\b/.test(body)) {
+      found.push({ law: 'L-P48-1 no caller-supplied signatureVerified', file, detail: 'a caller-supplied verification flag exists' });
+    }
+  }
+  return found;
+}
+
+const LAWS = [
+  'L-P42-1 no conflated idempotencyKey',
+  'L-P42-2 an attempt key is not an idempotency key',
+  'L-P42-3 an adapter declares its idempotency semantics',
+  'L-P48-1 no caller-supplied signatureVerified',
+] as const;
+
+describe('PART 42/48 — laws read over the live source', () => {
+  it('the live source satisfies every law', () => {
+    expect(sourceViolations()).toEqual([]);
+  });
+
+  it('the subject set is non-empty and real: it includes both adapters', () => {
+    const files = Object.keys(readSource());
+    expect(files).toContain('providers/whatsapp-cloud.ts');
+    expect(files).toContain('providers/fake-provider.ts');
+    expect(files.length).toBeGreaterThan(15);
+  });
+
+  it('L-P42-1 reds when the conflated name returns', () => {
+    const files = readSource();
+    const planted = { ...files, 'provider.ts': fileOf(files, 'provider.ts').replace('readonly deliveryKey: string;', 'readonly idempotencyKey: string;') };
+    expect(fileOf(planted, 'provider.ts'), 'the mutation must land').toMatch(/readonly idempotencyKey: string;/);
+    expect(sourceViolations(planted).map((v) => v.law)).toContain('L-P42-1 no conflated idempotencyKey');
+  });
+
+  it('L-P42-2 reds when an attempt key is sent as an idempotency key', () => {
+    const files = readSource();
+    const planted = {
+      ...files,
+      'providers/whatsapp-cloud.ts': fileOf(files, 'providers/whatsapp-cloud.ts').replace(
+        "'x-daftar-delivery-key': message.deliveryKey,",
+        "'x-idempotency-key': message.attemptKey,",
+      ),
+    };
+    expect(fileOf(planted, 'providers/whatsapp-cloud.ts'), 'the mutation must land').toMatch(/'x-idempotency-key': message\.attemptKey,/);
+    expect(sourceViolations(planted).map((v) => v.law)).toContain('L-P42-2 an attempt key is not an idempotency key');
+  });
+
+  it('L-P42-3 reds when an adapter stops declaring its idempotency semantics', () => {
+    const files = readSource();
+    const planted = {
+      ...files,
+      'providers/whatsapp-cloud.ts': fileOf(files, 'providers/whatsapp-cloud.ts').replace(/readonly serverSideIdempotency = false;/, ''),
+    };
+    // The declaration is gone from the CODE; the file's prose still discusses
+    // it, which is precisely what the law must not be satisfied by.
+    expect(code(fileOf(planted, 'providers/whatsapp-cloud.ts')), 'the mutation must land').not.toMatch(/serverSideIdempotency/);
+    expect(fileOf(planted, 'providers/whatsapp-cloud.ts'), 'and only the declaration changed').toMatch(/PART 42/);
+    expect(sourceViolations(planted).map((v) => v.law)).toContain('L-P42-3 an adapter declares its idempotency semantics');
+  });
+
+  it('L-P48-1 reds when a caller-supplied verification flag returns', () => {
+    const files = readSource();
+    const planted = {
+      ...files,
+      'webhook.ts': fileOf(files, 'webhook.ts').replace('readonly status: string;', 'readonly status: string;\n  readonly signatureVerified: boolean;'),
+    };
+    expect(fileOf(planted, 'webhook.ts'), 'the mutation must land').toMatch(/readonly signatureVerified: boolean;/);
+    expect(sourceViolations(planted).map((v) => v.law)).toContain('L-P48-1 no caller-supplied signatureVerified');
+  });
+
+  it('every declared law has a red proof above', () => {
+    // The law that reds if a law is added without one. The names below are the
+    // ones each red proof asserts on; a new law with no proof fails here.
+    const proved = new Set([
+      'L-P42-1 no conflated idempotencyKey',
+      'L-P42-2 an attempt key is not an idempotency key',
+      'L-P42-3 an adapter declares its idempotency semantics',
+      'L-P48-1 no caller-supplied signatureVerified',
+    ]);
+    for (const law of LAWS) expect(proved.has(law), law).toBe(true);
+    expect(proved.size).toBe(LAWS.length);
+  });
+
+  it('the scanner reads code, not comments: the words appear in prose and the laws stay green', () => {
+    // Proof that `code()` is doing work — otherwise every law above would be
+    // satisfied by nothing more than careful comment wording, which is exactly
+    // the defect TL-P4-COORD-R46 found elsewhere in this program.
+    const files = readSource();
+    const commentOnly = { 'x.ts': '// idempotencyKey signatureVerified attemptKey idempotency\n/* idempotencyKey */\nexport const a = 1;\n' };
+    expect(sourceViolations(commentOnly)).toEqual([]);
+    const realCode = { 'x.ts': 'export interface A { readonly idempotencyKey: string }\n' };
+    expect(sourceViolations(realCode).map((v) => v.law)).toContain('L-P42-1 no conflated idempotencyKey');
+    expect(Object.keys(files).length).toBeGreaterThan(0);
+  });
+});

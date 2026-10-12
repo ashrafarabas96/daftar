@@ -19,6 +19,7 @@ export * from './status';
 export * from './identity';
 export * from './eligibility';
 export * from './provider';
+export * from './delivery';
 export * from './webhook';
 export * from './consumer';
 export * from './dispatch';

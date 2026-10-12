@@ -30,7 +30,13 @@ function message(): OutgoingMessage {
     moneyFormatter,
     dateFormatter,
   });
-  return { idempotencyKey: 'ev-1:invoice_issued:whatsapp', channel: 'whatsapp', to: { phoneE164: '+972591234567' }, rendered };
+  return {
+    deliveryKey: 'event:ev-1|invoice_issued|customer:c-1::whatsapp@daftar_invoice_issued',
+    attemptKey: 'event:ev-1|invoice_issued|customer:c-1::whatsapp@daftar_invoice_issued#1',
+    channel: 'whatsapp',
+    to: { phoneE164: '+972591234567' },
+    rendered,
+  };
 }
 
 function refusalOf(fn: () => unknown): string {
@@ -76,10 +82,9 @@ describe('the official WhatsApp Cloud adapter', () => {
     const recorder = new RecordingHttp({ status: 200, body: { messages: [{ id: 'wamid.ABC' }] } });
     const provider = new WhatsAppCloudProvider(credentials, recorder);
     const result = await provider.send(message());
-    expect(result).toEqual({ accepted: true, providerMessageId: 'wamid.ABC' });
+    expect(result).toEqual({ outcome: 'accepted', providerMessageId: 'wamid.ABC' });
     expect(recorder.calls[0]?.url).toBe('https://graph.facebook.com/v21.0/1234567890/messages');
     expect(recorder.calls[0]?.headers['authorization']).toBe('Bearer EAAG-test-token');
-    expect(recorder.calls[0]?.headers['x-daftar-idempotency-key']).toBe('ev-1:invoice_issued:whatsapp');
   });
 
   it('sends an APPROVED TEMPLATE and never free prose', async () => {
@@ -114,31 +119,83 @@ describe('the official WhatsApp Cloud adapter', () => {
     await expect(sendThroughProvider(provider, withoutTemplate)).rejects.toMatchObject({ code: 'notification.provider_template_required' });
   });
 
-  it('classifies Meta HTTP failures into safe codes', async () => {
-    const cases: readonly [number, unknown, string][] = [
-      [401, { error: { message: 'Invalid OAuth access token' } }, 'PROVIDER_AUTH_FAILED'],
-      [429, { error: { message: 'rate limit hit' } }, 'PROVIDER_RATE_LIMITED'],
-      [503, { error: { message: 'service unavailable' } }, 'PROVIDER_UNAVAILABLE'],
-      [400, { error: { message: 'template name does not exist' } }, 'TEMPLATE_REJECTED'],
-      [400, { error: { message: 'not a valid whatsapp user' } }, 'RECIPIENT_REJECTED'],
+  it('PART 42 — declares NO server-side idempotency, and the custom header is correlation only', async () => {
+    const recorder = new RecordingHttp({ status: 200, body: { messages: [{ id: 'wamid.ABC' }] } });
+    const provider = new WhatsAppCloudProvider(credentials, recorder);
+    // Meta honours no idempotency key. Declaring `true` here would authorise an
+    // automatic resend of an ambiguous send, which is a duplicate message.
+    expect(provider.serverSideIdempotency).toBe(false);
+
+    const m = message();
+    await provider.send(m);
+    const headers = recorder.calls[0]?.headers ?? {};
+    // The header carries the STABLE logical delivery key, never the attempt key.
+    expect(headers['x-daftar-delivery-key']).toBe(m.deliveryKey);
+    expect(Object.values(headers)).not.toContain(m.attemptKey);
+    // And no header pretends to be an idempotency key.
+    expect(Object.keys(headers).join(',')).not.toMatch(/idempotency/i);
+  });
+
+  it('PART 45 — a definite 4xx/5xx is REJECTED, with retryability from the class and never from the text', async () => {
+    const cases: readonly [number, unknown, string, boolean][] = [
+      [401, { error: { message: 'Invalid OAuth access token' } }, 'PROVIDER_AUTH_FAILED', false],
+      [429, { error: { message: 'rate limit hit' } }, 'PROVIDER_RATE_LIMITED', true],
+      [503, { error: { message: 'service unavailable' } }, 'PROVIDER_UNAVAILABLE', true],
+      [400, { error: { message: 'template name does not exist' } }, 'TEMPLATE_REJECTED', false],
+      [400, { error: { message: 'not a valid whatsapp user' } }, 'RECIPIENT_REJECTED', false],
     ];
-    for (const [status, body, expected] of cases) {
+    for (const [status, body, expected, retryable] of cases) {
       const provider = new WhatsAppCloudProvider(credentials, new RecordingHttp({ status, body }));
       const result = await provider.send(message());
-      expect(result, `${status}`).toEqual({ accepted: false, code: expected });
+      expect(result, `${status}`).toEqual({ outcome: 'rejected', code: expected, retryable });
     }
   });
 
-  it('classifies a transport throw and leaks nothing from its message', async () => {
+  it('PART 45 — a definite retryable PRE-ACCEPT transport failure is rejected, not ambiguous', async () => {
+    // A connection that was never established cannot have delivered anything.
+    const refused = Object.assign(new Error('connect ECONNREFUSED 31.13.64.35:443'), { code: 'ECONNREFUSED' });
+    const provider = new WhatsAppCloudProvider(credentials, new RecordingHttp(refused));
+    expect(await provider.send(message())).toEqual({ outcome: 'rejected', code: 'PROVIDER_UNAVAILABLE', retryable: true });
+  });
+
+  it('PART 45 — a TIMEOUT AFTER SEND is ambiguous, and leaks nothing from its message', async () => {
     const leaky = Object.assign(new Error('connect ETIMEDOUT to +972591234567'), { code: 'ETIMEDOUT' });
     const provider = new WhatsAppCloudProvider(credentials, new RecordingHttp(leaky));
     const result = await provider.send(message());
-    expect(result).toEqual({ accepted: false, code: 'PROVIDER_TIMEOUT' });
+    expect(result).toEqual({ outcome: 'unknown', code: 'PROVIDER_TIMEOUT', reason: 'timeout_after_send' });
     expect(JSON.stringify(result)).not.toContain('972');
   });
 
-  it('returns an empty provider id rather than inventing one when Meta omits it', async () => {
-    const provider = new WhatsAppCloudProvider(credentials, new RecordingHttp({ status: 200, body: { messages: [] } }));
-    expect(await provider.send(message())).toEqual({ accepted: true, providerMessageId: '' });
+  it('PART 45 — a 2xx WITHOUT a usable provider message id is UNKNOWN, never an acceptance', async () => {
+    const malformed: readonly [string, unknown][] = [
+      ['an empty messages array', { messages: [] }],
+      ['an empty id', { messages: [{ id: '' }] }],
+      ['a blank id', { messages: [{ id: '   ' }] }],
+      ['a non-string id', { messages: [{ id: 12345 }] }],
+      ['a message object with no id at all', { messages: [{}] }],
+      ['messages that is not an array', { messages: { id: 'wamid.X' } }],
+      ['no messages key', { success: true }],
+      ['a body that is not an object', 'OK'],
+      ['a null body', null],
+    ];
+    for (const [label, body] of malformed) {
+      const provider = new WhatsAppCloudProvider(credentials, new RecordingHttp({ status: 200, body }));
+      const result = await provider.send(message());
+      expect(result, label).toEqual({ outcome: 'unknown', code: 'DELIVERY_FAILED', reason: 'invalid_success_response' });
+      // Specifically: never an empty provider id filed as a delivery.
+      expect(JSON.stringify(result), label).not.toContain('providerMessageId');
+    }
+  });
+
+  it('PART 45 — the shared send path refuses an empty id even if an adapter claimed acceptance', async () => {
+    // A careless adapter cannot route around the guard: it exists in both places.
+    const careless = {
+      name: 'careless',
+      channels: ['whatsapp'] as const,
+      requiresApprovedTemplate: true,
+      serverSideIdempotency: false,
+      send: () => Promise.resolve({ outcome: 'accepted' as const, providerMessageId: '' }),
+    };
+    expect(await sendThroughProvider(careless, message())).toEqual({ outcome: 'unknown', code: 'DELIVERY_FAILED', reason: 'invalid_success_response' });
   });
 });

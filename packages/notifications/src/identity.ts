@@ -1,25 +1,33 @@
 /**
- * TL-P8-R1 — TWO IDEMPOTENCY IDENTITIES, and they are never the same string.
+ * TL-P8-R2 — THREE identities, and no two of them are the same string.
  *
- *   OBLIGATION IDENTITY   origin + kind + recipient
- *     "this recipient is owed this notification, once."
+ *   1. OBLIGATION    origin + kind + recipient
+ *      "this recipient is owed this notification, once."
  *
- *   ATTEMPT IDENTITY      obligation + channel + attempt number
- *     "this is the n-th time we tried to hand that obligation to a provider
- *      on that channel."
+ *   2. LOGICAL DELIVERY   obligation + channel [+ stable provider/template context]
+ *      "this is the one intended send of that obligation on that channel."
+ *      It is STABLE across every retry of the same intended send. Where a
+ *      provider offers real server-side idempotency, THIS is the key handed to
+ *      it — never an attempt key.
  *
- * Why the separation is a correctness requirement and not tidiness: one event
- * can owe ten recipients. Under an event-only key, nine of them vanish behind
- * the first — the dedupe that was meant to prevent a double receipt silently
- * prevents nine notifications instead. Under an obligation-only key, a retry on
- * a second channel looks like the same send and cannot be distinguished in the
- * attempt history.
+ *   3. ATTEMPT       logical delivery + attempt number
+ *      "the n-th time we tried." AUDIT HISTORY ONLY. An attempt number is NOT
+ *      an external idempotency authority.
  *
- * Both are derived from stable facts — the origin row, the kind, the recipient,
- * the channel, the attempt number. Never a clock, never a random value. The
- * provider's own delivery id is NOT part of either: it is assigned by the
- * provider after the attempt and is recorded beside it, so it can never be an
- * input to the decision of whether to send.
+ * Why three and not two (PART 42, a HIGH finding against the earlier design):
+ * the earlier code passed the attempt identity to the provider as its
+ * idempotency key. That key changes with the attempt number, so a request that
+ * times out AFTER Meta accepted it, retried under a new attempt key, is a
+ * second message to the customer. The stable layer between "owed" and "n-th
+ * try" is what makes a retry recognisable as the same send.
+ *
+ * Why not one key (TL-P8-R1, still standing): one event can owe ten recipients.
+ * An origin-only key collapses them into one, and nine people are never told by
+ * the very mechanism meant to stop one double receipt.
+ *
+ * Every identity derives from stable facts only — never a clock, never a random
+ * value. The provider's own message id is assigned after an attempt and is
+ * recorded beside it, so it can never be an input to the decision to send.
  */
 import type { Channel, RecipientRef } from './types';
 import { recipientId } from './types';
@@ -36,13 +44,25 @@ function originKey(origin: NotificationOrigin): string {
   return origin.source === 'event' ? `event:${origin.eventId}` : `schedule:${origin.scheduleId}:${origin.occurrenceKey}`;
 }
 
-/** Obligation identity: origin + kind + recipient. One per owed notification. */
+/** (1) Obligation identity: origin + kind + recipient. One per owed notification. */
 export function obligationKey(origin: NotificationOrigin, kind: string, recipient: RecipientRef): string {
   return `${originKey(origin)}|${kind}|${recipient.kind}:${recipientId(recipient)}`;
 }
 
-/** Attempt identity: obligation + channel + attempt number (1-based). */
-export function attemptIdentity(obligation: string, channel: Channel, attemptNo: number): string {
+/**
+ * (2) Logical delivery identity: obligation + channel, plus a stable provider
+ * or template context where the provider needs one to recognise the same send
+ * (e.g. an approved template name). The context must itself be stable across
+ * retries — a value that changes per attempt would defeat the whole point, so
+ * anything empty is simply omitted rather than silently varying the key.
+ */
+export function deliveryKey(obligation: string, channel: Channel, providerContext?: string): string {
+  const context = providerContext === undefined || providerContext === '' ? '' : `@${providerContext}`;
+  return `${obligation}::${channel}${context}`;
+}
+
+/** (3) Attempt identity: logical delivery + attempt number (1-based). Audit only. */
+export function attemptIdentity(delivery: string, attemptNo: number): string {
   if (!Number.isInteger(attemptNo) || attemptNo < 1) throw new Error('attemptNo must be a positive integer');
-  return `${obligation}#${channel}#${attemptNo}`;
+  return `${delivery}#${attemptNo}`;
 }
