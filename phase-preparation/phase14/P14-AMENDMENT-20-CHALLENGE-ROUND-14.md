@@ -135,3 +135,47 @@ red cold on `main` (`G6`, the CI-owner queue's, not this phase's); `TL-P14-SEC-0
 
 **No head of this phase is signed.** The next verdict is the challenger's, and it will include the
 repository's gates.
+
+---
+
+## 6. The repository's four gates, three worlds, on the Node the repository declares
+
+`P14-GATE-035` now requires this table, so here it is, measured **after** the commit that answers
+this round and therefore recorded in a commit of its own: the answer commit was already made when
+these runs finished, and nothing in this lane rewrites history, not even an unpushed commit.
+
+Each world is a **separate fresh clone** of the repository at that revision, with its own `npm ci`
+(exit `0` in all three), under **node v24.12.0 / npm 11.6.2** — the Node the repository declares
+(`.nvmrc` `24.12.0`, `engines` `>=24 <25`), fetched and verified against `SHASUMS256.txt`, not the
+container's own v22.22.0 that §1's format table was measured on. Nothing was run from a checkout
+that had been built before, because a `build` or `typecheck` reading taken in a warm tree is not a
+reading of that revision.
+
+| gate | subject — the answer commit | previous head `27c76c3` | merge-base `6fc505d` | whose is it |
+|---|---|---|---|---|
+| `npm ci` | **0** | **0** | **0** | — |
+| `npm run format` | **0** | **1** | **0** | **this branch's, and now closed** |
+| `npm run lint` | 1 | 1 | 1 | inherited from `main` |
+| `npm run build` | 1 | 1 | 1 | inherited from `main` |
+| `npm run typecheck` | **0** | **0** | **0** | — |
+
+**What the third column is for.** Without it a red gate cannot be told from a red inherited from
+`main`. `format` is rc 1 at the previous head and rc 0 at the merge-base, which makes it this
+branch's; `lint` prints the identical `4220 problems (4220 errors, 0 warnings)` in all three
+worlds, and `build` fails in all three with the identical first errors —
+`src/modules/purchasing/supplier.service.ts(10,8): error TS2307: Cannot find module
+'@daftar/inventory'` and `src/modules/tenancy/structure.service.ts(7,83)` the same — which makes
+both `main`'s.
+
+**One correction to the carried note.** `G6` is carried in the project's index as *root `npm run
+build` AND `npm run typecheck` fail cold on main*. Measured here, in a cold clone of `6fc505d`
+after `npm ci` on node 24.12.0, `build` is rc **1** and `typecheck` is rc **0**. The build half of
+`G6` reproduces; the typecheck half does not reproduce at this revision with this Node, and this
+pack claims nothing further about it — the earlier reading may have been taken on a different Node
+or a different revision, which is exactly why this table names both.
+
+**What this table does not say.** It does not sign anything. `lint` and `build` are red in all
+three worlds, so the repository does not have five green gates at any of them; what the table
+establishes is only that **no gate is red at the subject that is green at the merge-base**, which
+is the condition `P4 r20` states. The phase suite (`tools/gate-sweep.sh`, `55 ok`, rc `0`) is a
+separate claim and is not a substitute for it.
