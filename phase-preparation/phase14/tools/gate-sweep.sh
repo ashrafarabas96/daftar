@@ -387,10 +387,12 @@ FW=$(mktemp -d); SCRATCH="${SCRATCH:-} $FW"; cp -r "$PACK" "$FW/pack"; cp -r "$P
   && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' ) >/dev/null 2>&1
 FWM="--manifest $FW/pack/P14-HANDOFF-MANIFEST.md --dir $FW/pack"
 EMPTYW=$(mktemp -d); SCRATCH="${SCRATCH:-} $EMPTYW"
-forge() { # tamper one reviewer report and hand-forge its row to match, in $1
+forge() { # tamper one reviewer report in $1 and hand-forge its row to match,
+          # in $1's manifest or in the manifest named as $2 (CHALLENGE R14-P2-01,
+          # where the manifest has been renamed and moved out of the pack).
   local d="$1" rep=P14-CHALLENGE-7af6438.md
   printf '\n\nan appended line nobody received\n' >> "$d/$rep"
-  python3 - "$d/$rep" "$d/P14-HANDOFF-MANIFEST.md" <<'FORGE'
+  python3 - "$d/$rep" "${2:-$d/P14-HANDOFF-MANIFEST.md}" <<'FORGE'
 import hashlib,os,re,sys
 rep,man=sys.argv[1],sys.argv[2]
 b=open(rep,'rb').read(); h=hashlib.sha256(b).hexdigest()
@@ -748,6 +750,36 @@ else
   fail=$((fail+1))
 fi
 rm -rf "$B3W"
+
+# CHALLENGE R14-P2-01: the NAME anchor closed a MOVE and not a move plus a
+# RENAME to a different basename, in the same commit as the forge. Then the new
+# basename has one revision -- the forging one -- and the walk read 1 of 3 and
+# said "checked". The coordinator ruled it must refuse by name under EVERY
+# invocation, not only under the gate's default `--manifest`, so this proof
+# points the verifier AT the renamed file, which is the shape that answered 0.
+RVW=$(mktemp -d); SCRATCH="${SCRATCH:-} $RVW"; mkdir -p "$RVW/repo/a"; cp -r "$PACK" "$RVW/repo/a/phase14"
+( cd "$RVW/repo" && git init -q . && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' \
+  && git -c user.email=p14@local -c user.name=p14 commit -q --allow-empty -m 'another revision' \
+  && mkdir -p elsewhere && git mv a/phase14/P14-HANDOFF-MANIFEST.md elsewhere/LEDGER.md ) >/dev/null 2>&1
+forge "$RVW/repo/a/phase14" "$RVW/repo/elsewhere/LEDGER.md"
+( cd "$RVW/repo" && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'promote: rename and move the ledger' ) >/dev/null 2>&1
+RVM="--manifest $RVW/repo/elsewhere/LEDGER.md --dir $RVW/repo/a/phase14"
+# Premise: the NEW basename has exactly one revision, and `--follow` sees more.
+RVB=$(cd "$RVW/repo" && git rev-list HEAD -- ':(top,glob)**/LEDGER.md' | wc -l)
+RVF=$(cd "$RVW/repo" && git log --follow --format=%H -- elsewhere/LEDGER.md | wc -l)
+if [ "$RVB" = 1 ] && [ "$RVF" -gt 1 ]; then
+  named manifest-renamed-and-moved 1 "REWRITTEN IN HISTORY" \
+    "python3 -I $HERE/manifest-digests.py $RVM --witness $RVW/none --check"
+  named manifest-renamed-and-moved-write 1 "REWRITTEN IN HISTORY" \
+    "python3 -I $HERE/manifest-digests.py $RVM --witness $RVW/none --write"
+else
+  printf 'FAIL  %-26s the rename world was not built (%s by basename, %s by --follow) — nothing was proved\n' \
+         manifest-renamed-and-moved "${RVB:-<none>}" "${RVF:-<none>}"
+  fail=$((fail+1))
+fi
+rm -rf "$RVW"
 rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"
 
 red retracted-claim-planted \

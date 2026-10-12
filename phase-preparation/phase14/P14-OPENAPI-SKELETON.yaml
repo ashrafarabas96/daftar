@@ -23,7 +23,7 @@ openapi: 3.1.0
 
 info:
   title: DAFTAR Public API
-  version: "1.0.0-prepared"
+  version: '1.0.0-prepared'
   summary: Read and write a DAFTAR business's catalog, customers and sales.
   description: >-
     Authenticated with a business-scoped API key. A key is a delegation of a
@@ -53,7 +53,7 @@ paths:
       tags: [catalog]
       operationId: listProducts
       summary: List products.
-      description: "Scope: catalog.view. Owning slice: Phase 3 (sealed)."
+      description: 'Scope: catalog.view. Owning slice: Phase 3 (sealed).'
       parameters:
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/cursor'
@@ -69,7 +69,7 @@ paths:
       tags: [catalog]
       operationId: getProduct
       summary: Read one product.
-      description: "Scope: catalog.view. Owning slice: Phase 3 (sealed)."
+      description: 'Scope: catalog.view. Owning slice: Phase 3 (sealed).'
       parameters:
         - $ref: '#/components/parameters/productId'
       responses:
@@ -83,7 +83,7 @@ paths:
       tags: [inventory]
       operationId: listStock
       summary: List stock levels.
-      description: "Scope: inventory.view. Owning slice: Phase 3 (sealed)."
+      description: 'Scope: inventory.view. Owning slice: Phase 3 (sealed).'
       parameters:
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/cursor'
@@ -97,7 +97,7 @@ paths:
       tags: [customers]
       operationId: listCustomers
       summary: List customers.
-      description: "Scope: customers.view. Owning slice: P4-S1 (sealed)."
+      description: 'Scope: customers.view. Owning slice: P4-S1 (sealed).'
       parameters:
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/cursor'
@@ -142,7 +142,7 @@ paths:
       tags: [customers]
       operationId: getCustomer
       summary: Read one customer.
-      description: "Scope: customers.view. Owning slice: P4-S1 (sealed)."
+      description: 'Scope: customers.view. Owning slice: P4-S1 (sealed).'
       parameters:
         - $ref: '#/components/parameters/customerId'
       responses:
@@ -171,7 +171,7 @@ paths:
       tags: [sales]
       operationId: getInvoice
       summary: Read one invoice.
-      description: "Scope: sales.view. Owning slice: P4-S1 (sealed). Lifecycle status only."
+      description: 'Scope: sales.view. Owning slice: P4-S1 (sealed). Lifecycle status only.'
       parameters:
         - $ref: '#/components/parameters/invoiceId'
       responses:

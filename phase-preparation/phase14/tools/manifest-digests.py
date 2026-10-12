@@ -53,8 +53,12 @@ def main():
     # passes a flag. `actions/checkout` defaults to `fetch-depth: 1`, so a CI job
     # running this gate needs `fetch-depth: 0`.
     ap.add_argument('--allow-unverified-history', action='store_true',
-                    help='accept a manifest history that cannot be read in full (shallow clone);'
-                         ' the limit is printed either way')
+                    help='accept a history that CANNOT BE READ in full -- a shallow clone, a'
+                         ' missing object, a non-blob revision (NOT CHECKED). It does NOT excuse a'
+                         ' history that WAS read and records no reviewer digest'
+                         ' (NO RECORD IN ANY REVISION), which refuses with this flag too'
+                         ' (CHALLENGE R14-P3-02: the old text was wider than the behaviour).'
+                         ' The limit is printed either way')
     a = ap.parse_args()
 
     # ROUND-8 CHALLENGE P3-02: an absent --dir refused by FileNotFoundError
@@ -118,6 +122,7 @@ def main():
 
     signed_history, moved = {}, {}
     history = 'checked over every revision of the manifest, OLDEST first'
+    _nrevs = 0
     _md = os.path.dirname(os.path.abspath(a.manifest))
     _mb = os.path.basename(a.manifest)
     def _g(*argv):
@@ -158,6 +163,54 @@ def main():
                 out.append((mode, path))
         return out
     _revs = _g('rev-list', 'HEAD', '--', _PS)
+    # CHALLENGE R14-P2-01: the NAME anchor closes a move, and not a move plus a
+    # RENAME to a different basename in the same commit as the forge. Then the
+    # new basename has exactly one revision, the forging one, and the walk again
+    # read 1 of 3 and said "checked". The coordinator's ruling: refuse by name
+    # under EVERY invocation, not only under the gate's default `--manifest`
+    # (which answers 2 CONFIGURATION ERROR because the file is gone from --dir).
+    # So the revision set is the UNION of two questions git can answer, and each
+    # revision is read at the path IT had:
+    #   (a) any path whose basename is this manifest's, anywhere in the tree;
+    #   (b) `git log --follow` on this manifest's own path, which crosses a
+    #       rename when git scores one -- and a forged manifest is ~99% similar
+    #       to the one it replaces, which is exactly when --follow does see it.
+    # Neither question alone is sufficient and neither is trusted alone: (a)
+    # misses a basename change, (b) misses a move git does not score. The union
+    # is what the witness is read from, and the printed line says how many
+    # revisions were read.
+    _revmap = {}
+    for _r in _revs.stdout.split():
+        _revmap.setdefault(_r, set())
+    _top = _g('rev-parse', '--show-toplevel').stdout.strip()
+    _rel = None
+    if _top:
+        try:
+            _rel = os.path.relpath(os.path.abspath(a.manifest), _top)
+        except ValueError:
+            _rel = None
+    if _rel and not _rel.startswith('..'):
+        # `-C` is the manifest's own directory, so a bare relative path is
+        # resolved against THAT and silently matches nothing; `:(top)` anchors
+        # it at the repository root. Measured: without this the union never
+        # fired and the rename-and-move world still answered 0.
+        _fl = _g('log', '--follow', '--format=C %H', '--name-only', '--', ':(top)%s' % _rel)
+        if _fl.returncode == 0:
+            _cur = None
+            for ln in _fl.stdout.split('\n'):
+                ln = ln.rstrip()
+                if ln.startswith('C ') and len(ln) > 2:
+                    _cur = ln[2:].strip()
+                    _revmap.setdefault(_cur, set())
+                elif ln and _cur:
+                    _revmap[_cur].add(ln)
+    if len(_revmap) > len(_revs.stdout.split()):
+        # Order them the way git does, oldest last, then walk reversed.
+        _all = _g('rev-list', 'HEAD')
+        _ordered = [r for r in _all.stdout.split() if r in _revmap]
+        if len(_ordered) == len(_revmap):
+            _revs = type(_revs)(args=_revs.args, returncode=0,
+                                stdout='\n'.join(_ordered) + '\n', stderr='')
     # R-08, measured rather than asserted: "every revision" is a claim about
     # REACHABILITY, and this container's own clone is shallow. The flag is not
     # the question -- a truncated history is harmless for a file whose FIRST
@@ -271,6 +324,20 @@ def main():
             # discriminate -- it exits 0 and echoes the string for a deleted
             # path.)
             _pl = _paths_at(rev)
+            if _pl is not None:
+                _have = {pth for _m, pth in _pl}
+                for _extra in sorted(_revmap.get(rev, set()) - _have):
+                    _ex = _g('ls-tree', '--full-tree', '--format=%(objectmode) %(path)',
+                             rev, '--', _extra)
+                    if _ex.returncode != 0:
+                        _pl = None
+                        break
+                    for _ln in _ex.stdout.split('\n'):
+                        _ln = _ln.strip()
+                        if not _ln:
+                            continue
+                        _m2, _, _p2 = _ln.partition(' ')
+                        _pl.append((_m2, _p2))
             if _pl is None:
                 signed_history, moved = {}, {}
                 history = ('NOT CHECKED (the tree of revision %s could not be read, so'
@@ -315,6 +382,10 @@ def main():
                         signed_history[nm] = dg
                     elif dg != signed_history[nm] and nm not in moved:
                         moved[nm] = (signed_history[nm], dg, rev)
+        _nrevs = len(_revs.stdout.split())
+        if history.startswith('checked'):
+            history = ('checked over all %d revision(s) of this manifest reachable from HEAD,'
+                       ' OLDEST first' % _nrevs)
         if gaps and history.startswith('checked'):
             history += (', and the manifest is ABSENT in %d of them (%s) — removed and re-added,'
                         ' which does not erase the records before it'
