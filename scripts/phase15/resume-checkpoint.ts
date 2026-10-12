@@ -412,12 +412,33 @@ function main(): number {
   lines.push('');
   lines.push('## 2 · What is accepted, and by whom');
   lines.push('');
+  // GENERATED, not restated — R1 of the coordinator's round-7 review. These
+  // three bullets described a single challenger round and said coordinator
+  // acceptance had not been given, after seven rounds and two coordinator
+  // reviews. A sentence about another file's contents, written by hand, is
+  // stale from its second day; the rounds are read off the reports on disk and
+  // the verdicts stay where the challenger wrote them.
+  const rounds = packState()
+    .map((d) => /^P15-CHALLENGE-([0-9a-f]{7,40})\.md$/.exec(d.file)?.[1])
+    .filter((x): x is string => x !== undefined)
+    .sort();
+  const coordReviews = packState()
+    .map((d) => /^P15-COORD-DIFF-REVIEW-([0-9a-f]{7,40})\.md$/.exec(d.file)?.[1])
+    .filter((x): x is string => x !== undefined)
+    .sort();
   lines.push('- **Accepted by this author: nothing.** An author does not sign their own work (PART 15).');
-  lines.push('- **An independent challenger reviewed `2c0abec` and returned REJECT**, signing eleven');
-  lines.push('  items it re-measured itself. Its report is `P15-CHALLENGE-2c0abec.md` in this directory.');
-  lines.push('  Both of its P1 findings are addressed in code; see §8c of the handoff manifest.');
-  lines.push('- **A signature on `2c0abec` does not transfer to this head.** What is owed is a');
-  lines.push('  re-challenge at the current head, and Coordinator acceptance, which has not been given.');
+  lines.push(
+    rounds.length === 0
+      ? '- **No challenge report is on disk in this directory.** That is an absence of evidence here, not an absence of review.'
+      : `- **Independent challenge rounds on disk here: ${rounds.length}** — ${rounds.map((s) => `\`${s}\``).join(', ')}. Each report states its own verdict and scope; this file does not grade them, and the LIVE verdict is the last one, never the best one.`,
+  );
+  lines.push(
+    coordReviews.length === 0
+      ? '- **No coordinator diff review is on disk here.**'
+      : `- **Coordinator actual-diff reviews on disk here: ${coordReviews.length}** — ${coordReviews.map((s) => `\`${s}\``).join(', ')}.`,
+  );
+  lines.push('- **A signature covers ONE SHA and never transfers.** Whatever the reports say, what is');
+  lines.push('  owed at THIS head is a round naming THIS head. Compare the SHAs above with the facts in §1.');
   lines.push('- **Phase 4 is not sealed**, and Phase 15 cannot promote before it (PART 88).');
   lines.push('');
   lines.push('## 3 · Open blockers');
@@ -433,33 +454,45 @@ function main(): number {
   lines.push('Each is executable by a resuming session with no further authorisation, and none of');
   lines.push('them touches a frozen migration, `main`, the Phase 4 branch, or production.');
   lines.push('');
-  lines.push('1. **B-18** — plant one red proof each for DR `V3`, `V4`, `V8`, `V9` and PITR `P5`–`P9`,');
-  lines.push('   or print, per validator, that it carries none. Highest value: `V4` (tenant isolation');
-  lines.push('   survives the restore) and `V3`/`P5` (the recovered ledger balances). A red proof must');
-  lines.push('   redden **its own named validator**, not merely something.');
-  lines.push('2. **B-20** — extend `verify:evidence-log` to the remaining eight instruments, starting');
-  lines.push('   with `audit:deps:phase15`, the only one that fails for a substantive reason.');
-  lines.push('3. **B-21** — declare and check the three preconditions, and give "did not run" an exit');
-  lines.push('   code distinct from "ran and left an item unmeasured".');
-  lines.push('4. **B-22** — let a diagnostic-only PG context go UNMEASURED without aborting the');
-  lines.push('   primary line.');
-  lines.push('5. **B-23** — name the collation in the DR and PITR evidence blocks, or run their');
-  lines.push('   primary line at `en_US.utf8`.');
-  lines.push('6. **B-19** — make `P9`\'s verdict and subject count carry the measured number, and');
-  lines.push('   rename `P8`\'s question to what it measures.');
-  lines.push('7. **B-24** — record the digest of the subject the release secret scan scanned.');
+  lines.push('1. **B-22** — let a diagnostic-only PG context go UNMEASURED without aborting the');
+  lines.push('   primary line. Still open: the matrix fails fast, so a context that exists only to');
+  lines.push('   diagnose can end the run that carries the deployment-equivalent result.');
+  lines.push('2. **B-23** — the DR and PITR drills run at collation `C` while the deployment line is');
+  lines.push('   `en_US.utf8` (`TL-P4-S3-R4`). The version matches and the collation does not, and');
+  lines.push('   whether it matters for THESE checks is unmeasured, which is the honest state.');
+  lines.push('3. **B-25** — this directory has several writers, so an index written here is current');
+  lines.push('   only at the instant it was written. Partly closed: the manifest gate reads the');
+  lines.push('   challenge reports on disk and fails when the prose disagrees, in either direction.');
+  lines.push('4. The coordinator\'s round-7 residuals R1-R10, each named in its own review file.');
   lines.push('');
-  lines.push('**Owed regardless, and not fixable here:** a **Node 24** re-run (every result in this');
-  lines.push('pack was produced on Node v22.22.0 against `engines: >=24 <25`, and no Node 24 exists in');
-  lines.push('this container), and a read of the **real** Phase 4/staging/production role attributes,');
+  lines.push('B-18, B-19, B-20, B-21 and B-24 were on this list and are closed; the items that');
+  lines.push('closed them are measured in the handoff manifest and in `verify:evidence-log`\'s own');
+  lines.push('output. A next-task list that still names finished work sends the next session to');
+  lines.push('redo it.');
+  lines.push('');
+  lines.push('**On the pinned engine:** `engines` asks for `>=24 <25`. The seventh challenge round');
+  lines.push('fetched Node v24.12.0, verified its digest against the published `SHASUMS256`, and ran');
+  lines.push('the whole inventory on it with the runner exiting 0 — so that debt is paid, by a second');
+  lines.push('party rather than by this author. It is not a standing property of the environment:');
+  lines.push('this container\'s image carries Node 20, 21 and 22, so a session that means to measure');
+  lines.push('on the pinned engine fetches it first and prints `node -v` in the record.');
+  lines.push('');
+  lines.push('**Owed regardless, and not fixable here:** a read of the **real**');
+  lines.push('Phase 4/staging/production role attributes,');
   lines.push('which the Security Authority performs with `npm run verify:role-attributes` and their own');
   lines.push('credentials. That instrument needs `P15_ROLE_READ_URL` set; this file records the');
   lines.push('variable\'s NAME and never a value.');
   lines.push('');
   lines.push('## 5 · Evidence still valid at this head');
   lines.push('');
-  lines.push('Re-run rather than trusted: `npm run verify:evidence-log` drives six instruments and');
-  lines.push('prints the full PART 19 record per proof — base SHA, runtime, database version **and');
+  // NO NUMBER HERE. This line said "six instruments" against 25, which is the
+  // coordinator's round-7 B4: a count committed into a document is stale by
+  // construction, and this one is about ANOTHER file's contents, so it goes
+  // stale on that file's first growth. The runner prints its own count and
+  // checks it against package.json (B-20); that is the place for the figure.
+  lines.push('Re-run rather than trusted: `npm run verify:evidence-log` drives every instrument in its');
+  lines.push('own inventory — it prints the count and measures it against `package.json` — and');
+  lines.push('prints the full PART 19 record per proof: base SHA, runtime, database version **and');
   lines.push('collation**, execution role, UTC window, counts beside the summary line they were read');
   lines.push('from, log digest, and measurement validity. Any run on an unclean tree is marked');
   lines.push('PREPARATION ONLY by its own run id, and is not final-SHA evidence.');

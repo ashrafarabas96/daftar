@@ -104,7 +104,7 @@ function arabicToWestern(t: string): string {
   return t.replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
 }
 
-function checkCurrency(manifest: string, root: string): Currency {
+function checkCurrency(manifest: string, root: string, dir: string): Currency {
   const git = (args: readonly string[]): string => {
     const r = spawnSync('git', [...args], { cwd: root, encoding: 'utf8' });
     return r.status === 0 ? (r.stdout ?? '').trim() : '';
@@ -145,10 +145,17 @@ function checkCurrency(manifest: string, root: string): Currency {
     const m = re.exec(summary);
     return m?.[1] === undefined ? null : Number(m[1]);
   };
+  // The DOCUMENT count joins the three — the coordinator's round-7 B4. The
+  // header said every count in §1 was checked here; three of four were, and
+  // the unchecked one was the one that was wrong (20 against 21). A header
+  // that overstates its own gate is the same defect as a count that is stale,
+  // one level up: so the count is measured here rather than narrowed away.
+  const docs = artifactsOnDisk(dir);
   const pairs: readonly { readonly what: string; readonly claimed: number | null; readonly measured: number }[] = [
     { what: 'commits on this branch', claimed: claim(/\*\*(\d+) إيداع/), measured: commits },
     { what: 'new phase-owned code files', claimed: claim(/\*\*(\d+) ملف[ًا]* برمجي/), measured: newFiles },
     { what: 'package.json script entries added', claimed: claim(/\*\*(\d+) سكربت/), measured: scriptsAdded },
+    { what: 'documents in the off-Git pack, this manifest excluded', claimed: claim(/\*\*(\d+) وثيقة/), measured: docs.length },
   ];
   for (const x of pairs) {
     if (x.claimed === null) {
@@ -333,7 +340,7 @@ function main(): void {
   }
 
   // ── direction 3: is the header current? ────────────────────────────────
-  const cur = checkCurrency(manifest, resolve(__dirname, '../..'));
+  const cur = checkCurrency(manifest, resolve(__dirname, '../..'), DIR);
   console.log('');
   console.log('DIRECTION 3 — IS THE HEADER CURRENT? (measured from git, not read from the file)');
   console.log(`  HEAD ${cur.headSha}`);

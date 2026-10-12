@@ -107,6 +107,27 @@ interface Precondition {
 
 const PRECONDITIONS: readonly Precondition[] = [
   {
+    id: 'build-inventory',
+    kind: 'environment',
+    what: '@daftar/inventory is built — the load-harness cases import it, and an unbuilt package makes vitest find no test files',
+    how: 'packages/inventory/package.json main, checked for existence on disk',
+    measure: () => {
+      const pkgPath = join(ROOT, 'packages/inventory/package.json');
+      if (!existsSync(pkgPath)) return { met: false, detail: 'packages/inventory/package.json is absent' };
+      let main: unknown;
+      try {
+        main = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { main?: unknown }).main;
+      } catch {
+        return { met: false, detail: 'packages/inventory/package.json is unreadable' };
+      }
+      if (typeof main !== 'string') return { met: false, detail: 'packages/inventory/package.json declares no main' };
+      const dist = join(ROOT, 'packages/inventory', main);
+      return existsSync(dist)
+        ? { met: true, detail: `packages/inventory → ${main} exists` }
+        : { met: false, detail: `packages/inventory → ${main} is absent, so the cases cannot import it. Build it and re-run; a vitest run that finds no test files is not a measurement of the harness` };
+    },
+  },
+  {
     id: 'build-accounting',
     kind: 'environment',
     what: 'packages/accounting is built — the dist `verify:gap-list` reaches through apps/api/src/config',
@@ -320,7 +341,7 @@ const INSTRUMENTS: readonly Instrument[] = [
   },
   {
     script: 'scan:secrets:release:prove',
-    what: 'the ways the release scan can miss a subject — an unmerged path, a dirty tracked file, a nested ignore file',
+    what: 'the ways the release scan can miss a subject: an unmerged path, a dirty tracked file, a tree-level and a nested ignore/config file, an empty inventory, a tree below the release floor, gitleaks pointed at an empty directory, and the positive control not requested at all',
     cluster: false,
     nonZeroMeans: 'the scan did not notice a planted hole in its own coverage, so its 0 findings are a statement about what it looked at, not about the tree',
   },
@@ -395,10 +416,20 @@ const INSTRUMENTS: readonly Instrument[] = [
     requires: ['locale'],
   },
   {
+    // `cluster: true`, and the coordinator's round-7 B4 is why. This entry said
+    // "starts no cluster" and declared no preconditions, while the vitest
+    // globalSetup starts the shared embedded PostgreSQL on a FIXED port and the
+    // cases import `@daftar/inventory`. Both omissions were measured in one
+    // run: at 60458ec the port was still held by the instrument before it, the
+    // fixture never started, and vitest reported "No test files found" — a
+    // setup failure wearing a filter failure's words. An instrument that starts
+    // a server and says it does not is also missing from its own PART 19
+    // record, where the database version belongs.
     script: 'test:phase15:load-harness',
-    what: 'the load harness’s own laws, as unit cases',
-    cluster: false,
-    nonZeroMeans: 'a case failed',
+    what: 'the load harness’s own laws, as unit cases — its globalSetup starts the shared embedded PostgreSQL on a fixed port',
+    cluster: true,
+    nonZeroMeans: 'a case failed, OR its fixture could not start — vitest reports an unstartable fixture as "No test files found", so read the log, not the code',
+    requires: ['build-inventory'],
   },
   {
     script: 'load:harness',
