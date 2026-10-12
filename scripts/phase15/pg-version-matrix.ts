@@ -98,10 +98,17 @@ interface Line {
  * a result at the wrong collation carried under the deployment's name is
  * exactly the substitution this phase keeps catching.
  */
+// V3 §22.1 ranks these, and the ranking is not cosmetic: «يُعيد دليل المنتج
+// الأساسي تشغيل المطلوب على PG16/en_US.utf8 والنسخة المجمّدة نفسها، وتبقى
+// مقارنة PG18 أدلة تشخيص مستقلة». So the 16 @ en_US.utf8 context is the
+// PRIMARY evidence line — the one the product's own evidence must be produced
+// on — and the 18 context is INDEPENDENT DIAGNOSTIC evidence, never a line any
+// product claim rests on. The 16 @ C context is this container's own tooling,
+// and its collation is not the deployment's.
 const LINES: Line[] = [
-  { name: '16 @ C (host tooling)', bin: '/usr/lib/postgresql/16/bin', dir: '/tmp/daftar-p15-matrix-16', port: 55481, locale: 'C' },
-  { name: '18 @ C (embedded test server)', bin: join(ROOT, 'node_modules/@embedded-postgres/linux-x64/native/bin'), dir: '/tmp/daftar-p15-matrix-18', port: 55482, locale: 'C' },
-  { name: '16 @ en_US.utf8 (DEPLOYMENT-equivalent)', bin: '/usr/lib/postgresql/16/bin', dir: '/tmp/daftar-p15-matrix-16d', port: 55484, locale: 'en_US.utf8' },
+  { name: '16 @ C (host tooling · diagnostic)', bin: '/usr/lib/postgresql/16/bin', dir: '/tmp/daftar-p15-matrix-16', port: 55481, locale: 'C' },
+  { name: '18 @ C (embedded · DIAGNOSTIC ONLY)', bin: join(ROOT, 'node_modules/@embedded-postgres/linux-x64/native/bin'), dir: '/tmp/daftar-p15-matrix-18', port: 55482, locale: 'C' },
+  { name: '16 @ en_US.utf8 (PRIMARY · deployment-equivalent)', bin: '/usr/lib/postgresql/16/bin', dir: '/tmp/daftar-p15-matrix-16d', port: 55484, locale: 'en_US.utf8' },
 ];
 
 /* ── cluster plumbing (the server account cannot be root) ─────────────────── */
@@ -260,6 +267,9 @@ async function v3(): Promise<void> {
     .sort();
   const prepCount = readdirSync(join(ROOT, 'infrastructure/database/migrations')).filter((n: string) => n.endsWith('.sql')).length;
   r.note.push(`subject: the candidate at ${ref} → ${sha}, ${names.length} migration(s). This prep branch carries ${prepCount}, which is the P3 baseline and NOT the candidate.`);
+  r.note.push(
+    "PRINCIPAL, stated because V3 §7 requires it: this probe applies the WHOLE train as the disposable cluster's SUPERUSER. The project's documented install contract is a SPLIT — `0000–0039` under the administrator role and `0040+` under the migrator role — and V3 forbids describing a single-principal run of all 87 as the project's real install path. So what this row measures is that the SCHEMA is accepted in each context. It is NOT an install-contract proof, and the role-dependent half of installation is UNMEASURED here.",
+  );
   if (names.length === 0) {
     r.note.push('UNMEASURED: the candidate ref carries no migrations at that path.');
     r.status = 'UNMEASURED';
@@ -314,6 +324,9 @@ async function v3(): Promise<void> {
 async function v4(): Promise<void> {
   const r = row('V4', 'ON DELETE RESTRICT: the exact SQLSTATE, constraint, and that the row survives the refusal');
   r.note.push('documented as 23001 on 18 and 23503 on 16–17 (docs/PHASE_3_S2_CONTRACT.md:209); T-14.4 derives it from server_version_num, so the tree ACCOUNTS for this one');
+  r.note.push(
+    'V3 §22.1 SCOPES THIS RESULT, and the scope is part of the result: this is a NARROW COMPATIBILITY EXPERIMENT on one constraint and one command. It is NOT an adoption of PostgreSQL 18, NOT exact-final-RC evidence, and NOT authority to widen an allowed-SQLSTATE list across Class 23. The mapping for THIS constraint and THIS command is the gate owner\'s and the domain owner\'s to review, with the constraint name, the rollback and the outcome in hand.',
+  );
   r.note.push(
     '§22.1: 23001 is restrict_violation and 23503 is foreign_key_violation, and NO Class 23 may be turned into a PASS. So this probe names the constraint, runs inside an explicit transaction as a non-superuser role, and proves three things rather than one: the refusal happens, it carries the constraint’s own name, and the parent row is STILL THERE afterwards. A probe that only reads the code would pass on a server that refused for the wrong reason, or that refused and deleted anyway.',
   );
@@ -425,9 +438,9 @@ async function main(): Promise<number> {
   const emb = declared.devDependencies?.['embedded-postgres'] ?? declared.dependencies?.['embedded-postgres'] ?? '(not declared)';
   v1.note.push(`package.json declares embedded-postgres ${emb}`);
   v1.note.push('');
-  v1.note.push('THE DEPLOYMENT TARGET IS ALREADY RECORDED — this matrix does not ask for it again.');
+  v1.note.push('THE DEPLOYMENT TARGET IS SETTLED (V3 §22.1) — this matrix measures against it and never asks for it.');
   v1.note.push(
-    '    V2 §22.1 says to look for a settled live version decision BEFORE requesting one. There is one, in Phase 4’s own documents, and it is consistent across four of them: TL-P4-S3-R4 states "the deployment target is the PostgreSQL 16 family at en_US.utf8" (P4-SLOT2-S5-IMPLEMENTATION-READY.md:925); P4-S3-REPORT-AR.md:521 names en_US.utf8 as what the postgres:16 image is initialised with, "أي هدف النشر" — i.e. the deployment target; P4-S3-FINAL-VERDICT-AR.md:31 records CI printing server_version_num=160015 datcollate=en_US.utf8 datctype=en_US.utf8; and P4-SLOT4-GATES-DESIGN.md:991 records that containers like this one run locale C while CI reports en_US.utf8. docs/DAFTAR_AWS_REFERENCE_ARCHITECTURE.md:13 independently says RDS PostgreSQL 16+.',
+    '    V3 §22.1 CONFIRMS this decision and withdraws the «16 or 18?» question outright; V2 §22.1 had already said to look for a settled live version decision BEFORE requesting one. There is one, in Phase 4’s own documents, and it is consistent across four of them: TL-P4-S3-R4 states "the deployment target is the PostgreSQL 16 family at en_US.utf8" (P4-SLOT2-S5-IMPLEMENTATION-READY.md:925); P4-S3-REPORT-AR.md:521 names en_US.utf8 as what the postgres:16 image is initialised with, "أي هدف النشر" — i.e. the deployment target; P4-S3-FINAL-VERDICT-AR.md:31 records CI printing server_version_num=160015 datcollate=en_US.utf8 datctype=en_US.utf8; and P4-SLOT4-GATES-DESIGN.md:991 records that containers like this one run locale C while CI reports en_US.utf8. docs/DAFTAR_AWS_REFERENCE_ARCHITECTURE.md:13 says RDS PostgreSQL 16+, which is CONSISTENT with the major but is NOT a copy of the detailed decision and does not carry the collation (V3 §22.1: «مرجع AWS الذي يقول RDS16+ لا ينسخ القرار التفصيلي»), so the decision rests on TL-P4-S3-R4 and its three Phase 4 corroborations, not on the reference architecture.',
   );
   v1.note.push(
     '    So the target is the 16 family at en_US.utf8, and no recommendation to move production to 18 belongs in a Phase 15 instrument. What remains genuinely open is narrower: pinning CI’s minor and image digest, and whether the embedded test server stays on another line.',
@@ -507,7 +520,7 @@ async function main(): Promise<number> {
       // The label is the CONTEXT, not the version string: two of the three
       // contexts are the same server version at different collations, and
       // printing `line.version` rendered them identically.
-      if (a !== undefined) console.log(`     ${line.name.padEnd(38)} ${a}`);
+      if (a !== undefined) console.log(`     ${line.name.padEnd(52)} ${a}`);
     }
     for (const n of r.note) console.log(`     · ${n}`);
   }
@@ -526,6 +539,18 @@ async function main(): Promise<number> {
   console.log('  upgrade path and backup/rollback/PITR evidence, not on the strength of a');
   console.log('  divergence measured here. What the evidence supports is stated above, per');
   console.log('  probe, per context.');
+  console.log('');
+  console.log('WHICH CONTEXT CARRIES WHICH WEIGHT (V3 §22.1)');
+  console.log('  16 @ en_US.utf8 is the PRIMARY line: the product\'s own evidence is produced');
+  console.log('  there, on the frozen set itself. The 18 context is INDEPENDENT DIAGNOSTIC');
+  console.log('  evidence and carries no product claim — a fixture on 18 never stands in for');
+  console.log('  an estate on 16. The 16 @ C context is this container\'s tooling, and its');
+  console.log('  collation is not the deployment\'s.');
+  console.log('');
+  console.log('  V3 §7: the train here is applied by ONE principal (the cluster superuser).');
+  console.log('  The documented install contract splits it — 0000-0039 administrator,');
+  console.log('  0040+ migrator — so no row above is an install-contract proof, and the');
+  console.log('  role-dependent half of installation is UNMEASURED by this instrument.');
   if (unaccounted.length > 0) {
     console.log('');
     console.log(`EXIT 2: ${unaccounted.map((r) => r.id).join(', ')} diverged between the measured contexts and the tree has no version-conditional branch for it.`);
