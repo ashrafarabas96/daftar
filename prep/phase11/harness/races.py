@@ -147,7 +147,17 @@ record("B  axis removed vs variant inserted",
 product(PD,'RACE-B2')
 s1,s2=Session("1"),Session("2")
 s1.send("BEGIN;"); s2.send("BEGIN;")
-i1,_=s1.send(V(PD,'c1000000-0000-0000-0000-0000000000b2','{"size":"l","color":"green"}'))
+i1,_=s1.send(V(PD,'c1000000-0000-0000-0000-0000000000b2','{"size":"l","color":"blue"}'))
+# T1's own arm is setup for this race: if it is refused, nothing holds the
+# key-share lock and the race measures nothing. The first run of this race
+# used 'green', which `product_attribute_values` does not register, so T1
+# was refused `catalog.variant_axis_value_unregistered`, never took the
+# lock, and the harness duly reported a FINDING that was its own. The
+# finding was real information about the harness, and it was caught because
+# the assertion reads the COMMITTED STATE rather than an error string.
+if any("ERROR" in line for line in i1):
+    print("HARNESS SETUP FAILED — race B2's T1 arm was refused, so nothing held the lock:")
+    print("  ", " ".join(i1)[:200]); sys.exit(2)
 d2,b2d=s2.send(f"DELETE FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PD}' AND axis_code='color';")
 cm1,_=s1.send("COMMIT;")
 d2b,_=s2.send(""); cm2,_=s2.send("COMMIT;")
