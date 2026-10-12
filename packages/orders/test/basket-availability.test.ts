@@ -433,6 +433,18 @@ describe('summariseBasket — a retracted line is not in the basket', () => {
     expect(() => summariseBasket([retracted(1, '2'), live(1, '3')], PRECISION)).toThrowError(expect.objectContaining({ code: 'order.cart_line_duplicate' }));
   });
 
+  it('claims the IDENTITY of a retracted line too, so a malformed id is refused before the skip', () => {
+    // Mutation M54 of round 15 moved this one claim below the retraction skip
+    // and the suite stayed green: the duplicate case above covers the id
+    // REGISTER, but nothing covered the id's SHAPE on a retracted line. A
+    // retracted line is skipped as a QUANTITY; it is not skipped as an
+    // identity, because `consumedCartLineIds` will name it to the sales
+    // authority and a malformed id there is a row nobody can match.
+    expect(() => summariseBasket([live(1, '2'), { ...retracted(2, '5'), lineId: 'not-a-uuid' }], PRECISION)).toThrowError(
+      expect.objectContaining({ code: 'order.id_invalid' }),
+    );
+  });
+
   it('refuses a retraction that is not a canonical instant', () => {
     for (const bad of ['2026-10-12', '2026-10-12T01:00:00.000Z', '2026-10-12T01:00:00+02:00', 'yesterday', '']) {
       expect(() => summariseBasket([live(1, '2'), { ...retracted(2, '5'), retractedAt: bad }], PRECISION)).toThrowError(
