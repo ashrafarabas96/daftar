@@ -192,11 +192,59 @@ export function obligationKey(businessId: string, origin: NotificationOrigin, ki
  */
 export function deliveryKey(obligation: string, channel: Channel, providerContext?: string): string {
   const context = providerContext === undefined || providerContext === '' ? '' : `@${providerContext}`;
-  return `${obligation}::${channel}${context}`;
+  if (providerContext !== undefined && providerContext !== '') assertKeyField('providerContext', providerContext);
+  return assertComposedDeliveryKey(`${obligation}::${channel}${context}`);
+}
+
+/**
+ * The law on the COMPOSED DELIVERY key — fourth challenge, D-6.
+ *
+ * N-7 closed this hole for the obligation key and left `deliveryKey` beside it
+ * unguarded, which is the shape this package has now been caught by twice: new
+ * scope beside a fix is the least-reviewed code in the change. `providerContext`
+ * was an arbitrary caller string. A template name of `promo::v2` produced
+ * `...::whatsapp@promo::v2`, which carries two `::` and is ambiguous to anything
+ * that splits on the separator this module reserves for exactly that purpose.
+ *
+ * THE CHALLENGE ASKED FOR `assertComposedKey('deliveryKey', ...)` ON THE
+ * RETURN, AND THAT WOULD BE WRONG. `assertComposedKey` refuses `::`, `#` and
+ * `@` outright, and a delivery key is REQUIRED to contain `::` and MAY contain
+ * one `@` — it would refuse every key the function exists to make. The law here
+ * is not "no separators" but "the separators are where the format says they
+ * are", so it is written as a shape, and `providerContext` is checked as an
+ * ordinary field, which is the half of the recommendation that applies as given.
+ */
+function assertComposedDeliveryKey(composed: string): string {
+  const doubleColons = composed.split('::').length - 1;
+  if (doubleColons !== 1) {
+    throw new NotificationRefusal('notification.delivery_key_invalid',
+      `deliveryKey/composed_double_colon_count_${doubleColons}`);
+  }
+  const ats = composed.split('@').length - 1;
+  if (ats > 1) {
+    throw new NotificationRefusal('notification.delivery_key_invalid', `deliveryKey/composed_at_count_${ats}`);
+  }
+  if (ats === 1 && composed.indexOf('@') < composed.indexOf('::')) {
+    throw new NotificationRefusal('notification.delivery_key_invalid', 'deliveryKey/composed_at_before_channel');
+  }
+  // `#` belongs to the ATTEMPT identity, which is appended after this key. One
+  // inside it would make an attempt identity ambiguous while the delivery key
+  // still looked sound — the same asymmetry N-7 found one level down.
+  if (composed.includes('#')) {
+    throw new NotificationRefusal('notification.delivery_key_invalid', 'deliveryKey/composed_hash');
+  }
+  return composed;
 }
 
 /** (3) Attempt identity: logical delivery + attempt number (1-based). Audit only. */
 export function attemptIdentity(delivery: string, attemptNo: number): string {
   if (!Number.isInteger(attemptNo) || attemptNo < 1) throw new Error('attemptNo must be a positive integer');
+  // The same question one level up: a delivery key that already carries a `#`
+  // makes `<delivery>#<n>` ambiguous. `deliveryKey` now refuses one, so this can
+  // only be reached by a caller that composed a delivery key by hand — which is
+  // exactly the caller worth refusing by name.
+  if (delivery.includes('#')) {
+    throw new NotificationRefusal('notification.attempt_identity_invalid', 'attemptIdentity/delivery_hash');
+  }
   return `${delivery}#${attemptNo}`;
 }

@@ -77,6 +77,18 @@ export type NotificationRefusalCode =
    * included — would have to share a decoder to tell them apart.
    */
   | 'notification.obligation_key_field_invalid'
+  /**
+   * The COMPOSED delivery key is not the shape the format declares — fourth
+   * challenge, D-6. Separate from the field code above on purpose: a field that
+   * carries a separator and a composition whose separators are in the wrong
+   * PLACES are different mistakes, made by different callers, and a reader of
+   * the log should not have to guess which one happened. `deliveryKey` is
+   * required to contain one `::` and may contain one `@`, so "no separators" is
+   * not the law here; where they sit is.
+   */
+  | 'notification.delivery_key_invalid'
+  /** An attempt identity composed over a delivery key that already carries `#`. */
+  | 'notification.attempt_identity_invalid'
   // Provider edge
   | 'notification.provider_not_configured'
   | 'notification.provider_template_required'

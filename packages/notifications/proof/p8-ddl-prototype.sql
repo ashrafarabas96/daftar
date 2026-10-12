@@ -1,4 +1,25 @@
 -- =====================================================================
+-- SUPERSEDED, round 11. THIS FILE IS NOT THE PHASE 8 SCHEMA ANY MORE, AND ITS
+-- ISOLATION RESULTS ARE WITHDRAWN.
+--
+-- The fourth independent challenge rejected the transcription this file is, and
+-- it was right twice over: the bypass helper copied a shape the repo had
+-- abandoned (see the correction below), and the stand-in `businesses` had no
+-- `UNIQUE (tenant_id, id)`, so a composite tenant key could not have been
+-- written here at all. Both defects were in the TRANSCRIPTION, not in the spec.
+--
+-- Phase 8 is now proved as an OVERLAY on the real frozen schema:
+--   proof/p8-overlay.sql              the DDL, applied after migrations 0000-0086
+--   proof/p8-real-fixtures*.sql       rows in the real relations
+--   proof/p8-real-cases-{app,owner,platform}.sql
+--   proof/p8-mutants.py               the mutants, as a program
+--   proof/run-p8-real-proof.sh        the runner
+--
+-- This file is kept, unrepaired, for one reason: the mutant that reinstates its
+-- defect (`guc_bypass` in p8-mutants.py) exists because of it, and a reviewer
+-- comparing the two rounds should be able to see what was wrong rather than a
+-- clean file and a claim. Nothing in the current proof reads it.
+-- =====================================================================
 -- Phase 8 — a PROTOTYPE of the DDL specified in `P8-DDL-SPEC.md`,
 -- written to be APPLIED, so that the spec's invariants stop being a
 -- reading of text and become refusals a parser and a planner agree with.
@@ -22,26 +43,72 @@ CREATE SCHEMA IF NOT EXISTS p8;
 SET search_path = p8, public;
 
 -- ---------------------------------------------------------------------
--- Prototype context helpers. Same contract as the live pair: the tenant
--- comes from the session, never from a caller's argument.
+-- Prototype context helpers.
+--
+-- `app_business()` reads the session, as the live one does.
+--
+-- `app_bypass()` is **IDENTITY-based, and that is a correction** (round 11,
+-- fourth challenge D-1). Round 10 wrote it as
+-- `current_setting('app.bypass_rls') = 'on'`, copying the repo's FIRST form —
+-- and `app.bypass_rls` is a custom GUC, which ANY role may SET. So the whole
+-- isolation result inverted: `p8_app`, asserted NOSUPERUSER NOBYPASSRLS by the
+-- runner, could type one statement and read every business. The ten green
+-- isolation cases proved only that the suite had chosen not to type it.
+--
+-- The repo abandoned that shape, which I should have read before transcribing
+-- it: `0006_rls.sql:12` is the GUC form, and it is REPLACED at
+-- `0013_security_boundary.sql:17` (`current_user = 'daftar_platform'`),
+-- `0030_provisioner_role.sql:18`, `0032_provisioner_narrow_functions.sql:18`
+-- and finally `0052_accounting_journal_lines_rls_performance.sql:244`
+-- (`CURRENT_USER OPERATOR(pg_catalog.=) 'daftar_platform'::pg_catalog.name`).
+-- The live contract is an identity a client cannot assume, not a flag it can
+-- set. Verified by reading those files, not taken from the report.
 -- ---------------------------------------------------------------------
 CREATE FUNCTION app_business() RETURNS UUID LANGUAGE sql STABLE AS $$
   SELECT nullif(current_setting('app.business_id', true), '')::UUID
 $$;
 CREATE FUNCTION app_bypass() RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
-  SELECT coalesce(current_setting('app.bypass_rls', true), 'off') = 'on'
+  SELECT CURRENT_USER = 'p8_platform'
 $$;
 
--- Stand-ins for the relations Phase 8 only REFERENCES. They exist so the
--- composite ownership keys of I-5b are real foreign keys here.
-CREATE TABLE businesses (id UUID PRIMARY KEY, tenant_id UUID NOT NULL);
+-- Stand-ins for the relations Phase 8 only REFERENCES. **Their shapes are
+-- transcribed from the frozen migrations, not invented** — round 10 invented
+-- two of them and both inventions hid a real question (fourth challenge D-2
+-- and D-4).
+--
+--   `businesses`  — `0003_tenancy.sql:7` (id PK, tenant_id NOT NULL), plus the
+--                   `UNIQUE (tenant_id, id)` that `0016_tenant_membership_invariant.sql:10`
+--                   adds. Round 10 omitted that unique, so the composite tenant
+--                   key `0075` uses TWICE on the very tables Phase 8 references
+--                   could not even have been written here: the stand-in removed
+--                   the question rather than answering it.
+--   `customers`   — PK `(business_id, id)`. No extra unique is added: an FK
+--                   matches the column SET, not its order, so
+--                   `REFERENCES customers (id, business_id)` is creatable
+--                   against that PK. Round 10 added a redundant
+--                   `UNIQUE (id, business_id)` that appears in none of the 87
+--                   frozen migrations; it is removed, so nothing here depends
+--                   on a key the real schema does not have.
+--   `users`       — **GLOBAL.** `0002_identity.sql:1` opens "users are GLOBAL
+--                   (not tenant-bound; access via memberships)" and the table
+--                   has no `business_id` at all. A user's business linkage lives
+--                   in `memberships` (`0003_tenancy.sql:45`, PK
+--                   `(business_id, user_id)`), which an FK cannot traverse.
+CREATE TABLE businesses (
+  id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL,
+  UNIQUE (tenant_id, id)
+);
 CREATE TABLE customers (
   business_id UUID NOT NULL REFERENCES businesses(id), id UUID NOT NULL,
-  PRIMARY KEY (business_id, id), UNIQUE (id, business_id)
+  PRIMARY KEY (business_id, id)
 );
-CREATE TABLE users (
-  business_id UUID NOT NULL REFERENCES businesses(id), id UUID NOT NULL,
-  PRIMARY KEY (business_id, id), UNIQUE (id, business_id)
+CREATE TABLE users (id UUID PRIMARY KEY, email TEXT NOT NULL UNIQUE);
+CREATE TABLE memberships (
+  business_id UUID NOT NULL REFERENCES businesses(id),
+  user_id     UUID NOT NULL REFERENCES users(id),
+  status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+  PRIMARY KEY (business_id, user_id)
 );
 
 -- =====================================================================
