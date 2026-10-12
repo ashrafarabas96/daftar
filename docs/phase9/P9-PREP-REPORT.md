@@ -14,20 +14,23 @@ head of `main`.
 | file | lines | what it is |
 |---|---|---|
 | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | 212 | the model, and why it has this shape |
-| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 1483 | the schema and its physical invariants — **not a migration** |
+| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 1583 | the schema and its physical invariants — **not a migration** |
 | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 521 | what the Migration Owner is asked to allocate |
 | `docs/phase9/P9-HANDOFF-MANIFEST.md` | 131 | the PART 13 handoff gate, with a SHA256 per artifact |
-| `tests/phase9-prep/p9-booking-schema.test.ts` | 303 | 17 cases: shape, security, grants, end state, the state contract, collation independence |
+| `tests/phase9-prep/p9-booking-schema.test.ts` | 304 | 17 cases: shape, security, grants, end state, the state contract, collation independence |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 588 | 7 cases: each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
-| `tests/phase9-prep/p9-booking-time.test.ts` | 574 | 21 cases: the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan and the two defects V3 named |
+| `tests/phase9-prep/p9-booking-time.test.ts` | 621 | 21 cases: the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan at one-day granularity, and the two defects V3 named |
+| `tests/phase9-prep/p9-booking-integrity.test.ts` | 240 | 5 cases: the closure record is write-once (R-P9-15) — the two defects the independent challenger found, and the non-vacuity that keeps the guard honest |
 | `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 350 | 10 cases: the schema attacked as the real runtime roles, no superuser |
 | `tests/phase9-prep/p9-booking-spec.ts` | 206 | the spec loader, the state contract parser, and the non-vacuity guards |
 | `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**76 of 76 cases green on BOTH runtimes**, over six suites, on a live PostgreSQL 18.4 cluster. A case count is
+**81 of 81 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`**
+— over seven suites, and again on PostgreSQL 18.4 at `C` as the comparison the mission permits.
+A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
 not how much of Phase 9 exists.
 
@@ -278,8 +281,10 @@ a control shows PostgreSQL's own `AT TIME ZONE` failing that same sweep.
 ### 3c.5a The bound itself, measured (Mission V2)
 
 V2 asked for the resolver's real bound against the lawful IANA transition, and for no claim
-left wider than its evidence. The ±180-minute scan is now measured over every one of the
-598 zones this server knows, in both directions separately, because they fail differently:
+left wider than its evidence. The ±180-minute scan is now measured over every zone the
+measuring server knows — 499 on the approved PostgreSQL 16 target, 598 on the PG 18.4
+comparison container, a tzdata-build fact and not a property of the law (C-P9-05) — in
+both directions separately, because they fail differently:
 2024–2030 (the window bookings live in) has a widest transition of 120 minutes either way,
 while 1970–2040 contains a 1440-minute date-line move and a 420-minute repeat. A gap wider
 than the bound is still refused — proved on Kwajalein's skipped day — but a repeat wider
@@ -329,6 +334,78 @@ three are owed. The D11 PART 117 label for the same state is `PREPARED / NOT PRO
 two are the same claim, and this report uses both so neither vocabulary has to be guessed
 at.
 
+### 3c.12 The INDEPENDENT CHALLENGER's REJECT at `51626e1`, answered
+
+An independent challenger ran its own container against `51626e1` on PostgreSQL 16.15 at
+`en_US.utf8` under Node 24.12.0, read the whole diff against `6fc505d`, verified the digests
+of all five committed artifacts, and wrote four probes of its own. Its verdict was **REJECT**
+with six findings. The report is `/mnt/project-files/phase9/P9-CHALLENGE-51626e1.md`. This is
+what each one was and what was done; nothing here is self-signed, and the challenger has not
+seen this round.
+
+**C-P9-01 (P1) — the whole measurement was off-target, and one case red on the target.**
+Correct, and already being fixed when the report landed: §3c.11 above records the same
+collation defect, found on the same first target run. The five orderings pin `COLLATE "C"`
+and a live case proves the hazard. The evidence claim is now stated against the target run's
+own identity and exit code, and the 18.4 numbers are a comparison, not the claim.
+
+**C-P9-02 and C-P9-03 (P2) — two laws this file states were enforced by nothing.** The real
+finding of the round, and both were defects in the schema, not in the evidence. Block (a) of
+`bookings_transition` froze what time is held for whom; the state machine in block (b) only
+fires on a CHANGE of `state`. An UPDATE that left `state` alone and rewrote only the
+settlement matched neither, so **the cancellation reason could be rewritten, `settled_at`
+backdated three days, and `rescheduled_to_id` repointed at a different booking** until the
+forward link contradicted the backlink that block (a) does freeze. The challenger proved both
+by execution: *refusal=(none)*, twice.
+
+Fixed as **R-P9-15 — the closure record is WRITE-ONCE**: blocks (a2) and (a3) of
+`bookings_transition` refuse any change to `settled_at`, `settled_by_user_id`,
+`settle_reason` or `rescheduled_to_id` once it is non-NULL (`booking.immutable_settlement`),
+and refuse writing one while the booking is still `'booked'`
+(`booking.settlement_without_close`). Write-once rather than frozen-always, because the
+statement that closes the booking has to write them. `IS DISTINCT FROM` on both sides, so
+**clearing** a written value is a rewrite too.
+
+Five cases land it in `tests/phase9-prep/p9-booking-integrity.test.ts`, each asserting the
+refusal **by name** — the two shape CHECKs would refuse some of these UPDATEs for a different
+reason, and a case asserting only "it failed" would have passed on the wrong constraint with
+the hole still open. The file carries the challenger's own measured pre-fix output beside each
+proof. The fifth case is non-vacuity: the three lawful closures still go through, so a guard
+that refused every UPDATE could not satisfy the suite.
+
+**C-P9-04 (P2) — the long-range tz sweep rested on a false premise.** The comment claimed a
+sample window holding two transitions "reports their sum, which can only overstate". False:
+two transitions of OPPOSITE sign inside one window **cancel**, and the challenger found the
+pairs (Asia/Hebron 2040-10-20 +60 with 2040-10-27 −60, and four more). The reported maximum
+was therefore a lower bound, not an upper one, and the assertion could not do the job it was
+given — redding if a future tzdata widened a repeat past the scan. The step is corrected
+rather than the claim reworded: the sweep now runs at **one-day** granularity, which isolates
+single transitions, and the two headline numbers are unchanged (gap 1440, repeat 420 at
+Antarctica/Vostok). Its second half was the zero margin: `<= 1440` against a scan half-width
+of exactly ±1440. The dangerous direction is now asserted **strictly** (`widest_repeat <
+1440`); the gap stays inclusive because 1440 is measured there and a gap only ever produces a
+refusal.
+
+**C-P9-05 (P3) — the documented zone count was the container's, not the target's.** 598 is a
+PG 18.4 tzdata fact; the target returns 499. Restated in all three places as a property of
+the measuring server's tzdata build, with both numbers given.
+
+**C-P9-06 (P3) — a catalog comment its own routine disproves.** `booking_replay_result`'s
+`COMMENT` still ended "row security applies to it as to any read", which is the premise the
+routine's own executed attack falsified. Struck, and replaced with what is true: row security
+does not bound this routine, which is why the scope is enforced in the body.
+
+**The run after the fixes.** `tests/phase9-prep`, 7 files, **81 of 81 cases, exit code 0**, on
+PostgreSQL 16.15 at `en_US.utf8` and again on 18.4 at `C` as a comparison. The 1-day sweep
+reproduces the challenger's numbers exactly on the target: gap 1440, repeat 420
+(Antarctica/Vostok), 499 zones × 47 483 samples.
+
+**What is still owed and is NOT claimed.** Node 24 (the container ships 22.22.0 — the
+challenger's run was on 24.12.0, but it was a run of `51626e1`, not of this round). No
+challenger signature on this round, and no coordinator actual-diff review: PART 15 forbids
+the author signing their own work, so this stays `PREPARED`. The retention decision is the
+owner's.
+
 ### 3c.11 HIGH-VELOCITY V1 — measured on the APPROVED TARGET, PostgreSQL 16 / `en_US.utf8`
 
 The mission's PART 1.3 names **PostgreSQL 16 with `en_US.utf8`** as the approved deployment
@@ -350,7 +427,7 @@ same schema therefore passed on one collation and failed on the other. The order
 assumed — a fix for a difference nobody can demonstrate is a guess.
 
 Nothing in the schema, the invariant, the routines or the policies behaved differently
-between the two versions: after the harness fix, **76 of 76 cases pass on PostgreSQL
+between the two versions: after the harness fix, **76 of 76 cases passed on PostgreSQL
 16.15/`en_US.utf8` AND on PostgreSQL 18.4/`C`, exit code 0 on both**, and the run log records
 each run's version, collation, role, command, times and exit code. That is the honest shape
 of the claim — the invariant is proved on the approved target, and the PG18 run is now what

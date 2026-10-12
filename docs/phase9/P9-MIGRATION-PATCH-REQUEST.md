@@ -514,7 +514,8 @@ money-shaped column reached the schema.
 
 ## 9. EVIDENCE
 
-**75 cases over six suites, all green with EXIT CODE 0, on a live PostgreSQL 18.4 cluster**, with the
+**81 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
+PostgreSQL 16.15 cluster at `en_US.utf8`** (and again on 18.4 at `C` as a comparison), with the
 spec applied in one transaction as the non-superuser deployment principal
 `daftar_migrator` on top of the sealed Phase 3 head.
 
@@ -579,7 +580,9 @@ is mixed, and nothing is claimed in a stronger class than it was measured in.
   index it; and the soundness sweep over 14 000+ inputs across ten transition days in two
   zones, with an independent round-trip oracle, together with the control that shows
   `AT TIME ZONE` failing that same sweep. The scan's width is ±1440 minutes, measured
-  over all 598 zones across the supported range in both directions, and the supported
+  over every zone the measuring server knows (499 on the approved PostgreSQL 16 target,
+  598 on the PG 18.4 comparison container) across the supported range in both directions,
+  at one-day granularity so no pair of opposite transitions can cancel, and the supported
   range `1970-01-01`–`2100-01-01` is enforced by its own refusal. A copy of the earlier
   ±180 scan is built in the scratch database to prove what it did wrong: it resolved
   Antarctica/Vostok's 420-minute repeat silently instead of refusing it.

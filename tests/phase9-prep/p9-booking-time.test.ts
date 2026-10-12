@@ -353,8 +353,22 @@ describe('P9 bookings — a local time is resolved or refused, never guessed', (
    *                      be seen as unambiguous and resolved silently, which
    *                      is exactly what R-P9-13 forbids.
    *
-   * A sample window wide enough to hold two transitions reports their sum,
-   * which can only overstate a single transition — the conservative direction.
+   * WHAT A FIXED GRID DOES NOT GUARANTEE, stated because an earlier version of
+   * this comment claimed the opposite. It said a window holding two transitions
+   * "reports their sum, which can only overstate". That is FALSE, and an
+   * independent challenger refuted it by execution at `51626e1` (C-P9-04): two
+   * transitions of OPPOSITE sign inside one sample window CANCEL, and the
+   * difference between the two end samples is their sum — zero, or less than
+   * either one. Asia/Hebron 2040-10-20 (+60) and 2040-10-27 (−60) are such a
+   * pair, and a seven-day grid differenced them to nothing. The reported
+   * maximum is therefore a lower bound on the true widest transition, not an
+   * upper one, and this test's job — redding if a future tzdata widens a
+   * repeat past the scan — only works if the step is fine enough to isolate
+   * single transitions. No zone in the IANA database has ever transitioned
+   * twice within one day, so the long-range sweep now steps by one day. It
+   * costs about 86 seconds and the two headline numbers are unchanged (gap
+   * 1440, repeat 420 at Antarctica/Vostok) — the premise was wrong, not the
+   * conclusion, and the step is corrected rather than the claim reworded.
    */
   it('the ±1440-minute scan covers every transition in the supported range, measured in both directions', async () => {
     const c = new Client({ connectionString: db.url('postgres') });
@@ -402,23 +416,38 @@ describe('P9 bookings — a local time is resolved or refused, never guessed', (
       expect(near.widest_repeat).toBeLessThanOrEqual(180);
       expect(near.widest_gap).toBeLessThanOrEqual(180);
 
-      // Long range, coarsely: 1970 to 2040 in seven-day samples.
-      const far = await sweep('1970-01-01T00:00:00Z', '2100-01-01T00:00:00Z', '7 days');
+      // Long range, at ONE-DAY granularity over the whole supported span, so
+      // that every sample window holds at most one transition and no pair of
+      // opposite transitions can cancel (C-P9-04).
+      const far = await sweep('1970-01-01T00:00:00Z', '2100-01-01T00:00:00Z', '1 day');
       expect(far.zones).toBeGreaterThan(400);
-      expect(far.steps).toBeGreaterThan(3000);
+      expect(far.steps).toBeGreaterThan(40000);
       // THE BOUND THE SCAN ACTUALLY USES, over the whole supported range:
       // ±1440 minutes. This is the assertion that would red if a tz update
       // ever moved a clock further than the scan can see — which is the only
       // honest way to hold a claim about data that updates.
+      //
+      // The two directions are asserted DIFFERENTLY, because the scan's
+      // half-width is exactly ±1440 and an assertion of `<= 1440` against a
+      // half-width of 1440 leaves no margin to red into:
+      //
+      //   repeat — the dangerous direction, where a too-narrow scan resolves
+      //     an ambiguous clock SILENTLY. Asserted STRICTLY narrower than the
+      //     half-width, so sufficiency does not rest on the boundary sample
+      //     landing in the right offset's regime. Measured 420.
+      //   gap — the safe direction: a clock that skips produces no candidate,
+      //     and a gap wider than the scan still produces none, so the resolver
+      //     refuses either way. 1440 is measured here (Kwajalein, 1993), so
+      //     this one is inclusive by measurement, not by choice.
+      expect(far.widest_repeat).toBeLessThan(1440);
       expect(far.widest_gap).toBeLessThanOrEqual(1440);
-      expect(far.widest_repeat).toBeLessThanOrEqual(1440);
       // And it is NOT inside the old ±180: that is why the scan was widened,
       // and this is the measurement that forced it.
       expect(far.widest_gap).toBeGreaterThan(180);
       expect(far.widest_repeat).toBeGreaterThan(180);
       console.log(
-        `[P9 tz bound] 2024-2030: gap ${near.widest_gap} min, repeat ${near.widest_repeat} min (${near.repeat_zone}), ${near.zones} zones × ${near.steps} samples. ` +
-          `1970-2100: gap ${far.widest_gap} min, repeat ${far.widest_repeat} min (${far.repeat_zone}).`,
+        `[P9 tz bound] 2024-2030 @ 12h: gap ${near.widest_gap} min, repeat ${near.widest_repeat} min (${near.repeat_zone}), ${near.zones} zones × ${near.steps} samples. ` +
+          `1970-2100 @ 1 day: gap ${far.widest_gap} min, repeat ${far.widest_repeat} min (${far.repeat_zone}), ${far.zones} zones × ${far.steps} samples.`,
       );
     } finally {
       await c.end().catch(() => undefined);

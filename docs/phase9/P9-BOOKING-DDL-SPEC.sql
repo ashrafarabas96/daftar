@@ -190,6 +190,25 @@
 --          first version relied on row security and the cross-business case
 --          returned the row.
 --
+-- R-P9-15  THE CLOSURE RECORD IS WRITE-ONCE.
+--          Who closed a booking, when, why, and which booking replaced it
+--          are the record of the closure, and a record that can be rewritten
+--          afterwards is not a record. R-P9-08 froze what time is held for
+--          whom; it did not freeze that. Nor did the state machine, which
+--          only looks at a CHANGE of `state`: an UPDATE that leaves `state`
+--          alone matched neither guard, so a cancellation reason could be
+--          rewritten, `settled_at` backdated, and `rescheduled_to_id`
+--          repointed at a different booking until it contradicted the
+--          backlink `rescheduled_from_id` that R-P9-08 does freeze. Found by
+--          an independent challenger, by execution, at `51626e1`
+--          (C-P9-02, C-P9-03): both rewrites succeeded.
+--          WRITE-ONCE, not frozen-always, because the UPDATE that closes the
+--          booking has to write them: once a field is non-NULL it may never
+--          change again (`booking.immutable_settlement`), and it may only
+--          become non-NULL in the same statement that leaves `'booked'`
+--          (`booking.settlement_without_close`) — settling a booking that is
+--          still standing is a contradiction, not a closure.
+--
 -- R-P9-10  Every refusal is `'<domain>.<snake_case_condition>: sentence'`
 --          with `ERRCODE = 'P0001'`, the convention of every migration from
 --          0053 on. Domain prefix `booking.`.
@@ -750,8 +769,13 @@ REVOKE ALL ON FUNCTION booking_lock_resources(UUID, UUID[]) FROM PUBLIC;
 --               supported range to be declared and enforced rather than
 --               implied, and for the claim or the algorithm to be fixed to
 --               match the usage scope; both were fixed.
---   shift       up to ±1440 minutes, MEASURED over all 598 zones this server
---               knows across the supported range: the widest gap is 1440
+--   shift       up to ±1440 minutes, MEASURED over every zone the server
+--               running the measurement knows — 499 on the approved target
+--               (PostgreSQL 16.15 @ en_US.utf8), 598 on the PG 18.4
+--               comparison container; the test asserts the count is over 400
+--               and logs the real one, because a zone count is a property of
+--               a tzdata build and not of this law (C-P9-05). Across the
+--               supported range: the widest gap is 1440
 --               minutes (Kwajalein's 1993 date-line move) and the widest
 --               repeat is 420 minutes (Antarctica/Vostok, 1994-01-31). The
 --               earlier ±180 claimed more than it could deliver — it
@@ -934,6 +958,30 @@ BEGIN
     RAISE EXCEPTION 'booking.immutable: a booking''s time, resource, service, customer and buffers never change — reschedule inserts a new booking' USING ERRCODE = 'P0001';
   END IF;
 
+  -- (a2) R-P9-15. The closure record is WRITE-ONCE: once a settlement field
+  --      is non-NULL it never changes again. Block (a) freezes the held
+  --      time; this freezes the account of how the holding ended. The
+  --      `IS DISTINCT FROM` is deliberate on both sides — clearing a written
+  --      value back to NULL is a rewrite too.
+  IF (OLD.settled_at IS NOT NULL AND NEW.settled_at IS DISTINCT FROM OLD.settled_at)
+     OR (OLD.settled_by_user_id IS NOT NULL AND NEW.settled_by_user_id IS DISTINCT FROM OLD.settled_by_user_id)
+     OR (OLD.settle_reason IS NOT NULL AND NEW.settle_reason IS DISTINCT FROM OLD.settle_reason)
+     OR (OLD.rescheduled_to_id IS NOT NULL AND NEW.rescheduled_to_id IS DISTINCT FROM OLD.rescheduled_to_id) THEN
+    RAISE EXCEPTION 'booking.immutable_settlement: who closed booking %, when, why and which booking replaced it are written once and never rewritten', OLD.id USING ERRCODE = 'P0001';
+  END IF;
+
+  -- (a3) R-P9-15. And they are written by the statement that CLOSES the
+  --      booking, not by a later one: a standing booking carrying a
+  --      settlement record, or a forward link to a successor, says two
+  --      contradictory things about itself.
+  IF OLD.state = 'booked' AND NEW.state = 'booked'
+     AND (NEW.settled_at IS DISTINCT FROM OLD.settled_at
+          OR NEW.settled_by_user_id IS DISTINCT FROM OLD.settled_by_user_id
+          OR NEW.settle_reason IS DISTINCT FROM OLD.settle_reason
+          OR NEW.rescheduled_to_id IS DISTINCT FROM OLD.rescheduled_to_id) THEN
+    RAISE EXCEPTION 'booking.settlement_without_close: booking % is still booked — a settlement record is written by the statement that settles it', OLD.id USING ERRCODE = 'P0001';
+  END IF;
+
   -- (b) The state machine. 'booked' is the only state anything leaves.
   IF OLD.state <> 'booked' AND NEW.state IS DISTINCT FROM OLD.state THEN
     RAISE EXCEPTION 'booking.state_terminal: % is a terminal state and cannot become %', OLD.state, NEW.state USING ERRCODE = 'P0001';
@@ -945,7 +993,7 @@ BEGIN
   RETURN NEW;
 END $$;
 COMMENT ON FUNCTION bookings_transition() IS
-  'P9-S1, R-P9-08. BEFORE UPDATE guard on `bookings`: refuses any change to the identity, the held time or the buffers (booking.immutable), refuses to leave a terminal state (booking.state_terminal) and refuses to re-enter ''booked'' (booking.state_not_reopenable). SECURITY INVOKER — it compares OLD to NEW and reads no relation.';
+  'P9-S1, R-P9-08 and R-P9-15. BEFORE UPDATE guard on `bookings`: refuses any change to the identity, the held time or the buffers (booking.immutable), refuses to rewrite a settlement field once it is non-NULL (booking.immutable_settlement), refuses to write one while the booking is still ''booked'' (booking.settlement_without_close), refuses to leave a terminal state (booking.state_terminal) and refuses to re-enter ''booked'' (booking.state_not_reopenable). SECURITY INVOKER — it compares OLD to NEW and reads no relation.';
 REVOKE ALL ON FUNCTION bookings_transition() FROM PUBLIC;
 
 CREATE TRIGGER bookings_transition_only
@@ -1124,7 +1172,7 @@ BEGIN
   o_recorded_at := v_rec.created_at;
 END $fn$;
 COMMENT ON FUNCTION booking_replay_result(UUID, UUID, TEXT, TEXT) IS
-  'P9-S1, R-P9-14. Returns the booking the FIRST attempt at this operation id produced, so a retry is answered from the record rather than from a 23505 the command layer would have to interpret. Refuses a lookup outside the caller''s own business scope (booking.replay_scope_mismatch), because the one principal that may execute it is the one row security does not confine to a business. Refuses a key whose recorded op code or intent digest disagrees with the request being replayed (booking.operation_conflict / booking.operation_intent_conflict); reports an unused key as a first attempt rather than an error. STABLE, SECURITY INVOKER: row security applies to it as to any read.';
+  'P9-S1, R-P9-14. Returns the booking the FIRST attempt at this operation id produced, so a retry is answered from the record rather than from a 23505 the command layer would have to interpret. Refuses a lookup outside the caller''s own business scope (booking.replay_scope_mismatch), because the one principal that may execute it is the one row security does not confine to a business. Refuses a key whose recorded op code or intent digest disagrees with the request being replayed (booking.operation_conflict / booking.operation_intent_conflict); reports an unused key as a first attempt rather than an error. STABLE, SECURITY INVOKER — and row security does NOT bound it: the one principal with EXECUTE is the one every business_isolation_read policy exempts by name, which is why the scope is enforced in the body. An earlier version of this comment claimed row security applied here; the routine''s own executed attack falsified it (C-P9-06).';
 REVOKE ALL ON FUNCTION booking_replay_result(UUID, UUID, TEXT, TEXT) FROM PUBLIC;
 
 -- ─────────────────────────────────────────────────────────────────────────
