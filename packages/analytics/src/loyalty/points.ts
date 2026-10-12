@@ -1328,6 +1328,18 @@ export interface ReversalRequest {
  * It is deliberately NOT registered as a new source or kind: it writes the
  * `manual_adjustment` `adjust` the pack already specifies for a correction
  * (`§1.4`, `§2.3`, `A-16`), so it adds a writer and invents no registry row.
+ *
+ * WHAT `ledger` MUST BE (F-31). The whole of this party's ledger, unfiltered:
+ * every movement held for this `(businessId, customerId)`, including movements
+ * dated after `request.asOf`. The chain bound below resolves a correction to its
+ * root by following `correctsId` through this array, so a caller that narrows the
+ * array — by `asOf`, by customer, by page — hands a chain whose root is missing or
+ * whose earlier links are invisible, and gets `loyalty.corrects_chain_unreadable`
+ * or a bound computed against the wrong root. That refusal is correct and it is a
+ * REFUSAL, never a pass: this function does not silently treat an unreadable chain
+ * as an empty one. `foldExpiry` takes a whole ledger and filters internally for the
+ * same reason, and `P13-LOYALTY-DESIGN.md` §5.7.3 states the same obligation on the
+ * caller side.
  */
 export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRequest): LoyaltyMovementDraft {
   const asOf = assertCivilDate(request.asOf, 'asOf');
@@ -1512,15 +1524,32 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
     root = next;
   }
 
+  // F-30: the chain's members are collected by ONE breadth-first walk over a
+  // correctsId -> children index, not by repeated full passes over the ledger. The
+  // previous shape added one generation per pass, so a ledger whose corrections form a
+  // long single file cost a pass per link; this writer runs inside the sale's
+  // transaction, so the shape of the walk is part of the contract and not a detail.
+  // Both forms collect the same set -- every row of this party that reaches the root
+  // through correctsId -- and the cases below assert the set through the refusals it
+  // produces, on a 4-link chain, a 20-link chain and a branch off a link.
+  const childrenOf = new Map<string, LoyaltyMovement[]>();
+  for (const m of ledger.movements) {
+    if (!sameParty(m) || m.correctsId === null) continue;
+    const siblings = childrenOf.get(m.correctsId);
+    if (siblings === undefined) {
+      childrenOf.set(m.correctsId, [m]);
+    } else {
+      siblings.push(m);
+    }
+  }
   const chain = new Set<string>([root.id]);
-  for (let grew = true; grew; ) {
-    grew = false;
-    for (const m of ledger.movements) {
-      if (!sameParty(m) || m.correctsId === null || chain.has(m.id)) continue;
-      if (chain.has(m.correctsId)) {
-        chain.add(m.id);
-        grew = true;
-      }
+  for (const queue = [root.id]; queue.length > 0; ) {
+    const parent = queue.pop();
+    if (parent === undefined) break;
+    for (const child of childrenOf.get(parent) ?? []) {
+      if (chain.has(child.id)) continue;
+      chain.add(child.id);
+      queue.push(child.id);
     }
   }
 
