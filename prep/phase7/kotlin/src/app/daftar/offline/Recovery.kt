@@ -96,6 +96,7 @@ enum class MerchantMessage {
     SALE_DISCARDED,
     ALREADY_CONFIRMED,
     CANNOT_CANCEL_AFTER_SENDING,
+    ALREADY_ABANDONED_NOTHING_WAS_SENT,
     NOT_READY_TO_SEND,
     DETAILS_CHANGED_SINCE_CAPTURE,
     DETAILS_ARCHIVED_RESTORE_FIRST,
@@ -247,6 +248,17 @@ object Recovery {
 
         "offline.cancel_after_send" ->
             view(MerchantMessage.CANNOT_CANCEL_AFTER_SENDING, RecoveryAction.WAIT_IT_IS_IN_PROGRESS)
+
+        // Challenger finding I-01. This row was abandoned before anything left
+        // the device, so there is nothing in progress and nothing to wait for.
+        // It shared `cancel_after_send`'s view until the H-01 exit made the
+        // state reachable by a second person: the cashier who cancelled a
+        // colleague's capture, then pressed cancel again, was told to wait for
+        // a sale nobody will ever send. Telling them it is already abandoned is
+        // what lets them key it in again if it was real — which is the whole
+        // reason the exit is a cancel and not a release.
+        "offline.already_abandoned" ->
+            view(MerchantMessage.ALREADY_ABANDONED_NOTHING_WAS_SENT, RecoveryAction.NOTHING_IT_IS_DONE)
 
         "offline.not_sendable" -> view(MerchantMessage.NOT_READY_TO_SEND, RecoveryAction.CONFIRM_THE_CAPTURE)
 

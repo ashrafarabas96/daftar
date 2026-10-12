@@ -15,7 +15,7 @@ class CrashSafetyTest {
     private val digest = "sha256:a1b2c3d4"
     private val scope = OwnerScope("tenant-1", "business-1", "member-1")
 
-    private fun captureSale() = Operation.capture(key, scope, EffectClass.FINANCIAL, digest)
+    private fun captureSale() = Operation.capture(key, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR")
 
     private fun moved(op: Operation, event: QueueEvent): Pair<Operation, List<SideEffect>> {
         val step = op.step(event)
@@ -138,7 +138,7 @@ class CrashSafetyTest {
 
     @Test
     fun `a stock conflict waits for a person and keeps the server's own words`() {
-        var (op, _) = moved(Operation.capture(key, scope, EffectClass.INVENTORY, digest), QueueEvent.Release(scope))
+        var (op, _) = moved(Operation.capture(key, scope, EffectClass.INVENTORY, digest, 7, "SAR"), QueueEvent.Release(scope))
         op = moved(op, QueueEvent.Send(digest, scope)).first
         val (refused, effects) = moved(
             op, QueueEvent.Observe(AttemptResult.Answered(409, "inventory.insufficient_stock", null, null)),
@@ -212,11 +212,11 @@ class CrashSafetyTest {
         // operation can still be re-captured, rather than after an outage when
         // the sale is already made.
         for (bad in listOf("", "short", "a".repeat(201), "has\u0000nul", "عربي")) {
-            val threw = runCatching { Operation.capture(bad, scope, EffectClass.FINANCIAL, digest) }.isFailure
+            val threw = runCatching { Operation.capture(bad, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR") }.isFailure
             assertTrue(threw, "capture accepted the key '$bad', which the merchant API would refuse")
         }
         for (good in listOf("12345678", "a".repeat(200), key)) {
-            Operation.capture(good, scope, EffectClass.FINANCIAL, digest)
+            Operation.capture(good, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR")
         }
     }
 }

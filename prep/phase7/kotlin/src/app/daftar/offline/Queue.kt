@@ -89,6 +89,55 @@ sealed interface SideEffect {
         /** The scope that acted on it, which is not the one above. */
         val actedBy: OwnerScope,
         val event: String,
+        /**
+         * The digest of what was captured, and its effect class.
+         *
+         * Challenger finding I-04, and it is the same argument as the one
+         * above carried one step further. The reason the actor is recorded as
+         * an effect rather than as a field on the row is that a cancel clears
+         * the row in the same step, so a field could not survive the action
+         * most worth recording — and that applies with equal force to WHAT was
+         * destroyed. A record naming the person and the key, and nothing else,
+         * can establish that Bob abandoned something of Alice's and can never
+         * establish that it was a sale she had taken cash for. The
+         * justification for the new exit is that a real sale is captured
+         * again by whoever is standing there, which presumes somebody can
+         * still tell a sale was there; once the row is gone this record is the
+         * only thing that outlives it, and unlike a missing refusal code this
+         * is not repairable afterwards.
+         *
+         * The digest rather than the payload: the bytes themselves are the
+         * merchant's data and this is an audit record, so what is kept is
+         * enough to recognise the capture again and not enough to reconstruct
+         * it. The amount and currency are carried as well, because a digest
+         * cannot be reconciled against a till: the question somebody asks
+         * afterwards is "how much was lost", and only these two answer it.
+         *
+         * **Ordering is part of the contract.** This effect is emitted BEFORE
+         * `ClearLocalRow` in the same step's list, and the caller must perform
+         * the effects of a step in the order given, within the one local
+         * transaction that applies the move. If the record cannot be written,
+         * the erase must not happen — the kernel is a decision function and
+         * cannot enforce that from here, so it is a caller obligation, stated
+         * here and asserted on the ordering of the list, which is all this
+         * kernel owns. The Android storage owner carries it in
+         * `P7-S1-ANDROID-CLIENT-KEY-PATCH-REQUEST.md`.
+         */
+        val payloadDigest: String,
+        val effect: EffectClass,
+        /**
+         * What the capture was worth, in the currency's minor units, exactly as
+         * the capturing surface stated it. The kernel does not compute,
+         * re-derive or validate it: a device that recalculated an amount would
+         * be asserting a total of its own, which is the authority L1 denies it.
+         */
+        val amountMinorUnits: Long?,
+        /**
+         * The currency the amount is in, as captured. Whether the code is a
+         * real currency is the canonical currency table's business on the
+         * server and never a shape check here.
+         */
+        val currency: String?,
     ) : SideEffect
 
     /** The local row may now be removed. Emitted only alongside SYNCED (L5). */
@@ -220,6 +269,20 @@ class Operation private constructor(
     val effect: EffectClass,
     /** The digest of the payload exactly as it was persisted at capture. */
     val payloadDigest: String,
+    /**
+     * What the capture is worth, in minor units, as the capturing surface
+     * stated it, with its currency.
+     *
+     * Challenger finding I-04. These are held because the row is not always
+     * the last thing to go: a cancel clears it, and the custody record that
+     * outlives it can only describe what was destroyed from facts the row
+     * carried. They are required for a material capture (see `capture`) and
+     * never computed here — L16's minimization already says the amount is part
+     * of what keeps an obligation legible, and this is the same fact needed one
+     * step earlier.
+     */
+    val amountMinorUnits: Long?,
+    val currency: String?,
     val state: OperationState,
     /** How many attempts have left the device. Never decreases. */
     val attempts: Int,
@@ -252,12 +315,32 @@ class Operation private constructor(
             scope: OwnerScope,
             effect: EffectClass,
             payloadDigest: String,
+            amountMinorUnits: Long? = null,
+            currency: String? = null,
         ): Operation {
             require(key.length in 8..200 && key.all { it.code in 0x20..0x7e }) {
                 "an idempotency key must be 8 to 200 printable ASCII characters, as the merchant API requires"
             }
             require(payloadDigest.isNotEmpty()) { "a captured payload must have a digest" }
-            return Operation(key, scope, effect, payloadDigest, OperationState.CAPTURED, 0, null, false)
+            // Fail closed, at the only moment the facts exist. A material
+            // capture that cannot say what it is worth cannot be described
+            // after it is destroyed (I-04), and the surface that captured it is
+            // the only thing that knows. A BENIGN operation moves no money by
+            // definition, so it may leave both absent; stating an amount for
+            // one is allowed and recorded as given.
+            if (effect.isMaterial) {
+                require(amountMinorUnits != null) {
+                    "a $effect capture must state what it is worth; a destroyed row cannot be described later"
+                }
+                require(!currency.isNullOrBlank()) {
+                    "a $effect capture must state its currency as captured; whether the code exists is the " +
+                        "canonical currency table's decision on the server, never a shape check here"
+                }
+            }
+            return Operation(
+                key, scope, effect, payloadDigest, amountMinorUnits, currency,
+                OperationState.CAPTURED, 0, null, false,
+            )
         }
     }
 
@@ -267,11 +350,13 @@ class Operation private constructor(
         lastCode: String? = this.lastCode,
         replayed: Boolean = this.replayed,
     ): Operation = Operation(
-        id, scope, effect, payloadDigest, state, attempts, lastCode, replayed, schemaVersion, payloadMinimized,
+        id, scope, effect, payloadDigest, amountMinorUnits, currency,
+        state, attempts, lastCode, replayed, schemaVersion, payloadMinimized,
     )
 
     private fun withPayloadMinimized(minimized: Boolean): Operation = Operation(
-        id, scope, effect, payloadDigest, state, attempts, lastCode, replayed, schemaVersion, minimized,
+        id, scope, effect, payloadDigest, amountMinorUnits, currency,
+        state, attempts, lastCode, replayed, schemaVersion, minimized,
     )
 
     val isTerminal: Boolean
@@ -315,9 +400,18 @@ class Operation private constructor(
         if (event is QueueEvent.ByScope && event.actingScope != scope && step is Step.Moved) {
             return Step.Moved(
                 step.operation,
-                step.effects + SideEffect.RecordCustodyAction(
-                    id, scope, event.actingScope, event::class.simpleName.orEmpty(),
-                ),
+                // The record goes FIRST, ahead of whatever the arm produced,
+                // because one of the things an arm produces is `ClearLocalRow`
+                // and the record is the only description of the row that
+                // survives it. A caller that performs effects in order and
+                // treats the step as one transaction therefore cannot erase a
+                // capture it failed to record.
+                listOf(
+                    SideEffect.RecordCustodyAction(
+                        id, scope, event.actingScope, event::class.simpleName.orEmpty(),
+                        payloadDigest, effect, amountMinorUnits, currency,
+                    ),
+                ) + step.effects,
             )
         }
         return step
@@ -342,6 +436,19 @@ class Operation private constructor(
             // knows that.
             if (attempts == 0 && !isTerminal) {
                 Step.Moved(moved(OperationState.DISCARDED), listOf(SideEffect.ClearLocalRow))
+            } else if (attempts == 0) {
+                // Challenger finding I-01. `!isTerminal` above does its work on
+                // exactly one state: SYNCED is unreachable with attempts == 0,
+                // because the only road to it passes through an attempt, so the
+                // row this arm turns away is a DISCARDED one — which is the
+                // state the H-01 exit itself produces. Folding it into
+                // `cancel_after_send` tells the cashier to wait for a sale that
+                // was abandoned seconds ago, possibly by the colleague beside
+                // them, and waiting for a sale that will never arrive is the
+                // re-key harm the merchant-view work exists to prevent. The
+                // code is distinct because the view must be, and nothing was
+                // ever sent here.
+                Step.Refused("offline.already_abandoned", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)
             } else {
                 Step.Refused("offline.cancel_after_send", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)
             }
@@ -482,6 +589,7 @@ class Operation private constructor(
     }
 
     override fun toString(): String =
-        "Operation(id=$id, scope=$scope, effect=$effect, state=$state, attempts=$attempts, " +
+        "Operation(id=$id, scope=$scope, effect=$effect, amount=$amountMinorUnits $currency, " +
+            "state=$state, attempts=$attempts, " +
             "lastCode=$lastCode, replayed=$replayed, schema=$schemaVersion, minimized=$payloadMinimized)"
 }

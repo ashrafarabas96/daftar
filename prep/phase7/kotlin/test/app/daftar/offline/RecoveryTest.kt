@@ -228,7 +228,7 @@ class RecoveryTest {
     // ── fixtures, built through the real reducer, never hand-constructed ──
 
     private fun needingAttention(effect: EffectClass, lastCode: String): Operation {
-        var op = Operation.capture(key, scope, effect, digest)
+        var op = Operation.capture(key, scope, effect, digest, 12_500, "SAR")
         op = (op.step(QueueEvent.Release(scope)) as Step.Moved).operation
         op = (op.step(QueueEvent.Send(digest, scope)) as Step.Moved).operation
         val step = op.step(QueueEvent.Observe(AttemptResult.Answered(409, lastCode, null, null))) as Step.Moved
@@ -250,7 +250,7 @@ class RecoveryTest {
      * configuration the kernel cannot produce.
      */
     private fun operationIn(state: OperationState, effect: EffectClass): Operation {
-        var op = Operation.capture(key, scope, effect, digest)
+        var op = Operation.capture(key, scope, effect, digest, 12_500, "SAR")
         if (state == OperationState.CAPTURED) return op
         if (state == OperationState.DISCARDED) {
             return (op.step(QueueEvent.CancelByMerchant(scope)) as Step.Moved).operation

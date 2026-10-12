@@ -238,6 +238,33 @@ object P7Laws {
         "A local store's silence counts as \"nothing was ever captured\" only where the install can prove it is the one that would have held the row, and a row that store holds counts as current only on the same proof; an install that cannot distinguish an empty store from a destroyed one, or a current row from a restored one, reports its prior state as undetermined, and an undetermined prior state is never read as an absence and never permits a new key for a material operation.",
     )
 
+    /**
+     * Challenger findings H-01 and I-04, and the one rule the H-01 exit
+     * created that no law stated.
+     *
+     * Letting a second member abandon a capture nobody released was the right
+     * unlock — it is the recoverable one, and the alternative let any member
+     * commit a sale nobody can be shown to have witnessed. But it introduced
+     * an actor the row has no field for, acting on a row that is erased in the
+     * same step, and `Scope.kt`'s own justification for storing the member at
+     * all is that an audit of "who captured this" has no other source once the
+     * row is the only record. That argument transfers to the second actor
+     * whole, and it transfers to WHAT was destroyed with equal force: a record
+     * naming two members and a key can establish that Bob abandoned something
+     * of Alice's and can never establish that it was a sale she had taken cash
+     * for.
+     *
+     * So the record is part of the act, not a report about it: it carries the
+     * actor, the capture's digest, its effect class and what it was worth, and
+     * it is written before the row can go. Until Phase 4's authority model
+     * exposes a role (OD-P7-08), this record is the only thing standing
+     * between a shared till and an unexplainable gap.
+     */
+    val A_DESTRUCTION_IS_RECORDED_BEFORE_IT_HAPPENS = OfflineLaw(
+        "P7-L20-A-DESTRUCTION-IS-RECORDED-BEFORE-IT-HAPPENS",
+        "A session that is not the one a row was captured under moves that row only with a record of who acted, what the capture was and what it was worth, written before any effect that erases the row, so that a capture destroyed on a shared till can still be described afterwards; and a refusal of such a move never tells the merchant to wait for something no attempt was ever made for.",
+    )
+
     /** Every stated law, for the completeness proof. */
     val ALL: List<OfflineLaw> = listOf(
         DEVICE_NOT_AUTHORITY,
@@ -259,5 +286,6 @@ object P7Laws {
         AN_UNFENCED_ABSENCE_SETTLES_NOTHING,
         THE_ORIGINAL_KEY_OUTRANKS_A_NEW_ONE,
         AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE,
+        A_DESTRUCTION_IS_RECORDED_BEFORE_IT_HAPPENS,
     )
 }

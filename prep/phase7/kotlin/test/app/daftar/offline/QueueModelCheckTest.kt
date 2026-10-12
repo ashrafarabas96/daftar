@@ -67,6 +67,67 @@ class QueueModelCheckTest {
                     acting.memberId == owner.memberId
                 )
 
+    /**
+     * What the custody record's `event` label must say, written out here
+     * rather than computed the way the kernel computes it.
+     *
+     * Challenger finding I-02. INV-14 asserted three of the record's four
+     * fields and left the one that says WHAT was done, so replacing the label
+     * with the literal "CancelByMerchant" passed the whole suite and recorded a
+     * foreign SEND as a cancel. Asserting `event::class.simpleName` against
+     * `event::class.simpleName` would have agreed with any such edit, which is
+     * the same reason `permittedToAct` above does not call `mayAct`: a check
+     * that re-derives its expectation the way the subject does is not a check.
+     * These are literals, one per event the gate lets through, and a `when`
+     * with no `else` so an event added later is a compile error here.
+     */
+    private fun expectedCustodyLabel(event: QueueEvent.ByScope): String = when (event) {
+        is QueueEvent.Release -> "Release"
+        is QueueEvent.CancelByMerchant -> "CancelByMerchant"
+        is QueueEvent.Send -> "Send"
+        is QueueEvent.ResolveByMerchant -> "ResolveByMerchant"
+        is QueueEvent.RestorePayload -> "RestorePayload"
+    }
+
+    /**
+     * Merchant messages that assert bytes left the device, each with the reason
+     * it does.
+     *
+     * Challenger finding I-01, and the next clause of the law G-03 opened: that
+     * one proved every refusal code HAS a view, and a code can have a view and
+     * still be the wrong code. A refusal produced before any attempt cannot
+     * honestly carry one of these, because nothing has been transmitted to be
+     * in progress. The set is small on purpose — it names only what `explain`
+     * can actually produce, so an entry here is a message a refusal could
+     * really be given, not a hypothetical.
+     */
+    private val assertsSomethingLeftTheDevice = mapOf(
+        MerchantMessage.CANNOT_CANCEL_AFTER_SENDING to
+            "it tells the merchant an attempt is out and they must wait for its answer",
+    ).keys
+
+    /**
+     * The captured facts, DIFFERENT for each effect class on purpose.
+     *
+     * Challenger finding I-04 asks that the custody record describe what was
+     * destroyed, and finding I-02 is the reason these are not one constant: a
+     * record that hardcoded any single amount would satisfy an equality check
+     * against a fixture that used the same one everywhere. Three roots with
+     * three amounts and three currencies mean a constant can match at most one
+     * of them.
+     */
+    private fun amountFor(effect: EffectClass): Long = when (effect) {
+        EffectClass.FINANCIAL -> 12_500
+        EffectClass.INVENTORY -> 7
+        EffectClass.BENIGN -> 0
+    }
+
+    private fun currencyFor(effect: EffectClass): String = when (effect) {
+        EffectClass.FINANCIAL -> "SAR"
+        EffectClass.INVENTORY -> "TRY"
+        EffectClass.BENIGN -> "USD"
+    }
+
     /** One representative answer per branch of the classifier. */
     private val answers: List<AttemptResult> = listOf(
         AttemptResult.Answered(200, null, true, null), // synced, replayed
@@ -99,7 +160,8 @@ class QueueModelCheckTest {
     private data class History(val serverCommitted: Boolean, val everSent: Boolean)
 
     private fun fingerprint(op: Operation, h: History): String =
-        "${op.id}|${op.scope}|${op.effect}|${op.payloadDigest}|${op.state}|${op.attempts}|${op.lastCode}|" +
+        "${op.id}|${op.scope}|${op.effect}|${op.payloadDigest}|${op.amountMinorUnits}|${op.currency}|" +
+            "${op.state}|${op.attempts}|${op.lastCode}|" +
             "${op.replayed}|${op.payloadMinimized}|${h.serverCommitted}|${h.everSent}"
 
     @Test
@@ -116,11 +178,15 @@ class QueueModelCheckTest {
         var nextShiftSends = 0
         var releasesOfAnUnsentRow = 0
         var custodyRecords = 0
+        var refusalsWithNothingSent = 0
+        var custodyRecordsBeforeAnErase = 0
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
 
         for (effect in EffectClass.entries) {
-            val start = Operation.capture(key, scope, effect, digest) to History(false, false)
+            val start = Operation.capture(
+                key, scope, effect, digest, amountFor(effect), currencyFor(effect),
+            ) to History(false, false)
             val visited = mutableSetOf(fingerprint(start.first, start.second))
             val frontier = ArrayDeque(listOf(start))
 
@@ -147,6 +213,29 @@ class QueueModelCheckTest {
                                 )
                                 assertEquals(P7Laws.NO_CROSS_ACCOUNT_SEND.id, step.law)
                             }
+                            // INV-9b: a refusal produced before anything was
+                            // ever sent never reaches the merchant as "an
+                            // attempt is out, wait for it". INV-9a judges
+                            // whether a refusal is the RIGHT refusal on one
+                            // axis (a foreign scope is a scope problem); this
+                            // is the same question on the axis I-01 found,
+                            // where a second cancel of an abandoned row was
+                            // answered with CANNOT_CANCEL_AFTER_SENDING and a
+                            // cashier was told to wait for a sale nobody will
+                            // send. It is asserted over the whole reachable
+                            // space because "which states can be refused with
+                            // nothing sent" is exactly the kind of question a
+                            // later edit changes without noticing.
+                            if (op.attempts == 0) {
+                                refusalsWithNothingSent++
+                                val view = Recovery.explain(step.code)
+                                assertTrue(
+                                    view.message !in assertsSomethingLeftTheDevice,
+                                    "a refusal with nothing sent (${step.code}) is shown as " +
+                                        "${view.message}, which asserts a transmission: $op on $event",
+                                )
+                            }
+
                             // INV-7: a refusal moves nothing and cites a law.
                             assertTrue(
                                 step.law in P7Laws.ALL.map { it.id }.toSet(),
@@ -167,6 +256,14 @@ class QueueModelCheckTest {
                                 "the captured payload digest changed: $op -> $next on $event",
                             )
                             assertEquals(op.effect, next.effect, "the effect class changed: $op -> $next")
+                            assertEquals(
+                                op.amountMinorUnits, next.amountMinorUnits,
+                                "the captured amount changed: $op -> $next on $event",
+                            )
+                            assertEquals(
+                                op.currency, next.currency,
+                                "the captured currency changed: $op -> $next on $event",
+                            )
 
                             // INV-9: nothing a foreign session asked for ever
                             // moved, and the row's owner is as immutable as its
@@ -233,6 +330,54 @@ class QueueModelCheckTest {
                                 assertEquals(op.scope, record.capturedBy, "the record names the wrong capturer")
                                 assertEquals(event.actingScope, record.actedBy, "the record names the wrong actor")
                                 assertEquals(op.id, record.idempotencyKey)
+                                // I-02: what was done, from a literal rather
+                                // than from the kernel's own expression.
+                                assertEquals(
+                                    expectedCustodyLabel(event), record.event,
+                                    "the record says ${record.event} about a $event: $op",
+                                )
+                                // I-04: what was destroyed, not only who did
+                                // it. The row is cleared in the same step on
+                                // the one path that opens, so these two fields
+                                // are the only surviving description of the
+                                // capture.
+                                assertEquals(
+                                    op.payloadDigest, record.payloadDigest,
+                                    "the record describes a capture that is not this row's: $op on $event",
+                                )
+                                assertEquals(
+                                    op.effect, record.effect,
+                                    "the record names the wrong effect class: $op on $event",
+                                )
+                                assertEquals(
+                                    op.amountMinorUnits, record.amountMinorUnits,
+                                    "the record cannot say what was lost: $op on $event",
+                                )
+                                assertEquals(
+                                    op.currency, record.currency,
+                                    "the record names the wrong currency: $op on $event",
+                                )
+                                // I-04's second half: the record is only an
+                                // audit of a destruction if it exists before
+                                // the destruction. A caller performing these in
+                                // order within one transaction cannot erase a
+                                // row it failed to record; a record appended
+                                // after the erase would reverse that, and the
+                                // ordering is the only part of it this kernel
+                                // owns.
+                                val recordAt = step.effects.indexOfFirst {
+                                    it is SideEffect.RecordCustodyAction
+                                }
+                                val clearAt = step.effects.indexOfFirst { it is SideEffect.ClearLocalRow }
+                                if (clearAt >= 0) {
+                                    assertTrue(
+                                        recordAt < clearAt,
+                                        "the local row is erased at effect $clearAt and the custody " +
+                                            "record written at $recordAt, so the erase is not fail-closed: " +
+                                            "$op on $event",
+                                    )
+                                    custodyRecordsBeforeAnErase++
+                                }
                                 custodyRecords++
                             } else {
                                 assertTrue(
@@ -422,6 +567,20 @@ class QueueModelCheckTest {
             custodyRecords > 0,
             "no session but the row's own ever moved it, so INV-14 is vacuous: the search never " +
                 "offered the kernel the shared till H-01 is about",
+        )
+        assertTrue(
+            custodyRecordsBeforeAnErase > 0,
+            "no foreign-session move ever erased the local row, so the ordering half of INV-14 " +
+                "is vacuous: the path I-04 is about was never explored",
+        )
+        assertTrue(
+            refusalsWithNothingSent > 0,
+            "no refusal was ever produced with nothing sent, so INV-9b is vacuous",
+        )
+        assertTrue(
+            MerchantMessage.CANNOT_CANCEL_AFTER_SENDING in assertsSomethingLeftTheDevice,
+            "the set of messages that assert a transmission does not contain the one the " +
+                "kernel actually produces for a cancel after a send, so INV-9b judges nothing",
         )
         assertTrue(edges > 1_000, "only $edges edges were explored")
     }

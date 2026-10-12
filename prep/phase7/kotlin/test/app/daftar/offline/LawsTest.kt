@@ -55,6 +55,8 @@ class LawsTest {
             "ReentryAndRetentionTest.a recoverable original is resent under its own key whatever the receipt says",
         P7Laws.AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE.id to
             "ReentryAndRetentionTest.a wiped install cannot report an absence, so re-entry is refused rather than permitted",
+        P7Laws.A_DESTRUCTION_IS_RECORDED_BEFORE_IT_HAPPENS.id to
+            "ScopeAndSchemaTest.a capture the previous shift never released can be abandoned by the next one, never confirmed",
     )
 
     @Test
@@ -62,7 +64,7 @@ class LawsTest {
         val stated = P7Laws.ALL.map { it.id }.toSet()
         assertEquals(stated, defendedBy.keys, "the law table and the coverage map have drifted apart")
         assertEquals(P7Laws.ALL.size, stated.size, "two laws share an id")
-        assertTrue(stated.size >= 19, "only ${stated.size} laws are stated")
+        assertTrue(stated.size >= 20, "only ${stated.size} laws are stated")
     }
 
     @Test

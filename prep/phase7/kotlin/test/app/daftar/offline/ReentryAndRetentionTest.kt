@@ -523,7 +523,7 @@ class ReentryAndRetentionTest {
     // ── L16: expiry minimizes the payload, never the obligation ──────────
 
     private fun waitingForAPerson(): Operation {
-        var op = Operation.capture(key, scope, EffectClass.FINANCIAL, digest)
+        var op = Operation.capture(key, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR")
         op = (op.step(QueueEvent.Release(scope)) as Step.Moved).operation
         op = (op.step(QueueEvent.Send(digest, scope)) as Step.Moved).operation
         val step = op.step(
@@ -642,7 +642,7 @@ class ReentryAndRetentionTest {
 
     /** Every state, reached by the events that actually produce it. */
     private fun operationIn(state: OperationState): Operation {
-        var op = Operation.capture(key, scope, EffectClass.FINANCIAL, digest)
+        var op = Operation.capture(key, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR")
         if (state == OperationState.CAPTURED) return op
         if (state == OperationState.DISCARDED) {
             return (op.step(QueueEvent.CancelByMerchant(scope)) as Step.Moved).operation

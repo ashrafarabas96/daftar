@@ -27,8 +27,12 @@ class ScopeAndSchemaTest {
     /** The next shift on the same till, same business. */
     private val bob = OwnerScope("tenant-1", "business-1", "member-bob")
 
+    /** What this sale is worth, which the custody record must be able to state. */
+    private val amount = 12_500L
+    private val currency = "SAR"
+
     private fun sale(scope: OwnerScope = alice) =
-        Operation.capture(key, scope, EffectClass.FINANCIAL, digest)
+        Operation.capture(key, scope, EffectClass.FINANCIAL, digest, amount, currency)
 
     private fun released(scope: OwnerScope = alice): Operation {
         val step = sale(scope).step(QueueEvent.Release(scope))
@@ -272,6 +276,54 @@ class ScopeAndSchemaTest {
         assertEquals(bob, record.actedBy)
         assertEquals(captured.id, record.idempotencyKey)
         assertEquals("CancelByMerchant", record.event)
+
+        // Challenger finding I-04: and it says WHAT was destroyed, not only
+        // who destroyed it. The row is cleared in this same step, so an audit
+        // that has only the key and the two members can establish that Bob
+        // abandoned something of Alice's and can never establish that it was a
+        // sale she had taken cash for.
+        assertEquals(digest, record.payloadDigest, "the record cannot identify the capture it destroyed")
+        assertEquals(EffectClass.FINANCIAL, record.effect)
+        assertEquals(amount, record.amountMinorUnits, "the record cannot say how much was lost")
+        assertEquals(currency, record.currency)
+
+        // And it is written BEFORE the row is erased. A caller that performs a
+        // step's effects in order, in one transaction, therefore cannot erase a
+        // capture it failed to record.
+        val recordAt = cancelled.effects.indexOfFirst { it is SideEffect.RecordCustodyAction }
+        val clearAt = cancelled.effects.indexOfFirst { it is SideEffect.ClearLocalRow }
+        assertTrue(clearAt >= 0, "the cancel did not clear the local row at all")
+        assertTrue(
+            recordAt < clearAt,
+            "the row is erased at effect $clearAt and recorded at $recordAt, so a failed write of " +
+                "the record would leave the capture destroyed and undescribed",
+        )
+
+        // Challenger finding I-01: and a second cancel is told the truth. The
+        // row was abandoned, nothing was ever sent, and the one thing the
+        // cashier must not be told is to wait for it — a sale that was real is
+        // keyed in again, which is the whole reason this exit is a cancel and
+        // not a release.
+        val again = assertIs<Step.Refused>(
+            cancelled.operation.step(QueueEvent.CancelByMerchant(bob)),
+            "an already-abandoned row was abandoned a second time, clearing it twice",
+        )
+        assertEquals("offline.already_abandoned", again.code)
+        assertEquals(P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id, again.law)
+        val view = Recovery.explain(again.code)
+        assertEquals(MerchantMessage.ALREADY_ABANDONED_NOTHING_WAS_SENT, view.message)
+        assertTrue(
+            view.action != RecoveryAction.WAIT_IT_IS_IN_PROGRESS,
+            "the cashier is told to wait for a sale that was abandoned and never sent",
+        )
+        assertTrue(!view.showsMoneyAsTaken)
+        for (who in listOf(alice, bob)) {
+            val no = assertIs<Step.Refused>(cancelled.operation.step(QueueEvent.CancelByMerchant(who)))
+            assertEquals(
+                "offline.already_abandoned", no.code,
+                "a second cancel by $who was answered as though something had been sent",
+            )
+        }
 
         // Alice's own cancel is not a custody action: she is the row.
         val byAlice = assertIs<Step.Moved>(captured.step(QueueEvent.CancelByMerchant(alice)))
