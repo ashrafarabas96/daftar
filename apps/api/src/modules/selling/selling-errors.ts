@@ -767,7 +767,7 @@ export const INSTALLMENT_INTERNAL_INVARIANT_CODES: readonly string[] = [...INSTA
  * written into `installment.schedule_incomplete` reached NOBODY: the body is
  * generic by contract and the log line carried the invariant NAME alone.
  * Round 16 repaired it by logging the refusal's FIRST LINE — and
- * `error.filter.ts:148-152`, thirty lines above the branch that logs it and
+ * `error.filter.ts:151-153`, earlier in that file than the branch that logs it and
  * untouched since, states the estate's boundary in terms: «SQL, THE ROUTINE'S
  * MESSAGE AFTER THE COLON, AN AMOUNT, a journal entry id, an assertion body
  * and a stack never leave the process». The first line IS the routine's

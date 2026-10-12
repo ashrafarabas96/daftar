@@ -239,7 +239,7 @@ describe('P4-S7 the installment.* rendering contract', () => {
    * `R63` item 4 found that round 15's two-cause remedy reached nobody: the
    * body is generic by contract and the log line carried `{ invariant }`
    * alone. Round 16 logged the refusal's FIRST LINE — and the first line IS
-   * «the routine's message after the colon», which `error.filter.ts:148-152`
+   * «the routine's message after the colon», which `error.filter.ts:151-153`
    * says never leaves the process, alongside SQL and AN AMOUNT. A log line
    * leaves the process. `R69` §1 refused the amendment and ordered the
    * narrowing: the log carries the invariant NAME and a STATIC remedy
@@ -331,12 +331,23 @@ describe('P4-S7 the installment.* rendering contract', () => {
     // ROUND 16'S FIELD IS GONE.
     expect(fields).not.toHaveProperty('refusal');
 
-    // ── (4) THE HALF THAT CAN FAIL: neither the message, nor the identifiers
-    //    it substitutes, nor the amount, nor a frame, nor the SQL appears
-    //    ANYWHERE in the log line — or in the body.
-    const loggedText = JSON.stringify(lines[0]);
-    const body = JSON.stringify(r.payload);
-    for (const leak of [
+    // ── (4) THE HALF THAT CAN FAIL, SWEPT OVER **THE WHOLE LOG** AND NOT
+    //    OVER ONE LINE OF IT (`TL-P4-COORD-R72` ordered item 1, F17-1).
+    //
+    //    ROUND 17 SCOPED THIS SWEEP TO `lines[0]`. The claim the filter and
+    //    the specification both make is «THE DYNAMIC MESSAGE NOW LEAVES THE
+    //    PROCESS IN NEITHER THE BODY NOR THE LOG» — a claim about the LOG —
+    //    and the round-17 challenger planted round 16's own `refusal` value
+    //    back under a SECOND log message and this case passed 6/6, exit 0.
+    //    The shipped code was and is true of the claim; the instrument did
+    //    not hold it, which is this phase's signature defect inside the
+    //    repair ordered for that very shape. And it was held to a weaker
+    //    standard than its own neighbour in this file: the `40P01` case reads
+    //    `r.logged.some(…)` across the whole log for a second line.
+    //
+    //    So the subject is now `r.logged` ENTIRE — every line, under every
+    //    message string, fields and message text alike.
+    const LEAKS: readonly string[] = [
       POISON.business,
       POISON.invoice,
       POISON.frame,
@@ -346,15 +357,51 @@ describe('P4-S7 the installment.* rendering contract', () => {
       'REINDEX the named indexes',
       'indisvalid=false',
       'CONTEXT:',
-    ]) {
-      expect(loggedText, `the LOG line leaked ${leak}`).not.toContain(leak);
+    ];
+    /** Every artefact of `LEAKS` that appears anywhere in a rendered log. */
+    const leaksIn = (logged: Rendered['logged']): readonly string[] => {
+      const text = JSON.stringify(logged);
+      return LEAKS.filter((leak) => text.includes(leak));
+    };
+    const body = JSON.stringify(r.payload);
+    expect(leaksIn(r.logged), 'the LOG leaked one or more of the artefacts the rule forbids').toStrictEqual([]);
+    for (const leak of LEAKS) {
       expect(body, `the BODY leaked ${leak}`).not.toContain(leak);
     }
     expect(body, 'the body leaked the invariant name').not.toContain(PINNED);
-    // NON-VACUITY: the fixture really does carry every one of those.
+    // NON-VACUITY (a): the fixture really does carry every one of those.
     for (const present of [POISON.business, POISON.invoice, AMOUNT, 'the schedule of plan', 'indisvalid=false']) {
       expect(message, `the fixture does not contain ${present}, so the absence above proves nothing`).toContain(present);
     }
+    // NON-VACUITY (b): THE WIDENED SWEEP REDS ON THE CHALLENGER'S OWN PLANT,
+    //    executed here on every run rather than described. The plant is a
+    //    SECOND `logger.error`, under a DIFFERENT message, carrying exactly
+    //    what round 16 logged — `pg.message.split('\n')[0]`, which is the
+    //    routine's message after the colon. The round-17 instrument could not
+    //    see it because it serialised `lines[0]`; this one must name it.
+    const plantedSecondLine: Rendered['logged'] = [
+      ...r.logged,
+      { fields: { requestId: 'req-1', detail: message.split('\n')[0] ?? '' }, message: 'installment invariant detail' },
+    ];
+    const found = leaksIn(plantedSecondLine);
+    expect(found.length, 'the widened sweep does not see a second log line carrying the dynamic message').toBeGreaterThan(0);
+    for (const named of [POISON.business, POISON.invoice, AMOUNT, 'the schedule of plan']) {
+      expect(found, `the widened sweep missed ${named} on the planted second line`).toContain(named);
+    }
+    // ...and the one-line scope round 17 shipped would have passed that plant,
+    // which is what makes this arm a repair and not a decoration.
+    expect(
+      LEAKS.filter((leak) => JSON.stringify(plantedSecondLine[0]).includes(leak)),
+      "round 17's one-line scope sees the plant",
+    ).toStrictEqual([]);
+    // ── AND THE BRANCH EMITS THAT ONE LINE AND NO OTHER. This is the BELT
+    //    and it is deliberately asserted AFTER the sweep: the sweep is what
+    //    `R72` ordered and the sweep is what must red first on a second line
+    //    carrying the message, so a plant demonstrates the repair and not
+    //    merely this pin. A second line that carried NOTHING dynamic would
+    //    still be a finding, because the claim is about the log and not about
+    //    one line of it.
+    expect(r.logged, 'the branch emitted a log line besides the invariant line').toHaveLength(1);
     expect(r.status).toBe(500);
     expect(r.payload.error.code).toBe('INTERNAL_ERROR');
     expect(r.payload.error.message).toBe('Internal error');
@@ -420,6 +467,109 @@ describe('P4-S7 the installment.* rendering contract', () => {
     // ...and it does NOT reach the caller, which the generic body above already
     // establishes for this refusal and which every registered code is held to
     // by the case before this one.
+  });
+
+  /**
+   * ── THE CITATION OF THE LEAK RULE IS DERIVED, NOT TYPED
+   *    (`TL-P4-COORD-R72` ordered item 2, F17-3) ────────────────────────────
+   *
+   * WHAT WENT WRONG. The estate's leak boundary lives in a comment of
+   * `apps/api/src/common/error.filter.ts`, and `R63`, `R69` and `R71` all
+   * cited it as `:148-152`. Round 17's own added `import` shifted the
+   * paragraph down one line, so at that SHA `:148-152` ran from
+   * «migration-time end-state assertions…» to «…a journal entry id,» — it
+   * STOPPED ONE LINE SHORT OF «never leave the process», which is the
+   * predicate: the citation clipped the only part of the sentence that
+   * forbids anything. Round 17 wrote that stale range in five places.
+   * `R72` §2 measures the correct range at `:151-153` and states the
+   * principle: a citation that can drift is the same defect at one remove.
+   *
+   * SO THE RANGE IS DERIVED HERE AND COMPARED AGAINST WHAT THE FIVE SITES
+   * SPELL. An edit anywhere above the rule reds this case rather than
+   * silently making five comments point at the wrong lines. And because
+   * offsets are a weaker handle than words, each site is also required to
+   * cite the rule BY ITS TEXT — the artefact and the predicate — so a reader
+   * who meets the citation after the line numbers have moved again still has
+   * the sentence.
+   *
+   * THE PREMISE THIS LAW DEPENDS ON, NAMED: that the rule still SAYS what the
+   * citations say it says. That is read, not assumed — the derived range must
+   * itself contain the artefact and the predicate, so a rule quietly reworded
+   * to drop «never leave the process» reds here too. The rule's own bytes are
+   * not this round's to touch and are not touched.
+   */
+  it('the leak rule is cited by a DERIVED line range and by its text, in every place this slice cites it', () => {
+    const REPO = join(__dirname, '..', '..');
+    const FILTER = join(REPO, 'apps', 'api', 'src', 'common', 'error.filter.ts');
+    const filterLines = readFileSync(FILTER, 'utf8').split('\n');
+
+    // ── (1) THE RANGE, DERIVED. The rule is ONE SENTENCE spanning comment
+    //    lines: it opens at «NO `details`. SQL, the» and closes at «never
+    //    leave the process». Both ends are located by their own text.
+    const opens = filterLines.findIndex((l) => /with NO `details`\. SQL, the\s*$/.test(l));
+    expect(opens, 'the leak rule no longer opens with «with NO `details`. SQL, the»').toBeGreaterThan(-1);
+    const closesAt = filterLines.findIndex((l, i) => i > opens && /never leave the process/.test(l));
+    expect(closesAt, 'the leak rule no longer closes with «never leave the process»').toBeGreaterThan(opens);
+    // Every line of the sentence is a comment line of one block — a sentence
+    // that had code in the middle of it would not be one sentence.
+    for (let i = opens; i <= closesAt; i += 1) {
+      expect(filterLines[i]?.trimStart().startsWith('//'), `line ${String(i + 1)} of the leak rule is not a comment line`).toBe(true);
+    }
+    const derived = `${String(opens + 1)}-${String(closesAt + 1)}`;
+
+    // ── (2) AND THE RULE STILL SAYS WHAT THE CITATIONS SAY IT SAYS. The
+    //    premise is READ: the artefact the rule names, and the predicate that
+    //    forbids it, must both be inside the derived range.
+    const ruleText = filterLines
+      .slice(opens, closesAt + 1)
+      .join(' ')
+      .replace(/\/\//g, ' ')
+      .replace(/\s+/g, ' ');
+    for (const phrase of ["routine's message after the colon", 'an amount', 'never leave the process']) {
+      expect(ruleText.toLowerCase(), `the derived rule range does not contain «${phrase}»`).toContain(phrase.toLowerCase());
+    }
+
+    // ── (3) EVERY SITE THAT CITES IT SPELLS THE DERIVED RANGE, AND QUOTES THE
+    //    RULE. The five are this slice's own; a site that stops citing the
+    //    rule at all is a finding, so the list is pinned rather than
+    //    discovered — a discovered list shrinks to zero and passes.
+    const SITES: readonly string[] = [
+      join(REPO, 'apps', 'api', 'src', 'common', 'error.filter.ts'),
+      join(REPO, 'apps', 'api', 'src', 'modules', 'selling', 'selling-errors.ts'),
+      join(REPO, 'tests', 'guards', 'p4s7-installment-filter-contract.test.ts'),
+      join(REPO, 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'),
+    ];
+    let cited = 0;
+    for (const site of SITES) {
+      const text = readFileSync(site, 'utf8');
+      const ranges = [...text.matchAll(/error\.filter\.ts:(\d+-\d+)/g)].map((m) => m[1] as string);
+      expect(ranges.length, `${site} no longer cites the leak rule at all`).toBeGreaterThan(0);
+      for (const range of ranges) {
+        expect(range, `${site} cites error.filter.ts:${range} where the rule is at :${derived}`).toBe(derived);
+      }
+      cited += ranges.length;
+      // ...and the citation carries the rule's own words, not only its
+      // offsets, for the reader who meets it after the next shift.
+      const flat = text.replace(/\s+/g, ' ').toLowerCase();
+      expect(flat, `${site} cites the rule without quoting the artefact it names`).toContain("routine's message after the colon");
+      expect(flat, `${site} cites the rule without quoting the predicate`).toContain('never leave the process');
+    }
+    // THE FIVE CITATIONS `R72` §2 COUNTED, STILL FIVE: the specification
+    // carries two of them. A citation deleted to make this law pass is a
+    // finding, because the count is pinned.
+    expect(cited, 'the number of citations of the leak rule moved').toBe(5);
+
+    // ── (4) WHAT THIS DOES NOT CATCH, SO IT IS NOT TAKEN FOR MORE. The scan
+    //    matches the FULL spelling `error.filter.ts:<range>`. A citation
+    //    written as a bare `:<range>` with no file name -- which is how this
+    //    file's own self-citation was spelled until round 18 re-spelled it --
+    //    is invisible to it, and would be an uncounted sixth citation rather
+    //    than a wrong one. The pinned count of five is what makes a DELETED
+    //    citation a finding; it is not a bound on citations spelled some other
+    //    way. Stated rather than left to be found. (The stale string
+    //    `148-152` appears in this law's own narrative above, deliberately:
+    //    the law may describe the defect it closes, and a `not.toContain` over
+    //    the whole file would have been a test about this comment.)
   });
 
   it('REGRESSION: an unknown P0001, an unregistered installment.* and a 42501 are all still 403', () => {

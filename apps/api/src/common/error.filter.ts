@@ -186,8 +186,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       //     NEVER THE MESSAGE (`TL-P4-COORD-R69` §1 and ordered item 1,
       //     which NARROWS `TL-P4-COORD-R63` item 4, F15-5).
       //
-      //     THE RULE THIRTY LINES ABOVE GOVERNS THIS LINE, AND IT STANDS.
-      //     `:148-152` says «SQL, THE ROUTINE'S MESSAGE AFTER THE COLON, AN
+      //     THE RULE EARLIER IN THIS FILE GOVERNS THIS LINE, AND IT STANDS.
+      //     `error.filter.ts:151-153` -- this file's own rule, whose range is
+      //     DERIVED and compared against this citation by the guard suite
+      //     rather than typed and left to drift (`TL-P4-COORD-R72` item 2,
+      //     F17-3) -- says «SQL, THE ROUTINE'S MESSAGE AFTER THE COLON, AN
       //     AMOUNT, a journal entry id, an assertion body and a stack never
       //     leave the process». A LOG LINE LEAVES THE PROCESS -- that is what
       //     a log is for -- so «never leaves the process» governs what is

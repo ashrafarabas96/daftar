@@ -1013,7 +1013,7 @@ BEGIN
   --     this text may reach a caller, and none of it does. Round 16 made it
   --     reach an operator by logging the refusal's FIRST LINE beside the
   --     name, and THAT WAS A LEAK OF THE CLASS THE FILTER'S OWN RULE NAMES:
-  --     `apps/api/src/common/error.filter.ts:148-152` says «SQL, THE
+  --     `apps/api/src/common/error.filter.ts:151-153` says «SQL, THE
   --     ROUTINE'S MESSAGE AFTER THE COLON, AN AMOUNT, a journal entry id, an
   --     assertion body and a stack never leave the process», a log line
   --     leaves the process, EIGHT of the thirteen registered `installment.*`
@@ -2872,8 +2872,9 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 -- body and no `details` — correctly, none of this vocabulary is in any
 -- localization catalogue — and the log line carried the invariant NAME alone.
 -- Round 16 repaired that by logging the refusal's FIRST LINE, and that is a
--- leak of a class the filter's own rule names thirty lines above the branch
--- that logged it (`apps/api/src/common/error.filter.ts:148-152`): «SQL, THE
+-- leak of a class the filter's own rule names earlier in the same file than
+-- the branch that logged it (`apps/api/src/common/error.filter.ts:151-153`):
+-- «SQL, THE
 -- ROUTINE'S MESSAGE AFTER THE COLON, AN AMOUNT, a journal entry id, an
 -- assertion body and a stack never leave the process». A LOG LINE LEAVES THE
 -- PROCESS. EIGHT of the thirteen registered names substitute `business_id`
@@ -4407,7 +4408,7 @@ DECLARE
     ['public.installment_plan_fact_sync()',                       '613fd36bae4ab68830f0d8167fedf1eafe17729839579d13a7edcbefec72acf1'],
     ['public.installment_plan_fact_verify()',                     'd83b0657a3b9896eccfb66313ad5ca2bf9080158739bf5a9d1e6cb553e423f7c'],
     ['public.installment_plan_active_exclusive()',                '972604870115f80909906ebf4a184d2de56f3c3568c91d0a7b66d288778515c2'],
-    ['public.installment_schedule_verify()',                      'de84a53494b068ab2066736731ce492e9a759e7ea6dddab4803da341ddefe786'],
+    ['public.installment_schedule_verify()',                      'c69837085b4386c24f939412a851c0b7d09d2e51ba0dda5182f90ccf1c8f8408'],
     ['public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)', '61d797de3fcb5f8e7fdb687414e09a2d734de630bdd954c48995661708b122f6'],
     ['public.customer_ar_aging(uuid,uuid,date,integer[])',        '67a3dc0b0bff28b65d4472bdda8c8856e7bc90009d4c9cb1d589c56c1df1eefc']];
   -- The six routine NAMES of the list above, for part 6c's overload law. A
