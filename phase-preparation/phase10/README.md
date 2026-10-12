@@ -58,5 +58,12 @@ a line shaped like a recorder line and having it believed; logs written
 before that change cannot be verified by the current `--check`, which is
 correct, since their cells were parsed from text a child could have written.
 
+Each gate's two streams are recorded as two labelled blocks, its stdout and
+then its stderr under `--- stderr:`. The counts in the run-identity table are
+measured from **stdout alone**, and a gate whose output carries more than one
+distinct figure for a cell has that cell recorded as ABSENT rather than
+resolved in its favour — so a forged figure costs the run its evidence
+instead of buying the forger a number.
+
 The design, the laws these modules enforce, and the architectural finding that
 gates the whole phase are in the project's shared folder under `phase10/`.

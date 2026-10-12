@@ -103,6 +103,17 @@ def gate_measurements(label: str, returncode: int, out: str) -> list[str]:
     output, never the first anywhere in the log, because a summary comes
     after the thing it summarises.
 
+    A third rule, from the challenger's round 7. The figures used to be read
+    out of `stdout + stderr`, a concatenation in which ALL of stderr follows
+    ALL of stdout and therefore follows the suite's own summary: a committed,
+    passing test that writes a summary-shaped line to stderr became the last
+    match and owned the cell. The stream is now stdout alone, but the stream
+    was never the defect — picking one figure out of several was. So an
+    AMBIGUOUS count is refused outright: when a gate's output carries more
+    than one DISTINCT figure for a cell, the cell is ABSENT and the run is
+    not evidence. Forgery then costs the forger the run instead of buying
+    them a number, and the rule holds whatever order the streams arrive in.
+
     These figures remain the child's own words, read by the recorder out of
     the one block that owns them. The exit code beside them is the
     recorder's.
@@ -117,8 +128,38 @@ def gate_measurements(label: str, returncode: int, out: str) -> list[str]:
             out_lines.append(f"{name}: ABSENT — the gate that reports it exited {returncode}")
             continue
         found = re.findall(pattern, out, re.M)
-        out_lines.append(f"{name}: {found[-1] if found else 'ABSENT'}")
+        distinct = sorted(set(found))
+        if not found:
+            out_lines.append(f"{name}: ABSENT")
+        elif len(distinct) > 1:
+            out_lines.append(
+                f"{name}: ABSENT \u2014 this gate's output carries {len(distinct)} different figures for it"
+            )
+        else:
+            out_lines.append(f"{name}: {found[-1]}")
     return out_lines
+
+
+def run_verdict(before: str, after: str, exits: list[int]) -> int:
+    """`--run`'s own exit code: 0 only if nothing at all went wrong.
+
+    It used to be 0 whatever happened: a gate could fail, or the tree could
+    end dirty or start dirty, and the recorder would say nothing to its
+    caller or to CI. An evidence tool that cannot fail is not a gate.
+
+    It is a function of its own, and not three lines woven through the loop,
+    so that each of the three rules can be deleted in a self-test and the
+    deletion seen. The dirty-START rule in particular had no case at the run
+    layer: `--check` refused such a run, `--run` also exited 1, and only the
+    first was measured (challenger round 7, P3-01).
+    """
+    if before != "":
+        return 1
+    if after != "":
+        return 1
+    if any(code != 0 for code in exits):
+        return 1
+    return 0
 
 
 def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path, int]:
@@ -146,6 +187,9 @@ def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path,
     in_child = subprocess.run([resolved, "-v"], capture_output=True, text=True, check=False, env=env).stdout.strip() if resolved else ""
 
     before = git("status", "--porcelain")
+    if before != "":
+        print("FAIL: the tree is DIRTY before the run; what the gates measure is not what is committed:")
+        print(before)
     lines = [
         f"run_id:      {run_id}",
         f"subject:     {PKG} (Phase 10 restaurant pack, pure package)",
@@ -159,17 +203,27 @@ def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path,
         f"started_utc: {started.strftime('%Y-%m-%dT%H:%M:%SZ')}",
         "database:    none — this package starts no PostgreSQL cluster and connects to none",
         f"note:        every line below beginning `{CHILD}` is a child's own output, which the parser does not read",
+        "note:        a gate's lines are its stdout, then its stderr under `--- stderr:`; counts are measured from stdout alone",
         "",
     ]
-    worst = 0 if before == "" else 1
+    codes: list[int] = []
     for label, cmd in GATES:
         lines.append(f"=== command: {' '.join(cmd)}")
         proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=env, check=False)
-        lines += child_lines(proc.stdout + proc.stderr)
+        # The two streams are written as two labelled blocks. Concatenating
+        # them cost two things: a stdout that did not end in a newline merged
+        # its last line into stderr's first, and the log could not say which
+        # stream a line came from. Neither block is parsed — both are
+        # prefixed — but the measurement below reads stdout alone, so the log
+        # has to show which lines that was.
+        lines += child_lines(proc.stdout)
+        if proc.stderr != "":
+            lines.append("--- stderr:")
+            lines += child_lines(proc.stderr)
         lines.append(f"--- exit code: {proc.returncode}")
-        lines += gate_measurements(label, proc.returncode, proc.stdout + proc.stderr)
+        lines += gate_measurements(label, proc.returncode, proc.stdout)
         lines.append("")
-        worst = max(worst, abs(proc.returncode))
+        codes.append(proc.returncode)
         print(f"{'ok  ' if proc.returncode == 0 else 'FAIL'} {' '.join(cmd)} -> exit {proc.returncode}")
     # The red-proof harness plants defects in `src/` and restores them in a
     # `finally`. A `finally` does not run if the process is killed, and a
@@ -180,7 +234,6 @@ def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path,
     lines.append(f"tree_after:  {'clean' if after == '' else 'DIRTY'}")
     if after != "":
         lines += child_lines(after)
-        worst = max(worst, 1)
         print("FAIL: the tree is DIRTY after the run; a planted mutation may have survived:")
         print(after)
     ended = datetime.datetime.now(datetime.timezone.utc)
@@ -191,7 +244,7 @@ def do_run(node_bin: pathlib.Path, out_dir: pathlib.Path) -> tuple[pathlib.Path,
     # happened: a gate could fail, or the tree could end dirty or start
     # dirty, and the recorder would say nothing to its caller or to CI. An
     # evidence tool that cannot fail is not a gate.
-    return log_path, (0 if worst == 0 else 1)
+    return log_path, run_verdict(before, after, codes)
 
 
 def derive(log_path: pathlib.Path) -> dict[str, str]:
@@ -318,6 +371,21 @@ MARK_BEGIN = "<!-- RUN-IDENTITY:BEGIN (generated by proofs/record-run.py --emit;
 MARK_END = "<!-- RUN-IDENTITY:END -->"
 
 
+def counts(d: dict[str, str]) -> str:
+    """The Counts cell, which must stay a sentence when a figure is missing.
+
+    Interpolating an ABSENT cell straight into the sentence produced
+    `ABSENT — the gate that reports it exited 1 test files, …`: a published
+    table shape reading as a mangled run-on. A missing figure now says so in
+    its own clause, and the reason is kept.
+    """
+    parts = []
+    for cell, noun in (("files", "test files"), ("cases", "cases"), ("laws", "red-proof laws")):
+        value = d[cell]
+        parts.append(f"{noun}: {value}" if value.startswith("ABSENT") else f"{value} {noun}")
+    return " · ".join(parts)
+
+
 def table(d: dict[str, str]) -> str:
     return "\n".join(
         [
@@ -331,7 +399,7 @@ def table(d: dict[str, str]) -> str:
             f"| **Node** | {d['node']} |",
             f"| **Node, inside the red-proof child** | {d['node_in_child']} |",
             f"| **Database** | {d['database']} |",
-            f"| **Counts** | {d['files']} test files, {d['cases']} cases, {d['laws']} red-proof laws |",
+            f"| **Counts** | {counts(d)} |",
             f"| **Exit codes** | {d['exits']} |",
             "",
             MARK_END,
@@ -513,6 +581,7 @@ def synthetic_log(
     child: str = "v24.0.0",
     node: str = "",
     forge: str | None = None,
+    ambiguous: str | None = None,
 ) -> pathlib.Path:
     """A log in the shape `derive()` reads, built to order.
 
@@ -521,6 +590,8 @@ def synthetic_log(
     same standard it holds the pack to. `forge` makes the named gate print
     the whole recorder frame — footer, counts, laws and a clean tree — as
     its own output, which is the attack the coordinator's review measured.
+    `ambiguous` makes the named gate's output carry TWO different figures for
+    the same cell, which is the attack the challenger's round 7 measured.
     """
     out = [SYNTHETIC_LOG_HEAD.format(run_id=path.stem, tree=tree, child=child if child else "ABSENT", node=node or child or "v24.0.0")]
     for (label, cmd), code in zip(GATES, exits):
@@ -541,7 +612,10 @@ def synthetic_log(
         else:
             out += child_lines("(output elided)")
         out.append(f"--- exit code: {code}")
-        out += gate_measurements(label, code, "  Test Files  10 passed (10)\n       Tests  219 passed (219)\nPASS red-proofs: 88 law(s)")
+        seen = "  Test Files  10 passed (10)\n       Tests  219 passed (219)\nPASS red-proofs: 88 law(s)"
+        if ambiguous is not None and label == ambiguous:
+            seen += "\n  Test Files  1 passed (1)\n       Tests  7 passed (7)"
+        out += gate_measurements(label, code, seen)
         out.append("")
     out.append(f"tree_after:  {tree_after}")
     out.append("ended_utc:   2000-01-01T00:01:00Z")
@@ -653,6 +727,49 @@ def self_test() -> int:
             failures.append("a CHANGED file was reported as matching")
         (folder / "doc.md").write_text("abc")
 
+        # ---- 2b. the measurement itself ------------------------------------
+        # The cell is the child's figure, but only when the child reports ONE
+        # figure. Round 7: a passing test writing a summary-shaped line to
+        # stderr became the last match and owned the cell, because the
+        # measurement read `stdout + stderr`. Reading stdout alone was half
+        # the fix; the half that does not depend on which stream arrives last
+        # is that TWO distinct figures are refused outright.
+        honest = "  Test Files  10 passed (10)\n       Tests  219 passed (219)"
+        if gate_measurements("T1 unit", 0, honest) != ["test_files: 10", "cases: 219"]:
+            failures.append("an honest gate's figures are not read out of its own output")
+        if gate_measurements("T1 unit", 0, honest + "\n  Test Files  10 passed (10)") != ["test_files: 10", "cases: 219"]:
+            failures.append("a figure repeated identically was treated as a disagreement")
+        twice = honest + "\n  Test Files  1 passed (1)\n       Tests  7 passed (7)"
+        got = gate_measurements("T1 unit", 0, twice)
+        if got != [
+            "test_files: ABSENT \u2014 this gate's output carries 2 different figures for it",
+            "cases: ABSENT \u2014 this gate's output carries 2 different figures for it",
+        ]:
+            failures.append("a gate reporting two different figures for one cell had one of them chosen for it")
+        if gate_measurements("T1 unit", 1, honest) != [
+            "test_files: ABSENT \u2014 the gate that reports it exited 1",
+            "cases: ABSENT \u2014 the gate that reports it exited 1",
+        ]:
+            failures.append("a failing gate still reported figures")
+        if gate_measurements("T1 unit", 0, "(nothing it says is a summary)") != ["test_files: ABSENT", "cases: ABSENT"]:
+            failures.append("a gate that reported no figure at all did not read ABSENT")
+
+        # ---- 2c. `--run`'s own verdict --------------------------------------
+        # `--check` refusing a bad run was measured; `--run` exiting non-zero
+        # on the same facts was not (challenger round 7, P3-01). Each of the
+        # three rules is deleted by a different one of these four.
+        for before, after, exits, why in [
+            ("", "", [0] * len(GATES), ""),
+            (" M src/x.ts", "", [0] * len(GATES), "a run that STARTED on a dirty tree still exited 0"),
+            ("", " M src/x.ts", [0] * len(GATES), "a run that ENDED on a dirty tree still exited 0"),
+            ("", "", [0, 0, 0, 0, 1, 0], "a run with a failing gate still exited 0"),
+        ]:
+            verdict = run_verdict(before, after, exits)
+            if why == "" and verdict != 0:
+                failures.append("a run with nothing wrong with it did not exit 0")
+            if why != "" and verdict == 0:
+                failures.append(why)
+
         # ---- 3. a run is evidence only if it SUCCEEDED ---------------------
         runs = folder / "logs"
         runs.mkdir()
@@ -667,8 +784,22 @@ def self_test() -> int:
             ("DIRTYEND", {"exits": [0] * len(GATES), "tree_after": "DIRTY"}, "a run that ended on a DIRTY tree was accepted as evidence"),
             ("DIRTYSTART", {"exits": [0] * len(GATES), "tree": "DIRTY"}, "a run that started on a DIRTY tree was accepted as evidence"),
             ("NORUNTIME", {"exits": [0] * len(GATES), "child": ""}, "a run that never recorded the runtime its laws saw was accepted as evidence"),
+            # Two different figures for one cell, every gate at exit 0. This
+            # is the challenger's round-7 P2 (a count line reaching the
+            # measurement from a second place and winning by being last) and
+            # their P3-02 together: it is the only fixture whose ABSENT is a
+            # LONG form with no failing gate beside it, so narrowing
+            # `startswith("ABSENT")` to `==` reds here and nowhere else.
+            ("AMBIGUOUS", {"exits": [0] * len(GATES), "ambiguous": "T1 unit"}, "a gate reporting two different figures for one cell was accepted as evidence"),
         ]:
             log = synthetic_log(runs / f"P10-SELFTEST-{name}.log", **kwargs)
+            if name == "AMBIGUOUS":
+                # The fixture must have planted its own ambiguity before the
+                # case below can prove anything — the house rule for every
+                # negative fixture in this file.
+                planted = log.read_text()
+                if "\ntest_files: ABSENT \u2014 this gate's output carries 2 different figures for it\n" not in planted:
+                    failures.append("the ambiguous-count fixture recorded a figure instead of refusing, so the case below proves nothing")
             bad_manifest = folder / f"run-{name}.md"
             bad_manifest.write_text("# r\n\n" + table(derive(log)) + "\n")
             rc, _ = silently(lambda: check_run(log, bad_manifest))
