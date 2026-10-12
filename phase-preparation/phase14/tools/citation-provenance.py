@@ -21,7 +21,17 @@ describes. A table that cannot detect its own staleness is a claim again.
 """
 import argparse, os, re, subprocess, sys, collections
 
-CITE = re.compile(r'`([A-Za-z0-9_./-]+\.(?:ts|tsx|sql|yaml|yml|kt|js))(?::[0-9][0-9,\s–-]*)?`')
+# ROUND-6 CHALLENGE P2-01: this pattern carried SEVEN extensions and the
+# sentence it fed said "35 cited files". `json` was not among them, so
+# `infrastructure/database/MIGRATION_MANIFEST.json` -- cited three times, a real
+# repo file, and the ONE cited file whose difference between the trees changes a
+# RULE rather than a citation (it carries `frozenThrough`) -- appeared in zero
+# rows. A generator whose scope is narrower than its sentence is the hand-kept
+# list's defect in a new form: not a wrong count, a count of the wrong
+# population. The extension set is named in the output now, so the claim cannot
+# outrun the scan again.
+EXTS = ('ts','tsx','sql','yaml','yml','kt','js','json','sh','py')
+CITE = re.compile(r'`([A-Za-z0-9_./-]+\.(?:%s))(?::[0-9][0-9,\s–-]*)?`' % '|'.join(EXTS))
 
 BEGIN = '<!-- BEGIN GENERATED citation-provenance -- do not edit by hand -->'
 END   = '<!-- END GENERATED citation-provenance -->'
@@ -122,6 +132,10 @@ def main():
         print()
         print('**%d cited files resolved: %d DIFFER, %d identical, %d ABSENT at `%s`.**'
               % (total, len(differ), len(identical), len(absent), a.other))
+        print('\nScanned population: backticked citations with one of these extensions — %s.'
+              ' The set is printed because `ROUND-6 P2-01` found the sentence claiming more than the'
+              ' pattern matched: `json` was missing, and the one cited file whose difference changes a'
+              ' RULE is a `.json`.' % ', '.join('`.%s`' % e for e in EXTS))
         if absent:
             print('\nAbsent at `%s`: %s — a reader on that tree cannot verify these citations at all.'
                   % (a.other, ', '.join('`%s`'%x for x in absent)))
@@ -133,16 +147,67 @@ def main():
             # Classify rather than dump: most "unresolved" tokens are not
             # citations of live code at all, and listing them as if they were
             # missing files misleads a reader.
-            proofs = [x for x in unresolved if re.match(r'^(c[0-9]|proofs/|bootstrap|fixture)', x)]
+            # ROUND-6 P3-04: `cases/c7a_cross_business_accepted.sql` landed in
+            # the PROPOSES bucket, which is false twice over -- it is a proof
+            # script, and it is one this pack DELETED. The bucket was decided by
+            # a NAME PATTERN, which is the hand-kept list again at one remove,
+            # so it is decided by MEASUREMENT instead: a token that resolves to
+            # a real file inside the pack is the pack's own, whatever it is
+            # called. (Widening the extensions to `.sh`/`.py` immediately proved
+            # the point: the pack's own driver and tools were classified as
+            # files the phase proposes.)
+            def in_pack(tok):
+                return any(os.path.exists(os.path.join(a.pack, d, tok))
+                           for d in ('', 'proofs', 'proofs/cases'))
+            proofs = [x for x in unresolved if in_pack(x)]
+            # And a token that is in neither tree NOR the pack, but that git
+            # knows under the pack, is a file this pack DELETED -- which is a
+            # third thing and not a file the phase proposes. Measured, again,
+            # rather than listed.
+            def was_in_pack(tok):
+                rel = os.path.relpath(a.pack, a.repo)
+                for d in ('', 'proofs', 'proofs/cases'):
+                    r = git(a.repo, 'log', '--all', '--oneline', '-1', '--',
+                            os.path.join(rel, d, tok))
+                    if r.returncode == 0 and r.stdout.strip():
+                        return True
+                return False
+            deleted = [x for x in unresolved if x not in proofs and was_in_pack(x)]
+            fold = lambda xs: [x for x in xs
+                               if not any(y != x and y.endswith('/'+x) for y in xs)]
+            deleted = fold(deleted)
             packown = [x for x in unresolved if x.endswith(('.yaml',)) and 'P14-' in x]
-            future = [x for x in unresolved if x not in proofs and x not in packown]
+            future = [x for x in unresolved if x not in proofs and x not in packown
+                      and x not in deleted]
+            # ROUND-6 P3-04: a bare basename and the path it names are the same
+            # file, and counting both inflated this bucket (`public-api.ts` and
+            # `packages/shared-contracts/src/public-api.ts`). Fold a basename
+            # into a longer token that ends with it.
+            future = fold(future)
             print('\n**Cited tokens that are not live code at `%s`, classified:**' % a.base)
-            print('- %d are this pack\'s own proof scripts (`proofs/cases/*.sql`), which live in the pack, not the repo.' % len(proofs))
+            print('- %d resolve to real files INSIDE this pack (its proof scripts, its driver and its'
+                  ' tools), which live in the pack and not in the repo. Measured by resolving each'
+                  ' against the pack directory, not by a name pattern.' % len(proofs))
             if packown:
                 print('- %d are the pack\'s own artifacts.' % len(packown))
+            if deleted:
+                print('- %d were proof scripts this pack DELETED and still names: %s. Git knows them'
+                      ' under the pack, so they are neither live code nor proposed files, and a'
+                      ' reader must not look for them.'
+                      % (len(deleted), ', '.join('`%s`' % x for x in sorted(deleted))))
             print('- %d are files this phase PROPOSES and that correctly do not exist yet: %s'
                   % (len(future), ', '.join('`%s`'%x for x in sorted(future))))
-            print('  A reader should not look for these in any tree; `P14-GATE-034` asserts they stay absent until the phase is built.')
+            # ROUND-6 P3-02: this line used to credit `P14-GATE-034` with
+            # asserting these stay absent. GATE-034 is replay-after-purge, and
+            # NO gate in the pack makes that assertion -- round-2 P1-01's
+            # species (a right rule on a wrong law number), in generated prose,
+            # so it would have regenerated identically forever. What is true is
+            # structural and is stated instead.
+            print('  A reader should not look for these in any tree. They are absent at `%s` by this'
+                  ' scan\'s own construction -- an entry here that later RESOLVES means either the'
+                  ' phase has been built or the citation is wrong, and `--check` turns that into'
+                  ' drift (exit 1). No gate in this pack asserts their absence, and none is claimed to.'
+                  % a.base)
     block = buf.getvalue().strip('\n')
 
     if a.markdown:

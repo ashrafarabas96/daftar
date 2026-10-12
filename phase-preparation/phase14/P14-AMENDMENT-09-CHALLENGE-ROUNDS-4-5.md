@@ -125,6 +125,11 @@ scans every pack document for `` `path:line` `` citations, resolves each against
 
 > **35 cited files resolved — 5 DIFFER, 21 identical, 9 ABSENT at `6fc505d`.**
 
+That figure is **this round's**, and it is kept as the record of this round
+rather than maintained: `CHALLENGE R6 P2-01` found the scan's pattern carried
+seven extensions and not `json`, so the population itself was narrower than the
+sentence. The current measurement is only ever the generated block in §15.
+
 The hand-kept table's "six of the fourteen" was wrong, and so was the eleven
 inferred from it. The count now lives nowhere but the generated block, and
 **`P14-GATE-032` runs `tools/citation-provenance.py --check`**, which exits `1`

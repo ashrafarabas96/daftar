@@ -15,25 +15,40 @@ being tested.
 ## Reproducing
 
 ```
-localedef -i en_US -f UTF-8 en_US.UTF-8   # the image ships only C, C.utf8, POSIX
+locale-gen en_US.UTF-8            # the image ships only C, C.utf8, POSIX
+                                  # (localedef -i en_US -f UTF-8 en_US.UTF-8 also works)
 initdb -D <data> --locale=en_US.utf8 --encoding=UTF8 -U p14super
 pg_ctl -D <data> -o "-p 54314 -c listen_addresses='' -k <sock> -c fsync=off" -w start
 psql -U p14super -d postgres -f bootstrap.sql      # non-superuser roles + database
 ./replay.sh                                        # recreates the DB, loads the
                                                    # fixture, runs every case
 ./replay.sh c7                                     # same, stopping after the
-                                                   # last c7 line of ORDER
+                                                   # last ORDER line whose
+                                                   # script path CONTAINS c7
 ./redproof-preflight.sh                            # red-proofs the preflight's
                                                    # own arms (5 of 6)
 ```
 
-**`localedef`, not `locale-gen` (`CHALLENGE R5 P3-04`).** Measured rather than
-conceded: `locale-gen` **does** exist on this image, at `/usr/sbin/locale-gen`,
-which is not on a non-root `PATH` — so step one of a recipe whose whole point is
-that a reader can run it failed for the challenger and would fail for anyone
-replaying as an unprivileged user. `localedef` is at `/usr/bin/localedef` and
-produces the same `en_US.utf8`, so it is the documented step and the absolute
-path is given here for the other.
+**`locale-gen` is the step, and the finding against it was WITHDRAWN by its
+author (`CHALLENGE R5 P3-04`, retracted in
+`P14-CHALLENGE-2430504-ADDENDUM-01.md`).** The reviewer reported that
+`locale-gen` *"is not present in this container"*; both this file and the
+evidence document were switched to `localedef` on that word. It was a false
+finding: `locale-gen` is at `/usr/sbin/locale-gen`, `/usr/sbin` **is** on the
+unprivileged `claude` account's `PATH`, and the command runs and generates
+`en_US.utf8`. The step is restored to what was actually executed, with
+`localedef` documented as the correct alternative the reviewer used.
+
+**This thread's own re-diagnosis was wrong too, and in the same way.** Having
+measured that the binary lives in `/usr/sbin`, it wrote *"the binary is present,
+the path is not"* — and never ran `command -v locale-gen` as the `claude`
+account, which prints `/usr/sbin/locale-gen`. The reviewer asserted an absence
+it had not executed; this thread asserted a `PATH` consequence it had not
+executed. **A measurement of one fact does not license an inference about the
+next one**, and the whole correction is reverted rather than kept on a second
+unmeasured claim. The withdrawal is recorded here rather than silently undone,
+because a reader of the earlier revision needs to know which of the two
+commands was ever in doubt: neither.
 
 **A filter chooses how far down `ORDER` the replay goes, never whether the
 database is clean (`CHALLENGE R5 P2-01`).** The filtered form used to skip the

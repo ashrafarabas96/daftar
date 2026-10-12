@@ -9,7 +9,14 @@
 #
 #   usage: ./replay.sh            replay every case, from a freshly created DB
 #          ./replay.sh c7         replay the ORDER prefix up to and including
-#                                 the last c7 line, from a freshly created DB
+#                                 the last line whose SCRIPT PATH CONTAINS c7,
+#                                 from a freshly created DB
+#
+# The filter is a SUBSTRING of the script path, not a family name, and that is
+# easy to forget: `./replay.sh nope` replays 33 cases, because
+# `c7c_assertio[nope]rable.sql` contains it. Measured while testing the
+# no-match path, which is why the no-match path is loud (exit 2) rather than an
+# empty success.
 #
 # Round-5 CHALLENGE P2-01: the filtered form used to SKIP the database
 # recreation, the fixture AND the preflight, so it could not exit 0 in any state

@@ -1433,9 +1433,11 @@ Two corrections came out of generating it rather than typing it:
 | `infrastructure/database/migrations/0025_credential_payload_protection.sql` | identical | `0025_credential_payload_protection.sql` | P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
 | `infrastructure/database/migrations/0045_accounting_post_entry.sql` | identical | `0045_accounting_post_entry.sql` | P14-AMENDMENT-03-CONTINUOUS-MISSION, P14-MIGRATION-PATCH-REQUEST |
 | `infrastructure/database/migrations/0054_inventory_assertion_authority.sql` | identical | `0054_inventory_assertion_authority.sql` | P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/migrations/0073_default_warehouse_locale_name.sql` | identical | `0073_default_warehouse_locale_name.sql` | P14-AMENDMENT-10-CHALLENGE-ROUND-6, P14-MIGRATION-PATCH-REQUEST |
 | `infrastructure/database/migrations/0076_phase4_permission_defaults_backfill.sql` | **ABSENT at 6fc505d** | `0076_phase4_permission_defaults_backfill.sql` | P14-MIGRATION-PATCH-REQUEST |
-| `infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql` | **ABSENT at 6fc505d** | `0079_phase4_pos_till_sessions_cart.sql` | P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
+| `infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql` | **ABSENT at 6fc505d** | `0079_phase4_pos_till_sessions_cart.sql` | P14-AMENDMENT-10-CHALLENGE-ROUND-6, P14-MIGRATION-PATCH-REQUEST, P14-S0-ARCHITECTURE-LOCK |
 | `infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql` | **ABSENT at 6fc505d** | `0086_phase4_rls_quals_once_per_query.sql` | P14-MIGRATION-PATCH-REQUEST |
+| `infrastructure/database/MIGRATION_MANIFEST.json` | **DIFFERS** (+27/-3) | `MIGRATION_MANIFEST.json` | P14-AMENDMENT-10-CHALLENGE-ROUND-6, P14-HANDOFF-MANIFEST, P14-MIGRATION-PATCH-REQUEST |
 | `apps/api/src/common/guards.ts` | identical | `apps/api/src/common/guards.ts` | P14-HANDOFF-MANIFEST, P14-S0-ARCHITECTURE-LOCK, P14-TASK-DAG |
 | `apps/api/src/infra/database.ts` | **DIFFERS** (+190/-15) | `apps/api/src/infra/database.ts` | P14-AMENDMENT-03-CONTINUOUS-MISSION |
 | `apps/api/src/infra/redis.ts` | identical | `apps/api/src/infra/redis.ts` | P14-AMENDMENT-01-SEALED-CONTRACTS, P14-HANDOFF-MANIFEST, P14-S0-ARCHITECTURE-LOCK, P14-TASK-DAG |
@@ -1459,15 +1461,18 @@ Two corrections came out of generating it rather than typing it:
 | `apps/api/src/modules/selling/customers.controller.ts` | **ABSENT at 6fc505d** | `selling/customers.controller.ts` | P14-AMENDMENT-05-MISSION-V3, P14-MIGRATION-PATCH-REQUEST |
 | `apps/api/src/modules/pos/till-sessions.controller.ts` | **ABSENT at 6fc505d** | `till-sessions.controller.ts` | P14-MIGRATION-PATCH-REQUEST |
 
-**35 cited files resolved: 5 DIFFER, 21 identical, 9 ABSENT at `6fc505d`.**
+**37 cited files resolved: 6 DIFFER, 22 identical, 9 ABSENT at `6fc505d`.**
+
+Scanned population: backticked citations with one of these extensions — `.ts`, `.tsx`, `.sql`, `.yaml`, `.yml`, `.kt`, `.js`, `.json`, `.sh`, `.py`. The set is printed because `ROUND-6 P2-01` found the sentence claiming more than the pattern matched: `json` was missing, and the one cited file whose difference changes a RULE is a `.json`.
 
 Absent at `6fc505d`: `apps/api/src/modules/pos/pos-cart-routes.ts`, `apps/api/src/modules/pos/pos-permissions.ts`, `apps/api/src/modules/pos/till-sessions.controller.ts`, `apps/api/src/modules/receivables/receivables.controller.ts`, `apps/api/src/modules/selling/customers.controller.ts`, `infrastructure/database/migrations/0076_phase4_permission_defaults_backfill.sql`, `infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql`, `infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql`, `packages/shared-contracts/src/invoices.ts` — a reader on that tree cannot verify these citations at all.
 
 **Cited tokens that are not live code at `93084f8`, classified:**
-- 39 are this pack's own proof scripts (`proofs/cases/*.sql`), which live in the pack, not the repo.
+- 47 resolve to real files INSIDE this pack (its proof scripts, its driver and its tools), which live in the pack and not in the repo. Measured by resolving each against the pack directory, not by a name pattern.
 - 2 are the pack's own artifacts.
-- 11 are files this phase PROPOSES and that correctly do not exist yet: `apps/api/src/modules/integrations/key-material.ts`, `cases/c7a_cross_business_accepted.sql`, `packages/domain-core/src/api-scopes.ts`, `packages/shared-contracts/src/public-api.ts`, `public-api.ts`, `scripts/phase14-event-catalogue-gate.ts`, `scripts/phase14-gate.ts`, `scripts/phase14-openapi.ts`, `scripts/phase14-registry-gate.ts`, `webhooks/egress-guard.ts`, `webhooks/signature.ts`
-  A reader should not look for these in any tree; `P14-GATE-034` asserts they stay absent until the phase is built.
+- 1 were proof scripts this pack DELETED and still names: `cases/c7a_cross_business_accepted.sql`. Git knows them under the pack, so they are neither live code nor proposed files, and a reader must not look for them.
+- 10 are files this phase PROPOSES and that correctly do not exist yet: `apps/api/src/modules/integrations/key-material.ts`, `c7a_cross_business_accepted.sql`, `packages/domain-core/src/api-scopes.ts`, `packages/shared-contracts/src/public-api.ts`, `scripts/phase14-event-catalogue-gate.ts`, `scripts/phase14-gate.ts`, `scripts/phase14-openapi.ts`, `scripts/phase14-registry-gate.ts`, `webhooks/egress-guard.ts`, `webhooks/signature.ts`
+  A reader should not look for these in any tree. They are absent at `93084f8` by this scan's own construction -- an entry here that later RESOLVES means either the phase has been built or the citation is wrong, and `--check` turns that into drift (exit 1). No gate in this pack asserts their absence, and none is claimed to.
 <!-- END GENERATED citation-provenance -->
 
 **The frozen-migration sentence, corrected (CHALLENGE R4 P3-03).** Earlier
@@ -1485,13 +1490,30 @@ the trap, and a reader on `6fc505d` cannot check the three absent ones at all
 rather than checking them wrongly, which is the better of the two failures.
 
 What the three absent ones are cited **for** has to be said rather than
-generalised, because two of them are not route-surface facts:
-`0076` and `0086` are cited for Phase 4 permission and RLS surface facts, and
-**`0079` is cited as the freeze boundary itself** — `frozenThrough =
-0079_phase4_pos_till_sessions_cart.sql`, which appears in four places in this
-pack. **So a reader on `6fc505d` cannot verify the freeze boundary at all**,
-which is the one consequence of this absence that touches a rule rather than a
-citation, and it is recorded here rather than left for a reader to discover.
+generalised, because two of them are not route-surface facts: `0076` and `0086`
+are cited for Phase 4 permission and RLS surface facts, and **`0079` is cited as
+the freeze boundary** — `frozenThrough = 0079_phase4_pos_till_sessions_cart.sql`
+— in four places in this pack.
+
+**And the boundary is worse than unverifiable on the other tree: it
+CONTRADICTS (`CHALLENGE R6 P2-01`).** The boundary is not the migration file, it
+is a **field**, and this pack says so itself:
+`infrastructure/database/MIGRATION_MANIFEST.json`. That file exists at **both**
+trees, and it was read at both rather than reasoned about:
+
+| tree | `frozenThrough` in `MIGRATION_MANIFEST.json` |
+|---|---|
+| `93084f8` (declared base) | `0079_phase4_pos_till_sessions_cart.sql` |
+| `6fc505d` (checked out) | **`0073_default_warehouse_locale_name.sql`** |
+
+So a reader on `6fc505d` does **not** fail to verify the freeze line. They
+verify it, get `0073`, and conclude this pack's boundary is wrong by six
+migrations — a coherent reading of the wrong world, which is this section's own
+thesis applied to a **rule** instead of a citation, and strictly worse than
+being unable to check. An earlier revision of this paragraph said *cannot verify
+the freeze boundary at all*; that sentence was **adopted from a reviewer's
+phrasing without being measured**, which is the thing this section exists to
+warn against, and it is corrected here with the reading of the file.
 
 **The two remediations, and why neither is taken.**
 
