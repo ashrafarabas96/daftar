@@ -41,6 +41,7 @@ import { BillingError } from '../../src/errors';
 import { appUrl, connect, isBlocked, ownerUrl, pidOf, refusedBy, uuid, waitUntilBlocked } from './helpers/cluster';
 import {
   consumedMinor,
+  createBusiness,
   createDraftInvoice,
   finalizeInvoice,
   insertConsumption,
@@ -60,7 +61,16 @@ let observer: Client;
 
 async function freshScope(schema: string, currency = 'USD'): Promise<Scope> {
   const businessId = uuid();
-  await owner.query(`INSERT INTO ${schema}.businesses (tenant_id, id) VALUES ($1, $2)`, [TENANT, businessId]);
+  if (schema === 'p5scratch') {
+    // ROUND 11: the fixture now carries the real table's NOT NULL columns.
+    await createBusiness(owner, schema, TENANT, businessId, currency);
+  } else {
+    // `p5naive` is the DELIBERATELY WRONG design, kept as the control that
+    // shows the hazard exists at all. Its stub stays a stub: making it
+    // faithful would say something about the control's realism that is not
+    // being claimed.
+    await owner.query(`INSERT INTO ${schema}.businesses (tenant_id, id) VALUES ($1, $2)`, [TENANT, businessId]);
+  }
   return { tenantId: TENANT, businessId, currency };
 }
 

@@ -41,7 +41,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
 import { connect, ownerUrl, refusedBy, uuid } from './helpers/cluster';
-import { insertGrant, type Scope } from './helpers/finalize';
+import { createBusiness, insertGrant, type Scope } from './helpers/finalize';
 
 const TENANT = '7f1a0000-0000-4000-8000-000000000006';
 const T1 = '2026-02-01T00:00:00.000Z';
@@ -58,7 +58,7 @@ interface Ground {
 
 async function ground(): Promise<Ground> {
   const businessId = uuid();
-  await owner.query(`INSERT INTO p5scratch.businesses (tenant_id, id) VALUES ($1, $2)`, [TENANT, businessId]);
+  await createBusiness(owner, 'p5scratch', TENANT, businessId, 'USD');
   const scope: Scope = { tenantId: TENANT, businessId, currency: 'USD' };
   const invoiceId = uuid();
   await owner.query(
@@ -76,6 +76,16 @@ async function refusal(sql: string, params: readonly unknown[]): Promise<string>
   return owner.query(sql, params as unknown[]).then(
     () => '',
     (e: unknown) => refusedBy(e),
+  );
+}
+
+/** A draft invoice in one currency, for the canonical-currency cases. */
+async function insertInvoiceIn(g: Ground, currency: string): Promise<string> {
+  return refusal(
+    `INSERT INTO p5scratch.subscription_invoices
+       (id,tenant_id,business_id,period_index,currency,charge_minor,credit_minor,total_minor,state)
+     VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,$4,100,0,100,'draft')`,
+    [uuid(), g.scope.tenantId, g.scope.businessId, currency],
   );
 }
 
@@ -338,5 +348,76 @@ describe('the invoice CHECKs, each provoked on its own', () => {
     expect(await insertInvoice(g, { chargeMinor: 0, creditMinor: 1, totalMinor: -1 })).toBe(
       '23514/si_credit_within_charge',
     );
+  });
+});
+
+describe('the canonical currency set is a key, not a shape', () => {
+  it('refuses an invoice in a code that passes the shape and names no currency', async () => {
+    const g = await ground();
+    // `ZZZ` is three upper-case letters. It is not a currency.
+    expect(await insertInvoiceIn(g, 'ZZZ')).toBe('23503/si_currency_fk');
+  });
+
+  it('refuses a ledger row in a code that passes the shape and names no currency', async () => {
+    const g = await ground();
+    expect(
+      await refusal(
+        `INSERT INTO p5scratch.platform_credit_adjustments
+           (id,tenant_id,business_id,kind,amount_minor,currency,occurred_at,source_ref,reason)
+         VALUES ($1,$2,$3,'grant',100,'ZZZ',$4,'checks','a grant in no currency')`,
+        [uuid(), g.scope.tenantId, g.scope.businessId, T2],
+      ),
+    ).toBe('23503/pca_currency_fk');
+  });
+
+  it('carries the precision of each currency, including the one that is not two', async () => {
+    // The reason the package stores integer minor units and never a
+    // decimal: JOD has three. A `/ 100` anywhere would be wrong for it,
+    // and `test/currency-is-canonical.test.ts` scans `src/` for exactly
+    // that. Here the fact is read from the table, where it belongs.
+    const r = await owner.query<{ code: string; minor_units: number }>(
+      `SELECT code, minor_units FROM p5scratch.currencies ORDER BY code`,
+    );
+    expect(r.rows.length, 'the canonical currency fixture is empty').toBe(7);
+    expect(r.rows.filter((row) => row.minor_units !== 2).map((row) => `${row.code}=${row.minor_units}`)).toStrictEqual([
+      'JOD=3',
+    ]);
+  });
+});
+
+describe('the subscription state machine is not this slice to move', () => {
+  it('gives the application role no write of any kind on the entitlement record', async () => {
+    const r = await owner.query<{ privilege: string; held: boolean }>(
+      `SELECT p AS privilege, has_table_privilege('p5_app', 'p5scratch.business_entitlements', p) AS held
+         FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) AS p`,
+    );
+    expect(r.rows.length, 'the privilege probe returned nothing').toBe(4);
+    expect(r.rows.filter((row) => row.held).map((row) => row.privilege)).toStrictEqual([]);
+  });
+
+  it('has no function or trigger in this schema that touches it', async () => {
+    // A grant is not the only way to write a row: a SECURITY DEFINER
+    // function would do it on the caller's behalf. So the catalogue is
+    // asked about both.
+    const fns = await owner.query<{ proname: string }>(
+      `SELECT p.proname
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'p5scratch' AND p.prosrc ILIKE '%business_entitlements%'`,
+    );
+    expect(fns.rows.map((row) => row.proname)).toStrictEqual([]);
+    const trgs = await owner.query<{ tgname: string }>(
+      `SELECT t.tgname
+         FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'p5scratch' AND c.relname = 'business_entitlements' AND NOT t.tgisinternal`,
+    );
+    expect(trgs.rows.map((row) => row.tgname)).toStrictEqual([]);
+    // And the probe is not vacuous: the same question about a relation this
+    // schema DOES maintain finds its maintainer.
+    const live = await owner.query<{ proname: string }>(
+      `SELECT p.proname
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'p5scratch' AND p.prosrc ILIKE '%platform_credit_grant_remainders%'`,
+    );
+    expect(live.rows.length, 'the catalogue probe finds nothing even where it should').toBeGreaterThan(0);
   });
 });

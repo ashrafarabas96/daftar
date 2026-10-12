@@ -37,6 +37,7 @@ import type { Client } from 'pg';
 import { appUrl, connect, isBlocked, ownerUrl, pidOf, refusedBy, uuid, waitUntilBlocked } from './helpers/cluster';
 import {
   consumedMinor,
+  createBusiness,
   createDraftInvoice,
   finalizeInvoice,
   insertConsumption,
@@ -55,7 +56,7 @@ let observer: Client;
 
 async function freshScope(currency = 'USD'): Promise<Scope> {
   const businessId = uuid();
-  await owner.query(`INSERT INTO p5scratch.businesses (tenant_id, id) VALUES ($1, $2)`, [TENANT, businessId]);
+  await createBusiness(owner, 'p5scratch', TENANT, businessId, currency);
   return { tenantId: TENANT, businessId, currency };
 }
 

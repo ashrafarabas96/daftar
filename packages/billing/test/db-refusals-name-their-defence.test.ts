@@ -6,7 +6,7 @@
  * dropping any one of them left the DB lane green. The other was a
  * RESOLUTION hole: the cases that did refuse asserted the bare SQLSTATE, and
  * a class is shared — 23514 is raised by six constraints in this schema,
- * 23503 by four keys, 23505 by four, and 23000 by every one of the fifteen
+ * 23503 by six keys, 23505 by four, and 23000 by every one of the fifteen
  * RAISE sites in the invariant functions. An assertion that names only the
  * class is satisfied by the wrong defence, which is how a masking pair
  * (`si_credit_within_charge` and `si_total_non_negative`) stayed invisible.
@@ -50,7 +50,7 @@ const DDL = join(DB_DIR, 'sql', 'credit-ledger-scratch.sql');
  */
 const SHARED: ReadonlyMap<string, string> = new Map([
   ['23514', 'six CHECK constraints'],
-  ['23503', 'four foreign keys'],
+  ['23503', 'six foreign keys from round 11, four before it'],
   ['23505', 'four unique keys'],
   ['23000', 'fifteen RAISE sites in the invariant functions'],
 ]);

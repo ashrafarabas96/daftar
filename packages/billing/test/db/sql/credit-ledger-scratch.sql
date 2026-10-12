@@ -25,18 +25,72 @@
 --     That is a weaker claim than `PROVEN BY DATABASE CATALOGUE` on the
 --     real tree and it is deliberately named differently.
 --
--- `p5scratch.businesses` is a STAND-IN for the live relation. It exists
--- only to give the composite ownership FK something to point at; its two
--- columns are the two the live `businesses_tenant_id_id_uq` carries.
+-- `p5scratch.businesses`, `p5scratch.tenants` and `p5scratch.currencies`
+-- are STAND-INS for the live relations, and from ROUND 11 they are copied
+-- from the frozen migrations rather than reduced to the columns this
+-- package happened to need. The challenger's §5 cross-check measured the
+-- old stub: `businesses` had 2 of the real table's 13 columns, four of
+-- which are NOT NULL with no default (`name`, `store_slug`,
+-- `country_code`, `base_currency`), so a two-column INSERT that worked
+-- here would have failed on the real table; and `tenants`, which the real
+-- `businesses.tenant_id` references, was absent entirely. Those four
+-- columns and that reference are now here, with the real CHECKs, copied
+-- from `0003_tenancy.sql`. `currencies` and its seven seeded rows are
+-- copied from `0001_platform.sql`, including `minor_units`, which is the
+-- canonical source of a currency's precision — nothing in this package
+-- restates it.
+--
+-- They are still a FIXTURE, not the real tables: the remaining nine
+-- columns of `businesses` are absent, and no RLS policy of the live
+-- schema is reproduced on them. `P5-CHECKPOINT.md` §9 states that limit
+-- rather than leaving it to be discovered at promotion.
 -- =====================================================================
 
 DROP SCHEMA IF EXISTS p5scratch CASCADE;
 CREATE SCHEMA p5scratch;
 
+-- From `0001_platform.sql`, verbatim in shape and in seed. `minor_units`
+-- is why it is here: a currency's precision is a FACT OF THIS TABLE, and
+-- JOD has three minor units while every other seeded currency has two.
+-- A three-letter shape CHECK cannot know that, and `ZZZ` passes a shape
+-- CHECK while naming no currency at all.
+CREATE TABLE p5scratch.currencies (
+  code         text     PRIMARY KEY,
+  numeric_code text     NOT NULL UNIQUE,
+  minor_units  smallint NOT NULL CHECK (minor_units BETWEEN 0 AND 3)
+);
+INSERT INTO p5scratch.currencies (code, numeric_code, minor_units) VALUES
+  ('ILS','376',2), ('JOD','400',3), ('LBP','422',2), ('SYP','760',2),
+  ('TRY','949',2), ('USD','840',2), ('EUR','978',2);
+
+-- The relation the real `businesses.tenant_id` references. One column of
+-- it is enough for a reference to be a reference; the point is that the
+-- fixture no longer omits the parent.
+CREATE TABLE p5scratch.tenants (
+  id uuid NOT NULL PRIMARY KEY
+);
+
 CREATE TABLE p5scratch.businesses (
-  tenant_id uuid NOT NULL,
-  id        uuid NOT NULL PRIMARY KEY,
+  tenant_id     uuid NOT NULL REFERENCES p5scratch.tenants (id),
+  id            uuid NOT NULL PRIMARY KEY,
+  -- The four NOT NULL columns with no default, with the live CHECKs from
+  -- `0003_tenancy.sql`. They are unnamed here exactly as they are there.
+  name          text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 160),
+  store_slug    text NOT NULL UNIQUE CHECK (store_slug ~ '^[a-z0-9][a-z0-9-]{1,62}$'),
+  country_code  text NOT NULL CHECK (country_code ~ '^[A-Z]{2}$'),
+  base_currency text NOT NULL REFERENCES p5scratch.currencies (code),
   CONSTRAINT businesses_tenant_id_id_uq UNIQUE (tenant_id, id)
+);
+
+-- From `0007_entitlements.sql` with the state set `0021_saas_enforcement.sql`
+-- replaced it with. It is here for ONE purpose: to show that this slice has
+-- no write path into it. The subscription state machine is not Phase 5's to
+-- move, and `P5-ENTITLEMENT-RECONCILIATION-CONTRACT.md` says who owns it and
+-- what P5 may do instead. Keyed by `business_id` ALONE, as the real table is.
+CREATE TABLE p5scratch.business_entitlements (
+  business_id uuid NOT NULL PRIMARY KEY REFERENCES p5scratch.businesses (id),
+  state       text NOT NULL CHECK (state IN ('trial','active','grace_period','past_due','paused',
+                                             'cancel_at_period_end','cancelled','expired','complimentary'))
 );
 
 -- ── the ledger ───────────────────────────────────────────────────────
@@ -76,6 +130,13 @@ CREATE TABLE p5scratch.platform_credit_adjustments (
   CONSTRAINT pca_kind_names_grant     CHECK ((kind = 'consumption') = (applies_to_grant_id IS NOT NULL)),
   CONSTRAINT pca_consumption_invoice  CHECK ((kind = 'consumption') = (invoice_id IS NOT NULL)),
 
+  -- ROUND 11, the challenger's §5 currency P3: the SHAPE check above says
+  -- a code is three upper-case letters, which `ZZZ` satisfies. The
+  -- canonical set of codes is a table, so membership is a KEY and not a
+  -- regular expression, and the regular expression stays only as the
+  -- cheap first answer.
+  CONSTRAINT pca_currency_fk FOREIGN KEY (currency)
+    REFERENCES p5scratch.currencies (code),
   CONSTRAINT pca_owner_fk FOREIGN KEY (tenant_id, business_id)
     REFERENCES p5scratch.businesses (tenant_id, id),
 
@@ -415,6 +476,9 @@ CREATE TABLE p5scratch.subscription_invoices (
   -- PART 25's "invoice payable cannot become negative" as arithmetic the
   -- database owns, not a code path a later edit changes.
   CONSTRAINT si_total_is_charge_minus_credit CHECK (total_minor = charge_minor - credit_minor + tax_minor),
+  -- ROUND 11, as on the ledger: the canonical currency set is a key.
+  CONSTRAINT si_currency_fk FOREIGN KEY (currency)
+    REFERENCES p5scratch.currencies (code),
   CONSTRAINT si_owner_fk FOREIGN KEY (tenant_id, business_id)
     REFERENCES p5scratch.businesses (tenant_id, id),
   -- §5's defence against a double renewal: a second invoice for the same

@@ -53,6 +53,38 @@ export async function readLedger(c: Client, schema: string, s: Scope): Promise<r
   }));
 }
 
+/**
+ * A tenant and a business, as the FROZEN tables define them.
+ *
+ * ROUND 11, the challenger's §5 cross-check: the fixture `businesses` used
+ * to be two columns, and the live table has four NOT NULL columns with no
+ * default plus a reference to `tenants`. A two-column INSERT that worked
+ * against the stub would have failed against the real table, which is a
+ * gap that would have been discovered at promotion. Every case now creates
+ * its business through this helper, so there is one place where the shape
+ * of the real relation is satisfied.
+ *
+ * `baseCurrency` is a real column of the real table and it REFERENCES the
+ * canonical `currencies`. It defaults to the scope's own currency here;
+ * whether a platform invoice may be issued in a currency other than the
+ * business's base currency is an OWNER question
+ * (`P5-MIGRATION-PATCH-REQUEST.md` §13), not something a fixture decides.
+ */
+export async function createBusiness(
+  c: Client,
+  schema: string,
+  tenantId: string,
+  businessId: string,
+  baseCurrency = 'USD',
+): Promise<void> {
+  await c.query(`INSERT INTO ${schema}.tenants (id) VALUES ($1) ON CONFLICT DO NOTHING`, [tenantId]);
+  await c.query(
+    `INSERT INTO ${schema}.businesses (tenant_id, id, name, store_slug, country_code, base_currency)
+     VALUES ($1, $2, $3, $4, 'PS', $5)`,
+    [tenantId, businessId, `fixture ${businessId}`, `b-${businessId}`, baseCurrency],
+  );
+}
+
 export async function insertGrant(
   c: Client,
   schema: string,

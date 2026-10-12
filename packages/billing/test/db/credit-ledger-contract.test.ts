@@ -25,7 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
 import { connect, constraintOf, ownerUrl, refusedBy, uuid } from './helpers/cluster';
-import { createDraftInvoice, finalizeInvoice, insertGrant, remainderOf, type Scope } from './helpers/finalize';
+import { createBusiness, createDraftInvoice, finalizeInvoice, insertGrant, remainderOf, type Scope } from './helpers/finalize';
 import {
   canTransitionInvoice,
   FINALIZATION_WRITABLE_COLUMNS,
@@ -40,7 +40,7 @@ let owner: Client;
 
 async function freshScope(currency = 'USD'): Promise<Scope> {
   const businessId = uuid();
-  await owner.query(`INSERT INTO p5scratch.businesses (tenant_id, id) VALUES ($1, $2)`, [TENANT, businessId]);
+  await createBusiness(owner, 'p5scratch', TENANT, businessId, currency);
   return { tenantId: TENANT, businessId, currency };
 }
 

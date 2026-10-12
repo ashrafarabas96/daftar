@@ -24,7 +24,7 @@ import type { Client } from 'pg';
 
 import { collectionAttemptKey } from '../../src/collection';
 import { appUrl, connect, ownerUrl, pidOf, refusedBy, uuid, waitUntilBlocked } from './helpers/cluster';
-import { createDraftInvoice, type Scope } from './helpers/finalize';
+import { createBusiness, createDraftInvoice, type Scope } from './helpers/finalize';
 
 const TENANT = '7f1a0000-0000-4000-8000-000000000004';
 const T1 = '2026-02-01T00:00:00.000Z';
@@ -34,7 +34,7 @@ let observer: Client;
 
 async function freshScope(currency = 'USD'): Promise<Scope> {
   const businessId = uuid();
-  await owner.query(`INSERT INTO p5scratch.businesses (tenant_id, id) VALUES ($1, $2)`, [TENANT, businessId]);
+  await createBusiness(owner, 'p5scratch', TENANT, businessId, currency);
   return { tenantId: TENANT, businessId, currency };
 }
 
