@@ -389,6 +389,84 @@ case("P3 and the status of a lot is NOT a fact of the goods: a quarantine is sti
      +f"SELECT status FROM stock_lots WHERE business_id='{A}' AND id='{LA}';",
      "active", kind="value")
 
+# ── PB-15's P3: the lot CODE case, with the masking constraint named ──────
+# The second challenge round asked for this case and for its shape. Rewriting
+# `lot_code_input` alone is refused by `stock_lots_code_canonical_ck`, the
+# CHECK that keeps the stored code and its canonical form in step — a
+# constraint that fires first hiding the guard under test, which this phase
+# has now paid for three times. So the case that proves the code is frozen
+# moves BOTH columns together, and the masking is measured in its own case
+# rather than left as a trap for the next reader.
+case("P3 a lot that movements name cannot have its CODE rewritten either (both columns moved together)",
+     f"UPDATE stock_lots SET lot_code_input='L-A-FIXED', lot_code_norm=catalog_identifier_norm('sku','L-A-FIXED') "
+     f"WHERE business_id='{A}' AND id='{LA}';",
+     "inventory.lot_facts_frozen")
+case("P3 and moving the stored code ALONE is refused by the canonical-form CHECK, not by the guard (the mask, named)",
+     f"UPDATE stock_lots SET lot_code_input='L-A-FIXED' WHERE business_id='{A}' AND id='{LA}';",
+     "stock_lots_code_canonical_ck")
+
+# ── PB-17. The path the law is NOT enforced on, measured and reversed ─────
+# The second challenge round measured it: a bare `UPDATE stock_levels SET
+# on_hand = on_hand + 5` is neither a movement nor a cache write, so it fires
+# neither conservation trigger and commits a key above its own breakdown.
+# Pack B does not close that path — a trigger on `stock_levels` would be this
+# phase guarding a FROZEN relation, and the frozen core makes the same bargain
+# for its own law (`inventory_stock_verify` is a routine, not a trigger). What
+# is owed is this measurement, the privilege list behind it, and the sentence
+# in C-LOT-03 that says which paths the law holds on. The case RESTORES the
+# key, so the state it measures is not left behind for the next case — which
+# the mutation runs could not do and is why they rebuild.
+case("PB-17 a direct write to the stock key fires neither conservation trigger, and the exposure is a GRANT (scope, measured)",
+     f"UPDATE stock_levels SET on_hand = on_hand + 5 WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}';\n"
+     f"SELECT 'diverged_by=' || ((SELECT on_hand FROM stock_levels WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}')"
+     f"    - (SELECT coalesce(sum(on_hand),0) FROM stock_lot_levels WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}'))::text;\n"
+     f"UPDATE stock_levels SET on_hand = on_hand - 5 WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}';\n"
+     f"SELECT 'restored=' || CASE WHEN (SELECT on_hand FROM stock_levels WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}')"
+     f"    = (SELECT coalesce(sum(on_hand),0) FROM stock_lot_levels WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}') THEN 'key=cache' ELSE 'DIVERGED' END;\n"
+     # The grant is read at BOTH granularities, because they differ and the
+     # difference is the scope sentence's substance: only the migration owner
+     # holds table-level UPDATE on the key, while the inventory principal
+     # holds it on `on_hand` by COLUMN. The challenger's list named both
+     # roles; this names which privilege each one actually has, so a future
+     # grant that widens either granularity reds this case.
+     f"SELECT 'table_updaters=' || coalesce(string_agg(grantee,',' ORDER BY grantee),'none') FROM information_schema.role_table_grants "
+     f" WHERE table_schema='public' AND table_name='stock_levels' AND privilege_type='UPDATE';\n"
+     f"SELECT 'on_hand_updaters=' || coalesce(string_agg(grantee,',' ORDER BY grantee),'none') FROM information_schema.column_privileges "
+     f" WHERE table_schema='public' AND table_name='stock_levels' AND privilege_type='UPDATE' AND column_name='on_hand';",
+     "diverged_by=5.0000\nrestored=key=cache\ntable_updaters=daftar_migrator\non_hand_updaters=daftar_inventory_internal,daftar_migrator", kind="value")
+case("PB-17 and the routine that closes it is named in the law, not left to a reader (SPEC ONLY at this SHA)",
+     "SELECT 'core_routine=' || (SELECT count(*)::text FROM pg_proc WHERE proname='inventory_stock_verify')"
+     " || ' overlay_routine=' || (SELECT count(*)::text FROM pg_proc WHERE proname='inventory_lot_verify');",
+     "core_routine=1 overlay_routine=0", kind="value")
+
+# ── D-32. The CACHE side of the same fail-open, found here ────────────────
+# Not reported by either round: re-reading this trigger against the fix the
+# challenge forced on its twin showed the same `RETURN NULL` on `NOT FOUND`.
+# The key cannot be absent — `stock_lot_levels_level_fk` guarantees it, and an
+# FK check ignores RLS — so `NOT FOUND` means the row exists and this
+# transaction cannot read it, which is the Phase 5 class exactly. The attack
+# is therefore the invisibility one, in the shape the challenger used on the
+# movement side: write the cache row lawfully, then drop the context before
+# COMMIT so the deferred read comes back empty.
+case("D-32 a COMMIT that cannot read the stock key behind its own cache row is REFUSED, not passed",
+     f"""BEGIN;
+       SET ROLE daftar_inventory_internal;
+       UPDATE stock_lot_levels SET on_hand = on_hand WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}';
+       RESET ROLE;
+       SET LOCAL ROLE daftar_app;
+       RESET app.business_id; RESET app.tenant_id;
+     COMMIT;""",
+     "inventory.lot_conservation_unverifiable")
+case("D-32 and the lawful cache write still commits, so the arm is not a blanket refusal",
+     f"""BEGIN;
+       SET ROLE daftar_inventory_internal;
+       UPDATE stock_lot_levels SET on_hand = on_hand WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}';
+       RESET ROLE;
+     COMMIT;
+     SELECT 'lawful=' || CASE WHEN (SELECT on_hand FROM stock_levels WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}')
+         = (SELECT coalesce(sum(on_hand),0) FROM stock_lot_levels WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}') THEN 'key=cache' ELSE 'DIVERGED' END;""",
+     "lawful=key=cache", kind="value")
+
 w=max(len(c[0]) for c in cases); v=max(len(c[1]) for c in cases)
 print(f"{'case':<{w}} {'verdict':<{v}} detail")
 print("-"*(w+v+60))

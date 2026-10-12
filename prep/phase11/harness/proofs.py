@@ -207,9 +207,18 @@ case("P1-N01 and the populated product still registers exactly its two axes",
 # non-base variant of a matrix product names anything but exactly the set
 # its product registers — neither a subset nor a superset nor an axis the
 # matrix does not carry.
-case("P1-N01 and no committed variant of this business names other than exactly its product's registered set",
+# Restated over LIVE variants in round 3, with the reason written down rather
+# than quietly narrowed: finding PA-02's fix makes ARCHIVED variants outside
+# the grid (they do not freeze the axis set, and `product_variants_matrix_uq`
+# has excluded them since round 0), so C-APP-01 is a law about live non-base
+# variants. An archived 2-axis row on a product that has since registered a
+# third axis is the INTENDED end state of the recovery path, and a case that
+# counted it would red the very path the pack now promises. The archived rows
+# are not unexamined: the case below asserts how many there are and that each
+# one holds no stock.
+case("P1-N01 and no committed LIVE variant of this business names other than exactly its product's registered set",
      f"""SELECT count(*)::text FROM product_variants v
-          WHERE v.business_id='{A}' AND NOT v.is_base
+          WHERE v.business_id='{A}' AND NOT v.is_base AND v.status <> 'archived'
             AND EXISTS (SELECT 1 FROM product_matrix_axes ma
                          WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id)
             AND ( (SELECT count(*) FROM product_matrix_axes ma
@@ -228,6 +237,173 @@ case("P1-N01 the freeze is on POPULATED matrices only: an empty grid can still b
      f"SELECT count(*)::text FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PE}';"
      f"DELETE FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PE}' AND axis_code='material';",
      "3", kind="value")
+
+
+# ── PA-01. THE THIRD DOOR of C-APP-01: a '{}' non-base variant ────────────
+# Third independent challenge, measured at 0db9450: on the world's TSHIRT,
+# which registers two axes and holds one committed cell, a non-base variant
+# with `attributes='{}'` was ACCEPTED (rc=0) and took its own stock key
+# (5.0000). One matrix cell set, one row outside it, both holding stock —
+# the same state P0-01 reached by blanking and P1-N01 reached by adding an
+# axis, reached this time by a single INSERT. The guard is now derived from
+# that STATE rather than from the reported statement; see the comment in
+# product_variants_40_matrix_canonical().
+case("PA-01 a '{}' non-base variant is refused on a product that HAS a matrix",
+     V('f0000020-0000-0000-0000-000000000020','{}'),
+     "catalog.variant_axis_set_incomplete")
+case("PA-01 and on a matrix product whose grid is still EMPTY, which is about the matrix and not about the cells",
+     f"INSERT INTO product_variants (business_id,id,product_id,attributes,is_base) VALUES ('{A}','f0000021-0000-0000-0000-000000000021','{PE}','{{}}'::jsonb,false);",
+     "catalog.variant_axis_set_incomplete")
+case("PA-01 and no committed non-base variant of a MATRIX product carries an empty combination",
+     f"""SELECT count(*)::text FROM product_variants v
+          WHERE v.business_id='{A}' AND NOT v.is_base AND v.attributes = '{{}}'::jsonb
+            AND EXISTS (SELECT 1 FROM product_matrix_axes ma
+                         WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id);""",
+     "0", kind="value")
+
+# ── PA-02. The recovery path the freeze guard offers, END TO END ───────────
+# The guard tells the merchant to archive the cells at zero stock and
+# regenerate the grid. Measured at 0db9450: the archive was permitted and the
+# next step was still refused, because the freeze read had no `status`
+# filter — a recovery path that existed only in a comment. The whole
+# sequence now runs as one case, on its own product, and every statement in
+# it is conditional so the case measures the same thing on a second run
+# (the variant INSERT in particular: a BEFORE trigger fires before ON
+# CONFLICT can apply, so `WHERE NOT EXISTS` is what makes it idempotent).
+PR='dddddddd-0000-0000-0000-00000000000f'
+case("PA-02 the documented recovery runs: archive the cells at zero stock, register another axis, regenerate the grid",
+     # 1. two cells on the product whose grid is to be corrected. TWO, and
+     #    not one, because the residual case below posts stock onto an
+     #    archived cell: measured on a second run, a single cell made the
+     #    premise case ("the archived cell holds no stock") depend on whether
+     #    the residual case had run yet, which is the order dependence this
+     #    suite has now been bitten by twice. One archived cell is the
+     #    subject of the premise, the other of the residual.
+     f"INSERT INTO product_variants (business_id,id,product_id,attributes,is_base) "
+     f"SELECT '{A}','f0000022-0000-0000-0000-000000000022','{PR}','{{\"size\":\"s\",\"color\":\"red\"}}'::jsonb,false "
+     f"WHERE NOT EXISTS (SELECT 1 FROM product_variants WHERE business_id='{A}' AND id='f0000022-0000-0000-0000-000000000022');\n"
+     f"INSERT INTO product_variants (business_id,id,product_id,attributes,is_base) "
+     f"SELECT '{A}','f0000024-0000-0000-0000-000000000024','{PR}','{{\"size\":\"m\",\"color\":\"blue\"}}'::jsonb,false "
+     f"WHERE NOT EXISTS (SELECT 1 FROM product_variants WHERE business_id='{A}' AND id='f0000024-0000-0000-0000-000000000024');\n"
+     # 2. archive them both (the pack permits this at zero stock). A BEFORE
+     #    trigger fires before ON CONFLICT can apply, so every write in this
+     #    case is conditional rather than conflict-tolerant.
+     f"UPDATE product_variants SET status='archived' WHERE business_id='{A}' "
+     f" AND id IN ('f0000022-0000-0000-0000-000000000022','f0000024-0000-0000-0000-000000000024') AND status <> 'archived';\n"
+     # 3. the step that was refused before this round
+     f"INSERT INTO product_attribute_values (business_id,axis_code,value_code,sort_order) VALUES ('{A}','material','cotton',1) ON CONFLICT DO NOTHING;\n"
+     # Conditional for the same reason as the variant writes, and this one
+     # cost a run to learn: on a second run the regenerated 3-axis cell is
+     # LIVE, so `ON CONFLICT DO NOTHING` is not reached — the freeze guard is
+     # a BEFORE trigger and fires first. An idempotent statement is one that
+     # does not fire a trigger it does not need, not one that tolerates a
+     # conflict.
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) "
+     f"SELECT '{A}','{PR}','material',3 WHERE NOT EXISTS (SELECT 1 FROM product_matrix_axes "
+     f" WHERE business_id='{A}' AND product_id='{PR}' AND axis_code='material');\n"
+     # 4. and the regenerated grid accepts a 3-axis cell
+     f"INSERT INTO product_variants (business_id,id,product_id,attributes,is_base) "
+     f"SELECT '{A}','f0000023-0000-0000-0000-000000000023','{PR}','{{\"size\":\"s\",\"color\":\"red\",\"material\":\"cotton\"}}'::jsonb,false "
+     f"WHERE NOT EXISTS (SELECT 1 FROM product_variants WHERE business_id='{A}' AND id='f0000023-0000-0000-0000-000000000023');\n"
+     f"SELECT 'axes=' || count(*)::text FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PR}';\n"
+     f"SELECT 'live_cells=' || count(*)::text FROM product_variants WHERE business_id='{A}' AND product_id='{PR}' AND NOT is_base AND status <> 'archived';\n"
+     f"SELECT 'archived_cells=' || count(*)::text FROM product_variants WHERE business_id='{A}' AND product_id='{PR}' AND NOT is_base AND status = 'archived';",
+     "axes=3\nlive_cells=1\narchived_cells=2", kind="value")
+# The fix is a filter, not a removal: a LIVE cell still freezes the set,
+# which is P1-N01's case on TSHIRT, and the first archived cell on this
+# product holds no stock, which is the premise the filter rests on
+# (product_variants_30_archive_requires_zero_stock, 0061).
+case("PA-02 and the archived cell holds no stock, which is what makes it outside the grid",
+     f"""SELECT 'keyed=' || (SELECT count(*)::text FROM stock_levels l
+                              WHERE l.business_id='{A}' AND l.variant_id='f0000022-0000-0000-0000-000000000022'
+                                AND l.on_hand <> 0)
+         || ' moved=' || (SELECT count(*)::text FROM stock_movements m
+                           WHERE m.business_id='{A}' AND m.variant_id='f0000022-0000-0000-0000-000000000022');""",
+     "keyed=0 moved=0", kind="value")
+# The RESIDUAL of that fix, measured rather than reasoned about: nothing in
+# the frozen core refuses a stock key on an archived variant, so the sequence
+# "archive, add an axis, then post stock onto the archived cell" reaches the
+# unaddressable state one authority further on. Pack A cannot close it here
+# (reading stock_levels from the matrix guard is a cross-table read of an
+# ABSENT row, which cannot be locked). It is MPR-09, and it is measured so
+# the limit is a number in a log rather than a sentence in a comment.
+case("PA-02 residual: a stock key on the OTHER archived cell is accepted today, and no trigger on the key reads variant status (MPR-09)",
+     f"SET ROLE daftar_inventory_internal;\n"
+     f"INSERT INTO stock_levels (tenant_id,business_id,warehouse_id,variant_id,on_hand,valuation_base_minor,last_stock_seq) "
+     f"SELECT '{TA}','{A}','{A}','f0000024-0000-0000-0000-000000000024',5,0,0 "
+     f"WHERE NOT EXISTS (SELECT 1 FROM stock_levels WHERE business_id='{A}' AND warehouse_id='{A}' AND variant_id='f0000024-0000-0000-0000-000000000024');\n"
+     f"RESET ROLE;\n"
+     f"SELECT 'archived_variant_on_hand=' || on_hand::text FROM stock_levels WHERE business_id='{A}' AND variant_id='f0000024-0000-0000-0000-000000000024';\n"
+     f"SELECT 'triggers_reading_variant_status=' || count(*)::text FROM pg_trigger g JOIN pg_proc pr ON pr.oid=g.tgfoid "
+     f"WHERE NOT g.tgisinternal AND g.tgrelid IN ('stock_levels'::regclass,'stock_movements'::regclass) "
+     f"AND position('product_variants' in pg_get_functiondef(pr.oid)) > 0 "
+     f"AND position('status' in pg_get_functiondef(pr.oid)) > 0;",
+     "archived_variant_on_hand=5.0000\ntriggers_reading_variant_status=0",
+     kind="value", pre=f"SET app.tenant_id='{TA}'; SET app.business_id='{A}'; INSERT INTO branches (business_id,id,name) VALUES ('{A}','{A}','BR') ON CONFLICT DO NOTHING; INSERT INTO warehouses (business_id,id,branch_id,name) VALUES ('{A}','{A}','{A}','WH') ON CONFLICT DO NOTHING;")
+# And the freeze still holds while a cell is LIVE on the SAME product, which
+# is what makes the filter a filter: the regenerated 3-axis cell above is
+# live, so a fourth axis is refused.
+case("PA-02 and once the grid is live again, the axis set is frozen again (the filter is not an opening)",
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','fabric',14) ON CONFLICT DO NOTHING;"
+     f"UPDATE product_attribute_axes SET status='active' WHERE business_id='{A}' AND axis_code='fabric';"
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PR}','fabric',4);",
+     "catalog.matrix_axis_set_frozen")
+
+# ── PA-03 / PA-04. The end-state assertion's own two defects ──────────────
+# PA-03: the policy-set pin joined pg_class on `relname` with no namespace
+# filter, so a same-named relation in ANOTHER schema contributed its policies
+# to the array the pin compares — measured by the challenger as
+# `{business_isolation,tenant_membership,zzz_wide}`. It failed closed, so it
+# was diagnosability rather than a hole, and it is the same unqualified
+# shape fixed for `pg_proc.proname` one round earlier. Every lookup in the
+# block is now qualified; this case is the measurement, run the same way.
+case("PA-03 a same-named relation in another schema no longer contributes to the policy-set pin",
+     "CREATE SCHEMA IF NOT EXISTS chal_other;\n"
+     "CREATE TABLE IF NOT EXISTS chal_other.product_matrix_axes (business_id UUID, product_id UUID);\n"
+     "ALTER TABLE chal_other.product_matrix_axes ENABLE ROW LEVEL SECURITY;\n"
+     "DROP POLICY IF EXISTS zzz_wide ON chal_other.product_matrix_axes;\n"
+     "CREATE POLICY zzz_wide ON chal_other.product_matrix_axes USING (true);\n"
+     "SELECT 'qualified=' || coalesce(array_to_string((SELECT array_agg(p.polname::TEXT ORDER BY p.polname) "
+     "  FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid "
+     " WHERE c.relnamespace = 'public'::regnamespace AND c.relname='product_matrix_axes'), ','),'none');\n"
+     "SELECT 'unqualified_was=' || coalesce(array_to_string((SELECT array_agg(p.polname::TEXT ORDER BY p.polname) "
+     "  FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid WHERE c.relname='product_matrix_axes'), ','),'none');\n"
+     "DROP SCHEMA chal_other CASCADE;",
+     "qualified=business_isolation,tenant_membership\nunqualified_was=business_isolation,tenant_membership,zzz_wide",
+     kind="value")
+# PA-04: the tautology list the author asked the challenge to attack, and it
+# did: `2 > 1` and `business_id IS NOT NULL` passed four literal spellings.
+# The test is now a FUNCTION with three sound forms (the list; evaluation of
+# a qualifier that names no column; `col IS NOT NULL` over a NOT NULL
+# column), so the proof can call the one implementation the end-state
+# assertion calls, with the spellings the challenge measured.
+TAUT = "SELECT %s || '=' || catalog_policy_qual_is_tautology('product_matrix_axes','%s')::text;"
+case("PA-04 the two spellings the challenge measured through the list are now caught",
+     (TAUT % ("'gt'", "(2 > 1)")) + (TAUT % ("'notnull'", "(business_id IS NOT NULL)")),
+     "gt=true\nnotnull=true", kind="value")
+case("PA-04 and so are the four the list already carried, plus an absent USING clause",
+     (TAUT % ("'true'", "true")) + (TAUT % ("'oneone'", "(1 = 1)")) +
+     (TAUT % ("'cast'", "true::boolean")) + (TAUT % ("'parens'", "(true)")) +
+     "SELECT 'nousing=' || catalog_policy_qual_is_tautology('product_matrix_axes', NULL)::text;",
+     "true=true\noneone=true\ncast=true\nparens=true\nnousing=true", kind="value")
+# A test that answered `true` to everything would pass the two cases above
+# and refuse every correct install, so the other direction is proved too:
+# this pack's OWN qualifier, a false arithmetic constant, and `IS NOT NULL`
+# over a NULLABLE column of the same relation.
+case("PA-04 and it does not call the pack's own tenant qualifier, a false constant, or a nullable column's IS NOT NULL a tautology",
+     "SELECT 'own=' || catalog_policy_qual_is_tautology('product_matrix_axes', "
+     "  (SELECT pg_get_expr(p.polqual,p.polrelid) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid "
+     "    WHERE c.relnamespace='public'::regnamespace AND c.relname='product_matrix_axes' AND p.polname='tenant_membership'))::text;\n"
+     + (TAUT % ("'falseconst'", "(2 < 1)"))
+     # Form 3 in both directions on one relation, because every column of
+     # this pack's own five relations is NOT NULL and a one-sided
+     # demonstration would prove the form only where it answers `true`.
+     + "SELECT 'nullable=' || catalog_policy_qual_is_tautology('stock_levels','(avg_unit_cost_base_minor IS NOT NULL)')::text;\n"
+     + "SELECT 'notnullable=' || catalog_policy_qual_is_tautology('stock_levels','(on_hand IS NOT NULL)')::text;",
+     "own=false\nfalseconst=false\nnullable=false\nnotnullable=true", kind="value")
+case("PA-04 and PUBLIC cannot execute the test, which reads the catalogue",
+     "SELECT has_function_privilege('public','catalog_policy_qual_is_tautology(text,text)','EXECUTE')::text;",
+     "f", kind="value")
 
 # ── P2-N02. An axis a MATRIX registers, archived, freezes that product ────
 # The guard's own comment gives this outcome as its reason; it read "in use"
@@ -315,16 +491,17 @@ case("as daftar_app in business B, inserting an axis FOR business A is refused",
 case("as daftar_app in business B, business A's matrix rows are invisible",
      f"SELECT count(*)::text FROM product_matrix_axes WHERE business_id='{A}';",
      "0", role="daftar_app", pre=rls_pre, kind="value")
-# Five, not the world's two: the sections above register `fit` (archived),
-# `material` and `freeable` in business A — and `cut` is gone, because the
-# case that needed it is now the structural one. The number is read from the
-# sections that created it rather than from the world file, because a case
-# whose expected count silently tracks another section's writes is a case
-# that will pass for the wrong reason one day; this one has had to be
-# re-derived twice now, which is the cost of that honesty and worth paying.
+# Six, not the world's two: the sections above register `fit` (archived),
+# `material`, `freeable` and now `fabric` in business A — and `cut` is gone,
+# because the case that needed it is now the structural one. The number is
+# read from the sections that created it rather than from the world file,
+# because a case whose expected count silently tracks another section's
+# writes is a case that will pass for the wrong reason one day; this one has
+# had to be re-derived three times now, which is the cost of that honesty and
+# worth paying.
 case("with business A's own context the same rows ARE visible (the read is not broken, it is scoped)",
      f"SELECT count(*)::text FROM product_attribute_axes WHERE business_id='{A}';",
-     "5", role="daftar_app", pre=f"SET app.tenant_id='{TA}'; SET app.business_id='{A}';", kind="value")
+     "6", role="daftar_app", pre=f"SET app.tenant_id='{TA}'; SET app.business_id='{A}';", kind="value")
 case("business A's context with the WRONG tenant sees nothing (tenant_membership, not only business_isolation)",
      f"SELECT count(*)::text FROM product_attribute_axes WHERE business_id='{A}';",
      "0", role="daftar_app", pre=f"SET app.tenant_id='{TB}'; SET app.business_id='{A}';", kind="value")

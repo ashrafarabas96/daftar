@@ -241,7 +241,60 @@ BEGIN
   PERFORM pg_advisory_xact_lock_shared(
             hashtextextended(NEW.business_id::text || '/' || NEW.product_id::text, 0));
 
-  IF NEW.is_base OR NEW.attributes = '{}'::jsonb THEN
+  IF NEW.is_base THEN
+    RETURN NEW;
+  END IF;
+
+  -- ── The THIRD door of C-APP-01, and the last state that reached it ─────
+  -- Finding PA-01 of the third independent challenge. This early return used
+  -- to read `NEW.is_base OR NEW.attributes = '{}'`, and the `'{}'` half asked
+  -- nothing about the PRODUCT. Measured at 0db9450 on the world's TSHIRT,
+  -- which registers two axes and holds one committed cell:
+  --   INSERT INTO product_variants (… is_base=false, attributes='{}') -> rc=0
+  --   non-base '{}' variants on this MATRIX product: 1   its own key: 5.0000
+  -- One matrix cell set, one row outside it, both holding stock, under Option
+  -- B where the variant IS the costing key. That is the same split identity
+  -- P0-01 produced by blanking and P1-N01 produced by adding an axis — the
+  -- third route to one state, reached with a single INSERT.
+  --
+  -- Three rounds have now found this clause through three different doors, so
+  -- the lesson is about where the guard is derived FROM. Rounds 1 and 2 each
+  -- guarded the statement that was reported. This round guards the STATE the
+  -- freeze guard's own comment describes — "a non-base variant outside the
+  -- product's matrix cell set, holding stock" — and then asks which
+  -- statements can reach it:
+  --   UPDATE a cell's attributes to '{}'      -> variant_matrix_immutable (P0-01)
+  --   UPDATE them to a different combination  -> variant_matrix_immutable
+  --   INSERT a partial / foreign combination  -> variant_axis_set_incomplete /
+  --                                              variant_axis_unregistered
+  --   INSERT a '{}' non-base variant          -> THIS branch (PA-01)
+  --   INSERT an axis under existing variants  -> matrix_axis_set_frozen (P1-N01)
+  --   DELETE/UPDATE an axis or a value in use -> the four in-use guards
+  -- The set is closed over the two relations the state is written from, and
+  -- every member is a red proof. The committed-state case
+  -- ("no committed variant names other than exactly its product's set")
+  -- measures the state itself rather than any one door, which is the case
+  -- that would have caught all three.
+  --
+  -- `'{}'` is still right for a product that registers NO axes — that is
+  -- every non-apparel product in the catalogue, and the reason the
+  -- structural CHECK `(is_base OR attributes <> '{}')` is still unavailable
+  -- (it cannot read another relation). So the predicate is "does THIS product
+  -- have a matrix", read under the same lock discipline as the completeness
+  -- count below, and the refusal is the completeness law's own name: the
+  -- empty set names zero of the product's registered axes, which is exactly
+  -- what `variant_axis_set_incomplete` says. One law, one name — the
+  -- distinction the challenge credited Pack B for making.
+  IF NEW.attributes = '{}'::jsonb THEN
+    PERFORM 1 FROM product_matrix_axes ma
+      WHERE ma.business_id = NEW.business_id AND ma.product_id = NEW.product_id
+      FOR SHARE;
+    IF FOUND THEN
+      SELECT count(*) INTO v_registered FROM product_matrix_axes ma
+       WHERE ma.business_id = NEW.business_id AND ma.product_id = NEW.product_id;
+      RAISE EXCEPTION 'catalog.variant_axis_set_incomplete: attributes must name exactly the product''s % registered axes', v_registered
+        USING ERRCODE = 'P0001';
+    END IF;
     RETURN NEW;
   END IF;
 
@@ -595,12 +648,57 @@ CREATE TRIGGER product_matrix_axes_20_axis_active
 -- product_variants_30_archive_requires_zero_stock already permits) and
 -- regenerate the grid. C-APP-01 now states the clause in both directions.
 --
--- ANY non-base variant freezes the set, including one whose attributes are
--- '{}': that is a plain product's single variant, it holds the product's
--- stock, and registering a first axis under it would leave it exactly as
--- unaddressable as the 2-axis row above. A product with no non-base variants
--- can still be given, re-ordered and taken off axes freely, which is the
--- whole lifecycle a merchant building a grid needs.
+-- ANY non-base variant that is not archived freezes the set, including one
+-- whose attributes are '{}': that is a plain product's single variant, it
+-- holds the product's stock, and registering a first axis under it would
+-- leave it exactly as unaddressable as the 2-axis row above. (The variant
+-- side refuses that row outright once a matrix exists — finding PA-01 — so
+-- the two guards now close the same state from both directions.) A product
+-- with no live non-base variants can still be given, re-ordered and taken
+-- off axes freely, which is the whole lifecycle a merchant building a grid
+-- needs.
+--
+-- ── Why the read excludes ARCHIVED variants (finding PA-02) ────────────
+-- The comment above offers the merchant a recovery path. The third
+-- independent challenge measured it and it did not work: the read had no
+-- `status` filter, so with both cells of TSHIRT at zero stock and archived
+-- (which the pack permits: 2 archived, 0 live), the documented next step
+--   INSERT INTO product_matrix_axes (… 'material', 3)  -> rc=3 matrix_axis_set_frozen
+-- A wrongly registered grid could therefore never be corrected: archiving
+-- was permitted and useless, the variant cannot be deleted once movements
+-- name it, and the axis could not be added. A recovery path stated in a
+-- comment is a claim, and a claim here gets measured.
+--
+-- So the filter is added, and the premise it rests on is stated rather than
+-- assumed: `product_variants_30_archive_requires_zero_stock` (0061) refuses
+-- the transition to `archived` while the variant's key holds stock OR its
+-- movements net to anything but zero per warehouse, so an archived variant
+-- is not a live costing identity. Its history stays addressable by id, which
+-- is where a ledger addresses it from; the grid addresses only live cells.
+-- C-APP-01 is therefore stated over LIVE non-base variants, in the law
+-- document and in the committed-state case, rather than left ambiguous.
+-- The pack's own uniqueness rule already reads the grid that way and has
+-- since round 0: `product_variants_matrix_uq` is partial on
+-- `NOT is_base AND status <> 'archived' AND attributes <> '{}'`, so an
+-- archived cell does not occupy its combination and the regenerated grid can
+-- re-create it. The guard was the only place in the pack that counted an
+-- archived variant as part of the matrix, which is why the recovery path it
+-- recommended was the one thing that could not be done.
+--
+-- The residual, MEASURED and routed rather than claimed away: nothing in the
+-- frozen core refuses a movement onto an ARCHIVED variant. Measured at this
+-- SHA — a `stock_levels` row with `on_hand 5.0000` on an archived variant is
+-- accepted, and no trigger on `stock_levels` or `stock_movements` reads
+-- `product_variants.status`. So the sequence "archive the cells, add an axis,
+-- then post stock onto an archived cell" reaches the unaddressable state
+-- again, one authority further on. Pack A cannot close it here: reading
+-- `stock_levels` from this guard would be a cross-table read of an ABSENT
+-- row, which cannot be locked (the measurement in
+-- product_variants_40_matrix_canonical()'s comment), and taking a row lock on
+-- another phase's ledger is what the `FOR SHARE` measurement in Pack B
+-- warns against. It is MPR-09 to the inventory authority — a movement is not
+-- posted onto an archived variant — and it is a declared limit of this fix,
+-- not a hole the pack is unaware of.
 --
 -- SECURITY INVOKER, for the reason measured on the first guard: a DEFINER
 -- variant owned by daftar_catalog_internal reads nothing through
@@ -619,9 +717,10 @@ BEGIN
     WHERE v.business_id = NEW.business_id
       AND v.product_id  = NEW.product_id
       AND NOT v.is_base
+      AND v.status <> 'archived'
     FOR SHARE;
   IF FOUND THEN
-    RAISE EXCEPTION 'catalog.matrix_axis_set_frozen: this product already has variants, so its axis set is frozen; archive the variants at zero stock and regenerate the grid'
+    RAISE EXCEPTION 'catalog.matrix_axis_set_frozen: this product already has live variants, so its axis set is frozen; archive them at zero stock and regenerate the grid'
       USING ERRCODE = 'P0001';
   END IF;
   RETURN NEW;
@@ -712,15 +811,98 @@ INSERT INTO features (key, description)
   VALUES ('VARIANT_MATRIX','Apparel variant matrices')
   ON CONFLICT (key) DO NOTHING;
 
+-- ── The decidable part of "a qualifier true of every row" (finding PA-04) ──
+-- The third independent challenge attacked the NAMED tautology list this
+-- pack's end-state assertion carried, as the author asked it to, and
+-- measured two spellings through it: `2 > 1` and `business_id IS NOT NULL`,
+-- both stored by the catalogue as qualifiers, both true of every row, both
+-- passing a list of four literal spellings. The challenge is right that no
+-- form of this test can be both sound and complete — "true of every row" is
+-- not decidable in SQL — and right that the list is the weakest of the sound
+-- forms. It named two stronger ones, and both are taken here:
+--
+--   Form 1, the list, kept for the spellings a reviewer will recognise.
+--   Form 2, EVALUATION: a qualifier that parses with no relation in scope
+--           names no column of the relation, so its value does not vary by
+--           row — the engine's own parser decides that, not a pattern. The
+--           expression is evaluated; if it is TRUE, it is a tautology for
+--           every row of that relation. `2 > 1` and any arithmetic constant
+--           are in this class.
+--   Form 3, NOT NULL: `(col IS NOT NULL)` over a column the catalogue marks
+--           `attnotnull` is provably true of every row.
+--
+-- Sound and still incomplete, which is the same bargain the list made with
+-- more reach, and the residual (a qualifier true of every row that none of
+-- the three forms sees) stays routed to PR-SEC-P11-01 rather than claimed
+-- closed. Two limits of form 2 are stated because they are real: it is
+-- evaluated under the INSTALLING session's settings, so a qualifier like
+-- `app_bypass()` alone reads false at install and could read true later; and
+-- a volatile function inside it is called once here rather than per row. Its
+-- input is never user text — it is `pg_get_expr` of a policy already stored
+-- on one of this pack's five relations, and the set pin above means the
+-- qualifier can only be one of two policies the pack installed itself.
+CREATE FUNCTION catalog_policy_qual_is_tautology(p_relname TEXT, p_qual TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $fn$
+DECLARE
+  v_col     TEXT;
+  v_notnull BOOLEAN;
+  v_val     BOOLEAN;
+BEGIN
+  IF p_qual IS NULL OR btrim(p_qual) = '' THEN
+    RETURN true;                      -- no USING clause at all
+  END IF;
+  IF p_qual IN ('true', '(1 = 1)', 'true::boolean', '(true)') THEN
+    RETURN true;                      -- form 1
+  END IF;
+  BEGIN                               -- form 2
+    EXECUTE format('SELECT (%s) IS TRUE', p_qual) INTO v_val;
+    IF v_val THEN
+      RETURN true;
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    NULL;                             -- it names a column, or will not evaluate
+  END;
+  v_col := substring(p_qual from '^\(?([a-z_][a-z0-9_]*) IS NOT NULL\)?$');
+  IF v_col IS NOT NULL THEN           -- form 3
+    SELECT a.attnotnull INTO v_notnull
+      FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+     WHERE c.relnamespace = 'public'::regnamespace
+       AND c.relname = p_relname
+       AND a.attname = v_col AND a.attnum > 0 AND NOT a.attisdropped;
+    IF coalesce(v_notnull, false) THEN
+      RETURN true;
+    END IF;
+  END IF;
+  RETURN false;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION catalog_policy_qual_is_tautology(TEXT, TEXT) FROM PUBLIC;
+
 -- ── 7. End-state assertion: the migration refuses itself rather than warn ───
 DO $$
 DECLARE
   r RECORD;
+  r2 RECORD;
   v_rels TEXT[] := ARRAY['product_attribute_axes','product_attribute_axis_translations',
                          'product_attribute_values','product_attribute_value_translations',
                          'product_matrix_axes'];
   v_name TEXT;
 BEGIN
+  -- ── Every catalogue lookup below is NAMESPACE-QUALIFIED (finding PA-03) ─
+  -- The third independent challenge measured the policy-set pin against a
+  -- `chal_other.product_matrix_axes` carrying one wide policy: the pin's own
+  -- query returned `{business_isolation,tenant_membership,zzz_wide}`, three
+  -- policies of two different relations in one array. It fails CLOSED — the
+  -- pack refuses to install, naming a policy set that is not its relation's
+  -- — so it was a diagnosability defect rather than a hole; and it is the
+  -- same unqualified-catalogue shape that was fixed for `pg_proc.proname` one
+  -- round earlier, found again in the place the fix did not look. So the
+  -- class is closed rather than the instance: every lookup in this block
+  -- carries `c.relnamespace = 'public'::regnamespace` (or `table_schema`),
+  -- not only the one that was reported. `relname` alone is not a name.
   FOREACH v_name IN ARRAY v_rels LOOP
     SELECT c.relrowsecurity, c.relforcerowsecurity INTO r
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -732,15 +914,15 @@ BEGIN
       RAISE EXCEPTION 'catalog.migration_end_state_invalid: % lacks ENABLE+FORCE row level security', v_name USING ERRCODE='P0001';
     END IF;
     IF (SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
-         WHERE c.relname = v_name AND p.polname = 'tenant_membership' AND p.polwithcheck IS NOT NULL) <> 1 THEN
+         WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_name AND p.polname = 'tenant_membership' AND p.polwithcheck IS NOT NULL) <> 1 THEN
       RAISE EXCEPTION 'catalog.migration_end_state_invalid: % lacks tenant_membership WITH CHECK', v_name USING ERRCODE='P0001';
     END IF;
     IF (SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
-         WHERE c.relname = v_name AND p.polname = 'business_isolation' AND NOT p.polpermissive) <> 1 THEN
+         WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_name AND p.polname = 'business_isolation' AND NOT p.polpermissive) <> 1 THEN
       RAISE EXCEPTION 'catalog.migration_end_state_invalid: % lacks a restrictive business_isolation', v_name USING ERRCODE='P0001';
     END IF;
     IF EXISTS (SELECT 1 FROM information_schema.role_table_grants
-                          WHERE table_name = v_name AND grantee = 'PUBLIC') THEN
+                          WHERE table_schema = 'public' AND table_name = v_name AND grantee = 'PUBLIC') THEN
       RAISE EXCEPTION 'catalog.migration_end_state_invalid: PUBLIC holds a privilege on %', v_name USING ERRCODE='P0001';
     END IF;
     -- L-P11-02, asserted on the column's TYPE against an allow-list rather
@@ -751,12 +933,12 @@ BEGIN
     -- is: NO column of a monetary type at all, and every numeric column in
     -- this pack is one of the two ordering columns, by name AND by type.
     IF EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
-                          WHERE c.relname = v_name AND a.attnum > 0 AND NOT a.attisdropped
+                          WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_name AND a.attnum > 0 AND NOT a.attisdropped
                             AND format_type(a.atttypid, NULL) IN ('numeric','money','double precision','real','bigint')) THEN
       RAISE EXCEPTION 'catalog.migration_end_state_invalid: % carries a column of a monetary type', v_name USING ERRCODE='P0001';
     END IF;
     IF EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
-                          WHERE c.relname = v_name AND a.attnum > 0 AND NOT a.attisdropped
+                          WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_name AND a.attnum > 0 AND NOT a.attisdropped
                             AND format_type(a.atttypid, NULL) IN ('integer','smallint')
                             AND (a.attname, format_type(a.atttypid, NULL)) NOT IN
                                 (('sort_order','integer'), ('axis_position','smallint'))) THEN
@@ -796,18 +978,30 @@ BEGIN
     -- procedure. The residual (a qualifier true of every row that is not on
     -- the list) is answered by PR-SEC-P11-01, not pretended away here.
     IF (SELECT array_agg(p.polname::TEXT ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
-         WHERE c.relname = v_name)
+         WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_name)
        IS DISTINCT FROM ARRAY['business_isolation','tenant_membership']::TEXT[] THEN
       RAISE EXCEPTION 'catalog.migration_end_state_invalid: % carries a policy set this pack did not install (%)', v_name,
-        coalesce((SELECT string_agg(p.polname, ',' ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid WHERE c.relname = v_name), 'none')
+        coalesce((SELECT string_agg(p.polname, ',' ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid WHERE c.relnamespace = 'public'::regnamespace AND c.relname = v_name), 'none')
         USING ERRCODE='P0001';
     END IF;
-    IF EXISTS (SELECT 1 FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
-                WHERE c.relname = v_name AND p.polpermissive
-                  AND coalesce(pg_get_expr(p.polqual, p.polrelid), 'true')
-                      IN ('true', '(1 = 1)', 'true::boolean', '(true)')) THEN
-      RAISE EXCEPTION 'catalog.migration_end_state_invalid: %''s permissive policy is qualified by a tautology, which switches tenant isolation off for the commands it names', v_name USING ERRCODE='P0001';
-    END IF;
+    FOR r2 IN SELECT p.polname::TEXT AS polname,
+                     coalesce(pg_get_expr(p.polqual, p.polrelid), 'true') AS qual,
+                     coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '') AS chk
+                FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+               WHERE c.relnamespace = 'public'::regnamespace
+                 AND c.relname = v_name AND p.polpermissive LOOP
+      IF catalog_policy_qual_is_tautology(v_name, r2.qual) THEN
+        RAISE EXCEPTION 'catalog.migration_end_state_invalid: %''s permissive policy % is qualified by a tautology (%), which switches tenant isolation off for the commands it names', v_name, r2.polname, r2.qual USING ERRCODE='P0001';
+      END IF;
+      -- The WITH CHECK half is the write direction of the same hole, and it
+      -- was not asserted at all before this round: a permissive policy whose
+      -- USING is sound and whose WITH CHECK is a tautology accepts another
+      -- tenant's INSERT. Measured in Pack B's round 1 in the read direction;
+      -- asserted here in both.
+      IF r2.chk <> '' AND catalog_policy_qual_is_tautology(v_name, r2.chk) THEN
+        RAISE EXCEPTION 'catalog.migration_end_state_invalid: %''s permissive policy % has a tautological WITH CHECK (%), which accepts a write from any tenant', v_name, r2.polname, r2.chk USING ERRCODE='P0001';
+      END IF;
+    END LOOP;
   END LOOP;
 
   IF (SELECT count(*) FROM pg_trigger WHERE tgname = 'product_variants_40_matrix_canonical' AND NOT tgisinternal) <> 1 THEN
@@ -832,7 +1026,7 @@ BEGIN
     ) AS t(tg, rel, needs_insert, needs_delete, needs_update)
   LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid
-                    WHERE g.tgname = r.tg AND c.relname = r.rel AND NOT g.tgisinternal
+                    WHERE g.tgname = r.tg AND c.relnamespace = 'public'::regnamespace AND c.relname = r.rel AND NOT g.tgisinternal
                       AND (g.tgtype & 4)  = CASE WHEN r.needs_insert THEN 4  ELSE 0 END
                       AND (g.tgtype & 8)  = CASE WHEN r.needs_delete THEN 8  ELSE 0 END
                       AND (g.tgtype & 16) = CASE WHEN r.needs_update THEN 16 ELSE 0 END) THEN
@@ -850,7 +1044,7 @@ BEGIN
     -- pg_trigger.tgfoid.
     IF EXISTS (SELECT 1 FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid
                 JOIN pg_proc pr ON pr.oid = g.tgfoid
-                WHERE g.tgname = r.tg AND c.relname = r.rel AND NOT g.tgisinternal
+                WHERE g.tgname = r.tg AND c.relnamespace = 'public'::regnamespace AND c.relname = r.rel AND NOT g.tgisinternal
                   AND pr.prosecdef) THEN
       RAISE EXCEPTION 'catalog.migration_end_state_invalid: % is SECURITY DEFINER; these guards conclude from a read of product_variants and a definer cannot satisfy its restrictive policy without a session context', r.tg USING ERRCODE='P0001';
     END IF;
@@ -871,14 +1065,35 @@ BEGIN
   -- P11-MIGRATION-PATCH-REQUEST.md §12.2 (PR-SEC-P11-01) asks the Security
   -- Authority for the same pin there. Stated as a limit, not as cover.
   IF (SELECT array_agg(p.polname::TEXT ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
-       WHERE c.relname = 'product_variants')
+       WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'product_variants')
      IS DISTINCT FROM ARRAY['business_isolation','tenant_membership']::TEXT[] THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: product_variants carries a policy set this pack did not reason about (%); the three in-use guards conclude absence from a read of it and must be re-proved against the new set',
-      (SELECT string_agg(p.polname, ',' ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid WHERE c.relname = 'product_variants')
+      (SELECT string_agg(p.polname, ',' ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'product_variants')
       USING ERRCODE='P0001';
   END IF;
-  IF (SELECT count(*) FROM pg_class WHERE relname = 'product_variants_matrix_uq' AND relkind = 'i') <> 1 THEN
+  IF (SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = 'product_variants_matrix_uq' AND relkind = 'i') <> 1 THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: the matrix uniqueness index is absent' USING ERRCODE='P0001';
+  END IF;
+  -- The tautology test is now a function, so it is one implementation the
+  -- proof suite can call directly with the spellings the challenge measured
+  -- rather than a copy of the assertion's own SQL. Its reach is asserted
+  -- here, so a pack whose function silently answered `false` to everything
+  -- would refuse to install: the four spellings that must be caught, the
+  -- pack's own real qualifier that must NOT be, and no EXECUTE for PUBLIC.
+  IF NOT (catalog_policy_qual_is_tautology('product_matrix_axes','true')
+          AND catalog_policy_qual_is_tautology('product_matrix_axes','(1 = 1)')
+          AND catalog_policy_qual_is_tautology('product_matrix_axes','(2 > 1)')
+          AND catalog_policy_qual_is_tautology('product_matrix_axes','(business_id IS NOT NULL)')) THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: the tautology test does not catch the spellings it is documented to catch' USING ERRCODE='P0001';
+  END IF;
+  IF catalog_policy_qual_is_tautology('product_matrix_axes',
+       (SELECT pg_get_expr(p.polqual, p.polrelid) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+         WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'product_matrix_axes'
+           AND p.polname = 'tenant_membership')) THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: the tautology test calls this pack''s own tenant qualifier a tautology, so it would refuse every correct install' USING ERRCODE='P0001';
+  END IF;
+  IF has_function_privilege('public', 'catalog_policy_qual_is_tautology(text,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: PUBLIC holds EXECUTE on the tautology test' USING ERRCODE='P0001';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM features WHERE key = 'VARIANT_MATRIX') THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: the VARIANT_MATRIX feature key is unregistered' USING ERRCODE='P0001';

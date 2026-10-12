@@ -24,10 +24,19 @@ VALUES ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000
        -- constraint that fires first hiding the one being proved, which this
        -- phase has paid for twice.
        ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000e','TSHIRT-EMPTY','active',0,'ILS'),
+       -- A THIRD apparel product, for finding PA-02: the recovery path the
+       -- freeze guard's comment offers (archive the cells at zero stock, then
+       -- register another axis and regenerate the grid) is now proved END TO
+       -- END, which needs a product whose grid is populated, archived and
+       -- then extended. It cannot be TSHIRT, whose live cell every other case
+       -- depends on, and it cannot be TSHIRT-EMPTY, whose grid must stay
+       -- empty for the matrix-lifecycle cases.
+       ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000f','TSHIRT-RECOVER','active',0,'ILS'),
        ('bbbbbbbb-0000-0000-0000-00000000000b','eeeeeeee-0000-0000-0000-00000000000e','ABAYA','active',0,'JOD');
 INSERT INTO product_translations (business_id, product_id, locale, name) VALUES
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000d','ar','تي شيرت'),
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000e','ar','تي شيرت فارغ'),
+ ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000f','ar','تي شيرت للاستعادة'),
  ('bbbbbbbb-0000-0000-0000-00000000000b','eeeeeeee-0000-0000-0000-00000000000e','ar','عباية');
 -- Pack A world: two axes, three sizes, two colours, a 2-axis matrix.
 INSERT INTO product_attribute_axes (business_id, axis_code, sort_order) VALUES
@@ -45,6 +54,8 @@ INSERT INTO product_matrix_axes (business_id, product_id, axis_code, axis_positi
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000d','size',1),
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000d','color',2),
  ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000e','size',1),
- ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000e','color',2);
+ ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000e','color',2),
+ ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000f','size',1),
+ ('aaaaaaaa-0000-0000-0000-00000000000a','dddddddd-0000-0000-0000-00000000000f','color',2);
 COMMIT;
 SELECT 'WORLD BUILT' AS step;

@@ -409,6 +409,39 @@ CREATE CONSTRAINT TRIGGER stock_lot_movements_conservation
 
 -- C-LOT-03: the per-lot cache folds to the stock key's own on-hand. The
 -- cache is derived, so this is the law that makes it safe to read.
+--
+-- ── WHICH PATHS THIS LAW IS ENFORCED ON, and which it is not (PB-17) ──────
+-- The second independent challenge asked for this paragraph by name, and it
+-- is owed. `C-LOT-03` states `Σ stock_lot_levels.on_hand =
+-- stock_levels.on_hand`. It is enforced, at COMMIT, from the two paths that
+-- write the pack's own relations:
+--   * a movement — `stock_lot_movement_conservation()`, finding P1-01 of the
+--     first round, which is what made the law a law rather than a comment;
+--   * a cache write — this function.
+-- It is NOT enforced on a third path: a bare `UPDATE stock_levels SET
+-- on_hand = …`, which is neither a movement nor a cache write and so fires
+-- neither trigger. Measured at b7ee445 from a consistent seed: the key
+-- committed at 13.0000 against a cache of 3.0000, as `daftar_migrator` and
+-- as `daftar_inventory_internal`, rc=0 both times.
+--
+-- Pack B does not close that path and deliberately does not try. A trigger
+-- on `stock_levels` would be Phase 11 putting a guard on a FROZEN relation,
+-- and the frozen core makes the same bargain for its own conservation law:
+-- `stock_levels` carries only `stock_levels_retain` and
+-- `stock_levels_zero_on_hand_zero_value`, and the core checks its totals
+-- against `stock_movements` in the ROUTINE `inventory_stock_verify`, not in a
+-- trigger. So the frozen design trusts its writer and offers reconciliation
+-- rather than prevention, and this overlay inherits exactly that bargain.
+-- The gap closes where the core's closes: `inventory_lot_verify` (§3.8,
+-- SPEC ONLY at this SHA) is the routine that compares the overlay against
+-- the key and against the ledger, and it is owed the same place in the
+-- reconciliation schedule as `inventory_stock_verify`.
+-- The exposure is stated the way `PB-15`'s was, with the grant measured
+-- rather than described: two roles hold UPDATE on `stock_levels`
+-- (`daftar_inventory_internal`, `daftar_migrator`) — which does not read as
+-- well as "no runtime role holds UPDATE on `stock_lots` at all", and that is
+-- the point of writing it down. A proof case records the privilege list, so
+-- a future grant that widens it reds a case.
 CREATE FUNCTION stock_lot_level_conservation() RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY INVOKER
 SET search_path = pg_catalog, public, pg_temp
@@ -420,7 +453,30 @@ BEGIN
   SELECT sl.on_hand INTO v_key_on_hand FROM stock_levels sl
    WHERE sl.business_id = NEW.business_id AND sl.warehouse_id = NEW.warehouse_id
      AND sl.variant_id = NEW.variant_id;
-  IF NOT FOUND THEN RETURN NULL; END IF;
+  -- ── This arm used to RETURN NULL, and that was the same fail-open ───────
+  -- Not reported by either challenge round: found here by re-reading this
+  -- function against the fix the challenge forced on its twin. `NOT FOUND`
+  -- was treated as "there is no key, so there is nothing to compare", which
+  -- is the Phase 5 fail-open class exactly: this read runs under the
+  -- invoker's row-level security, so an unreadable key row and an absent key
+  -- row gave the same answer, and a cache row written against a key the
+  -- writer cannot see at COMMIT committed with no comparison at all.
+  --
+  -- What the arm is NOT about, stated because the first draft of this comment
+  -- got it wrong: the key cannot be genuinely ABSENT.
+  -- `stock_lot_levels_level_fk` references `stock_levels (business_id,
+  -- warehouse_id, variant_id)`, and a foreign-key check runs as the
+  -- referenced table's owner and ignores row-level security, so the FK —
+  -- not this trigger — is what guarantees a cache row has a key behind it.
+  -- `NOT FOUND` here therefore means exactly one thing: the row exists and
+  -- this transaction cannot read it. Which is why the refusal carries the
+  -- name the movement side uses for the same condition — the law could not
+  -- be evaluated, a different statement from the law being broken — and why
+  -- the red proof below is an INVISIBILITY case and not an absence case.
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'inventory.lot_conservation_unverifiable: the stock key for warehouse % variant % cannot be read at COMMIT, so the per-lot cache written against it cannot be judged; the law refuses rather than passes', NEW.warehouse_id, NEW.variant_id
+      USING ERRCODE = 'P0001';
+  END IF;
 
   SELECT coalesce(sum(ll.on_hand), 0) INTO v_lot_sum FROM stock_lot_levels ll
    WHERE ll.business_id = NEW.business_id AND ll.warehouse_id = NEW.warehouse_id
@@ -694,10 +750,50 @@ BEGIN
     RAISE EXCEPTION 'P11 end-state: the conservation trigger has no fail-closed arm, so a COMMIT that cannot see its movement would skip the law';
   END IF;
 
+  -- Finding D-32, found here rather than reported: the CACHE side must fail
+  -- closed on the same condition, for the same reason. Asserted on its own
+  -- text, because the hole was that one of two sites had the arm.
+  IF position('lot_conservation_unverifiable' in
+              pg_get_functiondef('stock_lot_level_conservation()'::regprocedure)) = 0 THEN
+    RAISE EXCEPTION 'P11 end-state: the cache-side conservation trigger returns silently when it cannot read the stock key, so a cache row written against an unreadable key would commit unjudged';
+  END IF;
+
+  -- The policy SET of each overlay relation, pinned the way Pack A pins its
+  -- own after finding P3-N03.3. The arm above it — a permissive PUBLIC policy
+  -- qualified exactly `true` — is the NARROW form, and Pack A's third round
+  -- measured two spellings through a list like it (`2 > 1`,
+  -- `business_id IS NOT NULL`). The set pin is what is decidable without
+  -- depending on Pack A's `catalog_policy_qual_is_tautology`: this pack must
+  -- not require a relation created by another pack, so the two packs do not
+  -- share an implementation until the Migration Owner assembles them
+  -- (P11-MIGRATION-PATCH-REQUEST.md §15, MPR-10). Stated as a difference
+  -- between the two files rather than left for a reader to notice.
+  --
+  -- The expected set here is THREE, not Pack A's two, and the third is the
+  -- reason the arm above is scoped to PUBLIC: `inventory_internal_read` is a
+  -- permissive `USING (true)` applied TO `daftar_inventory_internal`, copied
+  -- from the live `stock_levels`, so a tautology test that ignored the role
+  -- clause would refuse this pack on a policy it installed on purpose. The
+  -- qualifier being a tautology is the POINT of a role-scoped read policy;
+  -- what must never be a tautology is one applied to PUBLIC. Measured here
+  -- on the first run of this assertion, which refused the pack with the set
+  -- `(business_isolation,inventory_internal_read,tenant_membership)` — a pin
+  -- getting its own expected value from the catalogue rather than from the
+  -- author's memory, which is how it should be found.
+  FOR bad IN SELECT x FROM unnest(ARRAY['stock_lots','stock_lot_movements','stock_lot_levels']) AS x LOOP
+    IF (SELECT array_agg(p.polname::TEXT ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+         WHERE c.relnamespace = 'public'::regnamespace AND c.relname = bad)
+       IS DISTINCT FROM ARRAY['business_isolation','inventory_internal_read','tenant_membership']::TEXT[] THEN
+      RAISE EXCEPTION 'P11 end-state: % carries a policy set this pack did not install (%)', bad,
+        coalesce((SELECT string_agg(p.polname, ',' ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+                   WHERE c.relnamespace = 'public'::regnamespace AND c.relname = bad), 'none');
+    END IF;
+  END LOOP;
+
   -- P3: lot facts are frozen once the ledger names the lot
   SELECT count(*) INTO n FROM pg_trigger
    WHERE tgrelid='stock_lots'::regclass AND tgname='stock_lots_10_facts_frozen_once_moved';
   IF n <> 1 THEN RAISE EXCEPTION 'P11 end-state: a lot''s dates and receipt order are rewritable after it has movements'; END IF;
 
-  RAISE NOTICE 'P11 PACK B end-state assertion passed: 17 checks';
+  RAISE NOTICE 'P11 PACK B end-state assertion passed: 19 checks';
 END $$;
