@@ -251,6 +251,36 @@ function main(): number {
   const emittedRules = rules.filter((r) => sites.has(r.signal));
   console.log(`${rules.length} rules: ${rules.length - stale} with claims matching the tree, ${stale} stale`);
   console.log(`${emittedRules.length} of ${rules.length} rules name a signal that is emitted today${exp.present ? '' : ', and none can fire while there is no exporter'}`);
+  /* ── §22.2's table: name → emit site → receiver → fire/resolution ─────── */
+  console.log('');
+  console.log('§22.2 — THE METRIC/ALERT TABLE: name, emit site, receiver, fire and resolution');
+  console.log('-'.repeat(78));
+  console.log('V2 §22.2 asks that this table bind every name to its emit position, its receiver');
+  console.log('source, and its fire/resolution. Three of the four columns can be derived from the');
+  console.log('tree. The fourth cannot, and saying so is the point of printing it empty.');
+  console.log('');
+  console.log(`${'ALERT'.padEnd(14)} ${'SIGNAL'.padEnd(42)} ${'EMIT SITE'.padEnd(18)} ${'RECEIVER'.padEnd(12)} FIRE / RESOLUTION`);
+  for (const r of rules) {
+    const site = sites.get(r.signal);
+    const emit = site !== undefined ? site.split('/').pop()?.slice(0, 18) ?? 'yes' : names.has(r.signal) ? 'RESERVED ONLY' : 'none in tree';
+    // There is no receiver anywhere: the rule objects carry no routing field,
+    // and no alertmanager/pagerduty/webhook configuration exists in the tree.
+    const receiver = 'UNDECIDED';
+    const fires = site !== undefined && exp.present ? 'could fire' : 'cannot fire';
+    console.log(`${r.id.replace('P15-ALERT-', 'A-').padEnd(14)} ${r.signal.slice(0, 42).padEnd(42)} ${emit.padEnd(18)} ${receiver.padEnd(12)} ${fires}`);
+  }
+  console.log('');
+  console.log('RECEIVER is UNDECIDED for all of them, and that is a measurement, not a placeholder:');
+  console.log('  no rule object carries a routing or receiver field (the keys are id, title, signal,');
+  console.log('  signal_source, condition, for, severity, slo_id, runbook_step, false_positive_notes,');
+  console.log('  exists_today), and no alertmanager, PagerDuty, webhook or e-mail destination exists');
+  console.log('  anywhere in the repository. §22.2 forbids choosing a recipient, a subscription or a');
+  console.log('  retention here, so the column stays empty until the owner fills it. A rule with a');
+  console.log('  condition and no receiver is a rule that fires into nothing.');
+  console.log('');
+  console.log('RESOLUTION is not modelled at all. Every rule states a fire condition and a `for`');
+  console.log('  duration; none states when it clears. An alert that cannot resolve has to be');
+  console.log('  silenced by hand, and a page that must be silenced by hand gets ignored.');
   console.log('');
   console.log('WHAT THIS DOES NOT DECIDE');
   console.log('  The alert destination, the dashboards and the incident rota are owner');

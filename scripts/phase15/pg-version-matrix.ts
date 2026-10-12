@@ -30,10 +30,11 @@
  *
  * ── What this script decides and what it does not ──────────────────────────
  *
- * It decides nothing about production. Which PostgreSQL line the estate runs
- * is an OWNER decision, and inventing one would be exactly the fabrication
- * the directive forbids. What this script produces is the evidence that
- * decision needs:
+ * It decides nothing about production, and it does not ask for a decision it
+ * already has: the target is recorded as the PostgreSQL 16 family at
+ * en_US.utf8 (TL-P4-S3-R4, corroborated by three further documents, all cited
+ * by V1 at run time). What this script produces is the evidence measured
+ * against that recorded target:
  *
  *   V1  the versions actually in play, each read from its own source
  *   V2  the version-conditional surface already in the tree
@@ -46,18 +47,20 @@
  * not a claim that the APPLICATION behaves identically on both — V4 and V5
  * exist precisely because it does not.
  *
- * Exit 0 when every probe was measured on both lines and the migration train
+ * Exit 0 when every probe was measured in every context and the migration train
  * applied on both. Exit 1 when a probe could not be measured, and exit 2 when
  * a divergence was measured that the tree does not already account for —
  * because that is a divergence nothing in the repository is ready for.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, mkdirSync, rmSync, writeFileSync, chmodSync, chownSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, writeFileSync, chmodSync, chownSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { userInfo } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { Client } from 'pg';
-import { runMigrations, MIGRATIONS_DIR } from '../../apps/api/src/infra/migrate';
+// The candidate runtime is built by the APPLICATION'S own migrator: a file
+// is wrapped in one transaction there, and migrations rely on that.
+import { runMigrations } from '../../apps/api/src/infra/migrate';
 
 const ROOT = resolve(__dirname, '../..');
 const SERVER_OS_USER = 'postgres';
@@ -69,14 +72,36 @@ interface Line {
   readonly bin: string;
   readonly dir: string;
   readonly port: number;
+  /** The initdb locale — the deployment axis, not a detail. */
+  readonly locale: string;
   /** Set once the cluster is up and its version read FROM THE SERVER. */
   version?: string;
   versionNum?: number;
+  /** What the SERVER says its collation is, read back rather than assumed. */
+  collate?: string;
 }
 
+/**
+ * Three contexts, not two.
+ *
+ * V2 §22.1 asks for one identity for the evidence and names collation among
+ * the axes. Phase 4's own documents record the deployment target as the
+ * PostgreSQL 16 family at `en_US.utf8` (TL-P4-S3-R4), and record that
+ * containers like this one run locale `C`, so every ordering claim made here
+ * has carried that caveat. The caveat is removable: `localedef -i en_US -f
+ * UTF-8 en_US.UTF-8` generates the locale, so this matrix runs a
+ * DEPLOYMENT-EQUIVALENT cluster beside the two it had, and the probes answer
+ * on all three.
+ *
+ * `locale` is the initdb locale. A context whose locale cannot be created on
+ * this box reports UNMEASURED rather than silently falling back to C, because
+ * a result at the wrong collation carried under the deployment's name is
+ * exactly the substitution this phase keeps catching.
+ */
 const LINES: Line[] = [
-  { name: 'host tooling', bin: '/usr/lib/postgresql/16/bin', dir: '/tmp/daftar-p15-matrix-16', port: 55481 },
-  { name: 'embedded test server', bin: join(ROOT, 'node_modules/@embedded-postgres/linux-x64/native/bin'), dir: '/tmp/daftar-p15-matrix-18', port: 55482 },
+  { name: '16 @ C (host tooling)', bin: '/usr/lib/postgresql/16/bin', dir: '/tmp/daftar-p15-matrix-16', port: 55481, locale: 'C' },
+  { name: '18 @ C (embedded test server)', bin: join(ROOT, 'node_modules/@embedded-postgres/linux-x64/native/bin'), dir: '/tmp/daftar-p15-matrix-18', port: 55482, locale: 'C' },
+  { name: '16 @ en_US.utf8 (DEPLOYMENT-equivalent)', bin: '/usr/lib/postgresql/16/bin', dir: '/tmp/daftar-p15-matrix-16d', port: 55484, locale: 'en_US.utf8' },
 ];
 
 /* ── cluster plumbing (the server account cannot be root) ─────────────────── */
@@ -105,7 +130,7 @@ function start(line: Line): void {
   const pw = join(line.dir, 'superuser.pw');
   writeFileSync(pw, `${SUPERPASS}\n`, { mode: 0o600 });
   chownToServer(pw);
-  const init = sh(`${line.bin}/initdb -D ${data} -U postgres --auth=md5 --pwfile=${pw} -E UTF8 --locale=C`);
+  const init = sh(`${line.bin}/initdb -D ${data} -U postgres --auth=md5 --pwfile=${pw} -E UTF8 --locale=${line.locale}`);
   if (init.status !== 0) throw new Error(`initdb (${line.name}): ${init.stderr.slice(0, 400)}`);
   // fsync off: these clusters are disposable and no durability claim is made
   // from them. The matrix measures BEHAVIOUR, never timing — a timing claim
@@ -200,7 +225,7 @@ function v2(): void {
     return;
   }
   for (const h of hits) r.note.push(h);
-  for (const l of LINES) r.answers[l.name] = `${hits.length} version-conditional site(s) (the same source file serves both lines)`;
+  for (const l of LINES) r.answers[l.name] = `${hits.length} version-conditional site(s) (the same source file serves every context)`;
   r.note.push('a version-conditional branch is the tree ACCOUNTING for a divergence; the divergences below are checked against this list');
   const inApp = hits.filter((h) => h.startsWith('apps/') || h.startsWith('packages/'));
   if (inApp.length === 0) {
@@ -213,72 +238,133 @@ function v2(): void {
   r.status = 'MEASURED';
 }
 
-/* V3 — the frozen migration train, from zero, on both lines. */
+/* V3 — the CANDIDATE's train, from zero, in every context. */
 async function v3(): Promise<void> {
-  const r = row('V3', 'Does the frozen migration train apply from zero on both lines?');
-  const expected = Number(spawnSync('bash', ['-c', `ls ${join(ROOT, 'infrastructure/database/migrations')}/*.sql | wc -l`], { encoding: 'utf8' }).stdout.trim());
-  r.note.push(`${expected} migration files on disk; bootstrap.sql then the application's own runMigrations, not a hand-rolled loop`);
+  const r = row('V3', "Does the CANDIDATE's migration train apply from zero in every context?");
+  // V2 §22.1 corrected the earlier round here, and was right: measuring this
+  // prep branch's 74 migrations is measuring the P3 baseline, not the
+  // candidate. The subject is the candidate's own files, read out of git by
+  // blob id — Phase 4's branch and worktree are never touched.
+  const ref = ['969b8605', 'origin/phase/4-sales-pos-customers-receivables'].find(
+    (x) => spawnSync('git', ['cat-file', '-e', `${x}^{commit}`], { cwd: ROOT }).status === 0,
+  );
+  if (ref === undefined) {
+    r.note.push('UNMEASURED: no Phase 4 candidate ref is reachable here, so the candidate train cannot be the subject. Fetch it and re-run; this is not a result about the candidate.');
+    r.status = 'UNMEASURED';
+    return;
+  }
+  const sha = spawnSync('git', ['rev-parse', ref], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+  const names = spawnSync('git', ['ls-tree', '-r', '--name-only', ref, '--', 'infrastructure/database/migrations'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    .stdout.split('\n')
+    .filter((n: string) => n.endsWith('.sql'))
+    .sort();
+  const prepCount = readdirSync(join(ROOT, 'infrastructure/database/migrations')).filter((n: string) => n.endsWith('.sql')).length;
+  r.note.push(`subject: the candidate at ${ref} → ${sha}, ${names.length} migration(s). This prep branch carries ${prepCount}, which is the P3 baseline and NOT the candidate.`);
+  if (names.length === 0) {
+    r.note.push('UNMEASURED: the candidate ref carries no migrations at that path.');
+    r.status = 'UNMEASURED';
+    return;
+  }
+
+  // Stage out of git. bootstrap.sql is kept OUT of the migrations directory:
+  // runMigrations globs every .sql it is given, and staging them together
+  // applies one file too many and records bootstrap as a migration.
+  const stage = '/tmp/daftar-p15-matrix-candidate';
+  rmSync(stage, { recursive: true, force: true });
+  mkdirSync(join(stage, 'sql'), { recursive: true });
+  mkdirSync(join(stage, 'boot'), { recursive: true });
+  const blob = (path: string): string =>
+    spawnSync('git', ['cat-file', 'blob', `${ref}:${path}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }).stdout;
+  const bootPath = join(stage, 'boot', 'bootstrap.sql');
+  writeFileSync(bootPath, blob('infrastructure/database/bootstrap.sql').replace(/__([A-Z_]+)_PASSWORD__/g, () => `p15_${randomBytes(18).toString('base64url')}`), { mode: 0o644 });
+  for (const n of names) writeFileSync(join(stage, 'sql', n.split('/').pop() as string), blob(n), { mode: 0o644 });
+
   for (const line of LINES) {
-    const create = await probe(line, 'postgres', "CREATE DATABASE daftar TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'");
+    const create = await probe(line, 'postgres', `CREATE DATABASE daftar TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE '${line.locale}' LC_CTYPE '${line.locale}'`);
     if (!create.ok) {
       r.answers[line.name] = `UNMEASURED: CREATE DATABASE refused (${create.code})`;
       r.note.push(`${line.name}: ${create.message}`);
       continue;
     }
-    // The train grants to the roles bootstrap.sql creates, so bootstrap runs
-    // first. PART 103: every fixture credential is minted per run, so no
-    // secret-like literal enters the tree to be scanned or allowlisted.
-    const boot = readFileSync(join(ROOT, 'infrastructure/database/bootstrap.sql'), 'utf8').replace(/__([A-Z_]+)_PASSWORD__/g, () => `p15_${randomBytes(18).toString('base64url')}`);
-    const bootApplied = await probe(line, 'daftar', boot);
-    if (!bootApplied.ok) {
-      r.answers[line.name] = `UNMEASURED: bootstrap.sql refused (${bootApplied.code})`;
-      r.note.push(`${line.name}: ${bootApplied.message}`);
+    const boot = await probe(line, 'daftar', readFileSync(bootPath, 'utf8'));
+    if (!boot.ok) {
+      r.answers[line.name] = `UNMEASURED: bootstrap.sql refused (${boot.code})`;
+      r.note.push(`${line.name}: ${boot.message}`);
       continue;
     }
     try {
-      const applied = await runMigrations(url(line, 'daftar'), MIGRATIONS_DIR);
-      // Idempotence on the same line: a second run must apply nothing.
-      const again = await runMigrations(url(line, 'daftar'), MIGRATIONS_DIR);
+      const applied = await runMigrations(url(line, 'daftar'), join(stage, 'sql'));
+      const again = await runMigrations(url(line, 'daftar'), join(stage, 'sql'));
       r.answers[line.name] = `${applied.length} applied, ${again.length} on a second run`;
-      if (applied.length !== expected) r.note.push(`${line.name}: applied ${applied.length} of ${expected} files — the train did not complete`);
-      if (again.length !== 0) r.note.push(`${line.name}: a second run applied ${again.length} migration(s) — the train is not idempotent on this line`);
+      if (applied.length !== names.length) r.note.push(`${line.name}: applied ${applied.length} of ${names.length} — the train did not complete`);
+      if (again.length !== 0) r.note.push(`${line.name}: a second run applied ${again.length} — not idempotent on this line`);
     } catch (e) {
-      r.answers[line.name] = `UNMEASURED: the train aborted`;
+      r.answers[line.name] = 'UNMEASURED: the train aborted';
       r.note.push(`${line.name}: ${(e as Error).message.slice(0, 300)}`);
     }
   }
+  rmSync(stage, { recursive: true, force: true });
   settle(r, false);
   if (r.status === 'MEASURED' && new Set(Object.values(r.answers)).size === 1) {
-    r.note.push(`the schema is accepted by both lines: identical outcome, ${Object.values(r.answers)[0]}`);
+    r.note.push(`the candidate's schema is accepted identically in every context measured: ${Object.values(r.answers)[0]}`);
   }
 }
 
-/* V4 — the divergences the tree documents, re-measured rather than quoted. */
+/* V4 — Class 23, to §22.1's standard: a real constraint, role and transaction. */
 async function v4(): Promise<void> {
-  const r = row('V4', 'ON DELETE RESTRICT: which SQLSTATE does each line report?');
+  const r = row('V4', 'ON DELETE RESTRICT: the exact SQLSTATE, constraint, and that the row survives the refusal');
   r.note.push('documented as 23001 on 18 and 23503 on 16–17 (docs/PHASE_3_S2_CONTRACT.md:209); T-14.4 derives it from server_version_num, so the tree ACCOUNTS for this one');
+  r.note.push(
+    '§22.1: 23001 is restrict_violation and 23503 is foreign_key_violation, and NO Class 23 may be turned into a PASS. So this probe names the constraint, runs inside an explicit transaction as a non-superuser role, and proves three things rather than one: the refusal happens, it carries the constraint’s own name, and the parent row is STILL THERE afterwards. A probe that only reads the code would pass on a server that refused for the wrong reason, or that refused and deleted anyway.',
+  );
   for (const line of LINES) {
     const setup = await probe(
       line,
       'postgres',
       `DROP TABLE IF EXISTS p15_child, p15_parent CASCADE;
+       DROP ROLE IF EXISTS p15_probe;
+       CREATE ROLE p15_probe LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'p15_${randomBytes(12).toString('hex')}';
        CREATE TABLE p15_parent (id int PRIMARY KEY);
-       CREATE TABLE p15_child (id int PRIMARY KEY, parent int REFERENCES p15_parent(id) ON DELETE RESTRICT);
-       INSERT INTO p15_parent VALUES (1); INSERT INTO p15_child VALUES (1, 1);`,
+       CREATE TABLE p15_child (id int PRIMARY KEY, parent int,
+         CONSTRAINT p15_child_parent_fk FOREIGN KEY (parent) REFERENCES p15_parent(id) ON DELETE RESTRICT);
+       INSERT INTO p15_parent VALUES (1); INSERT INTO p15_child VALUES (1, 1);
+       GRANT SELECT, DELETE ON p15_parent TO p15_probe; GRANT SELECT ON p15_child TO p15_probe;`,
     );
     if (!setup.ok) {
       r.answers[line.name] = `UNMEASURED: fixture refused (${setup.code})`;
+      r.note.push(`${line.name}: ${setup.message}`);
       continue;
     }
-    const del = await probe(line, 'postgres', 'DELETE FROM p15_parent WHERE id = 1');
-    r.answers[line.name] = del.ok ? 'ACCEPTED THE DELETE (no refusal at all)' : del.code;
-    if (del.ok) r.note.push(`${line.name}: the RESTRICT template did not refuse — that is a far larger problem than a code difference`);
+    // An explicit transaction, as a non-superuser, so the refusal is measured
+    // where the application would meet it — and the rollback is observable.
+    const del = await probe(line, 'postgres', 'BEGIN; SET LOCAL ROLE p15_probe; DELETE FROM p15_parent WHERE id = 1; COMMIT;');
+    const survived = await probe(line, 'postgres', 'SELECT count(*)::text AS v FROM p15_parent WHERE id = 1');
+    const rows = (survived.rows[0] as { v?: string } | undefined)?.v ?? '?';
+    if (del.ok) {
+      r.answers[line.name] = 'ACCEPTED THE DELETE — no refusal at all';
+      r.note.push(`${line.name}: the RESTRICT template did not refuse. That is far larger than a code difference and is not a version-mapping question.`);
+    } else {
+      const classed = /^23/.test(del.code);
+      const named = /p15_child_parent_fk/.test(del.message);
+      r.answers[line.name] = `${del.code}${classed ? '' : ' (NOT Class 23)'}, constraint ${named ? 'named' : 'NOT named'}, parent rows after = ${rows}`;
+      if (!classed) r.note.push(`${line.name}: the refusal is ${del.code}, outside Class 23 — a different failure, not this divergence`);
+      if (rows !== '1') r.note.push(`${line.name}: the parent row is GONE after a refused delete (count=${rows}) — the transaction did not roll back`);
+    }
+    await probe(line, 'postgres', 'DROP TABLE IF EXISTS p15_child, p15_parent CASCADE; DROP ROLE IF EXISTS p15_probe;');
   }
-  // Accounted for: the tree derives the code at run time.
-  settle(r, true);
-  const v = Object.values(r.answers);
-  if (new Set(v).size > 1) r.note.push(`measured divergence confirmed: ${LINES.map((l) => `${l.version ?? l.name} → ${r.answers[l.name] ?? '?'}`).join(', ')}`);
-  else r.note.push(`the two lines AGREED (${v[0] ?? '?'}) — the run-time derivation is still correct, but on these two servers it selects the same answer`);
+  // Accounted for: the tree derives the code at run time. But the ACCOUNTING
+  // only covers the code — a refusal that did not roll back would be a new
+  // finding, so that half is settled strictly.
+  const vals = Object.values(r.answers);
+  const allRolledBack = vals.every((v) => /parent rows after = 1/.test(v));
+  const allClass23 = vals.every((v) => /^23\d\d\d,/.test(v));
+  settle(r, allRolledBack && allClass23);
+  if (new Set(vals.map((v) => v.split(',')[0])).size > 1) {
+    r.note.push(`measured divergence in the CODE only: ${LINES.map((l) => `${l.version ?? l.name} → ${(r.answers[l.name] ?? '?').split(',')[0]}`).join(', ')}`);
+    r.note.push('the invariant held identically everywhere: every refusal is Class 23, every one names the constraint, and the parent row survives each one');
+  } else {
+    r.note.push(`every context agreed (${vals[0] ?? '?'})`);
+  }
 }
 
 /* V5 — the numeric claims the documents measured on PostgreSQL 16 only. */
@@ -338,6 +424,15 @@ async function main(): Promise<number> {
   const declared = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string>; dependencies?: Record<string, string> }) ?? {};
   const emb = declared.devDependencies?.['embedded-postgres'] ?? declared.dependencies?.['embedded-postgres'] ?? '(not declared)';
   v1.note.push(`package.json declares embedded-postgres ${emb}`);
+  v1.note.push('');
+  v1.note.push('THE DEPLOYMENT TARGET IS ALREADY RECORDED — this matrix does not ask for it again.');
+  v1.note.push(
+    '    V2 §22.1 says to look for a settled live version decision BEFORE requesting one. There is one, in Phase 4’s own documents, and it is consistent across four of them: TL-P4-S3-R4 states "the deployment target is the PostgreSQL 16 family at en_US.utf8" (P4-SLOT2-S5-IMPLEMENTATION-READY.md:925); P4-S3-REPORT-AR.md:521 names en_US.utf8 as what the postgres:16 image is initialised with, "أي هدف النشر" — i.e. the deployment target; P4-S3-FINAL-VERDICT-AR.md:31 records CI printing server_version_num=160015 datcollate=en_US.utf8 datctype=en_US.utf8; and P4-SLOT4-GATES-DESIGN.md:991 records that containers like this one run locale C while CI reports en_US.utf8. docs/DAFTAR_AWS_REFERENCE_ARCHITECTURE.md:13 independently says RDS PostgreSQL 16+.',
+  );
+  v1.note.push(
+    '    So the target is the 16 family at en_US.utf8, and no recommendation to move production to 18 belongs in a Phase 15 instrument. What remains genuinely open is narrower: pinning CI’s minor and image digest, and whether the embedded test server stays on another line.',
+  );
+  v1.note.push('');
   const ciImage = /image:\s*(postgres:[^\s]+)/.exec(readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8'))?.[1];
   v1.note.push(`CI's database service image: ${ciImage ?? '(not found in .github/workflows/ci.yml)'}`);
   if (ciImage && !/postgres:\d+\.\d+/.test(ciImage)) {
@@ -355,22 +450,38 @@ async function main(): Promise<number> {
       }
       start(line);
       started += 1;
-      const got = await probe(line, 'postgres', "SELECT current_setting('server_version') AS version, current_setting('server_version_num') AS num");
-      const got0 = got.rows[0] as { version?: string; num?: string } | undefined;
+      // V2 §22.1: pin the real SELECT version, the tools and a per-run
+      // baseline. Every value here is READ BACK from the server; none is the
+      // value this script asked for.
+      const got = await probe(
+        line,
+        'postgres',
+        "SELECT current_setting('server_version') AS version, current_setting('server_version_num') AS num, " +
+          "(SELECT datcollate FROM pg_database WHERE datname=current_database()) AS collate, " +
+          "(SELECT datctype FROM pg_database WHERE datname=current_database()) AS ctype, " +
+          "pg_encoding_to_char(encoding) AS encoding FROM pg_database WHERE datname=current_database()",
+      );
+      const got0 = got.rows[0] as { version?: string; num?: string; collate?: string; ctype?: string; encoding?: string } | undefined;
       line.version = got0?.version ?? 'UNKNOWN';
       line.versionNum = Number(got0?.num ?? 0);
-      v1.answers[line.name] = `${line.version} (server_version_num ${line.versionNum}), binaries ${line.bin}`;
-      v1.note.push(`${line.name}: running, port ${line.port}, version read FROM THE SERVER`);
+      line.collate = got0?.collate ?? 'UNKNOWN';
+      const initdbV = spawnSync(`${line.bin}/initdb`, ['--version'], { encoding: 'utf8' }).stdout?.trim() ?? 'unknown';
+      v1.answers[line.name] =
+        `${line.version} (server_version_num ${line.versionNum}), collate ${line.collate}, ctype ${got0?.ctype ?? '?'}, encoding ${got0?.encoding ?? '?'}`;
+      v1.note.push(`${line.name}: port ${line.port}, binaries ${line.bin} (${initdbV})`);
+      if (line.collate !== line.locale && !(line.locale === 'C' && line.collate === 'C')) {
+        v1.note.push(`    ! asked initdb for locale ${line.locale} and the server reports datcollate ${line.collate} — the context is NOT what it is named`);
+      }
     }
     v1.status = started === LINES.length ? 'MEASURED' : 'UNMEASURED';
     if (started < LINES.length) {
-      v1.note.push(`only ${started} of ${LINES.length} lines could be started, so nothing below is a two-line measurement`);
+      v1.note.push(`only ${started} of ${LINES.length} contexts could be started, so nothing below is a cross-context measurement`);
     }
 
     if (started === LINES.length) {
       const nums = LINES.map((l) => l.versionNum ?? 0);
       if (new Set(nums).size === 1) {
-        v1.note.push(`! both lines report the SAME version (${nums[0]}): this box cannot produce a two-line matrix today, and nothing below should be read as one`);
+        v1.note.push(`! every context reports the SAME version (${nums[0]}): this box cannot produce a multi-version matrix today, and nothing below should be read as one`);
         v1.status = 'UNMEASURED';
       }
       v2();
@@ -393,7 +504,10 @@ async function main(): Promise<number> {
     console.log(`${r.id}  ${r.status.padEnd(22)} ${r.question}`);
     for (const line of LINES) {
       const a = r.answers[line.name];
-      if (a !== undefined) console.log(`     ${(line.version ?? line.name).padEnd(22)} ${a}`);
+      // The label is the CONTEXT, not the version string: two of the three
+      // contexts are the same server version at different collations, and
+      // printing `line.version` rendered them identically.
+      if (a !== undefined) console.log(`     ${line.name.padEnd(38)} ${a}`);
     }
     for (const n of r.note) console.log(`     · ${n}`);
   }
@@ -403,18 +517,23 @@ async function main(): Promise<number> {
   console.log(`${rows.length} probes: ${rows.length - unmeasured.length - unaccounted.length} MEASURED, ${unaccounted.length} DIVERGENT AND UNACCOUNTED FOR, ${unmeasured.length} UNMEASURED`);
   console.log('');
   console.log('WHAT THIS MATRIX DOES NOT DECIDE');
-  console.log('  Which PostgreSQL line the production estate runs is an OWNER decision.');
-  console.log('  This matrix is the evidence for it, not the answer to it: inventing a');
-  console.log('  supported line here would be the fabrication the directive forbids.');
-  console.log('  What the evidence supports is stated above, per probe, per line.');
+  console.log('  The DB target is NOT an open question and this matrix does not reopen it:');
+  console.log('  it is already settled as the PostgreSQL 16 family at en_US.utf8 (TL-P4-S3-R4');
+  console.log('  and the three corroborating documents cited under V1). This matrix measures');
+  console.log('  against that recorded target; it does not choose one, and no recommendation');
+  console.log('  to move production to 18 belongs in a Phase 15 instrument. Moving the estate');
+  console.log('  off the recorded target would be an OWNER decision, taken with a supported');
+  console.log('  upgrade path and backup/rollback/PITR evidence, not on the strength of a');
+  console.log('  divergence measured here. What the evidence supports is stated above, per');
+  console.log('  probe, per context.');
   if (unaccounted.length > 0) {
     console.log('');
-    console.log(`EXIT 2: ${unaccounted.map((r) => r.id).join(', ')} diverged between the two lines and the tree has no version-conditional branch for it.`);
+    console.log(`EXIT 2: ${unaccounted.map((r) => r.id).join(', ')} diverged between the measured contexts and the tree has no version-conditional branch for it.`);
     return 2;
   }
   if (unmeasured.length > 0) {
     console.log('');
-    console.log(`EXIT 1: ${unmeasured.map((r) => r.id).join(', ')} not measured on both lines.`);
+    console.log(`EXIT 1: ${unmeasured.map((r) => r.id).join(', ')} not measured in every context.`);
     return 1;
   }
   return 0;
