@@ -1,5 +1,8 @@
 import hashlib, os, re, subprocess, sys, json
-SOCK="/var/tmp/p11s/run"; PORT="55511"; DB="daftar"
+import os
+# The cluster is named by the environment so the harness can create its own
+# on-target cluster and every script agrees on which one ran (finding P2-09).
+SOCK=os.environ.get("P11_SOCK","/var/tmp/p11u/run"); PORT=os.environ.get("P11_PORT","55512"); DB="daftar"
 PSQL="/usr/lib/postgresql/16/bin/psql"
 MIGDIR=sys.argv[1]
 ROLE=sys.argv[2] if len(sys.argv)>2 else "daftar_migrator"

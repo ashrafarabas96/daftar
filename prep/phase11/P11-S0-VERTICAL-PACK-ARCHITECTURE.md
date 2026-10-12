@@ -478,6 +478,37 @@ Promotion waits for closure of these, not for their enumeration. **Eight of them
 
 ---
 
+### `P11-AL-29` — a test suite is green against the law it reaches, not the law it is titled after
+
+**The measurement.** Pack A carried 21 serial cases and 4 races, green three times from
+zero, offered as proof of `C-APP-01`. An independent challenger defeated **three clauses
+of that law with one SQL statement each**: `UPDATE … SET attributes='{}'` blanked a
+combination (and split one matrix cell into two stock identities), `DELETE FROM
+product_attribute_values` orphaned two committed variants, and `UPDATE product_matrix_axes
+SET axis_code=…` removed an axis without deleting a row. Every one of the 21 cases tested
+its clause **in the insert direction**, and the immutability case happened to pick the one
+transition the trigger did not return early on.
+
+**The rule.** A law stated as a prohibition — *cannot be removed*, *never changes*,
+*registered active* — is a claim about **transitions**, and a transition has as many
+statement kinds as the database has. A suite that exercises one of them has tested one of
+them. So: for every negative clause, a case per statement kind that could achieve the
+prohibited end state (`DELETE`, an `UPDATE` of the identifying columns, an `UPDATE` of
+`status`), and the assertion reads the **committed state**, not the error string.
+
+**And its corollary, which cost more.** The three green runs from zero were real, and the
+challenger reproduced all of them. **Reproducibility is not coverage.** A proof that
+rebuilds from zero three times and never reaches its law is three times as confident and
+exactly as wrong, which is why this preparation now states, beside every `PROVEN BY TEST`,
+*which direction* was proved.
+
+**A second corollary, about accepting a fix.** The same challenge recommended making the
+three in-use guards `SECURITY DEFINER`. Implemented and measured, it **disabled all three**
+for any principal without a session context, because `product_variants`' RESTRICTIVE
+policy cannot be satisfied by a definer's own `USING (true)`. A recommended fix from a
+competent reviewer is a hypothesis with a good prior, and it is measured before it is
+believed — exactly as the reviewer's findings were.
+
 ## 8. Honest limits of this document
 
 - It was written from a **read** of the tree at `93084f8`, and that is no longer the whole story: **Pack A (apparel) has since been applied, unnumbered, to a scratch cluster** — 21 serial cases and **4 real-concurrency races** green over the frozen prefix applied **as `daftar_migrator`**, at `e27acaf` with every exit code `0` (`P11-LIVE-DDL-PROOF.md`; raw log `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-e27acaf.txt`, with the earlier logs kept). So `C-APP-01` and `C-APP-02` are `PROVEN BY TEST` and the live RLS shape on `stock_levels` is `PROVEN BY DATABASE CATALOGUE`. **That is not CI**, no npm suite ran (this container is Node 22.22.0 against `engines.node >=24 <25`), no gate exists yet, and lot, serial and repair remain untouched by any run. Every verdict outside those is therefore still `SPEC ONLY` or `UNMEASURED`, never combined with another class (§82 classes: `PROVEN IN LIVE CODE` / `PROVEN BY TEST` / `PROVEN BY DATABASE CATALOGUE` / `DESIGN ONLY` / `SPEC ONLY` / `UNMEASURED` / `BLOCKED` / `WAITING_FOR_INTEGRATED_SURFACE`), and this document says so rather than implying design equals proof. The S7 lesson is the standing one: **a spec is design until a parser has had an opinion, and still design until the principal that will apply it has had one.**

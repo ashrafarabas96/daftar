@@ -1,8 +1,8 @@
-# P11 — PACK A (APPAREL): THE EXECUTED SCRATCH PROOF, AND THE EIGHT DEFECTS IT FOUND
+# P11 — PACK A (APPAREL): THE EXECUTED SCRATCH PROOF, AND THE SIXTEEN DEFECTS IT FOUND
 
 **What this is.** The Master Continuous Mission's §18 says, for Phase 11: *execute unnumbered DDL for a scratch proof, then the Owner's allocation at promotion*, and *do not drop any required part of the scope because it is currently design only*. §18 also fixes the build order — start with the cheapest independent end-to-end path, **apparel**. This document is the result of doing that, and the point of it is the part a design document cannot produce: **eight defects, six of them in this preparation's own specification or its own proof, found by execution and none of them findable by reading.** Two of the eight were found only after V2 of the Master Continuous Mission refused the sentence this document used to carry — *"no concurrency case here; apparel has none to prove"* — on the ground that **"no locks, therefore no concurrency" is not a proof**. Running the races it asked for found two real holes in Pack A.
 
-**Status.** `PREPARED / NOT PROMOTED`. On the directive's ladder: **`PREPARED`**, not `CHALLENGED` — no independent challenger has read any of this. Nothing is promoted, **no migration number exists**, and the Migration Owner allocates at promotion from the live prefix.
+**Status.** `PREPARED / NOT PROMOTED`, and now **`CHALLENGED` and REJECTED once**. An independent challenger read Pack A at `1a8ba15`, reproduced every claim three times from zero, and **rejected it** on five defects that single SQL statements expose (§7). Those five are fixed and red-proved here; the pack returns to the challenger unsigned. **An author does not sign their own work**, so nothing in this document is a signature. Nothing is promoted, **no migration number exists**, and the Migration Owner allocates at promotion from the live prefix.
 
 **Evidence class.** What follows is `PROVEN BY TEST` and `PROVEN BY DATABASE CATALOGUE` on a scratch cluster in **this** container, and nothing more. It is **not CI**, it is **not release evidence**, and it carries **no timing or performance claim**. The container runs **Node 22.22.0 while the repository requires `>=24 <25`**, so no npm workspace suite was run at all and none is claimed; the proof uses PostgreSQL and `psql` only, which is why it was possible here.
 
@@ -14,13 +14,14 @@ One script, `prep/phase11/harness/rebuild_and_prove.sh`, which does every step f
 
 | step | what | result |
 |---|---|---|
-| 1 | `DROP DATABASE IF EXISTS daftar` / `CREATE DATABASE daftar` on a throw-away PostgreSQL **16.15** cluster | ok |
+| 0 | the cluster itself: `localedef -i en_US -f UTF-8 en_US.UTF-8`, then `initdb --locale=en_US.utf8 --encoding=UTF8` — **the script does this itself when the cluster is absent**, because `en_US.utf8` does not exist in this container until it is generated | created |
+| 1 | `DROP DATABASE IF EXISTS daftar` / `CREATE DATABASE daftar` on that throw-away PostgreSQL **16.15** cluster, then **`datcollate` / `datctype` read off the database under test and compared with the settled target; the script exits `3` rather than produce an off-target green** | ok, `en_US.utf8 / en_US.utf8 / UTF8` |
 | 2 | `infrastructure/database/bootstrap.sql`, rendered with scratch passwords, as the deployment administrator — six runtime roles, `btree_gist`, `citext`, `pgcrypto` | ok |
 | 3 | migrations `0000` → `0086`, **87 files**, each in its own transaction with the ownership-handover bracket, **as `daftar_migrator` and not as a superuser** | **87/87 applied** |
 | 4 | `prep/phase11/ddl/p11-pack-a-apparel.sql` — **unnumbered** — as `daftar_migrator` | applied; **end-state assertion passed** |
 | 5 | a world of two tenants, two businesses, two products, two axes, five axis values (one archived), one two-axis matrix | built |
-| 6 | the proof suite, `prep/phase11/harness/proofs.py` | **21 cases, 0 failed** |
-| 6b | **four real-concurrency races**, `prep/phase11/harness/races.py` — two live backends, sentinel-awaited interleaving, **no `sleep()`** | **4 races, 0 findings** (after the fixes of §2 and §3a) |
+| 6 | the proof suite, `prep/phase11/harness/proofs.py` | **41 cases, 0 failed** (21 before the challenge round, 20 added by it) |
+| 6b | **seven real-concurrency races**, `prep/phase11/harness/races.py` — two live backends, sentinel-awaited interleaving, **no `sleep()`** | **7 races, 0 findings** (after the fixes of §2, §3a and §7) |
 | 7 | the frozen tree re-verified **after** the run | 0 tracked changes under `infrastructure/database`; `frozenThrough = 0079_phase4_pos_till_sessions_cart.sql`; **80 frozen entries, 0 digest mismatches** |
 
 **Run repeatedly from zero, green each time.** Two raw logs are kept:
@@ -207,3 +208,105 @@ The handover privilege is the mechanism that makes the migrator-only path work, 
 **Confirmed independently, 2026-10-12.** The Phase 4 thread reached the same reading from its own measurements, and the coordinator ruled it as **`TL-P4-COORD-R61`: the deployment path is `daftar_migrator` over all migrations** — which is this proof's configuration. So the citations above are no longer one thread's lead. What remains with the owner is only whether V3 §7 was *meant* as a new contract rather than a description of the existing one, and Phase 4 has put that question to him in its own thread. **Nothing in Phase 11 waits on the answer**, and nothing in this document was changed to match §7.
 
 **Owed to the Migration Owner and the coordinator** — a one-line question, not a Phase 11 decision: **is V3 §7's admin/migrator split the install contract, or is `check:deployment-authority` Case A?** They cannot both be the real path. If §7 is right, `check:deployment-authority`, `phase2-rollback-rehearsal`'s withdrawal of RB-P2-01, and the runner's own header comment are all describing something that is not the deployment, and every phase that cited them is affected — which is why this is raised rather than answered here.
+
+---
+
+## 7. The independent challenge at `1a8ba15`, and what it found
+
+The challenger's report is `/mnt/project-files/phase11/P11-CHALLENGE-1a8ba15.md`, with its
+probes and raw logs in `phase11/challenge-1a8ba15/`. **Verdict: `REJECT`.** It is a
+good rejection and this section records it in its own terms before answering it.
+
+**What it reproduced.** Everything this document claimed: `bootstrap.sql` as the
+administrator, **87/87** migrations as `daftar_migrator`, the unnumbered pack with its
+end-state assertion, **21 cases and 4 races green, three times from zero**, the frozen
+prefix untouched after the run, and the proof-SHA tie (`d813de2`, `99dbbe7`,
+`e27acaf`, `1a8ba15` carry byte-identical executable inputs). It found **no overclaim
+of evidence class**. The rejection is not about any of that.
+
+**What it rejected.** The 21 cases test every clause of `C-APP-01` **in the insert
+direction only**, and three of those clauses fall to one UPDATE or DELETE statement
+with no concurrency at all. A suite can be green, three times from zero, against a law
+it never reaches.
+
+### 7.1 The five defects, and the fix for each
+
+| # | finding | what was measured at `1a8ba15` | fix in this round | red proof |
+|---|---|---|---|---|
+| **9** | **P0-01** the immutability law was bypassed by the one value the trigger returned early on | `UPDATE … SET attributes='{}'` committed on a variant holding `on_hand 5.0000`; the partial unique index excludes a blanked row, so a **second** variant for the same cell was then accepted — **one matrix cell with two stock identities** | the immutability check moved **above** the early return and stated over the TRANSITION: a non-base variant's attributes never change, to anything, `'{}'` included | `P0-01 the combination cannot be BLANKED either`, plus the cell's identity count |
+| **10** | **P0-02** the value registry had no guard on any removal path | `DELETE FROM product_attribute_values … 'blue'` committed, leaving **2** variants naming a value code that no longer existed | new `product_attribute_values_10_value_in_use`, `BEFORE DELETE OR UPDATE OF business_id, axis_code, value_code, status` | three cases: deleted, archived, repointed |
+| **11** | **P1-03** the `FOR KEY SHARE` lock the concurrency law credited was **inert** against the archive path | `UPDATE … SET status='archived'` committed with 2 variants naming it; concurrently, T2 **did not block** on the key-share lock | the registry reads take **`FOR SHARE`**, which conflicts with every write to the row while two validators still share it | race **D**, and the serial archive case |
+| **12** | **P1-04** the axis in-use guard was `BEFORE DELETE` only, so an UPDATE achieved the removal it refuses | `UPDATE product_matrix_axes SET axis_code='material'` committed; the matrix registered `[size, material]` with **1** variant naming an unregistered axis | the trigger is `BEFORE DELETE OR UPDATE OF axis_code`, reading `OLD`; the same guard added to the axis REGISTRY for rename and archive | two cases, plus the matrix's axis list |
+| **13** | **P2-06** an archived AXIS still accepted new matrix cells: `status` was a lifecycle on one registry and decoration on the other | with `product_attribute_axes.status='archived'`, a matrix accepted the axis and a variant committed | the validator reads the axis registry's status too, and `product_matrix_axes_20_axis_active` refuses an archived axis at the matrix write | two cases, the second ordered so the matrix guard does not hide the validator's own read |
+
+### 7.2 One recommended fix REJECTED, with the measurement that rejects it
+
+Finding **P2-07** is right about the mechanism: the in-use guards *allow* when they see
+no variant, and under `SECURITY INVOKER` that read is filtered by the deleting
+principal's row-level security — a zero read used as proof of absence. Its recommended
+fix was `SECURITY DEFINER` owned by `daftar_catalog_internal`, with the column-scoped
+grant and role-scoped policy that `0070` already uses.
+
+**It was implemented and measured, and it created the bypass it was meant to prevent.**
+`product_variants` carries a RESTRICTIVE `business_isolation` policy
+(`app_bypass() OR business_id = app_business()`) for all commands. Restrictive policies
+AND with everything, so a definer's own `USING (true)` cannot satisfy it:
+
+```
+SET ROLE daftar_catalog_internal;                       -- no session context
+SELECT count(*) FROM product_variants;              ->  0
+SET app.tenant_id=…; SET app.business_id=…;             -- same role, with context
+SELECT count(*) FROM product_variants;              ->  3
+```
+
+With the definer in place, **five removal cases that had been refusals reported "no
+error"** — including the axis-delete case that was green before the change. Under
+`SECURITY INVOKER` the three principals that can reach these rows all behave correctly,
+because FORCE row-level security makes visibility of the registry row and visibility of
+the variants the **same scope**: a bypassrls principal sees both; `daftar_app` with its
+own context sees its business's variants (**measured as `daftar_app`**, which the
+challenge rightly noted no case did); a principal with no context cannot see or delete
+the registry row at all. The definer variant breaks the first of those three.
+
+So the guards stay `SECURITY INVOKER`, the briefly-added grant and policy on
+`product_variants` are **gone** (this pack changes no privilege outside its own five
+relations), and the end-state assertion now **refuses a definer variant by name** so the
+fix cannot be re-applied without the assertion stopping it. The finding's real content —
+a FUTURE policy narrowing `product_variants` would convert each refusal into a silent
+allow — is answered by a tripwire instead: the assertion **pins the policy set** on
+`product_variants` to exactly `{business_isolation, tenant_membership}`, so the pack
+refuses to install over a set it did not reason about. That cannot catch a policy added
+*after* this pack, which is why `P11-MIGRATION-PATCH-REQUEST.md` §12.2 (`PR-SEC-P11-01`) asks the Security
+Authority for the same pin in the standing RLS invariant check. Stated as a limit, not as
+cover.
+
+### 7.3 Three defects of the EVIDENCE, two of them this harness's own
+
+| # | defect | answer |
+|---|---|---|
+| **14** | **this harness exited `0` over a failing race.** `races.py` ended in `sys.exit(0)` unconditionally, so a race that printed `**FINDING**` in its own matrix still returned success and `EXIT_RACES` would have read `0`. No race had failed, so nothing exposed it — the exact class of defect V3 §9 asks for exit codes to prevent, **in the harness that prints them**. Found by re-reading my own harness for this round, not by the challenge. | `sys.exit(1 if findings else 0)` |
+| **15** | **P2-08, and worse than reported: every earlier run of mine was at `datcollate = C`, not the settled `en_US.utf8`.** The challenger supplied the on-target measurement from their own cluster and all 21 cases were green there; mine was off-target and the log did not say so, because it printed `PG_VERSION` and nothing about locale. Every code validator in this pack is a bracket-range regex, and bracket ranges are the collation-sensitive part of POSIX regular expressions. | a new cluster at `en_US.utf8`, created **by the script**; the collation is read **off the database under test** and printed in the identity block; **a cluster off the settled target makes the script exit `3` instead of producing a green** |
+| **16** | **P2-09, the harness could not be re-run from the repository it lives in.** It read `$S/sql/bootstrap.rendered.sql`, `$S/apply_a.sql` and staged copies of itself — none in the repository, none described. The challenger had to reconstruct the locale, the port, the password rendering and whether the pack is applied in one transaction. "A proof whose setup is not in its own repository is reproducible by its author only." | every one of those steps is **in the script**: `localedef` + `initdb`, the password rendering inline, one transaction per pack via a named `apply_pack` function, the cluster named by `P11_SOCK` / `P11_PORT` so every script agrees on which cluster ran, and a pack that is **not on the branch is skipped BY NAME** rather than silently |
+
+**P3-10's three label mismatches** are also fixed: the race-count literal is now computed
+from the matrix it prints, the run identity is printed with its real `RUN_ID` and both a
+start and an end timestamp, and the two absence laws are no longer name-shaped — the
+no-money law asserts on the column's **type** against an allow-list of exactly the pack's
+two ordering columns, and the no-inventory-registration law compares the three inventory
+registries' **row counts** against a baseline taken before the pack's first statement.
+That baseline is held in session settings and not in a temporary table, because
+`daftar_migrator` has no TEMP privilege and **an absence law is not worth widening the
+migration principal's rights for**.
+
+### 7.4 What the challenge did NOT sign, and still does not
+
+Packs B, C and D (lot/expiry, serial, repair, warranty): **no subject existed on the
+branch**, so `C-SER-*`, `C-LOT-*`, `C-FEFO-01` and `C-REP-*` remain `SPEC ONLY` and
+nobody has signed them. Pack B (lot/expiry) is being built in its own round and **is not
+on the branch at this SHA**; the harness names it as skipped rather than running a
+different set of packs than the SHA carries. No CI claim, no npm or TypeScript suite
+(this container is Node 22.22.0 against `engines >=24 <25`), no timing claim, no
+`SERIALIZABLE` or deadlock property.
+
+**`READY_TO_PROMOTE` = NO.** Five defects were fixed and red-proved in this round; the
+pack goes back to the independent challenger, and the author does not sign it.

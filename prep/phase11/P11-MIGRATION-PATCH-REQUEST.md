@@ -67,7 +67,7 @@ No column is added to `product_variants`. Two new objects:
   | refusal | when |
   |---|---|
   | `catalog.variant_attributes_shape_invalid` | `attributes` is not a flat `{axis_code: value_code}` object |
-  | `catalog.variant_axis_unregistered` | an axis key is not in `product_matrix_axes` for that product. **The registry row is read `FOR KEY SHARE`, not with a bare `SELECT`:** an unlocked read does not protect the row, and race B of the live proof showed a concurrent `DELETE` of the axis and an `INSERT` naming it both committing, leaving a variant naming an axis that no longer exists (defect 7). With the key-share read the deleter waits and the loser is refused. |
+  | `catalog.variant_axis_unregistered` | an axis key is not in `product_matrix_axes` for that product. **The registry row is read `FOR SHARE`, not with a bare `SELECT` and not `FOR KEY SHARE`:** an unlocked read does not protect the row, and race B of the live proof showed a concurrent `DELETE` of the axis and an `INSERT` naming it both committing, leaving a variant naming an axis that no longer exists (defect 7). With the row locked the deleter waits and the loser is refused. **`FOR KEY SHARE` is not strong enough and that was measured** (independent challenge at `1a8ba15`, finding P1-03): it conflicts with a DELETE and with a key update, but not with an ordinary UPDATE of a non-key column, so `UPDATE product_attribute_values SET status='archived'` walked straight through it and a committed variant named an archived value. `FOR SHARE` conflicts with every write to the row while two validators still share it. |
   | `catalog.variant_axis_value_unregistered` | a value is not an active `product_attribute_values` row of that axis |
   | `catalog.variant_axis_set_incomplete` | the key set is not **exactly** the product's registered axis set (no partial combination) |
   | `catalog.variant_matrix_immutable` | `attributes` are being changed **at all**, on any variant, whether or not stock exists |
@@ -372,3 +372,60 @@ That is why §1's preconditions name the ruling: this is not a shape that should
 ## 11. Honest status
 
 Nothing in this document has been applied to a cluster, parsed by PostgreSQL or executed. **A spec is design until a parser has had an opinion — and still design until the principal that will apply it has had one.** Every verdict is `UNMEASURED`. The first thing the implementing slice must do, before any TypeScript, is apply its own DDL as `daftar_migrator` on a throwaway cluster and read the errors; P4-S7 found eight of twelve defects that way, and two of them (a constraint trigger above its function, RLS forced with zero policies) are exactly the mistakes this shape invites.
+
+---
+
+## 12. The challenge round's additions, and what is owed to whom
+
+The independent challenge at `1a8ba15` rejected Pack A on five defects of the
+**removal direction** (`P11-LIVE-DDL-PROOF.md` §7). All five fixes are **inside Pack A's
+own relations**, which is what the challenge said and what the implementation confirms:
+**no authority is asked for anything to close them.** This section records what changed
+and the one thing that is owed.
+
+### 12.1 Inside Pack A, nothing owed
+
+| what | why |
+|---|---|
+| the immutability check moved **above** the validator's early return, stated over the transition (`NOT OLD.is_base AND NEW.attributes IS DISTINCT FROM OLD.attributes`) | `'{}'` was the early return's own argument, so blanking a combination committed and split one matrix cell into two stock identities |
+| the registry reads take **`FOR SHARE`** instead of `FOR KEY SHARE` | the archive path is a non-key UPDATE, which key-share does not conflict with |
+| `product_matrix_axes_10_axis_in_use` is `BEFORE DELETE **OR UPDATE OF axis_code**` | a repointing UPDATE is the same removal |
+| new `product_attribute_values_10_value_in_use`, `BEFORE DELETE OR UPDATE OF business_id, axis_code, value_code, status` | this registry had **no** guard on any removal path |
+| new `product_attribute_axes_10_axis_in_use`, `BEFORE UPDATE OF business_id, axis_code, status` | the same for the axis registry; its DELETE is already structural (two `ON DELETE RESTRICT` FKs), its archive is not |
+| the validator reads `product_attribute_axes.status`, and new `product_matrix_axes_20_axis_active` at trigger position **`_20_`** on that relation | `status` was a lifecycle on the value registry and decoration on the axis registry |
+
+All three in-use guards are **`SECURITY INVOKER`**, deliberately: the `SECURITY DEFINER`
+variant was implemented, measured, and **silently disabled every one of them** for a
+principal with no session context, because `product_variants`' RESTRICTIVE
+`business_isolation` policy cannot be satisfied by a definer's own `USING (true)`.
+The end-state assertion now refuses a definer variant **by name**. See §7.2 of the proof
+document for the measurement.
+
+### 12.2 Owed to the Security Authority — one item, and it is not a privilege
+
+**PR-SEC-P11-01.** The three in-use guards conclude from the **absence** of a row in
+`product_variants`, read under the invoker's row-level security. That is sound while
+`product_variants` is narrowed by **business and tenant only**, because the registry row
+being removed is in that same scope. A later policy narrowing it by status, branch or
+channel would convert each refusal into a **silent allow**, and no test would notice.
+
+Pack A's end-state assertion pins the policy set on `product_variants` to exactly
+`{business_isolation, tenant_membership}`, so the pack refuses to install over a set it
+did not reason about — but an assertion inside a migration **cannot see a policy added
+after it**. The Security Authority is asked to pin the same set in the **standing RLS
+invariant check**, with a pointer to these three guards, so that a future policy on
+`product_variants` fails that check instead of quietly weakening a catalogue invariant.
+
+**This asks for no privilege and no policy change.** An earlier draft of this round
+granted `daftar_catalog_internal` a column-scoped SELECT on `product_variants` and added
+a role-scoped read policy to it, to support the definer design; both are **removed**.
+Pack A changes no grant and no policy outside its own five relations.
+
+### 12.3 Owed to the Migration Owner
+
+**MPR-07.** The four triggers above occupy `product_matrix_axes._10_` / `._20_`,
+`product_attribute_values._10_` and `product_attribute_axes._10_`, and the validator on
+`product_variants` stays at `_40_`. Trigger **name order decides firing order for the
+same event**, so the Owner is asked to confirm these positions when the pack is
+allocated — and, if another phase has since taken one, to renumber rather than let two
+guards race for first.
