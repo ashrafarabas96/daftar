@@ -411,7 +411,45 @@ BEGIN
   -- name, and the F-11 gate allows that because 42501 has a single source.
   -- Adding a named 42501 here would make those bare assertions ambiguous —
   -- two defences behind one class, which is exactly what F-11 was about.
-  IF SESSION_USER OPERATOR(pg_catalog.<>) CURRENT_USER THEN
+  -- ROUND 16, THE INDEPENDENT CHALLENGER'S F-16, AND IT IS A REAL COUPLING:
+  -- `SESSION_USER = CURRENT_USER` is false exactly when the session LOGGED IN
+  -- as this routine's owner — and `SET ROLE` does not touch `session_user`
+  -- any more than `SECURITY DEFINER` does. So a session that authenticates
+  -- as the platform principal and drops to the application role per request,
+  -- which is a mainstream pooling pattern, stayed EXEMPT from this check
+  -- while acting as the application role.
+  --
+  -- MEASURED, on the fixture lane at PG 16.15, with the membership planted
+  -- because it does not exist in the project's bootstrap:
+  --
+  --   GRANT p5_app TO p5owner;  SET LOCAL ROLE p5_app;
+  --     session_user=p5owner current_user=p5_app role_guc=p5_app
+  --     call with another tenant's ids under this tenant's context: RETURNED 2
+  --     advisory locks held: 1          <- the exemption was reached
+  --
+  -- The `role` GUC is the discriminator, and it is session state that
+  -- `SECURITY DEFINER` does not overwrite either, so it distinguishes all
+  -- three cases without asking the caller anything:
+  --
+  --   plain owner connection       session_user=owner  role_guc=none   exempt
+  --   owner connection + SET ROLE  session_user=owner  role_guc=<role> CHECKED
+  --   plain application connection session_user=app    role_guc=none   CHECKED
+  --
+  -- ONE FALSE NEGATIVE, NAMED RATHER THAN DISCOVERED LATER: an administrator
+  -- who writes `SET ROLE <the owner role>` explicitly is now refused, even
+  -- though nothing about their authority changed. That is the fail-closed
+  -- direction, it was measured (`context is <NULL>/<NULL>`, zero advisory
+  -- locks held afterwards), and the cost is one `RESET ROLE`.
+  --
+  -- THE CHALLENGER PREFERS A STRUCTURAL REMEDY and so do I: give the admin
+  -- path its own entry point with its own EXECUTE grant, and let this
+  -- routine check scope UNCONDITIONALLY, which removes the dependence on how
+  -- the session authenticated instead of tightening it. That changes the
+  -- requested signature, so it is the Migration Owner's call and it is
+  -- written down as one in `P5-MIGRATION-PATCH-REQUEST.md` §18a. This check
+  -- is what closes the route in the meantime.
+  IF NOT (SESSION_USER OPERATOR(pg_catalog.=) CURRENT_USER
+          AND current_setting('role') OPERATOR(pg_catalog.=) 'none') THEN
     IF p_tenant IS DISTINCT FROM NULLIF(app_tenant(), '')::uuid
        OR p_business IS DISTINCT FROM NULLIF(app_business(), '')::uuid THEN
       RAISE EXCEPTION 'lock_grants_in_order was called for tenant %/business % by a session whose context is %/%',
@@ -666,10 +704,64 @@ DECLARE
   claimed bigint;
   consumed bigint;
   invoice_state text;
+  inv_tenant uuid;
+  inv_business uuid;
+  caller_owns boolean;
 BEGIN
-  SELECT i.credit_minor, i.state INTO claimed, invoice_state
+  SELECT i.credit_minor, i.state, i.tenant_id, i.business_id
+    INTO claimed, invoice_state, inv_tenant, inv_business
     FROM p5scratch.subscription_invoices i WHERE i.id = p_invoice;
-  IF claimed IS NULL THEN
+  -- ROUND 16, THE INDEPENDENT CHALLENGER'S F-17. This is the SAME CLASS as
+  -- F-14: the other definer routine that takes a row-selecting argument from
+  -- its caller. It is owned by `p5_invariants`, whose two policies are
+  -- `FOR SELECT … USING (true)` — a principal that sees every tenant — and
+  -- the application role holds EXECUTE on it by the round-14 compensating
+  -- grant. It took no scope check at all, so it answered "does this invoice
+  -- id exist in some other tenant" where every other route answers no rows.
+  --
+  -- MEASURED before the fix, as the application role under another tenant's
+  -- context: direct read of the foreign invoice `n=0`, the call with that
+  -- invoice's REAL id `returned void`, the call with a non-existent id
+  -- `23000/si_invoice_unreadable`. Two distinguishable answers is the leak;
+  -- it is one existence bit per uuid the caller already holds.
+  --
+  -- THE CLOSE IS NOT A NEW REFUSAL, AND THAT IS THE POINT. A second named
+  -- refusal for "foreign invoice" would have left the oracle intact under a
+  -- different name. So an invoice this caller's context does not own is
+  -- treated EXACTLY as an unreadable one, by the fail-closed branch that is
+  -- already below, and the two cases became indistinguishable: measured
+  -- after the fix, the foreign id and the non-existent id both answer
+  -- `si_invoice_unreadable`, with no difference but the id the caller
+  -- supplied itself.
+  --
+  -- THE EXEMPTION CANNOT BE `SESSION_USER = CURRENT_USER` HERE, which is
+  -- F-14's spelling, and the reason is specific: this routine is owned by
+  -- `p5_invariants`, which has NOLOGIN, so no session can ever authenticate
+  -- as it and that comparison would be false for EVERY caller — including
+  -- the admin and fixture paths, which hold no request context and would
+  -- then be refused at their own commit. The exemption is therefore "the
+  -- session authenticated as the SCHEMA OWNER", read from
+  -- `pg_namespace.nspowner` so that it names neither lane's principal: the
+  -- fixture lane's is `p5owner` and the real lane's is `daftar_platform`.
+  -- The `role` GUC is required to be `none` for the same reason as F-16, so
+  -- the two routines now have the same exemption discipline.
+  --
+  -- The legitimate deferred path is unaffected and this is the load-bearing
+  -- claim of the change: the constraint triggers that `PERFORM` this run as
+  -- the application role, inside the transaction that wrote the invoice,
+  -- whose context is by construction that invoice's own tenant and business
+  -- — RLS would have refused the write otherwise.
+  caller_owns := (
+      SESSION_USER OPERATOR(pg_catalog.=) (
+        SELECT pg_catalog.pg_get_userbyid(n.nspowner)
+          FROM pg_catalog.pg_namespace n
+         WHERE n.nspname OPERATOR(pg_catalog.=) 'p5scratch')
+      AND current_setting('role') OPERATOR(pg_catalog.=) 'none'
+    ) OR (
+      inv_tenant IS NOT DISTINCT FROM NULLIF(app_tenant(), '')::uuid
+      AND inv_business IS NOT DISTINCT FROM NULLIF(app_business(), '')::uuid
+    );
+  IF claimed IS NULL OR NOT caller_owns THEN
     -- FAIL CLOSED. This used to `RETURN`, on the reasoning that NULL means
     -- "the invoice was rolled back or never written" and `pca_invoice_fk`
     -- reports that case. Both halves of that were true and the conclusion
@@ -694,6 +786,15 @@ BEGIN
     -- refusal it got: a case that asserts only that something was refused
     -- passes in both of two opposite worlds, which is how Phase 13's
     -- equivalent test proved nothing.
+    --
+    -- ROUND 16: this branch now has TWO causes, stated because one name for
+    -- two causes is the thing F-11 was about and this is a deliberate
+    -- exception to it. The first is "the row is not there". The second is
+    -- F-17's: "the row is there and is not this caller's", which is
+    -- DELIBERATELY not distinguishable from the first, because the whole
+    -- defect was that it was. The distinction a case needs is still
+    -- available to a case, from the OWNER connection, which is exempt and
+    -- sees the real reason — and that is where the lane asserts it.
     RAISE EXCEPTION 'the agreement invariant cannot read invoice %, so it refuses rather than assume', p_invoice
       USING ERRCODE = 'integrity_constraint_violation', CONSTRAINT = 'si_invoice_unreadable';
   END IF;

@@ -231,11 +231,13 @@ describe('a refusal in the DB lane names the defence that refused, not its class
     expect(transaction.length, 'no site sets the context per transaction, so the frozen discipline is unproved').toBeGreaterThanOrEqual(1);
     // Measured, never predicted — this number has been wrong three times in
     // this phase by being reasoned about instead of read off a run.
-    // ROUND 15: 22 = 18 helper sites plus 4 literal `set_config(…, false)`
-    // calls, all four of them in the RLS suite, where round 15's definer-scope
-    // and pooled-continuation cases were added. Round 14 measured 17 (15 + 2),
-    // and the coordinator counted the same population before round 14 as
-    // "12 of 13" plus two literals.
-    expect(session.length, 'the session-scoped site count changed; update this law and CHECKPOINT §9.3 together').toBe(22);
+    // ROUND 16: 23 = 19 helper sites plus 4 literal `set_config(…, false)`
+    // calls, all four of them in the RLS suite. The one site this round added
+    // is F-17's case; F-16's case is 'transaction'-scoped, which is why the
+    // count moved by one and not by two.
+    // ROUND 15 measured 22 (18 + 4), round 14 measured 17 (15 + 2), and the
+    // coordinator counted the same population before round 14 as "12 of 13"
+    // plus two literals.
+    expect(session.length, 'the session-scoped site count changed; update this law and CHECKPOINT §9.3 together').toBe(23);
   });
 });

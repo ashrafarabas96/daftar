@@ -17,11 +17,39 @@ GRANT SELECT, INSERT ON p5scratch.platform_credit_adjustments TO p5_app;
 -- and in the real-schema lane that is `daftar_migrator`, not `p5owner`.
 -- The application role needs SELECT on it either way, though NOT for the
 -- reason this comment gave until round 14 (the coordinator's diff review
--- R-13): the LIVE tenant-membership policy on a relation that carries its
--- own `tenant_id` compares it DIRECTLY, with no subquery, so no policy of
--- this slice reads `businesses` at all. What needs the read is the lane's
--- own fixture work and the FK target, and a policy's subquery would run as
--- the invoking role if there were one.
+-- R-13): no policy of THIS SLICE reads `businesses` at all, because the
+-- tenant-membership policies here compare `tenant_id` directly. What needs
+-- the read is the lane's own fixture work and the FK target, and a policy's
+-- subquery would run as the invoking role if there were one.
+--
+-- ROUND 16, AND ROUND 14'S CORRECTION WAS ITSELF AN OVER-CORRECTION. It
+-- generalised from this slice to the house pattern — "a relation that
+-- carries its own `tenant_id` compares it DIRECTLY" — and the frozen schema
+-- says otherwise. Counted from `pg_policies` on the real migrated database,
+-- PG 16.15, 400 policies in `public`, 86 of them mentioning `app_tenant()`:
+--
+--   25  compare `tenant_id` directly    <- the shape this slice copied
+--   61  go through `EXISTS (SELECT 1 FROM businesses b WHERE b.id = …
+--         AND b.tenant_id::text = app_tenant())`
+--   35  of those 61 are on tables that DO carry their own `tenant_id`
+--
+-- So the subquery is the MAJORITY shape and it is used even where a direct
+-- comparison was available. Both halves of the round-14 sentence are true
+-- about this slice and false about the house pattern, and the independent
+-- challenger is the one who caught the generalisation (round 12, its note on
+-- my corrections). Where the subquery shape is used, the invoking role DOES
+-- need SELECT on `businesses` — which is the reason the pre-round-14 comment
+-- gave, for the wrong relations.
+--
+-- WHICH SHAPE PHASE 5 SHOULD USE IS THEREFORE A DECISION AND NOT AN
+-- OBSERVATION, and it is the Migration Owner's: `P5-MIGRATION-PATCH-REQUEST.md`
+-- §18c. This slice keeps the direct comparison, because that is what it has
+-- measured and because its relations all carry `tenant_id` NOT NULL.
+--
+-- ONE MEASUREMENT NOTE, because it nearly went into a report as a figure: my
+-- first count of the direct shape was THREE, not 25, because I matched one
+-- spelling (`(tenant_id)::text = app_tenant()`) and the schema uses three.
+-- A count produced by one pattern is a claim about that pattern.
 -- ROUND 5: the invoice relation. SELECT, INSERT and UPDATE — an invoice is
 -- NOT append-only (a draft becomes finalized), which is exactly why it is a
 -- different relation from the ledger and not a column on it. No DELETE.

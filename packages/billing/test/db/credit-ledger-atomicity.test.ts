@@ -651,7 +651,23 @@ describe('the agreement invariant cannot be hidden from, round 8', () => {
       // The transaction is refused either way. The fail-closed branch is
       // proved separately and by name in the suite below, so neither
       // defence is resting on this case.
-      expect(code, 'an invoice claiming unbacked platform credit was committed').toBe('23000/si_credit_agrees_with_ledger');
+      //
+      // ROUND 16, AND THE ANSWER MOVED AGAIN — this time because I moved it,
+      // deliberately, and the round-12 note above is now history rather than
+      // the current reason. The challenger's F-17 close treats an invoice the
+      // caller's CONTEXT does not own exactly as an unreadable one, so that a
+      // foreign invoice id and a non-existent one cannot be told apart. A
+      // session that has moved to another business before COMMIT is precisely
+      // "the context does not own this invoice", so this attack is now
+      // refused by that rule, one branch EARLIER than the arithmetic.
+      //
+      // Recorded because it is a real loss and not only a renaming: this case
+      // no longer exercises the arithmetic comparison. That branch is asserted
+      // by name in four other cases whose session does NOT move — lines 318,
+      // 342, 411 and 623 — and that is what keeps it measured. If those four
+      // were ever deleted, this case would no longer notice the arithmetic
+      // going missing.
+      expect(code, 'an invoice claiming unbacked platform credit was committed').toBe('23000/si_invoice_unreadable');
     } finally {
       await app.end();
     }

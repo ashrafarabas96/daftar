@@ -23,6 +23,20 @@ export const appUrl = (): string => required('P5_DB_APP_URL');
  * definer routine. The lane sets `P5_DB_STRANGER_URL`.
  */
 export const strangerUrl = (): string => required('P5_DB_STRANGER_URL');
+/**
+ * The CLUSTER SUPERUSER, which both lanes already export because the
+ * bootstrap file has to be applied by one.
+ *
+ * ROUND 16, the independent challenger's F-16: its measurement needed a role
+ * MEMBERSHIP that the project's bootstrap deliberately does not create, and
+ * only a role administrator can create one. The challenger planted it by
+ * hand. The case plants and removes it itself instead, so the cluster is left
+ * as it was found and the proof is repeatable — it is the only thing in this
+ * lane that connects as a superuser, and it executes no part of the schema
+ * under test as one, because a superuser bypasses RLS and would turn a proof
+ * into a tautology.
+ */
+export const bootstrapUrl = (): string => required('P5_DB_BOOTSTRAP_URL');
 
 /**
  * The schema the BORROWED relations live in.

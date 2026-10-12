@@ -64,7 +64,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
-import { appUrl, borrowedSchema, connect, connectWithoutContext, ownerUrl, refusedBy, setRequestContext, strangerUrl, uuid } from './helpers/cluster';
+import { appUrl, bootstrapUrl, borrowedSchema, connect, connectWithoutContext, ownerUrl, refusedBy, setRequestContext, strangerUrl, uuid } from './helpers/cluster';
 import { createBusiness, createDraftInvoice, insertGrant, type Scope } from './helpers/finalize';
 
 const TENANT = '7f1a0000-0000-4000-8000-000000000007';
@@ -443,6 +443,120 @@ describe('a definer routine trusts the context, not its caller', () => {
     } finally {
       await stranger.end();
     }
+  });
+
+  it('is NOT exempted by a session that authenticated as the owner and then SET ROLE', async () => {
+    // ROUND 16, THE INDEPENDENT CHALLENGER'S F-16. `SESSION_USER = CURRENT_USER`
+    // is false exactly when the session LOGGED IN as the routine's owner, and
+    // `SET ROLE` does not touch `session_user` any more than `SECURITY DEFINER`
+    // does. So "authenticate as the admin role, drop to the application role
+    // per request" — a mainstream pooling pattern — was EXEMPT from the scope
+    // check while acting as the application role.
+    //
+    // The membership it needs does not exist in the project's bootstrap, and
+    // only a role administrator can create one, which is why the challenger
+    // rated it P3 and planted the membership by hand to measure the
+    // consequence. This case plants it and removes it again, so the finding is
+    // reproducible by a run rather than by a transcript, and the cluster is
+    // left as it was found. The guard now also requires the `role` GUC to be
+    // `none`, which is session state a definer cannot overwrite either.
+    const victim = await freshScope();
+    await insertGrant(owner, 'p5scratch', victim, 4200n, T1);
+    const mine = await freshScope();
+    const su = await connectWithoutContext(bootstrapUrl());
+    const ownerName = (
+      await su.query<{ owner: string }>(
+        `SELECT pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'p5scratch'`,
+      )
+    ).rows[0]?.owner;
+    expect(ownerName, 'the schema has no owner, so this case cannot plant anything').toBeTruthy();
+    // A role name cannot be a bind parameter in GRANT, so it is checked
+    // against the shape an unquoted identifier may have before it is
+    // interpolated. Both lanes' principals (`p5owner`, `daftar_platform`)
+    // satisfy it, and a name that does not stops the case instead of being
+    // pasted into DDL.
+    expect(ownerName ?? '', 'the schema owner is not a plain identifier; this case will not interpolate it').toMatch(
+      /^[a-z_][a-z0-9_]{0,62}$/,
+    );
+    const pooled = await connectWithoutContext(ownerUrl());
+    try {
+      await su.query(`GRANT p5_app TO ${ownerName}`);
+      // The route, exactly as the challenger measured it.
+      await pooled.query('BEGIN');
+      await setRequestContext(pooled, mine, 'transaction');
+      await pooled.query('SET LOCAL ROLE p5_app');
+      const who = await pooled.query<{ s: string; c: string; role: string }>(
+        `SELECT session_user AS s, current_user AS c, current_setting('role') AS role`,
+      );
+      expect(who.rows[0]?.s, 'this case proves nothing unless the session AUTHENTICATED as the owner').toBe(ownerName);
+      expect(who.rows[0]?.role, 'this case proves nothing unless the session is ACTING AS another role').toBe('p5_app');
+      const refusal = await pooled
+        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD'])
+        .then(() => '', (e: unknown) => refusedBy(e));
+      expect(refusal, 'an admin login acting as the application role reached another business').toBe(
+        '23000/lgo_scope_is_the_callers_own',
+      );
+      await pooled.query('ROLLBACK');
+      // The CONTROL, and it is what makes the refusal above attributable: the
+      // same connection, the same foreign ids, no SET ROLE. The platform
+      // principal's context-free path is exempt and still works, so the
+      // refusal came from the `role` GUC and not from the scope comparison.
+      const allowed = await pooled.query<{ locked: number }>(
+        `SELECT p5scratch.lock_grants_in_order($1, $2, $3) AS locked`,
+        [victim.tenantId, victim.businessId, 'USD'],
+      );
+      expect(allowed.rows[0]?.locked, 'the exempt admin path was refused, so the control proves nothing').toBe(1);
+    } finally {
+      await su.query(`REVOKE p5_app FROM ${ownerName}`);
+      const left = await su.query<{ ok: boolean }>(`SELECT pg_has_role($1, 'p5_app', 'USAGE') AS ok`, [ownerName]);
+      await su.end();
+      await pooled.end();
+      expect(left.rows[0]?.ok, 'the planted membership outlived the case that planted it').toBe(false);
+    }
+  });
+
+  it('tells a foreign invoice and a non-existent one apart for NOBODY but the owner', async () => {
+    // ROUND 16, THE INDEPENDENT CHALLENGER'S F-17, the same class as F-14:
+    // `assert_invoice_credit_agrees` is the other definer that takes a
+    // row-selecting argument. It is owned by `p5_invariants`, which sees every
+    // tenant, and the application role holds EXECUTE on it by the round-14
+    // compensating grant. With no scope check it answered "does this invoice
+    // id exist in some other tenant" where every other route answers no rows.
+    //
+    // The close is deliberately NOT a new named refusal: a second name would
+    // have left the oracle intact under a different spelling. An invoice the
+    // caller's context does not own is treated exactly as an unreadable one,
+    // so the two answers became the same answer — which is what this case
+    // asserts, by comparing them to each other and not only to a literal.
+    const mine = await freshScope();
+    const foreign = await freshScope(OTHER_TENANT);
+    const foreignInvoice = await createDraftInvoice(owner, 'p5scratch', foreign, 1000n);
+    const absent = uuid();
+    const app = await connectWithoutContext(appUrl());
+    try {
+      await setRequestContext(app, mine, 'session');
+      const onForeign = await app
+        .query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [foreignInvoice])
+        .then(() => '', (e: unknown) => refusedBy(e));
+      const onAbsent = await app
+        .query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [absent])
+        .then(() => '', (e: unknown) => refusedBy(e));
+      expect(onForeign, "another tenant's invoice was accepted by the invariant").toBe('23000/si_invoice_unreadable');
+      expect(onAbsent, 'a non-existent invoice was accepted by the invariant').toBe('23000/si_invoice_unreadable');
+      expect(onForeign, 'the two answers differ, so the existence oracle is still open').toBe(onAbsent);
+    } finally {
+      await app.end();
+    }
+    // And the distinction is not LOST, only withheld: the exempt principal
+    // still sees the real reason, which is where the lane asserts it. A draft
+    // carries no credit, so the invariant returns for one it may read.
+    await owner.query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [foreignInvoice]);
+    const ownerOnAbsent = await owner
+      .query(`SELECT p5scratch.assert_invoice_credit_agrees($1)`, [absent])
+      .then(() => '', (e: unknown) => refusedBy(e));
+    expect(ownerOnAbsent, 'the owner lost the fail-closed branch as well, which is more than F-17 asked for').toBe(
+      '23000/si_invoice_unreadable',
+    );
   });
 
   it('grants EXECUTE on no definer routine to PUBLIC', async () => {
