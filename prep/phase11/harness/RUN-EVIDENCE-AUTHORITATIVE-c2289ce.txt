@@ -1,0 +1,173 @@
+RUN_ID            : p11-20261012T151906Z-10772
+RUN_AT_UTC_START  : 2026-10-12T15:19:06Z
+HOST_KERNEL       : Linux 6.18.44-fc-v114
+SOURCE_REPO       : https://github.com/ashrafarabas96/daftar
+SOURCE_BRANCH     : claude/phase11-prep-re0epv
+SOURCE_SHA        : c2289ce7974a17d1e3509caf077e4fd5e8c26c26
+SOURCE_TREE_DIRTY : no
+MIGRATIONS_SHA    : b128c7033a3381bd2237d0a1405f0676ac509960
+MANIFEST_SHA256   : 4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804
+BOOTSTRAP_SHA256  : 19df5cca37a6a887ede923e6f108163e579ac42f68cb0c8b48730eb2f2a3c507
+PACK_A_DDL_SHA256 : 9ff638d426ec396947dfd0d89d759d0510faf8bb5e9da62921eb97a419304052
+PACK_B_DDL_SHA256 : 27bca629dc4d0ed238204e0e0cc11828db53808868dbae5c0854118410c5f60a
+HARNESS_SHA256    : 07ce536a632569a7c9f74754d5362387c26192f088e034c9980205d46fc5e4aa
+PG_VERSION        : postgres (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+PG_CLUSTER_DIR    : /var/tmp/p11u/data (port 55512, socket /var/tmp/p11u/run)
+NODE_VERSION      : v22.22.0 (repository engines: >=24 <25) -- NO npm suite is run here
+FIXTURES          : world.sql (Pack A), world_b.sql (Pack B, with its definer fixture). Within the packs present, no fixture and no case is skipped; a pack that is not on the branch is named as skipped above and below.
+
+=== 1. drop and recreate the database ===
+DB_COLLATION      : en_US.utf8 / en_US.utf8 / UTF8   (measured on the database under test, not on template1)
+=== 2. bootstrap.sql (the runtime roles + extensions), as the deployment administrator ===
+bootstrap rendered: 16 placeholders substituted
+psql:/var/tmp/p11u/sql/bootstrap.rendered.sql:297: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_accounting_internal" by role "postgres"
+psql:/var/tmp/p11u/sql/bootstrap.rendered.sql:298: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_platform" by role "postgres"
+psql:/var/tmp/p11u/sql/bootstrap.rendered.sql:304: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_inventory_internal" by role "postgres"
+psql:/var/tmp/p11u/sql/bootstrap.rendered.sql:314: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_catalog_internal" by role "postgres"
+psql:/var/tmp/p11u/sql/bootstrap.rendered.sql:315: NOTICE:  role "daftar_migrator" has already been granted membership in role "daftar_provisioning_internal" by role "postgres"
+=== 3. migrations 0000..0086 as daftar_migrator (NOT superuser) ===
+APPLIED 87/87 as daftar_migrator
+LAST: 0086_phase4_rls_quals_once_per_query.sql
+=== 4. Pack A (apparel / variant matrix), unnumbered, as daftar_migrator ===
+ set_config | set_config | set_config 
+------------+------------+------------
+ 9          | 11         | 34
+(1 row)
+
+PACK A APPLIED in one transaction, end-state assertion passed
+=== 4b. Pack B (lot / expiry), unnumbered, as daftar_migrator ===
+psql:/home/user/daftar/prep/phase11/ddl/p11-pack-b-lot-expiry.sql:481: NOTICE:  P11 PACK B end-state assertion passed: 12 checks
+PACK B APPLIED in one transaction, end-state assertion passed
+=== 5. the world (Pack A) ===
+    step     
+-------------
+ WORLD BUILT
+(1 row)
+
+=== 5b. the lot world (Pack B) ===
+ fixture_configure_lot_product 
+-------------------------------
+ 
+(1 row)
+
+ fixture_configure_lot_product 
+-------------------------------
+ 
+(1 row)
+
+        step        | tracked | lot_tracked | base_variants 
+--------------------+---------+-------------+---------------
+ PACK B WORLD BUILT |       2 |           1 |             2
+(1 row)
+
+             step             
+------------------------------
+ PACK B COMMAND FIXTURE READY
+(1 row)
+
+=== 6. proofs (Pack A, apparel) ===
+case                                                                     verdict                      detail
+--------------------------------------------------------------------------------------------------------------------------------------------
+happy path: a registered combination is accepted                         GREEN                        {"size": "s", "color": "red"}
+jsonb itself canonicalizes key order, which is what makes the index work GREEN                        t
+attributes is an array, not an object                                    RED (refused as required)    catalog.variant_attributes_shape_invalid
+attributes has a nested value                                            RED (refused as required)    catalog.variant_attributes_shape_invalid
+attributes has a non-text value                                          RED (refused as required)    catalog.variant_attributes_shape_invalid
+an axis the product's matrix does not register                           RED (refused as required)    catalog.variant_axis_unregistered
+a value that exists but is archived                                      RED (refused as required)    catalog.variant_axis_value_unregistered
+a value that does not exist at all                                       RED (refused as required)    catalog.variant_axis_value_unregistered
+a partial combination (one of two registered axes)                       RED (refused as required)    catalog.variant_axis_set_incomplete
+a product with no registered axes cannot carry attributes                RED (refused as required)    catalog.variant_axis_unregistered
+a base variant write is refused by the pre-existing authority, not by Pack A RED (refused as required)    catalog.base_variant_not_mutable
+the same combination twice                                               RED (refused as required)    product_variants_matrix_uq
+the same combination with the keys written in the other order            RED (refused as required)    product_variants_matrix_uq
+attributes changed at all (the combination is the identity)              RED (refused as required)    catalog.variant_matrix_immutable
+an axis named by existing variants cannot be removed                     RED (refused as required)    catalog.matrix_axis_in_use
+P0-01 the combination cannot be BLANKED either (the early return used to allow it) RED (refused as required)    catalog.variant_matrix_immutable
+P0-01 and the cell therefore still has exactly ONE stock identity        GREEN                        1
+a plain product's non-base variant may carry no combination at all (why the CHECK is unavailable) GREEN                        1
+and ITS combination is immutable in the other direction too              RED (refused as required)    catalog.variant_matrix_immutable
+P0-02 a value named by existing variants cannot be DELETED               RED (refused as required)    catalog.attribute_value_in_use
+P1-03 nor ARCHIVED (the non-key UPDATE the FOR KEY SHARE lock did not cover) RED (refused as required)    catalog.attribute_value_in_use
+P1-03 nor REPOINTED to another code, which is the same removal           RED (refused as required)    catalog.attribute_value_in_use
+a value no variant names is still archivable (the guard refuses removal, not administration) GREEN                        archived
+and un-archiving it is not a removal either                              GREEN                        active
+P1-04 an axis in use cannot be REPOINTED either (an UPDATE is the same removal) RED (refused as required)    catalog.matrix_axis_in_use
+P1-04 and the matrix still registers exactly its two axes                GREEN                        size,color
+an axis named by existing variants can be neither renamed nor archived in the REGISTRY RED (refused as required)    catalog.attribute_axis_in_use
+P2-06 an ARCHIVED axis cannot be added to a product's matrix             RED (refused as required)    catalog.variant_axis_archived
+P2-06 nor can a variant name an archived axis, even one its matrix registers RED (refused as required)    catalog.variant_axis_archived
+P2-07 an in-use axis cannot be deleted by the APPLICATION role either (the guard under live RLS) RED (refused as required)    catalog.matrix_axis_in_use
+P2-07 nor can it delete an in-use VALUE                                  RED (refused as required)    catalog.attribute_value_in_use
+P2-07 the guards are SECURITY INVOKER, because a DEFINER one cannot satisfy the restrictive policy GREEN                        0
+P2-07 the measurement itself: that role reads NOTHING without a session context GREEN                        0
+P2-07 and the same read WITH a context sees the business's variants, so it is the policy and not the grant GREEN                        t
+P2-07 and Pack A leaves product_variants' policy set exactly as it found it GREEN                        business_isolation,tenant_membership
+as daftar_app in business B, business A's axes are invisible             GREEN                        0
+as daftar_app in business B, inserting an axis FOR business A is refused RED (refused as required)    row-level security
+as daftar_app in business B, business A's matrix rows are invisible      GREEN                        0
+with business A's own context the same rows ARE visible (the read is not broken, it is scoped) GREEN                        4
+business A's context with the WRONG tenant sees nothing (tenant_membership, not only business_isolation) GREEN                        0
+daftar_app does not bypass RLS                                           GREEN                        f
+
+TOTAL 41 cases, 0 failed
+=== 6a2. proofs (Pack B, lot/expiry) ===
+case                                                                                  verdict                   detail
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+a lot code must be the catalogue's canonical form, not a second normalization         RED (refused as required) stock_lots_code_canonical_ck
+the same lot code twice for one variant                                               RED (refused as required) stock_lots_code_uq
+expiry before production                                                              RED (refused as required) stock_lots_dates_ck
+a status outside active/blocked/closed (a quarantine is a status, not a value change) RED (refused as required) stock_lots_status_ck
+an overlay row naming a lot of ANOTHER variant                                        RED (refused as required) stock_lot_movements_lot_fk
+an overlay row naming a movement of another stock key                                 RED (refused as required) stock_lot_movements_movement_fk
+a zero overlay delta                                                                  RED (refused as required) stock_lot_movements_qty_ck
+the happy path: a lot-tracked movement whose allocation sums exactly                  GREEN                     2
+the allocation sums to less than the movement (C-LOT-01)                              RED (refused as required) inventory.lot_allocation_sum_mismatch
+a lot-tracked movement with NO allocation at all                                      RED (refused as required) inventory.lot_allocation_missing
+an allocation on a variant that is NOT lot-tracked                                    RED (refused as required) stock_lot_movements_lot_fk
+an allocation whose SIGN disagrees with the movement                                  RED (refused as required) inventory.lot_allocation_sign_invalid
+SET CONSTRAINTS ALL IMMEDIATE does not switch the conservation law off                RED (refused as required) inventory.lot_allocation_sum_mismatch
+an overlay row cannot be updated, not even by the principal that owns the table       RED (refused as required) inventory.ledger_immutable
+nor deleted                                                                           RED (refused as required) inventory.ledger_immutable
+the per-lot cache cannot disagree with the stock key's on-hand                        RED (refused as required) inventory.lot_level_conservation_violated
+and it commits when it does agree                                                     GREEN                     10
+a negative per-lot on-hand                                                            RED (refused as required) stock_lot_levels_on_hand_ck
+the fold reports the lot's own quantity from the movements, not the cache             GREEN                     6
+the fold refuses a key outside the transaction's business                             RED (refused as required) inventory.scope_mismatch
+daftar_app cannot switch lot tracking on (it is inventory configuration)              RED (refused as required) inventory.configuration_authority_required
+nor set it at insert time                                                             RED (refused as required) inventory.configuration_authority_required
+lot tracking cannot change once the product has stock history                         RED (refused as required) inventory.lot_tracking_history_locked
+a lot of something that holds no stock at all                                         RED (refused as required) products_lot_requires_tracking_ck
+the expiry policy admits exactly one value in this phase                              RED (refused as required) products_expiry_policy_ck
+as daftar_app in business B, business A's lots are invisible                          GREEN                     0
+with business A's own context the same lots ARE visible                               GREEN                     2
+business A's context with the WRONG tenant sees nothing                               GREEN                     0
+daftar_app cannot write a lot at all (the overlay is the authority's)                 RED (refused as required) permission denied
+no monetary column exists on any overlay relation (L-P11-02)                          GREEN                     0
+the costing key is untouched: stock_levels still has no column below the variant      GREEN                     0
+
+PACK B TOTAL 31 cases, 0 failed
+=== 6b. real concurrency: the races, two live backends, no sleep() ===
+## RESULT MATRIX — 7 races, real backends, no sleep()
+
+| race                                                 | T1 | T2 | observed | verdict |
+|------------------------------------------------------|---|---|---|---|
+| A  duplicate combination                             | INSERT {size:s,color:red}, then COMMIT | INSERT the same combination, concurrently | T2 blocked while T1 held the speculative insert: True. Rows after both: 1. T2: refused on product_variants_matrix_uq | PASS — exactly one commits; the index refuses the other, and it BLOCKS rather than racing |
+| B  axis removed vs variant inserted                  | DELETE the 'color' axis of this product, then COMMIT | INSERT a variant naming 'color', concurrently | T2 blocked: True. T2: ERROR:  catalog.variant_axis_unregistered: axis co. Variants naming an unregistered axis after both commit: 0 | PASS — the closure invariant holds after both commit |
+| B2 variant inserted vs axis removed (reverse order)  | INSERT a variant naming 'color', then COMMIT | DELETE the 'color' axis, concurrently | T2 blocked: True. T2: refused on catalog.matrix_axis_in_use. Axis rows after both: 1; variants naming it: 1 | PASS — the deleter waits on the inserter's key-share lock and the guard then SEES the committed variant (R62's mechanism: the executor locks OLD before the trigger body) |
+| C  attributes changed vs first stock movement        | UPDATE attributes while no stock exists yet, then COMMIT | INSERT the variant's FIRST stock_levels row, concurrently | T1: ERROR:  catalog.variant_matrix_immutable. T2 blocked: False. T2: committed. Final: {"size": "s", "color": "red"} | stock rows: 1 | PASS — the interleaving does not produce a changed-attributes-with-stock row |
+| D  value archived vs variant inserted                | INSERT a variant naming value 'rd1', then COMMIT | UPDATE that value row to status='archived', concurrently | T2 blocked: True. T2: refused on catalog.attribute_value_in_use. Variants naming a non-active value after both: 0 | PASS — FOR SHARE makes the non-key UPDATE wait, and the new in-use guard then refuses it |
+| E  value deleted vs variant inserted                 | INSERT a variant naming value 'rd2', then COMMIT | DELETE that value row, concurrently | T2 blocked: True. T2: refused on catalog.attribute_value_in_use. Variants naming a value that no longer exists: 0 | PASS — the deleter waits, then the guard sees the committed variant and refuses |
+| F  value deleted vs variant inserted (reverse order) | DELETE the value row 'rd3', then COMMIT | INSERT a variant naming 'rd3', concurrently | T2 blocked: True. T2: refused on catalog.variant_axis_value_unregistered. Orphan variants: 0 | PASS — the inserter waits on the deleted row and is then refused by its own registry read |
+
+7 races run; 0 finding(s).
+=== 7. the frozen tree, after the run ===
+tracked changes under infrastructure/database: 0
+frozenThrough: 0079_phase4_pos_till_sessions_cart.sql | frozen entries: 80 | digest mismatches: []
+
+RUN_ID            : p11-20261012T151906Z-10772
+RUN_AT_UTC_END    : 2026-10-12T15:20:27Z
+EXIT_PROOFS_A     : 0  (prep/phase11/harness/proofs.py)
+EXIT_PROOFS_B     : 0  (prep/phase11/harness/proofs_b.py)
+EXIT_RACES        : 0  (prep/phase11/harness/races.py)
+EXIT_SCRIPT       : 0  (0 means every step above returned 0)

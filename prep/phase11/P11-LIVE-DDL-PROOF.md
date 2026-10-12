@@ -335,7 +335,15 @@ Pack B is the lot/expiry overlay of `TL-P11-R1`'s Option B: lot and serial exten
 monetary column** and the costing key stays `(business_id, warehouse_id, variant_id)`.
 It was applied unnumbered as `daftar_migrator` and proved the same way Pack A was.
 
-**Result: 31 cases, 0 failed** — `EXIT_PROOFS_B 0`. Applied in one transaction with its
+**Result: 31 cases, 0 failed** — `EXIT_PROOFS_B 0`, in the clean-tree run at
+**`c2289ce7974a17d1e3509caf077e4fd5e8c26c26`** (`RUN_ID p11-20261012T151906Z-10772`,
+`2026-10-12T15:19:06Z` → `15:20:27Z`, `SOURCE_TREE_DIRTY : no`,
+`DB_COLLATION en_US.utf8 / en_US.utf8 / UTF8`,
+`PACK_B_DDL_SHA256 27bca629dc4d0ed238204e0e0cc11828db53808868dbae5c0854118410c5f60a`,
+`HARNESS_SHA256 07ce536a632569a7c9f74754d5362387c26192f088e034c9980205d46fc5e4aa`), raw log
+`prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-c2289ce.txt`. That same run carries Pack
+A's 41 cases and 7 races, all green, with `EXIT_SCRIPT 0`: **the two packs are proved
+together on one cluster**, so neither is claimed from a run the other was absent from. Applied in one transaction with its
 own end-state assertion (12 checks). The writer change of
 `P11-MIGRATION-PATCH-REQUEST.md` §3.6 is **not** in this round, so `C-LOT-01`'s
 integration with `inventory_apply_stock_movements` stays
