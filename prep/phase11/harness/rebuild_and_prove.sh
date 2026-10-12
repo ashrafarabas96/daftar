@@ -122,6 +122,24 @@ if [ -f "$H/world_b.sql" ]; then
   echo "=== 5b. the lot world (Pack B) ==="
   $Q "$PSQL_P -U postgres -d daftar -X -q -v ON_ERROR_STOP=1 -f $H/world_b.sql" || exit 1
 fi
+# ── 5c. THE MUTATION HOOK, and why it is in the repository ──────────────────
+# A mutation is only measurable on a state that can be restored, and the third
+# round paid for the other half of that sentence: a mutation applied AFTER the
+# suite has already run measures the re-run. `P11_MUTATION_SQL` was added when
+# removing the `status` filter from the freeze guard red NOTHING — every write
+# the recovery case needed was already in place from the clean run, and its
+# statements are conditional precisely so a second run is quiet. So the
+# mutation is applied HERE: on a fresh database, after the packs and the
+# worlds, before any proof runs. It is in this file rather than in the
+# author's shell so a challenger can reproduce a mutation run by name, and it
+# is printed in full so a log says which words were changed.
+if [ -n "$P11_MUTATION_SQL" ]; then
+  echo "=== 5c. MUTATION APPLIED: $P11_MUTATION_SQL (this run is NOT a clean-tree proof run) ==="
+  sed 's/^/  | /' "$P11_MUTATION_SQL"
+  $Q "$PSQL_P -U postgres -d daftar -X -q -v ON_ERROR_STOP=1 -f $P11_MUTATION_SQL" || exit 1
+  echo "=== the suites below are expected to FAIL; a mutation run whose suites pass is a gap in the suite ==="
+fi
+
 echo "=== 6. proofs (Pack A, apparel) ==="
 python3 -I $H/proofs.py
 RC_PROOFS=$?; RC=$RC_PROOFS
