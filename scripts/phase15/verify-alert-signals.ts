@@ -37,11 +37,25 @@
  * or when the rule set cannot be read at all.
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const ROOT = resolve(__dirname, '../..');
-const RULES = '/mnt/project-files/phase15/P15-ALERT-RULES.json';
+/**
+ * The rule set under check. The default is the pack's own file; `P15_ALERT_RULES`
+ * points the check at another copy.
+ *
+ * The override exists so the red proof (`verify:alert-signals:prove`) can plant
+ * a defect in a COPY and watch this check go red, without ever writing to the
+ * shared document — that directory has other writers, and the frozen-artefact
+ * rule against editing a subject to change an outcome applies to the pack's own
+ * evidence too. Because an override could also point the check at a doctored
+ * file, the subject path and its digest are printed with every result, so a run
+ * on anything but the default is visible in its own output rather than silent.
+ */
+const DEFAULT_RULES = '/mnt/project-files/phase15/P15-ALERT-RULES.json';
+const RULES = process.env.P15_ALERT_RULES ?? DEFAULT_RULES;
 const METRICS = 'apps/api/src/infra/metrics.ts';
 
 interface Resolution {
@@ -60,7 +74,88 @@ interface Rule {
   readonly condition: string;
   readonly exists_today: boolean;
   readonly resolution?: Resolution;
+  /**
+   * Every OTHER key the rule object carries. It is read, not enumerated in
+   * prose: see `receiverOf` for why that distinction is the whole point.
+   */
+  readonly [key: string]: unknown;
 }
+
+/**
+ * The words a routing destination would be called, if one were ever added.
+ * Matched against the rule's OWN keys, so a key this script has never heard of
+ * still registers as routing when it is named like routing.
+ */
+const ROUTING_KEYS = ['receiver', 'receivers', 'route', 'routing', 'destination', 'notify', 'notification', 'target', 'channel', 'recipient', 'webhook', 'pagerduty', 'email', 'oncall', 'on_call'] as const;
+
+/**
+ * DERIVE a rule's receiver from the rule object. Never a constant.
+ *
+ * The first version of this function was `const receiver = 'UNDECIDED'`, with a
+ * paragraph underneath asserting that the emptiness "is a measurement, not a
+ * placeholder". The independent challenger was right to reject that: nothing was
+ * compared to anything, so the column could never go red. If an owner added a
+ * receiver to all 23 rules, the table would still have printed UNDECIDED 23
+ * times and still exited 0 — and the same round proved the hazard is not
+ * hypothetical, because the neighbouring RESOLUTION claim HAD gone stale and the
+ * instrument kept printing it. This pack rejected exactly this defect in Phase 8
+ * ("a constant column proved nothing") and then shipped it here.
+ *
+ * So: read the rule's keys, and report what is there. UNDECIDED is now a
+ * CONCLUSION from a key set, and it changes the moment the key set does.
+ */
+function receiverOf(r: Rule): { readonly value: string; readonly keys: readonly string[] } {
+  const keys = Object.keys(r).filter((k) => ROUTING_KEYS.some((w) => k.toLowerCase() === w || k.toLowerCase().includes(w)));
+  if (keys.length === 0) return { value: 'UNDECIDED', keys: [] };
+  // A routing key that is present but empty is NOT a receiver: an empty string
+  // routes nowhere, and reporting it as a destination would be the overclaim
+  // this instrument exists to prevent.
+  const named = keys.filter((k) => {
+    const v = r[k];
+    if (typeof v === 'string') return v.trim().length > 0;
+    if (Array.isArray(v)) return v.length > 0;
+    return v !== null && v !== undefined && v !== false;
+  });
+  return named.length === 0 ? { value: `EMPTY:${keys.join(',')}`, keys } : { value: `SET:${named.join(',')}`, keys: named };
+}
+
+/**
+ * The destinations a repository would hold if alerts were wired up. Searched in
+ * the tree, so "no destination exists" is also a measurement rather than a
+ * recollection. A hit does not mean the alerts are routed — it means the claim
+ * "nothing anywhere" is no longer true and a human has to look.
+ */
+/**
+ * Search the tracked tree for a pattern, returning the first match's location
+ * or null. `git grep` is used rather than a filesystem walk so the search
+ * covers exactly what the branch carries — an untracked scratch file left in
+ * the working tree is not a destination this repository configures.
+ */
+function grepTree(re: RegExp): string | null {
+  // This file is EXCLUDED from its own search. The patterns are written out
+  // here in full, so without the exclusion every one of them matched its own
+  // definition and the check reported six destinations that do not exist — a
+  // red result for the wrong reason, which is as useless as a green one. The
+  // exclusion is stated in the output so a reader knows the one file the search
+  // does not cover is the searcher.
+  const r = spawnSync('git', ['grep', '-nIE', '--', re.source, ':(exclude)scripts/phase15/verify-alert-signals.ts'], { cwd: ROOT, encoding: 'utf8' });
+  // git grep exits 1 for "no match", which is the expected answer here; any
+  // other non-zero is a failed search, and a failed search must not read as a
+  // clean one.
+  if (r.status === 1) return null;
+  if (r.status !== 0) return `SEARCH FAILED (${(r.stderr ?? '').slice(0, 80).trim()}) — not a statement that nothing matches`;
+  const first = (r.stdout ?? '').split('\n').find((l) => l.trim().length > 0);
+  return first === undefined ? null : first.slice(0, 120);
+}
+
+const DESTINATION_PATTERNS: readonly { readonly what: string; readonly re: RegExp }[] = [
+  { what: 'alertmanager configuration', re: /alertmanager|alert_manager/i },
+  { what: 'PagerDuty', re: /pagerduty|pager_duty|routing_key/i },
+  { what: 'Opsgenie', re: /opsgenie/i },
+  { what: 'a Slack webhook', re: /hooks\.slack\.com|slack_webhook|slack_api_url/i },
+  { what: 'a generic webhook destination', re: /webhook_url|webhook_configs/i },
+  { what: 'an SMTP/e-mail destination', re: /smtp_smarthost|email_configs|sendgrid|ses_region/i },
+];
 
 /**
  * Re-derive a rule's resolution class FROM ITS EXPRESSION, independently of
@@ -202,7 +297,10 @@ function main(): number {
     console.log(`UNMEASURED: the rule set is not at ${RULES}. Nothing below could be checked.`);
     return 1;
   }
-  const parsed = JSON.parse(readFileSync(RULES, 'utf8')) as { rules?: Rule[]; notPromotedMeaning?: string };
+  const rulesBytes = readFileSync(RULES);
+  console.log(`subject  : ${RULES}${RULES === DEFAULT_RULES ? '' : '   ! NOT THE DEFAULT RULE SET'}`);
+  console.log(`           sha256 ${createHash('sha256').update(rulesBytes).digest('hex')}  (${rulesBytes.length} bytes)`);
+  const parsed = JSON.parse(rulesBytes.toString('utf8')) as { rules?: Rule[]; notPromotedMeaning?: string };
   const rules = parsed.rules ?? [];
   if (rules.length === 0) {
     console.log('');
@@ -281,6 +379,7 @@ function main(): number {
   console.log(`${rules.length} rules: ${rules.length - stale} with claims matching the tree, ${stale} stale`);
   console.log(`${emittedRules.length} of ${rules.length} rules name a signal that is emitted today${exp.present ? '' : ', and none can fire while there is no exporter'}`);
   const resolutionProblems: string[] = [];
+  const receivers = new Map<string, string>();
 
   /* ── §22.2's table: name → emit site → receiver → fire/resolution ─────── */
   console.log('');
@@ -294,21 +393,50 @@ function main(): number {
   for (const r of rules) {
     const site = sites.get(r.signal);
     const emit = site !== undefined ? site.split('/').pop()?.slice(0, 18) ?? 'yes' : names.has(r.signal) ? 'RESERVED ONLY' : 'none in tree';
-    // There is no receiver anywhere: the rule objects carry no routing field,
-    // and no alertmanager/pagerduty/webhook configuration exists in the tree.
-    const receiver = 'UNDECIDED';
+    const recv = receiverOf(r);
     const fires = site !== undefined && exp.present ? 'could fire' : 'cannot fire';
-    console.log(`${r.id.replace('P15-ALERT-', 'A-').padEnd(14)} ${r.signal.slice(0, 42).padEnd(42)} ${emit.padEnd(18)} ${receiver.padEnd(12)} ${fires}`);
+    receivers.set(r.id, recv.value);
+    console.log(`${r.id.replace('P15-ALERT-', 'A-').padEnd(14)} ${r.signal.slice(0, 42).padEnd(42)} ${emit.padEnd(18)} ${recv.value.slice(0, 12).padEnd(12)} ${fires}`);
   }
   console.log('');
-  console.log('RECEIVER is UNDECIDED for all of them, and that is a measurement, not a placeholder:');
-  console.log('  no rule object carries a routing or receiver field (the keys are id, title, signal,');
-  console.log('  signal_source, condition, for, severity, slo_id, runbook_step, false_positive_notes,');
-  console.log('  exists_today), and no alertmanager, PagerDuty, webhook or e-mail destination exists');
-  console.log('  anywhere in the repository. §22.2 forbids choosing a recipient, a subscription or a');
-  console.log('  retention here, so the column stays empty until the owner fills it. A rule with a');
-  console.log('  condition and no receiver is a rule that fires into nothing.');
+
+  /* ── the receiver column, DERIVED and able to go red ──────────────────── */
+  // The key set is printed from the data, because the previous version
+  // enumerated it in prose and the prose was already wrong: it omitted
+  // `resolution`, which had been added to every rule hours earlier.
+  const keyUnion = [...new Set(rules.flatMap((r) => Object.keys(r)))].sort();
+  const withRouting = rules.filter((r) => receiverOf(r).keys.length > 0);
+  const undecided = [...receivers.values()].filter((v) => v === 'UNDECIDED').length;
+
+  console.log('RECEIVER, DERIVED FROM THE RULE OBJECTS (not asserted)');
+  console.log(`  the key set actually present on the ${rules.length} rules, read from the file:`);
+  console.log(`    ${keyUnion.join(', ')}`);
+  console.log(`  of those, keys that name a routing destination: ${withRouting.length === 0 ? 'NONE' : withRouting.map((r) => r.id).join(', ')}`);
+  console.log(`  rules whose receiver is therefore UNDECIDED: ${undecided} of ${rules.length}`);
+
+  const destinations: string[] = [];
+  for (const d of DESTINATION_PATTERNS) {
+    const hit = grepTree(d.re);
+    if (hit !== null) destinations.push(`${d.what} — ${hit}`);
+  }
+  console.log(`  destination configuration in the repository: ${destinations.length === 0 ? `NONE FOUND — ${DESTINATION_PATTERNS.length} patterns searched over the tracked tree (${DESTINATION_PATTERNS.map((d) => d.what).join(', ')}), excluding this script's own file, which defines them` : destinations.join('; ')}`);
   console.log('');
+  console.log('  §22.2 forbids choosing a recipient, a subscription or a retention here, so this');
+  console.log('  stays with the owner. What changed in this round is that the column is now a');
+  console.log('  CONCLUSION rather than a constant: a routing key appearing on a rule, or a');
+  console.log('  destination appearing in the tree, changes the value AND the exit code below.');
+  console.log('  A rule with a condition and no receiver is a rule that fires into nothing.');
+  console.log('');
+
+  // The claim is now falsifiable in both directions, which is what makes it a
+  // measurement. Routing that appears without the owner's decision being
+  // recorded is a change this instrument must not pass over in silence.
+  if (withRouting.length > 0 || destinations.length > 0) {
+    resolutionProblems.push(
+      `the receiver claim is STALE: ${withRouting.length} rule(s) now carry a routing key and ${destinations.length} destination pattern(s) match the tree. B-15 says no receiver exists anywhere; re-state it against this before any handoff repeats it.`,
+    );
+  }
+
   /* ── the resolution model, re-derived rather than trusted ─────────────── */
   console.log('RESOLUTION IS NOW MODELLED — and this section CHECKS the model instead of reading it.');
   console.log('  Each rule carries a `resolution` whose class is a property of its own expression, so');

@@ -92,7 +92,8 @@
     "verify:history": "tsx scripts/verify-migration-history.ts",
     "rehearse:phase2:rollback": "tsx scripts/phase2-rollback-rehearsal.ts",
     "rehearse:phase3:deployed": "tsx scripts/phase3-deployed-rehearsal.ts",
-    "gate:browser": "tsx tests/browser/gate.ts"
+    "gate:browser": "tsx tests/browser/gate.ts",
+    "verify:alert-signals:prove": "tsx scripts/phase15/alert-signals-proof.ts"
   },
   "engines": {
     "node": ">=24 <25"
