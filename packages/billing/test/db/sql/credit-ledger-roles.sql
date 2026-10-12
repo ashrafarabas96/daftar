@@ -14,6 +14,11 @@ GRANT USAGE ON SCHEMA p5scratch TO p5_app;
 -- application role. And nothing at all on the remainder table.
 GRANT SELECT, INSERT ON p5scratch.platform_credit_adjustments TO p5_app;
 GRANT SELECT ON p5scratch.businesses TO p5_app;
+-- ROUND 5: the invoice relation. SELECT, INSERT and UPDATE — an invoice is
+-- NOT append-only (a draft becomes finalized), which is exactly why it is a
+-- different relation from the ledger and not a column on it. No DELETE.
+GRANT SELECT, INSERT, UPDATE ON p5scratch.subscription_invoices TO p5_app;
+GRANT EXECUTE ON FUNCTION p5scratch.lock_grants_in_order(uuid, uuid, text) TO p5_app;
 REVOKE ALL ON p5scratch.platform_credit_grant_remainders FROM p5_app;
 
 -- The remainder table is under FORCE RLS, so even its owner is subject to

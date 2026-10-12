@@ -77,26 +77,70 @@ export interface FinalizationPlan {
 }
 
 /**
+ * A draft platform invoice, in its own statement.
+ *
+ * Round 4's helper wrote no invoice at all — it wrote consumption rows
+ * naming an invoice that did not exist, and nothing noticed, because
+ * nothing tied the two. That is exactly the gap V2 names ("this does not
+ * prove the real `subscription_invoices` finalization is tied to the grant
+ * and the consumption in the same transaction"), and adding
+ * `pca_invoice_fk` to the DDL made eight of round 4's twenty cases fail
+ * immediately. They were right to fail.
+ *
+ * A draft carries no credit: `credit_applied_minor` is 0 and
+ * `payable_minor` is the whole total, and the deferred agreement trigger
+ * checks that rather than assuming it.
+ */
+export async function createDraftInvoice(
+  c: Client,
+  schema: string,
+  s: Scope,
+  totalMinor: bigint,
+): Promise<string> {
+  const id = uuid();
+  await c.query(
+    `INSERT INTO ${schema}.subscription_invoices
+       (id, tenant_id, business_id, currency, total_minor, credit_applied_minor, payable_minor, state)
+     VALUES ($1,$2,$3,$4,$5,0,$5,'draft')`,
+    [id, s.tenantId, s.businessId, s.currency, totalMinor.toString()],
+  );
+  return id;
+}
+
+/**
  * One platform invoice finalization, as the integrated command would do it.
  *
  * The caller owns BEGIN and COMMIT, because what is being proved is what
- * happens between two of them in two different sessions. `withLock`
- * switches the one line §11b asks for — `pg_advisory_xact_lock` on the
- * business, the pattern `EntitlementService.acquireQuotaLock` already
- * establishes in this codebase — so the same interleaving can be run with
- * and without it and the difference attributed to that line alone.
+ * happens between two of them in two different sessions. Everything inside
+ * is one transaction: the lock, the read, the allocation, the invoice
+ * UPDATE and the consumption INSERTs.
+ *
+ * Two switches, so the same interleaving can be run with and without each
+ * and the difference attributed to that one line:
+ *
+ *   `withLock`       — `pg_advisory_xact_lock` on the business, the pattern
+ *                      `EntitlementService.acquireQuotaLock` already
+ *                      establishes in this codebase. §11b asks for it.
+ *   `withGrantLocks` — the DETERMINISTIC GRANT LOCK ORDER V2 asks for:
+ *                      every remainder row for this business and currency
+ *                      locked up front in `(created_at, id)` order. It is
+ *                      the second line, for a path that forgets the first.
  */
 export async function finalizeInvoice(
   c: Client,
   schema: string,
   s: Scope,
+  invoiceId: string,
   invoiceTotalMinor: bigint,
   invoiceRef: string,
   appliedAt: string,
-  opts: { readonly withLock: boolean; readonly invoiceId?: string },
+  opts: { readonly withLock: boolean; readonly withGrantLocks?: boolean },
 ): Promise<FinalizationPlan> {
   if (opts.withLock) {
     await c.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${schema}:${s.businessId}`]);
+  }
+  if (opts.withGrantLocks === true) {
+    await c.query(`SELECT ${schema}.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, s.currency]);
   }
   const ledger = await readLedger(c, schema, s);
   const application = applyCreditToInvoice({
@@ -108,7 +152,19 @@ export async function finalizeInvoice(
     consumptionIds: Array.from({ length: Math.max(ledger.length, 1) }, () => uuid()),
     reason: 'platform credit applied at invoice finalization',
   });
-  const invoiceId = opts.invoiceId ?? uuid();
+
+  // The invoice figures and the ledger rows, in this order, in this
+  // transaction. The order does not matter to the database — the
+  // agreement trigger is DEFERRED and the FK from a consumption to its
+  // invoice is too — and the test that writes them the other way round
+  // proves that.
+  await c.query(
+    `UPDATE ${schema}.subscription_invoices
+        SET state = 'finalized', finalized_at = $2,
+            credit_applied_minor = $3, payable_minor = $4
+      WHERE id = $1`,
+    [invoiceId, appliedAt, application.appliedMinor.toString(), application.payableMinor.toString()],
+  );
   for (const row of application.consumptions) {
     await c.query(
       `INSERT INTO ${schema}.platform_credit_adjustments

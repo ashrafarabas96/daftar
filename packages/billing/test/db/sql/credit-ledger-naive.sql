@@ -58,3 +58,41 @@ CREATE TABLE p5naive.platform_credit_adjustments (
 
 -- DELIBERATELY ABSENT: platform_credit_grant_remainders and its trigger
 -- (invariant 4), and pca_one_consumption_per_grant_per_invoice.
+
+-- ROUND 5: the invoice relation, so the naive variant differs from the
+-- requested one ONLY in the mechanisms under test. It gets the same
+-- CHECKs and the same deferrable FK from a consumption to its invoice.
+--
+-- DELIBERATELY ABSENT here too: the deferred agreement trigger that makes
+-- an invoice's `credit_applied_minor` equal the sum of the consumption
+-- rows naming it. So on this schema an invoice may claim a figure its own
+-- ledger rows do not support, which is the second symptom of the naive
+-- double-spend and is asserted as such.
+CREATE TABLE p5naive.subscription_invoices (
+  id                   uuid        NOT NULL PRIMARY KEY,
+  tenant_id            uuid        NOT NULL,
+  business_id          uuid        NOT NULL,
+  currency             text        NOT NULL,
+  total_minor          bigint      NOT NULL,
+  credit_applied_minor bigint      NOT NULL DEFAULT 0,
+  payable_minor        bigint      NOT NULL,
+  state                text        NOT NULL,
+  finalized_at         timestamptz,
+  CONSTRAINT si_total_positive        CHECK (total_minor > 0),
+  CONSTRAINT si_currency_shape        CHECK (currency ~ '^[A-Z]{3}$'),
+  CONSTRAINT si_state_known           CHECK (state IN ('draft', 'finalized')),
+  CONSTRAINT si_finalized_has_instant CHECK ((state = 'finalized') = (finalized_at IS NOT NULL)),
+  CONSTRAINT si_credit_non_negative   CHECK (credit_applied_minor >= 0),
+  CONSTRAINT si_credit_within_total   CHECK (credit_applied_minor <= total_minor),
+  CONSTRAINT si_payable_non_negative  CHECK (payable_minor >= 0),
+  CONSTRAINT si_payable_is_total_minus_credit CHECK (payable_minor = total_minor - credit_applied_minor),
+  CONSTRAINT si_owner_fk FOREIGN KEY (tenant_id, business_id)
+    REFERENCES p5naive.businesses (tenant_id, id),
+  CONSTRAINT si_scoped_identity_uq UNIQUE (tenant_id, business_id, currency, id)
+);
+
+ALTER TABLE p5naive.platform_credit_adjustments
+  ADD CONSTRAINT pca_invoice_fk
+  FOREIGN KEY (tenant_id, business_id, currency, invoice_id)
+  REFERENCES p5naive.subscription_invoices (tenant_id, business_id, currency, id)
+  DEFERRABLE INITIALLY DEFERRED;

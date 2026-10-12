@@ -41,6 +41,7 @@ import { BillingError } from '../../src/errors';
 import { appUrl, connect, isBlocked, ownerUrl, pidOf, sqlstate, uuid, waitUntilBlocked } from './helpers/cluster';
 import {
   consumedMinor,
+  createDraftInvoice,
   finalizeInvoice,
   insertConsumption,
   insertGrant,
@@ -98,6 +99,11 @@ describe('the hazard is real — the naive ledger double-spends', () => {
     const s = await freshScope('p5naive');
     await insertGrant(owner, 'p5naive', s, 1000n, T0);
 
+    // Each finalization has its own invoice, drafted before either
+    // transaction starts — two renewal jobs, not one retried.
+    const invA = await createDraftInvoice(owner, 'p5naive', s, 1000n);
+    const invB = await createDraftInvoice(owner, 'p5naive', s, 1000n);
+
     const a = await connect(ownerUrl());
     const b = await connect(ownerUrl());
     try {
@@ -107,8 +113,8 @@ describe('the hazard is real — the naive ledger double-spends', () => {
       // Both read before either writes. This is not a contrived
       // interleaving: it is what two renewal jobs, or a renewal and a
       // manual finalization, do when nothing serialises them.
-      const planA = await finalizeInvoice(a, 'p5naive', s, 1000n, 'inv-A', T1, { withLock: false });
-      const planB = await finalizeInvoice(b, 'p5naive', s, 1000n, 'inv-B', T1, { withLock: false });
+      const planA = await finalizeInvoice(a, 'p5naive', s, invA, 1000n, 'inv-A', T1, { withLock: false });
+      const planB = await finalizeInvoice(b, 'p5naive', s, invB, 1000n, 'inv-B', T1, { withLock: false });
 
       expect(planA.application.appliedMinor).toBe(1000n);
       expect(planB.application.appliedMinor).toBe(1000n);
@@ -142,9 +148,9 @@ describe('the hazard is real — the naive ledger double-spends', () => {
   it('and the same ledger lets the SAME invoice be finalized twice', async () => {
     const s = await freshScope('p5naive');
     await insertGrant(owner, 'p5naive', s, 1000n, T0);
-    const invoiceId = uuid();
-    await finalizeInvoice(owner, 'p5naive', s, 400n, 'inv-X', T1, { withLock: false, invoiceId });
-    await finalizeInvoice(owner, 'p5naive', s, 400n, 'inv-X', T1, { withLock: false, invoiceId });
+    const invoiceId = await createDraftInvoice(owner, 'p5naive', s, 400n);
+    await finalizeInvoice(owner, 'p5naive', s, invoiceId, 400n, 'inv-X', T1, { withLock: false });
+    await finalizeInvoice(owner, 'p5naive', s, invoiceId, 400n, 'inv-X', T1, { withLock: false });
     expect(await consumedMinor(owner, 'p5naive', s)).toBe(800n);
   });
 });
@@ -153,6 +159,8 @@ describe('the constraint — the requested ledger cannot be overdrawn, even with
   it('the second finalization BLOCKS on the grant remainder and is then refused', async () => {
     const s = await freshScope('p5scratch');
     const grant = await insertGrant(owner, 'p5scratch', s, 1000n, T0);
+    const invA = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+    const invB = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
 
     const a = await connect(ownerUrl());
     const b = await connect(ownerUrl());
@@ -161,12 +169,12 @@ describe('the constraint — the requested ledger cannot be overdrawn, even with
       await b.query('BEGIN');
       const bPid = await pidOf(b);
 
-      await finalizeInvoice(a, 'p5scratch', s, 1000n, 'inv-A', T1, { withLock: false });
+      await finalizeInvoice(a, 'p5scratch', s, invA, 1000n, 'inv-A', T1, { withLock: false });
 
       // B's INSERT must not return while A holds the remainder row. The
       // barrier is an OBSERVED lock wait, not a delay: if B never blocks,
       // `waitUntilBlocked` throws and the case fails.
-      const bInsert = finalizeInvoice(b, 'p5scratch', s, 1000n, 'inv-B', T1, { withLock: false });
+      const bInsert = finalizeInvoice(b, 'p5scratch', s, invB, 1000n, 'inv-B', T1, { withLock: false });
       await waitUntilBlocked(observer, bPid, 'second finalization on the grant remainder');
 
       await a.query('COMMIT');
@@ -210,6 +218,8 @@ describe('the lock — §11b asks for behaviour, not an error', () => {
   it('with the advisory lock the second finalization waits, then applies what is actually left', async () => {
     const s = await freshScope('p5scratch');
     await insertGrant(owner, 'p5scratch', s, 1000n, T0);
+    const invA = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+    const invB = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
 
     const a = await connect(ownerUrl());
     const b = await connect(ownerUrl());
@@ -218,13 +228,13 @@ describe('the lock — §11b asks for behaviour, not an error', () => {
       await b.query('BEGIN');
       const bPid = await pidOf(b);
 
-      await finalizeInvoice(a, 'p5scratch', s, 1000n, 'inv-A', T1, { withLock: true });
+      await finalizeInvoice(a, 'p5scratch', s, invA, 1000n, 'inv-A', T1, { withLock: true });
 
       // B blocks at the LOCK, which is before it reads anything — so it
       // never forms a plan from a stale balance in the first place. That
       // is the difference between the lock and the constraint: the
       // constraint refuses a wrong plan, the lock prevents one.
-      const bRun = finalizeInvoice(b, 'p5scratch', s, 1000n, 'inv-B', T1, { withLock: true });
+      const bRun = finalizeInvoice(b, 'p5scratch', s, invB, 1000n, 'inv-B', T1, { withLock: true });
       await waitUntilBlocked(observer, bPid, 'second finalization on the business advisory lock');
 
       await a.query('COMMIT');
@@ -249,15 +259,17 @@ describe('the lock — §11b asks for behaviour, not an error', () => {
     const two = await freshScope('p5scratch');
     await insertGrant(owner, 'p5scratch', one, 300n, T0);
     await insertGrant(owner, 'p5scratch', two, 300n, T0);
+    const invOne = await createDraftInvoice(owner, 'p5scratch', one, 300n);
+    const invTwo = await createDraftInvoice(owner, 'p5scratch', two, 300n);
 
     const a = await connect(ownerUrl());
     const b = await connect(ownerUrl());
     try {
       await a.query('BEGIN');
       await b.query('BEGIN');
-      await finalizeInvoice(a, 'p5scratch', one, 300n, 'inv-1', T1, { withLock: true });
+      await finalizeInvoice(a, 'p5scratch', one, invOne, 300n, 'inv-1', T1, { withLock: true });
       const bPid = await pidOf(b);
-      await finalizeInvoice(b, 'p5scratch', two, 300n, 'inv-2', T1, { withLock: true });
+      await finalizeInvoice(b, 'p5scratch', two, invTwo, 300n, 'inv-2', T1, { withLock: true });
       // A point observation: B got through while A held its own lock, so
       // the lock is per business and not a platform-wide serialisation.
       expect(await isBlocked(observer, bPid)).toBe(false);
@@ -276,11 +288,12 @@ describe('rollback and retry', () => {
   it('a rolled-back finalization leaves no row and no spent remainder, and the retry applies exactly once', async () => {
     const s = await freshScope('p5scratch');
     const grant = await insertGrant(owner, 'p5scratch', s, 700n, T0);
+    const invFirst = await createDraftInvoice(owner, 'p5scratch', s, 700n);
 
     const a = await connect(ownerUrl());
     try {
       await a.query('BEGIN');
-      await finalizeInvoice(a, 'p5scratch', s, 700n, 'inv-A', T1, { withLock: true });
+      await finalizeInvoice(a, 'p5scratch', s, invFirst, 700n, 'inv-A', T1, { withLock: true });
       // Inside the transaction the remainder is already 0 — the decrement
       // is not deferred to commit.
       await a.query('ROLLBACK');
@@ -293,7 +306,8 @@ describe('rollback and retry', () => {
 
     // The retry is a NEW invoice identity; it draws the full credit once.
     await owner.query('BEGIN');
-    const retry = await finalizeInvoice(owner, 'p5scratch', s, 700n, 'inv-A-retry', T2, { withLock: true });
+    const invRetry = await createDraftInvoice(owner, 'p5scratch', s, 700n);
+    const retry = await finalizeInvoice(owner, 'p5scratch', s, invRetry, 700n, 'inv-A-retry', T2, { withLock: true });
     await owner.query('COMMIT');
     expect(retry.application.appliedMinor).toBe(700n);
     expect(await consumedMinor(owner, 'p5scratch', s)).toBe(700n);
@@ -303,13 +317,22 @@ describe('rollback and retry', () => {
   it('a retry that re-uses the SAME invoice identity is refused, not applied twice', async () => {
     const s = await freshScope('p5scratch');
     await insertGrant(owner, 'p5scratch', s, 900n, T0);
-    const invoiceId = uuid();
+    const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 300n);
 
-    await finalizeInvoice(owner, 'p5scratch', s, 300n, 'inv-X', T1, { withLock: true, invoiceId });
-    const second = await finalizeInvoice(owner, 'p5scratch', s, 300n, 'inv-X', T1, { withLock: true, invoiceId }).then(
+    // Each finalization is its own TRANSACTION, because a finalization
+    // run statement by statement cannot commit at all — the case below
+    // proves that separately, and it is the whole point of the deferred
+    // agreement constraint.
+    await owner.query('BEGIN');
+    await finalizeInvoice(owner, 'p5scratch', s, invoiceId, 300n, 'inv-X', T1, { withLock: true });
+    await owner.query('COMMIT');
+
+    await owner.query('BEGIN');
+    const second = await finalizeInvoice(owner, 'p5scratch', s, invoiceId, 300n, 'inv-X', T1, { withLock: true }).then(
       () => '',
       (e: unknown) => sqlstate(e),
     );
+    await owner.query('ROLLBACK');
     // 23505 is `unique_violation`: the partial unique index on
     // (business, invoice, grant) for consumptions. Idempotency belongs to
     // the schema because a retry is exactly the case where the
@@ -321,7 +344,7 @@ describe('rollback and retry', () => {
   it('two CONCURRENT finalizations of the same invoice: one commits, the other is refused', async () => {
     const s = await freshScope('p5scratch');
     await insertGrant(owner, 'p5scratch', s, 900n, T0);
-    const invoiceId = uuid();
+    const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 200n);
 
     const a = await connect(ownerUrl());
     const b = await connect(ownerUrl());
@@ -329,8 +352,8 @@ describe('rollback and retry', () => {
       await a.query('BEGIN');
       await b.query('BEGIN');
       const bPid = await pidOf(b);
-      await finalizeInvoice(a, 'p5scratch', s, 200n, 'inv-X', T1, { withLock: false, invoiceId });
-      const bRun = finalizeInvoice(b, 'p5scratch', s, 200n, 'inv-X', T1, { withLock: false, invoiceId }).then(
+      await finalizeInvoice(a, 'p5scratch', s, invoiceId, 200n, 'inv-X', T1, { withLock: false });
+      const bRun = finalizeInvoice(b, 'p5scratch', s, invoiceId, 200n, 'inv-X', T1, { withLock: false }).then(
         () => '',
         (e: unknown) => sqlstate(e),
       );
@@ -351,6 +374,8 @@ describe('FIFO is also the deadlock avoidance', () => {
     const s = await freshScope('p5scratch');
     await insertGrant(owner, 'p5scratch', s, 100n, T0, 'grant-older');
     await insertGrant(owner, 'p5scratch', s, 100n, T1, 'grant-newer');
+    const invA = await createDraftInvoice(owner, 'p5scratch', s, 150n);
+    const invB = await createDraftInvoice(owner, 'p5scratch', s, 150n);
 
     const a = await connect(ownerUrl());
     const b = await connect(ownerUrl());
@@ -359,9 +384,9 @@ describe('FIFO is also the deadlock avoidance', () => {
       await b.query('BEGIN');
       // Each invoice is 150, so each must draw the older grant in full and
       // part of the newer one: both touch both remainder rows.
-      await finalizeInvoice(a, 'p5scratch', s, 150n, 'inv-A', T2, { withLock: false });
+      await finalizeInvoice(a, 'p5scratch', s, invA, 150n, 'inv-A', T2, { withLock: false });
       const bPid = await pidOf(b);
-      const bRun = finalizeInvoice(b, 'p5scratch', s, 150n, 'inv-B', T2, { withLock: false }).then(
+      const bRun = finalizeInvoice(b, 'p5scratch', s, invB, 150n, 'inv-B', T2, { withLock: false }).then(
         () => '',
         (e: unknown) => sqlstate(e),
       );
@@ -391,8 +416,8 @@ describe('FIFO is also the deadlock avoidance', () => {
       await b.query('BEGIN');
       const aPid = await pidOf(a);
       const bPid = await pidOf(b);
-      const invA = uuid();
-      const invB = uuid();
+      const invA = await createDraftInvoice(owner, 'p5scratch', s, 200n);
+      const invB = await createDraftInvoice(owner, 'p5scratch', s, 200n);
 
       // Row by row, and in a fixed order, so the outcome is not a race the
       // suite happens to win. A draws the OLDER grant first, as PART 25
@@ -449,7 +474,8 @@ describe('the pure core and the requested DDL agree', () => {
     const newer = await insertGrant(owner, 'p5scratch', s, 400n, T1, 'grant-newer');
 
     await owner.query('BEGIN');
-    const plan = await finalizeInvoice(owner, 'p5scratch', s, 500n, 'inv-A', T2, { withLock: true });
+    const invoiceId = await createDraftInvoice(owner, 'p5scratch', s, 500n);
+    const plan = await finalizeInvoice(owner, 'p5scratch', s, invoiceId, 500n, 'inv-A', T2, { withLock: true });
     await owner.query('COMMIT');
 
     // FIFO: the older grant is exhausted, the newer one part-drawn.

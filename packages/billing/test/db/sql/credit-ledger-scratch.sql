@@ -217,3 +217,198 @@ CREATE POLICY pca_tenant_isolation ON p5scratch.platform_credit_adjustments
   FOR SELECT USING (business_id = current_setting('app.business_id', true)::uuid);
 CREATE POLICY pca_tenant_insert ON p5scratch.platform_credit_adjustments
   FOR INSERT WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);
+
+-- =====================================================================
+-- ROUND 5 — added for Master Continuous Mission V2 §12.
+--
+-- V2 adds two asks to Phase 5 that round 4 did not meet:
+--
+--   «رتّب grant locks حتميًا؛ reverse-order deadlock المسجل يحتاج التحقق
+--    من النسخة المصححة»
+--     — order the grant locks deterministically, and the recorded
+--       reverse-order deadlock needs the CORRECTED version verified.
+--       Round 4 PROVED that hazard exists; it did not fix it.
+--
+--   «لا يثبت هذا ربط إقفال subscription_invoices الحقيقي بالمنح
+--    والاستهلاك في المعاملة نفسها»
+--     — nothing so far ties the invoice finalization to the grant and
+--       the consumption in the SAME transaction.
+--
+-- V2 defers the second one to integration, "on the official schema and
+-- command". It is realized here anyway, in the same deliberately weaker
+-- class as everything else in this file, because a design that cannot be
+-- shown to work is a design the Migration Owner has to take on trust.
+-- =====================================================================
+
+-- ── the deterministic grant lock order ───────────────────────────────
+-- The fix for the reverse-order deadlock, as a function rather than a
+-- convention, because a convention is what round 4's case 12 violated.
+--
+-- Every writer takes the remainder row locks UP FRONT, for the whole
+-- business-and-currency ledger, in the ledger's own total order
+-- `(created_at, id)` — the same order PART 25 pins allocation to. Two
+-- writers that both do this cannot form a cycle: whoever gets the first
+-- row gets all of them, and the other waits once instead of holding one
+-- and reaching for another.
+--
+-- This is the SECOND line, not the first. The per-business advisory lock
+-- is the first: it stops two finalizations for one business from
+-- overlapping at all. This function is what protects a future code path
+-- that forgets the advisory lock — and `test/db/` proves that both close
+-- the deadlock, separately.
+CREATE FUNCTION p5scratch.lock_grants_in_order(p_tenant uuid, p_business uuid, p_currency text)
+RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, pg_temp AS $fn$
+DECLARE
+  locked integer;
+BEGIN
+  -- `FOR UPDATE OF r` sits above the sort in the plan, so the rows are
+  -- locked in sorted order and not in whatever order the scan found
+  -- them. `test/db/credit-ledger-atomicity.test.ts` reads the plan and
+  -- asserts that LockRows is above Sort, because "the planner happens to
+  -- do this" is not a guarantee anyone can rely on.
+  WITH ordered AS (
+    SELECT r.grant_id
+      FROM p5scratch.platform_credit_grant_remainders r
+      JOIN p5scratch.platform_credit_adjustments a ON a.id = r.grant_id
+     WHERE r.tenant_id = p_tenant AND r.business_id = p_business AND r.currency = p_currency
+     ORDER BY a.created_at, a.id
+       FOR UPDATE OF r
+  )
+  SELECT count(*)::integer INTO locked FROM ordered;
+  RETURN locked;
+END;
+$fn$;
+
+-- ── the platform invoice, and the tie to the ledger ──────────────────
+-- §11c of the patch request, realized: `credit_applied_minor` and
+-- `payable_minor` as COLUMNS with CHECKs, because the provider charge is
+-- taken against `payable_minor` and a figure a charge was taken against
+-- must be the figure that was recorded.
+CREATE TABLE p5scratch.subscription_invoices (
+  id                   uuid        NOT NULL PRIMARY KEY,
+  tenant_id            uuid        NOT NULL,
+  business_id          uuid        NOT NULL,
+  currency             text        NOT NULL,
+  total_minor          bigint      NOT NULL,
+  credit_applied_minor bigint      NOT NULL DEFAULT 0,
+  payable_minor        bigint      NOT NULL,
+  state                text        NOT NULL,
+  finalized_at         timestamptz,
+  CONSTRAINT si_total_positive        CHECK (total_minor > 0),
+  CONSTRAINT si_currency_shape        CHECK (currency ~ '^[A-Z]{3}$'),
+  CONSTRAINT si_state_known           CHECK (state IN ('draft', 'finalized')),
+  CONSTRAINT si_finalized_has_instant CHECK ((state = 'finalized') = (finalized_at IS NOT NULL)),
+  CONSTRAINT si_credit_non_negative   CHECK (credit_applied_minor >= 0),
+  CONSTRAINT si_credit_within_total   CHECK (credit_applied_minor <= total_minor),
+  CONSTRAINT si_payable_non_negative  CHECK (payable_minor >= 0),
+  -- PART 25's "invoice payable cannot become negative" as arithmetic the
+  -- database owns, not a code path a later edit changes.
+  CONSTRAINT si_payable_is_total_minus_credit CHECK (payable_minor = total_minor - credit_applied_minor),
+  CONSTRAINT si_owner_fk FOREIGN KEY (tenant_id, business_id)
+    REFERENCES p5scratch.businesses (tenant_id, id),
+  CONSTRAINT si_scoped_identity_uq UNIQUE (tenant_id, business_id, currency, id)
+);
+
+-- A consumption's invoice must exist, in the same business and currency.
+-- DEFERRABLE, so the two writes may happen in either order inside one
+-- transaction — and NOT INITIALLY DEFERRED, so a transaction that never
+-- writes the invoice still fails, at commit.
+ALTER TABLE p5scratch.platform_credit_adjustments
+  ADD CONSTRAINT pca_invoice_fk
+  FOREIGN KEY (tenant_id, business_id, currency, invoice_id)
+  REFERENCES p5scratch.subscription_invoices (tenant_id, business_id, currency, id)
+  DEFERRABLE INITIALLY DEFERRED;
+
+-- ── the invariant V2 says is unproven ────────────────────────────────
+-- "the invoice finalization tied to the grant and the consumption in the
+-- same transaction": an invoice's `credit_applied_minor` must equal the
+-- sum of the consumption rows naming it. DEFERRED to commit, which is
+-- what makes it a statement about the TRANSACTION rather than about one
+-- statement inside it — and what makes partial consumption impossible:
+-- a transaction that writes 500 of credit onto the invoice and only 300
+-- of consumption rows cannot commit, whichever order it wrote them in.
+-- One check, reached from two triggers.
+--
+-- It is a separate function rather than one trigger function branching on
+-- TG_TABLE_NAME because plpgsql resolves `NEW.<field>` against the trigger
+-- table at RUNTIME: a single function reading `NEW.invoice_id` compiles
+-- fine and then fails with `record "new" has no field "invoice_id"` the
+-- first time the invoice table fires it. (It did.)
+CREATE FUNCTION p5scratch.assert_invoice_credit_agrees(p_invoice uuid) RETURNS void
+LANGUAGE plpgsql AS $fn$
+DECLARE
+  claimed bigint;
+  consumed bigint;
+  invoice_state text;
+BEGIN
+  SELECT i.credit_applied_minor, i.state INTO claimed, invoice_state
+    FROM p5scratch.subscription_invoices i WHERE i.id = p_invoice;
+  IF claimed IS NULL THEN
+    -- The invoice is gone: the transaction rolled it back, or never wrote
+    -- it. `pca_invoice_fk` is the constraint that reports that; there is
+    -- nothing here left to compare.
+    RETURN;
+  END IF;
+  IF invoice_state <> 'finalized' THEN
+    -- A draft carries no credit. Checked rather than assumed, because a
+    -- draft with a non-zero figure would otherwise pass unexamined.
+    IF claimed <> 0 THEN
+      RAISE EXCEPTION 'a draft invoice may not claim applied credit: % claims %', p_invoice, claimed
+        USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN;
+  END IF;
+  SELECT coalesce(sum(a.amount_minor), 0) INTO consumed
+    FROM p5scratch.platform_credit_adjustments a
+   WHERE a.kind = 'consumption' AND a.invoice_id = p_invoice;
+  IF claimed <> consumed THEN
+    RAISE EXCEPTION 'invoice % claims % of applied credit but its consumption rows sum to %',
+      p_invoice, claimed, consumed
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+END;
+$fn$;
+
+CREATE FUNCTION p5scratch.si_credit_agrees() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+  PERFORM p5scratch.assert_invoice_credit_agrees(NEW.id);
+  RETURN NULL;
+END;
+$fn$;
+
+CREATE FUNCTION p5scratch.pca_credit_agrees() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+  PERFORM p5scratch.assert_invoice_credit_agrees(NEW.invoice_id);
+  RETURN NULL;
+END;
+$fn$;
+
+CREATE CONSTRAINT TRIGGER si_credit_agrees_trg
+  AFTER INSERT OR UPDATE ON p5scratch.subscription_invoices
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION p5scratch.si_credit_agrees();
+
+CREATE CONSTRAINT TRIGGER pca_credit_agrees_trg
+  AFTER INSERT ON p5scratch.platform_credit_adjustments
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (NEW.kind = 'consumption')
+  EXECUTE FUNCTION p5scratch.pca_credit_agrees();
+
+ALTER TABLE p5scratch.subscription_invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE p5scratch.subscription_invoices FORCE ROW LEVEL SECURITY;
+CREATE POLICY si_tenant_isolation ON p5scratch.subscription_invoices
+  FOR SELECT USING (business_id = current_setting('app.business_id', true)::uuid);
+CREATE POLICY si_tenant_insert ON p5scratch.subscription_invoices
+  FOR INSERT WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);
+-- An UPDATE policy is required and is NOT implied by the other two: with
+-- FORCE RLS and no UPDATE policy, the application role holds the UPDATE
+-- privilege and can still update no row at all — which would look like a
+-- working finalization in a unit test and fail in production. Both the
+-- USING and the WITH CHECK side are scoped, so a row cannot be moved to
+-- another business by updating it either.
+CREATE POLICY si_tenant_update ON p5scratch.subscription_invoices
+  FOR UPDATE USING (business_id = current_setting('app.business_id', true)::uuid)
+          WITH CHECK (business_id = current_setting('app.business_id', true)::uuid);
