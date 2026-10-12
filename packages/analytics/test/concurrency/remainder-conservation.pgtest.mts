@@ -24,12 +24,33 @@
  *
  * - It is NOT a measurement of performance. This container is not a
  *   measurement box and nothing here claims a duration.
- * - It is NOT evidence for a 16.x production target. The cluster this starts
- *   is whatever `embedded-postgres` ships (observed: PostgreSQL 18.4, printed
- *   at the top of every run from `select version()`). Phase 5 measured the
- *   comparable behaviour on 16.15, and the production PostgreSQL line (16 vs
- *   18) is an OPEN OWNER DECISION. A result here is a result on the version
- *   printed, and on nothing else.
+ * - It is NOT a measurement of the REAL schema. The DDL is scratch, there is
+ *   no RLS on it, there is no official sale command behind it, and the
+ *   official authority that would own the consumption seam does not exist on
+ *   `main` at all. Those belong to integration and stay
+ *   `WAITING_FOR_INTEGRATED_SURFACE`.
+ *
+ * WHICH CLUSTER, AND WHY IT MATTERS
+ * ---------------------------------
+ * The deploy target is SETTLED: the **PostgreSQL 16 family with
+ * `en_US.utf8`**. An earlier revision of this file ran on whatever
+ * `embedded-postgres` ships (18.4) and labelled itself as evidence about the
+ * mechanism's shape and not about any production line, because the version
+ * was then an open owner decision. It is no longer open, so the default here
+ * is the target itself:
+ *
+ *   - `P13_PG_BINDIR` — a PostgreSQL `bin` directory to run DIRECTLY, via its
+ *     own `initdb` and `pg_ctl`. Defaults to the first of the well-known
+ *     locations that holds a 16.x `initdb`. The cluster is created with
+ *     `--locale` from `P13_PG_LOCALE` (default `en_US.utf8`) and `UTF8`, and
+ *     the run PRINTS `datcollate`, `datctype` and the encoding it actually
+ *     got, so a reader never has to trust this comment.
+ *   - If no such directory exists, the run falls back to the repository's own
+ *     `embedded-postgres` and SAYS SO LOUDLY: the result is then NOT on the
+ *     settled target, and the banner marks it `OFF-TARGET`.
+ *
+ * Either way the version is read back from `select version()` and printed. A
+ * result here is a result on the line printed and on nothing else.
  *
  * HOW IT WAITS
  * ------------
@@ -50,7 +71,8 @@
  * OBSERVED (never the one the design predicts), and the process exits non-zero
  * if any case fails.
  */
-import { chmodSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, chownSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, sep } from 'node:path';
 import { Client, Pool } from 'pg';
@@ -139,6 +161,130 @@ function ensureBinariesExecutable(): void {
       return;
     }
     dir = dirname(dir);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * The settled target: a real PostgreSQL 16 with en_US.utf8
+ * ------------------------------------------------------------------ */
+
+/** Where a distribution PostgreSQL `bin` directory is usually found. 16 first: it is the target. */
+const BINDIR_CANDIDATES: readonly string[] = [
+  '/usr/lib/postgresql/16/bin',
+  '/usr/pgsql-16/bin',
+  '/opt/homebrew/opt/postgresql@16/bin',
+  '/usr/local/opt/postgresql@16/bin',
+];
+
+const PG_LOCALE = process.env['P13_PG_LOCALE'] ?? 'en_US.utf8';
+
+/**
+ * The owner the server runs as.
+ *
+ * PostgreSQL refuses to start as root, on purpose. When this process IS root
+ * (which it is in this container), the data directory and the socket
+ * directory are handed to an unprivileged account and every server command is
+ * run through `su`. `P13_PG_OWNER` overrides the account.
+ */
+const PG_OWNER = process.env['P13_PG_OWNER'] ?? 'claude';
+
+function isRoot(): boolean {
+  return typeof process.getuid === 'function' && process.getuid() === 0;
+}
+
+/** The first candidate `bin` directory that actually holds an `initdb`, or null. */
+function findBinDir(): string | null {
+  const explicit = process.env['P13_PG_BINDIR'];
+  const candidates = explicit === undefined || explicit === '' ? BINDIR_CANDIDATES : [explicit];
+  for (const dir of candidates) {
+    try {
+      if (statSync(join(dir, 'initdb')).isFile()) return dir;
+    } catch {
+      /* not here; try the next */
+    }
+  }
+  return null;
+}
+
+/**
+ * A cluster run from a distribution PostgreSQL, satisfying the same interface
+ * the embedded package does so the runner below does not care which it got.
+ *
+ * Nothing is installed and nothing in the repository is touched: `initdb`
+ * writes into a throwaway directory under the system temp dir, and `stop`
+ * removes it.
+ */
+class ExternalCluster implements EmbeddedCluster {
+  // Written as explicit fields, not constructor parameter properties: this
+  // file is run by `node` directly, whose type stripping is syntax-only and
+  // rejects a parameter property outright (ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX).
+  private readonly binDir: string;
+  private readonly dataDir: string;
+  private readonly sockDir: string;
+  private readonly port: number;
+
+  constructor(binDir: string, dataDir: string, sockDir: string, port: number) {
+    this.binDir = binDir;
+    this.dataDir = dataDir;
+    this.sockDir = sockDir;
+    this.port = port;
+  }
+
+  /** Run a server binary, as `PG_OWNER` when this process is root. */
+  private run(bin: string, args: readonly string[]): string {
+    const command = [join(this.binDir, bin), ...args].join(' ');
+    if (isRoot()) {
+      return execFileSync('su', [PG_OWNER, '-c', command], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    }
+    return execFileSync(join(this.binDir, bin), [...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  }
+
+  /** The server's own version string, read from the binary before any cluster exists. */
+  version(): string {
+    return execFileSync(join(this.binDir, 'postgres'), ['--version'], { encoding: 'utf8' }).trim();
+  }
+
+  async initialise(): Promise<void> {
+    mkdirSync(this.dataDir, { recursive: true });
+    mkdirSync(this.sockDir, { recursive: true });
+    if (isRoot()) {
+      // `initdb` requires the data directory to be owned by the account that
+      // will run the server, and the server must be able to create its socket.
+      const owner = execFileSync('id', ['-u', PG_OWNER], { encoding: 'utf8' }).trim();
+      const group = execFileSync('id', ['-g', PG_OWNER], { encoding: 'utf8' }).trim();
+      chownSync(this.dataDir, Number(owner), Number(group));
+      chownSync(this.sockDir, Number(owner), Number(group));
+    }
+    this.run('initdb', [
+      '-D',
+      join(this.dataDir, 'data'),
+      `--locale=${PG_LOCALE}`,
+      '--encoding=UTF8',
+      '-U',
+      PG_USER,
+      '--auth=trust',
+    ]);
+  }
+
+  async start(): Promise<void> {
+    this.run('pg_ctl', [
+      '-D',
+      join(this.dataDir, 'data'),
+      '-o',
+      `'-p ${this.port} -c listen_addresses=localhost -c unix_socket_directories=${this.sockDir}'`,
+      '-l',
+      join(this.dataDir, 'server.log'),
+      'start',
+      '-w',
+    ]);
+  }
+
+  async stop(): Promise<void> {
+    try {
+      this.run('pg_ctl', ['-D', join(this.dataDir, 'data'), 'stop', '-m', 'immediate']);
+    } catch {
+      /* already down, or never came up; the directory removal below is what matters */
+    }
   }
 }
 
@@ -306,6 +452,22 @@ $fn$;
 
 create trigger point_grant_remainders_nonneg before insert or update on p13_proof.point_grant_remainders
   for each row execute function p13_proof.guard_remainder_nonneg();
+
+-- THE RESTORATION IDENTITY (cases 7, 10). The loyalty design's §5.7.2 binds a
+-- reversal to the CANONICAL SALE OR RETURN IDENTITY rather than to a free-text
+-- reference, under the ledger's existing identity invariant. Modelled here as
+-- the design states it: (business, source type, source id, restoring kind).
+-- Nothing else about a reversal is modelled, because nothing else is specified:
+-- §5.7.4 marks the PARTIAL return WAITING_FOR_EXPLICIT_POLICY and says in so
+-- many words that NO TEST CASE is written for it. None is written here.
+create table p13_proof.point_movement_identities (
+  business_id   uuid not null,
+  source_type   text not null,
+  source_id     uuid not null,
+  movement_kind text not null,
+  movement_id   uuid not null,
+  constraint point_movements_identity_uq primary key (business_id, source_type, source_id, movement_kind)
+);
 `;
 
 /* ------------------------------------------------------------------ *
@@ -1023,6 +1185,477 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
       }
     },
   },
+
+  /* ---------------------------------------------------------------- *
+   * 7. A FULL reversal, raced
+   * ---------------------------------------------------------------- */
+  {
+    name: 'case-7: two connections reversing the SAME sale restore the points ONCE, and over-restoration is refused',
+    /**
+     * The directive names `return` and `reversal` as raced cases that the pure
+     * suite cannot cover. This is them, at the ONLY scope the design
+     * specifies: §5.7 restricts v1 to a FULL reversal and marks the partial
+     * arm `WAITING_FOR_EXPLICIT_POLICY` with no test case, so no partial case
+     * is invented here.
+     *
+     * 7a Two connections both act on the reversal of ONE return document.
+     *    Each writes the restoring movement's identity row — (business,
+     *    source type, source id, kind) — and restores the grant. The identity
+     *    key is the whole mechanism: one commits, the other is refused BY
+     *    NAME. A reversal that bound to a `reason` string instead would let
+     *    both through and restore the points twice.
+     *
+     * 7b The restoration is bounded by what was granted, not by what is
+     *    asked. A restoration larger than the draw it reverses is refused by
+     *    the remainder relation's own trigger (`grant_over_restored`) — the
+     *    same trigger as case 2, in its other direction. This is the
+     *    conservation law's upper half, and nothing in the pure suite can
+     *    reach it.
+     */
+    fn: async (admin, note) => {
+      const customer = id();
+      const grant = await earn(admin, customer, 100n, '2027-01-01');
+      const RETURN_DOC = id();
+
+      // A sale consumed 40 of it, and is now being fully returned.
+      await admin.query(
+        `INSERT INTO p13_proof.point_draws (id, business_id, grant_id, movement_id, remaining_before, drawn_points)
+           VALUES ($1, $2, $3, $4, 100, 40)`,
+        [id(), BUSINESS, grant.grantId, id()],
+      );
+      await admin.query(
+        `UPDATE p13_proof.point_grant_remainders SET remaining_points = remaining_points - 40
+          WHERE business_id = $1 AND grant_id = $2`,
+        [BUSINESS, grant.grantId],
+      );
+      await admin.query(
+        `INSERT INTO p13_proof.point_movements (id, business_id, customer_id, movement_kind, points_delta, effective_on, reason)
+           VALUES ($1, $2, $3, 'consume', -40, date '2026-03-01', 'sale')`,
+        [id(), BUSINESS, customer],
+      );
+      const consumedTotal = await ledgerTotal(admin, customer);
+      note(`7a: fixture — 100 earned, 40 consumed by the sale now being returned; ledger total = ${consumedTotal}`);
+
+      const a = await session();
+      const b = await session();
+      try {
+        await begin(a);
+        await begin(b);
+
+        // Both reverse the SAME return document, with the SAME identity.
+        const restoreA = id();
+        const idA = await settle(() =>
+          a.query(
+            `INSERT INTO p13_proof.point_movement_identities (business_id, source_type, source_id, movement_kind, movement_id)
+               VALUES ($1, 'sale_return', $2, 'adjust', $3)`,
+            [BUSINESS, RETURN_DOC, restoreA],
+          ),
+        );
+        note(`7a: A claims the restoration identity for the return document: ${observed(idA)}`);
+        if (!idA.ok) throw new Error('7a: A should have claimed the identity first');
+
+        const pidB = await pidOf(b);
+        const restoreB = id();
+        const pendingB = b.query(
+          `INSERT INTO p13_proof.point_movement_identities (business_id, source_type, source_id, movement_kind, movement_id)
+             VALUES ($1, 'sale_return', $2, 'adjust', $3)`,
+          [BUSINESS, RETURN_DOC, restoreB],
+        );
+        const settledB = settle(() => pendingB);
+        const eventB = await waitUntilBlocked(admin, pidB, '7a: the second reversal');
+        note(`7a: B observed waiting on the identity key, wait_event = ${eventB}`);
+
+        // A completes the reversal: restore 40 to the grant, append the movement.
+        const restored = await settle(() =>
+          a.query(
+            `UPDATE p13_proof.point_grant_remainders SET remaining_points = remaining_points + 40
+              WHERE business_id = $1 AND grant_id = $2`,
+            [BUSINESS, grant.grantId],
+          ),
+        );
+        await a.query(
+          `INSERT INTO p13_proof.point_movements (id, business_id, customer_id, movement_kind, points_delta, effective_on, reason)
+             VALUES ($1, $2, $3, 'adjust', 40, date '2026-03-02', 'full return of the sale')`,
+          [restoreA, BUSINESS, customer],
+        );
+        note(`7a: A's restoration of the grant: ${observed(restored)}`);
+        await a.query('COMMIT');
+
+        const outcomeB = await settledB;
+        note(`7a: B's identical reversal, once A had committed: ${observed(outcomeB)}`);
+        if (outcomeB.ok) throw new Error('7a: the SAME reversal was accepted twice — the points were restored twice');
+        if (outcomeB.constraint !== 'point_movements_identity_uq') {
+          throw new Error(`7a: expected the identity key to refuse by name, observed ${observed(outcomeB)}`);
+        }
+        await settle(() => b.query('ROLLBACK'));
+
+        const afterTotal = await ledgerTotal(admin, customer);
+        const left = await remaining(admin, grant.grantId);
+        note(`7a: ledger total ${consumedTotal} -> ${afterTotal}; grant remainder = ${left} of 100`);
+        if (afterTotal !== consumedTotal + 40n) {
+          throw new Error(`7a: expected ${consumedTotal + 40n} after ONE restoration, observed ${afterTotal}`);
+        }
+        if (left !== 100n) throw new Error(`7a: expected the grant back at 100, observed ${left}`);
+        note('7a: OUTCOME = restored exactly once; the duplicate was refused by name on point_movements_identity_uq');
+
+        // 7b: the upper half of the conservation law.
+        await begin(b);
+        const over = await settle(() =>
+          b.query(
+            `UPDATE p13_proof.point_grant_remainders SET remaining_points = remaining_points + 1
+              WHERE business_id = $1 AND grant_id = $2`,
+            [BUSINESS, grant.grantId],
+          ),
+        );
+        note(`7b: a restoration of 1 point beyond what was granted: ${observed(over)}`);
+        if (over.ok) throw new Error('7b: a grant was restored above what it granted');
+        await settle(() => b.query('ROLLBACK'));
+        note('7b: OUTCOME = over-restoration refused by the remainder relation\'s own trigger — the law holds in BOTH directions');
+        note('7b: NOT MEASURED HERE, and deliberately: the PARTIAL return. §5.7.4 marks it');
+        note('7b: WAITING_FOR_EXPLICIT_POLICY and writes no test case for it; neither does this proof');
+      } finally {
+        await settle(() => a.query('ROLLBACK'));
+        await settle(() => b.query('ROLLBACK'));
+        await a.end();
+        await b.end();
+      }
+    },
+  },
+
+  /* ---------------------------------------------------------------- *
+   * 8. Consumption succeeds only if the sale succeeds
+   * ---------------------------------------------------------------- */
+  {
+    name: 'case-8: a rolled-back sale leaves NO consumption, and frees the points for the next connection',
+    /**
+     * The owner's law, in his words: consumption happens inside the sale's own
+     * transaction and succeeds only if the sale succeeds. A fold cannot test
+     * it — a fold has no transaction. Two connections can.
+     *
+     * 8a A takes the lock, draws the whole grant, decrements, appends the
+     *    consumption — and then its sale FAILS. B, waiting on the same
+     *    customer, is observed parked, then wakes and spends the SAME points
+     *    successfully. So A's rollback released real points, not merely rows:
+     *    nothing of A survives.
+     *
+     * 8b After both finish, the ledger and the remainder agree, and the
+     *    draw table carries exactly ONE draw — A's is gone.
+     */
+    fn: async (admin, note) => {
+      const customer = id();
+      const grant = await earn(admin, customer, 100n, '2027-01-01');
+      const startTotal = await ledgerTotal(admin, customer);
+
+      const a = await session();
+      const b = await session();
+      try {
+        await begin(a);
+        await begin(b);
+
+        await a.query(LOCK_SQL, [ADVISORY_NAMESPACE, customer]);
+        const beforeA = await remaining(a, grant.grantId);
+        await a.query(
+          `INSERT INTO p13_proof.point_draws (id, business_id, grant_id, movement_id, remaining_before, drawn_points)
+             VALUES ($1, $2, $3, $4, $5, 100)`,
+          [id(), BUSINESS, grant.grantId, id(), beforeA.toString()],
+        );
+        await a.query(
+          `UPDATE p13_proof.point_grant_remainders SET remaining_points = remaining_points - 100
+            WHERE business_id = $1 AND grant_id = $2`,
+          [BUSINESS, grant.grantId],
+        );
+        await a.query(
+          `INSERT INTO p13_proof.point_movements (id, business_id, customer_id, movement_kind, points_delta, effective_on, reason)
+             VALUES ($1, $2, $3, 'consume', -100, date '2026-03-01', 'sale that will fail')`,
+          [id(), BUSINESS, customer],
+        );
+        note('8a: A has drawn the whole grant, decremented it and appended the consumption — all uncommitted');
+
+        // B arrives for the same customer and parks on A's lock.
+        const pidB = await pidOf(b);
+        const pendingGate = settle(() => b.query(LOCK_SQL, [ADVISORY_NAMESPACE, customer]));
+        const eventB = await waitUntilBlocked(admin, pidB, "8a: B on A's customer lock");
+        note(`8a: B observed parked on the per-customer lock, wait_event = ${eventB}`);
+
+        // A's SALE FAILS.
+        await a.query('ROLLBACK');
+        note('8a: A ROLLED BACK — the sale failed, so the consumption must not have happened');
+
+        const gate = await pendingGate;
+        if (!gate.ok) throw new Error(`8a: B should have taken the lock once A released it: ${observed(gate)}`);
+
+        const beforeB = await remaining(b, grant.grantId);
+        note(`8a: B reads remaining = ${beforeB} after A's rollback`);
+        if (beforeB !== 100n) throw new Error(`8a: A's rollback did not release the points: B sees ${beforeB}`);
+
+        const drawB = await settle(() =>
+          b.query(
+            `INSERT INTO p13_proof.point_draws (id, business_id, grant_id, movement_id, remaining_before, drawn_points)
+               VALUES ($1, $2, $3, $4, $5, 100)`,
+            [id(), BUSINESS, grant.grantId, id(), beforeB.toString()],
+          ),
+        );
+        note(`8a: B's draw at the SAME level A had drawn at: ${observed(drawB)}`);
+        if (!drawB.ok) {
+          throw new Error(`8a: A's rolled-back draw still blocks the level — the rollback was not complete: ${observed(drawB)}`);
+        }
+        await b.query(
+          `UPDATE p13_proof.point_grant_remainders SET remaining_points = remaining_points - 100
+            WHERE business_id = $1 AND grant_id = $2`,
+          [BUSINESS, grant.grantId],
+        );
+        await b.query(
+          `INSERT INTO p13_proof.point_movements (id, business_id, customer_id, movement_kind, points_delta, effective_on, reason)
+             VALUES ($1, $2, $3, 'consume', -100, date '2026-03-01', 'the sale that succeeded')`,
+          [id(), BUSINESS, customer],
+        );
+        await b.query('COMMIT');
+
+        const endTotal = await ledgerTotal(admin, customer);
+        const left = await remaining(admin, grant.grantId);
+        const draws = await admin.query(
+          `SELECT 1 FROM p13_proof.point_draws WHERE business_id = $1 AND grant_id = $2`,
+          [BUSINESS, grant.grantId],
+        );
+        note(`8b: ledger total ${startTotal} -> ${endTotal}; remainder = ${left}; draw rows on the grant = ${draws.rows.length}`);
+        if (endTotal !== startTotal - 100n) {
+          throw new Error(`8b: expected ONE consumption of 100, observed a total of ${endTotal}`);
+        }
+        if (left !== 0n) throw new Error(`8b: expected 0 remaining, observed ${left}`);
+        if (draws.rows.length !== 1) {
+          throw new Error(`8b: expected exactly one surviving draw, observed ${draws.rows.length}`);
+        }
+        note('8b: OUTCOME = the failed sale consumed nothing and left nothing; the points were spent exactly once');
+      } finally {
+        await settle(() => a.query('ROLLBACK'));
+        await settle(() => b.query('ROLLBACK'));
+        await a.end();
+        await b.end();
+      }
+    },
+  },
+
+  /* ---------------------------------------------------------------- *
+   * 9. The retry TERMINATES
+   * ---------------------------------------------------------------- */
+  {
+    name: 'case-9: the lock loser\'s re-bind retry terminates — it either spends or is refused, never loops',
+    /**
+     * Case 4 showed the loser WAITS and re-binds. It did not show that the
+     * re-bind ENDS. A mechanism whose loser re-reads and tries again is a
+     * livelock risk, and "it will converge" is an assertion, not a
+     * measurement. This case bounds it and reports the number of attempts the
+     * server actually needed.
+     *
+     * A FIRST DRAFT OF THIS CASE WAS VACUOUS, and it is worth saying why,
+     * because the failure is easy to repeat. It let the competing sale commit
+     * BEFORE the loser read the remainder, so the loser's bind was always
+     * fresh, it succeeded on attempt 1, and the case reported "terminated"
+     * having never retried once. A termination proof whose loop body runs
+     * once proves nothing about termination.
+     *
+     * So the interleaving is now the one that actually produces a stale bind,
+     * which is case 4c's: the loser reads the remainder WITHOUT holding the
+     * lock, the competing sale commits in between, and only then does the
+     * loser draw — at a level that no longer exists. The case asserts that
+     * the loop retried AT LEAST ONCE and still reached a definite end.
+     */
+    fn: async (admin, note) => {
+      const customer = id();
+      const grant = await earn(admin, customer, 100n, '2027-01-01');
+
+      const loser = await session();
+      try {
+        const ATTEMPT_BOUND = 8;
+        const COMPETING_SALES = 3;
+        let attempts = 0;
+        let retried = 0;
+        let outcome: string = '(none)';
+
+        for (let i = 0; i < ATTEMPT_BOUND; i += 1) {
+          attempts += 1;
+
+          await begin(loser);
+          // The bind, taken WITHOUT the lock — this is what makes it stale.
+          const before = await remaining(loser, grant.grantId);
+
+          // A competing sale commits AFTER the loser has bound and BEFORE it
+          // draws. This is the interleaving that invalidates the bind.
+          if (i < COMPETING_SALES) {
+            const winner = await session();
+            try {
+              await begin(winner);
+              const w = await remaining(winner, grant.grantId);
+              await winner.query(
+                `INSERT INTO p13_proof.point_draws (id, business_id, grant_id, movement_id, remaining_before, drawn_points)
+                   VALUES ($1, $2, $3, $4, $5, 20)`,
+                [id(), BUSINESS, grant.grantId, id(), w.toString()],
+              );
+              await winner.query(
+                `UPDATE p13_proof.point_grant_remainders SET remaining_points = remaining_points - 20
+                  WHERE business_id = $1 AND grant_id = $2`,
+                [BUSINESS, grant.grantId],
+              );
+              await winner.query('COMMIT');
+            } finally {
+              await winner.end();
+            }
+          }
+
+          const drawn = await settle(() =>
+            loser.query(
+              `INSERT INTO p13_proof.point_draws (id, business_id, grant_id, movement_id, remaining_before, drawn_points)
+                 VALUES ($1, $2, $3, $4, $5, 20)`,
+              [id(), BUSINESS, grant.grantId, id(), before.toString()],
+            ),
+          );
+          const dec = drawn.ok
+            ? await settle(() =>
+                loser.query(
+                  `UPDATE p13_proof.point_grant_remainders SET remaining_points = remaining_points - 20
+                    WHERE business_id = $1 AND grant_id = $2`,
+                  [BUSINESS, grant.grantId],
+                ),
+              )
+            : drawn;
+          if (dec.ok) {
+            await loser.query('COMMIT');
+            outcome = `SPENT on attempt ${attempts}, on a bind of remaining_before = ${before}`;
+            break;
+          }
+          await settle(() => loser.query('ROLLBACK'));
+          retried += 1;
+          note(`9: attempt ${attempts} bound to ${before}, was overtaken, and was refused: ${observed(dec)}`);
+          if (dec.code === 'P0001') {
+            outcome = `REFUSED on attempt ${attempts}: ${observed(dec)} — the grant is exhausted`;
+            break;
+          }
+        }
+
+        note(`9: attempts the loop actually took = ${attempts} of a bound of ${ATTEMPT_BOUND}; retries forced = ${retried}`);
+        note(`9: terminal outcome = ${outcome}`);
+        if (outcome === '(none)') {
+          throw new Error(`9: the retry did NOT terminate within ${ATTEMPT_BOUND} attempts — this is a livelock`);
+        }
+        if (retried < 1) {
+          throw new Error('9: the loop never retried, so it measured nothing about termination (the vacuous case above)');
+        }
+        note('9: OUTCOME = the retry was genuinely forced and still terminated with a definite answer');
+        note('9: NOT MEASURED: termination under more than two writers, under an adversarial writer that');
+        note('9: never yields, and any claim about how LONG a retry takes. This bounds the NUMBER of');
+        note('9: attempts against a bounded competitor, not a duration and not a guarantee of progress');
+        note('9: against an unbounded one.');
+      } finally {
+        await settle(() => loser.query('ROLLBACK'));
+        await loser.end();
+      }
+    },
+  },
+
+  /* ---------------------------------------------------------------- *
+   * 10. The expiry sweep beside a spend
+   * ---------------------------------------------------------------- */
+  {
+    name: 'case-10: an expiry sweep and a spend cannot take the same points — one of them is refused',
+    /**
+     * The sweep is the one writer that is neither a sale nor an earn, and it
+     * touches the same grant a sale is drawing from. If both could take the
+     * same points, the balance would go negative with every row individually
+     * valid — the same failure as case 1, by another route.
+     *
+     * The sweep is written the way the design requires: it expires what is
+     * LEFT of a grant, under the same per-customer lock, with its own identity
+     * (`source_type = 'expiry_sweep'`). The case asserts the measured
+     * outcome: one of the two writers is refused, by name, and the ledger is
+     * conserved whichever one won.
+     */
+    fn: async (admin, note) => {
+      const customer = id();
+      // A grant whose horizon has passed, so the sweep has something to take.
+      const grant = await earn(admin, customer, 100n, '2026-02-01');
+      const startTotal = await ledgerTotal(admin, customer);
+
+      const sweeper = await session();
+      const seller = await session();
+      try {
+        await begin(sweeper);
+        await begin(seller);
+
+        // The sweep goes first and takes the whole remainder, uncommitted.
+        await sweeper.query(LOCK_SQL, [ADVISORY_NAMESPACE, customer]);
+        const beforeSweep = await remaining(sweeper, grant.grantId);
+        await sweeper.query(
+          `UPDATE p13_proof.point_grant_remainders SET remaining_points = 0
+            WHERE business_id = $1 AND grant_id = $2`,
+          [BUSINESS, grant.grantId],
+        );
+        const sweepMovement = id();
+        await sweeper.query(
+          `INSERT INTO p13_proof.point_movement_identities (business_id, source_type, source_id, movement_kind, movement_id)
+             VALUES ($1, 'expiry_sweep', $2, 'expire', $3)`,
+          [BUSINESS, grant.grantId, sweepMovement],
+        );
+        await sweeper.query(
+          `INSERT INTO p13_proof.point_movements (id, business_id, customer_id, movement_kind, points_delta, effective_on, reason)
+             VALUES ($1, $2, $3, 'expire', $4, date '2026-02-02', 'horizon passed')`,
+          [sweepMovement, BUSINESS, customer, (-beforeSweep).toString()],
+        );
+        note(`10: the sweep has taken all ${beforeSweep} remaining points of the expired grant, uncommitted`);
+
+        // The sale arrives for the same customer and parks on the same lock.
+        const pidSeller = await pidOf(seller);
+        const pendingGate = settle(() => seller.query(LOCK_SQL, [ADVISORY_NAMESPACE, customer]));
+        const event = await waitUntilBlocked(admin, pidSeller, '10: the sale behind the sweep');
+        note(`10: the sale observed parked on the per-customer lock, wait_event = ${event}`);
+
+        await sweeper.query('COMMIT');
+        note('10: the sweep COMMITTED');
+
+        const gate = await pendingGate;
+        if (!gate.ok) throw new Error(`10: the sale should have taken the lock after the sweep: ${observed(gate)}`);
+
+        const beforeSale = await remaining(seller, grant.grantId);
+        note(`10: the sale re-reads remaining = ${beforeSale} AFTER the sweep committed`);
+        const drawn = await settle(() =>
+          seller.query(
+            `INSERT INTO p13_proof.point_draws (id, business_id, grant_id, movement_id, remaining_before, drawn_points)
+               VALUES ($1, $2, $3, $4, $5, 100)`,
+            [id(), BUSINESS, grant.grantId, id(), beforeSale.toString()],
+          ),
+        );
+        const dec = drawn.ok
+          ? await settle(() =>
+              seller.query(
+                `UPDATE p13_proof.point_grant_remainders SET remaining_points = remaining_points - 100
+                  WHERE business_id = $1 AND grant_id = $2`,
+                [BUSINESS, grant.grantId],
+              ),
+            )
+          : drawn;
+        note(`10: the sale's spend of the swept points: ${observed(dec)}`);
+        if (dec.ok) {
+          throw new Error('10: the sale spent points the sweep had already expired — they were taken twice');
+        }
+        await settle(() => seller.query('ROLLBACK'));
+
+        const endTotal = await ledgerTotal(admin, customer);
+        const left = await remaining(admin, grant.grantId);
+        note(`10: ledger total ${startTotal} -> ${endTotal}; remainder = ${left}`);
+        if (endTotal !== 0n) throw new Error(`10: the sweep should have zeroed the balance, observed ${endTotal}`);
+        if (left !== 0n) throw new Error(`10: expected 0 remaining, observed ${left}`);
+        note(`10: OUTCOME = the sweep won and the sale was refused (${observed(dec)}); the points were taken ONCE`);
+        note('10: WHAT THIS DOES NOT SETTLE: whether the sweep SHOULD win. A sale losing to a sweep that');
+        note('10: fires mid-sale is a POLICY question for the loyalty configuration owner, not a');
+        note('10: mechanism question. The mechanism holds either way — the measured fact is that they');
+        note('10: cannot both take the same points.');
+      } finally {
+        await settle(() => sweeper.query('ROLLBACK'));
+        await settle(() => seller.query('ROLLBACK'));
+        await sweeper.end();
+        await seller.end();
+      }
+    },
+  },
 ];
 
 /* ------------------------------------------------------------------ *
@@ -1030,17 +1663,32 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
  * ------------------------------------------------------------------ */
 
 async function main(): Promise<number> {
-  ensureBinariesExecutable();
   rmSync(PG_DIR, { recursive: true, force: true });
 
-  const EmbeddedPostgres = await loadEmbeddedPostgres();
-  const pg = new EmbeddedPostgres({
-    databaseDir: PG_DIR,
-    user: PG_USER,
-    password: PG_PASSWORD,
-    port: PG_PORT,
-    persistent: false,
-  });
+  // The settled target first; the repository's embedded cluster only as a
+  // clearly-labelled fallback.
+  const binDir = findBinDir();
+  let pg: EmbeddedCluster;
+  let onTarget: boolean;
+  let binaryVersion: string;
+  if (binDir === null) {
+    ensureBinariesExecutable();
+    const EmbeddedPostgres = await loadEmbeddedPostgres();
+    pg = new EmbeddedPostgres({
+      databaseDir: PG_DIR,
+      user: PG_USER,
+      password: PG_PASSWORD,
+      port: PG_PORT,
+      persistent: false,
+    });
+    onTarget = false;
+    binaryVersion = "the repository's own embedded-postgres";
+  } else {
+    const external = new ExternalCluster(binDir, PG_DIR, join(PG_DIR, 'sock'), PG_PORT);
+    pg = external;
+    binaryVersion = external.version();
+    onTarget = /\b16\.\d+\b/.test(binaryVersion);
+  }
 
   let pool: Pool | null = null;
   const results: CaseResult[] = [];
@@ -1051,13 +1699,24 @@ async function main(): Promise<number> {
     pool = admin;
 
     const v = await one<{ version: string }>(admin, 'SELECT version() AS version');
+    const loc = await one<{ collate: string; ctype: string; encoding: string }>(
+      admin,
+      `SELECT datcollate AS collate, datctype AS ctype, pg_encoding_to_char(encoding) AS encoding
+         FROM pg_database WHERE datname = current_database()`,
+    );
     console.log('P13-PROOF-CONCURRENCY — two real connections, one real cluster');
+    console.log(`binary:      ${binaryVersion}`);
     console.log(`measured on: ${v.version}`);
+    console.log(`collation:   datcollate=${loc.collate} datctype=${loc.ctype} encoding=${loc.encoding}`);
     console.log(
-      'HONEST LABEL: this is the version this container ships. Phase 5 measured the comparable behaviour on 16.15,\n' +
-        '              and the production PostgreSQL line (16 vs 18) is an OPEN OWNER DECISION — the owner has not\n' +
-        '              chosen 18. A result here is NOT evidence for a 16.x target and names no production line.\n' +
-        '              No timing or performance claim is made anywhere in this proof.',
+      onTarget
+        ? 'TARGET: this IS the settled deploy line (the PostgreSQL 16 family). The collation line above is read\n' +
+            '        back from the catalogue, not asserted. What this still does NOT cover: the real schema, its\n' +
+            '        routines and RLS, the official sale authority, isolation levels above READ COMMITTED, more\n' +
+            '        than two connections, and every timing figure — no duration is claimed anywhere.'
+        : 'OFF-TARGET: no PostgreSQL 16 binaries were found, so this ran on the fallback printed above. The\n' +
+            '            settled deploy line is the PostgreSQL 16 family with en_US.utf8, so THIS RUN IS NOT\n' +
+            '            EVIDENCE FOR THE TARGET. Re-run with P13_PG_BINDIR pointing at a 16.x bin directory.',
     );
     console.log('');
 

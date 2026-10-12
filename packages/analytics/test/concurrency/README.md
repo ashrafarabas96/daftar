@@ -14,22 +14,33 @@ real connections. It is not a migration, not a unit test, and not a benchmark.
 ## The version this was measured on — read this before quoting any result
 
 ```
-PostgreSQL 18.4 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit
+PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+datcollate=en_US.utf8 datctype=en_US.utf8 encoding=UTF8
 ```
 
-That string is printed at the top of every run from `select version()`; it is
-not copied from anywhere else, and it is whatever `embedded-postgres` ships in
-this container.
+Both lines are printed at the top of every run — the first from
+`select version()`, the second read back from `pg_database` for the connected
+database. Neither is copied from anywhere else.
 
-- Phase 5 measured the comparable behaviour on **16.15**.
-- The production PostgreSQL line (**16 vs 18**) is an **OPEN OWNER DECISION**.
-  The owner has not chosen 18.
-- Therefore: **a result in this file is evidence about 18.4 and nothing else.**
-  It is **not** evidence for a 16.x target, and it names no production line.
-  Anyone citing a SQLSTATE below for a 16.x deployment is citing the wrong
-  measurement and must re-run it there.
-- **No performance or timing claim is made anywhere.** This container is not a
-  measurement box. The proof never asserts a duration and never sleeps.
+**This is the settled deploy line.** An earlier revision of this proof ran on
+PostgreSQL **18.4** — whatever the repository's `embedded-postgres` ships — and
+labelled itself, correctly at the time, as evidence about the mechanism's shape
+and *not* about any production target, because the version was then an open
+owner decision. **That decision is now settled: the PostgreSQL 16 family with
+`en_US.utf8`.** So the proof no longer runs on a version nobody chose:
+
+- it looks for a 16.x `bin` directory (`P13_PG_BINDIR`, else the well-known
+  locations) and runs that distribution's own `initdb`/`pg_ctl`, creating the
+  cluster with `--locale` from `P13_PG_LOCALE` (default `en_US.utf8`) and
+  `UTF8`;
+- it reads the collation and encoding back out of the catalogue and prints
+  them, so a reader never has to trust this file;
+- if no 16.x binaries exist it falls back to `embedded-postgres` and prints
+  **`OFF-TARGET`**, stating in the banner that the run is not evidence for the
+  target.
+
+**No performance or timing claim is made anywhere.** This container is not a
+measurement box. The proof never asserts a duration and never sleeps.
 
 ## How to run it, and why it is not in the unit suite
 
@@ -40,8 +51,10 @@ node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts
 echo "RC=$?"
 ```
 
-Observed: `6/6 cases passed`, `RC=0` — three consecutive runs, identical
-outcomes in each.
+Observed: `10/10 cases passed`, `RC=0` — three consecutive runs on
+PostgreSQL 16.15. The outcomes were identical in each **except one, which is
+itself a finding**: the deadlock victim in case 5b differed between runs on the
+same cluster and the same version (see qualification 4 below).
 
 The package's vitest config includes only `test/**/*.test.ts`. This file is
 `.mts`, under `test/concurrency/`, **specifically so that it cannot match that
@@ -110,6 +123,12 @@ predicts.
 | 5b | opposing orders | **deadlock** | **`40P01`** (`deadlock detected`), exactly one victim, the other accepted |
 | 6a | an uncommitted earn concurrent with a sale | the sale committed | sale's draw/decrement/consume/commit all `accepted`; the sale's backend observed parked on a lock at **no** step |
 | 6b | the earn then fails and rolls back | isolated | **`23505`**, `constraint = point_grant_remainders_pkey`; ledger `100 → 30` as the sale left it; 0 rows left behind |
+| 7a | two connections reverse the **same** return document (a FULL reversal) | restored exactly **once** | loser observed waiting (`wait_event = transactionid`), then refused **`23505`**, `constraint = point_movements_identity_uq`; ledger `60 → 100`, grant back at `100 of 100` |
+| 7b | a restoration one point beyond what the grant granted | refused | **`P0001`** (`loyalty.grant_over_restored`) — the conservation law holds in **both** directions |
+| 8a | a sale draws the whole grant, then **fails**; a second connection waits behind it | the second sale spent the same points successfully | the waiter observed parked (`wait_event = advisory`), then read `remaining = 100` after the rollback and drew at **the same level** the failed sale had drawn at: `accepted` |
+| 8b | what the failed sale left behind | nothing | ledger `100 → 0` (one consumption, not two), remainder `0`, **exactly 1** surviving draw row |
+| 9 | the lock loser's re-bind retry, with a competing sale committing **after** each bind | **terminated on attempt 4** | 3 forced retries, each refused **`23505`** on `point_draws_level_uq` at binds of `100`, `80`, `60`; then spent at a bind of `40`. Identical in all three runs |
+| 10 | an expiry sweep takes a grant's whole remainder; a sale waits behind it | the sweep won, the sale was **refused** | sale observed parked (`wait_event = advisory`), re-read `remaining = 0` after the sweep committed, and its spend was refused **`P0001`**; ledger `100 → 0` — the points were taken **once** |
 
 Case 1 **asserts the defect**: it fails loudly if the double-spend does *not*
 happen, so it cannot quietly become decoration. That is what makes it evidence
@@ -128,7 +147,7 @@ expectation.
    on the first inserter's transaction id until that transaction ends, and only
    then refuses it. So **level uniqueness removes the need to remember a lock;
    it does not remove the wait.** Any design text claiming the constraint path
-   is non-blocking is wrong on 18.4. The difference the lock makes is *which*
+   is non-blocking is wrong on both versions measured (18.4 and 16.15). The difference the lock makes is *which*
    wait and *what the loser can do next* (cases 4a/4b/4c), not whether a wait
    exists.
 2. **The remainder trigger's refusal is `P0001`, not a constraint-shaped
@@ -145,11 +164,14 @@ expectation.
    `tuple`. Any monitoring or test helper that keys on a specific `wait_event`
    name (rather than `wait_event_type = 'Lock'`, as the house helper does)
    would be matching the wrong string here.
-4. **The deadlock victim is the server's choice.** In case 5b the aborted
-   transaction was, in both recorded runs, the oldest-first one — but nothing
-   in PostgreSQL promises that, and the proof therefore asserts only that
-   **exactly one** victim exists and reports its SQLSTATE. A retry policy must
-   not assume which side loses.
+4. **The deadlock victim is the server's choice, and this is now MEASURED,
+   not merely argued.** An earlier revision of this file reasoned that nothing
+   in PostgreSQL promises which side loses, having observed the oldest-first
+   transaction aborted in both runs on 18.4. On 16.15 the victim **flipped
+   between two consecutive runs of the identical script against the identical
+   cluster** — `B` in run 2, `A` in run 3. So any retry policy that assumes a
+   side, or any test that asserts one, is wrong; the proof asserts only that
+   **exactly one** victim exists and reports whichever SQLSTATE it observed.
 5. **Case 1 needed no race window.** Two inserts conflict on no lock, so the
    naive `sum()` rule is not "usually right and occasionally wrong under
    load" — it is unconditionally bypassable by any two overlapping
@@ -157,29 +179,57 @@ expectation.
 
 ## What remains UNMEASURED
 
-This proof covers the mechanism's **shape** on a scratch schema. It does not
-cover:
+This proof covers the mechanism's **shape** on a scratch schema, now on the
+settled deploy line. It does **not** cover:
 
-- **`return` and `reversal`**, which the owner directive names alongside spend
-  and earn. Only **spend** and **earn** are exercised here; the scratch ledger
-  admits `earn/consume/adjust/expire` only, and no return or reversal path was
-  run against two connections. The remainder relation's over-restore guard
-  (`remaining_points > granted_points`) exists in the scratch trigger but was
-  **never raced**.
 - **The real schema.** Nothing here ran against the Phase 13 migration DDL, the
   real routines, RLS, or the real tenant/business scoping — by design: no
-  migration was read. Whether the real relations carry the trigger and the
-  level key in these shapes is **not** established by this file.
+  migration was read. Whether the real relations carry the trigger, the level
+  key and the identity key in these shapes is **not** established by this file.
+- **The official sale authority.** The whole point of the atomicity law is that
+  consumption rides inside the sale's own transaction. Case 8 models that with
+  a hand-written transaction, because the authority that would own the seam
+  does not exist on `main` at all — `selling`, `receivables` and `pos` are
+  present only on the Phase 4 branch. Until that surface integrates, the seam
+  itself stays `WAITING_FOR_INTEGRATED_SURFACE`, and case 8 is evidence about
+  transaction semantics, not about the real command.
+- **The PARTIAL return.** Deliberately. The loyalty design's §5.7.4 marks it
+  `WAITING_FOR_EXPLICIT_POLICY` and states that no test case is written for
+  it; none is written here either. Case 7 covers the **full** reversal, which
+  is the only arm v1 specifies.
 - **Isolation levels other than READ COMMITTED.** No REPEATABLE READ, no
   SERIALIZABLE, so no `40001` was ever observed or sought.
-- **More than two connections.** No three-way races, no deadlock cycles longer
-  than two, no contention fan-out.
-- **Retry behaviour.** The proof observes refusals; it never retries one, so
-  nothing here shows a retry loop terminates or that a re-bound draw is
-  eventually accepted under sustained contention.
+- **More than two connections.** Case 9 runs a bounded competitor one
+  transaction at a time; there are no three-way races, no deadlock cycles
+  longer than two, and no contention fan-out. Case 9 therefore bounds the
+  **number of attempts against a bounded competitor** — it is not a progress
+  guarantee against an adversarial writer that never yields.
+- **Whether the expiry sweep SHOULD win.** Case 10 measures that the sweep and
+  a spend cannot both take the same points. Which of them ought to win when a
+  sweep fires mid-sale is a **loyalty-configuration policy question** for its
+  owner, and this proof does not answer it.
 - **`lock_timeout` / `statement_timeout` / `deadlock_timeout` settings**,
   connection pooling, pgbouncer and transaction-mode pooling (which would break
   `pg_advisory_xact_lock` semantics).
-- **The expiry sweep** running concurrently with a spend.
-- **Any timing, throughput or latency figure**, and **any behaviour on
-  PostgreSQL 16.x**, which is the version the production line may actually be.
+- **Any timing, throughput or latency figure.**
+
+## Exit codes, for the handoff
+
+Every number quoted above comes from a run whose exit code was recorded. The
+three gates and this proof, measured together on Node **v24.12.0** (the CI
+line) against this working tree:
+
+| Command | Result | Exit code |
+|---|---|---|
+| `node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts` | `10/10 cases passed` | **0** (three consecutive runs) |
+| `../../node_modules/.bin/vitest run` (in `packages/analytics`) | 7 files, 193 tests passed | **0** |
+| `../../node_modules/.bin/tsc -p tsconfig.json --noEmit` | no diagnostics | **0** |
+| `./node_modules/.bin/eslint packages/analytics` (from the repo root) | no findings | **0** |
+| `./node_modules/.bin/eslint .` (from the repo root) | 4220 errors, **0 of them in `packages/analytics`** | **1** |
+
+That last row needs its honest reading. The repository-wide `eslint .` is red
+at 4220 errors, and **every one of them is outside this package** — measured by
+grouping the JSON formatter's output by path, not estimated. The root command
+was red before Phase 13 existed and is red for reasons Phase 13 did not create
+and is not asked to fix. What Phase 13 is answerable for is its own
+contribution, which is **zero**.
