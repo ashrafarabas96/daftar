@@ -407,10 +407,10 @@ describe('P9 bookings — attacked as the real runtime roles, with no superuser'
       try {
         await client.query(`SET ROLE daftar_booking_internal`);
         await client.query('BEGIN');
-        await client.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true), set_config('app.bypass_rls', 'false', true)`, [
-          world.tenantId,
-          world.businessId,
-        ]);
+        await client.query(
+          `SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true), set_config('app.bypass_rls', 'false', true)`,
+          [world.tenantId, world.businessId],
+        );
         try {
           for (const [id, back, hour] of [
             [b, a, h],
@@ -461,9 +461,7 @@ describe('P9 bookings — attacked as the real runtime roles, with no superuser'
     };
 
     const policy = async (): Promise<string> => {
-      const r = await db.pool.query<{ q: string }>(
-        `SELECT qual AS q FROM pg_policies WHERE tablename = 'bookings' AND policyname = 'business_isolation_read'`,
-      );
+      const r = await db.pool.query<{ q: string }>(`SELECT qual AS q FROM pg_policies WHERE tablename = 'bookings' AND policyname = 'business_isolation_read'`);
       const q = r.rows[0]?.q;
       if (q === undefined) throw new Error('business_isolation_read is not on bookings');
       return q;

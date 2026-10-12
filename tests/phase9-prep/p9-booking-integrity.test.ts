@@ -31,7 +31,17 @@
 import { describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 import type { ScratchDb } from '../helpers/scratch-db';
-import { CUSTOMER, INSERT_BOOKING, INSERT_BOOKING_WITH_BACKLINK, INTENT, type BookingWorld, bookingParams, reschedule, uuid, withBookingDb } from './p9-booking-world';
+import {
+  CUSTOMER,
+  INSERT_BOOKING,
+  INSERT_BOOKING_WITH_BACKLINK,
+  INTENT,
+  type BookingWorld,
+  bookingParams,
+  reschedule,
+  uuid,
+  withBookingDb,
+} from './p9-booking-world';
 
 /** A quiet June day, far from any transition: this file is not about clocks. */
 const AT = (h: string): string => `2026-06-10T${h}:00:00+00`;
@@ -764,10 +774,7 @@ describe('P9 — the reschedule chain agrees with itself (R-P9-17, C5-P9-01)', (
       // a successor's identity includes which booking it replaces; what it
       // cannot do is check the claim, because at the moment of the INSERT the
       // predecessor has not been closed yet. Only a deferred check can.
-      const said = await refused(db, INSERT_BOOKING_WITH_BACKLINK, [
-        ...bookingParams({ world, id: uuid(32), startsAt: AT('11'), endsAt: AT('12') }),
-        uuid(31),
-      ]);
+      const said = await refused(db, INSERT_BOOKING_WITH_BACKLINK, [...bookingParams({ world, id: uuid(32), startsAt: AT('11'), endsAt: AT('12') }), uuid(31)]);
       expect(said).toMatch(/booking\.chain_asymmetric/);
 
       const n = await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1`, [world.businessId]);
@@ -797,10 +804,7 @@ describe('P9 — the reschedule chain agrees with itself (R-P9-17, C5-P9-01)', (
              settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
           [world.businessId, world.userId, uuid(44), uuid(43)],
         );
-        await client.query(INSERT_BOOKING_WITH_BACKLINK, [
-          ...bookingParams({ world, id: uuid(44), startsAt: AT('15'), endsAt: AT('16') }),
-          uuid(43),
-        ]);
+        await client.query(INSERT_BOOKING_WITH_BACKLINK, [...bookingParams({ world, id: uuid(44), startsAt: AT('15'), endsAt: AT('16') }), uuid(43)]);
         await client.query('COMMIT');
       } finally {
         await client.end();
@@ -969,10 +973,9 @@ describe('P9 — a reschedule chain ends in a booking that is kept (R-P9-18, C6-
         await client.end().catch(() => undefined);
       }
 
-      const states = await db.pool.query<{ id: string; state: string }>(
-        `SELECT id::text AS id, state FROM bookings WHERE business_id = $1 ORDER BY id`,
-        [world.businessId],
-      );
+      const states = await db.pool.query<{ id: string; state: string }>(`SELECT id::text AS id, state FROM bookings WHERE business_id = $1 ORDER BY id`, [
+        world.businessId,
+      ]);
       expect(states.rows).toEqual([
         { id: uuid(71), state: 'rescheduled' },
         { id: uuid(72), state: 'rescheduled' },
@@ -1045,6 +1048,242 @@ describe('P9 — a reschedule chain ends in a booking that is kept (R-P9-18, C6-
       const back = await db.pool.query<{ body: string }>(`SELECT prosrc AS body FROM pg_proc WHERE proname = 'bookings_chain_symmetric'`);
       expect(back.rows[0]?.body).toBe(body);
       expect(await ring(db, world, [uuid(93), uuid(94)], 13)).toMatch(/booking\.chain_is_a_ring/);
+    });
+  });
+  /**
+   * Re-point the live function's ceiling and run `fn`, then restore the body
+   * byte for byte. The mutation is asserted to have APPLIED before anything
+   * runs, because a mutation that silently fails to apply reports a guard as
+   * proved when it was never tested (the lesson this project paid for twice).
+   */
+  const withGuard = async (db: ScratchDb, n: number, fn: () => Promise<void>): Promise<void> => {
+    const src = await db.pool.query<{ body: string }>(`SELECT prosrc AS body FROM pg_proc WHERE proname = 'bookings_chain_symmetric'`);
+    const body = src.rows[0]?.body;
+    if (body === undefined) throw new Error('bookings_chain_symmetric is not on the server');
+    // The DECLARE's assignment, not the token: the function's own comments
+    // name 4096 in prose too (they say what round 7 measured about it), so a
+    // bare token replacement would rewrite a comment and leave the ceiling.
+    // The first run of this case caught exactly that, on my own edit.
+    if (body.split(':= 4096;').length !== 2) throw new Error(':= 4096; is not the one ceiling assignment in the live body');
+    const mutant = body.replace(':= 4096;', `:= ${n};`);
+    let probe: unknown = null;
+    try {
+      await db.pool.query(
+        `CREATE OR REPLACE FUNCTION bookings_chain_symmetric() RETURNS trigger
+         LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $mutant$${mutant}$mutant$`,
+      );
+      const live = await db.pool.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM pg_proc WHERE proname = 'bookings_chain_symmetric' AND prosrc LIKE '%:= ${n};%'`,
+      );
+      expect(live.rows[0]?.n).toBe(1);
+      await fn();
+    } catch (e) {
+      probe = e;
+    }
+    let restoreFailure: unknown = null;
+    try {
+      await db.pool.query(
+        `CREATE OR REPLACE FUNCTION bookings_chain_symmetric() RETURNS trigger
+         LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $orig$${body}$orig$`,
+      );
+    } catch (e) {
+      restoreFailure = e;
+    }
+    if (probe !== null) throw probe;
+    if (restoreFailure !== null) throw restoreFailure;
+    const back = await db.pool.query<{ body: string }>(`SELECT prosrc AS body FROM pg_proc WHERE proname = 'bookings_chain_symmetric'`);
+    expect(back.rows[0]?.body).toBe(body);
+  };
+
+  /** A write that changes NOTHING, on one row: the walk's own entry point. */
+  const touch = async (db: ScratchDb, world: BookingWorld, id: string): Promise<string> =>
+    refused(db, `UPDATE bookings SET rescheduled_to_id = rescheduled_to_id WHERE business_id = $1 AND id = $2`, [world.businessId, id]);
+
+  /** A lawful chain of `n` hops built by `n` separate lawful reschedules. */
+  const chain = async (db: ScratchDb, world: BookingWorld, ids: readonly number[], hour: number): Promise<void> => {
+    const h = (i: number): string => String(hour + i).padStart(2, '0');
+    await book(db, world, ids[0] as number, h(0), h(1));
+    for (let i = 1; i < ids.length; i += 1) {
+      await reschedule(db, world, { from: uuid(ids[i - 1] as number), to: uuid(ids[i] as number), startsAt: AT(h(2 * i)), endsAt: AT(h(2 * i + 1)) });
+    }
+  };
+
+  it('the walk is INDEPENDENTLY REACHABLE: a write that changes nothing enters it at the chain HEAD (C7-P9-02)', async () => {
+    await withBookingDb('daftar_p9_ring_6', async (db, world) => {
+      // Round 7 closed limitation 22 against me. I had said the walk's own
+      // reads are never the only reads — that every row it sees is also the
+      // immediate counterpart block (a) reads — because a chain can only be
+      // extended at its tail. The challenger built the isolation I could not:
+      // an UPDATE that assigns a column to itself. It changes no field block
+      // (a) compares, no state block (b) needs, and it writes ONE row, so on
+      // a closed chain head (a) reads exactly one successor and the rest of
+      // the chain belongs to the walk alone.
+      await chain(db, world, [101, 102, 103, 104], 9);
+
+      // First, the challenger's own measurement: the no-op touch is lawful.
+      expect(await touch(db, world, uuid(101))).toBe('');
+      expect(await endsNowhere(db, world)).toBe(0);
+
+      // Then the isolation by DISTANCE, which needs no row security and names
+      // the walk's own refusal. With the ceiling at 2, the same no-op touch of
+      // the HEAD walks past it and is refused; the same touch of the last
+      // CLOSED row, whose walk is two rows, still commits. Only the walk can
+      // tell these two apart: block (a) reads one successor in both.
+      await withGuard(db, 2, async () => {
+        expect(await touch(db, world, uuid(101))).toMatch(/booking\.chain_too_long/);
+        expect(await touch(db, world, uuid(103))).toBe('');
+      });
+
+      // Nothing was changed by any of it, and with the ceiling back the head
+      // is touchable again.
+      expect(await touch(db, world, uuid(101))).toBe('');
+      const states = await db.pool.query<{ id: string; state: string }>(`SELECT id::text AS id, state FROM bookings WHERE business_id = $1 ORDER BY id`, [
+        world.businessId,
+      ]);
+      expect(states.rows).toEqual([
+        { id: uuid(101), state: 'rescheduled' },
+        { id: uuid(102), state: 'rescheduled' },
+        { id: uuid(103), state: 'rescheduled' },
+        { id: uuid(104), state: 'booked' },
+      ]);
+      expect(await endsNowhere(db, world)).toBe(0);
+    });
+  });
+
+  it('the ceiling is ENFORCED, not advisory: with it lowered, a LAWFUL chain is refused (C7-P9-03)', async () => {
+    await withBookingDb('daftar_p9_ring_7', async (db, world) => {
+      // My own documents said "nothing here decides how many times a booking
+      // may be moved". Round 7 measured that false: the ceiling refuses rather
+      // than passes, so at 4096 the schema does refuse the 4096th move. The
+      // number is defensible — it sits far above any chain a business produces
+      // — but the sentence was not, and a sentence this file can red is better
+      // than a sentence this file believes.
+      await chain(db, world, [111, 112, 113, 114, 115, 116, 117], 9);
+      expect(await endsNowhere(db, world)).toBe(0);
+
+      await withGuard(db, 3, async () => {
+        // Six hops, every one of them written by the lawful path above.
+        expect(await touch(db, world, uuid(111))).toMatch(/booking\.chain_too_long/);
+        // And it is a CEILING and not a blanket refusal: with the same mutant
+        // installed, a row whose remaining walk is short is still touchable.
+        // (A STANDING booking would prove nothing here — both link fields are
+        // NULL, so the trigger's WHEN clause never fires on it at all.)
+        expect(await touch(db, world, uuid(116))).toBe('');
+      });
+
+      expect(await touch(db, world, uuid(111))).toBe('');
+      expect(await endsNowhere(db, world)).toBe(0);
+    });
+  });
+
+  it('`chain_unterminated` has its own case, with the shape CHECK that masks it DROPPED (C7-P9-03 control)', async () => {
+    await withBookingDb('daftar_p9_ring_8', async (db, world) => {
+      // I named this refusal in the spec and in the report without a case that
+      // reaches it, because `bookings_reschedule_shape_ck` refuses the shape
+      // first. A refusal nothing can reach is a refusal nobody has read. The
+      // CHECK comes off for the duration, the way the promoted probes do it.
+      await chain(db, world, [121, 122], 9);
+      const dropped = `UPDATE bookings SET state = 'rescheduled', settled_at = now(), settled_by_user_id = $2, settle_reason = 'moved'
+                        WHERE business_id = $1 AND id = $3`;
+      const defOf = async (): Promise<string> => {
+        const r = await db.pool.query<{ def: string }>(
+          `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'bookings_reschedule_shape_ck'`,
+        );
+        const def = r.rows[0]?.def;
+        if (def === undefined) throw new Error('bookings_reschedule_shape_ck is not on the table');
+        return def;
+      };
+      const def = await defOf();
+
+      // With the CHECK in place the refusal is the CHECK's, by name — which is
+      // the whole reason the control is needed.
+      expect(await refused(db, dropped, [world.businessId, world.userId, uuid(122)])).toMatch(/bookings_reschedule_shape_ck/);
+
+      let probe: unknown = null;
+      let said = '';
+      try {
+        await db.pool.query(`ALTER TABLE bookings DROP CONSTRAINT bookings_reschedule_shape_ck`);
+        said = await refused(db, dropped, [world.businessId, world.userId, uuid(122)]);
+      } catch (e) {
+        probe = e;
+      }
+      let restoreFailure: unknown = null;
+      try {
+        await db.pool.query(`ALTER TABLE bookings ADD CONSTRAINT bookings_reschedule_shape_ck ${def}`);
+      } catch (e) {
+        restoreFailure = e;
+      }
+      if (probe !== null) throw probe;
+      if (restoreFailure !== null) throw restoreFailure;
+
+      expect(said).toMatch(/booking\.chain_unterminated/);
+      expect(await defOf()).toBe(def);
+      // Nothing moved: the chain still ends where it did.
+      expect(await endsNowhere(db, world)).toBe(0);
+      const states = await db.pool.query<{ id: string; state: string }>(`SELECT id::text AS id, state FROM bookings WHERE business_id = $1 ORDER BY id`, [
+        world.businessId,
+      ]);
+      expect(states.rows).toEqual([
+        { id: uuid(121), state: 'rescheduled' },
+        { id: uuid(122), state: 'booked' },
+      ]);
+    });
+  });
+
+  it('the visited set is the MECHANISM and the ceiling is depth: with only the ring raise cut, a ring is still refused', async () => {
+    await withBookingDb('daftar_p9_ring_9', async (db, world) => {
+      // A finer mutation than the one above, and the challenger's, which cut
+      // the whole of block (c). This cuts ONLY the visited-set raise and
+      // leaves the ceiling, which is the mutation class that tells the two
+      // apart: if the ceiling were dead code the ring would commit.
+      const src = await db.pool.query<{ body: string }>(`SELECT prosrc AS body FROM pg_proc WHERE proname = 'bookings_chain_symmetric'`);
+      const body = src.rows[0]?.body;
+      if (body === undefined) throw new Error('bookings_chain_symmetric is not on the server');
+      const start = body.indexOf('IF v_walk = ANY(v_seen) THEN');
+      const end = body.indexOf('v_seen := v_seen || v_walk;');
+      if (start < 0 || end < 0 || end < start) throw new Error('could not locate the visited-set raise in the live function body');
+      const cut = body.slice(0, start) + body.slice(end);
+      if (cut.includes('chain_is_a_ring')) throw new Error('the mutation did not remove the ring raise');
+      if (!cut.includes('chain_too_long')) throw new Error('the mutation removed the ceiling as well, which is not this case');
+
+      let probe: unknown = null;
+      let said = 'the mutation never ran';
+      let rows = -1;
+      try {
+        await db.pool.query(
+          `CREATE OR REPLACE FUNCTION bookings_chain_symmetric() RETURNS trigger
+           LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $mutant$${cut}$mutant$`,
+        );
+        const live = await db.pool.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_proc WHERE proname = 'bookings_chain_symmetric' AND prosrc LIKE '%chain_is_a_ring%'`,
+        );
+        expect(live.rows[0]?.n).toBe(0);
+        said = await ring(db, world, [uuid(131), uuid(132)], 9);
+        rows = (await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1`, [world.businessId])).rows[0]?.n ?? -1;
+      } catch (e) {
+        probe = e;
+      }
+      let restoreFailure: unknown = null;
+      try {
+        await db.pool.query(
+          `CREATE OR REPLACE FUNCTION bookings_chain_symmetric() RETURNS trigger
+           LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $orig$${body}$orig$`,
+        );
+      } catch (e) {
+        restoreFailure = e;
+      }
+      if (probe !== null) throw probe;
+      if (restoreFailure !== null) throw restoreFailure;
+
+      // The refusal is the CEILING's, by name, and not the ring raise's.
+      expect(said).toMatch(/booking\.chain_too_long/);
+      expect(said).not.toMatch(/booking\.chain_is_a_ring/);
+      expect(rows).toBe(0);
+
+      // Restored byte for byte, and the shipped code names the ring again.
+      const back = await db.pool.query<{ body: string }>(`SELECT prosrc AS body FROM pg_proc WHERE proname = 'bookings_chain_symmetric'`);
+      expect(back.rows[0]?.body).toBe(body);
+      expect(await ring(db, world, [uuid(133), uuid(134)], 13)).toMatch(/booking\.chain_is_a_ring/);
     });
   });
 });

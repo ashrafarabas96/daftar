@@ -270,7 +270,10 @@ reschedule. The same routine carries R-P9-18: following the forward links from a
 must END on a row that is not `'rescheduled'` (`booking.chain_is_a_ring`), because a pairwise
 check cannot see a ring and an executed attack committed a 2-ring and a 3-ring whose every
 pairwise check held. Its walk terminates on its own visited set, so `booking.chain_too_long`
-is defence in depth at 4096 and not a policy limit on how often a booking may be moved.
+is defence in depth. It is nonetheless a CEILING the deployment inherits and must not read as
+advisory: lowered in the live body it refuses a lawful chain (measured, C7-P9-03), so at 4096
+this schema refuses the 4096th move of one booking. No shorter limit is the schema's, and a
+retention or policy limit on rescheduling remains the owner's.
 
 ### 4.1 R-P9-11 — the per-resource serialization key, and why it is requested
 
@@ -530,7 +533,7 @@ money-shaped column reached the schema.
 
 ## 9. EVIDENCE
 
-**97 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
+**102 cases over seven suites, all green with EXIT CODE 0, on the approved target — a live
 PostgreSQL 16.15 cluster at `en_US.utf8` under Node v24.21.0** (and again on 18.4 at `C` as a comparison), with the
 spec applied in one transaction as the non-superuser deployment principal
 `daftar_migrator` on top of the sealed Phase 3 head.
@@ -540,12 +543,13 @@ is mixed, and nothing is claimed in a stronger class than it was measured in.
 
 | suite | cases | class |
 |---|---|---|
-| `p9-booking-schema.test.ts` | 16 | PROVEN BY DATABASE CATALOGUE |
+| `p9-booking-schema.test.ts` | 18 | PROVEN BY DATABASE CATALOGUE |
 | `p9-booking-concurrency.test.ts` | 11 | PROVEN BY TEST (real concurrency) |
 | `p9-booking-negative-controls.test.ts` | 7 | PROVEN BY TEST (red proofs) |
 | `p9-booking-multi-resource.test.ts` | 10 | PROVEN BY TEST (real concurrency) |
 | `p9-booking-time.test.ts` | 21 | PROVEN BY TEST |
-| `p9-booking-runtime-attack.test.ts` | 10 | PROVEN BY EXECUTED ATTACK (no superuser) |
+| `p9-booking-integrity.test.ts` | 24 | PROVEN BY EXECUTED ATTACK, with a red proof per law |
+| `p9-booking-runtime-attack.test.ts` | 11 | PROVEN BY EXECUTED ATTACK (no superuser) |
 | any retention period, or an erasure path | — | **UNMEASURED** — owner-only; nothing deletable today |
 | the command layer | — | **SPEC ONLY** — not written |
 | schedule containment | — | **SPEC ONLY** — deferred to the command slice |

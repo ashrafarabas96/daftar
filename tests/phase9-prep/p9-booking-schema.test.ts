@@ -227,6 +227,35 @@ describe('P9 booking schema — applies as the deployment principal', () => {
     }
   });
 
+  it('and the chain guard\u2019s EVENTS and WHEN clause are pinned too, not only its deferral (F-09)', async () => {
+    // The case above passes a trigger that fires on UPDATE alone, or one with
+    // no WHEN clause, or one whose WHEN clause watches the wrong column — and
+    // each of those is a different schema. INSERT is what carries the
+    // successor-committed-alone refusal, and the WHEN clause is what keeps the
+    // guard away from every booking with no reschedule link at all. Raised as
+    // F-09 by the coordinator's actual-diff review of `01f7c2d`: the end state
+    // was asserted, and this part of it was not.
+    //
+    // `tgtype` is asserted EXACTLY (1 ROW + 4 INSERT + 16 UPDATE = 21, AFTER
+    // being the absence of the BEFORE bit) rather than with a mask test,
+    // because an extra event is also a change of schema. The condition is read
+    // from `pg_get_triggerdef`, which renders the WHEN clause the server
+    // actually stored, so this is the catalogue's answer and not the file's.
+    const r = await db.pool.query<{ tgtype: number; def: string }>(
+      `SELECT tgtype::int AS tgtype, pg_get_triggerdef(oid) AS def FROM pg_trigger WHERE tgname = 'bookings_chain_agrees'`,
+    );
+    const row = r.rows[0];
+    if (row === undefined) throw new Error('bookings_chain_agrees is not on the table');
+    expect(row.tgtype).toBe(21);
+    expect(row.def).toMatch(/AFTER INSERT OR UPDATE ON public\.bookings/);
+    expect(row.def).toMatch(/DEFERRABLE INITIALLY DEFERRED FOR EACH ROW/);
+    // Three parens, not two: the server wraps the whole WHEN expression once
+    // more than the source does, which was measured on the server after the
+    // two-paren form refused the migration outright.
+    expect(row.def).toMatch(/WHEN \(\(\(new\.rescheduled_to_id IS NOT NULL\) OR \(new\.rescheduled_from_id IS NOT NULL\)\)\)/);
+    expect(row.def).toMatch(/EXECUTE FUNCTION bookings_chain_symmetric\(\)/);
+  });
+
   it('the state contract is CHECKED against the document, not trusted: four mutations each red it by name', () => {
     // The red proofs for the occupancy contract (PART 17). Each mutation is a
     // one-line change to the spec TEXT, applied in memory, and each must be

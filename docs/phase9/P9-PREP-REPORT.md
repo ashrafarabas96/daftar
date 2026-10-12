@@ -1,10 +1,20 @@
 # P9 — PREPARATION REPORT
 
 **Status: `PREPARED / NOT PROMOTED`** (master directive Part 9). On the Mission's ladder the
-rung is **`CHALLENGED`** — an independent challenger passed the work at `9a64289` with no
-open finding (§3c.14), rejected it at `6e339bf` on one P1 (§3c.17), and that P1 is answered
-here — and a challenger PASS is not a promotion; see §3c.7. **No signature names this
-subject**: the round-5 REJECT stands against `6e339bf` until the round-6 pass reports.
+rung is **`CHALLENGED`** — an independent challenger has now passed the work seven times, most
+recently **PASS-WITH-SCOPE at `01f7c2d`** with `C6-P9-01` closed and three findings, none of
+them in the schema (§3c.19), and the **coordinator's actual-diff review of `9a64289..01f7c2d`
+is ACCEPT-WITH-RESIDUALS on the schema and the suite** while **not accepting the PART 13
+handoff gate** (§3c.20) — and neither a challenger PASS nor a coordinator accept is a
+promotion; see §3c.7.
+**No signature names the subject of THIS document.** Both reviews name `01f7c2d`, and the
+documents they correct are written after it; a signature covers one SHA and never transfers.
+The one blocking item, **C7-P9-01 / B-1**, is a false claim of my own about the off-Git copies,
+answered in this commit and in the manifest, and closing it needs a measurement by someone who
+is not its author. Two further defects were found by me while answering the reviews — the
+repository's own format gate was red at the signed head, and one assertion in the signed suite
+was a scheduling coincidence that failed — both reported against myself in §3c.20.
+`READY_TO_PROMOTE` stays **NO**.
 
 Nothing here is promoted, merged, or in required CI. No migration number is allocated and
 no frozen migration is edited (Part 10). No Phase 4 file is touched and no Phase 4 branch is
@@ -17,22 +27,28 @@ head of `main`.
 
 | file | lines | what it is |
 |---|---|---|
-| `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | 212 | the model, and why it has this shape |
-| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 1583 | the schema and its physical invariants — **not a migration** |
-| `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 521 | what the Migration Owner is asked to allocate |
-| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 131 | the PART 13 handoff gate, with a SHA256 per artifact |
-| `tests/phase9-prep/p9-booking-schema.test.ts` | 304 | 17 cases: shape, security, grants, end state, the state contract, collation independence |
+| `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | 240 | the model, and why it has this shape |
+| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 1995 | the schema and its physical invariants — **not a migration** |
+| `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 616 | what the Migration Owner is asked to allocate |
+| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 404 | the PART 13 handoff gate, with a SHA256 per artifact |
+| `tests/phase9-prep/p9-booking-schema.test.ts` | 359 | 18 cases: shape, security, grants, end state, the state contract, the chain guard's events and WHEN clause, collation independence |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
-| `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 588 | 7 cases: each invariant removed, and the damage measured |
+| `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 602 | 7 cases: each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
 | `tests/phase9-prep/p9-booking-time.test.ts` | 621 | 21 cases: the timezone / DST law (PART 51), its soundness sweep, the measured ±1440 scan at one-day granularity, and the two defects V3 named |
-| `tests/phase9-prep/p9-booking-integrity.test.ts` | 399 | 7 cases: the closure record is write-once (R-P9-15) — the three defects the challenger found, the challenger's own (a4) probes behind each dropped CHECK, and the non-vacuity that keeps the guard honest |
-| `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 350 | 10 cases: the schema attacked as the real runtime roles, no superuser |
-| `tests/phase9-prep/p9-booking-spec.ts` | 206 | the spec loader, the state contract parser, and the non-vacuity guards |
-| `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
+| `tests/phase9-prep/p9-booking-integrity.test.ts` | 1289 | 24 cases: the closure record is write-once (R-P9-15), a booking is born standing (R-P9-16), the reschedule chain agrees with itself (R-P9-17) and ends in a booking that is kept (R-P9-18) — every one of them an executed defect the challenger found, with each law's red proof and its non-vacuity |
+| `tests/phase9-prep/p9-booking-runtime-attack.test.ts` | 571 | 11 cases: the schema attacked as the real runtime roles, no superuser |
+| `tests/phase9-prep/p9-booking-spec.ts` | 210 | the spec loader, the state contract parser, and the non-vacuity guards |
+| `tests/phase9-prep/p9-booking-world.ts` | 315 | the fixture, applied as `daftar_migrator`, and the one-transaction reschedule |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**97 of 97 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
+Every number in that table was re-measured at this tree with `wc -l` and a count of `it(`
+sites, after round 7 found two stale counts in these documents at an earlier round. The seven
+suite counts sum to **102** (18 + 11 + 7 + 10 + 21 + 24 + 11), which is the number the run
+reports: a count that does not add up to its own run is the first thing a reader should be able
+to check.
+
+**102 of 102 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
 — over seven suites, and again on PostgreSQL 18.4 at `C` as the comparison the mission permits.
 A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
@@ -343,6 +359,202 @@ actual-diff review — is still owed. The D11 PART 117 label for the same state 
 `PREPARED / NOT PROMOTED`; it names the promotion state, not the ladder rung, and this
 report uses both so neither vocabulary has to be guessed at.
 
+### 3c.20 The COORDINATOR's actual-diff review of `9a64289..01f7c2d`, and two defects I found while answering it
+
+**ACCEPT-WITH-RESIDUALS on the schema and the suite; the PART 13 handoff gate NOT ACCEPTED.**
+Report: `/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-01f7c2d.md`
+(`02fadfc2b996ea0424c5c82bc2a7c5ef9cc60b1d2d96fc9d3b7cdfaa249d2449`). It reproduced **97 of 97,
+exit code 0** on PostgreSQL 16.15 at `en_US.utf8` under **Node 22** — it says plainly that it
+cannot verify the Node 24 runs, and that the PostgreSQL 18.4 comparison is mine and not
+reproduced. It ran the ring walk itself on four shapes (a self-loop, a 2-ring, a 3-ring, and a
+ring entered from a tail) and found it terminates and fails closed on each; it found no other
+verb that creates the forbidden state, every lookup keyed `(business_id, id)`, and no definer
+trusting a caller-supplied id.
+
+**B-1 is the blocking item and it is the same claim as C7-P9-01**: the manifest's "same bytes"
+sentence was false from the moment it was committed at 18:04:48Z, through round 7, until my
+out-of-band refresh at 20:28:58Z, and as committed it stays true only while someone keeps the
+copies in step by hand. Its ruling is recorded here in its own words: *the gate is a claim in a
+committed file.* So the manifest in this commit names the SHA its mirrors were taken from, gives
+a digest per mirror, and states the command that re-measures the claim — and **closing B-1 needs
+a measurement by someone who is not me**, which is the challenger's next round.
+
+Its P3 residuals, each answered in this commit:
+
+- **F-02** — "All ten are committed" was not supported by its own table. Restated against the
+  table: five committed documents plus this manifest, and the off-Git artifacts counted
+  separately.
+- **F-03, F-04** — the same two findings as C7-P9-02 and C7-P9-03, reached independently. It
+  measured F-03 itself: with the row only the walk reads hidden, a no-op touch of the head raises
+  the **walk's** `chain_unreadable`. Corrected in the spec, in §3c.19, in item 3 of §3c.18 and in
+  limitation 22, and promoted into the suite as it asked.
+- **F-05** — the spec comment saying "nothing refuses an INSERT that arrives already closed" was
+  stale since `6e339bf` and contradicted `bookings_born_booked_only` in the same file. Narrowed
+  to what limitation 19 actually leaves open: whether a historical import may create an
+  already-closed booking, which R-P9-16 refuses today.
+- **F-06** — "Only the one SECURITY DEFINER routine moves … the three raise-only triggers": two
+  definers move and there are four raise-only guards. The `ALTER` statements were always right;
+  only the prose above them was wrong. Restated, with both numbers now derivable from the
+  statements they describe.
+- **F-07, F-08** — stale status lines in the manifest and in this report's header, including a
+  manifest that contradicted its own later section, and a Coordinator signature listed as owed
+  that this review supplies. Rewritten.
+- **F-09** — the end state pinned the chain trigger's deferral but not its **event mask** or its
+  **WHEN clause**, so a migration landing it on UPDATE alone, or with no condition, would pass.
+  Now pinned in two places: `(h3)` of the spec's own end-state block asserts `tgtype = 21`
+  exactly (ROW + INSERT + UPDATE, AFTER being the absence of the BEFORE bit) and the stored
+  `WHEN` clause through `pg_get_triggerdef`, and a new catalogue case asserts the same from the
+  suite. The first draft of that assertion refused the migration outright, because I wrote the
+  paren nesting from memory and the server renders one more level than the source does; the
+  pattern is now the server's own rendering, measured.
+- **F-10, F-11, F-12** — information. F-10 is its own correction of round 7 on the off-Git prep
+  report, reached independently and agreeing with the refresh record. F-11 is right that my
+  refresh record's header time (20:32Z) is 2–3 minutes behind the shared filesystem's mtimes, so
+  the mtimes are the order of record. F-12 notes the ring helpers write as `postgres` while the
+  trigger still runs as its definer owner, with the non-superuser path carried by the
+  runtime-attack case.
+
+**Two defects of my own, found while answering the above and reported against myself:**
+
+1. **The repository's own format gate was RED at the signed head.** Neither review ran it, and
+   nor had I since the cases were added. `npm run format` — `prettier --check .`, the repo's
+   command and not a narrower one — fails at `99695bb` on **three** Phase 9 files, measured by
+   piping each committed blob through `prettier --check --stdin-filepath`:
+   `p9-booking-integrity.test.ts`, `p9-booking-runtime-attack.test.ts` and
+   `p9-booking-world.ts`, all three exit 1. Nothing else in the repository is flagged, so Phase 9
+   is the whole of the red. This matters beyond tidiness, and this project has a ruling for it:
+   **a head that turns a repository gate red carries no signature** (Phase 4, round 20). Fixed in
+   this commit with `prettier --write` on those files, and `prettier --check .` is **exit code 0**
+   at this tree. Two of the three files were untouched by this round's work, which is how long
+   the red had been sitting there.
+2. **One assertion in the signed suite was a scheduling coincidence, and it failed.** CONTROL 2
+   of the negative controls asserted `expect(outcome.blocked).toBe(1)` — the number of backends
+   the server happened to report blocked at the instant of one `pg_blocking_pids` poll. The
+   identical file **passed at 20:33:24Z and failed at 20:42:28Z** with `expected 2 to be 1`, on a
+   tree where `git diff` showed it byte-identical to `99695bb`. Both racers can show a non-empty
+   `pg_blocking_pids` while they contend over the same index entry, and which one a poll catches
+   is the scheduler's business, not a property of this schema. The law was never at risk: one
+   commits, one is refused, one row occupies the slot, and `awaitBlocked` already throws if
+   contention is never observed at all. The assertion now states what the harness can prove — at
+   least one blocked, at most as many as there are racers — with the two timestamps written into
+   the case. **No law is relaxed by that change**, and three signatures (rounds 6 and 7 and this
+   review) were given on runs where the coincidence happened to hold, which is worth more than
+   the fix: a suite that can red at random would have been read as a regression by whoever hit it
+   next.
+
+**The state after all of it.** `tests/phase9-prep`, 7 files, **102 of 102 cases, exit code 0**,
+PostgreSQL 16.15 at `en_US.utf8` under Node v24.21.0, 2026-10-12T20:51:01Z→20:54:46Z;
+`prettier --check .` exit code 0; `eslint tests/phase9-prep --max-warnings 0` exit code 0. The
+root `npm run build` and `npm run typecheck` remain red cold on `main` itself (G6), which is not
+this phase's and is not claimed as passing here. `READY_TO_PROMOTE` = **NO**.
+
+### 3c.19 The challenger's SEVENTH pass at `01f7c2d` — PASS-WITH-SCOPE, `C6-P9-01` CLOSED, and three findings of which one corrects me in my own favour
+
+Reproduced independently in the challenger's own container: PostgreSQL 16.15 at `en_US.utf8`
+from a fresh `initdb` as `postgres` (one startup line, no crash-recovery line, no `FATAL` and
+no `PANIC`), Node v24.12.0, the spec applied as `daftar_migrator`, one vitest process.
+**97 of 97 cases, exit code 0, twice**, with the worktree clean before and after each run, and
+**13 of 13 digests verified**. It also compared the spec delta at the statement level: **140
+statements before and 140 after, exactly two replaced** — the function body and its `COMMENT`,
+and no constraint, trigger, index, grant, policy or owner among them. The signature extends to
+`01f7c2d` and covers the schema and the suite; it does **not** cover the manifest's artifact
+table — which is precisely where the round's one blocking finding is.
+
+**C6-P9-01 is CLOSED**, and with a completeness result rather than an absence of findings. I had
+asked the challenger to find the graft I could not: a way to assemble a ring that R-P9-18's
+single-transaction case does not already cover. It measured four more shapes and then said why
+no such graft exists. A link's two halves are the successor's BIRTH (its backlink, frozen at
+INSERT by R-P9-15) and the predecessor's CLOSE (the forward link); R-P9-17 is deferred, so the
+two must be written in one transaction; around a ring those pairings chain through every row, so
+all *n* births and all *n* closes fall into ONE transaction. And because agreement is forced in
+both directions, in-degree and out-degree are each at most 1, so the forward-link graph is
+disjoint paths and cycles, and R-P9-18 removes the cycles. Its own measurements, each refusal by
+name: a backlink written onto a standing row and onto a closed row are both `booking.immutable`;
+four rows born with circular backlinks and no closes is `booking.chain_asymmetric` with zero
+rows; closing the tail onto the head in a LATER transaction is `booking.chain_asymmetric`; two
+CONCURRENT transactions each holding half of a 2-ring both die on the deferred composite FK with
+zero rows; a lasso — the tail re-entering the middle — in one transaction is
+`booking.chain_is_a_ring`; and in-degree and out-degree greater than one each count zero.
+**The single-transaction ring case is therefore the complete reachable space.**
+
+Three findings. **The one that blocks is mine and is a false claim, not a missing law:**
+
+- **C7-P9-01 (P2) — the manifest said the off-Git copies carry the same bytes, and they did
+  not.** `docs/phase9/P9-HANDOFF-MANIFEST.md` at `99695bb` said the copies under
+  `/mnt/project-files/phase9/` "carry the same bytes; their hashes are the same values". The
+  challenger measured three of them different, among them the DDL spec — whose off-Git copy was
+  the one committed at `6e339bf`, the commit it had REJECTED in round 5, with `grep -c
+  chain_is_a_ring` returning **0** and neither R-P9-17 nor R-P9-18 in it. Its reading of why this
+  is worse than an absent file is correct and is recorded here in its own terms: a file that is
+  present, named, hashed and DIFFERENT defeats PART 13 more completely than one that is missing,
+  because nothing invites a second look, and the reader who opens the `/mnt` copy is the reader
+  without a checkout. Re-measuring it here found **four** stale copies, not three — the
+  manifest's own off-Git copy was stale too — and I found the fourth only because the
+  coordinator asked me to re-check every mirrored file rather than the ones named. One
+  correction to the challenger's report, against my own case: it reports the off-Git
+  `P9-PREP-REPORT.md` as matching no commit on the branch, and it matches `e81b079`. Searching
+  every commit reachable from `99695bb`, all four stale copies were ONE COHERENT SNAPSHOT taken
+  at `e81b079` (identical to `6e339bf` for three of them, and to `0f4f0e4` for the manifest).
+  That makes the defect worse rather than better: a coherent stale snapshot is exactly what a
+  reader cannot detect. **Remedied in two parts.** The copies were re-taken from `git show
+  99695bb:<path>` and re-hashed: 6 of 6 now agree, 0 differ, and the refreshed spec answers
+  `grep -c chain_is_a_ring` with 3 where it answered 0; the measurement is stored off-Git as
+  `P9-MIRROR-REFRESH-01f7c2d.txt` and hashed in the manifest. That alone is not the fix, because
+  the sentence would be true only by maintenance — which is how it became false. The manifest now
+  names the SHA the copies were taken from, gives each mirror its own digest, and states the one
+  command that re-verifies the claim, so the next person to touch a `docs/phase9` file is told
+  what they have invalidated. **`C7-P9-01` is answered, and the proposition it refuted is one
+  I wrote.**
+
+- **C7-P9-02 (P3) — limitation 22 is CLOSED and my in-place comment was the thing that was
+  wrong.** See limitation 22, rewritten. The challenger built the isolation my own reasoning said
+  did not exist, and the finding makes the guard stronger than I claimed rather than weaker.
+  Adopted as two cases of my own rather than as a sentence: a reviewer's sentence taken into a
+  pack is a claim to be measured, which is this project's own lesson. The second of them is not
+  the challenger's and needs no row security — with `v_guard` lowered, the same no-op touch is
+  refused at the chain HEAD by `booking.chain_too_long` and commits two hops from the end, which
+  only a walk can tell apart, since block (a) reads one successor in both.
+
+- **C7-P9-03 (P3) — the ceiling is a policy and it is enforced.** I had written, in three
+  documents and twice in the spec, that "nothing here decides how many times a booking may be
+  moved". The challenger lowered the constant in the live body (mutation asserted applied, body
+  restored byte-identical) and a LAWFUL six-link chain was refused with
+  `booking.chain_too_long`. So at 4096 this schema does refuse the 4096th move of one booking.
+  **The number is sound — it refuses rather than passes and sits far above any business — and the
+  sentence was not.** All four places are corrected, and a case of my own now reds the claim:
+  with the ceiling lowered a lawful chain is refused, and a row whose remaining walk is short is
+  still touchable with the same mutant installed, so it is a ceiling and not a blanket refusal.
+
+Two more things the challenger supplied that this document owed:
+
+- **A negative control for `booking.chain_unterminated`.** I named that refusal in the spec and
+  in item 3 of §3c.18 without a case that reaches it, because `bookings_reschedule_shape_ck`
+  refuses the shape first. It dropped the mask and measured both sides: with the CHECK present
+  the refusal is the CHECK's, by name; with it dropped it is `booking.chain_unterminated`. A case
+  here does the same, restores the CHECK and asserts `pg_get_constraintdef` is unchanged.
+- **A finer mutation than my own red proof reaches.** My proof cuts the whole of block (c). It
+  cut ONLY the visited-set raise and left the ceiling: the ring is still refused, by
+  `booking.chain_too_long`. So in the shipped code the visited set is the mechanism and the
+  ceiling is depth, and with the visited set gone the ceiling becomes the mechanism and still
+  refuses — a mutation class my own red proof does not test, and the reason the ceiling earns its
+  place beyond the argument that it is harmless. Added as a case, asserting the refusal is the
+  ceiling's by name and **not** the ring raise's.
+
+**The run after these items.** `tests/phase9-prep`, 7 files, **102 of 102 cases, exit code 0**,
+on the approved target: PostgreSQL 16.15 at `en_US.utf8` under Node v24.21.0,
+2026-10-12T20:51:01Z→20:54:46Z, and `prettier --check .` — the repository's own `npm run format`
+— exit code 0 at the same tree. Five cases added, none removed, none weakened. Three earlier
+runs of the same tree are in the stored run log with their exit codes, two of them RED, because
+what they redded is reported below. My rewrite of limitation 20
+from round 6 the challenger re-measured nothing on, and round 6 stands.
+
+**What round 7 does not cover.** Its signature names `01f7c2d` and the documents corrected here
+are later than that commit, so nothing signs the subject of this document. `READY_TO_PROMOTE`
+remains **NO**, on `C7-P9-01` until the manifest change lands with the copies refreshed a second
+time, and on every external gate: the predecessor phase's seal, the migration number from the
+Migration Owner, the `customers` composite FK at promotion, the `bootstrap.sql` patch that
+creates `daftar_booking_internal`, and the CI workflow step, which is the owner's alone.
+
 ### 3c.18 The challenger's SIXTH pass at `0f4f0e4` — PASS-WITH-SCOPE, and the ring
 
 **Verdict PASS-WITH-SCOPE, and the signature extends to `0f4f0e4`: C5-P9-01 is closed.**
@@ -413,18 +625,18 @@ my choices:
 2. **The walk terminates without a bound**, because each iteration exits, raises, or appends an
    id never seen, over a finite relation. `booking.chain_too_long` is therefore defence in depth
    set far above any chain a business produces, and it refuses rather than passes if it ever
-   fires. Nothing here decides a policy limit on how many times a booking may be moved — that is
-   not the schema's to choose.
-3. **The walk's own unreadable branch is defence in depth, not independently reachable, and the
-   spec says so.** A chain can only be extended at its TAIL: a successor is born carrying its
-   backlink and R-P9-15 freezes that backlink, so no row can be grafted onto the middle of an
-   existing chain. Every row the walk reads is therefore also the immediate counterpart of a row
-   written in the same transaction, which block (a) reads too. The branch exists because a walk
-   that ended early on an invisible row would report a ring as terminated — the worst possible
-   failure for a reachability law — and because it is the mechanism that would have to carry the
-   refusal if grafting ever became possible. The row-security case measures that an invisible row
-   anywhere in a three-link chain being written is a refusal and not a silent termination, and
-   says plainly that it does not isolate which block raised it. Recorded as limitation 22.
+   fires. ~~Nothing here decides a policy limit on how many times a booking may be moved — that
+   is not the schema's to choose.~~ **SUPERSEDED by round 7 (§3c.19, C7-P9-03): measured FALSE.**
+   The ceiling is enforced, not advisory — at 4096 this schema does refuse the 4096th move of
+   one booking. The number is sound; the sentence was not.
+3. ~~**The walk's own unreadable branch is defence in depth, not independently reachable, and
+   the spec says so.**~~ **SUPERSEDED by round 7 (§3c.19, C7-P9-02): the branch IS independently
+   reachable.** The reasoning recorded here — a chain can only be extended at its TAIL, so every
+   row the walk reads is also the immediate counterpart block (a) reads — was the argument I used
+   for the qualification, and I asked the challenger to find the write it ruled out. It found one:
+   an UPDATE that assigns a column to itself. The claim this item did measure stands unchanged —
+   an invisible row anywhere in a three-link chain being written is a refusal and not a silent
+   termination — and limitation 22 is now **closed**, not qualified.
 
 **The red proof for the new law** cuts block (c) out of the live function body, asserts the
 mutation applied (`prosrc` no longer mentions `chain_is_a_ring`) before any scenario runs,
@@ -1159,22 +1371,32 @@ Stated as limitations rather than left to be discovered.
     the narrowing is the contract the document always stated. What is recorded rather than
     settled is that a command slice wanting a genuinely two-phase reschedule (a hold, then
     a confirmation) would now have to say so and be designed for, not merely written.
-22. **R-P9-18's unreadable branch is DEFENCE IN DEPTH, not independently reachable.** A chain
-    can only be extended at its tail — a successor is born carrying its backlink and R-P9-15
-    freezes that backlink, so nothing can be grafted onto the middle of an existing chain — so
-    every row the walk reads is also the immediate counterpart of a row written in the same
-    transaction, which block (a) reads too. The row-security case measures that an invisible row
-    anywhere in a three-link chain being written is a REFUSAL and not a silent termination,
-    which is the claim that matters, and it states plainly that it does not isolate which block
-    raised it. The branch stays because a walk that ended early on an invisible row would report
-    a ring as terminated, and because it is what would carry the refusal if grafting ever became
-    possible.
+22. ~~**R-P9-18's unreadable branch is DEFENCE IN DEPTH, not independently reachable.**~~
+    **CLOSED by the seventh independent pass (C7-P9-02), against me.** I had recorded this as a
+    limitation on the reasoning that a chain can only be extended at its tail, so every row the
+    walk reads is also the immediate counterpart block (a) reads, and I asked the challenger to
+    find the write that reasoning ruled out. It built one: `UPDATE bookings SET
+    rescheduled_to_id = rescheduled_to_id`, a write that changes nothing. It passes every block
+    of `bookings_transition` — (a2) compares with `IS DISTINCT FROM`, (a3) wants `OLD.state =
+    'booked'`, (a4) wants the field still NULL, (b) wants a state change — and still fires the
+    deferred trigger on ONE row, so on a closed chain head (a) reads exactly one successor and
+    everything past it is the walk's alone. Two cases now measure it: hiding the chain's END
+    under row security gives `booking.chain_unreadable`, and with `v_guard` lowered the same
+    no-op touch refuses at the HEAD while it commits two hops from the end. **The branch is
+    load-bearing and fail-closed on the one path that reaches it — stronger than I claimed.**
+    What remains is not a limitation but an open question with no case: whether any OTHER write
+    reaches the walk past (a)'s horizon. None is known.
 23. **The ring walk's COST is not measured, and this container may not measure it.** Appending a
     link walks the chain from the written row, so a chain of length N costs O(N) reads per
-    append. `booking.chain_too_long` bounds it at 4096 as defence in depth, not as a policy, and
-    no chain a business produces approaches that. PART 20 and PART 123 forbid a timing claim
-    from this container, so none is made: what is recorded is the shape of the cost and that a
-    deployment with genuinely long chains should measure it before promotion.
+    append — and, since round 7, also per no-op touch of a chain head, which is the same O(N).
+    `booking.chain_too_long` bounds it at 4096: defence in depth as a mechanism, but an
+    **enforced** ceiling (C7-P9-03), and no chain a business produces approaches it. PART 20 and
+    PART 123 forbid a timing claim from this container, so none is made: what is recorded is the
+    shape of the cost and that a deployment with genuinely long chains should measure it before
+    promotion. The challenger adds one fact that narrows the exposure: no role but
+    `daftar_booking_internal` and `daftar_migrator` may UPDATE `bookings` at all — `daftar_app`
+    and `daftar_platform` both get "permission denied for table bookings" — so there is no
+    app-role path to the walk, and neither of us makes a timing claim from a container.
 17. **The lock-set collision case is reasoned, not measured.** Two distinct resources
     hashing to one key would merge their locks, which broadens exclusion and cannot
     narrow it; no fixture constructs such a collision, because constructing one against

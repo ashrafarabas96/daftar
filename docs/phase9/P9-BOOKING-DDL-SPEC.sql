@@ -296,9 +296,16 @@
 --
 --          The walk needs no bound to terminate — each iteration exits,
 --          raises, or appends an id never seen, over a finite relation — so
---          `booking.chain_too_long` is defence in depth and is set far above
---          any chain a business produces. Nothing here decides how many times
---          a booking may be moved; that is not the schema's to choose.
+--          `booking.chain_too_long` is defence in depth. It is a CEILING set
+--          far above any chain a business produces, and it refuses rather
+--          than passes if it is ever reached. It is enforced and not
+--          advisory: lowered in the live body, it refuses a lawful chain,
+--          so at 4096 this schema does refuse the 4096th move of one
+--          booking. An earlier draft of this comment said nothing here
+--          decides how many times a booking may be moved; that was measured
+--          FALSE by the seventh independent pass (C7-P9-03) and is corrected
+--          here. The number is the schema's; no shorter limit is, and a
+--          retention or policy limit is still the owner's.
 --
 -- R-P9-10  Every refusal is `'<domain>.<snake_case_condition>: sentence'`
 --          with `ERRCODE = 'P0001'`, the convention of every migration from
@@ -1158,14 +1165,22 @@ BEGIN
   --     of the prep report.
   --
   --     SECOND OPEN DESIGN ITEM, same place: this is a BEFORE UPDATE trigger,
-  --     so R-P9-15 and the state machine bind UPDATEs only. Nothing refuses an
-  --     INSERT that arrives already closed — state 'cancelled' with a
-  --     settlement record written, or a forward reschedule link — and the
-  --     shape CHECKs make such a row consistent rather than impossible.
-  --     Whether a booking may be BORN closed is a command-slice decision (an
-  --     import, a historical migration and a live cancellation want different
-  --     answers). What is guaranteed here is that once the row exists, every
-  --     later write to its closure record is refused. Limitation 19.
+  --     so R-P9-15 and the state machine bind UPDATEs only. An earlier draft
+  --     of this comment said nothing refuses an INSERT that arrives already
+  --     closed. That was true when it was written and is now FALSE in this
+  --     same file: `bookings_born_booked_only` (R-P9-16) refuses exactly that
+  --     row — born in a terminal state, or born carrying a settlement record
+  --     or a forward reschedule link — because an executed attack INSERTed
+  --     one (C4-P9-01). Stale here since `6e339bf`; corrected after the
+  --     coordinator's actual-diff review of `01f7c2d` (F-05).
+  --
+  --     What limitation 19 still leaves open is narrower and is not a hole in
+  --     this trigger: whether a HISTORICAL IMPORT command may legitimately
+  --     create an already-closed booking, which R-P9-16 refuses today. That is
+  --     a command-slice decision with a visible cost — such an import would
+  --     need a route past R-P9-16 — and it is recorded rather than decided.
+  --     What is guaranteed here is that once the row exists, every later write
+  --     to its closure record is refused.
   IF OLD.state <> 'booked' AND NEW.state IS DISTINCT FROM OLD.state THEN
     RAISE EXCEPTION 'booking.state_terminal: % is a terminal state and cannot become %', OLD.state, NEW.state USING ERRCODE = 'P0001';
   END IF;
@@ -1308,8 +1323,12 @@ BEGIN
   -- raises, or appends an id it has never seen, and the relation is finite.
   -- v_guard is therefore defence in depth and not the mechanism — it is set
   -- far above any chain a business could produce, and if it ever fires the
-  -- data is already wrong, so it refuses rather than passes. Nothing here
-  -- decides a policy limit on how many times a booking may be moved.
+  -- data is already wrong, so it refuses rather than passes. It is a CEILING
+  -- and it is enforced: lowered here and measured (C7-P9-03), it refuses a
+  -- lawful chain, so 4096 is a number this schema chooses and not merely
+  -- advice. It earns its place for a mutation class the ring raise's own red
+  -- proof does not reach: with ONLY the visited-set raise cut out, a ring is
+  -- still refused — by this ceiling, by name.
   v_walk := NEW.id;
   LOOP
     IF v_walk = ANY(v_seen) THEN
@@ -1320,18 +1339,23 @@ BEGIN
     SELECT b.state, b.rescheduled_to_id INTO v_state, v_counterpart
       FROM public.bookings b
      WHERE b.business_id = NEW.business_id AND b.id = v_walk;
-    -- Same discipline as (a) and (b). One honest qualification, because it is
-    -- the difference between a proof and a story: in THIS schema the branch is
-    -- defence in depth rather than independently reachable. A chain can only
-    -- ever be extended at its tail — a successor is born carrying its
-    -- backlink, and R-P9-15 freezes that backlink, so no row can be grafted
-    -- onto the middle of an existing chain — which means every row this walk
-    -- reads is also the immediate counterpart of some row written in the same
-    -- transaction, and (a) reads it too. The branch is here because the walk
-    -- is the mechanism that would have to carry the refusal if that ever
-    -- stopped being true, and because a walk that ends early on an invisible
-    -- row would report a ring as terminated, which is the worst possible
-    -- failure for a reachability law.
+    -- Same discipline as (a) and (b), and this branch is INDEPENDENTLY
+    -- REACHABLE. An earlier draft of this comment qualified it as defence in
+    -- depth on the reasoning that a chain can only be extended at its tail,
+    -- so every row the walk reads is also the immediate counterpart (a)
+    -- reads. The seventh independent pass built the isolation that reasoning
+    -- said did not exist (C7-P9-02): an UPDATE that assigns a column to
+    -- itself. It changes no field (a2) compares, needs no state change (b)
+    -- looks for, and writes ONE row, so on a closed chain head (a) reads
+    -- exactly one successor and every row beyond it belongs to this walk
+    -- alone — measured by hiding the chain's END under row security and
+    -- getting `booking.chain_unreadable`, and again by lowering v_guard and
+    -- watching the same no-op touch refuse at the HEAD while it commits at
+    -- a row two hops from the end. So this branch is load-bearing and
+    -- fail-closed on a path that reaches it and nothing else does. It also
+    -- remains what would carry the refusal if a graft ever became possible,
+    -- and a walk that ended early on an invisible row would report a ring as
+    -- terminated — the worst possible failure for a reachability law.
     IF NOT FOUND THEN
       RAISE EXCEPTION 'booking.chain_unreadable: the reschedule chain through booking % reaches % and that booking could not be read, so the chain cannot be checked', NEW.id, v_walk USING ERRCODE = 'P0001';
     END IF;
@@ -1660,10 +1684,16 @@ GRANT SELECT, INSERT ON booking_operations TO daftar_booking_internal;
 -- ─────────────────────────────────────────────────────────────────────────
 -- 10. Ownership, and handing the authority back.
 --
--- Only the one SECURITY DEFINER routine moves. The three raise-only
--- triggers stay with the migrator: they read nothing, they are not DEFINER,
--- and elevating them would widen the internal principal's surface for no
--- property gained — the call 0046, 0048 and 0049 all make.
+-- Only the SECURITY DEFINER routines move, and there are TWO of them:
+-- `bookings_buffers_match_service()` and `bookings_chain_symmetric()`. The
+-- four raise-only guards stay with the migrator: they read nothing, they are
+-- not DEFINER, and elevating them would widen the internal principal's
+-- surface for no property gained — the call 0046, 0048 and 0049 all make.
+-- (This comment said "the one definer" and "the three raise-only triggers"
+-- until the coordinator's actual-diff review of `01f7c2d` counted them: both
+-- numbers were stale, the second since `bookings_born_booked_only` was added
+-- for R-P9-16. The ALTER statements below were always right; only the prose
+-- above them was not. F-06.)
 --
 -- The triggers above were created while the migrator still owned their
 -- functions, which a non-superuser deployment principal requires
@@ -1910,6 +1940,39 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_trigger WHERE tgname = 'bookings_chain_agrees' AND tgdeferrable AND tginitdeferred) THEN
     RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_chain_agrees is not a DEFERRABLE INITIALLY DEFERRED constraint trigger (R-P9-17)' USING ERRCODE = 'P0001';
+  END IF;
+
+  -- (h3) And the deferral is not the only thing a migration could drop. The
+  --      check above passes a trigger that fires on UPDATE alone, or one with
+  --      no WHEN clause, or one whose WHEN clause watches the wrong column —
+  --      and each of those is a different schema. INSERT carries the
+  --      successor-committed-alone refusal, and the WHEN clause is what keeps
+  --      the guard off every booking that has no reschedule link at all. So
+  --      the definition itself is pinned: the event mask through `tgtype` and
+  --      the condition through `pg_get_triggerdef`, which renders the WHEN
+  --      clause the server actually stored. Raised as F-09 by the
+  --      coordinator's actual-diff review of `01f7c2d`: the end state was
+  --      asserted, and this part of it was not.
+  --
+  --      tgtype is a bitmask: 1 = ROW, 4 = INSERT, 16 = UPDATE. A constraint
+  --      trigger is AFTER, which is the absence of bit 2 (BEFORE), so
+  --      ROW + INSERT + UPDATE = 21 and the mask is asserted exactly, not
+  --      with `&`, because an extra event is also a change of schema.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'bookings_chain_agrees' AND tgtype = 21) THEN
+    RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_chain_agrees does not fire AFTER INSERT OR UPDATE FOR EACH ROW (R-P9-17)' USING ERRCODE = 'P0001';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+     WHERE t.tgname = 'bookings_chain_agrees'
+       -- The paren nesting is the SERVER's rendering, measured and not
+       -- guessed: PostgreSQL wraps the whole WHEN expression once more than
+       -- the source does. The first draft of this assertion assumed two and
+       -- refused the migration, which is how a pattern written from memory
+       -- announces itself — and is why this is a LIKE over the catalogue's own
+       -- text rather than a re-read of the file above.
+       AND pg_get_triggerdef(t.oid) LIKE '%WHEN (((new.rescheduled_to_id IS NOT NULL) OR (new.rescheduled_from_id IS NOT NULL)))%') THEN
+    RAISE EXCEPTION 'booking.migration_end_state_invalid: bookings_chain_agrees does not carry its WHEN clause over both reschedule links (R-P9-17)' USING ERRCODE = 'P0001';
   END IF;
 
   -- (i) The ownership-transfer authority of §0 did not survive.

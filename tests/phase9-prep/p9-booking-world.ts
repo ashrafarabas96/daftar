@@ -302,10 +302,7 @@ export async function reschedule(
   await client.connect();
   try {
     await client.query('BEGIN');
-    await client.query(INSERT_BOOKING_WITH_BACKLINK, [
-      ...bookingParams({ world, id: move.to, startsAt: move.startsAt, endsAt: move.endsAt }),
-      move.from,
-    ]);
+    await client.query(INSERT_BOOKING_WITH_BACKLINK, [...bookingParams({ world, id: move.to, startsAt: move.startsAt, endsAt: move.endsAt }), move.from]);
     await client.query(
       `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
          settled_by_user_id = $2, settle_reason = $4 WHERE business_id = $1 AND id = $5`,

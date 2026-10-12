@@ -297,7 +297,21 @@ describe('P9 bookings — negative controls: the invariant is what is doing the 
       const outcome = summarise(await Promise.all(attempts), blocked.length);
       expect(outcome.committed).toBe(1);
       expect(outcome.refused).toBe(1);
-      expect(outcome.blocked).toBe(1);
+      // At least one backend was observed blocked by the server — that is the
+      // claim, and `awaitBlocked` already enforces it by throwing if it never
+      // reaches one. The exact count is NOT a property of the schema: both
+      // backends can show a non-empty `pg_blocking_pids` at the instant of a
+      // poll while they contend over the same index entry, and which of the
+      // two the poll catches is the scheduler's business. This assertion read
+      // `toBe(1)` until round 7, where the identical file passed at
+      // 2026-10-12T20:33Z and failed at 20:42Z with `expected 2 to be 1` —
+      // measured on a tree in which this file was byte-identical to `99695bb`.
+      // So it was an assertion on a scheduling coincidence, and three
+      // signatures were given on runs where the coincidence held. Corrected
+      // to what the harness can prove; nothing about the invariant is relaxed,
+      // and the three assertions that carry the law are untouched.
+      expect(outcome.blocked).toBeGreaterThanOrEqual(1);
+      expect(outcome.blocked).toBeLessThanOrEqual(careless.length);
       // Without the lock the loser's code may be the invariant's own or the
       // deadlock detector's — CONTROL 6 is about exactly that difference — but
       // either way only one booking exists.
