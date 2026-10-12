@@ -2339,12 +2339,26 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
   //    access path must record the path and the inputs that chose it, or the
   //    next round inherits an unexplained movement -- which `R59` calls worse
   //    than a known one.
-  //    AND THE CAPTURE CARRIES THE ISOLATION LEVEL IT RAN AT, read and not
-  //    assumed (`TL-P4-COORD-R76` ordered item 2). `stats_rows` here is the
-  //    FIRST of two reads of the same premise; the second is taken after the
-  //    last plan reading of this section and the pair is what the guard
-  //    asserts. A re-read is only a read if the two statements take
-  //    different snapshots, so the level is recorded rather than assumed.
+  //    AND THE CAPTURE CARRIES THE ISOLATION LEVEL IT RAN AT, which IS a
+  //    thing this guard reads (`TL-P4-COORD-R76` ordered item 2 ordered it;
+  //    `TL-P4-COORD-R81` ordered item 1 is where what it is FOR was
+  //    corrected, and `R82` corrects `R76` item 2's own clause).
+  //    `stats_rows` here is the FIRST of two reads of the same premise; the
+  //    second is taken after the last plan reading of this section and the
+  //    pair is what the guard asserts.
+  //
+  //    A re-read is only a read if the two statements take different
+  //    snapshots — AND WHAT GIVES THEM DIFFERENT SNAPSHOTS IS THAT EACH IS
+  //    ITS OWN TRANSACTION, NOT THE LEVEL IT RUNS AT. A sentence here used
+  //    to draw the recording of the level straight from the snapshot
+  //    requirement, as though the level were what supplied the separate
+  //    snapshots; that inference rested on a premise `R79` §2 withdrew and
+  //    is withdrawn with it. The level is recorded for a NARROWER reason:
+  //    enclosing these two captures in ONE transaction at REPEATABLE READ is
+  //    one route to taking their separate snapshots away, and a recorded
+  //    level refuses that route. It is NOT what makes the re-read a read.
+  //    This guard does NOT read the transaction boundary, and §R7b names
+  //    that as unread where it asserts the pair.
   M['R7_cost_inputs'] = (
     await sup.query(
       `SELECT c.relname::text AS rel, c.relpages::int AS relpages, c.reltuples::text AS reltuples,
@@ -4010,8 +4024,22 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     //    establishes NOTHING about plan readings taken before the first
     //    capture or after the sweep, and it does not claim to.
     //
-    //    AND THE CONDITION THAT MAKES THE SECOND READ A READ IS ITSELF READ,
-    //    NOT ASSUMED. `pg_stats` is a view over the CATALOGUE
+    //    AND THE CONDITION THAT MAKES THE SECOND READ A READ IS **NOT** ONE
+    //    THIS GUARD READS. It is established by READING THE CODE, it is
+    //    named below as unread, and what the guard pins is a DIFFERENT fact
+    //    (`TL-P4-COORD-R81` §1 and ordered item 1). A heading stood here
+    //    claiming the opposite — that the instrument itself read that
+    //    condition. It was TRUE at the parent commit, and true ONLY through
+    //    the clause `R79` §2 withdrew: condition = the snapshot regime, the
+    //    regime set by the isolation level, the level pinned, therefore
+    //    read. The withdrawal took that support away and left the heading
+    //    contradicted by `:4049-4050` and `:4072-4074` of this same block, which
+    //    are correct and stand. A withdrawal falsifying a TRUE neighbour by
+    //    removing its support is the class `R81` records, and it is why
+    //    this heading is NARROWED rather than re-worded.
+    //
+    //    WHAT GOVERNS WHAT IS STILL WORTH STATING, and this part survived
+    //    attack (`R79` §3). `pg_stats` is a view over the CATALOGUE
     //    `pg_statistic`, so a re-read is governed by the transaction's
     //    SNAPSHOT — not by `stats_fetch_consistency`, which governs the
     //    CUMULATIVE `pg_stat_*` views, and not by
