@@ -203,9 +203,7 @@ export const EXPORT_FIELD_CATALOGUE: Readonly<Record<ExportFieldKey, ExportField
   },
 };
 
-export const EXPORT_FIELD_KEYS: readonly ExportFieldKey[] = Object.keys(
-  EXPORT_FIELD_CATALOGUE,
-) as ExportFieldKey[];
+export const EXPORT_FIELD_KEYS: readonly ExportFieldKey[] = Object.keys(EXPORT_FIELD_CATALOGUE) as ExportFieldKey[];
 
 export function isKnownExportField(key: string): key is ExportFieldKey {
   return Object.prototype.hasOwnProperty.call(EXPORT_FIELD_CATALOGUE, key);
@@ -297,13 +295,7 @@ export interface ExportBoundingConfiguration {
   readonly policyState: ExportPolicyState;
 }
 
-export type ExportConfigurationFact =
-  | 'permitted_fields'
-  | 'audience_permission'
-  | 'max_scope'
-  | 'retention'
-  | 'destination_access_model'
-  | 'policy_state';
+export type ExportConfigurationFact = 'permitted_fields' | 'audience_permission' | 'max_scope' | 'retention' | 'destination_access_model' | 'policy_state';
 
 /**
  * The fail-closed gate. Absent, unreadable or incomplete configuration refuses
@@ -313,9 +305,7 @@ export type ExportConfigurationFact =
  * `configuration` is typed nullable so that "there is no configuration at all"
  * is a reachable, testable state rather than an unreachable one.
  */
-export function requireExportConfiguration(
-  configuration: ExportBoundingConfiguration | null | undefined,
-): ExportBoundingConfiguration {
+export function requireExportConfiguration(configuration: ExportBoundingConfiguration | null | undefined): ExportBoundingConfiguration {
   if (configuration === null || configuration === undefined) {
     refuseUnconfigured('policy_state', 'no export configuration is readable at all');
   }
@@ -434,11 +424,7 @@ export function resolveExportFieldSet(
     seen.add(requested);
 
     if (!isKnownExportField(requested)) {
-      throw new ExportFieldRefusal(
-        'field_unknown',
-        requested,
-        'the field set is closed and this key is not in the catalogue',
-      );
+      throw new ExportFieldRefusal('field_unknown', requested, 'the field set is closed and this key is not in the catalogue');
     }
     const field = EXPORT_FIELD_CATALOGUE[requested];
 
@@ -454,18 +440,10 @@ export function resolveExportFieldSet(
       );
     }
     if (field.piiClass === 'never_exportable') {
-      throw new ExportFieldRefusal(
-        'field_never_exportable',
-        requested,
-        'secret and internal material is never exportable, whatever the configuration says',
-      );
+      throw new ExportFieldRefusal('field_never_exportable', requested, 'secret and internal material is never exportable, whatever the configuration says');
     }
     if (!permitted.has(requested)) {
-      throw new ExportFieldRefusal(
-        'field_not_in_permitted_set',
-        requested,
-        'the ratified permitted-field set does not include this field',
-      );
+      throw new ExportFieldRefusal('field_not_in_permitted_set', requested, 'the ratified permitted-field set does not include this field');
     }
     fields.push(field);
   }
@@ -481,10 +459,7 @@ export function resolveExportFieldSet(
     piiClassCounts[field.piiClass] += 1;
   }
 
-  const carriesPersonalData =
-    piiClassCounts.direct_identifier > 0 ||
-    piiClassCounts.quasi_identifier > 0 ||
-    piiClassCounts.derived_behavioural > 0;
+  const carriesPersonalData = piiClassCounts.direct_identifier > 0 || piiClassCounts.quasi_identifier > 0 || piiClassCounts.derived_behavioural > 0;
 
   return {
     fields,
@@ -507,10 +482,7 @@ export function resolveExportFieldSet(
  * passes through this module at all: a money figure is a `bigint` of minor
  * units and belongs to the metric that owns it.
  */
-export function requireRowCountWithinBound(
-  actualRowCount: number,
-  maxScope: ExportMaxScopeConfiguration,
-): void {
+export function requireRowCountWithinBound(actualRowCount: number, maxScope: ExportMaxScopeConfiguration): void {
   if (!Number.isSafeInteger(actualRowCount) || actualRowCount < 0) {
     refuseUnconfigured('max_scope', 'the materialised row count is not a whole number of rows');
   }

@@ -48,13 +48,7 @@
 
 import { refuse } from './errors';
 import type { SaleSummaryRow } from './ports';
-import type {
-  AnalyticsInterval,
-  AnalyticsScope,
-  Derived,
-  OnDemandProvenance,
-  SourceDefinitionRef,
-} from './provenance';
+import type { AnalyticsInterval, AnalyticsScope, Derived, OnDemandProvenance, SourceDefinitionRef } from './provenance';
 
 /* ------------------------------------------------------------------------- *
  * The authority's own status set, and why this module re-checks it
@@ -77,11 +71,7 @@ export type SaleDocumentStatus = 'draft' | 'confirmed' | 'returned_partial' | 'r
  * committed non-void sale and IS in this set: a return is a later commercial
  * fact, not an un-happening of the purchase.
  */
-export const COMMITTED_NON_VOID_STATUSES: readonly SaleDocumentStatus[] = [
-  'confirmed',
-  'returned_partial',
-  'returned_full',
-];
+export const COMMITTED_NON_VOID_STATUSES: readonly SaleDocumentStatus[] = ['confirmed', 'returned_partial', 'returned_full'];
 
 export function isCommittedNonVoid(status: SaleDocumentStatus): boolean {
   return COMMITTED_NON_VOID_STATUSES.includes(status);
@@ -215,9 +205,7 @@ export function nextCivilDate(value: string): string {
  * recorded tension in this module's header note on the interval shape below.
  */
 export function intervalContains(interval: AnalyticsInterval, documentDate: string): boolean {
-  return (
-    compareCivilDates(documentDate, interval.from) >= 0 && compareCivilDates(documentDate, interval.to) <= 0
-  );
+  return compareCivilDates(documentDate, interval.from) >= 0 && compareCivilDates(documentDate, interval.to) <= 0;
 }
 
 function requireWellFormedInterval(interval: AnalyticsInterval, field: string): void {
@@ -260,12 +248,7 @@ export interface WindowedMetricRequest extends MetricRequest {
   readonly interval: AnalyticsInterval | null;
 }
 
-function onDemandProvenance(
-  asOf: string,
-  interval: AnalyticsInterval,
-  scope: AnalyticsScope,
-  sourceDefinition: SourceDefinitionRef,
-): OnDemandProvenance {
+function onDemandProvenance(asOf: string, interval: AnalyticsInterval, scope: AnalyticsScope, sourceDefinition: SourceDefinitionRef): OnDemandProvenance {
   return { mode: 'on_demand', asOf, interval, sourceDefinition, scope };
 }
 
@@ -326,10 +309,7 @@ export interface LastPurchaseAnswer {
  *   2. MAXIMALITY  — no candidate has a strictly greater `(documentDate, saleId)`;
  *   3. CARDINALITY — `candidateCount === 0` iff the answer is "no purchase".
  */
-export function lastPurchase(
-  rows: readonly MetricSaleRow[],
-  request: MetricRequest,
-): Derived<LastPurchaseAnswer> {
+export function lastPurchase(rows: readonly MetricSaleRow[], request: MetricRequest): Derived<LastPurchaseAnswer> {
   parseCivilDate(request.asOf, 'asOf');
 
   const candidates = rows.filter((row) => {
@@ -380,16 +360,9 @@ function compareSaleOrdering(a: MetricSaleRow, b: MetricSaleRow): number {
  * law against an answer it did not itself produce — an algorithm compared to
  * itself proves nothing.
  */
-export function assertLastPurchaseLaw(
-  rows: readonly MetricSaleRow[],
-  request: MetricRequest,
-  answer: LastPurchaseAnswer,
-): void {
+export function assertLastPurchaseLaw(rows: readonly MetricSaleRow[], request: MetricRequest, answer: LastPurchaseAnswer): void {
   const candidates = rows.filter(
-    (row) =>
-      row.customerId === request.customerId &&
-      isCommittedNonVoid(row.status) &&
-      compareCivilDates(row.documentDate, request.asOf) <= 0,
+    (row) => row.customerId === request.customerId && isCommittedNonVoid(row.status) && compareCivilDates(row.documentDate, request.asOf) <= 0,
   );
 
   if (answer.candidateCount !== candidates.length) {
@@ -481,11 +454,9 @@ export function purchaseFrequency(
   parseCivilDate(request.asOf, 'asOf');
   const interval = request.interval;
   if (interval === null) {
-    refuse(
-      'analytics.interval_required',
-      'PURCHASE FREQUENCY is a count over an explicit interval and no interval was supplied',
-      { customerId: request.customerId },
-    );
+    refuse('analytics.interval_required', 'PURCHASE FREQUENCY is a count over an explicit interval and no interval was supplied', {
+      customerId: request.customerId,
+    });
   }
   requireWellFormedInterval(interval, 'interval');
 
@@ -690,11 +661,7 @@ export function netSalesValue(_rows: readonly MetricSaleRow[], request: Windowed
  * the left-hand side of an inequality in a test. It is not exported as a
  * metric, it is not a fallback, and it is never rendered.
  */
-export function documentHeaderFoldThatIsNotNetSalesValue(
-  rows: readonly MetricSaleRow[],
-  customerId: string,
-  interval: AnalyticsInterval,
-): bigint {
+export function documentHeaderFoldThatIsNotNetSalesValue(rows: readonly MetricSaleRow[], customerId: string, interval: AnalyticsInterval): bigint {
   let total = 0n;
   for (const row of rows) {
     if (!inScope(row, customerId, interval)) continue;
@@ -730,9 +697,7 @@ export interface ArAgingBand {
  * return an empty band list either: an empty aged answer renders as a customer
  * who owes nothing, which is a figure.
  */
-export function arAging(request: MetricRequest & { readonly bucketDays: readonly number[] }): Derived<
-  readonly ArAgingBand[]
-> {
+export function arAging(request: MetricRequest & { readonly bucketDays: readonly number[] }): Derived<readonly ArAgingBand[]> {
   refuse(
     'analytics.waiting_for_integrated_surface',
     'AR AGING comes from the Phase 4 S7 canonical receivables readers only, and that authority is not present on this branch',

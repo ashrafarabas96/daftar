@@ -81,9 +81,7 @@ describe('the export field catalogue', () => {
   });
 
   it('classifies an aggregate with no customer dimension as non-personal', () => {
-    expect(EXPORT_FIELD_CATALOGUE.aggregate_sale_document_count.piiClass).toBe(
-      'business_internal_non_personal',
-    );
+    expect(EXPORT_FIELD_CATALOGUE.aggregate_sale_document_count.piiClass).toBe('business_internal_non_personal');
   });
 
   it('declares the forbidden entries rather than omitting them, so the prohibition can turn red', () => {
@@ -123,10 +121,7 @@ describe('RED PROOF: an export with absent configuration refuses', () => {
   });
 
   it('refuses when the policy state is not positively configured', () => {
-    expectUnconfigured(
-      () => resolveExportFieldSet(['customer_display_name'], configured({ policyState: 'unconfigured' })),
-      'policy_state',
-    );
+    expectUnconfigured(() => resolveExportFieldSet(['customer_display_name'], configured({ policyState: 'unconfigured' })), 'policy_state');
   });
 
   it('refuses each of the five facts in turn, naming it', () => {
@@ -171,22 +166,13 @@ describe('RED PROOF: an export with absent configuration refuses', () => {
   });
 
   it('refuses a permitted set that itself names a forbidden field, because configuration is input and not authority', () => {
-    expectUnconfigured(
-      () => requireExportConfiguration(configured({ permittedFields: [...PERMITTED, 'tenant_id'] })),
-      'permitted_fields',
-    );
-    expectUnconfigured(
-      () => requireExportConfiguration(configured({ permittedFields: [...PERMITTED, 'session_token'] })),
-      'permitted_fields',
-    );
+    expectUnconfigured(() => requireExportConfiguration(configured({ permittedFields: [...PERMITTED, 'tenant_id'] })), 'permitted_fields');
+    expectUnconfigured(() => requireExportConfiguration(configured({ permittedFields: [...PERMITTED, 'session_token'] })), 'permitted_fields');
   });
 
   it('the baseline is restored and green: a fully configured policy resolves', () => {
     const resolved = resolveExportFieldSet(['customer_display_name', 'purchase_frequency_sale_count'], configured());
-    expect(resolved.fields.map((f) => f.key)).toEqual([
-      'customer_display_name',
-      'purchase_frequency_sale_count',
-    ]);
+    expect(resolved.fields.map((f) => f.key)).toEqual(['customer_display_name', 'purchase_frequency_sale_count']);
   });
 });
 

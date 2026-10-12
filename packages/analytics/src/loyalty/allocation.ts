@@ -190,11 +190,7 @@ function atIndex<T>(xs: readonly T[], index: number): T {
  * in particular is a money computation Phase 13 may not perform**. So this
  * function refuses and clamps nothing.
  */
-export function allocateRedemption(
-  valueMinor: bigint,
-  lines: readonly AllocatableLine[],
-  policy: AllocationPolicy,
-): AllocationResult {
+export function allocateRedemption(valueMinor: bigint, lines: readonly AllocatableLine[], policy: AllocationPolicy): AllocationResult {
   if (typeof valueMinor !== 'bigint') {
     refuseLoyalty('loyalty.allocation_value_invalid', 'a redemption value is integer minor units as a bigint');
   }
@@ -358,11 +354,7 @@ export function allocateRedemption(
 }
 
 /** A total order over the line indices, so the remainder's destination is deterministic. */
-function remainderOrder(
-  lines: readonly AllocatableLine[],
-  weights: readonly bigint[],
-  destination: RemainderDestination,
-): readonly number[] {
+function remainderOrder(lines: readonly AllocatableLine[], weights: readonly bigint[], destination: RemainderDestination): readonly number[] {
   const indices = lines.map((_, index) => index);
   switch (destination) {
     case 'first_line_first':
@@ -372,9 +364,7 @@ function remainderOrder(
     case 'largest_basis_first':
       // Ties fall to the earlier line, so the order is total and the output is
       // byte-identical across runs — `T2-EXP-ORDER`'s standard, applied here.
-      return indices
-        .slice()
-        .sort((a, b) => (atIndex(weights, a) > atIndex(weights, b) ? -1 : atIndex(weights, a) < atIndex(weights, b) ? 1 : a - b));
+      return indices.slice().sort((a, b) => (atIndex(weights, a) > atIndex(weights, b) ? -1 : atIndex(weights, a) < atIndex(weights, b) ? 1 : a - b));
   }
 }
 
@@ -402,11 +392,7 @@ export interface RedemptionHeaderEffect {
   readonly identityHolds: boolean;
 }
 
-export function redemptionHeaderEffect(
-  subtotalTxnMinor: bigint,
-  discountTxnMinorBefore: bigint,
-  allocation: AllocationResult,
-): RedemptionHeaderEffect {
+export function redemptionHeaderEffect(subtotalTxnMinor: bigint, discountTxnMinorBefore: bigint, allocation: AllocationResult): RedemptionHeaderEffect {
   let netsAfter = 0n;
   for (const line of allocation.lines) netsAfter += line.netAfterMinor;
   const discountedSubtotalAfter = subtotalTxnMinor - (discountTxnMinorBefore + allocation.totalAllocatedMinor);

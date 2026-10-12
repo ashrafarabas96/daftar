@@ -96,7 +96,7 @@ export const ANALYTICS_REFUSALS = {
   'loyalty.ledger_not_party_complete': 422,
   'loyalty.ledger_duplicate_movement_id': 422,
   'loyalty.corrects_cycle': 422,
-    /** `F-22`: a correction may not be dated before the row it corrects. */
+  /** `F-22`: a correction may not be dated before the row it corrects. */
   'loyalty.corrects_out_of_order': 422,
   /** A redemption value or line figure that is not usable integer minor units. */
   'loyalty.allocation_value_invalid': 422,

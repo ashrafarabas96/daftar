@@ -217,18 +217,13 @@ export function validatePredicate(predicate: Predicate, input: ValidationInput):
  * authority exists is a property of the tree we are standing in. Folding the two
  * together is how an absent authority turns into a zero.
  */
-export function validateAndRequireAuthorities(
-  predicate: Predicate,
-  input: ValidationInput,
-  presence: AuthorityPresence,
-): PredicateAdmission {
+export function validateAndRequireAuthorities(predicate: Predicate, input: ValidationInput, presence: AuthorityPresence): PredicateAdmission {
   const admission = validatePredicate(predicate, input);
   for (const authority of admission.authoritiesRequired) {
     if (!presence[authority]) {
-      refuseAbsentAuthority(
-        `the ${authority} read authority is not present on this branch, so this predicate resolves to a refusal and not to a zero`,
-        { authority },
-      );
+      refuseAbsentAuthority(`the ${authority} read authority is not present on this branch, so this predicate resolves to a refusal and not to a zero`, {
+        authority,
+      });
     }
   }
   return admission;
@@ -309,10 +304,7 @@ function assertArity(p: Predicate, path: string): void {
  * boundary: a stored definition is revalidated through this identical path on
  * every single evaluation and is never evaluated from its stored form.
  */
-export function validateSerialisedDefinition(
-  serialised: string,
-  input: ValidationInput,
-): PredicateAdmission {
+export function validateSerialisedDefinition(serialised: string, input: ValidationInput): PredicateAdmission {
   const bytes = utf8ByteLength(serialised);
   if (bytes > SHAPE_BOUNDS.maxSerialisedBytes) {
     refuseAdmissibility('segment.predicate_too_complex', 'the serialised definition is larger than the parser bound', {
@@ -448,8 +440,7 @@ function assertLiteralValid(leaf: Leaf, spec: AttributeSpec, path: string): void
 }
 
 function assertScalarLiteral(value: Literal | undefined, spec: AttributeSpec, attr: AttrName, path: string): void {
-  const bad: (why: string) => never = (why) =>
-    refuseAdmissibility('segment.literal_invalid', why, { path, attr, type: spec.type, value: String(value) });
+  const bad: (why: string) => never = (why) => refuseAdmissibility('segment.literal_invalid', why, { path, attr, type: spec.type, value: String(value) });
 
   switch (spec.type) {
     case 'enum': {
@@ -570,12 +561,7 @@ function assertPolicyPresent(attr: AttrName, spec: AttributeSpec, input: Validat
  * 5. The cost model (design §3.8).
  * ------------------------------------------------------------------ */
 
-function assertCostAdmissible(
-  predicate: Predicate,
-  occurrences: readonly LeafOccurrence[],
-  ceiling: number,
-  input: ValidationInput,
-): void {
+function assertCostAdmissible(predicate: Predicate, occurrences: readonly LeafOccurrence[], ceiling: number, input: ValidationInput): void {
   const profile = costProfile(predicate);
 
   if (profile.AUTHORITY_SET > COST_BOUNDS.maxAuthoritySetLeaves) {

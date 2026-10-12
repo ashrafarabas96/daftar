@@ -61,9 +61,7 @@ describe('the AST is pure data plus pure functions', () => {
   });
 
   it('gives every registered attribute an explicit cost class drawn from the design’s four names', () => {
-    expect([...COST_CLASSES].sort()).toEqual(
-      ['AUTHORITY_PER_CUSTOMER', 'AUTHORITY_SET', 'INDEXED_SCAN', 'JOIN_AGGREGATE'],
-    );
+    expect([...COST_CLASSES].sort()).toEqual(['AUTHORITY_PER_CUSTOMER', 'AUTHORITY_SET', 'INDEXED_SCAN', 'JOIN_AGGREGATE']);
     for (const attr of ATTR_NAMES) {
       expect(COST_CLASSES).toContain(costClassOf(attr));
     }
@@ -117,11 +115,7 @@ describe('the registry carries the laws on its own entries', () => {
 
   it('puts the per-customer class exactly on the attributes whose upstream signature takes one customer', () => {
     const perCustomer = ATTR_NAMES.filter((a) => costClassOf(a) === 'AUTHORITY_PER_CUSTOMER');
-    expect([...perCustomer].sort()).toEqual([
-      'insight.ar_max_bucket_no',
-      'insight.ar_open_invoice_count',
-      'insight.ar_outstanding_base_minor',
-    ]);
+    expect([...perCustomer].sort()).toEqual(['insight.ar_max_bucket_no', 'insight.ar_open_invoice_count', 'insight.ar_outstanding_base_minor']);
   });
 });
 
@@ -151,10 +145,7 @@ describe('traversal', () => {
       leaf('customer.status', 'eq', 'active'),
       {
         node: 'none_of',
-        of: [
-          leaf('customer.has_phone', 'is_false'),
-          { node: 'any_of', of: [leaf('customer.contact_count', 'eq', 0)] },
-        ],
+        of: [leaf('customer.has_phone', 'is_false'), { node: 'any_of', of: [leaf('customer.contact_count', 'eq', 0)] }],
       },
     ],
   };

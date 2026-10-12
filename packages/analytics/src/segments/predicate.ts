@@ -78,12 +78,7 @@ export function comparatorAppliesTo(type: AttributeType, cmp: Comparator): boole
  */
 export type CostClass = 'INDEXED_SCAN' | 'JOIN_AGGREGATE' | 'AUTHORITY_SET' | 'AUTHORITY_PER_CUSTOMER';
 
-export const COST_CLASSES: readonly CostClass[] = [
-  'INDEXED_SCAN',
-  'JOIN_AGGREGATE',
-  'AUTHORITY_SET',
-  'AUTHORITY_PER_CUSTOMER',
-] as const;
+export const COST_CLASSES: readonly CostClass[] = ['INDEXED_SCAN', 'JOIN_AGGREGATE', 'AUTHORITY_SET', 'AUTHORITY_PER_CUSTOMER'] as const;
 
 /** The classes that may perform candidate narrowing (design §3.8, last bullet). */
 export function isNarrowingClass(c: CostClass): boolean {
@@ -99,12 +94,7 @@ export function isNarrowingClass(c: CostClass): boolean {
  * answer is a column on a row the actor can already see — a fact about a visible
  * row, which design §5.2 distinguishes from the absence of a row.
  */
-export type AuthorityName =
-  | 'customers_own_columns'
-  | 'customer_contacts'
-  | 'sales_activity'
-  | 'receivables'
-  | 'marketing_consent';
+export type AuthorityName = 'customers_own_columns' | 'customer_contacts' | 'sales_activity' | 'receivables' | 'marketing_consent';
 
 /**
  * NO FINANCIAL RE-DERIVATION IN CRM (design §3.7 clause 3, lock PART 81/PART 89).
@@ -117,9 +107,7 @@ export type AuthorityName =
  * is a checkable branch rather than a comment: a planted spec declaring it is
  * what the red proof in the test suite feeds the validator.
  */
-export type MoneyOrigin =
-  | { readonly kind: 'authority_reported'; readonly authority: AuthorityName }
-  | { readonly kind: 'recomputed_in_crm' };
+export type MoneyOrigin = { readonly kind: 'authority_reported'; readonly authority: AuthorityName } | { readonly kind: 'recomputed_in_crm' };
 
 /* ------------------------------------------------------------------ *
  * The attribute registry (closed).

@@ -51,7 +51,6 @@ function must<T>(value: T | undefined | null, what: string): T {
   return value;
 }
 
-
 /** F-06 — a refusal is asserted by its CODE, never by its class alone.
  *  `toThrow(LoyaltyRefusal)` passes when ANY law in the call path refuses, so
  *  it keeps passing when the refusal moves to a different reason — including a
@@ -83,12 +82,8 @@ const CUSTOMER = '22222222-2222-4222-8222-222222222222';
  * contract says where the number must come from. The cases that exercise a
  * DISAGREEMENT, and the padded narrowing of `R11-04`, state the count by hand.
  */
-const partyCount = (
-  l: LoyaltyLedger, businessId: string = BUSINESS, customerId: string = CUSTOMER,
-): { storedPartyMovementCount: number } => ({
-  storedPartyMovementCount: l.movements.filter(
-    (m) => m.businessId === businessId && m.customerId === customerId,
-  ).length,
+const partyCount = (l: LoyaltyLedger, businessId: string = BUSINESS, customerId: string = CUSTOMER): { storedPartyMovementCount: number } => ({
+  storedPartyMovementCount: l.movements.filter((m) => m.businessId === businessId && m.customerId === customerId).length,
 });
 
 const earn = (id: string, points: bigint, effectiveOn: string, expiresOn: string): LoyaltyMovementDraft => ({
@@ -188,9 +183,7 @@ describe('foldBalance — §1.5, one definition with no predicate to forget', ()
     expect(balance.consumedPoints).toBe(-100n);
     expect(balance.expiredPoints).toBe(-60n);
     expect(balance.balancePoints).toBe(560n);
-    expect(balance.earnedPoints + balance.expiredPoints + balance.adjustedPoints + balance.consumedPoints).toBe(
-      balance.balancePoints,
-    );
+    expect(balance.earnedPoints + balance.expiredPoints + balance.adjustedPoints + balance.consumedPoints).toBe(balance.balancePoints);
     expect(balance.movementCount).toBe(6);
   });
 
@@ -291,27 +284,19 @@ describe('validateDraft — §1.2 shape rules, refused before the request is mad
   });
 
   it('refuses a delta outside the ledger range rather than wrapping it', () => {
-    expect(() => appendMovement(emptyLedger(), earn('e1', POINTS_DELTA_MAX + 1n, '2026-01-01', '2027-01-01'))).toThrow(
-      /outside the ledger's range/,
-    );
+    expect(() => appendMovement(emptyLedger(), earn('e1', POINTS_DELTA_MAX + 1n, '2026-01-01', '2027-01-01'))).toThrow(/outside the ledger's range/);
   });
 
   it('refuses a sign that contradicts the kind', () => {
-    expect(() => appendMovement(emptyLedger(), { ...earn('e1', 5n, '2026-01-01', '2027-01-01'), pointsDelta: -5n })).toThrow(
-      /earn movement is positive/,
-    );
-    expect(() => appendMovement(emptyLedger(), { ...consume('c1', 5n, '2026-01-01'), pointsDelta: 5n })).toThrow(
-      /consume movement is negative/,
-    );
+    expect(() => appendMovement(emptyLedger(), { ...earn('e1', 5n, '2026-01-01', '2027-01-01'), pointsDelta: -5n })).toThrow(/earn movement is positive/);
+    expect(() => appendMovement(emptyLedger(), { ...consume('c1', 5n, '2026-01-01'), pointsDelta: 5n })).toThrow(/consume movement is negative/);
   });
 
   it('refuses a (source, kind) pair the least-authority registry does not admit', () => {
-    expect(() =>
-      appendMovement(emptyLedger(), { ...earn('e1', 5n, '2026-01-01', '2027-01-01'), sourceType: 'expiry_sweep' }),
-    ).toThrow(/may not produce this movement kind/);
-    expect(() => appendMovement(emptyLedger(), { ...expire('x1', 5n, '2026-01-01'), sourceType: 'sale' })).toThrow(
+    expect(() => appendMovement(emptyLedger(), { ...earn('e1', 5n, '2026-01-01', '2027-01-01'), sourceType: 'expiry_sweep' })).toThrow(
       /may not produce this movement kind/,
     );
+    expect(() => appendMovement(emptyLedger(), { ...expire('x1', 5n, '2026-01-01'), sourceType: 'sale' })).toThrow(/may not produce this movement kind/);
   });
 
   it('refuses an adjust with no reason, and accepts one with a reason (§1.4)', () => {
@@ -320,12 +305,8 @@ describe('validateDraft — §1.2 shape rules, refused before the request is mad
   });
 
   it('refuses a horizon on a non-earn row and a missing one on an earn row', () => {
-    expect(() => appendMovement(emptyLedger(), { ...earn('e1', 5n, '2026-01-01', '2027-01-01'), expiresOn: null })).toThrow(
-      /an earn carries a horizon/,
-    );
-    expect(() => appendMovement(emptyLedger(), { ...expire('x1', 5n, '2026-01-01'), expiresOn: '2027-01-01' })).toThrow(
-      /an earn carries a horizon/,
-    );
+    expect(() => appendMovement(emptyLedger(), { ...earn('e1', 5n, '2026-01-01', '2027-01-01'), expiresOn: null })).toThrow(/an earn carries a horizon/);
+    expect(() => appendMovement(emptyLedger(), { ...expire('x1', 5n, '2026-01-01'), expiresOn: '2027-01-01' })).toThrow(/an earn carries a horizon/);
   });
 
   it('refuses a horizon on or before the day earned — the horizon-of-zero shape (§4.2)', () => {
@@ -347,15 +328,9 @@ describe('validateDraft — §1.2 shape rules, refused before the request is mad
     const twice = appendMovement(corrected.ledger, adjust('a2', 100n, '2026-03-01', 'partial restoration', target.id));
     expect(twice.outcome).toBe('appended');
 
-    expect(() => appendMovement(base, adjust('a9', -1n, '2026-02-01', 'why', 'not-in-the-ledger'))).toThrow(
-      /must name a movement in the ledger/,
-    );
-    expect(() => appendMovement(base, { ...adjust('a3', -1n, '2026-02-01', 'why'), correctsId: 'a3' })).toThrow(
-      /may not correct itself/,
-    );
-    expect(() => appendMovement(base, { ...earn('e2', 1n, '2026-02-01', '2027-01-01'), correctsId: target.id })).toThrow(
-      /only an adjust may be a correction/,
-    );
+    expect(() => appendMovement(base, adjust('a9', -1n, '2026-02-01', 'why', 'not-in-the-ledger'))).toThrow(/must name a movement in the ledger/);
+    expect(() => appendMovement(base, { ...adjust('a3', -1n, '2026-02-01', 'why'), correctsId: 'a3' })).toThrow(/may not correct itself/);
+    expect(() => appendMovement(base, { ...earn('e2', 1n, '2026-02-01', '2027-01-01'), correctsId: target.id })).toThrow(/only an adjust may be a correction/);
   });
 });
 
@@ -421,20 +396,14 @@ describe('foldExpiry — §4, oldest-earn-first by (expiresOn, point_seq)', () =
       earn('e3', 30n, '2026-01-03', '2028-01-01'),
     );
     const render = (): string =>
-      JSON.stringify(
-        foldExpiry(ledger, BUSINESS, CUSTOMER, '2028-01-01').lots.map((l) => [l.movementId, l.pointSeq.toString(), l.expiresOn]),
-      );
+      JSON.stringify(foldExpiry(ledger, BUSINESS, CUSTOMER, '2028-01-01').lots.map((l) => [l.movementId, l.pointSeq.toString(), l.expiresOn]));
     expect(render()).toBe('[["e1","1","2027-01-01"],["e2","2","2028-01-01"],["e3","3","2028-01-01"]]');
     expect(render()).toBe(render());
     expect(render()).toBe(render());
   });
 
   it('consumption draws on the oldest lot first, which is what makes the sweep representable (§4.3)', () => {
-    const ledger = ledgerOf(
-      earn('e1', 50n, '2026-01-01', '2027-01-01'),
-      earn('e2', 50n, '2026-01-02', '2029-01-01'),
-      consume('c1', 50n, '2026-06-01'),
-    );
+    const ledger = ledgerOf(earn('e1', 50n, '2026-01-01', '2027-01-01'), earn('e2', 50n, '2026-01-02', '2029-01-01'), consume('c1', 50n, '2026-06-01'));
     const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2027-01-01');
     // The oldest lot absorbed the consumption, so nothing is left to expire.
     expect(fold.lots.map((l) => l.remainingPoints)).toEqual([0n, 50n]);
@@ -468,10 +437,7 @@ describe('foldExpiry — §4, oldest-earn-first by (expiresOn, point_seq)', () =
   it('T4-EXP-LONG-HORIZON — only executable because asOf is supplied', () => {
     expect(addDays('2026-01-01', 3650)).toBe('2035-12-30');
     const secondEarnedOn = addDays('2026-01-01', 3649);
-    const ledger = ledgerOf(
-      earn('e1', 100n, '2026-01-01', addDays('2026-01-01', 3650)),
-      earn('e2', 200n, secondEarnedOn, addDays(secondEarnedOn, 3650)),
-    );
+    const ledger = ledgerOf(earn('e1', 100n, '2026-01-01', addDays('2026-01-01', 3650)), earn('e2', 200n, secondEarnedOn, addDays(secondEarnedOn, 3650)));
     expect(foldExpiry(ledger, BUSINESS, CUSTOMER, '2030-06-15').expiringPoints).toBe(0n);
     expect(foldExpiry(ledger, BUSINESS, CUSTOMER, '2035-12-29').expiringPoints).toBe(0n);
     expect(foldExpiry(ledger, BUSINESS, CUSTOMER, '2035-12-30').expiringPoints).toBe(100n);
@@ -516,9 +482,7 @@ describe('the rate and the rounding mode are arguments, never constants (§5.6)'
     expect(() => computeEarnedPoints(100n, null, 'floor')).toThrow(/no loyalty earning configuration/);
     expect(() => computeEarnedPoints(100n, undefined, 'floor')).toThrow(/no loyalty earning configuration/);
     expect(() => computeEarnedPoints(100n, {} as LoyaltyEarningConfig, 'floor')).toThrow(/not configured/);
-    expect(() =>
-      computeEarnedPoints(100n, { pointsPerMinorUnit: { numerator: 0n, denominator: 1n }, horizonDays: 1 }, 'floor'),
-    ).toThrow(/positive rational/);
+    expect(() => computeEarnedPoints(100n, { pointsPerMinorUnit: { numerator: 0n, denominator: 1n }, horizonDays: 1 }, 'floor')).toThrow(/positive rational/);
 
     try {
       computeEarnedPoints(100n, null, 'floor');
@@ -534,9 +498,7 @@ describe('the rate and the rounding mode are arguments, never constants (§5.6)'
     expect(convertPointsToValueMinor(100n, { valueMinorPerPoint: { numerator: 5n, denominator: 2n } }, 'floor')).toBe(250n);
     expect(convertPointsToValueMinor(101n, { valueMinorPerPoint: { numerator: 5n, denominator: 2n } }, 'floor')).toBe(252n);
     expect(convertPointsToValueMinor(101n, { valueMinorPerPoint: { numerator: 5n, denominator: 2n } }, 'ceil')).toBe(253n);
-    expect(() => convertPointsToValueMinor(0n, { valueMinorPerPoint: { numerator: 1n, denominator: 1n } }, 'floor')).toThrow(
-      /no points has no value/,
-    );
+    expect(() => convertPointsToValueMinor(0n, { valueMinorPerPoint: { numerator: 1n, denominator: 1n } }, 'floor')).toThrow(/no points has no value/);
   });
 
   it('refuses an award outside the ledger range instead of wrapping it', () => {
@@ -575,49 +537,20 @@ describe('earning is AFTER the sale and cannot fail it (§2.2, §2.3)', () => {
       ['no configuration', () => tryBuildPostSaleEarnMovement(committed(), null, 'floor')],
       ['undefined configuration', () => tryBuildPostSaleEarnMovement(committed(), undefined, 'floor')],
       ['empty configuration', () => tryBuildPostSaleEarnMovement(committed(), {} as LoyaltyEarningConfig, 'floor')],
-      [
-        'zero rate',
-        () =>
-          tryBuildPostSaleEarnMovement(
-            committed(),
-            { pointsPerMinorUnit: { numerator: 0n, denominator: 1n }, horizonDays: 1 },
-            'floor',
-          ),
-      ],
+      ['zero rate', () => tryBuildPostSaleEarnMovement(committed(), { pointsPerMinorUnit: { numerator: 0n, denominator: 1n }, horizonDays: 1 }, 'floor')],
       [
         'negative denominator',
-        () =>
-          tryBuildPostSaleEarnMovement(
-            committed(),
-            { pointsPerMinorUnit: { numerator: 1n, denominator: -1n }, horizonDays: 1 },
-            'floor',
-          ),
+        () => tryBuildPostSaleEarnMovement(committed(), { pointsPerMinorUnit: { numerator: 1n, denominator: -1n }, horizonDays: 1 }, 'floor'),
       ],
       ['awards no whole point', () => tryBuildPostSaleEarnMovement(committed({ eligibleBaseMinor: 1n }), CONFIG, 'floor')],
       ['negative base', () => tryBuildPostSaleEarnMovement(committed({ eligibleBaseMinor: -5n }), CONFIG, 'floor')],
-      [
-        'base is not a bigint',
-        () => tryBuildPostSaleEarnMovement(committed({ eligibleBaseMinor: 500 as unknown as bigint }), CONFIG, 'floor'),
-      ],
+      ['base is not a bigint', () => tryBuildPostSaleEarnMovement(committed({ eligibleBaseMinor: 500 as unknown as bigint }), CONFIG, 'floor')],
       ['bad effective date', () => tryBuildPostSaleEarnMovement(committed({ effectiveOn: '12/10/2026' }), CONFIG, 'floor')],
       ['impossible effective date', () => tryBuildPostSaleEarnMovement(committed({ effectiveOn: '2026-02-30' }), CONFIG, 'floor')],
-      [
-        'zero horizon',
-        () =>
-          tryBuildPostSaleEarnMovement(
-            committed(),
-            { pointsPerMinorUnit: { numerator: 1n, denominator: 1n }, horizonDays: 0 },
-            'floor',
-          ),
-      ],
+      ['zero horizon', () => tryBuildPostSaleEarnMovement(committed(), { pointsPerMinorUnit: { numerator: 1n, denominator: 1n }, horizonDays: 0 }, 'floor')],
       [
         'fractional horizon',
-        () =>
-          tryBuildPostSaleEarnMovement(
-            committed(),
-            { pointsPerMinorUnit: { numerator: 1n, denominator: 1n }, horizonDays: 1.5 },
-            'floor',
-          ),
+        () => tryBuildPostSaleEarnMovement(committed(), { pointsPerMinorUnit: { numerator: 1n, denominator: 1n }, horizonDays: 1.5 }, 'floor'),
       ],
       [
         'overflowing award',
@@ -670,9 +603,7 @@ describe('consumption is INSIDE the sale and may refuse it (§5.5.4 F-3)', () =>
 
   it('THROWS rather than returning a result, because the sale must abort (F-3)', () => {
     // The asymmetry with the earn path is the law, not a style difference.
-    expect(refusalCodeOf(() => buildSaleConsumptionMovement(base, inSale({ points: 1001n })))).toBe(
-      'loyalty.insufficient_eligible_points',
-    );
+    expect(refusalCodeOf(() => buildSaleConsumptionMovement(base, inSale({ points: 1001n })))).toBe('loyalty.insufficient_eligible_points');
     expect(() => buildSaleConsumptionMovement(base, inSale({ points: 0n }))).toThrow(/not a movement/);
     expect(() => buildSaleConsumptionMovement(base, inSale({ points: -1n }))).toThrow(/not a movement/);
     expect(() => buildSaleConsumptionMovement(base, inSale({ asOf: '2026-02-30' }))).toThrow(/not a real calendar date/);
@@ -696,9 +627,7 @@ describe('consumption is INSIDE the sale and may refuse it (§5.5.4 F-3)', () =>
     const stale = ledgerOf(earn('e1', 500n, '2026-01-01', '2026-06-01'));
     expect(foldBalance(stale, BUSINESS, CUSTOMER, '2026-07-01').balancePoints).toBe(500n);
     expect(eligiblePoints(stale, BUSINESS, CUSTOMER, '2026-07-01')).toBe(0n);
-    expect(() => buildSaleConsumptionMovement(stale, inSale({ asOf: '2026-07-01', points: 1n }))).toThrow(
-      /no longer available at commit time/,
-    );
+    expect(() => buildSaleConsumptionMovement(stale, inSale({ asOf: '2026-07-01', points: 1n }))).toThrow(/no longer available at commit time/);
   });
 
   it('F-2 — a sale that aborts consumes zero points: the draft is never appended', () => {
@@ -730,11 +659,7 @@ describe('RED PROOFS — the laws, proved by breaking them', () => {
     // The broken appender: append whatever it is handed. This is what the
     // absence of `loyalty_point_movements_identity_uq` would look like.
     const naive: LoyaltyLedger = {
-      movements: [
-        ...base.movements,
-        { ...draft, pointSeq: 2n },
-        { ...draft, id: 'c1-retry', pointSeq: 3n },
-      ],
+      movements: [...base.movements, { ...draft, pointSeq: 2n }, { ...draft, id: 'c1-retry', pointSeq: 3n }],
     };
     expect(foldBalance(naive, BUSINESS, CUSTOMER, '2026-12-31').balancePoints).toBe(400n);
 
@@ -749,11 +674,7 @@ describe('RED PROOFS — the laws, proved by breaking them', () => {
     // §4.3's forcing argument, made executable. Two lots: an old one that is
     // about to expire and a newer one. The customer has spent exactly one
     // lot's worth.
-    const ledger = ledgerOf(
-      earn('e1', 50n, '2026-01-01', '2027-01-01'),
-      earn('e2', 50n, '2026-01-02', '2029-01-01'),
-      consume('c1', 50n, '2026-06-01'),
-    );
+    const ledger = ledgerOf(earn('e1', 50n, '2026-01-01', '2027-01-01'), earn('e2', 50n, '2026-01-02', '2029-01-01'), consume('c1', 50n, '2026-06-01'));
     const asOf = '2027-01-01';
     const balance = foldBalance(ledger, BUSINESS, CUSTOMER, asOf).balancePoints;
     expect(balance).toBe(50n);
@@ -792,9 +713,7 @@ describe('RED PROOFS — the laws, proved by breaking them', () => {
 
   it('RED PROOF — a naive SUM(earn) sweep over-expires an adjusted balance', () => {
     const ledger = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'), adjust('a1', -30n, '2026-06-01', 'clawback'));
-    const naiveSumOfEarns = ledger.movements
-      .filter((m) => m.movementKind === 'earn')
-      .reduce((acc, m) => acc + m.pointsDelta, 0n);
+    const naiveSumOfEarns = ledger.movements.filter((m) => m.movementKind === 'earn').reduce((acc, m) => acc + m.pointsDelta, 0n);
     const balance = foldBalance(ledger, BUSINESS, CUSTOMER, '2027-01-01').balancePoints;
     expect(naiveSumOfEarns).toBe(100n);
     expect(balance).toBe(70n);
@@ -905,9 +824,7 @@ describe('foldExpiry — F-01, a positive row that CORRECTS another has no attri
         if (m.pointsDelta < 0n) draw += -m.pointsDelta;
         else unhorizoned += m.pointsDelta;
       }
-      const lots = rows
-        .filter((m) => m.movementKind === 'earn')
-        .map((m) => ({ expiresOn: must(m.expiresOn, 'an earn horizon'), remaining: m.pointsDelta }));
+      const lots = rows.filter((m) => m.movementKind === 'earn').map((m) => ({ expiresOn: must(m.expiresOn, 'an earn horizon'), remaining: m.pointsDelta }));
       for (const lot of lots) {
         const take = lot.remaining < draw ? lot.remaining : draw;
         lot.remaining -= take;
@@ -968,12 +885,14 @@ describe('foldExpiry — F-01, a positive row that CORRECTS another has no attri
     // The one positive non-earn shape that is MEANT to have no horizon: the
     // merchant's goodwill grant, with `correctsId === null`. The fix must not
     // take it away, and the field must say that none of it is lot-backed.
-    const ledger = ledgerOf(
-      earn('e1', 100n, '2025-06-01', '2026-06-01'),
-      adjust('a1', 40n, '2025-09-01', 'merchant goodwill'),
-    );
+    const ledger = ledgerOf(earn('e1', 100n, '2025-06-01', '2026-06-01'), adjust('a1', 40n, '2025-09-01', 'merchant goodwill'));
     const onHorizon = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-06-01');
-    expect(must(ledger.movements.find((m) => m.id === 'a1'), 'the grant').correctsId).toBeNull();
+    expect(
+      must(
+        ledger.movements.find((m) => m.id === 'a1'),
+        'the grant',
+      ).correctsId,
+    ).toBeNull();
     expect(onHorizon.balancePoints).toBe(140n);
     expect(onHorizon.expiringPoints).toBe(100n);
     expect(onHorizon.spendablePoints).toBe(40n);
@@ -992,10 +911,7 @@ describe('foldExpiry — F-01, a positive row that CORRECTS another has no attri
     // §1.4 makes the marker of a correction, and what the round-1 fix could
     // not see.
     const grant = ledgerOf(earn('e1', 100n, '2025-06-01', '2026-06-01'), adjust('a1', 40n, '2025-09-01', 'goodwill'));
-    const correction = ledgerOf(
-      earn('e1', 100n, '2025-06-01', '2026-06-01'),
-      adjust('a1', 40n, '2025-09-01', 'goodwill', 'e1'),
-    );
+    const correction = ledgerOf(earn('e1', 100n, '2025-06-01', '2026-06-01'), adjust('a1', 40n, '2025-09-01', 'goodwill', 'e1'));
     const asGrant = foldExpiry(grant, BUSINESS, CUSTOMER, '2026-06-01');
     const asCorrection = foldExpiry(correction, BUSINESS, CUSTOMER, '2026-06-01');
     expect(asGrant.unhorizonedPoints).toBe(40n);
@@ -1019,23 +935,37 @@ describe('foldExpiry — F-01, a positive row that CORRECTS another has no attri
     const byHand: LoyaltyLedger = {
       movements: [
         {
-          id: 'e1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
-          movementKind: 'earn', sourceType: 'sale', sourceId: 'sale-earn',
-          pointsDelta: 100n, expiresOn: '2026-06-01', effectiveOn: '2025-06-01',
-          reason: null, correctsId: null,
+          id: 'e1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 1n,
+          movementKind: 'earn',
+          sourceType: 'sale',
+          sourceId: 'sale-earn',
+          pointsDelta: 100n,
+          expiresOn: '2026-06-01',
+          effectiveOn: '2025-06-01',
+          reason: null,
+          correctsId: null,
         },
         {
-          id: 'x1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 2n,
-          movementKind: 'adjust', sourceType: 'sale', sourceId: 'sale-spend',
-          pointsDelta: 40n, expiresOn: null, effectiveOn: '2025-09-02',
-          reason: 'a source no registry admits yet', correctsId: null,
+          id: 'x1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 2n,
+          movementKind: 'adjust',
+          sourceType: 'sale',
+          sourceId: 'sale-spend',
+          pointsDelta: 40n,
+          expiresOn: null,
+          effectiveOn: '2025-09-02',
+          reason: 'a source no registry admits yet',
+          correctsId: null,
         },
       ],
     };
     expect(SOURCE_KIND_PAIRS).not.toContain('sale:adjust');
-    expect(refusalCodeOf(() => foldExpiry(byHand, BUSINESS, CUSTOMER, '2026-06-01'))).toBe(
-      'loyalty.unattributable_positive_movement',
-    );
+    expect(refusalCodeOf(() => foldExpiry(byHand, BUSINESS, CUSTOMER, '2026-06-01'))).toBe('loyalty.unattributable_positive_movement');
   });
 
   it('reports zero un-horizoned points for a ledger that has none', () => {
@@ -1066,7 +996,8 @@ describe('buildReversalMovement — F-11, a reversal cannot omit what it correct
 
   it('always writes `correctsId`, because it is a required field of its request', () => {
     const ledger = base();
-    const draft = buildReversalMovement(ledger, { ...partyCount(ledger), 
+    const draft = buildReversalMovement(ledger, {
+      ...partyCount(ledger),
       businessId: BUSINESS,
       customerId: CUSTOMER,
       sourceId: 'sale-c1',
@@ -1101,12 +1032,10 @@ describe('buildReversalMovement — F-11, a reversal cannot omit what it correct
       movementId: 'r1',
       reason: 'sale fully reversed',
     };
-    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, correctsId: 'nope' }))).toBe(
+    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger), ...request, correctsId: 'nope' }))).toBe(
       'loyalty.corrects_unknown_movement',
     );
-    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, correctsId: 'r1' }))).toBe(
-      'loyalty.corrects_self',
-    );
+    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger), ...request, correctsId: 'r1' }))).toBe('loyalty.corrects_self');
   });
 
   it('RED PROOF — the hole that remains: a hand-written reversal WITHOUT `correctsId` is immortal', () => {
@@ -1143,7 +1072,8 @@ describe('buildReversalMovement — F-11, a reversal cannot omit what it correct
     // that does not name one is indistinguishable from a grant.
     const named = appendMovement(
       base(),
-      buildReversalMovement(base(), { ...partyCount(base()), 
+      buildReversalMovement(base(), {
+        ...partyCount(base()),
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId: 'sale-c1',
@@ -1183,7 +1113,8 @@ describe('eligiblePoints — F-13, a lawful reversal withholds its own quantity 
     const ledger = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'), consume('c1', 40n, '2026-03-01'));
     return appendMovement(
       ledger,
-      buildReversalMovement(ledger, { ...partyCount(ledger), 
+      buildReversalMovement(ledger, {
+        ...partyCount(ledger),
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId: 'sale-c1',
@@ -1240,9 +1171,7 @@ describe('eligiblePoints — F-13, a lawful reversal withholds its own quantity 
   it('still refuses the 40 it withheld — withholding is not permitting', () => {
     const ledger = reversedInsideHorizon();
     for (const points of [61n, 70n, 100n]) {
-      expect(refusalCodeOf(() => buildSaleConsumptionMovement(ledger, spend(points)))).toBe(
-        'loyalty.insufficient_eligible_points',
-      );
+      expect(refusalCodeOf(() => buildSaleConsumptionMovement(ledger, spend(points)))).toBe('loyalty.insufficient_eligible_points');
     }
     // The refusal states the bound it enforced, so the 40 are visibly absent
     // from what was offered rather than silently added to it.
@@ -1300,7 +1229,8 @@ describe('eligiblePoints — F-13, a lawful reversal withholds its own quantity 
     const reverse = (ledger: LoyaltyLedger, target: string, points: bigint, id: string, day: string) =>
       appendMovement(
         ledger,
-        buildReversalMovement(ledger, { ...partyCount(ledger), 
+        buildReversalMovement(ledger, {
+          ...partyCount(ledger),
           businessId: BUSINESS,
           customerId: CUSTOMER,
           sourceId: `sale-${target}`,
@@ -1333,9 +1263,7 @@ describe('eligiblePoints — F-13, a lawful reversal withholds its own quantity 
     expect(after.unattributablePoints).toBe(40n);
     expect(after.spendablePoints).toBe(0n);
     expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, '2027-01-01')).toBe(0n);
-    expect(refusalCodeOf(() => buildSaleConsumptionMovement(ledger, { ...spend(1n), asOf: '2027-01-01' }))).toBe(
-      'loyalty.insufficient_eligible_points',
-    );
+    expect(refusalCodeOf(() => buildSaleConsumptionMovement(ledger, { ...spend(1n), asOf: '2027-01-01' }))).toBe('loyalty.insufficient_eligible_points');
   });
 });
 
@@ -1372,14 +1300,12 @@ describe('foldExpiry — F-14, a reversal withholds only the part its target dre
    *  40 that SPANS both — eligible was exactly 40, so the writer allowed it —
    *  and that sale fully returned. */
   function grantAndLotSpanned(spend: bigint): LoyaltyLedger {
-    let ledger = ledgerOf(
-      adjust('g1', 30n, '2026-01-01', 'merchant goodwill'),
-      earn('e1', 10n, '2026-01-02', '2027-01-01'),
-    );
+    let ledger = ledgerOf(adjust('g1', 30n, '2026-01-01', 'merchant goodwill'), earn('e1', 10n, '2026-01-02', '2027-01-01'));
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(spend, '2026-01-03', 'c1'))).ledger;
     return appendMovement(
       ledger,
-      buildReversalMovement(ledger, { ...partyCount(ledger), 
+      buildReversalMovement(ledger, {
+        ...partyCount(ledger),
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId: 'sale-c1',
@@ -1436,9 +1362,7 @@ describe('foldExpiry — F-14, a reversal withholds only the part its target dre
         else if (m.correctsId !== null) unattributable += m.pointsDelta;
         else unhorizoned += m.pointsDelta;
       }
-      const lots = rows
-        .filter((m) => m.movementKind === 'earn')
-        .map((m) => ({ expiresOn: must(m.expiresOn, 'an earn horizon'), remaining: m.pointsDelta }));
+      const lots = rows.filter((m) => m.movementKind === 'earn').map((m) => ({ expiresOn: must(m.expiresOn, 'an earn horizon'), remaining: m.pointsDelta }));
       for (const lot of lots) {
         const take = lot.remaining < draw ? lot.remaining : draw;
         lot.remaining -= take;
@@ -1501,7 +1425,8 @@ describe('foldExpiry — F-14, a reversal withholds only the part its target dre
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-02', 'c1'))).ledger;
     ledger = appendMovement(
       ledger,
-      buildReversalMovement(ledger, { ...partyCount(ledger), 
+      buildReversalMovement(ledger, {
+        ...partyCount(ledger),
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId: 'sale-c1',
@@ -1516,10 +1441,7 @@ describe('foldExpiry — F-14, a reversal withholds only the part its target dre
     expect(withTheReturn.unattributablePoints).toBe(40n);
     expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, '2026-06-01')).toBe(60n);
 
-    ledger = appendMovement(
-      ledger,
-      adjust('x1', -40n, '2026-01-05', 'the return was itself cancelled; the sale stands', 'r1'),
-    ).ledger;
+    ledger = appendMovement(ledger, adjust('x1', -40n, '2026-01-05', 'the return was itself cancelled; the sale stands', 'r1')).ledger;
     const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-06-01');
     expect(fold.balancePoints).toBe(60n);
     // The withheld quantity is DISCHARGED by the row that cancels it, and the
@@ -1550,7 +1472,8 @@ describe('foldExpiry — F-14, a reversal withholds only the part its target dre
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(45n, '2026-01-03', 'c1'))).ledger;
     ledger = appendMovement(
       ledger,
-      buildReversalMovement(ledger, { ...partyCount(ledger), 
+      buildReversalMovement(ledger, {
+        ...partyCount(ledger),
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId: 'sale-c1',
@@ -1681,17 +1604,7 @@ describe('foldExpiry — the property the challenge probed, as a deterministic c
         }
         for (const lot of before.lots
           .slice()
-          .sort((a, b) =>
-            a.expiresOn < b.expiresOn
-              ? -1
-              : a.expiresOn > b.expiresOn
-                ? 1
-                : a.pointSeq < b.pointSeq
-                  ? -1
-                  : a.pointSeq > b.pointSeq
-                    ? 1
-                    : 0,
-          )) {
+          .sort((a, b) => (a.expiresOn < b.expiresOn ? -1 : a.expiresOn > b.expiresOn ? 1 : a.pointSeq < b.pointSeq ? -1 : a.pointSeq > b.pointSeq ? 1 : 0))) {
           if (left <= 0n) break;
           const take = smaller(lot.remainingPoints, left);
           expectedLots.set(lot.movementId, lot.remainingPoints - take);
@@ -1745,15 +1658,12 @@ describe('foldExpiry — the property the challenge probed, as a deterministic c
       if (after.balancePoints !== before.balancePoints + m.pointsDelta) {
         bad.push(`${m.id}: balance expected ${before.balancePoints + m.pointsDelta}, fold says ${after.balancePoints}`);
       }
-      const spendable =
-        after.lots.reduce((acc, l) => (l.expiresOn > asOf ? acc + l.remainingPoints : acc), 0n) +
-        after.unhorizonedPoints;
+      const spendable = after.lots.reduce((acc, l) => (l.expiresOn > asOf ? acc + l.remainingPoints : acc), 0n) + after.unhorizonedPoints;
       if (after.spendablePoints !== spendable) {
         bad.push(`${m.id}: spendable expected ${spendable}, fold says ${after.spendablePoints}`);
       }
       const expiring = after.lots.reduce((acc, l) => (l.expiresOn <= asOf ? acc + l.remainingPoints : acc), 0n);
-      const boundedExpiring =
-        expiring > after.balancePoints ? (after.balancePoints > 0n ? after.balancePoints : 0n) : expiring;
+      const boundedExpiring = expiring > after.balancePoints ? (after.balancePoints > 0n ? after.balancePoints : 0n) : expiring;
       if (after.expiringPoints !== boundedExpiring) {
         bad.push(`${m.id}: expiring expected ${boundedExpiring}, fold says ${after.expiringPoints}`);
       }
@@ -1807,17 +1717,9 @@ describe('foldExpiry — the property the challenge probed, as a deterministic c
             // shape `F-16`'s defect lived in. The generator produced none of
             // these before, so the store the defect moved points out of was
             // never exercised by this case at all.
-            const credit = ledger.movements.find(
-              (m) =>
-                m.pointsDelta > 0n &&
-                m.correctsId !== null &&
-                !ledger.movements.some((o) => o.correctsId === m.id),
-            );
+            const credit = ledger.movements.find((m) => m.pointsDelta > 0n && m.correctsId !== null && !ledger.movements.some((o) => o.correctsId === m.id));
             if (credit === undefined) continue;
-            ledger = appendMovement(
-              ledger,
-              adjust(`x${seq}`, -credit.pointsDelta, day, 'the return was itself cancelled; the sale stands', credit.id),
-            ).ledger;
+            ledger = appendMovement(ledger, adjust(`x${seq}`, -credit.pointsDelta, day, 'the return was itself cancelled; the sale stands', credit.id)).ledger;
             withNegativeCorrections += 1;
           } else {
             const target = ledger.movements.find((m) => m.movementKind === 'consume' && m.correctsId === null);
@@ -1845,7 +1747,8 @@ describe('foldExpiry — the property the challenge probed, as a deterministic c
             if (ledger.movements.some((m) => m.correctsId === target.id)) continue;
             ledger = appendMovement(
               ledger,
-              buildReversalMovement(ledger, { ...partyCount(ledger), 
+              buildReversalMovement(ledger, {
+                ...partyCount(ledger),
                 businessId: BUSINESS,
                 customerId: CUSTOMER,
                 sourceId: target.sourceId,
@@ -1931,15 +1834,13 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       reason: 'sale fully reversed',
     };
     for (const points of [41n, 50n, 500n, 1000000n]) {
-      expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points }))).toBe(
-        'loyalty.corrects_more_than_target',
-      );
+      expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger), ...request, points }))).toBe('loyalty.corrects_more_than_target');
     }
     // The bound is the row's own magnitude and not a partial-return rule:
     // `§5.7.4` leaves the quantity of a partial return to configuration, so
     // anything up to what the row took is still built.
-    expect(buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points: 40n }).pointsDelta).toBe(40n);
-    expect(buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points: 1n }).pointsDelta).toBe(1n);
+    expect(buildReversalMovement(ledger, { ...partyCount(ledger), ...request, points: 40n }).pointsDelta).toBe(40n);
+    expect(buildReversalMovement(ledger, { ...partyCount(ledger), ...request, points: 1n }).pointsDelta).toBe(1n);
 
     // F-22 — AND THE DATE. This case exists because a mutation run found the
     // ordering guard was written with no case behind it: removing it reddened
@@ -1948,12 +1849,12 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // visible at a date its target is not, so the fold reads a restoration of a
     // draw that has not happened yet and withholds the whole quantity — the
     // conservative answer to a row that should not exist.
-    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points: 40n, asOf: '2026-01-01' }))).toBe(
+    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...partyCount(ledger), ...request, points: 40n, asOf: '2026-01-01' }))).toBe(
       'loyalty.corrects_out_of_order',
     );
     // The boundary itself is lawful: a correction ON its target's own date is
     // built, because §4.1's dates are civil dates and carry no time of day.
-    expect(buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points: 40n, asOf: '2026-01-02' }).pointsDelta).toBe(40n);
+    expect(buildReversalMovement(ledger, { ...partyCount(ledger), ...request, points: 40n, asOf: '2026-01-02' }).pointsDelta).toBe(40n);
 
     // AND THE HARM THE GUARD STOPS, hand-built because the writer now refuses
     // it and the DDL still permits it. The challenge measured a consumption
@@ -1966,22 +1867,46 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     const outOfOrder: LoyaltyLedger = {
       movements: [
         {
-          id: 'e9', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
-          movementKind: 'earn', sourceType: 'sale', sourceId: 'sale-e9',
-          pointsDelta: 100n, expiresOn: '2027-01-01', effectiveOn: '2026-01-01',
-          reason: null, correctsId: null,
+          id: 'e9',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 1n,
+          movementKind: 'earn',
+          sourceType: 'sale',
+          sourceId: 'sale-e9',
+          pointsDelta: 100n,
+          expiresOn: '2027-01-01',
+          effectiveOn: '2026-01-01',
+          reason: null,
+          correctsId: null,
         },
         {
-          id: 'c9', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 2n,
-          movementKind: 'consume', sourceType: 'sale', sourceId: 'sale-c9',
-          pointsDelta: -40n, expiresOn: null, effectiveOn: '2026-09-01',
-          reason: null, correctsId: null,
+          id: 'c9',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 2n,
+          movementKind: 'consume',
+          sourceType: 'sale',
+          sourceId: 'sale-c9',
+          pointsDelta: -40n,
+          expiresOn: null,
+          effectiveOn: '2026-09-01',
+          reason: null,
+          correctsId: null,
         },
         {
-          id: 'r9', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-r9',
-          pointsDelta: 40n, expiresOn: null, effectiveOn: '2026-03-01',
-          reason: 'sale fully reversed', correctsId: 'c9',
+          id: 'r9',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 3n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-r9',
+          pointsDelta: 40n,
+          expiresOn: null,
+          effectiveOn: '2026-03-01',
+          reason: 'sale fully reversed',
+          correctsId: 'c9',
         },
       ],
     };
@@ -2000,12 +1925,12 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // partial restorations cannot together exceed the whole.
     const half = appendMovement(
       ledger,
-      buildReversalMovement(ledger, { ...partyCount(ledger),  ...request, points: 30n, movementId: 'r1', sourceId: 'desk-1' }),
+      buildReversalMovement(ledger, { ...partyCount(ledger), ...request, points: 30n, movementId: 'r1', sourceId: 'desk-1' }),
     ).ledger;
-    expect(refusalCodeOf(() => buildReversalMovement(half, { ...partyCount(half),  ...request, points: 11n, movementId: 'r2', sourceId: 'desk-2' }))).toBe(
+    expect(refusalCodeOf(() => buildReversalMovement(half, { ...partyCount(half), ...request, points: 11n, movementId: 'r2', sourceId: 'desk-2' }))).toBe(
       'loyalty.corrects_more_than_target',
     );
-    expect(buildReversalMovement(half, { ...partyCount(half),  ...request, points: 10n, movementId: 'r2', sourceId: 'desk-2' }).pointsDelta).toBe(10n);
+    expect(buildReversalMovement(half, { ...partyCount(half), ...request, points: 10n, movementId: 'r2', sourceId: 'desk-2' }).pointsDelta).toBe(10n);
   });
 
   it('F-23 — the bound is on the MAGNITUDE of the row named, at every sign', () => {
@@ -2025,9 +1950,16 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       return l;
     })();
     const ask = (ledger: LoyaltyLedger, correctsId: string, points: bigint, id = 'x1') =>
-      buildReversalMovement(ledger, { ...partyCount(ledger), 
-        businessId: BUSINESS, customerId: CUSTOMER, sourceId: `desk-${id}`, correctsId, points,
-        asOf: '2026-01-03', movementId: id, reason: 'desk correction',
+      buildReversalMovement(ledger, {
+        ...partyCount(ledger),
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId: `desk-${id}`,
+        correctsId,
+        points,
+        asOf: '2026-01-03',
+        movementId: id,
+        reason: 'desk correction',
       });
 
     // A NEGATIVE target: the law as it already stood.
@@ -2062,10 +1994,18 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       movements: [
         ...base.movements,
         {
-          id: 'd1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-d1',
-          pointsDelta: -40n, expiresOn: null, effectiveOn: '2026-01-02',
-          reason: 'a second desk movement against the same consumption', correctsId: 'c1',
+          id: 'd1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 3n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-d1',
+          pointsDelta: -40n,
+          expiresOn: null,
+          effectiveOn: '2026-01-02',
+          reason: 'a second desk movement against the same consumption',
+          correctsId: 'c1',
         },
       ],
     };
@@ -2081,18 +2021,38 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       movements: [
         ...base.movements,
         {
-          id: 'z1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-z1',
-          pointsDelta: 0n, expiresOn: null, effectiveOn: '2026-01-02',
-          reason: 'a row the ledger itself would refuse', correctsId: null,
+          id: 'z1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 3n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-z1',
+          pointsDelta: 0n,
+          expiresOn: null,
+          effectiveOn: '2026-01-02',
+          reason: 'a row the ledger itself would refuse',
+          correctsId: null,
         },
       ],
     };
-    expect(refusalCodeOf(() => appendMovement(base, {
-      id: 'z9', businessId: BUSINESS, customerId: CUSTOMER, movementKind: 'adjust',
-      sourceType: 'manual_adjustment', sourceId: 'adj-z9', pointsDelta: 0n,
-      expiresOn: null, effectiveOn: '2026-01-02', reason: 'nothing', correctsId: null,
-    }))).toBe('loyalty.movement_would_be_zero');
+    expect(
+      refusalCodeOf(() =>
+        appendMovement(base, {
+          id: 'z9',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-z9',
+          pointsDelta: 0n,
+          expiresOn: null,
+          effectiveOn: '2026-01-02',
+          reason: 'nothing',
+          correctsId: null,
+        }),
+      ),
+    ).toBe('loyalty.movement_would_be_zero');
     expect(refusalCodeOf(() => ask(withZero, 'z1', 1n))).toBe('loyalty.corrects_more_than_target');
   });
 
@@ -2114,9 +2074,16 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     let ledger = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'));
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-02', 'c1'))).ledger;
     const link = (l: LoyaltyLedger, correctsId: string, id: string, points: bigint) =>
-      buildReversalMovement(l, { ...partyCount(l), 
-        businessId: BUSINESS, customerId: CUSTOMER, sourceId: `desk-${id}`, correctsId, points,
-        asOf: '2026-01-03', movementId: id, reason: 'desk correction',
+      buildReversalMovement(l, {
+        ...partyCount(l),
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId: `desk-${id}`,
+        correctsId,
+        points,
+        asOf: '2026-01-03',
+        movementId: id,
+        reason: 'desk correction',
       });
 
     // THE WHOLE CHAIN, AT ITS BOUND. The first link restores the draw's 40 and
@@ -2147,10 +2114,18 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       movements: [
         ...first.movements,
         {
-          id: 'z0', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 4n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-z0',
-          pointsDelta: -40n, expiresOn: null, effectiveOn: '2026-01-03',
-          reason: 'the restoration was itself cancelled', correctsId: 'x0',
+          id: 'z0',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 4n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-z0',
+          pointsDelta: -40n,
+          expiresOn: null,
+          effectiveOn: '2026-01-03',
+          reason: 'the restoration was itself cancelled',
+          correctsId: 'x0',
         },
       ],
     };
@@ -2163,10 +2138,18 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       movements: [
         ...ledger.movements,
         {
-          id: 'q0', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-q0',
-          pointsDelta: 0n, expiresOn: null, effectiveOn: '2026-01-02',
-          reason: 'a row the ledger itself would refuse', correctsId: null,
+          id: 'q0',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 3n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-q0',
+          pointsDelta: 0n,
+          expiresOn: null,
+          effectiveOn: '2026-01-02',
+          reason: 'a row the ledger itself would refuse',
+          correctsId: null,
         },
       ],
     };
@@ -2179,10 +2162,18 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       movements: [
         ...ledger.movements,
         {
-          id: 'u0', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-u0',
-          pointsDelta: 40n, expiresOn: null, effectiveOn: '2026-01-03',
-          reason: 'a correction whose target is not in this read', correctsId: 'not-in-this-ledger',
+          id: 'u0',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 3n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-u0',
+          pointsDelta: 40n,
+          expiresOn: null,
+          effectiveOn: '2026-01-03',
+          reason: 'a correction whose target is not in this read',
+          correctsId: 'not-in-this-ledger',
         },
       ],
     };
@@ -2195,14 +2186,32 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       movements: [
         ...ledger.movements,
         {
-          id: 'p1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-p1',
-          pointsDelta: 10n, expiresOn: null, effectiveOn: '2026-01-03', reason: 'p', correctsId: 'p2',
+          id: 'p1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 3n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-p1',
+          pointsDelta: 10n,
+          expiresOn: null,
+          effectiveOn: '2026-01-03',
+          reason: 'p',
+          correctsId: 'p2',
         },
         {
-          id: 'p2', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 4n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-p2',
-          pointsDelta: 10n, expiresOn: null, effectiveOn: '2026-01-03', reason: 'q', correctsId: 'p1',
+          id: 'p2',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 4n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-p2',
+          pointsDelta: 10n,
+          expiresOn: null,
+          effectiveOn: '2026-01-03',
+          reason: 'q',
+          correctsId: 'p1',
         },
       ],
     };
@@ -2220,10 +2229,18 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
         movements: [
           ...byHand.movements,
           {
-            id: `h${i}`, businessId: BUSINESS, customerId: CUSTOMER, pointSeq: BigInt(3 + i),
-            movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: `adj-h${i}`,
-            pointsDelta: 100n, expiresOn: null, effectiveOn: '2026-01-03',
-            reason: 'a desk chain', correctsId: handTarget,
+            id: `h${i}`,
+            businessId: BUSINESS,
+            customerId: CUSTOMER,
+            pointSeq: BigInt(3 + i),
+            movementKind: 'adjust',
+            sourceType: 'manual_adjustment',
+            sourceId: `adj-h${i}`,
+            pointsDelta: 100n,
+            expiresOn: null,
+            effectiveOn: '2026-01-03',
+            reason: 'a desk chain',
+            correctsId: handTarget,
           },
         ],
       };
@@ -2242,7 +2259,10 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // OF THAT ROW have already moved. Asked about a chain where each link names
     // the one before it, it accepts every link — which is the finding.
     const perLink = (movements: readonly LoyaltyMovement[], correctsId: string, points: bigint): string => {
-      const corrected = must(movements.find((m) => m.id === correctsId), 'the corrected row');
+      const corrected = must(
+        movements.find((m) => m.id === correctsId),
+        'the corrected row',
+      );
       const moved = corrected.pointsDelta < 0n ? -corrected.pointsDelta : corrected.pointsDelta;
       const alreadyMoved = movements
         .filter((m) => m.correctsId === corrected.id)
@@ -2251,22 +2271,40 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     };
 
     // A 100-point earn and 10 000 links of 100, each correcting the one before.
-    const rows: LoyaltyMovement[] = [{
-      id: 'e1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
-      movementKind: 'earn', sourceType: 'sale', sourceId: 'sale-e1',
-      pointsDelta: 100n, expiresOn: '2027-01-01', effectiveOn: '2026-01-01',
-      reason: null, correctsId: null,
-    }];
+    const rows: LoyaltyMovement[] = [
+      {
+        id: 'e1',
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        pointSeq: 1n,
+        movementKind: 'earn',
+        sourceType: 'sale',
+        sourceId: 'sale-e1',
+        pointsDelta: 100n,
+        expiresOn: '2027-01-01',
+        effectiveOn: '2026-01-01',
+        reason: null,
+        correctsId: null,
+      },
+    ];
     let target = 'e1';
     let accepted = 0;
     for (let i = 0; i < 10000; i += 1) {
       // The predicate is asked about the chain as it stands, link by link.
       if (perLink(rows, target, 100n) === '(accepted)') accepted += 1;
       rows.push({
-        id: `n${i}`, businessId: BUSINESS, customerId: CUSTOMER, pointSeq: BigInt(2 + i),
-        movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: `adj-n${i}`,
-        pointsDelta: 100n, expiresOn: null, effectiveOn: '2026-01-03',
-        reason: 'a desk chain', correctsId: target,
+        id: `n${i}`,
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        pointSeq: BigInt(2 + i),
+        movementKind: 'adjust',
+        sourceType: 'manual_adjustment',
+        sourceId: `adj-n${i}`,
+        pointsDelta: 100n,
+        expiresOn: null,
+        effectiveOn: '2026-01-03',
+        reason: 'a desk chain',
+        correctsId: target,
       });
       target = `n${i}`;
     }
@@ -2276,26 +2314,58 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
 
     // The chain invariant refuses the SECOND link of that same chain, by name.
     const twoRows: LoyaltyLedger = { movements: [must(rows[0], 'the earn'), must(rows[1], 'the first link')] };
-    expect(refusalCodeOf(() => buildReversalMovement(twoRows, { ...partyCount(twoRows), 
-      businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-2', correctsId: 'n0',
-      points: 1n, asOf: '2026-01-03', movementId: 'n1', reason: 'desk correction',
-    }))).toBe('loyalty.corrects_more_than_target');
+    expect(
+      refusalCodeOf(() =>
+        buildReversalMovement(twoRows, {
+          ...partyCount(twoRows),
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          sourceId: 'desk-2',
+          correctsId: 'n0',
+          points: 1n,
+          asOf: '2026-01-03',
+          movementId: 'n1',
+          reason: 'desk correction',
+        }),
+      ),
+    ).toBe('loyalty.corrects_more_than_target');
 
     // And the other figure the per-link bound produced: two links on a lawful
     // 1,000,000-point earn, which is the one that needs no patience at all.
     const bigEarn = ledgerOf(earn('e9', 1000000n, '2026-01-01', '2027-01-01'));
-    const one = appendMovement(bigEarn, buildReversalMovement(bigEarn, { ...partyCount(bigEarn), 
-      businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-b1', correctsId: 'e9',
-      points: 1000000n, asOf: '2026-01-03', movementId: 'b1', reason: 'desk correction',
-    })).ledger;
+    const one = appendMovement(
+      bigEarn,
+      buildReversalMovement(bigEarn, {
+        ...partyCount(bigEarn),
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId: 'desk-b1',
+        correctsId: 'e9',
+        points: 1000000n,
+        asOf: '2026-01-03',
+        movementId: 'b1',
+        reason: 'desk correction',
+      }),
+    ).ledger;
     expect(perLink(one.movements, 'b1', 1000000n)).toBe('(accepted)');
-    expect(refusalCodeOf(() => buildReversalMovement(one, { ...partyCount(one), 
-      businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-b2', correctsId: 'b1',
-      points: 1000000n, asOf: '2026-01-03', movementId: 'b2', reason: 'desk correction',
-    }))).toBe('loyalty.corrects_more_than_target');
+    expect(
+      refusalCodeOf(() =>
+        buildReversalMovement(one, {
+          ...partyCount(one),
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          sourceId: 'desk-b2',
+          correctsId: 'b1',
+          points: 1000000n,
+          asOf: '2026-01-03',
+          movementId: 'b2',
+          reason: 'desk correction',
+        }),
+      ),
+    ).toBe('loyalty.corrects_more_than_target');
   });
 
-  it('F-26 — the target is found by the DECLARED key, so one business cannot decide another\'s refusals', () => {
+  it("F-26 — the target is found by the DECLARED key, so one business cannot decide another's refusals", () => {
     // `§1.3` keys the relation `(business_id, id)` and there is no global unique
     // on `id`, so two businesses may hold one movement id — the case RLS case 9
     // exists for. This writer matched on `id` alone, and both arms were
@@ -2307,16 +2377,30 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // which is why this was a residual and not a blocker — and it is still one
     // party's writes deciding another's refusals.
     const row = (businessId: string, id: string, seq: bigint, delta: bigint, correctsId: string | null = null): LoyaltyMovement => ({
-      id, businessId, customerId: CUSTOMER, pointSeq: seq,
+      id,
+      businessId,
+      customerId: CUSTOMER,
+      pointSeq: seq,
       movementKind: delta < 0n ? 'consume' : 'adjust',
-      sourceType: delta < 0n ? 'sale' : 'manual_adjustment', sourceId: `src-${businessId}-${id}`,
-      pointsDelta: delta, expiresOn: null, effectiveOn: '2026-01-02',
-      reason: delta < 0n ? null : 'desk', correctsId,
+      sourceType: delta < 0n ? 'sale' : 'manual_adjustment',
+      sourceId: `src-${businessId}-${id}`,
+      pointsDelta: delta,
+      expiresOn: null,
+      effectiveOn: '2026-01-02',
+      reason: delta < 0n ? null : 'desk',
+      correctsId,
     });
     const ask = (ledger: LoyaltyLedger, points: bigint) =>
-      buildReversalMovement(ledger, { ...partyCount(ledger), 
-        businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1', correctsId: 'm1', points,
-        asOf: '2026-01-03', movementId: 'r1', reason: 'desk correction',
+      buildReversalMovement(ledger, {
+        ...partyCount(ledger),
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId: 'desk-1',
+        correctsId: 'm1',
+        points,
+        asOf: '2026-01-03',
+        movementId: 'r1',
+        reason: 'desk correction',
       });
 
     // The sibling business's row comes FIRST, which is what made `find` pick it.
@@ -2325,11 +2409,7 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
 
     // And the other party's corrections are not counted into this bound.
     const alsoCorrected: LoyaltyLedger = {
-      movements: [
-        row(BUSINESS, 'm1', 1n, -40n),
-        row('biz-2', 'm1', 1n, -40n),
-        row('biz-2', 'r9', 2n, 40n, 'm1'),
-      ],
+      movements: [row(BUSINESS, 'm1', 1n, -40n), row('biz-2', 'm1', 1n, -40n), row('biz-2', 'r9', 2n, 40n, 'm1')],
     };
     expect(ask(alsoCorrected, 1n).pointsDelta).toBe(1n);
     expect(ask(alsoCorrected, 40n).pointsDelta).toBe(40n);
@@ -2365,15 +2445,28 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       return l;
     })();
     const first = buildReversalMovement(base, {
-      ...partyCount(base), businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1',
-      correctsId: 'c1', points: 40n, asOf: '2026-01-03', movementId: 'r1', reason: 'first',
+      ...partyCount(base),
+      businessId: BUSINESS,
+      customerId: CUSTOMER,
+      sourceId: 'desk-1',
+      correctsId: 'c1',
+      points: 40n,
+      asOf: '2026-01-03',
+      movementId: 'r1',
+      reason: 'first',
     });
     const full = appendMovement(base, first).ledger;
     const second = (ledger: LoyaltyLedger, count: number) =>
       buildReversalMovement(ledger, {
-        storedPartyMovementCount: count, businessId: BUSINESS, customerId: CUSTOMER,
-        sourceId: 'desk-2', correctsId: 'c1', points: 40n, asOf: '2026-01-05',
-        movementId: 'r2', reason: 'second',
+        storedPartyMovementCount: count,
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId: 'desk-2',
+        correctsId: 'c1',
+        points: 40n,
+        asOf: '2026-01-05',
+        movementId: 'r2',
+        reason: 'second',
       });
 
     // The full ledger refuses it: the chain has already moved the root's 40.
@@ -2416,15 +2509,28 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     let base = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'));
     base = appendMovement(base, buildSaleConsumptionMovement(base, sale(40n, '2026-01-02', 'c1'))).ledger;
     const first = buildReversalMovement(base, {
-      ...partyCount(base), businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1',
-      correctsId: 'c1', points: 40n, asOf: '2026-01-03', movementId: 'r1', reason: 'first',
+      ...partyCount(base),
+      businessId: BUSINESS,
+      customerId: CUSTOMER,
+      sourceId: 'desk-1',
+      correctsId: 'c1',
+      points: 40n,
+      asOf: '2026-01-03',
+      movementId: 'r1',
+      reason: 'first',
     });
     const full = appendMovement(base, first).ledger;
     const second = (ledger: LoyaltyLedger, count: number) =>
       buildReversalMovement(ledger, {
-        storedPartyMovementCount: count, businessId: BUSINESS, customerId: CUSTOMER,
-        sourceId: 'desk-2', correctsId: 'c1', points: 40n, asOf: '2026-01-05',
-        movementId: 'r2', reason: 'second',
+        storedPartyMovementCount: count,
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId: 'desk-2',
+        correctsId: 'c1',
+        points: 40n,
+        asOf: '2026-01-05',
+        movementId: 'r2',
+        reason: 'second',
       });
 
     expect(full.movements).toHaveLength(3);
@@ -2436,10 +2542,18 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       movements: [
         ...full.movements.filter((m) => m.id !== 'r1'),
         {
-          id: 'e2', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 9n,
-          movementKind: 'earn', sourceType: 'manual_adjustment', sourceId: 'desk-pad',
-          pointsDelta: 10n, expiresOn: '2027-06-01', effectiveOn: '2026-01-04',
-          reason: 'goodwill', correctsId: null,
+          id: 'e2',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 9n,
+          movementKind: 'earn',
+          sourceType: 'manual_adjustment',
+          sourceId: 'desk-pad',
+          pointsDelta: 10n,
+          expiresOn: '2027-06-01',
+          effectiveOn: '2026-01-04',
+          reason: 'goodwill',
+          correctsId: null,
         },
       ],
     };
@@ -2469,11 +2583,18 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // passed, rc 1. So neither filter is reported as witnessed on its own, and
     // both are reported as witnessed together.
     const row = (businessId: string, id: string, seq: bigint, delta: bigint, correctsId: string | null = null): LoyaltyMovement => ({
-      id, businessId, customerId: CUSTOMER, pointSeq: seq,
+      id,
+      businessId,
+      customerId: CUSTOMER,
+      pointSeq: seq,
       movementKind: delta < 0n ? 'consume' : 'adjust',
-      sourceType: delta < 0n ? 'sale' : 'manual_adjustment', sourceId: `src-${businessId}-${id}`,
-      pointsDelta: delta, expiresOn: null, effectiveOn: '2026-01-02',
-      reason: delta < 0n ? null : 'desk', correctsId,
+      sourceType: delta < 0n ? 'sale' : 'manual_adjustment',
+      sourceId: `src-${businessId}-${id}`,
+      pointsDelta: delta,
+      expiresOn: null,
+      effectiveOn: '2026-01-02',
+      reason: delta < 0n ? null : 'desk',
+      correctsId,
     });
 
     // One id, two parties (`§1.3`: the relation is keyed `(business_id, id)` and
@@ -2492,9 +2613,16 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       ],
     };
     const ask = (points: bigint) =>
-      buildReversalMovement(ledger, { ...partyCount(ledger), 
-        businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1', correctsId: 'm1', points,
-        asOf: '2026-01-03', movementId: 'r1', reason: 'desk correction',
+      buildReversalMovement(ledger, {
+        ...partyCount(ledger),
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId: 'desk-1',
+        correctsId: 'm1',
+        points,
+        asOf: '2026-01-03',
+        movementId: 'r1',
+        reason: 'desk correction',
       });
 
     // This party's own chain is empty, so its whole 100 is available: the
@@ -2532,21 +2660,36 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     const DEPTH = 40;
     const movements: LoyaltyMovement[] = [
       {
-        id: 'root', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
-        movementKind: 'consume', sourceType: 'sale', sourceId: 'sale-root',
-        pointsDelta: -100n, expiresOn: null, effectiveOn: '2026-01-01',
-        reason: null, correctsId: null,
+        id: 'root',
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        pointSeq: 1n,
+        movementKind: 'consume',
+        sourceType: 'sale',
+        sourceId: 'sale-root',
+        pointsDelta: -100n,
+        expiresOn: null,
+        effectiveOn: '2026-01-01',
+        reason: null,
+        correctsId: null,
       },
     ];
     for (let level = 1; level <= DEPTH; level += 1) {
       const parent = level === 1 ? 'root' : `L${level - 1}`;
       for (const twin of [0, 1]) {
         movements.push({
-          id: `L${level}`, businessId: BUSINESS, customerId: CUSTOMER,
-          pointSeq: BigInt(level * 2 + twin + 1), movementKind: 'adjust',
-          sourceType: 'manual_adjustment', sourceId: `desk-${level}-${twin}`,
-          pointsDelta: 0n, expiresOn: null, effectiveOn: '2026-01-02',
-          reason: 'twin', correctsId: parent,
+          id: `L${level}`,
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: BigInt(level * 2 + twin + 1),
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: `desk-${level}-${twin}`,
+          pointsDelta: 0n,
+          expiresOn: null,
+          effectiveOn: '2026-01-02',
+          reason: 'twin',
+          correctsId: parent,
         });
       }
     }
@@ -2554,9 +2697,15 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     expect(twinned.movements).toHaveLength(DEPTH * 2 + 1);
     const ask = (ledger: LoyaltyLedger) =>
       buildReversalMovement(ledger, {
-        ...partyCount(ledger), businessId: BUSINESS, customerId: CUSTOMER,
-        sourceId: 'desk-1', correctsId: 'root', points: 100n, asOf: '2026-01-03',
-        movementId: 'r1', reason: 'desk correction',
+        ...partyCount(ledger),
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId: 'desk-1',
+        correctsId: 'root',
+        points: 100n,
+        asOf: '2026-01-03',
+        movementId: 'r1',
+        reason: 'desk correction',
       });
 
     // Refused by name, and it returns at once: nothing walks 2^40 anything.
@@ -2566,10 +2715,7 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // refusal is about the duplicate and not about the size of the chain. Every
     // delta is 0, so the root's whole 100 is still available.
     const distinct: LoyaltyLedger = {
-      movements: movements.map((m, index) =>
-        m.correctsId === null
-          ? m
-          : { ...m, id: `D${index}`, correctsId: index <= 2 ? 'root' : `D${index - 2}` }),
+      movements: movements.map((m, index) => (m.correctsId === null ? m : { ...m, id: `D${index}`, correctsId: index <= 2 ? 'root' : `D${index - 2}` })),
     };
     expect(ask(distinct).pointsDelta).toBe(100n);
 
@@ -2578,10 +2724,7 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     const twinOfAnotherParty = distinct.movements.find((m) => m.correctsId === 'root');
     expect(twinOfAnotherParty).toBeDefined();
     const foreign: LoyaltyLedger = {
-      movements: [
-        ...distinct.movements,
-        { ...(twinOfAnotherParty as LoyaltyMovement), businessId: 'biz-2' },
-      ],
+      movements: [...distinct.movements, { ...(twinOfAnotherParty as LoyaltyMovement), businessId: 'biz-2' }],
     };
     expect(ask(foreign).pointsDelta).toBe(100n);
   });
@@ -2596,12 +2739,13 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       return l;
     })();
     const broken = (ledger: LoyaltyLedger, correctsId: string, points: bigint): string => {
-      const corrected = must(ledger.movements.find((m) => m.id === correctsId), 'the corrected row');
+      const corrected = must(
+        ledger.movements.find((m) => m.id === correctsId),
+        'the corrected row',
+      );
       if (corrected.pointsDelta < 0n) {
         const taken = -corrected.pointsDelta;
-        const alreadyRestored = ledger.movements
-          .filter((m) => m.correctsId === corrected.id && m.pointsDelta > 0n)
-          .reduce((acc, m) => acc + m.pointsDelta, 0n);
+        const alreadyRestored = ledger.movements.filter((m) => m.correctsId === corrected.id && m.pointsDelta > 0n).reduce((acc, m) => acc + m.pointsDelta, 0n);
         if (alreadyRestored + points > taken) return 'loyalty.corrects_more_than_target';
       }
       return '(accepted)';
@@ -2610,10 +2754,21 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     expect(broken(base, 'c1', 41n)).toBe('loyalty.corrects_more_than_target');
     expect(broken(base, 'e1', 1000000n)).toBe('(accepted)');
     // The real one refuses both, by name.
-    expect(refusalCodeOf(() => buildReversalMovement(base, { ...partyCount(base), 
-      businessId: BUSINESS, customerId: CUSTOMER, sourceId: 'desk-1', correctsId: 'e1',
-      points: 1000000n, asOf: '2026-01-03', movementId: 'x1', reason: 'desk correction',
-    }))).toBe('loyalty.corrects_more_than_target');
+    expect(
+      refusalCodeOf(() =>
+        buildReversalMovement(base, {
+          ...partyCount(base),
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          sourceId: 'desk-1',
+          correctsId: 'e1',
+          points: 1000000n,
+          asOf: '2026-01-03',
+          movementId: 'x1',
+          reason: 'desk correction',
+        }),
+      ),
+    ).toBe('loyalty.corrects_more_than_target');
 
     // AND THE FIGURE THE BROKEN WRITER PRODUCED, which is still what the
     // relation permits past this package: 1,000,000 points naming the earn.
@@ -2621,10 +2776,18 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       movements: [
         ...base.movements,
         {
-          id: 'x1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-x1',
-          pointsDelta: 1000000n, expiresOn: null, effectiveOn: '2026-01-03',
-          reason: 'a desk correction naming the earn', correctsId: 'e1',
+          id: 'x1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 3n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-x1',
+          pointsDelta: 1000000n,
+          expiresOn: null,
+          effectiveOn: '2026-01-03',
+          reason: 'a desk correction naming the earn',
+          correctsId: 'e1',
         },
       ],
     };
@@ -2655,10 +2818,18 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       movements: [
         ...ledger.movements,
         {
-          id: 'r1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-r1',
-          pointsDelta: 50n, expiresOn: null, effectiveOn: '2026-01-03',
-          reason: 'ten more than the consumption took', correctsId: 'c1',
+          id: 'r1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 3n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-r1',
+          pointsDelta: 50n,
+          expiresOn: null,
+          effectiveOn: '2026-01-03',
+          reason: 'ten more than the consumption took',
+          correctsId: 'c1',
         },
       ],
     };
@@ -2684,16 +2855,32 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     const byHand: LoyaltyLedger = {
       movements: [
         {
-          id: 'a1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-a1',
-          pointsDelta: -30n, expiresOn: null, effectiveOn: '2026-01-01',
-          reason: 'a draw with nothing yet to draw on', correctsId: null,
+          id: 'a1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 1n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-a1',
+          pointsDelta: -30n,
+          expiresOn: null,
+          effectiveOn: '2026-01-01',
+          reason: 'a draw with nothing yet to draw on',
+          correctsId: null,
         },
         {
-          id: 'e1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 2n,
-          movementKind: 'earn', sourceType: 'sale', sourceId: 'sale-e1',
-          pointsDelta: 100n, expiresOn: '2027-01-01', effectiveOn: '2026-01-02',
-          reason: null, correctsId: null,
+          id: 'e1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 2n,
+          movementKind: 'earn',
+          sourceType: 'sale',
+          sourceId: 'sale-e1',
+          pointsDelta: 100n,
+          expiresOn: '2027-01-01',
+          effectiveOn: '2026-01-02',
+          reason: null,
+          correctsId: null,
         },
       ],
     };
@@ -2715,13 +2902,26 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     // that reaches it: a claim of 50, then a lot of 20 — which settles 20 and
     // stops — then a grant of 40, which settles the remaining 30.
     const row = (
-      id: string, seq: bigint, kind: 'adjust' | 'earn', delta: bigint, day: string,
-      expiresOn: string | null, reason: string | null,
+      id: string,
+      seq: bigint,
+      kind: 'adjust' | 'earn',
+      delta: bigint,
+      day: string,
+      expiresOn: string | null,
+      reason: string | null,
     ): LoyaltyMovement => ({
-      id, businessId: BUSINESS, customerId: CUSTOMER, pointSeq: seq,
-      movementKind: kind, sourceType: kind === 'earn' ? 'sale' : 'manual_adjustment',
-      sourceId: `src-${id}`, pointsDelta: delta, expiresOn, effectiveOn: day,
-      reason, correctsId: null,
+      id,
+      businessId: BUSINESS,
+      customerId: CUSTOMER,
+      pointSeq: seq,
+      movementKind: kind,
+      sourceType: kind === 'earn' ? 'sale' : 'manual_adjustment',
+      sourceId: `src-${id}`,
+      pointsDelta: delta,
+      expiresOn,
+      effectiveOn: day,
+      reason,
+      correctsId: null,
     });
     const claim = row('a1', 1n, 'adjust', -50n, '2026-01-01', null, 'a draw with nothing yet to draw on');
     const lot = row('e1', 2n, 'earn', 20n, '2026-01-02', '2027-01-01', null);
@@ -2757,10 +2957,18 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     const byHand: LoyaltyLedger = {
       movements: [
         {
-          id: 'a1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-a1',
-          pointsDelta: -30n, expiresOn: null, effectiveOn: '2026-01-01',
-          reason: 'an overdraw', correctsId: null,
+          id: 'a1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 1n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-a1',
+          pointsDelta: -30n,
+          expiresOn: null,
+          effectiveOn: '2026-01-01',
+          reason: 'an overdraw',
+          correctsId: null,
         },
       ],
     };
@@ -2796,16 +3004,21 @@ describe('foldExpiry — a target cannot fund two restorations with the same poi
     // that is all (`§1.4`), so a desk correction booked twice against one sale
     // from two sources is an ordinary human error, and the DDL item in §A.3c.3
     // is what would stop it at the database.
-    let ledger = ledgerOf(
-      adjust('g1', 30n, '2026-01-01', 'merchant goodwill'),
-      earn('e1', 10n, '2026-01-02', '2027-01-01'),
-    );
+    let ledger = ledgerOf(adjust('g1', 30n, '2026-01-01', 'merchant goodwill'), earn('e1', 10n, '2026-01-02', '2027-01-01'));
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-03', 'c1'))).ledger;
     const byHand = (id: string, seq: bigint, day: string, source: string): LoyaltyMovement => ({
-      id, businessId: BUSINESS, customerId: CUSTOMER, pointSeq: seq,
-      movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: source,
-      pointsDelta: 40n, expiresOn: null, effectiveOn: day,
-      reason: 'sale fully reversed', correctsId: 'c1',
+      id,
+      businessId: BUSINESS,
+      customerId: CUSTOMER,
+      pointSeq: seq,
+      movementKind: 'adjust',
+      sourceType: 'manual_adjustment',
+      sourceId: source,
+      pointsDelta: 40n,
+      expiresOn: null,
+      effectiveOn: day,
+      reason: 'sale fully reversed',
+      correctsId: 'c1',
     });
     ledger = {
       movements: [...ledger.movements, byHand('r1', 4n, '2026-01-04', 'adj-r1'), byHand('r2', 5n, '2026-01-05', 'adj-r2')],
@@ -2829,13 +3042,11 @@ describe('foldExpiry — a target cannot fund two restorations with the same poi
     // source id, kind), so a second correction naming the SAME source is
     // absorbed by `appendMovement` as the duplicate it is. The double refund
     // that reaches the ledger is the one booked against a second source.
-    let ledger = ledgerOf(
-      adjust('g1', 30n, '2026-01-01', 'merchant goodwill'),
-      earn('e1', 10n, '2026-01-02', '2027-01-01'),
-    );
+    let ledger = ledgerOf(adjust('g1', 30n, '2026-01-01', 'merchant goodwill'), earn('e1', 10n, '2026-01-02', '2027-01-01'));
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-03', 'c1'))).ledger;
     const reversal = (movementId: string, asOf: string, sourceId: string, points: bigint) =>
-      buildReversalMovement(ledger, { ...partyCount(ledger), 
+      buildReversalMovement(ledger, {
+        ...partyCount(ledger),
         businessId: BUSINESS,
         customerId: CUSTOMER,
         sourceId,
@@ -2855,9 +3066,7 @@ describe('foldExpiry — a target cannot fund two restorations with the same poi
     ledger = second.ledger;
     // 25 + 15 is the whole of the 40 that was taken, and one point more is
     // refused by the writer's own bound.
-    expect(refusalCodeOf(() => reversal('r3', '2026-01-06', 'desk-correction-3', 1n))).toBe(
-      'loyalty.corrects_more_than_target',
-    );
+    expect(refusalCodeOf(() => reversal('r3', '2026-01-06', 'desk-correction-3', 1n))).toBe('loyalty.corrects_more_than_target');
 
     const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-06-01');
     expect(fold.balancePoints).toBe(40n);
@@ -2874,22 +3083,46 @@ describe('foldExpiry — a target cannot fund two restorations with the same poi
     const byHand: LoyaltyLedger = {
       movements: [
         {
-          id: 'g1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 1n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-g1',
-          pointsDelta: 20n, expiresOn: null, effectiveOn: '2026-01-01',
-          reason: 'merchant goodwill', correctsId: null,
+          id: 'g1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 1n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-g1',
+          pointsDelta: 20n,
+          expiresOn: null,
+          effectiveOn: '2026-01-01',
+          reason: 'merchant goodwill',
+          correctsId: null,
         },
         {
-          id: 'c1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 2n,
-          movementKind: 'consume', sourceType: 'sale', sourceId: 'sale-c1',
-          pointsDelta: -50n, expiresOn: null, effectiveOn: '2026-01-02',
-          reason: null, correctsId: null,
+          id: 'c1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 2n,
+          movementKind: 'consume',
+          sourceType: 'sale',
+          sourceId: 'sale-c1',
+          pointsDelta: -50n,
+          expiresOn: null,
+          effectiveOn: '2026-01-02',
+          reason: null,
+          correctsId: null,
         },
         {
-          id: 'r1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
-          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-r1',
-          pointsDelta: 20n, expiresOn: null, effectiveOn: '2026-01-03',
-          reason: 'part of that sale returned', correctsId: 'c1',
+          id: 'r1',
+          businessId: BUSINESS,
+          customerId: CUSTOMER,
+          pointSeq: 3n,
+          movementKind: 'adjust',
+          sourceType: 'manual_adjustment',
+          sourceId: 'adj-r1',
+          pointsDelta: 20n,
+          expiresOn: null,
+          effectiveOn: '2026-01-03',
+          reason: 'part of that sale returned',
+          correctsId: 'c1',
         },
       ],
     };

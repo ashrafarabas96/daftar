@@ -36,7 +36,6 @@ function must<T>(value: T | undefined | null, what: string): T {
   return value;
 }
 
-
 const line = (lineId: string, netTxnMinor: bigint, qtyQ4: bigint): AllocatableLine => ({ lineId, netTxnMinor, qtyQ4 });
 
 const REMAINDER_DESTINATIONS: readonly RemainderDestination[] = ['largest_basis_first', 'first_line_first', 'last_line_first'];
@@ -134,8 +133,7 @@ describe('allocateRedemption — the conservation law of sale-payloads.ts:317', 
   it('is deterministic: the same inputs give byte-identical output', () => {
     const lines = must(BASKETS[0], 'BASKETS entry').lines;
     for (const policy of ALL_POLICIES) {
-      const render = (): string =>
-        JSON.stringify(allocateRedemption(199n, lines, policy).lines.map((l) => [l.lineId, l.allocatedMinor.toString()]));
+      const render = (): string => JSON.stringify(allocateRedemption(199n, lines, policy).lines.map((l) => [l.lineId, l.allocatedMinor.toString()]));
       expect(render()).toBe(render());
       expect(render()).toBe(render());
     }
@@ -145,8 +143,8 @@ describe('allocateRedemption — the conservation law of sale-payloads.ts:317', 
     // 10 minor units over three equal lines: 3 each proportionally, 1 left.
     const lines = [line('a', 100n, 10000n), line('b', 100n, 20000n), line('c', 100n, 30000n)];
     const at = (destination: RemainderDestination): string[] =>
-      allocateRedemption(10n, lines, { basis: 'pro_rata_by_net', remainderTo: destination }).lines
-        .filter((l) => l.allocatedMinor === 4n)
+      allocateRedemption(10n, lines, { basis: 'pro_rata_by_net', remainderTo: destination })
+        .lines.filter((l) => l.allocatedMinor === 4n)
         .map((l) => l.lineId);
 
     expect(at('first_line_first')).toEqual(['a']);
@@ -202,9 +200,7 @@ describe('allocateRedemption — refusals, never a rounded-into-existence value'
 
   it('refuses a zero-capacity basket asked to absorb anything', () => {
     const zeroes = [line('a', 0n, 10000n), line('b', 0n, 10000n)];
-    expect(() => allocateRedemption(1n, zeroes, { basis: 'pro_rata_by_net', remainderTo: 'largest_basis_first' })).toThrow(
-      LoyaltyRefusal,
-    );
+    expect(() => allocateRedemption(1n, zeroes, { basis: 'pro_rata_by_net', remainderTo: 'largest_basis_first' })).toThrow(LoyaltyRefusal);
     // Zero over a zero-capacity basket is lawful and allocates nothing.
     const nothing = allocateRedemption(0n, zeroes, { basis: 'by_quantity', remainderTo: 'largest_basis_first' });
     expect(nothing.totalAllocatedMinor).toBe(0n);

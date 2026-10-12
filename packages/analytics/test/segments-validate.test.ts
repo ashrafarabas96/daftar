@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AnalyticsRefusal } from '../src/errors';
-import {
-  type AttrName,
-  type AttributeSpec,
-  type Comparator,
-  type Predicate,
-} from '../src/segments/predicate';
+import { type AttrName, type AttributeSpec, type Comparator, type Predicate } from '../src/segments/predicate';
 import {
   type AuthorityPresence,
   type CostBoundConfig,
@@ -101,9 +96,7 @@ describe('an admissible predicate, and what its certificate refuses to be', () =
 
   it('never answers with a boolean: the only two outcomes are a certificate or a refusal', () => {
     expect(typeof validatePredicate(STATUS_ACTIVE, INPUT)).toBe('object');
-    expect(refusalOf(() => validatePredicate(OPTED_IN, {} as unknown as ValidationInput))).toBeInstanceOf(
-      AnalyticsRefusal,
-    );
+    expect(refusalOf(() => validatePredicate(OPTED_IN, {} as unknown as ValidationInput))).toBeInstanceOf(AnalyticsRefusal);
   });
 });
 
@@ -186,8 +179,7 @@ describe('RED PROOF: the shape bounds refuse, and they refuse at the right place
   });
 
   it('admits 7 and 8 children on a boolean node and refuses 9', () => {
-    const children = (n: number): Predicate =>
-      allOf(...Array.from({ length: n }, () => leaf('customer.has_phone', 'is_true')));
+    const children = (n: number): Predicate => allOf(...Array.from({ length: n }, () => leaf('customer.has_phone', 'is_true')));
     expect(validatePredicate(children(7), INPUT).leafCount).toBe(7);
     expect(validatePredicate(children(8), INPUT).leafCount).toBe(8);
     const r = refusalOf(() => validatePredicate(children(9), INPUT));
@@ -203,7 +195,11 @@ describe('RED PROOF: the shape bounds refuse, and they refuse at the right place
 
   it('admits an `in` list of 31 and 32 elements and refuses 33', () => {
     const inList = (n: number): Predicate =>
-      leaf('customer.status', 'in', Array.from({ length: n }, () => 'active'));
+      leaf(
+        'customer.status',
+        'in',
+        Array.from({ length: n }, () => 'active'),
+      );
     expect(validatePredicate(inList(31), INPUT).leafCount).toBe(1);
     expect(validatePredicate(inList(32), INPUT).leafCount).toBe(1);
     const r = refusalOf(() => validatePredicate(inList(33), INPUT));
@@ -237,17 +233,13 @@ describe('RED PROOF: a predicate with no cost bound supplied is refused', () => 
 
   it('refuses a ceiling that is zero, negative, fractional or not a number: never unbounded', () => {
     for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '500']) {
-      const r = refusalOf(() =>
-        validatePredicate(STATUS_ACTIVE, { bounds: { candidateCeiling: bad } } as unknown as ValidationInput),
-      );
+      const r = refusalOf(() => validatePredicate(STATUS_ACTIVE, { bounds: { candidateCeiling: bad } } as unknown as ValidationInput));
       expect(r.context['bound'], `ceiling ${String(bad)} must be refused`).toBe('candidateCeiling');
     }
   });
 
   it('refuses the cheapest possible predicate too: no class is exempt from the configuration', () => {
-    const r = refusalOf(() =>
-      validatePredicate(leaf('customer.has_email', 'is_true'), { bounds: {} } as unknown as ValidationInput),
-    );
+    const r = refusalOf(() => validatePredicate(leaf('customer.has_email', 'is_true'), { bounds: {} } as unknown as ValidationInput));
     expect(r.context['bound']).toBe('candidateCeiling');
   });
 });
@@ -265,9 +257,7 @@ describe('RED PROOF: a predicate that would re-derive money is refused', () => {
   });
 
   it('refuses a money attribute whose figure CRM would recompute itself', () => {
-    const r = refusalOf(() =>
-      assertNoFinancialRederivation('insight.planted_recomputed_total', planted({ kind: 'recomputed_in_crm' })),
-    );
+    const r = refusalOf(() => assertNoFinancialRederivation('insight.planted_recomputed_total', planted({ kind: 'recomputed_in_crm' })));
     expect(r.code).toBe('analytics.predicate_not_servable');
     expect(r.context['law']).toBe('no_financial_rederivation');
     expect(r.context['origin']).toBe('recomputed_in_crm');
@@ -326,8 +316,7 @@ describe('RED PROOF: a predicate that would re-derive money is refused', () => {
  * ================================================================== */
 
 describe('the per-cost-class bounds the design states', () => {
-  const setLeaves = (n: number): Predicate =>
-    allOf(...Array.from({ length: n }, () => leaf('insight.sale_count_total', 'gte', 1)));
+  const setLeaves = (n: number): Predicate => allOf(...Array.from({ length: n }, () => leaf('insight.sale_count_total', 'gte', 1)));
 
   it('admits 3 and 4 set-based authority leaves and refuses 5', () => {
     expect(validatePredicate(setLeaves(3), INPUT).costProfile.AUTHORITY_SET).toBe(3);
@@ -346,11 +335,7 @@ describe('the per-cost-class bounds the design states', () => {
   });
 
   it('refuses a second per-customer leaf', () => {
-    const two = allOf(
-      STATUS_ACTIVE,
-      leaf('insight.ar_open_invoice_count', 'eq', 0),
-      leaf('insight.ar_outstanding_base_minor', 'eq', '0'),
-    );
+    const two = allOf(STATUS_ACTIVE, leaf('insight.ar_open_invoice_count', 'eq', 0), leaf('insight.ar_outstanding_base_minor', 'eq', '0'));
     const r = refusalOf(() => validatePredicate(two, { bounds: BOUNDS, narrowedCandidateCount: 10 }));
     expect(r.context['costClass']).toBe('AUTHORITY_PER_CUSTOMER');
     expect(r.context['limit']).toBe('1');
@@ -360,12 +345,8 @@ describe('the per-cost-class bounds the design states', () => {
   it('admits a narrowed set at the ceiling and one under, and refuses one over', () => {
     const at = validatePredicate(perCustomer, { bounds: BOUNDS, narrowedCandidateCount: CEILING_SUPPLIED_BY_TEST });
     expect(at.candidateCeilingApplied).toBe(CEILING_SUPPLIED_BY_TEST);
-    expect(() =>
-      validatePredicate(perCustomer, { bounds: BOUNDS, narrowedCandidateCount: CEILING_SUPPLIED_BY_TEST - 1 }),
-    ).not.toThrow();
-    const r = refusalOf(() =>
-      validatePredicate(perCustomer, { bounds: BOUNDS, narrowedCandidateCount: CEILING_SUPPLIED_BY_TEST + 1 }),
-    );
+    expect(() => validatePredicate(perCustomer, { bounds: BOUNDS, narrowedCandidateCount: CEILING_SUPPLIED_BY_TEST - 1 })).not.toThrow();
+    const r = refusalOf(() => validatePredicate(perCustomer, { bounds: BOUNDS, narrowedCandidateCount: CEILING_SUPPLIED_BY_TEST + 1 }));
     expect(r.context['ceiling']).toBe(String(CEILING_SUPPLIED_BY_TEST));
     expect(r.context['candidates']).toBe(String(CEILING_SUPPLIED_BY_TEST + 1));
   });
@@ -427,31 +408,21 @@ describe('literals and comparators', () => {
   });
 
   it('refuses a date that is well-formed but not a real date, and admits a real one', () => {
-    expect(refusalOf(() => validatePredicate(leaf('customer.created_on', 'on', '2026-02-30'), INPUT)).context['designCode']).toBe(
-      'segment.literal_invalid',
-    );
-    expect(refusalOf(() => validatePredicate(leaf('customer.created_on', 'on', '12/10/2026'), INPUT)).context['designCode']).toBe(
-      'segment.literal_invalid',
-    );
+    expect(refusalOf(() => validatePredicate(leaf('customer.created_on', 'on', '2026-02-30'), INPUT)).context['designCode']).toBe('segment.literal_invalid');
+    expect(refusalOf(() => validatePredicate(leaf('customer.created_on', 'on', '12/10/2026'), INPUT)).context['designCode']).toBe('segment.literal_invalid');
     expect(validatePredicate(leaf('customer.created_on', 'on_or_after', '2026-10-12'), INPUT).leafCount).toBe(1);
   });
 
   it('refuses a negative or fractional count literal', () => {
-    expect(refusalOf(() => validatePredicate(leaf('customer.contact_count', 'eq', -1), INPUT)).context['designCode']).toBe(
-      'segment.literal_invalid',
-    );
-    expect(refusalOf(() => validatePredicate(leaf('customer.contact_count', 'eq', 1.5), INPUT)).context['designCode']).toBe(
-      'segment.literal_invalid',
-    );
+    expect(refusalOf(() => validatePredicate(leaf('customer.contact_count', 'eq', -1), INPUT)).context['designCode']).toBe('segment.literal_invalid');
+    expect(refusalOf(() => validatePredicate(leaf('customer.contact_count', 'eq', 1.5), INPUT)).context['designCode']).toBe('segment.literal_invalid');
     expect(validatePredicate(leaf('customer.contact_count', 'eq', 0), INPUT).leafCount).toBe(1);
   });
 
   it('checks both operands of a `between`', () => {
     const ok = allOf(leaf('customer.created_on', 'between', ['2026-01-01', '2026-12-31']));
     expect(validatePredicate(ok, INPUT).leafCount).toBe(1);
-    const r = refusalOf(() =>
-      validatePredicate(leaf('customer.created_on', 'between', ['2026-01-01', 'not-a-date']), INPUT),
-    );
+    const r = refusalOf(() => validatePredicate(leaf('customer.created_on', 'between', ['2026-01-01', 'not-a-date']), INPUT));
     expect(r.context['designCode']).toBe('segment.literal_invalid');
     expect(refusalOf(() => validatePredicate(leaf('customer.created_on', 'between', ['2026-01-01']), INPUT)).context['designCode']).toBe(
       'segment.literal_invalid',
@@ -492,12 +463,8 @@ describe('a stored definition is revalidated on every evaluation', () => {
   });
 
   it('refuses malformed JSON and a non-object root', () => {
-    expect(refusalOf(() => validateSerialisedDefinition('{not json', INPUT)).code).toBe(
-      'analytics.predicate_not_servable',
-    );
-    expect(refusalOf(() => validateSerialisedDefinition('[]', INPUT)).context['designCode']).toBe(
-      'segment.literal_invalid',
-    );
+    expect(refusalOf(() => validateSerialisedDefinition('{not json', INPUT)).code).toBe('analytics.predicate_not_servable');
+    expect(refusalOf(() => validateSerialisedDefinition('[]', INPUT)).context['designCode']).toBe('segment.literal_invalid');
   });
 
   it('refuses a stored boolean node whose `of` is not an array', () => {

@@ -76,11 +76,9 @@ export interface Derived<T> {
  */
 export function assertFinancialAnswerShape(p: AnalyticsProvenance): asserts p is OnDemandProvenance {
   if (p.mode !== 'on_demand') {
-    refuse(
-      'analytics.scope_narrower_than_requested',
-      'a financial answer must carry on-demand provenance; a persisted surface may not stand in for it',
-      { mode: p.mode },
-    );
+    refuse('analytics.scope_narrower_than_requested', 'a financial answer must carry on-demand provenance; a persisted surface may not stand in for it', {
+      mode: p.mode,
+    });
   }
 }
 

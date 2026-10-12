@@ -92,11 +92,7 @@ export const LoyaltyRefusal = AnalyticsRefusal;
 export type LoyaltyRefusal = AnalyticsRefusal;
 
 /** Refuse with a loyalty code. Narrowed so a non-loyalty code is a type error here. */
-export function refuseLoyalty(
-  code: LoyaltyRefusalCode,
-  message: string,
-  context?: Readonly<Record<string, string>>,
-): never {
+export function refuseLoyalty(code: LoyaltyRefusalCode, message: string, context?: Readonly<Record<string, string>>): never {
   refuse(code, message, context);
 }
 
@@ -346,11 +342,7 @@ function requireRate(rate: LoyaltyRate | null | undefined, what: string): Loyalt
  * `rounding` is required and positional. There is no default and no overload
  * without it.
  */
-export function computeEarnedPoints(
-  eligibleBaseMinor: bigint,
-  config: LoyaltyEarningConfig | null | undefined,
-  rounding: RoundingMode,
-): bigint {
+export function computeEarnedPoints(eligibleBaseMinor: bigint, config: LoyaltyEarningConfig | null | undefined, rounding: RoundingMode): bigint {
   if (config === null || config === undefined) {
     refuseLoyalty('loyalty.unconfigured', 'this business has no loyalty earning configuration');
   }
@@ -372,11 +364,7 @@ export function computeEarnedPoints(
  * {@link LoyaltyConversionConfig} for why this is a shape and not a Phase 13
  * product path. `rounding` is required; `§5.6` item 1 is the open policy.
  */
-export function convertPointsToValueMinor(
-  points: bigint,
-  config: LoyaltyConversionConfig | null | undefined,
-  rounding: RoundingMode,
-): bigint {
+export function convertPointsToValueMinor(points: bigint, config: LoyaltyConversionConfig | null | undefined, rounding: RoundingMode): bigint {
   if (config === null || config === undefined) {
     refuseLoyalty('loyalty.unconfigured', 'this business has no configured points conversion, so it has no redemption capability');
   }
@@ -471,11 +459,7 @@ export function identityKey(identity: LoyaltyMovementIdentity): string {
  * The earn row for the same sale is a different `movementKind`, so the two
  * coexist and neither blocks the other.
  */
-export function saleConsumptionIdentity(
-  businessId: string,
-  saleId: string,
-  movementKind: LoyaltyMovementKind = 'consume',
-): LoyaltyMovementIdentity {
+export function saleConsumptionIdentity(businessId: string, saleId: string, movementKind: LoyaltyMovementKind = 'consume'): LoyaltyMovementIdentity {
   return { businessId, sourceType: 'sale', sourceId: saleId, movementKind };
 }
 
@@ -629,12 +613,7 @@ function visibleMovements(ledger: LoyaltyLedger, businessId: string, customerId:
     .sort((a, b) => (a.pointSeq < b.pointSeq ? -1 : a.pointSeq > b.pointSeq ? 1 : 0));
 }
 
-export function foldBalance(
-  ledger: LoyaltyLedger,
-  businessId: string,
-  customerId: string,
-  asOf: CivilDate,
-): LoyaltyBalance {
+export function foldBalance(ledger: LoyaltyLedger, businessId: string, customerId: string, asOf: CivilDate): LoyaltyBalance {
   const rows = visibleMovements(ledger, businessId, customerId, asOf);
   let earned = 0n;
   let expired = 0n;
@@ -752,12 +731,7 @@ export interface LoyaltyExpiryFold {
  * **The boundary convention** (`§4.2`): a point is spendable while
  * `asOf < expiresOn` and expired once `asOf >= expiresOn`.
  */
-export function foldExpiry(
-  ledger: LoyaltyLedger,
-  businessId: string,
-  customerId: string,
-  asOf: CivilDate,
-): LoyaltyExpiryFold {
+export function foldExpiry(ledger: LoyaltyLedger, businessId: string, customerId: string, asOf: CivilDate): LoyaltyExpiryFold {
   const rows = visibleMovements(ledger, businessId, customerId, asOf);
 
   // THE FOLD IS A SEQUENTIAL REPLAY, and a fifth challenge round is why.
@@ -838,11 +812,7 @@ export function foldExpiry(
     let best: LotState | undefined;
     for (const lot of lots) {
       if (lot.remaining <= 0n) continue;
-      if (
-        best === undefined ||
-        lot.expiresOn < best.expiresOn ||
-        (lot.expiresOn === best.expiresOn && lot.pointSeq < best.pointSeq)
-      ) {
+      if (best === undefined || lot.expiresOn < best.expiresOn || (lot.expiresOn === best.expiresOn && lot.pointSeq < best.pointSeq)) {
         best = lot;
       }
     }
@@ -1065,12 +1035,7 @@ export function foldExpiry(
  * This is a COUNT. It carries no currency, no amount and no rate, because a
  * field that could hold money here would eventually hold money (`§5.2`).
  */
-export function eligiblePoints(
-  ledger: LoyaltyLedger,
-  businessId: string,
-  customerId: string,
-  asOf: CivilDate,
-): bigint {
+export function eligiblePoints(ledger: LoyaltyLedger, businessId: string, customerId: string, asOf: CivilDate): bigint {
   const fold = foldExpiry(ledger, businessId, customerId, asOf);
   // `F-13`: the un-attributable quantity is subtracted here and not refused in
   // the fold. It is part of the balance and it is not offerable, so the only
@@ -1125,9 +1090,7 @@ export interface SaleCommittedEvent {
  * The result of an earn attempt. A discriminated union and not an exception,
  * and that is the whole point of this function's existence.
  */
-export type EarnAttempt =
-  | { readonly ok: true; readonly draft: LoyaltyMovementDraft }
-  | { readonly ok: false; readonly refusal: LoyaltyRefusal };
+export type EarnAttempt = { readonly ok: true; readonly draft: LoyaltyMovementDraft } | { readonly ok: false; readonly refusal: LoyaltyRefusal };
 
 /**
  * Builds the post-sale earn row, and **never throws**.
@@ -1146,11 +1109,7 @@ export type EarnAttempt =
  * re-presents the identical `(businessId, 'sale', saleId, 'earn')` identity and
  * {@link appendMovement} makes the second one a no-op.
  */
-export function tryBuildPostSaleEarnMovement(
-  event: SaleCommittedEvent,
-  config: LoyaltyEarningConfig | null | undefined,
-  rounding: RoundingMode,
-): EarnAttempt {
+export function tryBuildPostSaleEarnMovement(event: SaleCommittedEvent, config: LoyaltyEarningConfig | null | undefined, rounding: RoundingMode): EarnAttempt {
   try {
     if (event.phase !== 'after_sale_commit') {
       refuseLoyalty('loyalty.source_kind_pair_unregistered', 'an earn is built only from a committed sale event');
@@ -1396,19 +1355,16 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   // statement rather than a sentence in a comment. The count is the caller's,
   // taken from the store with no filter; the rows are what this call was given.
   if (!Number.isSafeInteger(request.storedPartyMovementCount) || request.storedPartyMovementCount < 0) {
-    refuseLoyalty('loyalty.ledger_count_not_stated',
-      'a reversal must state how many movements the store holds for this party', {
-        storedPartyMovementCount: String(request.storedPartyMovementCount),
-      });
+    refuseLoyalty('loyalty.ledger_count_not_stated', 'a reversal must state how many movements the store holds for this party', {
+      storedPartyMovementCount: String(request.storedPartyMovementCount),
+    });
   }
-  const heldForParty = ledger.movements.filter(
-    (m) => m.businessId === request.businessId && m.customerId === request.customerId,
-  ).length;
+  const heldForParty = ledger.movements.filter((m) => m.businessId === request.businessId && m.customerId === request.customerId).length;
   if (heldForParty !== request.storedPartyMovementCount) {
-    refuseLoyalty('loyalty.ledger_not_party_complete',
-      'the ledger handed to this writer is not the whole of this party\'s ledger', {
-        stated: String(request.storedPartyMovementCount), handedOver: String(heldForParty),
-      });
+    refuseLoyalty('loyalty.ledger_not_party_complete', "the ledger handed to this writer is not the whole of this party's ledger", {
+      stated: String(request.storedPartyMovementCount),
+      handedOver: String(heldForParty),
+    });
   }
   // `F-26` — THE TARGET IS FOUND BY THE DECLARED KEY, NOT BY `id` ALONE.
   //
@@ -1430,10 +1386,8 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   // fire, and a guard that cannot fire is a comment (`P13-AL-21`). The refusal
   // a cross-party target gets is the same one, by name, and the suite asserts
   // it for another business and for another customer.
-  const sameParty = (m: LoyaltyMovement): boolean =>
-    m.businessId === request.businessId && m.customerId === request.customerId;
-  const byDeclaredKey = (id: string): LoyaltyMovement | undefined =>
-    ledger.movements.find((m) => m.id === id && sameParty(m));
+  const sameParty = (m: LoyaltyMovement): boolean => m.businessId === request.businessId && m.customerId === request.customerId;
+  const byDeclaredKey = (id: string): LoyaltyMovement | undefined => ledger.movements.find((m) => m.id === id && sameParty(m));
 
   // `R12-02` — THE ARRAY MAY NOT CARRY A SHAPE THE RELATION FORBIDS.
   //
@@ -1459,11 +1413,15 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   for (const m of ledger.movements) {
     if (!sameParty(m)) continue;
     if (seenIds.has(m.id)) {
-      refuseLoyalty('loyalty.ledger_duplicate_movement_id', 'the ledger handed to this writer carries two movements of one party under one id, which the relation\'s key forbids', {
-        movementId: m.id,
-        businessId: request.businessId,
-        customerId: request.customerId,
-      });
+      refuseLoyalty(
+        'loyalty.ledger_duplicate_movement_id',
+        "the ledger handed to this writer carries two movements of one party under one id, which the relation's key forbids",
+        {
+          movementId: m.id,
+          businessId: request.businessId,
+          customerId: request.customerId,
+        },
+      );
     }
     seenIds.add(m.id);
   }
@@ -1697,9 +1655,7 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
   }
 
   const rootMagnitude = root.pointsDelta < 0n ? -root.pointsDelta : root.pointsDelta;
-  const movedByChain = ledger.movements
-    .filter((m) => sameParty(m) && m.correctsId !== null && chain.has(m.id))
-    .reduce((acc, m) => acc + m.pointsDelta, 0n);
+  const movedByChain = ledger.movements.filter((m) => sameParty(m) && m.correctsId !== null && chain.has(m.id)).reduce((acc, m) => acc + m.pointsDelta, 0n);
   const net = movedByChain + request.points;
   const netMagnitude = net < 0n ? -net : net;
   if (netMagnitude > rootMagnitude) {

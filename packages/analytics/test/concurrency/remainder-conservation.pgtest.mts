@@ -104,13 +104,7 @@ interface EmbeddedCluster {
   start(): Promise<void>;
   stop(): Promise<void>;
 }
-type EmbeddedClusterCtor = new (options: {
-  databaseDir: string;
-  user: string;
-  password: string;
-  port: number;
-  persistent: boolean;
-}) => EmbeddedCluster;
+type EmbeddedClusterCtor = new (options: { databaseDir: string; user: string; password: string; port: number; persistent: boolean }) => EmbeddedCluster;
 
 async function loadEmbeddedPostgres(): Promise<EmbeddedClusterCtor> {
   const specifier = ['embedded', 'postgres'].join('-');
@@ -315,15 +309,7 @@ class ExternalCluster implements EmbeddedCluster {
       chownSync(this.sockDir, Number(owner), Number(group));
     }
     assertLocaleAvailable();
-    this.run('initdb', [
-      '-D',
-      join(this.dataDir, 'data'),
-      `--locale=${PG_LOCALE}`,
-      '--encoding=UTF8',
-      '-U',
-      PG_USER,
-      '--auth=trust',
-    ]);
+    this.run('initdb', ['-D', join(this.dataDir, 'data'), `--locale=${PG_LOCALE}`, '--encoding=UTF8', '-U', PG_USER, '--auth=trust']);
   }
 
   async start(): Promise<void> {
@@ -362,8 +348,7 @@ async function settle<T>(fn: () => Promise<T>): Promise<Outcome<T>> {
     return { ok: true, value: await fn() };
   } catch (e) {
     const code = typeof e === 'object' && e !== null && 'code' in e && typeof e.code === 'string' ? e.code : null;
-    const constraint =
-      typeof e === 'object' && e !== null && 'constraint' in e && typeof e.constraint === 'string' ? e.constraint : null;
+    const constraint = typeof e === 'object' && e !== null && 'constraint' in e && typeof e.constraint === 'string' ? e.constraint : null;
     return { ok: false, code, constraint, message: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -413,10 +398,7 @@ async function waitUntilBlocked(admin: Pool, pid: number, what: string): Promise
 
 /** A point observation: is `pid` parked on a lock right now? Used to prove a statement did NOT block. */
 async function isBlocked(admin: Pool, pid: number): Promise<boolean> {
-  const r = await admin.query(
-    `SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock' AND state = 'active'`,
-    [pid],
-  );
+  const r = await admin.query(`SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock' AND state = 'active'`, [pid]);
   return r.rows.length > 0;
 }
 
@@ -633,12 +615,7 @@ const ADVISORY_NAMESPACE = 'daftar.loyalty_customer_id';
 const LOCK_SQL = `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2::text))`;
 
 /** An earn of `points`, as both a ledger row and the grant remainder it opens. */
-async function earn(
-  c: Client | Pool,
-  customerId: string,
-  points: bigint,
-  expiresOn: string,
-): Promise<{ grantId: string; pointSeq: string }> {
+async function earn(c: Client | Pool, customerId: string, points: bigint, expiresOn: string): Promise<{ grantId: string; pointSeq: string }> {
   const grantId = id();
   const m = await one<{ point_seq: string }>(
     c,
@@ -1259,11 +1236,7 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
              VALUES ($1, $2, $3, 'earn', 50, date '2026-03-01', date '2028-01-01')`,
           [newGrant, BUSINESS, customer],
         );
-        const seq = await one<{ point_seq: string }>(
-          earner,
-          `SELECT point_seq::text FROM p13_proof.point_movements WHERE id = $1`,
-          [newGrant],
-        );
+        const seq = await one<{ point_seq: string }>(earner, `SELECT point_seq::text FROM p13_proof.point_movements WHERE id = $1`, [newGrant]);
         await earner.query(
           `INSERT INTO p13_proof.point_grant_remainders (business_id, grant_id, point_seq, expires_on, granted_points, remaining_points)
              VALUES ($1, $2, $3, date '2028-01-01', 50, 50)`,
@@ -1332,10 +1305,7 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
           throw new Error(`6b: the failed earn disturbed the ledger: expected ${totalBefore - 70n}, observed ${totalAfter}`);
         }
         if (left !== 30n) throw new Error(`6b: expected 30 remaining, observed ${left}`);
-        const ghost = await admin.query(
-          `SELECT 1 FROM p13_proof.point_grant_remainders WHERE business_id = $1 AND grant_id = $2`,
-          [BUSINESS, newGrant],
-        );
+        const ghost = await admin.query(`SELECT 1 FROM p13_proof.point_grant_remainders WHERE business_id = $1 AND grant_id = $2`, [BUSINESS, newGrant]);
         note(`6b: rows left behind by the rolled-back earn: ${ghost.rows.length}`);
         if (ghost.rows.length !== 0) throw new Error('6b: the failed earn left a remainder row behind');
         note("6b: OUTCOME = the earn's failure was isolated; the committed sale is untouched");
@@ -1472,7 +1442,7 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
         note(`7b: a restoration of 1 point beyond what was granted: ${observed(over)}`);
         if (over.ok) throw new Error('7b: a grant was restored above what it granted');
         await settle(() => b.query('ROLLBACK'));
-        note('7b: OUTCOME = over-restoration refused by the remainder relation\'s own trigger — the law holds in BOTH directions');
+        note("7b: OUTCOME = over-restoration refused by the remainder relation's own trigger — the law holds in BOTH directions");
         note('7b: NOT MEASURED HERE, and deliberately: the PARTIAL return. §5.7.4 marks it');
         note('7b: WAITING_FOR_EXPLICIT_POLICY and writes no test case for it; neither does this proof');
       } finally {
@@ -1575,10 +1545,7 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
 
         const endTotal = await ledgerTotal(admin, customer);
         const left = await remaining(admin, grant.grantId);
-        const draws = await admin.query(
-          `SELECT 1 FROM p13_proof.point_draws WHERE business_id = $1 AND grant_id = $2`,
-          [BUSINESS, grant.grantId],
-        );
+        const draws = await admin.query(`SELECT 1 FROM p13_proof.point_draws WHERE business_id = $1 AND grant_id = $2`, [BUSINESS, grant.grantId]);
         note(`8b: ledger total ${startTotal} -> ${endTotal}; remainder = ${left}; draw rows on the grant = ${draws.rows.length}`);
         if (endTotal !== startTotal - 100n) {
           throw new Error(`8b: expected ONE consumption of 100, observed a total of ${endTotal}`);
@@ -1601,7 +1568,7 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
    * 9. The retry TERMINATES
    * ---------------------------------------------------------------- */
   {
-    name: 'case-9: the lock loser\'s re-bind retry terminates — it either spends or is refused, never loops',
+    name: "case-9: the lock loser's re-bind retry terminates — it either spends or is refused, never loops",
     /**
      * Case 4 showed the loser WAITS and re-binds. It did not show that the
      * re-bind ENDS. A mechanism whose loser re-reads and tries again is a
@@ -1922,9 +1889,7 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
       const probe = await session();
       try {
         await begin(probe);
-        const refusedWrite = await settle(() =>
-          probe.query('SELECT p13_proof.service_write($1, $2, $3)', [sibling, SIBLING, '-5']),
-        );
+        const refusedWrite = await settle(() => probe.query('SELECT p13_proof.service_write($1, $2, $3)', [sibling, SIBLING, '-5']));
         note(`11a: the SECURITY DEFINER write for a sibling business: ${observed(refusedWrite)}`);
         if (refusedWrite.ok) {
           throw new Error('11a: a definer write crossed the business boundary — the owner has an RLS exemption');
@@ -1951,17 +1916,9 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
         try {
           await begin(app);
           await app.query('SELECT p13_proof.service_write($1, $2, $3)', [rowId, BUSINESS, '-5']);
-          const before = await one<{ n: string }>(
-            app,
-            'SELECT count(*)::text AS n FROM p13_proof.deferred_shape WHERE id = $1',
-            [rowId],
-          );
+          const before = await one<{ n: string }>(app, 'SELECT count(*)::text AS n FROM p13_proof.deferred_shape WHERE id = $1', [rowId]);
           await app.query('SELECT set_config($1, $2, false)', ['app.business', SIBLING]);
-          const after = await one<{ n: string }>(
-            app,
-            'SELECT count(*)::text AS n FROM p13_proof.deferred_shape WHERE id = $1',
-            [rowId],
-          );
+          const after = await one<{ n: string }>(app, 'SELECT count(*)::text AS n FROM p13_proof.deferred_shape WHERE id = $1', [rowId]);
           note(`${label}: rows visible to this session — at insert ${before.n}, after the context moved ${after.n}`);
           if (before.n !== '1' || after.n !== '0') {
             throw new Error(`${label}: the fixture needs 1 then 0; observed ${before.n} then ${after.n}`);
@@ -2064,9 +2021,7 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
   },
 
   {
-    name:
-      'case-12: the DECLARED key shape is what makes the correction edge creatable, and the draw-to-grant ' +
-      'edge refuses a grant that does not exist',
+    name: 'case-12: the DECLARED key shape is what makes the correction edge creatable, and the draw-to-grant ' + 'edge refuses a grant that does not exist',
     /**
      * A cross-phase check against the frozen schema found both executed proofs
      * building the movements table on a simple `id` while the design declares
@@ -2300,9 +2255,7 @@ async function main(): Promise<number> {
   // as though a merge base had been used. The two lines above already read
   // `origin/main`; this one does too, with the local ref only as a fallback,
   // and the unresolvable case now says so in words instead of slicing one.
-  const mergeBase = ['origin/main', 'main']
-    .map((ref) => gitFact(['merge-base', 'HEAD', ref]))
-    .find((sha) => /^[0-9a-f]{40}$/.test(sha));
+  const mergeBase = ['origin/main', 'main'].map((ref) => gitFact(['merge-base', 'HEAD', ref])).find((sha) => /^[0-9a-f]{40}$/.test(sha));
   console.log(
     mergeBase === undefined
       ? 'migrations touched : NOT MEASURED \u2014 no merge base with main resolves in this clone (neither origin/main nor main), so no diff was run'

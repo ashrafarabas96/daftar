@@ -161,18 +161,16 @@ class Cluster {
       chownSync(join(PG_DIR, 'sock'), uid, gid);
     }
     assertLocaleAvailable();
-    this.run('initdb', [
-      '-D', join(PG_DIR, 'data'),
-      `--locale=${PG_LOCALE}`,
-      '--encoding=UTF8',
-      '-U', SUPER,
-      '--auth=trust',
-    ]);
+    this.run('initdb', ['-D', join(PG_DIR, 'data'), `--locale=${PG_LOCALE}`, '--encoding=UTF8', '-U', SUPER, '--auth=trust']);
     this.run('pg_ctl', [
-      '-D', join(PG_DIR, 'data'),
-      '-o', `'-p ${PG_PORT} -c listen_addresses=localhost -c unix_socket_directories=${join(PG_DIR, 'sock')}'`,
-      '-l', join(PG_DIR, 'server.log'),
-      'start', '-w',
+      '-D',
+      join(PG_DIR, 'data'),
+      '-o',
+      `'-p ${PG_PORT} -c listen_addresses=localhost -c unix_socket_directories=${join(PG_DIR, 'sock')}'`,
+      '-l',
+      join(PG_DIR, 'server.log'),
+      'start',
+      '-w',
     ]);
   }
 
@@ -189,9 +187,7 @@ class Cluster {
  * Helpers
  * ------------------------------------------------------------------ */
 
-type Outcome<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly code: string | null; readonly message: string };
+type Outcome<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly code: string | null; readonly message: string };
 
 async function settle<T>(fn: () => Promise<T>): Promise<Outcome<T>> {
   try {
@@ -424,16 +420,8 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
     fn: async (admin, note) => {
       const c = await asApp(TENANT_A, BUSINESS_A1);
       try {
-        const foreign = await one<{ n: string }>(
-          c,
-          `SELECT count(*)::text AS n FROM p13_rls.loyalty_point_movements WHERE business_id <> $1`,
-          [BUSINESS_A1],
-        );
-        const own = await one<{ n: string }>(
-          c,
-          `SELECT count(*)::text AS n FROM p13_rls.loyalty_point_movements WHERE business_id = $1`,
-          [BUSINESS_A1],
-        );
+        const foreign = await one<{ n: string }>(c, `SELECT count(*)::text AS n FROM p13_rls.loyalty_point_movements WHERE business_id <> $1`, [BUSINESS_A1]);
+        const own = await one<{ n: string }>(c, `SELECT count(*)::text AS n FROM p13_rls.loyalty_point_movements WHERE business_id = $1`, [BUSINESS_A1]);
         const truth = await one<{ sibling: string; own: string }>(
           admin,
           `SELECT
@@ -580,11 +568,7 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
       const scoped = await asApp(TENANT_A, BUSINESS_A1);
       try {
         const sibling = async (): Promise<number> => {
-          const r = await one<{ n: string }>(
-            scoped,
-            `SELECT count(*)::text AS n FROM p13_rls.loyalty_point_movements WHERE business_id = $1`,
-            [BUSINESS_A2],
-          );
+          const r = await one<{ n: string }>(scoped, `SELECT count(*)::text AS n FROM p13_rls.loyalty_point_movements WHERE business_id = $1`, [BUSINESS_A2]);
           return Number(r.n);
         };
         const before = await sibling();
@@ -630,12 +614,8 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
     fn: async (admin, note) => {
       const c = await asApp(TENANT_A, BUSINESS_A1);
       try {
-        const upd = await settle(() =>
-          c.query(`UPDATE p13_rls.loyalty_point_movements SET points_delta = 0 WHERE tenant_id = $1`, [TENANT_A]),
-        );
-        const del = await settle(() =>
-          c.query(`DELETE FROM p13_rls.loyalty_point_movements WHERE tenant_id = $1`, [TENANT_A]),
-        );
+        const upd = await settle(() => c.query(`UPDATE p13_rls.loyalty_point_movements SET points_delta = 0 WHERE tenant_id = $1`, [TENANT_A]));
+        const del = await settle(() => c.query(`DELETE FROM p13_rls.loyalty_point_movements WHERE tenant_id = $1`, [TENANT_A]));
         note(`7: UPDATE as the runtime role: ${observed(upd)}`);
         note(`7: DELETE as the runtime role: ${observed(del)}`);
         if (upd.ok || del.ok) throw new Error('7: the ledger is mutable by the runtime role');
@@ -747,11 +727,7 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
         // RED PROOF: the shape the fixture used to have cannot hold these rows.
         await admin.query('create table p13_rls.simple_key_probe (id uuid primary key, business_id uuid not null)');
         const collide = await settle(() =>
-          admin.query('insert into p13_rls.simple_key_probe (id, business_id) values ($1,$2),($1,$3)', [
-            shared.id,
-            BUSINESS_A1,
-            BUSINESS_A2,
-          ]),
+          admin.query('insert into p13_rls.simple_key_probe (id, business_id) values ($1,$2),($1,$3)', [shared.id, BUSINESS_A1, BUSINESS_A2]),
         );
         note(`9: the same two rows against a SIMPLE id key: ${observed(collide)}`);
         if (collide.ok || collide.code !== '23505') {
@@ -782,11 +758,9 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
      * have pointed at.
      */
     fn: async (admin, note) => {
-      const own = await one<{ id: string }>(
-        admin,
-        `SELECT id::text FROM p13_rls.loyalty_point_movements WHERE business_id = $1 ORDER BY id LIMIT 1`,
-        [BUSINESS_A1],
-      );
+      const own = await one<{ id: string }>(admin, `SELECT id::text FROM p13_rls.loyalty_point_movements WHERE business_id = $1 ORDER BY id LIMIT 1`, [
+        BUSINESS_A1,
+      ]);
       // The sibling row must be one whose id does NOT also exist in this
       // business, or the composite key would legitimately resolve and the case
       // would measure nothing. Case 9 deliberately creates such a collision, so
@@ -912,10 +886,13 @@ async function main(): Promise<number> {
     await admin.query(`GRANT EXECUTE ON FUNCTION p13_rls.app_tenant(), p13_rls.app_business(), p13_rls.app_bypass() TO ${APP_ROLE}`);
 
     // The fixture: two tenants, three businesses, rows in each.
-    await admin.query(
-      `INSERT INTO p13_rls.businesses (business_id, tenant_id) VALUES ($1,$2),($3,$2),($4,$5)`,
-      [BUSINESS_A1, TENANT_A, BUSINESS_A2, BUSINESS_B1, TENANT_B],
-    );
+    await admin.query(`INSERT INTO p13_rls.businesses (business_id, tenant_id) VALUES ($1,$2),($3,$2),($4,$5)`, [
+      BUSINESS_A1,
+      TENANT_A,
+      BUSINESS_A2,
+      BUSINESS_B1,
+      TENANT_B,
+    ]);
     for (const [tenant, business, n] of [
       [TENANT_A, BUSINESS_A1, 3],
       [TENANT_A, BUSINESS_A2, 2],
@@ -980,9 +957,7 @@ async function main(): Promise<number> {
   // as though a merge base had been used. The two lines above already read
   // `origin/main`; this one does too, with the local ref only as a fallback,
   // and the unresolvable case now says so in words instead of slicing one.
-  const mergeBase = ['origin/main', 'main']
-    .map((ref) => gitFact(['merge-base', 'HEAD', ref]))
-    .find((sha) => /^[0-9a-f]{40}$/.test(sha));
+  const mergeBase = ['origin/main', 'main'].map((ref) => gitFact(['merge-base', 'HEAD', ref])).find((sha) => /^[0-9a-f]{40}$/.test(sha));
   console.log(
     mergeBase === undefined
       ? 'migrations touched : NOT MEASURED \u2014 no merge base with main resolves in this clone (neither origin/main nor main), so no diff was run'
@@ -991,7 +966,9 @@ async function main(): Promise<number> {
   console.log(`node               : ${process.version}`);
   console.log(`database           : ${serverVersion}`);
   console.log(`collation          : ${collation}`);
-  console.log(`execution role     : fixture + catalogue as '${SUPER}'; EVERY isolation assertion as '${APP_ROLE}' (NOSUPERUSER NOBYPASSRLS, verified in case 1)`);
+  console.log(
+    `execution role     : fixture + catalogue as '${SUPER}'; EVERY isolation assertion as '${APP_ROLE}' (NOSUPERUSER NOBYPASSRLS, verified in case 1)`,
+  );
   console.log(`fixture identity   : tenants ${TENANT_A} / ${TENANT_B}; businesses ${BUSINESS_A1}, ${BUSINESS_A2}, ${BUSINESS_B1}; 3/2/4 rows`);
   console.log(`UTC start          : ${startedAt}`);
   console.log(`UTC end            : ${new Date().toISOString()}`);

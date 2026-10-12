@@ -97,9 +97,7 @@ describe('RED PROOF: the forbidden vocabulary does not appear in this module sou
       const found = FORBIDDEN.filter((term) => text.includes(term.toLowerCase()));
       // Names the vocabulary rule and the offending term, not merely a
       // non-empty list: a non-empty list names no law.
-      expect(found, `forbidden-vocabulary rule M-0/M-1 violated in ${subject} by: ${found.join(', ')}`).toEqual(
-        [],
-      );
+      expect(found, `forbidden-vocabulary rule M-0/M-1 violated in ${subject} by: ${found.join(', ')}`).toEqual([]);
     });
   }
 
@@ -118,11 +116,7 @@ describe('RED PROOF: the forbidden vocabulary does not appear in this module sou
 
 describe('the committed non-void status set is the authority own set', () => {
   it('holds exactly the three statuses the authority state CHECK pairs with a confirmation', () => {
-    expect([...COMMITTED_NON_VOID_STATUSES].sort()).toEqual([
-      'confirmed',
-      'returned_full',
-      'returned_partial',
-    ]);
+    expect([...COMMITTED_NON_VOID_STATUSES].sort()).toEqual(['confirmed', 'returned_full', 'returned_partial']);
   });
 
   it('a returned sale is still committed; a draft and a void are not', () => {
@@ -192,13 +186,7 @@ describe('LAST PURCHASE', () => {
     });
     expect(answer.provenance.sourceDefinition.definition).toBe('sales.committed_non_void_sale_documents');
     expect(answer.provenance.scope).toEqual(SCOPE);
-    expect(Object.keys(answer.provenance).sort()).toEqual([
-      'asOf',
-      'interval',
-      'mode',
-      'scope',
-      'sourceDefinition',
-    ]);
+    expect(Object.keys(answer.provenance).sort()).toEqual(['asOf', 'interval', 'mode', 'scope', 'sourceDefinition']);
     expect('watermark' in answer.provenance).toBe(false);
   });
 
@@ -222,10 +210,7 @@ describe('LAST PURCHASE', () => {
   });
 
   it('excludes another customer rows', () => {
-    const rows = [
-      row('sale-a', '2026-03-10', 'confirmed'),
-      row('sale-other', '2026-03-20', 'confirmed', { customerId: 'customer-2' }),
-    ];
+    const rows = [row('sale-a', '2026-03-10', 'confirmed'), row('sale-other', '2026-03-20', 'confirmed', { customerId: 'customer-2' })];
     const answer = lastPurchase(rows, { customerId: CUSTOMER, asOf: '2026-03-31', scope: SCOPE });
     expect(answer.value.sale?.saleId).toBe('sale-a');
   });
@@ -242,10 +227,7 @@ describe('LAST PURCHASE', () => {
 
     it('the population is non-empty and contains both excluded candidates', () => {
       expect(rows.length).toBe(4);
-      expect(rows.filter((r) => !isCommittedNonVoid(r.status)).map((r) => r.saleId)).toEqual([
-        'sale-void',
-        'sale-draft',
-      ]);
+      expect(rows.filter((r) => !isCommittedNonVoid(r.status)).map((r) => r.saleId)).toEqual(['sale-void', 'sale-draft']);
     });
 
     it('the answer is the same-day committed sale, and the candidate set excludes the void and the draft', () => {
@@ -291,11 +273,7 @@ describe('LAST PURCHASE', () => {
 
     it('the cardinality law turns red by name when a non-empty set answers "no purchase"', () => {
       try {
-        assertLastPurchaseLaw(
-          rows,
-          { customerId: CUSTOMER, asOf: '2026-03-31', scope: SCOPE },
-          { sale: null, candidateCount: 2 },
-        );
+        assertLastPurchaseLaw(rows, { customerId: CUSTOMER, asOf: '2026-03-31', scope: SCOPE }, { sale: null, candidateCount: 2 });
         expect.unreachable('the cardinality line of L-LASTP-1 must refuse a blank over a non-empty set');
       } catch (error) {
         const violation = error as AnalyticsContractViolation;
@@ -306,9 +284,7 @@ describe('LAST PURCHASE', () => {
 
     it('the baseline is restored: the real answer satisfies the law', () => {
       const answer = lastPurchase(rows, { customerId: CUSTOMER, asOf: '2026-03-31', scope: SCOPE });
-      expect(() =>
-        assertLastPurchaseLaw(rows, { customerId: CUSTOMER, asOf: '2026-03-31', scope: SCOPE }, answer.value),
-      ).not.toThrow();
+      expect(() => assertLastPurchaseLaw(rows, { customerId: CUSTOMER, asOf: '2026-03-31', scope: SCOPE }, answer.value)).not.toThrow();
     });
   });
 });
@@ -372,9 +348,7 @@ describe('PURCHASE FREQUENCY', () => {
   });
 
   it('refuses an interval that ends before it begins', () => {
-    expect(() =>
-      purchaseFrequency(rows, { ...REQUEST, interval: interval('2026-03-31', '2026-03-01') }),
-    ).toThrowError(/L-DATE-2/);
+    expect(() => purchaseFrequency(rows, { ...REQUEST, interval: interval('2026-03-31', '2026-03-01') })).toThrowError(/L-DATE-2/);
   });
 
   /* --- RED PROOF 4 — additivity over a partition ------------------------ */
@@ -406,11 +380,7 @@ describe('PURCHASE FREQUENCY', () => {
       },
       {
         name: 'three-way split straddling every document date',
-        parts: [
-          interval('2026-03-01', '2026-03-02'),
-          interval('2026-03-03', '2026-03-20'),
-          interval('2026-03-21', '2026-03-31'),
-        ],
+        parts: [interval('2026-03-01', '2026-03-02'), interval('2026-03-03', '2026-03-20'), interval('2026-03-21', '2026-03-31')],
       },
       {
         name: 'per-day partition of the whole month',
@@ -491,10 +461,7 @@ describe('PURCHASE FREQUENCY', () => {
       // that covers one extra document.
       const widerRequest = { ...REQUEST, interval: interval('2026-03-01', '2026-04-05') };
       try {
-        assertFrequencyAdditivity(rows, widerRequest, [
-          interval('2026-03-01', '2026-03-31'),
-          interval('2026-04-01', '2026-04-04'),
-        ]);
+        assertFrequencyAdditivity(rows, widerRequest, [interval('2026-03-01', '2026-03-31'), interval('2026-04-01', '2026-04-04')]);
         expect.unreachable('a partition that stops one day short of the whole must be refused');
       } catch (error) {
         const violation = error as AnalyticsContractViolation;

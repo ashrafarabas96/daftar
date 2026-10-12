@@ -39,17 +39,11 @@ export interface ReceivablesReadPort {
  * caller handles a refusal rather than rendering a blank.
  */
 export const UNAVAILABLE_SALES_PORT: SalesReadPort = {
-  committedSales: () =>
-    Promise.reject(
-      refusalFor('the sales read authority is not present on this branch; it lands when Phase 4 seals'),
-    ),
+  committedSales: () => Promise.reject(refusalFor('the sales read authority is not present on this branch; it lands when Phase 4 seals')),
 };
 
 export const UNAVAILABLE_RECEIVABLES_PORT: ReceivablesReadPort = {
-  customerOutstandingMinor: () =>
-    Promise.reject(
-      refusalFor('the receivables read authority is not present on this branch; it lands when Phase 4 seals'),
-    ),
+  customerOutstandingMinor: () => Promise.reject(refusalFor('the receivables read authority is not present on this branch; it lands when Phase 4 seals')),
 };
 
 function refusalFor(message: string): Error {
