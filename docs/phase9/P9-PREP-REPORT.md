@@ -17,7 +17,7 @@ head of `main`.
 | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 1483 | the schema and its physical invariants — **not a migration** |
 | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 521 | what the Migration Owner is asked to allocate |
 | `docs/phase9/P9-HANDOFF-MANIFEST.md` | 131 | the PART 13 handoff gate, with a SHA256 per artifact |
-| `tests/phase9-prep/p9-booking-schema.test.ts` | 262 | 16 cases: shape, security, grants, end state, the state contract |
+| `tests/phase9-prep/p9-booking-schema.test.ts` | 303 | 17 cases: shape, security, grants, end state, the state contract, collation independence |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 588 | 7 cases: each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
@@ -27,7 +27,7 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**75 of 75 cases green**, over six suites, on a live PostgreSQL 18.4 cluster. A case count is
+**76 of 76 cases green on BOTH runtimes**, over six suites, on a live PostgreSQL 18.4 cluster. A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
 not how much of Phase 9 exists.
 
@@ -329,6 +329,38 @@ three are owed. The D11 PART 117 label for the same state is `PREPARED / NOT PRO
 two are the same claim, and this report uses both so neither vocabulary has to be guessed
 at.
 
+### 3c.11 HIGH-VELOCITY V1 — measured on the APPROVED TARGET, PostgreSQL 16 / `en_US.utf8`
+
+The mission's PART 1.3 names **PostgreSQL 16 with `en_US.utf8`** as the approved deployment
+target, says PG18 may be used only for specific comparison experiments, and PART 19 requires
+the database version **and collation** in every piece of evidence. Every proof in this phase
+until now was produced on PostgreSQL 18.4 — and, it turns out, on a **`C`-collated** cluster,
+which no document said because nothing asked.
+
+So the target was built and the whole suite run on it: a PostgreSQL **16.15** cluster,
+`UTF8`, `datcollate` and `datctype` both **`en_US.utf8`**, initialised with the project's own
+`bootstrap.sql` as the deployment principal.
+
+**It found a defect in the suite on the first run.** Five assertions sorted text in SQL —
+under the database's collation — and compared the result to a JavaScript `.sort()`, which is
+code-unit order. Under `en_US.utf8` the underscore carries no primary weight, so
+`booking_resources` sorts BEFORE `booking_resource_schedules`; under `C` it sorts after. The
+same schema therefore passed on one collation and failed on the other. The orderings now pin
+`COLLATE "C"`, and a new case proves the hazard is real on the live server rather than
+assumed — a fix for a difference nobody can demonstrate is a guess.
+
+Nothing in the schema, the invariant, the routines or the policies behaved differently
+between the two versions: after the harness fix, **76 of 76 cases pass on PostgreSQL
+16.15/`en_US.utf8` AND on PostgreSQL 18.4/`C`, exit code 0 on both**, and the run log records
+each run's version, collation, role, command, times and exit code. That is the honest shape
+of the claim — the invariant is proved on the approved target, and the PG18 run is now what
+the mission says it may be: a comparison.
+
+What this does **not** establish: Node 24. The container ships Node 22.22.0 while the
+repository declares `>=24 <25`, so the runtime half of PART 7.6's "rerun on Node 24 and
+PostgreSQL 16 at final integration" is still **UNMEASURED**. The database half is now
+measured.
+
 ### 3c.10 Mission V3 — the scan fixed, and the exit code proved
 
 **1. The ±180 window was a defect, not a documented limit.** Measured: Antarctica/Vostok
@@ -395,7 +427,7 @@ declared version is owed at promotion, and that is stated rather than left to be
 
 ### 3c.8 The prep cases are not a sealed phase
 
-75 green cases say that the invariants in this document hold on a live server. They do not
+76 green cases say that the invariants in this document hold on a live server. They do not
 say Phase 9 exists: there is no command layer, no surface, no migration number, and these
 suites are not in required CI. §4 states that in full, and nothing in this report may be
 read as a promotion claim (PART 83).
@@ -414,6 +446,9 @@ claimed in a stronger class than it was measured in.
 | the replay returns the first attempt's recorded booking, and refuses a reused key over a different request | PROVEN BY TEST |
 | no runtime role writes these relations, and RLS confines the internal authority | PROVEN BY EXECUTED ATTACK (test, no superuser) |
 | the local-time soundness property over 14 000+ inputs | PROVEN BY TEST (sweep, independent oracle) |
+| every claim above, on the APPROVED TARGET PostgreSQL 16.15 / `en_US.utf8` | PROVEN BY TEST (76/76, exit 0) |
+| the same claims on PostgreSQL 18.4 / `C` | PROVEN BY TEST — a comparison run, not the target |
+| anything on Node 24 (the repository's declared engine) | **UNMEASURED** — the container ships Node 22.22.0 |
 | each invariant is load-bearing (six red proofs, restored character-identical) | PROVEN BY TEST |
 | the DDL spec as a deployable migration | **SPEC ONLY** — no number allocated |
 | the command layer, schedule containment | **SPEC ONLY** — not written |

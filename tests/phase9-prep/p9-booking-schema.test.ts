@@ -33,9 +33,10 @@ describe('P9 booking schema — applies as the deployment principal', () => {
   });
 
   it('created all seven relations', async () => {
-    const r = await db.pool.query<{ relname: string }>(`SELECT relname FROM pg_class WHERE relname = ANY($1::text[]) AND relkind = 'r' ORDER BY 1`, [
-      [...P9_RELATIONS],
-    ]);
+    const r = await db.pool.query<{ relname: string }>(
+      `SELECT relname FROM pg_class WHERE relname = ANY($1::text[]) AND relkind = 'r' ORDER BY relname COLLATE "C"`,
+      [[...P9_RELATIONS]],
+    );
     expect(r.rows.map((x) => x.relname)).toEqual([...P9_RELATIONS].sort());
   });
 
@@ -52,7 +53,7 @@ describe('P9 booking schema — applies as the deployment principal', () => {
     // periods' own, so Phase 9 added its invariant beside it rather than over it.
     const x = await db.pool.query<{ conname: string; relname: string }>(
       `SELECT c.conname, t.relname FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
-        WHERE c.contype = 'x' ORDER BY 1`,
+        WHERE c.contype = 'x' ORDER BY c.conname COLLATE "C"`,
     );
     expect(x.rows).toEqual([
       { conname: 'accounting_periods_no_overlap', relname: 'accounting_periods' },
@@ -104,7 +105,7 @@ describe('P9 booking schema — applies as the deployment principal', () => {
 
   it('row security is enabled AND forced on every relation', async () => {
     const r = await db.pool.query<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>(
-      `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = ANY($1::text[]) ORDER BY 1`,
+      `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = ANY($1::text[]) ORDER BY relname COLLATE "C"`,
       [[...P9_RELATIONS]],
     );
     expect(r.rows).toHaveLength(P9_RELATIONS.length);
@@ -128,7 +129,7 @@ describe('P9 booking schema — applies as the deployment principal', () => {
 
   it('the merchant runtime may read the calendar and nothing may read the operation registry', async () => {
     const readable = await db.pool.query<{ tbl: string }>(
-      `SELECT tbl FROM unnest($1::text[]) tbl WHERE has_table_privilege('daftar_app', tbl, 'SELECT') ORDER BY 1`,
+      `SELECT tbl FROM unnest($1::text[]) tbl WHERE has_table_privilege('daftar_app', tbl, 'SELECT') ORDER BY tbl COLLATE "C"`,
       [[...P9_RELATIONS]],
     );
     expect(readable.rows.map((x) => x.tbl)).toEqual([...P9_RELATIONS].filter((t) => t !== 'booking_operations').sort());
@@ -153,7 +154,7 @@ describe('P9 booking schema — applies as the deployment principal', () => {
     const r = await db.pool.query<{ proname: string; prosecdef: boolean; owner: string; proconfig: string[] | null }>(
       `SELECT p.proname, p.prosecdef, r.rolname AS owner, p.proconfig
          FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
-        WHERE p.proname = ANY($1::text[]) ORDER BY 1`,
+        WHERE p.proname = ANY($1::text[]) ORDER BY p.proname COLLATE "C"`,
       [['bookings_buffers_match_service', 'bookings_no_delete', 'bookings_transition', 'booking_operations_immutable']],
     );
     const by = new Map(r.rows.map((x) => [x.proname, x]));
@@ -258,5 +259,46 @@ describe('P9 booking schema — applies as the deployment principal', () => {
     // The loader is this directory's only protection against applying an
     // emptied document and reporting a green. Its own refusals must fire.
     expect(() => loadSpec()).not.toThrow();
+  });
+
+  /**
+   * HIGH-VELOCITY V1 names PostgreSQL 16 with `en_US.utf8` as the approved
+   * target and asks for the database version AND COLLATION in every piece of
+   * evidence (PART 19). Running this suite against a real PG16/en_US.utf8
+   * cluster found a defect in THIS FILE, not in the schema: five assertions
+   * sorted text in SQL — under the database's collation — and compared the
+   * result to a JavaScript `.sort()`, which is code-unit order. Under
+   * `en_US.utf8` the underscore is not a primary-weight character, so
+   * `booking_resources` sorts BEFORE `booking_resource_schedules`; under `C`
+   * it sorts after. The suite passed on one collation and failed on the other
+   * while the schema was identical.
+   *
+   * The orderings now pin `COLLATE "C"`, and this case proves the hazard is
+   * real rather than theoretical — a fix for a difference nobody can
+   * demonstrate is a guess.
+   */
+  it('the suite’s orderings are collation-independent, and the server’s collation is recorded', async () => {
+    const r = await db.pool.query<{ c_order: string[]; locale_order: string[]; datcollate: string; version: string }>(
+      `SELECT (SELECT array_agg(n ORDER BY n COLLATE "C") FROM unnest(ARRAY['booking_resources', 'booking_resource_schedules']) n) AS c_order,
+              (SELECT array_agg(n ORDER BY n) FROM unnest(ARRAY['booking_resources', 'booking_resource_schedules']) n) AS locale_order,
+              (SELECT datcollate FROM pg_database WHERE datname = current_database()) AS datcollate,
+              version() AS version`,
+    );
+    const row = r.rows[0];
+    if (row === undefined) throw new Error('the collation probe returned no row');
+    // `C` is the order JavaScript's own sort produces, which is what the
+    // assertions in this file compare against.
+    expect(row.c_order).toEqual(['booking_resource_schedules', 'booking_resources']);
+    expect([...row.c_order].sort()).toEqual(row.c_order);
+    // On a locale collation the two disagree — and that disagreement is the
+    // whole defect. On a `C`-collated cluster they agree, and the case still
+    // holds: the assertion is that the pinned order equals JavaScript's, not
+    // that the database's default differs from it.
+    if (row.datcollate.startsWith('en_US')) {
+      expect(row.locale_order).toEqual(['booking_resources', 'booking_resource_schedules']);
+      expect(row.locale_order).not.toEqual(row.c_order);
+    }
+    // Recorded for the evidence record PART 19 asks for.
+    console.log(`[P9 runtime] ${row.version.split(' on ')[0]} / collation ${row.datcollate}`);
   });
 });
