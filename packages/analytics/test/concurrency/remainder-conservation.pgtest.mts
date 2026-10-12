@@ -1662,7 +1662,17 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
  * The runner
  * ------------------------------------------------------------------ */
 
+/** A git fact read at run time, so the record cannot drift from the tree it describes. */
+function gitFact(args: readonly string[]): string {
+  try {
+    return execFileSync('git', [...args], { cwd: process.cwd(), encoding: 'utf8' }).trim();
+  } catch {
+    return '(unavailable)';
+  }
+}
+
 async function main(): Promise<number> {
+  const startedAt = new Date().toISOString();
   rmSync(PG_DIR, { recursive: true, force: true });
 
   // The settled target first; the repository's embedded cluster only as a
@@ -1691,6 +1701,8 @@ async function main(): Promise<number> {
   }
 
   let pool: Pool | null = null;
+  let collationLine = '(not reached)';
+  let serverVersionLine = '(not reached)';
   const results: CaseResult[] = [];
   try {
     await pg.initialise();
@@ -1699,6 +1711,7 @@ async function main(): Promise<number> {
     pool = admin;
 
     const v = await one<{ version: string }>(admin, 'SELECT version() AS version');
+    collationLine = '(reading)';
     const loc = await one<{ collate: string; ctype: string; encoding: string }>(
       admin,
       `SELECT datcollate AS collate, datctype AS ctype, pg_encoding_to_char(encoding) AS encoding
@@ -1707,7 +1720,9 @@ async function main(): Promise<number> {
     console.log('P13-PROOF-CONCURRENCY — two real connections, one real cluster');
     console.log(`binary:      ${binaryVersion}`);
     console.log(`measured on: ${v.version}`);
-    console.log(`collation:   datcollate=${loc.collate} datctype=${loc.ctype} encoding=${loc.encoding}`);
+    collationLine = `datcollate=${loc.collate} datctype=${loc.ctype} encoding=${loc.encoding}`;
+    serverVersionLine = v.version;
+    console.log(`collation:   ${collationLine}`);
     console.log(
       onTarget
         ? 'TARGET: this IS the settled deploy line (the PostgreSQL 16 family). The collation line above is read\n' +
@@ -1746,9 +1761,46 @@ async function main(): Promise<number> {
   }
 
   const failed = results.filter((r) => !r.ok);
+  const code = failed.length === 0 ? 0 : 1;
   console.log(`${results.length - failed.length}/${results.length} cases passed`);
   for (const f of failed) console.log(`  FAILED: ${f.name}`);
-  return failed.length === 0 ? 0 : 1;
+
+  // The evidence record. The project's evidence rules require every proof to
+  // carry its command, exact SHA, base SHA, tree status, runtime versions,
+  // database version and collation, execution role, fixture identity, UTC
+  // start and end, exit code, counts, skips and a validity statement — so the
+  // run PRINTS them, rather than leaving a reader to reconstruct them from a
+  // report written afterwards. A dirty tree is reported as such: a result
+  // measured against uncommitted changes is not bound to any SHA.
+  const dirty = gitFact(['status', '--porcelain']);
+  console.log('');
+  console.log('--- EVIDENCE RECORD -------------------------------------------------');
+  console.log('command            : node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts');
+  console.log(`exact SHA          : ${gitFact(['rev-parse', 'HEAD'])}`);
+  console.log(`branch             : ${gitFact(['rev-parse', '--abbrev-ref', 'HEAD'])}`);
+  console.log(`base SHA (main)    : ${gitFact(['rev-parse', 'origin/main'])}`);
+  console.log(`merge base vs main : ${gitFact(['merge-base', 'HEAD', 'origin/main'])}`);
+  console.log(`tree status        : ${dirty === '' ? 'clean' : `${dirty.split('\n').length} changed path(s) — RESULT IS NOT SHA-BOUND`}`);
+  console.log(`migrations touched : ${gitFact(['diff', '--shortstat', 'HEAD', '--', 'infrastructure/database/migrations']) || '0 lines'}`);
+  console.log(`node               : ${process.version}`);
+  console.log(`database           : ${serverVersionLine}`);
+  console.log(`collation          : ${collationLine}`);
+  console.log(`on the settled line: ${onTarget ? 'YES — the PostgreSQL 16 family' : 'NO — OFF-TARGET, see the banner above'}`);
+  console.log(`execution role     : the cluster superuser throughout. This proof measures CONCURRENCY, not`);
+  console.log(`                     authorization; the RLS proof in ../rls/ is the one that must not use it.`);
+  console.log(`fixture identity   : business ${BUSINESS}; customers and grants generated deterministically`);
+  console.log(`                     (see id(), so a failing id is the same id on a re-run)`);
+  console.log(`isolation level    : READ COMMITTED, read back from SHOW transaction_isolation per transaction`);
+  console.log(`UTC start          : ${startedAt}`);
+  console.log(`UTC end            : ${new Date().toISOString()}`);
+  console.log(`cases              : ${results.length - failed.length} passed / ${results.length} total`);
+  console.log('skips              : 0 — this proof has no skip path');
+  console.log(`exit code          : ${code}`);
+  console.log('measurement validity: VALID for the mechanism SHAPE on scratch DDL. NOT evidence about the real');
+  console.log('                     relations, the official sale authority, RLS, isolation above READ COMMITTED,');
+  console.log('                     or more than two connections. No timing figure is claimed anywhere.');
+  console.log('---------------------------------------------------------------------');
+  return code;
 }
 
 // Not a top-level `await`: this package typechecks with `module: commonjs`,
