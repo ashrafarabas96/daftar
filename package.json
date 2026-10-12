@@ -41,6 +41,7 @@
     "verify:alert-signals": "tsx scripts/phase15/verify-alert-signals.ts",
     "verify:rc-identity": "tsx scripts/phase15/verify-rc-identity.ts",
     "verify:handoff-manifest": "tsx scripts/phase15/verify-handoff-manifest.ts",
+    "verify:role-convergence": "tsx scripts/phase15/verify-role-convergence.ts",
     "verify:gap-list:static": "tsx scripts/phase15/gap-list-verification.ts --no-cluster",
     "dr:proof": "tsx scripts/phase15/backup-restore-proof.ts",
     "dr:proof:prove": "tsx scripts/phase15/backup-restore-proof.ts --prove-detection",
