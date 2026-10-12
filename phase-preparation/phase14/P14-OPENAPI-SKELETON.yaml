@@ -1,0 +1,327 @@
+# DAFTAR Public API — OpenAPI SKELETON
+#
+# STATUS: PREPARED / NOT PROMOTED. Prepared 2026-10-08 from 93084f8, for §77 of
+# the Final Audited Master Directive, which names an "OpenAPI skeleton" as a
+# Phase 14 preparation deliverable.
+#
+# THIS FILE IS NOT THE CONTRACT. Two laws govern it:
+#   P14-AL-20 — the PUBLISHED document is GENERATED from the typed public
+#     contracts, and a gate fails when the committed document differs from a
+#     fresh regeneration. This skeleton is hand-written scaffolding that the
+#     generator REPLACES; it must never be published as if it were generated,
+#     and it is not a source of truth for any field.
+#   P14-AL-25 — only an operation whose owning slice is SEALED appears here.
+#     The seven DEFERRED items (settlement, receivable, aging, open-invoices,
+#     customer-payments, and the two settlement/payment events) are absent on
+#     purpose, not by oversight. See P14-AMENDMENT-01-SEALED-CONTRACTS.md.
+#
+# Schemas below are deliberately SHALLOW. Pinning field-level shapes by hand
+# would be exactly the premature freezing §77 forbids; the generator derives
+# them from the public DTOs once those exist.
+
+openapi: 3.1.0
+
+info:
+  title: DAFTAR Public API
+  version: "1.0.0-prepared"
+  summary: Read and write a DAFTAR business's catalog, customers and sales.
+  description: >-
+    Authenticated with a business-scoped API key. A key is a delegation of a
+    member's authority: its effective permissions are the live membership
+    permissions intersected with the key's scopes, recomputed on every request.
+    A key carries no authority of its own and no sensitive permission.
+
+servers:
+  - url: https://{host}/public/v1
+    description: Host is decided by OD-P14-03; the path prefix is fixed.
+    variables:
+      host:
+        default: api.example.invalid
+
+security:
+  - apiKey: []
+
+tags:
+  - name: catalog
+  - name: inventory
+  - name: customers
+  - name: sales
+
+paths:
+  /products:
+    get:
+      tags: [catalog]
+      operationId: listProducts
+      summary: List products.
+      description: "Scope: catalog.view. Owning slice: Phase 3 (sealed)."
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200': { $ref: '#/components/responses/Page' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /products/{productId}:
+    get:
+      tags: [catalog]
+      operationId: getProduct
+      summary: Read one product.
+      description: "Scope: catalog.view. Owning slice: Phase 3 (sealed)."
+      parameters:
+        - $ref: '#/components/parameters/productId'
+      responses:
+        '200': { $ref: '#/components/responses/Object' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /stock:
+    get:
+      tags: [inventory]
+      operationId: listStock
+      summary: List stock levels.
+      description: "Scope: inventory.view. Owning slice: Phase 3 (sealed)."
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200': { $ref: '#/components/responses/Page' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /customers:
+    get:
+      tags: [customers]
+      operationId: listCustomers
+      summary: List customers.
+      description: "Scope: customers.view. Owning slice: P4-S1 (sealed)."
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200': { $ref: '#/components/responses/Page' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [customers]
+      operationId: createCustomer
+      summary: Create a customer.
+      description: >-
+        Scope: customers.manage. Owning slice: P4-S1 (sealed). The client
+        chooses customerId, which is the idempotency key: 201 on create, 200 on
+        an identical replay, 409 IDEMPOTENCY_CONFLICT on the same id with a
+        different payload.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customerId]
+              properties:
+                customerId:
+                  type: string
+                  format: uuid
+                  description: Client-chosen; the idempotency key.
+              additionalProperties: true
+      responses:
+        '201': { $ref: '#/components/responses/Object' }
+        '200':
+          description: Identical replay of an earlier create.
+          content:
+            application/json:
+              schema: { type: object }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+  /customers/{customerId}:
+    get:
+      tags: [customers]
+      operationId: getCustomer
+      summary: Read one customer.
+      description: "Scope: customers.view. Owning slice: P4-S1 (sealed)."
+      parameters:
+        - $ref: '#/components/parameters/customerId'
+      responses:
+        '200': { $ref: '#/components/responses/Object' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /invoices:
+    get:
+      tags: [sales]
+      operationId: listInvoices
+      summary: List invoices.
+      description: >-
+        Scope: sales.view. Owning slice: P4-S1 (sealed). `status` is LIFECYCLE
+        ONLY (draft, open, void) and is never a settlement value. Settlement,
+        paid and outstanding are owned by P4-S4 and are DEFERRED under
+        P14-AL-25.
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200': { $ref: '#/components/responses/Page' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /invoices/{invoiceId}:
+    get:
+      tags: [sales]
+      operationId: getInvoice
+      summary: Read one invoice.
+      description: "Scope: sales.view. Owning slice: P4-S1 (sealed). Lifecycle status only."
+      parameters:
+        - $ref: '#/components/parameters/invoiceId'
+      responses:
+        '200': { $ref: '#/components/responses/Object' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /sales:
+    post:
+      tags: [sales]
+      operationId: commitSale
+      summary: Commit a sale.
+      description: >-
+        Scope: sales.create. Owning slice: P4-S2 (sealed). The client chooses
+        saleId, which is the idempotency key. Every amount is an integer in
+        minor units; the server recomputes every total and a client-supplied
+        total is not authoritative. Sales tax is a structural zero in this
+        phase and a non-zero tax is refused, never normalized.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [saleId]
+              properties:
+                saleId:
+                  type: string
+                  format: uuid
+                  description: Client-chosen; the idempotency key.
+              additionalProperties: true
+      responses:
+        '201': { $ref: '#/components/responses/Object' }
+        '200':
+          description: Identical replay of an earlier commit.
+          content:
+            application/json:
+              schema: { type: object }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: dftr_<key_id>_<secret>
+      description: >-
+        The key carries its own business. An X-Business-Id header naming a
+        different business is refused with KEY_BUSINESS_MISMATCH.
+
+  parameters:
+    limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: { type: string }
+      description: Opaque, server-signed, valid only for this key's business.
+    productId:
+      name: productId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    customerId:
+      name: customerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    invoiceId:
+      name: invoiceId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  headers:
+    X-RateLimit-Limit:
+      schema: { type: integer }
+    X-RateLimit-Remaining:
+      schema: { type: integer }
+    X-RateLimit-Reset:
+      schema: { type: integer }
+    Retry-After:
+      schema: { type: integer }
+      description: Present on 429 and on the 503 the fail-closed limiter returns.
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+              enum:
+                - VALIDATION_FAILED
+                - API_KEY_INVALID
+                - API_KEY_REVOKED
+                - API_KEY_EXPIRED
+                - SCOPE_INSUFFICIENT
+                - MEMBERSHIP_INSUFFICIENT
+                - KEY_BUSINESS_MISMATCH
+                - INTEGRATIONS_NOT_ENABLED
+                - UNSUPPORTED_API_VERSION
+                - IDEMPOTENCY_CONFLICT
+                - NOT_FOUND
+                - RATE_LIMITED
+            message: { type: string }
+            requestId: { type: string }
+            details: { type: object }
+
+    Page:
+      type: object
+      required: [data, nextCursor]
+      properties:
+        data:
+          type: array
+          items: { type: object }
+        nextCursor:
+          type: [string, 'null']
+
+  responses:
+    Object:
+      description: The requested resource.
+      headers:
+        X-RateLimit-Limit: { $ref: '#/components/headers/X-RateLimit-Limit' }
+        X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+        X-RateLimit-Reset: { $ref: '#/components/headers/X-RateLimit-Reset' }
+      content:
+        application/json:
+          schema: { type: object }
+    Page:
+      description: One page of results.
+      headers:
+        X-RateLimit-Limit: { $ref: '#/components/headers/X-RateLimit-Limit' }
+        X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+        X-RateLimit-Reset: { $ref: '#/components/headers/X-RateLimit-Reset' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Page' }
+    Error:
+      description: A refusal. The code is the contract; the message is localized.
+      headers:
+        Retry-After: { $ref: '#/components/headers/Retry-After' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
