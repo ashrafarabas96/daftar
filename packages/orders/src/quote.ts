@@ -363,8 +363,18 @@ export function assertQuoteIntact(quote: CommercialQuote, checks?: CommercialQuo
  * Equality must never be admitted by accident, so it is admitted by nothing:
  * the comparison is `>= 0`.
  */
-export function assertQuoteConfirmable(quote: CommercialQuote, asOf: string, confirmedVersion: number): void {
-  assertQuoteIntact(quote);
+export function assertQuoteConfirmable(quote: CommercialQuote, asOf: string, confirmedVersion: number, checks?: CommercialQuoteChecks): void {
+  // `checks` is threaded rather than dropped: `assertQuoteIntact` re-runs the
+  // builder, and the builder's REPRESENTABILITY law is the one leg that needs a
+  // per-stock-key precision to be claimed at all. For one revision this
+  // function had no such parameter, so the only gate call site could not supply
+  // one and that leg had no caller — the same "a law with no caller guards
+  // nothing" shape the challenger found in the quote module itself. Measured
+  // then: with a precision of 0 the builder refuses a quantity of `0.5000`, and
+  // a forged quote carrying it passed the whole gate. The path failed closed one
+  // layer out, because `summariseBasket` refuses the matching position, but a
+  // defence that depends on another module's refusal is not this one's defence.
+  assertQuoteIntact(quote, checks);
   if (!isCanonicalInstant(asOf)) {
     throw new OrderError('order.occurred_at_invalid', 'asOf must be a canonical RFC3339 UTC instant at second precision');
   }
@@ -402,6 +412,13 @@ export interface ConfirmedQuoteApproval {
    */
   asOf: string;
   /**
+   * What is CHECKED about the quote but is not part of it — today, the
+   * per-stock-key unit precision the representability law needs. It rides on
+   * the approval so the hand-off can supply the same map it validated the
+   * basket with, rather than the gate silently not claiming that law.
+   */
+  checks?: CommercialQuoteChecks;
+  /**
    * The total the canonical sales authority recomputed on a PREVIOUS refused
    * attempt, when there was one.
    *
@@ -437,7 +454,7 @@ export function quoteExpiryText(quote: CommercialQuote): string {
  * either alone can be bypassed — the relation is not consulted by a pure
  * function, and a check in a function is not consulted by an `INSERT`.
  */
-export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: string): void {
+export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: string, checks?: CommercialQuoteChecks): void {
   assertCanonicalId(orderId, 'orderId');
   // The presence of the approval is checked at RUNTIME, not only by the type.
   // A required field is a type-level law, and a type-level law reds the
@@ -456,6 +473,10 @@ export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: s
   if (confirmation.orderId !== orderId) {
     throw new OrderError('order.quote_not_approved', 'the confirmation names another order', { orderId, confirmedOrderId: confirmation.orderId });
   }
+  // Nullable means MAY BE ABSENT, not may be anything: `null` is the shopper
+  // confirming on the storefront, and a non-null value names a member of staff
+  // who confirmed on their behalf — so it is an id or it is nothing.
+  if (confirmation.confirmedByUserId !== null) assertCanonicalId(confirmation.confirmedByUserId, 'confirmedByUserId');
   if (confirmation.quoteId !== quote.quoteId) {
     throw new OrderError('order.quote_not_approved', 'the confirmation names another quote', {
       quoteId: quote.quoteId,
@@ -514,7 +535,7 @@ export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: s
 
   // The window and the version, last, so a mismatch of IDENTITY is reported as
   // one rather than as a stale version of a quote that was never this order's.
-  assertQuoteConfirmable(quote, approval.asOf, confirmation.confirmedVersion);
+  assertQuoteConfirmable(quote, approval.asOf, confirmation.confirmedVersion, checks ?? approval.checks);
 }
 
 /** The verdict on comparing the canonical recomputation against the confirmed quote. */
@@ -557,6 +578,10 @@ export const P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR = '0';
 export function assessQuoteDivergence(approval: ConfirmedQuoteApproval, orderId: string, recomputedTotalMinor: string): QuoteDivergenceVerdict {
   // Not `assertQuoteIntact` alone: the whole approval, so no verdict at all
   // exists for an expired, superseded or foreign quote.
+  // No `approval.checks` read here: a malformed approval must reach the
+  // presence guard inside `assertQuoteApproved` as a refusal, not as a
+  // TypeError. That function falls back to its own `approval.checks` once the
+  // shape is proved.
   assertQuoteApproved(approval, orderId);
   const quote = approval.quote;
   const recomputed = requireMinor(recomputedTotalMinor, 'recomputedTotalMinor');

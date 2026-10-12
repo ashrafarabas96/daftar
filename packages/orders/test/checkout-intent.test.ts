@@ -595,3 +595,34 @@ describe('the mirror carries the authority CONSTRAINTS, not only its shape (chal
     }
   });
 });
+
+describe('the hand-off supplies the precisions it validated the basket with (round-3 challenge P2-02)', () => {
+  it('refuses a quote line the product unit precision cannot represent', () => {
+    // PRECISION above states this product is sold in whole units, and
+    // `summariseBasket` was given that same map. The gate now claims the law
+    // too, instead of relying on the basket module to fail closed one layer out.
+    const halfUnitQuote = buildCommercialQuote({
+      quoteId: QUOTE_ID,
+      orderId: ORDER,
+      version: 1,
+      currency: 'ILS',
+      lines: [
+        { stockKey: KEY, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '5500' },
+      ],
+      displayedTotalMinor: '5500',
+      issuedAt: '2026-10-01T09:00:00Z',
+      expiresAt: '2026-10-01T10:00:00Z',
+    });
+    expect(() =>
+      buildSaleCommitIntent(snapshot('fulfilling'), POSITIONS, {
+        ...CASH,
+        quoteApproval: approve(halfUnitQuote),
+        unitDecimalsByStockKey: PRECISION,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+  });
+
+  it('still builds the honest checkout with the precisions supplied', () => {
+    expect(buildSaleCommitIntent(snapshot('fulfilling'), POSITIONS, { ...CASH, unitDecimalsByStockKey: PRECISION }).saleId).toBe(SALE);
+  });
+});

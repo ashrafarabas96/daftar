@@ -693,3 +693,57 @@ describe('confirmedAt is validated and compared to the window (round-2 challenge
     expect(() => assertQuoteApproved(early, ORDER)).toThrowError(expect.objectContaining({ code: 'order.quote_expiry_invalid' }));
   });
 });
+
+describe('the representability leg of the gate has a caller (round-3 challenge P2-02)', () => {
+  // The rebuild was strictly weaker than the build it claimed to re-run:
+  // `assertQuoteIntact` accepted a `checks` argument, `assertQuoteConfirmable`
+  // had no parameter to pass one through, and the only gate call site passed
+  // none — so the builder's representability law had no caller AT THE GATE.
+  // Measured by the challenger: with a precision of 0 the builder refuses a
+  // quantity of 0.5000, and a forged quote carrying it passed the whole gate.
+  const WHOLE_UNITS = { unitDecimalsByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, 0]]) };
+  const HALF = { ...INPUT, lines: [{ ...(INPUT.lines[0] as (typeof INPUT.lines)[number]), quantity: '2.5000' }, ...INPUT.lines.slice(1)] };
+
+  it('the builder refuses the half unit, so there is a law to carry', () => {
+    expect(() => buildCommercialQuote(HALF, WHOLE_UNITS)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+  });
+
+  it('the gate refuses it too, through every entry point, when the precision is supplied', () => {
+    // Built WITHOUT the precisions — which is lawful, since the law is not
+    // claimed where no caller states it — and then checked WITH them.
+    const forged = buildCommercialQuote(HALF);
+    expect(() => assertQuoteIntact(forged, WHOLE_UNITS)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+    expect(() => assertQuoteConfirmable(forged, '2026-10-01T09:30:00Z', 1, WHOLE_UNITS)).toThrowError(
+      expect.objectContaining({ code: 'order.quote_quantity_invalid' }),
+    );
+    expect(() => assertQuoteApproved(approve(forged), ORDER, WHOLE_UNITS)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+    // And carried ON the approval, which is how `assessQuoteDivergence` — whose
+    // signature takes no checks — reaches the same refusal.
+    const withChecks: ConfirmedQuoteApproval = { ...approve(forged), checks: WHOLE_UNITS };
+    expect(() => assertQuoteApproved(withChecks, ORDER)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+    expect(() => assessQuoteDivergence(withChecks, ORDER, '4049')).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+  });
+
+  it('still admits the half unit where no precision is claimed', () => {
+    const halfQuote = buildCommercialQuote(HALF);
+    expect(() => assertQuoteApproved(approve(halfQuote), ORDER)).not.toThrow();
+  });
+});
+
+describe('confirmedByUserId is an id or it is nothing (round-3 challenge P3-01)', () => {
+  it('refuses a non-canonical confirming user', () => {
+    const honest = approve(QUOTED);
+    for (const bad of ['not-a-uuid', '', 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA']) {
+      expect(() => assertQuoteApproved({ ...honest, confirmation: { ...honest.confirmation, confirmedByUserId: bad } }, ORDER)).toThrowError(
+        expect.objectContaining({ code: 'order.id_invalid' }),
+      );
+    }
+  });
+
+  it('admits null — the shopper confirming on the storefront — and a real id', () => {
+    const honest = approve(QUOTED);
+    expect(() => assertQuoteApproved(honest, ORDER)).not.toThrow();
+    const byStaff = { ...honest, confirmation: { ...honest.confirmation, confirmedByUserId: '77777777-7777-4777-8777-777777777777' } };
+    expect(() => assertQuoteApproved(byStaff, ORDER)).not.toThrow();
+  });
+});

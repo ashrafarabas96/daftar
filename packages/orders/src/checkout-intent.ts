@@ -223,6 +223,13 @@ export interface OrderCheckoutFacts {
   notes: string | null;
   /** Stock key → merchant-granted discount request, integer minor units. Absent means `"0"`. */
   discountMinorByStockKey?: ReadonlyMap<string, string>;
+  /**
+   * Stock key → the product's frozen unit precision — the SAME map
+   * `summariseBasket` was given. Supplying it here is what makes the quote
+   * gate's representability leg have a caller; where it is absent that one law
+   * is not claimed, rather than being assumed to be 4.
+   */
+  unitDecimalsByStockKey?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -323,7 +330,16 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
   // recomputed total is refused HERE under PART 33's zero tolerance, rather
   // than rebuilding an intent for a total the shopper never agreed to.
   const approval = facts.quoteApproval;
-  assertQuoteApproved(approval, facts.orderId);
+  // The precision map is passed, not omitted: the representability leg of the
+  // builder's laws is claimed only where a caller supplies the precisions, and
+  // this is the caller that has them.
+  // Read off the FACTS only, never off `approval`, which may be absent: the
+  // runtime presence guard lives inside `assertQuoteApproved`, and reading a
+  // property of the thing being checked before it is checked is how a refusal
+  // becomes a TypeError. Where the facts carry no map, the approval's own
+  // `checks` is used by that function instead.
+  const quoteChecks = facts.unitDecimalsByStockKey === undefined ? undefined : { unitDecimalsByStockKey: facts.unitDecimalsByStockKey };
+  assertQuoteApproved(approval, facts.orderId, quoteChecks);
   if (approval.priorRecomputedTotalMinor !== undefined) {
     assertCommitWithinConfirmedQuote(approval, facts.orderId, approval.priorRecomputedTotalMinor);
   }
