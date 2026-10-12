@@ -17,6 +17,7 @@ import {
   addDays,
   appendMovement,
   assertCivilDate,
+  buildReversalMovement,
   buildSaleConsumptionMovement,
   computeEarnedPoints,
   consumptionKindIsRegistered,
@@ -1005,5 +1006,118 @@ describe('foldExpiry — F-01, a positive row that CORRECTS another has no attri
     const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-05-31');
     expect(fold.unhorizonedPoints).toBe(0n);
     expect(fold.spendablePoints).toBe(60n);
+  });
+});
+
+/* ================================================================== *
+ * F-11 — the reversal writer, and the hole only the DDL can close
+ *
+ * A challenge measured the next question after the F-01 fix: the SAME reversal
+ * with `correctsId` omitted passes `validateDraft` (`corrects_ck` constrains
+ * the field only when it is non-null) and is admitted as a standing grant —
+ * immortal again. So the fold's closure depended on the caller CHOOSING to
+ * name its target, which is the caller discipline `appendMovement`'s own
+ * contract disclaims. These cases pin both halves: what the writer now makes
+ * impossible, and what remains possible without it.
+ * ================================================================== */
+
+describe('buildReversalMovement — F-11, a reversal cannot omit what it corrects', () => {
+  const base = () => ledgerOf(earn('e1', 100n, '2025-06-01', '2026-06-01'), consume('c1', 40n, '2025-09-01'));
+
+  it('always writes `correctsId`, because it is a required field of its request', () => {
+    const ledger = base();
+    const draft = buildReversalMovement(ledger, {
+      businessId: BUSINESS,
+      customerId: CUSTOMER,
+      sourceId: 'sale-c1',
+      correctsId: 'c1',
+      points: 40n,
+      asOf: '2025-09-02',
+      movementId: 'r1',
+      reason: 'sale fully reversed',
+    });
+    expect(draft.correctsId).toBe('c1');
+    expect(draft.movementKind).toBe('adjust');
+    expect(draft.sourceType).toBe('manual_adjustment');
+    expect(draft.pointsDelta).toBe(40n);
+    // It invents no registry row: this is the pair the pack already specifies
+    // for a correction.
+    expect(SOURCE_KIND_PAIRS).toContain(`${draft.sourceType}:${draft.movementKind}`);
+
+    // And the fold then refuses it, which is the F-01 law reached through the
+    // real writer rather than through a fixture.
+    const applied = appendMovement(ledger, draft).ledger;
+    expect(refusalCodeOf(() => foldExpiry(applied, BUSINESS, CUSTOMER, '2026-06-01'))).toBe(
+      'loyalty.unattributable_positive_movement',
+    );
+  });
+
+  it('refuses a reversal that names a movement the ledger does not hold, or itself', () => {
+    const ledger = base();
+    const request = {
+      businessId: BUSINESS,
+      customerId: CUSTOMER,
+      sourceId: 'sale-c1',
+      points: 40n,
+      asOf: '2025-09-02',
+      movementId: 'r1',
+      reason: 'sale fully reversed',
+    };
+    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...request, correctsId: 'nope' }))).toBe(
+      'loyalty.corrects_unknown_movement',
+    );
+    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...request, correctsId: 'r1' }))).toBe(
+      'loyalty.corrects_self',
+    );
+  });
+
+  it('RED PROOF — the hole that remains: a hand-written reversal WITHOUT `correctsId` is immortal', () => {
+    // This is the challenge's measurement, kept as a test of the limit rather
+    // than of the fix. It asserts the CURRENT behaviour and will go red the day
+    // the DDL carries the distinction on a column the writer cannot omit, which
+    // is exactly when it should be rewritten.
+    const ledger = appendMovement(base(), {
+      id: 'r1',
+      businessId: BUSINESS,
+      customerId: CUSTOMER,
+      movementKind: 'adjust',
+      sourceType: 'manual_adjustment',
+      sourceId: 'sale-c1',
+      pointsDelta: 40n,
+      expiresOn: null,
+      effectiveOn: '2025-09-02',
+      reason: 'sale fully reversed',
+      correctsId: null, // the omission, and nothing refuses it
+    }).ledger;
+
+    const onHorizon = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(onHorizon.balancePoints).toBe(100n);
+    expect(onHorizon.expiringPoints).toBe(60n);
+    expect(onHorizon.spendablePoints).toBe(40n);
+    expect(onHorizon.unhorizonedPoints).toBe(40n);
+    expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, '2026-06-01')).toBe(40n);
+
+    // Ten years on, after a sweep would have taken the 60 it was handed.
+    expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, '2036-01-01')).toBe(40n);
+
+    // The honest statement of the arm, asserted rather than asserted away: the
+    // fold fails closed on a reversal that NAMES its target, and a reversal
+    // that does not name one is indistinguishable from a grant.
+    const named = appendMovement(
+      base(),
+      buildReversalMovement(base(), {
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId: 'sale-c1',
+        correctsId: 'c1',
+        points: 40n,
+        asOf: '2025-09-02',
+        movementId: 'r2',
+        reason: 'sale fully reversed',
+      }),
+    ).ledger;
+    expect(refusalCodeOf(() => foldExpiry(named, BUSINESS, CUSTOMER, '2026-06-01'))).toBe(
+      'loyalty.unattributable_positive_movement',
+    );
   });
 });

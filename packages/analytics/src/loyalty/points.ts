@@ -775,6 +775,18 @@ export function foldExpiry(
   // row it corrects — or when it is not a manual adjustment at all, which keeps
   // the guard closed over a restoring source `§5.7.2` has yet to register.
   //
+  // THE EXACT EXTENT OF THAT CLOSURE, because a later challenge measured it and
+  // the first statement of it here was too broad: this fails closed on a
+  // reversal THAT NAMES ITS TARGET. `corrects_ck` constrains `corrects_id` only
+  // when it is non-null, so the same reversal with the field omitted passes
+  // `validateDraft` and is admitted as a grant — immortal again, measured. No
+  // code in this package can close that: a nullable field cannot be made
+  // mandatory for writers that do not come through this package.
+  // `buildReversalMovement` takes `correctsId` as a REQUIRED field so no caller
+  // of it can omit one, and §A.3c.1 asks the Migration Owner for the
+  // distinction on a column the writer cannot omit — a restoring kind of its
+  // own, or `corrects_id NOT NULL` for that kind.
+  //
   // Failing closed is forced rather than chosen: the migration patch request
   // demotes this fold to a cross-check that may only REFUSE and never permit,
   // and an un-horizoned total silently PERMITS a spend the remainder relation —
@@ -1056,6 +1068,86 @@ export function buildSaleConsumptionMovement(
     effectiveOn: asOf,
     reason: null,
     correctsId: null,
+  };
+  validateDraft(ledger, draft);
+  return draft;
+}
+
+/** Everything a reversal needs, with the corrected movement as a REQUIRED field. */
+export interface ReversalRequest {
+  readonly businessId: string;
+  readonly customerId: string;
+  /** The sale or return document the reversal belongs to. */
+  readonly sourceId: string;
+  /** The movement being reversed. There is no overload of this without it. */
+  readonly correctsId: string;
+  readonly points: bigint;
+  readonly asOf: CivilDate;
+  readonly movementId: string;
+  readonly reason: string;
+}
+
+/**
+ * The only writer in this package for a restoring movement.
+ *
+ * WHY IT EXISTS. `foldExpiry` refuses a positive movement that names a row it
+ * corrects, because the points it restores belong to a lot whose horizon the
+ * row cannot carry (`horizon_ck`). A challenge then measured the obvious next
+ * question: the SAME reversal with `correctsId` omitted passes `validateDraft`
+ * — `corrects_ck` constrains the field only when it is non-null — and is
+ * admitted as a standing grant, immortal again. So the fold's closure depends
+ * on the caller choosing to name its target, and caller discipline is exactly
+ * what `appendMovement`'s own contract disclaims.
+ *
+ * WHAT IT CAN AND CANNOT FIX. `correctsId` here is a required field of a
+ * required argument, so no caller of THIS function can omit it: the omission
+ * stops being a choice and becomes a type error. What it cannot do is bind a
+ * writer that does not come through it — a hand-written draft, or any writer
+ * outside this package — and no code in this package can. Only the database
+ * can force it, which is why `P13-MIGRATION-PATCH-REQUEST.md` §A.3c.1 asks for
+ * the distinction on a column the writer cannot omit (a restoring KIND of its
+ * own, or `corrects_id NOT NULL` for that kind) rather than on a nullable
+ * field. Until that lands, the honest statement of this arm is: **the fold
+ * fails closed on a reversal that names its target**, and a reversal that does
+ * not name one is indistinguishable from a grant to anything downstream.
+ *
+ * It is deliberately NOT registered as a new source or kind: it writes the
+ * `manual_adjustment` `adjust` the pack already specifies for a correction
+ * (`§1.4`, `§2.3`, `A-16`), so it adds a writer and invents no registry row.
+ */
+export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRequest): LoyaltyMovementDraft {
+  const asOf = assertCivilDate(request.asOf, 'asOf');
+  if (typeof request.points !== 'bigint' || request.points <= 0n) {
+    refuseLoyalty('loyalty.movement_would_be_zero', 'a reversal of no points is not a movement', {
+      points: String(request.points),
+    });
+  }
+  if (request.correctsId === request.movementId) {
+    refuseLoyalty('loyalty.corrects_self', 'a movement cannot correct itself', { movementId: request.movementId });
+  }
+  const corrected = ledger.movements.find((m) => m.id === request.correctsId);
+  if (corrected === undefined) {
+    refuseLoyalty('loyalty.corrects_unknown_movement', 'a reversal must name a movement this ledger holds', {
+      correctsId: request.correctsId,
+    });
+  }
+  if (corrected.businessId !== request.businessId || corrected.customerId !== request.customerId) {
+    refuseLoyalty('loyalty.corrects_unknown_movement', 'a reversal and the movement it corrects belong to one party', {
+      correctsId: request.correctsId,
+    });
+  }
+  const draft: LoyaltyMovementDraft = {
+    id: request.movementId,
+    businessId: request.businessId,
+    customerId: request.customerId,
+    movementKind: 'adjust',
+    sourceType: 'manual_adjustment',
+    sourceId: request.sourceId,
+    pointsDelta: request.points,
+    expiresOn: null,
+    effectiveOn: asOf,
+    reason: request.reason,
+    correctsId: request.correctsId,
   };
   validateDraft(ledger, draft);
   return draft;

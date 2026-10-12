@@ -86,6 +86,9 @@ export const ANALYTICS_REFUSALS = {
    * never that nothing does. See `foldExpiry`.
    */
   'loyalty.unattributable_positive_movement': 500,
+  /** A reversal named itself, or a movement this ledger does not hold. */
+  'loyalty.corrects_unknown_movement': 422,
+  'loyalty.corrects_self': 422,
   /** A redemption value or line figure that is not usable integer minor units. */
   'loyalty.allocation_value_invalid': 422,
   /** A redemption with no lines to split across. */
