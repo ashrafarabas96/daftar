@@ -46,6 +46,7 @@ export const P9_NAMED_OBJECTS = [
   'bookings_eligible_resource_fk',
   'bookings_no_delete',
   'bookings_transition',
+  'bookings_born_booked',
   'bookings_buffers_match_service',
   'booking_operations_immutable',
   'booking_resource_lock_key',

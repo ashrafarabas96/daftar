@@ -218,6 +218,25 @@
 --          required by CHECK only for `'cancelled'`. The law was right and
 --          the code was narrower than the law, so the code changed.
 --
+-- R-P9-16  A BOOKING IS BORN 'booked'.
+--          R-P9-08 and R-P9-15 are UPDATE laws, and an independent
+--          challenger's fourth pass measured what that leaves at INSERT
+--          (C4-P9-01): a row inserted already `'rescheduled'`, its forward
+--          link naming a booking that is still standing and carries no
+--          backlink — the asymmetric chain R-P9-08 forbids, reached by the
+--          verb nothing checked — and a row born `'completed'` with
+--          `settled_at` 27 years before the booking. Both satisfy every shape
+--          CHECK, because a CHECK makes such a row internally consistent, not
+--          impossible. So a booking is created standing and closed by a
+--          transition, and a new row carries no settlement record and no
+--          successor (`booking.not_born_closed`). The backlink
+--          `rescheduled_from_id` IS allowed at INSERT: a successor is born
+--          carrying it, which is how a reschedule is recorded at all.
+--          What this does NOT decide is whether an import of historical
+--          bookings may create a closed row — that is a command with its own
+--          authority and audit, not a side effect of INSERT privilege, and it
+--          stays an open design item (limitation 19) rather than a guess here.
+--
 -- R-P9-10  Every refusal is `'<domain>.<snake_case_condition>: sentence'`
 --          with `ERRCODE = 'P0001'`, the convention of every migration from
 --          0053 on. Domain prefix `booking.`.
@@ -943,6 +962,50 @@ CREATE TRIGGER bookings_no_deletion
   BEFORE DELETE ON bookings
   FOR EACH ROW EXECUTE FUNCTION bookings_no_delete();
 
+-- R-P9-16. A BOOKING IS BORN 'booked'.
+--
+-- Everything above this point guards UPDATE, and an independent challenger's
+-- fourth pass measured what that left open at INSERT (C4-P9-01): a row could
+-- be inserted already `'rescheduled'`, its forward link naming a booking that
+-- is still `'booked'` and carries no backlink — the asymmetric chain R-P9-08
+-- exists to forbid, reached by the one verb nothing checked. The same INSERT
+-- could be born `'completed'` with `settled_at` twenty-seven years before the
+-- booking. Both rows satisfy every shape CHECK, so nothing downstream would
+-- ever flag them: the CHECKs make such a row internally consistent, which is
+-- not the same as possible.
+--
+-- The rule is the narrow one the hole needs: a booking is created standing,
+-- and its closure is a transition, which is what every other law here already
+-- assumes. An import of historical bookings, or any other path that must
+-- create a row already closed, is a command with its own authority and its own
+-- audit — not a side effect of INSERT privilege — and it is named as an open
+-- design item (limitation 19) rather than guessed at here. The settlement
+-- fields are checked individually and not as a group, because
+-- `bookings_settled_shape_ck` compares `state <> 'booked'` against the
+-- CONJUNCTION of `settled_at` and `settled_by_user_id`: on a standing booking
+-- both sides are false when only ONE of them is set, so a lone field passes
+-- it. Measured, after the same challenger showed a comment of mine that
+-- claimed otherwise was false (C4-P9-02).
+CREATE OR REPLACE FUNCTION bookings_born_booked() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF NEW.state <> 'booked' THEN
+    RAISE EXCEPTION 'booking.not_born_closed: a booking is created standing and closed by a transition; % cannot be its first state', NEW.state USING ERRCODE = 'P0001';
+  END IF;
+  IF NEW.settled_at IS NOT NULL OR NEW.settled_by_user_id IS NOT NULL
+     OR NEW.settle_reason IS NOT NULL OR NEW.rescheduled_to_id IS NOT NULL THEN
+    RAISE EXCEPTION 'booking.not_born_closed: a new booking carries no settlement record and no successor; both are written by the statement that closes it' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $$;
+COMMENT ON FUNCTION bookings_born_booked() IS
+  'P9-S1, R-P9-16. BEFORE INSERT guard on `bookings`: refuses a row born in any state but ''booked'', and refuses one born carrying a settlement record or a forward reschedule link (booking.not_born_closed). It exists because R-P9-08 and R-P9-15 are UPDATE laws, and an executed attack inserted an asymmetric reschedule chain and a booking settled 27 years before it was booked, both satisfying every shape CHECK. `rescheduled_from_id` is NOT refused: a successor is born carrying its backlink, which is how a reschedule is recorded. SECURITY INVOKER — it reads no relation.';
+REVOKE ALL ON FUNCTION bookings_born_booked() FROM PUBLIC;
+
+CREATE TRIGGER bookings_born_booked_only
+  BEFORE INSERT ON bookings
+  FOR EACH ROW EXECUTE FUNCTION bookings_born_booked();
+
 CREATE OR REPLACE FUNCTION bookings_transition() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
@@ -1048,7 +1111,7 @@ BEGIN
   RETURN NEW;
 END $$;
 COMMENT ON FUNCTION bookings_transition() IS
-  'P9-S1, R-P9-08 and R-P9-15. BEFORE UPDATE guard on `bookings`: refuses any change to the identity, the held time or the buffers (booking.immutable), refuses to rewrite a settlement field once it is non-NULL (booking.immutable_settlement), refuses to write one while the booking is still ''booked'' (booking.settlement_without_close), refuses to ADD one to a booking that is already closed (booking.settlement_after_close), refuses to leave a terminal state (booking.state_terminal) and refuses to re-enter ''booked'' (booking.state_not_reopenable). SECURITY INVOKER — it compares OLD to NEW and reads no relation.';
+  'P9-S1, R-P9-08 and R-P9-15. BEFORE UPDATE guard on `bookings`: refuses any change to the identity, the held time or the buffers (booking.immutable), refuses to rewrite a settlement field once it is non-NULL (booking.immutable_settlement), refuses to write one while the booking is still ''booked'' (booking.settlement_without_close), refuses to ADD one to a booking that is already closed (booking.settlement_after_close), refuses to leave a terminal state (booking.state_terminal) and refuses to re-enter ''booked'' (booking.state_not_reopenable — which CANNOT FIRE as shipped, because leaving a terminal state is refused first; it is named here for the law it states and is recorded as limitation 18 of the prep report, verified dead by execution rather than by reading). SECURITY INVOKER — it compares OLD to NEW and reads no relation.';
 REVOKE ALL ON FUNCTION bookings_transition() FROM PUBLIC;
 
 CREATE TRIGGER bookings_transition_only
@@ -1534,7 +1597,7 @@ BEGIN
       RAISE EXCEPTION 'booking.registry_exposed: % may execute the buffer guard directly', v_role USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
-  FOR v_tbl IN SELECT unnest(ARRAY['bookings_no_delete', 'bookings_transition', 'booking_operations_immutable'])
+  FOR v_tbl IN SELECT unnest(ARRAY['bookings_no_delete', 'bookings_transition', 'bookings_born_booked', 'booking_operations_immutable'])
   LOOP
     IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = v_tbl AND prosecdef) THEN
       RAISE EXCEPTION 'booking.migration_end_state_invalid: % is SECURITY DEFINER and has no reason to be', v_tbl USING ERRCODE = 'P0001';

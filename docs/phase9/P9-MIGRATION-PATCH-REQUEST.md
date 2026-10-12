@@ -241,7 +241,8 @@ read it (end-state check (f)).
 | `booking_resolve_local(TEXT, TIMESTAMP, INTERVAL)` | `plpgsql STABLE`, owned, pinned path | — | `booking.local_time_nonexistent`, `booking.local_time_ambiguous`, `booking.local_time_offset_mismatch`, `booking.timezone_unknown`, `booking.local_time_unresolvable`, `booking.local_time_not_finite`, `booking.local_time_out_of_supported_range` |
 | `booking_replay_result(UUID, UUID, TEXT, TEXT)` | `plpgsql STABLE`, SECURITY INVOKER, owned, pinned path | — | `booking.replay_lookup_invalid`, `booking.replay_scope_mismatch`, `booking.operation_conflict`, `booking.operation_intent_conflict` |
 | `bookings_no_delete()` | raise-only, not a definer | `bookings_no_deletion` BEFORE DELETE | `booking.not_deletable` |
-| `bookings_transition()` | raise-only, not a definer | `bookings_transition_only` BEFORE UPDATE | `booking.immutable`, `booking.state_terminal`, `booking.state_not_reopenable` |
+| `bookings_transition()` | raise-only, not a definer | `bookings_transition_only` BEFORE UPDATE | `booking.immutable`, `booking.immutable_settlement`, `booking.settlement_without_close`, `booking.settlement_after_close`, `booking.state_terminal`, `booking.state_not_reopenable` (unreachable as shipped — limitation 18) |
+| `bookings_born_booked()` | raise-only, not a definer | `bookings_born_booked_only` BEFORE INSERT | `booking.not_born_closed` |
 | `bookings_buffers_match_service()` | `SECURITY DEFINER`, owned by `daftar_booking_internal`, pinned path | `bookings_buffers_are_the_service_s` — CONSTRAINT trigger, `DEFERRABLE INITIALLY DEFERRED`, `WHEN (kind = 'appointment')` | `booking.service_unreadable`, `booking.buffers_not_the_service_s` |
 | `booking_operations_immutable()` | raise-only, not a definer | `booking_operations_no_mutation` | per spec §7 |
 
@@ -253,8 +254,13 @@ login role can execute the buffer guard or the lock-key routine.
 `bookings_transition()` freezes, after INSERT: `tenant_id`, `business_id`, `branch_id`,
 `id`, `kind`, `resource_id`, `service_id`, `customer_id`, `starts_at`, `ends_at`, both
 buffers, `blocking_window`, `rescheduled_from_id`, `intent_sha256`, `created_by_user_id`,
-`created_at`. Only `state` and its settlement metadata ever change. A reschedule is a new
-row plus a transition on the old one, in one transaction (R-P9-08).
+`created_at`. Only `state` and its settlement metadata ever change, they are written once
+(R-P9-15), and `bookings_born_booked()` refuses a row born in any state but `'booked'` or
+born carrying a settlement record or a forward link (R-P9-16) — so the settlement metadata
+has exactly one writer, the statement that closes the booking. A reschedule is a new row
+plus a transition on the old one, in one transaction (R-P9-08); the successor's backlink
+`rescheduled_from_id` is written at INSERT and is the one closure-adjacent column an INSERT
+may set.
 
 ### 4.1 R-P9-11 — the per-resource serialization key, and why it is requested
 

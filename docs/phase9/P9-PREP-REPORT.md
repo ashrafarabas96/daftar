@@ -30,7 +30,7 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-world.ts` | 277 | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-**83 of 83 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
+**87 of 87 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
 — over seven suites, and again on PostgreSQL 18.4 at `C` as the comparison the mission permits.
 A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
@@ -340,6 +340,98 @@ this phase's own container is owed, and one signature of the three — the coord
 actual-diff review — is still owed. The D11 PART 117 label for the same state is
 `PREPARED / NOT PROMOTED`; it names the promotion state, not the ladder rung, and this
 report uses both so neither vocabulary has to be guessed at.
+
+### 3c.16 The challenger's FOURTH pass at `903e1f4` — PASS-WITH-SCOPE, and the INSERT hole
+
+The challenger's signature now extends to `903e1f4`: **PASS-WITH-SCOPE** over the delta
+`9a64289..3a1d0fd`, 83 of 83 with exit code 0 on Node v24.12.0 and PostgreSQL 16.15 at
+`en_US.utf8`, on a cluster it `initdb`-ed fresh. Report:
+`/mnt/project-files/phase9/P9-CHALLENGE-903e1f4.md`, digest
+`54b8f4d24cc087f6b3757b789c6eed4012265e792f0cefd79ae72e38fb06dbb3`. The round-3 PASS at
+`9a64289` is untouched.
+
+**It proved a claim of the previous round that had only been asserted.** That round said it
+changed no schema; the DDL spec's digest moved by 21 lines, which on its own reads as drift.
+The challenger tokenised both versions — stripping comments at the top level and inside every
+dollar-quoted body, leaving literals alone — and both reduce to the same 50 541 characters.
+Comments only, zero executable change. It also answered the three questions put to it by
+execution: each promoted (a4) case reds when its own clause is removed, and reds to **no
+refusal at all** rather than to a CHECK; dropping (a3) and (a4) together is identical to
+dropping either alone, and the reason is structural — the two guards are mutually exclusive
+on `OLD.state`, so neither can ever stand in for the other; and the constraint restore is
+byte-identical even with a failure injected while the CHECK is off and a violating row
+exists, compared across `convalidated`, `conislocal`, `condeferrable`, columns, indexes,
+triggers with `tgenabled`, policies and the RLS flags.
+
+**C4-P9-01 (P2) — limitation 19 was reachable, and one of its products contradicted a law
+this file states.** Measured: a booking can be INSERTed already `'rescheduled'`, its forward
+link naming a booking that is still `'booked'` and carries no backlink. That is the
+asymmetric chain R-P9-08 exists to forbid and that round 1's C-P9-03 was about; the only
+difference is the verb — C-P9-03 reached it by UPDATE, which is now refused, and this reaches
+it at INSERT, which nothing checked. Also measured: born `'completed'` with `settled_at`
+twenty-seven years before the booking. Both rows satisfy every shape CHECK, because a CHECK
+makes such a row internally consistent, which is not the same as possible. No case in the
+phase exercised a born-closed INSERT at all.
+
+Closed as **R-P9-16, a booking is born standing**: a BEFORE INSERT guard refusing any first
+state but `'booked'`, and refusing a new row that carries a settlement record or a forward
+link (`booking.not_born_closed`). `rescheduled_from_id` is deliberately NOT refused — a
+successor is born carrying its backlink, and block (a) refuses adding it later, so refusing
+it at INSERT too would make a reschedule impossible to record. The settlement fields are
+checked individually rather than as a group, for the reason C4-P9-02 established below.
+
+The challenger was explicit that it would not ask for an INSERT arm on its say-so, since an
+import and a live cancellation want different answers, and named the alternative: restate the
+laws as UPDATE-only. The narrow guard is the choice taken, and the reason is that the row it
+refuses is one R-P9-08 already forbids — the law was not UPDATE-only by intent, it was
+UPDATE-only by oversight. What remains undecided, and is now limitation 19's whole content,
+is whether an import of historical bookings may create a closed row: that is a command with
+its own authority and audit, not a side effect of INSERT privilege. Four cases land the
+guard, each asserting the refusal by name, with the fourth proving the lawful reschedule
+sequence still works end to end.
+
+**C4-P9-02 (P3) — the rationale I gave for the two new (a3) cases was measurably false, and
+I verified the correction against the live CHECK before accepting it.** My comment said
+`bookings_settled_shape_ck` "would also refuse both", so the cases had to assert the name to
+avoid passing on the CHECK. It refuses neither: the CHECK compares `state <> 'booked'`
+against the **conjunction** of `settled_at` and `settled_by_user_id`, so on a standing
+booking with only one of them set both sides are false and it passes. Confirmed directly:
+`('booked' <> 'booked') = (now() IS NOT NULL AND NULL::uuid IS NOT NULL)` is true — the CHECK
+holds — while setting both gives false. With (a3) removed the challenger measured exactly
+that: each lone field succeeds with no refusal, and only both at once reaches 23514. The
+cases were right and the reason was wrong in the most consequential direction — it described
+a backstop that does not exist, and so understated what (a3) alone is carrying. The comment
+now says that, and the same measurement is why R-P9-16 checks the fields one by one.
+
+**C4-P9-03 (P3) — the catalogue comment still advertised a refusal that cannot fire.**
+Limitation 18 says `booking.state_not_reopenable` is unreachable, and the challenger verified
+it by execution: as shipped a reopen gives `booking.state_terminal`, and with that clause
+removed the reopen refusal does fire. But `COMMENT ON FUNCTION bookings_transition()` still
+listed it among the refusals without a caveat, so the inline comment and the catalogue comment
+contradicted each other in the same file at the same commit. The COMMENT now carries the
+caveat and points at limitation 18.
+
+**C4-P9-04 (P3) — two loose edges in the suite, neither reachable, both closed.** An
+assertion accepted `booking.immutable_settlement` OR `booking.state_not_reopenable`, and the
+second arm cannot be produced by this schema: (a2) sits above the state machine and the
+reopen refusal is itself dead. A loosened alternation with no case behind it is a weaker
+assertion for nothing, so it now names one refusal. And in the promoted (a4) case the row
+discard ran before `ADD CONSTRAINT` inside one `finally`: had the discard thrown, the CHECK
+would never have gone back on and its error would have replaced the assertion error that
+explains why. Restructured so both steps always run and the probe's own error is re-raised
+first — and without throwing from a `finally` at all, which is its own version of the same
+masking.
+
+**Also recorded, for the coordinator's cross-phase question:** the challenger confirmed Phase
+9 is not exposed to the hand-written stand-in table class found in Phase 6. The fixture
+applies the real frozen `0000`–`0073` through the project's own runner, `BOOTSTRAP_PATCH`
+creates a role and no table, and every foreign key out of this slice lands on `branches`,
+`businesses` or `users`, each backed by a frozen key. `customers` does not exist in the frozen
+history and nothing references it — which is exactly why its key is an open external item
+rather than a declared constraint.
+
+**The run after these items.** `tests/phase9-prep`, 7 files, **87 of 87 cases, exit code 0**,
+on PostgreSQL 16.15 at `en_US.utf8` under Node v24.21.0.
 
 ### 3c.15 The COORDINATOR's actual-diff review of `51626e1..9a64289`, and its seven scope items
 
@@ -798,25 +890,35 @@ Stated as limitations rather than left to be discovered.
     report was written by the author of the thing it tests, and the challenger's probes
     are the challenger's. The coordinator actual-diff review was given at `9a64289`
     (ACCEPT-WITH-SCOPE); one signature of three is now owed, not two.
-18. **`booking.state_not_reopenable` can never fire — OPEN DESIGN ITEM, not a fix.** Block
+18. **`booking.state_not_reopenable` can never fire — OPEN DESIGN ITEM, not a fix.
+    VERIFIED BY EXECUTION, not by reading:** the challenger removed the clause above it and
+    the reopen refusal then fired, so it is dead code with a live name rather than a
+    misreading of the control flow. Its name is still advertised by
+    `COMMENT ON FUNCTION bookings_transition()`, now with a caveat pointing here (C4-P9-03).
+    The original entry follows. Block
     (b)'s first clause already refuses every change of state out of a terminal state, so
     the clause beneath it, which refuses re-entering `'booked'`, is unreachable: any UPDATE
     that would re-enter `'booked'` is leaving a terminal state and is refused by
     `booking.state_terminal` first. The refusal is therefore dead code with a live name,
-    and its name appears in the function's own COMMENT as though it were reachable.
+    and its name appeared in the function's own COMMENT as though it were reachable.
     Recorded rather than deleted: which of the two refusals a caller should see is a
     question about the command slice's error contract, not about the schema, and
     collapsing them now would decide it silently. Raised by the coordinator's actual-diff
     review of `51626e1..9a64289`.
-19. **R-P9-15 guards UPDATE only, so an INSERT can create an already-closed booking —
-    OPEN DESIGN ITEM, not a fix.** `bookings_transition` is a BEFORE UPDATE trigger, and
-    nothing refuses an INSERT that arrives with `state = 'cancelled'` and a settlement
-    record already written, or with a forward reschedule link. The shape CHECKs make such
-    a row internally consistent rather than impossible. Whether a booking may be born
-    closed is a command-slice question — an import, a migration of historical data and a
-    live cancellation want different answers — so the schema does not decide it here.
-    What the schema does guarantee is that once such a row exists, every later write to
-    its closure record is refused. Raised by the same review.
+19. **~~R-P9-15 guards UPDATE only, so an INSERT can create an already-closed
+    booking.~~ CLOSED at the mechanism; what remains is narrower.** This was recorded as
+    an open design item on the coordinator's review and then measured by the challenger's
+    fourth pass: it was not merely a gap, it was reachable, and one row it produced — born
+    `'rescheduled'` pointing at a booking that is still standing and carries no backlink —
+    is the asymmetric chain R-P9-08 already forbids. A law that is UPDATE-only by oversight
+    is not a design decision, so **R-P9-16** now refuses a booking born in any state but
+    `'booked'`, or born carrying a settlement record or a forward link
+    (`booking.not_born_closed`), with four red proofs (§3c.16).
+    What is still undecided, and is all that is left of this item: whether an **import of
+    historical bookings** may create a closed row. That is a command with its own authority
+    and its own audit, not a side effect of INSERT privilege, and the schema does not grant
+    it here. The backlink `rescheduled_from_id` IS writable at INSERT, because a successor
+    is born carrying it.
 17. **The lock-set collision case is reasoned, not measured.** Two distinct resources
     hashing to one key would merge their locks, which broadens exclusion and cannot
     narrow it; no fixture constructs such a collision, because constructing one against

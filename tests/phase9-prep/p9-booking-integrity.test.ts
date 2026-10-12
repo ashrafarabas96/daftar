@@ -30,7 +30,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ScratchDb } from '../helpers/scratch-db';
-import { INSERT_BOOKING, INSERT_BOOKING_WITH_BACKLINK, type BookingWorld, bookingParams, uuid, withBookingDb } from './p9-booking-world';
+import { CUSTOMER, INSERT_BOOKING, INSERT_BOOKING_WITH_BACKLINK, INTENT, type BookingWorld, bookingParams, uuid, withBookingDb } from './p9-booking-world';
 
 /** A quiet June day, far from any transition: this file is not about clocks. */
 const AT = (h: string): string => `2026-06-10T${h}:00:00+00`;
@@ -143,7 +143,13 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       // written with `<>` would have let this through on the NULL.
       for (const set of [`settle_reason = NULL`, `settled_at = NULL, state = 'booked'`, `settled_by_user_id = NULL, state = 'booked'`]) {
         const said = await refused(db, `UPDATE bookings SET ${set} WHERE business_id = $1 AND id = $2`, [world.businessId, uuid(1)]);
-        expect(said).toMatch(/booking\.(immutable_settlement|state_not_reopenable)/);
+        // `booking.immutable_settlement` and nothing else. The first version of
+        // this line accepted `state_not_reopenable` as an alternative, which
+        // CANNOT be produced by this schema: (a2) is above the state machine,
+        // so it refuses first, and the reopen refusal is itself unreachable
+        // (limitation 18). An alternation whose second arm cannot fire is a
+        // loosened assertion with no case behind it (C4-P9-04).
+        expect(said).toMatch(/booking\.immutable_settlement/);
       }
 
       const row = await db.pool.query<{ n: number }>(
@@ -180,11 +186,23 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       expect(row.rows[0]?.reason).toBeNull();
 
       // The other two fields (a3) covers, each written ALONE onto a row that
-      // is still 'booked'. `bookings_settled_shape_ck` would also refuse both
-      // — it ties settled_at and settled_by_user_id to `state <> 'booked'` —
-      // and that is exactly why these assert the NAME: the trigger fires
-      // BEFORE the constraint, so a case that accepted any failure would pass
-      // on the CHECK and tell us nothing about (a3).
+      // is still 'booked'.
+      //
+      // CORRECTION, measured. This comment used to say that
+      // `bookings_settled_shape_ck` "would also refuse both", and that the
+      // cases therefore had to assert the name to avoid passing on the CHECK.
+      // That was FALSE, and an independent challenger measured it (C4-P9-02):
+      // the CHECK compares `state <> 'booked'` against the CONJUNCTION of
+      // settled_at and settled_by_user_id, so on a standing booking with only
+      // ONE of them set both sides are false and the CHECK passes. With (a3)
+      // removed, a lone settled_at and a lone settled_by_user_id each succeed
+      // with no refusal at all; only setting BOTH reaches 23514.
+      //
+      // So the hazard is the opposite of the one I described: (a3) is the ONLY
+      // thing refusing these two writes, and the CHECK that looked like a
+      // backstop is not one. Asserting the name is still right — it is what
+      // names which guard answered — but the reason is that there is no second
+      // guard, not that there is one firing first.
       for (const set of [`settled_at = now()`, `settled_by_user_id = $3`]) {
         const alone = await refused(
           db,
@@ -210,32 +228,20 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
       //
       // Why they exist at all: every other case here reaches (a4) through a
       // field the shape CHECKs do not constrain (`settle_reason` on
-      // 'completed' and 'no_show'). For the other three fields the CHECKs
-      // would refuse the late write anyway, so those cases could not tell
+      // 'completed' and 'no_show'). For the other three fields a CHECK might
+      // be refusing the late write instead, so those cases could not tell
       // whether (a4) does anything — and the author of this file wrote the
       // guard and the CHECKs both, which is precisely the position from which
       // that question cannot be answered. The challenger answered it from
       // outside, by removing the mechanism it was not testing and making the
-      // other one speak its own name.
+      // other one speak its own name. (Its fourth pass went further and
+      // removed each (a4) clause alone: every probe below then produced NO
+      // refusal at all, not a CHECK's.)
       //
       // The CHECK is dropped on a SCRATCH database built from the migration
-      // history, captured by `pg_get_constraintdef` first, restored in a
-      // `finally`, and the restoration is asserted. No frozen migration is
-      // touched and the document is not edited.
-      // The probes leave rows that the dropped CHECK would reject, so they are
-      // discarded before it goes back on — otherwise the restoration itself
-      // fails with 23514 and the case leaves the schema weakened, which is a
-      // worse outcome than the hole it is testing for. Measured: the first
-      // version of this case did exactly that.
-      const discard = async (ids: readonly string[]): Promise<void> => {
-        await db.pool.query(`ALTER TABLE bookings DISABLE TRIGGER bookings_no_deletion`);
-        try {
-          await db.pool.query(`DELETE FROM bookings WHERE business_id = $1 AND id = ANY($2::uuid[])`, [world.businessId, ids]);
-        } finally {
-          await db.pool.query(`ALTER TABLE bookings ENABLE TRIGGER bookings_no_deletion`);
-        }
-      };
-
+      // history, captured with `pg_get_constraintdef` first, always restored,
+      // and the restoration asserted. No frozen migration is touched and the
+      // document is not edited.
       const defOf = async (name: string): Promise<string> => {
         const r = await db.pool.query<{ def: string }>(
           `SELECT pg_get_constraintdef(c.oid) AS def FROM pg_constraint c
@@ -248,9 +254,53 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
         return def;
       };
 
-      // PROBE 1 and 2 — settled_at and settled_by_user_id, behind
+      /** Delete the probe's rows, around the no-delete trigger. */
+      const discard = async (ids: readonly string[]): Promise<void> => {
+        await db.pool.query(`ALTER TABLE bookings DISABLE TRIGGER bookings_no_deletion`);
+        try {
+          await db.pool.query(`DELETE FROM bookings WHERE business_id = $1 AND id = ANY($2::uuid[])`, [world.businessId, ids]);
+        } finally {
+          await db.pool.query(`ALTER TABLE bookings ENABLE TRIGGER bookings_no_deletion`);
+        }
+      };
+
+      /**
+       * Put `name` back, whatever happened to the probe.
+       *
+       * The discard comes first, because the rows the probe created are the
+       * ones the CHECK forbids and `ADD CONSTRAINT` validates the whole table
+       * — the first version of this case skipped that and failed its own
+       * restore with 23514, leaving the schema weakened, which is a worse
+       * outcome than the hole it tests for. Both steps are attempted whichever
+       * one fails, and failures are RETURNED rather than thrown: a throw from
+       * a cleanup path replaces the assertion error that explains the failure,
+       * which is the masking C4-P9-04 was about, one level up.
+       */
+      const restore = async (name: string, def: string, ids: readonly string[]): Promise<readonly unknown[]> => {
+        const failures: unknown[] = [];
+        try {
+          await discard(ids);
+        } catch (e) {
+          failures.push(e);
+        }
+        try {
+          await db.pool.query(`ALTER TABLE bookings ADD CONSTRAINT ${name} ${def}`);
+        } catch (e) {
+          failures.push(e);
+        }
+        return failures;
+      };
+
+      /** Re-raise the probe's own error first: it is the one worth reading. */
+      const settle = (probe: unknown, failures: readonly unknown[]): void => {
+        if (probe !== null) throw probe;
+        if (failures.length > 0) throw failures[0];
+      };
+
+      // PROBES 1 and 2 — settled_at and settled_by_user_id, behind
       // `bookings_settled_shape_ck`.
       const settled = await defOf('bookings_settled_shape_ck');
+      let probe12: unknown = null;
       try {
         await db.pool.query(`ALTER TABLE bookings DROP CONSTRAINT bookings_settled_shape_ck`);
         await book(db, world, 20, '08', '09');
@@ -272,14 +322,15 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
           const late = await refused(db, `UPDATE bookings SET ${set} WHERE business_id = $1 AND id = $2`, params);
           expect(late).toMatch(/booking\.settlement_after_close/);
         }
-      } finally {
-        await discard([uuid(20)]);
-        await db.pool.query(`ALTER TABLE bookings ADD CONSTRAINT bookings_settled_shape_ck ${settled}`);
+      } catch (e) {
+        probe12 = e;
       }
+      settle(probe12, await restore('bookings_settled_shape_ck', settled, [uuid(20)]));
       expect(await defOf('bookings_settled_shape_ck')).toBe(settled);
 
       // PROBE 3 — the forward link, behind `bookings_reschedule_shape_ck`.
       const reschedule = await defOf('bookings_reschedule_shape_ck');
+      let probe3: unknown = null;
       try {
         await db.pool.query(`ALTER TABLE bookings DROP CONSTRAINT bookings_reschedule_shape_ck`);
         await book(db, world, 21, '10', '11');
@@ -297,10 +348,10 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
         await book(db, world, 22, '12', '13');
         const late = await refused(db, `UPDATE bookings SET rescheduled_to_id = $3 WHERE business_id = $1 AND id = $2`, [world.businessId, uuid(21), uuid(22)]);
         expect(late).toMatch(/booking\.settlement_after_close/);
-      } finally {
-        await discard([uuid(21), uuid(22)]);
-        await db.pool.query(`ALTER TABLE bookings ADD CONSTRAINT bookings_reschedule_shape_ck ${reschedule}`);
+      } catch (e) {
+        probe3 = e;
       }
+      settle(probe3, await restore('bookings_reschedule_shape_ck', reschedule, [uuid(21), uuid(22)]));
       expect(await defOf('bookings_reschedule_shape_ck')).toBe(reschedule);
     });
   });
@@ -394,6 +445,166 @@ describe('P9 — the closure record is written once (R-P9-15, C-P9-02 / C-P9-03)
         [uuid(1), uuid(2), uuid(3)],
       ]);
       expect(states.rows.map((r) => r.state)).toEqual(['cancelled', 'completed', 'rescheduled']);
+    });
+  });
+});
+
+describe('P9 — a booking is born standing (R-P9-16, C4-P9-01)', () => {
+  // The fourth independent pass measured what the write-once laws leave open
+  // at the one verb they never guard. R-P9-08 and R-P9-15 are UPDATE laws:
+  // every case above reaches them with an UPDATE, because that is how a
+  // booking is closed. INSERT was checked by the shape CHECKs alone — and a
+  // CHECK makes a row internally CONSISTENT, which is a different claim from
+  // possible. So a row could arrive already closed, and two of the shapes it
+  // could arrive in contradict laws this file states elsewhere.
+  //
+  // Each case below asserts the refusal by name and, before it, that the row
+  // it is trying to create is one the shape CHECKs would accept — otherwise
+  // the case would pass on a CHECK and prove nothing about the new guard. The
+  // last two cases are the non-vacuity: a normal INSERT still works, and a
+  // successor is still born carrying its backlink, which is the one piece of
+  // closure metadata an INSERT must be allowed to write.
+
+  const INSERT_WITH_STATE = `
+    INSERT INTO bookings (tenant_id, business_id, branch_id, id, kind, resource_id, service_id, customer_id,
+                          starts_at, ends_at, lead_buffer_minutes, trail_buffer_minutes, blocking_window,
+                          state, intent_sha256, created_by_user_id, rescheduled_to_id, settled_at, settled_by_user_id, settle_reason)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::timestamptz, $11::int, $12::int,
+            tstzrange($9::timestamptz - make_interval(mins => $11::int), $10::timestamptz + make_interval(mins => $12::int), '[)'),
+            $13, $14, $15, $16, $17::timestamptz, $18, $19)`;
+
+  it('a booking cannot be INSERTed already rescheduled, pointing at a booking that is still standing', async () => {
+    await withBookingDb('daftar_p9_born_1', async (db, world) => {
+      // The successor exists and is 'booked', carrying no backlink — so the
+      // row below would create exactly the asymmetric chain R-P9-08 forbids
+      // and that round 1's C-P9-03 was about. The only difference is the verb.
+      await book(db, world, 1, '09', '10');
+
+      const said = await refused(db, INSERT_WITH_STATE, [
+        world.tenantId,
+        world.businessId,
+        world.branchId,
+        uuid(2),
+        'appointment',
+        world.resourceAId,
+        world.plainServiceId,
+        CUSTOMER,
+        AT('11'),
+        AT('12'),
+        0,
+        0,
+        'rescheduled',
+        INTENT,
+        world.userId,
+        uuid(1),
+        '2026-06-10T11:30:00+00',
+        world.userId,
+        'moved, allegedly',
+      ]);
+      expect(said).toMatch(/booking\.not_born_closed/);
+
+      // And the chain is still symmetric: nothing was created, so the standing
+      // booking is not pointed at by anything.
+      const chain = await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1 AND rescheduled_to_id IS NOT NULL`, [
+        world.businessId,
+      ]);
+      expect(chain.rows[0]?.n).toBe(0);
+    });
+  });
+
+  it('a booking cannot be INSERTed already completed, with a settlement recorded before the booking existed', async () => {
+    await withBookingDb('daftar_p9_born_2', async (db, world) => {
+      // `settled_at` 27 years before the booking satisfies every CHECK on the
+      // table: nothing orders the settlement against the window. That is the
+      // shape the challenger measured, reproduced here.
+      const said = await refused(db, INSERT_WITH_STATE, [
+        world.tenantId,
+        world.businessId,
+        world.branchId,
+        uuid(3),
+        'appointment',
+        world.resourceAId,
+        world.plainServiceId,
+        CUSTOMER,
+        AT('13'),
+        AT('14'),
+        0,
+        0,
+        'completed',
+        INTENT,
+        world.userId,
+        null,
+        '1999-01-01T00:00:00+00',
+        world.userId,
+        null,
+      ]);
+      expect(said).toMatch(/booking\.not_born_closed/);
+
+      const none = await db.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM bookings WHERE business_id = $1`, [world.businessId]);
+      expect(none.rows[0]?.n).toBe(0);
+    });
+  });
+
+  it('a STANDING booking cannot be INSERTed carrying a settlement record either, which no CHECK refuses', async () => {
+    await withBookingDb('daftar_p9_born_3', async (db, world) => {
+      // The reason the guard checks the settlement fields INDIVIDUALLY.
+      // `bookings_settled_shape_ck` compares `state <> 'booked'` against the
+      // CONJUNCTION of settled_at and settled_by_user_id, so on a row born
+      // 'booked' with only ONE of them set both sides are false and the CHECK
+      // passes — the same measurement that corrected the comment in the (a3)
+      // case above (C4-P9-02). Nothing but R-P9-16 refuses this.
+      for (const [at, by, reason] of [
+        ['2026-06-10T09:30:00+00', null, null],
+        [null, null, 'born with a reason'],
+      ] as const) {
+        const said = await refused(db, INSERT_WITH_STATE, [
+          world.tenantId,
+          world.businessId,
+          world.branchId,
+          uuid(4),
+          'appointment',
+          world.resourceAId,
+          world.plainServiceId,
+          CUSTOMER,
+          AT('09'),
+          AT('10'),
+          0,
+          0,
+          'booked',
+          INTENT,
+          world.userId,
+          null,
+          at,
+          by,
+          reason,
+        ]);
+        expect(said).toMatch(/booking\.not_born_closed/);
+      }
+    });
+  });
+
+  it('and a successor is still born carrying its BACKLINK: the guard does not break how a reschedule is recorded', async () => {
+    await withBookingDb('daftar_p9_born_4', async (db, world) => {
+      // NON-VACUITY, and the one exception R-P9-16 names: `rescheduled_from_id`
+      // is written at INSERT, because the successor's own identity includes
+      // which booking it replaces — block (a) refuses adding it later, so if
+      // the INSERT guard refused it too, a reschedule could not be recorded at
+      // all. This is the full lawful sequence, end to end.
+      await book(db, world, 5, '09', '10');
+      await db.pool.query(INSERT_BOOKING_WITH_BACKLINK, [...bookingParams({ world, id: uuid(6), startsAt: AT('11'), endsAt: AT('12') }), uuid(5)]);
+      await db.pool.query(
+        `UPDATE bookings SET state = 'rescheduled', rescheduled_to_id = $3, settled_at = now(),
+           settled_by_user_id = $2, settle_reason = 'moved' WHERE business_id = $1 AND id = $4`,
+        [world.businessId, world.userId, uuid(6), uuid(5)],
+      );
+
+      const chain = await db.pool.query<{ fwd: string; back: string; state: string }>(
+        `SELECT a.rescheduled_to_id::text AS fwd, b.rescheduled_from_id::text AS back, a.state
+           FROM bookings a JOIN bookings b ON b.business_id = a.business_id AND b.id = a.rescheduled_to_id
+          WHERE a.business_id = $1 AND a.id = $2`,
+        [world.businessId, uuid(5)],
+      );
+      expect(chain.rows[0]).toEqual({ fwd: uuid(6), back: uuid(5), state: 'rescheduled' });
     });
   });
 });
