@@ -51,7 +51,12 @@ gate() { # name | command (absolute paths only)
     # still read "consistent, but FAILING". The diagnostic line is chosen from
     # the WHOLE output, preferring an error over a banner.
     if [ -z "$out1" ]; then
-      out1=$(printf '%s' "$o" | grep -m1 -E 'Permission denied|No such file|command not found|FAIL|ERROR|FATAL|STALE|CONFIGURATION|MEASUREMENT' | cut -c1-120)
+      # CAUSE lines first, SUMMARY lines second: the summary is what a reader
+      # already has (the gate failed), the cause is what they need. Preferring
+      # `FAIL` over `psql said:` cost me a diagnosis within the hour of fixing
+      # R10-P3-01, which is the same defect one layer in.
+      out1=$(printf '%s' "$o" | grep -m1 -E 'Permission denied|No such file|command not found|psql said|CAUSE:|ERROR|FATAL|could not' | cut -c1-120)
+      [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 -E 'FAIL|STALE|CONFIGURATION ERROR|MEASUREMENT|ABORTED' | cut -c1-120)
       [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 . | cut -c1-120)
     fi
     # COORDINATOR RELAY round 8: an exit code recorded without the path it was
@@ -245,8 +250,14 @@ for k,l in enumerate(L):
 open(p,'w',encoding='utf-8').write('\n'.join(L))
 ZERO
 out=$( cd /tmp && python3 -I "$HERE/manifest-digests.py" --dir "$PACK" --write 2>&1 ); rc=$?
-if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "does not move, in either direction"; then
-  printf 'ok    %-26s rc=1 — a signed reviewer row cannot be moved back to unsigned\n' reviewer-row-unsign
+# ROUND-10: this arm used to require the sentence "does not move, in either
+# direction", which was the HEAD-only rule's wording. Against the real pack the
+# refusal now comes from the two-directory witness -- the shared folder still
+# holds the pristine report -- so that is the sentence required here, and the
+# committed-unsign and no-repository routes have their own constructed proofs
+# below.
+if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "REVIEWER COPIES DIFFER"; then
+  printf 'ok    %-26s rc=1 — the other directory contradicts the zeroed row\n' reviewer-row-unsign
 else
   printf 'FAIL  %-26s rc=%s — the placeholder is still an escape hatch: %s\n' reviewer-row-unsign "$rc" \
          "$(printf '%s' "$out" | grep -m1 . | cut -c1-80)"; fail=$((fail+1))

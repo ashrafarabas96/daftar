@@ -83,6 +83,32 @@ whole output, preferring an error (`Permission denied`, `No such file`, `FAIL`,
 `ERROR`, `FATAL`, `STALE`, `CONFIGURATION`, `MEASUREMENT`) over a banner. It was
 fail-closed either way; it is now also diagnosable.
 
+### And one layer in, within the hour
+
+The same defect bit me again while fixing it. My pattern list preferred `FAIL`
+over the line that explains it, so when the database gates failed the sweep
+printed *"consistent, but FAILING — first line: `== recreating p14scratch`"*
+and hid the arm's own `psql said:` diagnosis. Cause lines are now preferred over
+summary lines: a summary tells a reader what they already know.
+
+### R10-RESIDUAL-AUTHOR-01 — an INTERMITTENT database-lane failure I have not explained
+
+Twice this hour the sweep reported `replay` and `redproof-preflight` as `rc=1`
+from all four directories — *"the MUTATION did not apply, so nothing was
+proved"* for the collation arm — while both scripts exited **0** standalone
+minutes later, and the four lanes each exited **0** when I ran them by hand in
+the same order. Roles and databases were measured clean in between (four roles
+present, `NOSUPERUSER NOBYPASSRLS`, only `p14scratch` left over). Three later
+sweeps were green.
+
+**I am not claiming a cause, and I am not claiming it fixed.** My suspicion is
+contention on this shared box, since Phase 4 owns it and other phases run
+clusters here too, or residue from my own earlier interactive plants. What is
+fixed is only the *diagnosis*: the next occurrence will print the cluster's own
+error beside the failure instead of a banner. Recorded as a residual, named,
+rather than left as a green claim — the exact species of thing this pack's
+rounds have been about.
+
 ---
 
 ## 3 — CARRIED RESIDUALS, NAMED RATHER THAN RE-OPENED
