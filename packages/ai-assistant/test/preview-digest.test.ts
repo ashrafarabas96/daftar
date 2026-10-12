@@ -203,6 +203,22 @@ describe('recomputation divergence names the diverging field (§5.3)', () => {
     if (!decision.ok) expect(decision.refusal.field).toBe('lines[0].variantId');
   });
 
+  it('refuses a per-line variantId that moves between null and the empty string (COORDINATOR P4)', () => {
+    // The preview-level optional fields had this case; the LINE-level one did not. null and '' are
+    // different values, and `escOptional` is what keeps them apart inside a line too.
+    const base = preview();
+    const first = base.lines[0];
+    expect(first).toBeDefined();
+    if (first === undefined) return;
+    const rest = base.lines.slice(1);
+    const emptied = preview({ lines: [{ ...first, variantId: '' }, ...rest] });
+    const nulled = preview({ lines: [{ ...first, variantId: null }, ...rest] });
+    const decision = checkRecomputation(emptied, nulled);
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) expect(decision.refusal.field).toBe('lines[0].variantId');
+    expect(previewDigest(emptied)).not.toBe(previewDigest(nulled));
+  });
+
   it.each([
     ['lineNo', { lineNo: 7 }],
     ['quantity', { quantity: '4' }],
