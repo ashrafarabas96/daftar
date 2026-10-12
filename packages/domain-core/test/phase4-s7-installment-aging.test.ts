@@ -218,7 +218,17 @@ function isEscapeString(s: string, i: number): boolean {
   return q === undefined || !/[A-Za-z0-9_$]/.test(q);
 }
 
-/** The index just past the single-quoted literal that opens at `i`. */
+/**
+ * The index just past the single-quoted literal that opens at `i`.
+ *
+ * AN UNTERMINATED LITERAL RAISES AND NO LONGER RETURNS THE END OF THE SUBJECT
+ * (`TL-P4-COORD-R55` ordered item 10, F13-7). `return s.length` made every
+ * statement after an unbalanced quote vanish from the code projection in
+ * silence — measured on a copy, a whole `CREATE UNIQUE INDEX` lost — which is
+ * the same failure as the unterminated dollar tag the previous round repaired
+ * in ONE of its three sites. The one instrument whose job is not to invert may
+ * not fail quietly in any of them.
+ */
 function endOfLiteral(s: string, i: number): number {
   const escapes = isEscapeString(s, i);
   let j = i + 1;
@@ -234,7 +244,10 @@ function endOfLiteral(s: string, i: number): number {
     if (s[j] === "'") return j + 1;
     j += 1;
   }
-  return s.length;
+  throw new Error(
+    `endOfLiteral: the single-quoted literal opened at offset ${i} is never closed, so every statement after it would be swallowed by the projection. ` +
+      `A projection that loses its subject is not a projection, and this is raised rather than returned.`,
+  );
 }
 
 /**
@@ -279,7 +292,20 @@ function stripCommentsQuoteAware(s: string): string {
     const tag = dollarTagAt(s, i);
     if (tag !== null) {
       const close = s.indexOf(tag, i + tag.length);
-      const stop = close === -1 ? s.length : close + tag.length;
+      // AND HERE TOO (`TL-P4-COORD-R55` ordered item 10, F13-7). The previous
+      // round made the TOP-LEVEL lexer raise on an unterminated tag and left
+      // this copy of the branch returning the remainder as one literal — so a
+      // nested unterminated tag inside a routine body copied that body's `--`
+      // comments through into the CODE projection, which is the inversion
+      // class that cost one run six laws. Measured on a copy; latent on the
+      // shipped bytes (zero dollar tags inside all six bodies).
+      if (close === -1) {
+        throw new Error(
+          `stripCommentsQuoteAware: the nested dollar tag ${tag} opened at offset ${i} of a routine body is never closed, ` +
+            `so the rest of that body would be copied through as one literal with its comments intact. Raised rather than returned.`,
+        );
+      }
+      const stop = close + tag.length;
       out += s.slice(i, stop);
       i = stop;
       continue;
@@ -2140,6 +2166,89 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     expect(OVER_SCHEDULED_INVOICE.paidTxnMinor).toBe(0n);
   });
 
+  it('THE 265-DAY GOLDEN, AGAINST THE FOUR §10.5 CHECKS — asOf not a clock, bases sum exactly, the carrying pair is the input, the rate is metadata', () => {
+    // ORDERED BY `TL-P4-COORD-R55` ordered item 9, out of `TL-P4-COORD-R54`
+    // §3 and the 2026-10-12 Master Continuous Mission §10.5, which moves the
+    // 265-day case from a limitation the coordinator declares in every ruling
+    // to a REQUIREMENT this challenge must meet. The golden input above is
+    // the subject; what this case adds is the four §10.5 checks stated and
+    // MEASURED on it, in one place, rather than inferred from four proofs.
+    const INV = OVER_SCHEDULED_INVOICE;
+    const B = INV.paidBaseMinor + INV.outstandingBaseMinor;
+    const T = INV.paidTxnMinor + INV.outstandingTxnMinor;
+
+    // (1) THE AGING COMES FROM THE CANONICAL BALANCE AND THE PASSED `asOf`,
+    //     NEVER A DEVICE CLOCK. The projection is a pure function of
+    //     (invoice, plan, asOf, thresholds): the SAME input at a DIFFERENT
+    //     as-of moves the bucket and nothing else, and no call reads a clock.
+    //     With thresholds 30/60/90, 265 days past the schedule date is
+    //     bucket 4, 31 days past it is bucket 2, and the day itself is
+    //     bucket 1 — the same money, three bands, decided by the argument.
+    expect(epochDay(AS_OF) - epochDay('2026-01-15')).toBe(265);
+    const at = (asOf: string): readonly AgingContribution[] => projectInvoice(INV, OVER_SCHEDULED_PLAN, asOf, THRESHOLDS);
+    expect(at(AS_OF).map((x) => x.bucketNo)).toEqual([4]);
+    expect(at('2026-02-15').map((x) => x.bucketNo)).toEqual([2]); // 31 days > 30, not > 60
+    expect(at('2026-01-15').map((x) => x.bucketNo)).toEqual([1]);
+    // ...and the MONEY is identical at all three, because the allocation does
+    // not depend on `asOf` at all — only the banding does.
+    for (const asOf of [AS_OF, '2026-02-15', '2026-01-15']) {
+      expect(at(asOf).reduce((a, x) => a + x.txnMinor, 0n), asOf).toBe(INV.outstandingTxnMinor);
+    }
+    // ...and the pure model reads no clock, which is the same law PROOF 8
+    // applies to the specification's own text.
+    const model = readFileSync(join(__dirname, 'phase4-s7-aging-reference-model.ts'), 'utf8');
+    //     A CLOCK READ IS A CALL WITH NO ARGUMENT, and the distinction is the
+    //     one PROOF 8 draws: `new Date(epochDay(x) * 86_400_000)` converts an
+    //     ARGUMENT and reads nothing, while `new Date()` and `Date.now()` are
+    //     the machine's opinion of the time. The non-coincidence is asserted
+    //     below so the matcher is not satisfied by refusing all date maths.
+    //     AND THE SUBJECT IS THE MODEL'S CODE AND NOT ITS PROSE, for the same
+    //     reason every law in this file filters comments: the model's own
+    //     header NAMES `CURRENT_DATE` and `now()` in the sentence that forbids
+    //     them, and a law satisfied or broken by a comment is the `prosrc
+    //     LIKE` defect in another language.
+    const modelCode = model
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
+    expect(modelCode, 'the comment filter removed the model itself').toContain('export function projectInvoice');
+    for (const clock of [/Date\.now/, /new Date\(\s*\)/, /CURRENT_DATE/i, /\bnow\(\)/, /Date\.UTC\(\s*\)/]) {
+      expect(modelCode, `the reference model reads a clock: ${String(clock)}`).not.toMatch(clock);
+    }
+    expect(modelCode, 'the model no longer converts a passed civil date, so the matcher above has no subject').toContain('new Date((epochDay(civil)');
+
+    // (2) THE AGING BASES SUM EXACTLY TO THE OUTSTANDING BASE — at this
+    //     as-of and at every other, since the allocation is as-of independent.
+    for (const asOf of [AS_OF, '2026-02-15', '2026-01-15', '2027-12-31']) {
+      expect(at(asOf).reduce((a, x) => a + x.baseMinor, 0n), asOf).toBe(INV.outstandingBaseMinor);
+    }
+
+    // (3) THE CARRYING ALLOCATION COMES FROM `total_txn_minor` AND
+    //     `total_base_minor`, THROUGH THE CANONICAL CUMULATIVE LAW, WITH ONE
+    //     CUMULATIVE HALF_EVEN ROUNDING. Shown as an identity on the stored
+    //     PAIR rather than as an assertion about the code: each contribution's
+    //     base is the difference of the canonical cumulative release at the
+    //     two settlement levels, and the pair is the only money input.
+    let level = INV.paidTxnMinor;
+    for (const c of at(AS_OF)) {
+      expect(c.baseMinor, `the base share at level ${String(level)} is not the canonical difference`).toBe(apRelease(B, T, level, c.txnMinor));
+      level += c.txnMinor;
+    }
+    expect(level, 'the levels do not reach the invoice total').toBe(T);
+    // R is cumulative and its endpoints are the stored pair itself.
+    expect(apRelease(B, T, 0n, T)).toBe(B);
+    expect(apRelease(B, T, 0n, INV.paidTxnMinor)).toBe(INV.paidBaseMinor);
+
+    // (4) `source_to_base_rate` IS METADATA ONLY. It is not a field of the
+    //     reference model's inputs, it appears in no arithmetic in the model
+    //     or in the projection the specification ships, and the base figures
+    //     above were reproduced from the PAIR with no rate anywhere.
+    expect(modelCode, 'the reference model has grown a rate').not.toContain('source_to_base_rate');
+    const sketch = sqlCodeOnly(SPEC.slice(SPEC.indexOf('>>> P4S7 PROJECTION SKETCH BEGIN'), SPEC.indexOf('<<< P4S7 PROJECTION SKETCH END')));
+    expect(sketch, 'the projection reads the rate').not.toContain('source_to_base_rate');
+    expect(sketch, 'the projection does not consume the canonical law').toContain('public.supplier_ap_release(');
+  });
+
   it('FIRES: the round-2 anchor is what produced the understatement, and it no longer exists', () => {
     // The old form anchored on the OUTSTANDING against the schedule's SUFFIX.
     // Reconstructed here from the fixture alone, to show the repair is a real
@@ -3094,7 +3203,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     for (const [relname, tgname, proname] of [
       ['installment_plans', 'installment_plans_fact_sync', 'installment_plan_fact_sync'],
       ['installment_plans', 'installment_plans_active_exclusive', 'installment_plan_active_exclusive'],
-      ['installment_plans', 'installment_plans_fact_agrees', 'installment_plan_fact_verify'],
+      ['installment_plans', 'installment_plans_fact_verified', 'installment_plan_fact_verify'],
       ['invoices', 'invoices_installment_fact_agrees', 'installment_plan_fact_verify'],
       ['installment_plans', 'installment_plans_schedule_complete', 'installment_schedule_verify'],
       ['installments', 'installments_schedule_complete', 'installment_schedule_verify'],
@@ -3112,7 +3221,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // THE FACT IS MAINTAINED AND VERIFIED BY THIS SLICE, on both sides, and
     // the verifier is DEFERRED while the writer is NOT.
     expect(code).toMatch(/CREATE TRIGGER installment_plans_fact_sync\s+AFTER INSERT OR UPDATE OR DELETE ON installment_plans\s+FOR EACH ROW/);
-    expect(code).toMatch(/CREATE CONSTRAINT TRIGGER installment_plans_fact_agrees[\s\S]{0,200}DEFERRABLE INITIALLY DEFERRED/);
+    expect(code).toMatch(/CREATE CONSTRAINT TRIGGER installment_plans_fact_verified[\s\S]{0,200}DEFERRABLE INITIALLY DEFERRED/);
     expect(code).toMatch(/CREATE CONSTRAINT TRIGGER invoices_installment_fact_agrees\s+AFTER INSERT OR UPDATE OF has_active_installment_plan ON invoices/);
     expect(code).toContain('installment.plan_fact_desynchronised');
     expect(code).toContain('installment.plan_fact_unwritable');
@@ -3765,7 +3874,23 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
     expect(block).toContain('EXPLAIN (COSTS OFF)');
     expect(block).toContain('SET LOCAL enable_seqscan = off');
-    expect(block).toContain("pg_catalog.strpos(v_plan, 'installment_plans_one_active_per_invoice_uq')");
+    // ── THE LAW IS OVER A CLASS OF INDEX, NOT OVER ONE NAME
+    //    (`TL-P4-COORD-R55` ordered items 3 and 4). It used to `strpos` for
+    //    one index name. The argument it rests on — a PARTIAL index may serve
+    //    only a query whose own qualifiers imply its predicate — is about
+    //    every partial index of the relation, so the law is now a loop over
+    //    them. The NON-partial ones are deliberately not forbidden: the
+    //    primary key DOES serve this count, which is exactly what F13-3
+    //    found the previous round's prose denying.
+    expect(block).toMatch(/FOR v_ix IN SELECT ic\.relname FROM pg_index x[\s\S]{0,400}?x\.indpred IS NOT NULL/);
+    expect(block).toContain('pg_catalog.strpos(v_plan, v_ix)');
+    // ── AND `enable_seqscan` IS RESTORED, WHICH IT WAS NOT
+    //    (`TL-P4-COORD-R55` ordered item 4, F13-4). A `DO` block is anonymous
+    //    and has no `proconfig`, so its `SET LOCAL` is not restored on exit:
+    //    measured `on` before the block and `off` after it, for the rest of
+    //    the MIGRATION's own transaction.
+    expect(block).toContain("v_seqscan := pg_catalog.current_setting('enable_seqscan')");
+    expect(block).toContain("pg_catalog.set_config('enable_seqscan', v_seqscan, true)");
     // AND THE APPLY-TIME PROBE'S TEXT IS THE TEXT THE ROUTINES TAKE. A law
     // whose subject is a DIFFERENT query than the one it certifies is the
     // defect of this whole family, so the probe's own `FILTER` is pinned.
@@ -3773,31 +3898,121 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
   });
 
   /**
-   * ── H11. THE VERIFIER'S DEFERRAL IS MEASURED PER EVENT
-   *    (`TL-P4-COORD-R52` ordered item 2, F-1) ────────────────────────────
+   * ── H10b. PART 9c'S SUBJECT IS THE INSTALLED BODY'S QUERY, AND THE
+   *    COUPLING IS A LAW (`TL-P4-COORD-R55` ordered item 4, F13-4) ────────
+   *
+   * `c_plan_probe` is a TRANSCRIPTION of a parameterised query, with literals
+   * in place of the two plpgsql variables, and `c_plan_probe` occurred 2 times
+   * in the specification and 0 times in any test: NOTHING compared it to the
+   * body. An edit to a body's query would leave part 9c reading the retired
+   * text and still passing — a law whose subject is a copy of its subject is
+   * one edit from measuring nothing.
+   *
+   * It cannot be compared INSIDE the block: the only SQL instrument for that
+   * is a `prosrc` substring function, which `TL-P4-COORD-R46` and `R50` §5
+   * rule cannot establish a property of code and which H14 forbids in that
+   * block in every spelling. So the comparison is here, over the FILE, where
+   * the digest coupling already lives — and with part 6b's digests beside it a
+   * body cannot change without the digest changing, and the digest cannot be
+   * regenerated without this comparison running.
+   */
+  it('H10b PART 9c PROBES THE EXACT QUERY ALL THREE ROUTINES TAKE, parameters substituted — nothing may drift', () => {
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    // THE PROBE, as the block really declares it: the SQL string with `''`
+    // un-doubled, which is what PostgreSQL will execute.
+    const decl = /c_plan_probe CONSTANT TEXT :=([\s\S]*?);\n/.exec(block);
+    expect(decl, 'the end-state block declares no c_plan_probe').not.toBeNull();
+    const probe = [...(decl?.[1] ?? '').matchAll(/'((?:[^']|'')*)'/g)]
+      .map((m) => (m[1] as string).replace(/''/g, "'"))
+      .join('')
+      .replace(/\s+/g, ' ')
+      .trim();
+    expect(probe.startsWith('EXPLAIN (COSTS OFF) '), `the probe is not an EXPLAIN: ${probe}`).toBe(true);
+    const probedQuery = probe.slice('EXPLAIN (COSTS OFF) '.length);
+
+    // THE SUBJECT, read out of each routine body: the `FILTER`-spelled count,
+    // with the `INTO` removed and the two plpgsql variables replaced by the
+    // literals the probe uses. The reader's copy is spelled over its own CTE
+    // and is pinned by H10's own reading instead, so the two WRITE-path
+    // bodies are the subject here — they are the two that raise
+    // `plan_index_disagrees`.
+    const ZERO = "'00000000-0000-0000-0000-000000000000'::UUID";
+    for (const head of [
+      'CREATE OR REPLACE FUNCTION installment_plan_fact_sync() RETURNS TRIGGER',
+      'CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER',
+    ]) {
+      const body = dollarQuotedBody(SPEC, head);
+      const m = /SELECT pg_catalog\.count\(\*\) FILTER \(WHERE p\.status = 'active'\) INTO v_active\b([\s\S]*?);/.exec(body);
+      expect(m, `${head} carries no FILTER-spelled active count`).not.toBeNull();
+      const asQuery = `SELECT pg_catalog.count(*) FILTER (WHERE p.status = 'active')${(m?.[1] ?? '')
+        .replace(/--[^\n]*/g, ' ')
+        .replace(/v_business/g, ZERO)
+        .replace(/v_invoice\b/g, ZERO)}`
+        .replace(/\s+/g, ' ')
+        .trim();
+      expect(asQuery, `part 9c does not probe the query ${head} takes`).toBe(probedQuery);
+    }
+  });
+
+  /**
+   * ── H11. THE ORDERING IS MADE NOT TO MATTER BY A NAME, AND THE NAME ORDER
+   *    IS READ FROM THE CATALOGUE (`TL-P4-COORD-R55` ordered item 1, F13-1)
    *
    * `SET CONSTRAINTS ALL IMMEDIATE` is unprivileged SQL that both app roles
-   * may issue. It occurred ZERO times in this specification and in each of its
-   * four test files, while the trigger site's own comment named the hazard it
-   * creates as the reason for a design choice.
+   * may issue, and PostgreSQL then fires the immediate `AFTER ROW` triggers of
+   * one relation for one event IN TRIGGER-NAME ORDER. While the plan-side fact
+   * verifier was called `installment_plans_fact_agrees` it sorted BEFORE
+   * `installment_plans_fact_sync`, so the verifier ran before the writer and
+   * refused a LAWFUL plan write under a FALSE name rendered 500.
+   *
+   * ROUND 13 DETECTED THAT WITH A TRANSACTION-LOCAL CUSTOM GUC COUNTER, AND
+   * THE CALLER OWNED THE EVIDENCE. PostgreSQL places no privilege on an
+   * unreserved two-part custom setting: one `SET LOCAL` made an ORDINARY
+   * LAWFUL plan write refuse under `installment.plan_fact_unordered` — a false
+   * diagnosis of a lawful sale rendered `500 INTERNAL_ERROR` — another
+   * defeated the detector for one statement, and a session-level `SET` turned
+   * it off for the life of a pooled connection while lawful writes still
+   * committed. So the counter is GONE and the hazard is removed instead of
+   * detected: the writer's trigger name sorts first, and that premise is READ
+   * from `pg_trigger` in two places rather than believed in a comment.
    */
-  it('H11 THE SYNC STAMPS EACH EVENT AND THE DEFERRED VERIFIER REFUSES WHEN IT RUNS FIRST', () => {
+  it('H11 THE WRITER TRIGGER SORTS BEFORE THE PLAN-SIDE VERIFIER, THE ORDER IS READ FROM pg_trigger, AND THE FORGEABLE COUNTER IS GONE', () => {
     const code = sqlCodeOnly(SPEC);
-    expect(code).toContain("pg_catalog.set_config('installment.plan_fact_sync_events'");
-    expect(code).toContain("pg_catalog.set_config('installment.plan_fact_verify_events'");
-    expect(code).toContain("pg_catalog.current_setting('installment.plan_fact_sync_events', true)");
-    // the comparison, and the catalogue read that tells «the writer did not
-    // run» from «there is no writer» -- a refusal must be true of every state
-    // that reaches it
-    expect(code).toMatch(/IF v_seq > v_sync\s*\n\s*AND EXISTS \(SELECT 1 FROM pg_catalog\.pg_trigger t/);
-    expect(code).toContain("f.proname = 'installment_plan_fact_sync'");
-    expect(code).toContain('installment.plan_fact_unordered');
-    // the empty string and NULL are both folded to zero: `current_setting`
-    // yields NULL before the name exists and '' after a local reset
-    expect(code).toMatch(/coalesce\(nullif\(pg_catalog\.current_setting\('installment\.plan_fact_sync_events', true\), ''\)::BIGINT, 0\)/);
-    // and the statement is NAMED in the file, which it was not
+    // ── THE NAMES, AND THE BYTE ORDER THAT IS THE WHOLE REPAIR.
+    expect(code).toContain('CREATE TRIGGER installment_plans_fact_sync');
+    expect(code).toContain('CREATE CONSTRAINT TRIGGER installment_plans_fact_verified');
+    expect('installment_plans_fact_sync' < 'installment_plans_fact_verified', 'the writer no longer sorts before the verifier').toBe(true);
+    // and the retired name is nowhere in the CODE (prose keeps the history).
+    expect(code, 'the old verifier trigger name is still installed somewhere').not.toContain('installment_plans_fact_agrees');
+    // ── THE FORGEABLE COUNTER IS GONE FROM EVERY PROJECTION OF THE CODE.
+    for (const guc of ['installment.plan_fact_sync_events', 'installment.plan_fact_verify_events']) {
+      expect(code, `the caller-writable counter ${guc} is still read or written`).not.toContain(guc);
+    }
+    expect(code, 'a session setting is still written somewhere in this slice').not.toMatch(/set_config\('installment\./);
+    // ── THE PREMISE IS READ: part 9e, at apply time.
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    expect(block).toContain('INTO v_writer_tg, v_verify_tg');
+    expect(block).toMatch(/NOT \(v_writer_tg < v_verify_tg\)/);
+    expect(block).toContain('installment.migration_end_state_invalid: the trigger executing installment_plan_fact_sync');
+    // ── AND AT RUNTIME, PER PLAN EVENT, INSIDE THE VERIFIER ITSELF.
+    const verify = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER');
+    expect(verify).toContain("f.proname = 'installment_plan_fact_sync'");
+    expect(verify).toContain('v_self := TG_NAME;');
+    expect(verify).toMatch(/IF v_writer IS NOT NULL AND NOT \(v_writer < v_self\) THEN/);
+    expect(verify).toContain('installment.plan_fact_unordered');
+    // ...and it does NOT refuse when there is no writer at all, because that
+    // state is section 2c's declared escape and has its own name.
+    expect(verify).toContain('v_writer IS NOT NULL');
+    // ...and the invoice side is not subject to it, because no sync runs there.
+    expect(verify).toMatch(/IF TG_TABLE_NAME = 'installment_plans' THEN[\s\S]{0,400}?pg_catalog\.pg_trigger/);
+    // ── AND THE STATEMENT AND THE MECHANISM ARE NAMED IN THE FILE.
     expect(SPEC).toContain('SET CONSTRAINTS ALL IMMEDIATE');
     expect(SPEC).toContain('TRIGGER-NAME ORDER');
+    // ── THE HALF A RENAME CANNOT FIX IS DECLARED AND NOT CLAIMED SHUT: the
+    //    schedule verifier still fires into a transaction whose `installments`
+    //    rows do not exist, and fails closed under a name true of the instant.
+    expect(SPEC).toContain('installment_plans_schedule_complete fires into a transaction');
+    expect(SPEC).toContain('R-94');
   });
 
   /**
@@ -3826,6 +4041,43 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // discusses `CREATE OR REPLACE FUNCTION` inside a comment box.
     expect(SPEC).toContain('`CREATE OR REPLACE FUNCTION` may not change a `RETURNS');
     expect(routineHeads(SPEC)).toHaveLength(6);
+
+    // ── THE EIGHT SPELLINGS THAT USED TO BE INVISIBLE, EACH NOW SEEN
+    //    (`TL-P4-COORD-R55` ordered item 5, F13-5). The law was a
+    //    line-anchored, case-sensitive, single-space regex: a seventh routine
+    //    in any of these installed with the entire end-state block reporting
+    //    OK. The pattern is widened rather than argued about — and the
+    //    DECIDING law is now the catalogue diff in
+    //    `tests/integration/phase4-s7-installment-aging-db.test.ts`, which
+    //    reads what the specification really installed and is blind to no
+    //    spelling at all, this one included.
+    for (const spelling of [
+      '  create function chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'create function chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'Create Function chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'CREATE FUNCTION\n  chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'CREATE OR REPLACE  FUNCTION chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'CREATE PROCEDURE chal_seventh(x INT) LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'CREATE FUNCTION Chal_Seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      '\tCREATE FUNCTION chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+    ]) {
+      const heads = routineHeads(`${SPEC}\n${spelling}\n`);
+      expect(heads.length, `the completeness law cannot see: ${spelling.slice(0, 44)}`).toBe(7);
+      expect(() => assertPinnedBodiesComplete(`${SPEC}\n${spelling}\n`), spelling.slice(0, 44)).toThrow(/installed and NOT pinned/);
+    }
+    // AND THE ONE SPELLING NO PATTERN OVER THIS FILE CAN SEE IS DECLARED
+    // RATHER THAN CERTIFIED ABSENT (`TL-P4-COORD-R50` §5): a routine created
+    // from a dynamic `EXECUTE` is a string at the point of creation, so the
+    // text instrument is blind to it BY CONSTRUCTION and only the catalogue
+    // diff covers it. Measured here, as a declaration with a reading behind
+    // it, not as an assumption.
+    const dynamic = `${SPEC}\nDO $x$ BEGIN EXECUTE 'CREATE FUNCTION chal_dyn() RETURNS INT LANGUAGE sql AS $$SELECT 1$$'; END $x$;\n`;
+    expect(routineHeads(dynamic), 'the declared blindness changed shape; re-read the declaration').toHaveLength(6);
+    const extractor = readFileSync(join(__dirname, '..', '..', '..', 'scripts', 'guards', 'p4s7-body-digests.ts'), 'utf8');
+    expect(extractor, 'the extractor no longer declares which law decides completeness').toContain(
+      'tests/integration/phase4-s7-installment-aging-db.test.ts',
+    );
+    expect(extractor).toContain('DECLARED AND NOT CERTIFIED ABSENT');
     // part 6c closes the one shape a digest of a signature cannot see.
     const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
     expect(block).toContain('c_routines');
@@ -3860,6 +4112,32 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(sqlCodeOnly("SELECT U&'d\\' ; CREATE UNIQUE INDEX v ON a (c);")).toContain('CREATE UNIQUE INDEX v ON a (c)');
     // an UNTERMINATED tag RAISES instead of swallowing the rest in silence
     expect(() => sqlCodeOnly('SELECT 1; AS $open$ BEGIN END;')).toThrow(/never closed/);
+    // ── AND SO DO THE OTHER TWO SILENT-SWALLOW SITES, WHICH THE PREVIOUS
+    //    ROUND'S REPAIR DID NOT REACH (`TL-P4-COORD-R55` ordered item 10,
+    //    F13-7). «An unterminated tag now RAISES» covered ONE of three.
+    //
+    //    (2) A NESTED unterminated tag INSIDE a body: `stripCommentsQuoteAware`
+    //    carried the identical `close === -1` branch and RETURNED the
+    //    remainder as one literal, so the body's `--` comments were copied
+    //    into the CODE projection — the inversion class that cost one run six
+    //    laws. Latent on the shipped bytes (zero dollar tags inside all six
+    //    bodies) and repaired anyway.
+    const nestedOpen = 'CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $fn$\nBEGIN $q$ -- FORBIDDEN_TOKEN\nEND;\n$fn$;';
+    expect(() => sqlCodeOnly(nestedOpen)).toThrow(/never closed/);
+    //    ...and the BALANCED nested case is still copied through as data,
+    //    which is the control that stops the repair being a refusal of
+    //    everything.
+    const nestedOk = 'CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $fn$\nBEGIN PERFORM $q$kept -- here$q$; -- stripped\nEND;\n$fn$;';
+    expect(sqlCodeOnly(nestedOk)).toContain('kept -- here');
+    expect(sqlCodeOnly(nestedOk)).not.toContain('-- stripped');
+    //    (3) AN UNTERMINATED SINGLE-QUOTED LITERAL: `endOfLiteral` returned
+    //    `s.length`, which swallowed every statement after it with no error —
+    //    measured on a copy, a whole `CREATE UNIQUE INDEX` lost from the
+    //    projection.
+    expect(() => sqlCodeOnly("SELECT 'open ; CREATE UNIQUE INDEX u ON a (c);")).toThrow(/never closed/);
+    expect(() => sqlSchemaOnly("SELECT 'open ; CREATE UNIQUE INDEX u ON a (c);")).toThrow(/never closed/);
+    //    ...and a BALANCED literal still ends where PostgreSQL ends it.
+    expect(sqlCodeOnly("SELECT 'closed' ; CREATE UNIQUE INDEX u ON a (c);")).toContain('CREATE UNIQUE INDEX u ON a (c)');
     // A DOUBLE-QUOTED IDENTIFIER IS ORDINARY TEXT HERE, AND THAT IS A
     // DECLARED REMAINDER AND NOT AN OVERSIGHT: it survives verbatim, and one
     // holding a comment marker would lose the rest of its line. The repair
@@ -3874,6 +4152,88 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(sqlSchemaOnly(SPEC)).toContain('CREATE UNIQUE INDEX installment_plans_one_active_per_invoice_uq');
     expect(sqlCodeOnly(SPEC)).toContain('CREATE UNIQUE INDEX installment_plans_one_active_per_invoice_uq');
     expect(sqlCodeOnly(SPEC)).toContain('pg_catalog.sha256');
+  });
+
+  /**
+   * ── H15. EVERY INDEX OF BOTH RELATIONS IS READ, AND AN INDEX MUST
+   *    PHYSICALLY DESCRIBE ITS OWN HEAP (`TL-P4-COORD-R55` ordered items 2,
+   *    3 and 7; F13-2, F13-3, F13-9) ──────────────────────────────────────
+   *
+   * `installment_plans_pkey` occurred ZERO times in this specification. Part 9
+   * read the three enforcement flags of exactly ONE index, and the writer's
+   * blindness probe reads the handed row BY PRIMARY KEY — so one catalogue
+   * flag on the primary key made EVERY lawful plan write fail, under a name
+   * whose message said the cause was row security and told the operator not to
+   * look in `pg_index`, while the whole end-state block reported OK and the
+   * reader served a figure.
+   *
+   * And there was NO law anywhere that an index physically describes its own
+   * heap: the round-12 corruption was repaired with two executable `REINDEX`
+   * statements in two test teardowns, and a measurement in a teardown is a
+   * fixture habit rather than an invariant.
+   */
+  it('H15 PART 9a READS EVERY INDEX OF BOTH RELATIONS, PART 9d REINDEXES AND CROSS-COUNTS, AND THE REFUSALS READ pg_index BEFORE BLAMING pg_policy', () => {
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    // ── 9a: every index of BOTH relations, by the relation list and not by a
+    //    hand-written index name, and the offenders NAMED with their flags.
+    expect(block).toMatch(/FROM pg_index x[\s\S]{0,400}?x\.indrelid = ANY \(SELECT \('public\.' \|\| y\)::regclass FROM unnest\(c_relations\) y\)/);
+    expect(block).toMatch(/NOT \(x\.indisvalid AND x\.indisready AND x\.indislive\)/);
+    expect(block).toContain('these indexes of the P4-S7 relations are present and NOT ENFORCING');
+    // and the primary key is now a NAMED subject of this file, which it was not
+    expect(SPEC).toContain('installment_plans_pkey');
+    // ── 9d: the physical instruments. A `REINDEX` per index of both
+    //    relations, and the two-path count over the whole relation.
+    expect(block).toMatch(/EXECUTE 'REINDEX INDEX public\.' \|\| pg_catalog\.quote_ident\(v_ix\)/);
+    expect(block).toContain("count(*) FILTER (WHERE p.status = 'active') INTO v_heap");
+    expect(block).toContain('INTO v_served FROM public.installment_plans p WHERE p.status');
+    expect(block).toMatch(/v_heap IS DISTINCT FROM v_served/);
+    // ...THE COUNT IS TAKEN BEFORE THE REBUILD, so the refusal that reaches
+    // an operator is this slice's own named one and not `23505 could not
+    // create unique index` (`TL-P4-COORD-R55` ordered item 2). Measured as an
+    // ORDER in the text, which is what decides which fires first.
+    expect(block.indexOf('v_heap IS DISTINCT FROM v_served')).toBeLessThan(block.indexOf("EXECUTE 'REINDEX INDEX public.'"));
+    // ...AND THE REBUILD'S OWN REFUSAL IS CAUGHT AND RE-RAISED UNDER THAT
+    // NAME, because the two-path count is PLANNER-DEPENDENT and is declared a
+    // belt while the rebuild is EXECUTION.
+    expect(block).toMatch(/EXCEPTION WHEN unique_violation THEN[\s\S]{0,80}?RAISE EXCEPTION 'installment\.migration_end_state_invalid: index % cannot be rebuilt from the heap of its own relation/);
+    expect(block).toContain('THIS IS NOT A CATALOGUE FLAG AND NO FLAG CAN SHOW IT');
+    // ...and the forced index path is SAVED AND RESTORED, so part 9d does not
+    // reintroduce the leak part 9c shipped (F13-4).
+    const nine_d = block.slice(block.indexOf('-- 9d.'));
+    expect((nine_d.match(/pg_catalog\.set_config\('enable_seqscan'/g) ?? []).length, 'part 9d sets enable_seqscan without restoring it').toBe(2);
+    expect(nine_d).toContain("v_seqscan := pg_catalog.current_setting('enable_seqscan')");
+    // ...and the apply-time VACUITY is declared rather than hidden: both
+    // relations are created in this same transaction, so they are empty here.
+    expect(SPEC).toContain('IT IS VACUOUS AT APPLY TIME AND THAT IS DECLARED, NOT HIDDEN');
+    // ── 9e exists and is read by H11.
+    expect(block).toContain('v_verify_tg');
+    // ── THE THREE RUNTIME REFUSALS READ `pg_index` BEFORE ATTRIBUTING A
+    //    CAUSE, and the categorical sentence that was false is gone.
+    expect(SPEC, "the categorical row-security attribution is back").not.toContain('look in pg_policy and not in pg_index. Writing from a blinded read');
+    const sync = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_fact_sync() RETURNS TRIGGER');
+    const verify = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER');
+    // two in the writer (the by-primary-key probe and the cross-check), one in
+    // the deferred verifier (the flag comparison).
+    expect(
+      (sync.match(/RAISE EXCEPTION 'installment\.plan_index_unenforcing:/g) ?? []).length,
+      'the writer does not name the index cause twice',
+    ).toBe(2);
+    expect(
+      (verify.match(/RAISE EXCEPTION 'installment\.plan_index_unenforcing:/g) ?? []).length,
+      'the deferred verifier does not name the index cause',
+    ).toBe(1);
+    for (const body of [sync, verify]) {
+      expect((body.match(/INTO v_unenforcing/g) ?? []).length, 'a refusal attributes a cause it did not read').toBeGreaterThanOrEqual(1);
+      expect(body).toContain("WHERE x.indrelid = 'public.installment_plans'::regclass");
+    }
+    // ...and each surviving `plan_fact_blind` says what the reading EXCLUDED,
+    // rather than asserting a cause outright.
+    for (const m of sync.matchAll(/RAISE EXCEPTION 'installment\.plan_fact_blind:[^']*(?:''[^']*)*'/g)) {
+      expect(m[0], 'a plan_fact_blind message does not state what it observed').toContain('WHAT WAS OBSERVED');
+    }
+    expect((sync.match(/RAISE EXCEPTION 'installment\.plan_fact_blind:/g) ?? []).length).toBe(2);
+    // ...and the phrase that was FALSE AS WRITTEN is gone from every message.
+    expect(SPEC, 'the «counted over the rows themselves» claim is back').not.toContain("''active'' when counted over the rows themselves");
   });
 
   /**
@@ -3894,6 +4254,25 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
       /prosrc\s+(NOT\s+)?SIMILAR\s+TO/i,
       /(position|strpos|substring|left|right)\s*\([^)]*prosrc/i,
       /prosrc\s*(LIKE|ILIKE|SIMILAR)/i,
+      // ── A CAST BREAKS EVERY MATCHER ABOVE, AND THAT WAS THE SIMPLEST
+      //    ESCAPE OF THE TEN (`TL-P4-COORD-R55` ordered item 10, F13-8):
+      //    `p.prosrc::TEXT LIKE '%token%'` satisfies none of the seven,
+      //    because each requires `LIKE` to follow `prosrc` with only
+      //    whitespace between. A CAST of `prosrc` has no legitimate use in
+      //    this block — the digest law reads
+      //    `sha256(convert_to(p.prosrc,'UTF8'))`, which casts nothing — so
+      //    the whole cast family is forbidden with one matcher rather than
+      //    enumerated operator by operator. Same for an explicit COLLATE and
+      //    for the prefix operator.
+      /prosrc\s*::/i,
+      /prosrc\s+COLLATE/i,
+      /prosrc\s*\^@/,
+      /(regexp_like|regexp_count|regexp_match|regexp_replace|regexp_substr|starts_with|split_part|replace|translate|to_tsvector)\s*\([^)]*prosrc/i,
+      /prosrc[^\n]{0,40}@@/,
+      // NOT `encode(` and NOT `convert_to(`: the digest law this block DOES
+      // carry is `encode(pg_catalog.sha256(convert_to(p.prosrc, 'UTF8')), 'hex')`,
+      // and a matcher that refused it would refuse the one honest instrument.
+      /(md5|sha224|sha384|sha512)\s*\([^)]*prosrc/i,
     ];
     const caught = (line: string): boolean => matchers.some((m) => m.test(line));
     for (const spelling of [
@@ -3910,6 +4289,18 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
       "p.prosrc SIMILAR TO '%token%'",
       "strpos(p.prosrc, 'token') > 0",
       "position('token' in p.prosrc) > 0",
+      // the ten the round-13 challenger measured escaping, each now caught
+      // except where the escape is DECLARED below.
+      "p.prosrc::TEXT LIKE '%token%'",
+      'p.prosrc COLLATE "C" LIKE \'%token%\'',
+      "regexp_like(p.prosrc,'token')",
+      "starts_with(p.prosrc,'token')",
+      "split_part(p.prosrc,'token',2)",
+      "p.prosrc ^@ 'token'",
+      "replace(p.prosrc,'token','') <> p.prosrc",
+      "regexp_count(p.prosrc,'token')",
+      "to_tsvector(p.prosrc) @@ to_tsquery('token')",
+      "md5(p.prosrc) = 'abc'",
     ]) {
       expect(caught(spelling), `the absence law does not catch: ${spelling}`).toBe(true);
     }
@@ -3926,5 +4317,15 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // and the file DOES still name the forbidden operators, in prose, which
     // is where a ruling is quoted and not applied.
     expect(SPEC).toContain('`~~`');
+    // ── AND THE LIST IS DECLARED NON-EXHAUSTIVE, which `TL-P4-COORD-R50` §5
+    //    permits and which this law may not quietly stop doing. A substring
+    //    test can be spelled through any function that takes text, including
+    //    one a later PostgreSQL adds, so what is established here is that the
+    //    twenty-three spellings written out are caught — never that no
+    //    spelling escapes. The DECIDING instrument is the digest: an installed
+    //    body that is not byte-identical to the shipped text is refused
+    //    whatever it contains.
+    expect(matchers.length, 'the matcher list shrank').toBeGreaterThanOrEqual(13);
+    expect(sql).toContain('pg_catalog.sha256');
   });
 });

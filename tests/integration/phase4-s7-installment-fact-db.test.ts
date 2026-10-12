@@ -49,8 +49,8 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { Pool } from 'pg';
 import type { ScratchDb } from '../helpers/scratch-db';
 import { createScratchDb, urlOf } from '../helpers/scratch-db';
@@ -64,6 +64,39 @@ import {
 const DB = 'daftar_s7f1_fact';
 const SPEC_PATH = join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql');
 const SPEC = readFileSync(SPEC_PATH, 'utf8');
+/**
+ * ── WHERE THIS SUITE WRITES ITS MEASUREMENTS, AND WHY NOT AT A FIXED PATH
+ *    (`TL-P4-COORD-R55` ordered item 8, §9) ─────────────────────────────────
+ *
+ * This file used to write `/tmp/claude-0/s7f1-fact.json` on every run. The round-13 challenger ran
+ * the shipped suites — which it must, to re-take the author's figures — and
+ * OVERWROTE THE AUTHOR'S OWN MEASUREMENT ARTIFACTS at exactly that path. It
+ * copied them aside first, so nothing was lost that time, and it disclosed the
+ * hazard; the coordinator made it a standing rule: a test that writes a
+ * measurement file writes it to a path DERIVED from the run, never a fixed
+ * one, or two honest runs destroy each other's evidence.
+ *
+ * The path is derived from `PG_PORT` — which the runner exports once per run
+ * and which is unique per cluster by the same rule — plus the process id, so
+ * two runs on one cluster do not collide either. The directory is created if
+ * it is absent, and a write failure is never allowed to fail a measurement:
+ * the file is a report, not a law.
+ */
+const MEASUREMENTS = (() => {
+  const port = process.env['PG_PORT'] ?? 'noport';
+  return join('/tmp', 'claude-0', 'p4s7-runs', `fact-${port}-${String(process.pid)}.json`);
+})();
+
+function writeMeasurements(payload: unknown): void {
+  try {
+    mkdirSync(dirname(MEASUREMENTS), { recursive: true });
+    writeFileSync(MEASUREMENTS, JSON.stringify(payload, null, 2));
+  } catch {
+    // A report that cannot be written is not a verdict. The assertions are the
+    // verdict, and they have already run.
+  }
+}
+
 const SHA = 'a'.repeat(64);
 const STAMP = '2026-01-02T00:00:00Z';
 const BUCKETS = [30, 60, 90];
@@ -455,7 +488,7 @@ beforeAll(async () => {
   }
   M['specError'] = specError;
   if (specError !== null) {
-    writeFileSync('/tmp/claude-0/s7f1-fact.json', JSON.stringify(M, null, 2));
+    writeMeasurements(M);
     return;
   }
 
@@ -1705,13 +1738,217 @@ beforeAll(async () => {
   M['R1_reset_c'] = await resetInvoice();
   M['R1_immediate_after_write'] = await immediateLast();
   M['R1_immediate_after_write_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
-  //    THE FIRE ORDER, FROM THE CATALOGUE: the verifier does sort first.
+  //    THE FIRE ORDER, FROM THE CATALOGUE: the WRITER now sorts first.
   M['R1_order'] = (
     await sup.query<{ tgname: string; tgdeferrable: boolean; tginitdeferred: boolean }>(
       `SELECT t.tgname, t.tgdeferrable, t.tginitdeferred FROM pg_trigger t
         WHERE t.tgrelid = 'public.installment_plans'::regclass AND NOT t.tgisinternal ORDER BY t.tgname`,
     )
   ).rows;
+
+  // ── §R1b THE GUC-POISONING CASES, MEASURED AS IRRELEVANT
+  //    (`TL-P4-COORD-R55` ordered item 1, F13-1).
+  //
+  //    Round 13 detected the inverted order with a TRANSACTION-LOCAL COUNTER
+  //    in two custom GUCs, and PostgreSQL places no privilege on an
+  //    unreserved two-part setting — so the attacker owned the detector's
+  //    evidence. The counter is gone and the hazard is removed by a trigger
+  //    NAME instead. These arms measure that the three poisoning cases the
+  //    challenger built now do nothing at all, and that the one lawful use
+  //    still commits.
+  const poisoned = async (gucs: readonly (readonly [string, string])[], immediateFirstToo: boolean, schedule: boolean): Promise<string | null> => {
+    const planId = randomUUID();
+    const c = await mig.connect();
+    try {
+      await c.query('BEGIN');
+      for (const [k, v] of Object.entries(APP_CTX())) await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
+      for (const [k, v] of gucs) await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
+      if (immediateFirstToo) await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+      await c.query(
+        `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+         VALUES ($1,$2,$3,$4,$5,'active',100000,'2026-01-02'::DATE,$6,gen_random_uuid())`,
+        [world.tenantId, world.businessId, planId, world.invoiceId, world.customerId, world.userId],
+      );
+      if (schedule) {
+        await c.query(
+          `INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+           VALUES ($1,$2,gen_random_uuid(),$3,1,'2026-02-02'::DATE,400000),($1,$2,gen_random_uuid(),$3,2,'2026-06-02'::DATE,400000)`,
+          [world.tenantId, world.businessId, planId],
+        );
+      }
+      await c.query('COMMIT');
+      return null;
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      return err(e);
+    } finally {
+      c.release();
+    }
+  };
+  //    (a) THE SETTINGS ARE STILL CALLER-WRITABLE. That fact has not changed
+  //        and is not claimed to have: what changed is that nothing reads
+  //        them.
+  M['R1b_guc_writable'] = {} as Record<string, string | null>;
+  for (const [role, pool] of [
+    ['daftar_app', app],
+    ['daftar_migrator', mig],
+  ] as const) {
+    const c = await pool.connect();
+    try {
+      await c.query(`SET LOCAL installment.plan_fact_verify_events = '5'`);
+      await c.query(`SET LOCAL installment.plan_fact_sync_events = '99'`);
+      (M['R1b_guc_writable'] as Record<string, string | null>)[role] = null;
+    } catch (e) {
+      (M['R1b_guc_writable'] as Record<string, string | null>)[role] = err(e);
+    } finally {
+      c.release();
+    }
+  }
+  //    (b) THE ROUND-13 FALSE REFUSAL: one `SET LOCAL` of the verifier's
+  //        counter plus an ORDINARY LAWFUL WRITE, with no `SET CONSTRAINTS`
+  //        anywhere. It used to be refused `installment.plan_fact_unordered`
+  //        and rendered 500 on a lawful sale. It must now COMMIT.
+  M['R1b_reset'] = await resetInvoice();
+  M['R1b_poisoned_lawful'] = await poisoned([['installment.plan_fact_verify_events', '5']], false, true);
+  M['R1b_poisoned_lawful_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  //    (c) THE ROUND-13 DEFEAT: one `SET LOCAL` of the WRITER's counter in
+  //        front of the original attack returned it to the original FALSE
+  //        `plan_fact_desynchronised`. The attack must still be refused, and
+  //        under a name true of what the refusing trigger read.
+  M['R1b_reset_b'] = await resetInvoice();
+  M['R1b_poisoned_attack'] = await poisoned([['installment.plan_fact_sync_events', '99']], true, true);
+  M['R1b_poisoned_attack_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  //    (d) THE POOLED-CONNECTION SHAPE: a SESSION-level `SET` was seen at the
+  //        start of a LATER transaction on the same backend, which turned the
+  //        detector off for the life of the connection with lawful writes
+  //        still committing. One dedicated backend, the setting read back in
+  //        a second transaction, then a lawful write on that same poisoned
+  //        session.
+  M['R1b_reset_c'] = await resetInvoice();
+  {
+    const c = await mig.connect();
+    try {
+      await c.query(`SET installment.plan_fact_sync_events = '99'`);
+      await c.query(`SET installment.plan_fact_verify_events = '99'`);
+      await c.query('BEGIN');
+      M['R1b_session_seen'] = (
+        await c.query<{ a: string; b: string }>(
+          `SELECT current_setting('installment.plan_fact_sync_events', true) AS a,
+                  current_setting('installment.plan_fact_verify_events', true) AS b`,
+        )
+      ).rows[0];
+      await c.query('COMMIT');
+      const planId = randomUUID();
+      await c.query('BEGIN');
+      for (const [k, v] of Object.entries(APP_CTX())) await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
+      await c.query(
+        `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+         VALUES ($1,$2,$3,$4,$5,'active',100000,'2026-01-02'::DATE,$6,gen_random_uuid())`,
+        [world.tenantId, world.businessId, planId, world.invoiceId, world.customerId, world.userId],
+      );
+      await c.query(
+        `INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+         VALUES ($1,$2,gen_random_uuid(),$3,1,'2026-02-02'::DATE,400000),($1,$2,gen_random_uuid(),$3,2,'2026-06-02'::DATE,400000)`,
+        [world.tenantId, world.businessId, planId],
+      );
+      await c.query('COMMIT');
+      M['R1b_session_lawful'] = null;
+    } catch (e) {
+      M['R1b_session_lawful'] = err(e);
+    } finally {
+      c.release();
+    }
+  }
+  M['R1b_session_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  //    (e) AND NOTHING READS EITHER SETTING, read out of the INSTALLED
+  //        bodies rather than out of the file.
+  M['R1b_names_in_bodies'] = (
+    await sup.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM pg_proc p
+        WHERE p.oid IN ('public.installment_plan_fact_sync()'::regprocedure,
+                        'public.installment_plan_fact_verify()'::regprocedure,
+                        'public.customer_ar_aging(uuid,uuid,date,integer[])'::regprocedure)
+          AND (p.prosrc LIKE '%plan_fact_sync_events%' OR p.prosrc LIKE '%plan_fact_verify_events%')`,
+    )
+  ).rows[0]?.n;
+
+  // ── §R15 PART 9e's RED PROOF: THE NAME ORDER IS A LAW, NOT A HABIT
+  //    (`TL-P4-COORD-R55` ordered item 1).
+  //
+  //    The repair is a trigger NAME, so the law that keeps it honest must red
+  //    when the name changes. The verifier trigger is renamed to sort BEFORE
+  //    the writer — which is exactly the state round 13 shipped — and the
+  //    apply-time block, the runtime verifier and a `SET CONSTRAINTS` attack
+  //    are each asked again. Then it is renamed back.
+  M['R15_reset'] = await resetInvoice();
+  M['R15_rename'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query('ALTER TRIGGER installment_plans_fact_verified ON installment_plans RENAME TO installment_plans_fact_agrees');
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R15_ratchet_renamed'] = await ratchet();
+  M['R15_lawful_renamed'] = await poisoned([], false, true);
+  M['R15_lawful_renamed_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['R15_reset_b'] = await resetInvoice();
+  M['R15_attack_renamed'] = await poisoned([], true, true);
+  M['R15_attack_renamed_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['R15_restore'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query('ALTER TRIGGER installment_plans_fact_agrees ON installment_plans RENAME TO installment_plans_fact_verified');
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R15_ratchet_restored'] = await ratchet();
+  M['R15_reset_c'] = await resetInvoice();
+  M['R15_lawful_restored'] = await poisoned([], false, true);
+  M['R15_lawful_restored_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+
+  // ── §R16 THE PRIMARY KEY, WHICH NO LAW IN THIS SLICE READ
+  //    (`TL-P4-COORD-R55` ordered items 2, 3 and 7; F13-2, F13-3, F13-9).
+  //
+  //    `installment_plans_pkey` occurred ZERO times in the specification. One
+  //    catalogue flag on it made EVERY lawful plan write fail — the writer
+  //    reads the handed row BY PRIMARY KEY — under `installment.plan_fact_blind`,
+  //    whose message said the cause was row security and told the operator to
+  //    look in `pg_policy` and NOT in `pg_index`, while the whole end-state
+  //    block reported OK and the reader served a figure.
+  const setFlag = async (ix: string, column: string, value: boolean): Promise<string | null> => {
+    try {
+      await sup.query(`UPDATE pg_index SET ${column} = ${value ? 'true' : 'false'} WHERE indexrelid = $1::regclass`, [`public.${ix}`]);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  };
+  M['R16_reset'] = await resetInvoice();
+  M['R16_unready_pkey'] = await setFlag('installment_plans_pkey', 'indisready', false);
+  //    (1) THE APPLY-TIME BLOCK NOW SEES IT. It reported OK at `c0d37ca`.
+  M['R16_ratchet_pkey'] = await ratchet();
+  //    (2) AND THE LAWFUL WRITE IS REFUSED UNDER A NAME TRUE OF WHAT WAS
+  //        OBSERVED, naming the index and not `pg_policy`.
+  M['R16_lawful_pkey'] = await poisoned([], false, true);
+  M['R16_lawful_pkey_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  //    (3) BOTH INDEXES UNENFORCING — the state in which the two counts
+  //        under-report TOGETHER and `plan_index_disagrees` is silent.
+  M['R16_unready_uq'] = await setFlag('installment_plans_one_active_per_invoice_uq', 'indisready', false);
+  M['R16_lawful_both'] = await poisoned([], false, true);
+  M['R16_lawful_both_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  //    (4) RESTORE, REBUILD, AND THE CONTROL: the identical write commits.
+  M['R16_restore'] = [
+    await setFlag('installment_plans_pkey', 'indisready', true),
+    await setFlag('installment_plans_one_active_per_invoice_uq', 'indisready', true),
+  ];
+  M['R16_reindex'] = [await ddl('REINDEX INDEX public.installment_plans_pkey'), await ddl('REINDEX INDEX public.installment_plans_one_active_per_invoice_uq')];
+  M['R16_ratchet_restored'] = await ratchet();
+  M['R16_reset_b'] = await resetInvoice();
+  M['R16_lawful_control'] = await poisoned([], false, true);
+  M['R16_lawful_control_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  M['R16_reset_c'] = await resetInvoice();
 
   // ── §R2 THE COUNT'S QUERY PLAN (item 1, F-2), read as two roles and with
   //    the planner pushed at the index.
@@ -1816,7 +2053,7 @@ beforeAll(async () => {
   })();
   M['R4_disable_one'] = await (async (): Promise<string | null> => {
     try {
-      await sup.query('ALTER TABLE installment_plans DISABLE TRIGGER installment_plans_fact_agrees');
+      await sup.query('ALTER TABLE installment_plans DISABLE TRIGGER installment_plans_fact_verified');
       return null;
     } catch (e) {
       return err(e);
@@ -1845,7 +2082,7 @@ beforeAll(async () => {
   M['R4_aging_compensated'] = await aging(app, APP_CTX());
   M['R4_enable'] = await (async (): Promise<string | null> => {
     try {
-      await sup.query('ALTER TABLE installment_plans ENABLE TRIGGER installment_plans_fact_agrees');
+      await sup.query('ALTER TABLE installment_plans ENABLE TRIGGER installment_plans_fact_verified');
       await sup.query('DROP TRIGGER zzr13_compensator ON installments');
       return null;
     } catch (e) {
@@ -1974,7 +2211,73 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
   //    every trigger back on, the flag true. The retired spelling of the
   //    reader's count is answered from the index and reads ONE.
   M['R7_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
-  M['R7_two_readings'] = (
+  //    AND THE SAME EXISTS WITH THE INDEX PATH FORCED. A FINDING OF THIS
+  //    ROUND, disclosed rather than smoothed over: at `c0d37ca` this
+  //    measurement was taken WITHOUT forcing anything and read `false`,
+  //    because section 2b part 9c's `SET LOCAL enable_seqscan = off` LEAKED
+  //    out of the anonymous `DO` block -- a `DO` block has no `proconfig`, so
+  //    its `SET LOCAL` is not restored on exit (F13-4) -- and every later
+  //    statement on that session was therefore planned with sequential scans
+  //    disabled. Part 9c now saves and restores the setting, so the planner
+  //    is free again and chooses a sequential scan over this four-row heap,
+  //    which SEES BOTH ROWS. The finding the measurement is for is about the
+  //    INDEX PATH, so the index path is now asked for explicitly and the
+  //    free-planner reading is recorded beside it.
+  M['R7_truth_indexserved'] = await (async (): Promise<string> => {
+    const c = await sup.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('SET LOCAL enable_seqscan = off');
+      await c.query('SET LOCAL enable_bitmapscan = off');
+      const r = await c.query<{ t: string }>(`SELECT EXISTS (SELECT 1 FROM installment_plans p WHERE p.invoice_id = $1 AND p.status = 'active')::text AS t`, [
+        world.invoiceId,
+      ]);
+      await c.query('COMMIT');
+      return String(r.rows[0]?.t ?? 'MISSING');
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      return err(e);
+    } finally {
+      c.release();
+    }
+  })();
+  //    THE TWO SPELLINGS, WITH THE INDEX PATH ASKED FOR EXPLICITLY. The whole
+  //    point is what each spelling reads WHEN THE PARTIAL INDEX IS AVAILABLE
+  //    TO IT: the retired one puts `status = 'active'` in the WHERE and may
+  //    therefore be answered from it, the shipped one puts it in a FILTER and
+  //    may not, by the predicate-implication rule. Over a four-row heap a free
+  //    planner sequential-scans both and they agree, which measures nothing.
+  //    At `c0d37ca` the force was not asked for and arrived anyway, because
+  //    part 9c's `SET LOCAL enable_seqscan = off` leaked out of the anonymous
+  //    `DO` block onto the session (F13-4). With that leak repaired the force
+  //    is explicit, and both readings are reported.
+  M['R7_two_readings'] = await (async (): Promise<Record<string, unknown>> => {
+    const c = await sup.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('SET LOCAL enable_seqscan = off');
+      await c.query('SET LOCAL enable_bitmapscan = off');
+      const r = await c.query(
+        `SELECT (SELECT count(*)::text FROM (SELECT v2.invoice_id FROM installment_plans v2
+                   WHERE v2.business_id = $1 AND v2.status = 'active' AND v2.invoice_id = $2
+                   GROUP BY v2.invoice_id HAVING count(*) > 1) z) AS retired_spelling,
+                (SELECT count(*)::text FROM (SELECT p2.invoice_id FROM installment_plans p2
+                   WHERE p2.business_id = $1 AND p2.invoice_id = $2
+                   GROUP BY p2.invoice_id HAVING count(*) FILTER (WHERE p2.status = 'active') > 1) z) AS shipped_spelling`,
+        [world.businessId, world.invoiceId],
+      );
+      await c.query('COMMIT');
+      return (r.rows[0] ?? {}) as Record<string, unknown>;
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      return { error: err(e) };
+    } finally {
+      c.release();
+    }
+  })();
+  //    AND THE SAME PAIR WITH THE PLANNER LEFT ALONE, so the dependence of
+  //    the finding on the ACCESS PATH is itself measured rather than assumed.
+  M['R7_two_readings_free'] = (
     await sup.query(
       `SELECT (SELECT count(*)::text FROM (SELECT v2.invoice_id FROM installment_plans v2
                  WHERE v2.business_id = $1 AND v2.status = 'active' AND v2.invoice_id = $2
@@ -1995,6 +2298,67 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
                             'installment_plan_active_exclusive','installment_schedule_verify')`,
     )
   ).rows[0]?.n;
+  // ── §R17 THE ROUND-12 CORRUPTION, WITH THE FLAGS PUT BACK: AN INDEX THAT
+  //    DOES NOT PHYSICALLY DESCRIBE ITS OWN HEAP (`TL-P4-COORD-R55` ordered
+  //    item 7, F13-9).
+  //
+  //    §R7 above committed two active plans while the partial unique index
+  //    was UNREADY, so the index holds an entry for one of them and never
+  //    will for the other. Restore the flag and the catalogue is PERFECT
+  //    again — `indisvalid`, `indisready` and `indislive` all true — while
+  //    the index is missing an entry for a row that qualifies for it, FOR
+  //    EVER. That is the state round 12 reached, and until this round NO LAW
+  //    ANYWHERE said anything about it: it was repaired by two executable
+  //    `REINDEX` statements in two test teardowns, which is a fixture habit
+  //    and not an invariant. Part 9d is the law, and this is its red proof.
+  M['R17_flags_back'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query(`UPDATE pg_index SET indisready = true WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`);
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+  M['R17_flags'] = (
+    await sup.query(
+      `SELECT ic.relname AS ix, x.indisvalid, x.indisready, x.indislive FROM pg_index x
+         JOIN pg_class ic ON ic.oid = x.indexrelid
+        WHERE x.indrelid = 'public.installment_plans'::regclass ORDER BY ic.relname`,
+    )
+  ).rows;
+  //    (1) THE TWO ACCESS PATHS OVER THE WHOLE RELATION DISAGREE.
+  //    THE INDEX PATH IS ASKED FOR EXPLICITLY. The `served` spelling CAN be
+  //    answered from the partial index by the implication rule, but over a
+  //    four-row heap the planner prefers a sequential scan and would then
+  //    read the heap twice and agree. At `c0d37ca` this reading happened to
+  //    be index-served because part 9c's `SET LOCAL enable_seqscan = off`
+  //    leaked onto the session (F13-4); with that leak repaired the force has
+  //    to be asked for, and it is asked for here and nowhere implicitly.
+  M['R17_two_paths'] = await (async (): Promise<Record<string, unknown>> => {
+    const c = await sup.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('SET LOCAL enable_seqscan = off');
+      await c.query('SET LOCAL enable_bitmapscan = off');
+      const r = await c.query(
+        `SELECT (SELECT count(*) FILTER (WHERE p.status = 'active') FROM installment_plans p)::text AS heap,
+                (SELECT count(*) FROM installment_plans p WHERE p.status = 'active')::text AS served`,
+      );
+      await c.query('COMMIT');
+      return (r.rows[0] ?? {}) as Record<string, unknown>;
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      return { error: err(e) };
+    } finally {
+      c.release();
+    }
+  })();
+  //    (2) SO THE END-STATE BLOCK REFUSES, WHERE IT USED TO REPORT OK.
+  M['R17_ratchet_corrupt'] = await ratchet();
+  //    (3) AND THE PHYSICAL INSTRUMENT AGREES: the index cannot be rebuilt
+  //        from this heap at all, because the heap violates it.
+  M['R17_reindex'] = await ddl('REINDEX INDEX public.installment_plans_one_active_per_invoice_uq');
+
   //    AND THE TEARDOWN GOES THROUGH THE SAME ESCAPE, because the write path
   //    now refuses to touch a state its own premise forbids.
   //    ── §R8 AND THE STATE IN WHICH THE BOUND ITSELF IS WHAT ANSWERS.
@@ -2052,7 +2416,7 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
   M['R13_teardown'] = await resetInvoice();
   M['R13_teardown_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
 
-  writeFileSync('/tmp/claude-0/s7f1-fact.json', JSON.stringify(M, null, 2));
+  writeMeasurements(M);
 }, 1800000);
 
 afterAll(async () => {
@@ -2854,7 +3218,15 @@ describe('P4-S7 §T the refusal names are in the TypeScript catalogue (TL-P4-COO
   it('an UNREGISTERED installment name is not treated as an invariant — the registry is closed, not a prefix test', () => {
     expect(parseDatabaseInstallmentInternalCode(new Error('installment.migration_end_state_invalid: x'))).toBe('installment.migration_end_state_invalid');
     expect(isInstallmentInternalInvariant('installment.migration_end_state_invalid')).toBe(false);
-    expect(isInstallmentInternalInvariant('installment.plan_fact_unwritable')).toBe(false);
+    // `TL-P4-COORD-R55` ORDERED ITEM 6. `installment.plan_fact_unwritable`
+    // used to stand here, pinned as unregistered on the rationale that a
+    // caller «cannot reach a response at all». That was false: it is raised
+    // twice from `installment_plan_fact_sync()` on the LIVE WRITE PATH, so it
+    // is registered now, and the example of an unregistered name has to be a
+    // name that really is one — an apply-time name and a fabricated one.
+    expect(isInstallmentInternalInvariant('installment.plan_fact_unwritable'), 'the item-6 correction was reverted').toBe(true);
+    expect(isInstallmentInternalInvariant('installment.authority_leak')).toBe(false);
+    expect(isInstallmentInternalInvariant('installment.not_a_name_anything_raises')).toBe(false);
   });
 });
 
@@ -2909,44 +3281,217 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
   });
 
   /**
-   * F-1. `SET CONSTRAINTS ALL IMMEDIATE` needs no privilege, removes the
-   * verifier's deferral, and PostgreSQL then fires the two immediate `AFTER
-   * ROW` triggers in TRIGGER-NAME ORDER — `installment_plans_fact_agrees`
-   * before `installment_plans_fact_sync`. At `6acd17b` a LAWFUL write was
-   * refused `installment.plan_fact_desynchronised`: a FALSE name, and one of
-   * the registered internal invariants, so a 500 on a lawful sale.
+   * F-1, AND ITS SECOND REPAIR. `SET CONSTRAINTS ALL IMMEDIATE` needs no
+   * privilege, removes the verifier's deferral, and PostgreSQL then fires the
+   * immediate `AFTER ROW` triggers of one relation IN TRIGGER-NAME ORDER.
+   * While the verifier's trigger was called `installment_plans_fact_agrees`
+   * it sorted BEFORE `installment_plans_fact_sync`, so the verifier ran first
+   * and a LAWFUL write was refused `installment.plan_fact_desynchronised` — a
+   * FALSE name, and a registered internal invariant, so a 500 on a lawful
+   * sale.
+   *
+   * ROUND 13 DETECTED THAT WITH A TRANSACTION-LOCAL COUNTER IN TWO CUSTOM
+   * GUCs, AND THE CALLER COULD WRITE THEM (`TL-P4-COORD-R55` ordered item 1).
+   * The counter is gone; the verifier's trigger is renamed so that the WRITER
+   * SORTS FIRST, and the name order is read from `pg_trigger` by part 9e and
+   * by the verifier itself.
    */
-  it('R1 BOTH APP ROLES MAY ISSUE IT, and the verifier does sort before the writer', () => {
+  it('R1 BOTH APP ROLES MAY ISSUE IT, and the WRITER now sorts before the verifier', () => {
     expect(M['R1_who']).toStrictEqual({ daftar_app: null, daftar_migrator: null });
     const order = (M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).map((t) => t.tgname);
-    expect(order.indexOf('installment_plans_fact_agrees')).toBeLessThan(order.indexOf('installment_plans_fact_sync'));
+    // the state round 13 shipped, gone:
+    expect(order, 'the trigger that sorted before the writer is still installed').not.toContain('installment_plans_fact_agrees');
+    expect(order.indexOf('installment_plans_fact_sync'), 'the writer does not sort before the plan-side verifier').toBeLessThan(
+      order.indexOf('installment_plans_fact_verified'),
+    );
+    // ...and the verifier is still DEFERRED, so the rename changed the name
+    // and nothing else about the construction.
     expect(
-      (M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_agrees')?.tgdeferrable,
+      (M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_verified')?.tgdeferrable,
     ).toBe(true);
+    expect((M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_sync')?.tgdeferrable).toBe(
+      false,
+    );
   });
 
-  it('R1 THE CONTROL COMMITS, the attack is refused by a name that is TRUE, and nothing commits', () => {
+  it('R1 THE CONTROL COMMITS, the attack still FAILS CLOSED, and the fact is no longer what refuses it', () => {
     // CONTROL
     expect(M['R1_control'], `the control write was refused: ${String(M['R1_control'])}`).toBeNull();
     expect(M['R1_control_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
-    // ATTACK: refused, and NOT under the false name
+    // THE ATTACK: still refused, still fails closed — and the FACT is no
+    // longer the thing that objects, because the writer now runs first and
+    // the verifier sees a state it can judge. What objects is the SCHEDULE
+    // verifier, forced immediate into a transaction whose `installments` rows
+    // do not exist yet, under `installment.schedule_incomplete` — TRUE of the
+    // instant it reads, and the half of this statement's effect that NO
+    // rename can fix. That is the same fail-closed stance frozen `0069` and
+    // `0071` take under `R-94`.
     const e = String(M['R1_attack']);
-    expect(e).toContain('installment.plan_fact_unordered');
-    expect(e, 'the false diagnosis is back').not.toContain('installment.plan_fact_desynchronised');
-    // the message names the cause, the statement and the remedy
-    expect(e).toContain('SET CONSTRAINTS ALL IMMEDIATE');
-    expect(e).toContain('TRIGGER-NAME ORDER');
-    expect(e).toContain('Nothing is desynchronised and no data is wrong');
+    expect(e).toContain('installment.schedule_incomplete');
+    expect(e, 'the false fact diagnosis is back').not.toContain('installment.plan_fact_desynchronised');
+    expect(e, 'the order detector fired on a state whose order is now correct').not.toContain('installment.plan_fact_unordered');
     // IT FAILS CLOSED
     expect(M['R1_attack_state']).toStrictEqual({ flag: 'false', truth: 'false', plans: '0' });
-    expect(parseDatabaseInstallmentInternalCode(new Error(e))).toBe('installment.plan_fact_unordered');
-    expect(isInstallmentInternalInvariant('installment.plan_fact_unordered')).toBe(true);
-    expect(INSTALLMENT_INTERNAL_INVARIANT_CODES).toContain('installment.plan_fact_unordered');
+    expect(parseDatabaseInstallmentInternalCode(new Error(e))).toBe('installment.schedule_incomplete');
+  });
+
+  /**
+   * ── §R1b THE THREE GUC-POISONING CASES, MEASURED AS IRRELEVANT
+   *    (`TL-P4-COORD-R55` ordered item 1, F13-1) ─────────────────────────
+   *
+   * The settings are still caller-writable — PostgreSQL places no privilege
+   * on an unreserved two-part custom setting and that has not changed. What
+   * changed is that NOTHING READS THEM, so none of the three attacks does
+   * anything at all. A detector whose evidence the attacker may write is not
+   * a detector; one that renders 500 on a lawful sale is worse than none.
+   */
+  it('R1b THE POISONED LAWFUL WRITE COMMITS — the false 500 on a lawful sale is gone', () => {
+    expect(M['R1b_guc_writable'], 'the settings stopped being writable, which is not what this repair claims').toStrictEqual({
+      daftar_app: null,
+      daftar_migrator: null,
+    });
+    expect(M['R1b_poisoned_lawful'], `a lawful write with the verifier counter preloaded was refused: ${String(M['R1b_poisoned_lawful'])}`).toBeNull();
+    expect(M['R1b_poisoned_lawful_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
+  });
+
+  it('R1b THE DETECTOR CANNOT BE DEFEATED BECAUSE THERE IS NOTHING TO DEFEAT — the attack still fails closed', () => {
+    const e = String(M['R1b_poisoned_attack']);
+    expect(e, 'the attack with the writer counter preloaded committed').not.toBe('null');
+    expect(e, "round 12's false plan_fact_desynchronised is back").not.toContain('installment.plan_fact_desynchronised');
+    expect(e).toContain('installment.schedule_incomplete');
+    expect(M['R1b_poisoned_attack_state']).toStrictEqual({ flag: 'false', truth: 'false', plans: '0' });
+  });
+
+  it('R1b A SESSION-LEVEL SET IS STILL SEEN IN A LATER TRANSACTION, and changes nothing — the pooled-connection shape', () => {
+    // THE NON-VACUITY: the setting really does survive into the next
+    // transaction on that backend, which is what made this the
+    // pooled-connection shape in the first place.
+    expect(M['R1b_session_seen']).toStrictEqual({ a: '99', b: '99' });
+    // AND THE LAWFUL WRITE ON THAT POISONED SESSION COMMITS, correctly.
+    expect(M['R1b_session_lawful'], `the poisoned session refused a lawful write: ${String(M['R1b_session_lawful'])}`).toBeNull();
+    expect(M['R1b_session_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
+    // AND NOTHING IN THE INSTALLED BODIES READS EITHER NAME — read from
+    // `pg_proc`, over the routines as the cluster really holds them.
+    expect(M['R1b_names_in_bodies'], 'an installed body still reads a caller-writable counter').toBe('0');
   });
 
   it('R1 AND THE SAME STATEMENT AFTER THE WRITE STILL COMMITS — the repair did not break the lawful use', () => {
     expect(M['R1_immediate_after_write'], `a SET CONSTRAINTS issued after the write was refused: ${String(M['R1_immediate_after_write'])}`).toBeNull();
     expect(M['R1_immediate_after_write_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
+  });
+
+  /**
+   * `TL-P4-COORD-R55` ordered item 1, THE RED PROOF OF THE REPAIR ITSELF.
+   * The repair is a trigger NAME, so the law that keeps it honest must go red
+   * when the name moves. Round 13's name is put back — the verifier renamed
+   * to sort BEFORE the writer — and the apply-time block, a lawful write and
+   * the attack are each asked again over that state.
+   */
+  it('R15 WITH THE VERIFIER RENAMED TO SORT FIRST, THE END-STATE BLOCK REFUSES — part 9e is the law that holds the name', () => {
+    expect(M['R15_reset'], `the fixture did not reset: ${String(M['R15_reset'])}`).toBeNull();
+    expect(M['R15_rename'], `the rename failed, so nothing below was measured: ${String(M['R15_rename'])}`).toBeNull();
+    const e = String(M['R15_ratchet_renamed']);
+    expect(e, 'the end-state block certified a name order in which the verifier runs first').not.toBe('null');
+    expect(e).toContain('installment.migration_end_state_invalid');
+    expect(e).toContain('installment_plans_fact_sync');
+    expect(e).toContain('installment_plans_fact_agrees');
+    expect(e).toContain('does not sort strictly before the verifier');
+  });
+
+  it('R15 AND A TAMPERED NAME FAILS CLOSED AT RUNTIME TOO, under a name TRUE of what was observed', () => {
+    // MEASURED, AND NOT WHAT THIS AUTHOR EXPECTED. The verifier does not
+    // merely rely on the name order: it READS IT FROM `pg_trigger` INSIDE
+    // EVERY EVENT, so with the verifier renamed to sort first EVERY plan
+    // write is refused — deferred or immediate — and the refusal says that
+    // the trigger NAMES of this relation are no longer the names this
+    // specification installs, that nothing is desynchronised, and what to do
+    // about it. That is the item-2 principle applied to item 1: the premise
+    // is read, and the message attributes only what the reading establishes.
+    // It is NOT the round-13 hazard, because the premise's storage is
+    // `pg_trigger` — reachable only by DDL on the relation's owner, never by
+    // a caller's `SET` — and the round-13 counter was a custom GUC any role
+    // could write.
+    const e = String(M['R15_lawful_renamed']);
+    expect(e, 'a tampered trigger name was accepted silently').not.toBe('null');
+    expect(e).toContain('installment.plan_fact_unordered');
+    expect(e, 'the refusal claims a desynchronisation it has not observed').not.toContain('installment.plan_fact_desynchronised');
+    expect(e).toContain('installment_plans_fact_sync');
+    expect(e).toContain('installment_plans_fact_agrees');
+    expect(e).toContain('Nothing is desynchronised and no data is wrong');
+    expect(e).toContain('rename so that the writer sorts first');
+    expect(M['R15_lawful_renamed_state']).toStrictEqual({ flag: 'false', truth: 'false', plans: '0' });
+    expect(parseDatabaseInstallmentInternalCode(new Error(e))).toBe('installment.plan_fact_unordered');
+  });
+
+  it('R15 AND THE ROUND-13 FAILURE MODE DOES NOT COME BACK: the attack under the old name is refused by the ORDER law, not by the FACT', () => {
+    expect(M['R15_reset_b']).toBeNull();
+    const a = String(M['R15_attack_renamed']);
+    expect(a, 'the attack committed under the round-13 name order').not.toBe('null');
+    // THE ROUND-13 STATE WAS: `SET CONSTRAINTS ALL IMMEDIATE`, the verifier
+    // fires first, and a LAWFUL write is refused `plan_fact_desynchronised`
+    // — a message about the data, for a fault in the trigger names. Under
+    // this round's law the same construction is refused by the ORDER law
+    // instead, which is a sentence about the catalogue.
+    expect(a, "round 13's false plan_fact_desynchronised is back").not.toContain('installment.plan_fact_desynchronised');
+    expect(a).toContain('installment.plan_fact_unordered');
+    expect(M['R15_attack_renamed_state']).toStrictEqual({ flag: 'false', truth: 'false', plans: '0' });
+  });
+
+  it('R15 AND THE CONTROL: the name put back, the block is OK again and the same write commits', () => {
+    expect(M['R15_restore'], `the restore failed: ${String(M['R15_restore'])}`).toBeNull();
+    expect(M['R15_ratchet_restored'], `the block refuses the shipped name order: ${String(M['R15_ratchet_restored'])}`).toBeNull();
+    expect(M['R15_reset_c']).toBeNull();
+    expect(M['R15_lawful_restored'], `the control write was refused: ${String(M['R15_lawful_restored'])}`).toBeNull();
+    expect(M['R15_lawful_restored_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
+  });
+
+  /**
+   * `TL-P4-COORD-R55` ordered items 2 and 3, F13-2 and F13-3. ONE catalogue
+   * flag on `installment_plans_pkey` — a name that occurred ZERO times in the
+   * specification at `c0d37ca` — made every lawful plan write fail under a
+   * message that attributed the cause to row security, while the end-state
+   * block reported OK and the reader served a figure.
+   */
+  it('R16 THE END-STATE BLOCK NOW SEES AN UNENFORCING PRIMARY KEY, where it reported OK', () => {
+    expect(M['R16_reset']).toBeNull();
+    expect(M['R16_unready_pkey'], `the flag could not be set: ${String(M['R16_unready_pkey'])}`).toBeNull();
+    const e = String(M['R16_ratchet_pkey']);
+    expect(e, 'the end-state block certified a relation whose PRIMARY KEY is not enforcing').not.toBe('null');
+    expect(e).toContain('installment.migration_end_state_invalid');
+    expect(e).toContain('installment_plans_pkey');
+    expect(e).toContain('NOT ENFORCING');
+    expect(e).toContain('indisready=false');
+  });
+
+  it('R16 AND THE LAWFUL WRITE IS REFUSED BY A NAME TRUE OF WHAT WAS OBSERVED — pg_index, not pg_policy', () => {
+    const e = String(M['R16_lawful_pkey']);
+    expect(e, 'the write committed over an unenforcing primary key').not.toBe('null');
+    // THE FINDING, IN ONE ASSERTION: the name is the one the reading
+    // establishes, and NOT the one that attributes row security.
+    expect(e).toContain('installment.plan_index_unenforcing');
+    expect(e, 'the refusal still attributes a cause the code did not establish').not.toContain('installment.plan_fact_blind');
+    expect(e).toContain('installment_plans_pkey');
+    expect(M['R16_lawful_pkey_state']).toStrictEqual({ flag: 'false', truth: 'false', plans: '0' });
+    expect(parseDatabaseInstallmentInternalCode(new Error(e))).toBe('installment.plan_index_unenforcing');
+  });
+
+  it('R16 AND WITH BOTH INDEXES UNENFORCING — the state in which the two counts under-report TOGETHER — it is still refused', () => {
+    expect(M['R16_unready_uq']).toBeNull();
+    const e = String(M['R16_lawful_both']);
+    expect(e, 'the write committed with every index of the relation unenforcing').not.toBe('null');
+    expect(e).toContain('installment.plan_index_unenforcing');
+    expect(e, 'row security is attributed over a state the catalogue explains').not.toContain('installment.plan_fact_blind');
+    expect(M['R16_lawful_both_state']).toStrictEqual({ flag: 'false', truth: 'false', plans: '0' });
+  });
+
+  it('R16 AND THE CONTROL: flags back, indexes rebuilt, the block OK and the identical write commits', () => {
+    expect(M['R16_restore']).toStrictEqual([null, null]);
+    expect(M['R16_reindex'], `a REINDEX failed: ${String(M['R16_reindex'])}`).toStrictEqual([null, null]);
+    expect(M['R16_ratchet_restored'], `the block refuses the restored state: ${String(M['R16_ratchet_restored'])}`).toBeNull();
+    expect(M['R16_reset_b']).toBeNull();
+    expect(M['R16_lawful_control'], `the control write was refused: ${String(M['R16_lawful_control'])}`).toBeNull();
+    expect(M['R16_lawful_control_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
+    expect(M['R16_reset_c']).toBeNull();
   });
 
   /**
@@ -3070,11 +3615,16 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     expect(errOf(M['R7_build']), `the two-plan state did not build: ${errOf(M['R7_build'])}`).toBe('');
     expect(M['R7_on']).toBeNull();
     // THE STATE: two active plans in the HEAP, the flag true, and every one
-    // of the seven triggers back ON. `truth` reads FALSE here, which is the
-    // finding in one word: that reading is an `EXISTS` over
-    // `status = 'active'` and it is answered FROM the index, which holds
-    // NEITHER row — both were written while it was not being maintained.
-    expect(M['R7_state']).toStrictEqual({ flag: 'true', truth: 'false', plans: '2' });
+    // of the seven triggers back ON. WITH THE PLANNER FREE the EXISTS is a sequential scan over a four-row
+    // heap and sees both rows, so it reads TRUE. At `c0d37ca` the same
+    // statement read FALSE, because part 9c's `SET LOCAL enable_seqscan = off`
+    // had leaked onto the session out of an anonymous `DO` block (F13-4) and
+    // silently planned it on the index. Both readings are reported.
+    expect(M['R7_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '2' });
+    // AND THE INDEX-SERVED READING OF THE SAME EXISTS, asked for explicitly,
+    // IS FALSE: the index holds NEITHER row, because both were written while
+    // it was not being maintained. That is the finding in one word.
+    expect(M['R7_truth_indexserved'], 'the index-served EXISTS sees a row the index cannot hold').toBe('false');
     expect(M['R7_triggers_all_enabled']).toBe('7');
     // THE MEASUREMENT THAT IS THE WHOLE OF F-2: the RETIRED spelling of the
     // reader's bound count, run against this very state, finds NOTHING, while
@@ -3082,14 +3632,22 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // answers — and the only difference between them is which access path the
     // planner may use.
     expect(M['R7_two_readings']).toStrictEqual({ retired_spelling: '0', shipped_spelling: '1' });
-    // AND THE READER REFUSES RATHER THAN SERVING A FIGURE. The arm that
-    // answers here is `plan_fact_unreadable`, not the bound: with the index
-    // unmaintained, the reader's own `visible_plan` sees NEITHER plan and the
-    // first count fires first. That is fail-closed and it is reported as what
-    // it is rather than as the refusal one might prefer; §R8 builds the state
-    // in which the bound itself is the only thing left to object.
+    // AND THE DEPENDENCE ON THE ACCESS PATH IS ITSELF MEASURED: with the
+    // planner left alone, both spellings sequential-scan this four-row heap,
+    // see both rows and AGREE. So the finding is about which access path a
+    // spelling PERMITS and not about the size of this fixture — and a reading
+    // taken with the planner free would have measured nothing at all.
+    expect(M['R7_two_readings_free']).toStrictEqual({ retired_spelling: '1', shipped_spelling: '1' });
+    // AND THE READER REFUSES RATHER THAN SERVING A FIGURE. WHICH ARM ANSWERS
+    // DEPENDS ON THE ACCESS PATH, and that is a finding of this round rather
+    // than a detail: at `c0d37ca` it was `plan_fact_unreadable`, because
+    // part 9c's leaked `enable_seqscan = off` (F13-4) made the reader's own
+    // `visible_plan` count index-served and it saw NEITHER plan. With the
+    // leak repaired the planner is free, every count reaches the heap, and
+    // the BOUND is what objects — which is the refusal that actually
+    // describes this state. Either way it is fail-closed and serves nothing.
     const e = errOf(M['R7_aging']);
-    expect(e, 'the reader served a figure over two active plans again').toContain('installment.plan_fact_unreadable');
+    expect(e, 'the reader served a figure over two active plans again').toContain('installment.plan_active_unbounded');
     expect(rows(M['R7_aging'])).toHaveLength(0);
   });
 
@@ -3099,6 +3657,60 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
    * state in which the reader served the pre-installment figure with no
    * refusal at all.
    */
+  /**
+   * `TL-P4-COORD-R55` ordered item 7, F13-9. §R7 committed two active plans
+   * while the partial unique index was UNREADY, so the index holds an entry
+   * for one of them and never will for the other. With the flag put back the
+   * CATALOGUE IS PERFECT — all three flags true — while the index does not
+   * physically describe its own heap, for ever. Until this round no law
+   * anywhere said anything about that state: it was repaired by two
+   * executable `REINDEX` statements in two test teardowns.
+   */
+  it('R17 THE CATALOGUE IS PERFECT AND THE INDEX STILL DOES NOT DESCRIBE ITS HEAP — and part 9d is what says so', () => {
+    expect(M['R17_flags_back'], `the flag could not be restored: ${String(M['R17_flags_back'])}`).toBeNull();
+    // NON-VACUITY (a): every index of the relation reports enforcing, so no
+    // flag-reading law — part 9, part 9a, or the three runtime readings — can
+    // see anything wrong here.
+    const flags = M['R17_flags'] as readonly Record<string, unknown>[];
+    expect(flags.length).toBeGreaterThanOrEqual(2);
+    for (const f of flags) {
+      expect(f['indisvalid'], `${String(f['ix'])} is not reported valid`).toBe(true);
+      expect(f['indisready'], `${String(f['ix'])} is not reported ready`).toBe(true);
+      expect(f['indislive'], `${String(f['ix'])} is not reported live`).toBe(true);
+    }
+    // NON-VACUITY (b): and the two access paths over the same heap in the
+    // same transaction disagree, which is the physical defect itself.
+    // MEASURED: the FILTER spelling reads TWO (it may not use the partial
+    // index at all, so it reaches the heap) and the WHERE spelling reads ZERO
+    // (it is answered from an index that holds NEITHER row, both having been
+    // written while it was not maintained). Two readings of one heap in one
+    // transaction, 2 against 0.
+    expect(M['R17_two_paths']).toStrictEqual({ heap: '2', served: '0' });
+    // THE LAW: the end-state block refuses this state. At `c0d37ca` it
+    // reported OK over it.
+    const e = String(M['R17_ratchet_corrupt']);
+    expect(e, 'the end-state block certified an index that does not describe its own heap').not.toBe('null');
+    expect(e).toContain('installment.migration_end_state_invalid');
+    // AND IT REFUSES UNDER ITS OWN NAME WITH A MESSAGE TRUE OF WHAT IT READ,
+    // not under `23505 could not create unique index` — which is fail-closed
+    // but is a sentence about index creation and names no invariant of this
+    // slice. Part 9d takes the count BEFORE the rebuild for exactly that
+    // reason (`TL-P4-COORD-R55` ordered item 2).
+    expect(e).toContain('THIS IS NOT A CATALOGUE FLAG AND NO FLAG CAN SHOW IT');
+    // AND THE INSTRUMENT THAT DECIDED IS THE REBUILD — EXECUTION — with the
+    // `23505` quoted inside this slice's own message rather than surfacing
+    // raw: the two-path count is planner-dependent and is declared a belt.
+    expect(e).toContain('cannot be rebuilt from the heap of its own relation');
+    expect(e).toContain('installment_plans_one_active_per_invoice_uq');
+    expect(e).toContain('could not create unique index');
+    // AND THE PHYSICAL INSTRUMENT AGREES: the index cannot be rebuilt from
+    // this heap at all, because the heap violates it.
+    const r = String(M['R17_reindex']);
+    expect(r, 'the index rebuilt cleanly, so the heap does not in fact violate it').not.toBe('null');
+    expect(r).toContain('could not create unique index');
+    expect(r).toContain('installment_plans_one_active_per_invoice_uq');
+  });
+
   it('R8 WITH THE INDEX GONE AND TWO ACTIVE PLANS VISIBLE, the reader refuses on the BOUND and serves nothing', () => {
     expect(M['R8_unready_back']).toBeNull();
     expect(M['R8_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '2' });

@@ -107,16 +107,45 @@ export const P4S7_PINNED_BODIES: readonly { readonly head: string; readonly sign
  * Every routine the specification INSTALLS, by bare name, read from its own
  * `CREATE [OR REPLACE] FUNCTION` heads.
  *
- * ANCHORED AT THE START OF A LINE, which is what makes the subject DDL rather
- * than prose: this file's own header discusses `CREATE OR REPLACE FUNCTION`
- * inside a box-drawing comment, and an unanchored match would count it as a
- * seventh routine. MEASURED: six heads at a line start, one mention inside a
- * comment, and the law goes red if that ratio ever changes — which is the
- * point, because a seventh routine is exactly what must not slip past the
- * digest list.
+ * ── WHAT THIS INSTRUMENT IS, AND WHAT IT IS NOT (`TL-P4-COORD-R55` ordered
+ *    item 5, F13-5) ──────────────────────────────────────────────────────
+ *
+ * IT IS A REGEX OVER SQL TEXT, WHICH IS THE INSTRUMENT CLASS THIS ESTATE HAS
+ * RULED AGAINST THREE TIMES (`TL-P4-COORD-R46`, `R50` §5, `R55` §6). The
+ * previous version was line-anchored, case-sensitive and single-space, and
+ * EIGHT valid SQL spellings of an installed routine were invisible to it:
+ * indented by two spaces, `create function` lowercase, `Create Function`
+ * mixed case, a newline between `FUNCTION` and the name, two spaces after
+ * `REPLACE`, `CREATE PROCEDURE`, an uppercase-initial routine name, and a
+ * `CREATE FUNCTION` issued from a dynamic `EXECUTE`. A seventh routine in any
+ * of those spellings installed with the entire end-state block reporting OK.
+ *
+ * SO THE COMPLETENESS LAW IS NOW A CATALOGUE LAW AND THIS IS ITS BELT. The
+ * law that decides the question is in
+ * `tests/integration/phase4-s7-installment-aging-db.test.ts`: it reads the set
+ * of routines in schema `public` BEFORE the specification is applied and
+ * AFTER, and requires the DIFFERENCE to be exactly the pinned set. That is
+ * catalogue DATA about what the file really installed; it is blind to no
+ * spelling, including a dynamic `EXECUTE`, because it never reads the text at
+ * all.
+ *
+ * This function is kept because the digest EXTRACTOR needs the file's own
+ * heads to slice bodies from, and it is widened to the spellings above so
+ * that it is not quietly weaker than its own comment: case-insensitive,
+ * leading whitespace allowed, `FUNCTION` or `PROCEDURE`, any whitespace
+ * (newline included) between the keyword and the name, and any
+ * case of the name. It remains ANCHORED at a line start, which is what keeps
+ * the subject DDL rather than prose — this file's own header discusses
+ * `CREATE OR REPLACE FUNCTION` inside a box-drawing comment, and an
+ * unanchored match would count it as a seventh routine. WHAT IT STILL CANNOT
+ * SEE IS DECLARED AND NOT CERTIFIED ABSENT: a routine created from a dynamic
+ * `EXECUTE`, or from inside a dollar-quoted body, is text no pattern over this
+ * file can recognise as DDL. The catalogue law above is what covers it.
  */
 export function routineHeads(spec: string): readonly string[] {
-  return [...spec.matchAll(/^CREATE (?:OR REPLACE )?FUNCTION[ \t]+([a-z_][a-z0-9_]*)[ \t]*\(/gm)].map((m) => m[1] as string);
+  return [...spec.matchAll(/^[ \t]*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/gim)].map((m) =>
+    (m[1] as string).toLowerCase(),
+  );
 }
 
 /** The bare routine name of a pinned `regprocedure` signature. */

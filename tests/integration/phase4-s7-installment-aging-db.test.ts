@@ -52,6 +52,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ScratchDb } from '../helpers/scratch-db';
 import { createScratchDb } from '../helpers/scratch-db';
+import { declaredBodyDigests, routineHeads } from '../../scripts/guards/p4s7-body-digests';
 
 const SPEC_PATH = join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql');
 const SPEC = readFileSync(SPEC_PATH, 'utf8');
@@ -82,6 +83,31 @@ let parserError: string | null = null;
 /** The schema ACL as the scratch database really holds it, for the report. */
 let schemaAcl: string | null = null;
 let applied: readonly string[] = [];
+/**
+ * `TL-P4-COORD-R55` ORDERED ITEM 5, F13-5 — THE DECIDING INSTRUMENT.
+ *
+ * The completeness of the pinned-body list was enforced by a REGEX OVER THE
+ * SPECIFICATION FILE (`routineHeads`): line-anchored, case-sensitive in its
+ * keyword spacing, and single-space between tokens. Eight valid spellings of a
+ * `CREATE FUNCTION` head were invisible to it — among them a head indented by
+ * a form feed, one with a comment between the keywords, and one produced by a
+ * dynamic `EXECUTE` — and a SEVENTH ROUTINE spelled any of those ways
+ * installed with the whole end-state block reporting null, after which it can
+ * be replaced by a conforming stub that no digest covers.
+ *
+ * SO THE LAW HERE READS THE CATALOGUE AND NOT THE FILE: the set of routines
+ * `public` holds is snapshotted BEFORE the specification is applied and again
+ * AFTER, and the DIFFERENCE must be exactly the signatures `c_bodies` pins. It
+ * cannot be defeated by a spelling, because its subject is what the cluster
+ * ended up holding — `pg_proc` rows, which are catalogue DATA. The file regex
+ * is kept as a BELT that reds earlier and in cheaper CI, and is documented as
+ * one.
+ */
+let routinesBefore: readonly string[] = [];
+let routinesAfter: readonly string[] = [];
+/** The same law asked again with a seventh routine planted — its red arm. */
+let plantedDiff: readonly string[] = [];
+let plantError: string | null = null;
 
 beforeAll(async () => {
   // CHALLENGER H3. The first version applied the specification as the
@@ -100,10 +126,35 @@ beforeAll(async () => {
   schemaAcl =
     (await db.pool.query<{ acl: string | null }>(`SELECT nspacl::text AS acl FROM pg_catalog.pg_namespace WHERE nspname = 'public'`)).rows[0]?.acl ?? null;
   const migrator = db.poolAs('daftar_migrator');
+  // ITEM 5: the catalogue BEFORE the apply. `pg_proc` is read for every
+  // routine of `public`, by `regprocedure` text, so an overload is a distinct
+  // member and a rename is a different member.
+  const ROUTINES = `SELECT p.oid::regprocedure::text AS sig
+                      FROM pg_catalog.pg_proc p
+                      JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                     WHERE n.nspname = 'public' ORDER BY 1`;
+  const sigs = async (): Promise<readonly string[]> => (await db.pool.query<{ sig: string }>(ROUTINES)).rows.map((r) => r.sig);
+  routinesBefore = await sigs();
   try {
     await migrator.query(SPEC);
   } catch (e) {
     parserError = e instanceof Error ? `${(e as { code?: string }).code ?? '?'}: ${e.message}` : String(e);
+  }
+  routinesAfter = await sigs();
+  // THE RED ARM. A seventh routine is planted in `public` — spelled the way
+  // the file regex cannot see, and installed by the one principal that may
+  // create in `public` at all — and THE SAME LAW is asked again. It must
+  // report the planted routine. Then it is dropped, so no case after this
+  // reads a polluted catalogue.
+  try {
+    await db.pool.query(
+      `CREATE	OR  REPLACE	FUNCTION	public.installment_plan_fact_assert_extra(p_a BIGINT)
+` + ` RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog AS $x$ BEGIN RETURN true; END $x$`,
+    );
+    plantedDiff = (await sigs()).filter((x) => !routinesBefore.includes(x));
+    await db.pool.query('DROP FUNCTION public.installment_plan_fact_assert_extra(bigint)');
+  } catch (e) {
+    plantError = e instanceof Error ? e.message : String(e);
   }
 }, 600_000);
 
@@ -302,5 +353,93 @@ describe("§A THE PARSER'S OPINION — a specification is design until PostgreSQ
       [['daftar_app', 'daftar_inventory_internal', 'daftar_accounting_internal']],
     );
     expect(control.rows[0]?.n, 'the privilege query reports nothing even for a privilege that IS held').toBe('6');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('§A3 THE COMPLETENESS LAW READS THE CATALOGUE, NOT THE FILE (TL-P4-COORD-R55 item 5, F13-5)', () => {
+  it('the snapshots are real and the apply really added routines, so the difference below is not empty by construction', () => {
+    expect(parserError, `the specification does not apply, so nothing here was measured: ${parserError ?? ''}`).toBeNull();
+    expect(routinesBefore.length, 'the pre-apply catalogue is empty, so the diff is the whole of `public`').toBeGreaterThan(20);
+    expect(routinesAfter.length).toBeGreaterThan(routinesBefore.length);
+  });
+
+  it('THE LAW: every routine the apply ADDED is one c_bodies pins, and every pinned routine is THERE — read from pg_proc', () => {
+    // THE PINNED SET IS DERIVED FROM THE SPECIFICATION'S OWN `c_bodies`, not
+    // written out here: a second spelling of a closed list is a second
+    // definition of it.
+    const norm = (x: string): string => (x.includes('.') ? x : `public.${x}`).replace(/\s+/g, '').toLowerCase();
+    const pinned = declaredBodyDigests(SPEC).map((r) => norm(r.signature));
+    expect(pinned.length, 'c_bodies no longer declares six rows, so this oracle has moved').toBe(6);
+    const before = routinesBefore.map(norm);
+    const after = routinesAfter.map(norm);
+    const added = after.filter((x) => !before.includes(x));
+    // (1) NOTHING WAS ADDED THAT IS NOT PINNED. This is the direction item 5
+    //     is about: a SEVENTH routine, however spelled, lands here.
+    expect(
+      added.filter((x) => !pinned.includes(x)),
+      `the apply added routines c_bodies does not pin: ${JSON.stringify(added)}`,
+    ).toStrictEqual([]);
+    // (2) AND EVERY PINNED ROUTINE IS PRESENT AFTERWARDS, so the list cannot
+    //     name a routine nothing installs.
+    expect(
+      pinned.filter((x) => !after.includes(x)),
+      'c_bodies pins a routine the cluster does not hold after the apply',
+    ).toStrictEqual([]);
+    // (3) THE ONES NOT IN `added` ARE EXACTLY THE ONES THAT ALREADY EXISTED —
+    //     `customer_ar_aging` is a `CREATE OR REPLACE` of `0084`'s routine, so
+    //     it is REPLACED and not ADDED, and that is measured rather than
+    //     explained away.
+    const replaced = pinned.filter((x) => before.includes(x));
+    expect(replaced, `the set of pinned routines that predate this slice has changed: ${JSON.stringify(replaced)}`).toStrictEqual([
+      'public.customer_ar_aging(uuid,uuid,date,integer[])',
+    ]);
+    expect([...added, ...replaced].sort(), 'added and replaced together are not the pinned set').toStrictEqual([...pinned].sort());
+    expect(added.length, 'the apply added nothing, so (1) is vacuous').toBe(5);
+    // (4) AND NOTHING WAS REMOVED: a `DROP FUNCTION` of a predecessor's
+    //     routine would be an authority change this slice does not declare.
+    expect(
+      before.filter((x) => !after.includes(x)),
+      'the apply removed a routine of a predecessor migration',
+    ).toStrictEqual([]);
+  });
+
+  it('ITS RED ARM: a SEVENTH routine, spelled so the file regex cannot see it, is reported by this law and NOT by that one', () => {
+    expect(plantError, `the seventh routine could not be planted, so the red arm is UNMEASURED: ${plantError ?? ''}`).toBeNull();
+    // (a) THE CATALOGUE LAW SEES IT. The diff now carries seven members, the
+    //     seventh being the planted routine.
+    // The apply itself ADDS five (the sixth pinned routine is a replace), so
+    // the planted seventh makes six members here — and the law's direction
+    // (1) above is what it trips.
+    expect(plantedDiff.length, `the planted routine is invisible to the catalogue law too: ${JSON.stringify(plantedDiff)}`).toBe(6);
+    expect(plantedDiff.some((x) => x.includes('installment_plan_fact_assert_extra'))).toBe(true);
+    const pinnedBare = declaredBodyDigests(SPEC).map((r) =>
+      r.signature
+        .replace(/^public\./, '')
+        .replace(/\s+/g, '')
+        .toLowerCase(),
+    );
+    const unpinned = plantedDiff.filter((x) => !pinnedBare.includes(x.replace(/\s+/g, '').toLowerCase()));
+    expect(unpinned, 'the law would not have refused the planted routine').toStrictEqual(['installment_plan_fact_assert_extra(bigint)']);
+    // (b) AND THE FILE REGEX DOES NOT. Asked of the very text that created
+    //     it, `routineHeads` finds nothing — which is the finding, stated as
+    //     a measurement rather than as a concession.
+    const plantedDdl = `CREATE\tOR  REPLACE\tFUNCTION\tpublic.installment_plan_fact_assert_extra(p_a BIGINT)`;
+    expect(routineHeads(plantedDdl), 'the regex can see this spelling after all, so (b) overstates the gap').toStrictEqual([]);
+    // (c) NON-VACUITY OF (b): the same instrument DOES see the six heads the
+    //     specification really ships, so it is a belt and not a no-op.
+    expect([...new Set(routineHeads(SPEC))].sort()).toStrictEqual(
+      [
+        'customer_ar_aging',
+        'installment_plan_active_exclusive',
+        'installment_plan_fact_assert',
+        'installment_plan_fact_sync',
+        'installment_plan_fact_verify',
+        'installment_schedule_verify',
+      ].sort(),
+    );
+    // (d) AND THE CATALOGUE IS CLEAN AGAIN, so no later case reads a polluted
+    //     `public`.
+    expect(routinesAfter.some((x) => x.includes('installment_plan_fact_assert_extra'))).toBe(false);
   });
 });

@@ -42,6 +42,8 @@
  *
  * Nothing here touches a database. The subject is a pure rendering.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ArgumentsHost } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import { GlobalExceptionFilter } from '../../apps/api/src/common/error.filter';
@@ -116,11 +118,13 @@ const refusal = (code: string): Error & { code: string } =>
   );
 
 /**
- * THE ELEVEN REGISTERED NAMES, WRITTEN OUT. Seven were registered in round 11;
- * `plan_active_unbounded` and `plan_fact_untrusted` joined them in the commit
- * that made them reachable (`TL-P4-COORD-R50` ordered items 1, 2 and 3), and
- * `plan_index_disagrees` and `plan_fact_unordered` in this one
- * (`TL-P4-COORD-R52` ordered items 1 and 2).
+ * THE THIRTEEN REGISTERED NAMES, WRITTEN OUT. Seven were registered in round
+ * 11; `plan_active_unbounded` and `plan_fact_untrusted` joined them in the
+ * commit that made them reachable (`TL-P4-COORD-R50` ordered items 1, 2 and
+ * 3); `plan_index_disagrees` and `plan_fact_unordered` in round 13
+ * (`TL-P4-COORD-R52` ordered items 1 and 2); and `plan_index_unenforcing` and
+ * `plan_fact_unwritable` in this one (`TL-P4-COORD-R55` ordered items 2, 3
+ * and 6).
  */
 const REGISTERED: readonly string[] = [
   'installment.plan_fact_unreadable',
@@ -141,24 +145,59 @@ const REGISTERED: readonly string[] = [
   // `plan_fact_desynchronised` on a LAWFUL write.
   'installment.plan_index_disagrees',
   'installment.plan_fact_unordered',
-];
-
-/**
- * THE `installment.*` NAMES THAT ARE NOT REGISTERED AND MUST NOT BE. These
- * are the migration-time end-state assertions of the same prefix: they cannot
- * reach a response at all, and an entry for them would be a contract for a
- * refusal nobody has located. They are the subject of the prefix-test
- * regression.
- */
-const UNREGISTERED: readonly string[] = [
-  'installment.migration_end_state_invalid',
-  'installment.authority_leak',
-  'installment.derived_truth_stored',
+  // `TL-P4-COORD-R55` ordered items 2, 3 and 6.
+  //
+  // `plan_index_unenforcing` is NEW CONSTRUCTION, registered in the same
+  // commit as the three raises that produce it: an index of
+  // `installment_plans` with `indisvalid`, `indisready` or `indislive` false,
+  // READ OUT OF `pg_index` inside the failing event. It exists because one
+  // catalogue flag on `installment_plans_pkey` made every lawful plan write
+  // fail under `plan_fact_blind`, whose message had just been rewritten to
+  // say the cause was row security and to look in `pg_policy` and NOT in
+  // `pg_index`.
+  //
+  // `plan_fact_unwritable` IS A CORRECTION AND NOT AN ADDITION. It was pinned
+  // in the list below, as UNREGISTERED, under the rationale «these are the
+  // migration-time end-state assertions of the same prefix: they cannot reach
+  // a response at all» — AND THAT RATIONALE IS FALSE OF IT. It is raised
+  // TWICE from `installment_plan_fact_sync()`'s body, on the LIVE PLAN WRITE
+  // PATH, inside a trigger a request fires, and the specification's own §7
+  // declares its reachability OPEN rather than closed; round 12 reached one
+  // of the two raises with a superuser `UPDATE installment_plans`. So this
+  // file was pinning, as a contract, that a refusal from DATABASE MACHINERY
+  // on the write path renders `403 FORBIDDEN / "Access denied"` to a
+  // merchant — the exact inversion of the rule applied to its ten siblings,
+  // and the same product-surface class as the live 403 bug `TL-P4-COORD-R49`
+  // found and fixed. A contract test that encodes a false premise and passes
+  // green is what these rounds exist to find.
+  'installment.plan_index_unenforcing',
   'installment.plan_fact_unwritable',
 ];
 
+/**
+ * THE `installment.*` NAMES THAT ARE NOT REGISTERED AND MUST NOT BE, AND THE
+ * RATIONALE IS NOW TRUE OF EVERY MEMBER (`TL-P4-COORD-R55` ordered item 6,
+ * F13-6).
+ *
+ * EVERY RAISE OF EACH OF THESE THREE IS INSIDE THE SPECIFICATION'S OWN
+ * `DO $end$` BLOCK, outside every `CREATE FUNCTION`, so each fires while the
+ * migration runs, in a transaction no request is attached to: they cannot
+ * reach a response at all. That is a property of WHERE THE RAISE IS, which is
+ * checkable, and it is the only test this list applies.
+ *
+ * `installment.plan_fact_unwritable` WAS IN THIS LIST AND DID NOT SATISFY
+ * THAT TEST: it is raised twice from a trigger function's body on the live
+ * plan write path. It has moved to `REGISTERED` above, with the reasoning
+ * there. The rule, stated once so a later author cannot re-derive the error:
+ * a name belongs here when every RAISE of it is in the migration's `DO`
+ * block, and «nobody has yet located a principal who reaches it» is a reason
+ * to record the reachability as OPEN — which the specification's §7 does —
+ * and never a reason to contract for the wrong rendering in the meantime.
+ */
+const UNREGISTERED: readonly string[] = ['installment.migration_end_state_invalid', 'installment.authority_leak', 'installment.derived_truth_stored'];
+
 describe('P4-S7 the installment.* rendering contract', () => {
-  it('the registry is exactly the nine names this file pins, in both directions', () => {
+  it('the registry is exactly the thirteen names this file pins, in both directions', () => {
     expect([...INSTALLMENT_INTERNAL_INVARIANT_CODES].sort()).toStrictEqual([...REGISTERED].sort());
     for (const code of REGISTERED) expect(isInstallmentInternalInvariant(code), code).toBe(true);
     for (const code of UNREGISTERED) expect(isInstallmentInternalInvariant(code), code).toBe(false);
@@ -200,6 +239,24 @@ describe('P4-S7 the installment.* rendering contract', () => {
       expect(r.payload.error.message, code).toBe('Access denied');
       expect(r.logged, code).toHaveLength(0);
     }
+    // AND THE LIST'S OWN PREMISE IS CHECKED AGAINST THE SPECIFICATION RATHER
+    // THAN ASSERTED IN THE COMMENT ABOVE IT (`TL-P4-COORD-R55` ordered item
+    // 6, F13-6). A name belongs in `UNREGISTERED` only when EVERY raise of it
+    // is inside the end-state `DO` block, and the previous list's fourth
+    // member failed that test while the comment claimed it for all four. The
+    // test is now executable: for each unregistered name, no `RAISE` of it
+    // appears before the block begins.
+    const spec = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'), 'utf8');
+    const beforeBlock = spec.slice(0, spec.indexOf('\nDO $end$'));
+    expect(beforeBlock.length, 'the specification no longer carries an end-state block').toBeGreaterThan(1000);
+    for (const code of UNREGISTERED) {
+      expect(beforeBlock, `${code} is raised OUTSIDE the end-state block, so it can reach a response and must be registered`).not.toContain(
+        `RAISE EXCEPTION '${code}:`,
+      );
+    }
+    // ...and the converse, for the one this round moved: it really is raised
+    // from a routine body on the write path, twice.
+    expect((beforeBlock.match(/RAISE EXCEPTION 'installment\.plan_fact_unwritable:/g) ?? []).length).toBe(2);
 
     const denied = render(pgError('42501', 'new row violates row-level security policy "business_isolation_update" for table "invoices"'));
     expect(denied.status).toBe(403);

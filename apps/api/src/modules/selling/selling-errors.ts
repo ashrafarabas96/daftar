@@ -626,16 +626,30 @@ export const SELLING_INTERNAL_INVARIANT_CODES: readonly string[] = [...SELLING_I
  *     specification's end-state `DO` block, outside every `CREATE FUNCTION`.
  *     They fire while the migration runs, in a transaction no request is
  *     attached to;
- *   - `installment.plan_fact_unwritable` — raised from a function body, and
- *     left out anyway, because `TL-P4-COORD-R46` F-6 measured BOTH of its
- *     raises pre-empted: the business-change arm by
- *     `business_isolation_update` (`42501`) for the writing principal and by
- *     `installment_plans_invoice_fk` / `installments_plan_fk` (`23503`) for
- *     the superuser, and the `ROW_COUNT` arm's advertised case — the
- *     cross-tenant plan — by `installment_plans_tenant_fk` or by the plan
- *     relation's own `WITH CHECK`. Whether any principal can reach it is OPEN,
- *     and an entry here would be a contract for a refusal nobody has located.
- *     It joins this set in the same commit as the measurement that reaches it.
+ * `installment.plan_fact_unwritable` WAS IN THE SECOND LIST AND IS NOW IN THE
+ * FIRST, AND THE RATIONALE THAT KEPT IT OUT WAS FALSE OF IT
+ * (`TL-P4-COORD-R55` ordered item 6, F13-6). The contract test pinned it as
+ * UNREGISTERED under the heading «these are the migration-time end-state
+ * assertions of the same prefix: they cannot reach a response at all». That
+ * sentence is true of `migration_end_state_invalid`, `authority_leak` and
+ * `derived_truth_stored`, and it is NOT true of this one: it is raised TWICE
+ * from `installment_plan_fact_sync()`'s body, on the LIVE PLAN WRITE PATH,
+ * inside a trigger a request fires, and the specification's own §7 declares
+ * its reachability OPEN rather than closed. Round 12 reached one of the two
+ * raises with a superuser `UPDATE installment_plans`. So the slice was
+ * pinning, as a contract, that a refusal from DATABASE MACHINERY on the write
+ * path renders `403 FORBIDDEN / "Access denied"` to a merchant — the exact
+ * inversion of the rule applied to its siblings, and the same product-surface
+ * defect class as the live 403 bug this registry was created to fix.
+ *
+ * THE RULE THIS CORRECTS TO, STATED ONCE: a name is registered when a RAISE of
+ * it sits inside a `CREATE FUNCTION` body that a request can execute, and it
+ * is excluded when every RAISE of it sits in the migration's own `DO` block.
+ * «Nobody has located a principal who reaches it» is a reason to record the
+ * reachability as OPEN — which §7 does — and NOT a reason to contract for the
+ * wrong rendering in the meantime: an unreachable name costs an unused entry,
+ * while a reachable one in the wrong list costs a merchant an access denial
+ * for a database fault.
  *
  * P4-AL-38 IS WHY THERE IS NO MERCHANT TABLE FOR THESE. The slice ships no
  * plan writer and no plan command, so there is no request whose BUSINESS
@@ -696,21 +710,49 @@ const INSTALLMENT_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
   // every apply-time flag read TRUE. It is an estate defect and never
   // something a merchant did.
   //
-  // `plan_fact_unordered`: the deferred fact verifier was fired for a plan row
-  // event before the immediate writer was, which is what `SET CONSTRAINTS ALL
-  // IMMEDIATE` -- UNPRIVILEGED SQL that `daftar_app` and `daftar_migrator` are
-  // both permitted to issue -- produces, because the deferral then goes and
-  // immediate `AFTER ROW` triggers fire in TRIGGER-NAME ORDER with
-  // `installment_plans_fact_agrees` sorting before
-  // `installment_plans_fact_sync`. Before this commit that state was refused
-  // as `installment.plan_fact_desynchronised`, which was a FALSE diagnosis of
-  // a LAWFUL write; it is now refused under a name that is true of it. It
-  // still renders 500 with the code in the log, because the cause is a
-  // session, pooler or migration helper having changed the rules the triggers
-  // fire under and not anything the merchant can supply -- and it FAILS
+  // `plan_fact_unordered`: READ FROM `pg_trigger`, NOT COUNTED IN A SETTING,
+  // WHICH IS `TL-P4-COORD-R55` ordered item 1. `SET CONSTRAINTS ALL IMMEDIATE`
+  // is unprivileged SQL both app roles may issue; it removes the deferred fact
+  // verifier's deferral, after which PostgreSQL fires the immediate `AFTER ROW`
+  // triggers of one relation in TRIGGER-NAME ORDER. While the verifier's
+  // trigger sorted FIRST it ran before the writer and refused a LAWFUL write
+  // as `plan_fact_desynchronised` — a false diagnosis rendered 500. Round 13
+  // detected that with a transaction-local CUSTOM GUC counter, and PostgreSQL
+  // places no privilege on an unreserved two-part setting: one `SET LOCAL`
+  // made a LAWFUL plan write refuse under THIS name, another defeated the
+  // detector, and a session-level `SET` disabled it for the life of a pooled
+  // connection. The counter is gone. The verifier's trigger is now named so
+  // that the writer sorts first, and this name is raised only when a reading
+  // of `pg_trigger` inside the event says the two trigger names are out of
+  // that order — catalogue DATA no session can write, changeable only by the
+  // table owner. It renders 500 with the code in the log because the cause is
+  // DDL somebody applied and not anything a merchant can supply, and it FAILS
   // CLOSED: no wrong fact commits.
   'installment.plan_index_disagrees',
   'installment.plan_fact_unordered',
+  // `TL-P4-COORD-R55` ordered items 1, 2, 3 and 6. All three are raised from
+  // a FUNCTION BODY on the plan WRITE path, and each joins this set in the
+  // same commit as the construction or the measurement that reaches it.
+  //
+  // `plan_index_unenforcing`: an index of `installment_plans` carries
+  // `indisvalid`, `indisready` or `indislive` false — read out of `pg_index`
+  // INSIDE the failing event, on the three refusal paths whose other
+  // candidate cause is row security. It exists because one catalogue flag on
+  // `installment_plans_pkey` — an index the specification did not name once —
+  // made every lawful plan write fail under `plan_fact_blind`, whose message
+  // had just been rewritten to say the cause was row security and to look in
+  // `pg_policy` and not in `pg_index`. A refusal must state what it observed;
+  // this is the name for the state the code can establish, and
+  // `plan_fact_blind` now keeps only the state in which the index
+  // explanation has been EXCLUDED by a reading. It is an estate defect — an
+  // interrupted `CREATE INDEX CONCURRENTLY` or `REINDEX CONCURRENTLY` — and
+  // never anything a merchant did, so it takes the 500-with-the-code-in-the-
+  // log contract like the rest of this set.
+  //
+  // `plan_fact_unwritable`: see the correction above the list. Raised twice
+  // from `installment_plan_fact_sync()` on the live write path.
+  'installment.plan_index_unenforcing',
+  'installment.plan_fact_unwritable',
 ]);
 
 /** The installment invariant codes, in registry order — the list a contract test enumerates. */

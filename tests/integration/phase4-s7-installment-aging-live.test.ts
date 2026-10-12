@@ -623,6 +623,83 @@ describe('§E THE 265-DAY CASE THROUGH THE ROUTINE — and the predecessor on th
     expect(sum).toBe(total);
   });
 
+  /**
+   * `TL-P4-COORD-R55` ORDERED ITEM 9 / MASTER CONTINUOUS MISSION §10.5, THE
+   * TWO CHECKS THIS SUITE DID NOT MAKE. Conservation above is asserted of
+   * `txn_minor` only; the `base_minor` column — the one PR-6 exists for, and
+   * the one the carrying allocation actually computes — had no conservation
+   * law anywhere in this file.
+   */
+  it('§10.5 BASE CONSERVATION: the base bands sum EXACTLY to the authoritative outstanding BASE', async () => {
+    const o = await ownerPool().query<{ txn: string; base: string }>(
+      `SELECT o.outstanding_txn_minor::text AS txn, o.outstanding_base_minor::text AS base
+         FROM invoice_outstanding($1, ARRAY[$2::UUID]) o`,
+      [w.shop.businessId, invoiceId],
+    );
+    const base = BigInt(o.rows[0]?.base ?? '-1');
+    const txn = BigInt(o.rows[0]?.txn ?? '-1');
+    expect(base, 'the invoice carries no outstanding base, so there is nothing to conserve').toBeGreaterThan(0n);
+    const sumBase = reading.reduce((acc, r) => acc + BigInt(r.base_minor), 0n);
+    expect(sumBase, 'the base bands do not sum to the outstanding base — the allocation leaks or duplicates a minor unit').toBe(base);
+    // AND THE SPLIT IS REAL: more than one band carries base, so the equality
+    // is not the trivial one-band case.
+    expect(reading.filter((r) => BigInt(r.base_minor) > 0n).length, 'only one band carries base, so this says nothing about an allocation').toBeGreaterThan(1);
+    // HONEST NON-VACUITY LIMIT, DECLARED: this fixture's base and txn figures
+    // may coincide when the invoice is in the base currency, in which case
+    // this law and the txn law above have the same arithmetic content. Which
+    // of the two cases held is REPORTED rather than assumed.
+    if (base === txn) {
+      expect(sumBase).toBe(txn); // base currency: the law is the txn law
+    } else {
+      expect(sumBase).not.toBe(txn); // a real rate applied, so the law is its own
+    }
+  });
+
+  it('§10.5 THE AGING COMES FROM THE PASSED asOf AND NOT FROM A CLOCK — measured by MOVING it, and read from the catalogue', async () => {
+    // (a) THE ANSWER MOVES WITH `asOf` AND WITH NOTHING ELSE. Asked at the
+    //     instalment's own due date the fallen-due half is NOT overdue; asked
+    //     265 days later it is in the oldest band. Same database, same second,
+    //     same rows.
+    const atDue = await aging(dueDate);
+    const atHorizon = await aging(asOf);
+    const oldest = BUCKET_DAYS.length + 1;
+    const bandOf = (rs: readonly AgingRow[], b: number): bigint => rs.filter((r) => r.bucket_no === b).reduce((a, r) => a + BigInt(r.txn_minor), 0n);
+    expect(bandOf(atDue, oldest), 'the oldest band is already carrying money at the due date itself').toBe(0n);
+    expect(bandOf(atHorizon, oldest), 'the oldest band is empty 265 days past the due date').toBe(firstAmount);
+    // AND CONSERVATION HOLDS AT BOTH, so the money moved between bands and
+    // did not appear or vanish.
+    const sumOf = (rs: readonly AgingRow[]): bigint => rs.reduce((a, r) => a + BigInt(r.txn_minor), 0n);
+    expect(sumOf(atDue)).toBe(total);
+    expect(sumOf(atHorizon)).toBe(total);
+    // (b) AND THE SAME `asOf` TWICE IS THE SAME ANSWER, which a clock read
+    //     could not promise across a date boundary.
+    expect(await aging(asOf)).toStrictEqual(atHorizon);
+    // (c) AND THE INSTALLED BODY READS NO CLOCK AND NO RATE. From
+    //     `pg_proc.prosrc`, which is catalogue DATA. DECLARED LIMIT, not
+    //     certified: a substring absence over `prosrc` cannot establish that
+    //     no clock is read (`TL-P4-COORD-R50` §5) — what establishes it is
+    //     (a) and (b), which are EXECUTION. This is the cheap corroboration
+    //     beside them, and it is reported as that.
+    const src = (await ownerPool().query<{ src: string }>(`SELECT p.prosrc AS src FROM pg_catalog.pg_proc p WHERE p.proname = 'customer_ar_aging'`)).rows[0]
+      ?.src;
+    expect(src, 'the routine is not installed, so (c) has no subject').toBeTruthy();
+    const body = String(src);
+    for (const token of ['now()', 'CURRENT_DATE', 'current_date', 'clock_timestamp', 'statement_timestamp', 'localtimestamp']) {
+      expect(body, `the installed body reads ${token} instead of the passed as_of`).not.toContain(token);
+    }
+    // ...and `source_to_base_rate` is METADATA: the allocation is computed
+    // from `total_txn_minor` and `total_base_minor`, never by multiplying a
+    // stored rate.
+    expect(body, 'the body multiplies by a stored rate instead of allocating between the two recorded totals').not.toContain('source_to_base_rate');
+    expect(body).toContain('total_base_minor');
+    expect(body).toContain('total_txn_minor');
+    // NON-VACUITY of the whole of (c): the matchers really can fire, asked of
+    // a body that does read a clock and a rate.
+    const decoy = `BEGIN RETURN now()::DATE; END; -- source_to_base_rate`;
+    expect(decoy).toContain('now()');
+    expect(decoy).toContain('source_to_base_rate');
+  });
+
   it('§D PR-6: daftar_app cannot execute the base allocation, so the base column is unreachable until it is granted', async () => {
     const app = new Pool({ connectionString: appDbUrl, max: 1 });
     try {

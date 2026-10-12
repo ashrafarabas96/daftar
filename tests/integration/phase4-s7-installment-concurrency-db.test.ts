@@ -62,13 +62,46 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { Client, Pool } from 'pg';
 import type { ScratchDb } from '../helpers/scratch-db';
 import { createScratchDb, urlOf } from '../helpers/scratch-db';
 
 const DB = 'daftar_s7r12_conc';
+/**
+ * ── WHERE THIS SUITE WRITES ITS MEASUREMENTS, AND WHY NOT AT A FIXED PATH
+ *    (`TL-P4-COORD-R55` ordered item 8, §9) ─────────────────────────────────
+ *
+ * This file used to write `/tmp/claude-0/r12/conc.json` on every run. The round-13 challenger ran
+ * the shipped suites — which it must, to re-take the author's figures — and
+ * OVERWROTE THE AUTHOR'S OWN MEASUREMENT ARTIFACTS at exactly that path. It
+ * copied them aside first, so nothing was lost that time, and it disclosed the
+ * hazard; the coordinator made it a standing rule: a test that writes a
+ * measurement file writes it to a path DERIVED from the run, never a fixed
+ * one, or two honest runs destroy each other's evidence.
+ *
+ * The path is derived from `PG_PORT` — which the runner exports once per run
+ * and which is unique per cluster by the same rule — plus the process id, so
+ * two runs on one cluster do not collide either. The directory is created if
+ * it is absent, and a write failure is never allowed to fail a measurement:
+ * the file is a report, not a law.
+ */
+const MEASUREMENTS = (() => {
+  const port = process.env['PG_PORT'] ?? 'noport';
+  return join('/tmp', 'claude-0', 'p4s7-runs', `conc-${port}-${String(process.pid)}.json`);
+})();
+
+function writeMeasurements(payload: unknown): void {
+  try {
+    mkdirSync(dirname(MEASUREMENTS), { recursive: true });
+    writeFileSync(MEASUREMENTS, JSON.stringify(payload, null, 2));
+  } catch {
+    // A report that cannot be written is not a verdict. The assertions are the
+    // verdict, and they have already run.
+  }
+}
+
 const SPEC_PATH = join(__dirname, '..', '..', 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql');
 const SPEC = readFileSync(SPEC_PATH, 'utf8');
 const SHA = 'c'.repeat(64);
@@ -475,7 +508,7 @@ beforeAll(async () => {
   }
   M['specError'] = specError;
   if (specError !== null) {
-    writeFileSync('/tmp/claude-0/r12/conc.json', JSON.stringify(M, null, 2));
+    writeMeasurements(M);
     return;
   }
   shippedSync = (await mig.query<{ d: string }>(`SELECT pg_get_functiondef('public.installment_plan_fact_sync()'::regprocedure) AS d`)).rows[0]?.d as string;
@@ -484,7 +517,7 @@ beforeAll(async () => {
 }, 900_000);
 
 afterAll(async () => {
-  writeFileSync('/tmp/claude-0/r12/conc.json', JSON.stringify(M, null, 2));
+  writeMeasurements(M);
   for (const p of [sup, mig, app]) await p?.end().catch(() => undefined);
   await db?.drop();
 });
@@ -1240,6 +1273,22 @@ describe('P4-S7 §E the runtime guard at WRITE time, and the lock order (F-1, F-
       const fb = B.fire(PLAN_INSERT, planArgs(b2, i1, 'active'));
       M['E9_A2'] = await fa.promise;
       M['E9_B2'] = await fb.promise;
+      // ── THE FIXTURE DEFECT THIS CASE SHIPPED, FIXED (`TL-P4-COORD-R55` §9;
+      //    the round-13 challenger's §3.1 reading, which is the round-12
+      //    challenger's own WITHDRAWN method defect found alive in this file).
+      //
+      //    Each actor's FIRST plan got a schedule and its SECOND did not, so
+      //    the survivor of the deadlock was refused AT COMMIT by obligation
+      //    (a) — `installment.schedule_incomplete`, schedule 100000 against a
+      //    total of 900000 — and the case's own title («two invoices in
+      //    opposite order still deadlock») was measuring ONE actor reaching
+      //    the lock-order question while the other never got there. The
+      //    `40P01` was real; the «nothing committed» end state was partly the
+      //    fixture's doing. The survivor's second plan now gets its schedule,
+      //    so BOTH actors reach the question and the surviving transaction is
+      //    a LAWFUL one that must commit.
+      if (M['E9_A2'] === null) M['E9_A2s'] = await A.q(SCHED_INSERT, [world.tenantId, world.businessId, a2]);
+      if (M['E9_B2'] === null) M['E9_B2s'] = await B.q(SCHED_INSERT, [world.tenantId, world.businessId, b2]);
       M['E9_A_commit'] = await A.q('COMMIT');
       M['E9_B_commit'] = await B.q('COMMIT');
       M['E9_post_i1'] = await state(i1);
@@ -1248,10 +1297,23 @@ describe('P4-S7 §E the runtime guard at WRITE time, and the lock order (F-1, F-
       M['E9_outcomes'] = outcomes;
       // ONE victim, `40P01`, and no state corrupted — the victim rolled back.
       expect(outcomes).toContain('40P01');
+      // EXACTLY ONE victim: the other actor's second write succeeded, which is
+      // what «reached the lock-order question» means.
+      expect(
+        [M['E9_A2'], M['E9_B2']].filter((x) => x === null),
+        'both actors were refused, so neither reached the question',
+      ).toHaveLength(1);
+      // AND THE SURVIVOR COMMITS, which is the arm the fixture defect hid: no
+      // `schedule_incomplete` from either side any more.
+      const commits = `${String(M['E9_A_commit'])} ${String(M['E9_B_commit'])}`;
+      expect(commits, 'the surviving transaction is still refused at COMMIT by the fixture').not.toContain('schedule_incomplete');
+      M['E9_survivor_committed'] = M['E9_A2'] === null ? M['E9_A_commit'] : M['E9_B_commit'];
+      expect(M['E9_survivor_committed'], 'the actor that reached the question did not commit').toBeNull();
+      // ...so the survivor's TWO plans are the state, one per invoice.
       for (const k of ['E9_post_i1', 'E9_post_i2']) {
         const s = M[k] as Record<string, unknown>;
-        expect(Number(s['active_plans']), `${k} active plans`).toBeLessThanOrEqual(1);
-        expect(s['flag'], `${k} flag`).toBe(Number(s['active_plans']) === 1 ? 'true' : 'false');
+        expect(Number(s['active_plans']), `${k} active plans`).toBe(1);
+        expect(s['flag'], `${k} flag`).toBe('true');
       }
     } finally {
       await A.end();
@@ -1286,5 +1348,72 @@ describe('P4-S7 §F the end state is intact after every mutation this file made'
     expect(M['F1_sync_is_shipped']).toBe(true);
     expect(M['F1_aging_is_shipped']).toBe(true);
     expect(M['F1_tgenabled']).toHaveLength(7);
+  });
+
+  it('F2 EVERY INDEX OF BOTH RELATIONS PHYSICALLY DESCRIBES ITS OWN HEAP, and the writer trigger still sorts first', async () => {
+    // ── `TL-P4-COORD-R55` ordered items 1 and 7 (F13-1, F13-9).
+    //
+    // THERE WAS NO SUCH LAW ANYWHERE IN THIS SLICE. The round-12 corruption —
+    // a row committed while `indisready` was false, leaving the flags perfect
+    // and the index missing an entry for ever — was repaired with two
+    // executable `REINDEX` statements in two `finally` blocks of this file,
+    // and a measurement in a teardown is a fixture habit and not an
+    // invariant. `R53` §1 called the `REINDEX` «itself a measurement», which
+    // is exactly why it had to become a law.
+    //
+    // THIS FIXTURE IS POPULATED, which is what makes the reading non-vacuous:
+    // the apply-time copy of it in part 9d runs on two empty relations.
+    const rows = await sup.query<{ n: string }>(`SELECT count(*)::text AS n FROM installment_plans`);
+    M['F2_plan_rows'] = rows.rows[0]?.n ?? '0';
+    expect(Number(M['F2_plan_rows']), 'the fixture is empty, so this reading establishes nothing').toBeGreaterThan(0);
+    // (1) THE TWO ACCESS PATHS AGREE OVER EVERY ROW OF THE RELATION. The
+    //     `FILTER` spelling cannot be served by the partial unique index, by
+    //     the predicate-implication rule; the `WHERE` spelling can. A
+    //     disagreement is an index that holds no entry for a row qualifying
+    //     for it.
+    const two = await sup.query<{ heap: string; served: string }>(
+      `SELECT (SELECT count(*) FILTER (WHERE p.status = 'active') FROM installment_plans p)::text AS heap,
+              (SELECT count(*) FROM installment_plans p WHERE p.status = 'active')::text AS served`,
+    );
+    M['F2_two_paths'] = two.rows[0];
+    expect(two.rows[0]?.heap, 'the two access paths disagree: an index does not describe its own heap').toBe(two.rows[0]?.served);
+    // (2) AND EVERY INDEX OF BOTH RELATIONS REBUILDS FROM THE HEAP, which is
+    //     the physical instrument: `REINDEX` refuses `23505` when the heap
+    //     does not satisfy a unique index.
+    const ixs = await sup.query<{ ix: string }>(
+      `SELECT ic.relname AS ix FROM pg_index x JOIN pg_class ic ON ic.oid = x.indexrelid
+        WHERE x.indrelid IN ('public.installment_plans'::regclass, 'public.installments'::regclass) ORDER BY ic.relname`,
+    );
+    const reindexed: Record<string, string | null> = {};
+    for (const r of ixs.rows) reindexed[r.ix] = await ddl(`REINDEX INDEX public.${r.ix}`);
+    M['F2_reindex'] = reindexed;
+    expect(Object.keys(reindexed).length, 'no index was found to rebuild').toBeGreaterThan(1);
+    for (const [ix, e] of Object.entries(reindexed)) expect(e, `REINDEX ${ix}`).toBeNull();
+    // (3) AND THE FLAGS OF EVERY INDEX — not only the partial unique one,
+    //     which was the only index any law here read before this round.
+    M['F2_all_flags'] = (
+      await sup.query(
+        `SELECT ic.relname AS ix, x.indisvalid, x.indisready, x.indislive
+           FROM pg_index x JOIN pg_class ic ON ic.oid = x.indexrelid
+          WHERE x.indrelid IN ('public.installment_plans'::regclass, 'public.installments'::regclass) ORDER BY ic.relname`,
+      )
+    ).rows;
+    for (const f of M['F2_all_flags'] as readonly Record<string, unknown>[]) {
+      expect([f['indisvalid'], f['indisready'], f['indislive']], `${String(f['ix'])} is not enforcing`).toEqual([true, true, true]);
+    }
+    // (4) AND THE TRIGGER-NAME ORDER THE DEFERRED VERIFIER'S CORRECTNESS
+    //     RESTS ON IS STILL WHAT THE SPECIFICATION INSTALLED.
+    const names = await sup.query<{ w: string; v: string }>(
+      `SELECT (SELECT min(t.tgname) FROM pg_trigger t JOIN pg_proc f ON f.oid = t.tgfoid
+                WHERE t.tgrelid = 'public.installment_plans'::regclass AND NOT t.tgisinternal
+                  AND f.proname = 'installment_plan_fact_sync') AS w,
+              (SELECT min(t.tgname) FROM pg_trigger t JOIN pg_proc f ON f.oid = t.tgfoid
+                WHERE t.tgrelid = 'public.installment_plans'::regclass AND NOT t.tgisinternal
+                  AND f.proname = 'installment_plan_fact_verify') AS v`,
+    );
+    M['F2_trigger_order'] = names.rows[0];
+    expect(names.rows[0]?.w).toBe('installment_plans_fact_sync');
+    expect(names.rows[0]?.v).toBe('installment_plans_fact_verified');
+    expect((names.rows[0]?.w ?? 'z') < (names.rows[0]?.v ?? 'a'), 'the writer no longer sorts before the verifier').toBe(true);
   });
 });
