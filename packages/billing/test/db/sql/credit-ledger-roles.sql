@@ -124,6 +124,12 @@ GRANT EXECUTE ON FUNCTION p5scratch.assert_invoice_credit_agrees(uuid) TO SESSIO
 RESET ROLE;
 REVOKE CREATE ON SCHEMA p5scratch FROM p5_invariants;
 
+-- ROUND 15: the stranger gets USAGE on the schema and NOTHING else, which
+-- is precisely the shape the challenger's F-14 second leg used. Without
+-- USAGE the EXECUTE denial would be masked by a schema denial, and a case
+-- that cannot tell which refusal it got is the defect F-11 closed.
+GRANT USAGE ON SCHEMA p5scratch TO p5_stranger;
+
 -- ROUND 8, the independent challenger's F-08. `createDraftInvoice` takes its
 -- period index from `nextval('p5scratch.scratch_period_seq')`, and the grant
 -- set never gave the application role USAGE on that sequence — so the

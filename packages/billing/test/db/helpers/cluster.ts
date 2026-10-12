@@ -16,6 +16,13 @@ function required(name: string): string {
 
 export const ownerUrl = (): string => required('P5_DB_OWNER_URL');
 export const appUrl = (): string => required('P5_DB_APP_URL');
+/**
+ * A role holding nothing but USAGE on the schema. ROUND 15, the independent
+ * challenger's F-14 second leg: it measured that such a role could read
+ * another tenant's grant count through the PUBLIC EXECUTE default on a
+ * definer routine. The lane sets `P5_DB_STRANGER_URL`.
+ */
+export const strangerUrl = (): string => required('P5_DB_STRANGER_URL');
 
 /**
  * The schema the BORROWED relations live in.

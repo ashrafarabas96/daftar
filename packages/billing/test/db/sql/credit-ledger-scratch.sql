@@ -138,9 +138,23 @@ CREATE TABLE p5scratch.platform_credit_grant_remainders (
     DEFERRABLE INITIALLY IMMEDIATE
 );
 
--- The remainder is maintained ONLY by the ledger's own trigger. The
--- application role has no privilege on this table at all, so there is no
--- route by which a remainder can disagree with the rows it summarises.
+-- The remainder is maintained ONLY by the ledger's own trigger, and the
+-- application role holds no privilege on this table.
+--
+-- THIS COMMENT USED TO SAY THAT THEREFORE "there is no route by which a
+-- remainder can disagree with the rows it summarises", AND THAT WAS FALSE:
+-- the independent challenger measured the route (F-14, at the same time as
+-- the coordinator's R-1). `lock_grants_in_order` is `SECURITY DEFINER` owned
+-- by the principal every policy admits, so inside it the remainder table is
+-- readable for EVERY tenant — and until round 14 it took the tenant and
+-- business to read FROM ITS CALLER. A definer routine over a relation is a
+-- privilege on that relation, whatever the grants on the table say, so the
+-- absence of a grant is not by itself the absence of a route.
+--
+-- What is true now, and it is a different sentence: every route into this
+-- table is either the trigger below or a definer routine that checks the
+-- caller's scope against the transaction context and refuses by name
+-- otherwise. The check is the claim; the missing grant is not.
 CREATE FUNCTION p5scratch.pca_maintain_remainder() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = p5scratch, public, pg_temp AS $fn$
 DECLARE

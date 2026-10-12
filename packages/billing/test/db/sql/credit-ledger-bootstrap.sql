@@ -56,6 +56,20 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- ROUND 15: a role that holds NOTHING but the right to enter the schema.
+-- The independent challenger's F-14 second leg: `REVOKE … FROM PUBLIC` was
+-- missing from every definer routine, and it measured that a role with
+-- USAGE on the schema and no other privilege could read another tenant's
+-- grant count through the PUBLIC EXECUTE default. The revoke landed at
+-- round 14; this role is what proves it, because a catalogue law over
+-- `proacl` says what the grant table holds and not what a stranger can do.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'p5_stranger') THEN
+    CREATE ROLE p5_stranger LOGIN PASSWORD 'p5strangerpw' NOSUPERUSER NOBYPASSRLS;
+  END IF;
+END $$;
+
 -- The schema owner must be able to SET ROLE to `p5_invariants` in order to
 -- hand it ownership of the invariant function. Membership only: it adds
 -- nothing the owner does not already hold through the `*_owner_admin`

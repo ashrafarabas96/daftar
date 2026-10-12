@@ -64,7 +64,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from 'pg';
 
-import { appUrl, borrowedSchema, connect, connectWithoutContext, ownerUrl, refusedBy, setRequestContext, uuid } from './helpers/cluster';
+import { appUrl, borrowedSchema, connect, connectWithoutContext, ownerUrl, refusedBy, setRequestContext, strangerUrl, uuid } from './helpers/cluster';
 import { createBusiness, createDraftInvoice, insertGrant, type Scope } from './helpers/finalize';
 
 const TENANT = '7f1a0000-0000-4000-8000-000000000007';
@@ -414,6 +414,37 @@ describe('a definer routine trusts the context, not its caller', () => {
     }
   });
 
+  it('refuses a USAGE-ONLY stranger the definer routine, by privilege', async () => {
+    // ROUND 15, the independent challenger's F-14 SECOND LEG, which it
+    // measured and I had only asserted from the catalogue: a role holding
+    // USAGE on the schema and nothing else read another tenant's grant
+    // count through the PUBLIC EXECUTE default on this routine. The revoke
+    // landed at round 14; this is the behavioural proof, and it is a
+    // different claim from the `proacl` law below — one says what the grant
+    // table holds, this says what a stranger can do.
+    const victim = await freshScope();
+    await insertGrant(owner, 'p5scratch', victim, 4200n, T1);
+    const stranger = await connectWithoutContext(strangerUrl());
+    try {
+      const refusal = await stranger
+        .query(`SELECT p5scratch.lock_grants_in_order($1, $2, $3)`, [victim.tenantId, victim.businessId, 'USD'])
+        .then(() => '', (e: unknown) => refusedBy(e));
+      // 42501 and not the named scope refusal: the privilege check happens
+      // before the body runs, which is the stronger of the two defences and
+      // the one PUBLIC had been bypassing.
+      expect(refusal, 'a role with nothing but schema USAGE executed the definer routine').toBe('42501');
+      // And the stranger really does hold USAGE, so the refusal above is
+      // about EXECUTE and not about the schema — a case that cannot tell
+      // which refusal it got is the defect F-11 closed.
+      const usage = await stranger.query<{ ok: boolean }>(
+        `SELECT has_schema_privilege(current_user, 'p5scratch', 'USAGE') AS ok`,
+      );
+      expect(usage.rows[0]?.ok, 'the stranger has no USAGE, so the refusal above was the wrong one').toBe(true);
+    } finally {
+      await stranger.end();
+    }
+  });
+
   it('grants EXECUTE on no definer routine to PUBLIC', async () => {
     // R-3: the requested DDL carried three `SECURITY DEFINER` routines and
     // ZERO `REVOKE` statements, so all three were executable by PUBLIC — the
@@ -432,6 +463,106 @@ describe('a definer routine trusts the context, not its caller', () => {
       const toPublic = (row.acl ?? '').split(' ').filter((entry) => entry.startsWith('='));
       expect(toPublic, `${row.proname} is EXECUTE-able by PUBLIC`).toStrictEqual([]);
       expect(row.acl, `${row.proname} has a NULL ACL, which means the default grant to PUBLIC`).toBeTruthy();
+    }
+  });
+});
+
+describe('what a SESSION-scoped context does to the next request on the same connection', () => {
+  // ROUND 15, the independent challenger's F-15, measured rather than
+  // argued, and kept as cases because round 14 removed the DEFAULT but not
+  // the hazard: as measured by the pure-lane law at this head, 22 sites
+  // still choose session scope (18 through the helper, 4 as literal
+  // `set_config(…, false)`), and what that choice costs now has a name and
+  // a test instead of a sentence in a checkpoint.
+
+  it('lets the NEXT request on the same backend continue as the previous tenant, and WRITE as it', async () => {
+    const first = await freshScope();
+    const pooled = await connectWithoutContext(appUrl());
+    try {
+      const before = await pooled.query<{ pid: number }>(`SELECT pg_backend_pid()::int AS pid`);
+      await setRequestContext(pooled, first, 'session');
+      await pooled.query('BEGIN');
+      await pooled.query('COMMIT');
+      // A new "request" on the same pooled connection, setting nothing.
+      const after = await pooled.query<{ pid: number; tenant: string; business: string }>(
+        `SELECT pg_backend_pid()::int AS pid,
+                coalesce(current_setting('app.tenant_id', true), '') AS tenant,
+                coalesce(current_setting('app.business_id', true), '') AS business`,
+      );
+      expect(after.rows[0]?.pid, 'this case proves nothing unless it is the same backend').toBe(before.rows[0]?.pid);
+      expect(after.rows[0]?.tenant, 'the session-scoped context did not survive, so this hazard is gone').toBe(first.tenantId);
+      expect(after.rows[0]?.business).toBe(first.businessId);
+      // The half that matters: it can WRITE, attributed to the stale tenant.
+      const id = uuid();
+      await pooled.query(
+        `INSERT INTO p5scratch.subscription_invoices
+           (id, tenant_id, business_id, period_index, currency, charge_minor, credit_minor, total_minor, state)
+         VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',100,0,100,'draft')`,
+        [id, first.tenantId, first.businessId],
+      );
+      const row = await owner.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM p5scratch.subscription_invoices WHERE id = $1`,
+        [id],
+      );
+      expect(row.rows[0]?.n, 'the stale-context write did not land, so the hazard is not what it looks like').toBe(1);
+    } finally {
+      await pooled.end();
+    }
+  });
+
+  it('cannot be promoted into another TENANT by half a context: that intersects empty', async () => {
+    // The challenger's own qualification of F-15, re-measured here: a
+    // request that sets only `app.business_id` over a stale tenant
+    // satisfies the restrictive policy and fails the permissive one, so
+    // across a TENANT boundary the two intersect empty and the path fails
+    // closed.
+    const stale = await freshScope();
+    const foreign = await freshScope(OTHER_TENANT);
+    await insertGrant(owner, 'p5scratch', foreign, 900n, T1);
+    const pooled = await connectWithoutContext(appUrl());
+    try {
+      await setRequestContext(pooled, stale, 'session');
+      await pooled.query(`SELECT set_config('app.business_id', $1, false)`, [foreign.businessId]);
+      const seen = await pooled.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM p5scratch.platform_credit_adjustments`,
+      );
+      expect(seen.rows[0]?.n, "half a context reached another tenant's rows").toBe(0);
+    } finally {
+      await pooled.end();
+    }
+  });
+
+  it('CAN be moved to a SIBLING business of the stale tenant by half a context — the qualification has a boundary', async () => {
+    // AND THIS IS A REFINEMENT OF THE CHALLENGER'S QUALIFICATION, measured
+    // because the first version of the case above was written with both
+    // scopes in ONE tenant and came back with a row where I expected zero.
+    //
+    // "Half a context fails closed" is true across tenants and FALSE across
+    // businesses of the same tenant: the permissive policy is satisfied by
+    // the stale tenant, which is genuinely the session's own, and the
+    // restrictive one by the business just set. So a stale session can be
+    // steered to a sibling business with one `set_config`. That is the same
+    // boundary the sibling-business case draws for the policy layers, and
+    // it is the reason the request context is a PAIR and the frozen
+    // discipline is per transaction: an incomplete context is not a safe
+    // context, it is a context half inherited from whoever used the
+    // connection last.
+    const stale = await freshScope();
+    const sibling = await freshScope();
+    expect(sibling.tenantId, 'the sibling is in another tenant, so this case is the one above').toBe(stale.tenantId);
+    await insertGrant(owner, 'p5scratch', sibling, 900n, T1);
+    const pooled = await connectWithoutContext(appUrl());
+    try {
+      await setRequestContext(pooled, stale, 'session');
+      await pooled.query(`SELECT set_config('app.business_id', $1, false)`, [sibling.businessId]);
+      const seen = await pooled.query<{ n: number; business: string }>(
+        `SELECT count(*)::int AS n, coalesce(max(business_id::text), '') AS business
+           FROM p5scratch.platform_credit_adjustments`,
+      );
+      expect(seen.rows[0]?.n, 'the sibling move no longer reaches the rows — then this hazard is closed and the comment above is stale').toBe(1);
+      expect(seen.rows[0]?.business).toBe(sibling.businessId);
+    } finally {
+      await pooled.end();
     }
   });
 });

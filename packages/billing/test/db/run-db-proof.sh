@@ -68,6 +68,7 @@ fi
 
 export P5_DB_BOOTSTRAP_URL="postgresql://$PGUSER_BOOTSTRAP@localhost:$PGPORT_P5/postgres"
 export P5_DB_OWNER_URL="postgresql://$PGUSER_P5@localhost:$PGPORT_P5/postgres"
+export P5_DB_STRANGER_URL="postgresql://p5_stranger:p5strangerpw@localhost:$PGPORT_P5/postgres"
 export P5_DB_APP_URL="postgresql://p5_app:p5apppw@localhost:$PGPORT_P5/postgres"
 
 # Roles first, as the cluster superuser, because the schema owner is now one

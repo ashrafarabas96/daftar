@@ -106,6 +106,7 @@ export P5_DB_BOOTSTRAP_URL="postgresql://postgres@localhost:$PGPORT_P5/daftar"
 # NOSUPERUSER NOBYPASSRLS in `bootstrap.sql`, which the principal guard
 # below re-checks rather than trusting.
 export P5_DB_OWNER_URL="postgresql://daftar_platform:scratchpw@localhost:$PGPORT_P5/daftar"
+export P5_DB_STRANGER_URL="postgresql://p5_stranger:p5strangerpw@localhost:$PGPORT_P5/daftar"
 export P5_DB_APP_URL="postgresql://p5_app:p5apppw@localhost:$PGPORT_P5/daftar"
 export P5_REAL_SCHEMA=1
 export P5_BORROWED_SCHEMA=public
@@ -122,6 +123,7 @@ psql -v ON_ERROR_STOP=1 "$P5_DB_BOOTSTRAP_URL" <<'SQL' > /dev/null || exit 1
 -- to a role it can SET ROLE to; in the fixture lane `p5owner` holds that
 -- membership, so here the platform principal must.
 GRANT p5_invariants TO daftar_platform WITH INHERIT FALSE, SET TRUE;
+GRANT CONNECT ON DATABASE daftar TO p5_stranger;
 GRANT USAGE ON SCHEMA public TO daftar_platform, p5_app, p5_invariants;
 GRANT SELECT, INSERT ON public.tenants, public.businesses TO daftar_platform;
 -- REFERENCES, not just SELECT: a foreign key from a Phase 5 relation to a
