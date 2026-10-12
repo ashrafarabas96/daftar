@@ -87,6 +87,36 @@ const MEASUREMENTS = (() => {
   return join('/tmp', 'claude-0', 'p4s7-runs', `fact-${port}-${String(process.pid)}.json`);
 })();
 
+/**
+ * THE SHIPPED `CREATE TRIGGER` FOR `installment_plans_active_exclusive`, SLICED
+ * OUT OF THE SPECIFICATION RATHER THAN RETYPED.
+ *
+ * ROUND 15, ordered item 4's sweep, found IN THIS FILE: the restores below used
+ * to put back a trigger they had typed in -- `BEFORE INSERT OR UPDATE` -- which
+ * was the shipped shape in round 14 but is not the shipped shape now, because
+ * round 15 reworked that trigger's event list twice. A retyped
+ * restore is a SILENT DOWNGRADE that every later case in the file inherits, and
+ * the end-state ratchet then refused each of them. Reading the statement out of
+ * `SPEC` makes the restore track the spec by construction.
+ */
+function shippedExclusiveTrigger(): string {
+  const a = SPEC.indexOf('CREATE TRIGGER installment_plans_active_exclusive');
+  if (a < 0) throw new Error('the shipped active-exclusive trigger could not be sliced');
+  const b = SPEC.indexOf(';', a);
+  if (b < 0) throw new Error('the shipped active-exclusive trigger is unterminated');
+  const stmt = SPEC.slice(a, b);
+  // The non-vacuity check deliberately does NOT pin the EVENT LIST: whether
+  // the trigger fires on DELETE is a decision of the spec (round 15 built a
+  // DELETE arm, measured that it cannot fix the lock order, and removed it
+  // again), and a restore that tracked a hard-coded event list is the very
+  // defect this helper exists to prevent. What it pins is that the slice is
+  // the whole-row BEFORE trigger running THIS function.
+  if (!/BEFORE [A-Z ]*ON installment_plans/.test(stmt)) throw new Error(`the sliced trigger is not a BEFORE trigger on installment_plans: ${stmt}`);
+  if (!/FOR EACH ROW EXECUTE FUNCTION installment_plan_active_exclusive\(\)/.test(stmt))
+    throw new Error(`the sliced trigger does not run the shipped function: ${stmt}`);
+  return stmt;
+}
+
 function writeMeasurements(payload: unknown): void {
   try {
     mkdirSync(dirname(MEASUREMENTS), { recursive: true });
@@ -1889,20 +1919,43 @@ beforeAll(async () => {
       return err(e);
     }
   })();
-  M['R15_ratchet_renamed'] = await ratchet();
-  M['R15_lawful_renamed'] = await poisoned([], false, true);
-  M['R15_lawful_renamed_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
-  M['R15_reset_b'] = await resetInvoice();
-  M['R15_attack_renamed'] = await poisoned([], true, true);
-  M['R15_attack_renamed_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
-  M['R15_restore'] = await (async (): Promise<string | null> => {
-    try {
-      await sup.query('ALTER TRIGGER installment_plans_fact_agrees ON installment_plans RENAME TO installment_plans_fact_verified');
-      return null;
-    } catch (e) {
-      return err(e);
-    }
-  })();
+  //    AND THE RENAME IS UNDONE IN A `finally` (`TL-P4-COORD-R59` ordered
+  //    item 4, the sweep; the law is `TL-P4-COORD-R56` §5). Every measurement
+  //    between the rename and the restore used to sit in the straight line
+  //    ahead of the restore, so one throw out of any of them -- a
+  //    `pool.connect()` that cannot get a backend is the realistic one, since
+  //    the inner helpers catch their own query errors -- would have left the
+  //    verifier trigger named `installment_plans_fact_agrees` for the WHOLE
+  //    REST OF THIS BEFOREALL, and §R16, §R17 and every later measurement in
+  //    this file would have been taken against round 13's shipped name while
+  //    reporting on round 15's. That is the fourth-instance shape, here as a
+  //    latent one, and it is removed rather than argued about.
+  try {
+    M['R15_ratchet_renamed'] = await ratchet();
+    M['R15_lawful_renamed'] = await poisoned([], false, true);
+    M['R15_lawful_renamed_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+    M['R15_reset_b'] = await resetInvoice();
+    M['R15_attack_renamed'] = await poisoned([], true, true);
+    M['R15_attack_renamed_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  } finally {
+    M['R15_restore'] = await (async (): Promise<string | null> => {
+      try {
+        await sup.query('ALTER TRIGGER installment_plans_fact_agrees ON installment_plans RENAME TO installment_plans_fact_verified');
+        return null;
+      } catch (e) {
+        return err(e);
+      }
+    })();
+  }
+  //    ...and the restore is READ BACK from `pg_trigger`, so «renamed back» is
+  //    a catalogue reading and not the absence of an error string.
+  M['R15_name_after_restore'] = (
+    await sup.query<{ n: string }>(
+      `SELECT t.tgname::text AS n FROM pg_trigger t JOIN pg_proc f ON f.oid = t.tgfoid
+        WHERE t.tgrelid = 'public.installment_plans'::regclass AND NOT t.tgisinternal
+          AND f.proname = 'installment_plan_fact_verify' ORDER BY 1`,
+    )
+  ).rows.map((r) => r.n);
   M['R15_ratchet_restored'] = await ratchet();
   M['R15_reset_c'] = await resetInvoice();
   M['R15_lawful_restored'] = await poisoned([], false, true);
@@ -2028,10 +2081,7 @@ beforeAll(async () => {
   })();
   M['R3_restore_trigger'] = await (async (): Promise<string | null> => {
     try {
-      await sup.query(
-        `CREATE TRIGGER installment_plans_active_exclusive BEFORE INSERT OR UPDATE ON installment_plans
-           FOR EACH ROW EXECUTE FUNCTION installment_plan_active_exclusive()`,
-      );
+      await sup.query(shippedExclusiveTrigger());
       return null;
     } catch (e) {
       return err(e);
@@ -2211,6 +2261,87 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
   //    every trigger back on, the flag true. The retired spelling of the
   //    reader's count is answered from the index and reads ONE.
   M['R7_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+  // ── §R7b WHAT MOVED THE FREE-PLANNER READING, MEASURED RATHER THAN
+  //    ATTRIBUTED (`TL-P4-COORD-R59` §1 and ordered item 1; F14-1).
+  //
+  //    ROUND 14 SAID THE CAUSE WAS ROUND 13's LEAKED `SET LOCAL
+  //    enable_seqscan = off`, AND THAT IS WITHDRAWN. The coordinator
+  //    retracted it in `R59` §1 after the round-14 challenger measured the
+  //    refutation: the specification is applied on the `mig` pool and these
+  //    readings run on the `sup` pool, different pools are different backends
+  //    are different sessions, and a `DO` block's `SET LOCAL` is bounded by
+  //    the TRANSACTION anyway -- a multi-statement simple query is one
+  //    implicit transaction, so the setting reads `on` the instant the apply
+  //    returns. THE LEAK COULD NOT REACH HERE. What survives is the
+  //    OBSERVATION: `truth` read `false` at `c0d37ca` and reads `true` here,
+  //    on the same query over the same two heap rows.
+  //
+  //    SO THE PLAN IS RECORDED, NOT JUST THE KNOB, and the cost inputs a
+  //    statistics-free planner actually has are recorded beside it: on a
+  //    relation nothing has `ANALYZE`d, `estimate_rel_size` takes the
+  //    relation's PHYSICAL PAGE COUNT and a default tuple density, so the
+  //    page count is the one planner input that can move between two commits
+  //    whose subject rows are identical. A reading whose value depends on the
+  //    access path must record the path and the inputs that chose it, or the
+  //    next round inherits an unexplained movement -- which `R59` calls worse
+  //    than a known one.
+  M['R7_cost_inputs'] = (
+    await sup.query(
+      `SELECT c.relname::text AS rel, c.relpages::int AS relpages, c.reltuples::text AS reltuples,
+              pg_relation_size(c.oid)::text AS bytes,
+              (SELECT count(*)::int FROM installment_plans) AS plan_rows,
+              (SELECT count(*)::int FROM installments) AS schedule_rows,
+              (SELECT count(*)::int FROM pg_stats WHERE schemaname = 'public' AND tablename = c.relname) AS stats_rows
+         FROM pg_class c WHERE c.oid = 'public.installment_plans'::regclass`,
+    )
+  ).rows[0];
+  M['R7_index_flags_at_read'] = (
+    await sup.query(
+      `SELECT ic.relname::text AS ix, x.indisvalid, x.indisready, x.indislive, ic.relpages::int AS relpages
+         FROM pg_index x JOIN pg_class ic ON ic.oid = x.indexrelid
+        WHERE x.indrelid = 'public.installment_plans'::regclass ORDER BY ic.relname`,
+    )
+  ).rows;
+  /** `EXPLAIN (COSTS OFF)` of one statement, with the planner free or forced. */
+  const planOf = async (sql: string, params: readonly unknown[], force: boolean): Promise<string> => {
+    const c = await sup.connect();
+    try {
+      await c.query('BEGIN');
+      if (force) {
+        await c.query('SET LOCAL enable_seqscan = off');
+        await c.query('SET LOCAL enable_bitmapscan = off');
+      }
+      const r = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [...params]);
+      await c.query('COMMIT');
+      return r.rows.map((x) => x['QUERY PLAN']).join(' | ');
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      return err(e);
+    } finally {
+      c.release();
+    }
+  };
+  const TRUTH_SQL = `SELECT EXISTS (SELECT 1 FROM installment_plans p WHERE p.invoice_id = $1 AND p.status = 'active')::text AS t`;
+  const RETIRED_SQL = `SELECT count(*)::text FROM (SELECT v2.invoice_id FROM installment_plans v2
+                          WHERE v2.business_id = $1 AND v2.status = 'active' AND v2.invoice_id = $2
+                          GROUP BY v2.invoice_id HAVING count(*) > 1) z`;
+  /**
+   * THE TWO SPELLINGS OF THE READER'S BOUND COUNT, IN ONE STATEMENT, so the
+   * pair is ONE query text used by every reading of it below -- the forced
+   * one, the free one, and the page-count sweep's. Round 14 carried three
+   * copies of it and they had drifted apart in whitespace, which is how a
+   * "same query, two answers" claim stops being about the same query.
+   */
+  const TWO_READINGS_SQL = `SELECT (SELECT count(*)::text FROM (SELECT v2.invoice_id FROM installment_plans v2
+                 WHERE v2.business_id = $1 AND v2.status = 'active' AND v2.invoice_id = $2
+                 GROUP BY v2.invoice_id HAVING count(*) > 1) z) AS retired_spelling,
+              (SELECT count(*)::text FROM (SELECT p2.invoice_id FROM installment_plans p2
+                 WHERE p2.business_id = $1 AND p2.invoice_id = $2
+                 GROUP BY p2.invoice_id HAVING count(*) FILTER (WHERE p2.status = 'active') > 1) z) AS shipped_spelling`;
+  M['R7_plan_truth_free'] = await planOf(TRUTH_SQL, [world.invoiceId], false);
+  M['R7_plan_truth_forced'] = await planOf(TRUTH_SQL, [world.invoiceId], true);
+  M['R7_plan_retired_free'] = await planOf(RETIRED_SQL, [world.businessId, world.invoiceId], false);
+  M['R7_plan_retired_forced'] = await planOf(RETIRED_SQL, [world.businessId, world.invoiceId], true);
   //    AND THE SAME EXISTS WITH THE INDEX PATH FORCED. A FINDING OF THIS
   //    ROUND, disclosed rather than smoothed over: at `c0d37ca` this
   //    measurement was taken WITHOUT forcing anything and read `false`,
@@ -2257,15 +2388,7 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       await c.query('BEGIN');
       await c.query('SET LOCAL enable_seqscan = off');
       await c.query('SET LOCAL enable_bitmapscan = off');
-      const r = await c.query(
-        `SELECT (SELECT count(*)::text FROM (SELECT v2.invoice_id FROM installment_plans v2
-                   WHERE v2.business_id = $1 AND v2.status = 'active' AND v2.invoice_id = $2
-                   GROUP BY v2.invoice_id HAVING count(*) > 1) z) AS retired_spelling,
-                (SELECT count(*)::text FROM (SELECT p2.invoice_id FROM installment_plans p2
-                   WHERE p2.business_id = $1 AND p2.invoice_id = $2
-                   GROUP BY p2.invoice_id HAVING count(*) FILTER (WHERE p2.status = 'active') > 1) z) AS shipped_spelling`,
-        [world.businessId, world.invoiceId],
-      );
+      const r = await c.query(TWO_READINGS_SQL, [world.businessId, world.invoiceId]);
       await c.query('COMMIT');
       return (r.rows[0] ?? {}) as Record<string, unknown>;
     } catch (e) {
@@ -2277,18 +2400,106 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
   })();
   //    AND THE SAME PAIR WITH THE PLANNER LEFT ALONE, so the dependence of
   //    the finding on the ACCESS PATH is itself measured rather than assumed.
-  M['R7_two_readings_free'] = (
-    await sup.query(
-      `SELECT (SELECT count(*)::text FROM (SELECT v2.invoice_id FROM installment_plans v2
-                 WHERE v2.business_id = $1 AND v2.status = 'active' AND v2.invoice_id = $2
-                 GROUP BY v2.invoice_id HAVING count(*) > 1) z) AS retired_spelling,
-              (SELECT count(*)::text FROM (SELECT p2.invoice_id FROM installment_plans p2
-                 WHERE p2.business_id = $1 AND p2.invoice_id = $2
-                 GROUP BY p2.invoice_id HAVING count(*) FILTER (WHERE p2.status = 'active') > 1) z) AS shipped_spelling`,
-      [world.businessId, world.invoiceId],
-    )
-  ).rows[0];
+  M['R7_two_readings_free'] = (await sup.query(TWO_READINGS_SQL, [world.businessId, world.invoiceId])).rows[0];
   M['R7_aging'] = await aging(app, APP_CTX());
+  //    AND THE CONTROLLED VARIATION, which is what turns a correlation into a
+  //    cause. The ONLY thing varied is the relation's PHYSICAL PAGE COUNT --
+  //    filler rows are `cancelled` plans on the SAME invoice, which no reading
+  //    above sees (every one of them is keyed on `status = 'active'`), and they
+  //    are removed again. If the page count is what chooses the path, the plan
+  //    and the value move with it and with nothing else; if they do not move,
+  //    the page count is NOT the cause and this measurement says so rather
+  //    than leaving the next round a correlation.
+  //
+  //    THE TRIGGERS ARE OFF FOR THE FILLER WRITES, and that is forced rather
+  //    than chosen: §R7's own state is TWO ACTIVE PLANS on this invoice, which
+  //    the deferred verifier refuses at the COMMIT of ANY later write on it.
+  //    It is the same owner-only escape §R7 already uses and declares, and it
+  //    is restored in a `finally` (`TL-P4-COORD-R56` §5).
+  M['R7_pagecount_sweep'] = await (async (): Promise<readonly Record<string, unknown>[]> => {
+    const out: Record<string, unknown>[] = [];
+    const sudoq = async (sql: string, params: readonly unknown[] = []): Promise<string | null> => {
+      try {
+        await sup.query(sql, [...params]);
+        return null;
+      } catch (e) {
+        return err(e);
+      }
+    };
+    out.push({ triggers_off: await sudoq('ALTER TABLE installment_plans DISABLE TRIGGER USER') });
+    try {
+      for (const add of [0, 400, 4000]) {
+        if (add > 0) {
+          const e = await sudoq(
+            `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+             SELECT $1,$2,gen_random_uuid(),$3,$4,'cancelled',0,'2026-01-02'::DATE,$5,gen_random_uuid() FROM generate_series(1,$6::int)`,
+            [world.tenantId, world.businessId, world.invoiceId, world.customerId, world.userId, add],
+          );
+          if (e !== null) {
+            out.push({ added: add, error: e });
+            continue;
+          }
+        }
+        const facts = (
+          await sup.query<{ relpages: number; rows: number; bytes: string }>(
+            `SELECT c.relpages::int AS relpages, pg_relation_size(c.oid)::text AS bytes,
+                    (SELECT count(*)::int FROM installment_plans) AS rows
+               FROM pg_class c WHERE c.oid = 'public.installment_plans'::regclass`,
+          )
+        ).rows[0];
+        out.push({
+          added: add,
+          relpages: facts?.relpages,
+          bytes: facts?.bytes,
+          rows: facts?.rows,
+          truth_free: await truth(),
+          plan_free: await planOf(TRUTH_SQL, [world.invoiceId], false),
+          plan_retired_free: await planOf(RETIRED_SQL, [world.businessId, world.invoiceId], false),
+          // THE PAIR §R7 ASSERTS, RE-TAKEN AT THIS PAGE COUNT AND WITH THE
+          // PLANNER FREE. This is the instrument of ordered item 1: if the
+          // page count is what chooses the path, THIS pair moves across the
+          // steps while nothing else about the state changes.
+          readings_free: ((await sup.query(TWO_READINGS_SQL, [world.businessId, world.invoiceId])).rows[0] ?? {}) as Record<string, unknown>,
+        });
+      }
+    } finally {
+      // THE RESTORE HAS THREE PARTS AND THE THIRD IS THE ONE THIS ROUND
+      // LEARNED. Deleting the filler rows does NOT give the physical size
+      // back: a `DELETE` leaves the pages in the relation, so the planner's
+      // one movable cost input stays moved. The FIRST pass of this sweep ran
+      // BEFORE §R7's own free-planner pair and left 4400 dead rows' worth of
+      // pages behind it -- and §R7's `retired_spelling` free reading duly
+      // moved from `1` to `0`, because the inflated size made the index
+      // cheaper than the scan. That red was MY OWN INSTRUMENT PERTURBING ITS
+      // SUBJECT, which is exactly the movement ordered item 1 is about, so it
+      // is disclosed and repaired twice over: this sweep now runs AFTER every
+      // §R7 reading, and it gives the pages back with a PLAIN `VACUUM`, which
+      // truncates the trailing all-empty pages.
+      //
+      // PLAIN, AND NOT `VACUUM FULL`, AND THAT IS NOT A PREFERENCE EITHER:
+      // `VACUUM FULL` REBUILDS THE INDEXES, which REPAIRED §R17's deliberate
+      // physical corruption -- the index that holds neither of the two active
+      // rows -- and §R17's `served: '0'` reading then read `2`. Measured, in
+      // this file, on the pass that introduced it. A cleanup may not repair
+      // the subject of a later case.
+      const cleanup = await sudoq(`DELETE FROM installment_plans WHERE invoice_id = $1 AND status = 'cancelled'`, [world.invoiceId]);
+      const vacuum = await sudoq('VACUUM public.installment_plans');
+      out.push({
+        cleanup,
+        vacuum,
+        triggers_on: await sudoq('ALTER TABLE installment_plans ENABLE TRIGGER USER'),
+        rows_after: (await sup.query<{ n: string }>(`SELECT count(*)::text AS n FROM installment_plans`)).rows[0]?.n,
+        bytes_after: (await sup.query<{ n: string }>(`SELECT pg_relation_size('public.installment_plans')::text AS n`)).rows[0]?.n,
+        relpages_after: (await sup.query<{ n: number }>(`SELECT c.relpages::int AS n FROM pg_class c WHERE c.oid = 'public.installment_plans'::regclass`))
+          .rows[0]?.n,
+        stats_after: (await sup.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_stats WHERE schemaname = 'public' AND tablename = 'installment_plans'`))
+          .rows[0]?.n,
+        truth_after: await truth(),
+        readings_after: ((await sup.query(TWO_READINGS_SQL, [world.businessId, world.invoiceId])).rows[0] ?? {}) as Record<string, unknown>,
+      });
+    }
+    return out;
+  })();
   M['R7_triggers_all_enabled'] = (
     await sup.query<{ n: string }>(
       `SELECT count(*)::text AS n FROM pg_trigger t JOIN pg_proc f ON f.oid = t.tgfoid
@@ -3439,6 +3650,9 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
 
   it('R15 AND THE CONTROL: the name put back, the block is OK again and the same write commits', () => {
     expect(M['R15_restore'], `the restore failed: ${String(M['R15_restore'])}`).toBeNull();
+    // ...and the restore is read back from `pg_trigger`, so the claim rests on
+    // the catalogue and not on the absence of an error string.
+    expect(M['R15_name_after_restore'], 'the verifier trigger is not back under its shipped name').toStrictEqual(['installment_plans_fact_verified']);
     expect(M['R15_ratchet_restored'], `the block refuses the shipped name order: ${String(M['R15_ratchet_restored'])}`).toBeNull();
     expect(M['R15_reset_c']).toBeNull();
     expect(M['R15_lawful_restored'], `the control write was refused: ${String(M['R15_lawful_restored'])}`).toBeNull();
@@ -3638,6 +3852,99 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // spelling PERMITS and not about the size of this fixture — and a reading
     // taken with the planner free would have measured nothing at all.
     expect(M['R7_two_readings_free']).toStrictEqual({ retired_spelling: '1', shipped_spelling: '1' });
+    // ── §R7b THE FREE-PLANNER READING'S MOVEMENT IS EXPLAINED, AND THE
+    //    ROUND-14 CAUSE IS WITHDRAWN (`TL-P4-COORD-R59` §1 and ordered item
+    //    1; F14-1). The leak could not reach these readings — the apply is on
+    //    `mig`, these run on `sup`, and a `DO` block's `SET LOCAL` is bounded
+    //    by the transaction in any case. What is asserted here instead is
+    //    that the PLAN is recorded and that the plan EXPLAINS the value, so
+    //    the next movement is attributable instead of mysterious.
+    const planFree = String(M['R7_plan_truth_free']);
+    const planForced = String(M['R7_plan_truth_forced']);
+    expect(planFree, 'no free plan was recorded for the reading whose value depends on the path').not.toBe('');
+    // THE FREE PLAN REACHES THE HEAP, which is why `truth` is `true`: the two
+    // rows are IN THE HEAP and in no index.
+    expect(planFree, `the free plan does not reach the heap yet truth is ${String(M['R7_state'])}`).toContain('Seq Scan');
+    // AND THE FORCED PLAN DOES NOT, which is why the index-served reading is
+    // `false`. The two plans are different plans, measured, not assumed.
+    expect(planForced, 'the forced plan is the same as the free one, so the pair measures nothing').not.toBe(planFree);
+    expect(planForced).toContain('Index');
+    // AND THE PLANNER HAD NO STATISTICS, so the page count is the cost input
+    // that can move — which is what the sweep varies.
+    expect(
+      Number((M['R7_cost_inputs'] as Record<string, unknown>)['stats_rows']),
+      'this fixture has been ANALYZEd, so every plan reading above is on statistics',
+    ).toBe(0);
+    // ── THE CONTROLLED VARIATION. The page count is varied and NOTHING else;
+    //    what moved and what did not is read off the sweep rather than
+    //    asserted in a comment. The only thing this case REQUIRES of it is
+    //    that the fixture is restored and that the sweep really did change
+    //    the page count — the direction of the finding is reported in the
+    //    author's report from these recorded values.
+    const sweep = M['R7_pagecount_sweep'] as readonly Record<string, unknown>[];
+    const steps = sweep.filter((x) => Object.hasOwn(x, 'bytes') && Object.hasOwn(x, 'added'));
+    expect(steps.length, 'the page-count sweep took no step at all').toBe(3);
+    expect(
+      steps.every((x) => x['error'] === undefined),
+      `a sweep step failed: ${JSON.stringify(sweep)}`,
+    ).toBe(true);
+    // THE VARIED INPUT IS THE PHYSICAL SIZE AND IT IS READ AS BYTES, NOT AS
+    //    `pg_class.relpages`. `relpages` is a STORED ESTIMATE that only
+    //    `VACUUM`, `ANALYZE` and `CREATE INDEX` update, so it stayed `1`
+    //    across 4400 inserted rows and the first version of this assertion
+    //    failed while the sweep was in fact working perfectly. What the
+    //    statistics-free planner uses is `RelationGetNumberOfBlocks` -- the
+    //    relation's ACTUAL size -- which is what `pg_relation_size` reports.
+    //    Disclosed as a method defect of this round and corrected here.
+    expect(Number(steps[steps.length - 1]?.['bytes']), 'the sweep did not actually grow the relation, so it varied nothing').toBeGreaterThan(
+      Number(steps[0]?.['bytes']),
+    );
+    // THE FINDING OF ORDERED ITEM 1, AS A LAW AND NOT AS A COMMENT: with the
+    //    two heap rows, the flag, the triggers, the index flags, the roles,
+    //    the session and the query text all held fixed and ONLY the physical
+    //    page count varied, the free planner's chosen path for the RETIRED
+    //    spelling CHANGES. So the page count is the cost input that moves
+    //    this reading -- which is what `R59` ordered item 1 asked for, and it
+    //    is NOT the withdrawn `enable_seqscan` leak.
+    const first = steps[0] as Record<string, unknown>;
+    const last = steps[steps.length - 1] as Record<string, unknown>;
+    expect(String(first['plan_retired_free']), 'no free plan was recorded at the base page count').not.toBe('');
+    expect(
+      String(last['plan_retired_free']),
+      `the path did not move when the relation went from ${String(first['bytes'])} to ${String(last['bytes'])} bytes, so the physical size is NOT what moves this reading`,
+    ).not.toBe(String(first['plan_retired_free']));
+    // ...and the VALUE moves with the path, which is why the movement matters
+    //    at all: at the base page count the free retired reading agrees with
+    //    §R7's own free pair above, and at the inflated one it does not.
+    expect((first['readings_free'] as Record<string, unknown>)['retired_spelling'], 'the sweep base step disagrees with §R7 own free reading').toBe(
+      (M['R7_two_readings_free'] as Record<string, unknown>)['retired_spelling'],
+    );
+    expect((last['readings_free'] as Record<string, unknown>)['retired_spelling'], 'the free retired reading did not move with the page count').not.toBe(
+      (first['readings_free'] as Record<string, unknown>)['retired_spelling'],
+    );
+    // ...and the SHIPPED spelling does NOT move, at any page count. That is
+    //    the `FILTER` plan-independence law, measured over a varying cost
+    //    input rather than over one state.
+    for (const st of steps) {
+      expect(
+        (st['readings_free'] as Record<string, unknown>)['shipped_spelling'],
+        `the shipped spelling moved at ${String(st['bytes'])} bytes, so FILTER is not plan-independent`,
+      ).toBe('1');
+    }
+    // ...and the fixture is BACK: the filler rows are gone, the PAGES are
+    //    given back (a `DELETE` does not give them back -- `VACUUM FULL`
+    //    does), no statistics were created, and `truth` is what the rest of
+    //    §R7 and all of §R17 were written against.
+    const tail = sweep[sweep.length - 1] as Record<string, unknown>;
+    expect(tail['cleanup'], `the sweep's filler rows were not removed: ${String(tail['cleanup'])}`).toBeNull();
+    expect(tail['vacuum'], `the pages were not given back: ${String(tail['vacuum'])}`).toBeNull();
+    expect(Number(tail['bytes_after']), 'the sweep left the relation inflated, so it perturbed every later reading').toBeLessThanOrEqual(
+      Number(first['bytes']),
+    );
+    expect(Number(tail['stats_after']), 'the sweep ANALYZEd the relation, so every later plan reading is on statistics').toBe(0);
+    expect(tail['triggers_on'], `the sweep left the triggers disabled: ${String(tail['triggers_on'])}`).toBeNull();
+    expect(tail['truth_after'], 'the sweep changed the state the rest of §R7 reads').toBe('true');
+    expect(tail['readings_after'], 'the sweep left the bound readings moved').toStrictEqual(M['R7_two_readings_free']);
     // AND THE READER REFUSES RATHER THAN SERVING A FIGURE. WHICH ARM ANSWERS
     // DEPENDS ON THE ACCESS PATH, and that is a finding of this round rather
     // than a detail: at `c0d37ca` it was `plan_fact_unreadable`, because

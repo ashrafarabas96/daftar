@@ -48,7 +48,12 @@ import type { ArgumentsHost } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import { GlobalExceptionFilter } from '../../apps/api/src/common/error.filter';
 import type { Logger } from '../../apps/api/src/infra/logger';
-import { INSTALLMENT_INTERNAL_INVARIANT_CODES, isInstallmentInternalInvariant } from '../../apps/api/src/modules/selling/selling-errors';
+import {
+  CONTENTION_SQLSTATE_CODES,
+  INSTALLMENT_INTERNAL_INVARIANT_CODES,
+  isInstallmentInternalInvariant,
+  parseDatabaseContention,
+} from '../../apps/api/src/modules/selling/selling-errors';
 
 interface Rendered {
   readonly status: number;
@@ -261,6 +266,71 @@ describe('P4-S7 the installment.* rendering contract', () => {
     const denied = render(pgError('42501', 'new row violates row-level security policy "business_isolation_update" for table "invoices"'));
     expect(denied.status).toBe(403);
     expect(denied.payload.error.code).toBe('FORBIDDEN');
+  });
+
+  /**
+   * ── THE TRANSACTION-MANAGER OUTCOMES STOP BEING AN UNNAMED 500
+   *    (`TL-P4-COORD-R59` ordered item 2, F14-2) ──────────────────────────
+   *
+   * A `40P01` on ONE invoice from two ORDINARY operations was measured by the
+   * round-14 challenger, and until this commit both `40001` and `40P01`
+   * reached `GlobalExceptionFilter`'s last `unhandled error` branch: `500
+   * INTERNAL_ERROR` with no code, no retry contract, and the whole `pg` error
+   * object in the log. They are not invariant violations and are not in
+   * either registry — section 3a-ter of the specification says so — so what
+   * was owed was a RENDERING, not a registry entry.
+   */
+  it('a 40P01 and a 40001 render 409 CONFLICT with retryable:true, the SQLSTATE in the LOG and the server sentence nowhere', () => {
+    // THE SERVER'S OWN SENTENCE, which names tuples, relations and the other
+    // backend's process id. None of it may reach the body.
+    const deadlock = pgError('40P01', 'deadlock detected', {
+      detail:
+        'Process 15141 waits for ShareLock on transaction 1234; blocked by process 15137. ' +
+        'Process 15137 waits for ShareLock on transaction 1235; blocked by process 15141.',
+      where: 'while deleting tuple (0,3) in relation "installment_plans"',
+    });
+    for (const [e, word] of [
+      [deadlock, 'deadlock_detected'],
+      [pgError('40001', 'could not serialize access due to concurrent update'), 'serialization_failure'],
+    ] as const) {
+      const r = render(e);
+      expect(r.status, word).toBe(409);
+      expect(r.payload.error.code, word).toBe('CONFLICT');
+      expect(r.payload.error.details?.['contention'], word).toBe(word);
+      expect(r.payload.error.details?.['retryable'], word).toBe(true);
+      // THE SQLSTATE IS IN THE LOG AND NOT IN THE BODY, and the line says
+      // contention rather than «unhandled error».
+      const lines = r.logged.filter((l) => l.message === 'transaction contention');
+      expect(lines, word).toHaveLength(1);
+      expect(lines[0]?.fields['sqlstate'], word).toBe(e.code);
+      expect(
+        r.logged.some((l) => l.message === 'unhandled error'),
+        word,
+      ).toBe(false);
+      const body = JSON.stringify(r.payload);
+      for (const leak of ['40P01', '40001', '15141', 'installment_plans', 'ShareLock', 'serialize']) {
+        expect(body, `${word} leaked ${leak}`).not.toContain(leak);
+      }
+    }
+    // AND THE CLASSIFIER READS THE SQLSTATE AND NEVER THE MESSAGE, so a
+    // refusal that merely MENTIONS a deadlock is not one.
+    expect(parseDatabaseContention(pgError('P0001', 'installment.plan_active_conflict: see 40P01 for the related case'))).toBeNull();
+    expect(parseDatabaseContention(new Error('deadlock detected'))).toBeNull();
+    expect(parseDatabaseContention(pgError('23505', 'duplicate key value'))).toBeNull();
+    expect([...CONTENTION_SQLSTATE_CODES].sort()).toStrictEqual(['40001', '40P01']);
+    // NON-VACUITY, AND IT IS THE DEFECT ITSELF: on the branch that was there
+    // before, a 40P01 was answered 500 with NO details at all. The two
+    // assertions below are the ones that would fail if the branch were
+    // removed again.
+    const r = render(deadlock);
+    expect(r.status, 'a contention outcome is rendered as an outage again').not.toBe(500);
+    expect(r.payload.error.details, 'a contention outcome carries no retry contract again').toBeDefined();
+    // ...and an UNCLASSIFIED SQLSTATE still falls to the unnamed 500, which is
+    // the rendering this branch deliberately does NOT widen.
+    const other = render(pgError('XX000', 'internal error'));
+    expect(other.status).toBe(500);
+    expect(other.payload.error.code).toBe('INTERNAL_ERROR');
+    expect(other.logged.some((l) => l.message === 'unhandled error')).toBe(true);
   });
 
   it('the code is taken from the START of the message and a mention elsewhere does not promote a 403 to a 500', () => {

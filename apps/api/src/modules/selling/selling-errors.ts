@@ -759,6 +759,77 @@ const INSTALLMENT_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
 export const INSTALLMENT_INTERNAL_INVARIANT_CODES: readonly string[] = [...INSTALLMENT_INTERNAL_INVARIANTS];
 
 /**
+ * ── THE TRANSACTION-MANAGER OUTCOMES, CLASSIFIED SO THEY STOP BEING AN
+ *    UNNAMED 500 (`TL-P4-COORD-R59` ordered item 2, F14-2) ─────────────────
+ *
+ * `40001` (serialization failure) and `40P01` (deadlock detected) are NOT
+ * invariant violations and are deliberately NOT in the two registries above:
+ * section 3a-ter of `p4s7-installment-aging.spec.sql` says so in terms, and a
+ * registry that held them would be contracting that contention is a defect of
+ * this slice. But until this commit they were classified NOWHERE, so
+ * `GlobalExceptionFilter` answered both from its last `unhandled error`
+ * branch: **`500 INTERNAL_ERROR`, with no code, no retry contract and the whole
+ * `pg` error object in the log** — the shape of an outage, for the one outcome
+ * whose correct answer is «nothing is broken, take it again».
+ *
+ * MEASURED AND NOT HYPOTHETICAL. A `40P01` arises on ONE invoice from TWO
+ * ORDINARY OPERATIONS: a `DELETE` of an active plan took the plan row (rank 6)
+ * and then needed the invoice row (rank 3), while an ordinary invoice write
+ * held the invoice row and then cancelled that plan through the documented
+ * route. Round 15 CLOSES that cycle structurally -- the one-active exclusion
+ * trigger now fires `BEFORE DELETE` too and takes the invoice row first, so
+ * every plan transition takes rank 3 before rank 6 -- and `40P01` remains
+ * reachable for the shapes `P4-AL-41` leaves to the CALLER (several invoices
+ * in opposite order, and the multi-row plan statement whose row order is the
+ * planner's). A rendering is owed to the shapes that remain.
+ *
+ * WHAT IS OWED, AND WHY 409 AND NOT 500 OR 503. The request was well formed,
+ * the server is healthy, and the transaction was rolled back whole: nothing
+ * partial committed. That is a CONFLICT over concurrent access, and the
+ * contract carries `retryable: true` so a caller knows the one thing it needs
+ * to know. 500 reads as «we are broken»; 503 reads as «we are down». Neither
+ * is true. `[[daftar-lock-order-not-retry]]` is not weakened by this: a retry
+ * HERE is a retry at the caller's own transaction boundary, which is the
+ * standard contract for these SQLSTATEs, and it is NOT a retry loop inside a
+ * writer and NOT a licence to leave a lock-order defect in place -- which is
+ * why round 15 changed the order rather than only the rendering.
+ *
+ * NO MERCHANT MESSAGE KEY IS ADDED. `details.contention` is a machine word for
+ * a client's retry logic, not a string to render, so there is no
+ * `error.selling.*` entry to localize and `check:localization` is unaffected.
+ */
+const CONTENTION_SQLSTATES: ReadonlyMap<string, string> = new Map([
+  ['40001', 'serialization_failure'],
+  ['40P01', 'deadlock_detected'],
+]);
+
+/**
+ * The transaction-manager contention a database error carries, or null, read
+ * from the SQLSTATE and never from the message: these outcomes carry the
+ * server's own English sentence, which names relations, tuples and process
+ * ids, and none of that may reach a caller.
+ */
+export function parseDatabaseContention(error: unknown): { readonly sqlstate: string; readonly contention: string } | null {
+  const sqlstate = (error as { code?: unknown } | null)?.code;
+  if (typeof sqlstate !== 'string') return null;
+  const contention = CONTENTION_SQLSTATES.get(sqlstate);
+  return contention === undefined ? null : { sqlstate, contention };
+}
+
+/** The two SQLSTATEs the classifier above recognizes, for a contract test to enumerate. */
+export const CONTENTION_SQLSTATE_CODES: readonly string[] = [...CONTENTION_SQLSTATES.keys()];
+
+/**
+ * A contention outcome as the API reports it: `409 CONFLICT`, the machine word
+ * for which contention it was, and `retryable: true`. The SQLSTATE itself is
+ * NOT in the body — it goes to the log — because a SQLSTATE in a response body
+ * is the same leak class `AccountingError.toSafeJSON` forbids.
+ */
+export function transactionContentionRefusal(contention: string): AppError {
+  return new AppError('CONFLICT', 'The request met concurrent contention and was not applied; it can be retried', 409, { contention, retryable: true });
+}
+
+/**
  * A RECOGNIZED internal `installment.*` invariant code — never a prefix test,
  * for the reason the `selling.*` registry states: most `installment.*` strings
  * in the tree are migration-time end-state assertions, and a wildcard would be

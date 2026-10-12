@@ -697,6 +697,7 @@ DECLARE
   v_max_seq    INTEGER;
   v_distinct   INTEGER;
   v_flag_now        BOOLEAN;
+  v_unenforcing     TEXT;
 BEGIN
   -- WHICH PLAN THIS ROW IMPLICATES. Both relations are judged by this one
   -- routine, so the plan key is taken from whichever relation fired, and from
@@ -816,12 +817,108 @@ BEGIN
     FROM public.installments n
    WHERE n.business_id = v_business AND n.plan_id = v_plan;
 
+  -- ---- AND BEFORE ANY OF (a) TO (d) STATES A FIGURE, THE INDEXES OF BOTH
+  --      RELATIONS ARE READ (`TL-P4-COORD-R59` ordered item 8, F14-9).
+  --
+  -- THE THREE RUNTIME `pg_index` READINGS OF THIS SLICE ALL COVERED
+  -- `installment_plans` AND NONE COVERED `installments`, which was read at
+  -- APPLY TIME ONLY (part 9a). And the sum immediately above is
+  -- `WHERE n.business_id = ... AND n.plan_id = ...` -- the leading pair of
+  -- `installments_plan_schedule_idx` -- which is MEASURED to be served by
+  -- that index with the planner FREE on a statistics-free database. So
+  -- `installment.schedule_incomplete: (a) the schedule sums to X` could state
+  -- an `X` that is an artifact of an `installments` index that is present and
+  -- not maintained, with no reading anywhere to exclude it. That is exactly
+  -- the F13-2 shape round 14 repaired on `installment_plans` and left open on
+  -- `installments`, and it is the defect class of this whole estate: A
+  -- REFUSAL THAT NAMES A PREMISE IT DOES NOT READ.
+  --
+  -- IT IS READ RATHER THAN DETECTED-LATER, AND IT REFUSES BY NAME. An index
+  -- that is not (`indisvalid` AND `indisready` AND `indislive`) on EITHER
+  -- relation makes every figure this routine could state unsafe -- the sum
+  -- over `installments` and the plan row it took `v_status`, `v_invoice` and
+  -- `v_down` from, which is read by primary key and therefore served by
+  -- `installments`'/`installment_plans`' own indexes -- so the refusal is
+  -- `installment.plan_index_unenforcing` and NOT a sentence about a schedule.
+  -- The round-14 challenger built `indisvalid=true, indisready=false` on
+  -- `installments_plan_schedule_idx` and the lawful write COMMITTED TWICE
+  -- (sum read `800000`, two rows in the heap), so the consequence was not
+  -- reachable by that route on PostgreSQL 18.4 and the gap stayed DESIGN ONLY.
+  -- It is not left as a hypothesis about reachability: the STATE is refused,
+  -- which is the only answer that does not depend on finding the route.
+  --
+  -- IT CANNOT REFUSE LAWFUL WORK, AND THAT IS STRUCTURAL AND NOT A HOPE: the
+  -- catalogue read happens ONLY when an obligation has already failed, so a
+  -- sound schedule never reaches it at all, and in every state this file
+  -- installs all five indexes of the two relations carry the three flags true.
+  -- The direction it covers is the only one a missing index entry can produce:
+  -- entries can only be ABSENT, so a sum read through an unenforcing index can
+  -- only UNDER-report, which makes an obligation FAIL -- it can never make one
+  -- pass that should have failed.
+  --
+  -- WHAT THIS DOES **NOT** CLOSE, STATED RATHER THAN LEFT TO BE FOUND. This
+  -- reads the three FLAGS. It cannot see the state where the flags are
+  -- PERFECT and the index is nevertheless missing an entry for a row that
+  -- qualifies for it -- the state `indisready = false`, a write, and the flag
+  -- put back, which `R53` §1 and part 9d exist for. On
+  -- `installment_plans` that half is answered at RUNTIME by the two-spelling
+  -- count (`installment.plan_index_disagrees`), and THAT INSTRUMENT DOES NOT
+  -- TRANSFER HERE: it works because the plan index is PARTIAL, so a query that
+  -- restricts no `status` cannot be served by it BY THE IMPLICATION RULE.
+  -- `installments_plan_schedule_idx` is NOT partial, so no spelling of this
+  -- sum is provably unservable by it and a two-reading comparison would be a
+  -- planner preference rather than a law -- which is exactly the mistake
+  -- `TL-P4-COORD-R52` F-2 found. The decider for the physical half is
+  -- EXECUTION (`REINDEX`), which part 9d runs at apply time over EVERY index of
+  -- BOTH relations and which the integration suites re-run over a POPULATED
+  -- fixture after every mutation they make. It is not run per plan write,
+  -- because a `REINDEX` takes `ACCESS EXCLUSIVE` on the relation and no
+  -- ordinary sale may do that. So: the FLAG half is closed on both relations
+  -- as of this round, and the PHYSICAL half is apply-time and CI, DECLARED.
+  IF v_down + v_sched <> v_total OR v_rows < 1 OR v_max_seq <> v_rows OR v_distinct <> v_rows THEN
+    SELECT pg_catalog.string_agg(ic.relname || ' on ' || x.indrelid::REGCLASS::TEXT
+                                 || ' (indisvalid=' || x.indisvalid::TEXT
+                                 || ', indisready=' || x.indisready::TEXT
+                                 || ', indislive=' || x.indislive::TEXT || ')', ', '
+                                 ORDER BY ic.relname)
+      INTO v_unenforcing
+      FROM pg_catalog.pg_index x
+      JOIN pg_catalog.pg_class ic ON ic.oid = x.indexrelid
+     WHERE x.indrelid IN ('public.installments'::regclass, 'public.installment_plans'::regclass)
+       AND NOT (x.indisvalid AND x.indisready AND x.indislive);
+    IF v_unenforcing IS NOT NULL THEN
+      RAISE EXCEPTION 'installment.plan_index_unenforcing: the schedule of plan %/% does not satisfy obligation (a) to (c) AS THIS ROUTINE READ IT -- down payment plus schedule % against an invoice total of %, % instalment row(s), max seq_no % -- AND pg_index says these indexes are not enforcing: %. EVERY FIGURE IN THE SENTENCE BEFORE THIS ONE MAY BE AN ARTIFACT OF THAT. The schedule sum is taken WHERE business_id and plan_id, which is the leading pair of installments_plan_schedule_idx, and the plan row is read by primary key, which is served by installment_plans_pkey; an index that is present and not maintained by DML makes either read MISS rows that exist, so a sum read through it UNDER-reports and this routine would otherwise refuse a schedule that is correct, or accept one that is not. No obligation of this slice is judged while an index of either relation is unenforcing. REINDEX the named indexes and retry; this is the state an interrupted CREATE INDEX CONCURRENTLY or REINDEX CONCURRENTLY leaves, and pg_indexes renders it identically to a correct index',
+        v_business, v_plan, v_down + v_sched, v_total, v_rows, v_max_seq, v_unenforcing USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+
   -- (a) THE EXACT SUM LAW, IN BOTH DIRECTIONS AT ONCE — `R-SAL-06`.
   --     `<>` and not `>`: a schedule summing BELOW the total is refused and a
   --     schedule summing ABOVE it is refused, by the same comparison, so
   --     neither direction can be lost by someone relaxing one inequality. A
   --     `<=` variant would accept the 265-day counterexample of section 3(d).
+  --
+  --     AND WHEN THIS FIRES WITH NO SCHEDULE AT ALL ON A PLAN'S OWN `INSERT`
+  --     EVENT, THE MESSAGE SAYS WHAT THE TWO CAUSES ARE AND WHAT TO DO ABOUT
+  --     EACH (`TL-P4-COORD-R59` ordered item 3, F14-5). The NAME is right and
+  --     stays -- the schedule really does not sum to the total at the instant
+  --     this reads, which is why `R-94`'s fail-closed stance applies and why
+  --     this is not round 13's false diagnosis. What was missing is that the
+  --     commonest way to reach it is NOT a short schedule: it is
+  --     `SET CONSTRAINTS ALL IMMEDIATE`, unprivileged SQL either app role may
+  --     issue, which removes this trigger's deferral and fires it at the end of
+  --     the PLAN INSERT STATEMENT -- before any `installments` row can exist,
+  --     because `installments.plan_id` references the plan and the plan must be
+  --     there first. Five of five lawful plan writes were refused that way, and
+  --     the message sent their reader to look at a schedule that was never
+  --     wrong. Section 3a-quater states why no reordering can eliminate this
+  --     the way the fact hazard was eliminated, and the remedy below is the one
+  --     that DOES reach it and is MEASURED.
   IF v_down + v_sched <> v_total THEN
+    IF v_rows = 0 AND TG_TABLE_NAME = 'installment_plans' AND TG_OP = 'INSERT' THEN
+      RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to % and the invoice total is %, and this plan carries NO instalment row at all while its own INSERT is the event being judged. TWO STATES REACH THIS AND THE REMEDY DIFFERS. (1) THE DEFERRAL WAS REMOVED: this verifier is created DEFERRABLE INITIALLY DEFERRED and SET CONSTRAINTS ALL IMMEDIATE -- unprivileged SQL either app role may issue -- makes it fire at the end of the plan INSERT statement instead of at COMMIT, which is BEFORE any installments row can exist, because installments.plan_id references the plan and the plan must be written first. NOTHING IS WRONG WITH THE SCHEDULE IN THAT CASE and no data is bad: either stop issuing SET CONSTRAINTS ALL IMMEDIATE before a plan write, or issue it AFTER the write, or write the plan and its whole schedule in ONE statement (a data-modifying CTE), which this verifier accepts under the removed deferral because both relations'' AFTER-ROW events then belong to the same statement. (2) THE PLAN REALLY HAS NO SCHEDULE: write its instalments in this same transaction, summing with down_payment_minor to the invoice total exactly. This refusal cannot tell the two apart -- PostgreSQL exposes no reading of whether SET CONSTRAINTS has been issued -- so it names both instead of asserting one, which is TL-P4-COORD-R46 F-4''s rule',
+        v_down + v_sched, v_total USING ERRCODE = 'P0001';
+    END IF;
     RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to % and the invoice total is %',
       v_down + v_sched, v_total USING ERRCODE = 'P0001';
   END IF;
@@ -1990,6 +2087,53 @@ BEGIN
   -- write», and two refusals for one state is how a caller comes to be told
   -- the wrong cause. `v_locked` is read so that the state is observable and
   -- not merely assumed, and the number is carried into the conflict message.
+  -- ---- AND THERE IS NO `DELETE` ARM, BECAUSE A TRIGGER CANNOT HOLD THE
+  --      ORDER ON `DELETE` AT ALL. THAT IS MEASURED, AND IT IS THIS ROUND'S
+  --      CORRECTION OF ITS OWN FIRST ANSWER
+  --      (`TL-P4-COORD-R59` ordered item 2, F14-2) ------------------------
+  --
+  -- THE DEFECT IS REAL AND IS NOT IN DOUBT. A `DELETE` of an active plan takes
+  -- the `installment_plans` row (`P4-AL-41` rank 6) and reaches the `invoices`
+  -- row (rank 3) only afterwards, from `installment_plan_fact_sync()`. The
+  -- round-14 challenger MEASURED the deadlock that makes out of TWO ORDINARY
+  -- OPERATIONS ON ONE INVOICE: an ordinary invoice write takes the invoice row
+  -- `FOR NO KEY UPDATE`, the deleter takes the plan row and blocks on the
+  -- invoice row (proved from a third backend by `55P03` on the plan row), the
+  -- invoice writer then cancels that plan through the DOCUMENTED route, and the
+  -- cycle closes -- `40P01` to the deleter. Section 3a-ter's stated remedy
+  -- («one invoice per statement, ascending `invoices.id`») cannot reach it:
+  -- there is ONE invoice and ONE statement each.
+  --
+  -- THIS ROUND'S FIRST ANSWER WAS TO ADD A `DELETE` ARM HERE THAT TOOK THE
+  -- INVOICE ROW FIRST, AND IT DOES NOT WORK. IT WAS BUILT, SHIPPED INTO THIS
+  -- BODY, AND THE RACE WAS RE-RUN AGAINST IT: the deleter STILL held the plan
+  -- row while waiting for the invoice row (`55P03` from the third backend,
+  -- unchanged) and STILL got `40P01`. THE REASON IS IN POSTGRESQL AND NOT IN
+  -- THIS FILE: for a `BEFORE ROW DELETE` trigger the executor must produce the
+  -- `OLD` tuple, and `GetTupleForTrigger` LOCKS THAT TUPLE BEFORE THE TRIGGER
+  -- FUNCTION IS CALLED. So rank 6 is already held when the first statement of
+  -- any `BEFORE DELETE` arm runs, and no code placed there can take rank 3
+  -- first. An `AFTER` arm is later still. There is no earlier hook: a statement
+  -- -level `BEFORE` trigger has no row to find the invoice from, and a rule is
+  -- not a lock.
+  --
+  -- SO THE ARM IS GONE AGAIN -- a trigger arm whose stated purpose it provably
+  -- does not serve is worse than no arm, because every law around it then
+  -- asserts a false rationale -- AND THE CASE IS DECLARED IN 3a-ter WITH A
+  -- REMEDY THAT REACHES IT AND IS MEASURED: the deleter takes the invoice row
+  -- ITSELF, in its own transaction, before it deletes the plan. That is one
+  -- extra statement in the caller, it is the rank-3-before-rank-6 order
+  -- `P4-AL-41` asks for, and
+  -- `tests/integration/phase4-s7-installment-concurrency-db.test.ts` §G1
+  -- measures the identical race with it and without it: with it the deleter
+  -- does not deadlock and the `DELETE` commits; without it, `40P01`.
+  --
+  -- AND THE `40P01` NO LONGER RENDERS AS AN UNNAMED 500 (`R59` ordered item 2's
+  -- second half): `apps/api/src/modules/selling/selling-errors.ts` classifies
+  -- `40001` and `40P01` BY SQLSTATE and the global filter renders them 409
+  -- `CONFLICT` with `retryable: true`. That is a RENDERING and not a retry
+  -- loop, and it is deliberately in NEITHER invariant registry, because neither
+  -- is an invariant of this slice.
   v_was_active := (TG_OP = 'UPDATE' AND OLD.status = 'active');
   IF NEW.status = 'active' OR v_was_active THEN
     v_locks := ARRAY[NEW.invoice_id];
@@ -2119,6 +2263,21 @@ CREATE TRIGGER installment_plans_fact_sync
 -- THE EXCLUSION IS BEFORE, AND THAT IS THE WHOLE POINT: it must have answered
 -- before the row is written, which is before the partial unique index is
 -- checked and before any AFTER trigger of this statement is fired.
+--
+-- AND IT DOES NOT FIRE ON `DELETE`, WHICH ROUND 15 TRIED AND MEASURED TO BE
+-- USELESS (`TL-P4-COORD-R59` ordered item 2, F14-2). A `BEFORE DELETE` arm was
+-- built here to take the `invoices` row (rank 3) before the
+-- `installment_plans` row (rank 6), and it CANNOT: for a `BEFORE ROW DELETE`
+-- trigger the executor produces the `OLD` tuple through `GetTupleForTrigger`,
+-- WHICH LOCKS THAT TUPLE BEFORE THE TRIGGER FUNCTION IS CALLED, so rank 6 is
+-- already held when the arm's first statement runs. The identical race was
+-- re-run with the arm installed and the deleter STILL held the plan row while
+-- awaiting the invoice row (`55P03` from a third backend) and STILL got
+-- `40P01`. The arm is therefore not here, the measured case is DECLARED in
+-- section 3a-ter with a caller remedy that DOES reach it (take the invoice row
+-- yourself, before the DELETE -- measured both ways in §G1 of
+-- `tests/integration/phase4-s7-installment-concurrency-db.test.ts`), and the
+-- `40P01` is rendered `409` with `retryable: true` instead of an unnamed 500.
 CREATE TRIGGER installment_plans_active_exclusive
   BEFORE INSERT OR UPDATE ON installment_plans
   FOR EACH ROW EXECUTE FUNCTION installment_plan_active_exclusive();
@@ -2162,7 +2321,7 @@ COMMENT ON FUNCTION installment_plan_fact_verify() IS
   'P4-S7 (TL-P4-COORD-R38 direction (d)). The COMMIT-time refusal that makes invoices.has_active_installment_plan true rather than merely maintained. A DEFERRABLE INITIALLY DEFERRED constraint trigger on BOTH sides of the fact: on installment_plans for INSERT, UPDATE and DELETE, and on invoices for INSERT and for UPDATE OF that column — the INSERT arm because 0078:264''s GRANT INSERT ON invoices is table-level and therefore covers a column added later, so an invoice could be born carrying the fact with no plan behind it. It re-derives EXISTS(active plan) and refuses installment.plan_fact_desynchronised on any disagreement, and refuses rather than returning when no invoice carries the fact at all, because returning there is the vacuous pass 0075:439-441 names. Blinded, its EXISTS reads false and every state it then reports is a refusal EXCEPT a flag of false beside a hidden active plan; that one direction is quiet here and is NOT claimed unreachable (TL-P4-COORD-R43 F1-c found round 9 claiming exactly that, falsely). What is true is narrower: after F1-c''s repair a false flag can only be WRITTEN by a transition that DETERMINES false from the handed row, with no read in the value, so the writer cannot produce the state from a blinded read — while TRUNCATE and a disabled trigger still can, and in those states the READ refuses as plan_fact_unflagged. THE ORDERING IS MADE NOT TO MATTER, BY NAME, AND THE NAME ORDER IS READ (TL-P4-COORD-R55 ordered item 1, F13-1): SET CONSTRAINTS ALL IMMEDIATE is unprivileged SQL permitted to daftar_app and daftar_migrator and it removes this trigger''s deferral, after which PostgreSQL fires the immediate AFTER ROW triggers of one relation in TRIGGER-NAME ORDER (strcmp over pg_trigger.tgname). The plan-side trigger on this routine is therefore named installment_plans_fact_verified, which sorts AFTER installment_plans_fact_sync, so the writer fires first in the immediate case too and this routine always reads a state it can judge. Round 13 instead counted invocations in transaction-local CUSTOM GUCs, which any role may SET: one SET LOCAL made a LAWFUL write refuse as installment.plan_fact_unordered rendered 500 INTERNAL_ERROR, another defeated the detector for one statement, and a session-level SET disabled it for the life of a pooled connection. The counter is gone. What remains is a READING of pg_trigger per plan event: the enabled trigger executing installment_plan_fact_sync on this relation must sort strictly before TG_NAME, and installment.plan_fact_unordered is raised when the catalogue says it does not — true of exactly what was read, unforgeable by any session, and still failing closed. A sync that is dropped or disabled has no row to compare and is NOT this refusal; it is section 2c''s declared escape, refused at read time as plan_fact_untrusted. Section 3a-ter states what is still open: installment_plans_schedule_complete fires into a transaction whose installments rows do not exist yet and fails closed under installment.schedule_incomplete, which is true of the instant it reads. ITS COUNT IS ALSO TAKEN BY A PATH THE PARTIAL UNIQUE INDEX CANNOT SERVE, AND TWICE (TL-P4-COORD-R52 ordered item 1, F-2), raising installment.plan_index_disagrees on a disagreement between the two readings. It only READS and RAISES: it writes nothing. SECURITY DEFINER owned by daftar_accounting_internal so that its reading cannot be blinded by an absent session context — the asymmetry that makes this construction sound where round 6''s DEFINER count was not: this routine is never asked what a CALLER can see, and the reader is never asked either, because the fact is on the row. Pinned search_path. No EXECUTE grantee but its owner.';
 
 COMMENT ON FUNCTION installment_plan_active_exclusive() IS
-  'P4-S7 (TL-P4-COORD-R46, F-4). The one-active exclusion, refused AT THE STATEMENT and under ONE NAME. A BEFORE INSERT OR UPDATE row trigger on installment_plans: a row may not BECOME an invoice''s active plan while another plan is that invoice''s active plan in this statement''s own snapshot, and it raises installment.plan_active_conflict when one is. ITS MESSAGE NAMES BOTH CAUSES AND PRESCRIBES THE REMEDY OF EACH (TL-P4-COORD-R50 ordered item 6, F-5): the previous message said «one statement may not move active from one plan to another: cancel the outgoing plan in one statement and activate the incoming plan in a later one», and measured against a cancel UNCOMMITTED IN ANOTHER TRANSACTION every clause of it was wrong for the caller reading it — no statement had moved anything, the caller WAS the later statement, and the remedy it was handed was the thing it had just done. This routine can see that another plan is active in its own snapshot and cannot see whose statement made it so, so the message states the observable fact and lets the caller pick the remedy that belongs to its own case. It exists because the sync''s AFTER-time cross-check declared this over-strictness and the declaration was ROW-ORDER DEPENDENT and misnamed: AFTER ROW triggers fire after every row of the statement is written while the partial unique index is checked per row, so the active-row-first heap order was refused P0001 installment.plan_fact_blind (a FALSE diagnosis: no policy altered and the index present) and the cancelled-row-first order was refused 23505 on installment_plans_one_active_per_invoice_uq. Judging it BEFORE the write makes both orders, and the two-statement activate-then-cancel order, one name; cancel-then-activate in two statements still COMMITS, because the outgoing row''s cancelled status is then a visible change of an earlier command, and that is the documented route. IT ALSO TAKES THE INVOICE ROW FOR NO KEY UPDATE FIRST — ascending by id ACROSS THE ROWS OF ONE INVOCATION, which is the whole of what a BEFORE ROW trigger can order, a statement touching plans on several invoices taking those invoice rows in ROW order (measured, 55P03 in both heap orders) and section 3a-ter declaring that shape as a P4-AL-41 rank 3 obligation this slice does not discharge (TL-P4-COORD-R52 ordered item 5) — WHICH IS THE DECLARED LOCK ORDER (section 3a-ter; TL-P4-COORD-R50 ordered item 5; P4-AL-41 ranks invoices third and installment_plans sixth, and this slice was taking rank 6 before rank 3 on every plan write). That moves the serialization point of a plan write from the index entry to the invoice row, so at READ COMMITTED two concurrent writers on one invoice meet each other HERE and the loser — whose next statement takes a fresh snapshot once the lock is granted — is refused installment.plan_active_conflict rather than a raw 23505 from the index, which is the cross-transaction race answered by the same name as the single-statement one and answered WITHOUT the index entering the argument. THE DETERMINISM CLAIM IS SCOPED ACCORDINGLY AND NOT THIRD-TIME OVER-CLAIMED: one name for a single statement in any row order and for two transactions at READ COMMITTED; 40001 at REPEATABLE READ and SERIALIZABLE, where the snapshot rules refuse the lock before this recheck runs and a retryable serialization failure is the correct answer; and 40P01 for two invoices locked in opposite order, which is a caller obligation P4-AL-41 rank 3 states and no per-row trigger can discharge. A blinded definer locks zero invoice rows and this routine does NOT raise on that, because installment_plan_fact_sync''s plan_fact_unwritable already owns it and two refusals for one state is how a caller is told the wrong cause. IT IS NOT THE MECHANISM AND DOES NOT REPLACE ONE: its read of installment_plans is blindable by FORCE ROW LEVEL SECURITY and blinded it reads nothing and PASSES, behind which stand the partial unique index, which is physical, and the sync''s cross-check. Its contribution is that the writer who meets the limit is told what the limit is. SECURITY DEFINER owned by daftar_accounting_internal, pinned search_path, no EXECUTE grantee but its owner.';
+  'P4-S7 (TL-P4-COORD-R46, F-4). The one-active exclusion, refused AT THE STATEMENT and under ONE NAME. A BEFORE INSERT OR UPDATE row trigger on installment_plans: a row may not BECOME an invoice''s active plan while another plan is that invoice''s active plan in this statement''s own snapshot, and it raises installment.plan_active_conflict when one is. ITS MESSAGE NAMES BOTH CAUSES AND PRESCRIBES THE REMEDY OF EACH (TL-P4-COORD-R50 ordered item 6, F-5): the previous message said «one statement may not move active from one plan to another: cancel the outgoing plan in one statement and activate the incoming plan in a later one», and measured against a cancel UNCOMMITTED IN ANOTHER TRANSACTION every clause of it was wrong for the caller reading it — no statement had moved anything, the caller WAS the later statement, and the remedy it was handed was the thing it had just done. This routine can see that another plan is active in its own snapshot and cannot see whose statement made it so, so the message states the observable fact and lets the caller pick the remedy that belongs to its own case. It exists because the sync''s AFTER-time cross-check declared this over-strictness and the declaration was ROW-ORDER DEPENDENT and misnamed: AFTER ROW triggers fire after every row of the statement is written while the partial unique index is checked per row, so the active-row-first heap order was refused P0001 installment.plan_fact_blind (a FALSE diagnosis: no policy altered and the index present) and the cancelled-row-first order was refused 23505 on installment_plans_one_active_per_invoice_uq. Judging it BEFORE the write makes both orders, and the two-statement activate-then-cancel order, one name; cancel-then-activate in two statements still COMMITS, because the outgoing row''s cancelled status is then a visible change of an earlier command, and that is the documented route. IT ALSO TAKES THE INVOICE ROW FOR NO KEY UPDATE FIRST — ascending by id ACROSS THE ROWS OF ONE INVOCATION, which is the whole of what a BEFORE ROW trigger can order, a statement touching plans on several invoices taking those invoice rows in ROW order (measured, 55P03 in both heap orders) and section 3a-ter declaring that shape as a P4-AL-41 rank 3 obligation this slice does not discharge (TL-P4-COORD-R52 ordered item 5) — WHICH IS THE DECLARED LOCK ORDER (section 3a-ter; TL-P4-COORD-R50 ordered item 5; P4-AL-41 ranks invoices third and installment_plans sixth, and this slice was taking rank 6 before rank 3 on every plan write). IT HAS NO DELETE ARM, AND THAT IS A MEASUREMENT OF ROUND 15 RATHER THAN AN OMISSION (TL-P4-COORD-R59 ordered item 2, F14-2). A DELETE of an active plan takes rank 6 and reaches rank 3 only afterwards from the sync, which section 3a-ter declared and which the round-14 challenger measured: an ordinary invoice write holding the invoice row, a deleter holding the plan row and blocking on the invoice row (proved by 55P03 from a third backend), and the invoice writer then cancelling that plan through the documented route — 40P01 to the deleter, on ONE invoice, from two ORDINARY operations, one statement each, for which 3a-ter''s stated remedy of one invoice per statement in ascending id order could not apply. A BEFORE DELETE arm taking the invoice row first was BUILT and the race was re-run against it: the deleter still held the plan row while awaiting the invoice row and still got 40P01, because for a BEFORE ROW DELETE trigger the executor produces OLD through GetTupleForTrigger, which LOCKS that tuple before the trigger function is called. No code in a BEFORE DELETE arm can take rank 3 first, so the arm was removed rather than left asserting a rationale it does not serve, part 12 of the end-state block refuses the DELETE bit, and section 3a-ter states the remedy that DOES reach the case: the DELETER takes the invoice row FOR NO KEY UPDATE itself, in its own transaction, before the DELETE — measured both ways in the concurrency suite''s section G1. The 40P01 is separately rendered 409 CONFLICT with retryable: true instead of an unnamed 500, by SQLSTATE and in neither invariant registry. What is still a CALLER obligation and is declared rather than certified absent: deleting a plan''s SCHEDULE first takes installments rows before anything else, and installments carries no BEFORE trigger to order that. That moves the serialization point of a plan write from the index entry to the invoice row, so at READ COMMITTED two concurrent writers on one invoice meet each other HERE and the loser — whose next statement takes a fresh snapshot once the lock is granted — is refused installment.plan_active_conflict rather than a raw 23505 from the index, which is the cross-transaction race answered by the same name as the single-statement one and answered WITHOUT the index entering the argument. THE DETERMINISM CLAIM IS SCOPED ACCORDINGLY AND NOT THIRD-TIME OVER-CLAIMED: one name for a single statement in any row order and for two transactions at READ COMMITTED; 40001 at REPEATABLE READ and SERIALIZABLE, where the snapshot rules refuse the lock before this recheck runs and a retryable serialization failure is the correct answer; and 40P01 for two invoices locked in opposite order, which is a caller obligation P4-AL-41 rank 3 states and no per-row trigger can discharge. A blinded definer locks zero invoice rows and this routine does NOT raise on that, because installment_plan_fact_sync''s plan_fact_unwritable already owns it and two refusals for one state is how a caller is told the wrong cause. IT IS NOT THE MECHANISM AND DOES NOT REPLACE ONE: its read of installment_plans is blindable by FORCE ROW LEVEL SECURITY and blinded it reads nothing and PASSES, behind which stand the partial unique index, which is physical, and the sync''s cross-check. Its contribution is that the writer who meets the limit is told what the limit is. SECURITY DEFINER owned by daftar_accounting_internal, pinned search_path, no EXECUTE grantee but its owner.';
 ALTER FUNCTION installment_plan_fact_sync() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION installment_plan_fact_verify() OWNER TO daftar_accounting_internal;
 ALTER FUNCTION installment_plan_active_exclusive() OWNER TO daftar_accounting_internal;
@@ -2253,15 +2412,94 @@ ALTER FUNCTION installment_plan_active_exclusive() OWNER TO daftar_accounting_in
 --      lock, two concurrent writers each counted 1 on the snapshot their
 --      statement started with and both committed. See the sync's own comment.)
 --
--- TWO TRANSITIONS DO NOT TAKE STEP 1 AND ARE NOT CLAIMED TO. A BEFORE ROW
--- trigger fires on INSERT and UPDATE and not on DELETE, so a DELETE of an
--- active plan reaches the invoice row only from the sync, at step 4, after
--- the plan row -- rank 6 before rank 3, the old inversion, on that one
--- transition. Closing it would mean an EIGHTH trigger (`BEFORE DELETE`), and
--- an eighth trigger is a change this round did not measure; the inversion is
--- DECLARED here instead of being left to be re-measured by a twelfth
--- challenger. The other is an `UPDATE` that leaves a non-active plan
--- non-active, whose write set is EMPTY and which therefore takes neither.
+-- THE `DELETE` INVERSION IS REAL, IS MEASURED, AND NO TRIGGER OF THIS SLICE
+-- CAN CLOSE IT -- WHICH ROUND 15 ESTABLISHED BY BUILDING THE TRIGGER THAT WAS
+-- SUPPOSED TO (`TL-P4-COORD-R59` ordered item 2, F14-2; `R55` §4 made general
+-- by `R59` §4).
+--
+-- A `BEFORE ROW` trigger fires on INSERT and UPDATE and not on DELETE, so a
+-- DELETE of an active plan reaches the invoice row only from the sync, at step
+-- 4, AFTER the plan row -- rank 6 before rank 3, on that one transition. Round
+-- 14 DECLARED it and said an EIGHTH trigger would be needed to close it. The
+-- round-14 challenger then MEASURED what the inversion costs:
+--
+--     B  SELECT 1 FROM invoices WHERE id = $1 FOR NO KEY UPDATE      -- rank 3
+--     A  DELETE FROM installments WHERE plan_id = $1
+--     A  DELETE FROM installment_plans WHERE id = $1   -> BLOCKED, asserted
+--        (and a third backend's FOR NO KEY UPDATE NOWAIT on the plan row was
+--         refused 55P03, which PROVES A held rank 6 while awaiting rank 3)
+--     B  UPDATE installment_plans SET status = 'cancelled' WHERE id = $1
+--     A  -> 40P01 deadlock detected          B -> null, commits
+--
+-- TWO ORDINARY OPERATIONS, ONE INVOICE, ONE STATEMENT EACH -- so the remedy
+-- this section states below («ONE INVOICE PER STATEMENT, in ascending
+-- `invoices.id` order») does not reach it, and B's half is the DOCUMENTED
+-- cancel route. `40P01` is in no registry of this slice.
+--
+-- ── WHAT ROUND 15 TRIED, AND WHAT THE ATTEMPT MEASURED ───────────────────
+--
+-- No eighth trigger is needed to fire on DELETE: `installment_plans_active_
+-- exclusive` can simply be created `BEFORE INSERT OR UPDATE OR DELETE`, with a
+-- DELETE arm that takes the invoice row `FOR NO KEY UPDATE` and returns `OLD`
+-- without judging anything. THAT WAS BUILT, SHIPPED INTO THE BODY, AND THE
+-- RACE ABOVE WAS RE-RUN AGAINST IT. IT DOES NOT WORK:
+--
+--   * the third backend's `FOR NO KEY UPDATE NOWAIT` on the plan row was
+--     refused `55P03` exactly as before -- the deleter held rank 6 while
+--     waiting for rank 3 -- and
+--   * the deleter was still refused `40P01`.
+--
+-- THE REASON IS IN POSTGRESQL AND NOT IN THIS FILE. To fire a `BEFORE ROW
+-- DELETE` trigger the executor must produce the `OLD` tuple, and it does so
+-- through `GetTupleForTrigger`, WHICH LOCKS THAT TUPLE BEFORE THE TRIGGER
+-- FUNCTION IS CALLED. Rank 6 is therefore already held when the first
+-- statement of ANY `BEFORE DELETE` arm runs, and no code placed there can take
+-- rank 3 first. An `AFTER` arm is later still; a statement-level `BEFORE`
+-- trigger has no row from which to find the invoice; a rule is not a lock. So
+-- `P4-AL-41`'s instruction -- «a deadlock is a lock-order defect, fixed by
+-- changing the order» -- is here an instruction TO THE CALLER, because the
+-- order on the DELETE path is not this file's to change.
+--
+-- THE ARM WAS THEREFORE REMOVED AGAIN. A trigger arm whose stated purpose it
+-- provably does not serve is worse than no arm: part 12 would read its
+-- `tgtype` bit, the body comment and the function COMMENT would state a
+-- rationale that is false, and the next round would inherit a closed-looking
+-- hazard that is open. The attempt is recorded here instead, because the next
+-- author's first idea will be the same one.
+--
+-- ── THE REMEDY THAT DOES REACH IT, AND IS MEASURED ───────────────────────
+--
+-- THE DELETER TAKES THE INVOICE ROW ITSELF, IN ITS OWN TRANSACTION, BEFORE IT
+-- DELETES THE PLAN:
+--
+--     SELECT 1 FROM invoices WHERE business_id = $1 AND id = $2
+--       FOR NO KEY UPDATE;                                          -- rank 3
+--     DELETE FROM installments WHERE plan_id = $3;
+--     DELETE FROM installment_plans WHERE id = $3;                  -- rank 6
+--
+-- One extra statement, no new privilege, and it is the rank-3-before-rank-6
+-- order `P4-AL-41` asks for. §G1 of
+-- `tests/integration/phase4-s7-installment-concurrency-db.test.ts` measures the
+-- SAME race both ways: WITHOUT that first statement the deleter is refused
+-- `40P01`, WITH it the deleter waits for the invoice row at its own FIRST
+-- statement -- holding nothing -- and then completes. This remedy is ABOUT THE
+-- DELETE PATH and is additional to the «one invoice per statement, ascending
+-- `invoices.id`» remedy below, which is about several invoices.
+--
+-- AND THE `40P01` NO LONGER RENDERS AS AN UNNAMED `500` (`R59` ordered item 2's
+-- second half), which is the part of this that does not depend on the caller
+-- doing anything: see the rendering paragraph after the determinism table.
+--
+-- ONE MORE TRANSITION TAKES NEITHER LOCK AND IS NOT CLAIMED TO: an `UPDATE`
+-- that leaves a non-active plan non-active, whose write set is EMPTY.
+--
+-- AND ONE FURTHER CALLER OBLIGATION ON THE DELETE PATH, DECLARED AND NOT
+-- CERTIFIED ABSENT. A transaction that deletes a plan's SCHEDULE first takes
+-- `installments` rows BEFORE it takes anything else, and `installments` carries
+-- no BEFORE trigger to order anything. A counterparty that holds the invoice
+-- row and then writes that plan's `installments` can close a cycle:
+-- TAKE THE INVOICE ROW (or the plan row) BEFORE THE SCHEDULE. DESIGN ONLY and
+-- UNMEASURED.
 --
 -- ── WHAT THE ORDER BUYS BESIDES AGREEING WITH `P4-AL-41` ─────────────────
 --
@@ -2298,6 +2536,10 @@ ALTER FUNCTION installment_plan_active_exclusive() OWNER TO daftar_accounting_in
 --   | two transactions, `REPEATABLE READ`         | `40001`                      |
 --   | two transactions, `SERIALIZABLE`            | `40001`                      |
 --   | two invoices, opposite order                | `40P01`                      |
+--   | ONE invoice: a plan DELETE against an       | `40P01` (MEASURED) unless    |
+--   | ordinary invoice write that then cancels    | the deleter takes the        |
+--   | that plan through the documented route      | invoice row FIRST, which no  |
+--   |                                             | trigger can do for it        |
 --
 -- THE CLAIM IS THEREFORE SCOPED TO A SINGLE STATEMENT AND TO
 -- `READ COMMITTED`, and the rest is named rather than implied. At
@@ -2312,6 +2554,26 @@ ALTER FUNCTION installment_plan_active_exclusive() OWNER TO daftar_accounting_in
 -- ASCENDING `invoices.id` ORDER. That is the declaration; `gate:phase4:s8`
 -- owns the N-run proof of it (`P4-AL-41`), and this slice ships no plan
 -- command for it to govern yet.
+--
+-- THE FOURTH ROW OF THAT TABLE IS THE ONE ROUND 15 ADDED, AND ITS REMEDY IS
+-- STATED ABOVE RATHER THAN LEFT TO BE RE-MEASURED: the deleter takes the
+-- invoice row itself before the DELETE. It is a CALLER obligation not because
+-- that is convenient but because `GetTupleForTrigger` locks the `OLD` tuple
+-- before any `BEFORE DELETE` arm can run, which round 15 measured by building
+-- the arm and watching it fail. A remedy a caller can carry out is the most a
+-- declared hazard may have; this one has it, and the attempt that could not
+-- supply it is recorded above rather than quietly dropped.
+--
+-- AND `40P01` NO LONGER RENDERS AS AN UNNAMED `500` EITHER, for the shapes
+-- that remain (`TL-P4-COORD-R59` ordered item 2). Both `40001` and `40P01`
+-- used to reach `GlobalExceptionFilter`'s last `unhandled error` branch --
+-- `500 INTERNAL_ERROR`, no code, no retry contract, and the whole `pg` error
+-- object in the log. They are classified now, in
+-- `apps/api/src/modules/selling/selling-errors.ts`, as `409 CONFLICT` with
+-- `details.contention` and `retryable: true`, with the SQLSTATE in the LOG and
+-- not in the body. They are STILL NOT in either invariant registry, for the
+-- reason the last paragraph of this section gives: a registry entry would
+-- contract that contention is a defect of this slice.
 --
 -- ── `SET CONSTRAINTS ALL IMMEDIATE`: AN UNPRIVILEGED STATEMENT WHOSE FACT
 --    HAZARD IS NOW REMOVED BY A NAME, AND WHOSE REMAINING EFFECT IS
@@ -2397,6 +2659,84 @@ ALTER FUNCTION installment_plan_active_exclusive() OWNER TO daftar_accounting_in
 -- standard contract for those SQLSTATEs and is `[[daftar-lock-order-not-retry]]`'s
 -- one permitted retry — a retry of a SERIALIZATION failure is not a retry of
 -- a deadlock.
+
+-- ── 3a-quater. WHY THE SCHEDULE HAZARD IS DECLARED AND NOT ELIMINATED,
+--              AND THE REMEDY THAT DOES REACH IT
+--              (`TL-P4-COORD-R59` ordered item 3; `R55` §4 made general by
+--               `R59` §4; F14-5) ─────────────────────────────────────────
+--
+-- `R55` §4 prefers REMOVING a hazard to DETECTING one, and `R59` §4 makes the
+-- preference general. Round 14 applied it to the FACT triggers -- by a NAME --
+-- and left the SCHEDULE triggers declaring the hazard instead. This section is
+-- the required statement of why the same remedy cannot apply there, and it is
+-- an argument with a measurement in it rather than an assertion.
+--
+-- ── WHY THE FACT REMEDY WORKED, PRECISELY ────────────────────────────────
+--
+-- `installment_plan_fact_sync()` and `installment_plan_fact_verify()` fire on
+-- THE SAME EVENT OF THE SAME STATEMENT. `SET CONSTRAINTS ALL IMMEDIATE` puts
+-- them both in that statement's AFTER-ROW queue, and PostgreSQL orders that
+-- queue BY TRIGGER NAME -- so a NAME is enough to put the writer first, and the
+-- verifier then reads a state that exists. The repair is a total function of
+-- information available INSIDE one statement.
+--
+-- ── WHY NO NAME CAN DO THE SAME HERE ─────────────────────────────────────
+--
+-- The schedule obligation's premise is not «the writer ran»; it is «the
+-- transaction is over». Its left-hand side is a SUM OVER `installments` ROWS
+-- WRITTEN BY A LATER STATEMENT, and they MUST be later: `installments_plan_fk`
+-- references `installment_plans`, so the plan row exists before any instalment
+-- of it can. At the end of the plan INSERT statement that sum is 0 for reasons
+-- of REFERENTIAL ORDER and not of TRIGGER ORDER. Renaming any of the seven
+-- triggers, adding an eighth, or reordering the queue in any way
+-- cannot make rows exist that no statement has written. That is the difference between the
+-- two cases, stated as the thing it is.
+--
+-- ── AND NO OTHER POSTGRESQL MECHANISM IS OUT OF `SET CONSTRAINTS`' REACH ──
+--
+-- The hooks PostgreSQL offers at the end of a transaction are: DEFERRABLE
+-- constraint triggers (this slice's three), and DEFERRABLE `UNIQUE`, `PRIMARY
+-- KEY`, `EXCLUDE` and `FOREIGN KEY` constraints. `SET CONSTRAINTS ALL
+-- IMMEDIATE` is defined over ALL of them -- that is the statement's whole
+-- meaning -- so there is no «deferred until COMMIT and unreachable by
+-- `SET CONSTRAINTS`» mechanism to move the obligation into. `ON COMMIT` exists
+-- only for TEMPORARY tables and cannot judge a permanent relation. A
+-- NOT DEFERRABLE constraint trigger is not an escape in the other direction
+-- either: it would fire at every statement, which is the same refusal made
+-- unconditional. The remaining alternative -- not enforcing the sum at all and
+-- leaving it to the reader -- is the state `TL-P4-COORD-R43` F1-d rejected,
+-- because a receivable whose schedule does not sum can then never be aged.
+--
+-- SO ELIMINATION IS SHOWN IMPOSSIBLE FOR THIS OBLIGATION, which is the
+-- condition `R59` §4 sets for a hazard being allowed to remain DECLARED. It
+-- fails CLOSED, under a name TRUE of the instant it reads, which is the stance
+-- frozen `0069`/`0071` take under `R-94`.
+--
+-- ── WHAT WAS WRONG ANYWAY, AND IS FIXED: THE REMEDY ──────────────────────
+--
+-- Being unavoidable did not make it acceptable as it stood. The refusal named
+-- a schedule that was never wrong and offered its reader nothing, and the
+-- hazard was «mitigated» only by no plan command having shipped -- a schedule,
+-- not a defence. Two things change:
+--
+--   1. obligation (a) now names BOTH causes when it fires on a plan's own
+--      `INSERT` with ZERO instalment rows -- the forced-early one and the
+--      genuinely-empty one -- and gives the remedy belonging to each, because
+--      PostgreSQL exposes no reading of whether `SET CONSTRAINTS` has been
+--      issued and a refusal may not assert a cause it cannot observe
+--      (`TL-P4-COORD-R46` F-4's rule, applied to this message);
+--   2. THERE IS A REMEDY THAT REACHES THE CASE, AND IT IS MEASURED: write the
+--      plan and its WHOLE SCHEDULE IN ONE STATEMENT -- a data-modifying CTE,
+--      `WITH p AS (INSERT INTO installment_plans ... RETURNING id) INSERT INTO
+--      installments SELECT ... FROM p` -- and the removed deferral becomes
+--      harmless, because both relations' AFTER-ROW events then belong to the
+--      SAME statement and the sum this verifier takes at the end of it is
+--      complete. The two-statement write is refused and the one-statement write
+--      COMMITS, under `SET CONSTRAINTS ALL IMMEDIATE`, in the same transaction
+--      and the same fixture --
+--      `tests/integration/phase4-s7-installment-concurrency-db.test.ts` carries
+--      both halves. A declaration whose reader can do nothing is worse than no
+--      declaration; this one ends with a statement they can write.
 
 REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 
@@ -3736,8 +4076,8 @@ DECLARE
   c_bodies    CONSTANT TEXT[][] := ARRAY[
     ['public.installment_plan_fact_sync()',                       '613fd36bae4ab68830f0d8167fedf1eafe17729839579d13a7edcbefec72acf1'],
     ['public.installment_plan_fact_verify()',                     'd83b0657a3b9896eccfb66313ad5ca2bf9080158739bf5a9d1e6cb553e423f7c'],
-    ['public.installment_plan_active_exclusive()',                '5907d8e69f7fe8c0ba0c785580b110a490760cc00cff4a707faa9da0cfeb4f27'],
-    ['public.installment_schedule_verify()',                      '47f3edc3f9f24413f736afa562eb59fa33ed21a72da9a1d21ee71c7ceac98c32'],
+    ['public.installment_plan_active_exclusive()',                '972604870115f80909906ebf4a184d2de56f3c3568c91d0a7b66d288778515c2'],
+    ['public.installment_schedule_verify()',                      '3c380419082f58d7f48a85f3c9abfb0f9bacc137595ed1b2ba7c7de703306473'],
     ['public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)', '61d797de3fcb5f8e7fdb687414e09a2d734de630bdd954c48995661708b122f6'],
     ['public.customer_ar_aging(uuid,uuid,date,integer[])',        '67a3dc0b0bff28b65d4472bdda8c8856e7bc90009d4c9cb1d589c56c1df1eefc']];
   -- The six routine NAMES of the list above, for part 6c's overload law. A
@@ -4340,20 +4680,40 @@ BEGIN
   --     a missing verifier is already refused by 9b's cardinality; equal
   --     names are impossible on one relation; so the comparison is `<` and a
   --     NULL on either side reaches the raise.
+  --
+  --     AND IT READS THE PREMISE THE RUNTIME VERIFIER READS, NOT A WEAKER ONE
+  --     (`TL-P4-COORD-R59` ordered item 10). The runtime read inside
+  --     `installment_plan_fact_verify()` qualifies the writer row with
+  --     `t.tgenabled = 'O'`; this one did not, so ONE PREMISE WAS READ TWO
+  --     WAYS and the apply-time reading was the weaker of the two -- a
+  --     DISABLED writer satisfied 9e and did not satisfy the runtime read.
+  --     That it was harmless rested on part 9b, a DIFFERENT law, requiring all
+  --     seven to be `'O'`; a law whose soundness rests on another law's
+  --     coincidence is the unnamed-premise shape this slice keeps paying for.
+  --     Both qualifications are now `tgenabled = 'O'` and the two readings are
+  --     ONE reading. The remaining asymmetry is deliberate and is the opposite
+  --     of slack: a NULL here RAISES (the migration may not finish without
+  --     both triggers enabled), while a NULL writer at RUNTIME is section 2c's
+  --     DECLARED escape, answered by `installment.plan_fact_untrusted` at read
+  --     time and not by `plan_fact_unordered`. Apply time ratchets the state
+  --     this file installs; runtime must be true of every state that reaches
+  --     it.
   SELECT (SELECT pg_catalog.min(t.tgname) FROM pg_trigger t
             JOIN pg_proc f ON f.oid = t.tgfoid
             JOIN pg_namespace fn ON fn.oid = f.pronamespace
            WHERE t.tgrelid = 'public.installment_plans'::regclass AND NOT t.tgisinternal
-             AND fn.nspname = 'public' AND f.proname = 'installment_plan_fact_sync'),
+             AND fn.nspname = 'public' AND f.proname = 'installment_plan_fact_sync'
+             AND t.tgenabled = 'O'),
          (SELECT pg_catalog.min(t.tgname) FROM pg_trigger t
             JOIN pg_proc f ON f.oid = t.tgfoid
             JOIN pg_namespace fn ON fn.oid = f.pronamespace
            WHERE t.tgrelid = 'public.installment_plans'::regclass AND NOT t.tgisinternal
-             AND fn.nspname = 'public' AND f.proname = 'installment_plan_fact_verify')
+             AND fn.nspname = 'public' AND f.proname = 'installment_plan_fact_verify'
+             AND t.tgenabled = 'O')
     INTO v_writer_tg, v_verify_tg;
   IF v_writer_tg IS NULL OR v_verify_tg IS NULL OR NOT (v_writer_tg < v_verify_tg) THEN
-    RAISE EXCEPTION 'installment.migration_end_state_invalid: the trigger executing installment_plan_fact_sync on installment_plans is named % and the plan-side trigger executing installment_plan_fact_verify is named %, and the writer does not sort strictly before the verifier. PostgreSQL fires the immediate AFTER ROW triggers of one relation for one event in TRIGGER-NAME ORDER, and SET CONSTRAINTS ALL IMMEDIATE -- unprivileged SQL any session may issue -- makes that name order the firing order for the deferred verifier. In this name order the VERIFIER would run BEFORE THE WRITER and judge a fact nobody had written yet, which is how a LAWFUL plan write came to be refused installment.plan_fact_desynchronised and rendered 500 INTERNAL_ERROR',
-      coalesce(v_writer_tg, '(absent)'), coalesce(v_verify_tg, '(absent)') USING ERRCODE = 'P0001';
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: the ENABLED (tgenabled = O) trigger executing installment_plan_fact_sync on installment_plans is named % and the enabled plan-side trigger executing installment_plan_fact_verify is named %, and the writer does not sort strictly before the verifier. (absent or not enabled) means pg_trigger carries no ENABLED non-internal trigger of that relation on that routine, which is the same qualification installment_plan_fact_verify() applies at runtime. PostgreSQL fires the immediate AFTER ROW triggers of one relation for one event in TRIGGER-NAME ORDER, and SET CONSTRAINTS ALL IMMEDIATE -- unprivileged SQL any session may issue -- makes that name order the firing order for the deferred verifier. In this name order the VERIFIER would run BEFORE THE WRITER and judge a fact nobody had written yet, which is how a LAWFUL plan write came to be refused installment.plan_fact_desynchronised and rendered 500 INTERNAL_ERROR',
+      coalesce(v_writer_tg, '(absent or not enabled)'), coalesce(v_verify_tg, '(absent or not enabled)') USING ERRCODE = 'P0001';
   END IF;
 
   -- 9b. AND EVERY TRIGGER THIS SLICE INSTALLS IS ENABLED
@@ -4538,12 +4898,33 @@ BEGIN
   --     two parameters substituted. With part 6b's digests beside it a body
   --     cannot change without the digest changing, and the digest cannot be
   --     regenerated without that comparison running.
+  --
+  --     (iv) AND THE RESTORE IS NOW EXCEPTION-SAFE IN CODE RATHER THAN BY AN
+  --     ABORT NOBODY STATED (`TL-P4-COORD-R59` ordered item 6, F14-7). The
+  --     restore used to be a plain statement AFTER the reading, so a raise
+  --     out of `EXECUTE c_plan_probe` itself would skip it. That was harmless
+  --     -- any exception out of this block aborts the transaction and the
+  --     setting reverts with it, measured -- but THE CODE DID NOT SAY SO, and
+  --     a correctness that rests on an abort nothing names is the exact
+  --     defect class fourteen rounds of this slice have been spent on. The
+  --     reading is now wrapped and the handler restores and re-raises, so the
+  --     property is a property of these statements. (The subtransaction a
+  --     plpgsql exception block opens ALSO reverts a `set_config(..., true)`
+  --     on rollback, which means the handler's restore is belt as well as
+  --     code -- stated here so that this comment does not become the next
+  --     unnamed premise.)
   v_seqscan := pg_catalog.current_setting('enable_seqscan');
-  SET LOCAL enable_seqscan = off;
-  v_plan := '';
-  FOR v_line IN EXECUTE c_plan_probe LOOP
-    v_plan := v_plan || v_line."QUERY PLAN" || E'\n';
-  END LOOP;
+  BEGIN
+    SET LOCAL enable_seqscan = off;
+    v_plan := '';
+    FOR v_line IN EXECUTE c_plan_probe LOOP
+      v_plan := v_plan || v_line."QUERY PLAN" || E'\n';
+    END LOOP;
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM pg_catalog.set_config('enable_seqscan', v_seqscan, true);
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: part 9c could not read the plan of the index-independent active-plan count at all -- EXPLAIN raised % (%). The reading that decides whether a guard measuring a partial index is itself answered BY a partial index therefore did not happen, and enable_seqscan has been restored to % before this refusal. A law that cannot read its subject is not a law',
+      SQLSTATE, SQLERRM, v_seqscan USING ERRCODE = 'P0001';
+  END;
   PERFORM pg_catalog.set_config('enable_seqscan', v_seqscan, true);
   IF v_plan = '' THEN
     RAISE EXCEPTION 'installment.migration_end_state_invalid: EXPLAIN of the index-independent active-plan count returned no plan at all, so part 9c measured nothing. A law that cannot read its subject is not a law'
@@ -4603,10 +4984,21 @@ BEGIN
   --     and the setting is SAVED AND RESTORED because a `SET LOCAL` in an
   --     anonymous `DO` block is NOT restored on exit -- a `DO` block has no
   --     `proconfig` -- which is exactly the leak part 9c shipped (F13-4).
+  --     AND THIS RESTORE IS EXCEPTION-SAFE IN CODE TOO (`TL-P4-COORD-R59`
+  --     ordered item 6, F14-7), on the same grounds and with the same
+  --     disclosure: a raise out of either `count(*)` used to skip the
+  --     restore, which was harmless only because the exception aborts the
+  --     transaction, and nothing said that.
   v_seqscan := pg_catalog.current_setting('enable_seqscan');
-  PERFORM pg_catalog.set_config('enable_seqscan', 'off', true);
-  SELECT pg_catalog.count(*) FILTER (WHERE p.status = 'active') INTO v_heap FROM public.installment_plans p;
-  SELECT pg_catalog.count(*) INTO v_served FROM public.installment_plans p WHERE p.status = 'active';
+  BEGIN
+    PERFORM pg_catalog.set_config('enable_seqscan', 'off', true);
+    SELECT pg_catalog.count(*) FILTER (WHERE p.status = 'active') INTO v_heap FROM public.installment_plans p;
+    SELECT pg_catalog.count(*) INTO v_served FROM public.installment_plans p WHERE p.status = 'active';
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM pg_catalog.set_config('enable_seqscan', v_seqscan, true);
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: part 9d could not take the two-path active-plan count over installment_plans -- the reading raised % (%). The belt that compares the FILTER spelling against the index-servable spelling therefore did not happen, and enable_seqscan has been restored to % before this refusal',
+      SQLSTATE, SQLERRM, v_seqscan USING ERRCODE = 'P0001';
+  END;
   PERFORM pg_catalog.set_config('enable_seqscan', v_seqscan, true);
   IF v_heap IS DISTINCT FROM v_served THEN
     RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_plans holds % rows with status = ''active'' when counted with the status test in a FILTER above the scan and % when counted with it in the WHERE, where a partial index may serve. Two readings of the same heap in the same transaction disagree, so an index of this relation holds no entry for a row that qualifies for it -- the index does not physically describe its own heap, and every bound installment_plan_fact_sync derives the invoice-borne fact from is therefore not being held. THIS IS NOT A CATALOGUE FLAG AND NO FLAG CAN SHOW IT: a row written while indisready was false leaves indisvalid, indisready and indislive all true and the index missing an entry for a row that qualifies for it, for ever. REINDEX INDEX each index of this relation to rebuild it from the heap -- and if that refuses 23505 then the heap itself violates a unique index and the data must be reconciled first',
@@ -4624,12 +5016,33 @@ BEGIN
   --     (`TL-P4-COORD-R46` §5: read catalogue DATA, or prove by EXECUTION),
   --     and its refusal is re-raised under this slice's own name with the
   --     consequence spelled out.
+  --
+  --     AND EVERY FAILURE IT CAN RAISE IS NAMED, NOT ONLY THE ONE THAT WAS
+  --     ANTICIPATED (`TL-P4-COORD-R59` ordered item 6, F14-6). The handler
+  --     used to be `WHEN unique_violation` alone, so exactly one of
+  --     `REINDEX`'s failures acquired a name of this slice and every other
+  --     surfaced raw out of this block: measured, `REINDEX INDEX
+  --     public.installment_plans_pkey` is `42501 permission denied for index
+  --     installment_plans_pkey` for `daftar_app` and succeeds for the
+  --     relations' owner `daftar_migrator`, and a lock timeout
+  --     (`55P03`/`57014`) or a `55006` is reachable by any concurrent session
+  --     holding a conflicting lock. All of those were fail-closed and NAMED
+  --     NO INVARIANT OF THIS SLICE, which is the same defect the two-path
+  --     count above was written to repair. The handler is now `WHEN OTHERS`,
+  --     it distinguishes the heap-violation case from the could-not-run case
+  --     BY `SQLSTATE` rather than by assuming which arrived, and both carry
+  --     the original `SQLSTATE` and `SQLERRM` so the operator reads what the
+  --     server actually said.
   FOR v_ix IN SELECT ic.relname FROM pg_index x JOIN pg_class ic ON ic.oid = x.indexrelid
                WHERE x.indrelid = ANY (SELECT ('public.' || y)::regclass FROM unnest(c_relations) y)
                ORDER BY ic.relname LOOP
     BEGIN
       EXECUTE 'REINDEX INDEX public.' || pg_catalog.quote_ident(v_ix);
-    EXCEPTION WHEN unique_violation THEN
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLSTATE <> '23505' THEN
+        RAISE EXCEPTION 'installment.migration_end_state_invalid: index % of installment_plans or installments could not be REBUILT AT ALL -- REINDEX raised % (%), which is not the 23505 a violating heap raises, so this migration has NOT established that the index physically describes its own heap and must not be allowed to finish claiming it has. This is the DECIDER of part 9d and the two-path count above it is only a planner-dependent belt. Among the states that reach here: 42501 (the principal applying is not the relations'' owner -- measured, REINDEX of installment_plans_pkey is permission denied for daftar_app and succeeds for daftar_migrator), 55P03 or 57014 (another session holds a conflicting lock on the relation, or lock_timeout/statement_timeout fired), and 55006 (the object is in use). None of them is evidence about the heap in either direction',
+          v_ix, SQLSTATE, SQLERRM USING ERRCODE = 'P0001';
+      END IF;
       RAISE EXCEPTION 'installment.migration_end_state_invalid: index % cannot be rebuilt from the heap of its own relation -- REINDEX refused it with %, so the heap CONTAINS rows that violate an index the catalogue reports as valid, ready and live. THIS IS NOT A CATALOGUE FLAG AND NO FLAG CAN SHOW IT: rows written while indisready was false leave all three flags true and the index missing an entry for a row that qualifies for it, FOR EVER, and pg_indexes renders it identically to a correct index. installment_plan_fact_sync derives invoices.has_active_installment_plan from the bound installment_plans_one_active_per_invoice_uq is supposed to hold, and customer_ar_aging refuses a receivable when that bound is broken, so this state is the one in which a plan fact can be written from a premise nothing is enforcing. Reconcile the duplicate rows first; the index cannot be made to describe this heap',
         v_ix, SQLERRM USING ERRCODE = 'P0001';
     END;
@@ -4685,9 +5098,23 @@ BEGIN
   --     created it. `tgtype` bit 0 (value 1) is ROW, bit 1 (value 2) is
   --     BEFORE, bit 2 (value 4) is INSERT, bit 3 (value 8) is DELETE, bit 4
   --     (value 16) is UPDATE: INSERT and UPDATE are required, DELETE is
-  --     refused because a deleted row cannot become anything, and it must be
-  --     an ORDINARY row trigger rather than a deferrable constraint one --
-  --     a deferred answer is exactly the answer this repair replaces.
+  --     refused, and it must be an ORDINARY row trigger rather than a
+  --     deferrable constraint one -- a deferred answer is exactly the answer
+  --     this repair replaces.
+  --
+  --     THE `DELETE` BIT IS REFUSED, AND THE REASON IS NOT «a deleted row
+  --     cannot become anything» ALONE (`TL-P4-COORD-R59` ordered item 2,
+  --     F14-2). That sentence is true of the EXCLUSION and says nothing about
+  --     the LOCK ORDER, which is what round 14's declared `DELETE` inversion
+  --     was about. Round 15 built the `BEFORE DELETE` arm that was supposed to
+  --     fix that order and MEASURED THAT IT CANNOT: `GetTupleForTrigger` locks
+  --     the `OLD` tuple before a `BEFORE ROW DELETE` trigger is called, so
+  --     rank 6 is held before the arm's first statement and the same race still
+  --     deadlocked. The arm would therefore make this law assert a rationale
+  --     that is false, so the bit stays refused, the hazard stays DECLARED in
+  --     section 3a-ter, and the remedy stated there is the CALLER's: take the
+  --     invoice row before the DELETE. See also the `40P01` rendering, which is
+  --     the half of ordered item 2 that does not depend on the caller.
   --
   --     THE WHOLE `UPDATE` IS COVERED AND NO `UPDATE OF` NARROWS IT, which is
   --     the one place in this block where an EMPTY `tgattr` is the assertion:
@@ -4707,7 +5134,7 @@ BEGIN
                     AND (t.tgtype & 1) = 1 AND (t.tgtype & 2) = 2
                     AND (t.tgtype & 4) = 4 AND (t.tgtype & 16) = 16 AND (t.tgtype & 8) = 0
                     AND pg_catalog.array_length(t.tgattr::SMALLINT[], 1) = 0) THEN
-    RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_plans carries no BEFORE INSERT OR UPDATE row trigger on installment_plan_active_exclusive() over the whole row, so the one-active exclusion is not judged before the row is written and its refusal is row-order dependent again'
+    RAISE EXCEPTION 'installment.migration_end_state_invalid: installment_plans carries no BEFORE INSERT OR UPDATE row trigger on installment_plan_active_exclusive() over the whole row, so the one-active exclusion is not judged before the row is written and its refusal is row-order dependent again. A DELETE bit is refused here too: round 15 measured that a BEFORE DELETE arm cannot take the invoices row (P4-AL-41 rank 3) ahead of the installment_plans row (rank 6), because GetTupleForTrigger locks the OLD tuple before the arm runs, so an arm here would carry a rationale that is false -- section 3a-ter declares that case and states the caller remedy that does reach it'
       USING ERRCODE = 'P0001';
   END IF;
 

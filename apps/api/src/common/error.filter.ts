@@ -11,10 +11,12 @@ import {
   isInstallmentInternalInvariant,
   isSellingCode,
   isSellingInternalInvariant,
+  parseDatabaseContention,
   parseDatabaseInstallmentInternalCode,
   parseDatabaseSellingCode,
   parseDatabaseSellingInternalCode,
   sellingRefusal,
+  transactionContentionRefusal,
 } from '../modules/selling/selling-errors';
 
 /**
@@ -187,6 +189,32 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     }
     if (pg.code === '42501' || pg.code === 'P0001') {
       body('FORBIDDEN', 'Access denied', HttpStatus.FORBIDDEN);
+      return;
+    }
+    // ── A TRANSACTION-MANAGER OUTCOME IS NOT A DEFECT AND NOT AN OUTAGE
+    //    (`TL-P4-COORD-R59` ordered item 2, F14-2).
+    //
+    // `40001` (serialization failure) and `40P01` (deadlock detected) reached
+    // the `unhandled error` branch below and were answered **`500
+    // INTERNAL_ERROR` with no code and no retry contract**, with the whole
+    // `pg` error object -- its `detail`, its SQL and the process ids of the
+    // other backend -- written to the log as an unexplained fault. Both are
+    // MEASURED on the P4-S7 plan path: a `40P01` arises on ONE invoice from
+    // two ordinary operations, and `40001` is the correct answer to every
+    // plan race at `REPEATABLE READ` and `SERIALIZABLE`.
+    //
+    // They are NOT invariant violations and are deliberately not in either
+    // `installment.*`/`selling.*` registry — the specification's section
+    // 3a-ter says so in terms. What they are is a conflict over concurrent
+    // access, with nothing partially committed, and the one fact a caller
+    // needs is that it may take the request again. So: `409 CONFLICT`, the
+    // machine word for which contention it was, `retryable: true`, and the
+    // SQLSTATE in the LOG and not in the body.
+    const contention = parseDatabaseContention(exception);
+    if (contention !== null) {
+      this.logger.error({ requestId, sqlstate: contention.sqlstate, contention: contention.contention }, 'transaction contention');
+      const e = transactionContentionRefusal(contention.contention);
+      body(e.code, e.message, e.httpStatus, e.details);
       return;
     }
     this.logger.error({ err: exception, requestId }, 'unhandled error');

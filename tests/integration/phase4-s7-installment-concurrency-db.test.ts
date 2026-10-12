@@ -67,6 +67,7 @@ import { dirname, join } from 'node:path';
 import { Client, Pool } from 'pg';
 import type { ScratchDb } from '../helpers/scratch-db';
 import { createScratchDb, urlOf } from '../helpers/scratch-db';
+import { apRelease } from '@daftar/inventory';
 
 const DB = 'daftar_s7r12_conc';
 /**
@@ -126,6 +127,39 @@ function endStateBlock(): string {
   return SPEC.slice(a + 1, b + '\n$end$;'.length);
 }
 
+/**
+ * THE SHIPPED `CREATE TRIGGER` FOR `installment_plans_active_exclusive`, SLICED
+ * OUT OF THE SPECIFICATION RATHER THAN RETYPED.
+ *
+ * §B6 drops that trigger and must put it back. Round 14's version of §B6 put
+ * back a trigger it had typed into the test -- `BEFORE INSERT OR UPDATE` --
+ * which was the shipped shape at the time. Round 15's spec adds `OR DELETE`,
+ * and the retyped copy silently became a DOWNGRADE that every later case in
+ * this file then inherited. Reading the statement out of `SPEC` makes the
+ * restore track the spec by construction, so the next event added to that
+ * trigger cannot repeat it.
+ */
+function shippedExclusiveTrigger(): string {
+  const a = SPEC.indexOf('CREATE TRIGGER installment_plans_active_exclusive');
+  if (a < 0) throw new Error('the shipped active-exclusive trigger could not be sliced');
+  const b = SPEC.indexOf(';', a);
+  if (b < 0) throw new Error('the shipped active-exclusive trigger is unterminated');
+  const stmt = SPEC.slice(a, b);
+  // Non-vacuity of the slice: it must be the whole-row BEFORE trigger on all
+  // three events running the function this case is about. If the spec ever
+  // stops saying so, this throws instead of restoring something weaker.
+  // The non-vacuity check deliberately does NOT pin the EVENT LIST: whether
+  // the trigger fires on DELETE is a decision of the spec (round 15 built a
+  // DELETE arm, measured that it cannot fix the lock order, and removed it
+  // again), and a restore that tracked a hard-coded event list is the very
+  // defect this helper exists to prevent. What it pins is that the slice is
+  // the whole-row BEFORE trigger running THIS function.
+  if (!/BEFORE [A-Z ]*ON installment_plans/.test(stmt)) throw new Error(`the sliced trigger is not a BEFORE trigger on installment_plans: ${stmt}`);
+  if (!/FOR EACH ROW EXECUTE FUNCTION installment_plan_active_exclusive\(\)/.test(stmt))
+    throw new Error(`the sliced trigger does not run the shipped function: ${stmt}`);
+  return stmt;
+}
+
 interface Outcome {
   readonly error: string | null;
   readonly rows: readonly Record<string, unknown>[];
@@ -151,8 +185,14 @@ let world: {
   businessId: string;
   customerId: string;
   customerId2: string;
+  /** The customer of the ONE invoice whose base total is not its txn total (§G3). */
+  customerId3: string;
   invoiceIds: readonly string[];
   f3InvoiceId: string;
+  /** Three fresh invoices for §G, so no §G arm measures another arm's leftovers. */
+  gInvoiceIds: readonly string[];
+  /** `total_txn_minor` 900000, `total_base_minor` 760501 — base <> txn (§G3). */
+  baseFxInvoiceId: string;
   userId: string;
 };
 let specError: string | null = null;
@@ -276,6 +316,42 @@ async function sudoTx(sqls: readonly string[]): Promise<string | null> {
   }
 }
 
+/**
+ * WHAT A WAITING BACKEND HOLDS ON A PLAN ROW, ASKED FROM A THIRD BACKEND WITH
+ * `NOWAIT`. `55P03` means the row is held by someone else; `null` means it is
+ * free. This is how §G1 proves WHICH RANK the deleter holds while it waits,
+ * instead of arguing it from the order of statements in a trigger body.
+ */
+async function invoiceRowProbe(invoiceId: string): Promise<string | null> {
+  const c = await sup.connect();
+  try {
+    await c.query('BEGIN');
+    await c.query('SELECT 1 FROM invoices WHERE id = $1 FOR NO KEY UPDATE NOWAIT', [invoiceId]);
+    await c.query('ROLLBACK');
+    return null;
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => undefined);
+    return err(e);
+  } finally {
+    c.release();
+  }
+}
+
+async function planRowProbe(planId: string): Promise<string | null> {
+  const c = await sup.connect();
+  try {
+    await c.query('BEGIN');
+    await c.query('SELECT 1 FROM installment_plans WHERE id = $1 FOR NO KEY UPDATE NOWAIT', [planId]);
+    await c.query('ROLLBACK');
+    return null;
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => undefined);
+    return err(e);
+  } finally {
+    c.release();
+  }
+}
+
 /** Run the sliced end-state block as `daftar_migrator`: `null` is OK. */
 async function ratchet(): Promise<string | null> {
   return ddl(endStateBlock());
@@ -304,10 +380,27 @@ class Actor {
   ) {
     this.client = new Client({ connectionString: urlOf(DB, role) });
   }
-  async open(iso: 'READ COMMITTED' | 'REPEATABLE READ' | 'SERIALIZABLE' = 'READ COMMITTED'): Promise<void> {
+  /**
+   * `timeoutMs` BOUNDS EVERY STATEMENT OF THIS ACTOR, and it is a GUARD AGAINST
+   * A DEFECTIVE ARM rather than an instrument of any measurement.
+   *
+   * §G1's first version of its DELETE-arm plant made the arm RAISE instead of
+   * wait; no cycle could form, the counterparty blocked on a row the aborted
+   * statement had already locked, and the case HUNG until vitest timed it out --
+   * after which every later case in the file queued behind two abandoned
+   * transactions and the whole file's verdict was lost. A bounded statement
+   * turns that into one named failure (`57014`) in one case.
+   *
+   * IT IS SET WELL ABOVE `deadlock_timeout` (1s by default), so the deadlock
+   * detector always fires first and no `40P01` of this file can be turned into
+   * a `57014` by this guard. Where a case MEASURES a wait, it asserts the wait
+   * from `pg_stat_activity` and `pg_locks` -- never from this timeout.
+   */
+  async open(iso: 'READ COMMITTED' | 'REPEATABLE READ' | 'SERIALIZABLE' = 'READ COMMITTED', timeoutMs = 0): Promise<void> {
     await this.client.connect();
     this.pid = Number((await this.client.query<{ p: number }>('SELECT pg_backend_pid() AS p')).rows[0]?.p);
     await this.client.query(`BEGIN ISOLATION LEVEL ${iso}`);
+    if (timeoutMs > 0) await this.client.query(`SET LOCAL statement_timeout = ${String(timeoutMs)}`);
     await this.client.query(`SELECT set_config('app.tenant_id',$1,true), set_config('app.business_id',$2,true)`, [world.tenantId, world.businessId]);
   }
   async q(sql: string, params: readonly unknown[] = []): Promise<string | null> {
@@ -402,6 +495,45 @@ function planArgs(planId: string, invoiceId: string, status = 'active'): readonl
   return [world.tenantId, world.businessId, planId, invoiceId, world.customerId, status, world.userId];
 }
 
+/**
+ * §G3's OWN PLAN, WITH A SCHEDULE WHOSE DUE DATES STRADDLE THE BUCKET
+ * BOUNDARIES AT THE `as_of` §G3 READS.
+ *
+ * `commitPlan` above dates the down payment 2026-01-02 and the two instalments
+ * 2026-02-02 and 2026-06-02. §G3 reads `as_of = 2026-10-07` with buckets
+ * `[30, 60, 90]`, and EVERY ONE of those three dates is more than 90 days old
+ * at that date -- so the shipped projection, correctly, puts all three schedule
+ * rows in the SAME (oldest) band. §G3's first pass used `commitPlan` and then
+ * asserted that more than one band carries base, which that fixture cannot
+ * satisfy: the red was the FIXTURE and not the law. Disclosed, and re-taken on
+ * this schedule, whose three rows land in three DIFFERENT bands at that
+ * `as_of`:
+ *
+ *     2026-06-20  down payment 100000   age 109  > 90        -> bucket 4
+ *     2026-08-20  instalment 1 400000   age  48  > 30        -> bucket 2
+ *     2026-10-05  instalment 2 400000   age   2  no threshold -> bucket 1
+ *
+ * The amounts are unchanged, so obligation (a) still holds exactly:
+ * 100000 + 400000 + 400000 = 900000 = `invoices.total_txn_minor` of `INV-9`.
+ * The ordering is `(due_date, seq_no)` and the two instalments are written in
+ * ascending date order, so the prefix sums the projection takes are the
+ * settlement order the design declares.
+ */
+const G3_PLAN_INSERT = `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+   VALUES ($1,$2,$3,$4,$5,'active',100000,'2026-06-20'::DATE,$6,gen_random_uuid())`;
+const G3_SCHED_INSERT = `INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+   VALUES ($1,$2,gen_random_uuid(),$3,1,'2026-08-20'::DATE,400000),
+          ($1,$2,gen_random_uuid(),$3,2,'2026-10-05'::DATE,400000)`;
+
+async function commitG3Plan(invoiceId: string): Promise<{ error: string | null; planId: string }> {
+  const planId = randomUUID();
+  const r = await inCtx(mig, APP_CTX(), [
+    { sql: G3_PLAN_INSERT, params: [world.tenantId, world.businessId, planId, invoiceId, world.customerId3, world.userId] },
+    { sql: G3_SCHED_INSERT, params: [world.tenantId, world.businessId, planId] },
+  ]);
+  return { error: r.error, planId };
+}
+
 /** Write one lawful active plan with its schedule, in one transaction, as `daftar_migrator`. */
 async function commitPlan(invoiceId: string, status = 'active'): Promise<{ error: string | null; planId: string }> {
   const planId = randomUUID();
@@ -443,9 +575,11 @@ beforeAll(async () => {
     ]);
     const customerId = randomUUID();
     const customerId2 = randomUUID();
+    const customerId3 = randomUUID();
     for (const [id, name] of [
       [customerId, 'R12 Customer'],
       [customerId2, 'R12 F3 Customer'],
+      [customerId3, 'R15 FX Customer'],
     ] as const) {
       await c.query(
         `INSERT INTO customers (tenant_id,business_id,id,name,status,revision,create_intent_sha256,last_intent_sha256,business_transaction_id,created_by,updated_by)
@@ -458,8 +592,17 @@ beforeAll(async () => {
     // refused still leaves the invoice in whatever state the previous case
     // left it, and a concurrency reading taken on a dirty invoice measures the
     // previous case.
+    // ...AND FIVE MORE FOR §G, for the same reason (`TL-P4-COORD-R59`
+    // ordered items 2, 3 and 8): §G1 runs the lock-order race THREE times (bare,
+    // with the DELETE arm that does not help, and with the caller's remedy) and
+    // each run leaves a cancelled plan behind; §G2 and §G4 each assert that the
+    // invoice they use carries NO plan at all, so neither may share an invoice
+    // with §G1. The first pass of §G let §G1's remedy arm and §G2 share
+    // `gInvoiceIds[2]` and let §G4 share `gInvoiceIds[0]`, and both read the
+    // OTHER case's leftover plan: `expected 1 to be +0`. Disclosed, and
+    // re-taken on five invoices nothing else touches.
     const ids: string[] = [];
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 10; i += 1) {
       const owner = i === 4 ? customerId2 : customerId;
       const saleId = randomUUID();
       await c.query(
@@ -476,10 +619,55 @@ beforeAll(async () => {
                                rate_source,rate_timestamp,customer_name_snapshot,issue_intent_sha256,business_transaction_id,created_by,binding_source_id)
          VALUES ($1,$2,$3,$4,$5,$6,'invoice',$10,$11,'2026','2026-01-02','2026-01-02','ILS','open',900000,0,0,900000,900000,1,'base',$7::timestamptz,
                  'R12 Customer',$8,gen_random_uuid(),$9,$3)`,
-        [tenantId, businessId, invoiceId, saleId, owner, branchId, STAMP, SHA, userId, `INV-${i + 1}`, i + 1],
+        // NUMBERED FROM 11 so that nothing here can collide with `INV-9`, the
+        // FX invoice written below with its own `number_seq`.
+        [tenantId, businessId, invoiceId, saleId, owner, branchId, STAMP, SHA, userId, `INV-${i + 11}`, i + 11],
       );
       ids.push(invoiceId);
     }
+    // ── THE ONE INVOICE WHOSE BASE TOTAL IS NOT ITS TXN TOTAL
+    //    (`TL-P4-COORD-R59` ordered item 7, §6).
+    //
+    // The live suite's §E base-conservation arm is DEGENERATE and both the
+    // round-14 author and its challenger said so: its business is ILS, its
+    // invoice is ILS, `source_to_base_rate` is 1, so `base === txn` and the
+    // base law there has the same arithmetic content as the txn law. There was
+    // therefore NO live, in-PostgreSQL measurement of base conservation where
+    // base <> txn anywhere in this slice — the non-degenerate case existed only
+    // in TypeScript against the reference model.
+    //
+    // This is that measurement's fixture, and it is a LAWFUL foreign-currency
+    // invoice rather than an inconsistent row: `0075`'s
+    // `invoices_rate_shape_ck` requires `rate_source = 'base'` to coincide
+    // EXACTLY with `fx_rate_id IS NULL AND source_to_base_rate = 1`, so a row
+    // with a real rate needs a real `accounting_fx_rates` row behind it, and
+    // `invoices_fx_rate_fk` enforces that. Both are written here. USD 9000.00
+    // at 0.8450011111 ILS/USD gives a base total of 760501 agurot, which is the
+    // same pair of figures the domain-core fixture uses — deliberately, so the
+    // live reading and the pure model can be compared on one arithmetic.
+    const fxRateId = randomUUID();
+    await c.query(
+      `INSERT INTO accounting_fx_rates (tenant_id,business_id,id,from_currency,to_currency,rate,source,effective_at,entered_by_user_id)
+       VALUES ($1,$2,$3,'USD','ILS',0.8450011111,'manual',$4::timestamptz,$5)`,
+      [tenantId, businessId, fxRateId, STAMP, userId],
+    );
+    const fxSaleId = randomUUID();
+    const baseFxInvoiceId = randomUUID();
+    await c.query(
+      `INSERT INTO sales (tenant_id,business_id,id,customer_id,branch_id,warehouse_id,status,settlement_mode,document_date,currency_code,
+                          subtotal_txn_minor,discount_txn_minor,total_txn_minor,total_base_minor,source_to_base_rate,rate_source,rate_timestamp,
+                          customer_name_snapshot,commit_intent_sha256,confirmed_by,confirmed_at,business_transaction_id,created_by,binding_source_id)
+       VALUES ($1,$2,$3,$4,$5,$6,'confirmed','credit','2026-01-02','USD',900000,0,900000,760501,0.8450011111,'manual',$7::timestamptz,'R15 FX Customer',$8,$9,$7::timestamptz,gen_random_uuid(),$9,$3)`,
+      [tenantId, businessId, fxSaleId, customerId3, branchId, warehouseId, STAMP, SHA, userId],
+    );
+    await c.query(
+      `INSERT INTO invoices (tenant_id,business_id,id,sale_id,customer_id,branch_id,document_kind,document_number,number_seq,period,issue_date,due_date,
+                             currency_code,status,subtotal_txn_minor,discount_txn_minor,tax_minor,total_txn_minor,total_base_minor,source_to_base_rate,
+                             rate_source,rate_timestamp,fx_rate_id,customer_name_snapshot,issue_intent_sha256,business_transaction_id,created_by,binding_source_id)
+       VALUES ($1,$2,$3,$4,$5,$6,'invoice','INV-9',9,'2026','2026-01-02','2026-01-02','USD','open',900000,0,0,900000,760501,0.8450011111,'manual',$7::timestamptz,$10,
+               'R15 FX Customer',$8,gen_random_uuid(),$9,$3)`,
+      [tenantId, businessId, baseFxInvoiceId, fxSaleId, customerId3, branchId, STAMP, SHA, userId, fxRateId],
+    );
     // PR-6, PRE-APPLIED AND DISCLOSED (module header).
     await c.query(`GRANT EXECUTE ON FUNCTION public.supplier_ap_release(BIGINT,BIGINT,BIGINT,BIGINT) TO daftar_app`);
     await c.query('COMMIT');
@@ -489,8 +677,11 @@ beforeAll(async () => {
       businessId,
       customerId,
       customerId2,
+      customerId3,
       invoiceIds: ids.slice(0, 4),
       f3InvoiceId: ids[4] as string,
+      gInvoiceIds: ids.slice(5, 10),
+      baseFxInvoiceId,
       userId,
     };
   } catch (e) {
@@ -624,15 +815,41 @@ describe('P4-S7 §B the apply-time laws, each with its planted defect', () => {
   });
 
   it('B6 part 9b refuses a MISSING trigger as well as a disabled one', async () => {
-    M['B6_drop'] = await ddl(`DROP TRIGGER installment_plans_active_exclusive ON installment_plans`);
-    M['B6_ratchet'] = await ratchet();
-    M['B6_recreate'] = await sudo(
-      `CREATE TRIGGER installment_plans_active_exclusive BEFORE INSERT OR UPDATE ON installment_plans
-         FOR EACH ROW EXECUTE FUNCTION installment_plan_active_exclusive()`,
-    );
+    // ROUND 15, ordered item 4's sweep, found IN THIS FILE: the re-creation below
+    // RETYPED the trigger statement. Round 15 then changed that trigger's event
+    // list (it added a DELETE arm, measured that the arm cannot fix the lock
+    // order, and removed it again) and the retyped copy became a SILENT
+    // DOWNGRADE that stripped the arm from the fixture for every later case in
+    // the file -- nine reds, none of them about their own subject. Two repairs,
+    // both of them the sweep's lesson:
+    //   (1) the re-creation reads the SHIPPED statement out of the spec instead
+    //       of retyping it -- see `shippedExclusiveTrigger` above; and
+    //   (2) it runs in a `finally`, so a failed assertion inside the arm cannot
+    //       leave the fixture without the trigger (R56 section 5).
+    try {
+      M['B6_drop'] = await ddl(`DROP TRIGGER installment_plans_active_exclusive ON installment_plans`);
+      M['B6_ratchet'] = await ratchet();
+    } finally {
+      M['B6_recreate'] = await sudo(shippedExclusiveTrigger());
+    }
     M['B6_after'] = await ratchet();
     expect(String(M['B6_ratchet'])).toContain('seven');
     expect(M['B6_after']).toBeNull();
+    // NON-VACUITY OF THE RESTORE, read from the catalogue and compared against
+    // THE SPEC rather than against a number typed here: the restored trigger's
+    // event bits are exactly the ones the shipped statement names.
+    const back = await sup.query<{ ins: number; upd: number; del: number }>(
+      `SELECT (tgtype & 4) AS ins, (tgtype & 16) AS upd, (tgtype & 8) AS del FROM pg_trigger
+        WHERE tgrelid = 'public.installment_plans'::regclass AND tgname = 'installment_plans_active_exclusive'`,
+    );
+    const stmt = shippedExclusiveTrigger();
+    M['B6_restored_bits'] = back.rows[0];
+    M['B6_shipped_statement'] = stmt;
+    expect(back.rows[0]).toStrictEqual({
+      ins: /\bINSERT\b/.test(stmt) ? 4 : 0,
+      upd: /\bUPDATE\b/.test(stmt) ? 16 : 0,
+      del: /\bDELETE\b/.test(stmt) ? 8 : 0,
+    });
   });
 });
 
@@ -1136,10 +1353,8 @@ describe('P4-S7 §E the runtime guard at WRITE time, and the lock order (F-1, F-
     } finally {
       await A.end();
       await B.end();
-      M['E4_recreate'] = await sudo(
-        `CREATE TRIGGER installment_plans_active_exclusive BEFORE INSERT OR UPDATE ON installment_plans
-           FOR EACH ROW EXECUTE FUNCTION installment_plan_active_exclusive()`,
-      );
+      // Sliced from the spec, never retyped -- see `shippedExclusiveTrigger`.
+      M['E4_recreate'] = await sudo(shippedExclusiveTrigger());
       M['E4_reenforce'] = await sudo(
         `UPDATE pg_index SET indisvalid = true, indisready = true WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`,
       );
@@ -1319,6 +1534,532 @@ describe('P4-S7 §E the runtime guard at WRITE time, and the lock order (F-1, F-
       await A.end();
       await B.end();
     }
+  });
+});
+
+/**
+ * ══════════════════════════════════════════════════════════════════════════
+ * §G ROUND 15 — THE DELETE LOCK ORDER MEASURED AND REMEDIED IN THE CALLER,
+ *    THE `SET CONSTRAINTS` REMEDY, AND BASE CONSERVATION WHERE BASE <> TXN
+ *    (`TL-P4-COORD-R59` ordered items 2, 3 and 7)
+ * ══════════════════════════════════════════════════════════════════════════
+ */
+describe('P4-S7 §G round 15 — the DELETE inversion, the SET CONSTRAINTS remedy, and base <> txn', () => {
+  /**
+   * G1. THE MEASURED ONE-INVOICE `40P01`, THE TRIGGER THAT CANNOT FIX IT, AND
+   *     THE CALLER STATEMENT THAT DOES (`TL-P4-COORD-R59` ordered item 2,
+   *     F14-2).
+   *
+   * The round-14 challenger measured a deadlock on ONE invoice from TWO
+   * ORDINARY operations, one statement each: an ordinary invoice write holds
+   * the invoice row, a deleter of the active plan takes the plan row and
+   * blocks on the invoice row, and the invoice writer then cancels that plan
+   * through the DOCUMENTED route. Section 3a-ter listed `40P01` for «two
+   * invoices, opposite order» only, and its stated remedy — one invoice per
+   * statement, ascending `invoices.id` — could not reach this case at all.
+   *
+   * THIS CASE HAS THREE ARMS AND THE SECOND IS THE ONE THIS ROUND LEARNED
+   * FROM.
+   *
+   *   (1) BARE: the challenger's race, reproduced. `40P01`, and `55P03` from a
+   *       third backend proving the deleter held rank 6 while awaiting rank 3.
+   *   (2) THE TRIGGER THAT WAS SUPPOSED TO FIX IT: a `BEFORE INSERT OR UPDATE
+   *       OR DELETE` trigger whose DELETE arm takes the invoice row first.
+   *       MEASURED TO CHANGE NOTHING — still `55P03`, still `40P01` — because
+   *       for a `BEFORE ROW DELETE` trigger the executor produces `OLD`
+   *       through `GetTupleForTrigger`, which LOCKS that tuple before the
+   *       trigger function is called. This arm is the evidence for section
+   *       3a-ter's claim that no trigger of this slice can close the case, and
+   *       it is a RED PROOF of the shipped trigger shape at the same time: the
+   *       planted trigger is restored in a `finally`.
+   *   (3) THE REMEDY THAT DOES REACH IT: the deleter takes the invoice row
+   *       `FOR NO KEY UPDATE` ITSELF, as its own first statement, before it
+   *       deletes anything. It then holds NOTHING while it waits (`null` from
+   *       the third-backend probe on the plan row), and when the invoice
+   *       writer commits, the deleter completes.
+   */
+  it('G1 the one-invoice DELETE cycle is MEASURED, no BEFORE DELETE arm can fix it, and the caller statement that does is measured too', async () => {
+    const round14 = `CREATE TRIGGER installment_plans_active_exclusive
+                       BEFORE INSERT OR UPDATE OR DELETE ON installment_plans
+                       FOR EACH ROW EXECUTE FUNCTION installment_plan_active_exclusive()`;
+    /**
+     * ARM 2's PLANT IS A BODY AS WELL AS A TRIGGER, and that is not a detail.
+     *
+     * The first version of arm 2 planted ONLY the trigger. The shipped body has
+     * no `DELETE` branch, so on a `DELETE` it falls through to
+     * `v_was_active := (TG_OP = 'UPDATE' ...)` and then reads `NEW.status` --
+     * and `NEW` is UNASSIGNED in a `DELETE` trigger. The arm therefore RAISED
+     * instead of waiting, no cycle could form, `B`'s cancel blocked on the row
+     * `GetTupleForTrigger` had already locked for the aborted statement, and the
+     * CASE ITSELF HUNG until vitest timed it out -- after which every later case
+     * in the file queued behind the two abandoned transactions. Measured, in
+     * this file, from `pg_stat_activity` and `pg_locks`.
+     *
+     * So the plant is the SHIPPED body plus the arm: `pg_get_functiondef` gives
+     * the exact shipped definition, the arm is inserted after its first `BEGIN`,
+     * and the restore re-applies the definition that was read. The end-state
+     * block's digest law is what certifies the restore was exact -- a restored
+     * body that differs by one byte reds `M['G1_restore_ratchet']`.
+     */
+    const plantDeleteArm = async (): Promise<{ planted: string | null; shipped: string }> => {
+      const shipped = String(
+        (await sup.query<{ d: string }>(`SELECT pg_get_functiondef('public.installment_plan_active_exclusive()'::regprocedure) AS d`)).rows[0]?.d ?? '',
+      );
+      const at = shipped.indexOf('\nBEGIN\n', shipped.indexOf('$function$'));
+      if (at < 0) throw new Error('the shipped definition has no BEGIN to plant after');
+      const arm = [
+        '',
+        "IF TG_OP = 'DELETE' THEN",
+        "  IF OLD.status = 'active' THEN",
+        '    PERFORM 1 FROM public.invoices i',
+        '      WHERE i.business_id = OLD.business_id AND i.id = OLD.invoice_id',
+        '      FOR NO KEY UPDATE;',
+        '  END IF;',
+        '  RETURN OLD;',
+        'END IF;',
+      ].join('\n');
+      const planted = shipped.slice(0, at + '\nBEGIN'.length) + arm + shipped.slice(at + '\nBEGIN'.length);
+      return { planted: await sudo(planted), shipped };
+    };
+    // THE SHIPPED TRIGGER'S SHAPE IS READ FROM THE CATALOGUE FIRST, so «there
+    // is no DELETE arm» is a reading and not an assumption about the file that
+    // was applied.
+    M['G1_tgtype_shipped'] = (
+      await sup.query<{ t: number }>(
+        `SELECT t.tgtype::int AS t FROM pg_trigger t WHERE t.tgrelid = 'public.installment_plans'::regclass AND t.tgname = 'installment_plans_active_exclusive'`,
+      )
+    ).rows[0]?.t;
+    // bit 1 BEFORE (2), bit 2 INSERT (4), bit 3 DELETE (8), bit 4 UPDATE (16)
+    expect(Number(M['G1_tgtype_shipped']) & 2, 'the shipped trigger is not BEFORE').toBe(2);
+    expect(Number(M['G1_tgtype_shipped']) & 8, 'the shipped trigger fires on DELETE, which was measured not to help').toBe(0);
+
+    /**
+     * One run of the race, on its own invoice. `lockFirst` is the REMEDY: the
+     * deleter takes the invoice row itself, as its own first statement.
+     */
+    const race = async (label: string, invoiceId: string, lockFirst: boolean): Promise<void> => {
+      const seeded = await commitPlan(invoiceId);
+      M[`${label}_seed`] = seeded.error;
+      expect(M[`${label}_seed`], `${label}: the active plan this race is about was refused`).toBeNull();
+      const A = new Actor(`${label}A`, 'daftar_migrator'); // the deleter
+      const B = new Actor(`${label}B`, 'daftar_migrator'); // the ordinary invoice writer
+      try {
+        // 20 seconds, which is 20x `deadlock_timeout`: a real `40P01` always
+        // arrives first, and a DEFECTIVE arm fails under its own name instead
+        // of hanging the file. See `Actor.open`.
+        await A.open('READ COMMITTED', 20000);
+        await B.open('READ COMMITTED', 20000);
+        // B takes the invoice row the way an ORDINARY invoice write of a
+        // non-key column takes it. Nothing exotic is needed for B's half.
+        M[`${label}_B_invoice_row`] = await B.q('SELECT 1 FROM invoices WHERE id = $1 FOR NO KEY UPDATE', [invoiceId]);
+        expect(M[`${label}_B_invoice_row`], `${label}: the ordinary invoice write could not take the invoice row`).toBeNull();
+        // NON-VACUITY OF B'S HALF, and it is here because its absence is what
+        // broke this case once: a `SELECT ... FOR NO KEY UPDATE` that matches
+        // NO ROW returns success and holds nothing, after which the race has no
+        // counterparty and the whole arm measures nothing. A third backend
+        // asks with `NOWAIT`: `55P03` is proof that B holds that row.
+        M[`${label}_B_holds_invoice`] = await invoiceRowProbe(invoiceId);
+        expect(String(M[`${label}_B_holds_invoice`]), `${label}: B does not hold the invoice row, so there is no race`).toContain('55P03');
+        if (lockFirst) {
+          // THE REMEDY, AND IT IS THE FIRST THING A DOES: rank 3 before rank
+          // 6. This statement is what blocks, and A holds nothing while it
+          // does.
+          const firstLock = A.fire('SELECT 1 FROM invoices WHERE business_id = $1 AND id = $2 FOR NO KEY UPDATE', [world.businessId, invoiceId]);
+          M[`${label}_A_blocked`] = await awaitLock(A.pid);
+          M[`${label}_plan_row_probe`] = await planRowProbe(seeded.planId);
+          M[`${label}_B_cancel`] = await B.q(`UPDATE installment_plans SET status = 'cancelled' WHERE id = $1`, [seeded.planId]);
+          M[`${label}_B_commit`] = await B.q('COMMIT');
+          M[`${label}_A_first_lock`] = await firstLock.promise;
+          // ...and then the deleter does its work, which no longer waits for
+          // anything: it already holds the invoice row.
+          M[`${label}_A_sched`] = await A.q('DELETE FROM installments WHERE plan_id = $1', [seeded.planId]);
+          M[`${label}_A_outcome`] = await A.q('DELETE FROM installment_plans WHERE id = $1', [seeded.planId]);
+          if (M[`${label}_A_outcome`] === null) M[`${label}_A_commit`] = await A.q('COMMIT');
+        } else {
+          M[`${label}_A_sched`] = await A.q('DELETE FROM installments WHERE plan_id = $1', [seeded.planId]);
+          const fired = A.fire('DELETE FROM installment_plans WHERE id = $1', [seeded.planId]);
+          M[`${label}_A_blocked`] = await awaitLock(A.pid);
+          // WHAT THE DELETER HOLDS WHILE IT WAITS, asked from a THIRD backend
+          // with `NOWAIT`: `55P03` means it holds the plan row (rank 6) while
+          // awaiting the invoice row (rank 3) — the inversion itself.
+          M[`${label}_plan_row_probe`] = await planRowProbe(seeded.planId);
+          // B closes the cycle: it cancels that plan through the documented
+          // route, from the transaction that holds the invoice row.
+          M[`${label}_B_cancel`] = await B.q(`UPDATE installment_plans SET status = 'cancelled' WHERE id = $1`, [seeded.planId]);
+          M[`${label}_A_outcome`] = await fired.promise;
+          M[`${label}_B_commit`] = await B.q('COMMIT');
+          if (M[`${label}_A_outcome`] === null) M[`${label}_A_commit`] = await A.q('COMMIT');
+        }
+        M[`${label}_post`] = await state(invoiceId);
+      } finally {
+        await A.end();
+        await B.end();
+      }
+    };
+
+    // ── ARM 1: THE CHALLENGER'S RACE, AS SHIPPED. The cycle is REAL.
+    await race('G1_bare', world.gInvoiceIds[0] as string, false);
+    expect((M['G1_bare_A_blocked'] as BlockedReading).blocked, 'the deleter never waited, so this race measured nothing').toBe(true);
+    expect(String(M['G1_bare_plan_row_probe']), 'the inversion is not reproducible, so this arm measures nothing').toContain('55P03');
+    expect(String(M['G1_bare_A_outcome']), 'the one-invoice deadlock did not reproduce').toContain('40P01');
+    expect(M['G1_bare_B_commit'], 'the ordinary invoice writer did not commit').toBeNull();
+
+    // ── ARM 2: WITH THE `BEFORE DELETE` ARM ROUND 15 BUILT FOR THIS. It
+    //    changes NOTHING, and that is the measurement section 3a-ter rests on.
+    let shippedBody = '';
+    try {
+      const plant = await plantDeleteArm();
+      shippedBody = plant.shipped;
+      M['G1_arm_body'] = plant.planted;
+      expect(M['G1_arm_body'], `the DELETE arm could not be planted into the body: ${String(M['G1_arm_body'])}`).toBeNull();
+      M['G1_arm_drop'] = await ddl('DROP TRIGGER installment_plans_active_exclusive ON installment_plans');
+      M['G1_arm_create'] = await sudo(round14);
+      expect(M['G1_arm_create'], `the DELETE-arm trigger shape could not be planted: ${String(M['G1_arm_create'])}`).toBeNull();
+      // ...and the end-state block REFUSES that shape, which is part 12's
+      //    half of this finding: an arm whose rationale is false is refused
+      //    by the migration rather than carried.
+      M['G1_arm_ratchet'] = await ratchet();
+      expect(String(M['G1_arm_ratchet']), 'part 12 accepts a trigger with a DELETE arm it was measured not to need').toContain(
+        'installment.migration_end_state_invalid',
+      );
+      await race('G1_arm', world.gInvoiceIds[1] as string, false);
+      expect((M['G1_arm_A_blocked'] as BlockedReading).blocked).toBe(true);
+      // THE WHOLE POINT: the arm takes the invoice row FIRST in its own text,
+      // and the deleter STILL holds the plan row while it waits — because
+      // `GetTupleForTrigger` locked that row before the arm's first statement
+      // ran. Two readings, identical to arm 1.
+      expect(String(M['G1_arm_plan_row_probe']), 'with the DELETE arm the deleter no longer holds rank 6, so the arm DOES help').toContain('55P03');
+      expect(String(M['G1_arm_A_outcome']), 'with the DELETE arm the cycle is gone, so the arm DOES help').toContain('40P01');
+    } finally {
+      M['G1_restore_body'] = shippedBody === '' ? 'the shipped body was never read' : await sudo(shippedBody);
+      M['G1_restore_drop'] = await sudo('DROP TRIGGER IF EXISTS installment_plans_active_exclusive ON installment_plans');
+      M['G1_restore'] = await sudo(shippedExclusiveTrigger());
+      M['G1_restore_ratchet'] = await ratchet();
+    }
+    expect(M['G1_restore_body'], `the shipped body was not restored: ${String(M['G1_restore_body'])}`).toBeNull();
+    expect(M['G1_restore'], `the shipped trigger was not restored: ${String(M['G1_restore'])}`).toBeNull();
+    expect(M['G1_restore_ratchet'], `the block refuses the restored trigger: ${String(M['G1_restore_ratchet'])}`).toBeNull();
+
+    // ── ARM 3: THE REMEDY SECTION 3a-ter STATES. One extra statement in the
+    //    caller, and the cycle is gone.
+    await race('G1_remedy', world.gInvoiceIds[2] as string, true);
+    expect((M['G1_remedy_A_blocked'] as BlockedReading).blocked, 'the deleter never waited, so the remedy arm measures nothing').toBe(true);
+    // IT HOLDS NO PLAN ROW WHILE IT WAITS — which is the whole remedy, read
+    // from a third backend rather than argued from the statement order.
+    expect(String(M['G1_remedy_plan_row_probe'] ?? ''), 'the deleter still holds the plan row while awaiting the invoice row').not.toContain('55P03');
+    expect(M['G1_remedy_plan_row_probe'], 'the plan-row probe failed for some other reason').toBeNull();
+    expect(M['G1_remedy_B_cancel'], 'the documented cancel route was refused').toBeNull();
+    expect(M['G1_remedy_B_commit']).toBeNull();
+    expect(String(M['G1_remedy_A_outcome'] ?? 'null'), 'the remedy does not remove the cycle').not.toContain('40P01');
+    // AND THE DELETE ITSELF IS LAWFUL AFTERWARDS: B cancelled the plan, so A
+    // deletes a NON-ACTIVE plan and the fact needs no write. Whatever the
+    // outcome, it is not a deadlock and the end state satisfies the block.
+    M['G1_remedy_ratchet'] = await ratchet();
+    expect(M['G1_remedy_ratchet'], `the block refuses the state §G1 left: ${String(M['G1_remedy_ratchet'])}`).toBeNull();
+    expect((M['G1_remedy_post'] as Record<string, unknown>)['active_plans']).toBe(0);
+  });
+
+  /**
+   * G2. `SET CONSTRAINTS ALL IMMEDIATE`: THE REFUSAL, THE MESSAGE THAT NAMES
+   *     BOTH CAUSES, AND THE ONE-STATEMENT REMEDY THAT REACHES IT
+   *     (`TL-P4-COORD-R59` ordered item 3, F14-5; section 3a-quater).
+   *
+   * Elimination is shown impossible for this obligation — the sum is over rows
+   * a LATER statement writes, and they must be later because
+   * `installments_plan_fk` references the plan — so what is owed is a remedy a
+   * reader can act on. There is one, and it is measured here: write the plan
+   * and its whole schedule IN ONE STATEMENT, and the removed deferral is
+   * harmless because both relations' AFTER-ROW events then belong to that one
+   * statement.
+   */
+  it('G2 under SET CONSTRAINTS ALL IMMEDIATE the two-statement plan write is refused and the ONE-statement write COMMITS', async () => {
+    const inv = world.gInvoiceIds[3] as string;
+    const planA = randomUUID();
+    const planB = randomUUID();
+    // (a) THE REFUSAL, and the message now names BOTH causes and the remedy.
+    M['G2_two_statement'] = (
+      await inCtx(mig, APP_CTX(), [
+        { sql: 'SET CONSTRAINTS ALL IMMEDIATE' },
+        { sql: PLAN_INSERT, params: planArgs(planA, inv, 'active') },
+        { sql: SCHED_INSERT, params: [world.tenantId, world.businessId, planA] },
+      ])
+    ).error;
+    M['G2_after_refusal'] = await state(inv);
+    expect(String(M['G2_two_statement']), 'the forced-early write is no longer refused by the schedule law').toContain('installment.schedule_incomplete: (a)');
+    // THE MESSAGE IS THE REPAIR: it names the removed deferral, says nothing
+    // is wrong with the schedule in that case, and gives the one-statement
+    // remedy — instead of sending its reader to a schedule that was fine.
+    for (const token of ['SET CONSTRAINTS ALL IMMEDIATE', 'NO instalment row at all', 'ONE statement', 'data-modifying CTE', 'TWO STATES REACH THIS']) {
+      expect(String(M['G2_two_statement']), `the refusal does not say ${token}`).toContain(token);
+    }
+    // ...and it FAILS CLOSED: nothing committed.
+    expect((M['G2_after_refusal'] as Record<string, unknown>)['plans']).toBe(0);
+    expect((M['G2_after_refusal'] as Record<string, unknown>)['flag']).toBe('false');
+
+    // (b) THE REMEDY, in the same transaction shape and the same fixture: the
+    //     plan and its whole schedule in ONE data-modifying statement.
+    M['G2_one_statement'] = (
+      await inCtx(mig, APP_CTX(), [
+        { sql: 'SET CONSTRAINTS ALL IMMEDIATE' },
+        {
+          sql: `WITH p AS (
+                  INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+                  VALUES ($1,$2,$3,$4,$5,'active',100000,'2026-01-02'::DATE,$6,gen_random_uuid())
+                  RETURNING id
+                )
+                INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+                SELECT $1,$2,gen_random_uuid(),p.id,v.seq,v.due::DATE,v.amt
+                  FROM p, (VALUES (1,'2026-02-02',400000::BIGINT),(2,'2026-06-02',400000::BIGINT)) AS v(seq,due,amt)`,
+          params: [world.tenantId, world.businessId, planB, inv, world.customerId, world.userId],
+        },
+      ])
+    ).error;
+    M['G2_after_remedy'] = await state(inv);
+    expect(M['G2_one_statement'], `the one-statement remedy does not work: ${String(M['G2_one_statement'])}`).toBeNull();
+    expect((M['G2_after_remedy'] as Record<string, unknown>)['active_plans']).toBe(1);
+    expect((M['G2_after_remedy'] as Record<string, unknown>)['flag']).toBe('true');
+    // AND THE REMEDY IS NOT A WEAKENING: the SAME one statement with a
+    // schedule that genuinely does not sum is still refused.
+    const planC = randomUUID();
+    M['G2_one_statement_short'] = (
+      await inCtx(mig, APP_CTX(), [
+        { sql: 'SET CONSTRAINTS ALL IMMEDIATE' },
+        {
+          sql: `WITH p AS (
+                  INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+                  VALUES ($1,$2,$3,$4,$5,'cancelled',100000,'2026-01-02'::DATE,$6,gen_random_uuid())
+                  RETURNING id
+                )
+                INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+                SELECT $1,$2,gen_random_uuid(),p.id,1,'2026-02-02'::DATE,1::BIGINT FROM p`,
+          params: [world.tenantId, world.businessId, planC, inv, world.customerId, world.userId],
+        },
+      ])
+    ).error;
+    // A cancelled plan is out of the schedule law's scope, so the control that
+    // the law still bites must be an ACTIVE plan: it is taken on a fresh
+    // active plan whose single instalment does not reach the total.
+    const planD = randomUUID();
+    M['G2_one_statement_short_active'] = (
+      await inCtx(mig, APP_CTX(), [
+        { sql: 'SET CONSTRAINTS ALL IMMEDIATE' },
+        { sql: `UPDATE installment_plans SET status = 'cancelled' WHERE id = $1`, params: [planB] },
+        {
+          sql: `WITH p AS (
+                  INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+                  VALUES ($1,$2,$3,$4,$5,'active',100000,'2026-01-02'::DATE,$6,gen_random_uuid())
+                  RETURNING id
+                )
+                INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+                SELECT $1,$2,gen_random_uuid(),p.id,1,'2026-02-02'::DATE,1::BIGINT FROM p`,
+          params: [world.tenantId, world.businessId, planD, inv, world.customerId, world.userId],
+        },
+      ])
+    ).error;
+    expect(String(M['G2_one_statement_short_active']), 'one statement is enough to get a short schedule past the sum law').toContain(
+      'installment.schedule_incomplete: (a)',
+    );
+    // ...and that refusal is the ORDINARY (a) message, not the forced-early
+    //    one, because the plan DOES carry an instalment row.
+    expect(String(M['G2_one_statement_short_active']), 'the forced-early message is used for a schedule that really is short').not.toContain(
+      'NO instalment row at all',
+    );
+    // THE END STATE, cleaned up through the documented route so §F reads a
+    // sound fixture.
+    M['G2_cleanup'] = await clearActive(inv);
+    M['G2_ratchet'] = await ratchet();
+    expect(M['G2_ratchet'], `the block refuses the state §G2 left: ${String(M['G2_ratchet'])}`).toBeNull();
+  });
+
+  /**
+   * G3. BASE CONSERVATION WHERE BASE <> TXN, IN POSTGRESQL
+   *     (`TL-P4-COORD-R59` ordered item 7, §6).
+   *
+   * The live suite's §E base law is DEGENERATE — ILS business, ILS invoice,
+   * rate 1, so `base === txn` and it has the same arithmetic content as the
+   * txn law — and the only non-degenerate base measurement in this slice was
+   * in TypeScript against the reference model. This is the live one: a LAWFUL
+   * USD invoice with an `accounting_fx_rates` row behind it, `total_txn_minor`
+   * 900000 and `total_base_minor` 760501, read through the shipped
+   * `customer_ar_aging` as `daftar_app`.
+   *
+   * The law has three parts and the third is the one with content: the bands
+   * sum EXACTLY to the authoritative outstanding base; base is NOT txn
+   * (asserted, not assumed); and each band's base is the CANONICAL cumulative
+   * HALF_EVEN release `apRelease(B, T, releasedBefore, bandTxn)` — consumed
+   * from `@daftar/inventory` and never re-implemented here.
+   */
+  it('G3 the base bands sum to the outstanding BASE and each band is the canonical cumulative release, with base <> txn', async () => {
+    const inv = world.baseFxInvoiceId;
+    const seeded = await commitG3Plan(inv);
+    M['G3_seed'] = seeded.error;
+    expect(M['G3_seed'], `the plan on the FX invoice was refused: ${String(M['G3_seed'])}`).toBeNull();
+    M['G3_totals'] = (
+      await sup.query(
+        `SELECT total_txn_minor::text AS txn, total_base_minor::text AS base, currency_code, source_to_base_rate::text AS rate,
+                (fx_rate_id IS NOT NULL) AS has_rate_row
+           FROM invoices WHERE id = $1`,
+        [inv],
+      )
+    ).rows[0];
+    M['G3_outstanding'] = (
+      await sup.query(
+        `SELECT o.outstanding_txn_minor::text AS txn, o.outstanding_base_minor::text AS base
+           FROM invoice_outstanding($1, ARRAY[$2::UUID]) o`,
+        [world.businessId, inv],
+      )
+    ).rows[0];
+    const reading = (
+      await inCtx(app, { 'app.tenant_id': world.tenantId, 'app.business_id': world.businessId }, [
+        {
+          sql: `SELECT bucket_no, currency_code, txn_minor::text AS txn, base_minor::text AS base
+                  FROM public.customer_ar_aging($1,$2,$3::DATE,$4::INTEGER[]) ORDER BY bucket_no`,
+          params: [world.businessId, world.customerId3, '2026-10-07', BUCKETS],
+        },
+      ])
+    ).rows as readonly Record<string, string>[];
+    M['G3_reading'] = reading;
+    // ── THE FIXTURE IS THE NON-DEGENERATE ONE, ASSERTED AND NOT ASSUMED.
+    const T = BigInt(String((M['G3_outstanding'] as Record<string, string>)['txn']));
+    const B = BigInt(String((M['G3_outstanding'] as Record<string, string>)['base']));
+    expect(B, 'the FX invoice carries no outstanding base, so there is nothing to conserve').toBeGreaterThan(0n);
+    expect(B, 'THE FIXTURE IS DEGENERATE AGAIN: base equals txn, so this law has the txn law content').not.toBe(T);
+    expect((M['G3_totals'] as Record<string, unknown>)['has_rate_row'], 'the invoice carries no fx_rate_id, so it is not a lawful FX row').toBe(true);
+    expect(String((M['G3_totals'] as Record<string, unknown>)['currency_code'])).toBe('USD');
+    // ── (1) THE BANDS SUM EXACTLY TO THE AUTHORITATIVE OUTSTANDING BASE.
+    const sumBase = reading.reduce((a, r) => a + BigInt(r['base'] as string), 0n);
+    const sumTxn = reading.reduce((a, r) => a + BigInt(r['txn'] as string), 0n);
+    expect(sumTxn, 'the txn bands do not conserve, so the base reading is on a broken fixture').toBe(T);
+    expect(sumBase, 'the base bands do not sum to the outstanding base — the allocation leaks or duplicates a minor unit').toBe(B);
+    // ── (2) THE SPLIT IS REAL: more than one band carries base.
+    expect(
+      reading.filter((r) => BigInt(r['base'] as string) > 0n).length,
+      'only one band carries base, so this says nothing about an allocation',
+    ).toBeGreaterThan(1);
+    // ...and the split is the one the fixture's dates predict, which is what
+    //    makes it a reading of the projection rather than of whatever came out:
+    //    2026-06-20 -> 4, 2026-08-20 -> 2, 2026-10-05 -> 1 at as_of 2026-10-07.
+    expect(
+      reading.map((r) => Number(r['bucket_no'])),
+      'the bands are not the ones this schedule dates',
+    ).toStrictEqual([1, 2, 4]);
+    // ── (3) AND EACH BAND IS THE CANONICAL CUMULATIVE HALF_EVEN RELEASE,
+    //        consumed from the shipped model rather than re-implemented.
+    let before = 0n;
+    const perBand: { bucket: number; txn: string; base: string; expected: string }[] = [];
+    for (const r of reading) {
+      const txn = BigInt(r['txn'] as string);
+      const expected = apRelease(B, T, before, txn);
+      perBand.push({ bucket: Number(r['bucket_no']), txn: String(txn), base: String(r['base']), expected: String(expected) });
+      before += txn;
+    }
+    M['G3_per_band'] = perBand;
+    for (const b of perBand) {
+      expect(b.base, `bucket ${b.bucket} base is not apRelease(B,T,before,bandTxn)`).toBe(b.expected);
+    }
+    // ...and the endpoints of the identity, which is what makes (3) more than
+    //    a restatement of (1): the whole txn releases the whole base.
+    expect(apRelease(B, T, 0n, T), 'apRelease(B,T,0,T) is not B, so the identity this law rests on does not hold').toBe(B);
+    expect(before, 'the bands do not cover the whole outstanding txn').toBe(T);
+    // ── CLEANUP through the documented route, so §F reads a sound fixture.
+    M['G3_cleanup'] = await clearActive(inv);
+    M['G3_ratchet'] = await ratchet();
+    expect(M['G3_ratchet'], `the block refuses the state §G3 left: ${String(M['G3_ratchet'])}`).toBeNull();
+  });
+
+  /**
+   * G4. THE SCHEDULE-SIDE RUNTIME INDEX GAP, CLOSED ON THE HALF A CATALOGUE
+   *     READ CAN CLOSE (`TL-P4-COORD-R59` ordered item 8, F14-9).
+   *
+   * All three runtime `pg_index` readings of this slice covered
+   * `installment_plans`; `installments` was read at APPLY TIME only. The
+   * schedule sum is taken on the leading pair of
+   * `installments_plan_schedule_idx` and is MEASURED index-served with the
+   * planner free, so `schedule_incomplete: (a) the schedule sums to X` could
+   * state an X that an unenforcing `installments` index produced, with nothing
+   * reading to exclude it.
+   *
+   * `installment_schedule_verify()` now reads the three flags of every index
+   * of BOTH relations before any obligation states a figure. Both halves are
+   * here: the SHIPPED state refuses the short schedule by its own name, and
+   * the UNENFORCING state refuses it as `plan_index_unenforcing` and names the
+   * index. `indislive = false` is taken as well, which is the state the
+   * round-14 challenger's two failed attempts did not reach.
+   */
+  it('G4 a schedule refusal reads the indexes of installments before stating a figure, and names an unenforcing one', async () => {
+    const inv = world.gInvoiceIds[4] as string;
+    await clearActive(inv);
+    /** A plan whose single instalment genuinely does NOT reach the invoice total. */
+    const shortPlan = async (): Promise<string | null> => {
+      const planId = randomUUID();
+      return (
+        await inCtx(mig, APP_CTX(), [
+          { sql: PLAN_INSERT, params: planArgs(planId, inv, 'active') },
+          {
+            sql: `INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+                  VALUES ($1,$2,gen_random_uuid(),$3,1,'2026-02-02'::DATE,400000)`,
+            params: [world.tenantId, world.businessId, planId],
+          },
+        ])
+      ).error;
+    };
+    // ── THE SHIPPED CONTROL: the flags are all true, so the refusal is the
+    //    schedule's own name and states the figures.
+    M['G4_flags_before'] = (
+      await sup.query(
+        `SELECT ic.relname::text AS ix, x.indrelid::regclass::text AS rel, x.indisvalid, x.indisready, x.indislive
+           FROM pg_index x JOIN pg_class ic ON ic.oid = x.indexrelid
+          WHERE x.indrelid IN ('public.installments'::regclass, 'public.installment_plans'::regclass) ORDER BY 1`,
+      )
+    ).rows;
+    M['G4_short_shipped'] = await shortPlan();
+    expect(String(M['G4_short_shipped']), 'a short schedule is no longer refused at all').toContain('installment.schedule_incomplete: (a)');
+    expect(String(M['G4_short_shipped']), 'the index name is blamed while every flag is true').not.toContain('plan_index_unenforcing');
+
+    // ── THE RED ARMS, one per unenforcing shape, each restored in `finally`.
+    for (const [label, flags] of [
+      ['G4_unready', `indisvalid = false, indisready = false`],
+      ['G4_notlive', `indislive = false`],
+    ] as const) {
+      try {
+        M[`${label}_set`] = await sudo(`UPDATE pg_index SET ${flags} WHERE indexrelid = 'public.installments_plan_schedule_idx'::regclass`);
+        expect(M[`${label}_set`], `${label}: the state could not be built: ${String(M[`${label}_set`])}`).toBeNull();
+        M[`${label}_outcome`] = await shortPlan();
+        M[`${label}_post`] = await state(inv);
+        // THE REFUSAL NAMES WHAT IT READ, AND NAMES THE INDEX.
+        expect(String(M[`${label}_outcome`]), `${label}: the schedule refusal still states a figure with no index reading`).toContain(
+          'installment.plan_index_unenforcing',
+        );
+        expect(String(M[`${label}_outcome`]), `${label}: the refusal does not name the index it read`).toContain(
+          'installments_plan_schedule_idx on installments',
+        );
+        expect(String(M[`${label}_outcome`]), `${label}: the refusal does not say which relation`).toContain('indisvalid=');
+        // AND IT FAILS CLOSED: nothing committed.
+        expect((M[`${label}_post`] as Record<string, unknown>)['plans'], `${label}: a plan committed over an unenforcing index`).toBe(0);
+      } finally {
+        M[`${label}_restore`] = await sudo(
+          `UPDATE pg_index SET indisvalid = true, indisready = true, indislive = true WHERE indexrelid = 'public.installments_plan_schedule_idx'::regclass`,
+        );
+        // `REINDEX` IS ITSELF A MEASUREMENT: it would raise if the heap did not
+        // satisfy the index, so a null here says nothing was written past it.
+        M[`${label}_reindex`] = await sudo('REINDEX INDEX public.installments_plan_schedule_idx');
+      }
+      expect(M[`${label}_restore`], `${label}: the flags were not restored`).toBeNull();
+      expect(M[`${label}_reindex`], `${label}: the index could not be rebuilt afterwards`).toBeNull();
+    }
+    // ── AND THE SHIPPED BEHAVIOUR IS BACK, byte for byte: the same short
+    //    schedule is refused by the schedule's own name again, which is the
+    //    control that stops the repair being a refusal of everything.
+    M['G4_short_after'] = await shortPlan();
+    expect(String(M['G4_short_after'])).toContain('installment.schedule_incomplete: (a)');
+    expect(String(M['G4_short_after'])).not.toContain('plan_index_unenforcing');
+    // ...and a LAWFUL plan on the same invoice still commits.
+    const lawful = await commitPlan(inv);
+    M['G4_lawful_after'] = lawful.error;
+    expect(M['G4_lawful_after'], `a lawful plan is refused after §G4: ${String(M['G4_lawful_after'])}`).toBeNull();
+    M['G4_cleanup'] = await clearActive(inv);
+    M['G4_ratchet'] = await ratchet();
+    expect(M['G4_ratchet'], `the block refuses the state §G4 left: ${String(M['G4_ratchet'])}`).toBeNull();
   });
 });
 

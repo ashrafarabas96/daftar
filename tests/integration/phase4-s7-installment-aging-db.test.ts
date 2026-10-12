@@ -108,6 +108,15 @@ let routinesAfter: readonly string[] = [];
 /** The same law asked again with a seventh routine planted — its red arm. */
 let plantedDiff: readonly string[] = [];
 let plantError: string | null = null;
+/**
+ * The catalogue read AFTER the plant has been dropped, which is the only
+ * snapshot that can decide whether it was dropped (`TL-P4-COORD-R59` ordered
+ * item 4, F14-3). Assertion (d) used to read `routinesAfter` — a snapshot
+ * taken BEFORE the plant existed — so it tested a list that could never have
+ * held the plant and passed whether the drop ran or not.
+ */
+let routinesAfterDrop: readonly string[] = [];
+let dropError: string | null = null;
 
 beforeAll(async () => {
   // CHALLENGER H3. The first version applied the specification as the
@@ -146,15 +155,35 @@ beforeAll(async () => {
   // create in `public` at all — and THE SAME LAW is asked again. It must
   // report the planted routine. Then it is dropped, so no case after this
   // reads a polluted catalogue.
+  //
+  // THE DROP IS IN A `finally` AND NOT IN THE `try` (`TL-P4-COORD-R59`
+  // ordered item 4, F14-4; the law is `TL-P4-COORD-R56` §5). It used to be the
+  // LAST STATEMENT INSIDE the `try`, after the read that may throw — so a
+  // throw in `sigs()` left the planted routine alive in `public` for every
+  // later case in this file. A teardown that lives inside the arm it cleans up
+  // is not a teardown. `IF EXISTS` makes the `finally` idempotent for the path
+  // where the plant was never created, and the drop's own failure is recorded
+  // rather than swallowed.
   try {
     await db.pool.query(
       `CREATE	OR  REPLACE	FUNCTION	public.installment_plan_fact_assert_extra(p_a BIGINT)
 ` + ` RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog AS $x$ BEGIN RETURN true; END $x$`,
     );
     plantedDiff = (await sigs()).filter((x) => !routinesBefore.includes(x));
-    await db.pool.query('DROP FUNCTION public.installment_plan_fact_assert_extra(bigint)');
   } catch (e) {
     plantError = e instanceof Error ? e.message : String(e);
+  } finally {
+    try {
+      await db.pool.query('DROP FUNCTION IF EXISTS public.installment_plan_fact_assert_extra(bigint)');
+    } catch (e) {
+      dropError = e instanceof Error ? e.message : String(e);
+    }
+    // ...and the snapshot that decides (d) is taken HERE, after the drop.
+    try {
+      routinesAfterDrop = await sigs();
+    } catch (e) {
+      dropError = `${dropError ?? ''} | snapshot: ${e instanceof Error ? e.message : String(e)}`;
+    }
   }
 }, 600_000);
 
@@ -439,7 +468,22 @@ describe('§A3 THE COMPLETENESS LAW READS THE CATALOGUE, NOT THE FILE (TL-P4-COO
       ].sort(),
     );
     // (d) AND THE CATALOGUE IS CLEAN AGAIN, so no later case reads a polluted
-    //     `public`.
-    expect(routinesAfter.some((x) => x.includes('installment_plan_fact_assert_extra'))).toBe(false);
+    //     `public` — READ FROM A SNAPSHOT TAKEN AFTER THE DROP, which it was
+    //     not (`TL-P4-COORD-R59` ordered item 4, F14-3). The old assertion
+    //     read `routinesAfter`, snapshotted BEFORE the plant was created, so
+    //     it tested a list that could never have held the plant and passed
+    //     whether the drop ran or not. It is now the post-drop snapshot, and
+    //     the clause below makes it NON-VACUOUS by first requiring that the
+    //     plant really was in the catalogue between the two reads.
+    expect(dropError, `the plant's drop or the post-drop snapshot failed, so (d) is UNMEASURED: ${dropError ?? ''}`).toBeNull();
+    expect(routinesAfterDrop.length, 'the post-drop snapshot is empty, so (d) would pass vacuously').toBeGreaterThan(0);
+    expect(
+      plantedDiff.some((x) => x.includes('installment_plan_fact_assert_extra')),
+      'the plant was never in the catalogue, so (d) has nothing to be clean of',
+    ).toBe(true);
+    expect(routinesAfterDrop.some((x) => x.includes('installment_plan_fact_assert_extra'))).toBe(false);
+    // ...and the drop removed EXACTLY the plant and nothing else: the
+    //    post-drop catalogue equals the post-apply one.
+    expect([...routinesAfterDrop].sort(), 'the drop changed more of public than the plant').toStrictEqual([...routinesAfter].sort());
   });
 });

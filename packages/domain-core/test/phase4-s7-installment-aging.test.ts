@@ -259,6 +259,17 @@ function endOfLiteral(s: string, i: number): number {
  * counted instead. (The construct itself cannot be written in this comment:
  * a closing delimiter would end the comment. `H13` writes it as a string and
  * measures it.)
+ *
+ * AN UNTERMINATED BLOCK COMMENT RAISES AND NO LONGER RETURNS THE END OF THE
+ * SUBJECT (`TL-P4-COORD-R59` ordered item 5, F14-8). `return s.length` was the
+ * FOURTH silent-swallow site of this one lexer, shipped in the round whose own
+ * report said all three were closed, while both its siblings
+ * (`endOfLiteral`, `lexSql`'s dollar tag) raise. The nesting count above is
+ * correct and that is exactly what made the silent return easy to miss. Latent
+ * on the shipped bytes -- the specification contains the opening delimiter
+ * ZERO times, which `H13` measures rather than assumes -- and repaired anyway,
+ * because the instrument whose job is not to invert may not fail quietly in
+ * ANY of its sites.
  */
 function endOfBlockComment(s: string, i: number): number {
   let depth = 0;
@@ -277,7 +288,11 @@ function endOfBlockComment(s: string, i: number): number {
     }
     j += 1;
   }
-  return s.length;
+  throw new Error(
+    `endOfBlockComment: the block comment opened at offset ${i} is never closed (depth ${depth} at the end of the subject), ` +
+      `so every statement after it would be swallowed by the projection. A projection that loses its subject is not a projection, ` +
+      `and this is raised rather than returned.`,
+  );
 }
 
 function stripCommentsQuoteAware(s: string): string {
@@ -2192,7 +2207,10 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     // ...and the MONEY is identical at all three, because the allocation does
     // not depend on `asOf` at all — only the banding does.
     for (const asOf of [AS_OF, '2026-02-15', '2026-01-15']) {
-      expect(at(asOf).reduce((a, x) => a + x.txnMinor, 0n), asOf).toBe(INV.outstandingTxnMinor);
+      expect(
+        at(asOf).reduce((a, x) => a + x.txnMinor, 0n),
+        asOf,
+      ).toBe(INV.outstandingTxnMinor);
     }
     // ...and the pure model reads no clock, which is the same law PROOF 8
     // applies to the specification's own text.
@@ -2220,7 +2238,10 @@ describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions
     // (2) THE AGING BASES SUM EXACTLY TO THE OUTSTANDING BASE — at this
     //     as-of and at every other, since the allocation is as-of independent.
     for (const asOf of [AS_OF, '2026-02-15', '2026-01-15', '2027-12-31']) {
-      expect(at(asOf).reduce((a, x) => a + x.baseMinor, 0n), asOf).toBe(INV.outstandingBaseMinor);
+      expect(
+        at(asOf).reduce((a, x) => a + x.baseMinor, 0n),
+        asOf,
+      ).toBe(INV.outstandingBaseMinor);
     }
 
     // (3) THE CARRYING ALLOCATION COMES FROM `total_txn_minor` AND
@@ -2965,12 +2986,8 @@ describe('META — the proofs are not vacuous', () => {
       ['sqlCodeOnly', plantedCode],
       ['sqlSchemaOnly', plantedSchema],
     ] as const) {
-      expect(projected, `${name} lost a statement to a -- inside a literal`).toContain(
-        'CREATE UNIQUE INDEX t_live_uq ON t (id) WHERE status = 1;',
-      );
-      expect(projected, `${name} lost the statement after the second literal`).toContain(
-        'CREATE INDEX t_other_ix ON t (created_at);',
-      );
+      expect(projected, `${name} lost a statement to a -- inside a literal`).toContain('CREATE UNIQUE INDEX t_live_uq ON t (id) WHERE status = 1;');
+      expect(projected, `${name} lost the statement after the second literal`).toContain('CREATE INDEX t_other_ix ON t (created_at);');
     }
     // ...and the literal's prose is still DATA to a code law, which is the
     // property the inversion silently took away.
@@ -3209,9 +3226,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
       ['installments', 'installments_schedule_complete', 'installment_schedule_verify'],
       ['invoices', 'invoices_installment_schedule_complete', 'installment_schedule_verify'],
     ] as const) {
-      expect(sketchCode, `the read-time trigger law does not enumerate ${tgname}`).toMatch(
-        new RegExp(`'${relname}',\\s*'${tgname}',\\s*'${proname}'`),
-      );
+      expect(sketchCode, `the read-time trigger law does not enumerate ${tgname}`).toMatch(new RegExp(`'${relname}',\\s*'${tgname}',\\s*'${proname}'`));
     }
     // the four things it pins per row, and the `NOT EXISTS` that makes an
     // absence the thing counted
@@ -3346,9 +3361,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // lock is a count taken on the snapshot the statement started with.
     expect(syncBody).toMatch(/SELECT pg_catalog\.count\(\*\) INTO v_active[\s\S]{0,300}AND p\.status = 'active';/);
     expect(syncBody).toMatch(/v_state := \(v_active > 0\);/);
-    expect(syncBody, 'the blindable EXISTS came back').not.toMatch(
-      /SELECT EXISTS \(SELECT 1 FROM public\.installment_plans p[\s\S]{0,200}INTO v_state;/,
-    );
+    expect(syncBody, 'the blindable EXISTS came back').not.toMatch(/SELECT EXISTS \(SELECT 1 FROM public\.installment_plans p[\s\S]{0,200}INTO v_state;/);
     // THE LOCK PRECEDES THE COUNT, in this body, in this order.
     const lockAt = syncBody.indexOf('FOR NO KEY UPDATE');
     const countAt = syncBody.indexOf('SELECT pg_catalog.count(*) INTO v_active');
@@ -3413,9 +3426,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     //     require the refusal from the running database.
     // So what this law now asserts is that the substring instrument is GONE
     // and the digest instrument is present.
-    expect(code, 'a code-substring ratchet came back on the write side').not.toMatch(
-      /\bcode\s+(NOT\s+)?LIKE\s+'%/,
-    );
+    expect(code, 'a code-substring ratchet came back on the write side').not.toMatch(/\bcode\s+(NOT\s+)?LIKE\s+'%/);
     // SCOPED TO THE OPERATOR WITH ITS PATTERN, NOT TO THE WORDS -- the EIGHTH
     // time in this slice that explaining a removal has tripped the test for
     // the removal, and measured here rather than guessed: the digest law's own
@@ -3425,9 +3436,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // the very statement that enforces the absence. A real substring test is
     // `prosrc LIKE '...'` -- the operator followed by a LITERAL -- so that is
     // what is forbidden, and the explanation may say the words.
-    expect(code, 'a raw prosrc substring law is back on the write side').not.toMatch(
-      /\bprosrc\s+(NOT\s+)?LIKE\s+'/,
-    );
+    expect(code, 'a raw prosrc substring law is back on the write side').not.toMatch(/\bprosrc\s+(NOT\s+)?LIKE\s+'/);
     expect(code).toContain("pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8'))");
     expect(code).toContain("['public.installment_plan_fact_sync()',");
     // AND THE SPECIFICATION SAYS WHAT THE INSTRUMENT IS AND WHAT IT COSTS, in
@@ -3809,14 +3818,58 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(SPEC).toContain('P4-AL-41');
     const code = sqlCodeOnly(SPEC);
     // taken, in the BEFORE trigger's body, on `invoices`, with the ordering
-    expect(code).toMatch(/FROM public\.invoices i\s*\n\s*WHERE i\.business_id = NEW\.business_id AND i\.id = ANY \(v_locks\)\s*\n\s*ORDER BY i\.id\s*\n\s*FOR NO KEY UPDATE/);
+    expect(code).toMatch(
+      /FROM public\.invoices i\s*\n\s*WHERE i\.business_id = NEW\.business_id AND i\.id = ANY \(v_locks\)\s*\n\s*ORDER BY i\.id\s*\n\s*FOR NO KEY UPDATE/,
+    );
     // `FOR NO KEY UPDATE` and not `FOR UPDATE`: it is the strength a plain
     // UPDATE of a non-key column takes and it does not block the `FOR KEY
     // SHARE` an ordinary foreign-key check takes against the same invoice.
     expect(code).not.toContain('FOR UPDATE;');
-    // and the DECLARED exceptions are declared rather than left to a twelfth
-    // challenger to re-measure: the DELETE arm takes no BEFORE trigger.
-    expect(SPEC).toContain('BEFORE DELETE');
+    // ── AND THE `DELETE` INVERSION IS DECLARED WITH A REMEDY THAT REACHES
+    //    IT, AFTER THE TRIGGER THAT WAS SUPPOSED TO CLOSE IT WAS BUILT AND
+    //    MEASURED NOT TO (`TL-P4-COORD-R59` ordered item 2, F14-2). Round 14
+    //    declared the inversion and said an EIGHTH trigger would be needed.
+    //    Round 15 found that no eighth trigger is needed to FIRE on DELETE —
+    //    and that firing on DELETE does not help, because
+    //    `GetTupleForTrigger` locks the `OLD` tuple before a `BEFORE ROW
+    //    DELETE` trigger is called, so rank 6 is held before the arm runs.
+    //    The arm is therefore NOT in the body, part 12 REFUSES the bit, and
+    //    the measured case is declared with the caller remedy that reaches it.
+    const exclusive = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_active_exclusive() RETURNS TRIGGER');
+    expect(exclusive, 'the DELETE arm is back, and it was measured not to fix the order').not.toContain("IF TG_OP = 'DELETE' THEN");
+    expect(exclusive, 'the DELETE arm is back, and it was measured not to fix the order').not.toContain('RETURN OLD;');
+    // ...and the REASON is in the file, as the mechanism and not as a mood.
+    expect(SPEC).toContain('GetTupleForTrigger');
+    expect(SPEC).toContain('LOCKS THAT TUPLE BEFORE THE TRIGGER');
+    // ...and the measured trace of the cycle is there, with the 55P03 that
+    //    proves which rank the deleter held.
+    expect(SPEC).toContain('A  DELETE FROM installment_plans WHERE id = $1   -> BLOCKED, asserted');
+    expect(SPEC).toContain('refused 55P03, which PROVES A held rank 6 while awaiting rank 3');
+    // ...and the REMEDY IS A STATEMENT THE CALLER CAN WRITE, which is the
+    //    condition a declared hazard has to meet.
+    expect(SPEC).toContain('THE DELETER TAKES THE INVOICE ROW ITSELF');
+    expect(SPEC).toContain('SELECT 1 FROM invoices WHERE business_id = $1 AND id = $2');
+    // ...and the trigger shape and part 12 AGREE with all of that: INSERT and
+    //    UPDATE required, DELETE refused, read out of `tgtype`.
+    expect(code).toMatch(/CREATE TRIGGER installment_plans_active_exclusive\s*\n\s*BEFORE INSERT OR UPDATE ON installment_plans/);
+    const endBlock = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    const block12 = endBlock.slice(endBlock.indexOf('-- 12. THE ONE-ACTIVE EXCLUSION'));
+    expect(block12.indexOf('installment_plan_active_exclusive()'), 'part 12 is not where it was').toBeGreaterThan(-1);
+    expect(block12).toContain('AND (t.tgtype & 4) = 4 AND (t.tgtype & 16) = 16 AND (t.tgtype & 8) = 0');
+    // ...and part 12's own rationale names the measurement rather than only
+    //    the old «a deleted row cannot become anything», which was true of
+    //    the exclusion and silent about the lock order.
+    expect(block12).toContain('GetTupleForTrigger');
+    // ...and the one-invoice case is in the determinism table with the answer
+    //    that is TRUE of it, instead of being absent from it.
+    expect(SPEC).toContain('ONE invoice: a plan DELETE against an');
+    expect(SPEC).toContain('invoice row FIRST, which no');
+    // ...and the RENDERING half of ordered item 2 is declared here too: 409,
+    //    retryable, by SQLSTATE, and in NEITHER registry.
+    expect(SPEC).toContain('retryable: true');
+    expect(SPEC).toContain('STILL NOT in either invariant registry');
+    // ...and the still-open caller shape is DECLARED and not certified absent.
+    expect(SPEC).toContain('TAKE THE INVOICE ROW (or the plan row) BEFORE THE SCHEDULE');
     // the determinism claim is SCOPED and names the three outcomes it is not
     for (const token of ['40001', '40P01', 'REPEATABLE READ', 'SERIALIZABLE']) {
       expect(SPEC, `section 3a-ter does not name ${token}`).toContain(token);
@@ -3832,6 +3885,69 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(SPEC).toContain('55P03');
     expect(SPEC).toContain('ONE INVOICE PER STATEMENT');
     expect(SPEC, 'the unscoped ascending claim is back').not.toContain('the rows this takes are taken ASCENDING BY `id`');
+  });
+
+  /**
+   * ── H9a. THE SCHEDULE HAZARD IS DECLARED ONLY WITH ELIMINATION SHOWN
+   *    IMPOSSIBLE, AND THE REMEDY REACHES IT
+   *    (`TL-P4-COORD-R59` ordered item 3; `R55` §4 made general by `R59` §4;
+   *     F14-5) ──────────────────────────────────────────────────────────────
+   *
+   * Round 14 applied the structural-elimination preference to the FACT
+   * triggers -- by a trigger NAME -- and left the SCHEDULE triggers merely
+   * DECLARING the same class of hazard. `R59` §4 permits a declared hazard
+   * ONLY where elimination is shown impossible, so the showing is now IN THE
+   * FILE as section 3a-quater, and this is the law over it. It is a law about
+   * three things a reader can check: that the argument is there, that it is an
+   * argument about REFERENTIAL order rather than trigger order (which is what
+   * makes it different from the fact case), and that the section ends in a
+   * statement the caller can actually write.
+   */
+  it('H9a THE SCHEDULE HAZARD CARRIES AN IMPOSSIBILITY ARGUMENT AND A REMEDY THAT REACHES IT', () => {
+    expect(SPEC, 'section 3a-quater is not in the file').toContain('3a-quater');
+    const a = SPEC.indexOf('-- ── 3a-quater.');
+    expect(a, 'section 3a-quater does not open with a section rule').toBeGreaterThan(-1);
+    const b = SPEC.indexOf('-- ── 4. WHAT THIS SPECIFICATION DELIBERATELY DOES NOT CREATE', a);
+    expect(b, 'section 3a-quater has no end').toBeGreaterThan(a);
+    const quater = SPEC.slice(a, b);
+    // (1) IT IS SCOPED TO THE RULING THAT ASKED FOR IT.
+    expect(quater).toContain('TL-P4-COORD-R59');
+    // (2) IT SAYS WHY THE FACT REMEDY -- A TRIGGER NAME -- CANNOT TRANSFER,
+    //     and the reason is REFERENTIAL ORDER and not trigger order. That
+    //     distinction is the whole argument: a name orders a queue, and no
+    //     queue order can make rows exist that no statement has written.
+    expect(quater).toContain('installments_plan_fk');
+    expect(quater).toContain('REFERENTIAL ORDER');
+    expect(quater).toContain('TRIGGER ORDER');
+    expect(quater).toContain('cannot make rows exist that no statement has written');
+    // (3) IT ENUMERATES THE TRANSACTION-END HOOKS, so «no other mechanism
+    //     escapes SET CONSTRAINTS» is an enumeration and not a feeling.
+    for (const hook of ['DEFERRABLE `UNIQUE`', 'EXCLUDE', 'FOREIGN KEY', 'ON COMMIT', 'TEMPORARY', 'NOT DEFERRABLE']) {
+      expect(quater, `the hook enumeration does not name ${hook}`).toContain(hook);
+    }
+    expect(quater).toContain('SET CONSTRAINTS ALL IMMEDIATE');
+    expect(quater).toContain('ELIMINATION IS SHOWN IMPOSSIBLE');
+    // (4) AND IT ENDS IN A STATEMENT THE CALLER CAN WRITE -- the one-statement
+    //     data-modifying CTE -- rather than in a declaration they can do
+    //     nothing with. The spelling is named, so the remedy is checkable.
+    expect(quater).toContain('data-modifying CTE');
+    expect(quater).toContain('RETURNING id');
+    expect(quater).toContain('tests/integration/phase4-s7-installment-concurrency-db.test.ts');
+    // (5) AND THE REFUSAL IT DESCRIBES REALLY DOES NAME BOTH CAUSES, in the
+    //     body, on the one event where the forced-early state is reachable:
+    //     a plan's own INSERT with zero instalment rows. A section may not
+    //     describe a message the code does not carry.
+    const verify = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_schedule_verify() RETURNS TRIGGER');
+    expect(verify).toContain("IF v_rows = 0 AND TG_TABLE_NAME = 'installment_plans' AND TG_OP = 'INSERT' THEN");
+    const both = verify.slice(verify.indexOf('IF v_rows = 0 AND TG_TABLE_NAME'), verify.indexOf('-- (b) AT LEAST ONE INSTALMENT ROW'));
+    for (const token of ['TWO STATES REACH THIS', 'SET CONSTRAINTS ALL IMMEDIATE', 'NO instalment row at all', 'ONE statement', 'data-modifying CTE']) {
+      expect(both, `the both-causes refusal does not name ${token}`).toContain(token);
+    }
+    // ...and it does not ASSERT the cause it cannot observe.
+    expect(both).toContain('This refusal cannot tell the two apart');
+    // ...and the generic obligation-(a) message is still there for every other
+    //    event, so the new branch ADDED a case and did not replace the law.
+    expect(verify).toContain("RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to % and the invoice total is %',");
   });
 
   /**
@@ -3993,10 +4109,18 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
     expect(block).toContain('INTO v_writer_tg, v_verify_tg');
     expect(block).toMatch(/NOT \(v_writer_tg < v_verify_tg\)/);
-    expect(block).toContain('installment.migration_end_state_invalid: the trigger executing installment_plan_fact_sync');
+    expect(block).toContain('installment.migration_end_state_invalid: the ENABLED (tgenabled = O) trigger executing installment_plan_fact_sync');
+    // ...and part 9e reads the SAME premise the runtime verifier reads, which
+    // it did not (`TL-P4-COORD-R59` ordered item 10): the runtime read
+    // qualifies the writer row `tgenabled = 'O'` and the apply-time one did
+    // not, so one premise had two readings and the apply-time one was weaker.
+    // Both sides of 9e now carry the qualification.
+    const nineE = block.slice(block.indexOf('-- 9e.'), block.indexOf('-- 9b.'));
+    expect(nineE.split("AND t.tgenabled = 'O'").length - 1, 'part 9e does not read tgenabled on both sides').toBe(2);
     // ── AND AT RUNTIME, PER PLAN EVENT, INSIDE THE VERIFIER ITSELF.
     const verify = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER');
     expect(verify).toContain("f.proname = 'installment_plan_fact_sync'");
+    expect(verify, 'the runtime verifier stopped qualifying the writer row on tgenabled').toContain("t.tgenabled = 'O'");
     expect(verify).toContain('v_self := TG_NAME;');
     expect(verify).toMatch(/IF v_writer IS NOT NULL AND NOT \(v_writer < v_self\) THEN/);
     expect(verify).toContain('installment.plan_fact_unordered');
@@ -4034,7 +4158,10 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(() => assertPinnedBodiesComplete(planted)).toThrow(/installed and NOT pinned: installment_plan_fact_shadow/);
     expect(() => bodyDigests(planted)).toThrow(/installed and NOT pinned/);
     // RED, the other direction: a pinned routine the file does not install.
-    const removed = SPEC.replace('CREATE OR REPLACE FUNCTION installment_plan_fact_assert(p_unreadable_plan BIGINT,', 'CREATE OR REPLACE FUNCTION zzz_other(p_unreadable_plan BIGINT,');
+    const removed = SPEC.replace(
+      'CREATE OR REPLACE FUNCTION installment_plan_fact_assert(p_unreadable_plan BIGINT,',
+      'CREATE OR REPLACE FUNCTION zzz_other(p_unreadable_plan BIGINT,',
+    );
     expect(removed).not.toBe(SPEC);
     expect(() => assertPinnedBodiesComplete(removed)).toThrow(/pinned and NOT installed: installment_plan_fact_assert/);
     // and a head mentioned in PROSE is not a routine: the file's own header
@@ -4074,9 +4201,7 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     const dynamic = `${SPEC}\nDO $x$ BEGIN EXECUTE 'CREATE FUNCTION chal_dyn() RETURNS INT LANGUAGE sql AS $$SELECT 1$$'; END $x$;\n`;
     expect(routineHeads(dynamic), 'the declared blindness changed shape; re-read the declaration').toHaveLength(6);
     const extractor = readFileSync(join(__dirname, '..', '..', '..', 'scripts', 'guards', 'p4s7-body-digests.ts'), 'utf8');
-    expect(extractor, 'the extractor no longer declares which law decides completeness').toContain(
-      'tests/integration/phase4-s7-installment-aging-db.test.ts',
-    );
+    expect(extractor, 'the extractor no longer declares which law decides completeness').toContain('tests/integration/phase4-s7-installment-aging-db.test.ts');
     expect(extractor).toContain('DECLARED AND NOT CERTIFIED ABSENT');
     // part 6c closes the one shape a digest of a signature cannot see.
     const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
@@ -4138,6 +4263,31 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(() => sqlSchemaOnly("SELECT 'open ; CREATE UNIQUE INDEX u ON a (c);")).toThrow(/never closed/);
     //    ...and a BALANCED literal still ends where PostgreSQL ends it.
     expect(sqlCodeOnly("SELECT 'closed' ; CREATE UNIQUE INDEX u ON a (c);")).toContain('CREATE UNIQUE INDEX u ON a (c)');
+    //    (4) AN UNTERMINATED BLOCK COMMENT -- THE FOURTH SILENT-SWALLOW SITE
+    //    OF THE SAME LEXER (`TL-P4-COORD-R59` ordered item 5, F14-8).
+    //    `endOfBlockComment` returned `s.length`, so an unclosed opening
+    //    delimiter consumed the entire remainder of the subject in BOTH
+    //    projections with no error, while its two siblings raised. The round
+    //    that reported «all three silent-swallow sites now raise» had four.
+    //    It now raises, and the depth counter is reported in the message.
+    const openBlock = '/* an unterminated block comment\nCREATE UNIQUE INDEX a_uq ON a (id) WHERE id > 0;\n';
+    expect(() => sqlCodeOnly(openBlock)).toThrow(/never closed/);
+    expect(() => sqlSchemaOnly(openBlock)).toThrow(/never closed/);
+    //    ...an unterminated INNER comment inside a closed outer one is also
+    //    unbalanced and also raises: the depth never returns to zero.
+    expect(() => sqlCodeOnly('/* outer /* inner */ SELECT 1;')).toThrow(/never closed/);
+    //    ...and THE BALANCED CONTROL, which is what stops the repair being a
+    //    refusal of everything: the same subject with the comment CLOSED
+    //    keeps the statement that follows it in both projections.
+    const closedBlock = '/* a terminated block comment */\nCREATE UNIQUE INDEX a_uq ON a (id) WHERE id > 0;\n';
+    expect(sqlCodeOnly(closedBlock)).toContain('CREATE UNIQUE INDEX a_uq ON a (id) WHERE id > 0');
+    expect(sqlSchemaOnly(closedBlock)).toContain('CREATE UNIQUE INDEX a_uq ON a (id) WHERE id > 0');
+    expect(sqlCodeOnly(closedBlock), 'the comment body leaked into the code projection').not.toContain('terminated block comment');
+    //    ...and the LATENCY on the shipped bytes is MEASURED, not assumed:
+    //    the raise cannot change a projection of a subject that never opens a
+    //    block comment.
+    expect(SPEC.split('/*').length - 1, 'the specification now opens a block comment').toBe(0);
+    expect(SPEC.split('*/').length - 1, 'the specification now closes a block comment').toBe(0);
     // A DOUBLE-QUOTED IDENTIFIER IS ORDINARY TEXT HERE, AND THAT IS A
     // DECLARED REMAINDER AND NOT AN OVERSIGHT: it survives verbatim, and one
     // holding a comment marker would lose the rest of its line. The repair
@@ -4195,13 +4345,38 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     // ...AND THE REBUILD'S OWN REFUSAL IS CAUGHT AND RE-RAISED UNDER THAT
     // NAME, because the two-path count is PLANNER-DEPENDENT and is declared a
     // belt while the rebuild is EXECUTION.
-    expect(block).toMatch(/EXCEPTION WHEN unique_violation THEN[\s\S]{0,80}?RAISE EXCEPTION 'installment\.migration_end_state_invalid: index % cannot be rebuilt from the heap of its own relation/);
+    // ...AND EVERY FAILURE THE REBUILD CAN RAISE IS NAMED, NOT ONLY THE ONE
+    //    THAT WAS ANTICIPATED (`TL-P4-COORD-R59` ordered item 6, F14-6).
+    //    `WHEN unique_violation` renamed exactly one of `REINDEX`'s failures
+    //    and let a `42501` (measured: as `daftar_app`), a `55P03` or a lock
+    //    timeout surface raw out of the block naming no invariant of this
+    //    slice — the same shape the two-path count above it exists to repair.
+    //    The handler is `WHEN OTHERS` and it decides by `SQLSTATE` rather
+    //    than by assuming which failure arrived.
+    const nine_d = block.slice(block.indexOf('-- 9d.'));
+    expect(nine_d, 'part 9d still catches only unique_violation').not.toContain('EXCEPTION WHEN unique_violation');
+    expect(nine_d).toMatch(/EXECUTE 'REINDEX INDEX public\.' \|\| pg_catalog\.quote_ident\(v_ix\);\s*\n\s*EXCEPTION WHEN OTHERS THEN/);
+    expect(nine_d).toMatch(/IF SQLSTATE <> '23505' THEN/);
+    expect(nine_d).toContain('could not be REBUILT AT ALL');
+    expect(nine_d).toMatch(/RAISE EXCEPTION 'installment\.migration_end_state_invalid: index % cannot be rebuilt from the heap of its own relation/);
+    // ...and BOTH arms report the server's own SQLSTATE, so neither asserts a
+    //    cause it did not read.
+    expect((nine_d.match(/SQLSTATE, SQLERRM/g) ?? []).length, 'a 9d refusal states a cause without reporting the SQLSTATE it read').toBeGreaterThanOrEqual(2);
     expect(block).toContain('THIS IS NOT A CATALOGUE FLAG AND NO FLAG CAN SHOW IT');
     // ...and the forced index path is SAVED AND RESTORED, so part 9d does not
-    // reintroduce the leak part 9c shipped (F13-4).
-    const nine_d = block.slice(block.indexOf('-- 9d.'));
-    expect((nine_d.match(/pg_catalog\.set_config\('enable_seqscan'/g) ?? []).length, 'part 9d sets enable_seqscan without restoring it').toBe(2);
+    // reintroduce the leak part 9c shipped (F13-4) — AND THE RESTORE IS NOW
+    // EXCEPTION-SAFE IN CODE rather than resting on the transaction abort
+    // nothing stated (`TL-P4-COORD-R59` ordered item 6, F14-7): three
+    // `set_config` calls, one to force it and one restore on EACH path.
+    expect((nine_d.match(/pg_catalog\.set_config\('enable_seqscan'/g) ?? []).length, 'part 9d sets enable_seqscan without restoring it on every path').toBe(3);
     expect(nine_d).toContain("v_seqscan := pg_catalog.current_setting('enable_seqscan')");
+    expect(nine_d).toMatch(/EXCEPTION WHEN OTHERS THEN\s*\n\s*PERFORM pg_catalog\.set_config\('enable_seqscan', v_seqscan, true\);/);
+    // ...and part 9c's restore the same way: forced, read, restored on the
+    //    success path AND in a handler that re-raises under this slice's name.
+    const nine_c = block.slice(block.indexOf('-- 9c.'), block.indexOf('-- 9d.'));
+    expect((nine_c.match(/pg_catalog\.set_config\('enable_seqscan'/g) ?? []).length, 'part 9c does not restore enable_seqscan on every path').toBe(2);
+    expect(nine_c).toMatch(/EXCEPTION WHEN OTHERS THEN\s*\n\s*PERFORM pg_catalog\.set_config\('enable_seqscan', v_seqscan, true\);/);
+    expect(nine_c).toContain('part 9c could not read the plan of the index-independent active-plan count at all');
     // ...and the apply-time VACUITY is declared rather than hidden: both
     // relations are created in this same transaction, so they are empty here.
     expect(SPEC).toContain('IT IS VACUOUS AT APPLY TIME AND THAT IS DECLARED, NOT HIDDEN');
@@ -4209,19 +4384,40 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     expect(block).toContain('v_verify_tg');
     // ── THE THREE RUNTIME REFUSALS READ `pg_index` BEFORE ATTRIBUTING A
     //    CAUSE, and the categorical sentence that was false is gone.
-    expect(SPEC, "the categorical row-security attribution is back").not.toContain('look in pg_policy and not in pg_index. Writing from a blinded read');
+    expect(SPEC, 'the categorical row-security attribution is back').not.toContain('look in pg_policy and not in pg_index. Writing from a blinded read');
     const sync = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_fact_sync() RETURNS TRIGGER');
     const verify = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER');
     // two in the writer (the by-primary-key probe and the cross-check), one in
     // the deferred verifier (the flag comparison).
+    expect((sync.match(/RAISE EXCEPTION 'installment\.plan_index_unenforcing:/g) ?? []).length, 'the writer does not name the index cause twice').toBe(2);
+    expect((verify.match(/RAISE EXCEPTION 'installment\.plan_index_unenforcing:/g) ?? []).length, 'the deferred verifier does not name the index cause').toBe(
+      1,
+    );
+    // ── AND THE SCHEDULE VERIFIER NAMES IT TOO, OVER **BOTH** RELATIONS
+    //    (`TL-P4-COORD-R59` ordered item 8, F14-9). The three runtime
+    //    readings covered `installment_plans` alone; `installments` was read
+    //    at APPLY TIME only, and the schedule sum is taken on the leading
+    //    pair of `installments_plan_schedule_idx` — measured index-served
+    //    with the planner FREE — so `schedule_incomplete: (a) the schedule
+    //    sums to X` could state an X that is an artifact of an unenforcing
+    //    `installments` index with nothing reading to exclude it.
+    const sched = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_schedule_verify() RETURNS TRIGGER');
     expect(
-      (sync.match(/RAISE EXCEPTION 'installment\.plan_index_unenforcing:/g) ?? []).length,
-      'the writer does not name the index cause twice',
-    ).toBe(2);
-    expect(
-      (verify.match(/RAISE EXCEPTION 'installment\.plan_index_unenforcing:/g) ?? []).length,
-      'the deferred verifier does not name the index cause',
+      (sched.match(/RAISE EXCEPTION 'installment\.plan_index_unenforcing:/g) ?? []).length,
+      'the schedule verifier states a sum without reading whether an index of installments is enforcing',
     ).toBe(1);
+    expect(sched).toContain("WHERE x.indrelid IN ('public.installments'::regclass, 'public.installment_plans'::regclass)");
+    expect(sched).toContain('NOT (x.indisvalid AND x.indisready AND x.indislive)');
+    // ...and it is read BEFORE the figure is stated, which is the whole point.
+    expect(sched.indexOf('INTO v_unenforcing'), 'the index reading comes after the obligation that states the figure').toBeLessThan(
+      sched.indexOf("RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to"),
+    );
+    // ...and it cannot refuse lawful work: the read is GUARDED by one of the
+    //    obligations already having failed, so a sound schedule never reaches
+    //    the catalogue query at all.
+    expect(sched).toMatch(
+      /IF v_down \+ v_sched <> v_total OR v_rows < 1 OR v_max_seq <> v_rows OR v_distinct <> v_rows THEN\s*\n\s*SELECT pg_catalog\.string_agg/,
+    );
     for (const body of [sync, verify]) {
       expect((body.match(/INTO v_unenforcing/g) ?? []).length, 'a refusal attributes a cause it did not read').toBeGreaterThanOrEqual(1);
       expect(body).toContain("WHERE x.indrelid = 'public.installment_plans'::regclass");
