@@ -50,7 +50,8 @@ protectFailingExitCode();
 
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const ARGV = process.argv.slice(2);
 const REWRITE = ARGV.includes('--rewrite');
@@ -70,6 +71,93 @@ function artifactsOnDisk(dir: string): string[] {
   return readdirSync(dir)
     .filter((f) => /^P15-.*\.(md|json)$/.test(f) && f !== SELF)
     .sort();
+}
+
+/**
+ * DIRECTION 3: is the manifest's own status header CURRENT?
+ *
+ * The independent challenger found this file asserting an exact SHA ten commits
+ * behind the branch, and four counts in its Arabic summary — the section the
+ * owner actually reads — that disagreed with both the branch and with §4 of the
+ * same document. This gate did not catch any of it, because it proved digests
+ * and digests only: a file can carry a perfectly consistent digest table and a
+ * header describing a different commit.
+ *
+ * Phase 4 recorded this class as `TL-P4-COORD-R63`: a status header sitting
+ * outside the laws the file enforces. The fix is for the file's own gate to
+ * enforce them, so the numbers cannot rot silently between rounds.
+ *
+ * Every figure here is MEASURED from git — commits ahead of the base, files
+ * added, and `package.json` script keys compared as KEY SETS against the base
+ * rather than as diff lines, because counting diff lines is precisely how this
+ * pack produced a wrong script count once already.
+ */
+interface Currency {
+  readonly headSha: string;
+  readonly commits: number;
+  readonly newFiles: number;
+  readonly scriptsAdded: number;
+  readonly problems: readonly string[];
+}
+
+function arabicToWestern(t: string): string {
+  return t.replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+}
+
+function checkCurrency(manifest: string, root: string): Currency {
+  const git = (args: readonly string[]): string => {
+    const r = spawnSync('git', [...args], { cwd: root, encoding: 'utf8' });
+    return r.status === 0 ? (r.stdout ?? '').trim() : '';
+  };
+  const headSha = git(['rev-parse', 'HEAD']);
+  const base = 'origin/main';
+  const commits = Number(git(['rev-list', '--count', `${base}..HEAD`]) || '0');
+  const newFiles = git(['diff', '--diff-filter=A', '--name-only', `${base}...HEAD`]).split('\n').filter((l) => l.trim().length > 0).length;
+
+  let scriptsAdded = 0;
+  try {
+    const cur = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+    const baseJson = JSON.parse(git(['show', `${base}:package.json`]) || '{}') as { scripts?: Record<string, string> };
+    const b = baseJson.scripts ?? {};
+    scriptsAdded = Object.keys(cur.scripts ?? {}).filter((k) => !(k in b)).length;
+  } catch {
+    scriptsAdded = -1;
+  }
+
+  const problems: string[] = [];
+  if (headSha.length === 0) {
+    problems.push('HEAD could not be read, so currency is UNMEASURED — which is not the same as current');
+    return { headSha, commits, newFiles, scriptsAdded, problems };
+  }
+
+  // The header must name THIS head. A manifest is an index of a commit; an
+  // index naming another commit indexes something the reader does not have.
+  if (!manifest.includes(headSha)) {
+    const stated = /\*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\*/.exec(manifest);
+    problems.push(
+      `the header's exact SHA is ${stated?.[1] === undefined ? 'absent' : `\`${stated[1]}\``}, but HEAD is \`${headSha}\`. A handoff must be rewritten at the head it describes.`,
+    );
+  }
+
+  // The Arabic summary's counts, read with Arabic-Indic digits normalised.
+  const summary = arabicToWestern(manifest);
+  const claim = (re: RegExp): number | null => {
+    const m = re.exec(summary);
+    return m?.[1] === undefined ? null : Number(m[1]);
+  };
+  const pairs: readonly { readonly what: string; readonly claimed: number | null; readonly measured: number }[] = [
+    { what: 'commits on this branch', claimed: claim(/\*\*(\d+) إيداع/), measured: commits },
+    { what: 'new phase-owned code files', claimed: claim(/\*\*(\d+) ملف[ًا]* برمجي/), measured: newFiles },
+    { what: 'package.json script entries added', claimed: claim(/\*\*(\d+) سكربت/), measured: scriptsAdded },
+  ];
+  for (const x of pairs) {
+    if (x.claimed === null) {
+      problems.push(`the Arabic summary states no number for ${x.what}; measured ${x.measured}. An unstated count cannot be checked, so state it.`);
+    } else if (x.claimed !== x.measured) {
+      problems.push(`the Arabic summary says ${x.claimed} for ${x.what}; measured ${x.measured}. The owner reads that section.`);
+    }
+  }
+  return { headSha, commits, newFiles, scriptsAdded, problems };
 }
 
 function main(): void {
@@ -155,14 +243,26 @@ function main(): void {
     return;
   }
 
-  const problems = stale.length + missing.length + unlisted.length;
+  // ── direction 3: is the header current? ────────────────────────────────
+  const cur = checkCurrency(manifest, resolve(__dirname, '../..'));
+  console.log('');
+  console.log('DIRECTION 3 — IS THE HEADER CURRENT? (measured from git, not read from the file)');
+  console.log(`  HEAD ${cur.headSha}`);
+  console.log(`  measured: ${cur.commits} commit(s) ahead of origin/main, ${cur.newFiles} file(s) added, ${cur.scriptsAdded === -1 ? 'package.json unreadable' : `${cur.scriptsAdded} package.json script key(s) added`}`);
+  if (cur.problems.length === 0) {
+    console.log('  the header SHA and every stated count match this branch.');
+  } else {
+    for (const pr of cur.problems) console.log(`  STALE ${pr}`);
+  }
+
+  const problems = stale.length + missing.length + unlisted.length + cur.problems.length;
   console.log('');
   if (problems === 0) {
-    console.log(`PHASE 15 HANDOFF MANIFEST: VERIFIED — ${rows.length} digest(s) match, ${onDisk.length} artifact(s) all listed, none missing`);
+    console.log(`PHASE 15 HANDOFF MANIFEST: VERIFIED — ${rows.length} digest(s) match, ${onDisk.length} artifact(s) all listed, none missing, header current at ${cur.headSha.slice(0, 12)}`);
     return;
   }
   console.error(
-    `PHASE 15 HANDOFF MANIFEST: FAIL — ${stale.length} stale digest(s), ${missing.length} missing file(s), ${unlisted.length} unlisted artifact(s).`,
+    `PHASE 15 HANDOFF MANIFEST: FAIL — ${stale.length} stale digest(s), ${missing.length} missing file(s), ${unlisted.length} unlisted artifact(s), ${cur.problems.length} stale header claim(s).`,
   );
   console.error('  A stale digest is not a cosmetic defect: it is an evidence index asserting a byte state that is not the one on disk.');
   console.error(

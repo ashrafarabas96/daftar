@@ -93,7 +93,8 @@
     "rehearse:phase2:rollback": "tsx scripts/phase2-rollback-rehearsal.ts",
     "rehearse:phase3:deployed": "tsx scripts/phase3-deployed-rehearsal.ts",
     "gate:browser": "tsx tests/browser/gate.ts",
-    "verify:alert-signals:prove": "tsx scripts/phase15/alert-signals-proof.ts"
+    "verify:alert-signals:prove": "tsx scripts/phase15/alert-signals-proof.ts",
+    "checkpoint:phase15": "tsx scripts/phase15/resume-checkpoint.ts"
   },
   "engines": {
     "node": ">=24 <25"
