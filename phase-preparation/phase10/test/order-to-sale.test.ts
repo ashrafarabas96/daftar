@@ -18,6 +18,7 @@ const line = (over: Partial<RestaurantOrderLine> & { orderLineId: string; produc
   courseNo: 1,
   modifiers: [],
   voided: false,
+  recipeBinding: null,
   ...over,
 });
 
@@ -26,6 +27,7 @@ const modifier = (over: Partial<OrderedModifier> & { modifierId: string; label: 
   variantId: null,
   quantityQ4: Q(1),
   priced: false,
+  recipeBinding: null,
   ...over,
 });
 

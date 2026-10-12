@@ -13,7 +13,18 @@ require three things of the run, in this order:
 
 A non-empty list of failures names no law. Only (3) does.
 
-ONE GUARD IS DELIBERATELY ABSENT FROM THIS LIST. `distributeBillDiscount`'s
+TWO GUARDS ARE DELIBERATELY ABSENT FROM THIS LIST.
+
+The second is `expandAggregatedSaleLine`'s folded-grain check. Every
+contribution's quantity is already on its component's grain (§57), and the fold
+refuses two versions that declare different precisions for one component, so a
+sum of multiples of one step is a multiple of that step and the check cannot
+fire. Removing it leaves the suite green, so claiming a red proof for it would be
+a false claim. Its unreachability is MEASURED in
+`test/aggregate-consumption.test.ts` instead, and the guard is kept because it is
+the invariant the canonical stock writer will actually test.
+
+The first: `distributeBillDiscount`'s
 per-line cap (`share.amountMinor < share.capMinor`) cannot be made to fire: when
 the discount is below the subtotal every positive-gross line's floor is strictly
 below its gross, and the leftover never exceeds the count of such lines. Removing
@@ -195,7 +206,7 @@ MUTATIONS = [
     (
         "§49 — movements against another recipe version are refused",
         "src/stock-effect.ts",
-        "movement.recipeVersion !== options.boundRecipeVersion",
+        "!bound.includes(movement.recipeVersion)",
         "false",
         "refuses movements recorded against a different recipe version",
     ),
@@ -343,6 +354,81 @@ MUTATIONS = [
         """    const quantityQ4 = nearestRepresentableQuantity(halfEvenDiv(component.quantityQ4 * soldQuantityQ4, recipe.yieldQuantityQ4), component.unitDecimals);
     if (false) {""",
         "refuses a fractional portion of a dish whose component is counted in whole units",
+    ),
+    (
+        "\u00a717 — aggregation records every contribution, not one per variant",
+        "src/order-to-sale.ts",
+        """    bucket.contributions.push(
+      Object.freeze({ orderLineId, modifierId, quantityQ4, recipeBinding: recipeBinding === null ? null : Object.freeze({ ...recipeBinding }) }),
+    );""",
+        """    if (bucket.contributions.length === 0)
+      bucket.contributions.push(
+        Object.freeze({ orderLineId, modifierId, quantityQ4, recipeBinding: recipeBinding === null ? null : Object.freeze({ ...recipeBinding }) }),
+      );""",
+        "keeps both bindings on that one sale line, so the provenance survives the merge",
+    ),
+    (
+        "\u00a717 — a contribution keeps its OWN binding, not the first one seen",
+        "src/order-to-sale.ts",
+        "recipeBinding: recipeBinding === null ? null : Object.freeze({ ...recipeBinding }) }),",
+        "recipeBinding: bucket.contributions[0]?.recipeBinding ?? (recipeBinding === null ? null : Object.freeze({ ...recipeBinding })) }),",
+        "keeps both bindings on that one sale line, so the provenance survives the merge",
+    ),
+    (
+        "\u00a717 — consumption expands each contribution, not the aggregate quantity",
+        "src/aggregate-consumption.ts",
+        "    for (const component of expandRecipe(recipe, contribution.quantityQ4)) {",
+        "    for (const component of expandRecipe(recipe, draft.quantityQ4)) {",
+        "consumes each version its own components and folds the totals",
+    ),
+    (
+        "\u00a717 — the set is folded, so two versions' components add up",
+        "src/aggregate-consumption.ts",
+        "        existing.quantityQ4 += component.quantityQ4;",
+        "        existing.quantityQ4 = component.quantityQ4;",
+        "consumes each version its own components and folds the totals",
+    ),
+    (
+        "\u00a717 — a bound version is never substituted when it cannot be read",
+        "src/aggregate-consumption.ts",
+        "    if (recipe === null) {",
+        "    if (false) {",
+        "refuses rather than substitutes when a bound version cannot be read",
+    ),
+    (
+        "\u00a717 — the recipe read back must be the version bound to the contribution",
+        "src/aggregate-consumption.ts",
+        "      assertBindingGoverns('sale_component_mapping', binding, recipe.recipeId, recipe.version);",
+        "      void binding;",
+        "refuses a recipe read back under a version other than the bound one",
+    ),
+    (
+        "\u00a717 — a composed contribution with no binding is refused",
+        "src/aggregate-consumption.ts",
+        "    if (contribution.recipeBinding === null) {",
+        "    if (false) {",
+        "refuses a composed contribution that carries no binding",
+    ),
+    (
+        "\u00a717 — the contributions must account for the billed quantity",
+        "src/aggregate-consumption.ts",
+        "  if (sum !== draft.quantityQ4) {",
+        "  if (false) {",
+        "refuses contributions that do not account for the billed quantity",
+    ),
+    (
+        "\u00a717 — two versions disagreeing on a component's precision is refused, not resolved",
+        "src/aggregate-consumption.ts",
+        "        if (existing.unitDecimals !== declared.unitDecimals) {",
+        "        if (false) {",
+        "refuses two bound versions that declare different precisions for one component",
+    ),
+    (
+        "\u00a717/\u00a758 — the verifier reads the bound SET, so a single version would reject this line's own movements",
+        "src/stock-effect.ts",
+        "    if (bound !== undefined && bound.length > 0 && movement.recipeVersion !== undefined && !bound.includes(movement.recipeVersion)) {",
+        "    if (bound !== undefined && bound.length > 0 && movement.recipeVersion !== undefined && movement.recipeVersion !== bound[0]) {",
+        "accepts movements recorded under either of the line's two versions",
     ),
 ]
 

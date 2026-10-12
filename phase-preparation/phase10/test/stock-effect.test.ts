@@ -303,18 +303,18 @@ describe('§48 — completeness is exact-set equality, not a count', () => {
   it('refuses movements recorded against a different recipe version (§49)', () => {
     const actual = movementsFrom(expected).map((m) => ({ ...m, recipeVersion: 2 }));
     try {
-      assertMovementSetComplete(expected, actual, { boundRecipeVersion: 3 });
+      assertMovementSetComplete(expected, actual, { boundRecipeVersions: [3] });
       throw new Error('expected a refusal');
     } catch (error) {
       const refusal = error as { code?: string; details?: Record<string, unknown> };
       expect(refusal.code).toBe('restaurant_stock_effect.recipe_version_mismatch');
-      expect(refusal.details?.boundVersion).toBe(3);
+      expect(refusal.details?.boundVersions).toEqual([3]);
     }
   });
 
   it('accepts movements carrying the bound version', () => {
     const actual = movementsFrom(expected).map((m) => ({ ...m, recipeVersion: 3 }));
-    expect(() => assertMovementSetComplete(expected, actual, { boundRecipeVersion: 3 })).not.toThrow();
+    expect(() => assertMovementSetComplete(expected, actual, { boundRecipeVersions: [3] })).not.toThrow();
   });
 
   it('demonstrates that a COUNT would have passed every one of the seven defects it must refuse', () => {

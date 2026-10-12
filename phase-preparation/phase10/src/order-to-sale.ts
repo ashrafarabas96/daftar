@@ -19,7 +19,27 @@
  * It also fixes WHEN a bill may be split: a split must happen BEFORE commit, so
  * each bill aggregates its own lines into its own sale. After commit, a bill is
  * divided only by payment, through the Phase 4 payment/allocation authority.
+ *
+ * ── Aggregation does not erase provenance ──
+ * Two lattes can be two different dishes. If one entered preparation while
+ * recipe v3 was current and the second after the chef edited it to v4, §56 binds
+ * each line to its own version and both bindings are facts about what was
+ * cooked. The aggregate "latte x 2" is only the SALE's view of them.
+ *
+ * So every sale line carries its `contributions`: each contributing order line
+ * or priced modifier, its own quantity, and its own recipe binding. This is not
+ * display data. Expanding the aggregate quantity under any single version would
+ * consume the wrong components — v3's milk twice when half the cups were made to
+ * v4 — which is the wrong consumption the directive's §17 forbids. The component
+ * set is the SUM of each contribution expanded under its OWN bound version; see
+ * `aggregate-consumption.ts`.
+ *
+ * The cardinality that follows, and which the Contract Diff has to resolve at
+ * promotion: one sale line maps to N contributions and to M distinct recipe
+ * versions, M <= N. It is 1:N, never 1:1.
  */
+
+import type { RecipeBinding } from './recipe-binding';
 
 export type OrderToSaleRefusalCode =
   | 'restaurant.order.no_billable_line'
@@ -58,6 +78,12 @@ export interface OrderedModifier {
   readonly quantityQ4: bigint;
   /** True when the merchant configured a price for it. Must imply `productId`. */
   readonly priced: boolean;
+  /**
+   * The recipe version bound to THIS modifier at preparation start (§56), when
+   * the modifier's product is composed. `null` for a direct or service product,
+   * and for an unpriced instruction.
+   */
+  readonly recipeBinding: RecipeBinding | null;
 }
 
 /**
@@ -77,6 +103,31 @@ export interface RestaurantOrderLine {
   readonly modifiers: readonly OrderedModifier[];
   /** Void state: a voided line is billed to nobody. */
   readonly voided: boolean;
+  /**
+   * The recipe version bound to THIS line at preparation start (§56). `null`
+   * while the line is still queued, and for a direct or service product.
+   *
+   * Two lines of the same variant may carry different bindings, and that
+   * difference survives aggregation.
+   */
+  readonly recipeBinding: RecipeBinding | null;
+}
+
+/**
+ * One contribution to an aggregated sale line: where a part of its quantity came
+ * from, and under which recipe version that part was prepared.
+ *
+ * This is the record that makes the aggregate reversible. Billing reads the
+ * summed quantity; consumption, waste and audit read the contributions.
+ */
+export interface SaleLineContribution {
+  readonly orderLineId: string;
+  /** `null` when the contribution is the order line itself rather than a modifier on it. */
+  readonly modifierId: string | null;
+  /** This contribution's own share of the sale line's quantity, in Q4. */
+  readonly quantityQ4: bigint;
+  /** The version bound to this contribution at preparation start, or null. */
+  readonly recipeBinding: RecipeBinding | null;
 }
 
 /** Exactly the shape `saleCommitLine` admits, minus the server-minted `lineId`. */
@@ -84,8 +135,23 @@ export interface SaleLineDraft {
   readonly productId: string;
   readonly variantId: string | null;
   readonly quantityQ4: bigint;
-  /** Which order lines and modifiers rolled into this one sale line. Display only. */
+  /** Which order lines rolled into this one sale line. Display. */
   readonly contributingOrderLineIds: readonly string[];
+  /**
+   * Every contribution, with its own quantity and its own recipe binding. The
+   * quantities sum to `quantityQ4` exactly, and the distinct bindings here are
+   * the M versions this one sale line was prepared under.
+   */
+  readonly contributions: readonly SaleLineContribution[];
+}
+
+/** The distinct recipe versions one aggregated sale line was prepared under. */
+export function boundVersionsOf(draft: SaleLineDraft): readonly number[] {
+  const versions = new Set<number>();
+  for (const contribution of draft.contributions) {
+    if (contribution.recipeBinding !== null) versions.add(contribution.recipeBinding.version);
+  }
+  return Object.freeze([...versions].sort((a, b) => a - b));
 }
 
 function variantKey(productId: string, variantId: string | null): string {
@@ -101,9 +167,19 @@ function variantKey(productId: string, variantId: string | null): string {
  * because a modifier the guest was quoted and not charged for is lost revenue.
  */
 export function aggregateToSaleLines(orderLines: readonly RestaurantOrderLine[]): readonly SaleLineDraft[] {
-  const buckets = new Map<string, { productId: string; variantId: string | null; quantityQ4: bigint; contributingOrderLineIds: string[] }>();
+  const buckets = new Map<
+    string,
+    { productId: string; variantId: string | null; quantityQ4: bigint; contributingOrderLineIds: string[]; contributions: SaleLineContribution[] }
+  >();
 
-  const add = (productId: string, variantId: string | null, quantityQ4: bigint, orderLineId: string): void => {
+  const add = (
+    productId: string,
+    variantId: string | null,
+    quantityQ4: bigint,
+    orderLineId: string,
+    modifierId: string | null,
+    recipeBinding: RecipeBinding | null,
+  ): void => {
     if (quantityQ4 <= 0n) {
       throw new OrderToSaleRefusal('restaurant.order.quantity_not_positive', `Order line ${orderLineId} carries a non-positive quantity ${quantityQ4}`, {
         orderLineId,
@@ -111,15 +187,21 @@ export function aggregateToSaleLines(orderLines: readonly RestaurantOrderLine[])
       });
     }
     const key = variantKey(productId, variantId);
-    const bucket = buckets.get(key) ?? { productId, variantId, quantityQ4: 0n, contributingOrderLineIds: [] };
+    const bucket = buckets.get(key) ?? { productId, variantId, quantityQ4: 0n, contributingOrderLineIds: [], contributions: [] };
     bucket.quantityQ4 += quantityQ4;
     if (!bucket.contributingOrderLineIds.includes(orderLineId)) bucket.contributingOrderLineIds.push(orderLineId);
+    // Each contribution is recorded separately even when two share a variant and
+    // a version: collapsing them would lose which order line owes which share,
+    // and waste on a cancellation is per line.
+    bucket.contributions.push(
+      Object.freeze({ orderLineId, modifierId, quantityQ4, recipeBinding: recipeBinding === null ? null : Object.freeze({ ...recipeBinding }) }),
+    );
     buckets.set(key, bucket);
   };
 
   for (const line of orderLines) {
     if (line.voided) continue;
-    add(line.productId, line.variantId, line.quantityQ4, line.orderLineId);
+    add(line.productId, line.variantId, line.quantityQ4, line.orderLineId, null, line.recipeBinding);
     for (const modifier of line.modifiers) {
       if (!modifier.priced) continue;
       if (modifier.productId === null) {
@@ -131,7 +213,14 @@ export function aggregateToSaleLines(orderLines: readonly RestaurantOrderLine[])
       }
       // A modifier's quantity multiplies with the line's: two lattes with an
       // extra shot each is two extra shots.
-      add(modifier.productId, modifier.variantId, (modifier.quantityQ4 * line.quantityQ4) / 10_000n, line.orderLineId);
+      add(
+        modifier.productId,
+        modifier.variantId,
+        (modifier.quantityQ4 * line.quantityQ4) / 10_000n,
+        line.orderLineId,
+        modifier.modifierId,
+        modifier.recipeBinding,
+      );
     }
   }
 
@@ -152,6 +241,7 @@ export function aggregateToSaleLines(orderLines: readonly RestaurantOrderLine[])
         variantId: b.variantId,
         quantityQ4: b.quantityQ4,
         contributingOrderLineIds: Object.freeze([...b.contributingOrderLineIds]),
+        contributions: Object.freeze([...b.contributions]),
       }),
     ),
   );

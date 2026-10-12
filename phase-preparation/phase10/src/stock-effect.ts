@@ -154,15 +154,22 @@ function key(productId: string, variantId: string): string {
  * own case — it would otherwise be reported as one missing plus one extra, which
  * tells a reader two wrong things instead of one right one.
  *
- * `boundRecipeVersion` is checked for a composed line because §49's whole point
+ * `boundRecipeVersions` is checked for a composed line because §49's whole point
  * is that the committed sale names the version it used: movements recorded
  * against a different version are not this sale's movements.
+ *
+ * It is a SET, not a single version. An aggregated sale line is prepared under M
+ * distinct versions (the mission's §17), so a movement is this line's when its
+ * version is one the line is actually bound to, and is foreign when it is not.
+ * A single version is the one-element case; passing one version where several
+ * were bound would refuse this line's own movements.
  */
 export function assertMovementSetComplete(
   expected: readonly ExpectedMovement[],
   actual: readonly ActualMovement[],
-  options: { readonly boundRecipeVersion?: number } = {},
+  options: { readonly boundRecipeVersions?: readonly number[] } = {},
 ): void {
+  const bound = options.boundRecipeVersions;
   const actualByKey = new Map<string, ActualMovement>();
   for (const movement of actual) {
     const k = key(movement.componentProductId, movement.componentVariantId);
@@ -173,11 +180,11 @@ export function assertMovementSetComplete(
       });
     }
     actualByKey.set(k, movement);
-    if (options.boundRecipeVersion !== undefined && movement.recipeVersion !== undefined && movement.recipeVersion !== options.boundRecipeVersion) {
+    if (bound !== undefined && bound.length > 0 && movement.recipeVersion !== undefined && !bound.includes(movement.recipeVersion)) {
       throw new StockEffectRefusal(
         'restaurant_stock_effect.recipe_version_mismatch',
-        `Component ${k} was moved against recipe version ${movement.recipeVersion}, but this sale line is bound to version ${options.boundRecipeVersion}`,
-        { componentProductId: movement.componentProductId, movedVersion: movement.recipeVersion, boundVersion: options.boundRecipeVersion },
+        `Component ${k} was moved against recipe version ${movement.recipeVersion}, but this sale line is bound to ${bound.join(', ')}`,
+        { componentProductId: movement.componentProductId, movedVersion: movement.recipeVersion, boundVersions: [...bound] },
       );
     }
   }
