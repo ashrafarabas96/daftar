@@ -268,7 +268,10 @@ async function v3(): Promise<void> {
   const prepCount = readdirSync(join(ROOT, 'infrastructure/database/migrations')).filter((n: string) => n.endsWith('.sql')).length;
   r.note.push(`subject: the candidate at ${ref} → ${sha}, ${names.length} migration(s). This prep branch carries ${prepCount}, which is the P3 baseline and NOT the candidate.`);
   r.note.push(
-    "PRINCIPAL, stated because V3 §7 requires it: this probe applies the WHOLE train as the disposable cluster's SUPERUSER. The project's documented install contract is a SPLIT — `0000–0039` under the administrator role and `0040+` under the migrator role — and V3 forbids describing a single-principal run of all 87 as the project's real install path. So what this row measures is that the SCHEMA is accepted in each context. It is NOT an install-contract proof, and the role-dependent half of installation is UNMEASURED here.",
+    "PRINCIPAL, named because V3 §7 requires every run to name it: this probe applies the WHOLE train as the disposable cluster's SUPERUSER. That is the same principal CI uses (docs/PHASE_2_S8_ACCEPTANCE.md:109 — 'CI applies migrations as the superuser'), and it is why a green run here, like a green run in CI, NEVER proves the deployment principal can apply anything. So this row measures that the SCHEMA is accepted in each context, and nothing about deployment authority.",
+  );
+  r.note.push(
+    "V3 §7 describes the split «0000–0039 administrator, 0040+ migrator». In THIS tree that is not the deployment contract: TL-P4-COORD-R61 confirms the deployment path is `daftar_migrator` over the whole history, and the four claims behind the administrator reading were WITHDRAWN in P2-S9 (docs/PHASE_1_MIGRATION_HISTORY_DECISION.md:135–141). The instrument that proves deployment authority is `npm run check:deployment-authority`, which applies the history as `daftar_migrator` and nothing else; this matrix is not that instrument and does not stand in for it.",
   );
   if (names.length === 0) {
     r.note.push('UNMEASURED: the candidate ref carries no migrations at that path.');
@@ -547,10 +550,12 @@ async function main(): Promise<number> {
   console.log('  an estate on 16. The 16 @ C context is this container\'s tooling, and its');
   console.log('  collation is not the deployment\'s.');
   console.log('');
-  console.log('  V3 §7: the train here is applied by ONE principal (the cluster superuser).');
-  console.log('  The documented install contract splits it — 0000-0039 administrator,');
-  console.log('  0040+ migrator — so no row above is an install-contract proof, and the');
-  console.log('  role-dependent half of installation is UNMEASURED by this instrument.');
+  console.log('  V3 §7 asks every run to name its principal. Here it is the cluster SUPERUSER,');
+  console.log('  which is also what CI uses, so no row above says anything about whether the');
+  console.log('  DEPLOYMENT principal can apply the history. In this tree that principal is');
+  console.log('  daftar_migrator over the whole history (TL-P4-COORD-R61; the administrator');
+  console.log('  reading was withdrawn in P2-S9), and the instrument for it is');
+  console.log('  `npm run check:deployment-authority`, not this matrix.');
   if (unaccounted.length > 0) {
     console.log('');
     console.log(`EXIT 2: ${unaccounted.map((r) => r.id).join(', ')} diverged between the measured contexts and the tree has no version-conditional branch for it.`);
