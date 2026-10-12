@@ -654,6 +654,37 @@ describe('the hand-off supplies the precisions it validated the basket with (rou
     expect(() => buildSaleCommitIntent(snapshot('fulfilling'), atQ4, { ...CASH, quoteApproval: approve(halfUnitQuote) })).not.toThrow();
   });
 
+  // Round-5 challenge P3: the Challenger measured that NaN, -1, 2.5, Infinity
+  // and 10 all pass `typeof === 'number'` and are then refused one layer in by
+  // the inventory authority, so the gate fails CLOSED. It is right about that.
+  // What it is also right about: the refusal arrived as
+  // `order.quote_quantity_invalid` — a client maps that to "ask the shopper to
+  // fix the quantity", and the shopper never wrote the precision. The subject
+  // of a refusal is part of the refusal.
+  it('refuses a position whose precision is a number but not a precision, naming the precision', () => {
+    for (const bad of [Number.NaN, -1, 2.5, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 10]) {
+      const positions = [{ ...(POSITIONS[0] as (typeof POSITIONS)[number]), unitDecimals: bad }];
+      expect(() => buildSaleCommitIntent(snapshot('fulfilling'), positions, CASH)).toThrowError(
+        expect.objectContaining({ code: 'order.unit_precision_invalid' }),
+      );
+    }
+  });
+
+  it('refuses a malformed precision on a position the quote never priced, which only the basket guard can see', () => {
+    // Without the position guard this basket is refused as
+    // `order.quote_not_approved` — the quote prices a different SET — and the
+    // malformed precision is never the subject of any refusal. The author's own
+    // first version of this guard was UNPROVED for exactly that reason: a
+    // mutation disabling it stayed green, because the gate's own precision
+    // check raised the same code for the priced key. The law here is the
+    // basket's: a position states a well-formed precision whatever the quote
+    // prices.
+    const second = { ...(POSITIONS[0] as (typeof POSITIONS)[number]), stockKey: 'other-key', unitDecimals: 2.5 };
+    expect(() => buildSaleCommitIntent(snapshot('fulfilling'), [...POSITIONS, second], CASH)).toThrowError(
+      expect.objectContaining({ code: 'order.unit_precision_invalid' }),
+    );
+  });
+
   it('refuses a hand-built position that carries no precision at all', () => {
     // A type-only requirement has no runtime existence: without this guard the
     // derived map answers `undefined` for that key and the representability

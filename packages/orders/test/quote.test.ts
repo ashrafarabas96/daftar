@@ -735,6 +735,19 @@ describe('the representability leg of the gate has a caller (round-3 challenge P
   // precedence was a comment with nothing behind it, and which map wins decides
   // whether a law is claimed. The explicit argument wins: an approval cannot
   // weaken a check its call site stated.
+  it('refuses a stated precision that is not a precision, under its own code', () => {
+    // Not `order.quote_quantity_invalid`: the quantity is honest and the figure
+    // at fault is the caller's. Round-5 challenge P3.
+    for (const bad of [Number.NaN, -1, 2.5, Number.POSITIVE_INFINITY, 10]) {
+      const checks = { unitDecimalsByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, bad]]) };
+      expect(() => buildCommercialQuote(INPUT, checks)).toThrowError(expect.objectContaining({ code: 'order.unit_precision_invalid' }));
+      expect(() => assertQuoteApproved(approve(QUOTED), ORDER, checks)).toThrowError(expect.objectContaining({ code: 'order.unit_precision_invalid' }));
+    }
+    // And a lawful precision still reaches the quantity law, so the new guard
+    // did not swallow the old one.
+    expect(() => buildCommercialQuote(HALF, WHOLE_UNITS)).toThrowError(expect.objectContaining({ code: 'order.quote_quantity_invalid' }));
+  });
+
   it('lets the explicit argument win over the approval own checks when they disagree', () => {
     const forged = buildCommercialQuote(HALF);
     const atQ4 = { unitDecimalsByStockKey: new Map([[`${PRODUCT_A}:${VARIANT}`, 4]]) };

@@ -43,7 +43,7 @@ import type { BasketPosition } from './cart';
 import { requireSettlementTruth, type OrderSettlementEvidence, type OrderSettlementMode } from './settlement';
 import { OrderError, assertCanonicalId } from './errors';
 import { isCanonicalCivilDate } from './instant';
-import { assertCommitWithinConfirmedQuote, assertQuoteApproved, type ConfirmedQuoteApproval } from './quote';
+import { MAX_UNIT_DECIMALS, assertCommitWithinConfirmedQuote, assertQuoteApproved, type ConfirmedQuoteApproval } from './quote';
 import { SALE_BOUND_ORDER_STATES, type OrderSnapshot } from './state';
 
 /** One line of the sale commit intent. Mirrors `SaleCommitLineDto` at `93084f8`. */
@@ -345,6 +345,18 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
     // representability check would then skip that line in silence.
     if (typeof position.unitDecimals !== 'number') {
       throw new OrderError('order.checkout_field_forbidden', 'a checkout position carries no unit precision', { stockKey: position.stockKey });
+    }
+    // And it is a precision, not merely a number. `NaN`, `-1`, `2.5` and `10`
+    // are all refused HERE, under a code that names the caller's figure. The
+    // inventory authority does refuse every one of them one layer in — the
+    // round-5 Challenger measured that and published five cases proving it
+    // fails closed — but it refuses them while the client is being told the
+    // SHOPPER's quantity is wrong. The subject of the refusal matters.
+    if (!Number.isInteger(position.unitDecimals) || position.unitDecimals < 0 || position.unitDecimals > MAX_UNIT_DECIMALS) {
+      throw new OrderError('order.unit_precision_invalid', 'a checkout position states a unit precision that is not an integer from 0 to 4', {
+        stockKey: position.stockKey,
+        stated: String(position.unitDecimals),
+      });
     }
     unitDecimalsByStockKey.set(position.stockKey, position.unitDecimals);
   }

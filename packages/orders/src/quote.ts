@@ -57,6 +57,14 @@ import { compareCanonical, isCanonicalInstant } from './instant';
 /** Non-negative integer minor units as a decimal string. A shape check, so a float, a sign or padding cannot pass. */
 const NON_NEGATIVE_MINOR = /^(0|[1-9]\d*)$/;
 
+/**
+ * The inventory authority's own bound on a product's frozen `unit_decimals`
+ * (`packages/inventory/src/quantity.ts`, `Q4_STEP` for d = 0..4). It is mirrored
+ * here so a malformed PRECISION is refused under its own code instead of being
+ * relabelled as a malformed quantity.
+ */
+export const MAX_UNIT_DECIMALS = 4;
+
 function requireMinor(value: string, field: string): bigint {
   if (!NON_NEGATIVE_MINOR.test(value)) {
     throw new OrderError('order.quote_amount_invalid', 'an amount must be non-negative integer minor units as a canonical decimal string', {
@@ -106,9 +114,26 @@ function requireQuoteQuantity(line: QuoteLineSnapshot, unitDecimals: number | un
     });
   }
   if (unitDecimals !== undefined) {
+    // The PRECISION is checked before the quantity is checked against it, and
+    // under its own code. A caller-supplied precision that is not an integer in
+    // 0..4 is a defect in the CALLER's figure, not in the shopper's quantity;
+    // relabelling it `order.quote_quantity_invalid` told a client to ask the
+    // shopper to fix a number the shopper never wrote (round-5 challenge P3).
+    if (!Number.isInteger(unitDecimals) || unitDecimals < 0 || unitDecimals > MAX_UNIT_DECIMALS) {
+      throw new OrderError('order.unit_precision_invalid', 'a stated unit precision is an integer from 0 to 4', {
+        stockKey: line.stockKey,
+        stated: String(unitDecimals),
+      });
+    }
     try {
       assertQuantityRepresentable(q4, unitDecimals);
-    } catch {
+    } catch (cause) {
+      // Narrowed: with the precision already range-checked, the only refusal
+      // the inventory authority can raise here is about the QUANTITY. Anything
+      // else is rethrown as itself rather than renamed.
+      if (cause instanceof Error && 'code' in cause && cause.code !== 'inventory.quantity_precision_invalid') {
+        throw cause;
+      }
       throw new OrderError('order.quote_quantity_invalid', 'a quoted quantity is not representable at the product unit precision', {
         stockKey: line.stockKey,
         stated: line.quantity,

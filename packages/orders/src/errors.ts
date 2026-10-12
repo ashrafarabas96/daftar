@@ -114,6 +114,7 @@ export type OrderErrorCode =
   | 'order.quote_version_stale'
   /** A quoted quantity is not positive, not exact at the supported scale, not canonically spelled, or not representable at the unit precision. */
   | 'order.quote_quantity_invalid'
+  | 'order.unit_precision_invalid'
   /** A quote line's stock key is not the canonical key of its own product and variant. */
   | 'order.quote_stock_key_invalid'
   /**
