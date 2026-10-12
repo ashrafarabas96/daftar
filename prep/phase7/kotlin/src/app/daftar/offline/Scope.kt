@@ -122,8 +122,12 @@ data class OwnerScope(
             //
             // The clean answer to H-01 is neither cashier but a supervisor, and
             // `OwnerScope` has no role dimension to express one — `Recovery`
-            // names `ESCALATE_TO_A_SUPERVISOR` five times and the kernel cannot
-            // represent the authority it points at. That role belongs to Phase
+            // returns `ESCALATE_TO_A_SUPERVISOR` wherever a till cannot settle
+            // something by itself, and the kernel cannot represent the
+            // authority that action points at. (The count that stood here was
+            // five, and closing D-01 made it seven: a sentence that has to be
+            // recounted after every round is a C-01′ waiting to happen, so it
+            // no longer carries one.) That role belongs to Phase
             // 4's authority model, and inventing a second one here is exactly
             // the duplicated authority the mission forbids, so it is recorded
             // as owed (OD-P7-08) rather than guessed at.
