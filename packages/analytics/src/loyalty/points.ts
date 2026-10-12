@@ -871,7 +871,23 @@ export function foldExpiry(
     return take;
   };
 
-  /** Capacity has appeared; settle the oldest unfunded claims against it. */
+  /** Capacity has appeared; settle the oldest unfunded claims against it.
+   *
+   *  WHAT IN HERE IS REACHED, AND WHAT IS NOT. A challenge round observed that
+   *  much of this machinery is unreachable through this package's own writers —
+   *  `buildSaleConsumptionMovement` will not write a draw its ledger cannot
+   *  fund — and that a line which would silently stop settling deserves a case
+   *  rather than a reader's confidence. So the suite now reaches the
+   *  PARTIAL-SETTLE `break` by hand: a claim of 50, a lot of 20 that settles 20
+   *  and stops, then a grant of 40 that settles the remaining 30.
+   *
+   *  Two lines here are DEFENSIVE and nothing reaches them: the `undefined`
+   *  guard on the head of the queue (`pending.length > 0` already decided it)
+   *  and the `undefined` guard on the claim's own split (every queued claim is
+   *  registered in `draws` on the same row that queues it). They stay because
+   *  `noUncheckedIndexedAccess` is on and the repository forbids the non-null
+   *  assertion, so the alternative is not fewer lines but a weaker type. They
+   *  are stated here rather than left for a reader to wonder about. */
   const settlePending = (): void => {
     while (pending.length > 0) {
       const claim = pending[0];
@@ -1334,6 +1350,58 @@ export function buildReversalMovement(ledger: LoyaltyLedger, request: ReversalRe
       correctsId: request.correctsId,
     });
   }
+
+  // `F-22` — A CORRECTION MAY NOT PRECEDE THE ROW IT CORRECTS.
+  //
+  // Nothing required this before, and a sixth challenge round measured what it
+  // costs: visibility is by `effectiveOn` while the replay is by `pointSeq`, so
+  // a correction dated before its target is VISIBLE at an `asOf` where the
+  // target is not, the attribution falls through to "target unknown", and the
+  // fold reports a balance of 140 for a customer who has earned 100. It heals
+  // when the target becomes visible, so it is a reporting and attribution
+  // defect rather than an over-offer — and it has no lawful reason to exist.
+  // The database counterpart needs a deferred trigger (a CHECK cannot read
+  // another row) and is raised with the Migration Owner in §A.3c.3.
+  if (asOf < corrected.effectiveOn) {
+    refuseLoyalty('loyalty.corrects_out_of_order', 'a correction may not be dated before the movement it corrects', {
+      correctsId: request.correctsId,
+      correctedEffectiveOn: corrected.effectiveOn,
+      asOf,
+    });
+  }
+
+  // `F-21` — AND IT MAY NOT GIVE BACK MORE THAN THAT ROW EVER TOOK.
+  //
+  // This writer compared the quantity with nothing, and the fold absorbed the
+  // excess into the withheld store, so redemption stayed safe while
+  // `balancePoints` did not: a 1,000,000-point "reversal" of a 40-point
+  // consumption reported a balance of 1,000,060 for that customer. That figure
+  // is the pack's whole-ledger balance and what a customer screen and a CRM
+  // read show, so one hand correction could set it to any value. Round 1 of the
+  // challenge had listed over-restoration among the laws it could not break;
+  // under the replay it was absorbed, and the change had not been recorded.
+  //
+  // The bound is the row's own magnitude, less whatever earlier corrections of
+  // it have already given back. It is NOT a partial-return rule: `§5.7.4`
+  // leaves the quantity of a partial return to configuration, and this refuses
+  // only a quantity larger than the movement it names. A `grant_over_restored`
+  // guard exists in the patch request for the remainder relation, not for the
+  // ledger, so the ledger-level counterpart is raised in §A.3c.3 too.
+  if (corrected.pointsDelta < 0n) {
+    const taken = -corrected.pointsDelta;
+    const alreadyRestored = ledger.movements
+      .filter((m) => m.correctsId === corrected.id && m.pointsDelta > 0n)
+      .reduce((acc, m) => acc + m.pointsDelta, 0n);
+    if (alreadyRestored + request.points > taken) {
+      refuseLoyalty('loyalty.corrects_more_than_target', 'a correction may not restore more than the movement it corrects took', {
+        correctsId: request.correctsId,
+        taken: String(taken),
+        alreadyRestored: String(alreadyRestored),
+        requested: String(request.points),
+      });
+    }
+  }
+
   const draft: LoyaltyMovementDraft = {
     id: request.movementId,
     businessId: request.businessId,

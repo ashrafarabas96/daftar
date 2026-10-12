@@ -38,6 +38,7 @@ import {
   tryBuildPostSaleEarnMovement,
   type LoyaltyEarningConfig,
   type LoyaltyLedger,
+  type LoyaltyMovement,
   type LoyaltyMovementDraft,
   type RoundingMode,
 } from '../src/loyalty/points';
@@ -1572,15 +1573,183 @@ describe('foldExpiry — the property the challenge probed, as a deterministic c
    *  Asserted exactly rather than as a floor: the seed is fixed, so this is a
    *  measurement, and a change to the generator that quietly stops exercising
    *  the reversal path reds this case instead of passing for the wrong reason. */
-  const WITH_REVERSALS = 375;
+  const WITH_REVERSALS = 193;
+  /** Likewise measurements, and likewise exact: the number of ledgers carrying
+   *  a negative hand correction, and the number of (ledger, date) pairs the
+   *  one-step law stops on because a draw outran its capacity. */
+  const WITH_NEGATIVE_CORRECTIONS = 31;
+  const BAILED_OUT = 0;
+
+  /** THE PER-ROW LAWS, each component against its own expected value.
+   *
+   *  `F-20`: what stood here before was the three stores summing to the
+   *  balance — the very identity `F-16` showed a PAIR of compensating errors
+   *  can satisfy exactly (60 = 0 + 20 + 40 on a ledger whose truth is
+   *  0 + 60 + 0). An identity over a sum cannot name which store is wrong, so
+   *  the challenger re-planted `F-16`'s defect and the sum rule passed it.
+   *
+   *  So each row is now checked on its OWN step: the fold is read on the
+   *  prefix before the row and on the prefix including it, and the expected
+   *  after-value of EVERY component — each lot's remainder by name, the pool,
+   *  the withheld quantity, the balance, the spendable and expiring figures —
+   *  is computed here from the before-state and the row alone. This is not a
+   *  second replay: it holds no stores of its own and carries no balance
+   *  forward. It takes the capacity from the fold at each step and asks only
+   *  whether THIS row moved the right quantity out of the right store, which
+   *  is the question a compensating pair is built to escape.
+   *
+   *  ITS DECLARED LIMITS. It encodes the same LAWS the fold claims (§4.3's
+   *  oldest-horizon-first order, a correction attributed through the row it
+   *  corrects, a grant drawn after the lots), so a wrong law would be wrong in
+   *  both; what it measures is whether the fold computes the laws it states,
+   *  per store. And it covers a FUNDED ledger: on a draw with nothing to draw
+   *  on, the claim is queued and settled by a later row, the one-step law no
+   *  longer holds for the rows after it, and the check stops rather than
+   *  reporting a violation it cannot attribute. The unfunded path has its own
+   *  hand-built cases in the block below, and the number of ledgers that stop
+   *  here is asserted exactly. */
+  const stepLawViolations = (ledger: LoyaltyLedger, asOf: string): { bad: string[]; bailed: boolean } => {
+    const rows = ledger.movements
+      .filter((m) => m.businessId === BUSINESS && m.customerId === CUSTOMER && m.effectiveOn <= asOf)
+      .slice()
+      .sort((a, b) => (a.pointSeq < b.pointSeq ? -1 : a.pointSeq > b.pointSeq ? 1 : 0));
+    const bad: string[] = [];
+    const smaller = (a: bigint, b: bigint) => (a < b ? a : b);
+    /** What a positive row put in each store, less what later rows discharged. */
+    const creditPool = new Map<string, bigint>();
+    const creditWithheld = new Map<string, bigint>();
+    /** What a negative row drew from each store, less what restorations claimed. */
+    const drawLots = new Map<string, bigint>();
+    const drawPool = new Map<string, bigint>();
+
+    for (let k = 0; k < rows.length; k += 1) {
+      const m = must(rows[k], `row ${k}`);
+      const before = foldExpiry({ movements: rows.slice(0, k) }, BUSINESS, CUSTOMER, asOf);
+      const after = foldExpiry({ movements: rows.slice(0, k + 1) }, BUSINESS, CUSTOMER, asOf);
+      const pool = before.unhorizonedPoints;
+      const withheld = before.unattributablePoints;
+      const expectedLots = new Map<string, bigint>(before.lots.map((l) => [l.movementId, l.remainingPoints]));
+      let expectedPool = pool;
+      let expectedWithheld = withheld;
+
+      if (m.movementKind === 'earn') {
+        if (m.expiresOn !== null) {
+          expectedLots.set(m.id, m.pointsDelta);
+        } else {
+          expectedPool = pool + m.pointsDelta;
+          creditPool.set(m.id, m.pointsDelta);
+        }
+      } else if (m.pointsDelta < 0n) {
+        let left = -m.pointsDelta;
+        let takenLots = 0n;
+        let takenPool = 0n;
+        let takenWithheld = 0n;
+        if (m.correctsId !== null) {
+          // The stores the TARGET credited are discharged first, and only as
+          // far as the target itself credited them.
+          const cw = creditWithheld.get(m.correctsId) ?? 0n;
+          const takeW = smaller(smaller(cw, left), withheld);
+          creditWithheld.set(m.correctsId, cw - takeW);
+          takenWithheld += takeW;
+          left -= takeW;
+          const cp = creditPool.get(m.correctsId) ?? 0n;
+          const takeP = smaller(smaller(cp, left), pool);
+          creditPool.set(m.correctsId, cp - takeP);
+          takenPool += takeP;
+          left -= takeP;
+        }
+        for (const lot of before.lots
+          .slice()
+          .sort((a, b) =>
+            a.expiresOn < b.expiresOn
+              ? -1
+              : a.expiresOn > b.expiresOn
+                ? 1
+                : a.pointSeq < b.pointSeq
+                  ? -1
+                  : a.pointSeq > b.pointSeq
+                    ? 1
+                    : 0,
+          )) {
+          if (left <= 0n) break;
+          const take = smaller(lot.remainingPoints, left);
+          expectedLots.set(lot.movementId, lot.remainingPoints - take);
+          takenLots += take;
+          left -= take;
+        }
+        const morePool = smaller(left, pool - takenPool);
+        takenPool += morePool;
+        left -= morePool;
+        const moreWithheld = smaller(left, withheld - takenWithheld);
+        takenWithheld += moreWithheld;
+        left -= moreWithheld;
+        expectedPool = pool - takenPool;
+        expectedWithheld = withheld - takenWithheld;
+        drawLots.set(m.id, takenLots);
+        drawPool.set(m.id, takenPool);
+        if (left > 0n) return { bad, bailed: true };
+      } else if (m.correctsId === null) {
+        expectedPool = pool + m.pointsDelta;
+        creditPool.set(m.id, m.pointsDelta);
+      } else {
+        // A restoration restores what its target actually drew: the lot-backed
+        // part is un-attributable and is withheld, the pool-backed part goes
+        // straight back, and anything beyond what the target drew is withheld.
+        const lotDrawn = drawLots.get(m.correctsId) ?? 0n;
+        const poolDrawn = drawPool.get(m.correctsId) ?? 0n;
+        const lotPart = smaller(lotDrawn, m.pointsDelta);
+        const poolPart = smaller(poolDrawn, m.pointsDelta - lotPart);
+        drawLots.set(m.correctsId, lotDrawn - lotPart);
+        drawPool.set(m.correctsId, poolDrawn - poolPart);
+        expectedPool = pool + poolPart;
+        expectedWithheld = withheld + (m.pointsDelta - poolPart);
+        creditPool.set(m.id, poolPart);
+        creditWithheld.set(m.id, m.pointsDelta - poolPart);
+      }
+
+      const reported = new Map<string, bigint>(after.lots.map((l) => [l.movementId, l.remainingPoints]));
+      if (reported.size !== expectedLots.size) {
+        bad.push(`${m.id}: ${reported.size} lots reported where ${expectedLots.size} are expected`);
+      }
+      for (const [id, want] of expectedLots) {
+        const got = reported.get(id);
+        if (got !== want) bad.push(`${m.id}: lot ${id} expected ${want}, fold says ${String(got)}`);
+      }
+      if (after.unhorizonedPoints !== expectedPool) {
+        bad.push(`${m.id}: pool expected ${expectedPool}, fold says ${after.unhorizonedPoints}`);
+      }
+      if (after.unattributablePoints !== expectedWithheld) {
+        bad.push(`${m.id}: withheld expected ${expectedWithheld}, fold says ${after.unattributablePoints}`);
+      }
+      if (after.balancePoints !== before.balancePoints + m.pointsDelta) {
+        bad.push(`${m.id}: balance expected ${before.balancePoints + m.pointsDelta}, fold says ${after.balancePoints}`);
+      }
+      const spendable =
+        after.lots.reduce((acc, l) => (l.expiresOn > asOf ? acc + l.remainingPoints : acc), 0n) +
+        after.unhorizonedPoints;
+      if (after.spendablePoints !== spendable) {
+        bad.push(`${m.id}: spendable expected ${spendable}, fold says ${after.spendablePoints}`);
+      }
+      const expiring = after.lots.reduce((acc, l) => (l.expiresOn <= asOf ? acc + l.remainingPoints : acc), 0n);
+      const boundedExpiring =
+        expiring > after.balancePoints ? (after.balancePoints > 0n ? after.balancePoints : 0n) : expiring;
+      if (after.expiringPoints !== boundedExpiring) {
+        bad.push(`${m.id}: expiring expected ${boundedExpiring}, fold says ${after.expiringPoints}`);
+      }
+    }
+    return { bad, bailed: false };
+  };
 
   it('never offers more than the lots and the pool can back, over 2 000 seeded ledgers', () => {
     const rand = seeded(20261012);
     const dates = ['2026-06-01', '2027-06-01', '2040-01-01'];
     let built = 0;
     let withReversals = 0;
+    let withNegativeCorrections = 0;
     let breaches = 0;
     let conservationBreaches = 0;
+    let bailedOut = 0;
+    const stepViolations: string[] = [];
 
     for (let i = 0; i < 2000; i += 1) {
       let ledger = emptyLedger();
@@ -1589,7 +1758,7 @@ describe('foldExpiry — the property the challenge probed, as a deterministic c
       for (let step = 0; step < steps; step += 1) {
         seq += 1;
         const day = `2026-01-${String(10 + seq).padStart(2, '0')}`;
-        const roll = rand(4);
+        const roll = rand(5);
         try {
           if (roll === 0) {
             ledger = appendMovement(ledger, earn(`e${seq}`, BigInt(1 + rand(60)), day, rand(2) === 0 ? '2026-09-01' : '2028-09-01')).ledger;
@@ -1611,6 +1780,24 @@ describe('foldExpiry — the property the challenge probed, as a deterministic c
                 movementId: `c${seq}`,
               } as Parameters<typeof buildSaleConsumptionMovement>[1]),
             ).ledger;
+          } else if (roll === 4) {
+            // `F-20`: a NEGATIVE hand correction of a restoring row — `A-16`'s
+            // lawful record that a return was itself cancelled, and the exact
+            // shape `F-16`'s defect lived in. The generator produced none of
+            // these before, so the store the defect moved points out of was
+            // never exercised by this case at all.
+            const credit = ledger.movements.find(
+              (m) =>
+                m.pointsDelta > 0n &&
+                m.correctsId !== null &&
+                !ledger.movements.some((o) => o.correctsId === m.id),
+            );
+            if (credit === undefined) continue;
+            ledger = appendMovement(
+              ledger,
+              adjust(`x${seq}`, -credit.pointsDelta, day, 'the return was itself cancelled; the sale stands', credit.id),
+            ).ledger;
+            withNegativeCorrections += 1;
           } else {
             const target = ledger.movements.find((m) => m.movementKind === 'consume' && m.correctsId === null);
             if (target === undefined) {
@@ -1666,13 +1853,26 @@ describe('foldExpiry — the property the challenge probed, as a deterministic c
         if (inLots + fold.unhorizonedPoints + fold.unattributablePoints !== fold.balancePoints) {
           conservationBreaches += 1;
         }
+        const step = stepLawViolations(ledger, asOf);
+        if (step.bailed) bailedOut += 1;
+        for (const violation of step.bad) stepViolations.push(violation);
       }
     }
 
     expect(built).toBe(2000);
+    // EACH COMPONENT against its own expected value, row by row. The first few
+    // violations are reported rather than a count, so a failure names the row,
+    // the store and both figures instead of saying how many went wrong.
+    expect(stepViolations.slice(0, 8)).toEqual([]);
     // Non-vacuity, because a generator that never produced a reversal would
     // make the whole property pass for the wrong reason.
     expect(withReversals).toBe(WITH_REVERSALS);
+    expect(withNegativeCorrections).toBe(WITH_NEGATIVE_CORRECTIONS);
+    // The ledgers the one-step law does not cover, measured and not hidden: a
+    // draw that outran its capacity is settled by a later row, so the step
+    // check stops there. A change that quietly sent most of the run down that
+    // path would show up here as a number, not as a silently weaker property.
+    expect(bailedOut).toBe(BAILED_OUT);
     expect(breaches).toBe(0);
     expect(conservationBreaches).toBe(0);
   });
@@ -1691,27 +1891,80 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
       movementId,
     }) as Parameters<typeof buildSaleConsumptionMovement>[1];
 
-  it('withholds the excess when a reversal restores more than its target took', () => {
-    // `buildReversalMovement` takes the quantity from its caller and does not
-    // compare it with the row it corrects — `§5.7.4` leaves the partial case
-    // open, so it is not this writer's rule to invent. A quantity beyond what
-    // the target drew is accounted for by no draw at all, so it is withheld,
-    // and a mutation that returns it to the spendable pool is caught here.
+  it('F-21 — the WRITER refuses a reversal larger than the row it corrects took', () => {
+    // Round 1 of the challenge listed over-restoration among the laws it could
+    // not break; under the replay it was absorbed without limit, and the change
+    // had not been recorded. Measured before the fix: a 1,000,000-point
+    // "reversal" of a 40-point consumption reported `balancePoints` 1,000,060.
+    // Redemption stayed correct, but that figure is what a customer screen and
+    // a CRM read show, so one hand correction could set it to any value.
     let ledger = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'));
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-02', 'c1'))).ledger;
-    ledger = appendMovement(
+    const request = {
+      businessId: BUSINESS,
+      customerId: CUSTOMER,
+      sourceId: 'sale-c1',
+      correctsId: 'c1',
+      asOf: '2026-01-03',
+      movementId: 'r1',
+      reason: 'sale fully reversed',
+    };
+    for (const points of [41n, 50n, 500n, 1000000n]) {
+      expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...request, points }))).toBe(
+        'loyalty.corrects_more_than_target',
+      );
+    }
+    // The bound is the row's own magnitude and not a partial-return rule:
+    // `§5.7.4` leaves the quantity of a partial return to configuration, so
+    // anything up to what the row took is still built.
+    expect(buildReversalMovement(ledger, { ...request, points: 40n }).pointsDelta).toBe(40n);
+    expect(buildReversalMovement(ledger, { ...request, points: 1n }).pointsDelta).toBe(1n);
+
+    // F-22 — AND THE DATE. This case exists because a mutation run found the
+    // ordering guard was written with no case behind it: removing it reddened
+    // nothing, which is the same defect as a comment promising a protection
+    // the code does not give. A correction dated before the row it corrects is
+    // visible at a date its target is not, so the fold reads a restoration of a
+    // draw that has not happened yet and withholds the whole quantity — the
+    // conservative answer to a row that should not exist.
+    expect(refusalCodeOf(() => buildReversalMovement(ledger, { ...request, points: 40n, asOf: '2026-01-01' }))).toBe(
+      'loyalty.corrects_out_of_order',
+    );
+    // The boundary itself is lawful: a correction ON its target's own date is
+    // built, because §4.1's dates are civil dates and carry no time of day.
+    expect(buildReversalMovement(ledger, { ...request, points: 40n, asOf: '2026-01-02' }).pointsDelta).toBe(40n);
+
+    // And the bound counts what earlier corrections already gave back, so two
+    // partial restorations cannot together exceed the whole.
+    const half = appendMovement(
       ledger,
-      buildReversalMovement(ledger, {
-        businessId: BUSINESS,
-        customerId: CUSTOMER,
-        sourceId: 'sale-c1',
-        correctsId: 'c1',
-        points: 50n, // ten more than the consumption took
-        asOf: '2026-01-03',
-        movementId: 'r1',
-        reason: 'sale fully reversed',
-      }),
+      buildReversalMovement(ledger, { ...request, points: 30n, movementId: 'r1', sourceId: 'desk-1' }),
     ).ledger;
+    expect(refusalCodeOf(() => buildReversalMovement(half, { ...request, points: 11n, movementId: 'r2', sourceId: 'desk-2' }))).toBe(
+      'loyalty.corrects_more_than_target',
+    );
+    expect(buildReversalMovement(half, { ...request, points: 10n, movementId: 'r2', sourceId: 'desk-2' }).pointsDelta).toBe(10n);
+  });
+
+  it('withholds the excess when an over-restoration is written past the writer', () => {
+    // The fold must still be sound over a ledger the writer would refuse, and
+    // this is the arm that keeps it measured: hand-built, because
+    // `buildReversalMovement` now refuses the quantity. A quantity beyond what
+    // the target drew is accounted for by no draw, so it is withheld, and a
+    // mutation that returns it to the spendable pool is caught here.
+    let ledger = ledgerOf(earn('e1', 100n, '2026-01-01', '2027-01-01'));
+    ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-02', 'c1'))).ledger;
+    ledger = {
+      movements: [
+        ...ledger.movements,
+        {
+          id: 'r1', businessId: BUSINESS, customerId: CUSTOMER, pointSeq: 3n,
+          movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: 'adj-r1',
+          pointsDelta: 50n, expiresOn: null, effectiveOn: '2026-01-03',
+          reason: 'ten more than the consumption took', correctsId: 'c1',
+        },
+      ],
+    };
 
     const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-06-01');
     expect(fold.balancePoints).toBe(110n);
@@ -1756,6 +2009,50 @@ describe('foldExpiry — restoring MORE than the target drew, and a draw with no
     expect(inLots + fold.unhorizonedPoints + fold.unattributablePoints).toBe(fold.balancePoints);
   });
 
+  it('settles a claim in PARTS, so capacity smaller than the claim stops at what it funded', () => {
+    // The challenger's observation on round 6: about twenty-five lines of the
+    // replay were unreachable through this package's own writers, among them
+    // the `break` that stops settling when the capacity that just appeared is
+    // SMALLER than the oldest claim. A line that would silently stop settling
+    // deserves a case rather than a reader's confidence, so here is the one
+    // that reaches it: a claim of 50, then a lot of 20 — which settles 20 and
+    // stops — then a grant of 40, which settles the remaining 30.
+    const row = (
+      id: string, seq: bigint, kind: 'adjust' | 'earn', delta: bigint, day: string,
+      expiresOn: string | null, reason: string | null,
+    ): LoyaltyMovement => ({
+      id, businessId: BUSINESS, customerId: CUSTOMER, pointSeq: seq,
+      movementKind: kind, sourceType: kind === 'earn' ? 'sale' : 'manual_adjustment',
+      sourceId: `src-${id}`, pointsDelta: delta, expiresOn, effectiveOn: day,
+      reason, correctsId: null,
+    });
+    const claim = row('a1', 1n, 'adjust', -50n, '2026-01-01', null, 'a draw with nothing yet to draw on');
+    const lot = row('e1', 2n, 'earn', 20n, '2026-01-02', '2027-01-01', null);
+    const grant = row('g1', 3n, 'adjust', 40n, '2026-01-03', null, 'merchant goodwill');
+
+    // After the lot: 20 of the 50 are settled and the claim is still owed 30,
+    // which is the state the `break` leaves behind.
+    const afterLot = foldExpiry({ movements: [claim, lot] }, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(afterLot.balancePoints).toBe(-30n);
+    expect(must(afterLot.lots[0], 'the lot').remainingPoints).toBe(0n);
+    expect(afterLot.unhorizonedPoints).toBe(0n);
+    expect(afterLot.unattributablePoints).toBe(0n);
+    expect(afterLot.spendablePoints).toBe(0n);
+    expect(eligiblePoints({ movements: [claim, lot] }, BUSINESS, CUSTOMER, '2026-06-01')).toBe(0n);
+
+    // And then the grant settles the rest, leaving exactly its remainder.
+    const byHand: LoyaltyLedger = { movements: [claim, lot, grant] };
+    const fold = foldExpiry(byHand, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(fold.balancePoints).toBe(10n);
+    expect(must(fold.lots[0], 'the lot').remainingPoints).toBe(0n);
+    expect(fold.unhorizonedPoints).toBe(10n);
+    expect(fold.unattributablePoints).toBe(0n);
+    expect(fold.spendablePoints).toBe(10n);
+    expect(eligiblePoints(byHand, BUSINESS, CUSTOMER, '2026-06-01')).toBe(10n);
+    const inLots = fold.lots.reduce((acc, l) => acc + l.remainingPoints, 0n);
+    expect(inLots + fold.unhorizonedPoints + fold.unattributablePoints).toBe(fold.balancePoints);
+  });
+
   it('offers nothing on a ledger whose draws exceed everything it ever held', () => {
     // An unfunded claim that is never settled: the balance goes negative, the
     // stores stay at zero, and the eligible figure is zero rather than a
@@ -1792,45 +2089,34 @@ describe('foldExpiry — a target cannot fund two restorations with the same poi
     }) as Parameters<typeof buildSaleConsumptionMovement>[1];
 
   it('strikes off what a restoration claims, so a SECOND one cannot claim it again', () => {
-    // Nothing forbids two reversals naming one consumption: `correctsId` must
-    // name a row in the ledger and that is all (`§1.4`), and a double refund is
-    // an ordinary human error rather than an exotic one. Each restoration is
-    // attributed against what is LEFT of its target's draw, so the pool part
-    // can be given back once and the rest is withheld.
+    // Two restorations of ONE consumption. Through the writer they can only sum
+    // to what that consumption took (`F-21`), and this is the pair that still
+    // reaches the striking-off: both are written PAST the writer, because that
+    // is the only way the second can out-claim what is left of the target's
+    // draw. Labelled hand-built for that reason.
+    //
+    // A plausible route to it: `correctsId` must name a row in the ledger and
+    // that is all (`§1.4`), so a desk correction booked twice against one sale
+    // from two sources is an ordinary human error, and the DDL item in §A.3c.3
+    // is what would stop it at the database.
     let ledger = ledgerOf(
       adjust('g1', 30n, '2026-01-01', 'merchant goodwill'),
       earn('e1', 10n, '2026-01-02', '2027-01-01'),
     );
     ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-03', 'c1'))).ledger;
-    // The two must carry DIFFERENT source ids, and that is worth recording: the
-    // identity key of a movement is (business, source type, source id, kind),
-    // so a second reversal naming the SAME source is absorbed by
-    // `appendMovement` as the duplicate it is. The double refund that reaches
-    // the ledger is the one booked against a second correction source, which is
-    // exactly how it would happen by hand.
-    const reversal = (movementId: string, asOf: string, sourceId: string) =>
-      buildReversalMovement(ledger, {
-        businessId: BUSINESS,
-        customerId: CUSTOMER,
-        sourceId,
-        correctsId: 'c1',
-        points: 40n,
-        asOf,
-        movementId,
-        reason: 'sale fully reversed',
-      });
-    const first = appendMovement(ledger, reversal('r1', '2026-01-04', 'sale-c1'));
-    expect(first.outcome).toBe('appended');
-    ledger = first.ledger;
-    const duplicate = appendMovement(ledger, reversal('rX', '2026-01-04', 'sale-c1'));
-    expect(duplicate.outcome).toBe('already_present');
-    const second = appendMovement(ledger, reversal('r2', '2026-01-05', 'desk-correction-2'));
-    expect(second.outcome).toBe('appended');
-    ledger = second.ledger;
+    const byHand = (id: string, seq: bigint, day: string, source: string): LoyaltyMovement => ({
+      id, businessId: BUSINESS, customerId: CUSTOMER, pointSeq: seq,
+      movementKind: 'adjust', sourceType: 'manual_adjustment', sourceId: source,
+      pointsDelta: 40n, expiresOn: null, effectiveOn: day,
+      reason: 'sale fully reversed', correctsId: 'c1',
+    });
+    ledger = {
+      movements: [...ledger.movements, byHand('r1', 4n, '2026-01-04', 'adj-r1'), byHand('r2', 5n, '2026-01-05', 'adj-r2')],
+    };
 
     const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-06-01');
     expect(fold.balancePoints).toBe(80n);
-    // The first reversal gave the grant's 30 back and withheld the lot's 10.
+    // The first restoration gave the grant's 30 back and withheld the lot's 10.
     // The second had nothing left to be attributed to, so all 40 are withheld.
     expect(fold.unhorizonedPoints).toBe(30n);
     expect(fold.unattributablePoints).toBe(50n);
@@ -1838,6 +2124,49 @@ describe('foldExpiry — a target cannot fund two restorations with the same poi
     expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, '2026-06-01')).toBe(30n);
     const inLots = fold.lots.reduce((acc, l) => acc + l.remainingPoints, 0n);
     expect(inLots + fold.unhorizonedPoints + fold.unattributablePoints).toBe(fold.balancePoints);
+  });
+
+  it('through the WRITER, two partial restorations can only sum to what was taken', () => {
+    // The lawful half of the same question, and the idempotency fact worth
+    // recording: the identity key of a movement is (business, source type,
+    // source id, kind), so a second correction naming the SAME source is
+    // absorbed by `appendMovement` as the duplicate it is. The double refund
+    // that reaches the ledger is the one booked against a second source.
+    let ledger = ledgerOf(
+      adjust('g1', 30n, '2026-01-01', 'merchant goodwill'),
+      earn('e1', 10n, '2026-01-02', '2027-01-01'),
+    );
+    ledger = appendMovement(ledger, buildSaleConsumptionMovement(ledger, sale(40n, '2026-01-03', 'c1'))).ledger;
+    const reversal = (movementId: string, asOf: string, sourceId: string, points: bigint) =>
+      buildReversalMovement(ledger, {
+        businessId: BUSINESS,
+        customerId: CUSTOMER,
+        sourceId,
+        correctsId: 'c1',
+        points,
+        asOf,
+        movementId,
+        reason: 'sale fully reversed',
+      });
+    const first = appendMovement(ledger, reversal('r1', '2026-01-04', 'sale-c1', 25n));
+    expect(first.outcome).toBe('appended');
+    ledger = first.ledger;
+    const duplicate = appendMovement(ledger, reversal('rX', '2026-01-04', 'sale-c1', 15n));
+    expect(duplicate.outcome).toBe('already_present');
+    const second = appendMovement(ledger, reversal('r2', '2026-01-05', 'desk-correction-2', 15n));
+    expect(second.outcome).toBe('appended');
+    ledger = second.ledger;
+    // 25 + 15 is the whole of the 40 that was taken, and one point more is
+    // refused by the writer's own bound.
+    expect(refusalCodeOf(() => reversal('r3', '2026-01-06', 'desk-correction-3', 1n))).toBe(
+      'loyalty.corrects_more_than_target',
+    );
+
+    const fold = foldExpiry(ledger, BUSINESS, CUSTOMER, '2026-06-01');
+    expect(fold.balancePoints).toBe(40n);
+    expect(fold.unhorizonedPoints).toBe(30n);
+    expect(fold.unattributablePoints).toBe(10n);
+    expect(eligiblePoints(ledger, BUSINESS, CUSTOMER, '2026-06-01')).toBe(30n);
   });
 
   it('treats a restoration of an UNFUNDED draw as un-attributable, not as the pool', () => {

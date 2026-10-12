@@ -89,6 +89,10 @@ export const ANALYTICS_REFUSALS = {
   /** A reversal named itself, or a movement this ledger does not hold. */
   'loyalty.corrects_unknown_movement': 422,
   'loyalty.corrects_self': 422,
+  /** `F-21`: a correction may not give back more than the row it corrects ever took. */
+  'loyalty.corrects_more_than_target': 422,
+  /** `F-22`: a correction may not be dated before the row it corrects. */
+  'loyalty.corrects_out_of_order': 422,
   /** A redemption value or line figure that is not usable integer minor units. */
   'loyalty.allocation_value_invalid': 422,
   /** A redemption with no lines to split across. */

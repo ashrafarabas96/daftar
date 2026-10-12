@@ -9,17 +9,14 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "eslint src test --max-warnings 0"
+    "lint-is-a-root-gate": "node -e \"console.error('Linting is a ROOT gate in this repository: one flat config at the repo root, which resolves its own plugins from the root. Run: npx eslint packages/analytics --max-warnings 0 from the repository root. A package-local lint script cannot work without the root install (measured: exit 2, Cannot find package @eslint/js imported from <root>/eslint.config.mjs), and a second config here would be a second truth.'); process.exit(2)\""
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.1",
     "@types/node": "24.10.1",
     "@types/pg": "8.15.6",
     "embedded-postgres": "^18.4.0-beta.17",
-    "eslint": "9.39.1",
     "pg": "8.16.3",
     "typescript": "5.9.3",
-    "typescript-eslint": "^8.48.0",
     "vitest": "4.1.11"
   }
 }
