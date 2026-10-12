@@ -81,10 +81,28 @@ data class OwnerScope(
         if (tenantId != owner.tenantId || businessId != owner.businessId) return false
         return when (event) {
             // A transmission. Authorized by the server, not by the row.
-            is QueueEvent.Send -> true
+            is QueueEvent.Send,
 
-            // A person deciding something about someone else's capture.
+            // Handing an unsent capture to the network is not a decision about
+            // it. G-02: gating this on the member left the case this comment
+            // describes stranded one state earlier than the send — a capture
+            // Alice never released is unsendable (not in a sendable state),
+            // unreleasable, uncancellable and unresolvable once her session is
+            // gone, while L4 and L5 forbid dropping it. A release asserts
+            // nothing about who took the money: it cannot be the step that
+            // loses a sale, because nothing has left the device yet. The
+            // reducer permits a release only from CAPTURED, so `attempts` is
+            // necessarily 0 here — asserted as INV-13 rather than argued — and
+            // the row goes on naming Alice, so the attempt still leaves under
+            // her scope and the ledger still records her sale.
             is QueueEvent.Release,
+            -> true
+
+            // A person deciding something about someone else's capture. These
+            // stay the capturer's: cancelling, resolving a material refusal and
+            // restoring the bytes behind one are decisions about money, and a
+            // refusal that needs a decision Bob cannot make is escalated to a
+            // supervisor by `Recovery`, not quietly reassigned here.
             is QueueEvent.CancelByMerchant,
             is QueueEvent.ResolveByMerchant,
             is QueueEvent.RestorePayload,

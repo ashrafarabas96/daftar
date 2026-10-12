@@ -19,6 +19,26 @@ class RecoveryTest {
     private val digest = "sha256:cafebabe"
     private val scope = OwnerScope("tenant-1", "business-1", "member-1")
 
+    /**
+     * Challenger finding G-03: these three were inline inequalities in the
+     * filter below, with no name and no reason, so a reader could not tell
+     * "deliberately a developer problem" from "forgot to map it" — and the
+     * next entry added the same way would be indistinguishable from
+     * suppressing a real miss. Each one here states why the generic view is
+     * the RIGHT view for it.
+     */
+    private val deliberatelyADeveloperProblem = mapOf(
+        // The server says this key was used for different bytes. Nothing a
+        // merchant can do changes that, and no retry clears it.
+        "offline.divergence_needs_a_fix" to "the key was reused for different bytes; only a fix helps",
+        // The payload was rebuilt between capture and send, which is a client
+        // bug: the bytes a merchant approved no longer exist to send.
+        "offline.payload_changed_after_capture" to "the app rebuilt a frozen payload; the capture is gone",
+        // A restore handed back bytes that are not the captured ones, which
+        // means the restore path itself is wrong.
+        "offline.restored_payload_does_not_match_capture" to "the restore returned the wrong bytes",
+    ).keys
+
     private fun kernelSources(): List<File> {
         val root = File(System.getProperty("p7.src") ?: "prep/phase7/kotlin/src")
         val sources = root.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.toList()
@@ -46,16 +66,14 @@ class RecoveryTest {
         assertTrue(codes.size >= 20, "the sweep found only ${codes.size} codes; the kernel has more than that")
 
         val unexplained = codes.filter { code ->
-            val view = Recovery.explain(code)
-            view.message == MerchantMessage.DEVICE_SOFTWARE_PROBLEM &&
-                code != "offline.divergence_needs_a_fix" &&
-                code != "offline.payload_changed_after_capture" &&
-                code != "offline.restored_payload_does_not_match_capture"
+            Recovery.explain(code).message == MerchantMessage.DEVICE_SOFTWARE_PROBLEM &&
+                code !in deliberatelyADeveloperProblem
         }
         assertEquals(
             emptyList(), unexplained,
             "these codes reach a merchant as a generic device-software problem, which erases what " +
-                "they could actually do about it",
+                "they could actually do about it. If one of them genuinely is a device defect, add " +
+                "it to deliberatelyADeveloperProblem WITH ITS REASON rather than widening this test",
         )
     }
 

@@ -131,14 +131,15 @@ class ScopeAndSchemaTest {
      * only record of who took the money.
      */
     @Test
-    fun `another member on the same till cannot release, cancel or resolve another member's capture`() {
+    fun `another member on the same till cannot cancel or resolve another member's capture`() {
         val captured = sale(alice)
-        // Challenger finding F-05 changed this list: `Send` is no longer
-        // here, and the test below it is the reason. What a PERSON decides
-        // about someone else's capture is still refused, which is what this
-        // half of L13 was always about.
+        // Challenger finding F-05 removed `Send` from this list and G-02
+        // removed `Release`, and the two tests below are the reasons. What a
+        // PERSON decides about someone else's capture is still refused —
+        // cancelling it, resolving a refusal on it, restoring the bytes behind
+        // one — which is what this half of L13 was always about. Handing an
+        // unsent capture to the network decides nothing about it.
         val attempted: List<QueueEvent> = listOf(
-            QueueEvent.Release(bob),
             QueueEvent.CancelByMerchant(bob),
             QueueEvent.ResolveByMerchant(true, bob),
             QueueEvent.ResolveByMerchant(false, bob),
@@ -150,7 +151,7 @@ class ScopeAndSchemaTest {
             assertEquals("offline.scope_switched", step.code, "$event was refused for the wrong reason")
             assertEquals(P7Laws.NO_CROSS_ACCOUNT_SEND.id, step.law)
         }
-        assertEquals(5, attempted.size, "every member-gated event must be covered")
+        assertEquals(4, attempted.size, "every member-gated event must be covered")
     }
 
     /**
@@ -221,9 +222,53 @@ class ScopeAndSchemaTest {
         assertEquals(op.id, attempt.idempotencyKey)
 
         // Everything a person decides is still Alice's alone.
-        for (event in listOf(QueueEvent.CancelByMerchant(bob), QueueEvent.Release(bob))) {
+        for (event in listOf(QueueEvent.CancelByMerchant(bob), QueueEvent.ResolveByMerchant(true, bob))) {
             val refused = assertIs<Step.Refused>(op.step(event), "$event by the next shift was allowed")
             assertEquals("offline.scope_switched", refused.code)
+        }
+    }
+
+    /**
+     * Challenger finding G-02, as the test that would have caught it.
+     *
+     * The same shift change one state earlier, which is the state the comment
+     * above actually describes: a sale Alice captured while the till was
+     * offline and never released. The send cannot rescue it — `CAPTURED` is
+     * not a sendable state — so with the release gated on the member too, all
+     * seven session-originated events were refused and the row could never
+     * settle. A permanently closed state is not fail-closed.
+     *
+     * The release is permitted, and nothing else about the row changes: the
+     * owner still names Alice, the key and the bytes are hers, and the attempt
+     * leaves under her scope. What a person decides is still refused.
+     */
+    @Test
+    fun `a capture the previous shift never released can still be finished by the next one`() {
+        val captured = sale(alice)
+        assertEquals(OperationState.CAPTURED, captured.state)
+        assertEquals(0, captured.attempts, "the premise of the relaxation is that nothing was sent")
+
+        val released = assertIs<Step.Moved>(
+            captured.step(QueueEvent.Release(bob)),
+            "a capture left behind by a shift change could never be released by anyone",
+        ).operation
+        assertEquals(OperationState.QUEUED, released.state)
+        assertEquals(alice, released.scope, "the release reassigned the row's owner")
+        assertEquals(captured.id, released.id)
+        assertEquals(captured.payloadDigest, released.payloadDigest)
+
+        val attempt = assertIs<Step.Moved>(released.step(QueueEvent.Send(digest, bob)))
+            .effects.filterIsInstance<SideEffect.SendAttempt>().single()
+        assertEquals(alice, attempt.scope, "the sale would have been recorded against the wrong member")
+
+        // And the decisions are still not Bob's to make.
+        for (event in listOf<QueueEvent>(
+            QueueEvent.CancelByMerchant(bob),
+            QueueEvent.ResolveByMerchant(false, bob),
+            QueueEvent.RestorePayload(digest, bob),
+        )) {
+            val refused = assertIs<Step.Refused>(captured.step(event), "$event by the next shift was allowed")
+            assertEquals("offline.scope_switched", refused.code, "$event was refused for the wrong reason")
         }
     }
 

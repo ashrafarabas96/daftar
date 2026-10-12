@@ -265,15 +265,53 @@ class ReentryAndRetentionTest {
             PriorOutcome.UNDETERMINED, PriorState.classify(StoreAttestation.CANNOT_VOUCH, rowState = null),
         )
         // A row that is PRESENT is evidence whatever the install can prove
-        // about itself, which is the asymmetry the law rests on.
-        for (attestation in StoreAttestation.entries) {
-            for (held in listOf(PriorOutcome.UNKNOWN, PriorOutcome.COMMITTED, PriorOutcome.NEVER_SENT)) {
-                assertEquals(
-                    held, PriorState.classify(attestation, held),
-                    "a row the store actually holds was overridden by $attestation",
-                )
-            }
+        // about itself, which is the asymmetry the law rests on — but only a
+        // vouched install can say WHEN it was true, which is G-02's successor
+        // finding G-01 and the second half of L19.
+        for (held in listOf(PriorOutcome.UNKNOWN, PriorOutcome.COMMITTED, PriorOutcome.NEVER_SENT)) {
+            assertEquals(
+                held, PriorState.classify(StoreAttestation.VOUCHED, held),
+                "a row the store actually holds was overridden for a vouched install",
+            )
         }
+        // The two values staleness cannot harm pass through unchanged: a
+        // commit does not un-commit, and an unknown is already the unsure
+        // answer that the receipt lookup then has to settle.
+        for (held in listOf(PriorOutcome.UNKNOWN, PriorOutcome.COMMITTED)) {
+            assertEquals(held, PriorState.classify(StoreAttestation.CANNOT_VOUCH, held))
+        }
+    }
+
+    /**
+     * Challenger finding G-01, as the test that would have caught it.
+     *
+     * `NEVER_SENT` is the only held value that PERMITS, and it is the only one
+     * monotonicity breaks: it means `attempts == 0`, `attempts` only ever
+     * increases, and a row read out of a restored backup says what was true
+     * when the backup was taken. Alice captures a 500-unit sale; a backup is
+     * taken; the sale is released, sent and committed, and the answer is lost;
+     * the phone is replaced and restored from that backup. The restored row
+     * reads `attempts == 0`. Passing that through permits a new key, and the
+     * customer pays twice — from a store that has already declared it cannot
+     * vouch for itself.
+     */
+    @Test
+    fun `a stale counter from a store that cannot vouch for itself is not a report that nothing was sent`() {
+        assertEquals(
+            PriorOutcome.UNDETERMINED,
+            PriorState.classify(StoreAttestation.CANNOT_VOUCH, PriorOutcome.NEVER_SENT),
+            "a restored backup's attempts == 0 was read as a fact about now " +
+                "(${P7Laws.AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE.id})",
+        )
+        // And the verdict that follows from it, end to end, so this is a claim
+        // about what the till does and not only about one enum value.
+        val verdict = Reconciliation.decideReentry(
+            PriorState.classify(StoreAttestation.CANNOT_VOUCH, PriorOutcome.NEVER_SENT),
+            ReceiptLookup.UNAVAILABLE,
+            Provenance.ORIGINAL_LOST,
+        )
+        val refused = assertIs<Reentry.Refused>(verdict, "a restored backup was allowed to re-enter the sale")
+        assertEquals("offline.prior_state_undetermined", refused.code)
     }
 
     /**

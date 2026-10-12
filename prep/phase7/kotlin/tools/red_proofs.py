@@ -407,6 +407,44 @@ PROOFS: list[Proof] = [
         expect_red="no source in the kernel infers a fenced absence from a status, a null or an empty read",
         why="challenger finding F-06: a fence inferred from an HTTP 404. A 404 says the server did not find the key at that instant and says nothing about whether the original can still arrive, so this converts the one absence that settles the original into the one that does not — and nothing but a textual guard can see it, because the type checks out perfectly",
     ),
+    Proof(
+        law="P7-L19-A-STALE-ROW-IS-NOT-A-CURRENT-ONE",
+        path="src/app/daftar/offline/Reconciliation.kt",
+        find="                    PriorOutcome.NEVER_SENT -> PriorOutcome.UNDETERMINED",
+        replace="                    PriorOutcome.NEVER_SENT -> PriorOutcome.NEVER_SENT",
+        expect_red="a stale counter from a store that cannot vouch for itself is not a report that nothing was sent",
+        why="challenger finding G-01, restored: the fix for F-01 distinguished presence from absence and not presence from CURRENCY. A row restored from a backup reads attempts == 0, which is the one held value that permits, and attempts only ever increases \u2014 so the sale released, sent and committed after the backup was taken is re-entered under a new key and the customer pays twice, from a store that has already declared it cannot vouch for itself",
+    ),
+    Proof(
+        law="P7-L13-THE-NEXT-SHIFT-CAN-FINISH-AN-UNRELEASED-CAPTURE",
+        path="src/app/daftar/offline/Scope.kt",
+        find=(
+            "            is QueueEvent.Release,\n"
+            "            -> true\n"
+        ),
+        replace=(
+            "            -> true\n"
+            "            is QueueEvent.Release,\n"
+        ),
+        expect_red="a capture the previous shift never released can still be finished by the next one",
+        why="challenger finding G-02, restored: the release goes back under the member gate, so a sale Alice captured while the till was offline and never released is unsendable (CAPTURED is not a sendable state), unreleasable, uncancellable, unresolvable and unminimizable once her session is revoked \u2014 seven refusals and a material row that can never settle, which L4 and L5 forbid dropping",
+    ),
+    Proof(
+        law="INV-13-A-RELEASE-ONLY-EVER-MOVES-AN-UNSENT-ROW",
+        path="src/app/daftar/offline/Queue.kt",
+        find="            if (state == OperationState.CAPTURED) {\n                Step.Moved(moved(OperationState.QUEUED), emptyList())",
+        replace="            if (state == OperationState.CAPTURED || state == OperationState.UNKNOWN_OUTCOME) {\n                Step.Moved(moved(OperationState.QUEUED), emptyList())",
+        expect_red="every reachable configuration honours every invariant",
+        why="the ground G-02's relaxation stands on is removed: a release becomes legal from a state only reachable AFTER a send, so the member check that was dropped would be handing another member a row the server may already hold. The relaxation is sound only while a release is structurally unsent, which is why that is an invariant over the whole space and not a remark about the Release arm",
+    ),
+    Proof(
+        law="HARNESS-THE-MERCHANT-VIEW-SWEEP-CATCHES-A-REAL-MISS",
+        path="src/app/daftar/offline/Recovery.kt",
+        find='        "offline.absence_not_fenced" ->',
+        replace='        "offline.absence_not_fenced_typo" ->',
+        expect_red="every refusal code the kernel can produce has a stated merchant view",
+        why="challenger finding G-03's practical risk: a real refusal loses its view and falls through to the generic device-software message. The named allow-list must not be able to swallow it \u2014 the merchant would be told the till is broken instead of that the original sale is still being confirmed, and would key the sale in again",
+    ),
 ]
 
 FAILURE_LINE = re.compile(r"^\s+JUnit Jupiter:(\S+):(.+)\(\)\s*$")

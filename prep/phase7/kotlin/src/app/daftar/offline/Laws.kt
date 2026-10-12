@@ -235,7 +235,7 @@ object P7Laws {
      */
     val AN_UNVOUCHED_STORE_CANNOT_REPORT_ABSENCE = OfflineLaw(
         "P7-L19-AN-UNVOUCHED-STORE-CANNOT-REPORT-ABSENCE",
-        "A local store's silence counts as \"nothing was ever captured\" only where the install can prove it is the one that would have held the row; an install that cannot distinguish an empty store from a destroyed one reports its prior state as undetermined, and an undetermined prior state is never read as an absence and never permits a new key for a material operation.",
+        "A local store's silence counts as \"nothing was ever captured\" only where the install can prove it is the one that would have held the row, and a row that store holds counts as current only on the same proof; an install that cannot distinguish an empty store from a destroyed one, or a current row from a restored one, reports its prior state as undetermined, and an undetermined prior state is never read as an absence and never permits a new key for a material operation.",
     )
 
     /** Every stated law, for the completeness proof. */

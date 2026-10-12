@@ -61,7 +61,11 @@ class QueueModelCheckTest {
     private fun permittedToAct(acting: OwnerScope, owner: OwnerScope, event: QueueEvent.ByScope): Boolean =
         acting.tenantId == owner.tenantId &&
             acting.businessId == owner.businessId &&
-            (event is QueueEvent.Send || acting.memberId == owner.memberId)
+            (
+                event is QueueEvent.Send ||
+                    event is QueueEvent.Release ||
+                    acting.memberId == owner.memberId
+                )
 
     /** One representative answer per branch of the classifier. */
     private val answers: List<AttemptResult> = listOf(
@@ -110,6 +114,7 @@ class QueueModelCheckTest {
         val statesSeen = mutableSetOf<OperationState>()
         var foreignScopeRefusals = 0
         var nextShiftSends = 0
+        var releasesOfAnUnsentRow = 0
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
 
@@ -188,6 +193,24 @@ class QueueModelCheckTest {
                                 next.attempts >= op.attempts,
                                 "attempts went backwards: $op -> $next on $event",
                             )
+
+                            // INV-13: a release only ever moves a row nothing
+                            // has been sent from. G-02 relaxed the member check
+                            // for a release on exactly that ground, so the
+                            // ground is asserted over the whole reachable space
+                            // instead of read off the reducer's `Release` arm —
+                            // if a later edit made a release legal from a state
+                            // reachable after a send, the relaxation would hand
+                            // another member a row that may already be at the
+                            // server.
+                            if (event is QueueEvent.Release) {
+                                assertEquals(
+                                    0, op.attempts,
+                                    "a release moved a row that had already been sent: $op on $event " +
+                                        "(${P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id})",
+                                )
+                                releasesOfAnUnsentRow++
+                            }
 
                             // INV-5: at most one attempt is ever in flight.
                             val sends = step.effects.filterIsInstance<SideEffect.SendAttempt>()
@@ -358,6 +381,11 @@ class QueueModelCheckTest {
             nextShiftSends > 0,
             "no event under another member of the same business ever moved anything, so INV-2's " +
                 "claim that a send carries the ROW's scope rather than the sender's is vacuous",
+        )
+        assertTrue(
+            releasesOfAnUnsentRow > 0,
+            "no release ever moved anything, so INV-13 — the ground G-02's relaxation stands on " +
+                "— is vacuous",
         )
         assertTrue(edges > 1_000, "only $edges edges were explored")
     }

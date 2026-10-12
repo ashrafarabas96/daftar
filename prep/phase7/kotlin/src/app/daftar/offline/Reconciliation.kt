@@ -297,7 +297,39 @@ object PriorState {
         require(rowState != PriorOutcome.NONE && rowState != PriorOutcome.UNDETERMINED) {
             "rowState is what the store HOLDS; pass null for an empty store rather than a verdict"
         }
-        if (rowState != null) return rowState
+        if (rowState != null) {
+            return when (attestation) {
+                StoreAttestation.VOUCHED -> rowState
+
+                // G-01: finding a row tells this install something, but it does
+                // not tell it WHEN. A store that cannot vouch for itself cannot
+                // vouch for the currency of what it holds, and the three values
+                // are not alike in what staleness costs:
+                StoreAttestation.CANNOT_VOUCH -> when (rowState) {
+                    // A commit does not un-commit, so a stale COMMITTED is
+                    // still true — and it refuses, which is the safe side.
+                    PriorOutcome.COMMITTED -> PriorOutcome.COMMITTED
+
+                    // Already the unsure answer, and it is routed to the
+                    // receipt, where an unfenced absence refuses.
+                    PriorOutcome.UNKNOWN -> PriorOutcome.UNKNOWN
+
+                    // The one that PERMITS, and the one monotonicity breaks.
+                    // `NEVER_SENT` means `attempts == 0`, and `attempts` only
+                    // ever increases: a row read from a restored backup says
+                    // what was true when the backup was taken and cannot say
+                    // what is true now. The sale may have been released, sent
+                    // and committed between the backup and the restore.
+                    PriorOutcome.NEVER_SENT -> PriorOutcome.UNDETERMINED
+
+                    // Rejected by the `require` above; mapped fail-closed
+                    // rather than thrown so that this `when` stays exhaustive
+                    // with no `else` and a sixth value cannot be added without
+                    // deciding what staleness does to it.
+                    PriorOutcome.NONE, PriorOutcome.UNDETERMINED -> PriorOutcome.UNDETERMINED
+                }
+            }
+        }
         return when (attestation) {
             StoreAttestation.VOUCHED -> PriorOutcome.NONE
             StoreAttestation.CANNOT_VOUCH -> PriorOutcome.UNDETERMINED
