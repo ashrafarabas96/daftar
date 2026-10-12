@@ -273,12 +273,24 @@ create table p13_rls.businesses (
 create unique index businesses_pair_uq on p13_rls.businesses (business_id, tenant_id);
 
 create table p13_rls.loyalty_point_movements (
-  id            uuid primary key,
+  id            uuid   not null,
   tenant_id     uuid   not null,
   business_id   uuid   not null,
   customer_id   uuid   not null,
   movement_kind text   not null,
   points_delta  bigint not null,
+  corrects_id   uuid,
+  -- THE DECLARED KEY SHAPE, and a cross-phase check is why this is not a
+  -- simple \`id\`. P13-LOYALTY-DESIGN §1.3 declares PRIMARY KEY (business_id,
+  -- id) with no global unique on id, and the frozen house comment at
+  -- 0043:139 says what that is for: two businesses may hold the same id. A
+  -- fixture keyed on id alone is NARROWER than the real table, so the
+  -- collision this proof's own subject requires could not even be built, and
+  -- the self-referential composite key below cannot be created on it at all
+  -- (measured: ERROR 42830, no unique constraint matching given keys).
+  primary key (business_id, id),
+  constraint corrects_fk foreign key (business_id, corrects_id)
+    references p13_rls.loyalty_point_movements (business_id, id) on delete restrict,
   foreign key (business_id, tenant_id) references p13_rls.businesses (business_id, tenant_id)
 );
 
@@ -680,6 +692,163 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
           throw new Error('8: a grouped analytics read returned a business the session is not scoped to');
         }
         note('8: OUTCOME = neither the rows nor their count nor their grouping crosses the boundary');
+      } finally {
+        await c.end();
+      }
+    },
+  },
+
+  {
+    name: 'case-9-key-shape: two businesses hold the SAME movement id, and each sees only its own',
+    /**
+     * A cross-phase check found both proofs keyed on a simple `id` while the
+     * design declares `PRIMARY KEY (business_id, id)`. That made the fixture
+     * NARROWER than the real table: the collision this proof's whole subject
+     * requires could not be built in it at all, so the isolation of two rows
+     * that share an id had never been measured. The frozen house comment at
+     * `0043:139` is explicit that the composite key exists to allow it.
+     *
+     * This case measures the collision on the declared shape AND shows, on a
+     * scratch table keyed the way the fixture used to be, that the same two
+     * rows are refused outright — which is the red proof that the key shape is
+     * doing the work rather than being decoration.
+     */
+    fn: async (admin, note) => {
+      const shared = await one<{ id: string }>(admin, 'SELECT gen_random_uuid()::text AS id');
+      await admin.query(
+        `INSERT INTO p13_rls.loyalty_point_movements (id, tenant_id, business_id, customer_id, movement_kind, points_delta)
+           VALUES ($1,$2,$3,$4,'earn',11), ($1,$2,$5,$4,'earn',22)`,
+        [shared.id, TENANT_A, BUSINESS_A1, CUSTOMER, BUSINESS_A2],
+      );
+      note(`9: both businesses now hold movement id ${shared.id} — accepted by the declared key`);
+
+      const c = await asApp(TENANT_A, BUSINESS_A1);
+      try {
+        const seen = await admin.query<{ business_id: string; points_delta: string }>(
+          `SELECT business_id::text, points_delta::text FROM p13_rls.loyalty_point_movements WHERE id = $1`,
+          [shared.id],
+        );
+        note(`9: the admin pool (BYPASSRLS off, but the owner) sees ${seen.rows.length} row(s) under that id`);
+        const scoped = await c.query<{ business_id: string; points_delta: string }>(
+          `SELECT business_id::text, points_delta::text FROM p13_rls.loyalty_point_movements WHERE id = $1`,
+          [shared.id],
+        );
+        note(
+          `9: the app role scoped to A1 sees ${scoped.rows.length} row(s): ` +
+            `${scoped.rows.map((r) => `${r.business_id}=${r.points_delta}`).join(', ') || '(none)'}`,
+        );
+        if (scoped.rows.length !== 1) {
+          throw new Error(`9: an id shared across businesses leaked: ${scoped.rows.length} row(s) visible to A1`);
+        }
+        if (scoped.rows[0]?.business_id !== BUSINESS_A1 || scoped.rows[0]?.points_delta !== '11') {
+          throw new Error('9: the row visible under the shared id is not this business own row');
+        }
+
+        // RED PROOF: the shape the fixture used to have cannot hold these rows.
+        await admin.query('create table p13_rls.simple_key_probe (id uuid primary key, business_id uuid not null)');
+        const collide = await settle(() =>
+          admin.query('insert into p13_rls.simple_key_probe (id, business_id) values ($1,$2),($1,$3)', [
+            shared.id,
+            BUSINESS_A1,
+            BUSINESS_A2,
+          ]),
+        );
+        note(`9: the same two rows against a SIMPLE id key: ${observed(collide)}`);
+        if (collide.ok || collide.code !== '23505') {
+          throw new Error(`9: expected 23505 on the simple key, observed ${observed(collide)}`);
+        }
+        await admin.query('drop table p13_rls.simple_key_probe');
+        note('9: OUTCOME = the declared composite key permits the collision and RLS isolates it; the simple key forbids it');
+      } finally {
+        await c.end();
+      }
+    },
+  },
+
+  {
+    name: 'case-10-corrects-fk: a correction may name a row in its OWN business and no other',
+    /**
+     * `corrects_id` is the discriminator four challenge rounds have turned on,
+     * and the self-referential composite FK `§1.4` rests on had never been
+     * exercised at the database level — not even for creatability, because on a
+     * table keyed by a simple `id` it cannot be created at all (measured:
+     * `42830`). Now that the fixture carries the declared key, the edge exists
+     * and both of its directions are measured here.
+     *
+     * Note what answers, because it is not the policy: a foreign key is checked
+     * by the system, not by the session, so a cross-business correction is
+     * refused by `23503` rather than by RLS. That is the point — the
+     * referential law holds even where the reader cannot see the row it would
+     * have pointed at.
+     */
+    fn: async (admin, note) => {
+      const own = await one<{ id: string }>(
+        admin,
+        `SELECT id::text FROM p13_rls.loyalty_point_movements WHERE business_id = $1 ORDER BY id LIMIT 1`,
+        [BUSINESS_A1],
+      );
+      // The sibling row must be one whose id does NOT also exist in this
+      // business, or the composite key would legitimately resolve and the case
+      // would measure nothing. Case 9 deliberately creates such a collision, so
+      // this is not hypothetical: the first version of this case selected that
+      // very row and reported a boundary crossing that had not happened.
+      const sibling = await one<{ id: string }>(
+        admin,
+        `SELECT m.id::text FROM p13_rls.loyalty_point_movements m
+          WHERE m.business_id = $1
+            AND NOT EXISTS (
+              SELECT 1 FROM p13_rls.loyalty_point_movements o
+                WHERE o.business_id = $2 AND o.id = m.id
+            )
+          ORDER BY m.id LIMIT 1`,
+        [BUSINESS_A2, BUSINESS_A1],
+      );
+      const declared = await one<{ n: string }>(
+        admin,
+        `SELECT count(*)::text AS n FROM pg_constraint
+          WHERE conname = 'corrects_fk' AND contype = 'f'
+            AND conrelid = 'p13_rls.loyalty_point_movements'::regclass
+            AND confrelid = 'p13_rls.loyalty_point_movements'::regclass`,
+      );
+      note(`10: the self-referential composite FK is in the catalogue: ${declared.n} constraint(s) named corrects_fk`);
+      if (declared.n !== '1') throw new Error('10: corrects_fk is not on the table the proof is measuring');
+
+      const c = await asApp(TENANT_A, BUSINESS_A1);
+      try {
+        const good = await settle(() =>
+          c.query(
+            `INSERT INTO p13_rls.loyalty_point_movements (id, tenant_id, business_id, customer_id, movement_kind, points_delta, corrects_id)
+               VALUES (gen_random_uuid(), $1, $2, $3, 'adjust', 5, $4)`,
+            [TENANT_A, BUSINESS_A1, CUSTOMER, own.id],
+          ),
+        );
+        note(`10: a correction naming a row in its OWN business: ${observed(good)}`);
+        if (!good.ok) throw new Error(`10: the permitted capability does not work: ${observed(good)}`);
+
+        const across = await settle(() =>
+          c.query(
+            `INSERT INTO p13_rls.loyalty_point_movements (id, tenant_id, business_id, customer_id, movement_kind, points_delta, corrects_id)
+               VALUES (gen_random_uuid(), $1, $2, $3, 'adjust', 5, $4)`,
+            [TENANT_A, BUSINESS_A1, CUSTOMER, sibling.id],
+          ),
+        );
+        note(`10: a correction naming the SIBLING business row: ${observed(across)}`);
+        if (across.ok) throw new Error('10: a correction crossed the business boundary');
+        if (across.code !== '23503') {
+          throw new Error(`10: expected 23503 from the composite FK, observed ${observed(across)}`);
+        }
+        const unknown = await settle(() =>
+          c.query(
+            `INSERT INTO p13_rls.loyalty_point_movements (id, tenant_id, business_id, customer_id, movement_kind, points_delta, corrects_id)
+               VALUES (gen_random_uuid(), $1, $2, $3, 'adjust', 5, gen_random_uuid())`,
+            [TENANT_A, BUSINESS_A1, CUSTOMER],
+          ),
+        );
+        note(`10: a correction naming a row that exists nowhere: ${observed(unknown)}`);
+        if (unknown.ok || unknown.code !== '23503') {
+          throw new Error(`10: expected 23503 for an unknown target, observed ${observed(unknown)}`);
+        }
+        note('10: OUTCOME = the correction edge is a real constraint, refusing across the boundary and refusing an absence');
       } finally {
         await c.end();
       }

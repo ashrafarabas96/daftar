@@ -441,7 +441,7 @@ const SCHEMA = `
 create schema p13_proof;
 
 create table p13_proof.point_movements (
-  id              uuid primary key,
+  id              uuid   not null,
   business_id     uuid   not null,
   customer_id     uuid   not null,
   point_seq       bigint not null generated always as identity,
@@ -450,7 +450,18 @@ create table p13_proof.point_movements (
   effective_on    date   not null,
   expires_on      date,
   reason          text,
-  constraint horizon_ck check ((movement_kind = 'earn') = (expires_on is not null))
+  corrects_id     uuid,
+  constraint horizon_ck check ((movement_kind = 'earn') = (expires_on is not null)),
+  -- THE DECLARED KEY SHAPE. A cross-phase check found this fixture keyed on a
+  -- simple id while P13-LOYALTY-DESIGN section 1.3 declares (business_id, id),
+  -- and the difference is not cosmetic: the composite key below CANNOT
+  -- be created against a simple id (ERROR 42830, no unique constraint matching
+  -- given keys), so the correction edge four challenge rounds turn on had never
+  -- been exercised at the database level, not even for creatability.
+  primary key (business_id, id),
+  constraint corrects_fk foreign key (business_id, corrects_id)
+    references p13_proof.point_movements (business_id, id) on delete restrict,
+  constraint corrects_ck check (corrects_id is null or movement_kind = 'adjust')
 );
 
 create table p13_proof.point_grant_remainders (
@@ -470,7 +481,25 @@ create table p13_proof.point_draws (
   movement_id      uuid   not null,
   remaining_before bigint not null,
   drawn_points     bigint not null,
-  constraint point_draws_level_uq unique (business_id, grant_id, remaining_before)
+  constraint point_draws_level_uq unique (business_id, grant_id, remaining_before),
+  -- The two edges section A.3 of the patch request asks the Migration Owner
+  -- for, declared here because the fixture already holds both uniques they need
+  -- and a cross-phase check pointed out that a free measurement was being left
+  -- on the table: without them a draw naming a grant or a movement that does
+  -- not exist is a lawful row in the proof, while the request says it must not.
+  constraint point_draws_grant_fk foreign key (business_id, grant_id)
+    references p13_proof.point_grant_remainders (business_id, grant_id) on delete restrict
+  -- The movement edge is NOT declared, and the reason is stated rather than
+  -- omitted: every draw in this proof names a synthetic movement id, because
+  -- the subject is the remainder mechanism and the lock order, not the ledger.
+  -- Declaring it was measured and it reds six cases. Making them lawful would
+  -- mean inserting a real movement row per draw, which runs the naive sum
+  -- guard above INSIDE cases whose whole point is what the remainder relation
+  -- does, so it would change what they measure; planting zero-delta rows to
+  -- satisfy the key would plant rows the ledger's own law forbids. So the
+  -- movement edge stays an obligation on the Migration Owner (patch request
+  -- section A.3) and is declared UNMEASURED here. A draw naming a movement
+  -- that does not exist is still a lawful row in this fixture.
 );
 
 -- THE NAIVE RULE (case 1). Conservation expressed as a rule evaluated over
@@ -2019,6 +2048,106 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
         await settle(() => app.query('ROLLBACK'));
         await app.end();
       }
+    },
+  },
+
+  {
+    name:
+      'case-12: the DECLARED key shape is what makes the correction edge creatable, and the draw-to-grant ' +
+      'edge refuses a grant that does not exist',
+    /**
+     * A cross-phase check against the frozen schema found both executed proofs
+     * building the movements table on a simple `id` while the design declares
+     * `PRIMARY KEY (business_id, id)`, and drew the consequence: the
+     * self-referential composite key the correction law rests on cannot be
+     * created on that shape at all. Four challenge rounds have turned on
+     * `corrects_id` and none of them had reached the database.
+     *
+     * Both halves are measured here rather than asserted. The first is the
+     * creatability claim, with its red proof: the same constraint against a
+     * simple key is refused with 42830. The second is one of the referential
+     * edges the patch request asks the Migration Owner for, now declared on
+     * this fixture because the unique it needs was already there.
+     */
+    fn: async (admin, note) => {
+      const declared = await admin.query<{ conname: string }>(
+        `select conname from pg_constraint
+          where contype = 'f' and conrelid = 'p13_proof.point_movements'::regclass
+          order by conname`,
+      );
+      note(`12: foreign keys on the movements table: ${declared.rows.map((r) => r.conname).join(', ') || '(none)'}`);
+      if (!declared.rows.some((r) => r.conname === 'corrects_fk')) {
+        throw new Error('12: corrects_fk is not on the table this proof measures');
+      }
+
+      const key = await admin.query<{ def: string }>(
+        `select pg_get_constraintdef(oid) as def from pg_constraint
+          where contype = 'p' and conrelid = 'p13_proof.point_movements'::regclass`,
+      );
+      note(`12: the movements primary key, read from the catalogue: ${key.rows[0]?.def ?? '(none)'}`);
+      if (key.rows[0]?.def !== 'PRIMARY KEY (business_id, id)') {
+        throw new Error(`12: the key shape is not the declared one: ${key.rows[0]?.def ?? '(none)'}`);
+      }
+
+      // RED PROOF: the shape these proofs used to have cannot carry that edge.
+      await admin.query('create table p13_proof.simple_key_probe (id uuid primary key, business_id uuid not null, corrects_id uuid)');
+      const refused = await settle(() =>
+        admin.query(
+          `alter table p13_proof.simple_key_probe add constraint corrects_fk
+             foreign key (business_id, corrects_id) references p13_proof.simple_key_probe (business_id, id)`,
+        ),
+      );
+      note(`12: the same constraint against a SIMPLE id key: ${observed(refused)}`);
+      if (refused.ok || refused.code !== '42830') {
+        throw new Error(`12: expected 42830 on the simple key, observed ${observed(refused)}`);
+      }
+      await admin.query('drop table p13_proof.simple_key_probe');
+
+      // The correction edge, both directions, on the declared shape.
+      const business = id();
+      const other = id();
+      const customer = id();
+      const earnId = id();
+      await admin.query(
+        `insert into p13_proof.point_movements (id, business_id, customer_id, movement_kind, points_delta, effective_on, expires_on)
+           values ($1,$2,$3,'earn',50,'2026-01-01','2027-01-01')`,
+        [earnId, business, customer],
+      );
+      const sameBusiness = await settle(() =>
+        admin.query(
+          `insert into p13_proof.point_movements (id, business_id, customer_id, movement_kind, points_delta, effective_on, reason, corrects_id)
+             values ($1,$2,$3,'adjust',5,'2026-01-02','a correction naming its own business row',$4)`,
+          [id(), business, customer, earnId],
+        ),
+      );
+      note(`12: a correction naming a row in its own business: ${observed(sameBusiness)}`);
+      if (!sameBusiness.ok) throw new Error(`12: the permitted capability does not work: ${observed(sameBusiness)}`);
+      const across = await settle(() =>
+        admin.query(
+          `insert into p13_proof.point_movements (id, business_id, customer_id, movement_kind, points_delta, effective_on, reason, corrects_id)
+             values ($1,$2,$3,'adjust',5,'2026-01-02','a correction reaching into another business',$4)`,
+          [id(), other, customer, earnId],
+        ),
+      );
+      note(`12: a correction in another business naming that row: ${observed(across)}`);
+      if (across.ok || across.code !== '23503') {
+        throw new Error(`12: expected 23503 across the business boundary, observed ${observed(across)}`);
+      }
+
+      // The draw-to-grant edge the patch request asks for.
+      const unknownGrant = await settle(() =>
+        admin.query(
+          `insert into p13_proof.point_draws (id, business_id, grant_id, movement_id, remaining_before, drawn_points)
+             values ($1,$2,$3,$4,10,1)`,
+          [id(), business, id(), id()],
+        ),
+      );
+      note(`12: a draw naming a grant that does not exist: ${observed(unknownGrant)}`);
+      if (unknownGrant.ok || unknownGrant.code !== '23503') {
+        throw new Error(`12: expected 23503 from the draw-to-grant edge, observed ${observed(unknownGrant)}`);
+      }
+      note('12: OUTCOME = the declared key makes the correction edge real, and the draw edge refuses an absent grant');
+      note('12: STILL UNMEASURED: the draw-to-movement edge, declared UNMEASURED in the schema comment and owed to the Migration Owner');
     },
   },
 ];

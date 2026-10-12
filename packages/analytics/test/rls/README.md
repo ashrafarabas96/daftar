@@ -47,7 +47,7 @@ node packages/analytics/test/rls/tenant-isolation.pgtest.mts
 echo "RC=$?"
 ```
 
-Observed: **8/8 cases passed, RC=0** on PostgreSQL **16.15** with
+Observed: **10/10 cases passed, RC=0** on PostgreSQL **16.15** with
 `datcollate=en_US.utf8 datctype=en_US.utf8 encoding=UTF8`, all read back from
 `pg_database` and printed by the run.
 
@@ -160,3 +160,30 @@ worse than a test that fails**, because it is quoted later.
   authorization — all in the phase's security scope, none of them reachable from
   a scratch schema with no application in front of it.
 - **Any timing figure.** None is asserted and nothing sleeps.
+
+## The key shape, and the two cases a cross-phase check added
+
+A check of these fixtures against the frozen schema found the movements table
+here built on a **simple `id`** while `P13-LOYALTY-DESIGN` §1.3 declares
+`PRIMARY KEY (business_id, id)`. That was not cosmetic in either direction:
+
+- The self-referential composite key `corrects_fk` **cannot be created** against
+  a simple `id` — measured, `42830`, and case 12 of the concurrency proof now
+  carries that measurement with its red proof. So the correction edge four
+  challenge rounds turned on had never been exercised at the database level.
+- A simple `id` made this fixture **narrower than the real table**: two
+  businesses could not hold one movement id, so the cross-business collision the
+  composite key exists to permit safely could not be built inside the proof
+  whose own subject is tenant isolation.
+
+Both are fixed here. The table carries `primary key (business_id, id)`, the
+`corrects_id` column and the declared `corrects_fk`, and two cases were added:
+**case 9** builds the collision and measures that each business sees only its own
+row (with a scratch simple-key table refusing the same two rows, `23505`), and
+**case 10** measures the correction edge in both directions — accepted inside the
+business, `23503` across it and `23503` for a target that exists nowhere.
+
+Note what answers in case 10: a foreign key is checked by the system and not by
+the session, so a cross-business correction is refused by the **constraint**, not
+by a policy. That is the point of measuring it — the referential law holds even
+where the reader cannot see the row it would have pointed at.

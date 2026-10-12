@@ -68,7 +68,7 @@ open charmap`, which is why the printed command does not simply echo the locale
 name PostgreSQL reports back.) To measure a line this proof is **not** evidence
 for, set `P13_PG_LOCALE` explicitly.
 
-Observed: `11/11 cases passed`, `RC=0` on PostgreSQL 16.15. The outcomes were identical in each **except one, which is
+Observed: `12/12 cases passed`, `RC=0` on PostgreSQL 16.15. The outcomes were identical in each **except one, which is
 itself a finding**: the deadlock victim in case 5b differed between runs on the
 same cluster and the same version (see qualification 4 below).
 
@@ -289,7 +289,7 @@ line) against this working tree:
 
 | Command | Result | Exit code |
 |---|---|---|
-| `node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts` | `11/11 cases passed`, every racing connection as `daftar_app_proof` (`NOSUPERUSER NOBYPASSRLS`), and case 11's fixture owned by a non-superuser too | **0** |
+| `node packages/analytics/test/concurrency/remainder-conservation.pgtest.mts` | `12/12 cases passed`, every racing connection as `daftar_app_proof` (`NOSUPERUSER NOBYPASSRLS`), case 11's fixture owned by a non-superuser too, and the movements table on the DECLARED key `(business_id, id)` with the correction edge measured in case 12 | **0** |
 | the same, with `P13_PG_LOCALE=zz_ZZ.utf8` | refuses **before** `initdb`, printing the `localedef` command | **1** |
 | `../../node_modules/.bin/vitest run` (in `packages/analytics`) | 7 files, every case passed; the count for a SHA is the generated §3.5 row | **0** |
 | `../../node_modules/.bin/tsc -p tsconfig.json --noEmit` | no diagnostics | **0** |
