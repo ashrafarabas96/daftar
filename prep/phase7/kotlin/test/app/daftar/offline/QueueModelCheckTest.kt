@@ -218,6 +218,7 @@ class QueueModelCheckTest {
         var terminalRefusals = 0
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
+        val codesSeen = mutableSetOf<String>()
 
         for (effect in EffectClass.entries) {
             val start = Operation.capture(
@@ -234,6 +235,31 @@ class QueueModelCheckTest {
                     when (val step = op.step(event)) {
                         is Step.Refused -> {
                             refusals++
+                            codesSeen += step.code
+
+                            // E-04, first half: `not_sendable`'s view says
+                            // "confirm this capture", so it may be refused
+                            // only where that instruction is true — a CAPTURED
+                            // row, and an actor who may confirm it. The
+                            // expectation is written from the acting scope
+                            // here, not read from the kernel, and the question
+                            // "may this session confirm" is asked of the test's
+                            // own independent `permittedToAct` with a Release.
+                            if (step.code == "offline.not_sendable") {
+                                assertEquals(
+                                    OperationState.CAPTURED, op.state,
+                                    "a ${op.state} row was refused offline.not_sendable, whose view tells " +
+                                        "the merchant to confirm a capture: $op on $event",
+                                )
+                                assertTrue(
+                                    event !is QueueEvent.ByScope ||
+                                        permittedToAct(
+                                            event.actingScope, op.scope, QueueEvent.Release(event.actingScope),
+                                        ),
+                                    "a session that may not confirm this row was told to confirm it " +
+                                        "(offline.not_sendable): $op on $event",
+                                )
+                            }
                             if (event is QueueEvent.ByScope &&
                                 !permittedToAct(event.actingScope, op.scope, event)
                             ) {
@@ -692,6 +718,27 @@ class QueueModelCheckTest {
             "no foreign-session move ever erased the local row, so the fused half of INV-14 " +
                 "is vacuous: the path I-04 and J-04 are about was never explored",
         )
+        // E-04, second half. The vocabulary sweep in `RecoveryTest` compares
+        // the set of refusals whose VIEW instructs a wait against the set this
+        // model check has proven reachable only while something is pending —
+        // and an equality over views is blind to a code nothing produces any
+        // more. Removing a helper from the Send arm made `already_sending`
+        // unreachable while that equality stayed green, which the coordinator
+        // measured. So each of those four codes must be OBSERVED here, in the
+        // reachable space, and a code that stops being produced fails by name
+        // rather than by nobody noticing.
+        for (honest in listOf(
+            "offline.already_released",
+            "offline.cancel_after_send",
+            "offline.no_attempt_in_flight",
+            "offline.already_sending",
+        )) {
+            assertTrue(
+                honest in codesSeen,
+                "$honest is listed in RecoveryTest's waitIsHonest, but nothing in the reachable " +
+                    "space produces it any more: produced = ${codesSeen.sorted()}",
+            )
+        }
         assertTrue(
             terminalRefusals > 0,
             "no refusal on a finished row was judged, so INV-15 defends nothing",

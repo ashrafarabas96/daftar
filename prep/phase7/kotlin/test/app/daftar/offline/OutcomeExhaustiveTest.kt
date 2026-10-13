@@ -240,4 +240,75 @@ class OutcomeExhaustiveTest {
             assertFailsWith<IllegalArgumentException> { Outcome.classify(AttemptResult.NoAnswer, op, bad) }
         }
     }
+    /**
+     * Challenger finding K-02, and the half of D-01's guard that a literal
+     * sweep cannot reach.
+     *
+     * `RecoveryTest` takes every `offline.*` LITERAL in the kernel's source and
+     * judges what each one instructs. That covers a refusal added as a literal
+     * anywhere, including in a file nobody has written yet — and it does not
+     * cover a code ASSEMBLED from parts, because there is no literal to find.
+     * The re-entry layer is immune for a different reason: its own test walks
+     * the real 5 x 4 x 2 input space and explains whatever code comes back,
+     * literal or not. This layer had no such judge, and the challenger proved
+     * it: an assembled code with a WAIT view in `Outcome.kt` left the suite
+     * green.
+     *
+     * So the subjects here are not literals either. They are the codes
+     * `classify` actually returns over this file's own exhaustive input space,
+     * and the rule is the one the state makes true: a `NeedsAttention`
+     * decision means the SERVER has answered and the operation is waiting on a
+     * person, so nothing on the device is pending and no view of its code may
+     * instruct a wait or claim a transmission is in progress
+     * (`P7-L20-A-DESTRUCTION-IS-RECORDED-BEFORE-IT-HAPPENS`, second clause).
+     */
+    @Test
+    fun `no code this classifier produces tells the merchant to wait`() {
+        val assertsATransmission = setOf(
+            MerchantMessage.CANNOT_CANCEL_AFTER_SENDING,
+            MerchantMessage.ALREADY_SENDING,
+        )
+        val judged = mutableSetOf<String>()
+        every { answered ->
+            val decision = Outcome.classify(answered, op, 1)
+            // The code is extracted by an exhaustive `when` with NO `else`,
+            // not by filtering for the one arm that happens to carry one
+            // today. Only `NeedsAttention` has a code field; the other three
+            // carry a law id, which is not a refusal code and is never handed
+            // to `explain`. Written this way, a decision constructor added
+            // later — or a code added to one of the other three — is a COMPILE
+            // ERROR here rather than a case this sweep silently skips, which
+            // is the same hole one layer up that K-02 is about.
+            val code: String? = when (decision) {
+                is Decision.Synced -> null
+                is Decision.Retry -> null
+                is Decision.ResolveByReplay -> null
+                is Decision.NeedsAttention -> decision.code
+            }
+            if (code == null || !judged.add(code)) return@every
+            val view = Recovery.explain(code)
+            assertTrue(
+                view.action != RecoveryAction.WAIT_IT_IS_IN_PROGRESS &&
+                    view.message !in assertsATransmission,
+                "the classifier produced $code for status ${answered.status} / " +
+                    "errorCode ${answered.errorCode}, and the merchant is told ${view.message} / " +
+                    "${view.action} — but the server has answered and this row is waiting on a " +
+                    "person, so nothing is pending on the device to wait for",
+            )
+        }
+        // Non-vacuity, anchored to the codes THEMSELVES and not to how many
+        // there are: a count of three is satisfied by any three, including
+        // three this file no longer produces. Each of its own three constants
+        // must have come back from the classifier, and the server codes it
+        // passes through verbatim must have been judged as well, so the sweep
+        // cannot pass by judging nothing or by judging the wrong things.
+        for (own in listOf(Outcome.UNNAMED_REFUSAL, Outcome.SESSION_EXPIRED, Outcome.PERMISSION_REVOKED)) {
+            assertTrue(own in judged, "the sweep never produced $own, so it judged less than it claims")
+        }
+        assertTrue(
+            "accounting.period_closed" in judged && "IDEMPOTENCY_KEY_REUSED" in judged,
+            "the sweep never saw a server code passed through verbatim: judged = ${judged.sorted()}",
+        )
+    }
+
 }

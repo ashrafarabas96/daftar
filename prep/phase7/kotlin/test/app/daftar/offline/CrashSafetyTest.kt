@@ -281,7 +281,15 @@ class CrashSafetyTest {
     fun `the facts a capture must state cannot be omitted by a caller`() {
         val root = java.io.File(System.getProperty("p7.src") ?: "prep/phase7/kotlin/src")
         assertTrue(root.isDirectory, "the kernel source was not found at ${root.absolutePath}")
-        val queue = root.walkTopDown().first { it.isFile && it.name == "Queue.kt" }.readText()
+        val sources = root.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.toList()
+        assertTrue(sources.size >= 6, "only ${sources.size} kernel sources found — the sweep found no subject")
+        val queue = sources.first { it.name == "Queue.kt" }.readText()
+        // Challenger finding K-03: the declaration counter below read `Queue.kt`
+        // alone, so a `capture` declared in any other kernel file left the
+        // count at one. The reasoning was always about the whole source set —
+        // "the number of ways in" — so the subject is the whole source set,
+        // the way the refusal-vocabulary sweep already takes it.
+        val allSource = sources.joinToString("\n") { it.readText() }
 
         val forbidden = listOf(
             Regex("""amountMinorUnits:\s*Long\?\s*=\s*"""),
@@ -320,8 +328,8 @@ class CrashSafetyTest {
         // is the number of ways in, not the shape of one of them.
         val declaration = Regex("fun\\s+capture\\s*\\(")
         assertEquals(
-            1, declaration.findAll(queue).count(),
-            "Queue.kt declares more than one capture function. A second one is a way to capture " +
+            1, declaration.findAll(allSource).count(),
+            "the kernel declares more than one capture function. A second one is a way to capture " +
                 "without stating what the operation is worth, whatever its body passes for null",
         )
         val signature = queue.substringAfter("fun capture(").substringBefore("): Operation")

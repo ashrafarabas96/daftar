@@ -590,7 +590,7 @@ PROOFS: list[Proof] = [
             "RecoveryAction.WAIT_IT_IS_IN_PROGRESS)"
         ),
         expect_red="no refusal in any layer tells the merchant to wait for a device with nothing pending",
-        why="D-01\u2019s other half, and the direction a per-layer guard cannot cover: a code that is NOT a queue state question starts telling the merchant to wait. The sweep takes its subjects from the kernel\u2019s own source and compares the set of waiting refusals for EQUALITY against the ones the model check proved are reachable only while something is pending, so a code added anywhere \u2014 in a layer written after this round \u2014 is judged by absence rather than by a list someone has to remember to extend",
+        why="D-01\u2019s other half: a refusal that is not a wait starts telling the merchant to wait. The sweep takes its subjects from the kernel\u2019s own source and compares the set of waiting refusals for EQUALITY against the ones the model check proved are reachable only while something is pending, so a code added anywhere \u2014 in a layer written after this round \u2014 is judged by absence rather than by a list someone has to remember to extend. What this plant does NOT show, and the round-seven review was right to say so, is the one direction only that sweep can cover: `offline.another_members_capture` is returned by `Operation.step`, so the per-layer invariant over the reachable space sees it too and either guard would have caught this plant. It is kept because it measures the sweep end to end \u2014 source literal, view, instruction, equality \u2014 and the direction no per-layer guard reaches is measured separately by E-03-A-CODE-NO-QUEUE-STATE-EVER-PRODUCES",
     ),
     Proof(
         law="INV-15-A-FINISHED-ROW-ANSWERS-IN-ITS-OWN-TERMS",
@@ -599,6 +599,7 @@ PROOFS: list[Proof] = [
             "                refusalForAFinishedRow()\n"
             "                    ?: refusalForARowAwaitingAPerson()\n"
             "                    ?: refusalForARowAlreadySending()\n"
+            "                    ?: refusalForACaptureSomebodyElseMustConfirm(event.actingScope)\n"
             '                    ?: Step.Refused("offline.not_sendable", P7Laws.KEY_MINTED_AT_CAPTURE.id)'
         ),
         replace='                Step.Refused("offline.not_sendable", P7Laws.KEY_MINTED_AT_CAPTURE.id)',
@@ -629,6 +630,65 @@ PROOFS: list[Proof] = [
         replace='            val code = "offline.scope_switched"',
         expect_red="another member on the same till cannot confirm or settle another member's capture",
         why="coordinator finding C-02\u2032: the gate refuses on two grounds \u2014 a business that is not the row\u2019s, which is never relaxed, and a colleague\u2019s capture inside one business, which is gated only for the three committing events \u2014 and with one code the second is told SIGNED_IN_TO_ANOTHER_BUSINESS and to switch back to the owning account. It is the same business, and the account named is a colleague\u2019s; a cashier who follows that instruction is being sent to sign in as someone else",
+    ),
+    Proof(
+        law="K-02-A-CODE-NEED-NOT-BE-A-LITERAL-TO-REACH-A-MERCHANT",
+        path="src/app/daftar/offline/Outcome.kt",
+        find=(
+            "            status == 401 ->\n"
+            "                Decision.NeedsAttention(SESSION_EXPIRED, false, "
+            "P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)"
+        ),
+        replace=(
+            "            status == 401 ->\n"
+            '                Decision.NeedsAttention("off" + "line." + "cancel_after_send", false, '
+            "P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)"
+        ),
+        expect_red="no code this classifier produces tells the merchant to wait",
+        why="challenger finding K-02, in one file instead of two: the classifier answers an expired session with a code that is ASSEMBLED rather than written, and the code it assembles is one whose view tells the merchant an attempt is out and to wait for it. The literal sweep in RecoveryTest cannot see a code that is not a literal, and the challenger measured exactly this shape staying green \u2014 so the subjects of this layer\u2019s judge are the codes `classify` actually returns over its own exhaustive input space, not the strings its source contains",
+    ),
+    Proof(
+        law="K-03-A-SECOND-WAY-IN-NEED-NOT-BE-IN-THE-SAME-FILE",
+        path="src/app/daftar/offline/Scope.kt",
+        find=(
+            "    fun admit(version: Int) {\n"
+            "        if (!isReadable(version)) throw UnreadableQueueRow(version, CURRENT)\n"
+            "    }\n"
+            "}"
+        ),
+        replace=(
+            "    fun admit(version: Int) {\n"
+            "        if (!isReadable(version)) throw UnreadableQueueRow(version, CURRENT)\n"
+            "    }\n"
+            "}\n"
+            "\n"
+            "fun capture(key: String, scope: OwnerScope, effect: EffectClass, payloadDigest: String): Operation =\n"
+            "    Operation.capture(key, scope, effect, payloadDigest, null, null)"
+        ),
+        expect_red="the facts a capture must state cannot be omitted by a caller",
+        why="challenger finding K-03: the declaration counter read `Queue.kt` alone, and a second way to capture without stating what the operation is worth does not have to live in that file. This plant puts a four-argument `capture` in another kernel source, in the same package, where it resolves for any caller in the module and passes null for both facts \u2014 D-02\u2019s harm one file over. The guard\u2019s subject is now the whole source set, the way the refusal-vocabulary sweep already takes it",
+    ),
+    Proof(
+        law="E-03-A-CODE-NO-QUEUE-STATE-EVER-PRODUCES",
+        path="src/app/daftar/offline/Recovery.kt",
+        find=(
+            '        "offline.session_expired" -> '
+            "view(MerchantMessage.SESSION_ENDED, RecoveryAction.SIGN_IN_AGAIN)"
+        ),
+        replace=(
+            '        "offline.session_expired" -> '
+            "view(MerchantMessage.SESSION_ENDED, RecoveryAction.WAIT_IT_IS_IN_PROGRESS)"
+        ),
+        expect_red="no refusal in any layer tells the merchant to wait for a device with nothing pending",
+        why="coordinator finding E-03, the direction proof 57 did not reach. `offline.session_expired` is not a queue state: no `Operation.step` returns it, so the model check\u2019s reachable space cannot contain it \u2014 it arrives from the server\u2019s answer, through the outcome classifier, and the merchant meets it only as a view. Planted here, a till whose session has ended is told its sale is in progress and to wait, while nothing is pending and nothing will be until somebody signs in. Every per-layer guard stays green, because the code never passes through the layer they watch; only a sweep whose subjects are the kernel\u2019s own literals can see it, and this is the measurement that it does",
+    ),
+    Proof(
+        law="E-04-A-REFUSAL-MAY-NOT-OFFER-A-BUTTON-ITS-READER-CANNOT-PRESS",
+        path="src/app/daftar/offline/Queue.kt",
+        find="                    ?: refusalForACaptureSomebodyElseMustConfirm(event.actingScope)\n",
+        replace="",
+        expect_red="every reachable configuration honours every invariant",
+        why="coordinator finding E-04. Without this arm the next shift\u2019s send of a colleague\u2019s CAPTURED row falls through to `offline.not_sendable`, whose view tells the merchant to confirm the capture \u2014 the one thing L13 forbids that session from doing, so the till shows a button that refuses when pressed. The invariant now asks of every `not_sendable` in the reachable space whether its reader could act on it, computing the answer from the acting scope with the test\u2019s own permission function rather than reading it back from the kernel",
     ),
 ]
 

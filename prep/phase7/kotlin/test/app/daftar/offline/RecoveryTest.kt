@@ -60,6 +60,101 @@ class RecoveryTest {
     private fun currencyFor(effect: EffectClass): String? =
         if (effect == EffectClass.FINANCIAL) "SAR" else null
 
+    /**
+     * Every `offline.*` code literal the kernel's source contains.
+     *
+     * Coordinator finding E-01: this pattern was `offline\.[a-z_]+`, and that
+     * alphabet is narrower than the sentence "every code the kernel can
+     * produce". A code with a digit or a capital — `offline.permission_revoked_v2`
+     * is the one the coordinator planted — is an ordinary literal needing no
+     * assembly, and it was invisible to all four sweeps in this file at once,
+     * which is the worst property a subject-gathering pattern can have: it
+     * narrows every guard built on it, silently, in the same direction. The
+     * The class is now letters of either case, digits, `_` and `.`, which is
+     * every character a code in this kernel can contain and no character that
+     * ends one. It deliberately stops at a space or a colon: one kernel string
+     * opens with a code and continues in prose for an exception message
+     * (`Scope.kt`'s unreadable-row throw), and a class of "anything but a
+     * quote" swallows that prose and hands the sweeps a subject no mapping
+     * could ever explain. Measured, not reasoned: with `[^"]+` the
+     * completeness sweep failed on exactly that string.
+     *
+     * The closing quote stays required, and the test below is what makes that
+     * safe: it asserts that EVERY `offline.` occurrence in the source is
+     * either a code this pattern captured or one named exception, so a code
+     * the boundary misses cannot hide behind the boundary.
+     */
+    private val CODE_LITERAL = Regex("\"(offline\\.[A-Za-z0-9_.]+)\"")
+
+    /**
+     * E-01's non-vacuity: the pattern must be able to SEE the shapes its old
+     * alphabet excluded. Asserted rather than argued, because "the regex is
+     * wider now" is exactly the kind of claim that is true when written and
+     * false after an edit.
+     */
+    @Test
+    fun `the code sweep can see a code its old alphabet excluded`() {
+        for (shape in listOf(
+            "\"offline.permission_revoked_v2\"",
+            "\"offline.sessionExpired\"",
+            "\"offline.a_code_with_9_in_it\"",
+        )) {
+            assertTrue(
+                CODE_LITERAL.containsMatchIn(shape),
+                "the sweep cannot see $shape, so every guard built on it is narrower than its sentence",
+            )
+        }
+        // And it still stops at the literal's own boundary, so one match is
+        // one code rather than everything up to the next quote in the file.
+        assertEquals(
+            "offline.one", CODE_LITERAL.find("\"offline.one\" and \"offline.two\"")!!.groupValues[1],
+        )
+    }
+
+    /**
+     * E-01's other half: the pattern's BOUNDARY, asserted the way its alphabet
+     * is.
+     *
+     * The sweeps take a quoted literal, so a code that is not followed by a
+     * closing quote is not a subject — and one string in this kernel opens
+     * with `offline.` and continues in prose. Dropping the closing quote to
+     * catch it made the completeness sweep fail on that prose, which is the
+     * measurement behind the pattern above. What is left is this: every
+     * `offline.` occurrence in the kernel's source must be either a code the
+     * sweeps captured or a named exception with its reason, so the boundary
+     * cannot become a place for a code to hide.
+     */
+    @Test
+    fun `every offline occurrence in the kernel is a swept code or a named exception`() {
+        // The one exception, and why it is one: this is the message of
+        // `UnreadableQueueRow`, an exception whose TYPE is the contract
+        // (`Scope.admit` throws it, `ScopeAndSchemaTest` asserts the type).
+        // It is never a `Step.Refused` code, never reaches `explain`, and no
+        // surface can be handed it as one — a build that cannot read a row
+        // cannot show the row either.
+        val notARefusalCode = mapOf(
+            "offline.queue_schema_unreadable" to
+                "the message of UnreadableQueueRow, an exception rather than a refusal",
+        )
+        val occurrence = Regex("offline\\.[A-Za-z0-9_.]+")
+        val unswept = mutableMapOf<String, String>()
+        for (file in kernelSources()) {
+            val text = file.readText()
+            val swept = CODE_LITERAL.findAll(text).map { it.groupValues[1] }.toSet()
+            for (m in occurrence.findAll(text)) {
+                val found = m.value
+                if (found in swept || found in notARefusalCode) continue
+                unswept[found] = file.name
+            }
+        }
+        assertEquals(
+            emptyMap(), unswept,
+            "these look like refusal codes and no sweep in this file can see them, so every guard " +
+                "built on the sweeps is blind to them. Either quote them as codes, or add them to " +
+                "notARefusalCode WITH THE REASON they are not codes",
+        )
+    }
+
     private fun kernelSources(): List<File> {
         val root = File(System.getProperty("p7.src") ?: "prep/phase7/kotlin/src")
         val sources = root.walkTopDown().filter { it.isFile && it.name.endsWith(".kt") }.toList()
@@ -79,7 +174,7 @@ class RecoveryTest {
      */
     @Test
     fun `every refusal code the kernel can produce has a stated merchant view`() {
-        val literal = Regex("\"(offline\\.[a-z_]+)\"")
+        val literal = CODE_LITERAL
         val codes = kernelSources()
             .flatMap { file -> literal.findAll(file.readText()).map { it.groupValues[1] } }
             .toSortedSet()
@@ -143,7 +238,7 @@ class RecoveryTest {
 
     @Test
     fun `a refusal is never presented as money taken, over every code the kernel has`() {
-        val literal = Regex("\"(offline\\.[a-z_]+)\"")
+        val literal = CODE_LITERAL
         val codes = kernelSources()
             .flatMap { file -> literal.findAll(file.readText()).map { it.groupValues[1] } }
             .toSortedSet()
@@ -185,7 +280,7 @@ class RecoveryTest {
     @Test
     fun `only the re-entry refusals stop the till, and all three of them do`() {
         val blocking = mutableSetOf<String>()
-        val literal = Regex("\"(offline\\.[a-z_]+)\"")
+        val literal = CODE_LITERAL
         for (file in kernelSources()) {
             for (m in literal.findAll(file.readText())) {
                 val code = m.groupValues[1]
@@ -356,7 +451,7 @@ class RecoveryTest {
             "offline.no_attempt_in_flight" to "the row is queued or re-asking after a lost answer",
             "offline.already_sending" to "the attempt is out now",
         )
-        val literal = Regex("\"(offline\\.[a-z_]+)\"")
+        val literal = CODE_LITERAL
         val codes = kernelSources()
             .flatMap { file -> literal.findAll(file.readText()).map { it.groupValues[1] } }
             .toSortedSet()
@@ -376,6 +471,33 @@ class RecoveryTest {
                 "A code that belongs here needs its state proven in QueueModelCheckTest first; a " +
                 "code that no longer belongs is a line to delete from waitIsHonest, with its reason",
         )
+
+        // Coordinator finding E-02, and the reason the equality above is not
+        // sufficient on its own. It judges CODES, so a producer in another
+        // layer can adopt one of these four and inherit its WAIT view without
+        // changing the literal set at all — the coordinator did it with a
+        // one-token edit, `Outcome.PERMISSION_REVOKED = "offline.already_sending"`,
+        // and the suite stayed green. What makes a wait honest for these four
+        // is a STATE the model check walks, and the model check walks what
+        // `Operation.step` produces, so a use of one of them anywhere else is
+        // a claim about pending-ness that nothing has proven.
+        //
+        // `Queue.kt` is where they are produced and `Recovery.kt` is where
+        // they are explained. Any third file is the finding.
+        val mayHoldAWaitingCode = setOf("Queue.kt", "Recovery.kt")
+        for (code in waitIsHonest.keys) {
+            val elsewhere = kernelSources()
+                .filter { it.name !in mayHoldAWaitingCode && it.readText().contains("\"" + code + "\"") }
+                .map { it.name }
+            assertEquals(
+                emptyList(), elsewhere,
+                "$code instructs the merchant to wait, and ${P7Laws.A_DESTRUCTION_IS_RECORDED_BEFORE_IT_HAPPENS.id} " +
+                    "only permits that where something is pending on the device — which is proven " +
+                    "for the states Operation.step reaches, not for whatever $elsewhere does. A " +
+                    "layer that needs this code needs its own judge first, the way the re-entry " +
+                    "layer and the classifier have one",
+            )
+        }
     }
 
     /**

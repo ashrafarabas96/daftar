@@ -430,9 +430,15 @@ class Operation private constructor(
      * abandoned row still answered in the vocabulary of a row that was still
      * live — `not_sendable`, whose view tells the merchant to CONFIRM a
      * capture the server has already recorded or a colleague has abandoned.
-     * Every arm now routes its refusal of a finished row through here, which
-     * is the same "one place, not one per arm" reason the scope gate and the
-     * custody record have one site each.
+     * Every arm a PERSON can perform now routes its refusal of a finished row
+     * through here, which is the same "one place, not one per arm" reason the
+     * scope gate and the custody record have one site each. The retention
+     * deadline is the exception, and it is one by name rather than by
+     * omission: no person performs it, so its refusal is not an answer to
+     * anybody and `offline.nothing_awaiting_a_person` is the honest thing for
+     * it to say. `INV-15` states the same exception, and challenger finding
+     * K-03's sibling K-01 is that the qualifier lived only there while this
+     * sentence claimed every arm.
      *
      * Challenger finding J-01. A refusal's code decides what a person is told,
      * and three codes told a merchant to wait for something that was not
@@ -484,6 +490,29 @@ class Operation private constructor(
     private fun refusalForARowAlreadySending(): Step.Refused? =
         if (state == OperationState.IN_FLIGHT) {
             Step.Refused("offline.already_sending", P7Laws.KEY_MINTED_AT_CAPTURE.id)
+        } else {
+            null
+        }
+
+    /**
+     * The refusal a capture gives to a session that cannot confirm it.
+     *
+     * Coordinator finding E-04, which is the remainder of C-02′ and the one
+     * part of it a person can see. A `Send` is permitted for any member of the
+     * business (L13's deliberate relaxation, F-05), so the next shift's send of
+     * a colleague's unreleased capture reaches this arm and used to answer
+     * `offline.not_sendable`, whose view says "confirm this capture". They may
+     * not: `Release` is gated on the member, so the button they are offered is
+     * the one the gate will refuse them a step later — which is the C-02′ harm
+     * exactly, surviving in the one arm the finding's remedy did not reach.
+     *
+     * The authority is not restated here. The question "may this session
+     * confirm this row" has one answer in this kernel, `mayAct`, and this asks
+     * it with the event it is about rather than comparing member ids again.
+     */
+    private fun refusalForACaptureSomebodyElseMustConfirm(acting: OwnerScope): Step.Refused? =
+        if (state == OperationState.CAPTURED && !acting.mayAct(scope, QueueEvent.Release(acting))) {
+            Step.Refused("offline.another_members_capture", P7Laws.NO_CROSS_ACCOUNT_SEND.id)
         } else {
             null
         }
@@ -605,13 +634,16 @@ class Operation private constructor(
 
         is QueueEvent.Send ->
             if (!isSendable) {
-                // C-02′. Each non-sendable state answers in its own terms, and
-                // what is left for `not_sendable` after the three helpers is
-                // exactly CAPTURED — the one state where "confirm this
-                // capture" is the true instruction.
+                // C-02′, completed by coordinator finding E-04. Each
+                // non-sendable state answers in its own terms, and what is
+                // left for `not_sendable` after the four helpers is a CAPTURED
+                // row the acting session may itself confirm — the only case
+                // where "confirm this capture" is an instruction the person
+                // reading it can actually carry out.
                 refusalForAFinishedRow()
                     ?: refusalForARowAwaitingAPerson()
                     ?: refusalForARowAlreadySending()
+                    ?: refusalForACaptureSomebodyElseMustConfirm(event.actingScope)
                     ?: Step.Refused("offline.not_sendable", P7Laws.KEY_MINTED_AT_CAPTURE.id)
             } else if (event.digestNow != payloadDigest) {
                 // Loud, local, and before the wire: the server would answer
