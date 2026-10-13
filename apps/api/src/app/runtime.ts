@@ -9,7 +9,7 @@ import { createLogger } from '../infra/logger';
 import { Database } from '../infra/database';
 import { InMemoryMetrics, METRICS, type Metrics } from '../infra/metrics';
 import { MemoryRateLimiter, RedisRateLimiter, type RateLimiter } from '../infra/redis';
-import { createObjectStorage, DisabledDevelopmentMalwareScanner, type MalwareScanner, type ObjectStorage } from '../infra/storage';
+import { createMalwareScanner, createObjectStorage, type MalwareScanner, type ObjectStorage } from '../infra/storage';
 import { GlobalExceptionFilter } from '../common/error.filter';
 import { AuthGuard, MEMBERSHIP_RESOLVER, type MembershipResolver } from '../common/guards';
 import { TokenService, type CredentialDelivery } from '../modules/auth/tokens';
@@ -91,6 +91,9 @@ export interface RuntimeSeams {
   outboxSink?: OutboxSink;
   /** Test seam: scripted object storage (merchant/all only). */
   storage?: ObjectStorage;
+  /** Test seam: scripted malware scanner (merchant/all only). Production uses
+   *  createMalwareScanner(), which refuses the disabled adapter in production. */
+  scanner?: MalwareScanner;
   /** Test seam: deterministic credential encryptor (merchant/platform/all). */
   encryptor?: CredentialPayloadEncryptor;
   /** Test seam: a metrics recorder to assert against (any process). */
@@ -166,7 +169,7 @@ export function merchantInfraProviders(config: AppConfig, seams: RuntimeSeams): 
   return [
     OutboxService,
     { provide: 'OBJECT_STORAGE', useFactory: (): ObjectStorage => seams.storage ?? createObjectStorage(config) },
-    { provide: 'MALWARE_SCANNER', useFactory: (): MalwareScanner => new DisabledDevelopmentMalwareScanner() },
+    { provide: 'MALWARE_SCANNER', useFactory: (): MalwareScanner => seams.scanner ?? createMalwareScanner(config) },
   ];
 }
 

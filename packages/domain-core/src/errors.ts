@@ -24,6 +24,13 @@ export type ApiErrorCode =
   | 'TOKEN_REUSE_DETECTED'
   | 'MEDIA_INVALID'
   | 'MEDIA_TOO_LARGE'
+  // Fail-closed upload scanning (owner ruling 2026-10-12). The scan could not
+  // be performed or could not be trusted — disabled, unreachable, failing or
+  // no answer — so the upload was REFUSED and nothing was stored. It is a
+  // 503-class refusal (retryable once the scanner is back), never a pass.
+  | 'MEDIA_SCAN_UNAVAILABLE'
+  // The scanner really scanned the file and reported it as malware.
+  | 'MEDIA_INFECTED'
   | 'EMAIL_TAKEN'
   | 'ALREADY_MEMBER'
   | 'MEMBER_SUSPENDED'
