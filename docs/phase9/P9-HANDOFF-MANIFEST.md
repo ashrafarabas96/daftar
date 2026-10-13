@@ -64,8 +64,8 @@ one, and the stored run log names its own subject in its header.
 
 ## Artifacts
 
-**Five documents are committed** to the branch above, plus this manifest in the commit that
-follows the subject. Everything else listed here is **off-Git**, under
+**Six documents are committed** to the branch above — five plus this manifest, all in the SAME
+commit, which is the subject. Everything else listed here is **off-Git**, under
 `/mnt/project-files/phase9/`, and is hashed because PART 13 asks for a hash on anything that
 does not live in Git. The `committed` column of the table below is the authority; an earlier
 version of this sentence said "all ten are committed", which the table never supported
@@ -102,21 +102,27 @@ for f in docs/phase9/*; do b=$(basename "$f"); \
   [ "$a" = "$c" ] && echo "SAME $b" || echo "DIFFERENT $b $a $c"; done
 # and the other direction, or a renamed or deleted document leaves an ORPHAN
 # mirror that the loop above never visits and nobody ever flags:
-for m in "$MIR"/*; do b=$(basename "$m"); case "$b" in P9-CHALLENGE-*|P9-COORD-*|P9-RUN-LOG*|P9-EVIDENCE-SHA*|P9-MIRROR-REFRESH-*) continue;; esac; \
+for m in "$MIR"/*; do b=$(basename "$m"); case "$b" in \
+  P9-CHALLENGE-*|P9-COORD-*|P9-RUN-LOG*|P9-EVIDENCE-SHA*|P9-MIRROR-REFRESH-*|P9-HELD-PATCH-*) continue;; esac; \
   git cat-file -e "$M:docs/phase9/$b" 2>/dev/null || echo "ORPHAN $b — no committed counterpart at $M"; done
 ```
 
 The second loop is there because round 8 measured that the first one cannot see an orphan: it
 walks the committed documents, so a document that is renamed or deleted leaves its mirror
 sitting in place, named and hashed and belonging to nothing. The `case` skips the off-Git
-artifacts — challenge reports, coordinator reviews, run logs, digest files and refresh records
-— which are off-Git BY DESIGN and have no committed counterpart to find.
+artifacts — challenge reports, coordinator reviews, run logs, digest files, refresh records and
+held-patch notes — which are off-Git BY DESIGN and have no committed counterpart to find. That
+list is a liability and is named as one: every new KIND of off-Git artifact has to be added to
+it, and the coordinator's review of `6baa1eb` found exactly that, with the check printing ORPHAN
+for a held-patch note I had written an hour earlier. A prefix list is the honest instrument here
+— an unrecognised file in the mirror SHOULD be flagged — but whoever adds an artifact kind adds
+its prefix in the same act.
 
 | mirrored document | SHA256 of the committed blob at `$M` |
 |---|---|
-| `P9-BOOKING-DDL-SPEC.sql` | `49aad8e0e02366f99516a8670eab7751445e61eacbcdb676f7e74ab989e5eb00` |
-| `P9-MIGRATION-PATCH-REQUEST.md` | `c4b3c6e4b2106810cc020824bfadaeaf2701a981da48d0a7c1e8fc8e101480e7` |
-| `P9-PREP-REPORT.md` | `dca086b9004a08747313b1d29ab6ddacb0076c07d790024c802ceaf186ed08b1` |
+| `P9-BOOKING-DDL-SPEC.sql` | `71cd1b38893d1499ead0157e3c8d55a63f74e36277378d13e82c1395cdad8851` |
+| `P9-MIGRATION-PATCH-REQUEST.md` | `27737c51aed23bba0fc8952f17495e3d6c7adf61044a722b07818e69f7f68226` |
+| `P9-PREP-REPORT.md` | `7a3897784a075d8e145c42f0589e97e92214dfbf328ce356b905c473758ec62e` |
 | `P9-S0-SCOPE-AND-ARCHITECTURE.md` | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
 | `P9-RETENTION-AND-ERASURE-OPTIONS.md` | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
 
@@ -126,9 +132,12 @@ under `docs/phase9/` invalidates every row above**, which is the point: the next
 told what they have just made stale, instead of discovering it as a reviewer did. The refresh
 is recorded off-Git in `P9-MIRROR-REFRESH-01f7c2d.txt` — named for the subject whose mirrors it
 corrected, not for this one — hashed below, with the before-and-after
-measurement. **C7-P9-01 / B-1 is not closed by this section**: the coordinator ruled that
-closing it needs a measurement by someone who is not the author, and that is the next
-challenge round's.
+measurement. **`C7-P9-01` / the mirror `B-1` IS now closed**, and not by this section: the
+coordinator's condition was a measurement by someone who is not the author, and challenge round 9
+supplied it — the published command resolved this file's commit, gave 6 of 6 SAME, and the
+challenger then made the check red three ways, including an orphan planted in a COPY of the
+mirror. What this section still cannot do is attest itself; the claim is re-measurable, which is
+the most a committed sentence can offer.
 
 **One commit, one digest per file.** Every SHA256 in the table below for a committed document
 is the digest of its blob **at the same commit as the mirror table above**, `$M`. Round 8 found
@@ -140,10 +149,10 @@ commit it means.
 
 | artifact | location | committed | SHA256 at `$M` |
 |---|---|---|---|
-| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `49aad8e0e02366f99516a8670eab7751445e61eacbcdb676f7e74ab989e5eb00` |
-| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `c4b3c6e4b2106810cc020824bfadaeaf2701a981da48d0a7c1e8fc8e101480e7` |
+| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `71cd1b38893d1499ead0157e3c8d55a63f74e36277378d13e82c1395cdad8851` |
+| Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `27737c51aed23bba0fc8952f17495e3d6c7adf61044a722b07818e69f7f68226` |
 | Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
-| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `dca086b9004a08747313b1d29ab6ddacb0076c07d790024c802ceaf186ed08b1` |
+| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `7a3897784a075d8e145c42f0589e97e92214dfbf328ce356b905c473758ec62e` |
 | Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
 | Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `92dea85ad38b47ae3be0eff1c2fd26409c3289e9a4c47d3a8f069d6079642147` |
 | Independent challenger's PASS-WITH-SCOPE at `0f4f0e4` | `/mnt/project-files/phase9/P9-CHALLENGE-0f4f0e4.md` | **no — off-Git** | `44aad5193b4c22b3cb8ff24f8f25b5d1196de496ab6d7ffe930d4abc0ca66371` |
@@ -157,8 +166,11 @@ commit it means.
 | Coordinator actual-diff review at `01f7c2d` | `/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-01f7c2d.md` | **no — off-Git** | `02fadfc2b996ea0424c5c82bc2a7c5ef9cc60b1d2d96fc9d3b7cdfaa249d2449` |
 | Mirror refresh record (C7-P9-01 / B-1) | `/mnt/project-files/phase9/P9-MIRROR-REFRESH-01f7c2d.txt` | **no — off-Git** | `168e8be09f920bc668b767a416b9c89cdf5bbfba7c322d463688e3be6e475828` |
 | Independent challenger's REJECT at `b6d6101` (round 8) | `/mnt/project-files/phase9/P9-CHALLENGE-b6d6101.md` | **no — off-Git** | `3815e04b9420077e4b7868a655fa44a5edcc27c8eeaae18c7803e29cb48177b9` |
+| Independent challenger's PASS at `6baa1eb` (round 9) | `/mnt/project-files/phase9/P9-CHALLENGE-6baa1eb.md` | **no — off-Git** | `6c037e3638e2a9b5eabf82504f8bea774059232b1a9afaa6f327e16787c36f6a` |
+| Coordinator actual-diff review at `6baa1eb` (REJECT, documents only) | `/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-6baa1eb.md` | **no — off-Git** | `40b96fcc462b1cd0f499488188f6a907225315fcd52c01d7d6af895fe947e212` |
+| Held patch written after `6baa1eb`, folded into this commit | `/mnt/project-files/phase9/P9-HELD-PATCH-after-6baa1eb.md` | **no — off-Git** | `1a30aef9ff6571a011961107cd195474442675726754307dba3092a00267b942` |
 | Stored run log and digest record for THIS subject | `/mnt/project-files/phase9/P9-RUN-LOG-<subject>.txt`, `P9-EVIDENCE-SHA-<subject>.txt` | **no — off-Git** | written after this commit, with the subject SHA in the filename and in the header; the digest record carries its own `sha256sum -c`-verifiable lines |
-| This manifest | `docs/phase9/P9-HANDOFF-MANIFEST.md` | yes (next commit) | — |
+| This manifest | `docs/phase9/P9-HANDOFF-MANIFEST.md` | yes — **this** commit | — (a file cannot carry its own hash; its digest is published in the mirror refresh record) |
 
 No artifact is referenced by any of the above that does not exist. There are no
 byte-identical duplicates to canonicalize (PART 14).
@@ -167,7 +179,7 @@ byte-identical duplicates to canonicalize (PART 14).
 
 | suite | cases | what it measures |
 |---|---|---|
-| `tests/phase9-prep/p9-booking-schema.test.ts` | 25 | shape, RLS, grants, ownership, the state contract, collation independence, and the end state — both deferred guards pinned as ONE ROW (table, function, enabled, events, deferral, WHEN clause) with a red proof for each of round 8's three wrong triggers and a deletion proof per condition |
+| `tests/phase9-prep/p9-booking-schema.test.ts` | 26 | shape, RLS, grants, ownership, the state contract, collation independence, and the end state — both deferred guards pinned as ONE ROW (table, function, enabled, events, deferral, WHEN clause) with a red proof for each of round 8's three wrong triggers and, since round 9, a deletion proof for every one of the gate's eleven conditions on both guards |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 11 | no double booking under real concurrency |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 7 | each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 10 | the global lock order (PART 50), idempotent retries and the replay (PART 53) |
@@ -178,22 +190,40 @@ byte-identical duplicates to canonicalize (PART 14).
 | `tests/phase9-prep/p9-booking-world.ts` | — | the fixture, applied as `daftar_migrator` |
 | `tests/phase9-prep/p9-race.ts` | — | the race harness: `pg_blocking_pids`, never a sleep |
 
-**109 of 109 green, EXIT CODE 0**, on the APPROVED TARGET — a live PostgreSQL **16.15**
+**110 of 110 green, EXIT CODE 0**, on the APPROVED TARGET — a live PostgreSQL **16.15**
 cluster whose `datcollate` and `datctype` are both **`en_US.utf8`** (HIGH-VELOCITY V1 PART
 1.3; PART 19 requires the version and the collation) — with the spec applied in one
 transaction as the non-superuser deployment principal `daftar_migrator` on top of the sealed
-Phase 3 head. Run with `node ./node_modules/vitest/vitest.mjs run tests/phase9-prep --reporter=verbose`,
-`PG_DIR=/tmp/daftar-pg16 PG_PORT=55433`, started 2026-10-12T21:49:32Z, finished 21:53:17Z,
-under **Node v24.21.0** — this phase's own Node 24 run, which PART 7.6 asked for.
+Phase 3 head. Run with `npm ci`, then **`npm run build`**, then
+`npx vitest run tests/phase9-prep`, with `PG_DIR=/tmp/daftar-pg16 PG_PORT=55433`, started
+2026-10-13T01:04:34Z, finished 01:10:01Z, under **Node v24.21.0** — this phase's own Node 24
+run, which PART 7.6 asked for. The build step is part of the command and not an aside (F-1):
+the workspaces must be built before the repository's type-aware gates mean anything, and
+`npm ci` does not remove a `dist/` that is already present, which is how a warm reading of
+`lint` came to be published as if it were a cold one.
 
-**The repository's own gates at the same tree**, run after a clean `npm ci` (**exit code 0**)
-and by their own script names, not by a narrower command standing in for them:
-`npm run format` — `prettier --check .` — **exit code 0**, and `npm run lint` —
-`eslint . --max-warnings 0`, the whole repository and not just this phase's directory —
-**exit code 0**. The format gate was **RED at
-`99695bb`** on three Phase 9 files and is fixed in the subject commit; §3c.20 of the prep
-report measures it. The root `npm run build` and `npm run typecheck` are red cold on `main`
-itself (tracked as G6) and are not claimed here as passing.
+**The repository's own gates at the same tree.** Every type-aware gate gets TWO numbers,
+because one number is uninterpretable: a **cold** run (a fresh clone, `npm ci` only) and a run
+**after `npm run build`**. `format` has no build dependency and keeps one number. The gates are
+run by their own script names, never by a narrower command standing in for them.
+
+| gate | cold (`npm ci` only) | after `npm run build` |
+|---|---|---|
+| `npm ci` | exit 0 | — |
+| `npm run format` (`prettier --check .`) | exit 0 | exit 0 |
+| `npm run lint` (`eslint . --max-warnings 0`) | see the run log for this commit | see the run log for this commit |
+| `npm run typecheck` | see the run log for this commit | see the run log for this commit |
+| `npm run build --workspaces --if-present` | see the run log for this commit | see the run log for this commit |
+
+The two numbers for this commit's tree are in the off-Git run log named for this commit's SHA,
+and they are not written into this file: a gate reading is a measurement of a tree, the SHA of
+the tree does not exist until the commit does, and a number written here before the commit
+would be a number measured somewhere else. The three-world comparison the mission asks for —
+subject, previous head, merge-base `6fc505d` — is in the same log. What is already established
+and does not move: the cold `lint` and `build` reds are the **base's**, measured identically at
+`6fc505d` with no phase-9 path in the output (tracked as G6), and `prettier --check .` was
+**RED at `99695bb`** on three Phase 9 files and has been green since the subject commit; §3c.20
+of the prep report measures that.
 
 Earlier runs of this line's trees are in the stored run logs with their exit codes, **the red
 ones included** — a mutation helper that matched the ceiling's token inside a comment I had

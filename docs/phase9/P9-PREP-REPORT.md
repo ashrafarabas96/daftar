@@ -1,19 +1,29 @@
 # P9 — PREPARATION REPORT
 
 **Status: `PREPARED / NOT PROMOTED`** (master directive Part 9). On the Mission's ladder the
-rung is **`CHALLENGED`** — an independent challenger has now passed the work seven times, most
-recently **PASS-WITH-SCOPE at `01f7c2d`** with `C6-P9-01` closed and three findings, none of
-them in the schema (§3c.19), and the **coordinator's actual-diff review of `9a64289..01f7c2d`
-is ACCEPT-WITH-RESIDUALS on the schema and the suite** while **not accepting the PART 13
-handoff gate** (§3c.20) — and neither a challenger PASS nor a coordinator accept is a
-promotion; see §3c.7.
-**No signature names the subject of THIS document.** Both reviews name `01f7c2d`, and the
-documents they correct are written after it; a signature covers one SHA and never transfers.
-The one blocking item, **C7-P9-01 / B-1**, is a false claim of my own about the off-Git copies,
-answered in this commit and in the manifest, and closing it needs a measurement by someone who
-is not its author. Two further defects were found by me while answering the reviews — the
-repository's own format gate was red at the signed head, and one assertion in the signed suite
-was a scheduling coincidence that failed — both reported against myself in §3c.20.
+rung is **`CHALLENGED`**.
+
+**The review record, counted rather than characterised.** Nine challenger rounds have run. Five
+ended in a pass (`9a64289`, `76ab277`, `903e1f4`, `0f4f0e4`, `01f7c2d`) and **two of those five
+signatures were later WITHDRAWN by the challenger itself** — rounds 6 and 7 — when it measured
+the repository's own format gate red at the heads they covered. The remaining rounds ended in a
+REJECT. The last two verdicts are the ones that describe this document: a **REJECT at
+`b6d6101`** (round 8, §3c.21), where the end-state gate I had signed was measured failing open,
+and a **PASS at `6baa1eb`** (round 9), which also closed `C7-P9-01` by independent measurement.
+The coordinator's actual-diff review of `6baa1eb` is a **REJECT on the documents** — three false
+counts in this file, none of them in the schema or the suite — and it is answered in this
+commit. An earlier edition of this header said a challenger "has now passed the work seven
+times" and called `C7-P9-01` "the one blocking item" while §3c.21 already recorded it closed;
+the coordinator redded both, and the correction is this paragraph.
+
+**No signature names the subject of THIS document.** The newest signature names `6baa1eb`, and
+this commit is after it; a signature covers one SHA and never transfers (PART 16). A challenger
+PASS is in any case not a promotion and neither is a coordinator accept; see §3c.7.
+
+Three defects in this work were found by me rather than by a reviewer, and each is reported
+against myself: the repository's own format gate was red at a signed head (§3c.20), one
+assertion in the signed suite was a scheduling coincidence that failed (§3c.20), and the
+ceiling mutator matched a literal in a comment I had just written (§3c.22).
 `READY_TO_PROMOTE` stays **NO**.
 
 Nothing here is promoted, merged, or in required CI. No migration number is allocated and
@@ -28,10 +38,10 @@ head of `main`.
 | file | lines | what it is |
 |---|---|---|
 | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | 240 | the model, and why it has this shape |
-| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 2012 | the schema and its physical invariants — **not a migration** |
+| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 2057 | the schema and its physical invariants — **not a migration** |
 | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 616 | what the Migration Owner is asked to allocate |
-| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 532 | the PART 13 handoff gate, with a SHA256 per artifact |
-| `tests/phase9-prep/p9-booking-schema.test.ts` | 569 | 25 cases: shape, security, grants, ownership, the state contract, collation independence, and the end state — both deferred guards pinned as one row, with a red proof for each of the three wrong triggers round 8 landed and a deletion proof per condition |
+| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 621 | the PART 13 handoff gate, with a SHA256 per artifact |
+| `tests/phase9-prep/p9-booking-schema.test.ts` | 714 | 26 cases: shape, security, grants, ownership, the state contract, collation independence, and the end state — both deferred guards pinned as one row, with a red proof for each of the three wrong triggers round 8 landed and, since round 9, a deletion proof for **every one of the gate's eleven conditions on both guards** |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 608 | 7 cases: each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
@@ -42,16 +52,41 @@ head of `main`.
 | `tests/phase9-prep/p9-booking-world.ts` | 315 | the fixture, applied as `daftar_migrator`, and the one-transaction reschedule |
 | `tests/phase9-prep/p9-race.ts` | 142 | the race harness: `pg_blocking_pids`, never a sleep |
 
-Every number in that table was re-measured at this tree with `wc -l` and a count of `it(`
-sites, after round 7 found two stale counts in these documents at an earlier round. The seven
-suite counts sum to **109** (25 + 11 + 7 + 10 + 21 + 24 + 11), which is the number the run
-reports: a count that does not add up to its own run is the first thing a reader should be able
-to check. One caution for anyone checking it with `grep -c 'it('`: that gives 106, not 109,
-because three `it` sites in the schema suite are parameterised over the two deferred guards and
-run once for each. The runtime count is the authority and the discrepancy is named here rather
-than left for a reader to trip over.
+Every number in that table is measured at the tree of THIS commit with `wc -l` and, for the
+cases, by running the suite. Two cautions, both of them defects the coordinator found in the
+edition before this one.
 
-**109 of 109 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
+The manifest's own line count is the awkward one: this commit edits
+`P9-HANDOFF-MANIFEST.md`, so a number written for it is stale the moment it is written unless
+it is written last. The 532 in the edition the coordinator reviewed was measured three commits
+earlier; at `6baa1eb` the file was already 591 lines, and this commit takes it to 621. The number above is written after the
+last edit this commit makes to that file, and re-measuring it is one command:
+
+```
+wc -l docs/phase9/P9-HANDOFF-MANIFEST.md     # at the commit that carries this table
+```
+
+The case counts are the other. The seven suites sum to **110** (26 + 11 + 7 + 10 + 21 + 24 +
+11), which is the number the run reports — and that is the RUNTIME count, which no `grep` over
+these files produces, because four `it` sites in the schema suite are parameterised over the
+two deferred guards and run once for each. The anchored command gives the number of SITES:
+
+```
+grep -cE '^[[:space:]]*it\(' tests/phase9-prep/*.test.ts   # 106 sites
+npx vitest run tests/phase9-prep                           # 110 cases
+```
+
+The unanchored `grep -c 'it('` gives **109** at this tree, not the 106 the previous edition
+claimed for it, because it also matches three `.split(` calls that happen to contain the two
+characters `it(` — `tests/phase9-prep/p9-booking-schema.test.ts:441` and `:712`, and
+`tests/phase9-prep/p9-booking-integrity.test.ts:1067`. The coordinator measured the same
+command as **108** at `6baa1eb`, over the two `.split(` calls that existed then; the eleven-
+condition proof added in this commit is the third. The number moves with the tree, which is
+the whole reason a document should quote the command rather than a remembered figure. Quoting a command with the output of a
+different command is exactly the kind of unreproducible evidence the mission forbids, and it
+was mine; the commands above are the ones that print what is claimed for them.
+
+**110 of 110 cases green, EXIT CODE 0, on the approved target — PostgreSQL 16.15 at `en_US.utf8`, under Node v24.21.0**
 — over seven suites, and again on PostgreSQL 18.4 at `C` as the comparison the mission permits.
 A case count is
 not progress and is not quoted as any (Mission, cross-phase): it says how much was measured,
@@ -361,6 +396,112 @@ this phase's own container is owed, and one signature of the three — the coord
 actual-diff review — is still owed. The D11 PART 117 label for the same state is
 `PREPARED / NOT PROMOTED`; it names the promotion state, not the ladder rung, and this
 report uses both so neither vocabulary has to be guessed at.
+
+### 3c.22 The challenger's NINTH round at `6baa1eb` — PASS, and the coordinator's REJECT on this file
+
+Round 9 ran on its own PostgreSQL 16.15 cluster at `en_US.utf8` built fresh for the round, in
+its own checkout of `6baa1eb`, applying the spec as `daftar_migrator`, and it ran the
+repository's own gate scripts — the condition that cost two earlier signatures. Its verdict is
+**PASS**, scoped to `6baa1eb` and nothing else, with two P3 residuals and no blocker. All four
+of round 8's findings are closed. Then the coordinator's actual-diff review of the same head
+came back **REJECT**, on three false counts in THIS file and nothing in the schema or the
+suite. Both are answered in this one commit.
+
+**What round 9 closed by measurement rather than by argument.**
+
+* **`C7-P9-01` is closed by someone who is not its author.** The mirror claim I had corrected
+  was re-measured independently: six of six mirrored documents SAME, and the manifest's
+  self-location `git log -1 --format=%H -- docs/phase9/P9-HANDOFF-MANIFEST.md` resolving to
+  the subject itself.
+* **Limitation 24 was not a limitation.** I had written it down as open, saying the gate pins a
+  function's name and not its body, and asking the challenger to rule on what the right
+  instrument is rather than inventing one. It ruled by attacking: a body swap needs `CREATE OR
+  REPLACE FUNCTION`, which needs CREATE on the schema, and §10 revokes that from
+  `daftar_booking_internal` — the owner, and so the one principal no GRANT could have stopped.
+  Three attempts as that role, two guard functions and a fresh helper, all refused with
+  `42501 permission denied for schema public`. Clause (i) of the end-state block already
+  asserts that revocation, so the gate does not hope the swap is unavailable; it refuses to
+  finish if the privilege ever comes back. Limitation 24 is rewritten as **closed**, and the
+  spec now says this where clause (i) is written instead of leaving a reader to join two
+  clauses forty lines apart.
+* **`'R'` and `'A'` are refused, and I had written that they were not.** See F-3 below.
+
+**The two residuals, both answered in this commit.**
+
+* **R9-01 — the gate pins `tgenabled = 'O'`, so the hardened configuration fails it.** Measured
+  on the shipped schema: under `session_replication_role = 'replica'` the server SKIPS an `'O'`
+  trigger, and a two-booking ring committed **with no refusal**; the same ring under `ENABLE
+  ALWAYS` was refused with `booking.chain_is_a_ring`. So ALWAYS is the configuration that
+  survives replica mode and this gate refuses it. It is P3 rather than higher because of who
+  can reach it: only a superuser may set that GUC — `daftar_app` and `daftar_migrator` both get
+  *"permission denied to set parameter"* — and `daftar_migrator`, which owns the table and so
+  CAN issue `ENABLE ALWAYS`, gets the migration refused if it does. The challenger asked for
+  neither remedy, only that **the choice be visible**, because a reader who hardens the
+  triggers would otherwise meet a refusal with no explanation in it. The spec now carries that
+  paragraph at the condition itself, with these measurements in it.
+* **R9-02 — an in-migration gate cannot see post-deployment drift.** The block runs once, in
+  the migration's transaction. The coordinator confirmed the sharper version: `daftar_migrator`
+  may `DISABLE TRIGGER` after the migration, and nothing here will ever run again to notice.
+  Recorded as **limitation 26**, named for the owner rather than closed, with the one thing
+  this phase can hand whoever builds the monitor: `endStateBlock()` extracts the migration's
+  own predicate from the spec text, which is how the suite re-runs it against a live database
+  without writing a second copy of the gate.
+
+**The coordinator's three blocking items, all of them false counts of mine in this file.**
+
+| | what it said | what is true | where |
+|---|---|---|---|
+| B-1 | the manifest is 532 lines, under an explicit *"re-measured at this tree"* claim | 591 at `6baa1eb`; 532 matches no commit on this line. The other 13 rows were correct | §1, with the re-measure command and why this one number has to be written last |
+| B-2 | *"`grep -c 'it('` gives 106"* | that command gave 108 at `6baa1eb` and gives 109 here; 106 is the ANCHORED count, a different command | §1, both commands quoted with what each prints |
+| B-3 | *"passed the work seven times, most recently PASS-WITH-SCOPE at `01f7c2d`"*, and `C7-P9-01` called *"the one blocking item"* while §3c.21 already recorded it closed | five passes in nine rounds, two of them withdrawn; the last two verdicts are the REJECT at `b6d6101` and the PASS at `6baa1eb` | the header, rewritten as a counted record |
+
+None of the three is a defect in the schema or the suite, and that is not a mitigation: a
+reader decides what to trust from the header and the counts, and all three were readings I had
+not run. The pattern is the one this file has now recorded three times — a number remembered
+instead of measured — and the structural answer in this round is to quote the command beside
+every count, so the next reader can red it in one line instead of in a review.
+
+**The six residuals, and what this commit did with each.**
+
+* **F-1 (P2) — the lint claim needs its tree state.** Done, in both documents. The run command
+  now names `npm run build` as a step rather than an aside, and every type-aware gate is
+  reported with two numbers, cold and after build, per the coordinator's standing rule for all
+  lanes. The gate numbers themselves live in the off-Git run log named for this commit's SHA,
+  because a gate reading is a measurement of a tree and a number written into the tree before
+  the commit exists was measured somewhere else.
+* **F-2 (P3) — stale manifest prose.** Done: the three passages that still said the manifest
+  lands "in the commit that follows" and that `C7-P9-01` is "not closed" are rewritten.
+* **F-3 (P3) — limitation 25 was wrong about `'R'` and `'A'`.** Done. The gate pins
+  `tg.tgenabled = 'O'`, an equality, which refuses every other state the column holds. Writing
+  a condition down as unasserted when the file asserts it is the same class of error as B-2,
+  and it is recorded as mine.
+* **F-4 (P3) — the mirror check flagged an orphan.** Done. `P9-HELD-PATCH-after-6baa1eb.md`,
+  which I wrote off-Git after the commit, is added to the skip list, with a note that a prefix
+  list is itself a liability. The gate was doing its job.
+* **F-6 (P3, optional) — the deletion proof was narrower than the review's probe.** Done, and
+  this is the largest change in the commit. The suite cut three of the gate's conditions on one
+  guard; it now cuts **every one of the eleven, on both guards**, measuring the wrong trigger
+  each condition was added for as PASSING once that condition is gone. Three of the eleven
+  cannot be isolated by a single cut, and that is PostgreSQL rather than a gap: a trigger
+  cannot be INITIALLY DEFERRED without being DEFERRABLE, and a plain trigger can be neither, so
+  for those the strictly smaller cut is measured **still refusing**, which is what shows the
+  extra condition carries weight. The suite grows from 109 cases to 110.
+* **F-7 (P3, hygiene) — A1 could leave a trigger disabled.** Done. `withPlant` takes a callback
+  that runs while the plant is in place, so a failing assertion still reaches the restore.
+
+**One defect of mine in this round, found by me.** The ceiling mutator I added in round 7
+matched `4096` inside a comment I had just written into the function body, so it rewrote the
+comment instead of the ceiling and the case passed on an unmutated function. It is fixed to
+match the assignment `:= 4096;` and to refuse unless there is exactly one of it. An instrument
+that cannot fail reports what its author hoped for, and this one was mine.
+
+**The run at this commit.** `npx vitest run tests/phase9-prep`, after `npm ci` and `npm run
+build`, on PostgreSQL **16.15** at `en_US.utf8` (read back from `pg_database`, not assumed),
+under Node **v24.21.0**, started **2026-10-13T01:04:34Z**, finished **01:10:01Z**: **110 of
+110 passed, 7 files, exit code 0**. The gate table and the three-world comparison are in the
+off-Git run log for this commit's SHA.
+
+---
 
 ### 3c.21 The challenger's EIGHTH pass at `b6d6101` — REJECT, on a gate of mine that failed open
 
@@ -1337,8 +1478,20 @@ required CI, and a branch push is not CI (PART 15).
 Stated as limitations rather than left to be discovered.
 
 1. **These suites are not in required CI.** Adding a workflow step is owner-only (TD-08),
-   and the work is `PREPARED / NOT PROMOTED`. A green run here is a record, not a gate. They
-   are run with `npx vitest run tests/phase9-prep`.
+   and the work is `PREPARED / NOT PROMOTED`. A green run here is a record, not a gate. The
+   run is three commands and the ORDER is part of the evidence (F-1):
+
+   ```
+   npm ci                              # a fresh clone; this removes node_modules, not dist/
+   npm run build                       # FIRST: the workspaces must be built
+   npx vitest run tests/phase9-prep
+   ```
+
+   `npm run build` comes first because the repository's `lint` and `typecheck` read the
+   workspaces' `dist/`, and `npm ci` does not remove a `dist/` that is already there. That is
+   how a warm reading of `lint` was reported as rc 0 in an earlier edition of this file when
+   the cold reading at the same SHA is rc 1 — see §3c.22 and the gate table there, which now
+   carries two numbers per cell, cold and after build, as the coordinator requires.
 2. **No migration number exists, and this work proposes none.** Until the Migration Owner
    allocates one, nothing in `docs/phase9/` is deployable. The DDL spec lives outside the
    migrations directory and is absent from the migration manifest by design.
@@ -1511,26 +1664,62 @@ Stated as limitations rather than left to be discovered.
     `daftar_booking_internal` and `daftar_migrator` may UPDATE `bookings` at all — `daftar_app`
     and `daftar_platform` both get "permission denied for table bookings" — so there is no
     app-role path to the walk, and neither of us makes a timing claim from a container.
-24. **The pinned end state is the MIGRATION's end state, and it does not pin a function BODY.**
-    Round 8's finding is answered by identifying the trigger completely — table, function,
-    schema, enabled, events, deferral, WHEN clause, all in one row. What that still does not
-    see is a function with the right name, schema and owner whose BODY is not the body this
-    spec wrote: the gate would pass it. Two things bound the exposure and neither closes it.
-    The migration runs in one transaction, so a body swap inside it is not a realistic attack
-    on the gate; and a swapped body IS caught behaviourally, by the red proofs that mutate
-    `prosrc` and measure the ring committing. But a gate that pins a name and not a body is
-    exactly the shape of defect round 8 found one level up, so it is written down here rather
-    than argued away. I have not built a digest of `prosrc` into the end state: comparing the
-    body to the spec's own text would be a file checking itself, and I would rather the
-    challenger rule on what the right instrument is than invent one unasked. **Open for round
-    9.**
+24. **The pinned end state does not pin a function BODY — and round 9 measured that this is
+    CLOSED, not open.** Round 8's finding is answered by identifying each trigger completely:
+    table, schema, function, function schema, enabled state, events, deferral, constraint
+    linkage and WHEN clause, all read from ONE joined row. What that predicate cannot see is a
+    function with the right name, schema and owner whose BODY is not the body this spec wrote.
+    I wrote this down as open for round 9 rather than argue it away, and round 9 ruled on it by
+    measurement rather than by argument: a body swap needs `CREATE OR REPLACE FUNCTION`, which
+    needs CREATE on the schema, and §10 revokes CREATE on schema `public` from
+    `daftar_booking_internal` — the role that OWNS these functions, and therefore the one role
+    no GRANT could have stopped. The challenger attempted the swap three times as that role —
+    `bookings_chain_symmetric`, `bookings_buffers_match_service`, and a fresh helper — and was
+    refused each time with `42501 permission denied for schema public`. Clause (i) of the
+    end-state block asserts exactly that revocation, so the gate does not merely hope the swap
+    is unavailable: it refuses to finish the migration if the privilege that would make it
+    available ever comes back. The spec now says this where clause (i) is written, instead of
+    leaving a reader to connect two clauses forty lines apart. **Closed at round 9.** What
+    remains is limitation 26 below, which is a different statement: not that a body can be
+    swapped, but that an in-migration gate is not a monitor.
 25. **A gate's own completeness is never proved, only attacked.** The one-row predicate refuses
-    every wrong trigger round 8 built, and each of its new conditions is proved load-bearing by
-    deletion. That is evidence that the conditions work, not evidence that the list is
-    complete: `tgisinternal`, `tgconstrrelid`, `tgargs` and the `tgenabled` values `'R'` and
-    `'A'` are not asserted, and I do not claim to know they cannot matter. This is recorded as
-    the standing invitation it is, after a round in which my own claim to have pinned a
-    definition was measured false.
+    every wrong trigger round 8 built, and since round 9 **every one of its eleven conditions is
+    proved load-bearing by deletion, on both guards** — the wrong trigger each condition was
+    added for is measured PASSING once that condition is cut, and for the three conditions that
+    PostgreSQL will not let a single deletion isolate (a trigger cannot be INITIALLY DEFERRED
+    without being DEFERRABLE, and a plain trigger can be neither) the strictly smaller deletion
+    is measured still refusing. That is evidence the conditions work, not evidence the list is
+    complete: `tgisinternal`, `tgconstrrelid` and `tgargs`/`tgnargs` are not asserted, and I do
+    not claim to know they cannot matter. The coordinator adds the converse observation (F-5,
+    info): two of the eleven, `tgdeferrable` and `tgconstraint <> 0`, are implied by
+    `tginitdeferred` in any state DDL can reach, so they are redundant rather than wrong —
+    which is exactly why the deletion proof for those two is a minimal pair instead of a
+    single cut, and why they are kept: a condition that costs nothing and would catch a
+    catalogue state reached some other way is not worth removing to save a line.
+
+    An earlier edition of this limitation also listed the `tgenabled` values `'R'` and `'A'` as
+    unasserted. That was wrong and the coordinator redded it (F-3). The gate pins
+    `tg.tgenabled = 'O'`, which is an equality and therefore refuses every other state the
+    column can hold — `'D'` disabled, `'R'` replica-only, and `'A'` ENABLE ALWAYS — and the
+    spec now says at the condition itself why `'O'` is the only admitted state and why ALWAYS
+    in particular is refused rather than welcomed: ALWAYS would also run the guard inside a
+    logical-replication apply worker, which nothing here has measured. Writing a condition down
+    as unasserted when the file asserts it is the same class of error as claiming a count one
+    has not run, and it is recorded here as mine.
+
+26. **An end-state gate inside a migration is not a monitor, and cannot be (R9-02).** Every
+    clause of the end-state block runs ONCE, in the migration's own transaction, and what it
+    proves is that the schema was correct at the instant the migration committed. It says
+    nothing about the schema an hour later. Someone with the privileges to do so can disable a
+    trigger, replace a definer body, or re-grant CREATE on schema `public` the day after
+    deployment, and no clause here will ever run again to notice. The challenger raised this in
+    round 9 and I am recording it rather than building around it: a drift check is a scheduled
+    job with its own owner, its own alert route and its own on-call, none of which exists in
+    this phase or is mine to create (TD-08). What this phase CAN offer whoever builds it is the
+    predicate itself — `endStateBlock()` in `tests/phase9-prep/p9-booking-spec.ts` extracts the
+    migration's own block from the spec text, which is how the suite re-runs it against a live
+    database without writing a second copy of the gate. A monitor can do the same. **Named for
+    the owner, not closed.**
 
 17. **The lock-set collision case is reasoned, not measured.** Two distinct resources
     hashing to one key would merge their locks, which broadens exclusion and cannot

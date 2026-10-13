@@ -290,9 +290,19 @@ describe('P9 booking schema — applies as the deployment principal', () => {
     // nothing about the migration — and asserts the refusal BY NAME. Then it
     // restores the trigger from the definition the server itself rendered
     // before the plant, and asserts the gate passes again.
+    // `events` is the guard's own event list as the server renders it, and
+    // `otherEvents` a DIFFERENT one that still fires on the rows the WHEN
+    // clause admits — the pair the `tgtype` probe below needs, since swapping
+    // the events is the only way to change `tgtype` while leaving every other
+    // fact the gate reads identical.
     const GUARDS = [
-      { tgname: 'bookings_chain_agrees', proname: 'bookings_chain_symmetric' },
-      { tgname: 'bookings_buffers_are_the_service_s', proname: 'bookings_buffers_match_service' },
+      { tgname: 'bookings_chain_agrees', proname: 'bookings_chain_symmetric', events: 'AFTER INSERT OR UPDATE ON', otherEvents: 'AFTER INSERT ON' },
+      {
+        tgname: 'bookings_buffers_are_the_service_s',
+        proname: 'bookings_buffers_match_service',
+        events: 'AFTER INSERT ON',
+        otherEvents: 'AFTER INSERT OR UPDATE ON',
+      },
     ] as const;
 
     /** Run the spec's own end-state block and return its refusal, or `''`. */
@@ -323,7 +333,7 @@ describe('P9 booking schema — applies as the deployment principal', () => {
      * helper asserts the gate is GREEN before planting and GREEN after
      * restoring, so a plant that failed to apply cannot be read as a proof.
      */
-    const withPlant = async (plant: string[], undo: string[]): Promise<string> => {
+    const withPlant = async (plant: string[], undo: string[], whilePlanted?: () => Promise<void>): Promise<string> => {
       const block = endStateBlock();
       expect(await gate(block)).toBe('');
       let said = 'the plant never ran';
@@ -331,6 +341,11 @@ describe('P9 booking schema — applies as the deployment principal', () => {
       try {
         for (const q of plant) await db.pool.query(q);
         said = await gate(block);
+        // Anything the case wants to measure while the schema is wrong runs
+        // HERE, inside the try, so a failed assertion still reaches `undo`
+        // below (F-7): a measurement taken after this helper returned would
+        // leave the trigger planted for every later case in the file.
+        if (whilePlanted !== undefined) await whilePlanted();
       } catch (e) {
         probe = e;
       }
@@ -349,21 +364,24 @@ describe('P9 booking schema — applies as the deployment principal', () => {
     for (const g of GUARDS) {
       it(`A1 — ${g.tgname} DISABLED: every shape fact is unchanged and the guard does not run`, async () => {
         const before = await defOf(g.tgname);
-        const said = await withPlant([`ALTER TABLE bookings DISABLE TRIGGER ${g.tgname}`], [`ALTER TABLE bookings ENABLE TRIGGER ${g.tgname}`]);
-        expect(said).toMatch(/booking\.migration_end_state_invalid/);
-        expect(said).toContain(g.tgname);
         // The point of this case: DISABLE changes nothing the old gate looked
         // at. `pg_get_triggerdef` renders the same text, and only `tgenabled`
-        // moves — measured here rather than asserted from the manual.
-        await db.pool.query(`ALTER TABLE bookings DISABLE TRIGGER ${g.tgname}`);
-        const during = await db.pool.query<{ e: string; def: string }>(
-          `SELECT tg.tgenabled::text AS e, pg_get_triggerdef(tg.oid) AS def FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid
-            WHERE tg.tgname = $1 AND c.relname = 'bookings'`,
-          [g.tgname],
-        );
-        expect(during.rows[0]?.e).toBe('D');
-        expect(during.rows[0]?.def).toBe(before);
-        await db.pool.query(`ALTER TABLE bookings ENABLE TRIGGER ${g.tgname}`);
+        // moves — measured here rather than asserted from the manual, and
+        // measured WHILE the trigger is disabled, inside the helper, so the
+        // trigger is re-enabled even if one of these assertions fails (F-7).
+        let during: { e: string; def: string } | undefined;
+        const said = await withPlant([`ALTER TABLE bookings DISABLE TRIGGER ${g.tgname}`], [`ALTER TABLE bookings ENABLE TRIGGER ${g.tgname}`], async () => {
+          const r = await db.pool.query<{ e: string; def: string }>(
+            `SELECT tg.tgenabled::text AS e, pg_get_triggerdef(tg.oid) AS def FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid
+                WHERE tg.tgname = $1 AND c.relname = 'bookings'`,
+            [g.tgname],
+          );
+          during = r.rows[0];
+        });
+        expect(said).toMatch(/booking\.migration_end_state_invalid/);
+        expect(said).toContain(g.tgname);
+        expect(during?.e).toBe('D');
+        expect(during?.def).toBe(before);
       });
 
       it(`A2 — ${g.tgname} with the same name, events, deferral and WHEN clause, executing a DO-NOTHING function`, async () => {
@@ -399,71 +417,198 @@ describe('P9 booking schema — applies as the deployment principal', () => {
         expect(said).toMatch(/booking\.migration_end_state_invalid/);
         expect(said).toContain(g.tgname);
       });
-    }
 
-    it('and each of the three NEW conditions is the one doing the work: delete it and its own wrong trigger passes', async () => {
-      // The gate above could refuse all three for the wrong reason — one
-      // over-strict clause catching everything. So each new condition is
-      // deleted from the extracted block in turn, and the wrong trigger it was
-      // added for is then measured PASSING. A condition whose deletion changes
-      // nothing is not load-bearing, and this is the only way to tell.
-      const block = endStateBlock();
-      const cut = (fragment: string): string => {
-        if (!block.includes(fragment)) throw new Error(`the end-state block does not contain ${fragment}`);
-        const without = block.replace(fragment, '');
-        if (without === block) throw new Error(`removing ${fragment} changed nothing`);
-        return without;
-      };
-      const g = 'bookings_chain_agrees';
-      const proname = 'bookings_chain_symmetric';
-      const before = await defOf(g);
-      const gate = async (b: string): Promise<string> => {
-        try {
-          await db.pool.query(b);
-          return '';
-        } catch (e) {
-          return e instanceof Error ? e.message : 'non-error thrown';
+      it(`and every one of the 11 conditions is load-bearing for ${g.tgname}: delete it and its own wrong trigger passes`, async () => {
+        // The gate could refuse all three of A1-A3 for the wrong reason — one
+        // over-strict clause catching everything — and nine of its eleven
+        // conditions could be decoration. So EVERY condition is deleted from
+        // the extracted block in turn and the wrong trigger it was added for
+        // is then measured PASSING. Round 9 asked for all eleven on both
+        // guards rather than three on one (F-6).
+        //
+        // Three of the eleven cannot be isolated by a single deletion, and
+        // that is a fact about PostgreSQL rather than a gap here: a trigger
+        // cannot be INITIALLY DEFERRED without being DEFERRABLE, and a plain
+        // trigger cannot be either, so the wrong trigger that defeats
+        // `tgdeferrable` necessarily also defeats `tginitdeferred`. For those,
+        // `stillRed` names the strictly smaller deletion that must STILL
+        // refuse, which is what shows the extra condition is carrying weight
+        // instead of riding along.
+        const block = endStateBlock();
+        const cut = (fragments: readonly (readonly [string, string])[]): string => {
+          let out = block;
+          for (const [fragment, replacement] of fragments) {
+            if (out.split(fragment).length !== 2) throw new Error(`the end-state block does not contain exactly one ${JSON.stringify(fragment)}`);
+            out = out.replace(fragment, replacement);
+          }
+          if (out === block) throw new Error('the deletion changed nothing');
+          return out;
+        };
+        // The conditions, quoted from the spec with their own whitespace so a
+        // reformatting of the gate fails this case instead of silently
+        // deleting nothing.
+        const C = {
+          tgname: ['       WHERE tg.tgname       = v_g.tgname\n', '       WHERE true\n'] as const,
+          relname: ["         AND c.relname       = 'bookings'\n", ''] as const,
+          nspname: ["         AND n.nspname       = 'public'\n", ''] as const,
+          proname: ['         AND p.proname       = v_g.proname\n', ''] as const,
+          pronsp: ["         AND pn.nspname      = 'public'\n", ''] as const,
+          enabled: ["         AND tg.tgenabled    = 'O'\n", ''] as const,
+          tgtype: ['         AND tg.tgtype       = v_g.tgtype\n', ''] as const,
+          deferrable: ['         AND tg.tgdeferrable\n', ''] as const,
+          initdeferred: ['         AND tg.tginitdeferred\n', ''] as const,
+          constraintOid: ['         AND tg.tgconstraint <> 0\n', ''] as const,
+          whenclause: ['         AND pg_get_triggerdef(tg.oid) LIKE v_g.whenlike\n', ''] as const,
+        };
+        const before = await defOf(g.tgname);
+        const drop = `DROP TRIGGER ${g.tgname} ON bookings`;
+        const nothing = `CREATE OR REPLACE FUNCTION zz_nothing() RETURNS trigger LANGUAGE plpgsql AS $zz$ BEGIN RETURN NULL; END $zz$`;
+        const cols = '(id UUID PRIMARY KEY, kind TEXT, rescheduled_to_id UUID, rescheduled_from_id UUID)';
+        const noDeferral = before.replace('DEFERRABLE INITIALLY DEFERRED ', '');
+        expect(noDeferral).not.toBe(before);
+        const noWhen = before.replace(/ WHEN \(.*\) EXECUTE FUNCTION /, ' EXECUTE FUNCTION ');
+        expect(noWhen).not.toBe(before);
+        expect(noWhen).not.toContain(' WHEN ');
+
+        const probes: {
+          condition: string;
+          wrong: string;
+          cuts: readonly (readonly [string, string])[];
+          stillRed?: readonly (readonly [string, string])[];
+          plant: string[];
+          undo: string[];
+        }[] = [
+          {
+            condition: 'tg.tgname',
+            wrong: 'the guard renamed, everything else identical',
+            cuts: [C.tgname],
+            plant: [drop, before.replace(`TRIGGER ${g.tgname} `, 'TRIGGER zz_renamed ')],
+            undo: [`DROP TRIGGER zz_renamed ON bookings`, before],
+          },
+          {
+            condition: 'c.relname',
+            wrong: 'the guard moved to another table in public',
+            cuts: [C.relname],
+            plant: [`CREATE TABLE zz_decoy ${cols}`, drop, before.replace('ON public.bookings', 'ON public.zz_decoy')],
+            undo: [`DROP TABLE zz_decoy CASCADE`, before],
+          },
+          {
+            condition: 'n.nspname',
+            wrong: 'the guard moved to a table also called bookings, in another schema',
+            cuts: [C.nspname],
+            plant: [`CREATE SCHEMA zz`, `CREATE TABLE zz.bookings ${cols}`, drop, before.replace('ON public.bookings', 'ON zz.bookings')],
+            undo: [`DROP SCHEMA zz CASCADE`, before],
+          },
+          {
+            condition: 'p.proname',
+            wrong: 'the guard executing a do-nothing function',
+            cuts: [C.proname],
+            plant: [nothing, drop, before.replace(`EXECUTE FUNCTION ${g.proname}()`, 'EXECUTE FUNCTION zz_nothing()')],
+            undo: [drop, before, `DROP FUNCTION zz_nothing()`],
+          },
+          {
+            condition: 'pn.nspname',
+            wrong: 'the guard executing a same-named function in another schema',
+            cuts: [C.pronsp],
+            plant: [
+              `CREATE SCHEMA zz`,
+              `CREATE FUNCTION zz.${g.proname}() RETURNS trigger LANGUAGE plpgsql AS $zz$ BEGIN RETURN NULL; END $zz$`,
+              drop,
+              before.replace(`EXECUTE FUNCTION ${g.proname}()`, `EXECUTE FUNCTION zz.${g.proname}()`),
+            ],
+            undo: [drop, before, `DROP SCHEMA zz CASCADE`],
+          },
+          {
+            condition: 'tg.tgenabled',
+            wrong: 'the guard disabled',
+            cuts: [C.enabled],
+            plant: [`ALTER TABLE bookings DISABLE TRIGGER ${g.tgname}`],
+            undo: [`ALTER TABLE bookings ENABLE TRIGGER ${g.tgname}`],
+          },
+          {
+            condition: 'tg.tgtype',
+            wrong: 'the guard on a different event list',
+            cuts: [C.tgtype],
+            plant: [drop, before.replace(g.events, g.otherEvents)],
+            undo: [drop, before],
+          },
+          {
+            condition: 'tg.tginitdeferred',
+            wrong: 'the guard DEFERRABLE INITIALLY IMMEDIATE',
+            cuts: [C.initdeferred],
+            plant: [drop, before.replace('DEFERRABLE INITIALLY DEFERRED', 'DEFERRABLE INITIALLY IMMEDIATE')],
+            undo: [drop, before],
+          },
+          {
+            condition: 'tg.tgdeferrable',
+            wrong: 'the guard NOT DEFERRABLE',
+            cuts: [C.deferrable, C.initdeferred],
+            stillRed: [C.initdeferred],
+            plant: [drop, noDeferral],
+            undo: [drop, before],
+          },
+          {
+            condition: 'tg.tgconstraint',
+            wrong: 'a plain trigger in the constraint trigger\u2019s place',
+            cuts: [C.deferrable, C.initdeferred, C.constraintOid],
+            stillRed: [C.deferrable, C.initdeferred],
+            plant: [drop, noDeferral.replace('CREATE CONSTRAINT TRIGGER', 'CREATE TRIGGER')],
+            undo: [drop, before],
+          },
+          {
+            condition: 'pg_get_triggerdef LIKE',
+            wrong: 'the guard with its WHEN clause removed, so it fires on rows it was never measured on',
+            cuts: [C.whenclause],
+            plant: [drop, noWhen],
+            undo: [drop, before],
+          },
+        ];
+        expect(probes.length).toBe(11);
+        expect(new Set(probes.map((x) => x.condition)).size).toBe(11);
+
+        for (const probe of probes) {
+          const where = `${probe.condition} / ${probe.wrong}`;
+          const withFull = block; // the migration's own gate, unmodified
+          const withCut = cut(probe.cuts);
+          const withSmaller = probe.stillRed === undefined ? null : cut(probe.stillRed);
+          expect(await gate(withFull), `${where}: the gate is not green before the plant`).toBe('');
+          let seen: { full: string; cutted: string; smaller: string | null } | null = null;
+          let failure: unknown = null;
+          try {
+            for (const q of probe.plant) await db.pool.query(q);
+            seen = {
+              full: await gate(withFull),
+              cutted: await gate(withCut),
+              smaller: withSmaller === null ? null : await gate(withSmaller),
+            };
+          } catch (e) {
+            failure = e;
+          }
+          let restoreFailure: unknown = null;
+          try {
+            for (const q of probe.undo) await db.pool.query(q);
+          } catch (e) {
+            restoreFailure = e;
+          }
+          if (failure !== null) throw failure;
+          if (restoreFailure !== null) throw restoreFailure;
+          expect(seen, where).not.toBeNull();
+          // The gate refuses the wrong trigger BY NAME.
+          expect(seen?.full, `${where}: the full gate did not refuse`).toMatch(/booking\.migration_end_state_invalid/);
+          expect(seen?.full, where).toContain(g.tgname);
+          // And it refuses it ONLY because of this condition.
+          expect(seen?.cutted, `${where}: the gate still refused without the condition, so the condition is not what refused`).toBe('');
+          if (withSmaller !== null) {
+            expect(seen?.smaller, `${where}: the smaller deletion already passed, so this condition carries no weight`).toMatch(
+              /booking\.migration_end_state_invalid/,
+            );
+          }
+          // And the schema is back, byte for byte, before the next probe.
+          expect(await gate(withFull), `${where}: the gate is not green after the restore`).toBe('');
+          expect(await defOf(g.tgname), `${where}: the trigger was not restored`).toBe(before);
         }
-      };
-
-      // tgenabled, against the DISABLED trigger.
-      const noEnabled = cut("         AND tg.tgenabled    = 'O'\n");
-      await db.pool.query(`ALTER TABLE bookings DISABLE TRIGGER ${g}`);
-      const disabledWithout = await gate(noEnabled);
-      const disabledWith = await gate(block);
-      await db.pool.query(`ALTER TABLE bookings ENABLE TRIGGER ${g}`);
-      expect(disabledWith).toMatch(/booking\.migration_end_state_invalid/);
-      expect(disabledWithout).toBe('');
-
-      // tgfoid, against the do-nothing function.
-      const noFunction = cut('         AND p.proname       = v_g.proname\n');
-      await db.pool.query(`CREATE OR REPLACE FUNCTION zz_nothing() RETURNS trigger LANGUAGE plpgsql AS $zz$ BEGIN RETURN NULL; END $zz$`);
-      await db.pool.query(`DROP TRIGGER ${g} ON bookings`);
-      await db.pool.query(before.replace(`EXECUTE FUNCTION ${proname}()`, 'EXECUTE FUNCTION zz_nothing()'));
-      const wrongFnWithout = await gate(noFunction);
-      const wrongFnWith = await gate(block);
-      await db.pool.query(`DROP TRIGGER ${g} ON bookings`);
-      await db.pool.query(before);
-      expect(wrongFnWith).toMatch(/booking\.migration_end_state_invalid/);
-      expect(wrongFnWithout).toBe('');
-
-      // tgrelid, against the decoy on another table.
-      const noTable = cut("         AND c.relname       = 'bookings'\n");
-      await db.pool.query(`CREATE TABLE zz_decoy (id UUID PRIMARY KEY, kind TEXT, rescheduled_to_id UUID, rescheduled_from_id UUID)`);
-      await db.pool.query(`DROP TRIGGER ${g} ON bookings`);
-      await db.pool.query(before.replace('ON public.bookings', 'ON public.zz_decoy'));
-      const decoyWithout = await gate(noTable);
-      const decoyWith = await gate(block);
-      await db.pool.query(`DROP TABLE zz_decoy CASCADE`);
-      await db.pool.query(before);
-      await db.pool.query(`DROP FUNCTION zz_nothing()`);
-      expect(decoyWith).toMatch(/booking\.migration_end_state_invalid/);
-      expect(decoyWithout).toBe('');
-
-      // Everything is back and the gate is green.
-      expect(await gate(block)).toBe('');
-      expect(await defOf(g)).toBe(before);
-    });
+      });
+    }
   });
 
   it('the state contract is CHECKED against the document, not trusted: four mutations each red it by name', () => {

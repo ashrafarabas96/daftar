@@ -1961,6 +1961,31 @@ BEGIN
   --     change of schema; and the WHEN renderings carry the paren nesting and
   --     the `::text` cast the server actually stores, which differ between the
   --     two because one expression is an OR and the other is a comparison.
+  --
+  --     `tgenabled = 'O'` is the only state this gate admits, and that is a
+  --     decision rather than shorthand for "enabled". 'O' is session_replication_role
+  --     = origin, which is how the application connects; 'D' is a disabled
+  --     trigger; 'R' fires ONLY under session_replication_role = replica, so a
+  --     trigger left in 'R' would be absent for every ordinary write; and 'A'
+  --     (ENABLE ALWAYS) fires under replica too, which would also make a
+  --     logical-replication apply worker run this guard — a state this spec has
+  --     never measured and does not claim. The gate therefore refuses all three
+  --     of 'D', 'R' and 'A', and a deployment that genuinely wants ALWAYS has to
+  --     come back and change this line, which is the point.
+  --
+  --     That choice has a cost and round 9 measured it, so it is written here
+  --     rather than left for a reader to meet as an unexplained refusal
+  --     (R9-01). Under `session_replication_role = 'replica'` the server SKIPS
+  --     an 'O' trigger: a two-booking ring was committed with no refusal in
+  --     that mode, and the same ring under ENABLE ALWAYS was refused with
+  --     `booking.chain_is_a_ring`. So ALWAYS is the configuration that survives
+  --     replica mode, and this gate refuses it. What makes that acceptable
+  --     rather than a hole is who can reach it: only a superuser can set that
+  --     GUC — `daftar_app` and `daftar_migrator` both get "permission denied to
+  --     set parameter" — and `daftar_migrator`, which owns the table and so CAN
+  --     issue `ENABLE ALWAYS`, gets the migration refused if it does. A
+  --     deployment that wants replica-safe guards therefore changes this spec
+  --     and says so, instead of hardening the schema behind the gate's back.
   FOR v_g IN
     SELECT * FROM (VALUES
       ('bookings_buffers_are_the_service_s', 'bookings_buffers_match_service', 5,
@@ -1993,6 +2018,26 @@ BEGIN
   END LOOP;
 
   -- (i) The ownership-transfer authority of §0 did not survive.
+  --
+  --     This clause is not bookkeeping about a GRANT; it is the reason clause
+  --     (h) above can be believed. Clause (h) asserts that each guard trigger
+  --     executes a named function in schema public. It cannot assert what is
+  --     INSIDE that function later on, because a role that holds CREATE on
+  --     schema public can issue CREATE OR REPLACE FUNCTION over its own
+  --     definer body and leave every catalogue fact clause (h) reads — tgname,
+  --     tgfoid, tgtype, the deferral flags, the rendered WHEN — byte-identical
+  --     while the body no longer refuses anything. `daftar_booking_internal`
+  --     OWNS these functions, so no GRANT can stop it replacing them; what
+  --     stops it is the §10 `REVOKE CREATE ON SCHEMA public`, which leaves the
+  --     owner without the schema-level CREATE that CREATE OR REPLACE requires.
+  --     Round 9 measured that refusal three times as that role — a replacement
+  --     of bookings_chain_symmetric, a replacement of
+  --     bookings_buffers_match_service, and a fresh helper function — and all
+  --     three were refused with 42501 permission denied for schema public. So
+  --     this IF is the one that keeps clause (h) from pinning an empty shell:
+  --     if CREATE ever comes back, the body swap becomes available again and
+  --     the migration refuses to finish rather than certify a schema whose
+  --     guards can be hollowed out without any catalogue change.
   IF has_schema_privilege('daftar_booking_internal', 'public', 'CREATE') THEN
     RAISE EXCEPTION 'booking.authority_leak: daftar_booking_internal still holds CREATE on schema public' USING ERRCODE = 'P0001';
   END IF;
