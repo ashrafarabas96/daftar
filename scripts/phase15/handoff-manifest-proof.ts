@@ -100,6 +100,28 @@ function direction5(dir: string): { readonly text: string; readonly wrong: numbe
   return { text: block, wrong: (block.match(/WRONG /g) ?? []).length, ran: true };
 }
 
+/** The round count the gate prints in its verdict line, or null. */
+function count(dir: string): number | null {
+  const r = spawnSync('npx', ['tsx', join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts'), `--dir=${dir}`], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.error !== undefined || (r.status !== 0 && r.status !== 1)) return null;
+  // Direction 4's own line, not the verdict line: adding a document to the pack
+  // moves §1's document count too, so the gate correctly FAILs on a stale header
+  // and its verdict line then carries no round count at all. The count this
+  // plant is about is the one direction 4 prints.
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  const block = out.includes('DIRECTION 4') ? out.slice(out.indexOf('DIRECTION 4')) : '';
+  const m = /(\d+) report\(s\) on disk/.exec(block);
+  const named = /(\d+) SHA\(s\) named in this file/.exec(block);
+  if (m === null || named === null) return null;
+  // Both halves must move together: a twin on disk that the row does not name is
+  // M13's case, and this one is about the recorded count.
+  return Number(m[1]) === Number(named[1]) ? Number(m[1]) : null;
+}
+
 const PLANTS: readonly Plant[] = [
   {
     id: 'M1',
@@ -219,6 +241,64 @@ const PLANTS: readonly Plant[] = [
         : d.wrong > 0
           ? null
           : 'the forged figure went unnoticed, which is what M10 asserts about the copy with the arm removed — but this case runs the REAL gate, so it must still be caught here',
+  },
+  {
+    id: 'M12',
+    what: 'a SECOND report on a head that already has one, listed — it must count as its own round and not collapse into the first',
+    plant: (dir) => {
+      // Round 9B is a real instance: a second challenger session re-attacked
+      // `071056e` and filed `P15-CHALLENGE-071056e-R9B.md`. A gate that keys
+      // rounds on the SHA either refuses that name or counts two reviews as one,
+      // and a set that collapses duplicates before the count is taken is how a
+      // review goes missing. So this plant adds a tagged twin of a report that
+      // is already recorded, lists it, and requires the round count to RISE.
+      const f = join(dir, MANIFEST);
+      const text = readFileSync(f, 'utf8');
+      const first = reports(dir)[0];
+      if (first === undefined) throw new Error('M12 could not plant: no challenge report in the copy to twin');
+      const sha = /^P15-CHALLENGE-([0-9a-f]{7,40})/.exec(first)?.[1];
+      if (sha === undefined) throw new Error('M12 could not plant: the report name carries no SHA to twin');
+      const twin = `P15-CHALLENGE-${sha}-M12.md`;
+      const before = count(dir);
+      writeFileSync(join(dir, twin), '# a planted second review of the same head\nThis file exists only inside a throwaway copy.\n');
+      const row = text.split('\n').find((l) => /^\|\s*\*\*Reports/.test(l.trim()));
+      if (row === undefined) throw new Error('M12 could not plant: this pack has no «Reports» row to list the twin in');
+      writeFileSync(f, text.replace(row, row.replace(`\`${first}\``, `\`${first}\`, \`${twin}\``)));
+      rewrite(dir);
+      const after = count(dir);
+      if (before === null || after === null)
+        throw new Error(`M12 could not plant: the gate printed no round count (before ${String(before)}, after ${String(after)})`);
+      if (after !== before + 1)
+        throw new Error(
+          `M12: a second report on ${sha} was added and listed, and the recorded round count went ${String(before)} → ${String(after)}. Two reviews of one head counted as one round is a review that went missing`,
+        );
+    },
+    // DIRECTION 4 only. The plant adds a document, so §1's document count is
+    // legitimately stale in the copy and the gate says so; this case is about
+    // whether the twin is treated as its own round, which direction 4 answers.
+    expect: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.contradictions === 0
+          ? null
+          : 'a second, properly listed report on an already-reviewed head was failed as if it were unrecorded — and the suffix is how a re-run of one head is named',
+  },
+  {
+    id: 'M13',
+    what: 'the same tagged twin, NOT listed in the Reports row — the absence half of M12',
+    plant: (dir) => {
+      const first = reports(dir)[0];
+      if (first === undefined) throw new Error('M13 could not plant: no challenge report in the copy to twin');
+      const sha = /^P15-CHALLENGE-([0-9a-f]{7,40})/.exec(first)?.[1];
+      if (sha === undefined) throw new Error('M13 could not plant: the report name carries no SHA to twin');
+      writeFileSync(join(dir, `P15-CHALLENGE-${sha}-M13.md`), '# a planted second review of the same head\nThis file exists only inside a throwaway copy.\n');
+    },
+    expect: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.contradictions > 0
+          ? null
+          : 'a second review of an already-reviewed head sat on disk unlisted and the gate said nothing, because the head it names was already recorded — the exact shape of a collapsed duplicate',
   },
   {
     id: 'M8',
@@ -449,7 +529,10 @@ function main(): number {
       const dir = join(tmp, 'pack');
       p.plant(dir);
       const problem = p.viaDirection5 === undefined ? p.expect(direction4(dir)) : p.viaDirection5(direction5(dir));
-      const verdict = p.id === 'M4' ? 'HELD GREEN ' : 'RED';
+      // A case whose requirement is "the gate must NOT complain" is labelled as
+      // such: printing it as RED would read as a planted defect that reddened,
+      // which is the opposite of what it measures.
+      const verdict = p.id === 'M4' || p.id === 'M12' ? 'HELD GREEN ' : 'RED';
       if (problem === null) console.log(`  ${p.id} ${verdict.padEnd(10)}${p.what}`);
       else {
         failures += 1;

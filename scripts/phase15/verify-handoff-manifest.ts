@@ -223,9 +223,19 @@ interface Challenge {
 
 function checkChallenges(manifest: string, dir: string): Challenge {
   const problems: string[] = [];
+  // A ROUND IS A REPORT, AND A REPORT IS A FILENAME.
+  //
+  // This used to key rounds on the SHA alone, which breaks the moment one head
+  // is reviewed twice: round 9B is a SECOND challenger session's report on
+  // `071056e`, named `P15-CHALLENGE-071056e-R9B.md`, and keying on the SHA both
+  // refused the name outright and would have collapsed the two reports into one
+  // round had it accepted it. The optional tag is allowed, the SHA part is still
+  // required to be a SHA, and every comparison below is on the full filename —
+  // a set that collapses duplicates before the count is taken is how a review
+  // goes missing.
+  const REPORT = /^P15-CHALLENGE-([0-9a-f]{7,40})(?:-[0-9A-Za-z-]+)?\.md$/;
   const onDisk = artifactsOnDisk(dir)
-    .map((f) => /^P15-CHALLENGE-([0-9a-f]{7,40})\.md$/.exec(f)?.[1])
-    .filter((x): x is string => x !== undefined)
+    .filter((f) => REPORT.test(f))
     .sort();
   // NAMED MEANS NAMED IN THE NARRATIVE — the coordinator's round-7 B2.
   //
@@ -258,13 +268,15 @@ function checkChallenges(manifest: string, dir: string): Challenge {
     problems.push(
       '§8 carries no «Reports» row, so this file lists the challenge rounds nowhere a reader would look for them; the gate reads that row and nothing else',
     );
-  const named = [...reportsRow.join('\n').matchAll(/P15-CHALLENGE-([0-9a-fA-F]{7,40})\.md/g)].map((m) => (m[1] ?? '').toLowerCase());
+  const named = [...reportsRow.join('\n').matchAll(/P15-CHALLENGE-[0-9a-fA-F]{7,40}(?:-[0-9A-Za-z-]+)?\.md/g)].map((m) =>
+    m[0].replace(/^P15-CHALLENGE-([0-9a-fA-F]{7,40})/, (_x, h: string) => `P15-CHALLENGE-${h.toLowerCase()}`),
+  );
   // A report named with something that is not a SHA cannot be matched against
   // the disk at all, so it is a failure rather than a silent non-match: it
   // would otherwise read as "this round is recorded".
   for (const m of narrative.matchAll(/P15-CHALLENGE-([0-9A-Za-z._-]+)\.md/g)) {
     const token = m[1] ?? '';
-    if (!/^[0-9a-fA-F]{7,40}$/.test(token))
+    if (!/^[0-9a-fA-F]{7,40}(?:-[0-9A-Za-z-]+)?$/.test(token))
       problems.push(
         `this file names P15-CHALLENGE-${token}.md, whose name is not a commit SHA — a report nobody can match to a head is not a record of a round`,
       );
@@ -277,25 +289,25 @@ function checkChallenges(manifest: string, dir: string): Challenge {
   // error — the same trap a red proof in this pack fell into when its refusal
   // pattern matched the fix's own disclaimer. A quotation is still visible to the
   // reader; it is simply not an assertion.
-  const body = narrative.replace(/P15-CHALLENGE-[0-9a-fA-F]{7,40}\.md/g, '').replace(/\u00ab[^\u00bb]*\u00bb/g, '');
+  const body = narrative.replace(/P15-CHALLENGE-[0-9a-fA-F]{7,40}(?:-[0-9A-Za-z-]+)?\.md/g, '').replace(/\u00ab[^\u00bb]*\u00bb/g, '');
 
-  for (const sha of onDisk)
-    if (!named.includes(sha))
+  for (const name of onDisk)
+    if (!named.includes(name))
       problems.push(
-        `a challenge report for ${sha} is on disk and §8's Reports row does not list it — a round that happened and went unrecorded is how "NOT RUN" survived six of them, and a mention elsewhere in the prose is not the list`,
+        `${name} is on disk and §8's Reports row does not list it — a round that happened and went unrecorded is how "NOT RUN" survived six of them, and a mention elsewhere in the prose is not the list`,
       );
   // A name in the prose that is NOT in the Reports row: the round is either
   // recorded in the list or it is not recorded.
-  const inProse = [...narrative.matchAll(/P15-CHALLENGE-([0-9a-fA-F]{7,40})\.md/g)].map((m) => (m[1] ?? '').toLowerCase());
-  for (const sha of new Set(inProse))
-    if (!named.includes(sha))
+  const inProse = [...narrative.matchAll(/P15-CHALLENGE-[0-9a-fA-F]{7,40}(?:-[0-9A-Za-z-]+)?\.md/g)].map((m) => m[0]);
+  for (const name of new Set(inProse))
+    if (!named.includes(name))
       problems.push(
-        `P15-CHALLENGE-${sha}.md is named in the prose but not in §8's Reports row, so the round is mentioned and not recorded — which is exactly how a pack can name a round only in a sentence about what nobody has read yet`,
+        `${name} is named in the prose but not in §8's Reports row, so the round is mentioned and not recorded — which is exactly how a pack can name a round only in a sentence about what nobody has read yet`,
       );
-  for (const sha of new Set(named))
-    if (!onDisk.includes(sha))
+  for (const name of new Set(named))
+    if (!onDisk.includes(name))
       problems.push(
-        `this file names P15-CHALLENGE-${sha}.md and no such report is on disk — a claimed review nobody can read is worse than an unclaimed one, so this is a FAIL and not a note`,
+        `this file names ${name} and no such report is on disk — a claimed review nobody can read is worse than an unclaimed one, so this is a FAIL and not a note`,
       );
   if (onDisk.length > 0)
     for (const phrase of ['Independent Challenger\u2060? *\\| *\\*\\*NOT RUN', 'NOT RUN on any Phase 15 artifact', 'No second party has inspected'])
