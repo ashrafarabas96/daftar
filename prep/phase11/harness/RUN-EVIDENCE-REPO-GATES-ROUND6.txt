@@ -1,0 +1,61 @@
+### head (29a26bf) — COLD-FIRST ORDER: npm ci already done, dist removed, then typecheck, then lint, then build
+typecheck_cold_rc=2
+lint_cold_rc=1  errors=2793
+build_first_rc=1
+build_second_rc=0
+typecheck_warm_rc=0
+lint_warm_rc=0  errors=0
+format_rc=0
+### base (6fc505d) — COLD-FIRST ORDER: npm ci already done, dist removed, then typecheck, then lint, then build
+typecheck_cold_rc=2
+lint_cold_rc=1  errors=2400
+build_first_rc=1
+build_second_rc=0
+typecheck_warm_rc=0
+lint_warm_rc=0  errors=0
+format_rc=0
+
+=== cold-A measurement (a tree that had never been built: npm ci, then the gates) ===
+### HEAD gate measurement
+node v24.21.0  npm 11.19.0
+SHA 29a26bf916cf214940e135e7397e5cfe6fff42de
+--- npm ci ---
+npm_ci_rc=0
+prettier 3.7.1
+--- lint COLD (no build) ---
+lint_cold_rc=1
+errors_cold=4798
+--- npm run build ---
+build_rc=1
+--- lint AFTER BUILD ---
+lint_warm_rc=0
+errors_warm=0
+--- format ---
+format_rc=0
+--- typecheck ---
+typecheck_rc=0
+git_status_after=1
+
+### BASE 6fc505d gate measurement
+node v24.21.0  npm 11.19.0
+SHA 6fc505d33b7a6f7a49fa04ee3bc60bb1ddf3b595
+npm_ci_rc=0
+prettier 3.7.1
+lint_cold_rc=1
+errors_cold=4220
+build_rc=1
+lint_warm_rc=0
+errors_warm=0
+format_rc=0
+typecheck_rc=0
+
+=== cold lint errors attributed by path (cold A) ===
+head 29a26bf: apps 4748, tests 40, packages 10, prep 0  (total 4798)
+base 6fc505d: apps 4179, tests 31, packages 10, prep 0  (total 4220)
+delta:        apps  569, tests   9, packages  0, prep 0  (total  578)
+6fc505d..HEAD is 335 commits and is NOT a Phase 11-only range.
+
+=== engine ===
+node v24.21.0 (node-v24.21.0-linux-x64.tar.xz, verified against that release's SHASUMS256.txt: OK)
+npm 11.19.0; prettier resolved 3.7.1 with node_modules present, which is the version package-lock.json pins
+NOTE: Node 24 is not in this container's base image; it is fetched and verified per session.

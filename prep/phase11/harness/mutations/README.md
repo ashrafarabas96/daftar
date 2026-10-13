@@ -31,6 +31,20 @@ NULL`. It is the red proof of the DIGEST, not of the tautology test, and the
 file states its own measurement including the half of its first draft that was
 wrong.
 
+`M14`–`M17` (round 6) are about the LEDGER that replaced the forgeable GUC.
+`M14` restores the two privileges whose absence makes a recorded identity
+unforgeable and unremovable. `M15` drops the RLS own-transaction write policy,
+`M16` drops the `xmin` filter and `M17` drops both: that is the pair-drop, and
+its result is asymmetric — only the policy has a reachable case, because it
+makes the planted state unreachable, so the filter is UNMEASURED defence in
+depth and is named as such rather than counted as a tested layer.
+
+`M11` and `M16`/`M17` mutate by TEXT SURGERY on the live function body rather
+than by pasting a copy of it, and they REFUSE outright if the text they target
+is not there. A pasted copy is a second implementation that drifts: it would
+keep reding long after the real function changed, and the log would still say
+the guard was tested.
+
 **Every count reported from a mutation run names the PASS it was measured on**
 (`P3-01` of round 5). The suites run twice on one database on purpose: the
 second pass starts from the state the first left behind, so a bare number is an

@@ -305,6 +305,87 @@ any of it.
 
 ---
 
+## 7.6 The SIXTH independent challenge round (2026-10-12) — Pack A `REJECT` on one fail-open, answered
+
+The round **closed** round 5's `P1-01` (the write-identity remedy's content is
+confirmed across four shapes the coordinator named), **closed both round-5
+residuals**, settled `M13` and `M9`, and **reproduced this thread's rejection of
+its own preferred read-back remedy** in its container. It then rejected Pack A on
+one defect.
+
+**The defect: the remedy's content was right and its STORAGE was forgeable.**
+`p11.grid_ctx` was a custom GUC in an unreserved prefix — any role may `SET` one,
+no grant, no check — and "first write wins" preserved a value that was already
+there, so the comparison read the attacker's own string. Measured three ways,
+`rc=0` **NOT REFUSED** each time; the one that matters needed **nothing beyond
+`daftar_app`'s own rights**: one session-level `SET` covered **two successive
+transactions** on one connection, which is what a pooled connection looks like.
+Round 5's comment claimed `is_local => true` prevented exactly that; it is true of
+the recorder's own write and says nothing about a session-level value that was
+already there.
+
+**The answer: a store the judged session cannot write, and unanimity instead of
+first-write-wins.** The identity lives in `catalog_grid_ctx_ledger`, one row per
+writing statement; `recorded_identity` is a server-evaluated column `DEFAULT` and
+the writing roles hold `INSERT (txid)` only; no role holding `INSERT` holds
+`UPDATE`, `DELETE` or `TRUNCATE`; RLS pins every row to its own transaction; and
+the check refuses unless **every** recorded identity is the same **and** equals
+the identity at `COMMIT`. Unanimity is what makes a forged row harmless rather
+than decisive, and it refuses a transaction that wrote as A, wrote as B and came
+back to A — which the old rule passed. `EXECUTE` on the identity function is
+revoked from `PUBLIC` and granted to the roles enumerated from `relacl`/`attacl`,
+and the DDL states that the integrity comes from the column ACL, not from the
+function being private.
+
+**Two of this thread's own errors inside the fix are on the record** (§14.1): an
+end-state assertion that refused the pack's own install because it did not
+exclude the table owner, and a claim that moving the generated grant block
+changed the enumeration from 3 roles to 4 — it did not, measured both ways, and
+the DDL now calls the move a precaution.
+
+**The pair-drop's result is reported as asymmetric** (§14.2): of the two defences
+against a planted row, only the RLS write policy has a reachable case. The `xmin`
+filter is `UNMEASURED` defence in depth and is named as a residual. Two green
+layers are not two tested layers.
+
+**The repository's gates, two numbers per cell as the coordinator's rule
+requires, measured on Node 24.21.0 (verified against its `SHASUMS256.txt`) with
+`npm ci` from the lockfile, at this head and at `main`'s `6fc505d`** (§14.3):
+
+| gate | head cold | head after build | `6fc505d` cold | after build |
+|---|---|---|---|---|
+| `typecheck` | **2** | **0** | **2** | **0** |
+| `lint` | **1** (4,798 errors never-built; 2,793 with `dist` removed) | **0**, 0 errors | **1** (4,220; 2,400) | **0**, 0 errors |
+| `build` | **1** first run, **0** second | — | **1** first run, **0** second | — |
+| `format` | **0** (no build dependency) | 0 | **0** | 0 |
+
+The order within each tree was `typecheck → lint → build → build → typecheck →
+lint → format`, and it is stated because **two states both honestly called
+"cold" gave two different lint figures at the same commit** (4,798 and 2,793) —
+a bare cold number is underdetermined, not merely incomplete. So the lint
+residual the round-5 challenger named is **`G6`, not a lint debt**: the first
+build fails because `apps/api` compiles before its dependencies' `dist` exists,
+and the second returns 0. The 578-error cold delta is attributed by path — 569
+in `apps/`, 9 in `tests/`, 0 in `prep/` at either commit — and the range
+`6fc505d..HEAD` is 335 commits, so it is not a Phase 11-only range. Raw logs:
+`prep/phase11/harness/RUN-EVIDENCE-REPO-GATES-ROUND6.txt`.
+
+**A method failure of this thread's own is on the record** (§14.4): I started a
+second mutation loop while the first was still running, so two harness runs
+were rebuilding one scratch cluster at once. Those segments were **discarded,
+not reported**, and `M16`–`M19` were re-run strictly serially.
+
+Evidence: `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND6.txt`,
+`RUN-EVIDENCE-MUTATIONS-ROUND6.txt` (**twelve** mutations, each on its own full
+rebuild) and `RUN-EVIDENCE-REPO-GATES-ROUND6.txt`. Run identity and exit codes in `P11-LIVE-DDL-PROOF.md` §14.4; what
+stays open in §14.5.
+
+**A SEVENTH round is owed**, and **nothing here is self-signed.**
+`READY_TO_PROMOTE` = **NO**; **no migration number exists**; no CI has executed
+any of it. `OD-P11-07` is the owner's.
+
+---
+
 ## 8. Coordinator state
 
 **No coordinator signature.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. The coordinator's involvement so far has been to relay the two directives and to ask that the per-phase one be applied here; no verdict has been signed on this phase by anyone.

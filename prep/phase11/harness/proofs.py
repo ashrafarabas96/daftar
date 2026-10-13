@@ -655,6 +655,149 @@ case("P1-01/5 the same shape WITHOUT the identity change commits (the arm refuse
      f"DELETE FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='sightedaxis';\n"
      f"COMMIT;",
      "added=1", kind="value")
+# ── P1-01 OF THE SIXTH ROUND: the store, not the content ─────────────────
+# The fifth round's remedy was right about WHAT to compare and wrong about
+# WHERE to keep it. `p11.grid_ctx` was a custom GUC in an unreserved prefix, so
+# the judged session could set it itself — no grant, no check — and
+# "first write wins" then kept the attacker's value, because a setting that was
+# already there was never overwritten. The challenger measured three shapes at
+# 29a26bf, all rc=0 NOT REFUSED with one live variant outside its grid, and the
+# third needed nothing beyond daftar_app's own rights: ONE session-level SET
+# covers every later transaction on a pooled connection.
+#
+# The store is now a RELATION whose identity column the server writes and whose
+# rows no writing role can change or remove, and the rule is UNANIMITY rather
+# than first-write-wins. These cases are the challenger's three shapes and the
+# attacks on the new store, and EVERY ONE of them runs as daftar_app with no
+# superuser anywhere in the session.
+#
+# The GUC is still settable — that was never the fix, and claiming otherwise
+# would be the same mistake one level down. It is simply no longer read.
+case("PA6-05 forging the old GUC inside the transaction no longer helps: the chain is REFUSED",
+     f"BEGIN;\n"
+     f"SELECT set_config('p11.grid_ctx', 'daftar_app||', true);\n"
+     f"UPDATE product_variants SET status='archived' WHERE business_id='{A}' AND product_id='{PG}' AND NOT is_base AND status <> 'archived';\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','forgeaxis',93);\n"
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PG}','forgeaxis',4);\n"
+     f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G2}';\n"
+     f"RESET app.business_id;\n"
+     f"RESET app.tenant_id;\n"
+     f"COMMIT;",
+     "catalog.matrix_grid_unverifiable", role="daftar_app", pre=rls_a_ctx)
+case("PA6-06 and the SESSION-level forgery, set before BEGIN with no set_config inside at all, is REFUSED",
+     f"SET p11.grid_ctx = 'daftar_app||';\n"
+     f"BEGIN;\n"
+     f"UPDATE product_variants SET status='archived' WHERE business_id='{A}' AND product_id='{PG}' AND NOT is_base AND status <> 'archived';\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','forgeaxis2',94);\n"
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PG}','forgeaxis2',4);\n"
+     f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G2}';\n"
+     f"RESET app.business_id;\n"
+     f"RESET app.tenant_id;\n"
+     f"COMMIT;",
+     "catalog.matrix_grid_unverifiable", role="daftar_app", pre=rls_a_ctx)
+# PA6-09 is the one the challenger said matters: the realistic shape. One
+# connection, one session-level SET, then TWO successive transactions — which
+# is what a pooled connection looks like. Both must refuse, and the second is
+# the one the old store got wrong, because `is_local => true` on the recorder's
+# own write says nothing about a session-level value that was already there.
+case("PA6-09 the pooled-connection shape: one session SET, then TWO successive transactions, BOTH refused",
+     f"SET p11.grid_ctx = 'daftar_app||';\n"
+     f"BEGIN;\n"
+     f"UPDATE product_variants SET status='archived' WHERE business_id='{A}' AND product_id='{PG}' AND NOT is_base AND status <> 'archived';\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','poolaxis',95);\n"
+     f"INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position) VALUES ('{A}','{PG}','poolaxis',4);\n"
+     f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G2}';\n"
+     f"RESET app.business_id;\n"
+     f"RESET app.tenant_id;\n"
+     f"COMMIT;",
+     "catalog.matrix_grid_unverifiable", role="daftar_app", pre=rls_a_ctx)
+case("PA6-09 and nothing committed from either transaction: no forged axis exists and nothing is outside the grid",
+     f"SELECT 'forged_axes=' || count(*)::text FROM product_attribute_axes WHERE business_id='{A}' AND axis_code IN ('forgeaxis','forgeaxis2','poolaxis');\n"
+     f"SELECT 'axes=' || count(*)::text FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PG}';\n"
+     f"""SELECT 'outside=' || count(*)::text FROM product_variants v
+          WHERE v.business_id='{A}' AND NOT v.is_base AND v.status <> 'archived'
+            AND ( (SELECT coalesce(array_agg(k ORDER BY k), ARRAY[]::TEXT[]) FROM jsonb_object_keys(v.attributes) k)
+                  IS DISTINCT FROM
+                  (SELECT coalesce(array_agg(ma.axis_code ORDER BY ma.axis_code), ARRAY[]::TEXT[])
+                     FROM product_matrix_axes ma
+                    WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id) );""",
+     "forged_axes=0\naxes=3\noutside=0", kind="value")
+# ── AND THE ATTACKS ON THE NEW STORE, which is where a reviewer should look ──
+# The ledger is only as good as three absences. Each is measured here as
+# daftar_app, by name, rather than asserted from the GRANT statements.
+case("PA6-L1 daftar_app cannot choose what is recorded about it: supplying recorded_identity is permission denied",
+     f"BEGIN;\n"
+     f"INSERT INTO catalog_grid_ctx_ledger (txid, recorded_identity) VALUES (pg_current_xact_id(), 'daftar_app||');\n"
+     f"COMMIT;",
+     "permission denied for table catalog_grid_ctx_ledger", role="daftar_app", pre=rls_a_ctx)
+case("PA6-L2 nor plant a row for ANOTHER transaction: the own-transaction write policy refuses it",
+     f"BEGIN;\n"
+     f"INSERT INTO catalog_grid_ctx_ledger (txid) VALUES ((pg_current_xact_id()::text::bigint + 5000)::text::xid8);\n"
+     f"COMMIT;",
+     "new row violates row-level security policy", role="daftar_app", pre=rls_a_ctx)
+case("PA6-L3 nor remove the honest rows: UPDATE on the ledger is permission denied",
+     f"UPDATE catalog_grid_ctx_ledger SET recorded_identity='x';",
+     "permission denied for table catalog_grid_ctx_ledger", role="daftar_app", pre=rls_a_ctx)
+case("PA6-L4 nor DELETE them, which is the one lever unanimity could not survive",
+     f"DELETE FROM catalog_grid_ctx_ledger;",
+     "permission denied for table catalog_grid_ctx_ledger", role="daftar_app", pre=rls_a_ctx)
+# The ledger row daftar_app CAN write is the one the recorder writes, and its
+# identity is the server's answer, not the caller's. This is the positive side:
+# the forgery is impossible because the only writable column is the txid.
+case("PA6-L5 the one insert it may make records the server's own answer, not the caller's",
+     f"BEGIN;\n"
+     f"INSERT INTO catalog_grid_ctx_ledger (txid) VALUES (pg_current_xact_id());\n"
+     f"SELECT 'identity=' || min(recorded_identity) FROM catalog_grid_ctx_ledger WHERE txid = pg_current_xact_id();\n"
+     f"SELECT 'written_by_me=' || bool_and(xmin = pg_current_xact_id()::xid)::text FROM catalog_grid_ctx_ledger WHERE txid = pg_current_xact_id();\n"
+     f"ROLLBACK;",
+     f"identity=daftar_app|{A}|{TA}\nwritten_by_me=true", role="daftar_app", pre=rls_a_ctx, kind="value")
+# UNANIMITY, and the case that shows it is strictly stronger than
+# first-write-wins: write as A, write as a DIFFERENT identity, then come back to
+# A and commit. The fifth round's store compared the FIRST write with the
+# COMMIT and passed this; this one refuses it, and the message names the count.
+case("PA6-L6 a transaction that wrote under TWO identities and came back to the first is REFUSED (first-write-wins passed this)",
+     f"BEGIN;\n"
+     # statement 1, under identity A. It is a NO-OP update on purpose: it fires
+     # the row trigger and queues the deferred check for the fixture product,
+     # so the check really runs at COMMIT, while changing no state this case
+     # would then have to assert about.
+     f"UPDATE product_variants SET status = status WHERE business_id='{A}' AND id='{G2}';\n"
+     # statement 2, under a DIFFERENT identity: only the request context moves,
+     # no role change, so the case cannot be dismissed as a privilege artefact
+     f"SET app.business_id='{B}';\n"
+     f"SET app.tenant_id='{TB}';\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{B}','unanimaxis',97);\n"
+     # and back to the identity the transaction started with, which is exactly
+     # what first-write-wins compared and passed
+     f"SET app.business_id='{A}';\n"
+     f"SET app.tenant_id='{TA}';\n"
+     f"COMMIT;",
+     "catalog.matrix_grid_unverifiable", pre=rls_a_ctx)
+case("PA6-L7 and nothing from that transaction committed, and the closure invariant still holds",
+     f"SELECT 'unanim=' || count(*)::text FROM product_attribute_axes WHERE axis_code='unanimaxis';\n"
+     f"""SELECT 'outside=' || count(*)::text FROM product_variants v
+          WHERE v.business_id='{A}' AND NOT v.is_base AND v.status <> 'archived'
+            AND ( (SELECT coalesce(array_agg(k ORDER BY k), ARRAY[]::TEXT[]) FROM jsonb_object_keys(v.attributes) k)
+                  IS DISTINCT FROM
+                  (SELECT coalesce(array_agg(ma.axis_code ORDER BY ma.axis_code), ARRAY[]::TEXT[])
+                     FROM product_matrix_axes ma
+                    WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id) );""",
+     "unanim=0\noutside=0", kind="value")
+# And the arm is still specific rather than a blanket refusal of anything that
+# writes twice: several statements under ONE identity commit, as daftar_app,
+# with the ledger carrying one row per statement.
+case("PA6-L8 several statements under ONE identity still commit (the arm refuses a change of identity, not a transaction)",
+     f"BEGIN;\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','lawfulaxis',98);\n"
+     f"INSERT INTO product_attribute_values (business_id,axis_code,value_code,sort_order) VALUES ('{A}','lawfulaxis','v1',1);\n"
+     f"SELECT 'recorded=' || count(*)::text || ' identities=' || count(DISTINCT recorded_identity)::text FROM catalog_grid_ctx_ledger WHERE txid = pg_current_xact_id();\n"
+     f"DELETE FROM product_attribute_values WHERE business_id='{A}' AND axis_code='lawfulaxis';\n"
+     f"DELETE FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='lawfulaxis';\n"
+     f"COMMIT;",
+     "recorded=2 identities=1", role="daftar_app", pre=rls_a_ctx, kind="value")
+case("PA6-L9 and that lawful transaction left nothing behind",
+     f"SELECT 'lawful=' || count(*)::text FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='lawfulaxis';",
+     "lawful=0", kind="value")
 case("P1-01 a principal that cannot read the registries is REFUSED, not passed (catalog.matrix_grid_unverifiable)",
      f"REVOKE SELECT ON product_matrix_axes FROM daftar_app;\n"
      f"SET ROLE daftar_app;\n"

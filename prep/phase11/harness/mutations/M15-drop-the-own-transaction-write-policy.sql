@@ -1,0 +1,30 @@
+-- M15 (round 6). The first of the TWO defences against a row planted for
+-- another transaction: the RLS `WITH CHECK (txid = pg_current_xact_id())` that
+-- makes the plant impossible rather than merely harmless.
+--
+-- MEASURED, and NOT what this file first predicted. I wrote that PA6-L2 would
+-- red because the plant would succeed. It does not. On a table with ENABLE +
+-- FORCE row-level security, dropping the only INSERT policy means NO insert is
+-- permitted at all: the recorder itself can no longer write, so every lawful
+-- write to the four relations breaks and the forgeries fail with the wrong
+-- error rather than with the refusal they are asserting.
+--
+--   PACK A 9 failed (pass 1) and 9 (pass 2), EXIT=1, Pack B 0 and 0
+--   red: the generated sweep's INSERT legs on product_attribute_axes and
+--        product_attribute_values, the UPDATE leg on product_variants,
+--        PA6-05, PA6-06, PA6-09, PA6-L5, PA6-L8, and the privilege-withdrawal
+--        case -- i.e. every case that needs a write to go through
+--
+-- So what this mutation proves is the OPPOSITE direction from the one it was
+-- written for, and the direction is worth keeping: the ledger's write path
+-- depends on this policy existing, and a later migration that removed it
+-- would break every write rather than quietly widen anything. Fail-closed.
+--
+-- The plant defence's real red proof is M18, which REPLACES the policy with a
+-- permissive one instead of removing it; M19 pairs that with the xmin filter's
+-- removal. This file is kept, with its wrong prediction visible, because a
+-- corrected expectation is evidence and a deleted one is not.
+--
+-- Pair-dropped with M16 and M17, which is the P5 R9 lesson: a one-at-a-time
+-- sweep cannot see two defences that mask each other.
+DROP POLICY catalog_grid_ctx_ledger_own_txid_insert ON catalog_grid_ctx_ledger;

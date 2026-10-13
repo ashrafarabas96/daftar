@@ -829,10 +829,46 @@ CREATE TRIGGER product_matrix_axes_30_set_frozen
 --
 --   * recorded by a STATEMENT-level trigger, so a fifty-cell grid records once
 --     per statement rather than once per row;
---   * first write wins (`p11.grid_ctx` is only set when empty), so the
---     identity compared is the one the EARLIEST write in the transaction had;
---   * `is_local => true`, so it is discarded at COMMIT or ROLLBACK and cannot
---     leak into the next transaction on a pooled connection;
+--   * recorded in a RELATION, `catalog_grid_ctx_ledger`, and NOT in a custom
+--     GUC. That is finding P1-01 of the SIXTH round, and it is a fail-open the
+--     fifth round's own remedy introduced: `p11.grid_ctx` was a custom setting
+--     in an unreserved prefix, so the judged session could set it itself (no
+--     grant, no check, measured `rc=0`), and "first write wins" then kept the
+--     ATTACKER's string because a value already present was never overwritten.
+--     One session-level `SET` covered every later transaction on a pooled
+--     connection, with nothing beyond `daftar_app`'s own rights. A value that
+--     must be unforgeable cannot live anywhere the judged session can write.
+--   * UNANIMITY, not first-write-wins. Every statement appends its own row,
+--     and the check requires that EVERY identity recorded by this transaction
+--     is the same AND equal to the identity at COMMIT. This is what makes a
+--     forged row harmless instead of decisive: a row the attacker inserts
+--     carries the identity it held at that moment, so any disagreement is a
+--     REFUSAL, and the attacker cannot remove the honest rows (no UPDATE and
+--     no DELETE is granted to any writing role — measured, `permission denied
+--     for table catalog_grid_ctx_ledger`). First-write-wins also passed a
+--     transaction that wrote as A, wrote as B, and came back to A to commit;
+--     unanimity refuses it.
+--   * the identity itself is written by the SERVER, not by the caller:
+--     `recorded_identity` is a column DEFAULT evaluated during the INSERT, and
+--     the writing roles hold `INSERT (txid)` ONLY, so supplying the column
+--     fails with `permission denied for table catalog_grid_ctx_ledger`
+--     (measured). The column ACL is the mechanism this phase's own DDL digest
+--     gained a `pg_attribute` arm for in round 5, which is why a drift in it
+--     can no longer pass as a no-op.
+--   * a row for ANOTHER transaction cannot be planted, and that is defended
+--     TWICE on purpose, so the pair can be dropped and read: an RLS
+--     `WITH CHECK (txid = pg_current_xact_id())` refuses the INSERT outright
+--     (`new row violates row-level security policy`, measured), and the check
+--     additionally counts only rows whose system column `xmin` equals this
+--     transaction's id, so a row that somehow exists for this `txid` but was
+--     written by a DIFFERENT transaction is IGNORED rather than counted. The
+--     first makes the plant impossible; the second makes a planted row
+--     harmless if the first is ever lost. Neither is a fail-open remedy on its
+--     own: unanimity already means a planted row can only cause a refusal, so
+--     what the pair protects is availability — a stranger must not be able to
+--     make a later lawful transaction refuse. `pg_current_xact_id()` is
+--     `xid8`, epoch-extended, so the `txid` key does not wrap; the 32-bit
+--     `xmin` comparison is paired with it and never stands alone.
 --   * ABSENT is a refusal, not a pass: a check reached with no recorded
 --     identity means the recorder is gone or was bypassed, and the whole
 --     point of this finding is that an empty read must not reassure.
@@ -850,17 +886,58 @@ AS $fn$
          || '|' || coalesce(current_setting('app.business_id', true), '')
          || '|' || coalesce(current_setting('app.tenant_id', true), '');
 $fn$;
--- PUBLIC keeps EXECUTE on this one, deliberately and against this pack's own
--- default, and the reason is measured rather than argued: it is called from a
--- STATEMENT trigger on `product_variants`, whose writers include
--- `daftar_inventory_internal` (base variants, 0053) and whoever else a later
--- phase gives a grant to. A REVOKE here made the lot fixture fail with
--- `permission denied for function catalog_grid_ctx_identity` — a guard that
--- breaks a lawful write is a worse defect than the one it closes. It returns
--- `current_user` and two of the caller's own session settings, so it tells a
--- caller nothing the caller does not already have; it is kept as ONE function
--- rather than inlined twice precisely because "one of two sites carries the
--- arm" is the defect shape this phase has now paid for three times.
+-- EXECUTE is REVOKED from PUBLIC and granted to exactly the roles that hold a
+-- write privilege on the four relations, enumerated from the catalogue below
+-- rather than from a hand-written list. Round 5 kept PUBLIC EXECUTE and gave a
+-- measured reason: a blanket REVOKE made the lot fixture fail with
+-- `permission denied for function catalog_grid_ctx_identity`, because the
+-- statement trigger runs as `daftar_inventory_internal` too (base variants,
+-- 0053), and a guard that breaks a lawful write is a worse defect than the one
+-- it closes. The sixth round's answer is not to widen or to narrow by
+-- judgement but to GENERATE the grant from the same `relacl`/`attacl` sweep
+-- that found `daftar_app`'s write path on `product_variants`: every role that
+-- can fire the recorder can execute it, and no other role can. The function
+-- still returns only `current_user` and two of the caller's own settings, so
+-- the tightening is hygiene rather than a secret — the identity's integrity
+-- comes from the ledger's column ACL, never from this function being private.
+-- It is kept as ONE function rather than inlined precisely because "one of two
+-- sites carries the arm" is the defect shape this phase has paid for three
+-- times.
+
+-- THE LEDGER. One row per writing statement. Nothing in it is supplied by the
+-- caller except the transaction id, which RLS pins to the caller's own
+-- transaction, and the row cannot be changed or removed afterwards by any role
+-- that can write it.
+CREATE TABLE catalog_grid_ctx_ledger (
+  id                BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  txid              xid8        NOT NULL,
+  recorded_identity TEXT        NOT NULL DEFAULT catalog_grid_ctx_identity(),
+  recorded_at       TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE INDEX catalog_grid_ctx_ledger_txid_idx ON catalog_grid_ctx_ledger (txid);
+
+COMMENT ON TABLE catalog_grid_ctx_ledger IS
+  'Phase 11 Pack A, finding P1-01 (SIXTH challenge round). The write identities of one transaction, one row per statement that touched a relation C-APP-01 can be written from. It replaces the custom GUC p11.grid_ctx, which the judged session could set itself. recorded_identity is a column DEFAULT evaluated by the server during the INSERT and the writing roles hold INSERT (txid) only, so a caller cannot choose what is recorded; no role holding INSERT holds UPDATE or DELETE, so a recorded row cannot be removed; and RLS pins every row to the inserting transaction. catalog_grid_closed_check requires UNANIMITY across this transaction''s rows and equality with the identity at COMMIT. Rows outlive their transaction and are dead weight after it: pruning is a Migration Owner decision, recorded as MPR-10.';
+
+COMMENT ON COLUMN catalog_grid_ctx_ledger.recorded_identity IS
+  'Server-written. The writing roles hold INSERT (txid) only; supplying this column fails with permission denied for table catalog_grid_ctx_ledger (measured).';
+
+ALTER TABLE catalog_grid_ctx_ledger ENABLE  ROW LEVEL SECURITY;
+ALTER TABLE catalog_grid_ctx_ledger FORCE   ROW LEVEL SECURITY;
+
+-- A session reads ONLY its own transaction's rows, and the predicate is the
+-- transaction id rather than the business, so a reset request context does not
+-- make the ledger unreadable: the refusal a blind session gets must be the
+-- identity refusal with its two identities named, not a second blindness.
+CREATE POLICY catalog_grid_ctx_ledger_own_txid_select ON catalog_grid_ctx_ledger
+  FOR SELECT USING (txid = pg_current_xact_id());
+
+-- And writes ONLY for its own transaction. This is the first of the two
+-- defences against a row planted for another transaction; the second is the
+-- `xmin` filter in the check, and they are pair-dropped in the mutation set.
+CREATE POLICY catalog_grid_ctx_ledger_own_txid_insert ON catalog_grid_ctx_ledger
+  FOR INSERT WITH CHECK (txid = pg_current_xact_id());
 
 CREATE FUNCTION catalog_grid_90_ctx_record()
 RETURNS TRIGGER
@@ -868,15 +945,18 @@ LANGUAGE plpgsql SECURITY INVOKER
 SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 BEGIN
-  IF coalesce(current_setting('p11.grid_ctx', true), '') = '' THEN
-    PERFORM set_config('p11.grid_ctx', catalog_grid_ctx_identity(), true);
-  END IF;
+  -- Every statement appends. There is deliberately no "only if empty" test
+  -- here: that test is what made the fifth round's store forgeable, because a
+  -- value already present was never overwritten and the check then read the
+  -- attacker's string as if a trigger had put it there. The check requires
+  -- unanimity instead, which needs every write's identity, not the first.
+  INSERT INTO catalog_grid_ctx_ledger (txid) VALUES (pg_current_xact_id());
   RETURN NULL;
 END;
 $fn$;
 
 COMMENT ON FUNCTION catalog_grid_90_ctx_record() IS
-  'Phase 11 Pack A, finding P1-01 (fifth challenge round). AFTER STATEMENT trigger function on the four relations C-APP-01 is written from: records the principal and the request context of the FIRST write of the transaction in the transaction-local setting p11.grid_ctx, which catalog_grid_closed_check compares against the identity at COMMIT. A deferred check run by a session that is no longer the session that wrote cannot see what it is judging, and an empty read must not reassure. No EXECUTE grant.';
+  'Phase 11 Pack A, finding P1-01 (fifth challenge round, store replaced in the sixth). AFTER STATEMENT trigger function on the four relations C-APP-01 is written from: appends the principal and the request context of EVERY write of the transaction to catalog_grid_ctx_ledger, whose identity column is server-written. catalog_grid_closed_check requires that all of them agree and that they equal the identity at COMMIT. A deferred check run by a session that is no longer the session that wrote cannot see what it is judging, and an empty read must not reassure. EXECUTE is not granted: a trigger function is callable only as a trigger.';
 
 CREATE FUNCTION catalog_grid_closed_check(p_business UUID, p_product UUID)
 RETURNS VOID
@@ -887,6 +967,8 @@ DECLARE
   r RECORD;
   v_rel TEXT;
   v_at_write TEXT;
+  v_rows BIGINT;
+  v_identities BIGINT;
 BEGIN
   -- Blindness is a refusal, not a pass. Privilege is checkable; row-level
   -- visibility is not checkable from inside the read, so the privilege test
@@ -906,9 +988,28 @@ BEGIN
   -- catalog_grid_ctx_record(). The identity under which the state was written
   -- is recorded at statement time; if it is absent, or differs from the
   -- identity at this COMMIT, the read below is not a measurement.
-  v_at_write := coalesce(current_setting('p11.grid_ctx', true), '');
-  IF v_at_write = '' THEN
+  -- Read the ledger, and count ONLY the rows this transaction itself wrote:
+  -- `xmin` is the inserting transaction's id, so a row that exists for this
+  -- `txid` without having been written by it is ignored rather than counted.
+  -- The RLS WITH CHECK makes such a row impossible to insert in the first
+  -- place; this is the second of the two defences, and the mutation set drops
+  -- them singly and together so the log says which one answers.
+  SELECT count(*), count(DISTINCT l.recorded_identity), min(l.recorded_identity)
+    INTO v_rows, v_identities, v_at_write
+    FROM catalog_grid_ctx_ledger l
+   WHERE l.txid = pg_current_xact_id()
+     AND l.xmin = pg_current_xact_id()::xid;
+
+  IF v_rows = 0 THEN
     RAISE EXCEPTION 'catalog.matrix_grid_unverifiable: no write identity was recorded for this transaction, so the grid-closure law cannot know whether the session judging the state is the session that wrote it; it refuses rather than passes'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- UNANIMITY. Not "the first write agrees with the commit": a transaction
+  -- that wrote as A, wrote as B and came back to A to commit passed that test
+  -- and does not pass this one. It is also what makes a forged row harmless:
+  -- any row whose identity disagrees is a refusal, never a pass.
+  IF v_identities > 1 THEN
+    RAISE EXCEPTION 'catalog.matrix_grid_unverifiable: this transaction recorded % different write identities across % writing statements, so the grid-closure law cannot say which session wrote the state it is judging; it refuses rather than passes', v_identities, v_rows
       USING ERRCODE = 'P0001';
   END IF;
   IF v_at_write <> catalog_grid_ctx_identity() THEN
@@ -1092,6 +1193,7 @@ CREATE TRIGGER product_attribute_axes_01_grid_ctx
 CREATE TRIGGER product_attribute_values_01_grid_ctx
   AFTER INSERT OR UPDATE OR DELETE ON product_attribute_values
   FOR EACH STATEMENT EXECUTE FUNCTION catalog_grid_90_ctx_record();
+
 
 CREATE CONSTRAINT TRIGGER product_variants_90_grid_closed
   AFTER INSERT OR UPDATE OR DELETE ON product_variants
@@ -1363,6 +1465,79 @@ END;
 $fn$;
 REVOKE ALL ON FUNCTION catalog_policy_qual_is_tautology(TEXT, TEXT) FROM PUBLIC;
 
+-- ── THE LEDGER'S GRANTS, GENERATED FROM THE CATALOGUE ───────────────────────
+-- Not a hand-written role list. Every role that holds ANY write privilege on
+-- any of the four relations can fire the recorder, so every such role needs
+-- `INSERT (txid)` on the ledger, `SELECT` on it, and `EXECUTE` on the identity
+-- function — and no other role needs any of them. The enumeration is the same
+-- `relacl`/`attacl` sweep that found `daftar_app`'s write path on
+-- `product_variants` by generation rather than by review (round 4, P1-01), and
+-- `information_schema` is NOT used: its views filter by the enabled role and
+-- hide column-scoped grants (the P5 §7 lesson).
+--
+-- It runs HERE, after every grant this pack makes, and the honest account of
+-- why is a PRECAUTION, not a fix: measured both ways, the two positions
+-- enumerate the same three roles (`daftar_app`, `daftar_inventory_internal`
+-- and the owner), because `daftar_app`'s write path on `product_variants`
+-- comes from frozen history rather than from this pack's own grants. It is
+-- placed last so that a grant added to this pack LATER cannot leave a writer
+-- unable to fire the recorder without anything saying so -- a sweep over the
+-- catalogue measures the catalogue as it is at the moment it runs, and the
+-- moment is a property of the file's order.
+--
+-- What is deliberately NOT granted, to anyone: UPDATE and DELETE on the
+-- ledger, and INSERT on `recorded_identity`. Those three absences are what
+-- make a recorded identity unforgeable and unremovable, and the end-state
+-- assertion below re-reads all three from the catalogue rather than trusting
+-- this block to have run.
+DO $grants$
+DECLARE
+  v_role TEXT;
+  v_n    INT := 0;
+BEGIN
+  FOR v_role IN
+    SELECT DISTINCT grantee FROM (
+      SELECT coalesce(g.rolname, 'PUBLIC') AS grantee, a.privilege_type
+        FROM pg_class c
+        CROSS JOIN LATERAL aclexplode(c.relacl) a
+        LEFT  JOIN pg_roles g ON g.oid = a.grantee
+       WHERE c.relnamespace = 'public'::regnamespace
+         AND c.relname IN ('product_variants','product_matrix_axes',
+                           'product_attribute_axes','product_attribute_values')
+      UNION ALL
+      SELECT coalesce(g.rolname, 'PUBLIC') AS grantee, a.privilege_type
+        FROM pg_attribute att
+        JOIN pg_class c ON c.oid = att.attrelid
+        CROSS JOIN LATERAL aclexplode(att.attacl) a
+        LEFT  JOIN pg_roles g ON g.oid = a.grantee
+       WHERE c.relnamespace = 'public'::regnamespace
+         AND c.relname IN ('product_variants','product_matrix_axes',
+                           'product_attribute_axes','product_attribute_values')
+         AND att.attnum > 0 AND NOT att.attisdropped
+    ) q
+     WHERE q.privilege_type IN ('INSERT','UPDATE','DELETE')
+       AND q.grantee <> 'PUBLIC'
+     ORDER BY 1
+  LOOP
+    EXECUTE format('GRANT SELECT ON catalog_grid_ctx_ledger TO %I', v_role);
+    EXECUTE format('GRANT INSERT (txid) ON catalog_grid_ctx_ledger TO %I', v_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION catalog_grid_ctx_identity() TO %I', v_role);
+    v_n := v_n + 1;
+  END LOOP;
+  -- A sweep that grants to nobody would leave every lawful write failing on
+  -- the recorder, which is the shape this pack refuses to ship: a guard that
+  -- breaks a lawful write is worse than the defect it closes.
+  IF v_n = 0 THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: the generated ledger grant found no role holding a write privilege on the four relations, so either the sweep is wrong or the relations are ungranted; refusing to apply a recorder no role can fire'
+      USING ERRCODE = 'P0001';
+  END IF;
+  RAISE NOTICE 'Phase 11 Pack A: ledger grants generated for % role(s) from relacl/attacl', v_n;
+END;
+$grants$;
+
+-- PUBLIC loses EXECUTE on the identity function; the enumerated roles keep it.
+REVOKE EXECUTE ON FUNCTION catalog_grid_ctx_identity() FROM PUBLIC;
+
 -- ── 7. End-state assertion: the migration refuses itself rather than warn ───
 DO $$
 DECLARE
@@ -1620,6 +1795,79 @@ BEGIN
       RAISE EXCEPTION 'catalog.migration_end_state_invalid: the write-identity recorder on % is absent or does not cover INSERT, UPDATE and DELETE as an AFTER STATEMENT trigger', r.rel USING ERRCODE='P0001';
     END IF;
   END LOOP;
+  -- ── THE LEDGER, finding P1-01 of the SIXTH round ───────────────────────
+  -- The remedy's content was right and its STORAGE was forgeable: the judged
+  -- session could set the custom GUC the identity lived in. What is asserted
+  -- here is not that the ledger exists but that the three ABSENCES which make
+  -- a recorded identity unforgeable are real, read from the catalogue and not
+  -- from the GRANT block above having run:
+  --   (a) no role may write `recorded_identity` — it is a server-evaluated
+  --       column DEFAULT, and a column ACL that admitted a writer would let a
+  --       caller choose what is recorded about itself;
+  --   (b) no role holding INSERT holds UPDATE or DELETE — a removable row
+  --       defeats unanimity, because an attacker could delete the honest rows
+  --       and leave its own;
+  --   (c) RLS is ENABLED and FORCED and both own-transaction policies exist —
+  --       the write policy is what makes a row planted for another
+  --       transaction impossible rather than merely harmless.
+  -- Each is a separate RAISE, so the log says which one is missing.
+  IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relnamespace = 'public'::regnamespace
+                  AND relname = 'catalog_grid_ctx_ledger' AND relkind = 'r') THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: the write-identity ledger is absent, so the grid-closure check has nowhere unforgeable to read its identity from' USING ERRCODE='P0001';
+  END IF;
+  IF EXISTS (SELECT 1
+               FROM pg_attribute att
+               JOIN pg_class c ON c.oid = att.attrelid
+               CROSS JOIN LATERAL aclexplode(att.attacl) a
+              WHERE c.relnamespace = 'public'::regnamespace
+                AND c.relname = 'catalog_grid_ctx_ledger'
+                AND att.attname IN ('recorded_identity','recorded_at','id')
+                AND a.grantee <> c.relowner
+                AND a.privilege_type = 'INSERT') THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: a role may write catalog_grid_ctx_ledger.recorded_identity (or id/recorded_at) directly, so a caller can choose the identity recorded about itself and the comparison proves nothing' USING ERRCODE='P0001';
+  END IF;
+  -- The OWNER is excluded, and that is a limit rather than an oversight: an
+  -- ACL materialises with the owner's own full entry as soon as any grant is
+  -- made, and the owner of every relation in this schema can UPDATE, DELETE
+  -- and DROP it in any case. The boundary this assertion defends is the set of
+  -- roles the application runs as; the migration owner is outside it, which is
+  -- the same statement every relation in the schema already rests on. The
+  -- first version of this assertion did not exclude the owner and REFUSED the
+  -- pack's own install -- recorded because a guard that refuses a lawful
+  -- install is the shape this pack has now measured three times.
+  IF EXISTS (SELECT 1
+               FROM pg_class c
+               CROSS JOIN LATERAL aclexplode(c.relacl) a
+              WHERE c.relnamespace = 'public'::regnamespace
+                AND c.relname = 'catalog_grid_ctx_ledger'
+                AND a.grantee <> c.relowner
+                AND a.privilege_type IN ('UPDATE','DELETE','TRUNCATE')) THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: a role holds UPDATE, DELETE or TRUNCATE on catalog_grid_ctx_ledger; a recorded identity that can be removed defeats unanimity, because the honest rows can be deleted and a forged one left behind' USING ERRCODE='P0001';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relnamespace = 'public'::regnamespace
+                  AND relname = 'catalog_grid_ctx_ledger' AND relrowsecurity AND relforcerowsecurity) THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: catalog_grid_ctx_ledger does not have row-level security both ENABLED and FORCED, so a session can read or write another transaction''s recorded identity' USING ERRCODE='P0001';
+  END IF;
+  IF (SELECT array_agg(p.polname::TEXT ORDER BY p.polname) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+       WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'catalog_grid_ctx_ledger')
+     IS DISTINCT FROM ARRAY['catalog_grid_ctx_ledger_own_txid_insert',
+                            'catalog_grid_ctx_ledger_own_txid_select']::TEXT[] THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: catalog_grid_ctx_ledger carries a policy set this pack did not reason about; the own-transaction INSERT policy is one of the two defences against a planted row' USING ERRCODE='P0001';
+  END IF;
+  -- And the grant the recorder needs, in the other direction: a ledger no
+  -- role can INSERT into makes every lawful write fail on the recorder. The
+  -- generated block above refuses on zero roles; this re-reads the result.
+  IF NOT EXISTS (SELECT 1
+                   FROM pg_attribute att
+                   JOIN pg_class c ON c.oid = att.attrelid
+                   CROSS JOIN LATERAL aclexplode(att.attacl) a
+                  WHERE c.relnamespace = 'public'::regnamespace
+                    AND c.relname = 'catalog_grid_ctx_ledger'
+                    AND att.attname = 'txid'
+                    AND a.grantee <> c.relowner
+                    AND a.privilege_type = 'INSERT') THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: no role holds INSERT (txid) on catalog_grid_ctx_ledger, so the recorder cannot run and every lawful write to the four relations would fail' USING ERRCODE='P0001';
+  END IF;
   IF (SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = 'product_variants_matrix_uq' AND relkind = 'i') <> 1 THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: the matrix uniqueness index is absent' USING ERRCODE='P0001';
   END IF;

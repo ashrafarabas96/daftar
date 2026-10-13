@@ -1663,3 +1663,292 @@ verdict and closing either would be a claim this round cannot make:
   `UNMEASURED` here (G6 is a root-level defect of `main`, not of this branch).
 - `READY_TO_PROMOTE` = **NO** for both packs, **no migration number exists**, and
   **no CI has executed any of it**.
+
+## 14. The SIXTH independent challenge: Pack A `REJECT` on one fail-open — defect 45, and the repo gates measured properly
+
+The report is `/mnt/project-files/phase11/P11-CHALLENGE-29a26bf.md` with evidence
+in `challenge-29a26bf/`. It named `29a26bf` as its subject and showed the naming
+was sound: `303b316..29a26bf` is documents-only (one file, `+23/-0`) and both
+pack digests and the harness digest are byte-identical at the two commits, so
+its `303b316` measurements carry.
+
+**What it closed.** Round 5's `P1-01` is **CLOSED**: the write-identity remedy's
+*content* is confirmed sound, measured across four separate shapes the
+coordinator named — keep the role and reset only the context (as `postgres`, and
+as `daftar_app` throughout so `current_user` never changes), `SET LOCAL ROLE` to
+each `daftar_*` principal with the `SELECT` privilege measured per role first, a
+released `SAVEPOINT` and a `ROLLBACK TO` one (which discards queued AFTER
+events), and moving the business's tenant with `current_user` and both GUCs
+unchanged. All `rc=3`, nothing outside the grid. **Both round-5 residuals are
+closed by its measurement**, and `M13` and `M9` are settled.
+
+**And it reproduced the rejection I made of its own preferred remedy.** The
+read-back's counter-case — a lawful `INSERT`-then-`DELETE` of the same row in
+one transaction — commits at `rc=0` with zero rows left in its container too, so
+a remedy that re-reads what it wrote would have to refuse a lawful transaction.
+Its arms (b) and (c) also measured what the identity comparison does that a
+read-back cannot: a lawful `DELETE` of a cell commits `rc=0`, and the same
+`DELETE` with the identity changed before `COMMIT` is refused by name.
+
+### 14.1 Defect 45 (`P1-01`, the P1) — the remedy's content was right and its STORAGE was forgeable
+
+`p11.grid_ctx` was a **custom GUC in an unreserved prefix**. Any role may set
+one: no grant, no check, measured `rc=0`. And the recorder wrote it only when it
+was empty — "first write wins" — so a value that was **already there when the
+transaction started was never overwritten**, and the comparison then read the
+attacker's string as if a trigger had put it there. `catalog_grid_ctx_identity()`
+was `EXECUTE`-able by `daftar_app`, so the string did not even have to be
+guessed.
+
+Measured three ways by the challenger, each on its own freshly rebuilt database,
+each using round 4's door (register a third axis, then `UPDATE … SET
+status='active'`):
+
+| shape | measured |
+|---|---|
+| `PA6-05` `set_config('p11.grid_ctx','daftar_app||',true)` as the first statement | `rc=0` **NOT REFUSED**, live non-base variants outside the grid: **1** |
+| `PA6-06` `SET p11.grid_ctx='daftar_app||'` at SESSION level before `BEGIN`, no `set_config` inside at all | `rc=0`, outside the grid: **1** |
+| `PA6-09` connected as `daftar_app`, **no superuser anywhere**, one session-level `SET`, then **two successive transactions on the one connection** | `rc=0`, outside the grid: **2** |
+
+`PA6-09` is the one that matters, and it is the one I had argued could not
+happen. Round 5's comment said the setting was `is_local => true` and therefore
+"cannot leak into the next transaction on a pooled connection". That is true of
+**the recorder's own write** and says nothing about a **session-level value that
+was already there** — which is the blind side the challenger found. A pooled
+connection is exactly where it bites.
+
+**The remedy: a store the judged session cannot write.** The GUC is gone. The
+identity now lives in a relation, `catalog_grid_ctx_ledger`, and the rule changed
+from first-write-wins to **UNANIMITY**:
+
+- **one row per writing statement**, appended by the four `<rel>_01_grid_ctx`
+  `AFTER … FOR EACH STATEMENT` triggers, with no "only if empty" test — that
+  test is what made the old store forgeable;
+- **the identity is written by the server**: `recorded_identity` is a column
+  `DEFAULT` evaluated during the `INSERT`, and the writing roles hold
+  `INSERT (txid)` **only**, so supplying the column fails with `permission
+  denied for table catalog_grid_ctx_ledger` (`PA6-L1`);
+- **the rows cannot be changed or removed**: no role holding `INSERT` holds
+  `UPDATE`, `DELETE` or `TRUNCATE` (`PA6-L3`, `PA6-L4`). This is the lever
+  unanimity could not survive, and it is the one the end-state assertion checks
+  most carefully;
+- **a row cannot be planted for another transaction**: an RLS
+  `WITH CHECK (txid = pg_current_xact_id())` refuses it (`PA6-L2`), and the check
+  additionally counts only rows whose `xmin` is this transaction's id;
+- **the check requires that every recorded identity is the same AND equal to the
+  identity at `COMMIT`**, refusing with the count in the message when they are
+  not.
+
+Unanimity is what makes a forged row **harmless instead of decisive**: a row an
+attacker inserts carries the identity it held at that moment, so any disagreement
+is a refusal, never a pass. And it is strictly stronger than what it replaces —
+a transaction that wrote as A, wrote as B and came back to A to commit **passed**
+first-write-wins and is refused now (`PA6-L6`, with only the request context
+moving and no role change, so it cannot be dismissed as a privilege artefact).
+
+`EXECUTE` on the identity function is now **revoked from `PUBLIC`** and granted
+to exactly the roles that hold a write privilege on the four relations,
+**enumerated from `relacl`/`attacl`** rather than from a hand-written list — the
+same sweep that found `daftar_app`'s write path by generation in round 4. Round 5
+had kept `PUBLIC` for a measured reason (a blanket `REVOKE` broke the lot
+fixture, because the recorder runs as `daftar_inventory_internal` too); generating
+the grant is what let the tightening happen without breaking a lawful write. The
+integrity of the identity comes from the ledger's column ACL, never from the
+function being private, and that is stated in the DDL so a later reader does not
+treat the `REVOKE` as the defence.
+
+**Two of my own errors inside this fix, recorded because they are the pattern.**
+The first version of the end-state assertion did not exclude the table **owner**
+from the "no `UPDATE`/`DELETE`" check — an ACL materialises with the owner's own
+full entry as soon as any grant is made — and it **refused the pack's own
+install**: a guard that refuses a lawful install, for the third measured time in
+this pack. And the generated grant block, placed next to the triggers, ran before
+the pack's own grants; I moved it to the end and first wrote that this changed
+the enumeration from 3 roles to 4. **It did not.** Measured both ways, the two
+positions enumerate the same three roles, because `daftar_app`'s write path comes
+from frozen history rather than from this pack's grants. The move is a
+precaution, and the DDL now says so in those words.
+
+### 14.2 The pair-drop of the two plant defences, and the honest result
+
+`M15` drops the RLS write policy; `M16` drops the `xmin` filter; `M17` drops
+both. The result is **not symmetric, and the pair-drop is what made that
+visible**: the policy is the defence the suite measures, and the `xmin` filter has
+**no case that can reach it**, because the policy makes the state it defends
+against unreachable. So the filter is defence in depth whose effect is
+`UNMEASURED`, and it is named as a residual in §14.5 rather than counted as a
+tested layer. Two green layers do not mean two tested layers.
+
+What the pair protects is also stated narrowly: **availability, not
+correctness**. Unanimity already means a planted row can only cause a refusal, so
+the plant defences exist so that a stranger cannot make a later lawful
+transaction refuse.
+
+### 14.3 The repository's own gates, measured on the engine the repository requires
+
+The challenger's round-5 self-correction (recorded at `29a26bf`) was the reason
+to do this properly. Node 24.21.0 was fetched and verified against that release's
+`SHASUMS256.txt`, `npm ci` was run from the lockfile at both commits, and the
+gates were run **cold and after `npm run build`**, at this head and at `main`'s
+`6fc505d`:
+
+Each gate gets **two numbers**, cold and after `npm run build`, per the
+coordinator's gate-reporting rule — a single number is uninterpretable here. The
+**order is stated** because it changes what "cold" means, and this round
+measured two different cold states and got two different figures:
+
+- **cold A** — a tree that has never been built: `npm ci`, then `lint`.
+- **cold B** — a built tree with every `apps/*/dist` and `packages/*/dist`
+  removed, then `typecheck`, then `lint`. The run order within each tree was
+  `typecheck → lint → build → build → typecheck → lint → format`.
+
+| gate | head `29a26bf` cold | head after build | `6fc505d` cold | `6fc505d` after build |
+|---|---|---|---|---|
+| `npm ci` | **`0`** | — | **`0`** | — |
+| `prettier --version` | **3.7.1** (the pinned version, with `node_modules` present) | — | **3.7.1** | — |
+| `npm run typecheck` | **`2`** (cold B) | **`0`** | **`2`** (cold B) | **`0`** |
+| `npm run lint` | **`1`** — 4,798 errors (cold A), 2,793 (cold B) | **`0`, 0 errors** | **`1`** — 4,220 (cold A), 2,400 (cold B) | **`0`, 0 errors** |
+| `npm run build` | **`1`** first run, **`0`** second run | — | **`1`** first run, **`0`** second run | — |
+| `npm run format` | **`0`** (no build dependency, so one number) | `0` | **`0`** | `0` |
+
+**So the lint residual is not a lint debt: it is `G6`.** `npm run build` fails on
+an unbuilt tree because `apps/api` compiles before its workspace dependencies'
+`dist` exists (`error TS2307: Cannot find module '@daftar/accounting'`, 99 such
+errors at `6fc505d`), and a **second** `npm run build` returns `0` with zero
+TypeScript errors at both commits. Cold lint and cold typecheck are the same
+artefact: after a build, `lint`, `typecheck` and `format` are all `0` at **both**
+commits.
+
+**And the two cold figures are themselves a finding about reporting.** 4,798
+versus 2,793 at the same commit, from two states both honestly describable as
+"cold", is why the order has to be stated: a bare "cold" number is
+underdetermined, not merely incomplete.
+
+The cold delta between the commits is attributed by path rather than by
+inspection, as the coordinator asked: at cold A, head 4,798 and base 4,220, a
+difference of **578** = **569 in `apps/`** + **9 in `tests/`**, `packages/`
+unchanged at 10, and **zero errors in `prep/` at either commit**. The range
+`6fc505d..HEAD` is **335 commits** — it is not a Phase 11-only range; the branch
+inherits Phase 4 work through its base, and that is where the extra cold errors
+are. **Neither tree has a lint failure once built**, and no claim here rests on
+reading the diff.
+
+The raw gate logs are `harness/RUN-EVIDENCE-REPO-GATES-ROUND6.txt`.
+
+`EXIT_SCRIPT` of the DB harness is a different measurement from any of the above
+and is never reported with them in one sentence (PART 82).
+
+### 14.4 Run identity, exit codes, and the mutations of this round
+
+| | |
+|---|---|
+| `RUN_ID` | `p11-20261013T011027Z-1332` |
+| `SOURCE_BRANCH` | `claude/phase11-prep-re0epv` |
+| `SOURCE_SHA` at the run | `29a26bf916cf214940e135e7397e5cfe6fff42de`, `SOURCE_TREE_DIRTY: YES` — the run is of the answer, which is committed in the same commit as this section; the subject is identified by the digests below, and the clean-tree verification run is reported in the handoff |
+| `PACK_A_DDL_SHA256` | `4854354b751ae8b8d0ffac3a07495a5a3d03a749e121a780ef1172edb796eb7c` |
+| `PACK_B_DDL_SHA256` | `d5820ada9f3f0ddee2a3475271a996f5c2e3be83190845d2e85130d601c8ff75` (byte-identical to rounds 4 and 5 — this round changed Pack A only) |
+| `HARNESS_SHA256` | `0dcdac1b75c9e0e4afa9ab1e5f46dba2e29b468eb16fc7b180c85fc673bbcdbe` |
+| `MIGRATIONS_SHA` | `b128c7033a3381bd2237d0a1405f0676ac509960` (unchanged; frozen tree clean after the run) |
+| `PG_VERSION` | PostgreSQL 16.15, `datcollate = datctype = en_US.utf8`, measured on the database under test |
+| `EXIT_PROOFS_A` / `_RUN2` | **0** / **0** — **106 cases, 0 failed on pass 1 and 0 on pass 2** |
+| `EXIT_PROOFS_B` / `_RUN2` | **0** / **0** — **53 cases, 0 failed on pass 1 and 0 on pass 2** |
+| `EXIT_RACES` / `EXIT_RACES_B` | **0** / **0** — 9 and 4 races, overlap `2/2` on every one, 0 findings |
+| `EXIT_SCRIPT` | **0** |
+
+**A method failure of mine, reported before the results it affected.** I started
+a second mutation loop while the first was still running, so **two harness runs
+were rebuilding the same scratch cluster at once**. The contaminated segments
+(`M16`, `M17` and a first `M18`) were **discarded, not reported**, and `M16`
+through `M19` were re-run strictly serially. "An authoritative run owns the box"
+is a rule this container already had and I broke it; the table below is the
+serial measurement.
+
+| mutation | digest | Pack A red | Pack B red | exit | what it establishes |
+|---|---|---|---|---|---|
+| `M7-drop-deferred-grid-closure` | changed | **20 (p1) / 24 (p2)** | 0 / 0 | 1 | no per-verb guard answers the fourth door, and none answers this round's forgeries either; all 13 races still pass |
+| `M8-drop-per-verb-guards` | changed | **17 / 17** | 0 / 0 | 1 | the deferred check answers those paths with **its** name where the case expects the statement guard's — the signal a pair-drop exists to give |
+| `M9-drop-both` | changed | **45 / 49** | 0 / 0 | 2 | nothing else in the schema holds `C-APP-01`; the race fixture is unbuildable for the documented reason |
+| `M10-noop` | **identical** | not run | not run | **4** | the hook refuses rather than reporting a clean-tree green under a mutation's name |
+| `M11-defeat-the-write-identity-comparison` | changed | **12 / 22** | 0 / 0 | 1 | the identity function stops distinguishing sessions, and the arm's whole dependency set reds: round 5's exploit and its rollback, the `DELETE` sibling and its rollback, `PA6-05`, `PA6-06`, `PA6-09`, `PA6-L5`, `PA6-L6`, `PA6-L7`, and the RLS-scoping control |
+| `M13-column-acl-and-notnull` | changed | 0 / 0 | **8 / 9** | 2 | round 5's digest fix, unchanged and reproduced |
+| `M14-restore-the-ledgers-forgeability` | changed | **3 / 3** | 0 / 0 | 1 | exactly `PA6-L1`, `PA6-L3`, `PA6-L4` — the three absences that make a recorded identity unforgeable and unremovable are load-bearing |
+| `M15-drop-the-own-transaction-write-policy` | changed | **9 / 9** | 0 / 0 | 1 | **not what I predicted.** Dropping the only `INSERT` policy on an `ENABLE` + `FORCE` RLS table permits no insert at all, so the recorder cannot write and every case needing a write reds. Fail-closed and broken, not a hole |
+| `M16-drop-the-xmin-filter` | changed | **0 / 0** | 0 / 0 | **0** | **nothing reds, and `EXIT_SCRIPT` is 0** — a mutation run that looks exactly like a clean run. Only the digest says anything happened, which is why the hook digests the schema |
+| `M17-drop-both-plant-defences` | changed | **9 / 9** | 0 / 0 | 1 | behaves as `M15`, for `M15`'s reason |
+| `M18-make-the-write-policy-permissive` | changed | **1 / 1** | 0 / 0 | 1 | the plant defence's real red proof: exactly `PA6-L2`, and nothing else moves |
+| `M19-permissive-policy-and-no-xmin-filter` | changed | **1 / 1** | 0 / 0 | 1 | also exactly `PA6-L2`: removing the `xmin` filter on top changes no verdict this suite can observe |
+
+`M7`, `M8` and `M9` were **re-measured** rather than carried forward, because
+this round added 13 cases and a count from the previous round would be a figure
+about a different suite.
+
+**The pair-drop's conclusion, stated as the residual it is.** The RLS write
+policy is the plant defence this suite measures. The `xmin` filter is defence in
+depth whose effect is `UNMEASURED`: no case can reach it, because the policy
+makes the planted state unreachable, and a plant aimed at **another** session's
+future transaction id cannot be written as a test at all, since transaction ids
+are assigned by the server and not chosen by the test. And no mutation here can
+show that a planted row makes the law fail **open** — it cannot, because
+unanimity makes a disagreeing row a refusal. What a plant could cost is a
+**denial**, someone else's lawful transaction refusing, which is why the policy
+is described as protecting availability rather than correctness.
+
+### 14.5 What remains unsigned after this round
+
+**A SEVENTH challenge round is owed.** The newest and least reviewed code in the
+phase is again what this round added: `catalog_grid_ctx_ledger` with its two
+policies and its column ACL, the recorder's `INSERT`, the unanimity arms of
+`catalog_grid_closed_check`, the generated ledger grant and the `REVOKE` from
+`PUBLIC`, the six new end-state assertions, and the 13 new cases.
+**Nothing here is self-signed.**
+
+Residuals this round names rather than closes:
+
+1. **The `xmin` filter is `UNMEASURED` defence in depth** (§14.2, §14.4). The RLS
+   write policy makes the state it defends against unreachable, so no case
+   reaches it, and the pair-drop says so instead of letting two green layers
+   imply two tested layers.
+2. **The ledger grows.** One row per writing statement, and the rows are dead
+   weight once their transaction ends — they cannot be deleted by any role that
+   can write them, which is exactly what makes them trustworthy. Pruning (a
+   maintenance role deleting rows below the oldest active transaction id, or an
+   `UNLOGGED` table, or both) is a **Migration Owner** decision and is recorded
+   in `MPR-10`. This phase does not choose it, and a prep pack that silently
+   grew a table without saying so would be the same defect class as a count
+   without its pass.
+3. **The migration owner is outside this boundary.** The "no `UPDATE`/`DELETE`"
+   assertion excludes the table owner, because an ACL materialises with the
+   owner's own entry and the owner of every relation in this schema can change
+   or drop it anyway. Stated as a limit, not as cover.
+4. **`session_replication_role = replica`** still suppresses every non-`ALWAYS`
+   trigger, including the recorder. Re-measured this round: `pg_settings.context`
+   is `superuser`, the attempt fails for `daftar_app` **and** for
+   `daftar_platform`, and `rolsuper`/`rolbypassrls` are false for all twelve
+   `daftar_*` roles — so only a true superuser can, which is outside every
+   boundary this phase defines. `ENABLE ALWAYS TRIGGER` would close it and would
+   also fire during `pg_restore` and logical-replica apply: `MPR-10`.
+5. **An unreachable `RAISE` still satisfies the comment-stripped pin.** A text
+   pin proves the arm is written, never that it fires; the behavioural cases
+   carry the enforcement claim, and the two are never mixed in one sentence.
+6. **The deferred check's own concurrency** with the ledger in place is
+   `UNMEASURED`: no race drives two sessions through `catalog_grid_ctx_ledger`.
+   `SERIALIZABLE` is `UNMEASURED` everywhere in this phase, and Pack B's fifth
+   race is still owed.
+7. **`M14`'s narrow claim.** It shows the three absences are load-bearing; it
+   does not show that granting them reopens the fail-open, because the sequence
+   that would (delete the honest rows, leave a forged one) cannot be written as
+   a case on the unmutated schema.
+
+Still open and unchanged: `MPR-07`, `MPR-08`, `MPR-09` (nothing refuses a
+movement posted onto an archived variant), `MPR-10` (now **seven** items for the
+Migration Owner: the tautology test, the comment stripper, form 4 for Pack B's
+relations, the `session_replication_role` decision, the `ENABLE ALWAYS TRIGGER`
+question, ledger pruning, and whether the ledger should be `UNLOGGED`),
+`PR-SEC-P11-01`, the Pack B grants and the registered op code, `PB-17` as a
+scope statement rather than a law, `inventory_lot_verify` as `SPEC ONLY`, Packs
+C and D as `SPEC ONLY`, and **`OD-P11-07`, which is the owner's**.
+
+`READY_TO_PROMOTE` = **NO** for both packs, **no migration number exists**, and
+**no CI has executed any of it**. The repository's own npm gates are green after
+a build at this head and at `main` (§14.3) and are a separate measurement from
+every `EXIT_*` above.

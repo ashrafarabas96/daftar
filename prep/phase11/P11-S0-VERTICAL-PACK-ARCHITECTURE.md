@@ -759,3 +759,52 @@ The gate arms are `privilege-tested-where-visibility-decides` and
 `count-without-its-pass`; the second is `P3-01` of the same round — a count
 stated without naming which of the two passes it was measured on is an ambiguous
 cell, and this phase runs every suite twice on one database on purpose.
+
+### `P11-AL-41` — a comparison is only as strong as the store it reads, and a store the subject can write is not a store
+
+**`P1-01` of the sixth round, and the fifth round's own remedy is what it
+broke.** `P11-AL-40` moved the law from a stored privilege test to a stored
+*identity*: record who wrote, compare at `COMMIT`. The content was right — four
+independent shapes confirm it, including a role change with the context intact,
+a context change with the role intact, a released savepoint, a `ROLLBACK TO` one,
+and a moved tenant. What was wrong was **where the record lived**.
+
+`p11.grid_ctx` was a custom GUC in an unreserved prefix. **Any role may set
+one**: no grant, no check, `rc=0`. And the recorder wrote it only when empty, so
+a value already present when the transaction began was never overwritten and the
+comparison read the attacker's own string as if a trigger had put it there. One
+session-level `SET` covered every later transaction on a pooled connection, with
+nothing beyond the API role's own rights.
+
+**The law, in three parts.**
+
+First: **the integrity of a comparison is the integrity of its store.** Ask of
+every remembered fact — the identity, a sequence number, a flag, a count — *who
+can write this?* A GUC, a temporary table, a row in a relation the subject holds
+`INSERT`/`UPDATE`/`DELETE` on, or a value passed as a column rather than
+evaluated as a server-side `DEFAULT`: all of these are the subject's to choose.
+
+Second: **the remedy is not secrecy, it is authorship and immutability.** The
+record is written by the server (a column `DEFAULT`, with the writing roles
+holding `INSERT` on the key column only), and it cannot be changed or removed
+(no `UPDATE`, no `DELETE`, no `TRUNCATE` to any role that can write it). Making
+the identity function private is hygiene; it is not the defence, and the DDL says
+so where the `REVOKE` is written, so a later reader cannot mistake one for the
+other.
+
+Third, and this is the part worth carrying to other phases: **prefer UNANIMITY
+to first-write-wins.** "The first write agrees with the commit" can be satisfied
+by planting the first write. "Every write agrees with the commit" cannot: a
+forged record carries the identity its author held at that moment, so any
+disagreement is a refusal rather than a pass. **Forgery becomes fail-closed by
+construction instead of being prevented** — a much weaker thing to have to prove.
+It is also strictly stronger: a transaction that wrote as A, wrote as B and came
+back to A to commit passed the old rule and is refused by this one.
+
+The gate arms are `identity-kept-where-the-subject-can-write-it` and
+`two-layers-counted-as-two-tested-layers`. The second comes from this round's
+pair-drop and is a result, not a rule: of the two defences against a row planted
+for another transaction, only the RLS write policy has a reachable case, because
+it makes the planted state unreachable. The `xmin` filter it backs up is
+`UNMEASURED` defence in depth, and naming that is the verdict. **Two green layers
+are not two tested layers.**

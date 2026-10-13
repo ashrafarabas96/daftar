@@ -1,0 +1,29 @@
+-- M14 (round 6). The ledger that replaced the forgeable GUC is only as strong
+-- as three ABSENCES: no role may write `recorded_identity`, no role holding
+-- INSERT holds UPDATE or DELETE, and RLS pins every row to its own
+-- transaction. This mutation restores the first two, which is exactly what a
+-- careless later migration or a "just give the app role what it needs" grant
+-- would do, and it is the red proof that those absences are load-bearing
+-- rather than decoration.
+--
+-- Expected: the three cases that measure them by name go red --
+--   PA6-L1 (supplying recorded_identity is permission denied)
+--   PA6-L3 (UPDATE on the ledger is permission denied)
+--   PA6-L4 (DELETE on the ledger is permission denied)
+-- and nothing else changes, because the challenger's own forgeries
+-- (PA6-05/06/09) do not use these privileges: they forge the GUC, which the
+-- check no longer reads at all.
+--
+-- What this mutation CANNOT show, stated so no reader infers it: that the
+-- grant re-opens the fail-open. With DELETE granted an attacker could delete
+-- the honest rows and leave a forged one, and unanimity would then pass -- but
+-- no case in the suite performs that sequence, because on the unmutated
+-- schema the DELETE is refused and the case would be unwritable. The claim
+-- here is the narrow one the measurement supports: these three privileges are
+-- absent, and a suite notices when they are not.
+--
+-- The end-state assertion that checks the same three absences has ALREADY run
+-- by the time step 5c applies this file (the documented ordering limit), so it
+-- is not the instrument that reds here.
+GRANT UPDATE, DELETE ON catalog_grid_ctx_ledger TO daftar_app;
+GRANT INSERT (recorded_identity) ON catalog_grid_ctx_ledger TO daftar_app;
