@@ -87,8 +87,25 @@ if sha256sum -c "$SAFE/pristine.sha" >/dev/null 2>&1; then
 else
   say "FAIL: src/identity.ts was NOT restored"; FAILED=1
 fi
-if git -C "$PKG" status --porcelain -- src | grep -q .; then
-  say "NOTE: src/ differs from HEAD — expected while the round's own changes are uncommitted"
+# ROUND 17: this read used to be unguarded, and `| grep -q .` swallowed the
+# difference between "git says src/ is clean" and "git could not answer at all".
+# In an archive with no .git, git printed a bare `fatal:` to stderr, grep saw an
+# empty stdout, and the note was skipped — silence standing in for a measurement,
+# which is this phase's whole defect class. It now carries gate 6's sentence:
+# the git dir is a precondition, a non-zero rc is reported, and the absence of a
+# work tree is SAID rather than passed over.
+if git -C "$PKG" rev-parse --git-dir >/dev/null 2>&1; then
+  GIT_OUT=$(git -C "$PKG" status --porcelain -- src 2>&1)
+  GIT_RC=$?
+  if [ "$GIT_RC" -ne 0 ]; then
+    say "FAIL: git status failed with rc=$GIT_RC in a tree that reports a git dir: $GIT_OUT"; FAILED=1
+  elif [ -n "$GIT_OUT" ]; then
+    say "NOTE: src/ differs from HEAD — expected while the round's own changes are uncommitted: $GIT_OUT"
+  else
+    say "git agrees: src/ is identical to HEAD, so the restore above put back what was committed"
+  fi
+else
+  say "no git work tree here, so git is not consulted — the byte-for-byte restore check above is what attests"
 fi
 ( cd "$PKG" && "$VITEST" run > "$SAFE/final.log" 2>&1 ) \
   && say "the whole suite is green again: $(grep -E '^ *Tests ' "$SAFE/final.log" | tail -1 | xargs)" \

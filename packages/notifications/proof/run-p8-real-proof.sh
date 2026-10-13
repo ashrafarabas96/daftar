@@ -337,18 +337,42 @@ fi
 # lives in the check as forty characters and this script passes none. The
 # variable is not merely ignored: being ignored silently is how a reader keeps
 # believing it works.
-P8_ANCHOR_PIN=93084f82b8e36ad49ebb207c0b6e7435d7fcb49f
+# ROUND 17, N-2 (second half): this was its own forty-character literal, and the
+# line below printed a claim about the one it did NOT hold. The challenger
+# measured that with the two set to different commits the authoritative leg
+# passed on a tampered tree while this script printed "pinned in the check, all
+# forty characters" — false. There is ONE pin in the pack now, in the check, and
+# this script ASKS for it. It still refuses what it reads, because a derived
+# value is not an unchecked one.
+P8_ANCHOR_PIN=$(python3 "$HERE/p8-frozen-integrity.py" --print-pin 2>/dev/null)
+case "$P8_ANCHOR_PIN" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+  *) say "FAIL: the check did not report a forty-character anchor pin (got '$P8_ANCHOR_PIN'), so this gate has nothing to require of it"; FAILED=1 ;;
+esac
 P8_ANCHOR_DIR=${P8_GIT_ANCHOR_DIR:-}
 P8_EXPECT_COVERED=80
 P8_EXPECT_BOUNDARY=0079_phase4_pos_till_sessions_cart.sql
 P8_EXPECT_COVERED_DIGEST=ae0a8d0a45403ced7f622c67dc4bb7ed8a196592c386c33379fcce79b205f916
-ANCHOR_ARGS=""
+# ROUND 17, N-1-TRIPLE-PRIME: these were STRINGS, expanded unquoted at the call
+# site. The anchor directory is the only caller-controlled value among them, so
+# the caller chose not merely which repository was read but WHICH ARGUMENTS the
+# check received — a directory named `--inner-guards-only`, or merely containing
+# it after a space, turned the strongest leg OFF and a tampered tree exited 0.
+# Both forms were measured here before this was written. They are ARRAYS now, so
+# one element is one argument whatever it contains, and a path with a space
+# arrives whole (also measured: the old form truncated it and then refused by
+# naming a directory that does not exist).
+ANCHOR_ARGS=()
 if [ -n "${P8_GIT_ANCHOR_SHA:-}" ] && [ "${P8_GIT_ANCHOR_SHA}" != "$P8_ANCHOR_PIN" ]; then
   say "FAIL: ANCHOR IDENTITY — P8_GIT_ANCHOR_SHA=${P8_GIT_ANCHOR_SHA} is set, and this gate's anchor is pinned to $P8_ANCHOR_PIN inside the check; the variable no longer steers anything and is refused rather than ignored"
   FAILED=1
 elif [ -n "${P8_GIT_ANCHOR_SHA:-}" ]; then
   say "note: P8_GIT_ANCHOR_SHA is set to the pin itself, which steers nothing; the check carries the pin"
 fi
+case "$P8_ANCHOR_DIR" in
+  -*) say "FAIL: ARGUMENT INJECTION — P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR is option-shaped, so the anchor's directory cannot be told from this gate's own flags; refusing"
+      FAILED=1; P8_ANCHOR_DIR="" ;;
+esac
 if [ -z "$P8_ANCHOR_DIR" ]; then
   say "FAIL: P8_GIT_ANCHOR_DIR is not set, so the frozen boundary has no witness outside the tree under test; refusing to report a pass without it"
   FAILED=1
@@ -356,14 +380,24 @@ elif ! git -C "$P8_ANCHOR_DIR" rev-parse --verify "${P8_ANCHOR_PIN}^{commit}" >/
   say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR does not contain the anchor commit $P8_ANCHOR_PIN"
   FAILED=1
 else
-  ANCHOR_ARGS="--git-dir $P8_ANCHOR_DIR"
-  say "the frozen boundary is anchored to $P8_ANCHOR_PIN (pinned in the check, all forty characters) in $P8_ANCHOR_DIR, read with replacement objects disabled"
+  ANCHOR_ARGS=(--git-dir "$P8_ANCHOR_DIR")
+  say "the frozen boundary is anchored to $P8_ANCHOR_PIN (the ONE pin, read out of the check itself) in $P8_ANCHOR_DIR, read with replacement objects disabled"
 fi
-CLAIM_ARGS="--expect-covered $P8_EXPECT_COVERED --expect-boundary $P8_EXPECT_BOUNDARY --expect-covered-digest $P8_EXPECT_COVERED_DIGEST"
+CLAIM_ARGS=(--expect-covered "$P8_EXPECT_COVERED" --expect-boundary "$P8_EXPECT_BOUNDARY" --expect-covered-digest "$P8_EXPECT_COVERED_DIGEST")
 INTEGRITY_OUT=$OUT/frozen-integrity.log
-# shellcheck disable=SC2086  # both are deliberate flag lists
-if python3 "$HERE/p8-frozen-integrity.py" "$REPO" $ANCHOR_ARGS $CLAIM_ARGS > "$INTEGRITY_OUT" 2>&1; then
+# ROUND 17, N-2: the authoritative run must SAY that the anchor leg ran. Round
+# 16's evidence for its strongest leg was the ABSENCE of a complaint, which is
+# what every fail-open in this phase has looked like from outside — and the
+# injection above produced exactly that: a quiet exit 0 whose next line said the
+# leg had not run. The token is required, and the pin and directory inside it
+# must be the ones this gate asked for.
+if python3 "$HERE/p8-frozen-integrity.py" "$REPO" "${ANCHOR_ARGS[@]}" "${CLAIM_ARGS[@]}" > "$INTEGRITY_OUT" 2>&1; then
   while IFS= read -r line; do say "$line"; done < "$INTEGRITY_OUT"
+  WANT_TOKEN="ANCHOR LEG EXERCISED: pin=$P8_ANCHOR_PIN dir=$P8_ANCHOR_DIR"
+  if [ -n "$P8_ANCHOR_DIR" ] && ! grep -qF "$WANT_TOKEN" "$INTEGRITY_OUT"; then
+    say "FAIL: the frozen-integrity check exited 0 but never said it exercised the anchor leg for the pin and directory this gate asked for ('$WANT_TOKEN'). A reader throws unless it sees the pass token; the absence of a complaint is not evidence that the leg ran."
+    FAILED=1
+  fi
 else
   say "FAIL: the frozen history did not verify against the manifest"
   while IFS= read -r line; do say "  $line"; done < "$INTEGRITY_OUT"
@@ -417,7 +451,15 @@ integrity_must_refuse(){   # integrity_must_refuse <id> <setup> <expect> [extra-
   # evidence about the outer one"), so the new plants carry their flags
   # explicitly, one arm per guard, and the old twelve keep testing the inner
   # ones.
-  local extra=${4:-}
+  # ROUND 17: this used to be `local extra=${4:-}`, one string the call site
+  # quoted and the run unquoted. That is the shape the tenth challenge attacked,
+  # and it broke here the moment the authoritative call became an array: a
+  # single word "$CLAIM_ARGS" carries only the array's FIRST element, so the
+  # three claim arms ran with `--expect-covered` and no value and reported
+  # "PASSED on a broken tree". Caught by this run. The extra flags are now the
+  # remaining positional arguments, passed through as an array, so there is no
+  # string for a space to split.
+  shift 3
   local sand=$OUT/integrity-$id
   rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
   cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
@@ -447,8 +489,7 @@ integrity_must_refuse(){   # integrity_must_refuse <id> <setup> <expect> [extra-
   # ROUND 16: `--inner-guards-only` is now how a run says it is NOT exercising
   # the anchor. It used to be the absence of a flag, which is how round 15's
   # check came to print a pass line with its strongest leg never run.
-  # shellcheck disable=SC2086  # $extra is a deliberate flag list, not a path
-  if python3 "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only $extra > "$out" 2>&1; then
+  if python3 "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only "$@" > "$out" 2>&1; then
     say "INTEGRITY-MUT $id: FAIL — the check PASSED on a broken tree"
     FAILED=1; return
   fi
@@ -568,7 +609,7 @@ anchor_is_loadbearing(){   # anchor_is_loadbearing <id> <setup> <expect>
   local setup=$2
   local expect=$3
   local sand=$OUT/anchor-$id
-  if [ -z "$ANCHOR_ARGS" ]; then
+  if [ "${#ANCHOR_ARGS[@]}" -eq 0 ]; then
     say "ANCHOR-MUT $id: FAIL — no anchor was resolved, so this round's guard is untested"
     FAILED=1; return
   fi
@@ -589,8 +630,7 @@ anchor_is_loadbearing(){   # anchor_is_loadbearing <id> <setup> <expect>
     head -2 "$bare" | tee -a "$OUT/run.log"
     FAILED=1; return
   fi
-  # shellcheck disable=SC2086  # a deliberate flag list
-  if python3 "$HERE/p8-frozen-integrity.py" "$sand" $ANCHOR_ARGS > "$anch" 2>&1; then
+  if python3 "$HERE/p8-frozen-integrity.py" "$sand" "${ANCHOR_ARGS[@]}" > "$anch" 2>&1; then
     say "ANCHOR-MUT $id: FAIL — the ANCHORED arm passed too; the fail-open is still open"
     FAILED=1; return
   fi
@@ -744,7 +784,8 @@ PLANT
   # round's two guards removed. It must PASS. A guard whose absence changes
   # nothing was not the reason the plant was refused.
   local nog=$work/no-guards.py
-  python3 - "$HERE/p8-frozen-integrity.py" "$nog" <<'DELETE'
+  local pat=0
+  python3 - "$HERE/p8-frozen-integrity.py" "$nog" <<'DELETE' || pat=$?
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 s = open(src, encoding="utf-8").read()
@@ -759,6 +800,17 @@ assert s.count(a2) == 1, "the identity comparison is not where this expects it"
 s = s.replace(a2, "        if False:", 1)
 open(dst, "w", encoding="utf-8").write(s)
 DELETE
+  # ROUND 17, N-4: the patcher's own exit code. Each of its three asserts fires
+  # BEFORE the write, so a patcher that no longer matches the check leaves no
+  # file at all — and the arm below then failed on python's "No such file or
+  # directory" and reported it as "refused even with the guards deleted", which
+  # blames the plant for the apparatus. The same defect class as everything else
+  # in this phase: the quantity that decided whether anything was wrong (the
+  # arm's exit code) could not tell a measurement from the absence of one.
+  if [ "$pat" -ne 0 ] || [ ! -s "$nog" ]; then
+    say "ANCHOR-ID $id: FAIL — the guard-deletion patcher did not apply (exit $pat), so this arm measured nothing about this round's guards"
+    FAILED=1; return
+  fi
   # shellcheck disable=SC2086
   if python3 "$nog" "$sand" --git-dir "$work/anchor" $extra > "$work/no-guards.log" 2>&1; then
     say "ANCHOR-ID $id: guard-deletion arm PASSES, so this round's guard is what refused it"
@@ -795,16 +847,125 @@ anchor_identity t \
 # one commit can change). They are measured anyway, because a claim that cannot
 # fail is not a claim. Each of the three coordinated plants is run once more with
 # the figures and no anchor, and must be refused by the falsified figure's name.
+
+say "=== the shape of the check's own arguments, measured ==="
+# ROUND 17, N-1-TRIPLE-PRIME. The ninth round moved the anchor's identity out of
+# the caller's reach: the pin is forty characters in the check's own source and
+# the resolved sha must equal it. The tenth found the leg BELOW that one — WHICH
+# ARGUMENTS THE CHECK RECEIVES was still the caller's to choose, and a single
+# option-shaped word turned the whole anchor leg off while the gate exited 0.
+# That is this phase's defect class at its sixth depth: git's silence, the
+# manifest's rows, the directory's length, the boundary name, the anchor commit,
+# and now the argv the measurement is asked for.
+#
+# Four arms. Two must be REFUSED BY NAME, because an injected flag must never
+# read as an opt-out. Two must PASS, because a guard that refuses an honest
+# caller is a guard nobody can run: a directory whose path contains a space, and
+# a run whose environment tries to redirect git underneath it.
+ARG_SHAPE_ENV=()
+arg_shape(){   # arg_shape <id> <refuse|pass> <expect-text> [args...]
+  local id=$1
+  local mode=$2
+  local expect=$3
+  shift 3
+  local sand=$OUT/argshape-$id
+  rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
+  cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
+  cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+  # The subject is an HONEST copy, deliberately. What is under test here is the
+  # argument shape, not a tree mutation: a planted byte would red for the wrong
+  # reason and the arm would stop being evidence about the argv.
+  local out=$sand/out.log
+  local rc=0
+  # ARG_SHAPE_ENV is how an arm names the environment it wants, as an array
+  # passed to env(1). An assignment prefix on a FUNCTION call is not reliably
+  # scoped to that call in bash, and a subshell would lose FAILED, so the
+  # environment travels explicitly.
+  env ${ARG_SHAPE_ENV[@]+"${ARG_SHAPE_ENV[@]}"} \
+      python3 "$HERE/p8-frozen-integrity.py" "$sand" "$@" > "$out" 2>&1 || rc=$?
+  if [ "$mode" = refuse ] && [ "$rc" -eq 0 ]; then
+    say "ARGSHAPE $id: FAIL — the check exited 0 on an injected argument; first line: $(head -1 "$out")"
+    FAILED=1; return
+  fi
+  if [ "$mode" = pass ] && [ "$rc" -ne 0 ]; then
+    say "ARGSHAPE $id: FAIL — the check refused an HONEST caller (rc=$rc): $(head -1 "$out")"
+    FAILED=1; return
+  fi
+  if grep -qF "$expect" "$out"; then
+    say "ARGSHAPE $id ($mode, rc=$rc): named it — '$expect'"
+  else
+    say "ARGSHAPE $id: FAIL — rc=$rc as required, but '$expect' is not in the output"
+    head -2 "$out" | tee -a "$OUT/run.log"
+    FAILED=1
+  fi
+}
+
+# (u) The flag AS the directory. This is the attack verbatim: the gate's own
+#     opt-out word arriving where a path belongs.
+arg_shape u refuse \
+  "ARGUMENT INJECTION — --git-dir was given '--inner-guards-only'" \
+  --git-dir --inner-guards-only
+# (v) The flag ALONGSIDE the directory, which is what word-splitting a path
+#     produced. One argument asks for the anchor leg, the other turns it off;
+#     preferring the opt-out is how round 16 exited 0 with nothing measured.
+if [ -n "$P8_ANCHOR_DIR" ]; then
+  arg_shape v refuse \
+    "ARGUMENT INJECTION — --inner-guards-only was given" \
+    --git-dir "$P8_ANCHOR_DIR" --inner-guards-only
+else
+  say "ARGSHAPE v: FAIL — no anchor directory, so this arm is untested"; FAILED=1
+fi
+# (w) THE HONEST SPACED PATH. The quoting fix is only proved by a caller a
+#     naive implementation would truncate: this directory's name contains a
+#     space, and the run must exercise the anchor leg against it and say so.
+if [ -n "$P8_ANCHOR_DIR" ]; then
+  SPACED="$OUT/spaced anchor dir"
+  rm -rf "$SPACED"; mkdir -p "$SPACED"
+  if git clone -q "$P8_ANCHOR_DIR" "$SPACED/anchor" 2>"$OUT/spaced-clone.log"; then
+    arg_shape w pass \
+      "ANCHOR LEG EXERCISED: pin=$P8_ANCHOR_PIN dir=$SPACED/anchor" \
+      --git-dir "$SPACED/anchor"
+  else
+    say "ARGSHAPE w: FAIL — could not clone the anchor into a spaced path: $(tail -1 "$OUT/spaced-clone.log")"
+    FAILED=1
+  fi
+else
+  say "ARGSHAPE w: FAIL — no anchor directory, so this arm is untested"; FAILED=1
+fi
+# (x) THE ENVIRONMENT UNDERNEATH. GIT_DIR BEATS -C, measured in this container:
+#     with GIT_DIR set to an empty repository, `git -C <anchor> rev-parse
+#     --absolute-git-dir` answers with the EMPTY one, and round 16's check then
+#     said the anchor commit was unreachable in a repository that demonstrably
+#     holds it — a refusal naming a directory it never read. The subprocess
+#     environment is scrubbed, so this run must pass and must name the directory
+#     it was actually given.
+if [ -n "$P8_ANCHOR_DIR" ]; then
+  DECOY=$OUT/env-decoy
+  rm -rf "$DECOY"; mkdir -p "$DECOY"
+  git init -q "$DECOY/empty" 2>/dev/null
+  ARG_SHAPE_ENV=(
+    "GIT_DIR=$DECOY/empty/.git"
+    "GIT_REPLACE_REF_BASE=refs/p8-elsewhere/"
+    "GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=core.useReplaceRefs" "GIT_CONFIG_VALUE_0=true"
+  )
+  arg_shape x pass \
+    "ANCHOR LEG EXERCISED: pin=$P8_ANCHOR_PIN dir=$P8_ANCHOR_DIR" \
+    --git-dir "$P8_ANCHOR_DIR"
+  ARG_SHAPE_ENV=()
+else
+  say "ARGSHAPE x: FAIL — no anchor directory, so this arm is untested"; FAILED=1
+fi
+
 say "=== the claimed figures, measured (the weaker leg) ==="
 integrity_must_refuse m2 \
   "python3 '$HERE/p8-plant.py' tail-renumber" \
-  "COVERED COUNT  expected 80, measured 79" "$CLAIM_ARGS"
+  "COVERED COUNT  expected 80, measured 79" "${CLAIM_ARGS[@]}"
 integrity_must_refuse n2 \
   "python3 '$HERE/p8-plant.py' boundary-shrink" \
-  "COVERED COUNT  expected 80, measured 6" "$CLAIM_ARGS"
+  "COVERED COUNT  expected 80, measured 6" "${CLAIM_ARGS[@]}"
 integrity_must_refuse o2 \
   "python3 '$HERE/p8-plant.py' limit-one" \
-  "COVERED COUNT  expected 80, measured 1" "$CLAIM_ARGS"
+  "COVERED COUNT  expected 80, measured 1" "${CLAIM_ARGS[@]}"
 
 # git is still consulted WHERE THERE IS A WORK TREE, as a second opinion on the
 # files that are beyond the manifest's coverage. Its exit code is read, and where

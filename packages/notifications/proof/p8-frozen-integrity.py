@@ -243,6 +243,23 @@ def _git(gitdir, *args):
     it, rather than silently ignored like an unknown environment variable.
     """
     env = dict(os.environ)
+    # ROUND 17, N-3: `GIT_DIR` OVERRIDES `-C` — measured: `GIT_DIR=<other>/.git git
+    # -C <anchor> rev-parse --absolute-git-dir` prints the OTHER repository. So
+    # round 16's refusal could name a repository that demonstrably holds the
+    # commit, which is a false sentence even where it fails closed. And
+    # `GIT_REPLACE_REF_BASE` moves replacement into a namespace nothing looks at,
+    # while `GIT_CONFIG_*` can set `core.useReplaceRefs` from outside the
+    # repository — the challenger measured all three. None can steer a read any
+    # more: every variable that relocates the repository, its objects or its
+    # configuration is REMOVED from the child environment, rather than fought one
+    # at a time.
+    for name in [n for n in env if n.startswith("GIT_CONFIG")]:
+        del env[name]
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                 "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                 "GIT_CEILING_DIRECTORIES", "GIT_REPLACE_REF_BASE",
+                 "GIT_NAMESPACE", "GIT_LITERAL_PATHSPECS"):
+        env.pop(name, None)
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
     proc = subprocess.run(("git", "--no-replace-objects", "-C", gitdir) + args,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
@@ -258,10 +275,20 @@ def digest(path):
 
 
 def main():
+    # ROUND 17, N-2 (second half): the runner carried its own forty-character
+    # literal and printed a claim about THIS one, with nothing reconciling them.
+    # The challenger measured the consequence: with the two set to different
+    # commits, the authoritative leg passed on a tampered tree while the runner
+    # printed "pinned in the check, all forty characters" — false. There is now
+    # ONE pin in the pack, here, and every other reader asks for it.
+    if "--print-pin" in sys.argv:
+        print(ANCHOR_PIN)
+        return 0
     if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
         sys.stderr.write("usage: p8-frozen-integrity.py <repo-root> --git-dir PATH "
                          "[--git-anchor SHA] [--inner-guards-only] [--expect-covered N] "
-                         "[--expect-boundary NAME] [--expect-covered-digest HEX]\n")
+                         "[--expect-boundary NAME] [--expect-covered-digest HEX]\n"
+                         "       p8-frozen-integrity.py --print-pin\n")
         return 2
     repo = sys.argv[1]
     anchor_sha = _arg("--git-anchor", ANCHOR_PIN)
@@ -393,6 +420,34 @@ def main():
     # internal-consistency mutants and the two-arm harness's bare arm are run
     # that way on purpose, and their output must not read like frozen-history
     # evidence.
+    #
+    # ROUND 17, N-1-TRIPLE-PRIME: the anchor directory was the only
+    # caller-controlled string in this check's argument list, and the runner
+    # interpolated it UNQUOTED while this function decided the opt-out by a
+    # membership test over the whole vector. So the caller chose not merely WHICH
+    # repository was read but WHICH ARGUMENTS arrived — including the opt-out
+    # introduced one commit earlier. A directory named `--inner-guards-only`, or
+    # merely containing it after a space, turned the strongest leg off, and a
+    # tampered tree exited 0 printing `ANCHOR LEG NOT EXERCISED`. Measured in both
+    # forms before this was written.
+    #
+    # The runner now passes the path as one quoted argument, which closes the
+    # injection at its source. These two refusals are here because the check must
+    # not depend on its caller's quoting: any caller that builds a command line
+    # gets them.
+    if anchor_dir is not None and anchor_dir.startswith("-"):
+        sys.stderr.write("INTEGRITY FAIL: ARGUMENT INJECTION — --git-dir was given '%s', which is "
+                         "option-shaped, so the anchor's directory and this check's own flags "
+                         "cannot be told apart; refusing rather than reading whatever that "
+                         "resolves to\n" % anchor_dir)
+        return 1
+    if inner_only and anchor_dir is not None:
+        sys.stderr.write("INTEGRITY FAIL: ARGUMENT INJECTION — --inner-guards-only was given "
+                         "together with --git-dir '%s'. The combination is incoherent: one asks "
+                         "for the anchor leg and the other turns it off, and it is the shape an "
+                         "injected flag takes; refusing rather than silently preferring the "
+                         "opt-out\n" % anchor_dir)
+        return 1
     if inner_only:
         print("ANCHOR LEG NOT EXERCISED (--inner-guards-only): what follows checks the tree "
               "against ITSELF and is NOT evidence that the frozen history is intact.")
@@ -550,6 +605,16 @@ def main():
             sys.stderr.write("  %s\n" % line)
         return 1
 
+    # ROUND 17, N-2: on success this check used to print nothing saying the
+    # anchor leg had RUN, so the gate's evidence for its strongest leg was an
+    # ABSENCE — and an absence is what every fail-open in this phase has looked
+    # like from the outside. The leg now announces itself, with the pin it used,
+    # the directory it read and the counts it compared, and the runner REQUIRES
+    # this token in the authoritative log rather than inferring it from a quiet
+    # exit 0.
+    if not inner_only:
+        print("ANCHOR LEG EXERCISED: pin=%s dir=%s covered=%d anchored=%d boundary=%s"
+              % (anchor_sha, anchor_dir, len(covered), len(anchored_covered), frozen_through))
     print("covered-set digest (sha256 over the recorded digests, in name order): %s"
           % covered_digest)
     print("frozen integrity: %d files derived from the directory up to frozenThrough "
