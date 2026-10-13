@@ -330,21 +330,34 @@ fi
 # commit, THIS GATE GOES RED. It does not "skip the anchor": a run that quietly
 # drops its strongest witness and still prints a pass is the defect this round
 # exists to remove.
-P8_ANCHOR_SHA=${P8_GIT_ANCHOR_SHA:-93084f8}
+# ROUND 16, N-1" (route two): this line was
+# `P8_ANCHOR_SHA=${P8_GIT_ANCHOR_SHA:-93084f8}` — one environment variable, and
+# the anchor pointed somewhere else, with a seven-character abbreviation as the
+# only pin. The anchor's identity is not the caller's to supply, so the SHA now
+# lives in the check as forty characters and this script passes none. The
+# variable is not merely ignored: being ignored silently is how a reader keeps
+# believing it works.
+P8_ANCHOR_PIN=93084f82b8e36ad49ebb207c0b6e7435d7fcb49f
 P8_ANCHOR_DIR=${P8_GIT_ANCHOR_DIR:-}
 P8_EXPECT_COVERED=80
 P8_EXPECT_BOUNDARY=0079_phase4_pos_till_sessions_cart.sql
 P8_EXPECT_COVERED_DIGEST=ae0a8d0a45403ced7f622c67dc4bb7ed8a196592c386c33379fcce79b205f916
 ANCHOR_ARGS=""
+if [ -n "${P8_GIT_ANCHOR_SHA:-}" ] && [ "${P8_GIT_ANCHOR_SHA}" != "$P8_ANCHOR_PIN" ]; then
+  say "FAIL: ANCHOR IDENTITY — P8_GIT_ANCHOR_SHA=${P8_GIT_ANCHOR_SHA} is set, and this gate's anchor is pinned to $P8_ANCHOR_PIN inside the check; the variable no longer steers anything and is refused rather than ignored"
+  FAILED=1
+elif [ -n "${P8_GIT_ANCHOR_SHA:-}" ]; then
+  say "note: P8_GIT_ANCHOR_SHA is set to the pin itself, which steers nothing; the check carries the pin"
+fi
 if [ -z "$P8_ANCHOR_DIR" ]; then
   say "FAIL: P8_GIT_ANCHOR_DIR is not set, so the frozen boundary has no witness outside the tree under test; refusing to report a pass without it"
   FAILED=1
-elif ! git -C "$P8_ANCHOR_DIR" rev-parse --verify "${P8_ANCHOR_SHA}^{commit}" >/dev/null 2>&1; then
-  say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR does not contain the anchor commit $P8_ANCHOR_SHA"
+elif ! git -C "$P8_ANCHOR_DIR" rev-parse --verify "${P8_ANCHOR_PIN}^{commit}" >/dev/null 2>&1; then
+  say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR does not contain the anchor commit $P8_ANCHOR_PIN"
   FAILED=1
 else
-  ANCHOR_ARGS="--git-anchor $P8_ANCHOR_SHA --git-dir $P8_ANCHOR_DIR"
-  say "the frozen boundary is anchored to $P8_ANCHOR_SHA in $P8_ANCHOR_DIR (a commit this archive cannot write to)"
+  ANCHOR_ARGS="--git-dir $P8_ANCHOR_DIR"
+  say "the frozen boundary is anchored to $P8_ANCHOR_PIN (pinned in the check, all forty characters) in $P8_ANCHOR_DIR, read with replacement objects disabled"
 fi
 CLAIM_ARGS="--expect-covered $P8_EXPECT_COVERED --expect-boundary $P8_EXPECT_BOUNDARY --expect-covered-digest $P8_EXPECT_COVERED_DIGEST"
 INTEGRITY_OUT=$OUT/frozen-integrity.log
@@ -431,8 +444,11 @@ integrity_must_refuse(){   # integrity_must_refuse <id> <setup> <expect> [extra-
     FAILED=1; return
   fi
   local out=$sand/out.log
+  # ROUND 16: `--inner-guards-only` is now how a run says it is NOT exercising
+  # the anchor. It used to be the absence of a flag, which is how round 15's
+  # check came to print a pass line with its strongest leg never run.
   # shellcheck disable=SC2086  # $extra is a deliberate flag list, not a path
-  if python3 "$HERE/p8-frozen-integrity.py" "$sand" $extra > "$out" 2>&1; then
+  if python3 "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only $extra > "$out" 2>&1; then
     say "INTEGRITY-MUT $id: FAIL — the check PASSED on a broken tree"
     FAILED=1; return
   fi
@@ -566,7 +582,7 @@ anchor_is_loadbearing(){   # anchor_is_loadbearing <id> <setup> <expect>
     FAILED=1; return
   fi
   local bare=$sand/bare.log anch=$sand/anchored.log
-  if python3 "$HERE/p8-frozen-integrity.py" "$sand" > "$bare" 2>&1; then
+  if python3 "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only > "$bare" 2>&1; then
     say "ANCHOR-MUT $id: bare — the tree is internally consistent and round 14's check PASSES it ($(grep -c . "$bare") lines, exit 0)"
   else
     say "ANCHOR-MUT $id: FAIL — the bare arm went RED, so this plant is not evidence about the anchor"
@@ -624,6 +640,154 @@ anchor_is_loadbearing p \
 anchor_is_loadbearing q \
   "mv infrastructure/database/migrations/0013_security_boundary.sql infrastructure/database/migrations/0013_security_boundaries.sql && python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[dict(r,name='0013_security_boundaries.sql') if r['name']=='0013_security_boundary.sql' else r for r in m['migrations']];json.dump(m,open(p,'w'))\"" \
   "NOT IN TREE   0013_security_boundary.sql"
+
+# ---------------------------------------------------------------------
+# ROUND 16, N-1": THE ANCHOR'S OWN IDENTITY.
+# ---------------------------------------------------------------------
+# Round 15 moved the authority out of the tree and onto a commit. The ninth
+# challenge found that the commit was whatever the CALLER made `93084f8` mean —
+# the fourth appearance of one shape, now one level further out: the quantity
+# deciding whether anything is wrong (here, WHICH commit is the witness) was
+# supplied by the party being checked. Two routes, both measured by me before
+# being fixed:
+#
+#   1. `refs/replace/93084f82b8…` in the anchor repository redirects exactly the
+#      reads the check makes — show, ls-tree, cat-file — while `rev-parse
+#      --verify` keeps printing the honest name, so nothing in the log looked
+#      wrong. Measured: plant (p)'s forged tree CONFIRMED, "all 80 matching",
+#      rc=0.
+#   2. The anchor SHA came from an environment variable with a seven-character
+#      default, so naming a forged commit needed no git trickery at all.
+#      Measured: the same forged tree, rc=0.
+#
+# The remedies are in `p8-frozen-integrity.py`: every anchor read runs with
+# replacement objects disabled (by argument AND by environment), and the pin is
+# forty characters inside the check, compared against the SHA `rev-parse`
+# RESOLVES — which round 15 computed and threw away. Each plant below carries a
+# GUARD-DELETION arm, because a guard is shown to be load-bearing only by a run
+# in which it is absent.
+anchor_identity(){   # anchor_identity <id> <doctor-the-anchor-clone> <extra-args> <expect>
+  local id=$1
+  local doctor=$2
+  local extra=$3
+  local expect=$4
+  local work=$OUT/anchorid-$id
+  rm -rf "$work"; mkdir -p "$work"
+  if [ -z "$P8_ANCHOR_DIR" ]; then
+    say "ANCHOR-ID $id: FAIL — no anchor directory, so this plant is untested"
+    FAILED=1; return
+  fi
+  # A CLONE of the anchor repository, so the real one is never written to. No
+  # frozen migration is touched in any real tree: what is doctored is a ref and a
+  # commit inside a throwaway clone.
+  if ! git clone -q "$P8_ANCHOR_DIR" "$work/anchor" 2>"$work/clone.log"; then
+    say "ANCHOR-ID $id: FAIL — could not clone the anchor repository: $(tail -1 "$work/clone.log")"
+    FAILED=1; return
+  fi
+  git -C "$work/anchor" config user.email p8@local >/dev/null 2>&1
+  git -C "$work/anchor" config user.name p8 >/dev/null 2>&1
+  # The forged commit every plant aims at: the anchor's tree with one frozen file
+  # altered, built in the clone.
+  git -C "$work/anchor" checkout -q -b p8forge "$P8_ANCHOR_PIN" 2>/dev/null
+  printf '\n-- mutant\n' >> "$work/anchor/infrastructure/database/migrations/0006_rls.sql"
+  git -C "$work/anchor" commit -q -am "p8 round 16 forge (throwaway clone)" 2>/dev/null
+  FORGE=$(git -C "$work/anchor" rev-parse p8forge)
+  FORGE_SHORT=$(git -C "$work/anchor" rev-parse --short=7 p8forge)
+  git -C "$work/anchor" checkout -q --detach "$P8_ANCHOR_PIN" 2>/dev/null
+  ( cd "$work/anchor" && eval "$doctor" ) >"$work/doctor.log" 2>&1
+  # The caller cannot name the forged commit, because it does not exist until the
+  # lines above make it, so <extra-args> is a template and is filled in here.
+  extra=${extra//@FORGE_SHORT@/$FORGE_SHORT}
+  extra=${extra//@FORGE@/$FORGE}
+  # The SUBJECT is a tree built to AGREE with the forgery. That is the only
+  # subject that tests the anchor's identity: an honest tree disagrees with the
+  # forged content and reds for the wrong reason, which is exactly how round 15's
+  # gate went red while the fail-open stood.
+  local sand=$work/tree
+  mkdir -p "$sand/infrastructure/database"
+  cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
+  cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+  printf '\n-- mutant\n' >> "$sand/infrastructure/database/migrations/0006_rls.sql"
+  python3 - "$sand" <<'PLANT'
+import hashlib, json, os, sys
+root = sys.argv[1]
+mp = os.path.join(root, "infrastructure", "database", "MIGRATION_MANIFEST.json")
+f = os.path.join(root, "infrastructure", "database", "migrations", "0006_rls.sql")
+h = hashlib.sha256(open(f, "rb").read()).hexdigest()
+m = json.load(open(mp))
+m["migrations"] = [dict(r, sha256=h) if r["name"] == "0006_rls.sql" else r
+                   for r in m["migrations"]]
+json.dump(m, open(mp, "w"))
+PLANT
+  # The subject must be a tree the round-15 check calls correct, or the plant is
+  # evidence about something else.
+  if python3 "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only >"$work/inner.log" 2>&1; then
+    say "ANCHOR-ID $id: the forged tree is internally consistent, as the plant requires"
+  else
+    say "ANCHOR-ID $id: FAIL — the forged tree is not internally consistent ($(head -1 "$work/inner.log")), so it does not reach the anchor at all"
+    FAILED=1; return
+  fi
+  local out=$work/guarded.log
+  # shellcheck disable=SC2086  # deliberate flag lists
+  if python3 "$HERE/p8-frozen-integrity.py" "$sand" --git-dir "$work/anchor" $extra > "$out" 2>&1; then
+    say "ANCHOR-ID $id: FAIL — the check CONFIRMED a forged tree against a doctored anchor"
+    FAILED=1; return
+  fi
+  if grep -qF "$expect" "$out"; then
+    say "ANCHOR-ID $id: refused, and named it — '$expect'"
+  else
+    say "ANCHOR-ID $id: FAIL — it refused, but did not name '$expect'"
+    head -2 "$out" | tee -a "$OUT/run.log"
+    FAILED=1; return
+  fi
+  # THE GUARD-DELETION ARM: the same plant against a copy of the check with this
+  # round's two guards removed. It must PASS. A guard whose absence changes
+  # nothing was not the reason the plant was refused.
+  local nog=$work/no-guards.py
+  python3 - "$HERE/p8-frozen-integrity.py" "$nog" <<'DELETE'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = '    env["GIT_NO_REPLACE_OBJECTS"] = "1"\n'
+assert s.count(a) == 1, "the replacement guard is not where this expects it"
+s = s.replace(a, "", 1)
+a1 = '("git", "--no-replace-objects", "-C", gitdir)'
+assert s.count(a1) == 1, "the --no-replace-objects argument is not where this expects it"
+s = s.replace(a1, '("git", "-C", gitdir)', 1)
+a2 = "        if resolved != ANCHOR_PIN:"
+assert s.count(a2) == 1, "the identity comparison is not where this expects it"
+s = s.replace(a2, "        if False:", 1)
+open(dst, "w", encoding="utf-8").write(s)
+DELETE
+  # shellcheck disable=SC2086
+  if python3 "$nog" "$sand" --git-dir "$work/anchor" $extra > "$work/no-guards.log" 2>&1; then
+    say "ANCHOR-ID $id: guard-deletion arm PASSES, so this round's guard is what refused it"
+  else
+    say "ANCHOR-ID $id: FAIL — refused even with this round's guards deleted ($(head -1 "$work/no-guards.log")), so it is not evidence about them"
+    FAILED=1
+  fi
+}
+
+say "=== the anchor's own identity, measured ==="
+# (r) ROUTE ONE: a replace ref in the anchor repository, aimed at the pin itself.
+#     No environment change; nothing about it appears in the log.
+anchor_identity r \
+  'git replace "$P8_ANCHOR_PIN" "$FORGE"' \
+  "" \
+  "ANCHOR DRIFT  0006_rls.sql"
+# (s) ROUTE TWO: the forged commit named directly, which is what the old
+#     environment variable bought. The anchor repository is honest here; only the
+#     NAME is wrong, which is the whole point.
+anchor_identity s \
+  'true' \
+  "--git-anchor @FORGE@" \
+  "ANCHOR IDENTITY"
+# (t) THE ABBREVIATION: seven characters of the forged commit. A short SHA names
+#     whatever a given repository makes it mean, which is why the pin is forty.
+anchor_identity t \
+  'true' \
+  "--git-anchor @FORGE_SHORT@" \
+  "ANCHOR IDENTITY"
 
 # The three claimed figures are the pack's SECOND leg, and weaker: a literal
 # travels in the same commit as the change it would catch, which is this

@@ -210,15 +210,42 @@ def _arg(name, default=None):
     return default
 
 
+# The anchor commit, pinned to all FORTY characters, in the check itself.
+#
+# ROUND 16, N-1" (route two): this was a seven-character abbreviation supplied by
+# the caller, through `--git-anchor` and, in the runner, through an environment
+# variable with the abbreviation only as its default. So the check verified that
+# whatever commit it was handed agreed with the tree, which is not the same claim
+# as the tree agreeing with THE frozen history — measured: naming a forged commit
+# directly makes plant (p) exit 0 with no git trickery at all. A literal here is
+# not the weak kind this pack already labels weak: a count or a name is a
+# PROPERTY that a commit can change and a literal can be edited to match, whereas
+# forty hex characters ARE the object's identity, so an editor of this line has to
+# produce a commit with that exact hash.
+ANCHOR_PIN = "93084f82b8e36ad49ebb207c0b6e7435d7fcb49f"
+
+
 def _git(gitdir, *args):
     """Run git in the ANCHOR repository, never in the tree under test.
 
     Returns (rc, stdout_bytes, stderr_text). The caller refuses on rc != 0 and
     never falls back to the manifest: falling back is how the first three
     fail-opens worked.
+
+    ROUND 16, N-1" (route one): every read here is made with replacement objects
+    DISABLED, both by argument and by environment. `refs/replace/<the anchor>` in
+    the anchor repository redirects exactly the reads this check makes — `show`,
+    `ls-tree` and `cat-file` — while `rev-parse --verify` keeps printing the
+    honest name, so nothing in the log said anything was wrong. Measured here: a
+    forged tree was CONFIRMED, `all 80 matching`, rc=0; the same read with
+    replacement off returns the true content. Both switches are set because they
+    fail differently — the argument is refused outright by a git too old to know
+    it, rather than silently ignored like an unknown environment variable.
     """
-    proc = subprocess.run(("git", "-C", gitdir) + args,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    env = dict(os.environ)
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    proc = subprocess.run(("git", "--no-replace-objects", "-C", gitdir) + args,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     return proc.returncode, proc.stdout, proc.stderr.decode("utf-8", "replace").strip()
 
 
@@ -232,13 +259,14 @@ def digest(path):
 
 def main():
     if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
-        sys.stderr.write("usage: p8-frozen-integrity.py <repo-root> [--git-anchor SHA] "
-                         "[--git-dir PATH] [--expect-covered N] [--expect-boundary NAME] "
-                         "[--expect-covered-digest HEX]\n")
+        sys.stderr.write("usage: p8-frozen-integrity.py <repo-root> --git-dir PATH "
+                         "[--git-anchor SHA] [--inner-guards-only] [--expect-covered N] "
+                         "[--expect-boundary NAME] [--expect-covered-digest HEX]\n")
         return 2
     repo = sys.argv[1]
-    anchor_sha = _arg("--git-anchor")
+    anchor_sha = _arg("--git-anchor", ANCHOR_PIN)
     anchor_dir = _arg("--git-dir")
+    inner_only = "--inner-guards-only" in sys.argv
     want_covered = _arg("--expect-covered")
     want_boundary = _arg("--expect-boundary")
     want_digest = _arg("--expect-covered-digest")
@@ -356,17 +384,46 @@ def main():
     # list and the content are read from a PINNED COMMIT instead, in a
     # repository this archive cannot write to. An unreachable anchor REFUSES; it
     # never falls back to the manifest.
-    if anchor_sha:
+    #
+    # ROUND 16, N-1": the anchor leg is no longer OPTIONAL to the check. Round 15
+    # left "is there an anchor at all?" to the caller, and only the runner
+    # insisted — so the check printed its pass line with the leg never exercised,
+    # which is the same shape as the finding itself. There is one opt-out, it has
+    # to be asked for by name, and it SAYS so in the output: the twelve
+    # internal-consistency mutants and the two-arm harness's bare arm are run
+    # that way on purpose, and their output must not read like frozen-history
+    # evidence.
+    if inner_only:
+        print("ANCHOR LEG NOT EXERCISED (--inner-guards-only): what follows checks the tree "
+              "against ITSELF and is NOT evidence that the frozen history is intact.")
+    else:
         if not anchor_dir:
-            sys.stderr.write("INTEGRITY FAIL: --git-anchor %s was given with no --git-dir, so the "
-                             "anchor cannot be resolved; refusing rather than falling back to the "
-                             "manifest\n" % anchor_sha)
+            sys.stderr.write("INTEGRITY FAIL: no --git-dir was given, so the frozen boundary has "
+                             "no witness outside the tree under test. Pass --git-dir, or ask for "
+                             "--inner-guards-only by name; refusing rather than reporting a pass "
+                             "on the tree's agreement with itself\n")
             return 1
-        rc, _out, err = _git(anchor_dir, "rev-parse", "--verify", "%s^{commit}" % anchor_sha)
+        rc, out, err = _git(anchor_dir, "rev-parse", "--verify", "%s^{commit}" % anchor_sha)
         if rc != 0:
             sys.stderr.write("INTEGRITY FAIL: the anchor commit %s is not reachable in %s, so the "
                              "boundary has no witness: %s\n" % (anchor_sha, anchor_dir, err))
             return 1
+        # ROUND 16, N-1" (route two): `rev-parse --verify` already returns the
+        # RESOLVED forty characters, and round 15 discarded them. The resolved
+        # value is now compared against the pin, so an anchor that merely
+        # resolves is refused; only THE anchor is accepted. This also removes the
+        # abbreviation: seven characters name whatever a repository happens to
+        # make them mean.
+        resolved = out.decode("utf-8", "replace").strip()
+        if resolved != ANCHOR_PIN:
+            sys.stderr.write("INTEGRITY FAIL: ANCHOR IDENTITY — '%s' resolves to %s in %s, but "
+                             "this check is pinned to %s, so that commit is not the frozen "
+                             "history's witness whatever it contains\n"
+                             % (anchor_sha, resolved, anchor_dir, ANCHOR_PIN))
+            return 1
+        # Every read below names the RESOLVED pin, not the caller's spelling of
+        # it, so nothing downstream can be aimed somewhere else by abbreviation.
+        anchor_sha = resolved
         rc, out, err = _git(anchor_dir, "show",
                             "%s:infrastructure/database/MIGRATION_MANIFEST.json" % anchor_sha)
         if rc != 0:
