@@ -484,9 +484,15 @@ function assertPlainCarrier(carrier: object, subject: string, lineIndex: number 
  * are accepted by POSITION rather than by count, so a sparse or out-of-order
  * array is refused rather than silently read.
  *
- * As with `assertPlainCarrier`, a PROXY over a lawful array forwards
- * `isArray`, `getPrototypeOf` and `ownKeys` and is NOT detected here; see that
- * function's note on `F-41`.
+ * A PROXY over a lawful array forwards `isArray`, `getPrototypeOf` and
+ * `ownKeys`, so nothing in the paragraph above can see one — and it is REFUSED
+ * anyway, because `assertReadableArray` asks the runtime through
+ * `node:util`'s `types.isProxy` before it looks at a single key. This comment
+ * used to end "and is NOT detected here", which was true when it was written
+ * and was made false by the guard two files away; it is the third of the three
+ * places the coordinator's `R-23` found, and it outlived the first round of
+ * that remedy because I corrected the two the review quoted and did not
+ * re-read the third against the code.
  */
 function assertPlainLineArray(lines: unknown, subject: string): readonly QuoteLineSnapshot[] {
   const refuse = (reason: string, detail?: Record<string, string>): never => {
