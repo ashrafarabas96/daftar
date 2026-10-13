@@ -273,9 +273,26 @@ function snapshotPositions(positions: readonly BasketPosition[]): readonly Posit
   };
   let array: readonly unknown[];
   try {
-    array = assertReadableArray(positions);
+    // THE BOUND IS PASSED HERE, and it is the SAME limit the sales authority
+    // already enforces a few lines below — `C-F`, the challenger at `a869aab`:
+    // `carrier.ts` offers `maxLength` and says the bound comes before the walk,
+    // and neither call site passed it, so 100,000 positions were fully
+    // snapshotted (608 ms measured) before `SALE_MIRROR_MAX_LINES` refused
+    // them. No new policy limit is invented: the same number, consulted
+    // earlier, so the work is bounded by what can be accepted rather than by
+    // what was supplied. The later check stays, because it names the sales
+    // authority's own limit to the caller and this one names a carrier fault.
+    array = assertReadableArray(positions, SALE_MIRROR_MAX_LINES);
   } catch (error) {
     if (!(error instanceof CarrierFault)) throw error;
+    // The bound keeps the sales authority's own refusal, word for word and code
+    // for code, so moving it earlier changes WHEN it fires and nothing else.
+    if (error.kind === 'too-long') {
+      throw new OrderError('order.checkout_line_limit', 'the checkout carries more lines than the sales authority accepts', {
+        lines: error.field ?? '',
+        maxLines: String(SALE_MIRROR_MAX_LINES),
+      });
+    }
     throw new OrderError('order.checkout_field_forbidden', 'the checkout positions container must be a plain, dense array of its own data', {
       carrier: error.kind,
       ...(error.field === null ? {} : { field: error.field }),
@@ -324,9 +341,14 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
   // confirmed `5` and the sale with `50`. Nothing else in this function reads
   // `positions` again.
   const checked: readonly PositionSnapshot[] = snapshotPositions(positions);
-  if (positions.length > SALE_MIRROR_MAX_LINES) {
+  // KEPT, and it is not dead: `snapshotPositions` refuses an over-long
+  // container before it walks it (`C-F`), so in practice this answers only for
+  // a caller that reached here another way. It reads the SNAPSHOT rather than
+  // `positions`, because reading the caller's array again after the snapshot is
+  // the check-then-use shape this file was just corrected for.
+  if (checked.length > SALE_MIRROR_MAX_LINES) {
     throw new OrderError('order.checkout_line_limit', 'the checkout carries more lines than the sales authority accepts', {
-      lines: String(positions.length),
+      lines: String(checked.length),
       maxLines: String(SALE_MIRROR_MAX_LINES),
     });
   }

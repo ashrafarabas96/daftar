@@ -44,6 +44,7 @@ import {
   summariseBasket,
   type CartLine as CartLineInput,
   type CommercialQuote,
+  type CommercialQuoteChecks,
   type CommercialQuoteInput,
   type ConfirmedQuoteApproval,
   type OrderCheckoutFacts,
@@ -596,5 +597,154 @@ describe('the unguarded objects and the unnamed refusals (R-C2, R-C3, R-C4)', ()
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
     expect(error.code).toBe('order.quote_field_undeclared');
     expect(elapsedMs).toBeLessThan(1000);
+  });
+});
+
+describe("the challenger's REJECT at a869aab — the leaf the remedy itself left unchecked, and a law dropped by a typo", () => {
+  it('C-A: a boxed asOf carrying an undeclared field is refused, where it used to be accepted AND handed back by reference', () => {
+    // Measured by the independent challenger at `a869aab`, inside the remedy's
+    // own return value: `isCanonicalInstant` runs a regex, a regex stringifies,
+    // so this passed every window comparison; the returned approval was frozen
+    // but its `asOf` was the caller's live object, and rewriting that object
+    // after the gate returned changed what the approval carried.
+    const boxed = Object.assign(new String('2026-10-01T09:30:00Z'), { documentFeeMinor: '500000' });
+    // The plant is proved to have landed: it stringifies to the lawful instant,
+    // so every comparison downstream would have agreed with it.
+    expect(String(boxed)).toBe('2026-10-01T09:30:00Z');
+    expect(typeof boxed).toBe('object');
+    const error = refusalOf(
+      () => assertQuoteApproved({ quote: CONFIRMED, confirmation: confirmationFor(CONFIRMED), asOf: boxed as unknown as string }, ORDER),
+      'a boxed asOf',
+    );
+    expect(error.code).toBe('order.occurred_at_invalid');
+  });
+
+  it("C-A: the approval the gate returns carries asOf as a frozen PRIMITIVE, so a caller's reference cannot reach it", () => {
+    const approval: ConfirmedQuoteApproval = { quote: CONFIRMED, confirmation: confirmationFor(CONFIRMED), asOf: '2026-10-01T09:30:00Z' };
+    const approved = assertQuoteApproved(approval, ORDER);
+    expect(typeof approved.asOf).toBe('string');
+    expect(Object.isFrozen(approved)).toBe(true);
+    // The comment at that `return` claims nothing in the returned object can
+    // change under a caller that holds it. This is that claim, as an assertion:
+    // every value the approval hands back is a primitive or a frozen object.
+    for (const [field, value] of Object.entries(approved)) {
+      if (value !== null && typeof value === 'object') expect(Object.isFrozen(value), `${field} is handed back unfrozen`).toBe(true);
+    }
+  });
+
+  it('C-E: an undeclared field on the APPROVAL itself is refused by name, as it already was on the confirmation', () => {
+    const error = refusalOf(
+      () =>
+        assertQuoteApproved(
+          {
+            quote: CONFIRMED,
+            confirmation: confirmationFor(CONFIRMED),
+            asOf: '2026-10-01T09:30:00Z',
+            documentFeeMinor: '500000',
+          } as unknown as ConfirmedQuoteApproval,
+          ORDER,
+        ),
+      'an approval carrying a document fee',
+    );
+    expect(error.code).toBe('order.quote_not_approved');
+    expect(error.details?.fields).toBe('documentFeeMinor');
+  });
+
+  const WHOLE_UNITS = new Map([[KEY, { tracksInventory: true, unitDecimals: 0 } as UnitPrecisionDeclaration]]);
+  const HALF_UNIT: CommercialQuoteInput = {
+    quoteId: QUOTE_ID,
+    orderId: ORDER,
+    version: 1,
+    currency: 'ILS',
+    lines: [{ stockKey: KEY, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '5500' }],
+    displayedTotalMinor: '5500',
+    issuedAt: '2026-10-01T09:00:00Z',
+    expiresAt: '2026-10-01T10:00:00Z',
+  };
+
+  it('C-B: the correct key refuses half a whole unit — the law this typo used to drop', () => {
+    const error = refusalOf(() => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: WHOLE_UNITS }), 'half a unit of a whole-unit product');
+    expect(error.code).toBe('order.quote_quantity_invalid');
+    expect(error.details?.stated).toBe('5.5000');
+  });
+
+  it('C-B: a MISSPELLED key on checks is refused by name, naming both what was sent and what is read', () => {
+    // One letter. It was indistinguishable from no `checks` at all, so the same
+    // quantity was refused with the correct key and ACCEPTED with the typo, at
+    // the same digest — a law not claimed rather than answered wrongly.
+    const error = refusalOf(
+      () => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockkey: WHOLE_UNITS } as unknown as CommercialQuoteChecks),
+      'a misspelled checks key',
+    );
+    expect(error.code).toBe('order.quote_field_undeclared');
+    expect(error.details?.fields).toBe('unitPrecisionByStockkey');
+    expect(error.details?.expected).toBe('unitPrecisionByStockKey');
+  });
+
+  it('C-B: a plain object where the declaration MAP belongs is refused, because get() for no key is the same silent omission', () => {
+    const error = refusalOf(
+      () => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: { get: () => undefined } } as unknown as CommercialQuoteChecks),
+      'a plain object instead of a Map',
+    );
+    expect(error.code).toBe('order.quote_field_undeclared');
+    expect(error.details?.fields).toBe('unitPrecisionByStockKey');
+  });
+
+  it('C-B: saying "check nothing" is still lawful, by absence or by an empty object', () => {
+    // The cost of the refusal, stated as a case: a caller that genuinely states
+    // no law must stay accepted, or the guard has quietly become a requirement.
+    expect(buildCommercialQuote(HALF_UNIT).lines[0]?.quantity).toBe('5.5000');
+    expect(buildCommercialQuote(HALF_UNIT, {}).lines[0]?.quantity).toBe('5.5000');
+  });
+
+  it('C-F: more positions than the authority accepts are refused BY ITS OWN CODE, before the container is walked', () => {
+    // The bound moved earlier and the refusal did not change: `C-F` asked for
+    // the ordering, and PART 16 forbids the code changing with it. The
+    // attribution matters — if this came back as a carrier fault, the sales
+    // authority's limit would have silently become a shape complaint.
+    const one = POSITIONS[0] as (typeof POSITIONS)[number];
+    const tooMany = Array.from({ length: 201 }, () => one);
+    const error = refusalOf(() => buildSaleCommitIntent(FULFILLING, tooMany, factsWith(APPROVAL)), '201 positions');
+    expect(error.code).toBe('order.checkout_line_limit');
+    expect(error.details?.lines).toBe('201');
+    expect(error.details?.maxLines).toBe('200');
+    expect(error.details?.carrier).toBeUndefined();
+  });
+
+  it('C-F: the bound runs BEFORE the walk, proved by which refusal answers when both would fire', () => {
+    // The ordering is the whole of `C-F`, and asserting the line-limit refusal
+    // alone does not prove it: without the bound, the later length check
+    // refuses with the same code and the same details, so that case stayed
+    // green with the guard deleted (M126, 0 red, published). What distinguishes
+    // the two is WHICH refusal answers when the container is both over-long
+    // AND carries a malformed position. With the bound before the walk the
+    // limit answers; without it, position 5 is reached first and the refusal
+    // becomes a shape complaint.
+    const one = POSITIONS[0] as (typeof POSITIONS)[number];
+    const tooMany: unknown[] = Array.from({ length: 201 }, () => one);
+    tooMany[5] = { ...one, totalQuantity: { toString: () => '5.0000' } };
+    const error = refusalOf(
+      () => buildSaleCommitIntent(FULFILLING, tooMany as readonly (typeof one)[], factsWith(APPROVAL)),
+      '201 positions, one of them malformed',
+    );
+    expect(error.code).toBe('order.checkout_line_limit');
+    expect(error.details?.lines).toBe('201');
+    expect(error.details?.position).toBeUndefined();
+  });
+
+  it('C-D: a built quote hands back a frozen lines array and frozen lines — the builder\u2019s freeze, not the snapshot\u2019s inner one', () => {
+    // Named precisely, because my first version of this case claimed to test
+    // the snapshot's INNER array freeze and did not. That freeze covers one
+    // field, `lineIds` on a checkout position, which is internal to
+    // `buildSaleCommitIntent` and reaches no exported surface, so NO case can
+    // observe it at this head: M127 is published as a zero that is
+    // UNOBSERVABLE rather than merely untested. What is asserted here is the
+    // builder's own freeze, which M109 and M110 red.
+    const approved = assertQuoteApproved({ quote: CONFIRMED, confirmation: confirmationFor(CONFIRMED), asOf: '2026-10-01T09:30:00Z' }, ORDER);
+    expect(Object.isFrozen(approved.quote.lines)).toBe(true);
+    expect(() => {
+      (approved.quote.lines as unknown as unknown[]).push({});
+    }).toThrowError(TypeError);
+    expect(Object.isFrozen(approved.quote.lines[0])).toBe(true);
   });
 });

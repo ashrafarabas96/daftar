@@ -741,6 +741,72 @@ export interface CommercialQuoteChecks {
   unitPrecisionByStockKey?: ReadonlyMap<string, UnitPrecisionDeclaration>;
 }
 
+/** The `checks` contract as a LIST, for the same reason `APPROVAL_FIELDS` is one. */
+const CHECKS_FIELDS: readonly string[] = Object.freeze(['unitPrecisionByStockKey']);
+
+/**
+ * Refuse a `checks` object this package cannot read as the contract it declares.
+ *
+ * `C-B`, measured by the independent challenger at `a869aab`, and it is the
+ * worst failure mode this package has: `unitPrecisionByStockkey` — ONE letter
+ * wrong — is indistinguishable from no `checks` at all, so a quantity of
+ * `5.5000` on a product the catalogue declares in WHOLE units is refused with
+ * the correct key and ACCEPTED with the typo, with the same digest. A law is not
+ * answered wrongly, it is simply not claimed, and nothing in the output says so.
+ * The mission's own words for it are "ZERO SILENT ERRORS".
+ *
+ * A caller that means "check nothing" says so by passing no `checks`, or an
+ * EMPTY object, which stays lawful. What is refused is an object that looks like
+ * it states a law and does not.
+ *
+ * The declaration map must be a real `Map`, because the only thing this package
+ * does with it is `.get`, and a plain object with a `get` property would answer
+ * `.get` while a plain object WITHOUT one answers `undefined` for every key —
+ * the same silent omission one level down. The cost is stated: a caller holding
+ * some other `ReadonlyMap` implementation converts it with `new Map(entries)`.
+ */
+function assertChecksContract(checks: CommercialQuoteChecks | undefined): void {
+  if (checks === undefined) return;
+  if (checks === null || typeof checks !== 'object') {
+    throw new OrderError('order.quote_field_undeclared', 'checks must be an object stating what is checked, or be absent', {
+      fields: 'checks',
+      carrier: checks === null ? 'null' : typeof checks,
+    });
+  }
+  try {
+    assertReadableCarrier(checks);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
+    throw new OrderError('order.quote_field_undeclared', 'checks must be plain own data; a Proxy or an accessor can answer the check and the use differently', {
+      fields: 'checks',
+      carrier: error.kind,
+    });
+  }
+  for (const key of Reflect.ownKeys(checks)) {
+    if (typeof key !== 'string' || !CHECKS_FIELDS.includes(key)) {
+      throw new OrderError(
+        'order.quote_field_undeclared',
+        'checks carries a key this package does not read, so a law the caller believes it stated is not claimed',
+        {
+          fields: String(key),
+          expected: CHECKS_FIELDS.join(','),
+        },
+      );
+    }
+  }
+  const declarations = checks.unitPrecisionByStockKey;
+  if (declarations !== undefined && !(declarations instanceof Map)) {
+    throw new OrderError(
+      'order.quote_field_undeclared',
+      'unitPrecisionByStockKey must be a Map; anything else answers get() for no key and drops the law silently',
+      {
+        fields: 'unitPrecisionByStockKey',
+        carrier: declarations === null ? 'null' : typeof declarations,
+      },
+    );
+  }
+}
+
 /**
  * Build a quote snapshot, checking everything that can be checked without
  * inventing a pricing policy.
@@ -752,6 +818,13 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
   // (`assertQuoteIntact` re-runs this function on a stored quote). Two layers,
   // because the first states the law to the caller and the second keeps the
   // claim true for a quote that was not built here.
+  //
+  // `checks` is validated in THIS one place and nowhere else, because every
+  // other entry point that takes it rebuilds through this function:
+  // `assertQuoteIntact` re-runs the builder, `assertQuoteConfirmable` calls
+  // that, and `assertQuoteApproved` calls both. One site, so a path cannot be
+  // added later that reads `checks` without it.
+  assertChecksContract(checks);
   assertCanonicalInput(input);
   assertCanonicalId(input.quoteId, 'quoteId');
   assertCanonicalId(input.orderId, 'orderId');
@@ -1017,6 +1090,17 @@ export interface ConfirmedQuoteApproval {
 }
 
 /**
+ * The approval's fields as a LIST, so the undeclared-key refusal is checked
+ * against a reader-visible contract rather than against whatever keys the
+ * caller's object happens to have. It is hand-written beside the interface
+ * above, and `test/contract-consistency.test.ts`'s own discipline applies: a
+ * field added to the interface and not to this list makes a lawful approval
+ * refused, which the suite reds immediately — the failure direction a silent
+ * acceptance does not have.
+ */
+const APPROVAL_FIELDS: readonly string[] = Object.freeze(['quote', 'confirmation', 'asOf', 'checks', 'priorRecomputedTotalMinor']);
+
+/**
  * The text a confirmation must carry for the quote's expiry.
  *
  * The domain says `expiresAt: string | null`; `I6a.2`'s seven-column foreign key
@@ -1108,6 +1192,25 @@ export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: s
       },
     );
   }
+  // THE APPROVAL'S OWN KEYS, by name (`C-E`). The same undeclared field is
+  // refused on the confirmation and was ACCEPTED here — `R-16` applied unevenly
+  // across sibling carriers, which is the reasoning `C9` was fixed on. No
+  // consequence was measured, because nothing reads the extra field; it is
+  // refused anyway, because "nothing reads it today" is a statement about
+  // today's callers.
+  for (const key of Reflect.ownKeys(approval)) {
+    if (typeof key !== 'string' || !APPROVAL_FIELDS.includes(key)) {
+      throw new OrderError('order.quote_not_approved', 'an approval carries a field this package does not read, so nothing attests to it', {
+        fields: String(key),
+      });
+    }
+  }
+  // `asOf` IS READ ONCE, HERE, and every later use is this local (`C-A`). The
+  // type check is what the leaf never had: `isCanonicalInstant` runs a regex and
+  // a regex stringifies, so a boxed `String` carrying an undeclared field passed
+  // the window comparison and then travelled out in the returned approval as the
+  // caller's own mutable object.
+  const asOf = requireStringField(approval.asOf, 'asOf', 'order.occurred_at_invalid', 'asOf must be a string instant, not an object a regex would stringify');
   // The CONFIRMATION is snapshotted, so every comparison below reads a frozen
   // primitive copy rather than the caller's object. A `confirmedQuoteDigest`
   // accessor is what got an unconfirmed quote approved (`B-1` T3).
@@ -1210,20 +1313,31 @@ export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: s
   // for a caller that has no precisions of its own (`assessQuoteDivergence`),
   // and the direction is proved by a case in which the two disagree — a
   // precedence with no such case is a comment, not a law.
-  const confirmable = assertQuoteConfirmable(quote, approval.asOf, confirmation.confirmedVersion, checks ?? approval.checks);
+  const confirmable = assertQuoteConfirmable(quote, asOf, confirmation.confirmedVersion, checks ?? approval.checks);
 
   // THE VALIDATED APPROVAL, which is what callers must read from here on
-  // (`B-1`). `asOf` is carried through the canonical-instant check inside
-  // `assertQuoteConfirmable`, the quote is the gate's own snapshot and the
-  // confirmation is the frozen primitive copy taken above, so nothing in the
-  // returned object can change under a caller that holds it. `checks` is NOT
-  // carried: a map is not a primitive, and a caller that needs precisions
-  // states them at its own call site, which is the precedence this function
-  // already enforces.
+  // (`B-1`). The quote is the gate's own snapshot, the confirmation is the
+  // frozen primitive copy taken above, and `asOf` is the STRING read once into
+  // `asOf` at the top of this function — not `approval.asOf` re-read here.
+  //
+  // The previous version of this comment claimed "nothing in the returned object
+  // can change under a caller that holds it" while returning `approval.asOf`
+  // verbatim, and the independent challenger measured the sentence false at
+  // `a869aab` (`C-A`): `isCanonicalInstant` runs a regex, a regex STRINGIFIES, so
+  // `Object.assign(new String('2026-10-01T09:30:00Z'), { documentFeeMinor:
+  // '500000' })` passed every check; the returned object was frozen but its
+  // `asOf` was the caller's own live object, unfrozen, and rewriting it through
+  // the caller's reference AFTER the gate returned changed what the approval
+  // carried. The `B-2` shape this commit exists to close, surviving inside the
+  // remedy's own return value, at the one leaf that had no `typeof` check.
+  //
+  // `checks` is NOT carried: a map is not a primitive, and a caller that needs
+  // precisions states them at its own call site, which is the precedence this
+  // function already enforces.
   return Object.freeze({
     quote: confirmable,
     confirmation,
-    asOf: approval.asOf,
+    asOf,
     ...(approval.priorRecomputedTotalMinor === undefined
       ? {}
       : {

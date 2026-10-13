@@ -33,7 +33,7 @@
 import { types as nodeTypes } from 'node:util';
 
 /** Why a carrier cannot be read as its own data. One per family, so a caller can map it to its own subject. */
-export type CarrierFaultKind = 'proxy' | 'prototype' | 'null-prototype' | 'accessor' | 'not-primitive' | 'not-array' | 'sparse' | 'undeclared';
+export type CarrierFaultKind = 'proxy' | 'prototype' | 'null-prototype' | 'accessor' | 'not-primitive' | 'not-array' | 'sparse' | 'undeclared' | 'too-long';
 
 /** A carrier-level refusal, before any domain meaning is attached. `field` is the key, index or field name where one exists. */
 export class CarrierFault extends Error {
@@ -133,8 +133,14 @@ export function assertReadableArray(value: unknown, maxLength?: number): readonl
   // `length = 2e7` — twenty bytes of input — spent 23 seconds and then died on
   // an unnamed `RangeError`. A refusal that costs more than the request is a
   // refusal an attacker can afford to ask for.
+  // The fault has its OWN kind rather than sharing `undeclared`, so a caller can
+  // map "too many" to the limit its own authority states — `order.checkout_line_limit`
+  // is the sales authority's refusal and must not become a carrier fault just
+  // because the bound now runs earlier (`C-F`). A shared kind would have made
+  // the two indistinguishable at the catch site, which is how a refusal quietly
+  // changes its name.
   if (maxLength !== undefined && array.length > maxLength) {
-    throw new CarrierFault('undeclared', String(array.length), 'an array declares more positions than this contract admits');
+    throw new CarrierFault('too-long', String(array.length), 'an array declares more positions than this contract admits');
   }
   for (const key of Reflect.ownKeys(array)) {
     if (key === 'length') continue;
