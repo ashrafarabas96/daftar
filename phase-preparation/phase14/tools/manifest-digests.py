@@ -327,7 +327,15 @@ def main():
             if _rl.returncode != 0:
                 continue
             for _r2 in _rl.stdout.split():
-                _marker_revs.add(_r2)
+                # CHALLENGE R17-P1-01: this loop is the PATH leg, and it used to
+                # add every revision it discovered to _marker_revs, the set the
+                # summary reports as "found by the marker it carries". So the
+                # count could never be low: the real pack printed "24 of them
+                # found by the marker" where `git log --no-renames -G` finds 1,
+                # and a world whose marker leg found NOTHING printed its own
+                # revision count back — the exact blindness the sentence was
+                # added to remove. _marker_revs is now written ONCE, from the
+                # marker leg's own output, and nothing else may add to it.
                 if _r2 not in _revmap:
                     _revmap.setdefault(_r2, set())
                     _todo.append(_r2)

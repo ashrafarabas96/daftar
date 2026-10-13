@@ -1057,6 +1057,56 @@ else
   fail=$((fail+1))
 fi
 rm -rf "$NHW"
+
+# ---- ROUND 17 (R17-P1-01). The count in that summary was written by BOTH legs:
+# the path-discovery loop added every revision it found to the marker set, so
+# the sentence could never be low, and the one world it exists to expose -- an
+# inert anchor, where `git log -G` matches nothing at all -- printed its whole
+# revision count back as "found by the marker". No proof covered the COUNT,
+# which is how it survived into b49d612. These two do, and they read the true
+# figure from the marker leg's OWN command rather than from the tool.
+mkworld17() { # $1 world dir, $2 plain|binary
+  local W="$1" M="$2"
+  rm -rf "$W"; mkdir -p "$W/repo/a"; cp -r "$PACK" "$W/repo/a/phase14"
+  rm -rf "$W/repo/a/phase14/.git"
+  # `*.md binary` makes git produce NO textual diff for the manifest, so the
+  # `-G` leg cannot match the marker in any patch -- an anchor that is inert
+  # through no fault of the manifest, which still carries the marker verbatim
+  # and is still found at HEAD by `git grep`.
+  [ "$M" = binary ] && printf '*.md binary\n' > "$W/repo/.gitattributes"
+  ( cd "$W/repo" && git init -q . && git add -A >/dev/null 2>&1 \
+    && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' \
+    && git -c user.email=p14@local -c user.name=p14 commit -q --allow-empty -m 'another revision' ) >/dev/null 2>&1
+  # an honest later revision OF THE MANIFEST, whose added line does not carry
+  # the marker: the path leg sees it, the marker leg does not, and the two legs
+  # must therefore report different numbers.
+  printf '\nan honest later note.\n' >> "$W/repo/a/phase14/P14-HANDOFF-MANIFEST.md"
+  ( cd "$W/repo" && git -c user.email=p14@local -c user.name=p14 commit -qam 'an honest edit of the manifest' ) >/dev/null 2>&1
+}
+C17=$(mktemp -d); SCRATCH="${SCRATCH:-} $C17"
+for w in plain binary; do
+  mkworld17 "$C17/$w" "$w"
+  R="$C17/$w/repo"; P17="$R/a/phase14"
+  # Premises, every one read from git, not from the tool: the marker leg's own
+  # command, the path leg's own command, and the carrier at HEAD (without which
+  # the run would refuse NOT ANCHORED and print no count at all).
+  g17=$(cd "$R" && git log --format=%H --no-renames -G '^# P14-HANDOFF-MANIFEST[.]md[[:space:]]*$' HEAD -- ':(top)' | wc -l | tr -d ' ')
+  p17=$(cd "$R" && git rev-list HEAD -- ':(top)a/phase14/P14-HANDOFF-MANIFEST.md' | wc -l | tr -d ' ')
+  h17=$(cd "$R" && git grep -l --full-name -E '^# P14-HANDOFF-MANIFEST[.]md[[:space:]]*$' HEAD -- ':(top)' | wc -l | tr -d ' ')
+  want_g=1; [ "$w" = binary ] && want_g=0
+  if [ "$g17" = "$want_g" ] && [ "$p17" = 2 ] && [ "$h17" = 1 ]; then
+    # The required message is built from git's figure, so a tool that counts
+    # the path leg's revisions into the marker set cannot satisfy it: at
+    # b49d612 these worlds printed "2 of them" and "2 of them".
+    named "marker-count-$w" 0 "— $g17 of them found by the marker" \
+      "python3 -I $HERE/manifest-digests.py --manifest $P17/P14-HANDOFF-MANIFEST.md --dir $P17 --witness $C17/$w/none --check"
+  else
+    printf 'FAIL  %-26s premise not built (marker leg %s want %s, path leg %s want 2, carrier at HEAD %s want 1) — nothing was proved\n' \
+           "marker-count-$w" "$g17" "$want_g" "$p17" "$h17"
+    fail=$((fail+1))
+  fi
+done
+rm -rf "$C17"
 rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"
 
 red retracted-claim-planted \

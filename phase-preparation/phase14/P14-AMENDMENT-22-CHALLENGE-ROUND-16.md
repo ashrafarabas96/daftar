@@ -52,7 +52,14 @@ that something refuses.
 
 **And the summary now reports what the legs contributed** — *N of them found by the marker it
 carries, the rest by a path it has held* — so an inert anchor is visible in the output rather than
-asserted away by it. At this head, on the real pack, that count is 23 of 23.
+asserted away by it. ~~At this head, on the real pack, that count is 23 of 23.~~
+**RETRACTED IN ROUND 17 (`R17-P3-01`).** Two things were wrong with that sentence. The figure
+`23` was measured before this commit existed and the head prints `24`; and the count itself was
+false, because the path-discovery loop added its own revisions to the marker set
+(`R17-P1-01`), so the sentence *could never be low* and the inert-anchor world it claims to
+expose printed its whole revision count back. On the real pack the marker leg's true
+contribution is **1** of 24, which is `git log --no-renames -G`'s own answer. Corrected in
+`P14-AMENDMENT-23-CHALLENGE-ROUND-17.md`; the code is corrected there too.
 
 Four red proofs: `marker-ctrl-world`, `marker-space-world`, `marker-crlf-world`,
 `marker-absent-from-head`, each asserting its premise from git before it runs.
