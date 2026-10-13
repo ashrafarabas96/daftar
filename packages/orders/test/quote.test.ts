@@ -585,6 +585,88 @@ describe('the domain null and the relation infinity are one mapping (challenger 
     expect(quoteExpiryText(QUOTED)).toBe('2026-10-01T10:00:00Z');
   });
 
+  // The OUTPUT of this function is what a confirmation row carries, and it was
+  // the one exported reader of a quote field with no gate of its own — the
+  // challenger's `R-25`, routed by the coordinator. These cases are the red
+  // proof: delete the `assertQuoteIntact` call in `quoteExpiryText` and each of
+  // the refusal cases below goes red. What the ungated function would do differs
+  // by case and is NOT uniformly "returns the forged value" — the two Proxy
+  // cases below measure that difference rather than assuming it.
+  it('refuses a quote whose expiry was edited in place after its bytes were digested (R-25)', () => {
+    const edited = { ...QUOTED, expiresAt: '2099-01-01T00:00:00Z' };
+    expect(() => quoteExpiryText(edited)).toThrowError(expect.objectContaining({ code: 'order.quote_tampered' }));
+    // And the forged value is not returned on the way to the refusal.
+    let returned: string | null = null;
+    try {
+      returned = quoteExpiryText(edited);
+    } catch {
+      returned = null;
+    }
+    expect(returned).toBeNull();
+  });
+
+  it('refuses an expiry read off a quote that was never a lawful quote (R-25)', () => {
+    // Self-consistent bytes are NOT enough: the gate re-runs the builder, so a
+    // quote whose displayed total disagrees with its lines is refused by the law
+    // it breaks rather than answered for. Forged here rather than borrowed from
+    // the lawfulness block below, so this case stands on its own.
+    const fields = { ...QUOTED, displayedTotalMinor: '999999' } as Omit<CommercialQuote, 'digest'> & { digest?: string };
+    delete fields.digest;
+    const forged = { ...fields, digest: createHash('sha256').update(canonicalQuoteBytes(fields), 'utf8').digest('hex') } as CommercialQuote;
+    // The forgery is proved to have landed before it is used as evidence.
+    expect(() => assertQuoteIntact(forged)).toThrowError(expect.objectContaining({ code: 'order.quote_total_mismatch' }));
+    expect(() => quoteExpiryText(forged)).toThrowError(expect.objectContaining({ code: 'order.quote_total_mismatch' }));
+  });
+
+  // The Proxy threat is NOT uniform, and the challenger measured why at
+  // `3f56c62`: the builder FREEZES its quote, so a `get` trap that answers
+  // differently from a frozen own data property throws a `TypeError` from the
+  // language's own invariant before any guard is consulted. So a Proxy can only
+  // forge a field of a carrier that never came from `buildCommercialQuote`. Both
+  // cases are kept, because the gate must refuse BY NAME in either one rather
+  // than letting the runtime decide which error a caller sees.
+  const forgeExpiry = {
+    get(target: CommercialQuote, key: string | symbol, receiver: unknown): unknown {
+      if (key === 'expiresAt') return '2099-01-01T00:00:00Z';
+      return Reflect.get(target, key, receiver) as unknown;
+    },
+  };
+
+  it('refuses an expiry read through a Proxy over a FROZEN builder quote (R-25 over F-41)', () => {
+    const trapped = new Proxy(QUOTED, forgeExpiry);
+    // The refusal arrives BEFORE the trap is consulted, which is the point: the
+    // caller gets this package's code, not a TypeError out of the language.
+    expect(() => quoteExpiryText(trapped)).toThrowError(expect.objectContaining({ code: 'order.quote_field_undeclared' }));
+    // And the language fact that makes this case different, asserted rather
+    // than described: reading the trapped field directly throws.
+    expect(() => (trapped as CommercialQuote).expiresAt).toThrowError(TypeError);
+  });
+
+  it('refuses an expiry read through a Proxy over an UNFROZEN lawful carrier, which is the case that forges (R-25)', () => {
+    // A spread of a lawful quote: same fields, same digest, no longer frozen —
+    // exactly the carrier a storage read or a deserializer hands over.
+    const carrier = { ...QUOTED };
+    const trapped = new Proxy(carrier, forgeExpiry);
+    // Here the trap DOES answer, so without the gate the forged text is what a
+    // confirmation row would carry. Measured, not assumed:
+    expect((trapped as CommercialQuote).expiresAt).toBe('2099-01-01T00:00:00Z');
+    expect(() => quoteExpiryText(trapped)).toThrowError(expect.objectContaining({ code: 'order.quote_field_undeclared' }));
+  });
+
+  it('still maps the two representations in exactly one place after the gate (R-25)', () => {
+    // The gate is added WITHOUT a second mapping appearing at a call site: the
+    // approval gate's refusal still reports the same text this function returns.
+    const honest = approve(OPEN_ENDED);
+    const disagreeing = { ...honest, confirmation: { ...honest.confirmation, confirmedQuoteExpiresAt: '2026-10-01T10:00:00Z' } };
+    try {
+      assertQuoteApproved(disagreeing, ORDER);
+      throw new Error('the approval gate accepted a confirmation that disagreed about the expiry');
+    } catch (error) {
+      expect(error).toEqual(expect.objectContaining({ code: 'order.quote_not_approved' }));
+      expect((error as { details?: { expiresAt?: string } }).details?.expiresAt).toBe(quoteExpiryText(OPEN_ENDED));
+    }
+  });
+
   it('a no-expiry quote is confirmable at any instant at or after issue, and never before', () => {
     expect(() => assertQuoteApproved(approve(OPEN_ENDED, '2099-01-01T00:00:00Z'), ORDER)).not.toThrow();
     expect(() => assertQuoteApproved(approve(OPEN_ENDED, '2026-10-01T08:59:59Z'), ORDER)).toThrowError(
@@ -1017,7 +1099,19 @@ describe('the carrier is the digested stream, not a superset of it (round-10 F-3
     // someone reorders that path, this case reds instead of the guard silently
     // disappearing from the approval route.
     const forged = { ...QUOTED, documentFeeMinor: '500000' } as CommercialQuote;
-    const approvalOfForged = approve(forged);
+    // The confirmation is built by the PRODUCTION mapping over the lawful quote
+    // and the forged carrier is then substituted, rather than the helper being
+    // relaxed to write the expiry itself (`R-25`, the challenger's judgement).
+    // Measured: this is the ONE case of the seven `approve(forged)` sites that
+    // the gated reader refuses, because the other six forge values a lawfully
+    // BUILT quote can carry, so relaxing the helper would have been wider than
+    // the problem by six cases.
+    const approvalOfForged = { ...approve(QUOTED), quote: forged };
+    // Every confirmation field still describes THIS quote, so the refusal below
+    // cannot be an incidental disagreement about the digest, version or expiry.
+    expect(approvalOfForged.confirmation.confirmedQuoteDigest).toBe(forged.digest);
+    expect(approvalOfForged.confirmation.confirmedVersion).toBe(forged.version);
+    expect(approvalOfForged.confirmation.confirmedQuoteExpiresAt).toBe(forged.expiresAt);
     try {
       assertQuoteApproved(approvalOfForged, ORDER);
       throw new Error('an approval of a quote carrying an undeclared field was accepted');

@@ -39,7 +39,8 @@
  * movements and two receivables. So the id is supplied, it is validated, and
  * nothing in this module can generate one.
  */
-import type { BasketPosition } from './cart';
+import { stockKeyOf, type BasketPosition } from './cart';
+import { CarrierFault, assertReadableArray, assertReadableCarrier, snapshotFields } from './carrier';
 import { requireSettlementTruth, type OrderSettlementEvidence, type OrderSettlementMode } from './settlement';
 import { OrderError, assertCanonicalId } from './errors';
 import { isCanonicalCivilDate } from './instant';
@@ -237,6 +238,62 @@ export interface OrderCheckoutFacts {
  * runs before any figure is assembled, so an unpaid order cannot reach the point
  * of producing a `cash` sale request at all (§25, `TL-P6-R2`).
  */
+/** The fields a basket position carries. A LIST, so the snapshot is taken over something a reader can check. */
+const POSITION_FIELDS: readonly string[] = Object.freeze([
+  'stockKey',
+  'productId',
+  'variantId',
+  'totalQuantity',
+  'totalQuantityQ4',
+  'representativeLineId',
+  'unitDecimals',
+  'tracksInventory',
+  'lineIds',
+]);
+
+/** A position as this function may read it: frozen, own data, every leaf a primitive. */
+type PositionSnapshot = BasketPosition;
+
+/**
+ * Copy the positions into frozen snapshots, refusing anything that could answer
+ * twice, and NAMING the position by index rather than by a field read off the
+ * object being refused.
+ *
+ * The index is the subject because the stock key is exactly the field that
+ * cannot be trusted yet: reading `position.stockKey` to describe a refusal of
+ * `position` is how a refusal ends up quoting the attacker's getter.
+ */
+function snapshotPositions(positions: readonly BasketPosition[]): readonly PositionSnapshot[] {
+  const refuse = (index: number, fault: CarrierFault): never => {
+    throw new OrderError('order.checkout_field_forbidden', 'a checkout position must be plain own data with primitive fields', {
+      position: String(index),
+      carrier: fault.kind,
+      ...(fault.field === null ? {} : { field: fault.field }),
+    });
+  };
+  let array: readonly unknown[];
+  try {
+    array = assertReadableArray(positions);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
+    throw new OrderError('order.checkout_field_forbidden', 'the checkout positions container must be a plain, dense array of its own data', {
+      carrier: error.kind,
+      ...(error.field === null ? {} : { field: error.field }),
+    });
+  }
+  return Object.freeze(
+    array.map((position, index) => {
+      try {
+        assertReadableCarrier(position as object);
+        return snapshotFields<PositionSnapshot>(position as object, POSITION_FIELDS, ['lineIds']);
+      } catch (error) {
+        if (!(error instanceof CarrierFault)) throw error;
+        return refuse(index, error);
+      }
+    }),
+  );
+}
+
 export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readonly BasketPosition[], facts: OrderCheckoutFacts): SaleCommitIntent {
   if (snapshot.saleId !== null || SALE_BOUND_ORDER_STATES.includes(snapshot.state)) {
     throw new OrderError('order.checkout_state_invalid', 'the order is already bound to a canonical sale', { state: snapshot.state });
@@ -260,6 +317,13 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
   if (positions.length === 0) {
     throw new OrderError('order.cart_empty', 'a checkout carries at least one position');
   }
+  // EVERY position is read as its own data ONCE and then only through this
+  // frozen snapshot. The coordinator's diff review of `3f56c62` measured why
+  // (`B-1` T6): `position.totalQuantity` was compared at one line and emitted
+  // thirty lines later, so an accessor answered the comparison with the
+  // confirmed `5` and the sale with `50`. Nothing else in this function reads
+  // `positions` again.
+  const checked: readonly PositionSnapshot[] = snapshotPositions(positions);
   if (positions.length > SALE_MIRROR_MAX_LINES) {
     throw new OrderError('order.checkout_line_limit', 'the checkout carries more lines than the sales authority accepts', {
       lines: String(positions.length),
@@ -339,7 +403,7 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
   // and reading a property of the thing being checked before it is checked is
   // how a refusal becomes a TypeError.
   const unitPrecisionByStockKey = new Map<string, UnitPrecisionDeclaration>();
-  for (const position of positions) {
+  for (const position of checked) {
     // A type-only requirement has no runtime existence, and this one decides
     // whether a law is claimed at all: a hand-built position whose precision is
     // missing would produce a map that answers `undefined` for its key, and the
@@ -370,26 +434,31 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
     requireUnitPrecision(declaration, { stockKey: position.stockKey });
     unitPrecisionByStockKey.set(position.stockKey, declaration);
   }
-  assertQuoteApproved(approval, facts.orderId, { unitPrecisionByStockKey });
-  if (approval.priorRecomputedTotalMinor !== undefined) {
-    assertCommitWithinConfirmedQuote(approval, facts.orderId, approval.priorRecomputedTotalMinor);
+  // The gate's VALIDATED APPROVAL is what the rest of this function reads. The
+  // caller's `approval` is not read again: an accessor on `approval.quote`
+  // answered the gate with a lawful quote and this builder with another one on
+  // its fourth read, and the intent then emitted a discount of `4000` that no
+  // confirmed quote granted (`B-1` T1).
+  const approved = assertQuoteApproved(approval, facts.orderId, { unitPrecisionByStockKey });
+  if (approved.priorRecomputedTotalMinor !== undefined) {
+    assertCommitWithinConfirmedQuote(approved, facts.orderId, approved.priorRecomputedTotalMinor);
   }
 
   // The confirmed quote prices exactly the positions being committed. Set
   // equality in both directions: a position the quote never priced is a line
   // the shopper never saw, and a quoted line that is not being committed means
   // the basket changed after confirmation.
-  const quotedByStockKey = new Map(approval.quote.lines.map((line) => [line.stockKey, line] as const));
-  if (quotedByStockKey.size !== positions.length) {
+  const quotedByStockKey = new Map(approved.quote.lines.map((line) => [line.stockKey, line] as const));
+  if (quotedByStockKey.size !== checked.length) {
     throw new OrderError('order.quote_not_approved', 'the confirmed quote prices a different set of positions than the checkout carries', {
       quotedLines: String(quotedByStockKey.size),
-      positions: String(positions.length),
+      positions: String(checked.length),
     });
   }
 
   const discounts = facts.discountMinorByStockKey;
   if (discounts !== undefined) {
-    const known = new Set(positions.map((p) => p.stockKey));
+    const known = new Set(checked.map((p) => p.stockKey));
     for (const stockKey of discounts.keys()) {
       if (!known.has(stockKey)) {
         throw new OrderError('order.availability_subject_unknown', 'a discount was stated for a stock key the checkout does not carry', { stockKey });
@@ -397,7 +466,7 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
     }
   }
 
-  const lines: SaleCommitIntentLine[] = positions.map((position) => {
+  const lines: SaleCommitIntentLine[] = checked.map((position) => {
     const requested = discounts?.get(position.stockKey) ?? '0';
     if (!NON_NEGATIVE_MINOR.test(requested)) {
       throw new OrderError('order.checkout_field_forbidden', 'a discount request must be non-negative integer minor units as a string', {
@@ -433,6 +502,43 @@ export function buildSaleCommitIntent(snapshot: OrderSnapshot, positions: readon
       });
     }
 
+    // `B-3`: the intent emitted `position.productId` and NOTHING tied it to the
+    // confirmed line. The coordinator's T7 sold a different product under a
+    // confirmed line's stock key — the quote priced one product and the sale
+    // committed another, at the confirmed price. The stock key IS the identity
+    // `stock_levels` is keyed on, so the check is that the position's own
+    // product and variant reproduce the key the quote priced, by the same
+    // `stockKeyOf` the quote's own builder uses.
+    // The position's own key must BE the key of its own product and variant,
+    // exactly as `quote.ts` requires of a quote line. Without it the key is
+    // merely a label the caller chose, and the lookup above matched on a label.
+    const emittedKey = stockKeyOf({ productId: position.productId, variantId: position.variantId });
+    if (emittedKey !== position.stockKey) {
+      throw new OrderError('order.quote_not_approved', 'a checkout position stock key is not the canonical key of its own product and variant', {
+        stockKey: position.stockKey,
+        expected: emittedKey,
+      });
+    }
+    // And the IDENTITY is compared field by field with the confirmed line, so
+    // the refusal names which half moved. The challenger's plant kept the
+    // priced stock key and carried a different `productId` and `variantId`; the
+    // intent committed those ids at the confirmed quantity and discount, so the
+    // quote priced one product and the sale would have committed another at the
+    // confirmed price.
+    if (position.productId !== quoted.productId) {
+      throw new OrderError('order.quote_not_approved', 'the product the checkout would commit is not the product the confirmed quote priced', {
+        stockKey: quoted.stockKey,
+        confirmed: quoted.productId,
+        committed: position.productId,
+      });
+    }
+    if (position.variantId !== quoted.variantId) {
+      throw new OrderError('order.quote_not_approved', 'the variant the checkout would commit is not the variant the confirmed quote priced', {
+        stockKey: quoted.stockKey,
+        confirmed: quoted.variantId ?? 'null',
+        committed: position.variantId ?? 'null',
+      });
+    }
     return {
       lineId: position.representativeLineId,
       productId: position.productId,

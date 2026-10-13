@@ -56,11 +56,11 @@
  * is the price surprise §27 exists to prevent.
  */
 import { createHash } from 'node:crypto';
-import { types as nodeTypes } from 'node:util';
+import { CarrierFault, assertNotProxyCarrier, assertReadableArray, assertReadableCarrier, requireStringLeaf, snapshotFields } from './carrier';
 import { assertQuantityRepresentable, formatQuantity, parseQuantity } from '@daftar/inventory';
 import { stockKeyOf } from './cart';
 import { NO_QUOTE_EXPIRY, type OrderQuoteConfirmationDto } from './contracts';
-import { OrderError, assertCanonicalId } from './errors';
+import { OrderError, assertCanonicalId, type OrderErrorCode } from './errors';
 import { compareCanonical, isCanonicalInstant } from './instant';
 import { assertLineTotalRounded } from './line-rounding';
 import { type UnitPrecisionDeclaration, requireUnitPrecision } from './unit-precision';
@@ -68,7 +68,33 @@ import { type UnitPrecisionDeclaration, requireUnitPrecision } from './unit-prec
 /** Non-negative integer minor units as a decimal string. A shape check, so a float, a sign or padding cannot pass. */
 const NON_NEGATIVE_MINOR = /^(0|[1-9]\d*)$/;
 
+/**
+ * Refuse a leaf that is not a string, under the code the FIELD owns.
+ *
+ * `B-2`, from the coordinator's diff review of `3f56c62`: `RegExp#test` and
+ * `BigInt` stringify their argument, so `new String('3799')`, `{ toString() {…} }`
+ * and `['3799']` passed every amount, instant and currency check and produced an
+ * IDENTICAL digest — measured, with the `toString` case leaving a bare `{}` in
+ * the carrier where an amount belonged. The builder then copied the leaf by
+ * reference and froze only the top level, so the caller kept the object and
+ * could rewrite it after the digest. A type check before the pattern is the only
+ * place this can be closed, because after the pattern there is nothing left to
+ * check: the thing that matched was a string the runtime invented.
+ *
+ * The CODE is the field's own, not a generic shape code, because the subject of
+ * a refusal is what the caller has to fix.
+ */
+function requireStringField(value: unknown, field: string, code: OrderErrorCode, message: string): string {
+  try {
+    return requireStringLeaf(value, field);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
+    throw new OrderError(code, message, { field, carrier: 'not-primitive' });
+  }
+}
+
 function requireMinor(value: string, field: string): bigint {
+  requireStringField(value, field, 'order.quote_amount_invalid', 'an amount must be a string of integer minor units, not an object a regex would stringify');
   if (!NON_NEGATIVE_MINOR.test(value)) {
     throw new OrderError('order.quote_amount_invalid', 'an amount must be non-negative integer minor units as a canonical decimal string', {
       field,
@@ -289,6 +315,22 @@ const CANONICAL_LINE_FIELDS: readonly (keyof QuoteLineSnapshot)[] = Object.freez
  * listing keys at all, because the field is not the object's own; that is what
  * `assertPlainCarrier` is for.
  */
+/**
+ * The fields a confirmation carries, as a LIST, so the snapshot of it is taken
+ * over something a reader can check against `OrderQuoteConfirmationDto` rather
+ * than over whatever keys the caller's object happens to have.
+ */
+const CONFIRMATION_FIELDS: readonly string[] = Object.freeze([
+  'confirmationId',
+  'quoteId',
+  'orderId',
+  'confirmedVersion',
+  'confirmedAt',
+  'confirmedQuoteDigest',
+  'confirmedQuoteExpiresAt',
+  'confirmedByUserId',
+]);
+
 function undeclaredKeys(carrier: object, allowed: ReadonlySet<string>): string[] {
   return Reflect.ownKeys(carrier)
     .filter((key) => typeof key !== 'string' || !allowed.has(key))
@@ -320,7 +362,10 @@ function undeclaredKeys(carrier: object, allowed: ReadonlySet<string>): string[]
  * object a Proxy?) rather than answering a different question well.
  */
 function assertNotProxy(carrier: object, subject: string, lineIndex: number | null): void {
-  if (nodeTypes.isProxy(carrier)) {
+  try {
+    assertNotProxyCarrier(carrier);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
     throw new OrderError('order.quote_field_undeclared', `${subject} is a Proxy, which can answer for a field that is in no byte of the digest`, {
       ...(lineIndex === null ? {} : { lineIndex: String(lineIndex) }),
       carrier: 'proxy',
@@ -336,20 +381,31 @@ function assertNotProxy(carrier: object, subject: string, lineIndex: number | nu
  * a getter can return anything on each read. So the carrier's prototype is
  * checked as well as its keys.
  *
- * WHAT THIS CHECK CANNOT SEE, and the unqualified sentence that used to stand
- * here is withdrawn (challenger `F-41`): a **Proxy** over a plain object
- * forwards both `getPrototypeOf` and `ownKeys` to its target, so it passes both
- * guards and can still answer an undeclared field from a `get` trap. Measured at
- * `7902cc0`. Nothing a key list or a prototype comparison can do detects that —
- * a Proxy is designed to be transparent — so this is NOT claimed to be closed.
- * What closes the ONE thing that matters for money is elsewhere and is measured:
- * the closing rebuild in `assertQuoteIntact` re-digests the values it reads, so a
- * trap that changes a DIGESTED field is refused as `order.quote_tampered` on
- * every re-entry (the challenger measured this on `assertQuoteIntact`,
- * `assertQuoteApproved` and `assessQuoteDivergence`). An UNDECLARED field
- * answered by a trap is outside the digest and therefore outside what this
- * package can attest to, which is a statement about the caller's object, not a
- * property of this function.
+ * WHAT THIS CHECK CANNOT SEE, AND WHO SEES IT INSTEAD. A **Proxy** over a plain
+ * object forwards both `getPrototypeOf` and `ownKeys` to its target, so it
+ * passes this check and the key list alike and can still answer an undeclared
+ * field from a `get` trap. Measured at `7902cc0` (challenger `F-41`). Nothing a
+ * key list or a prototype comparison can do detects that — a Proxy is designed
+ * to be transparent — so it is refused by a DIFFERENT kind of check:
+ * `assertNotProxy` runs first in this function and asks the runtime itself,
+ * through `node:util`'s `types.isProxy`. An earlier revision of this comment
+ * said a Proxy "is NOT claimed to be closed"; that sentence was true when it was
+ * written and became false three functions above it, and the challenger's `R-25`
+ * round caught it still standing here.
+ *
+ * One property of that choice worth stating, since it was not the reason for it:
+ * `types.isProxy` is not realm-sensitive, while the `Object.prototype`
+ * comparison below is, so the cross-realm Proxy is caught too — measured by the
+ * challenger at `3f56c62`.
+ *
+ * AND THE CLOSING REBUILD IS NOT CREDITED HERE, which an earlier revision of
+ * this paragraph did. The rebuild RE-READS the carrier, and a field that answers
+ * twice is precisely what exploits a second read: the coordinator's `B-1`
+ * measured six such threats, one of which got an unconfirmed quote approved
+ * through the very comparison the rebuild was supposed to protect. A re-read is
+ * not a defence against a value that changes between reads. What closes that is
+ * the ACCESSOR REFUSAL in `assertPlainCarrier`, plus every gate returning a
+ * frozen snapshot that callers read instead of the caller's object.
  *
  * WHAT THIS COSTS, stated rather than discovered: an `Object.create(null)`
  * carrier is refused too, as is an ORM entity or any class instance. `JSON.parse`
@@ -372,15 +428,33 @@ function assertNotProxy(carrier: object, subject: string, lineIndex: number | nu
  * silently drop is exactly the thing `R-16` was about.
  */
 function assertPlainCarrier(carrier: object, subject: string, lineIndex: number | null): void {
-  assertNotProxy(carrier, subject, lineIndex);
-  if (Object.getPrototypeOf(carrier) !== Object.prototype) {
+  const at: Record<string, string> = lineIndex === null ? {} : { lineIndex: String(lineIndex) };
+  try {
+    assertReadableCarrier(carrier);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
+    if (error.kind === 'proxy') {
+      throw new OrderError('order.quote_field_undeclared', `${subject} is a Proxy, which can answer for a field that is in no byte of the digest`, {
+        ...at,
+        carrier: 'proxy',
+      });
+    }
+    // The ACCESSOR arm is the `B-1` family: a getter answers the CHECK with one
+    // value and the USE with another, so six gates accepted a quote and then
+    // emitted figures no confirmed quote carried. It is refused by name, and
+    // before the digest, because an accessor over a DIGESTED field would make
+    // the digest itself a statement about whichever read happened first.
+    if (error.kind === 'accessor') {
+      throw new OrderError(
+        'order.quote_field_undeclared',
+        `${subject} answers a field from an accessor, so the value that was checked need not be the value that is used`,
+        { ...at, carrier: 'accessor', fields: error.field ?? '' },
+      );
+    }
     throw new OrderError(
       'order.quote_field_undeclared',
       `${subject} is not a plain object, so a field it answers for need not be among its own keys and nothing can attest to it`,
-      {
-        ...(lineIndex === null ? {} : { lineIndex: String(lineIndex) }),
-        prototype: Object.getPrototypeOf(carrier) === null ? 'null' : 'not Object.prototype',
-      },
+      { ...at, prototype: error.kind === 'null-prototype' ? 'null' : 'not Object.prototype' },
     );
   }
 }
@@ -421,23 +495,25 @@ function assertPlainLineArray(lines: unknown, subject: string): readonly QuoteLi
       ...detail,
     });
   };
-  if (!Array.isArray(lines)) refuse('is not an array');
-  const array = lines as unknown[];
-  assertNotProxy(array, `${subject} lines container`, null);
-  if (Object.getPrototypeOf(array) !== Array.prototype) refuse('is not a plain array');
-  const own = Reflect.ownKeys(array);
-  const expected = new Set<string>(['length', ...Array.from({ length: array.length }, (_unused, index) => String(index))]);
-  const extra = own
-    .filter((key) => typeof key !== 'string' || !expected.has(key))
-    .map((key) => String(key))
-    .sort();
-  if (extra.length > 0) refuse('carries keys that are not its own indices', { fields: extra.join(',') });
-  // The indices are judged by POSITION and by PRESENCE, so a SPARSE array —
-  // whose holes are not own keys at all — is refused rather than walked with
-  // `undefined` lines. `length` alone would not have caught it.
-  const ownStrings = new Set(own.filter((key): key is string => typeof key === 'string'));
-  for (const key of expected) {
-    if (!ownStrings.has(key)) refuse('is sparse', { missingIndex: key });
+  // One definition, in `carrier.ts`, mapped here onto this package's own
+  // wording: the container guard is the same discipline the positions in
+  // `checkout-intent.ts` now need, and two copies of it would drift.
+  let array: readonly unknown[];
+  try {
+    array = assertReadableArray(lines);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
+    if (error.kind === 'proxy') assertNotProxy(new Proxy({}, {}), `${subject} lines container`, null);
+    if (error.kind === 'not-array') refuse('is not an array');
+    if (error.kind === 'prototype') refuse('is not a plain array');
+    if (error.kind === 'undeclared') refuse('carries keys that are not its own indices', { fields: error.field ?? '' });
+    // An accessor INDEX is the `B-1` family at the container level: the element
+    // the gate walked need not be the element the caller later hands on.
+    if (error.kind === 'accessor') refuse('answers an index from an accessor', { fields: error.field ?? '' });
+    // Positions are judged by PRESENCE, so a SPARSE array — whose holes are not
+    // own keys at all — is refused rather than walked with `undefined` lines.
+    if (error.kind === 'sparse') refuse('is sparse', { missingIndex: error.field ?? '' });
+    throw error;
   }
   return array as readonly QuoteLineSnapshot[];
 }
@@ -453,15 +529,60 @@ function canonicalCarrier(input: CommercialQuoteInput): CommercialQuoteInput {
   // this is the second layer; it is here because the sentence this function's
   // header makes about its own output should be true of THIS function and not
   // only true because something upstream checked.
-  const lines = [...input.lines].map((line) => {
-    const kept: Partial<QuoteLineSnapshot> = {};
-    for (const field of CANONICAL_LINE_FIELDS) kept[field] = line[field] as never;
-    return Object.freeze(kept as QuoteLineSnapshot);
+  // Copied field by field THROUGH `snapshotFields`, which refuses a leaf that is
+  // not a primitive. Two things follow: the copy cannot share a mutable leaf
+  // with the caller, and the returned quote is therefore frozen ALL THE WAY
+  // DOWN rather than only at the top. A leaf shared with the caller is a leaf
+  // the caller can still change after the digest is taken — `Object.freeze` is
+  // shallow and says nothing about what a field POINTS AT. MEASURED by the
+  // coordinator at `3f56c62` (`P6-COORD-B2-FREEZE-RECHECK-3f56c62.md`): a boxed
+  // `String` currency carrying a `documentFeeMinor` property was held by
+  // reference, stayed unfrozen, and the property was rewritten to `999999999`
+  // after the digest while both gates still answered ACCEPTED.
+  //
+  // The recheck's own conclusion is carried here rather than improved upon: the
+  // shallow freeze is NOT a separate defect. It can only matter while a leaf is
+  // an object, and a leaf can only be an object because the leaves were not
+  // type-checked. With the `typeof` checks above in place the existing freeze is
+  // deep in effect, because no object leaf is left to reach. This copy is the
+  // structural layer that keeps that true for a field added later without a
+  // check; it is not claimed to close anything on its own. The leaf checks in
+  // the builder above refuse a
+  // non-primitive field under its own domain code first; this is the layer that
+  // keeps the guarantee true for a field added later without such a check.
+  // A fault from the snapshot is MAPPED, never allowed to escape: an unmapped
+  // `CarrierFault` would reach the caller as a crash with no subject, which is
+  // the `R-C4` shape under a different name.
+  const refuseCarrier = (error: unknown, lineIndex: number | null): never => {
+    if (!(error instanceof CarrierFault)) throw error;
+    throw new OrderError(
+      'order.quote_field_undeclared',
+      `a quote ${lineIndex === null ? 'carrier' : 'LINE'} cannot be copied as its own data: ${error.message}`,
+      {
+        ...(lineIndex === null ? {} : { lineIndex: String(lineIndex) }),
+        carrier: error.kind,
+        ...(error.field === null ? {} : { fields: error.field }),
+      },
+    );
+  };
+  const lines = [...input.lines].map((line, index) => {
+    try {
+      return snapshotFields<QuoteLineSnapshot>(line, CANONICAL_LINE_FIELDS);
+    } catch (error) {
+      return refuseCarrier(error, index);
+    }
   });
-  const kept: Partial<CommercialQuoteInput> = {};
-  for (const field of CANONICAL_QUOTE_FIELDS) kept[field] = input[field] as never;
-  kept.lines = Object.freeze(lines);
-  return kept as CommercialQuoteInput;
+  let kept: Record<string, unknown>;
+  try {
+    kept = snapshotFields<Record<string, unknown>>(input, CANONICAL_QUOTE_FIELDS, [], undefined, ['lines']);
+  } catch (error) {
+    return refuseCarrier(error, null);
+  }
+  const carrier: Record<string, unknown> = { ...kept, lines: Object.freeze(lines) };
+  // The field ORDER of the canonical stream is `CANONICAL_QUOTE_FIELDS`, and the
+  // digest is taken over that list rather than over this object's key order, so
+  // rebuilding the object here cannot move a byte of the stream.
+  return Object.freeze(carrier) as unknown as CommercialQuoteInput;
 }
 
 /**
@@ -506,7 +627,19 @@ function assertCanonicalInput(input: CommercialQuoteInput): void {
   const allowedLine = new Set<string>(CANONICAL_LINE_FIELDS as readonly string[]);
   const lines = assertPlainLineArray(input.lines, 'the quote input');
   for (const [index, line] of lines.entries()) {
-    if (line === null || typeof line !== 'object') continue;
+    // REFUSED, not skipped. `B-4(2)`, located by the coordinator and the
+    // challenger together: this line read `if (line === null || typeof line !==
+    // 'object') continue;`, and `typeof` a FUNCTION is `'function'`, so a
+    // function object carrying `documentFeeMinor` walked past the per-line
+    // guard, past the fee refusal, and the fee was SILENTLY DROPPED — which is
+    // the exact thing `ACC-REQ-P6-03` and the pack claimed could not happen.
+    // A skip is how a guard becomes a comment.
+    if (line === null || (typeof line !== 'object' && typeof line !== 'function')) {
+      throw new OrderError('order.quote_field_undeclared', 'a quote input LINE is not an object, so nothing it carries can be priced or digested', {
+        lineIndex: String(index),
+        carrier: line === null ? 'null' : typeof line,
+      });
+    }
     assertPlainCarrier(line, 'a quote input LINE', index);
     const extraLine = undeclaredKeys(line, allowedLine);
     if (extraLine.length > 0) {
@@ -530,11 +663,15 @@ function assertCanonicalInput(input: CommercialQuoteInput): void {
  * LINE, and on the lines CONTAINER between them (`assertPlainLineArray`; the
  * container was unguarded until the challenger's `F-40`).
  *
- * THE ONE QUALIFICATION, because the unqualified sentence was false: a PROXY
- * over a lawful carrier forwards `getPrototypeOf`, `isArray` and `ownKeys`, so
- * it passes every guard here and can answer an undeclared field from a `get`
- * trap. That is not closed and is not claimed to be — see `assertPlainCarrier`
- * for what the closing rebuild does and does not buy (`F-41`).
+ * A PROXY over a lawful carrier forwards `getPrototypeOf`, `isArray` and
+ * `ownKeys`, so it passes every STRUCTURAL guard here and could answer an
+ * undeclared field from a `get` trap. It is refused anyway, by asking the
+ * runtime rather than the object: `assertNotProxy` (`types.isProxy`) runs over
+ * the quote, over the lines container and over each line, and the refusal
+ * carries `details.carrier = 'proxy'` (`F-41`, measured over eight Proxy shapes
+ * at `3f56c62`, the revocable, trapless, cross-realm and Proxy-of-a-Proxy cases
+ * among them). This paragraph previously said the opposite, having outlived the
+ * check that closed it (`R-25`).
  *
  * This is deliberately strict about one thing in particular: a storage layer
  * that reads a quote back with its own columns attached (`created_at`, a row
@@ -632,13 +769,16 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
   // unknown code be STORED on a quote. That is why this is a residual and not a
   // blocker, and why the suite carries an exponent-0 case (JPY) to pin that the
   // rule is exponent-agnostic.
+  requireStringField(input.currency, 'currency', 'order.quote_amount_invalid', 'currency must be a string, not an object a regex would stringify');
   if (!/^[A-Z]{3}$/.test(input.currency)) {
     throw new OrderError('order.quote_amount_invalid', 'currency must be a three-letter uppercase code', { field: 'currency' });
   }
+  requireStringField(input.issuedAt, 'issuedAt', 'order.occurred_at_invalid', 'issuedAt must be a string instant, not an object a regex would stringify');
   if (!isCanonicalInstant(input.issuedAt)) {
     throw new OrderError('order.occurred_at_invalid', 'issuedAt must be a canonical RFC3339 UTC instant at second precision');
   }
   if (input.expiresAt !== null) {
+    requireStringField(input.expiresAt, 'expiresAt', 'order.occurred_at_invalid', 'expiresAt must be a string instant, not an object a regex would stringify');
     if (!isCanonicalInstant(input.expiresAt)) {
       throw new OrderError('order.occurred_at_invalid', 'expiresAt must be a canonical RFC3339 UTC instant at second precision');
     }
@@ -662,6 +802,8 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
     // that excludes a NUL, and `stockKey` and `quantity` were the two that were
     // not. The injectivity premise held only by the accident of the line-count
     // field; now it holds for the reason the comment gives.
+    requireStringField(line.stockKey, 'stockKey', 'order.quote_stock_key_invalid', 'a stock key must be a string, not an object a comparison would stringify');
+    requireStringField(line.quantity, 'quantity', 'order.quote_quantity_invalid', 'a quantity must be a string, not an object a regex would stringify');
     const canonicalKey = stockKeyOf(line);
     if (line.stockKey !== canonicalKey) {
       throw new OrderError('order.quote_stock_key_invalid', 'a quote line stock key is not the canonical key of its own product and variant', {
@@ -714,7 +856,7 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
  * rather than the system carrying on with a snapshot that is no longer the one
  * the shopper confirmed.
  */
-export function assertQuoteIntact(quote: CommercialQuote, checks?: CommercialQuoteChecks): void {
+export function assertQuoteIntact(quote: CommercialQuote, checks?: CommercialQuoteChecks): CommercialQuote {
   // BEFORE the digest, because the digest's verdict is only as wide as the
   // fields it covers: a quote carrying an undeclared field gets "untampered"
   // for bytes nobody attested to (F-34).
@@ -751,7 +893,7 @@ export function assertQuoteIntact(quote: CommercialQuote, checks?: CommercialQuo
   // `I6.2` would refuse an unlawful sum in the relation too, but the DDL is
   // `SPEC ONLY` until the Migration Owner applies it, so today this is the only
   // layer that holds.
-  const rebuilt = buildCommercialQuote(rest, checks);
+  const rebuilt: CommercialQuote = buildCommercialQuote(rest, checks);
   if (rebuilt.digest !== digest) {
     // Unreachable while the digest is a pure function of the fields: the bytes
     // were just proved to hash to `digest`. Stated as a refusal rather than
@@ -759,6 +901,15 @@ export function assertQuoteIntact(quote: CommercialQuote, checks?: CommercialQuo
     // pass silently.
     throw new OrderError('order.quote_tampered', 'the quote rebuilt from its own fields does not reproduce its digest', { quoteId: quote.quoteId });
   }
+
+  // THE VALIDATED SNAPSHOT, and the reason this function returns anything at
+  // all (the coordinator's `B-1` remedy): a caller that goes back to its own
+  // object after this gate has checked nothing it then uses. `rebuilt` came out
+  // of the builder, so it is a fresh deep-frozen copy whose every leaf is a
+  // primitive — nothing the caller still holds can change a byte of it. Callers
+  // inside this package read ONLY what the gate returns; a caller outside it is
+  // handed the same snapshot rather than being trusted to re-read safely.
+  return rebuilt;
 }
 
 /**
@@ -785,7 +936,7 @@ export function assertQuoteIntact(quote: CommercialQuote, checks?: CommercialQuo
  * Equality must never be admitted by accident, so it is admitted by nothing:
  * the comparison is `>= 0`.
  */
-export function assertQuoteConfirmable(quote: CommercialQuote, asOf: string, confirmedVersion: number, checks?: CommercialQuoteChecks): void {
+export function assertQuoteConfirmable(quote: CommercialQuote, asOf: string, confirmedVersion: number, checks?: CommercialQuoteChecks): CommercialQuote {
   // `checks` is threaded rather than dropped: `assertQuoteIntact` re-runs the
   // builder, and the builder's REPRESENTABILITY law is the one leg that needs a
   // per-stock-key precision to be claimed at all. For one revision this
@@ -796,22 +947,28 @@ export function assertQuoteConfirmable(quote: CommercialQuote, asOf: string, con
   // a forged quote carrying it passed the whole gate. The path failed closed one
   // layer out, because `summariseBasket` refuses the matching position, but a
   // defence that depends on another module's refusal is not this one's defence.
-  assertQuoteIntact(quote, checks);
+  // EVERY read below is off `snapshot`, never off `quote` again: an `expiresAt`
+  // accessor answered this function's expiry comparison with a future instant
+  // and the rest of the system with the real one (`B-1` T4). The accessor is
+  // refused outright now, and reading only the snapshot is the property that
+  // does not depend on that refusal staying complete.
+  const snapshot = assertQuoteIntact(quote, checks);
   if (!isCanonicalInstant(asOf)) {
     throw new OrderError('order.occurred_at_invalid', 'asOf must be a canonical RFC3339 UTC instant at second precision');
   }
-  if (compareCanonical(asOf, quote.issuedAt) < 0) {
+  if (compareCanonical(asOf, snapshot.issuedAt) < 0) {
     throw new OrderError('order.quote_expiry_invalid', 'asOf precedes the instant the quote was issued');
   }
-  if (quote.expiresAt !== null && compareCanonical(asOf, quote.expiresAt) >= 0) {
-    throw new OrderError('order.quote_expired', 'the quote has expired and must be re-issued before it is confirmed', { quoteId: quote.quoteId });
+  if (snapshot.expiresAt !== null && compareCanonical(asOf, snapshot.expiresAt) >= 0) {
+    throw new OrderError('order.quote_expired', 'the quote has expired and must be re-issued before it is confirmed', { quoteId: snapshot.quoteId });
   }
-  if (confirmedVersion !== quote.version) {
+  if (confirmedVersion !== snapshot.version) {
     throw new OrderError('order.quote_version_stale', 'the confirmed version is not the order current quote version', {
       confirmed: String(confirmedVersion),
-      current: String(quote.version),
+      current: String(snapshot.version),
     });
   }
+  return snapshot;
 }
 
 /**
@@ -864,6 +1021,36 @@ export interface ConfirmedQuoteApproval {
  * second mapping written at a call site is how the two representations drift.
  */
 export function quoteExpiryText(quote: CommercialQuote): string {
+  // GATED, because this function's OUTPUT is what a confirmation row carries,
+  // and it was the one exported reader of a quote field with no gate of its own
+  // (the challenger's `R-25`, routed by the coordinator). It is not a fail-open
+  // — nothing in this package reaches it ungated, and `I6a.2`'s seven-column
+  // foreign key makes a disagreeing confirmation unrepresentable — but an
+  // exported function that reads a quote and is trusted to have read the real
+  // one is a defence that depends on its callers, and this package has already
+  // paid for that shape twice.
+  //
+  // WHAT THE GATE BUYS, stated exactly rather than as "now closed": it refuses
+  // a quote edited in place after its bytes were digested, a quote carrying an
+  // undeclared field, a Proxy or a tampered lines container, and a quote whose
+  // content the builder would not produce. WHAT IT DOES NOT BUY: a wholly
+  // fabricated, self-consistent quote still passes, because `canonicalQuoteBytes`
+  // is exported and any self-consistent object carries a valid digest — the
+  // same limit recorded on `assertQuoteIntact` above. That one is closed by the
+  // relation, not here.
+  // The mapping reads the GATE'S SNAPSHOT, not the argument: the gate having
+  // accepted the caller's object is not a reason to read that object again.
+  return expiryTextOf(assertQuoteIntact(quote));
+}
+
+/**
+ * The mapping itself, for callers that have ALREADY gated this quote.
+ *
+ * Not exported: the mapping stays single-sited (a second mapping written at a
+ * call site is how the two representations drift), while the gate is not paid
+ * twice inside one function that has already run it.
+ */
+function expiryTextOf(quote: CommercialQuote): string {
   return quote.expiresAt ?? NO_QUOTE_EXPIRY;
 }
 
@@ -876,7 +1063,7 @@ export function quoteExpiryText(quote: CommercialQuote): string {
  * either alone can be bypassed — the relation is not consulted by a pure
  * function, and a check in a function is not consulted by an `INSERT`.
  */
-export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: string, checks?: CommercialQuoteChecks): void {
+export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: string, checks?: CommercialQuoteChecks): ConfirmedQuoteApproval {
   assertCanonicalId(orderId, 'orderId');
   // The presence of the approval is checked at RUNTIME, not only by the type.
   // A required field is a type-level law, and a type-level law reds the
@@ -899,7 +1086,42 @@ export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: s
   ) {
     throw new OrderError('order.quote_not_approved', 'a checkout carries the quote the shopper confirmed; there is no unapproved path');
   }
-  const { quote, confirmation } = approval;
+  // THE APPROVAL ITSELF is read as its own data before anything is taken off
+  // it: an accessor on `approval.quote` answered this gate with a lawful quote
+  // and the intent builder with another one on its fourth read (`B-1` T1).
+  try {
+    assertReadableCarrier(approval);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
+    throw new OrderError(
+      'order.quote_not_approved',
+      'an approval must be plain own data; a Proxy or an accessor can answer the check and the use differently',
+      {
+        carrier: error.kind,
+        ...(error.field === null ? {} : { fields: error.field }),
+      },
+    );
+  }
+  // The CONFIRMATION is snapshotted, so every comparison below reads a frozen
+  // primitive copy rather than the caller's object. A `confirmedQuoteDigest`
+  // accessor is what got an unconfirmed quote approved (`B-1` T3).
+  let confirmation: OrderQuoteConfirmationDto;
+  try {
+    confirmation = snapshotFields<OrderQuoteConfirmationDto>(approval.confirmation, CONFIRMATION_FIELDS);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
+    throw new OrderError(
+      'order.quote_not_approved',
+      'a confirmation must be plain own data covering exactly the confirmation contract; nothing else is attested to',
+      { carrier: error.kind, ...(error.field === null ? {} : { fields: error.field }) },
+    );
+  }
+  // The QUOTE is gated FIRST, before any field of it is compared. The previous
+  // order compared the digest at the top and re-established integrity only at
+  // the end, so a quote whose bytes did not match its own digest was measured
+  // against the confirmation before anything had established that the bytes
+  // were the ones the digest covers.
+  const quote = assertQuoteIntact(approval.quote, checks ?? approval.checks);
   assertCanonicalId(confirmation.confirmationId, 'confirmationId');
 
   if (quote.orderId !== orderId) {
@@ -924,11 +1146,15 @@ export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: s
       confirmedDigest: confirmation.confirmedQuoteDigest,
     });
   }
-  if (confirmation.confirmedQuoteExpiresAt !== quoteExpiryText(quote)) {
+  // ONE gated read, held in a const. Calling `quoteExpiryText` twice would run
+  // the integrity gate — and therefore the builder — twice for one comparison,
+  // and the second call could not disagree with the first anyway.
+  const expiryText = quoteExpiryText(quote);
+  if (confirmation.confirmedQuoteExpiresAt !== expiryText) {
     throw new OrderError('order.quote_not_approved', 'the confirmation saw a different expiry than the quote states', {
       quoteId: quote.quoteId,
       confirmedExpiresAt: confirmation.confirmedQuoteExpiresAt,
-      expiresAt: quoteExpiryText(quote),
+      expiresAt: expiryText,
     });
   }
 
@@ -978,7 +1204,31 @@ export function assertQuoteApproved(approval: ConfirmedQuoteApproval, orderId: s
   // for a caller that has no precisions of its own (`assessQuoteDivergence`),
   // and the direction is proved by a case in which the two disagree — a
   // precedence with no such case is a comment, not a law.
-  assertQuoteConfirmable(quote, approval.asOf, confirmation.confirmedVersion, checks ?? approval.checks);
+  const confirmable = assertQuoteConfirmable(quote, approval.asOf, confirmation.confirmedVersion, checks ?? approval.checks);
+
+  // THE VALIDATED APPROVAL, which is what callers must read from here on
+  // (`B-1`). `asOf` is carried through the canonical-instant check inside
+  // `assertQuoteConfirmable`, the quote is the gate's own snapshot and the
+  // confirmation is the frozen primitive copy taken above, so nothing in the
+  // returned object can change under a caller that holds it. `checks` is NOT
+  // carried: a map is not a primitive, and a caller that needs precisions
+  // states them at its own call site, which is the precedence this function
+  // already enforces.
+  return Object.freeze({
+    quote: confirmable,
+    confirmation,
+    asOf: approval.asOf,
+    ...(approval.priorRecomputedTotalMinor === undefined
+      ? {}
+      : {
+          priorRecomputedTotalMinor: requireStringField(
+            approval.priorRecomputedTotalMinor,
+            'priorRecomputedTotalMinor',
+            'order.quote_amount_invalid',
+            'a prior recomputed total must be a string of integer minor units',
+          ),
+        }),
+  });
 }
 
 /** The verdict on comparing the canonical recomputation against the confirmed quote. */
@@ -1025,8 +1275,7 @@ export function assessQuoteDivergence(approval: ConfirmedQuoteApproval, orderId:
   // presence guard inside `assertQuoteApproved` as a refusal, not as a
   // TypeError. That function falls back to its own `approval.checks` once the
   // shape is proved.
-  assertQuoteApproved(approval, orderId);
-  const quote = approval.quote;
+  const quote = assertQuoteApproved(approval, orderId).quote;
   const recomputed = requireMinor(recomputedTotalMinor, 'recomputedTotalMinor');
   const tolerance = requireMinor(P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR, 'P6_V1_QUOTE_DIVERGENCE_TOLERANCE_MINOR');
   const quoted = BigInt(quote.displayedTotalMinor);
