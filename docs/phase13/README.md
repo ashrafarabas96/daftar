@@ -29,5 +29,12 @@ reading.
 The copy in the pack and the copy here are therefore the same bytes by construction. If
 they ever differ, the gate says so and refuses.
 
+`proofs/r15-replace-ref-proof.sh` is the red proof for that, and it needs no pack:
+`sh docs/phase13/proofs/r15-replace-ref-proof.sh [<sha>]` builds its own clone, plants
+`refs/replace/<the generator blob>`, and asserts three arms — the committed generator is
+accepted; the forged one is refused **by name**; and with the guard deleted the same
+forgery succeeds again. Aimed at the commit before the fix it goes red on the second arm,
+which is how one knows the arms mean anything.
+
 A signature on this phase names a **triple**: the commit SHA, the pack manifest's
 SHA-256, and this file's SHA-256.
