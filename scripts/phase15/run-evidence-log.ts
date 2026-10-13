@@ -997,25 +997,46 @@ const TOLERATED_NONZERO: readonly { readonly script: string; readonly reason: st
  * Phase-owned lint is deliberately NOT tolerated: `scripts/phase15` and the
  * one shared file this phase edits are this phase's to keep green.
  */
-const REPO_GATES: readonly { readonly name: string; readonly command: string; readonly tolerated: string | null }[] = [
-  { name: 'format (prettier --check .)', command: 'npm run format', tolerated: null },
+/**
+ * TWO NUMBERS, NOT ONE, FOR EVERY BUILD-DEPENDENT GATE
+ *
+ * The coordinator's rule of 2026-10-13, after P14's single-number table claimed
+ * the opposite of the truth: lint, typecheck and build each have a COLD figure
+ * (a fresh clone with `npm ci` only) and an AFTER-BUILD figure, and one number
+ * without the order is uninterpretable. On `main` the coordinator measured
+ * typecheck 2 cold / 0 after build, and lint 1 cold / 0 after build.
+ *
+ * This runner cannot produce the cold figure, and says so rather than letting
+ * its own number stand for both: its `build-inventory` and `build-accounting`
+ * preconditions REQUIRE the workspace packages to be built before any
+ * instrument runs, so by the time a gate runs here the tree is never cold. So
+ * each gate below declares `treeState`, every printed row carries it, and the
+ * cold figures live in the handoff's own gate table, measured in a fresh clone
+ * at the named SHA. `prettier --check` has no build dependency and keeps one
+ * number.
+ */
+const REPO_GATES: readonly { readonly name: string; readonly command: string; readonly tolerated: string | null; readonly buildDependent: boolean }[] = [
+  { name: 'format (prettier --check .)', command: 'npm run format', tolerated: null, buildDependent: false },
   {
     name: 'lint, phase-owned (eslint scripts/phase15 + the one shared file)',
     command: 'npx eslint scripts/phase15 scripts/phase3-secret-scan.ts --max-warnings 0',
     tolerated: null,
+    buildDependent: true,
   },
-  { name: 'typecheck, root tsconfig (tsc --noEmit)', command: 'npx tsc -p tsconfig.json --noEmit', tolerated: null },
+  { name: 'typecheck, root tsconfig (tsc --noEmit)', command: 'npx tsc -p tsconfig.json --noEmit', tolerated: null, buildDependent: true },
   {
     name: 'lint, whole repo (eslint .)',
     command: 'npm run lint',
     tolerated:
       "inherited from main and not this phase's: every error is in apps/ and packages/ and is the cold-tree shape (`a type that cannot be resolved`), which needs the workspace packages built. None is in scripts/phase15 — that is the gate above, and it is not tolerated",
+    buildDependent: true,
   },
   {
     name: 'typecheck, workspaces then root (npm run typecheck)',
     command: 'npm run typecheck',
     tolerated:
       'inherited from main and tracked as G6 in the CI-owner queue: the root script builds nothing first, so workspace packages resolve to their sources. The root tsconfig alone is the gate above, and it is not tolerated',
+    buildDependent: true,
   },
 ];
 
@@ -1027,6 +1048,8 @@ interface GateResult {
   readonly ok: boolean;
   readonly engine: string;
   readonly tolerated: string | null;
+  /** Which tree this number is about: never a cold one, here. */
+  readonly treeState: string;
   readonly tail: string;
 }
 
@@ -1064,6 +1087,9 @@ function runRepoGates(): readonly GateResult[] {
       ok,
       engine,
       tolerated: g.tolerated,
+      treeState: g.buildDependent
+        ? 'in THIS tree, with the workspace packages BUILT (the preconditions require it) — the cold figure is in the handoff gate table, from a fresh clone'
+        : 'no build dependency, so one number is the whole fact',
       tail: text.trim().split('\n').slice(-3).join(' | ').slice(0, 300),
     });
   }
@@ -1297,7 +1323,7 @@ function main(): number {
   console.log("THE REPOSITORY'S OWN GATES at this head, with the engine each one ran on");
   for (const g of gates)
     console.log(
-      `  exit ${String(g.exitCode)}  ${g.engine}  ${g.name}${g.ok ? '' : g.tolerated === null ? '  — NOT TOLERATED' : '  — tolerated: inherited from main'}`,
+      `  exit ${String(g.exitCode)}  ${g.engine}  ${g.name}${g.ok ? '' : g.tolerated === null ? '  — NOT TOLERATED' : '  — tolerated: inherited from main'}\n            ${g.treeState}`,
     );
   // A gate that ran on a different engine from this run is not this run's gate,
   // whatever it returned — so an engine mismatch is red and cannot be tolerated.
