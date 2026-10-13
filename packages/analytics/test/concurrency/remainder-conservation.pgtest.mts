@@ -2125,8 +2125,25 @@ const cases: readonly { readonly name: string; readonly fn: CaseFn }[] = [
 
 /** A git fact read at run time, so the record cannot drift from the tree it describes. */
 function gitFact(args: readonly string[]): string {
+  // R15-01 and A-01, from the fifteenth and sixteenth challenge rounds, applied to
+  // this record's own git reads: `git replace` rewrites what every read of an object
+  // returns, so the SHA, branch and merge-base printed below are facts about the
+  // repository's redirections unless replacement is off. Both mechanisms, because the
+  // flag covers this invocation and the variable covers anything git runs underneath
+  // it.
+  //
+  // What this does NOT fix, and the record says so rather than implying otherwise:
+  // git does not verify a loose object's hash when it reads it, so a prepared object
+  // store can still serve forged bytes under a real id. These lines print ids and
+  // counts rather than file contents, and an id read this way is the id the
+  // repository holds, which is the fact being recorded. Content-integrity checking
+  // belongs where content is compared -- the generator pin -- and is done there.
   try {
-    return execFileSync('git', [...args], { cwd: process.cwd(), encoding: 'utf8' }).trim();
+    return execFileSync('git', ['--no-replace-objects', ...args], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+    }).trim();
   } catch {
     return '(unavailable)';
   }

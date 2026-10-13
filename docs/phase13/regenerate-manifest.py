@@ -256,7 +256,12 @@ DELIVERED_REVIEWER_REPORTS = (
     'P13-CHALLENGE-cc4e263.md',
     # R15, delivered into the pack by the challenger during round 15.
     'P13-CHALLENGE-f8068cc.md',
+    # R16, delivered into the pack by the challenger during round 16. Its
+    # addendum A lives outside the pack, by their choice, so it is not listed.
+    'P13-CHALLENGE-ef15738.md',
     'P13-COORD-DIFF-REVIEW-12fe9a4.md',
+    # R16's coordinator diff review, frozen and delivered into the pack.
+    'P13-COORD-DIFF-REVIEW-ef15738.md',
 )
 # The SHAPE of a reviewer report, used only to spot a file that wears the name without
 # being on the list, and MY OWN round records, which are hashed and are anchored to a
@@ -470,6 +475,8 @@ def footer_reviewer_names(body: str) -> list[str]:
 
 
 GENERATOR_IN_REPO = 'docs/phase13/regenerate-manifest.py'
+# A-01: an object id as Git spells it, so a store cannot answer with prose.
+OBJECT_ID_RE = re.compile(r'^[0-9a-f]{40}$')
 
 
 def pin_verdict(subject_sha: str) -> tuple[bool, str]:
@@ -483,11 +490,45 @@ def pin_verdict(subject_sha: str) -> tuple[bool, str]:
     the commit this manifest claims to be about, and nothing in this directory can move
     both.
 
+    A-01, the challenger's addendum to round 16, and a P1 fail-open of mine: "anchored to
+    Git" assumed that asking git for an object returns that object. It does not. Git does
+    NOT verify a loose object's hash when it reads it -- only `fsck` does -- so a store
+    holding the generator blob loose can serve any bytes at all under the real blob's
+    name. Reached through `.git/objects/info/alternates`, that forges the pin with no
+    replacement anywhere: `rev-parse <sha>:<path>` still prints the id RECORDED IN THE
+    TREE, `for-each-ref refs/replace/` is empty so the R15 disclosure says something true
+    and useless, and the subject SHA, the tree, the worktree and the branch resolution are
+    all genuinely correct. This IS the right repository at the right commit; only the
+    bytes are not the object. Measured: all five arms (`--no-replace-objects`,
+    `GIT_NO_REPLACE_OBJECTS=1`, both, both plus `core.useReplaceRefs=false`, and plain)
+    served the forgery. My own written bound -- "an alternate object store cannot
+    substitute the blob ... substitution-by-hash needs a collision" -- was false, and it
+    was false in the one clause that mattered: the reasoning holds only for a store that
+    verifies what it serves.
+
+    So the identity is no longer taken from the store's word for it. The id the TREE
+    records is read, the bytes are re-hashed as Git itself defines an object
+    (`sha1("blob <len>\0" + data)`), and a mismatch is a named refusal. That is a
+    statement the store cannot lie about, because the id is in the tree and the hash is
+    over the bytes actually handed over. It also SUBSUMES the R15-01 replace case: with
+    both git guards deliberately removed, `show` returns the replacement while the tree
+    still records the real id, so the re-hash refuses anyway. The guards stay regardless
+    -- they are free, and they keep the replace case out of this comparison entirely.
+
     Returns (ok, sentence). Every failure is BY NAME, and a failure is fail-closed:
-    unreachable commit, absent blob and foreign repository are refusals, not skips,
-    because "I could not check the checker" must never read as "the checker is fine".
+    unreachable commit, absent blob, foreign repository and now bytes that are not the
+    object they are served as, are refusals, not skips, because "I could not check the
+    checker" must never read as "the checker is fine".
     """
     running = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    try:
+        recorded = subprocess.run(
+            (*GIT, '-C', str(REPO), 'rev-parse', f'{subject_sha}:{GENERATOR_IN_REPO}'),
+            capture_output=True, timeout=120, check=False, env=git_env())
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, (f'the generator pin CANNOT BE CHECKED: git could not be run in {REPO} '
+                       f'({exc}). Refusing, because an unchecked checker is not a checked one')
+    recorded_id = recorded.stdout.decode('utf-8', 'replace').strip() if recorded.returncode == 0 else ''
     try:
         committed = subprocess.run(
             (*GIT, '-C', str(REPO), 'show', f'{subject_sha}:{GENERATOR_IN_REPO}'),
@@ -502,6 +543,22 @@ def pin_verdict(subject_sha: str) -> tuple[bool, str]:
                        f'readable at {subject_sha[:7]} in {REPO} — {why}. Either the commit is '
                        'unreachable here, the blob is absent at that commit, or this is not the '
                        'repository that commit belongs to')
+    if not OBJECT_ID_RE.match(recorded_id):
+        return False, (f'the generator pin CANNOT BE CHECKED: `git rev-parse '
+                       f'{subject_sha[:7]}:{GENERATOR_IN_REPO}` did not yield an object id in '
+                       f'{REPO}. Refusing: without the id the TREE records there is nothing to '
+                       'check the served bytes against, and the store\'s own word for what it '
+                       'handed over is exactly what A-01 forges')
+    served_id = hashlib.sha1(b'blob %d\x00' % len(committed.stdout) + committed.stdout).hexdigest()
+    if served_id != recorded_id:
+        return False, (f'the repository SERVED BYTES THAT ARE NOT THE OBJECT IT NAMES (A-01):\n'
+                       f'    the tree at {subject_sha[:7]} records `{GENERATOR_IN_REPO}` as '
+                       f'{recorded_id}\n'
+                       f'    the {len(committed.stdout)} bytes handed over hash to {served_id}\n'
+                       '  git does not verify a loose object when it reads it, so a prepared '
+                       'object store can serve anything under a real id. This is NOT a '
+                       'replacement and no `refs/replace/` need exist; the commit, the tree and '
+                       'the branch resolution can all be correct. Refusing by name')
     pinned = hashlib.sha256(committed.stdout).hexdigest()
     if pinned != running:
         return False, (f'the generator RUNNING HERE is not the one committed at '
@@ -509,8 +566,10 @@ def pin_verdict(subject_sha: str) -> tuple[bool, str]:
                        f'  the file is `{Path(__file__).name}` in this directory and '
                        f'`{GENERATOR_IN_REPO}` in the repository; they must be the same bytes')
     return True, (f'the generator is PINNED: the bytes running here hash to {running[:16]}…, '
-                  f'which is `{GENERATOR_IN_REPO}` at {subject_sha[:7]} — the pack no longer '
-                  'certifies its own checker')
+                  f'and the {len(committed.stdout)} bytes the repository served re-hash to '
+                  f'{served_id[:12]}…, which is the id the tree at {subject_sha[:7]} RECORDS for '
+                  f'`{GENERATOR_IN_REPO}` — so the store was not taken at its word (A-01) and the '
+                  'pack no longer certifies its own checker')
 
 
 def replace_refs() -> list[str]:

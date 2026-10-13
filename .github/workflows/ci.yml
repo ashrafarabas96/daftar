@@ -50,6 +50,33 @@ jobs:
           done
 
   # -------------------------------------------------------------------------
+  # 1b. Phase 13 evidence proofs. These scripts assert that the prep pack's
+  #     gate cannot be made to certify a generator that is not the committed
+  #     one -- once through `git replace` (R15-01) and once through a store
+  #     that serves bytes which are not the object it names (A-01). Each
+  #     script ends by DELETING its own guard and requiring the forgery to
+  #     succeed again, so a green tick here means the guards are load-bearing
+  #     and not merely present.
+  #
+  #     The exit code is the assertion. A step that ran the scripts and read
+  #     their output would be a step that reports; this one fails the job.
+  # -------------------------------------------------------------------------
+  phase13-proofs:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: both proofs resolve a subject commit and read the blob
+      # the tree records at it, which a shallow checkout cannot serve.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: R15-01 - the generator pin resists git replace
+        run: |
+          sh docs/phase13/proofs/r15-replace-ref-proof.sh
+      - name: A-01 - the generator pin resists a store that serves forged bytes
+        run: |
+          sh docs/phase13/proofs/a01-object-integrity-proof.sh
+
+  # -------------------------------------------------------------------------
   # 2. Backend: install, manifest, gate, static guards, format/lint/typecheck,
   #    unit + integration + security + DB-contract + golden + localization.
   # -------------------------------------------------------------------------

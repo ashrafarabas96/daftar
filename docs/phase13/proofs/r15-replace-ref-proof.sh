@@ -41,8 +41,11 @@ echo
 # A clone of its own, because the attack IS a property of the repository the
 # reviewer is handed, and because planting a replace ref in someone's real
 # worktree is not a thing a proof may do.
-git clone --no-hardlinks -q "$SRC" "$WORK/repo"
-git -C "$WORK/repo" checkout -q "$SUBJECT"
+# The clone and the checkout read objects too. If $SRC carried a replace ref, the
+# clone would copy refs/replace/ and the checkout would lay down the replacement,
+# so the proof would be built on top of the thing it is testing.
+git --no-replace-objects clone --no-hardlinks -q "$SRC" "$WORK/repo"
+git -C "$WORK/repo" --no-replace-objects checkout -q "$SUBJECT"
 
 # The driver calls the pinning code path itself and prints what it returns, so
 # the sentences asserted below are the gate's own, not this script's.
@@ -143,10 +146,19 @@ grep -q '^REPLACE-REF refs/replace/' "$WORK/arm2.out" || fail "arm 2: the replac
 echo "    OK: refused BY NAME, and the replace ref is disclosed with its exact object ids."
 echo
 
-# ------------------------------- arm 3: delete the guard, the forgery must work
+# ------------------------------- arm 3: delete the guards, the forgery must work
 # Without this arm the fix is unfalsifiable: arm 2 would read the same if the
 # refusal came from somewhere else entirely.
-echo "ARM 3 - the guard DELETED from the forged generator, same plant."
+#
+# It is in TWO parts since the A-01 fix landed, and the first part is a property
+# worth asserting rather than a step on the way. Stripping the two git guards no
+# longer reopens the forgery, because the generator now also re-hashes the bytes
+# the repository served against the id the TREE records, and a replacement does
+# not change what the tree records. The re-hash SUBSUMES these guards. They stay
+# anyway -- they cost nothing, and they keep the replace case out of that
+# comparison entirely -- but a guard-deletion arm has to delete every guard that
+# covers the case, or it proves only that some other guard exists.
+echo "ARM 3a - the two git guards DELETED; the re-hash must still refuse."
 python3 - "$WORK/forged.py" "$WORK/guardless.py" <<'PY'
 import pathlib
 import sys
@@ -165,15 +177,45 @@ compile(s, str(dst), 'exec')
 dst.write_text(s, encoding='utf-8')
 print(f'    removed {flags} --no-replace-objects site(s) and {envs} environment site(s)')
 PY
-plant "$WORK/guardless.py"
-GUARDLESS=$(stage arm3-guardless "$WORK/guardless.py")
-run_driver "$GUARDLESS" > "$WORK/arm3.out"
-sed 's/^/    /' "$WORK/arm3.out"
-grep -q '^VERDICT ok=True' "$WORK/arm3.out" || fail "arm 3: removing the guard changed nothing, so arm 2 proves nothing about it"
-grep -q 'is PINNED' "$WORK/arm3.out" || fail "arm 3: removing the guard changed nothing, so arm 2 proves nothing about it"
-echo "    OK: with the guard gone the forgery succeeds again - it printed a PIN for a"
-echo "    generator that is not the committed one. The guard is what refuses arm 2."
-echo "    Note it still disclosed the replace ref while claiming the pin: a disclosure"
-echo "    is not a guard."
+GUARDLESS=$(stage arm3a-guardless "$WORK/guardless.py")
+plant "$GUARDLESS"
+run_driver "$GUARDLESS" > "$WORK/arm3a.out"
+sed 's/^/    /' "$WORK/arm3a.out"
+grep -q '^VERDICT ok=False' "$WORK/arm3a.out" \
+    || fail "arm 3a: with only the git guards gone the forgery passed, so the re-hash does not subsume them"
+grep -q 'SERVED BYTES THAT ARE NOT THE OBJECT IT NAMES' "$WORK/arm3a.out" \
+    || fail "arm 3a: refused, but not by the re-hash"
+echo "    OK: refused by the A-01 re-hash. The replacement changes what git SERVES and not"
+echo "    what the tree RECORDS, so the two git guards are subsumed by it."
 echo
-echo "ALL THREE ARMS HOLD at $SUBJECT"
+
+echo "ARM 3b - the re-hash deleted TOO; now the forgery must succeed again."
+python3 - "$WORK/guardless.py" "$WORK/guardless2.py" <<'PY'
+import pathlib
+import re
+import sys
+src, dst = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+s = src.read_text(encoding='utf-8')
+m = re.search(r'\n    served_id = hashlib\.sha1.*?\n(?=    pinned = )', s, re.S)
+if not m:
+    raise SystemExit('the re-hash check is not where this proof expects it; the proof needs updating')
+s = s[:m.start()] + '\n    served_id = recorded_id  # GUARD DELETED for arm 3b\n' + s[m.end():]
+compile(s, str(dst), 'exec')
+dst.write_text(s, encoding='utf-8')
+print('    replaced the re-hash with the id the store claims')
+PY
+GUARDLESS2=$(stage arm3b-guardless "$WORK/guardless2.py")
+plant "$GUARDLESS2"
+run_driver "$GUARDLESS2" > "$WORK/arm3b.out"
+sed 's/^/    /' "$WORK/arm3b.out"
+grep -q '^VERDICT ok=True' "$WORK/arm3b.out" \
+    || fail "arm 3b: with every guard gone the forgery still failed, so arms 2 and 3a are about something else"
+grep -q 'is PINNED' "$WORK/arm3b.out" \
+    || fail "arm 3b: with every guard gone the forgery still failed, so arms 2 and 3a are about something else"
+echo "    OK: with every guard gone the forgery succeeds - a PIN printed for a generator that"
+echo "    is not the committed one. So the guards are what refuse arms 2 and 3a."
+echo "    Note it still disclosed the replace ref while claiming the pin: a disclosure is not"
+echo "    a guard, and neither is a sentence that says the store was not taken at its word."
+echo
+
+echo "ALL ARMS HOLD at $SUBJECT"
