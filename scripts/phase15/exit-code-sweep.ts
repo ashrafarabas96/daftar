@@ -377,23 +377,72 @@ function forwarderFor(call: ts.CallExpression, bound: ts.VariableDeclaration | n
   return forwards ? name : null;
 }
 
-/** Does this returned expression hand out the call's result, or its status? */
+/**
+ * Does this expression carry the SPAWN RESULT, by provenance?
+ *
+ * True only when it contains the call itself, or an identifier that resolves to
+ * a declaration initialised by that call — the identifier binding, or the
+ * destructuring one. A name that merely spells `status` proves nothing about
+ * where its value came from.
+ */
+function yieldsCall(e: ts.Expression, call: ts.CallExpression): boolean {
+  const x = unwrap(e);
+  if (x === call) return true;
+  // `const r = cond ? spawnSync(a) : spawnSync(b)` — the pack's own
+  // `pg-version-matrix.ts` shape. The call's value flows into the binding, so
+  // the binding carries its provenance; both branches are measured, so one
+  // comparison on `r.status` decides both commands and neither is excused.
+  if (ts.isConditionalExpression(x)) return yieldsCall(x.whenTrue, call) || yieldsCall(x.whenFalse, call);
+  if (ts.isBinaryExpression(x) && (x.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || x.operatorToken.kind === ts.SyntaxKind.BarBarToken))
+    return yieldsCall(x.left, call) || yieldsCall(x.right, call);
+  return false;
+}
+
+function fromSpawn(e: ts.Expression, call: ts.CallExpression, bound: ts.VariableDeclaration | null): boolean {
+  let hit = false;
+  const walk = (n: ts.Node): void => {
+    if (hit) return;
+    if (n === call) {
+      hit = true;
+      return;
+    }
+    if (ts.isIdentifier(n)) {
+      const d = resolve(n);
+      if (d !== null && (d === bound || (ts.isVariableDeclaration(d) && d.initializer !== undefined && yieldsCall(d.initializer, call)))) hit = true;
+    }
+    n.forEachChild(walk);
+  };
+  walk(e);
+  return hit;
+}
+
+/**
+ * Does this returned expression hand out the call's result, or its exit code?
+ *
+ * THE ROUND-9B FAIL-OPEN (F-R9B-01). This used to credit ANY returned object
+ * literal carrying a property named `status`, whatever its value: a function
+ * that ran a command, discarded its code and returned `{ status: 0, out }` was
+ * read as a forwarder, and every call it covered was reported as measured. An
+ * invented zero is the exact shape of the `sh()` defect this pack found in its
+ * own code two rounds earlier, so the sweep was blind to its own lesson.
+ *
+ * The property's VALUE must now come from the spawn result. A spread of the
+ * result counts, `{ status }` destructured from it counts, and `{ status: 0 }`
+ * does not — nor does a result mentioned in some OTHER property while `status`
+ * is invented, which is the same defect one key to the left.
+ */
 function mentions(e: ts.Expression, call: ts.CallExpression, bound: ts.VariableDeclaration | null, sf: ts.SourceFile): boolean {
   const x = unwrap(e);
   if (x === call) return true;
-  if (bound !== null && ts.isIdentifier(bound.name)) {
-    const want = bound.name.text;
-    let hit = false;
-    const walk = (n: ts.Node): void => {
-      if (hit) return;
-      if (ts.isIdentifier(n) && n.text === want && resolve(n) === bound) hit = true;
-      n.forEachChild(walk);
-    };
-    walk(x);
-    if (hit) return true;
+  if (ts.isObjectLiteralExpression(x)) {
+    for (const prop of x.properties) {
+      if (ts.isSpreadAssignment(prop) && fromSpawn(prop.expression, call, bound)) return true;
+      if (ts.isPropertyAssignment(prop) && prop.name.getText(sf) === 'status' && fromSpawn(prop.initializer, call, bound)) return true;
+      if (ts.isShorthandPropertyAssignment(prop) && prop.name.text === 'status' && fromSpawn(prop.name, call, bound)) return true;
+    }
+    return false;
   }
-  if (ts.isObjectLiteralExpression(x)) return x.properties.some((p) => ts.isPropertyAssignment(p) && p.name.getText(sf) === 'status');
-  return false;
+  return fromSpawn(x, call, bound);
 }
 
 type Decision = { readonly kind: 'read'; readonly how: string } | { readonly kind: 'defer'; readonly to: string } | null;
@@ -928,6 +977,37 @@ const PLANTS: readonly Plant[] = [
       r.unchecked.some((s) => s.file === 'planted-x14.ts')
         ? 'a destructured status that IS compared was reported anyway: a sweep that reds on correct code gets switched off'
         : null,
+  },
+  {
+    id: 'X15',
+    what: "round-9B's F-R9B-01 — a forwarder that INVENTS its status: the command's own code is discarded and `{ status: 0 }` handed on",
+    plant: (dir) => {
+      const f = join(dir, 'planted-x15.ts');
+      writeFileSync(
+        f,
+        [
+          "import { spawnSync } from 'node:child_process';",
+          '// The shape the challenger planted: the function looks like every other',
+          '// run-a-command helper in this pack, and the one thing it does not do is',
+          "// read the exit code. Its caller's `if (r.status !== 0)` then decides on a",
+          '// zero this function wrote itself.',
+          'export function run(cmd: string, args: readonly string[]): { status: number; out: string } {',
+          "  const r = spawnSync(cmd, [...args], { encoding: 'utf8' });",
+          "  return { status: 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };",
+          '}',
+          'export function listed(): readonly string[] {',
+          "  const r = run('git', ['ls-files']);",
+          "  if (r.status !== 0) throw new Error('git ls-files failed');",
+          "  return r.out.split('\\n');",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'planted-x15.ts')
+        ? null
+        : 'a helper that discarded the exit code and returned a hand-written `status: 0` was credited as a forwarder, so every command it runs reads as measured. An invented zero is the `sh()` defect this pack found in its own code two rounds earlier. The half this case cannot carry — that it is PROVENANCE catching it — is `npm run verify:exit-codes:phase15:guard`, which runs a copy of this sweep with that requirement removed; it lives in its own instrument because this file must stay unable to run a command at all, which is what its one exemption rests on',
   },
   {
     id: 'X9',

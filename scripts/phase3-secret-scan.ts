@@ -875,7 +875,24 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
           findings = [...(findings ?? []), ...twinFindings.filter((f) => f.File !== allowlistedCanaryFile)];
         }
       }
-      const covered = new Set<string>([...readPaths, ...coveredByTwin]);
+      // The two planted controls are NOT inventory files. `readPaths` is what
+      // gitleaks said it read, which includes the per-run `.env` canary this
+      // scan itself writes into the copy — so counting it as "inventory files
+      // read" made the figures fail to add up: 1051 handed, 1050 read, 2
+      // allowlisted is 1052, and the extra one was this scan's own control
+      // (the round-9B challenger's F-R9B-02). They are excluded BY EXACT NAME,
+      // never by pattern: a name pattern cannot decide who wrote a file.
+      const plantedControls = new Set<string>([canaryFile, allowlistedCanaryFile].filter((x): x is string => x !== null));
+      const readInventory = new Set<string>([...readPaths].filter((pth) => !plantedControls.has(pth)));
+      // AND THE IDENTITY, in code rather than in a sentence: every inventory
+      // file is either read in the first pass or skipped by the allowlist, so
+      // read + skipped MUST equal the inventory. A figure that does not add up
+      // is a figure nobody computed.
+      if (readInventory.size + skippedFiles.length !== handed.length)
+        problems.push(
+          `the coverage figures do not add up: ${String(readInventory.size)} inventory file(s) read + ${String(skippedFiles.length)} skipped by the allowlist is not the ${String(handed.length)} handed to gitleaks. Until that identity holds, neither number is a measurement of this tree`,
+        );
+      const covered = new Set<string>([...readInventory, ...coveredByTwin]);
       const uncovered = handed.filter((h) => h !== allowlistedCanaryFile && !covered.has(h));
       for (const u of uncovered.slice(0, 20))
         problems.push(`${u} was handed to gitleaks and gitleaks never reported reading it, and no twin covered it: UNSCANNED, which is not clean`);
@@ -891,7 +908,7 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
       if (allowlistedCanaryFile !== null && findings !== null) findings = findings.filter((f) => f.File !== allowlistedCanaryFile);
       coverage = {
         inventory: handed.length,
-        read: readPaths.size,
+        read: readInventory.size,
         skipped: skippedFiles,
         coveredByTwin,
         uncovered,

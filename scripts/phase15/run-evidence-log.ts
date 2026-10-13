@@ -962,19 +962,33 @@ const SETTLED_COLLATION = 'en_US.utf8';
  * pending — so a pre-regeneration run exits 5 by design, and the run whose rc
  * is quotable is the confirmation run made after the documents are rewritten.
  */
-const TOLERATED_NONZERO: readonly { readonly script: string; readonly reason: string }[] = [
+/**
+ * EVERY EXCUSE BINDS A SCRIPT, THE CODES IT COVERS, AND THE REASON
+ *
+ * Round 10's R-9B-d. An entry used to excuse a script for ANY non-zero code
+ * under a reason written for particular ones: `verify:gap-list`'s reason
+ * explains exit 1 and exit 2, and an exit 7 — the cluster-teardown failure
+ * `pg-cluster.ts` now reports — was tolerated by the same row, silently, under
+ * a sentence that does not describe it. A reason that does not name the code it
+ * excuses is not a reason, so the codes are part of the entry and a code
+ * outside the list is UNEXCUSED and reaches this runner's exit 5.
+ */
+const TOLERATED_NONZERO: readonly { readonly script: string; readonly codes: readonly number[]; readonly reason: string }[] = [
   {
     script: 'verify:gap-list:static',
+    codes: [1, 2],
     reason:
       'the static mode measures what it can read and reports the rest as UNMEASURED; its exit 2 says "something here could not be measured at all" and its exit 1 "everything was measured and a gap was found" (round-8 R3), neither of which is a failure of the pack\u2019s own code. Its FINDINGs are carried as named open items (G5 is the owner-decided scanner block)',
   },
   {
     script: 'verify:gap-list',
+    codes: [1, 2],
     reason:
       "the same instrument against a live cluster. From round-8 R3 a measured FINDING reaches its exit code, which is the point of that fix: G5 — the production malware-scanner fail-open the owner ruled a promotion blocker on 2026-10-12 — used to be printed over an exit 0. The findings are named open items in §9, and a gap in another phase's code is not a defect in this pack",
   },
   {
     script: 'audit:deps:phase15',
+    codes: [1],
     reason:
       "a FAILURE inherited from main's lockfile a8fecd0, with HIGH advisories this branch neither authored nor changes. It blocks PROMOTION and is recorded as §6.3; the floor stays at moderate and nothing is allowlisted",
   },
@@ -1336,13 +1350,19 @@ function main(): number {
   console.log('');
 
   // R2 — a measured non-zero that nothing in this list accounts for.
-  const tolerated = new Map(TOLERATED_NONZERO.map((t) => [t.script, t.reason]));
+  // The excuse is looked up by (script, code), never by script alone: see
+  // R-9B-d above the list.
+  const excuseFor = (script: string, code: number | null): string | null => {
+    if (code === null) return null;
+    const row = TOLERATED_NONZERO.find((t) => t.script === script && t.codes.includes(code));
+    return row === undefined ? null : row.reason;
+  };
   const redInstruments = results.filter((r) => r.ran && r.exitCode !== 0 && r.exitCode !== null);
-  const excused = redInstruments.filter((r) => tolerated.has(r.instrument.script));
-  const unexcused = redInstruments.filter((r) => !tolerated.has(r.instrument.script));
+  const excused = redInstruments.filter((r) => excuseFor(r.instrument.script, r.exitCode) !== null);
+  const unexcused = redInstruments.filter((r) => excuseFor(r.instrument.script, r.exitCode) === null);
   if (excused.length > 0) {
-    console.log(`${excused.length} instrument(s) returned a non-zero code this runner TOLERATES, each named in its source with a reason:`);
-    for (const r of excused) console.log(`  ${r.instrument.script} exit ${String(r.exitCode)} — ${tolerated.get(r.instrument.script) ?? ''}`);
+    console.log(`${excused.length} instrument(s) returned a non-zero code this runner TOLERATES, each named in its source with a reason for THAT code:`);
+    for (const r of excused) console.log(`  ${r.instrument.script} exit ${String(r.exitCode)} — ${excuseFor(r.instrument.script, r.exitCode) ?? ''}`);
     console.log('');
   }
   if (gatesRed.length > 0) {
@@ -1354,7 +1374,14 @@ function main(): number {
   }
   if (unexcused.length > 0) {
     console.log(`EXIT 5: ${unexcused.length} instrument(s) measured and returned a non-zero exit code that nothing here accounts for:`);
-    for (const r of unexcused) console.log(`  ${r.instrument.script} exit ${String(r.exitCode)} — ${outcomeClass(r)}`);
+    for (const r of unexcused) {
+      const sameScript = TOLERATED_NONZERO.find((t) => t.script === r.instrument.script);
+      console.log(
+        `  ${r.instrument.script} exit ${String(r.exitCode)} — ${outcomeClass(r)}${
+          sameScript === undefined ? '' : ` (this script is excused for exit ${sameScript.codes.join(' and ')} only, and this code is not one of them)`
+        }`,
+      );
+    }
     console.log("  This runner's own code is now a verdict about its instruments, not only about whether they ran");
     console.log('  (coordinator round-8 R2). An index instrument red BEFORE its regeneration is the expected');
     console.log('  case: regenerate the documents, then make the confirmation run whose rc can be quoted.');
