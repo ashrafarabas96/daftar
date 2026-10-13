@@ -92,7 +92,7 @@ BROAD = re.compile(
     r"set_config\s*\(\s*'app\.[a-z_]+'"
     r"|set_config\s*\(\s*\$\d+"
     r"|set_config\s*\(\s*[`'\"][^`'\"]*\$\{"
-    r"|(?<![\w.])SET\s+(?:LOCAL\s+|SESSION\s+)?app\.[a-z_]+",
+    r"|(?<![\w.])SET\s+(?:LOCAL\s+|SESSION\s+)?\"?app\.[a-z_]+",
     re.IGNORECASE,
 )
 
@@ -161,7 +161,7 @@ def render(c: dict) -> list[str]:
         " by neither, so a fail-closed detector reds the suite and this check when it finds a"
         " `set_config('app.…`, a bound or interpolated `set_config(` key, or a"
         " `SET`/`SET LOCAL`/`SET SESSION app.…` that neither counted form accounts for — a"
-        " broad net, not a parser, and not a claim of exhaustiveness. **What the net does NOT see**, measured and named rather than implied: anything in `test/db/helpers/*.ts` or any non-`.test.ts` file under `test/db`, which is outside the corpus this census declares — `cluster.ts`'s own internal line lives there, and a helper's implementation is not a call site. Round 24 widened the net to `SET LOCAL`/`SET SESSION` (the challenger's B-6: the sentence named `SET app.…` while the pattern demanded `app.` immediately after `SET`, so the PostgreSQL spelling for the transaction-scoped setting this census exists to distinguish was not caught) and to a bound key, an interpolated key and `set_config (` with a space (its F-43). Two rounds of history, because the"
+        " broad net, not a parser, and not a claim of exhaustiveness. Round 25 added the quoted GUC name `SET LOCAL \"app.…\"` (the challenger's F-44), legal PostgreSQL and a quoting variant of a shape this sentence names. **What the net does NOT see**, measured and named rather than implied: anything in `test/db/helpers/*.ts` or any non-`.test.ts` file under `test/db`, which is outside the corpus this census declares — `cluster.ts`'s own internal line lives there, and a helper's implementation is not a call site; and a key passed as a bare identifier, `set_config(key, …, false)`, which is neither a literal, a bound parameter nor an interpolation, so it falls outside every shape this sentence names and is left to that limit rather than matched, because matching it would red on ordinary settings that have nothing to do with the request context. Round 24 widened the net to `SET LOCAL`/`SET SESSION` (the challenger's B-6: the sentence named `SET app.…` while the pattern demanded `app.` immediately after `SET`, so the PostgreSQL spelling for the transaction-scoped setting this census exists to distinguish was not caught) and to a bound key, an interpolated key and `set_config (` with a space (its F-43). Two rounds of history, because the"
         " claim has been wrong twice: round 21 added two transaction sites while the law pinned only"
         " the session sum and this footnote claimed the table (B-3), and round 22's replacement"
         " sentence said \"anywhere in the corpus\" while a third spelling — the one `cluster.ts`"

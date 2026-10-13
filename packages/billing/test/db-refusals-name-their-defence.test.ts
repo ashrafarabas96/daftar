@@ -305,7 +305,7 @@ describe('a refusal in the DB lane names the defence that refused, not its class
     // corpus — where `cluster.ts`'s own implementation lives; counting a
     // helper's implementation as a call site would be wrong.
     const broad =
-      /set_config\s*\(\s*'app\.[a-z_]+'|set_config\s*\(\s*\$\d+|set_config\s*\(\s*[`'"][^`'"]*\$\{|(?<![\w.])SET\s+(?:LOCAL\s+|SESSION\s+)?app\.[a-z_]+/gi;
+      /set_config\s*\(\s*'app\.[a-z_]+'|set_config\s*\(\s*\$\d+|set_config\s*\(\s*[`'"][^`'"]*\$\{|(?<![\w.])SET\s+(?:LOCAL\s+|SESSION\s+)?"?app\.[a-z_]+/gi;
     const counted = /set_config\('app\.[a-z_]+'[^)]*,\s*false\s*\)/g;
     const unaccounted: string[] = [];
     for (const file of dbTestPaths()) {
