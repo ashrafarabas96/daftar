@@ -200,6 +200,13 @@ the anchor itself rather than the legs around it.
 
 ## 7. Each new guard deleted, and what that measured
 
+> **ROUND 16 (`R16-P1-01` blocking, `R16-P3-01`): two cells of this table were measured wrong, the
+> stripped-marker cell is corrected IN the table above to the `rc 0` the challenger measured, and
+> the whole matrix is re-run at the head that answers round 16 — see §4 of
+> `P14-AMENDMENT-22-CHALLENGE-ROUND-16.md`, which supersedes this table.** This one was measured
+> against `7f6f535`'s tool and two of its cells did not come from deleting the guard and running
+> it.
+
 The challenger's method, run here before handing the head over: delete one guard at a time in a
 copy of the tool and see whether the world it protects comes back. The exit code alone does not
 answer that — these worlds refuse for several reasons at once — so what is read is the **refusal by
@@ -211,7 +218,7 @@ name**.
 | the marker discovery legs | **NOT CHECKED** | REWRITTEN IN HISTORY | **no history refusal** | NOT ANCHORED |
 | `core.quotePath=false` | REWRITTEN IN HISTORY | REWRITTEN IN HISTORY | AMBIGUOUS | NOT ANCHORED |
 | the more-than-one-carrier refusal | REWRITTEN IN HISTORY | REWRITTEN IN HISTORY | **no history refusal** | NOT ANCHORED |
-| the subject-marker requirement | REWRITTEN IN HISTORY | REWRITTEN IN HISTORY | AMBIGUOUS | **NOT CHECKED** |
+| the subject-marker requirement | REWRITTEN IN HISTORY | REWRITTEN IN HISTORY | AMBIGUOUS | **rc 0 — "every artifact row matches"** |
 | the marker in the parents test | REWRITTEN IN HISTORY | REWRITTEN IN HISTORY | AMBIGUOUS | NOT ANCHORED |
 
 **Two of the six rows say something I would otherwise have claimed falsely.**
@@ -225,11 +232,33 @@ independent defences cover that world, and neither is claimed as the only one. T
 [two-defences-one-unreachable] shape read the right way round: both are reachable here, and the
 measurement says so rather than the design.
 
-*The subject-marker requirement does not change the verdict, only the sentence.* With it deleted,
+> **CORRECTED IN ROUND 16 (`R16-P1-01`, ruled blocking). The paragraph below was WRONG, and it was
+> wrong in the direction that matters.** It said the subject-marker requirement changes only the
+> sentence and not the verdict. Measured by the challenger with **only those nine lines deleted**,
+> the stripped-marker world goes to **rc 0** — *checked over all 4 revision(s) … found by the marker
+> it carries*, and *every artifact row matches the file on disk*. The verdict changes **1 → 0**, so
+> **that check is the only defence for that world**, not a naming convenience. The mechanism is the
+> one I failed to think through: something IS found in history — the revisions from before the
+> marker was stripped — so the walk is not empty, it is a walk of a lineage the subject no longer
+> belongs to, and it comes back clean. The Arabic-path cell in the same row is corrected below as
+> well. My reasoning error was to infer the deleted-guard behaviour from what the other guards
+> cover, instead of deleting it and running it; the head itself was never fail-open, because the
+> check is present — what was wrong is the claim a reader would rely on when deciding the check
+> could be simplified away.
+
+~~*The subject-marker requirement does not change the verdict, only the sentence.* With it deleted,
 a manifest whose marker has been stripped is still refused — as `NOT CHECKED`, because nothing can
 then be found in history. Its contribution is the NAME: *the file you gave me is not anchorable*,
 said before a history is walked, instead of a reader having to infer it from an empty walk. That
-is what the row above claims and nothing more.
+is what the row above claims and nothing more.~~
+
+**`R16-P3-01`, the other corrected cell.** The `core.quotePath=false` row's Arabic-path column said
+`REWRITTEN IN HISTORY`, explained by the discovery leg finding those revisions by content. Measured:
+the refusal is **`NOT CHECKED`**, naming the path — *git reported the manifest at revision
+517d250f168c under a path this tool cannot use verbatim* — because this head's own quoted-path
+refusal catches it one layer earlier than the explanation claimed. Both are rc 1, so nothing was
+fail-open; the mechanism named was not the one that fires. The conclusion that the guard is
+load-bearing is unaffected and the challenger reproduced it. 22 of §7's 24 cells reproduce.
 
 The other four rows are the ordinary result: deleting the discovery legs loses `G2`'s
 `REWRITTEN IN HISTORY` (the parents backstop still refuses, fail-closed) and loses the decoy

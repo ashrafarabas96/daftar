@@ -47,6 +47,24 @@ REVIEWER_PREFIXES = ('P14-CHALLENGE-', 'P14-COORD-DIFF-REVIEW-')
 # read. The marker is a fixed literal here and not read from the file, because
 # a marker the subject chooses is not an anchor.
 MARKER = '# P14-HANDOFF-MANIFEST.md'
+# CHALLENGE R16-P0-01, which BLOCKED, and the coordinator's ruling on it: the
+# subject test and the two history legs differed BY ONE BYTE of normalisation.
+# The subject was `ln.rstrip() == MARKER`, which eats a trailing space, a tab and
+# a CR; the legs matched an exact `^marker$`, which does not. So a manifest whose
+# marker line carries ONE TRAILING SPACE, or that was committed CRLF, satisfied
+# the subject requirement while BOTH legs found zero revisions -- and the summary
+# still read "found by the marker it carries and by every path it has held". Not
+# only under attack: such a pack runs with the anchor silently inert from the
+# day the byte appears, and nothing in this pack forbids either spelling.
+# There is now ONE normalisation, written once and used three times: the marker
+# line is the literal followed by any run of ASCII whitespace and nothing else.
+# `[[:space:]]` in the C locale is space, tab, newline, vertical tab, form feed
+# and CR, which is exactly the Python class below for a single line; a line
+# cannot contain the newline. The `.` is escaped as `[.]` rather than with
+# `re.escape`, because `re.escape` also escapes `#`, `-` and the space, and an
+# ERE is not obliged to accept those as escapes.
+MARKER_PY = re.compile(r'^' + re.escape(MARKER) + r'[ \t\r\f\v]*$')
+MARKER_ERE = '^' + MARKER.replace('.', '[.]') + '[[:space:]]*$'
 
 def main():
     ap = argparse.ArgumentParser()
@@ -263,8 +281,7 @@ def main():
         # AMBIGUOUS refusal fired on an honest world. `git grep` has no `-x`
         # ("unknown switch", measured), so the pattern is anchored explicitly
         # and the same whole-line test is applied to the subject above.
-        r = _g('grep', '-l', '--full-name', '-E', '^%s$' % re.escape(MARKER),
-               rev, '--', ':(top)')
+        r = _g('grep', '-l', '--full-name', '-E', MARKER_ERE, rev, '--', ':(top)')
         if r.returncode == 1:
             return []                      # git's own "no file matches"
         if r.returncode != 0:
@@ -286,11 +303,11 @@ def main():
     # the marker lines are in the patch, and both the add and the move are
     # found. Depending on rename detection here would be the same lottery this
     # leg exists to replace.
-    _gm = _g('log', '--format=%H', '--no-renames', '-G', '^%s$' % re.escape(MARKER),
-             'HEAD', '--', ':(top)')
+    _gm = _g('log', '--format=%H', '--no-renames', '-G', MARKER_ERE, 'HEAD', '--', ':(top)')
     if _gm.returncode == 0:
         for _r in _gm.stdout.split():
             _revmap.setdefault(_r, set())
+    _marker_revs = set(_gm.stdout.split()) if _gm.returncode == 0 else set()
     _seen_paths, _todo = set(), list(_revmap)
     while _todo:
         _rev = _todo.pop()
@@ -310,6 +327,7 @@ def main():
             if _rl.returncode != 0:
                 continue
             for _r2 in _rl.stdout.split():
+                _marker_revs.add(_r2)
                 if _r2 not in _revmap:
                     _revmap.setdefault(_r2, set())
                     _todo.append(_r2)
@@ -382,7 +400,25 @@ def main():
                 _incomplete = ('revision %s is a boundary commit%s, so an earlier record of this'
                                ' manifest may exist and cannot be read'
                                % (_oldest[:12], ' of a shallow clone' if _shallow else ''))
-            elif _paths_at(_p) or (_carriers(_p) or []):
+            elif _paths_at(_p) is None or _carriers(_p) is None:
+                # FOUND BY MY OWN READING WHILE HOLDING AT 7f6f535, before the
+                # challenger's round 16 asked for it: both of these helpers
+                # return None for "the tree could not be read" and [] for "the
+                # manifest is not in it", and `_paths_at(_p) or (_carriers(_p)
+                # or [])` collapsed BOTH to falsy -- so a parent whose commit
+                # object exists but whose TREE or blobs are unreadable (a
+                # treeless or blobless clone whose promisor is unreachable, a
+                # pruned or corrupt object) was read as "the parent does not
+                # contain the manifest", which is the permissive value and makes
+                # the oldest discovered revision look like the commit that ADDED
+                # it. That is the species this pack has now fixed six times: an
+                # exception or an unknown must never resolve to the permissive
+                # value. Unknown is NOT CHECKED.
+                _incomplete = ('the tree of %s, the parent of the oldest revision of this manifest'
+                               ' reachable here (%s), could not be read, so whether an earlier'
+                               ' record of this manifest exists there is unknown'
+                               % (_p[:12], _oldest[:12]))
+            elif _paths_at(_p) or _carriers(_p):
                 # CHALLENGE R15-P0-01: this test asked only the BASENAME, so a
                 # parent that carried the manifest under its OLD name looked
                 # empty and the forging revision passed as "the commit that
@@ -500,9 +536,13 @@ def main():
                         moved[nm] = (signed_history[nm], dg, rev)
         _nrevs = len(_revs.stdout.split())
         if history.startswith('checked'):
+            # CHALLENGE R16-P0-01: this sentence asserted that the marker had
+            # found the revisions, and printed the same words when the marker
+            # legs had found NOTHING AT ALL. It now reports the count those legs
+            # contributed, so a reader can see an inert anchor in the output.
             history = ('checked over all %d revision(s) of this manifest reachable from HEAD,'
-                       ' OLDEST first, found by the marker it carries and by every path it has'
-                       ' held' % _nrevs)
+                       ' OLDEST first — %d of them found by the marker it carries, the rest by'
+                       ' a path it has held' % (_nrevs, len(_marker_revs & set(_revmap))))
         if gaps and history.startswith('checked'):
             # CHALLENGE R15-P3-01: this sentence used to say "removed and
             # re-added", which is a CAUSE, and the measurement under it is only
@@ -647,7 +687,7 @@ def main():
     #  * a path git hands back quoted, or with a backslash this tool cannot
     #    round-trip, is a refusal and never a skip -- it was read as "absent
     #    from that tree" and counted two true records as gaps.
-    _subject_marks = sum(1 for ln in lines if ln.rstrip() == MARKER)
+    _subject_marks = sum(1 for ln in lines if MARKER_PY.match(ln))
     if _subject_marks != 1:
         blocked = True
         history = ('NOT ANCHORED (the file given as the manifest carries the manifest marker %d'
@@ -656,6 +696,25 @@ def main():
                      ' whatever path or name it has held, so without exactly one of it in the'
                      ' subject there is no anchor to read a history against, and this tool'
                      ' reports no verdict about the reviewer rows.' % (history, MARKER))
+    # CHALLENGE R16-P0-01, the second half of the remedy, and the coordinator's
+    # "zero revisions found must be a named refusal": matching the three places
+    # alike is not enough on its own, because the next spelling nobody thought
+    # of makes the anchor inert again. So the anchor is ASSERTED: the subject
+    # carries the marker, and if HEAD is in a readable repository and NO file in
+    # it carries that marker, the tool refuses by name instead of walking a
+    # revision set the marker had no part in choosing.
+    _head_carriers = _carriers('HEAD')
+    if (_subject_marks == 1 and _head_carriers is not None and not _head_carriers
+            and not blocked):
+        blocked = True
+        history = ('NOT ANCHORED (the file given as the manifest carries the marker, but no file'
+                   ' in HEAD does, so the marker found nothing to walk)')
+        stale.append('%s. Either this manifest is not the one this repository tracks, or its'
+                     ' marker line differs from the committed one by bytes this tool normalises'
+                     ' away in the file and git does not in the tree — a trailing space, a tab or'
+                     ' a CR. Until the committed marker and this one agree, the history witness'
+                     ' is chosen by path alone, which is what a move plus a rename defeats, so'
+                     ' nothing here is reported as checked.' % history)
     if _quotefail is not None:
         blocked = True
         history = ('NOT CHECKED (git reported the manifest at revision %s under a path this tool'

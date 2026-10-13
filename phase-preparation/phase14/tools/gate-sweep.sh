@@ -147,7 +147,11 @@ else
   printf '   anchor=%s ABSENT from %s — the 4 citation-provenance cases below will refuse at rc 2,\n' \
          "${P14ANCHOR:0:12}" "$REPO"
   printf '   which is fail-closed, not a flake. Fetch it by its FULL object name:\n     git fetch --depth 1 origin %s\n' "$P14ANCHOR"
-  printf '   The 7-character abbreviation is refused by the server, and fetch-depth: 0 does not\n   help, because the commit is on no branch.\n'
+  printf '   The 7-character abbreviation is refused by the server. CHALLENGE R16-R-01, measured in\n'
+  printf '   a clean clone by both the author and the challenger: it is fetch-depth: 0 AND that\n'
+  printf '   fetch, not one or the other. A depth-1 checkout cannot pass even with the anchor AND\n'
+  printf '   the merge-base fetched, because one classification in the generated block is derived\n'
+  printf '   from history (a file the pack once tracked and deleted), so the block reads STALE.\n'
 fi
 # And the opt-out this sweep must never be run with, said where a CI author
 # reads it: --allow-unverified-history accepts a history that CANNOT BE READ and
@@ -931,6 +935,128 @@ else
   fail=$((fail+1))
 fi
 rm -rf "$DCW" "$STW"
+
+# ---- CHALLENGE R16-P0-01, which BLOCKED: the marker's subject test and its two
+# history legs differed by ONE BYTE of normalisation -- `rstrip()` against an
+# exact `^marker$` -- so a manifest whose marker line carries a trailing SPACE,
+# or that is committed CRLF, passed the subject requirement while BOTH legs
+# found nothing, and the walk fell back to the path alone while still printing
+# "found by the marker it carries". These three worlds are identical except for
+# that one byte, which is why the control is here: without it the two attack
+# worlds prove only that something refuses.
+mkworld16() { # $1 world dir, $2 none|space|crlf
+  local W="$1" M="$2"
+  rm -rf "$W"; mkdir -p "$W/repo/a"; cp -r "$PACK" "$W/repo/a/phase14"
+  rm -rf "$W/repo/a/phase14/.git"
+  case "$M" in
+    space) python3 - "$W/repo/a/phase14/P14-HANDOFF-MANIFEST.md" <<'SP'
+import sys
+p=sys.argv[1]; L=open(p,encoding='utf-8').read().split(chr(10))
+L[0]=L[0]+' '
+open(p,'w',encoding='utf-8').write(chr(10).join(L))
+SP
+;;
+    crlf) python3 - "$W/repo/a/phase14/P14-HANDOFF-MANIFEST.md" <<'CR'
+import sys
+p=sys.argv[1]; d=open(p,'rb').read().replace(b'\r\n',b'\n').replace(b'\n',b'\r\n')
+open(p,'wb').write(d)
+CR
+;;
+  esac
+  ( cd "$W/repo" && git init -q . && git add -A >/dev/null 2>&1 \
+    && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' \
+    && git -c user.email=p14@local -c user.name=p14 commit -q --allow-empty -m 'another revision' ) >/dev/null 2>&1
+  # an honest third revision OF THE MANIFEST: the manifest carries no row for
+  # itself, so editing it leaves every artifact row intact and the only reason
+  # this world can red is the forgery below.
+  python3 - "$W/repo/a/phase14/P14-HANDOFF-MANIFEST.md" <<'ED'
+import sys
+p=sys.argv[1]; raw=open(p,'rb').read()
+nl=b'\r\n' if b'\r\n' in raw else b'\n'
+open(p,'wb').write(raw+nl+b'an honest later note.'+nl)
+ED
+  ( cd "$W/repo" && git add -A >/dev/null 2>&1 \
+    && git -c user.email=p14@local -c user.name=p14 commit -q -m 'an honest edit of the manifest' \
+    && mkdir -p promoted && git mv a/phase14/P14-HANDOFF-MANIFEST.md promoted/HANDOFF.md ) >/dev/null 2>&1
+  printf '\n\nan appended line nobody received\n' >> "$W/repo/a/phase14/P14-CHALLENGE-7af6438.md"
+  python3 - "$W/repo/a/phase14/P14-CHALLENGE-7af6438.md" "$W/repo/promoted/HANDOFF.md" <<'FG16'
+import hashlib,os,re,sys
+rep,man=sys.argv[1],sys.argv[2]
+b=open(rep,'rb').read(); h=hashlib.sha256(b).hexdigest()
+raw=open(man,'rb').read(); crlf=b'\r\n' in raw
+L=raw.decode('utf-8').split('\n'); out=[]
+for l in L:
+    if l.startswith('| `%s`' % os.path.basename(rep)):
+        l=re.sub(r'`[0-9a-f]{64}`','`%s`' % h,l)
+        l=re.sub(r'\| [0-9,]+ \|(\r?)$','| %s |\\1' % format(len(b),','),l)
+    out.append(l)
+pad=['the promotion ledger was rewritten wholesale, line %d.%s' % (i,'\r' if crlf else '')
+     for i in range(4000)]
+open(man,'w',encoding='utf-8',newline='').write('\n'.join(out[:1]+pad+out[1:]))
+FG16
+  ( cd "$W/repo" && git add -A >/dev/null 2>&1 \
+    && git -c user.email=p14@local -c user.name=p14 commit -q -m 'promote: rename, move and rewrite' ) >/dev/null 2>&1
+}
+M16=$(mktemp -d); SCRATCH="${SCRATCH:-} $M16"
+for v in ctrl:none space:space crlf:crlf; do
+  nm="${v%%:*}"; mut="${v##*:}"
+  mkworld16 "$M16/$nm" "$mut"
+  R="$M16/$nm/repo"
+  # Premises, all read from git: four revisions exist; the path legs see one
+  # each; and the EXACT marker is present at HEAD only in the control.
+  tot=$(cd "$R" && git rev-list HEAD | wc -l)
+  bn=$(cd "$R" && git rev-list HEAD -- ':(top,glob)**/HANDOFF.md' | wc -l)
+  fl=$(cd "$R" && git log --follow --format=%H -- promoted/HANDOFF.md | wc -l)
+  ex=$(cd "$R" && git grep -l --full-name -E '^# P14-HANDOFF-MANIFEST[.]md$' HEAD -- ':(top)' | wc -l)
+  want_ex=0; [ "$nm" = ctrl ] && want_ex=1
+  A16="--manifest $R/promoted/HANDOFF.md --dir $R/a/phase14 --witness $M16/$nm/none"
+  if [ "$tot" = 4 ] && [ "$bn" = 1 ] && [ "$fl" = 1 ] && [ "$ex" = "$want_ex" ]; then
+    named "marker-$nm-world" 1 "REWRITTEN IN HISTORY" \
+      "python3 -I $HERE/manifest-digests.py $A16 --check"
+  else
+    printf 'FAIL  %-26s premise not built (total %s, basename %s, follow %s, exact-at-HEAD %s want %s) — nothing was proved\n' \
+           "marker-$nm-world" "$tot" "$bn" "$fl" "$ex" "$want_ex"
+    fail=$((fail+1))
+  fi
+done
+rm -rf "$M16"
+
+# ---- The second half of the same remedy, which the first half cannot cover:
+# the next spelling nobody thought of. The anchor is ASSERTED -- a subject that
+# carries the marker while NO file in HEAD does refuses by name, instead of
+# walking a revision set the marker had no part in choosing. NOTE what this
+# proof claims: at `7f6f535` this world also exited 1 (the forged row is caught
+# by its digest), so this is NOT a 0 -> 1 flip. What changes is that the summary
+# no longer says "checked over all 2 revision(s) ... found by the marker" about
+# a run in which the marker found nothing.
+NHW=$(mktemp -d); SCRATCH="${SCRATCH:-} $NHW"; mkdir -p "$NHW/repo/a"
+cp -r "$PACK" "$NHW/repo/a/phase14"; rm -rf "$NHW/repo/a/phase14/.git"
+python3 - "$NHW/repo/a/phase14/P14-HANDOFF-MANIFEST.md" <<'OTHER'
+import sys
+p=sys.argv[1]; L=open(p,encoding='utf-8').read().split(chr(10))
+L[0]='# the promotion ledger'
+open(p,'w',encoding='utf-8').write(chr(10).join(L))
+OTHER
+( cd "$NHW/repo" && git init -q . && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'committed under another heading' \
+  && git -c user.email=p14@local -c user.name=p14 commit -q --allow-empty -m 'another revision' ) >/dev/null 2>&1
+python3 - "$NHW/repo/a/phase14/P14-HANDOFF-MANIFEST.md" <<'BACK'
+import sys
+p=sys.argv[1]; L=open(p,encoding='utf-8').read().split(chr(10))
+L[0]='# P14-HANDOFF-MANIFEST.md'
+open(p,'w',encoding='utf-8').write(chr(10).join(L))
+BACK
+NHE=$(cd "$NHW/repo" && git grep -l --full-name -E '^# P14-HANDOFF-MANIFEST[.]md$' HEAD -- ':(top)' | wc -l)
+NHS=$(grep -c '^# P14-HANDOFF-MANIFEST\.md$' "$NHW/repo/a/phase14/P14-HANDOFF-MANIFEST.md" || true)
+if [ "$NHE" = 0 ] && [ "${NHS:-0}" = 1 ]; then
+  named marker-absent-from-head 1 "NOT ANCHORED" \
+    "python3 -I $HERE/manifest-digests.py --manifest $NHW/repo/a/phase14/P14-HANDOFF-MANIFEST.md --dir $NHW/repo/a/phase14 --witness $NHW/none --check"
+else
+  printf 'FAIL  %-26s premise not built (exact-at-HEAD %s, in subject %s) — nothing was proved\n' \
+         marker-absent-from-head "$NHE" "${NHS:-<none>}"
+  fail=$((fail+1))
+fi
+rm -rf "$NHW"
 rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"
 
 red retracted-claim-planted \
