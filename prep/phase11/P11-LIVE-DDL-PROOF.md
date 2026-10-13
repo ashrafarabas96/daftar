@@ -1952,3 +1952,128 @@ C and D as `SPEC ONLY`, and **`OD-P11-07`, which is the owner's**.
 **no CI has executed any of it**. The repository's own npm gates are green after
 a build at this head and at `main` (§14.3) and are a separate measurement from
 every `EXIT_*` above.
+
+## 15. The SEVENTH independent challenge: Pack A `REJECT` on one clause that was BOTH a fail-open and a refusal of lawful work — defect 46
+
+The sixth round's answer moved the write identity into a server-written ledger
+and changed the rule to unanimity. The challenger confirmed every part of that
+— the column ACL, the immutability, the RLS, the grants, the decoy ledger and
+`pg_temp` shadowing, the 48 `SECURITY DEFINER` functions none of which names
+the ledger, and the three round-6 forgeries, all now refused — and rejected the
+head on **one clause**:
+
+```
+   WHERE l.txid = pg_current_xact_id()
+     AND l.xmin = pg_current_xact_id()::xid;   -- deleted in this round
+```
+
+### 15.1 The fact underneath it, measured directly
+
+`pg_current_xact_id()` returns the **top-level** transaction id. A row inserted
+inside a **sub**transaction carries the subtransaction's id in `xmin`. One
+probe, run as a single statement sequence on the scratch cluster:
+
+```
+ a | row_xmin | cur_topxid | matches_filter
+---+----------+------------+----------------
+ 1 | 20097    | 20097      | t
+ 2 | 20098    | 20097      | f     <- written after SAVEPOINT s1
+```
+
+A `SAVEPOINT`, a PL/pgSQL `BEGIN ... EXCEPTION` block and a nested transaction
+in most ORMs all open that subtransaction. `PA7-S4` and `PA7-S7` are the two
+cases that pin the mechanism rather than the consequence: the `EXCEPTION` block
+opens one with no `SAVEPOINT` keyword anywhere, and the recorder is a
+`FOR EACH STATEMENT` trigger, so even an `UPDATE` matching **zero rows**
+appends a ledger row under the identity holding at that moment. That last fact
+is what made the exploit cheap: a no-op supplies the agreeing row for free.
+
+### 15.2 Both faces, reproduced here before the clause was touched
+
+`PROVEN BY TEST`, every arm as `daftar_app` with no superuser in the session:
+
+| shape | at `2bfb6d5` | at this head |
+|---|---|---|
+| the round-4 door, harmful chain inside a `RELEASE`d savepoint, committing under an identity blind to business A | **rc 0, NOT REFUSED**, 1 live variant outside its grid committed (reproduced in this container before the fix) | `PA7-S1` **rc 3** `catalog.matrix_grid_unverifiable` |
+| the identical chain at **top level** — the isolating control | rc 3 | `PA7-S2` rc 3 |
+| the same exploit whose only top-level write is a **zero-row no-op** | rc 0 | `PA7-S8` **rc 3** |
+| a **wholly lawful** build inside a `RELEASE`d savepoint | **rc 3**, refused — `v_rows = 0`, because every row the recorder wrote was discarded | `PA7-S3` **rc 0**, committed |
+| a write under another identity that was **rolled back** | rc 0 | `PA7-S5` rc 0, one identity |
+| `TRUNCATE` on a governed relation as the app role (`R7-06`) | ungranted | `PA7-S9` rc 3 `permission denied for table product_variants` |
+
+The savepoint is the whole difference between the first two rows, which is
+what makes the pair an attribution rather than a demonstration.
+
+### 15.3 Why the remedy is a DELETION, and how a deletion is red-proved
+
+The clause is removed, not repaired, and that is a claim about what it
+protected: nothing the `txid` predicate does not already protect. A row
+visible here with `txid = pg_current_xact_id()` can only have been written by
+this transaction — another transaction's insert carrying this `txid` is refused
+by the RLS `WITH CHECK` (`PA6-L2`, measured by name), and an uncommitted
+stranger's row is not visible in this snapshot at all. `txid` is `xid8`, so the
+key does not wrap and nothing narrower is compared anywhere. PostgreSQL does
+not expose the subtransaction-to-top-level mapping from SQL, so a *repaired*
+comparison was not available even in principle.
+
+A remedy that is an **absence** can only be red-proved by restoring what was
+removed. `M20` puts the clause back, and `M20` is the one mutation in this
+phase whose point is that **it is not green**. Measured on a fresh database
+through the step-5c hook, digest `4f3ea2f9…` before and `cfb0e4d7…` after,
+Pack A **115 cases, 6 failed on pass 1 and 21 on pass 2**, Pack B 53 cases 0
+failed on both, `EXIT_PROOFS_A` 1 and `EXIT_SCRIPT` 1. The two **attributable**
+flips are the point:
+
+* `PA7-S1` fails with `no error` — the exploit **commits again** — and `PA7-S6`
+  then reads the state it left: `sp=2`, `outside=1`, one live variant outside
+  its grid;
+* `PA7-S3` is **refused** — the refusal of lawful work is back.
+
+And the limit of the other arms, stated rather than counted: once `PA7-S1`
+commits, `PA7-S2` and `PA7-S8` fail on `duplicate key value violates unique
+constraint` against the state it left, and `PA7-S6`'s assertion fails because
+that state exists. Those three are **collateral of the fail-open landing**, not
+three independent measurements of it — every arm runs on one shared database,
+and an exploit that commits changes what the later arms meet. The pair that
+attributes the defect to the subtransaction and to nothing else is `PA7-S1`
+against `PA7-S2` on the **unmutated** schema, where both are refused.
+
+`M16`, `M17` and `M19` are **deleted** from the mutation set, because with the
+clause gone all three target text that is not there, and a mutation that cannot
+find its subject tests nothing. Every one of the ten mutations that remain is
+red, each on its own rebuild and each count naming its pass: `M7` 24 p1 / 28 p2,
+`M8` 17 / 17, `M9` 50 / 54 (exit 2), `M10` refused at exit 4 as a no-op, `M11`
+16 / 25, `M13` Pack A 0 / 0 and Pack B 8 / 9 (exit 2), `M14` 3 / 3, `M15`
+16 / 16, `M18` 1 / 1, `M20` 6 / 21.
+
+### 15.4 The correction this round forces on the sixth round's own wording
+
+Round 6 measured that `M16` reded no case, and wrote that the clause was
+`UNMEASURED` defence in depth, named as a residual rather than counted as a
+tested layer. Naming it was right. **Reading the green as harmlessness was
+wrong.** A layer no instrument reaches is a layer whose behaviour is unknown
+**in both directions**, and this one was wrong in both: it opened the exact
+hole the fifth and sixth rounds were spent closing, and it refused lawful work
+at the same time. The phase law this adds is in
+`P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` as the gate arm
+`unmeasured-read-as-inert`, and the architecture note is `P11-AL-42`.
+
+It also puts a second law of this file on the record for the third time: a
+guard that breaks a lawful write is a worse defect than the one it closes.
+`PA7-S3` is now a permanent case precisely so that the next remedy in this area
+cannot be accepted on the strength of its refusals alone.
+
+### 15.5 What is still `UNMEASURED` here, named rather than counted
+
+1. **Concurrency through the ledger** remains unmeasured: no race drives two
+   sessions through `catalog_grid_ctx_ledger`, and `SERIALIZABLE` is unmeasured
+   everywhere in this phase.
+2. **`TRUNCATE` triggers are not declared** by this pack. `PA7-S9` and the new
+   end-state assertion measure that no non-owner role *holds* `TRUNCATE` on the
+   four relations; neither shows what would happen if one did. Declaring
+   `TRUNCATE` triggers, or keeping the privilege out by assertion only, is a
+   Migration Owner decision — `MPR-10`, now **eight** items.
+3. **A deferred check reached with no ledger row at all** still refuses
+   (`v_rows = 0`), and that branch is exercised only by `M14`'s neighbourhood,
+   not by a shape an application can produce, now that a zero-row statement is
+   known to record one.

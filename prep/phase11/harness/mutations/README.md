@@ -31,19 +31,42 @@ NULL`. It is the red proof of the DIGEST, not of the tautology test, and the
 file states its own measurement including the half of its first draft that was
 wrong.
 
-`M14`–`M17` (round 6) are about the LEDGER that replaced the forgeable GUC.
-`M14` restores the two privileges whose absence makes a recorded identity
-unforgeable and unremovable. `M15` drops the RLS own-transaction write policy,
-`M16` drops the `xmin` filter and `M17` drops both: that is the pair-drop, and
-its result is asymmetric — only the policy has a reachable case, because it
-makes the planted state unreachable, so the filter is UNMEASURED defence in
-depth and is named as such rather than counted as a tested layer.
+`M14`, `M15` and `M18` (round 6) are about the LEDGER that replaced the
+forgeable GUC. `M14` restores the two privileges whose absence makes a
+recorded identity unforgeable and unremovable. `M15` drops the RLS
+own-transaction write policy, and its result was not the one predicted:
+dropping the only `INSERT` policy on a FORCE RLS table permits no insert at
+all, so it is fail-closed and broken rather than open. `M18` replaces that
+policy with a PERMISSIVE one, and that is the plant defence's real red proof.
 
-`M11` and `M16`/`M17` mutate by TEXT SURGERY on the live function body rather
-than by pasting a copy of it, and they REFUSE outright if the text they target
-is not there. A pasted copy is a second implementation that drifts: it would
-keep reding long after the real function changed, and the log would still say
-the guard was tested.
+`M16`, `M17` and `M19` ARE GONE, and why they are gone is the seventh round's
+finding. All three targeted `AND l.xmin = pg_current_xact_id()::xid` in the
+deferred check. `M16` dropped the clause and reded nothing, and round 6 read
+that green as "defence in depth whose effect is UNMEASURED" — named as a
+residual rather than counted as a tested layer, which was the careful half of
+the mistake. The careless half was treating unmeasured as inert. The clause
+was reachable, and in both directions: `pg_current_xact_id()` returns the
+TOP-LEVEL transaction id while a row written inside a SUBtransaction carries
+the subtransaction's id as `xmin`, so the clause discarded every ledger row
+written inside a savepoint, a PL/pgSQL `BEGIN ... EXCEPTION` block or an ORM's
+nested transaction. It was a FAIL-OPEN (the harmful chain inside a RELEASEd
+savepoint committed, rc 0) and a REFUSAL OF LAWFUL WORK (a wholly lawful build
+inside a RELEASEd savepoint, rc 3). The clause is deleted from the pack, which
+makes all three files vacuous: there is nothing left to drop.
+
+`M20` (round 7) is their replacement and it runs the other way: it puts the
+clause BACK, and the suite must go red. A remedy that is an ABSENCE can only be
+red-proved by restoring what was removed, and `PA7-S1` and `PA7-S3` are the two
+cases that must flip. `M20` is therefore the one mutation in this directory
+whose point is that it is NOT green.
+
+`M11`, `M20` mutate by TEXT SURGERY on the live function body rather than by
+pasting a copy of it, and they REFUSE outright if the text they target is not
+there — `M20` refuses in both directions, including when the clause it restores
+is already present, so it cannot pass as a test of a remedy that is not in
+place. A pasted copy is a second implementation that drifts: it would keep
+reding long after the real function changed, and the log would still say the
+guard was tested.
 
 **Every count reported from a mutation run names the PASS it was measured on**
 (`P3-01` of round 5). The suites run twice on one database on purpose: the

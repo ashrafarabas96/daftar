@@ -855,20 +855,21 @@ CREATE TRIGGER product_matrix_axes_30_set_frozen
 --     (measured). The column ACL is the mechanism this phase's own DDL digest
 --     gained a `pg_attribute` arm for in round 5, which is why a drift in it
 --     can no longer pass as a no-op.
---   * a row for ANOTHER transaction cannot be planted, and that is defended
---     TWICE on purpose, so the pair can be dropped and read: an RLS
---     `WITH CHECK (txid = pg_current_xact_id())` refuses the INSERT outright
---     (`new row violates row-level security policy`, measured), and the check
---     additionally counts only rows whose system column `xmin` equals this
---     transaction's id, so a row that somehow exists for this `txid` but was
---     written by a DIFFERENT transaction is IGNORED rather than counted. The
---     first makes the plant impossible; the second makes a planted row
---     harmless if the first is ever lost. Neither is a fail-open remedy on its
---     own: unanimity already means a planted row can only cause a refusal, so
---     what the pair protects is availability — a stranger must not be able to
---     make a later lawful transaction refuse. `pg_current_xact_id()` is
---     `xid8`, epoch-extended, so the `txid` key does not wrap; the 32-bit
---     `xmin` comparison is paired with it and never stands alone.
+--   * a row for ANOTHER transaction cannot be planted, and it is defended
+--     ONCE, by the RLS `WITH CHECK (txid = pg_current_xact_id())` that
+--     refuses the INSERT outright (`new row violates row-level security
+--     policy`, measured by name as `daftar_app`). The sixth round paired that
+--     policy with an `xmin` filter in the check and called the pair two
+--     defences; the seventh round measured the filter as a fail-open and as a
+--     refusal of lawful work, and it is DELETED. The reasoning is written out
+--     at the read itself. What matters here is the correction to the claim:
+--     the sixth round named that filter an UNMEASURED defence in depth
+--     because no case reached it, and "unmeasured" was treated as "inert".
+--     It was not inert. A layer no instrument reaches is a layer whose
+--     BEHAVIOUR is unknown in both directions, and the only honest way to
+--     learn which it is, is to reach it. `pg_current_xact_id()` is `xid8`,
+--     epoch-extended, so the `txid` key does not wrap and nothing narrower
+--     is compared anywhere.
 --   * ABSENT is a refusal, not a pass: a check reached with no recorded
 --     identity means the recorder is gone or was bypassed, and the whole
 --     point of this finding is that an empty read must not reassure.
@@ -933,9 +934,12 @@ ALTER TABLE catalog_grid_ctx_ledger FORCE   ROW LEVEL SECURITY;
 CREATE POLICY catalog_grid_ctx_ledger_own_txid_select ON catalog_grid_ctx_ledger
   FOR SELECT USING (txid = pg_current_xact_id());
 
--- And writes ONLY for its own transaction. This is the first of the two
--- defences against a row planted for another transaction; the second is the
--- `xmin` filter in the check, and they are pair-dropped in the mutation set.
+-- And writes ONLY for its own transaction. This is now the ONLY defence
+-- against a row planted for another transaction, because the seventh round
+-- deleted the `xmin` filter that used to stand beside it; M18 is its red
+-- proof (replacing it with a permissive policy opens the plant) and M15
+-- measures the other direction (dropping it outright permits no write at
+-- all, so it is fail-closed and broken rather than open).
 CREATE POLICY catalog_grid_ctx_ledger_own_txid_insert ON catalog_grid_ctx_ledger
   FOR INSERT WITH CHECK (txid = pg_current_xact_id());
 
@@ -988,17 +992,54 @@ BEGIN
   -- catalog_grid_ctx_record(). The identity under which the state was written
   -- is recorded at statement time; if it is absent, or differs from the
   -- identity at this COMMIT, the read below is not a measurement.
-  -- Read the ledger, and count ONLY the rows this transaction itself wrote:
-  -- `xmin` is the inserting transaction's id, so a row that exists for this
-  -- `txid` without having been written by it is ignored rather than counted.
-  -- The RLS WITH CHECK makes such a row impossible to insert in the first
-  -- place; this is the second of the two defences, and the mutation set drops
-  -- them singly and together so the log says which one answers.
+  -- Read the ledger. The predicate is the transaction id and NOTHING ELSE,
+  -- and the seventh challenge round is why: this read used to carry
+  -- `AND l.xmin = pg_current_xact_id()::xid` as a second defence against a
+  -- planted row, and that clause was a fail-open AND a refusal of lawful
+  -- work. `pg_current_xact_id()` returns the TOP-LEVEL transaction id, while
+  -- a row inserted inside a SUBtransaction carries the subtransaction's id as
+  -- `xmin` -- measured in one probe, top level 20097 == 20097 true, the row
+  -- written after `SAVEPOINT s1` 20098 vs 20097 false. A savepoint, a
+  -- PL/pgSQL `BEGIN ... EXCEPTION` block and a nested transaction in most
+  -- ORMs all open that subtransaction, so the clause silently discarded the
+  -- ledger rows of an ordinary application shape. Both faces were measured as
+  -- `daftar_app`:
+  --   * FAIL-OPEN. The round-4 door run with the harmful chain inside a
+  --     RELEASEd savepoint and one lawful top-level write under the
+  --     committing identity: rc 0, NOT REFUSED, 1 live variant outside its
+  --     grid committed. The identical chain at top level: rc 3,
+  --     catalog.matrix_grid_unverifiable. The savepoint was the whole
+  --     difference -- the ledger held the harmful row and the clause threw it
+  --     away, so unanimity saw one agreeing identity and the closure read was
+  --     then blind, which is the exact state the fifth and sixth rounds were
+  --     spent closing.
+  --   * AND A REFUSAL OF LAWFUL WORK. A wholly lawful grid build inside a
+  --     RELEASEd savepoint: rc 3, because every row the recorder wrote was
+  --     discarded and the check took its `v_rows = 0` branch. That is this
+  --     file's own standing rule -- a guard that breaks a lawful write is a
+  --     worse defect than the one it closes.
+  -- The clause is DELETED, not repaired, and that is a claim about what it
+  -- protected: nothing the `txid` predicate does not already protect. A row
+  -- visible here with `txid = pg_current_xact_id()` can only have been
+  -- written by this transaction. Another transaction cannot insert one --
+  -- the RLS `WITH CHECK (txid = pg_current_xact_id())` refuses it, measured
+  -- by name as `daftar_app` -- and an uncommitted stranger's row is not
+  -- visible in this snapshot at all. `txid` is `xid8`, epoch-extended, so the
+  -- key does not wrap and there is no 32-bit comparison left to stand alone.
+  -- Rows written inside a ROLLED BACK savepoint stay invisible, which is
+  -- correct: work that was undone has no identity to answer for.
+  -- PostgreSQL does not expose the subtransaction-to-top-level mapping from
+  -- SQL, so a repaired comparison was not available even in principle; the
+  -- deletion is the remedy. Re-adding the clause is mutation M20, and M20 is
+  -- NOT green: measured, the savepoint exploit COMMITS again (PA7-S1 fails
+  -- with `no error`, and PA7-S6 then reads sp=2, outside=1) while the lawful
+  -- savepoint build is REFUSED (PA7-S3). Pack A 115 cases, 6 failed on pass 1
+  -- and 21 on pass 2; the later arms' failures are collateral of the exploit
+  -- landing on a shared database, and M20's own header says so.
   SELECT count(*), count(DISTINCT l.recorded_identity), min(l.recorded_identity)
     INTO v_rows, v_identities, v_at_write
     FROM catalog_grid_ctx_ledger l
-   WHERE l.txid = pg_current_xact_id()
-     AND l.xmin = pg_current_xact_id()::xid;
+   WHERE l.txid = pg_current_xact_id();
 
   IF v_rows = 0 THEN
     RAISE EXCEPTION 'catalog.matrix_grid_unverifiable: no write identity was recorded for this transaction, so the grid-closure law cannot know whether the session judging the state is the session that wrote it; it refuses rather than passes'
@@ -1867,6 +1908,25 @@ BEGIN
                     AND a.grantee <> c.relowner
                     AND a.privilege_type = 'INSERT') THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: no role holds INSERT (txid) on catalog_grid_ctx_ledger, so the recorder cannot run and every lawful write to the four relations would fail' USING ERRCODE='P0001';
+  END IF;
+  -- R7-06, the seventh challenge round. TRUNCATE on the four relations is a
+  -- write NO TRIGGER COVERS: a statement trigger fires for INSERT, UPDATE and
+  -- DELETE, and PostgreSQL's TRUNCATE triggers are a separate event this pack
+  -- does not declare, so a role holding TRUNCATE could empty a product's grid
+  -- with no ledger row written, no deferred check queued and nothing for
+  -- unanimity to judge. Nothing in this pack or in frozen history grants it,
+  -- which is exactly why it is asserted rather than assumed: an absence no
+  -- instrument reads is the shape this phase keeps paying for, and the
+  -- previous round paid for it again by calling an unreached clause inert.
+  IF EXISTS (SELECT 1
+               FROM pg_class c
+               CROSS JOIN LATERAL aclexplode(c.relacl) a
+              WHERE c.relnamespace = 'public'::regnamespace
+                AND c.relname IN ('product_variants','product_matrix_axes',
+                                  'product_attribute_axes','product_attribute_values')
+                AND a.grantee <> c.relowner
+                AND a.privilege_type = 'TRUNCATE') THEN
+    RAISE EXCEPTION 'catalog.migration_end_state_invalid: a role holds TRUNCATE on one of the four relations the grid laws govern; TRUNCATE fires no statement trigger here, so it would empty the state with no recorded write identity and no deferred closure check' USING ERRCODE='P0001';
   END IF;
   IF (SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = 'product_variants_matrix_uq' AND relkind = 'i') <> 1 THEN
     RAISE EXCEPTION 'catalog.migration_end_state_invalid: the matrix uniqueness index is absent' USING ERRCODE='P0001';

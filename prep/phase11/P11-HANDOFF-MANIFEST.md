@@ -380,7 +380,58 @@ Evidence: `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND6.txt`,
 rebuild) and `RUN-EVIDENCE-REPO-GATES-ROUND6.txt`. Run identity and exit codes in `P11-LIVE-DDL-PROOF.md` §14.4; what
 stays open in §14.5.
 
-**A SEVENTH round is owed**, and **nothing here is self-signed.**
+**A SEVENTH round was run; see §7.7.** Nothing here is self-signed.
+
+---
+
+## 7.7 The SEVENTH independent challenge round (2026-10-13) — Pack A `REJECT` on one clause, both faces measured, answered
+
+**The verdict confirmed everything the sixth round built** — the server-written
+identity column, the `INSERT (txid)`-only grant, the immutability, the RLS, the
+generated grants, a decoy ledger in a schema the app role owns and a `pg_temp`
+decoy (both refused), the 48 `SECURITY DEFINER` functions none of which names
+the ledger or the context, and all three round-6 forgeries now refused — and
+rejected the head on **one clause**: `AND l.xmin = pg_current_xact_id()::xid`.
+
+`pg_current_xact_id()` returns the TOP-LEVEL transaction id; a row written
+inside a SUBtransaction carries the subtransaction's id in `xmin`. Probed here
+directly before anything was changed: `20098` vs a current `20097` for the row
+written after `SAVEPOINT s1`. A savepoint, a PL/pgSQL `BEGIN ... EXCEPTION`
+block and an ORM's nested transaction all open one, so the clause discarded the
+ledger rows of an ordinary application shape — and it was wrong in **both**
+directions, reproduced in this container as `daftar_app`:
+
+* **fail-open** — the round-4 door with the harmful chain inside a `RELEASE`d
+  savepoint committed at **rc 0** with 1 live variant outside its grid, while
+  the identical chain at top level was refused at rc 3;
+* **refusal of lawful work** — a wholly lawful build inside a `RELEASE`d
+  savepoint was refused at rc 3 on the `v_rows = 0` branch.
+
+**Answer, in ONE commit:** the clause is DELETED (not repaired — PostgreSQL does
+not expose the subtransaction-to-top-level mapping from SQL, and the `txid`
+predicate plus the RLS `WITH CHECK` already carry everything it was meant to).
+Nine permanent cases, `PA7-S1`…`PA7-S9`, every arm as `daftar_app` with no
+superuser: the savepoint exploit, its top-level isolating control, the zero-row
+no-op variant of the same exploit, the lawful savepoint build, the
+`BEGIN ... EXCEPTION` shape, the zero-row statement that records a consenting
+row for free, the rolled-back write that correctly records none, `TRUNCATE`
+refused by name (`R7-06`), and the committed-state assertion. `M20` restores the
+clause and is the one mutation whose point is that it is **NOT green**; `M16`,
+`M17` and `M19` are deleted, because with the clause gone all three target text
+that is not there. `R7-06` also adds an end-state assertion that no non-owner
+role holds `TRUNCATE` on the four relations. The sixth round's own wording is
+corrected rather than reinterpreted: naming an unreached layer `UNMEASURED` was
+right, reading its green as harmlessness was not — gate arms
+`unmeasured-read-as-inert` and `write-that-no-trigger-covers`, architecture note
+`P11-AL-42`.
+
+Evidence: `RUN-EVIDENCE-AUTHORITATIVE-ROUND7.txt` and
+`RUN-EVIDENCE-MUTATIONS-ROUND7.txt`. Run identity, both faces and the figures in
+`P11-LIVE-DDL-PROOF.md` §15; what stays open in §15.5. **No cold lint or
+typecheck figure is quoted as attribution anywhere** — the challenger retracted
+its round-6 attribution and the two-number table is the only gate reference.
+
+**An EIGHTH round is owed**, and **nothing here is self-signed.**
 `READY_TO_PROMOTE` = **NO**; **no migration number exists**; no CI has executed
 any of it. `OD-P11-07` is the owner's.
 

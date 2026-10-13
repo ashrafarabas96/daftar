@@ -697,3 +697,36 @@ relations, after every existing `_NN_` guard on each, and they are constraint
 triggers so their firing order among themselves does not matter);
 `MPR-08` (`stock_lots._10_`); `OD-P11-07` (the owner's). **No migration number
 exists**, and a FIFTH challenge round is owed on both packs.
+
+### 16.5 `MPR-10` — the eighth item, from the seventh challenge round (`R7-06`)
+
+**`TRUNCATE` on the four relations the Pack A grid laws govern.** A
+`FOR EACH STATEMENT` trigger fires for `INSERT`, `UPDATE` and `DELETE`;
+`TRUNCATE` is a **separate trigger event** this pack does not declare. So a
+role holding `TRUNCATE` could empty a product's grid with **no** write identity
+recorded, **no** deferred closure check queued, and nothing for unanimity to
+judge.
+
+What this pack does about it, and the limit of it:
+
+* an end-state assertion refuses the install if any **non-owner** role holds
+  `TRUNCATE` on `product_variants`, `product_matrix_axes`,
+  `product_attribute_axes` or `product_attribute_values`
+  (`catalog.migration_end_state_invalid`);
+* `PA7-S9` reads the refusal **by name** as `daftar_app`
+  (`permission denied for table product_variants`);
+* nothing in this pack or in frozen history grants it.
+
+**What is `UNMEASURED` and is the Migration Owner's to decide:** what would
+happen if a later migration *did* grant it. The two options are to declare
+`TRUNCATE` triggers on the four relations (which also changes behaviour under
+`pg_restore` and logical-replica apply, the same trade-off as the
+`ENABLE ALWAYS TRIGGER` item in this list), or to keep the privilege out by
+assertion only and accept that the assertion is the whole defence. This pack
+makes no claim about the first and ships the second.
+
+`MPR-10` therefore now carries **eight** items: the shared tautology test, the
+comment stripper, form 4 for Pack B's relations, the `session_replication_role`
+decision, the `ENABLE ALWAYS TRIGGER` question, ledger pruning, whether the
+ledger should be `UNLOGGED`, and this one. **No migration number exists**, and
+an EIGHTH challenge round is owed on Pack A.

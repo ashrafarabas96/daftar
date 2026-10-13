@@ -757,10 +757,12 @@ case("PA6-L5 the one insert it may make records the server's own answer, not the
 # COMMIT and passed this; this one refuses it, and the message names the count.
 case("PA6-L6 a transaction that wrote under TWO identities and came back to the first is REFUSED (first-write-wins passed this)",
      f"BEGIN;\n"
-     # statement 1, under identity A. It is a NO-OP update on purpose: it fires
-     # the row trigger and queues the deferred check for the fixture product,
-     # so the check really runs at COMMIT, while changing no state this case
-     # would then have to assert about.
+     # statement 1, under identity A. It is a NO-OP update on purpose: it
+     # fires the FOR EACH STATEMENT trigger that records the write identity
+     # (which fires even for zero rows -- PA7-S7) and the FOR EACH ROW
+     # trigger that queues the deferred check for the fixture product, so the
+     # check really runs at COMMIT while this case changes no state it would
+     # then have to assert about.
      f"UPDATE product_variants SET status = status WHERE business_id='{A}' AND id='{G2}';\n"
      # statement 2, under a DIFFERENT identity: only the request context moves,
      # no role change, so the case cannot be dismissed as a privilege artefact
@@ -798,6 +800,139 @@ case("PA6-L8 several statements under ONE identity still commit (the arm refuses
 case("PA6-L9 and that lawful transaction left nothing behind",
      f"SELECT 'lawful=' || count(*)::text FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='lawfulaxis';",
      "lawful=0", kind="value")
+# ── SEVENTH CHALLENGE ROUND, finding P1-01 and P1-02: THE SUBTRANSACTION ────
+# The sixth round's check read the ledger with
+# `AND l.xmin = pg_current_xact_id()::xid` beside the txid predicate, and
+# called it a second defence against a planted row. `pg_current_xact_id()`
+# returns the TOP-LEVEL transaction id; a row inserted inside a
+# SUBtransaction carries the subtransaction's id as `xmin`. Probed directly:
+# a top-level row 20097 == 20097, the row written after `SAVEPOINT s1`
+# 20098 vs 20097. So the clause discarded every ledger row the recorder
+# wrote inside a savepoint — and a PL/pgSQL `BEGIN ... EXCEPTION` block and a
+# nested transaction in most ORMs open the same implicit subtransaction, so
+# this is an ordinary application shape and not a contrivance.
+#
+# Both faces were reproduced here before the clause was deleted, and these
+# cases are the permanent record of both directions. PA7-S1 is the fail-open
+# and PA7-S3 is the lawful write the same clause refused; PA7-S2 is PA7-S1's
+# isolating control, which differs from it ONLY in the savepoint. Re-adding
+# the clause is mutation M20, and M20 is not green: it turns PA7-S1 and
+# PA7-S3 red, which is what makes these four cases the clause's red proof.
+SPC = ("UPDATE product_variants SET status='archived'\n"
+       f"  WHERE business_id='{A}' AND product_id='{PG}' AND NOT is_base AND status <> 'archived';\n"
+       "INSERT INTO product_attribute_axes (business_id,axis_code,sort_order)\n"
+       f"  VALUES ('{A}','%s',96);\n"
+       "INSERT INTO product_matrix_axes (business_id,product_id,axis_code,axis_position)\n"
+       f"  VALUES ('{A}','{PG}','%s',4);\n"
+       f"UPDATE product_variants SET status='active' WHERE business_id='{A}' AND id='{G2}';\n")
+# The harmful chain inside a RELEASEd savepoint, committing under an identity
+# blind to business A, with one lawful top-level write under THAT identity so
+# the ledger is not empty and the refusal cannot be the v_rows=0 branch.
+case("PA7-S1 the harmful chain inside a RELEASEd savepoint is REFUSED (it committed at 2bfb6d5, rc 0, 1 variant outside its grid)",
+     "BEGIN;\n"
+     "SAVEPOINT harm;\n"
+     + (SPC % ('spaxis', 'spaxis')) +
+     "RELEASE SAVEPOINT harm;\n"
+     f"SET app.business_id='{B}';\n"
+     f"SET app.tenant_id='{TB}';\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{B}','spaxisb',96);\n"
+     "COMMIT;",
+     "catalog.matrix_grid_unverifiable", role="daftar_app", pre=rls_a_ctx)
+# The control. The same chain, the same identity change, the same lawful
+# top-level write — and NO savepoint. It was already refused at 2bfb6d5, and
+# it must stay refused, so the pair attributes the difference to the
+# savepoint and to nothing else. Its own axis code, so the two arms cannot
+# collide through the state one leaves behind.
+case("PA7-S2 the isolating control: the identical chain at TOP LEVEL is REFUSED too, so the savepoint was the whole difference",
+     "BEGIN;\n"
+     + (SPC % ('tlaxis', 'tlaxis')) +
+     f"SET app.business_id='{B}';\n"
+     f"SET app.tenant_id='{TB}';\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{B}','tlaxisb',96);\n"
+     "COMMIT;",
+     "catalog.matrix_grid_unverifiable", role="daftar_app", pre=rls_a_ctx)
+case("PA7-S3 and a WHOLLY LAWFUL build inside a RELEASEd savepoint COMMITS (the same clause refused it at 2bfb6d5)",
+     "BEGIN;\n"
+     "SAVEPOINT build;\n"
+     f"  INSERT INTO product_variants (business_id,id,product_id,attributes,is_base) VALUES ('{A}','f0000051-0000-0000-0000-000000000051','{PA}','{{\"size\":\"m\",\"color\":\"blue\"}}'::jsonb,false) ON CONFLICT DO NOTHING;\n"
+     f"  UPDATE product_variants SET status = status WHERE business_id='{A}' AND id='f0000051-0000-0000-0000-000000000051';\n"
+     "RELEASE SAVEPOINT build;\n"
+     "COMMIT;\n"
+     # and it is put back to a state no later case has to work around: the row
+     # stays (so the assertion below holds on the second pass too) and nothing
+     # live is left behind by this case.
+     f"UPDATE product_variants SET status='archived' WHERE business_id='{A}' AND id='f0000051-0000-0000-0000-000000000051';\n"
+     f"SELECT 'built=' || count(*)::text FROM product_variants WHERE business_id='{A}' AND id='f0000051-0000-0000-0000-000000000051';",
+     "built=1", role="daftar_app", pre=rls_a_ctx, kind="value")
+# The recorder's rows must be COUNTED from inside a subtransaction, not merely
+# written there, and the shape that proves it is the one an ORM produces: a
+# PL/pgSQL BEGIN ... EXCEPTION block, which opens an implicit subtransaction
+# with no SAVEPOINT keyword anywhere. Read as daftar_app, in its own
+# transaction, so the count is this transaction's own.
+case("PA7-S4 a PL/pgSQL EXCEPTION block opens the same subtransaction with no SAVEPOINT keyword, and its ledger rows are COUNTED",
+     "BEGIN;\n"
+     "DO $do$ BEGIN\n"
+     f"  INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','spexc',89);\n"
+     "EXCEPTION WHEN unique_violation THEN NULL;\n"
+     "END $do$;\n"
+     "SELECT 'recorded=' || count(*)::text FROM catalog_grid_ctx_ledger WHERE txid = pg_current_xact_id();\n"
+     "ROLLBACK;",
+     "recorded=1", role="daftar_app", pre=rls_a_ctx, kind="value")
+# And the other direction, which the deletion must NOT have broken: work
+# inside a ROLLED BACK savepoint has no identity to answer for, so a
+# transaction that wrote under another identity and threw that work away
+# commits. If this went red, the deletion would have turned a correct
+# refusal into a correct-looking pass; it is here so the log says so.
+case("PA7-S5 a write under ANOTHER identity that was ROLLED BACK leaves no ledger row, and the transaction commits",
+     "BEGIN;\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','sprb1',90);\n"
+     "SAVEPOINT other;\n"
+     f"  SET app.business_id='{B}';\n"
+     f"  SET app.tenant_id='{TB}';\n"
+     f"  INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{B}','sprb2',91);\n"
+     "ROLLBACK TO SAVEPOINT other;\n"
+     "SELECT 'identities=' || count(DISTINCT recorded_identity)::text FROM catalog_grid_ctx_ledger WHERE txid = pg_current_xact_id();\n"
+     f"DELETE FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='sprb1';\n"
+     "COMMIT;",
+     "identities=1", role="daftar_app", pre=rls_a_ctx, kind="value")
+# The challenger's addendum, and it is the sharper form of PA7-S1: the
+# consenting top-level write does not have to be a real write at all. A
+# statement trigger fires FOR EACH STATEMENT, so an UPDATE that matches ZERO
+# rows still appends a ledger row under the identity holding at that moment.
+# That is free consent, and with the xmin clause in place it was the whole
+# exploit: one no-op supplied the agreeing row while the savepoint hid every
+# disagreeing one.
+case("PA7-S7 the statement trigger fires for a ZERO-ROW statement, so a no-op supplies a consenting ledger row for free",
+     "BEGIN;\n"
+     f"UPDATE product_variants SET status = status WHERE business_id='{A}' AND id='00000000-0000-0000-0000-000000000000';\n"
+     "SELECT 'recorded=' || count(*)::text FROM catalog_grid_ctx_ledger WHERE txid = pg_current_xact_id();\n"
+     "ROLLBACK;",
+     "recorded=1", role="daftar_app", pre=rls_a_ctx, kind="value")
+case("PA7-S8 and the exploit built on that free consent -- harmful chain in a savepoint, a ZERO-ROW no-op as the only top-level write -- is REFUSED",
+     "BEGIN;\n"
+     "SAVEPOINT harm;\n"
+     + (SPC % ('zraxis', 'zraxis')) +
+     "RELEASE SAVEPOINT harm;\n"
+     f"SET app.business_id='{B}';\n"
+     f"SET app.tenant_id='{TB}';\n"
+     f"UPDATE product_variants SET status = status WHERE business_id='{B}' AND id='00000000-0000-0000-0000-000000000000';\n"
+     "COMMIT;",
+     "catalog.matrix_grid_unverifiable", role="daftar_app", pre=rls_a_ctx)
+# R7-06. TRUNCATE is the one write no trigger here covers, so its absence is
+# read by name rather than inferred from the GRANT statements.
+case("PA7-S9 R7-06: TRUNCATE on the governed relations is not granted to the application role, so no write can escape the recorder",
+     f"TRUNCATE product_variants;",
+     "permission denied for table product_variants", role="daftar_app", pre=rls_a_ctx)
+case("PA7-S6 and nothing from the two refused savepoint chains committed: no axis of theirs exists and nothing is outside its grid",
+     f"SELECT 'sp=' || count(*)::text FROM product_attribute_axes WHERE axis_code IN ('spaxis','spaxisb','tlaxis','tlaxisb','sprb2','zraxis');\n"
+     f"""SELECT 'outside=' || count(*)::text FROM product_variants v
+          WHERE NOT v.is_base AND v.status <> 'archived'
+            AND ( (SELECT coalesce(array_agg(k ORDER BY k), ARRAY[]::TEXT[]) FROM jsonb_object_keys(v.attributes) k)
+                  IS DISTINCT FROM
+                  (SELECT coalesce(array_agg(ma.axis_code ORDER BY ma.axis_code), ARRAY[]::TEXT[])
+                     FROM product_matrix_axes ma
+                    WHERE ma.business_id=v.business_id AND ma.product_id=v.product_id) );""",
+     "sp=0\noutside=0", kind="value")
 case("P1-01 a principal that cannot read the registries is REFUSED, not passed (catalog.matrix_grid_unverifiable)",
      f"REVOKE SELECT ON product_matrix_axes FROM daftar_app;\n"
      f"SET ROLE daftar_app;\n"

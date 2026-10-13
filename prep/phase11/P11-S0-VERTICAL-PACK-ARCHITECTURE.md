@@ -805,6 +805,57 @@ The gate arms are `identity-kept-where-the-subject-can-write-it` and
 `two-layers-counted-as-two-tested-layers`. The second comes from this round's
 pair-drop and is a result, not a rule: of the two defences against a row planted
 for another transaction, only the RLS write policy has a reachable case, because
-it makes the planted state unreachable. The `xmin` filter it backs up is
-`UNMEASURED` defence in depth, and naming that is the verdict. **Two green layers
-are not two tested layers.**
+it makes the planted state unreachable. The `xmin` filter it backs up had no
+reachable case, and naming that was the verdict. **Two green layers are not two
+tested layers** — and the seventh round added the other half of that sentence:
+an unreached layer is not an inert one. See [`P11-AL-42`](#p11-al-42), which
+measured that same filter as a fail-open AND a refusal of lawful work, and
+deleted it.
+
+### `P11-AL-42` — "unmeasured" is a report, not a reassurance: a layer nothing reaches is unknown in BOTH directions
+
+The seventh independent challenge round rejected the head on the clause the
+sixth round had just finished describing as harmless.
+
+The sixth round's deferred check read its ledger with
+`AND l.xmin = pg_current_xact_id()::xid` beside the `txid` predicate, dropped
+that clause as mutation `M16`, measured that **no case went red**, and
+concluded: defence in depth whose effect is `UNMEASURED`, named as a residual
+rather than counted as a tested layer. The naming was correct and is the
+discipline this phase runs on. The **conclusion drawn from the green was not**.
+
+`pg_current_xact_id()` returns the top-level transaction id, and a row written
+inside a subtransaction carries the subtransaction's id in `xmin` — probed
+directly: `20098` against a current `20097` for the row written after
+`SAVEPOINT s1`. A savepoint, a PL/pgSQL `BEGIN ... EXCEPTION` block, and a
+nested transaction in most ORMs all open one. So the clause silently discarded
+the ledger rows of an ordinary application shape, and it did so in both
+directions at once:
+
+* it **opened** the exact hole the fifth and sixth rounds were spent closing —
+  the harmful chain inside a `RELEASE`d savepoint committed at `rc 0` with a
+  live variant outside its grid, while the identical chain at top level was
+  refused; and
+* it **refused lawful work** — a wholly lawful build inside a `RELEASE`d
+  savepoint took the `v_rows = 0` branch, because every row the recorder wrote
+  had been thrown away.
+
+The lesson is not "the clause was wrong". It is that a mutation set which can
+only **remove** a layer cannot see what that layer does when it is present and
+reached. `M16` subtracted and got a green; the two faces were only visible to a
+case that went *through* the clause. So the correct response to "no instrument
+reaches this layer" is to build the instrument, and until one exists the honest
+statement is that the layer's behaviour is **unknown**, not that it is inert.
+
+The remedy here is an absence — the clause is deleted — and an absence is
+red-proved by **restoring** what was removed. `M20` puts the clause back and
+must turn `PA7-S1` and `PA7-S8` from refusals into commits and `PA7-S3` from a
+commit into a refusal. It is the one mutation in this phase whose point is that
+it is **not** green, and it exists because `M16`, `M17` and `M19` could not
+have found this and are deleted.
+
+Two older laws of this phase are reaffirmed rather than discovered, and both
+were on the record before this round cost one: **a guard that breaks a lawful
+write is a worse defect than the one it closes**, and **a defence must be
+reached to be known**. See [`P11-AL-41`](#p11-al-41) for the store, and the gate
+arms `unmeasured-read-as-inert` and `write-that-no-trigger-covers`.
