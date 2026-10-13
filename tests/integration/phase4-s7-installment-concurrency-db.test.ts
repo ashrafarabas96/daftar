@@ -1378,7 +1378,49 @@ describe('P4-S7 §E the runtime guard at WRITE time, and the lock order (F-1, F-
     }
   });
 
-  it('E3 the same race with the index NOT ENFORCING: still refused, and the index is not what refuses (F-1)', async () => {
+  /**
+   * ── WHAT THIS CASE MEASURED UNTIL ROUND 27, AND WHY IT MEASURES SOMETHING
+   *    ELSE NOW (FINDING C's repair in the specification) ─────────────────
+   *
+   * It raced two plan creations on one invoice with
+   * `installment_plans_one_active_per_invoice_uq` NOT ENFORCING, and asserted
+   * that the FIRST writer COMMITTED and the second was refused by name — the
+   * point being that the invoice-row lock refuses the loser, not the index.
+   *
+   * THE FIRST WRITER ONLY COMMITTED BECAUSE THE SHIPPED GUARD FAILED OPEN.
+   * `installment_plan_fact_sync` detected an unenforcing index only from
+   * inside its own by-primary-key probe's failure path, so with `indisvalid`
+   * false the planner could not use that index at all, the probe read the row
+   * out of the heap and NOTHING refused. Round 27 takes that `pg_index`
+   * reading UNCONDITIONALLY on every non-DELETE plan event, so NO plan write
+   * is admitted while any index of the relation is unenforcing — including
+   * the first one. This case therefore cannot construct its old subject any
+   * more, and it is re-aimed at the law that is actually there rather than
+   * left asserting the fail-open.
+   *
+   * WHAT IS NO LONGER CLAIMED HERE, AND IS NOW **UNMEASURED**: that in the
+   * unenforcing state the LOSER of the race is refused by
+   * `installment.plan_active_conflict`. No writer is admitted in that state
+   * at all, so the claim has no construction. The same claim with the index
+   * ENFORCING is §E2's subject and is untouched.
+   *
+   * AND THE SERIALISATION IS NOT MEASURABLE IN THIS STATE EITHER, WHICH IS
+   * MEASURED RATHER THAN ASSUMED. A's refusal is raised inside A's OWN
+   * statement, so A's transaction is already ABORTED — `RecordTransactionAbort`
+   * has run and its locks are released — by the time B's write arrives, and B
+   * never waits for it. The reading is kept and RECORDED: it reports
+   * `blocked: false` with the two session states `active` and
+   * `idle in transaction (aborted)`, and the aborted state is what is
+   * asserted, because it is the mechanism. The lock-order and serialisation
+   * laws with the index ENFORCING are §E1's and §E2's subjects and are
+   * untouched.
+   *
+   * WHAT IS STILL MEASURED HERE: that the refusal reaches BOTH writers by
+   * name, that A is aborted rather than silently committed, and that NOTHING
+   * commits — a strictly stronger end state than the one this case used to
+   * assert, since the old one left one plan behind.
+   */
+  it('E3 the same race with the index NOT ENFORCING: NO writer is admitted and both are refused BY NAME (F-1)', async () => {
     const inv = world.invoiceIds[2] as string;
     M['E3_unenforce'] = await sudo(
       `UPDATE pg_index SET indisvalid = false, indisready = false WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`,
@@ -1400,24 +1442,36 @@ describe('P4-S7 §E the runtime guard at WRITE time, and the lock order (F-1, F-
       M['E3_B_commit'] = await B.q('COMMIT');
       M['E3_post'] = await state(inv);
       expect((M['E3_pre'] as Record<string, unknown>)['active_plans']).toBe(0);
-      expect(M['E3_A_plan']).toBeNull();
-      expect((M['E3_B_blocked'] as BlockedReading).blocked).toBe(true);
+      // THE FIRST WRITER IS NOW REFUSED TOO, BY THE UNCONDITIONAL CATALOGUE
+      // READING. Until round 27 this read `toBeNull()` — it COMMITTED — and
+      // that was the fail-open, not a property of the guard.
+      expect(String(M['E3_A_plan']), 'a plan write was admitted while an index of the relation is unenforcing').toContain('installment.plan_index_unenforcing');
+      // RECORDED AND NOT ASSERTED: whether B blocked. It does not, and the
+      // reason is asserted instead — A's transaction is ABORTED by its own
+      // refusal before B's write arrives, so there is no lock to wait for.
+      expect((M['E3_B_blocked'] as BlockedReading).samples, 'the lock reading was never taken').toBeGreaterThan(0);
+      expect(
+        JSON.stringify((M['E3_B_blocked'] as BlockedReading).distinct),
+        "A's session is not in the aborted state, so the reason B did not wait is unread",
+      ).toContain('aborted');
       // THIS IS THE WHOLE OF F-1 ON THE WRITE PATH. Round 11 measured `null`
       // here — no refusal — and two active plans committed, after which the
       // reader served the pre-installment figure silently.
-      expect(String(M['E3_B_outcome'])).toContain('installment.plan_active_conflict');
-      expect((M['E3_post'] as Record<string, unknown>)['active_plans']).toBe(1);
+      expect(String(M['E3_B_outcome'])).toContain('installment.plan_index_unenforcing');
+      expect((M['E3_post'] as Record<string, unknown>)['active_plans']).toBe(0);
     } finally {
       await A.end();
       await B.end();
       M['E3_reenforce'] = await sudo(
         `UPDATE pg_index SET indisvalid = true, indisready = true WHERE indexrelid = 'public.installment_plans_one_active_per_invoice_uq'::regclass`,
       );
-      // A's plan row was written while the index was NOT MAINTAINED, so it is
-      // absent from the index. Flipping the flags back does not put it there:
-      // the heap then holds one active plan on this invoice and the index
-      // holds none, and the round-13 guard in the sync and the verifier READS
-      // THAT DISAGREEMENT and refuses the next write on this invoice. Round
+      // UNTIL ROUND 27 A's plan row was written while the index was NOT
+      // MAINTAINED, so it was absent from the index and flipping the flags
+      // back did not put it there. No plan row is written in this state any
+      // more, so that fixture debt is gone; the paragraph is kept because the
+      // SHAPE it describes is still the one §R17 of the fact suite builds by
+      // other means, and because the `REINDEX` reading below is retained for
+      // the reason it states. Round
       // 12's suite did not notice because its count was index-served and so
       // agreed with the index by construction; the figures below were
       // therefore taken on a fixture whose index did not describe its own
@@ -1434,7 +1488,7 @@ describe('P4-S7 §E the runtime guard at WRITE time, and the lock order (F-1, F-
     }
   });
 
-  it('E4 with the exclusion trigger GONE and the index not enforcing, the AFTER-trigger count refuses — and the writers STILL serialise', async () => {
+  it('E4 with the exclusion trigger GONE and the index not enforcing, the UNCONDITIONAL INDEX READING refuses BOTH writers', async () => {
     // WHAT THIS CASE WAS WRITTEN TO MEASURE, AND WHAT IT MEASURED INSTEAD.
     //
     // It was written for the arm the DEFERRED verifier owns: with no BEFORE
@@ -1492,14 +1546,45 @@ describe('P4-S7 §E the runtime guard at WRITE time, and the lock order (F-1, F-
       M['E4_B_commit'] = await B.q('COMMIT');
       M['E4_post'] = await state(inv);
       expect(M['E4_drop_excl']).toBeNull();
-      expect(M['E4_A_plan']).toBeNull();
-      expect((M['E4_B_blocked'] as BlockedReading).blocked).toBe(true);
+      // ── AND FROM ROUND 27 THE INDEX READING REFUSES BEFORE THE COUNT DOES
+      //    (FINDING C's repair). `installment_plan_fact_sync` reads
+      //    `pg_index` unconditionally on every non-DELETE plan event, so with
+      //    the index not enforcing NEITHER writer is admitted: A is refused
+      //    by `installment.plan_index_unenforcing` where it used to commit,
+      //    and B is refused by the same name where it used to meet the
+      //    AFTER-trigger count. A's write used to be admitted ONLY because
+      //    that detection was conditional on its own probe missing the row,
+      //    which `indisvalid = false` made impossible — the fail-open.
+      //
+      //    WHAT IS THEREBY **UNMEASURED** HERE, stated and not dropped: that
+      //    `installment.plan_active_unbounded` is the arm that refuses the
+      //    second writer under concurrency with the BEFORE trigger gone and
+      //    the index not enforcing. That state admits no write at all now, so
+      //    the claim has no construction in this suite. The AFTER arm's count
+      //    is still measured single-threaded by the fact suite, and the
+      //    DEFERRED arm remains unmeasured under concurrency exactly as the
+      //    paragraph above already declares.
+      //
+      //    AND THE SERIALISATION IS NOT MEASURABLE HERE ANY MORE, for two
+      //    measured reasons rather than one: the sync now raises BEFORE it
+      //    reaches the `UPDATE` of `invoices` that used to take the row, and
+      //    A's transaction is ABORTED by its own refusal before B's write
+      //    arrives. The lock reading is RECORDED, not asserted, and what is
+      //    asserted is the aborted state that explains it. §E1 and §E2 own
+      //    the serialisation laws with the index enforcing.
+      //
+      //    WHAT IS STILL MEASURED: that neither writer is admitted, by name,
+      //    and that nothing commits.
+      expect(String(M['E4_A_plan']), 'a plan write was admitted while an index of the relation is unenforcing').toContain('installment.plan_index_unenforcing');
+      expect((M['E4_B_blocked'] as BlockedReading).samples, 'the lock reading was never taken').toBeGreaterThan(0);
+      expect(
+        JSON.stringify((M['E4_B_blocked'] as BlockedReading).distinct),
+        "A's session is not in the aborted state, so the reason B did not wait is unread",
+      ).toContain('aborted');
       expect(M['E4_A_commit']).toBeNull();
-      // THE COUNT IS WHAT REFUSES, with no BEFORE trigger and a
-      // non-enforcing index: not `23505`, and not silence.
-      expect(String(M['E4_B_outcome'])).toContain('installment.plan_active_unbounded');
+      expect(String(M['E4_B_outcome'])).toContain('installment.plan_index_unenforcing');
       expect(String(M['E4_B_outcome'])).not.toContain('23505');
-      expect((M['E4_post'] as Record<string, unknown>)['active_plans']).toBe(1);
+      expect((M['E4_post'] as Record<string, unknown>)['active_plans']).toBe(0);
     } finally {
       await A.end();
       await B.end();

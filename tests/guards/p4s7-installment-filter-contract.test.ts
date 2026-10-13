@@ -159,10 +159,23 @@ const REGISTERED: readonly string[] = [
   // commit as the three raises that produce it: an index of
   // `installment_plans` with `indisvalid`, `indisready` or `indislive` false,
   // READ OUT OF `pg_index` inside the failing event. It exists because one
-  // catalogue flag on `installment_plans_pkey` made every lawful plan write
+  // catalogue flag on `installment_plans_pkey` made A lawful plan write
   // fail under `plan_fact_blind`, whose message had just been rewritten to
   // say the cause was row security and to look in `pg_policy` and NOT in
   // `pg_index`.
+  //
+  // IT DID NOT MAKE «EVERY» LAWFUL PLAN WRITE FAIL AND THIS COMMENT SAID
+  // THAT IT DID. The writer's detection sat inside its own by-primary-key
+  // probe's failure path, so it fired only when that probe was INDEX-SERVED
+  // and missed the row; on a SEQUENTIAL SCAN the probe found the row the
+  // statement had just written and NOTHING refused — the poisoned write
+  // committed. Measured with the access path forced each way, in
+  // `tests/integration/phase4-s7-installment-fact-db.test.ts` §R16. The
+  // specification now takes that `pg_index` reading UNCONDITIONALLY on every
+  // non-DELETE plan event, so any such write is refused while any index of
+  // the relation is unenforcing; the DELETE direction is NOT covered by it.
+  // Nothing about THIS file's subject changes: the name is registered either
+  // way, and what was false was the scope this comment claimed for it.
   //
   // `plan_fact_unwritable` IS A CORRECTION AND NOT AN ADDITION. It was pinned
   // in the list below, as UNREGISTERED, under the rationale «these are the

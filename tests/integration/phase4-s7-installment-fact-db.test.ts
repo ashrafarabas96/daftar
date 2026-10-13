@@ -602,6 +602,47 @@ beforeAll(async () => {
     return;
   }
 
+  // ── THE FIXTURE'S TWO RELATIONS ARE PINNED AGAINST THE AUTOVACUUM DAEMON,
+  //    AT FIXTURE CREATION AND NOWHERE ELSE (`TL-P4-COORD-R86` §4, FINDING
+  //    D's authorised remedy).
+  //
+  //    WHY: §R7 asserts that NO `pg_statistic` row for `installment_plans`
+  //    exists across its plan readings, and round 25 measured that premise
+  //    failing 2 times in 30 at `34d3d77` and 2 in 60 at `6c95f44`, with
+  //    `stats_rows` reading 11 where 0 is required. `pg_statistic` rows are
+  //    written by ANALYZE, and the only ANALYZE in this picture is the
+  //    autovacuum daemon's autoanalyze landing mid-run. This storage
+  //    parameter stops the daemon processing these two tables, which stops
+  //    the writer of that quantity.
+  //
+  //    WHAT IT IS NOT, STATED SO IT IS NOT OVER-CLAIMED: it does NOT stop
+  //    anti-wraparound autovacuum, which runs whatever this parameter says.
+  //    Anti-wraparound is a VACUUM and a VACUUM writes no `pg_statistic`
+  //    row, so it cannot move the quantity §R7 counts -- but it CAN move
+  //    `pg_class.relpages` and `reltuples`, which are inputs to a
+  //    statistics-free planner's choice. That is why every §R7 reading whose
+  //    value depends on the access path is now taken on a FORCED or
+  //    CONSTRUCTED path and the free ones are recorded WITHOUT being
+  //    asserted (FINDING E, below at §R7): the pin removes one uncontrolled
+  //    writer, it does not make a free planner choice determinate.
+  //
+  //    WHERE IT IS AND IS NOT: here, immediately after the specification is
+  //    applied, on the two relations this specification creates. NOT in any
+  //    migration of any number, NOT in a frozen migration (`0000`-`0079`
+  //    are byte-immutable), NOT in `bootstrap.sql`, and nowhere in the
+  //    shipped specification. It is read back out of `pg_class.reloptions`
+  //    at §R7 and ASSERTED there, so its ABSENCE reds the arm instead of
+  //    silently restoring the uncontrolled event.
+  M['fixture_autovacuum_pin'] = await (async (): Promise<string | null> => {
+    try {
+      await sup.query('ALTER TABLE public.installment_plans SET (autovacuum_enabled = false)');
+      await sup.query('ALTER TABLE public.installments SET (autovacuum_enabled = false)');
+      return null;
+    } catch (e) {
+      return err(e);
+    }
+  })();
+
   // ── §B THE FIXTURE DISCRIMINATES, and the base case of the induction.
   M['B_flag_after_apply'] = await flag();
   M['B_app_sees_invoice'] = await inCtx(app, APP_CTX(), [{ sql: `SELECT count(*)::text AS n FROM public.invoices WHERE id = $1`, params: [world.invoiceId] }]);
@@ -2632,8 +2673,121 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
   })();
   //    AND THE SAME PAIR WITH THE PLANNER LEFT ALONE, so the dependence of
   //    the finding on the ACCESS PATH is itself measured rather than assumed.
+  // ── FINDING E: THE FIVE PLANNER-DEPENDENT READINGS OF THIS SECTION ARE
+  //    NOW TAKEN ON A FORCED PATH, AND THE FREE ONES ARE RECORDED WITHOUT
+  //    BEING ASSERTED (`TL-P4-COORD-R84` §4's shape, which is this phase's
+  //    standard remedy for this class, applied here for the first time).
+  //
+  //    WHAT WAS WRONG, MEASURED AND NOT ARGUED. §R7 asserted the VALUES of
+  //    five readings whose value depends on the access path:
+  //    `R7_state.truth`, `R7_two_readings_free`, the free plan of the
+  //    `EXISTS`, the forced plan beside it, and `R7_truth_indexserved` --
+  //    which is forced OFF the sequential path but then chooses BETWEEN two
+  //    indexes on `reltuples` alone. Their green was conditional on the
+  //    AUTOVACUUM DAEMON having vacuumed this relation mid-run: §R2, earlier
+  //    in the same run, reads `relpages = 0` / `reltuples = -1` (the
+  //    never-vacuumed sentinel) while round 25 read `relpages = 1` /
+  //    `reltuples = 1` HERE in all 65 of its runs, and nothing in this file
+  //    vacuums the relation in between. Pin the daemon off -- which FINDING
+  //    D's authorised remedy does, at fixture creation -- and the free
+  //    planner believes the relation empty, prefers an `Index Only Scan` on
+  //    an index holding neither of the two rows, and `truth` reads `false`:
+  //    round 26 measured exactly that, deterministically, 3 runs of 3.
+  //
+  //    SO THE DETERMINED READINGS ARE THE ONES ASSERTED. `HEAP_ONLY`
+  //    discourages every index path, so the only plan left is the sequential
+  //    scan that sees both heap rows; `IX_ONLY` discourages the sequential
+  //    and bitmap paths, which is the reading the finding is ABOUT. Each
+  //    forced reading carries ITS OWN PLAN, taken under the SAME knobs on the
+  //    SAME connection, and the plan is asserted beside the value -- so a
+  //    planner that takes a different path reds this arm instead of silently
+  //    answering a different question. That is the one shape this estate
+  //    accepts for a reading it cannot make determinate in principle: it
+  //    FAILS when its premise moves, and it never excuses itself.
+  const HEAP_ONLY = ['SET LOCAL enable_indexscan = off', 'SET LOCAL enable_indexonlyscan = off', 'SET LOCAL enable_bitmapscan = off'] as const;
+  const IX_ONLY = ['SET LOCAL enable_seqscan = off', 'SET LOCAL enable_bitmapscan = off'] as const;
+  /**
+   * One statement under `knobs`, on a connection of its own, with `EXPLAIN`
+   * of the SAME statement taken under the SAME knobs in the SAME transaction.
+   * A plan read in another transaction is a plan of another planner state.
+   */
+  const readWith = async (knobs: readonly string[], sql: string, params: readonly unknown[]): Promise<Record<string, unknown>> => {
+    const c = await sup.connect();
+    try {
+      await c.query('BEGIN');
+      for (const k of knobs) await c.query(k);
+      const r = await c.query(sql, [...params]);
+      const pl = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [...params]);
+      await c.query('COMMIT');
+      return { row: (r.rows[0] ?? {}) as Record<string, unknown>, plan: pl.rows.map((x) => x['QUERY PLAN']).join(' | ') };
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      return { error: err(e) };
+    } finally {
+      c.release();
+    }
+  };
+  M['R7_truth_heapforced'] = await readWith(HEAP_ONLY, TRUTH_SQL, [world.invoiceId]);
+  M['R7_two_readings_heapforced'] = await readWith(HEAP_ONLY, TWO_READINGS_SQL, [world.businessId, world.invoiceId]);
+  M['R7_truth_ixforced'] = await readWith(IX_ONLY, TRUTH_SQL, [world.invoiceId]);
+  //    AND THE PIN ITSELF IS READ BACK OUT OF THE CATALOGUE HERE, where the
+  //    arm that depends on it can assert it. `reloptions` is what the
+  //    relation really carries; the absence of an error from the `ALTER` is
+  //    not.
+  M['R7_autovacuum_pin'] = (
+    await sup.query(
+      `SELECT c.relname::text AS rel, coalesce(array_to_string(c.reloptions, ','), '') AS reloptions
+         FROM pg_class c WHERE c.oid IN ('public.installment_plans'::regclass, 'public.installments'::regclass) ORDER BY c.relname`,
+    )
+  ).rows;
   M['R7_two_readings_free'] = (await sup.query(TWO_READINGS_SQL, [world.businessId, world.invoiceId])).rows[0];
   M['R7_aging'] = await aging(app, APP_CTX());
+  // ── AND THE SAME READ WITH THE ACCESS PATH FORCED ONTO THE HEAP, BECAUSE
+  //    **WHICH REFUSAL ANSWERS** IS ITSELF PLANNER-DEPENDENT AND THIS CASE
+  //    USED TO ASSERT ONE OF THE TWO (FINDING E's sixth reading, found by
+  //    measurement in round 27 and not enumerated before).
+  //
+  //    The reader takes its own counts over `installment_plans`. Index-served
+  //    they see NEITHER of the two rows -- both were written while the
+  //    partial unique index was unenforcing -- and the reader refuses as
+  //    `installment.plan_fact_unreadable`; heap-served they see both and the
+  //    BOUND objects, as `installment.plan_active_unbounded`. The arm's own
+  //    comment has said since round 13 that which arm answers depends on the
+  //    access path, and then asserted one of them anyway. With the autovacuum
+  //    daemon pinned off the relation reports the never-vacuumed sentinel and
+  //    the free planner takes the index, so the free reading moves to
+  //    `plan_fact_unreadable`: measured, exit 1, before this was added.
+  //
+  //    The knobs go on a FRESH connection for the same reason `commitPlan`'s
+  //    `freshPool` exists: the routines the reader calls are plpgsql with
+  //    CACHED PLANS, and a backend that has already settled on a generic plan
+  //    does not rebuild it because a cost setting changed.
+  M['R7_aging_heapforced'] = await (async (): Promise<Outcome> => {
+    const pool = new Pool({ connectionString: urlOf(DB, 'daftar_app'), max: 1 });
+    try {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        for (const [k, v] of Object.entries(APP_CTX())) await c.query(`SELECT set_config($1, $2, true)`, [k, v]);
+        for (const k of HEAP_ONLY) await c.query(k);
+        const r = await c.query(`SELECT * FROM public.customer_ar_aging($1,$2,$3::DATE,$4::INTEGER[]) ORDER BY bucket_no`, [
+          world.businessId,
+          world.customerId,
+          '2026-06-30',
+          BUCKETS,
+        ]);
+        await c.query('COMMIT');
+        return { error: null, rows: r.rows as readonly Record<string, unknown>[] };
+      } catch (e) {
+        await c.query('ROLLBACK').catch(() => undefined);
+        return { error: err(e), rows: [] };
+      } finally {
+        c.release();
+      }
+    } finally {
+      await pool.end().catch(() => undefined);
+    }
+  })();
   //    AND THE CONTROLLED VARIATION, which is what turns a correlation into a
   //    cause. The ONLY thing varied is the relation's PHYSICAL PAGE COUNT --
   //    filler rows are `cancelled` plans on the SAME invoice, which no reading
@@ -2659,6 +2813,37 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       }
     };
     out.push({ triggers_off: await sudoq('ALTER TABLE installment_plans DISABLE TRIGGER USER') });
+    // ── THE BASE STEP'S COST INPUTS ARE CONSTRUCTED, NOT INHERITED
+    //    (FINDING E; `TL-P4-COORD-R84` §4's «construct it explicitly and
+    //    assert the construction»).
+    //
+    //    This sweep's law is that the FREE planner's path for the retired
+    //    spelling MOVES when only the physical page count moves. That law
+    //    needs a base step whose cost inputs are KNOWN, and until round 27
+    //    they were whatever the autovacuum daemon had left behind: round 25
+    //    recorded `relpages = 1` / `reltuples = 1` here in all 65 runs while
+    //    §R2, earlier in the same run, recorded `0` / `-1`. With the daemon
+    //    pinned off (FINDING D's remedy) the base step inherits the
+    //    NEVER-VACUUMED SENTINEL `reltuples = -1` instead, the planner falls
+    //    back to a default tuple density, the index is the cheaper path at
+    //    EVERY page count and the movement this law asserts stops happening
+    //    -- measured, exit 1, before this construction was added.
+    //
+    //    So the base state is CONSTRUCTED by one PLAIN `VACUUM` -- never
+    //    `VACUUM FULL`, which rebuilds the indexes and would repair §R17's
+    //    deliberate physical corruption -- and the constructed values are
+    //    read back out of `pg_class` and ASSERTED by the arm. A `VACUUM`
+    //    writes no `pg_statistic` row, so §R7's statistics premise is
+    //    untouched by it, and this runs AFTER every §R7 reading.
+    out.push({
+      base_vacuum: await sudoq('VACUUM public.installment_plans'),
+      base_inputs: (
+        await sup.query<{ relpages: number; reltuples: string }>(
+          `SELECT c.relpages::int AS relpages, c.reltuples::text AS reltuples
+             FROM pg_class c WHERE c.oid = 'public.installment_plans'::regclass`,
+        )
+      ).rows[0],
+    });
     try {
       for (const add of [0, 400, 4000]) {
         if (add > 0) {
@@ -2692,6 +2877,10 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
           // page count is what chooses the path, THIS pair moves across the
           // steps while nothing else about the state changes.
           readings_free: ((await sup.query(TWO_READINGS_SQL, [world.businessId, world.invoiceId])).rows[0] ?? {}) as Record<string, unknown>,
+          // AND THE SAME PAIR ON THE FORCED HEAP PATH, which must NOT move
+          // with the page count: it is the determined counterpart of the
+          // free reading above, and it is what the cross-checks below use.
+          readings_heapforced: await readWith(HEAP_ONLY, TWO_READINGS_SQL, [world.businessId, world.invoiceId]),
         });
       }
     } finally {
@@ -2744,6 +2933,12 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
           .rows[0]?.n,
         truth_after: await truth(),
         readings_after: ((await sup.query(TWO_READINGS_SQL, [world.businessId, world.invoiceId])).rows[0] ?? {}) as Record<string, unknown>,
+        // THE DETERMINED COUNTERPARTS OF THE TWO READINGS ABOVE. The sweep's
+        // `VACUUM` moves `relpages` and `reltuples`, which are exactly the
+        // inputs a free planner chooses on, so «the fixture is back» is
+        // asserted over the FORCED readings and the free ones are recorded.
+        truth_after_heapforced: await readWith(HEAP_ONLY, TRUTH_SQL, [world.invoiceId]),
+        readings_after_heapforced: await readWith(HEAP_ONLY, TWO_READINGS_SQL, [world.businessId, world.invoiceId]),
       });
     }
     return out;
@@ -4091,9 +4286,31 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // happened. What this arm detects is that the refusal did not come from
     // the index-disagreement arm; whether anything committed is the business
     // of the `R3_state` assertion below.
+    //
+    // AND THE NAME THIS ARM RECEIVES CHANGED IN ROUND 27, BECAUSE THE
+    // SPECIFIED GUARD CHANGED (FINDING C's repair: the `pg_index` enforcement
+    // reading is now taken UNCONDITIONALLY on every non-DELETE plan event
+    // instead of only when the writer's own by-primary-key probe missed).
+    // In THIS state one index of `installment_plans` IS unenforcing, so the
+    // write is now refused by `installment.plan_index_unenforcing` BEFORE the
+    // cross-check that compares the two countings is reached. The law §R3
+    // asserts is unchanged and is satisfied EARLIER: the second active plan is
+    // refused and nothing commits (`R3_state` below).
+    //
+    // WHAT IS THEREBY NO LONGER MEASURED, SAID RATHER THAN LOST:
+    // `installment.plan_index_disagrees` was measured at runtime HERE and
+    // nowhere else, and in the unenforcing state it is no longer REACHABLE
+    // from the writer, because the stronger refusal fires first. It is still
+    // specified and still raised twice in the specification (the writer's
+    // cross-check and the deferred verifier's), and it remains reachable in
+    // principle in the state §R17 builds — every flag true while the index
+    // does not physically describe its own heap — which no arm of this suite
+    // asks the WRITER about. So: the refusal's runtime reachability is
+    // **UNMEASURED at this head**, it is not claimed to be dead code, and it
+    // is not asserted here on a path the shipped guard no longer takes.
     const e = String(M['R3_second_no_trigger']);
-    expect(e, 'the second active plan was not refused by the index-disagreement arm').toContain('installment.plan_index_disagrees');
-    expect(e).toContain('PRESENT AND NOT ENFORCING');
+    expect(e, 'the second active plan was not refused while an index of the relation is unenforcing').toContain('installment.plan_index_unenforcing');
+    expect(e, 'the refusal does not state the index state it observed').toContain('are not enforcing');
     expect(M['R3_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '1' });
     // and the two readings of the heap really did disagree in that state,
     // which is what the refusal says
@@ -4103,7 +4320,7 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     expect(M['R3_restore_ready']).toBeNull();
     expect(M['R3_restore_trigger']).toBeNull();
     expect(M['R3_ratchet_after_restore'], 'the restored state does not satisfy the end-state block').toBeNull();
-    expect(parseDatabaseInstallmentInternalCode(new Error(e))).toBe('installment.plan_index_disagrees');
+    expect(parseDatabaseInstallmentInternalCode(new Error(e))).toBe('installment.plan_index_unenforcing');
     expect(INSTALLMENT_INTERNAL_INVARIANT_CODES).toContain('installment.plan_index_disagrees');
   });
 
@@ -4184,11 +4401,63 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // statement read FALSE, because part 9c's `SET LOCAL enable_seqscan = off`
     // had leaked onto the session out of an anonymous `DO` block (F13-4) and
     // silently planned it on the index. Both readings are reported.
-    expect(M['R7_state']).toStrictEqual({ flag: 'true', truth: 'true', plans: '2' });
+    //
+    // ── AND FROM ROUND 27 THE FREE `truth` IS RECORDED AND NOT ASSERTED
+    //    (FINDING E; `TL-P4-COORD-R84` §4's shape). `flag` and `plans` do not
+    //    depend on the access path -- the flag is a column of the invoice row
+    //    and the plan count is answered the same from the heap or from the
+    //    enforcing primary key -- so those two are still asserted. `truth` is
+    //    an `EXISTS` the planner may answer from an index that holds neither
+    //    of the two rows, and WHAT IS NO LONGER CLAIMED IS THAT A FREE
+    //    PLANNER WOULD REACH THE HEAP HERE. Its value is in this suite's
+    //    measurements file beside `R7_cost_inputs`, for whoever reads the
+    //    next flip.
+    const r7state = M['R7_state'] as Record<string, unknown>;
+    expect({ flag: r7state['flag'], plans: r7state['plans'] }).toStrictEqual({ flag: 'true', plans: '2' });
+    expect(r7state['truth'], 'the free reading was not recorded at all').toBeDefined();
+    // THE DETERMINED FORM OF THE SAME CLAIM: with every INDEX path
+    // discouraged the only plan left is the sequential scan, it sees both
+    // heap rows, and it reads TRUE. The plan is asserted beside the value, so
+    // a path change reds this instead of answering another question.
+    const heapTruth = M['R7_truth_heapforced'] as Record<string, unknown>;
+    expect(heapTruth['error'], `the heap-forced EXISTS did not answer: ${String(heapTruth['error'])}`).toBeUndefined();
+    expect(String(heapTruth['plan']), 'the heap-forced EXISTS was not planned on the heap, so its value answers another question').toContain('Seq Scan');
+    expect((heapTruth['row'] as Record<string, unknown>)['t'], 'the heap-forced EXISTS does not see the two rows that ARE in the heap').toBe('true');
     // AND THE INDEX-SERVED READING OF THE SAME EXISTS, asked for explicitly,
     // IS FALSE: the index holds NEITHER row, because both were written while
     // it was not being maintained. That is the finding in one word.
     expect(M['R7_truth_indexserved'], 'the index-served EXISTS sees a row the index cannot hold').toBe('false');
+    // ...AND WHICH INDEX SERVED IT IS NOW READ RATHER THAN ASSUMED. This
+    // reading is forced OFF the sequential and bitmap paths, which leaves the
+    // planner a choice BETWEEN TWO INDEXES, and it chooses on `reltuples`:
+    // round 26 measured that one plain `VACUUM` moves `reltuples` to 2 and
+    // the choice to `installment_plans_pkey` -- which IS enforcing, DOES hold
+    // both rows, and reads `true`. So the partial unique index is required to
+    // be the one that served it. This reading remains UNDETERMINED IN
+    // PRINCIPLE -- no `SET LOCAL` forbids a non-partial index -- and the
+    // assertion is therefore on the OBSERVED PLAN: if the planner ever moves
+    // to the primary key, this arm REDS BY NAME rather than reporting the
+    // other index's answer as this one's.
+    const ixTruth = M['R7_truth_ixforced'] as Record<string, unknown>;
+    expect(ixTruth['error'], `the index-forced EXISTS did not answer: ${String(ixTruth['error'])}`).toBeUndefined();
+    expect(
+      String(ixTruth['plan']),
+      `the index-forced EXISTS was served by something other than the partial unique index, so its value is not the finding's subject: ${String(ixTruth['plan'])}`,
+    ).toContain('installment_plans_one_active_per_invoice_uq');
+    expect((ixTruth['row'] as Record<string, unknown>)['t'], 'the index-served EXISTS sees a row the index cannot hold').toBe('false');
+    // AND THE PIN THAT MAKES FINDING D's QUANTITY CONTROLLABLE IS READ BACK
+    // OUT OF `pg_class.reloptions`, HERE, IN THE ARM THAT DEPENDS ON IT. Its
+    // ABSENCE reds this arm: a premise restored silently is a premise unread
+    // (P15 R4 -- a check must also fail on ABSENCE, not only on drift).
+    const pin = M['R7_autovacuum_pin'] as readonly Record<string, unknown>[];
+    expect(M['fixture_autovacuum_pin'], `the fixture could not pin the autovacuum daemon off: ${String(M['fixture_autovacuum_pin'])}`).toBeNull();
+    expect(
+      pin.map((r) => String(r['rel'])),
+      'the pin read-back did not cover both relations',
+    ).toStrictEqual(['installment_plans', 'installments']);
+    for (const r of pin) {
+      expect(String(r['reloptions']), `${String(r['rel'])} is not pinned against the autovacuum daemon`).toContain('autovacuum_enabled=false');
+    }
     expect(M['R7_triggers_all_enabled']).toBe('7');
     // THE MEASUREMENT THAT IS THE WHOLE OF F-2: the RETIRED spelling of the
     // reader's bound count, run against this very state, finds NOTHING, while
@@ -4196,12 +4465,25 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // answers — and the only difference between them is which access path the
     // planner may use.
     expect(M['R7_two_readings']).toStrictEqual({ retired_spelling: '0', shipped_spelling: '1' });
-    // AND THE DEPENDENCE ON THE ACCESS PATH IS ITSELF MEASURED: with the
-    // planner left alone, both spellings sequential-scan this four-row heap,
-    // see both rows and AGREE. So the finding is about which access path a
-    // spelling PERMITS and not about the size of this fixture — and a reading
-    // taken with the planner free would have measured nothing at all.
-    expect(M['R7_two_readings_free']).toStrictEqual({ retired_spelling: '1', shipped_spelling: '1' });
+    // AND THE DEPENDENCE ON THE ACCESS PATH IS ITSELF MEASURED: on the
+    // FORCED HEAP PATH both spellings see both rows and AGREE. So the finding
+    // is about which access path a spelling PERMITS and not about the size of
+    // this fixture.
+    //
+    // THE FREE PAIR IS RECORDED AND NO LONGER ASSERTED (FINDING E). Until
+    // this round the assertion was on the free reading, and its agreement was
+    // conditional on the planner sequential-scanning a relation whose page
+    // count the autovacuum daemon supplied. What is no longer claimed is that
+    // a FREE planner would reach the heap for either spelling; the only thing
+    // asked of the free pair is that it ANSWERED BOTH SPELLINGS, which is
+    // true of a scan and of an index alike and is therefore not a claim about
+    // the path.
+    const freePair = M['R7_two_readings_free'] as Record<string, unknown>;
+    expect(Object.keys(freePair).sort(), 'the free pair did not answer both spellings').toStrictEqual(['retired_spelling', 'shipped_spelling']);
+    const heapPair = M['R7_two_readings_heapforced'] as Record<string, unknown>;
+    expect(heapPair['error'], `the heap-forced pair did not answer: ${String(heapPair['error'])}`).toBeUndefined();
+    expect(String(heapPair['plan']), 'the heap-forced pair was not planned on the heap').toContain('Seq Scan');
+    expect(heapPair['row']).toStrictEqual({ retired_spelling: '1', shipped_spelling: '1' });
     // ── §R7b THE FREE-PLANNER READING'S MOVEMENT IS EXPLAINED, AND THE
     //    ROUND-14 CAUSE IS WITHDRAWN (`TL-P4-COORD-R59` §1 and ordered item
     //    1; F14-1). The leak could not reach these readings — the apply is on
@@ -4212,13 +4494,22 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     const planFree = String(M['R7_plan_truth_free']);
     const planForced = String(M['R7_plan_truth_forced']);
     expect(planFree, 'no free plan was recorded for the reading whose value depends on the path').not.toBe('');
-    // THE FREE PLAN REACHES THE HEAP, which is why `truth` is `true`: the two
-    // rows are IN THE HEAP and in no index.
-    expect(planFree, `the free plan does not reach the heap yet truth is ${String(M['R7_state'])}`).toContain('Seq Scan');
-    // AND THE FORCED PLAN DOES NOT, which is why the index-served reading is
-    // `false`. The two plans are different plans, measured, not assumed.
-    expect(planForced, 'the forced plan is the same as the free one, so the pair measures nothing').not.toBe(planFree);
-    expect(planForced).toContain('Index');
+    // RECORDED AND NOT ASSERTED (FINDING E): the free plan. The only thing
+    // asked of it is that EXPLAIN ANSWERED and named the relation -- true of
+    // a `Seq Scan` and of an `Index Only Scan` alike. IT IS NO LONGER
+    // CLAIMED THAT A FREE PLANNER REACHES THE HEAP HERE; with the autovacuum
+    // daemon pinned off the relation reports no pages at all and an index
+    // path is the cheaper one, which round 26 measured.
+    expect(planFree, 'EXPLAIN did not answer for the free reading').toContain('installment_plans');
+    // THE TWO FORCED PLANS ARE DIFFERENT PLANS, which is what makes the pair
+    // a measurement at all -- and BOTH are forced, so the comparison does not
+    // rest on a planner choice. The heap-forced plan reaches the heap and
+    // reads `true`; the index-forced plan does not reach it and reads
+    // `false`.
+    expect(planForced, 'the index-forced plan is not an index plan').toContain('Index');
+    expect(String(heapTruth['plan']), 'the heap-forced and index-forced plans are the same plan, so the pair measures nothing').not.toBe(
+      String(ixTruth['plan']),
+    );
     // ── AND NO `ANALYZE` OF THIS RELATION COMPLETED ACROSS THESE PLAN
     //    READINGS, so the page count is the cost input that can move — which
     //    is what the sweep varies. THE PREMISE IS READ TWICE AND BOTH READS
@@ -4341,6 +4632,19 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     //    author's report from these recorded values.
     const sweep = M['R7_pagecount_sweep'] as readonly Record<string, unknown>[];
     const steps = sweep.filter((x) => Object.hasOwn(x, 'bytes') && Object.hasOwn(x, 'added'));
+    //    AND THE BASE STATE OF THE SWEEP IS CONSTRUCTED AND READ BACK, NOT
+    //    INHERITED FROM THE AUTOVACUUM DAEMON (FINDING E). The `VACUUM` must
+    //    have succeeded and the relation must carry a real page count and a
+    //    real tuple count -- NOT the never-vacuumed sentinel `-1`, on which
+    //    the planner falls back to a default density and prefers the index at
+    //    every page count, which is what made this law unreproducible once
+    //    the daemon was pinned off.
+    const base = sweep.find((x) => Object.hasOwn(x, 'base_inputs')) as Record<string, unknown> | undefined;
+    expect(base, 'the sweep did not construct its base state at all').toBeTruthy();
+    expect((base as Record<string, unknown>)['base_vacuum'], `the base VACUUM failed: ${String((base as Record<string, unknown>)['base_vacuum'])}`).toBeNull();
+    const baseInputs = (base as Record<string, unknown>)['base_inputs'] as Record<string, unknown>;
+    expect(Number(baseInputs['relpages']), 'the constructed base page count is zero, so the planner has no page count to scale from').toBeGreaterThan(0);
+    expect(Number(baseInputs['reltuples']), 'the constructed base tuple count is the never-vacuumed sentinel').toBeGreaterThanOrEqual(0);
     expect(steps.length, 'the page-count sweep took no step at all').toBe(3);
     expect(
       steps.every((x) => x['error'] === undefined),
@@ -4374,9 +4678,16 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // ...and the VALUE moves with the path, which is why the movement matters
     //    at all: at the base page count the free retired reading agrees with
     //    §R7's own free pair above, and at the inflated one it does not.
-    expect((first['readings_free'] as Record<string, unknown>)['retired_spelling'], 'the sweep base step disagrees with §R7 own free reading').toBe(
-      (M['R7_two_readings_free'] as Record<string, unknown>)['retired_spelling'],
+    //    THE BASE STEP IS TIED TO §R7's OWN READINGS OVER THE **FORCED**
+    //    PAIR, not over two free readings (FINDING E). Two free readings
+    //    agreeing is a fact about one planner state; the forced pair is the
+    //    same question asked the same way at both points.
+    expect((first['readings_heapforced'] as Record<string, unknown>)['row'], 'the sweep base step disagrees with §R7 own FORCED reading').toStrictEqual(
+      (M['R7_two_readings_heapforced'] as Record<string, unknown>)['row'],
     );
+    //    ...and the free base reading is RECORDED: it is required only to
+    //    have answered, which is what makes the movement below readable.
+    expect((first['readings_free'] as Record<string, unknown>)['retired_spelling'], 'the sweep base step recorded no free reading').toBeDefined();
     expect((last['readings_free'] as Record<string, unknown>)['retired_spelling'], 'the free retired reading did not move with the page count').not.toBe(
       (first['readings_free'] as Record<string, unknown>)['retired_spelling'],
     );
@@ -4401,8 +4712,23 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     );
     expect(Number(tail['stats_after']), 'the sweep ANALYZEd the relation, so every later plan reading is on statistics').toBe(0);
     expect(tail['triggers_on'], `the sweep left the triggers disabled: ${String(tail['triggers_on'])}`).toBeNull();
-    expect(tail['truth_after'], 'the sweep changed the state the rest of §R7 reads').toBe('true');
-    expect(tail['readings_after'], 'the sweep left the bound readings moved').toStrictEqual(M['R7_two_readings_free']);
+    //    ...AND «THE FIXTURE IS BACK» IS ASSERTED OVER THE FORCED READINGS
+    //    (FINDING E). The sweep's PLAIN `VACUUM` is what gives the pages
+    //    back, and a `VACUUM` moves `relpages` AND `reltuples` -- precisely
+    //    the inputs a free planner chooses on -- so comparing a free reading
+    //    taken after it against a free reading taken before it compares two
+    //    planner states and not two states of the fixture. The forced
+    //    readings ask the same question the same way at both points. The free
+    //    ones are recorded.
+    const tailTruthForced = tail['truth_after_heapforced'] as Record<string, unknown>;
+    expect(tailTruthForced['error'], `the heap-forced truth did not answer after the sweep: ${String(tailTruthForced['error'])}`).toBeUndefined();
+    expect(String(tailTruthForced['plan']), 'the post-sweep heap-forced truth was not planned on the heap').toContain('Seq Scan');
+    expect((tailTruthForced['row'] as Record<string, unknown>)['t'], 'the sweep changed the state the rest of §R7 reads').toBe('true');
+    expect((tail['readings_after_heapforced'] as Record<string, unknown>)['row'], 'the sweep left the bound readings moved').toStrictEqual(
+      (M['R7_two_readings_heapforced'] as Record<string, unknown>)['row'],
+    );
+    expect(tail['truth_after'], 'the free post-sweep reading was not recorded').toBeDefined();
+    expect(tail['readings_after'], 'the free post-sweep pair was not recorded').toBeTruthy();
     // AND THE READER REFUSES RATHER THAN SERVING A FIGURE. WHICH ARM ANSWERS
     // DEPENDS ON THE ACCESS PATH, and that is a finding of this round rather
     // than a detail: at `c0d37ca` it was `plan_fact_unreadable`, because
@@ -4411,8 +4737,29 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // leak repaired the planner is free, every count reaches the heap, and
     // the BOUND is what objects — which is the refusal that actually
     // describes this state. Either way it is fail-closed and serves nothing.
+    //
+    // THE DETERMINED FORM: with the reader's own counts forced onto the HEAP
+    // they see both rows and THE BOUND is what objects. That is the refusal
+    // that describes this state, and it is asserted on the forced path.
+    const eForced = errOf(M['R7_aging_heapforced']);
+    expect(eForced, 'the reader served a figure over two active plans again').toContain('installment.plan_active_unbounded');
+    expect(rows(M['R7_aging_heapforced'])).toHaveLength(0);
+    // AND THE FREE READ IS ASSERTED ONLY FOR WHAT IS DETERMINED OF IT
+    // (FINDING E): that it REFUSED, that the refusal is one of this slice's
+    // own internal invariants, that it is one of the TWO fail-closed arms
+    // this state admits, and that it served NO ROWS. **WHICH** of the two
+    // answers is no longer claimed: it depends on whether the reader's counts
+    // are index-served, which no `SET LOCAL` of this suite governs from
+    // outside the routine. Both arms are fail-closed and neither serves a
+    // figure, which is the property this case exists to establish.
     const e = errOf(M['R7_aging']);
-    expect(e, 'the reader served a figure over two active plans again').toContain('installment.plan_active_unbounded');
+    const eCode = parseDatabaseInstallmentInternalCode(new Error(e));
+    expect(e, 'the reader did not refuse at all over two active plans').not.toBe('');
+    expect(eCode, `the free read's refusal is not one of this slice's internal invariants: ${e}`).not.toBeNull();
+    expect(
+      ['installment.plan_active_unbounded', 'installment.plan_fact_unreadable'],
+      `the free read was refused by an arm this state does not admit: ${String(eCode)}`,
+    ).toContain(eCode);
     expect(rows(M['R7_aging'])).toHaveLength(0);
   });
 
