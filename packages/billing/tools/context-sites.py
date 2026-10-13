@@ -48,6 +48,42 @@ HELPER = re.compile(r"setRequestContext\([^;]*?'(session|transaction)'\s*\)")
 LITERAL = re.compile(r"set_config\('app\.[a-z_]+'[^)]*,\s*false\s*\)")
 COMMENT = re.compile(r"//.*$")
 
+# ROUND 23, THE CHALLENGER'S B-4. The two patterns above do not count
+# context-setting sites; they count what two spellings match. A THIRD spelling
+# sets the context and was invisible to both — and it is not contrived, it is
+# the line `cluster.ts` itself uses, with the scope argument BOUND rather than
+# the literal `false`:
+#
+#   c.query(`SELECT set_config('app.tenant_id', $1, $3), …`, [t, b, false]);
+#
+# Planted in the corpus, the pure law stayed green and the census did not move,
+# while a session-scoped site had been added. The figures were right and the
+# sentence about what KEEPS them right was wrong — the third sentence in this
+# phase to over-claim its own instrument.
+#
+# This detector is the fail-closed half of the remedy, in the shape
+# `manifest-digests.py`'s LOOKS_LIKE_REVIEWER already has: a BROAD pattern for
+# every way of writing a context set that this lane could plausibly use, each
+# match of which must be ACCOUNTED FOR by one of the two counted forms. A match
+# that is not is a PROBLEM, never a quiet zero. It cannot be exhaustive — no
+# regex over a corpus can be — so the footnote the tool renders claims exactly
+# this and not more.
+BROAD = re.compile(r"set_config\(\s*'app\.[a-z_]+'|(?<![\w.])SET\s+app\.[a-z_]+", re.IGNORECASE)
+
+
+def unaccounted(db_dir: Path) -> list[str]:
+    """Context sets in a spelling neither counted form matches."""
+    out: list[str] = []
+    for path in sorted(db_dir.glob("*.test.ts")):
+        code = "\n".join(COMMENT.sub("", line) for line in path.read_text().split("\n"))
+        covered = [m.span() for m in LITERAL.finditer(code)]
+        for m in BROAD.finditer(code):
+            if any(a <= m.start() < b for a, b in covered):
+                continue
+            line = code[: m.start()].count("\n") + 1
+            out.append(f"{path.name}:{line}: {m.group(0).strip()}")
+    return out
+
 
 def census(db_dir: Path) -> dict:
     helper: list[tuple[str, str, int]] = []
@@ -92,10 +128,17 @@ def render(c: dict) -> list[str]:
         " on a listed document with no block, and on a malformed sentinel pair. **Every figure in"
         " this table** — the total, both session rows, their sum and the transaction row — is"
         " independently PINNED as an exact equality by"
-        " `test/db-refusals-name-their-defence.test.ts`, so a site added or removed anywhere in the"
-        " corpus reds the pure suite. Until round 22 that law pinned only the session sum while this"
-        " footnote claimed the table; round 21 added two transaction sites, the suite stayed green"
-        " and the published total and transaction row went stale (the challenger's B-3)._",
+        " `test/db-refusals-name-their-defence.test.ts`, **against the two spellings this census"
+        " defines**: `setRequestContext(… 'session' | 'transaction')` and a literal"
+        " `set_config('app.…', …, false)`. A site written in either spelling cannot be added or"
+        " removed without redding the pure suite. A site written in ANY OTHER spelling is counted"
+        " by neither, so a fail-closed detector reds the suite and this check when it finds a"
+        " `set_config('app.…` or a `SET app.…` that neither counted form accounts for — a broad"
+        " net, not a parser, and not a claim of exhaustiveness. Two rounds of history, because the"
+        " claim has been wrong twice: round 21 added two transaction sites while the law pinned only"
+        " the session sum and this footnote claimed the table (B-3), and round 22's replacement"
+        " sentence said \"anywhere in the corpus\" while a third spelling — the one `cluster.ts`"
+        " uses, with the scope argument bound — moved neither the law nor the census (B-4)._",
         "",
         END,
     ]
@@ -129,7 +172,10 @@ def main() -> int:
     block = render(c)
 
     base = Path(args.dir)
-    problems: list[str] = []
+    problems: list[str] = [
+        f"UNACCOUNTED context set, in a spelling neither counted form matches: {site}"
+        for site in unaccounted(tests)
+    ]
     for name in DOCUMENTS:
         path = base / name
         if not path.is_file():

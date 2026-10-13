@@ -273,5 +273,43 @@ describe('a refusal in the DB lane names the defence that refused, not its class
     // five literals above with parts that do not add up.
     expect(helperSession.length + literalSession.length).toBe(session.length);
     expect(session.length + transaction.length).toBe(sites.length);
+
+    // ROUND 23, THE CHALLENGER'S B-4, AND THE OVER-CLAIM WAS MINE AGAIN. The
+    // two patterns above do not count context-setting sites; they count what
+    // two spellings match. A THIRD spelling — the one `cluster.ts` itself uses
+    // inside `setRequestContext`, with the scope argument BOUND rather than
+    // the literal `false` —
+    //
+    //   c.query(`SELECT set_config('app.tenant_id', $1, $3), …`, [t, b, false])
+    //
+    // is invisible to both. Planted in the corpus it left this case GREEN and
+    // the census unchanged at 34, while a session-scoped site had been added:
+    // exactly the failure R-2 created this law to prevent. I reproduced it
+    // before fixing it.
+    //
+    // So the five equalities above hold against the two counted spellings, and
+    // this is the fail-closed half: a BROAD net over every way of setting the
+    // context this lane could plausibly write, each match of which must be
+    // accounted for by the LITERAL form. It is not a parser and not
+    // exhaustive — no regex over a corpus can be — and the generated footnote
+    // now claims exactly this and not "anywhere in the corpus".
+    const broad = /set_config\(\s*'app\.[a-z_]+'|(?<![\w.])SET\s+app\.[a-z_]+/gi;
+    const counted = /set_config\('app\.[a-z_]+'[^)]*,\s*false\s*\)/g;
+    const unaccounted: string[] = [];
+    for (const file of dbTestPaths()) {
+      const code = readFileSync(file, 'utf8')
+        .split('\n')
+        .map((line) => line.replace(/\/\/.*$/, ''))
+        .join('\n');
+      const covered: Array<readonly [number, number]> = [...code.matchAll(counted)].map((m) => [m.index, m.index + m[0].length] as const);
+      for (const m of code.matchAll(broad)) {
+        if (covered.some(([a, b]) => a <= m.index && m.index < b)) continue;
+        unaccounted.push(`${file.split('/').pop()}:${code.slice(0, m.index).split('\n').length}: ${m[0].trim()}`);
+      }
+    }
+    expect(
+      unaccounted,
+      'a context set is written in a spelling neither counted form matches, so the census cannot see it — count it or change the spelling',
+    ).toStrictEqual([]);
   });
 });

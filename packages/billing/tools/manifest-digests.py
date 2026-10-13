@@ -61,6 +61,7 @@ REVIEWER_REPORTS: tuple[str, ...] = (
     "P5-CHALLENGE-421e425.md",
     "P5-CHALLENGE-47a56c8.md",
     "P5-CHALLENGE-4c451e6.md",
+    "P5-CHALLENGE-594178c.md",
     "P5-CHALLENGE-5af0c96.md",
     "P5-CHALLENGE-6171923.md",
     "P5-CHALLENGE-678564e.md",
@@ -75,7 +76,19 @@ REVIEWER_REPORTS: tuple[str, ...] = (
 # PROBLEM, so adding a report without enumerating it cannot pass unnoticed;
 # and a name that matches nothing here is hashed as the author's, whatever it
 # is called.
-LOOKS_LIKE_REVIEWER = re.compile(r"^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-f]{7}\.md$")
+#
+# ROUND 23, THE CHALLENGER'S F-42. The first version demanded exactly seven
+# hex characters, so a report copied as `P5-CHALLENGE-0c165460.md` — eight —
+# was hashed as the author's and `--check` returned rc 0. The consequence was
+# mild (drift, never a false record) but the shape was the wrong one: a
+# fail-closed net with an exact-width hole in it. Six to forty hex characters
+# now, either case, with an optional `-suffix`, which covers an abbreviated
+# sha, a full one, and `…-v2`. It still catches only the two name shapes the
+# reviewers use; anything outside them is hashed as the author's, which is the
+# safe direction.
+LOOKS_LIKE_REVIEWER = re.compile(
+    r"^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-fA-F]{6,40}(-[A-Za-z0-9]+)?\.md$"
+)
 
 
 def reviewer_list_problems(on_disk: list[str]) -> list[str]:
