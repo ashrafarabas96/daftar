@@ -426,14 +426,28 @@ describe('P9 booking schema — applies as the deployment principal', () => {
         // is then measured PASSING. Round 9 asked for all eleven on both
         // guards rather than three on one (F-6).
         //
-        // Three of the eleven cannot be isolated by a single deletion, and
-        // that is a fact about PostgreSQL rather than a gap here: a trigger
-        // cannot be INITIALLY DEFERRED without being DEFERRABLE, and a plain
-        // trigger cannot be either, so the wrong trigger that defeats
-        // `tgdeferrable` necessarily also defeats `tginitdeferred`. For those,
-        // `stillRed` names the strictly smaller deletion that must STILL
-        // refuse, which is what shows the extra condition is carrying weight
-        // instead of riding along.
+        // Three of the eleven cannot be isolated by a single deletion in any
+        // state a DEPLOYMENT can reach, and the wording matters (C10-P9-05):
+        // **no DDL path produces** `tgdeferrable = false` with
+        // `tginitdeferred = true`, measured three ways on PostgreSQL 16.15 —
+        // `CREATE CONSTRAINT TRIGGER … NOT DEFERRABLE INITIALLY DEFERRED` and
+        // the equivalent `ALTER TABLE … ALTER CONSTRAINT` both error with
+        // "constraint declared INITIALLY DEFERRED must be DEFERRABLE", and
+        // `ALTER CONSTRAINT … NOT DEFERRABLE` is foreign-key-only. The state
+        // itself is NOT impossible: a superuser `UPDATE pg_trigger SET
+        // tgdeferrable = false` produces it, and on that state a single cut
+        // of `tg.tgdeferrable` WOULD isolate the condition. An earlier edition
+        // of this comment said a trigger "cannot" be in that pair, which is
+        // false about the catalogue and true about DDL; the challenger
+        // measured it after being asked to. A plain trigger can be neither
+        // deferrable nor initially deferred, which is the second pair. The
+        // gate is not fail-open on the catalogue state — the full block
+        // refuses `tgdeferrable = false` whatever `tginitdeferred` holds — and
+        // a superuser who can write `pg_trigger` can also drop the table, so
+        // it is not a state to design a proof around. For every state a
+        // deployment can reach, `stillRed` names the strictly smaller deletion
+        // that must STILL refuse, which is what shows the extra condition is
+        // carrying weight instead of riding along.
         const block = endStateBlock();
         const cut = (fragments: readonly (readonly [string, string])[]): string => {
           let out = block;

@@ -2030,10 +2030,20 @@ BEGIN
   --     OWNS these functions, so no GRANT can stop it replacing them; what
   --     stops it is the §10 `REVOKE CREATE ON SCHEMA public`, which leaves the
   --     owner without the schema-level CREATE that CREATE OR REPLACE requires.
-  --     Round 9 measured that refusal three times as that role — a replacement
-  --     of bookings_chain_symmetric, a replacement of
-  --     bookings_buffers_match_service, and a fresh helper function — and all
-  --     three were refused with 42501 permission denied for schema public. So
+  --     Two rounds measured that refusal, and the attribution matters because
+  --     this comment exists to tell a future reader what has been ESTABLISHED
+  --     (C10-P9-01). Round 9 measured ONE object, bookings_chain_symmetric,
+  --     under THREE principals: daftar_app got "permission denied for schema
+  --     public", daftar_migrator got "must be owner of function", and
+  --     daftar_migrator after SET ROLE daftar_booking_internal — which it may
+  --     do, being a member of the owning role — got "permission denied for
+  --     schema public" again. That last reading is the one that closes it: the
+  --     owner itself cannot replace its own body. Round 10 then measured the
+  --     three OBJECTS as that role — bookings_chain_symmetric,
+  --     bookings_buffers_match_service and a fresh helper function — and all
+  --     three were refused with SQLSTATE 42501 permission denied for schema
+  --     public, with the gate green afterwards
+  --     (/mnt/project-files/phase9/P9-CHALLENGE-975ef97.md). So
   --     this IF is the one that keeps clause (h) from pinning an empty shell:
   --     if CREATE ever comes back, the body swap becomes available again and
   --     the migration refuses to finish rather than certify a schema whose

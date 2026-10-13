@@ -22,7 +22,10 @@ PASS-WITH-SCOPE at `76ab277`, PASS at `9a64289`, PASS-WITH-SCOPE at `903e1f4`, R
 **withdrew the signatures at `0f4f0e4` and `01f7c2d`** because a repository gate was red at
 both, and then a PASS at `6baa1eb` that the challenger **withdrew in its own addendum** on the
 same three false document counts the coordinator's review of that head had found. **Three
-signatures have now been withdrawn and the two that stand are at `9a64289` and `903e1f4`**; the
+signatures have now been withdrawn and the THREE that stand are at `76ab277`, `9a64289` and
+`903e1f4`** — six passes less three withdrawals is three, and an earlier edition of this file
+named only two, dropping `76ab277`, whose PASS-WITH-SCOPE nothing has ever withdrawn
+(`C10-P9-02`); the
 verdict at `6baa1eb` is REJECT from both reviewers, on sentences in the prep report and nothing
 in the schema or the suite: see the Challenger and Coordinator states below. `READY_TO_PROMOTE` is the next rung
 and its gates are external, below. Neither a challenger PASS nor a coordinator accept is a
@@ -40,23 +43,42 @@ first (PART 4), a migration number must be allocated by the one Migration Owner
 git log -1 --format=%H -- docs/phase9/P9-HANDOFF-MANIFEST.md
 ```
 
-Parent: `eb1046c` — the previous head, which round 8 reviewed as `b6d6101` plus a manifest.
+Parent: `975ef97` — re-measured at this head with
+`git --no-replace-objects rev-parse HEAD^`, not carried forward. The previous edition of this
+line said `eb1046c`, which is two commits back: it is `6baa1eb`'s parent, and `6baa1eb` is this
+head's grandparent. Round 10 redded it as `C10-P9-03`, in the one file whose whole subject is
+provenance.
 Branch: `claude/project-thread-4i752q`
 Base:   `6fc505d` (`origin/main`, the sealed Phase 3 head; `frozenThrough 0073` on this base)
 Worktree: the session's primary checkout — no secondary worktree was created.
 Tree state: `git status --porcelain` was 0 lines when the run below started, and 0 lines after
 the push.
 
-**Why there is no literal SHA printed here, and why that is an improvement.** Until this round
+**Why there is no literal SHA printed here, and why that is an improvement.** Until round 8
 the code landed in one commit and this manifest in the next, so the manifest named an earlier
 subject and the head was always one commit ahead of the evidence. Round 8 measured what that
 costs: this file published **two different SHA256s for the prep report**, one at each of the two
 commits, because the document moved between them. So the documents, the tests and this manifest
-now go in **ONE commit** — the subject and the head are the same commit, there is no
-reconciliation to state, and the digest tables below cannot disagree with each other. A literal
-SHA cannot be written into the commit that contains it; the command above is exact, and
-`git log -1 --format=%H -- <this file>` is the same expression the mirror check uses, so a
-reader learns one idiom rather than two.
+now go in ONE commit wherever one commit is honest, and the digest tables below cannot disagree
+with each other. A literal SHA cannot be written into the commit that contains it; the command
+above is exact, and `git log -1 --format=%H -- <this file>` is the same expression the mirror
+check uses, so a reader learns one idiom rather than two.
+
+**What actually happened on the last three heads, because this paragraph used to claim a
+discipline it had not followed (`C10-P9-03`).** The one-commit rule held for `6baa1eb`. The two
+heads after it are three commits, and each extra one has a reason a reader can check:
+
+| commit | what it carries | why it is its own commit |
+|---|---|---|
+| `a3a60ac` | the DDL spec, the schema test, and the first pass of the prose | the ONE commit the coordinator's review of `6baa1eb` asked for |
+| `975ef97` | this manifest and the prep report's text | the challenger withdrew its round-9 signature AFTER `a3a60ac` was written, so that commit's own header still said round 9 ended in a PASS; a header that is right only until the next artifact lands is the defect the round was about, so the correction is a commit rather than an edit pretending the first one said it |
+| this head | the spec's clause-(i) provenance, the prep report, and this file | round 10's three false provenance sentences, which are what this head answers |
+
+What that costs and what saves it: the digest tables are anchored to `$M`, the commit in which
+THIS FILE last changed, so they describe this head and all of them verify; the prose around them
+has to be re-measured by hand, and twice now it was not. The honest statement is therefore not
+"the subject and the head are the same commit" but **"the digests are anchored to this file's own
+commit, and every sentence about which commit carries what is listed above."**
 
 **What that does NOT paper over (PART 16).** The run recorded below was executed on the working
 tree that became this commit, with `git status --porcelain` empty at the start — not on the
@@ -122,9 +144,9 @@ its prefix in the same act.
 
 | mirrored document | SHA256 of the committed blob at `$M` |
 |---|---|
-| `P9-BOOKING-DDL-SPEC.sql` | `71cd1b38893d1499ead0157e3c8d55a63f74e36277378d13e82c1395cdad8851` |
+| `P9-BOOKING-DDL-SPEC.sql` | `3d1ae666a2378c720bc1c77b54af1a52365e8c47d669fcccf52e23888b22bd4b` |
 | `P9-MIGRATION-PATCH-REQUEST.md` | `27737c51aed23bba0fc8952f17495e3d6c7adf61044a722b07818e69f7f68226` |
-| `P9-PREP-REPORT.md` | `49d6a187a1c547a6ef25397675bf1896ec597bdeefbfa0ff59b65f0407ee6cfb` |
+| `P9-PREP-REPORT.md` | `a76ae030b15e4cdfac0a9666b43a3c7bf7c2a634223be2b4aa994abdcaaab869` |
 | `P9-S0-SCOPE-AND-ARCHITECTURE.md` | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
 | `P9-RETENTION-AND-ERASURE-OPTIONS.md` | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
 
@@ -151,10 +173,10 @@ commit it means.
 
 | artifact | location | committed | SHA256 at `$M` |
 |---|---|---|---|
-| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `71cd1b38893d1499ead0157e3c8d55a63f74e36277378d13e82c1395cdad8851` |
+| DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `3d1ae666a2378c720bc1c77b54af1a52365e8c47d669fcccf52e23888b22bd4b` |
 | Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `27737c51aed23bba0fc8952f17495e3d6c7adf61044a722b07818e69f7f68226` |
 | Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
-| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `49d6a187a1c547a6ef25397675bf1896ec597bdeefbfa0ff59b65f0407ee6cfb` |
+| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `a76ae030b15e4cdfac0a9666b43a3c7bf7c2a634223be2b4aa994abdcaaab869` |
 | Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
 | Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `92dea85ad38b47ae3be0eff1c2fd26409c3289e9a4c47d3a8f069d6079642147` |
 | Independent challenger's PASS-WITH-SCOPE at `0f4f0e4` | `/mnt/project-files/phase9/P9-CHALLENGE-0f4f0e4.md` | **no — off-Git** | `44aad5193b4c22b3cb8ff24f8f25b5d1196de496ab6d7ffe930d4abc0ca66371` |
@@ -172,6 +194,8 @@ commit it means.
 | Challenger ADDENDUM 1 — **withdraws the `6baa1eb` signature**, revised verdict REJECT | `/mnt/project-files/phase9/P9-CHALLENGE-6baa1eb-ADDENDUM-1.md` | **no — off-Git** | `da4fdf78618292609daeff61770c2866c7ba9379bab7792abe621394a40dfadd` |
 | Coordinator actual-diff review at `6baa1eb` (REJECT, documents only) | `/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-6baa1eb.md` | **no — off-Git** | `40b96fcc462b1cd0f499488188f6a907225315fcd52c01d7d6af895fe947e212` |
 | Held patch written after `6baa1eb`, folded into this commit | `/mnt/project-files/phase9/P9-HELD-PATCH-after-6baa1eb.md` | **no — off-Git** | `1a30aef9ff6571a011961107cd195474442675726754307dba3092a00267b942` |
+| Independent challenger round 10 at `975ef97` — REJECT on three provenance sentences, everything executable accepted | `/mnt/project-files/phase9/P9-CHALLENGE-975ef97.md` | **no — off-Git** | `31579881d2aca70d02878c207fcaee416a56c80793f7554f8ac3886cf4aa7886` |
+| Challenger round-10 ADDENDUM 1 — `C10-P9-05`, the DDL-vs-catalogue measurement | `/mnt/project-files/phase9/P9-CHALLENGE-975ef97-ADDENDUM-1.md` | **no — off-Git** | `5783e6df9f84f49a2f4683711dcb315179245b4d00f98a7883dd7f686f214a0c` |
 | Stored run log and digest record for THIS subject | `/mnt/project-files/phase9/P9-RUN-LOG-<subject>.txt`, `P9-EVIDENCE-SHA-<subject>.txt` | **no — off-Git** | written after this commit, with the subject SHA in the filename and in the header; the digest record carries its own `sha256sum -c`-verifiable lines |
 | This manifest | `docs/phase9/P9-HANDOFF-MANIFEST.md` | yes — **this** commit | — (a file cannot carry its own hash; its digest is published in the mirror refresh record) |
 
@@ -325,8 +349,13 @@ open design items and not fixed under a review's scope.
 
 **RUN NINE TIMES. Round 9 at `6baa1eb`: a PASS, WITHDRAWN BY THE CHALLENGER ITSELF in
 `P9-CHALLENGE-6baa1eb-ADDENDUM-1.md`, revised verdict REJECT. THREE SIGNATURES HAVE NOW BEEN
-WITHDRAWN. The signatures that stand are at `9a64289` and `903e1f4`. No signature names THIS
-subject or its parent.**
+WITHDRAWN. The THREE that stand are at `76ab277`, `9a64289` and `903e1f4`, each covering one
+SHA and nothing after it — `76ab277` the diff `51626e1..76ab277` with one full suite run at that
+head; `9a64289` the diff `76ab277..9a64289`, its eight manifest digests and four probes of the
+challenger's own; `903e1f4` the delta's executable content, the suite at that subject on the
+deploy-target runtime and the mutation adequacy of three promoted cases. All three name heads
+that precede the end-state gate, the eleven-condition proof and every document as they now
+stand. No signature names THIS subject or any of its last three ancestors.**
 
 Round 9 reviewed `6baa1eb` on its own fresh PG 16.15 at `en_US.utf8` under Node v24.12.0,
 applying the spec as `daftar_migrator`, and ran the repository's own gate scripts: **109 of 109,
@@ -608,8 +637,8 @@ not sign their own fix** (PART 15), so this is answered and not closed.
 condition the coordinator set.
 
 Fifteen findings across nine rounds, plus the coordinator's residuals, are all discharged in
-code or in prose at the subject SHA above. **The signatures that stand are at `9a64289` and
-`903e1f4`**: the round-6 and round-7 signatures were withdrawn in round 8 because
+code or in prose at the subject SHA above. **The signatures that stand are at `76ab277`,
+`9a64289` and `903e1f4`**: the round-6 and round-7 signatures were withdrawn in round 8 because
 `prettier --check .` was red at the heads they named, and the round-9 signature at `6baa1eb` was
 withdrawn by the challenger itself over three false document counts. Nothing signs this
 subject.

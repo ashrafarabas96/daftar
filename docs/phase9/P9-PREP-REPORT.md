@@ -8,8 +8,15 @@ ended in a pass — `9a64289`, `76ab277`, `903e1f4`, `0f4f0e4`, `01f7c2d`, `6baa
 **three of those six signatures were later WITHDRAWN by the challenger itself**: `0f4f0e4` and
 `01f7c2d` in round 8, when it measured the repository's own format gate red at those heads, and
 `6baa1eb` in an addendum to round 9, when it re-measured the three counts the coordinator had
-found false in this file and agreed they block. **The signatures that stand are at `9a64289`
-and `903e1f4`, and the current verdict at `6baa1eb` is a REJECT** — from the challenger and from
+found false in this file and agreed they block. **Six minus three is three, so the signatures that stand
+are at `76ab277`, `9a64289` and `903e1f4`** — an earlier edition of this paragraph named only
+two and dropped `76ab277`, whose PASS-WITH-SCOPE has never been withdrawn by anybody
+(`C10-P9-02`). Each covers one SHA and nothing after it: `76ab277` the diff `51626e1..76ab277`
+with one full suite run at that head; `9a64289` the diff `76ab277..9a64289`, its eight manifest
+digests and four probes of the challenger's own; `903e1f4` the delta's executable content, the
+suite at that subject on the deploy-target runtime and the mutation adequacy of three promoted
+cases. All three name heads that precede the end-state gate, the eleven-condition proof and
+every document as they now stand. **The current verdict at `6baa1eb` is a REJECT** — from the challenger and from
 the coordinator independently, on three sentences in this document and nothing in the schema or
 the suite. Both are answered in this commit.
 
@@ -44,10 +51,10 @@ head of `main`.
 | file | lines | what it is |
 |---|---|---|
 | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | 240 | the model, and why it has this shape |
-| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 2057 | the schema and its physical invariants — **not a migration** |
+| `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 2067 | the schema and its physical invariants — **not a migration** |
 | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 616 | what the Migration Owner is asked to allocate |
-| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 651 | the PART 13 handoff gate, with a SHA256 per artifact |
-| `tests/phase9-prep/p9-booking-schema.test.ts` | 714 | 26 cases: shape, security, grants, ownership, the state contract, collation independence, and the end state — both deferred guards pinned as one row, with a red proof for each of the three wrong triggers round 8 landed and, since round 9, a deletion proof for **every one of the gate's eleven conditions on both guards** |
+| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 680 | the PART 13 handoff gate, with a SHA256 per artifact |
+| `tests/phase9-prep/p9-booking-schema.test.ts` | 728 | 26 cases: shape, security, grants, ownership, the state contract, collation independence, and the end state — both deferred guards pinned as one row, with a red proof for each of the three wrong triggers round 8 landed and, since round 9, a deletion proof for **every one of the gate's eleven conditions on both guards** |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 608 | 7 cases: each invariant removed, and the damage measured |
 | `tests/phase9-prep/p9-booking-multi-resource.test.ts` | 736 | 10 cases: the global lock order (PART 50), idempotent retries and the replay (PART 53) |
@@ -65,7 +72,7 @@ edition before this one.
 The manifest's own line count is the awkward one: this commit edits
 `P9-HANDOFF-MANIFEST.md`, so a number written for it is stale the moment it is written unless
 it is written last. The 532 in the edition the coordinator reviewed was measured three commits
-earlier; at `6baa1eb` the file was already 591 lines, and it is 651 here. The number above is written after the
+earlier; at `6baa1eb` the file was already 591 lines, 651 at `975ef97`, and 680 here. The number above is written after the
 last edit this commit makes to that file, and re-measuring it is one command:
 
 ```
@@ -78,8 +85,11 @@ these files produces, because four `it` sites in the schema suite are parameteri
 two deferred guards and run once for each. The anchored command gives the number of SITES:
 
 ```
-grep -cE '^[[:space:]]*it\(' tests/phase9-prep/*.test.ts   # 106 sites
-npx vitest run tests/phase9-prep                           # 110 cases
+# `grep -c` with seven file arguments prints seven path:count lines, not one number
+# (C10-P9-04) — 11 concurrency, 24 integrity, 10 multi-resource, 7 negative-controls,
+# 11 runtime-attack, 22 schema, 21 time. These print the sum:
+grep -ohE '^[[:space:]]*it\(' tests/phase9-prep/*.test.ts | wc -l   # 106 sites
+npx vitest run tests/phase9-prep                                     # 110 cases
 ```
 
 The unanchored `grep -c 'it('` gives **109** at this tree, not the 106 the previous edition
@@ -403,6 +413,91 @@ actual-diff review — is still owed. The D11 PART 117 label for the same state 
 `PREPARED / NOT PROMOTED`; it names the promotion state, not the ladder rung, and this
 report uses both so neither vocabulary has to be guessed at.
 
+### 3c.23 The challenger's TENTH round at `975ef97` — everything executable accepted, three provenance sentences REJECTED
+
+Round 10 accepted the gate, the schema, the suite, the digests, the mirror, the handoff command,
+the held patch, F-1 through F-6 and the `'R'`/`'A'` decision, each on its own measurement, and
+rejected three sentences about **who measured what and which commit carries it**. The
+coordinator's review ruled the same three blocking under the stopping rule. Both are answered in
+the one commit this section is written in.
+
+**What it verified rather than accepted.** It did not take the eleven-condition proof's word for
+itself: it wrote its own cuts over the extracted block, its own plants and its own restore
+check, and ran 22 probes — eleven conditions on both guards. In all 22 the full gate refuses by
+name, the block with that condition cut returns GREEN, the gate is green before the plant and
+after the restore, and `pg_get_triggerdef` comes back byte-identical. It then added the one
+check this repository's harness does not make: for each plant it reads the catalogue column back
+and asserts the specific fact the plant claims to violate — `tgenabled = 'D'`,
+`tgconstraint = 0`, `relname = 'zz_decoy'`, `nspname = 'zz'`, the function's schema `'zz'`, a
+changed `tgtype`, `tgdeferrable` false with `tgconstraint` still true, a rendered definition no
+longer containing `WHEN`, and the trigger absent for the rename. All 22 came back
+plant-is-what-it-claims. It also measured the `'R'` state for the first time by anybody: `ENABLE
+REPLICA` gives `tgenabled = 'R'` and the gate refuses on both guards, `ALWAYS` gives `'A'` and
+refuses, `ENABLE` gives `'O'` and is green — and it says `'R'` was the one most worth asserting,
+because a trigger left in `'R'` fires only under replica mode, so it is a guard that looks
+installed and is not. Its own figures: 110/110 exit 0 from `--reporter=json` with the per-file
+distribution matching this report's table, the gates in a genuinely cold clone (no
+`node_modules`, no `dist`, both checked) at Node v24.12.0 — format rc 0 cold and warm, lint rc 1
+cold with 4220 over four rules and rc 0 after a build, typecheck rc 2 cold with 286 and rc 0
+after, build rc 1 then rc 0 — with the per-rule distribution identical to base `6fc505d` and
+zero of the 4220 in a phase-9 file, 26 of 26 manifest digests, 6 of 6 mirrors SAME with 0
+orphans under the new skip list, and no added non-comment line in the spec's diff.
+
+**The three it rejected, each verified here before it was touched.**
+
+* **`C10-P9-01` — the clause-(i) comment credited round 9 with three objects.** Round 9 measured
+  ONE object, `bookings_chain_symmetric`, under THREE principals: `daftar_app`,
+  `daftar_migrator`, and `daftar_migrator` after `SET ROLE daftar_booking_internal`. I checked
+  its report and the challenger is right; the decisive reading is that third one, the owner
+  itself refused. Round 10 measured the three OBJECTS — both guard functions and a fresh helper
+  — each `42501`, gate green after. The conclusion was never in doubt; what was false is the
+  sentence saying who established it, in a comment whose only purpose is to tell a future reader
+  what has been established. The spec and the two places in this file now say which round
+  measured which, and cite round 10's report by path. The challenger called this the mildest of
+  its three and said it would not argue with a coordinator who ruled it a residual; the
+  coordinator ruled it blocking, and I would rather fix it than litigate the grade.
+* **`C10-P9-02` — the header's own arithmetic contradicted its own list.** It counted six passes
+  and three withdrawals and then named two standing signatures. Six less three is three, and
+  `76ab277` was the one missing: its verdict row reads PASS-WITH-SCOPE, it carries its own scope
+  section, and no challenge report or coordinator review has ever withdrawn it — I searched all
+  of them. Three signatures stand, at `76ab277`, `9a64289` and `903e1f4`, and each one's scope is
+  now stated where it is named rather than left as a bare SHA. None of them names any of the
+  last three heads.
+* **`C10-P9-03` — the manifest's parent line was two commits stale, in the file whose subject is
+  provenance.** It said `eb1046c`, which is `6baa1eb`'s parent; this head's parent is `975ef97`.
+  Worse than the line itself was the paragraph below it, which explained that the documents, the
+  tests and the manifest now go in ONE commit so that "the subject and the head are the same
+  commit" — while the last three heads are three commits. That paragraph now carries a table of
+  what each of the three commits holds and why each extra one exists, and says plainly what
+  saves the digests (they are anchored to the manifest's own commit) and what does not (the
+  prose around them, which has to be re-measured by hand, and twice was not).
+* **`C10-P9-04` (P3)** — the counting block quoted `grep -c` over seven file arguments, which
+  prints seven `path:count` lines rather than the single number beside it. Same shape as B-2 and
+  milder; the block now prints the seven per-file figures and uses `grep -ohE … | wc -l` for the
+  sum.
+
+* **`C10-P9-05` (P3), from the round's addendum — the one sentence I had reasoned to rather
+  than measured.** When I handed the head over I asked the challenger to check exactly this: if
+  a single cut CAN isolate `tgdeferrable` on some catalogue state I had not thought of, then my
+  comment calling it impossible was a claim about PostgreSQL I had reasoned to, and it belonged
+  on its list. It measured four routes on PostgreSQL 16.15. `CREATE CONSTRAINT TRIGGER … NOT
+  DEFERRABLE INITIALLY DEFERRED` errors with *"constraint declared INITIALLY DEFERRED must be
+  DEFERRABLE"*; the equivalent `ALTER TABLE … ALTER CONSTRAINT` gives the same error;
+  `ALTER CONSTRAINT … NOT DEFERRABLE` is foreign-key-only; and `UPDATE pg_trigger SET
+  tgdeferrable = false` as superuser returns `UPDATE 1` and produces the pair. So the reasoning
+  was right about DDL and wrong about the catalogue, and on that catalogue state a single cut
+  WOULD isolate the condition. The comment now says no DDL path produces the pair and that a
+  superuser write does. Nothing else moves: the full gate refuses `tgdeferrable = false`
+  whatever `tginitdeferred` holds, so it is not fail-open on that state, and a superuser who can
+  write `pg_trigger` can also drop the table — the same reasoning that closed limitation 24 on
+  the `REVOKE` rather than on a digest. For every state a deployment can reach, the minimal pair
+  remains the instrument.
+
+One scope note the challenger asked to be carried: its runs are on Node v24.12.0 and this
+report's are on v24.21.0, so where a figure differs, theirs is the v24.12.0 reading.
+
+---
+
 ### 3c.22 The challenger's NINTH round at `6baa1eb` — a PASS it then WITHDREW, and the coordinator's REJECT on this file
 
 Round 9 ran on its own PostgreSQL 16.15 cluster at `en_US.utf8` built fresh for the round, in
@@ -441,8 +536,16 @@ no mitigation available.
   instrument is rather than inventing one. It ruled by attacking: a body swap needs `CREATE OR
   REPLACE FUNCTION`, which needs CREATE on the schema, and §10 revokes that from
   `daftar_booking_internal` — the owner, and so the one principal no GRANT could have stopped.
-  Three attempts as that role, two guard functions and a fresh helper, all refused with
-  `42501 permission denied for schema public`. Clause (i) of the end-state block already
+Round 9 measured one object — `bookings_chain_symmetric` — under three
+  principals: `daftar_app` refused with *"permission denied for schema public"*,
+  `daftar_migrator` with *"must be owner of function"*, and `daftar_migrator` after
+  `SET ROLE daftar_booking_internal`, which it may do as a member of the owning role, with
+  *"permission denied for schema public"* again. That third reading is the one that closes it,
+  because it is the owner itself being refused. Round 10 then measured the three OBJECTS as
+  that role — both guard functions and a fresh helper — each refused with `42501`, gate green
+  afterwards. An earlier edition of this paragraph credited round 9 with the three objects;
+  round 10 redded that as `C10-P9-01`, and it was right to: a sentence whose job is to say what
+  has been established cannot be vague about who established it. Clause (i) of the end-state block already
   asserts that revocation, so the gate does not hope the swap is unavailable; it refuses to
   finish if the privilege ever comes back. Limitation 24 is rewritten as **closed**, and the
   spec now says this where clause (i) is written instead of leaving a reader to join two
@@ -505,10 +608,13 @@ every count, so the next reader can red it in one line instead of in a review.
   this is the largest change in the commit. The suite cut three of the gate's conditions on one
   guard; it now cuts **every one of the eleven, on both guards**, measuring the wrong trigger
   each condition was added for as PASSING once that condition is gone. Three of the eleven
-  cannot be isolated by a single cut, and that is PostgreSQL rather than a gap: a trigger
-  cannot be INITIALLY DEFERRED without being DEFERRABLE, and a plain trigger can be neither, so
-  for those the strictly smaller cut is measured **still refusing**, which is what shows the
-  extra condition carries weight. The suite grows from 109 cases to 110.
+  cannot be isolated by a single cut in any state a DEPLOYMENT can reach: **no DDL path
+  produces** `tgdeferrable = false` with `tginitdeferred = true`, and a plain trigger can be
+  neither deferrable nor initially deferred, so for those the strictly smaller cut is measured
+  **still refusing**, which is what shows the extra condition carries weight. The first of those
+  two was the one sentence in that commit I had reasoned to rather than measured, and I said so
+  to the challenger unprompted; it measured it and the wording was wrong as written — see
+  `C10-P9-05` in §3c.23. The suite grows from 109 cases to 110.
 * **F-7 (P3, hygiene) — A1 could leave a trigger disabled.** Done. `withPlant` takes a callback
   that runs while the plant is in place, so a failing assertion still reaches the restore.
 
@@ -1721,8 +1827,10 @@ Stated as limitations rather than left to be discovered.
     needs CREATE on the schema, and §10 revokes CREATE on schema `public` from
     `daftar_booking_internal` — the role that OWNS these functions, and therefore the one role
     no GRANT could have stopped. The challenger attempted the swap three times as that role —
-    `bookings_chain_symmetric`, `bookings_buffers_match_service`, and a fresh helper — and was
-    refused each time with `42501 permission denied for schema public`. Clause (i) of the
+    `bookings_chain_symmetric` under three principals, the decisive one being `daftar_migrator`
+    after `SET ROLE daftar_booking_internal` — the owner itself — and round 10 then attempted
+    all three objects as that role: both guard functions and a fresh helper, each refused with
+    `42501 permission denied for schema public`, with the gate green afterwards. Clause (i) of the
     end-state block asserts exactly that revocation, so the gate does not merely hope the swap
     is unavailable: it refuses to finish the migration if the privilege that would make it
     available ever comes back. The spec now says this where clause (i) is written, instead of
@@ -1733,9 +1841,10 @@ Stated as limitations rather than left to be discovered.
     every wrong trigger round 8 built, and since round 9 **every one of its eleven conditions is
     proved load-bearing by deletion, on both guards** — the wrong trigger each condition was
     added for is measured PASSING once that condition is cut, and for the three conditions that
-    PostgreSQL will not let a single deletion isolate (a trigger cannot be INITIALLY DEFERRED
-    without being DEFERRABLE, and a plain trigger can be neither) the strictly smaller deletion
-    is measured still refusing. That is evidence the conditions work, not evidence the list is
+    no DDL path lets a single deletion isolate — `tgdeferrable = false` with
+    `tginitdeferred = true` is unreachable by DDL though a superuser catalogue write produces it
+    (`C10-P9-05`), and a plain trigger can be neither — the strictly smaller deletion is measured
+    still refusing. That is evidence the conditions work, not evidence the list is
     complete: `tgisinternal`, `tgconstrrelid` and `tgargs`/`tgnargs` are not asserted, and I do
     not claim to know they cannot matter. The coordinator adds the converse observation (F-5,
     info): two of the eleven, `tgdeferrable` and `tgconstraint <> 0`, are implied by
