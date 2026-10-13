@@ -51,7 +51,7 @@ protectFailingExitCode();
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 
 const ARGV = process.argv.slice(2);
 const REWRITE = ARGV.includes('--rewrite');
@@ -100,13 +100,34 @@ interface Currency {
   readonly problems: readonly string[];
 }
 
+/**
+ * Every git read this gate makes, with replace objects DISABLED.
+ *
+ * The coordinator's ruling of 2026-10-13: a `refs/replace` entry has now
+ * broken both P8's and P13's anchors silently, because git substitutes the
+ * replacement object everywhere — `git show`, `git diff`, `git cat-file` — with
+ * no notice in the output. A gate that measures a figure through a replaced
+ * object measures whatever the replacement says, so the flag goes on the
+ * command AND in the environment (a `git` wrapper or an alias could otherwise
+ * strip the flag), and `core.quotePath=false` keeps non-ASCII paths from
+ * dropping out of a path list unnoticed.
+ */
+function gitRead(root: string, args: readonly string[], maxBuffer = 64 * 1024 * 1024): SpawnSyncReturns<string> {
+  return spawnSync('git', ['--no-replace-objects', '-c', 'core.quotePath=false', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer,
+    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+  });
+}
+
 function arabicToWestern(t: string): string {
   return t.replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
 }
 
 function checkCurrency(manifest: string, root: string, dir: string): Currency {
   const git = (args: readonly string[]): string => {
-    const r = spawnSync('git', [...args], { cwd: root, encoding: 'utf8' });
+    const r = gitRead(root, args);
     return r.status === 0 ? (r.stdout ?? '').trim() : '';
   };
   const headSha = git(['rev-parse', 'HEAD']);
@@ -321,7 +342,7 @@ interface FileTable {
 const FILE_ROW = /^\| `((?:scripts|tests|apps|packages|infrastructure)\/[^`]+)` \| (\d+) \|/gm;
 
 function linesAt(root: string, sha: string, path: string): number | null {
-  const r = spawnSync('git', ['show', `${sha}:${path}`], { cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  const r = gitRead(root, ['show', `${sha}:${path}`], 256 * 1024 * 1024);
   if (r.error !== undefined || r.status !== 0) return null;
   const text = r.stdout ?? '';
   // `wc -l` counts newlines, which is what the sentence under the table says.
@@ -338,7 +359,7 @@ function checkFileTable(manifest: string, root: string): FileTable {
     problems.push('the header declares no exact SHA, so the line counts in §3 cannot be measured against anything — an unanchored figure is not a measurement');
     return { problems, rows: rows.length, sha };
   }
-  const known = spawnSync('git', ['cat-file', '-t', `${sha}^{commit}`], { cwd: root, encoding: 'utf8' });
+  const known = gitRead(root, ['cat-file', '-t', `${sha}^{commit}`]);
   if (known.error !== undefined || known.status !== 0 || (known.stdout ?? '').trim() !== 'commit') {
     problems.push(
       `the declared SHA ${sha} is not a commit this clone can read, so every figure attributed to it is UNMEASURED. If it was written before the push, push first and re-run: a manifest naming a commit nobody can fetch indexes nothing (the challenger's round-8 P3)`,
@@ -363,11 +384,7 @@ function checkFileTable(manifest: string, root: string): FileTable {
       );
   }
   // And the other direction: a phase-owned file the branch added with no row.
-  const added = spawnSync('git', ['diff', '--diff-filter=A', '--name-only', `origin/main...${sha}`], {
-    cwd: root,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const added = gitRead(root, ['diff', '--diff-filter=A', '--name-only', `origin/main...${sha}`]);
   if (added.error === undefined && added.status === 0) {
     const listed = new Set(rows.map((r) => r.path));
     for (const f of (added.stdout ?? '')
@@ -381,6 +398,80 @@ function checkFileTable(manifest: string, root: string): FileTable {
       `the added-file list could not be read (git exited ${String(added.status)}), so "every added file has a row" is UNMEASURED rather than established`,
     );
   }
+  // ── AND EVERY FILE THE BRANCH MODIFIES, with the figure its row names ──
+  //
+  // The challenger's round-9 F-R9-01, which is round 8's B4-1 living inside the
+  // mechanism built to stop it. Direction 5 covered the files the branch ADDS,
+  // and the one repo file this branch MODIFIES — `scripts/phase3-secret-scan.ts`,
+  // Phase 3-owned and run by CI — had no §3 row at all. Its only figure was in
+  // §6.1: «+47 / −1 against origin/main, in commit 1da1037». True at `1da1037`
+  // and at `211b0b7`; at the head the file declares as exact it is **+213 / −1**,
+  // because `a0cb069` added 166 lines to it. The challenger proved the blind spot
+  // rather than arguing it: replacing the figure with +9999 / −8888 in a copy of
+  // the pack still printed VERIFIED, exit 0.
+  //
+  // So a modified file's figure is now measured with the command its row names,
+  // and a modified file with no figure row at all is a failure — the row exists
+  // only because that edit went unrecorded for eight rounds.
+  // Deleted and renamed repo files are part of the same inventory: the
+  // coordinator's ruling on round 9 asks for `--name-status`, so a file the
+  // branch removes or moves cannot leave the record silently either.
+  const names = gitRead(root, ['diff', '--name-status', `origin/main...${sha}`]);
+  if (names.error !== undefined || names.status !== 0)
+    problems.push(`the branch's file inventory could not be read (git exited ${String(names.status)}), so what it touches is UNMEASURED`);
+  else
+    for (const line of (names.stdout ?? '').split('\n')) {
+      const parts = line.split('\t').filter((x) => x.length > 0);
+      const status = (parts[0] ?? '').trim();
+      if (status.length === 0) continue;
+      if (!/^[DR]/.test(status)) continue;
+      for (const path of parts.slice(1)) {
+        if (manifest.includes(`\`${path}\``)) continue;
+        problems.push(
+          status.startsWith('D')
+            ? `the branch DELETES \`${path}\` and this file never names it — a removal nobody indexes is the PART 108 recovery case in reverse`
+            : `the branch RENAMES \`${path}\` and this file never names it, so a reader following the record looks for it where it no longer is`,
+        );
+      }
+    }
+  const mods = gitRead(root, ['diff', '--diff-filter=M', '--name-only', `origin/main...${sha}`]);
+  if (mods.error !== undefined || mods.status !== 0)
+    problems.push(
+      `the modified-file list could not be read (git exited ${String(mods.status)}), so the figures this file states about the repo files the branch CHANGES are UNMEASURED rather than established`,
+    );
+  else
+    for (const f of (mods.stdout ?? '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)) {
+      // `package.json` is counted by direction 3 as script keys, not as a diff
+      // size, and §1/§6.1 state it that way.
+      if (f === 'package.json') continue;
+      const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const row = new RegExp(`\`${esc}\`[^|\n]*?\\*\\*\\+(\\d+) ?/ ?[-\u2212](\\d+)\\*\\*`).exec(manifest);
+      if (row === null) {
+        problems.push(
+          `the branch MODIFIES \`${f}\` and no row in this file states its size as **+N / −M** — the one repo file this phase does not own is the row an owner reads first, and a shared-file edit with no figure is how it went unrecorded for eight rounds`,
+        );
+        continue;
+      }
+      const stat = gitRead(root, ['diff', '--numstat', `origin/main..${sha}`, '--', `:(top)${f}`]);
+      if (stat.error !== undefined || stat.status !== 0) {
+        problems.push(`\`git diff --numstat origin/main..${sha.slice(0, 7)} -- ${f}\` exited ${String(stat.status)}, so that row's figure is UNMEASURED`);
+        continue;
+      }
+      const m = /^(\d+)\s+(\d+)\s/.exec((stat.stdout ?? '').trim());
+      if (m === null) {
+        problems.push(`\`git diff --numstat\` printed nothing parsable for \`${f}\`, so the row's figure is UNMEASURED and not confirmed`);
+        continue;
+      }
+      const added2 = Number(m[1]);
+      const removed = Number(m[2]);
+      if (added2 !== Number(row[1]) || removed !== Number(row[2]))
+        problems.push(
+          `this file says \`${f}\` is **+${row[1] ?? '?'} / −${row[2] ?? '?'}** against origin/main; \`git diff --numstat origin/main..${sha.slice(0, 7)} -- ${f}\` is **+${String(added2)} / −${String(removed)}**. A figure that was true at an earlier commit is the defect direction 5 exists for, and it is worse in the row an owner reads first`,
+        );
+    }
   return { problems, rows: rows.length, sha };
 }
 

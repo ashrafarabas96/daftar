@@ -427,6 +427,34 @@ function decideCall(call: ts.CallExpression, sf: ts.SourceFile, wrappers: readon
       if (via !== undefined) return { kind: 'read', how: `${want} → ${via.name}() at ${via.file}:${via.line}` };
     }
   }
+  // 1b. DESTRUCTURED — `const { status } = run(…)` then a decision on `status`.
+  //
+  // The round-9 challenger named this as its next attack and could not run it:
+  // the binding is neither a re-binding of an identifier nor a syntactic
+  // descent into an argument, so neither rule above sees it. It is a real shape
+  // — `{ status, out }` is what this pack's own helpers return — and the
+  // decision is measured, not assumed: the element must be `status` (directly
+  // or renamed) and that binding must itself be compared in its own scope.
+  if (
+    parent !== undefined &&
+    ts.isVariableDeclaration(parent) &&
+    ts.isObjectBindingPattern(parent.name) &&
+    parent.initializer !== undefined &&
+    unwrap(parent.initializer) === call
+  ) {
+    for (const el of parent.name.elements) {
+      const prop = el.propertyName ?? el.name;
+      if (!ts.isIdentifier(prop) || prop.text !== 'status' || !ts.isIdentifier(el.name)) continue;
+      const bound2 = el.name.text;
+      // the scope chain resolves a destructured name to its VariableDeclaration,
+      // not to the element, so the element's own name is excluded here instead.
+      for (const use of usesOf(parent, bound2, enclosingFunction(parent))) {
+        if (use.parent === el) continue;
+        const viaBinding = decidedHere(use, sf);
+        if (viaBinding !== null) return { kind: 'read', how: `{ status } → ${bound2}: ${viaBinding}` };
+      }
+    }
+  }
   // 2. decided on the spot, on the call expression itself
   const spot = (() => {
     const p = call.parent;
@@ -853,6 +881,53 @@ const PLANTS: readonly Plant[] = [
       r.unchecked.some((s) => s.file === 'planted-x12.ts' && s.line === 3)
         ? null
         : "the outer spawn was credited with the inner binding's comparison: a re-bound name is a different variable",
+  },
+  {
+    id: 'X13',
+    what: "the round-9 challenger's own next attack: a spawn result taken through `const { status } = …` and never compared",
+    plant: (dir) => {
+      const f = join(dir, 'planted-x13.ts');
+      writeFileSync(
+        f,
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'export function listed(): readonly string[] {',
+          "  const { status, stdout } = spawnSync('git', ['ls-files'], { encoding: 'utf8' });",
+          '  void status;',
+          "  return (stdout ?? '').split('\\n');",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'planted-x13.ts')
+        ? null
+        : 'a destructured spawn whose status is bound and never compared was excused — the binding is not the decision',
+  },
+  {
+    id: 'X14',
+    control: true,
+    what: 'THE SECOND CONTROL — the same destructuring, with the status actually compared, must stay green',
+    plant: (dir) => {
+      const f = join(dir, 'planted-x14.ts');
+      writeFileSync(
+        f,
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'export function listed2(): readonly string[] {',
+          "  const { status, stdout } = spawnSync('git', ['ls-files'], { encoding: 'utf8' });",
+          "  if (status !== 0) throw new Error('git ls-files failed');",
+          "  return (stdout ?? '').split('\\n');",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'planted-x14.ts')
+        ? 'a destructured status that IS compared was reported anyway: a sweep that reds on correct code gets switched off'
+        : null,
   },
   {
     id: 'X9',

@@ -158,6 +158,69 @@ const PLANTS: readonly Plant[] = [
           : 'a correction QUOTING the claim it retracts was failed as if it were repeating it. Punish that and the next author stops recording the correction at all',
   },
   {
+    id: 'M9',
+    what: 'round-9 F-R9-01: a FORGED figure about the one repo file the branch MODIFIES — the shared file whose owner reads that figure first',
+    plant: (dir) => {
+      const f = join(dir, MANIFEST);
+      const text = readFileSync(f, 'utf8');
+      const forged = text.replace(/\*\*\+\d+ ?\/ ?[-\u2212]\d+\*\*/, '**+9999 / \u22128888**');
+      if (forged === text) throw new Error('M9 could not plant: no **+N / −M** figure about a modified repo file is stated in this pack');
+      writeFileSync(f, forged);
+    },
+    expect: () => null,
+    viaDirection5: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.wrong > 0
+          ? null
+          : 'a figure about the repo file this branch modifies was replaced with +9999 / −8888 and the gate still verified — which is the blind spot the challenger measured, not a hypothetical',
+  },
+  {
+    id: 'M10',
+    what: 'the GUARD-DELETION test for that arm: with the modified-file check removed, M9 must stop being caught',
+    plant: (dir) => {
+      // The guard is deleted in a COPY OF THE GATE, never in the repository:
+      // the proof runs that copy against the same forged pack. A guard that
+      // can be removed without the proof noticing is a guard that was never
+      // doing the work (the P15 `:prove` lesson, applied to this direction).
+      const f = join(dir, MANIFEST);
+      const text = readFileSync(f, 'utf8');
+      const forged = text.replace(/\*\*\+\d+ ?\/ ?[-\u2212]\d+\*\*/, '**+9999 / \u22128888**');
+      if (forged === text) throw new Error('M10 could not plant: no **+N / −M** figure about a modified repo file is stated in this pack');
+      writeFileSync(f, forged);
+      // THE GUARD-DELETION HALF, measured inside this plant: a copy of the gate
+      // with the modified-file arm cut out is run against this same forged pack,
+      // and it must come back CLEAN. If it still catches the forgery, then
+      // something else is doing the work and the arm is decoration — which is
+      // the thing a red proof cannot tell you by going red.
+      const gate = readFileSync(join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts'), 'utf8');
+      const marker = "const mods = gitRead(root, ['diff', '--diff-filter=M', '--name-only', `origin/main...${sha}`]);";
+      if (!gate.includes(marker)) throw new Error('M10 could not plant: the modified-file arm no longer reads the branch diff in the shape this plant edits');
+      const without = gate.replace(marker, "const mods = gitRead(root, ['diff', '--diff-filter=M', '--name-only', 'HEAD', '--', 'no-such-path']);");
+      const stripped = join(dir, 'gate-without-the-modified-file-arm.ts');
+      writeFileSync(stripped, without);
+      const r = spawnSync('npx', ['tsx', stripped, `--dir=${dir}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+      const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+      if (r.error !== undefined || (r.status !== 0 && r.status !== 1))
+        throw new Error(`M10 could not plant: the stripped gate did not run (exit ${String(r.status)})`);
+      const block = out.includes('DIRECTION 5') ? out.slice(out.indexOf('DIRECTION 5')) : '';
+      const caughtAnyway = (block.match(/WRONG /g) ?? []).length > 0;
+      if (caughtAnyway)
+        throw new Error(
+          'M10: with the modified-file arm removed, the gate STILL caught the forged figure — so that arm is not what catches it, and the proof below would attribute the red to the wrong guard',
+        );
+      // The stripped copy is left in the throwaway pack; the harness now runs
+      // the REAL gate against the same forgery, which must go red.
+    },
+    expect: () => null,
+    viaDirection5: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.wrong > 0
+          ? null
+          : 'the forged figure went unnoticed, which is what M10 asserts about the copy with the arm removed — but this case runs the REAL gate, so it must still be caught here',
+  },
+  {
     id: 'M8',
     what: 'round-8 N4: a round on disk named ONLY in a sentence about what nobody has read yet — mentioned, not recorded',
     plant: (dir) => {
@@ -226,8 +289,117 @@ const PLANTS: readonly Plant[] = [
           ? null
           : 'the table named a file the commit does not have and the gate passed \u2014 an index of what the branch carries must not invent a row',
   },
+  {
+    id: 'M11',
+    what: "the coordinator's replace-ref ruling: a `refs/replace` entry that changes the measured figure of a modified file must not be believed",
+    plant: (dir) => {
+      // WHY THIS CASE EXISTS
+      //   A `refs/replace` entry makes git serve a different object everywhere
+      //   — `show`, `diff`, `cat-file` — and says nothing about it in the
+      //   output. It has now broken both P8's and P13's anchors silently. So
+      //   every git read this gate makes carries `--no-replace-objects` AND
+      //   GIT_NO_REPLACE_OBJECTS=1, and this plant is what shows that flag is
+      //   load-bearing rather than decorative.
+      //
+      // WHERE IT IS PLANTED
+      //   In a throwaway CLONE, never in this repository. A replace ref is
+      //   repository-wide: left in the shared clone for even a few seconds it
+      //   would silently falsify any measurement another session happens to
+      //   take in that window, which is the very harm being guarded against.
+      const g = (args: readonly string[], cwd: string, input?: string): { status: number; out: string } => {
+        const r = spawnSync('git', [...args], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...(input === undefined ? {} : { input }) });
+        if (r.error !== undefined) throw new Error(`M11 could not plant: git ${args.join(' ')} could not start (${r.error.message})`);
+        return { status: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+      };
+      const must = (args: readonly string[], cwd: string, input?: string): string => {
+        const r = g(args, cwd, input);
+        if (r.status !== 0) throw new Error(`M11 could not plant: git ${args.join(' ')} exited ${String(r.status)}: ${r.out.slice(0, 200).trim()}`);
+        return r.out.trim();
+      };
+      const sha = /\*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\*/.exec(readFileSync(join(dir, MANIFEST), 'utf8'))?.[1];
+      if (sha === undefined) throw new Error('M11 could not plant: this pack declares no exact SHA to measure against');
+      const mainSha = must(['rev-parse', 'origin/main'], ROOT);
+      const clone = mkdtempSync(join(tmpdir(), 'p15-replace-ref-'));
+      try {
+        must(['clone', '--shared', '--quiet', ROOT, clone], ROOT);
+        must(['update-ref', 'refs/remotes/origin/main', mainSha], clone);
+        // The file whose figure the forgery will move: one the branch MODIFIES.
+        const modified = must(['--no-replace-objects', 'diff', '--diff-filter=M', '--name-only', `origin/main...${sha}`], clone)
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0 && l !== 'package.json');
+        const file = modified[0];
+        if (file === undefined) throw new Error('M11 could not plant: the branch modifies no repo file other than package.json, so there is no figure to move');
+        const truth = must(['--no-replace-objects', 'diff', '--numstat', `origin/main..${sha}`, '--', `:(top)${file}`], clone);
+        // The plant itself: the blob the subject commit carries for that file is
+        // replaced by a one-line blob, so every git read that honours replace
+        // objects now reports a different +N / −M for it.
+        const headBlob = must(['--no-replace-objects', 'rev-parse', `${sha}:${file}`], clone);
+        const planted = must(['hash-object', '-w', '--stdin', '--path', file], clone, 'planted by M11 inside a throwaway clone\n');
+        if (planted.length === 0) throw new Error('M11 could not plant: the replacement blob was not written');
+        must(['replace', '-f', headBlob, planted], clone);
+        const replaced = must(['diff', '--numstat', `origin/main..${sha}`, '--', `:(top)${file}`], clone);
+        if (replaced === truth)
+          throw new Error(`M11 could not plant: the replace ref did not move the figure for ${file} (still ${truth}), so this case would prove nothing`);
+        const rm = /^(\d+)\s+(\d+)\s/.exec(replaced);
+        if (rm === null) throw new Error(`M11 could not plant: the replaced numstat for ${file} is unparsable (${replaced})`);
+        // The manifest is forged to AGREE with the replaced reading. A gate that
+        // believes replace objects therefore finds the row correct and passes.
+        const f = join(dir, MANIFEST);
+        const text = readFileSync(f, 'utf8');
+        const esc = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const row = new RegExp(`\`${esc}\`[^|\n]*?\\*\\*\\+(\\d+) ?/ ?[-−](\\d+)\\*\\*`).exec(text);
+        if (row === null) throw new Error(`M11 could not plant: no **+N / −M** row states the size of ${file}`);
+        const forgedRow = (row[0] as string).replace(/\*\*\+\d+ ?\/ ?[-−]\d+\*\*/, `**+${rm[1] as string} / −${rm[2] as string}**`);
+        writeFileSync(f, text.replace(row[0] as string, forgedRow));
+        // ARM 1 — THE GUARD DELETED. A copy of the gate with the flag and the
+        // environment variable both removed is run against the same clone: it
+        // must ACCEPT the forgery. If it refuses anyway, the flag is not what
+        // catches this and arm 2's red would be attributed to the wrong guard.
+        const gate = readFileSync(join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts'), 'utf8');
+        const flag = "['--no-replace-objects', '-c', 'core.quotePath=false', ...args]";
+        const envLine = "env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },";
+        if (!gate.includes(flag) || !gate.includes(envLine))
+          throw new Error('M11 could not plant: the gate no longer disables replace objects in the shape this plant removes');
+        const stripped = join(dir, 'gate-that-believes-replace-refs.ts');
+        writeFileSync(stripped, gate.replace(flag, '[...args]').replace(envLine, 'env: { ...process.env },'));
+        const believing = spawnSync('npx', ['tsx', stripped, `--dir=${dir}`], { cwd: clone, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+        if (believing.error !== undefined || (believing.status !== 0 && believing.status !== 1))
+          throw new Error(`M11 could not plant: the stripped gate did not run (exit ${String(believing.status)})`);
+        const bOut = `${believing.stdout ?? ''}${believing.stderr ?? ''}`;
+        const bBlock = bOut.includes('DIRECTION 5') ? bOut.slice(bOut.indexOf('DIRECTION 5')) : '';
+        if (bBlock.includes(file) && /WRONG /.test(bBlock))
+          throw new Error(
+            `M11: the gate with --no-replace-objects removed STILL refused the forged figure for ${file}, so the flag is not what catches a replace ref and this case attributes the red to the wrong guard`,
+          );
+        // ARM 2 — THE REAL GATE, same clone, same forgery. It must refuse, and
+        // refuse BY NAME: a red that does not say which file is not a finding.
+        const real = spawnSync('npx', ['tsx', join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts'), `--dir=${dir}`], {
+          cwd: clone,
+          encoding: 'utf8',
+          maxBuffer: 64 * 1024 * 1024,
+        });
+        const rOut = `${real.stdout ?? ''}${real.stderr ?? ''}`;
+        if (real.error !== undefined || (real.status !== 0 && real.status !== 1))
+          throw new Error(`M11: the real gate did not run (exit ${String(real.status)})`);
+        const rBlock = rOut.includes('DIRECTION 5') ? rOut.slice(rOut.indexOf('DIRECTION 5')) : '';
+        if (!/WRONG /.test(rBlock) || !rBlock.includes(file))
+          throw new Error(
+            `M11: a refs/replace entry moved the measured figure of ${file} from ${truth} to ${replaced}, the row was forged to match the replaced reading, and the real gate did not refuse it by name`,
+          );
+      } finally {
+        rmSync(clone, { recursive: true, force: true });
+      }
+    },
+    expect: () => null,
+    viaDirection5: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.wrong > 0
+          ? null
+          : 'the row forged to match a replace-ref reading was accepted against this repository too, so the figure is whatever a local ref says it is',
+  },
 ];
-
 function main(): number {
   console.log('━'.repeat(78));
   console.log('PHASE 15 — RED PROOF: DIRECTION 4 OF THE HANDOFF MANIFEST GATE   (PREPARED / NOT PROMOTED)');
