@@ -1263,7 +1263,16 @@ def main() -> int:
         # The recorded-versus-live comparison. Its limit, stated: where §3.6 cannot
         # be measured the honest verdict is 3 while the recorded row legitimately
         # says 0, so the comparison is not made there and the run says so.
-        base_code = 1 if stale else (3 if git_error is not None else 0)
+        # R14-01's sibling, found by my own replay rather than reported: this predicted
+        # verdict was computed BEFORE the pin was weighed, so on a patched-and-regenerated
+        # pack the gate printed "§3.5b records 2, this run returns 0" while actually
+        # returning non-zero. A predicted exit code that omits one of the real exits is a
+        # false figure in the one row whose whole job is to be comparable, so the pin's
+        # verdict is folded in here, in the same order the returns below use.
+        base_code = (1 if stale
+                     else 2 if not pin_ok
+                     else 3 if git_error is not None
+                     else 0)
         code_mismatch = False
         # R13-01, a bounded fail-open: the exit code was recomputed and compared and
         # the COUNT beside it was neither, so three coordinated edits (the count
