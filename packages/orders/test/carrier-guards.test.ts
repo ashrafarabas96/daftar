@@ -346,6 +346,51 @@ describe('B-2 — a leaf that is not a primitive (coordinator diff review and th
       (quote.lines[0] as unknown as Record<string, unknown>).unitPriceMinor = '1';
     }).toThrowError(TypeError);
   });
+
+  // THE POST-DIGEST REWRITE, the challenger's fourth case, cannot be written the
+  // way the finding was: the rewrite needed a leaf that was an OBJECT, and the
+  // builder refuses one before a digest exists. My first attempt at it walked a
+  // LAWFUL quote and asserted no leaf was an object — which is decoration, and
+  // my own mutation said so: deleting `requirePrimitiveLeaf`'s refusal reds
+  // NOTHING of it (M118), because a lawful quote has no object leaf however
+  // many guards are gone. The attack form is below, where the leaf refusal is
+  // the ONLY thing standing.
+  //
+  // The two reviewers' disagreement about the freeze is settled by the same
+  // fact: `Object.freeze` was never the defect. The quote, its lines array and
+  // each line WERE frozen at `3f56c62` (the challenger measured that and is
+  // right); what was not frozen was the object a declared field POINTED AT (the
+  // coordinator measured that and is right). With no object leaves admitted,
+  // there is nothing left for a deeper freeze to do.
+  //
+  // These four run against the CONFIRMATION rather than the quote, and that is
+  // the point: the quote's own fields are type-checked one by one in `quote.ts`,
+  // so a boxed currency is refused there and `requirePrimitiveLeaf` never
+  // answers (mutation M120 reds the boxed-currency cases on its own; the
+  // pair-drop M119 reds exactly the same four, which is how I know which guard
+  // they rest on). A confirmation field has no such individual check — the
+  // snapshot of `CONFIRMATION_FIELDS` is all that stands between it and the
+  // comparison, so here the leaf refusal is load-bearing and testable.
+  const BOXED_CONFIRMATION_FIELDS: [string, (confirmation: OrderQuoteConfirmationDto) => OrderQuoteConfirmationDto][] = [
+    ['confirmationId', (c) => ({ ...c, confirmationId: new String(c.confirmationId) as unknown as string })],
+    ['confirmedQuoteDigest', (c) => ({ ...c, confirmedQuoteDigest: new String(c.confirmedQuoteDigest) as unknown as string })],
+    ['confirmedVersion', (c) => ({ ...c, confirmedVersion: new Number(c.confirmedVersion) as unknown as number })],
+    ['confirmedAt', (c) => ({ ...c, confirmedAt: { toString: () => '2026-10-01T09:30:00Z' } as unknown as string })],
+  ];
+  for (const [field, box] of BOXED_CONFIRMATION_FIELDS) {
+    it(`a boxed ${field} on the CONFIRMATION is refused as a non-primitive, where only the snapshot's leaf check stands`, () => {
+      const boxed = box(confirmationFor(CONFIRMED));
+      // The plant is proved to have landed: the field stringifies to the lawful
+      // value, so every comparison downstream would have agreed with it.
+      expect(String((boxed as unknown as Record<string, unknown>)[field])).toBe(
+        String((confirmationFor(CONFIRMED) as unknown as Record<string, unknown>)[field]),
+      );
+      expect(typeof (boxed as unknown as Record<string, unknown>)[field]).toBe('object');
+      const error = refusalOf(() => assertQuoteApproved({ quote: CONFIRMED, confirmation: boxed, asOf: '2026-10-01T09:30:00Z' }, ORDER), `a boxed ${field}`);
+      expect(error.code).toBe('order.quote_not_approved');
+      expect(error.details?.carrier).toBe('not-primitive');
+    });
+  }
 });
 
 describe('B-3 — the product the sale commits is the product the quote priced', () => {
@@ -415,6 +460,33 @@ describe('B-3 — the product the sale commits is the product the quote priced',
     expect(intent.lines[0]?.variantId).toBe(VARIANT);
     expect(intent.lines[0]?.quantity).toBe('5.0000');
     expect(intent.lines[0]?.discountMinor).toBe('0');
+  });
+
+  it('ATTRIBUTION: a position canonical for its OWN product but priced by no quoted line is refused by the COVERAGE check, not by the identity comparison', () => {
+    // The challenger asked for this one by name, and for the reason: without it,
+    // the new identity comparison gets credited with a refusal it does not make.
+    // This position's key IS `stockKeyOf` of its own product and variant, so the
+    // self-consistency leg passes; the quote simply never priced it, so the
+    // lookup misses and the coverage refusal answers FIRST. The two are told
+    // apart by their details, since they share `order.quote_not_approved`:
+    // coverage names only the `stockKey` it could not find, while the identity
+    // comparison names `confirmed` and `committed`.
+    const otherKey = stockKeyOf({ productId: OTHER_PRODUCT, variantId: null });
+    const unpriced = summariseBasket(
+      [{ lineId: LINE1, productId: OTHER_PRODUCT, variantId: null, quantity: '1', consumedByOrderId: null, retractedAt: null }] as readonly CartLineInput[],
+      new Map([[otherKey, tracked(0)]]),
+      '2026-10-12T12:00:00Z',
+    );
+    const position = unpriced[0] as (typeof unpriced)[number];
+    // The plant is proved to have landed: the key is canonical for ITSELF.
+    expect(stockKeyOf({ productId: position.productId, variantId: position.variantId })).toBe(position.stockKey);
+    expect(CONFIRMED.lines.some((line) => line.stockKey === position.stockKey)).toBe(false);
+    const error = refusalOf(() => buildSaleCommitIntent(FULFILLING, unpriced, factsWith(APPROVAL)), 'a self-consistent position no quoted line priced');
+    expect(error.code).toBe('order.quote_not_approved');
+    expect(error.details?.stockKey).toBe(otherKey);
+    expect(error.details?.confirmed).toBeUndefined();
+    expect(error.details?.committed).toBeUndefined();
+    expect(error.details?.expected).toBeUndefined();
   });
 });
 
