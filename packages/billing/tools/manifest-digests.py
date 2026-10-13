@@ -34,7 +34,66 @@ from pathlib import Path
 MANIFEST = "P5-HANDOFF-MANIFEST.md"
 HEADER = "| file | SHA256 |"
 SELF_ROW = f"| `{MANIFEST}` | this file |"
-ROW = re.compile(r"^\| `([^`]+)` \| (?:`([0-9a-f]{64})`|this file) \|$")
+REVIEWER_NOTE = "reviewer-owned, not hashed by the author"
+# Group 2 is the VALUE exactly as written, so the check can tell the three
+# legitimate forms apart instead of reading them all as "no digest".
+ROW = re.compile(
+    r"^\| `([^`]+)` \| (`[0-9a-f]{64}`|this file|" + re.escape(REVIEWER_NOTE) + r") \|$"
+)
+
+# ROUND 22, the coordinator's item 5, which is the P13 ruling applied here.
+# These files are written by the REVIEWERS — the independent challenger and the
+# coordinator — and the author must not present a digest of them as his own
+# record: every time a reviewer appends a withdrawal or files a new report, an
+# author-hashed row DRIFTS, and the author's only way to make his own gate
+# green is to re-hash somebody else's document. So their rows carry a marker
+# instead of a digest.
+#
+# It is ONE ENUMERATED LIST OF EXACT NAMES, deliberately not a name pattern: a
+# pattern would silently exempt the next file that happens to match it, which
+# is exactly the fail-open shape this phase keeps finding. The list is shared
+# by the walk that writes the rows and by the coverage self-test below, so a
+# name can never be exempt in one and hashed in the other.
+REVIEWER_REPORTS: tuple[str, ...] = (
+    "P5-CHALLENGE-04e72cd.md",
+    "P5-CHALLENGE-07d308a.md",
+    "P5-CHALLENGE-0c16546.md",
+    "P5-CHALLENGE-421e425.md",
+    "P5-CHALLENGE-47a56c8.md",
+    "P5-CHALLENGE-4c451e6.md",
+    "P5-CHALLENGE-5af0c96.md",
+    "P5-CHALLENGE-6171923.md",
+    "P5-CHALLENGE-678564e.md",
+    "P5-CHALLENGE-7a9737c.md",
+    "P5-COORD-DIFF-REVIEW-2108d26.md",
+    "P5-COORD-DIFF-REVIEW-4c451e6.md",
+    "P5-COORD-DIFF-REVIEW-4fb8e1d.md",
+)
+
+# The DETECTOR exists to fail closed, never to exempt. A file whose name says
+# it is a reviewer report but which is absent from the list above is a
+# PROBLEM, so adding a report without enumerating it cannot pass unnoticed;
+# and a name that matches nothing here is hashed as the author's, whatever it
+# is called.
+LOOKS_LIKE_REVIEWER = re.compile(r"^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-f]{7}\.md$")
+
+
+def reviewer_list_problems(on_disk: list[str]) -> list[str]:
+    """The coverage self-test of the enumerated list, used in BOTH modes."""
+    problems: list[str] = []
+    present = set(on_disk)
+    for name in REVIEWER_REPORTS:
+        if name not in present:
+            problems.append(
+                f"STALE reviewer-report list: {name} is enumerated but not in the pack"
+            )
+    for name in on_disk:
+        if LOOKS_LIKE_REVIEWER.match(name) and name not in REVIEWER_REPORTS:
+            problems.append(
+                f"UNENUMERATED reviewer report: {name} — add it to REVIEWER_REPORTS by its exact "
+                "name; it is not exempt by looking like one"
+            )
+    return problems
 
 
 def digest(path: Path) -> str:
@@ -72,12 +131,27 @@ def main() -> int:
     lines = manifest.read_text().split("\n")
     start, end = table_bounds(lines)
 
+    list_problems = reviewer_list_problems(on_disk)
+
     if not args.check:
+        if list_problems:
+            for p in list_problems:
+                print(p)
+            print("refusing to write the table while the reviewer-report list is wrong")
+            return 1
         rows = [HEADER, "|---|---|"]
         for name in on_disk:
-            rows.append(SELF_ROW if name == MANIFEST else f"| `{name}` | `{digest(base / name)}` |")
+            if name == MANIFEST:
+                rows.append(SELF_ROW)
+            elif name in REVIEWER_REPORTS:
+                rows.append(f"| `{name}` | {REVIEWER_NOTE} |")
+            else:
+                rows.append(f"| `{name}` | `{digest(base / name)}` |")
         manifest.write_text("\n".join(lines[:start] + rows + lines[end:]))
-        print(f"wrote {len(rows) - 2} rows for {len(on_disk)} files in {base}")
+        print(
+            f"wrote {len(rows) - 2} rows for {len(on_disk)} files in {base} "
+            f"({len(REVIEWER_REPORTS)} reviewer-owned, not hashed)"
+        )
         return 0
 
     # ROUND 17, THE COORDINATOR'S N-6. This used to be a plain dict
@@ -87,7 +161,7 @@ def main() -> int:
     # contradiction in the table it is checking. Rows are counted per name
     # now, and more than one is a problem of its own: the right answer to
     # "which of these two digests is the file's?" is to refuse, not to pick.
-    listed: dict[str, str | None] = {}
+    listed: dict[str, str] = {}
     seen: dict[str, int] = {}
     malformed: list[str] = []
     for line in lines[start:end]:
@@ -105,7 +179,7 @@ def main() -> int:
             # either a row or a problem.
             malformed.append(line.strip()[:60])
 
-    problems: list[str] = []
+    problems: list[str] = list(list_problems)
     for line in malformed:
         problems.append(f"MALFORMED line inside the digest table, neither a row nor a heading: {line}")
     for name, n in sorted(seen.items()):
@@ -114,15 +188,29 @@ def main() -> int:
     for name in on_disk:
         if name not in listed:
             problems.append(f"ABSENT from the table: {name}")
-        elif name == MANIFEST:
             continue
-        elif listed[name] != digest(base / name):
+        value = listed[name]
+        if name == MANIFEST:
+            # A file cannot carry its own digest; the row must say so and
+            # must not be a digest pretending to be one.
+            if value != "this file":
+                problems.append("the manifest's own row must read 'this file', not a digest")
+        elif name in REVIEWER_REPORTS:
+            # The author must neither hash a reviewer's report nor leave the
+            # row off: the marker is the only accepted value.
+            if value != REVIEWER_NOTE:
+                problems.append(
+                    f"REVIEWER-OWNED file must carry '{REVIEWER_NOTE}', not a digest: {name}"
+                )
+        elif value == REVIEWER_NOTE:
+            problems.append(
+                f"MARKED reviewer-owned but not enumerated as one, so it must be hashed: {name}"
+            )
+        elif value != f"`{digest(base / name)}`":
             problems.append(f"DRIFTED: {name}")
     for name in listed:
         if name not in on_disk:
             problems.append(f"ORPHAN row, no such file: {name}")
-    if listed.get(MANIFEST, "missing") is not None:
-        problems.append(f"the manifest's own row must read 'this file', not a digest")
 
     for p in problems:
         print(p)

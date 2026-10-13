@@ -203,8 +203,36 @@ BEGIN
   -- ONE THING THIS DOES NOT DO, stated because the review asked for it: it
   -- does not lock several grant rows in a deterministic order, because a
   -- `FOR EACH ROW` trigger sees exactly one row. The order in which several
-  -- consumptions take their remainder rows is the CALLER's, and the key
-  -- above is what makes that order unable to produce a cycle.
+  -- consumptions take their REMAINDER rows is the CALLER's, and the key
+  -- above is what makes that order unable to produce a cycle BETWEEN
+  -- REMAINDER ROWS. That is the whole of the claim, and the M67/M68/M69
+  -- pair-drop is what holds it.
+  --
+  -- ROUND 22, NARROWED: the sentence used to end "unable to produce a
+  -- cycle", with no object, and read that way it was false. The challenger's
+  -- F-40 holds a cycle 3/3 in which this key is one of the two waits: the
+  -- key is taken in an AFTER ROW trigger, so the row and its index entries
+  -- are already written when it is acquired, which inverts the order between
+  -- the key and `pca_one_consumption_per_grant_per_invoice`. Two `p5_app`
+  -- sessions inserting consumptions for the SAME invoice row by row — A
+  -- takes the key for (i,g1); B writes (i,g2)'s index entry and then waits
+  -- for the key; A inserts (i,g2) and waits on B's uncommitted index tuple —
+  -- deadlock, attributed by the server to "while inserting index tuple in
+  -- relation pca_one_consumption_per_grant_per_invoice". Measured 3/3 at
+  -- this head AND 3/3 at the previous one, so it is INHERITED, not round
+  -- 21's: the key has always been taken in an AFTER ROW trigger.
+  --
+  -- RESIDUAL, NAMED AND NOT CLOSED HERE: what keeps that cycle out of the
+  -- allocator is a property of the CALLER, not of this schema —
+  -- `finalizeInvoice` issues its `UPDATE subscription_invoices` BEFORE any
+  -- consumption insert, so two finalizations of one invoice serialise on the
+  -- invoice row before either can hold the key and reach for a second grant.
+  -- Different invoices do not collide on that index, and the remaining
+  -- unique indexes are on uuids. A promoted caller that writes consumptions
+  -- without taking the invoice row first can reach the cycle. Closing it in
+  -- the schema would mean taking the key BEFORE the row — a BEFORE trigger
+  -- or the caller's own `PERFORM` — and that is a Migration Owner decision,
+  -- not something this scratch realization should decide by itself.
   PERFORM pg_advisory_xact_lock(hashtext('p5scratch:' || NEW.business_id::text));
 
   IF NEW.kind = 'grant' THEN

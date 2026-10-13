@@ -204,13 +204,26 @@ describe('a refusal in the DB lane names the defence that refused, not its class
     expect(/\.not\.toBe\(\s*''\s*\)/.test(planted), 'the pattern no longer matches the form it bans').toBe(true);
   });
 
-  it('pins how many call sites set the request context per SESSION rather than per transaction', () => {
+  it('pins EVERY figure of the context-setting census, not only the session count', () => {
     // R-2: the helper's scope argument used to DEFAULT to session-level and
     // 12 of 13 sites took the default, while the pack claimed the lane set
     // the context per transaction. The default is gone — every site names
     // its scope — and this law pins the count so the divergence cannot grow
     // back silently. Raising it is allowed; raising it without changing
     // this number and `P5-CHECKPOINT.md` §9.3 is not.
+    //
+    // ROUND 22, THE CHALLENGER'S B-3, AND THE ADVERTISEMENT WAS MINE. The
+    // generated census renders five numbers and this law pinned ONE of them
+    // (the 23) while the footnote under the table said "a new case reds the
+    // suite and this table at once". Round 21 added two 'transaction' sites:
+    // the pure lane stayed 277/277 rc 0, the published total and transaction
+    // row went stale, and the Migration Owner read both. A check advertised
+    // over a class it covers part of is this phase's own recurring finding,
+    // wearing my name this time.
+    //
+    // So all four figures are now exact equalities against literals. A
+    // 'transaction' site added anywhere in the corpus reds this case, which
+    // is what the footnote may now claim.
     const sites: string[] = [];
     for (const file of dbTestPaths()) {
       const code = readFileSync(file, 'utf8')
@@ -226,18 +239,39 @@ describe('a refusal in the DB lane names the defence that refused, not its class
         sites.push(`${file.split('/').pop()}:literal-session`);
       }
     }
-    const session = sites.filter((s) => s.endsWith(':session') || s.endsWith(':literal-session'));
+    const helperSession = sites.filter((s) => s.endsWith(':session'));
+    const literalSession = sites.filter((s) => s.endsWith(':literal-session'));
+    const session = [...helperSession, ...literalSession];
     const transaction = sites.filter((s) => s.endsWith(':transaction'));
-    expect(transaction.length, 'no site sets the context per transaction, so the frozen discipline is unproved').toBeGreaterThanOrEqual(1);
-    // Measured, never predicted — this number has been wrong three times in
+    // Measured, never predicted — these numbers have been wrong four times in
     // this phase by being reasoned about instead of read off a run.
     // ROUND 16: 23 = 19 helper sites plus 4 literal `set_config(…, false)`
-    // calls, all four of them in the RLS suite. The one site this round added
+    // calls, all four of them in the RLS suite. The one site that round added
     // is F-17's case; F-16's case is 'transaction'-scoped, which is why the
     // count moved by one and not by two.
     // ROUND 15 measured 22 (18 + 4), round 14 measured 17 (15 + 2), and the
     // coordinator counted the same population before round 14 as "12 of 13"
     // plus two literals.
-    expect(session.length, 'the session-scoped site count changed; update this law and CHECKPOINT §9.3 together').toBe(23);
+    // ROUND 21 added two 'transaction' sites: 9 → 11, total 32 → 34.
+    expect(
+      {
+        helperSession: helperSession.length,
+        literalSession: literalSession.length,
+        sessionTogether: session.length,
+        transaction: transaction.length,
+        total: sites.length,
+      },
+      'a context-setting census figure moved; update this law, the generated block (tools/context-sites.py) and CHECKPOINT §9.3 together',
+    ).toStrictEqual({
+      helperSession: 19,
+      literalSession: 4,
+      sessionTogether: 23,
+      transaction: 11,
+      total: 34,
+    });
+    // The arithmetic is asserted too, so a future edit cannot satisfy the
+    // five literals above with parts that do not add up.
+    expect(helperSession.length + literalSession.length).toBe(session.length);
+    expect(session.length + transaction.length).toBe(sites.length);
   });
 });
