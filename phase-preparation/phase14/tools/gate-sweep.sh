@@ -135,6 +135,25 @@ gate() { # name | command (absolute paths only)
 printf '== every gate, from %s working directories\n' "$NDIRS"
 printf '   pack=%s\n   repo=%s\n   worktree=%s\n   host=%s  date=%s\n' \
        "$PACK" "$REPO" "${WT2:-<none>}" "$(hostname)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# CHALLENGE R15-P1-01: this sweep's full count has a PRECONDITION nobody stated
+# for fifteen rounds -- the repository must contain the migration-freeze anchor,
+# which is on no branch, so a clean CI checkout fails the four provenance cases
+# fail-closed. It is printed before the gate runs, whether or not it is met, and
+# the anchor is checked here so the sweep says which world it is in.
+P14ANCHOR=93084f82b8e36ad49ebb207c0b6e7435d7fcb49f
+if git -C "$REPO" --no-replace-objects cat-file -e "$P14ANCHOR^{commit}" 2>/dev/null; then
+  printf '   anchor=%s present in %s (citation-provenance can run)\n' "${P14ANCHOR:0:12}" "$REPO"
+else
+  printf '   anchor=%s ABSENT from %s — the 4 citation-provenance cases below will refuse at rc 2,\n' \
+         "${P14ANCHOR:0:12}" "$REPO"
+  printf '   which is fail-closed, not a flake. Fetch it by its FULL object name:\n     git fetch --depth 1 origin %s\n' "$P14ANCHOR"
+  printf '   The 7-character abbreviation is refused by the server, and fetch-depth: 0 does not\n   help, because the commit is on no branch.\n'
+fi
+# And the opt-out this sweep must never be run with, said where a CI author
+# reads it: --allow-unverified-history accepts a history that CANNOT BE READ and
+# prints its own limit; a job that passes it asserts nothing about what any
+# reviewer sent. No case in this sweep passes it except the two that exist to
+# prove it prints the limit.
 gate citation-provenance "python3 -I $HERE/citation-provenance.py --check $DOC"
 gate manifest-digests    "python3 -I $HERE/manifest-digests.py --dir $PACK --check"
 gate manifest-shared     "python3 -I $HERE/manifest-digests.py --dir $SHARED --check"
@@ -543,7 +562,12 @@ if [ "$(cd "$DR/pack" && git rev-list --count HEAD)" = 4 ]; then
   # CHALLENGE R12-P1-01's control: a GENUINE deletion revision must still be
   # SKIPPED AND RECORDED, not read as an unreadable record. This is the half of
   # the discrimination that the blobless proof below cannot show.
-  named deletion-revision-still-skipped 1 "ABSENT in 1 of them" \
+  # CHALLENGE R15-P3-01: the sentence this proof reads used to name a CAUSE
+  # ("removed and re-added") for a measurement that is only "git reports no
+  # file carrying the manifest in that tree", and it was reached in the
+  # quoted-path world by a LOOKUP FAILURE where nothing was removed. The
+  # proof follows the corrected sentence.
+  named deletion-revision-still-skipped 1 "no file carrying this manifest in 1 of them" \
     "python3 -I $HERE/manifest-digests.py $DRM --witness $DR/counterpart --check"
 else
   printf 'FAIL  %-26s the drop/re-add world was not built (%s commits) — nothing was proved\n' \
@@ -780,6 +804,133 @@ else
   fail=$((fail+1))
 fi
 rm -rf "$RVW"
+
+# ---- CHALLENGE R15-P0-01, which BLOCKED: the anchor above rested on git's
+# RENAME-SIMILARITY score over content the attacker writes in the same commit.
+# The challenger's world `G2` is the rename-and-move world PLUS a prose rewrite,
+# and at the default threshold `--follow` scored no rename: 1 revision of 4,
+# rc 0, "checked over every revision". The anchor is now the manifest's MARKER,
+# and these four proofs are the four ways that anchor can be attacked. Each
+# asserts its own premise, so a world that fails to build FAILS rather than
+# passing quietly.
+G2W=$(mktemp -d); SCRATCH="${SCRATCH:-} $G2W"; mkdir -p "$G2W/repo/a"; cp -r "$PACK" "$G2W/repo/a/phase14"
+rm -rf "$G2W/repo/a/phase14/.git"
+( cd "$G2W/repo" && git init -q . && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' \
+  && git -c user.email=p14@local -c user.name=p14 commit -q --allow-empty -m 'another revision' \
+  && mkdir -p elsewhere && git mv a/phase14/P14-HANDOFF-MANIFEST.md elsewhere/LEDGER.md ) >/dev/null 2>&1
+printf '\n\nan appended line nobody received\n' >> "$G2W/repo/a/phase14/P14-CHALLENGE-7af6438.md"
+python3 - "$G2W/repo/a/phase14/P14-CHALLENGE-7af6438.md" "$G2W/repo/elsewhere/LEDGER.md" <<'G2FORGE'
+import hashlib,os,re,sys
+rep,man=sys.argv[1],sys.argv[2]
+b=open(rep,'rb').read(); h=hashlib.sha256(b).hexdigest()
+L=open(man,encoding='utf-8').read().split(chr(10))
+out=[]
+for l in L:
+    if l.startswith('| `%s`' % os.path.basename(rep)):
+        l=re.sub(r'`[0-9a-f]{64}`','`%s`' % h,l)
+        l=re.sub(r'\| [0-9,]+ \|$','| %s |' % format(len(b),','),l)
+    out.append(l)
+# EVERY row is kept, so the pack still validates and the ONLY thing this commit
+# changes besides the forgery is the narrative -- which is what drops the
+# rename similarity below git's threshold. Measured: with the rows alone the
+# score still holds and `--follow` DOES see the move, so the premise below
+# would not hold and the proof would fail rather than mislead.
+pad=['the promotion ledger restates every artifact of this phase line %d, and the'
+     ' narrative around the table was rewritten wholesale for the promotion.' % i
+     for i in range(4000)]
+open(man,'w',encoding='utf-8').write(chr(10).join(out[:1]+pad+out[1:]))
+G2FORGE
+( cd "$G2W/repo" && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'promote: rename, move and rewrite' ) >/dev/null 2>&1
+G2M="--manifest $G2W/repo/elsewhere/LEDGER.md --dir $G2W/repo/a/phase14"
+# Premise: BOTH of the old legs miss -- one revision by basename AND one by
+# `--follow` -- while the history holds three and the marker leg finds two.
+G2B=$(cd "$G2W/repo" && git rev-list HEAD -- ':(top,glob)**/LEDGER.md' | wc -l)
+G2F=$(cd "$G2W/repo" && git log --follow --format=%H -- elsewhere/LEDGER.md | wc -l)
+G2G=$(cd "$G2W/repo" && git log --format=%H --no-renames -G '^# P14-HANDOFF-MANIFEST\.md$' HEAD -- ':(top)' | wc -l)
+if [ "$G2B" = 1 ] && [ "$G2F" = 1 ] && [ "$G2G" -gt 1 ]; then
+  named manifest-renamed-moved-and-rewritten 1 "REWRITTEN IN HISTORY" \
+    "python3 -I $HERE/manifest-digests.py $G2M --witness $G2W/none --check"
+  named manifest-renamed-moved-and-rewritten-write 1 "REWRITTEN IN HISTORY" \
+    "python3 -I $HERE/manifest-digests.py $G2M --witness $G2W/none --write"
+else
+  printf 'FAIL  %-26s the G2 world was not built (%s by basename, %s by --follow, %s by marker) — nothing was proved\n' \
+         manifest-renamed-moved-and-rewritten "${G2B:-<none>}" "${G2F:-<none>}" "${G2G:-<none>}"
+  fail=$((fail+1))
+fi
+rm -rf "$G2W"
+
+# ---- CHALLENGE R15-P0-02, which BLOCKED: `core.quotePath` defaults TRUE, so a
+# non-ASCII path came back QUOTED and `ls-tree -- <that string>` answered empty
+# at rc 0 -- read here as "absent from that tree". In the challenger's world the
+# two revisions holding the TRUE digest were both counted as gaps and the tool
+# printed 0 with "ABSENT in 2 of them — removed and re-added", a cause that was
+# not the cause. This is an ar/en/tr product; the path shape is ordinary.
+ARW=$(mktemp -d); SCRATCH="${SCRATCH:-} $ARW"; ARD="$ARW/repo/مرحلة"
+mkdir -p "$ARD" && cp -r "$PACK"/* "$ARD"/ 2>/dev/null; rm -rf "$ARD/.git"
+( cd "$ARW/repo" && git init -q . && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received at an arabic path' ) >/dev/null 2>&1
+printf '\n' >> "$ARD/P14-HANDOFF-MANIFEST.md"
+( cd "$ARW/repo" && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'amend the manifest there' \
+  && mkdir -p pack && git mv "مرحلة/P14-HANDOFF-MANIFEST.md" pack/HANDOFF.md ) >/dev/null 2>&1
+forge "$ARD" "$ARW/repo/pack/HANDOFF.md"
+( cd "$ARW/repo" && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'promote: move it out of the arabic path' ) >/dev/null 2>&1
+ARM="--manifest $ARW/repo/pack/HANDOFF.md --dir $ARD"
+# Premise: git really does quote this path, and the history really holds three
+# revisions -- otherwise the quoting is not what is being measured.
+ARQ=$(cd "$ARW/repo" && git log --name-only --format= -1 HEAD~1 | grep -c '^"')
+ARR=$(cd "$ARW/repo" && git rev-list HEAD | wc -l)
+if [ "$ARQ" -ge 1 ] && [ "$ARR" = 3 ]; then
+  named manifest-moved-off-a-quoted-path 1 "REWRITTEN IN HISTORY" \
+    "python3 -I $HERE/manifest-digests.py $ARM --witness $ARW/none --check"
+  named manifest-moved-off-a-quoted-path-write 1 "REWRITTEN IN HISTORY" \
+    "python3 -I $HERE/manifest-digests.py $ARM --witness $ARW/none --write"
+else
+  printf 'FAIL  %-26s the quoted-path world was not built (%s quoted line(s), %s revision(s)) — nothing was proved\n' \
+         manifest-moved-off-a-quoted-path "${ARQ:-<none>}" "${ARR:-<none>}"
+  fail=$((fail+1))
+fi
+rm -rf "$ARW"
+
+# ---- The coordinator's requirement on the new anchor, and the challenger's own
+# caveat about it: a marker-based walk must not let a SECOND file carrying the
+# marker supply an "oldest" record of its own, and must not be silently
+# unanchored when the marker is REMOVED. Both refuse by name.
+DCW=$(mktemp -d); SCRATCH="${SCRATCH:-} $DCW"; mkdir -p "$DCW/repo/a"; cp -r "$PACK" "$DCW/repo/a/phase14"
+rm -rf "$DCW/repo/a/phase14/.git"
+( cd "$DCW/repo" && git init -q . && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'reports received and signed' ) >/dev/null 2>&1
+printf '# an amendment quoting the manifest\n\n# P14-HANDOFF-MANIFEST.md\n\nsays the row was received.\n' \
+  > "$DCW/repo/a/phase14/P14-AMENDMENT-99-QUOTES-THE-MARKER.md"
+( cd "$DCW/repo" && git add -A >/dev/null 2>&1 \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'an amendment reproducing the marker as a whole line' ) >/dev/null 2>&1
+DCM="--manifest $DCW/repo/a/phase14/P14-HANDOFF-MANIFEST.md --dir $DCW/repo/a/phase14"
+DCN=$(cd "$DCW/repo" && git grep -l --full-name -E '^# P14-HANDOFF-MANIFEST\.md$' HEAD -- ':(top)' | wc -l)
+if [ "$DCN" = 2 ]; then
+  named marker-in-two-files-refused 1 "AMBIGUOUS" \
+    "python3 -I $HERE/manifest-digests.py $DCM --witness $DCW/none --check"
+else
+  printf 'FAIL  %-26s the decoy world was not built (%s carrier(s)) — nothing was proved\n' \
+         marker-in-two-files-refused "${DCN:-<none>}"
+  fail=$((fail+1))
+fi
+# The subject with its marker stripped: unanchorable, and refused before any
+# history is read rather than answered at 0.
+STW=$(mktemp -d); SCRATCH="${SCRATCH:-} $STW"; cp -r "$PACK"/* "$STW"/ 2>/dev/null; rm -rf "$STW/.git"
+sed -i '1s/.*/# a ledger/' "$STW/P14-HANDOFF-MANIFEST.md"
+STN=$(grep -c '^# P14-HANDOFF-MANIFEST\.md$' "$STW/P14-HANDOFF-MANIFEST.md" || true)
+if [ "${STN:-0}" = 0 ]; then
+  named marker-stripped-from-subject 1 "NOT ANCHORED" \
+    "python3 -I $HERE/manifest-digests.py --manifest $STW/P14-HANDOFF-MANIFEST.md --dir $STW --witness $STW/none --check"
+else
+  printf 'FAIL  %-26s the stripped world was not built (%s marker line(s) left) — nothing was proved\n' \
+         marker-stripped-from-subject "${STN:-<none>}"
+  fail=$((fail+1))
+fi
+rm -rf "$DCW" "$STW"
 rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"
 
 red retracted-claim-planted \

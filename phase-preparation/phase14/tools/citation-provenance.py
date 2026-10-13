@@ -41,8 +41,21 @@ CITE = re.compile(r'`([A-Za-z0-9_./-]+\.(?:%s))(?::[0-9][0-9,\s–-]*)?`' % '|'.
 BEGIN = '<!-- BEGIN GENERATED citation-provenance -- do not edit by hand -->'
 END   = '<!-- END GENERATED citation-provenance -->'
 
+# The migration-freeze anchor, pinned as the FULL 40-character object name. A
+# coordinator relay of the Phase 8 challenger's measurement, re-measured here:
+# GitHub serves this commit to `git fetch --depth 1 origin <40 chars>` (rc 0,
+# `git cat-file -t` → commit) and REFUSES the 7-character abbreviation
+# ("couldn't find remote ref 93084f8"). So an abbreviation is not a thing a CI
+# job can fetch, and an abbreviation is also not a thing this tool should trust:
+# it can become ambiguous as the repository grows, and `--base` defaults to one.
+# Whenever the default is used, the resolved object is required to BE this
+# literal, and every git call runs with replace refs OFF, so a `replace` object
+# cannot substitute another tree for the anchor's.
+ANCHOR = '93084f82b8e36ad49ebb207c0b6e7435d7fcb49f'
+
 def git(repo, *args):
-    return subprocess.run(['git','-C',repo,*args], capture_output=True, text=True)
+    return subprocess.run(['git','-C',repo,'--no-replace-objects',*args],
+                          capture_output=True, text=True)
 
 def tracked(repo, rev):
     r = git(repo,'ls-tree','-r','--name-only',rev)
@@ -99,7 +112,27 @@ def main():
         if git(a.repo, 'rev-parse', '--verify', '%s^{commit}' % _rev).returncode != 0:
             print('CONFIGURATION ERROR: --repo (%s) is a git repository but does not'
                   ' contain %s, so the two trees cannot be compared and every row'
-                  ' would read as absent.' % (a.repo, _rev), file=sys.stderr)
+                  ' would read as absent.%s' % (a.repo, _rev,
+                  (' This is the migration-freeze anchor, and it is reachable from'
+                   ' neither `main` nor this branch, so a plain clone does not carry'
+                   ' it. Fetch it by its FULL object name —'
+                   ' `git fetch --depth 1 origin %s` — or fetch a branch that'
+                   ' contains it; the 7-character abbreviation is refused by the'
+                   ' server.' % ANCHOR) if _rev == ap.get_default('base') else ''),
+                  file=sys.stderr)
+            return 2
+    # CHALLENGE R15-P1-01 and the coordinator's relay of the Phase 8 finding: an
+    # abbreviation is not an anchor. When `--base` is the default, what it
+    # resolves to here must be the pinned full object name; another commit that
+    # happens to share the prefix, or a `replace` object standing in for it, is a
+    # DIFFERENT tree and every row below would be computed against it.
+    if a.base == ap.get_default('base'):
+        _res = git(a.repo, 'rev-parse', '--verify', '%s^{commit}' % a.base).stdout.strip()
+        if _res != ANCHOR:
+            print('CONFIGURATION ERROR: the default --base (%s) resolves to %s in --repo (%s),'
+                  ' not to the pinned migration-freeze anchor %s. Every row below would be'
+                  ' computed against a different tree, so nothing is reported.'
+                  % (a.base, _res or '<nothing>', a.repo, ANCHOR), file=sys.stderr)
             return 2
 
     # COORD-DIFF-REVIEW R1 P3-12: only TOP-LEVEL pack documents were scanned, so

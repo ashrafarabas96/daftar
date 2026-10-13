@@ -30,6 +30,23 @@ PLACEHOLDER = 'UNSIGNED'
 # to the reviewer-row rules, so a coordinator's review could be tampered with and
 # re-signed. A review is a review whoever wrote it.
 REVIEWER_PREFIXES = ('P14-CHALLENGE-', 'P14-COORD-DIFF-REVIEW-')
+# CHALLENGE R15-P0-01, which BLOCKED, and the coordinator's ruling on it: the
+# history walk may not rest on git's RENAME-SIMILARITY score, because the
+# content that score is computed over is content the attacker writes in the
+# same commit. Measured in the challenger's world `G2` -- rename to a new
+# basename, move out of the pack, forge a reviewer row AND rewrite the
+# manifest's prose, all in one commit -- `git log --follow` found 1 revision of
+# 4 at the default threshold, 1 at `-M50%`, 1 at `-M20%`, and only 4 at `-M10%`.
+# Tuning `-M` is not a fix; it is the same lottery at a different odds. So the
+# manifest is identified by a MARKER it carries, the walk asks `git grep` which
+# file in each revision carries it, and every path it is found at seeds a
+# further `rev-list` until no new path appears. A move, a rename, a prose
+# rewrite and all three at once leave the marker in place, and an attacker who
+# REMOVES it does not get a pass: the file under `--manifest` is required to
+# carry it exactly once, so stripping it refuses by name before any history is
+# read. The marker is a fixed literal here and not read from the file, because
+# a marker the subject chooses is not an anchor.
+MARKER = '# P14-HANDOFF-MANIFEST.md'
 
 def main():
     ap = argparse.ArgumentParser()
@@ -126,7 +143,22 @@ def main():
     _md = os.path.dirname(os.path.abspath(a.manifest))
     _mb = os.path.basename(a.manifest)
     def _g(*argv):
-        return subprocess.run(['git','-C',_md] + list(argv), capture_output=True, text=True)
+        # CHALLENGE R15-P0-02, which BLOCKED: `core.quotePath` defaults TRUE, so
+        # every git command that emits a path QUOTES a non-ASCII one
+        # (`"\331\205..."`). The quoted string was then fed straight back to
+        # `ls-tree -- <path>`, which answered EMPTY at rc 0 -- indistinguishable
+        # here from "the path is not in this tree" -- so in the challenger's
+        # world `M` (a manifest added at an Arabic path, then moved and forged)
+        # the two revisions holding the TRUE digest were both counted as gaps
+        # and the tool answered 0. This is an ar/en/tr product; that path shape
+        # is ordinary. Every git call of this tool now runs with quoting OFF,
+        # and a path that still arrives quoted is a NAMED REFUSAL below rather
+        # than a skip.
+        return subprocess.run(['git','-C',_md,'-c','core.quotePath=false'] + list(argv),
+                              capture_output=True, text=True)
+    def _quoted(path):
+        '''True when git handed back a path this tool cannot use verbatim.'''
+        return path.startswith('"') or '\\' in path
     # COORDINATOR DIFF REVIEW AT 03b3a0b, B2 (P2-01-ter), which BLOCKED: this
     # walk asked `git rev-list HEAD -- P14-HANDOFF-MANIFEST.md`, keyed to the
     # manifest's CURRENT path and blind to renames. ONE ordinary commit that
@@ -204,6 +236,84 @@ def main():
                     _revmap.setdefault(_cur, set())
                 elif ln and _cur:
                     _revmap[_cur].add(ln)
+    # CHALLENGE R15-P0-01 and the coordinator's ruling: legs (a) and (b) are
+    # kept, neither is trusted alone, and NEITHER IS THE ANCHOR ANY MORE. The
+    # anchor is the MARKER, asked of git three ways:
+    #   (c) every HEAD-reachable revision whose diff adds or removes a marker
+    #       line -- which is every revision that created, deleted, moved or
+    #       renamed the manifest, whatever its name and wherever it went;
+    #   (d) for each revision found, `git grep` says WHICH file in that
+    #       revision's tree carries the marker, so the path is read from the
+    #       tree instead of guessed from a name or a similarity score;
+    #   (e) every path so discovered seeds `rev-list HEAD -- <that path>`, and
+    #       (d) runs again on whatever that adds, until no new path appears.
+    # (e) is what makes the set COMPLETE across a chain of moves: a commit that
+    # moves the file CHANGES both the old and the new path, so it is listed by
+    # the `rev-list` of the old path, and its own grep then yields the new path.
+    # A revision carrying the marker in MORE THAN ONE file is a refusal by name
+    # (this tool will not choose between two candidate manifests), which is also
+    # what closes the decoy the challenger warned of: an amendment that quotes
+    # the marker does not become an older "manifest", it stops the gate.
+    _ambiguous, _quotefail = None, None
+    def _carriers(rev):
+        '''Paths in `rev` whose content carries MARKER. None = unreadable tree.'''
+        # The marker must match a WHOLE LINE. Measured: `-F` matches a
+        # SUBSTRING, so every document that mentions the manifest's heading --
+        # this tool's own source among them -- counted as a carrier and the
+        # AMBIGUOUS refusal fired on an honest world. `git grep` has no `-x`
+        # ("unknown switch", measured), so the pattern is anchored explicitly
+        # and the same whole-line test is applied to the subject above.
+        r = _g('grep', '-l', '--full-name', '-E', '^%s$' % re.escape(MARKER),
+               rev, '--', ':(top)')
+        if r.returncode == 1:
+            return []                      # git's own "no file matches"
+        if r.returncode != 0:
+            return None
+        out = []
+        for ln in r.stdout.split('\n'):
+            ln = ln.strip()
+            if not ln:
+                continue
+            pre, _, path = ln.partition(':')
+            if pre != rev or not path:
+                return None                # not the shape this parse assumes
+            out.append(path)
+        return out
+    # `--no-renames` is load-bearing and measured: WITH rename detection git
+    # presents a move as a rename whose unchanged lines are not in the patch, so
+    # `-G` on the marker missed the very commit that moved the file (1 revision
+    # of 3 in the G2 world); with it the move appears as a delete plus an add,
+    # the marker lines are in the patch, and both the add and the move are
+    # found. Depending on rename detection here would be the same lottery this
+    # leg exists to replace.
+    _gm = _g('log', '--format=%H', '--no-renames', '-G', '^%s$' % re.escape(MARKER),
+             'HEAD', '--', ':(top)')
+    if _gm.returncode == 0:
+        for _r in _gm.stdout.split():
+            _revmap.setdefault(_r, set())
+    _seen_paths, _todo = set(), list(_revmap)
+    while _todo:
+        _rev = _todo.pop()
+        _cs = _carriers(_rev)
+        if _cs is None:
+            continue                       # the walk below reports an unreadable tree
+        if len(_cs) > 1 and _ambiguous is None:
+            _ambiguous = (_rev, sorted(_cs))
+        for _c in _cs:
+            _revmap[_rev].add(_c)
+            if _quoted(_c) and _quotefail is None:
+                _quotefail = (_rev, _c)
+            if _c in _seen_paths:
+                continue
+            _seen_paths.add(_c)
+            _rl = _g('rev-list', 'HEAD', '--', ':(top)%s' % _c)
+            if _rl.returncode != 0:
+                continue
+            for _r2 in _rl.stdout.split():
+                if _r2 not in _revmap:
+                    _revmap.setdefault(_r2, set())
+                    _todo.append(_r2)
+                _revmap[_r2].add(_c)
     if len(_revmap) > len(_revs.stdout.split()):
         # Order them the way git does, oldest last, then walk reversed.
         _all = _g('rev-list', 'HEAD')
@@ -272,7 +382,13 @@ def main():
                 _incomplete = ('revision %s is a boundary commit%s, so an earlier record of this'
                                ' manifest may exist and cannot be read'
                                % (_oldest[:12], ' of a shallow clone' if _shallow else ''))
-            elif _paths_at(_p):
+            elif _paths_at(_p) or (_carriers(_p) or []):
+                # CHALLENGE R15-P0-01: this test asked only the BASENAME, so a
+                # parent that carried the manifest under its OLD name looked
+                # empty and the forging revision passed as "the commit that
+                # added it". The marker answers it whatever the file is called,
+                # and this is the backstop that holds even when every discovery
+                # leg finds nothing but the forging revision itself.
                 _incomplete = ('the oldest revision of this manifest reachable here (%s) is a'
                                ' modification, not the commit that added it, so the digest a'
                                ' report was received with may be out of reach' % _oldest[:12])
@@ -385,10 +501,20 @@ def main():
         _nrevs = len(_revs.stdout.split())
         if history.startswith('checked'):
             history = ('checked over all %d revision(s) of this manifest reachable from HEAD,'
-                       ' OLDEST first' % _nrevs)
+                       ' OLDEST first, found by the marker it carries and by every path it has'
+                       ' held' % _nrevs)
         if gaps and history.startswith('checked'):
-            history += (', and the manifest is ABSENT in %d of them (%s) — removed and re-added,'
-                        ' which does not erase the records before it'
+            # CHALLENGE R15-P3-01: this sentence used to say "removed and
+            # re-added", which is a CAUSE, and the measurement under it is only
+            # that git reported no such path in those trees — the eighth
+            # instance of a refusal naming a cause that is not the cause. It
+            # was reached in the challenger's world `M` by a LOOKUP FAILURE on a
+            # quoted path, where nothing had been removed at all. The quoting is
+            # fixed above; the sentence now claims only what was read.
+            history += (', and git reports no file carrying this manifest in %d of them (%s),'
+                        ' which is what a revision before it was added, or between a removal and'
+                        ' a re-add, looks like from here; the records in the revisions that DO'
+                        ' carry it were read, and a gap does not erase them'
                         % (len(gaps), ', '.join(g[:12] for g in gaps[:4])))
     listed, out, stale, refused = [], [], [], []
     for ln in lines:
@@ -510,6 +636,43 @@ def main():
     # manifest cannot erase, so it is asked: reports there with no rows here,
     # under an unverifiable history, is the shape of the attack.
     blocked = False
+    # CHALLENGE R15-P0-01 / R15-P0-02, the three refusals the new anchor owes,
+    # each by name and each fail-closed:
+    #  * the subject must carry the marker EXACTLY ONCE. An attacker who strips
+    #    it cannot be found by grep in any revision, so the tool must stop
+    #    before it reads a history it cannot anchor -- not answer 0.
+    #  * a revision carrying the marker in more than one file is ambiguous and
+    #    stops the gate; this tool does not choose between two candidate
+    #    manifests, and it is the quoting-amendment decoy's refusal too.
+    #  * a path git hands back quoted, or with a backslash this tool cannot
+    #    round-trip, is a refusal and never a skip -- it was read as "absent
+    #    from that tree" and counted two true records as gaps.
+    _subject_marks = sum(1 for ln in lines if ln.rstrip() == MARKER)
+    if _subject_marks != 1:
+        blocked = True
+        history = ('NOT ANCHORED (the file given as the manifest carries the manifest marker %d'
+                   ' time(s), not once)' % _subject_marks)
+        stale.append('%s: %s. The marker is how every revision of this manifest is found'
+                     ' whatever path or name it has held, so without exactly one of it in the'
+                     ' subject there is no anchor to read a history against, and this tool'
+                     ' reports no verdict about the reviewer rows.' % (history, MARKER))
+    if _quotefail is not None:
+        blocked = True
+        history = ('NOT CHECKED (git reported the manifest at revision %s under a path this tool'
+                   ' cannot use verbatim: %s)' % (_quotefail[0][:12], _quotefail[1]))
+        stale.append('%s. Paths are read with `core.quotePath=false`, so a quoted or escaped path'
+                     ' here means the name holds something this parse does not round-trip. It is'
+                     ' refused rather than skipped, because a skipped revision is a record that'
+                     ' was never compared.' % history)
+    if _ambiguous is not None:
+        blocked = True
+        history = ('AMBIGUOUS (revision %s carries the manifest marker in %d files: %s)'
+                   % (_ambiguous[0][:12], len(_ambiguous[1]), ', '.join(_ambiguous[1][:4])))
+        stale.append('%s. The marker identifies the manifest in history; two files carrying it in'
+                     ' one revision means this tool cannot say which of them the records belong'
+                     ' to, and it will not pick. Keep the marker in the manifest alone — a'
+                     ' document that needs to quote it must not reproduce it as a whole line.'
+                     % history)
     # CHALLENGE R13-P2-01's wider half: a walk that read EVERY revision and
     # parsed ZERO rows printed the same words as a walk that verified nineteen.
     # "checked" is a claim about what was found, not only about what was read,

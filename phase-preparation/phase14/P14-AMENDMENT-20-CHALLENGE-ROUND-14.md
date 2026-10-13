@@ -140,6 +140,21 @@ repository's gates.
 
 ## 6. The repository's four gates, three worlds, on the Node the repository declares
 
+> **RETRACTED IN ROUND 15, AND THE TEXT IS LEFT STANDING ON PURPOSE** (`CHALLENGE R15-P0-03`,
+> ruled blocking). The `typecheck` row below — **0/0/0** — is **FALSE**, and so is the sentence
+> *"Nothing was run from a checkout that had been built before"* that licenses it: the measurement
+> loop ran the four gates in sequence inside each clone, so `build` ran immediately before
+> `typecheck` in the same directory and every typecheck reading was taken in a tree the previous
+> gate had just populated. Measured cold, `npm ci` only, it is **2/2/2**, and the conclusion drawn
+> below — that `G6`'s typecheck half does not reproduce — is **withdrawn**: it does reproduce on a
+> cold tree. The "inherited from `main`" verdicts on `lint` and `build` are **too wide** as well:
+> `lint` is rc 1 cold and rc **0** after `build`, and `build` is rc 1 cold and rc **0** run again,
+> in all three worlds. The corrected table, in both orders, is §1 of
+> `P14-AMENDMENT-21-CHALLENGE-ROUND-15.md`, and three rows in `tools/RETRACTED-CLAIMS.tsv` fence
+> these sentences to this annotated section and that one. Read nothing below as a current figure
+> except `format` 0/1/0, which the challenger re-measured and confirmed.
+
+
 `P14-GATE-035` now requires this table, so here it is, measured **after** the commit that answers
 this round and therefore recorded in a commit of its own: the answer commit was already made when
 these runs finished, and nothing in this lane rewrites history, not even an unpushed commit.
