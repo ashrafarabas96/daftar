@@ -1,0 +1,338 @@
+{
+  "accepts movements recorded under either of the line's two versions": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "§17 + §58 — the completeness verifier reads the bound SET accepts movements recorded under either of the line's two versions"
+  ],
+  "accepts the five fields in their declared shapes, so the check is not a blanket refusal": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 8 — one writer, and no second valuation accepts the five fields in their declared shapes, so the check is not a blanket refusal"
+  ],
+  "accepts the same command arriving twice as one consumption": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 7.7 — exactly once accepts the same command arriving twice as one consumption"
+  ],
+  "agrees with the kitchen's own waste boundary on every preparation state": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 7.7 — which occasion owes a line its movements agrees with the kitchen's own waste boundary on every preparation state"
+  ],
+  "binds on queued/start and on nothing else": [
+    "phase-preparation/phase10/test/recipe-binding.test.ts",
+    "§56 — exactly one transition binds binds on queued/start and on nothing else"
+  ],
+  "breaks a remainder tie on the lower line index": [
+    "phase-preparation/phase10/test/bill-discount.test.ts",
+    "distributeBillDiscount — a whole-bill discount becomes line discounts that add up breaks a remainder tie on the lower line index, so the receipt is explainable"
+  ],
+  "carries a HALF_EVEN rounding result into the grain check, not a truncated one": [
+    "phase-preparation/phase10/test/composition.test.ts",
+    "P3-09 — aggregation composes with the grain check it depends on carries a HALF_EVEN rounding result into the grain check, not a truncated one"
+  ],
+  "conserves the discount exactly and never exceeds a line gross": [
+    "phase-preparation/phase10/test/bill-discount.test.ts",
+    "distributeBillDiscount — a whole-bill discount becomes line discounts that add up conserves the discount exactly and never exceeds a line gross, over a wide grid"
+  ],
+  "conserves the total for every total x parts in a wide grid": [
+    "phase-preparation/phase10/test/split-bill.test.ts",
+    "splitEvenly — LAW 4, exact conservation conserves the total for every total x parts in a wide grid, and the grid is not empty"
+  ],
+  "consumes each version its own components and folds the totals": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "§17 — consumption is per contribution, never per aggregate consumes each version its own components and folds the totals"
+  ],
+  "divides HALF_EVEN, so a half lands on the even quotient": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§49 — a sale binds an immutable recipe version divides HALF_EVEN, so a half lands on the even quotient and never on a float"
+  ],
+  "does not let a foreign writer's record occupy the line's one slot": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 8 — one writer, and no second valuation does not let a foreign writer's record occupy the line's one slot"
+  ],
+  "does not register PRECONSUMED for a future phase": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§46 — exactly three stock-effect modes, and no fourth does not register PRECONSUMED for a future phase"
+  ],
+  "expands deterministically and in a canonical order": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§49 — a sale binds an immutable recipe version expands deterministically and in a canonical order"
+  ],
+  "expands the whole bound recipe at the cancelled quantity": [
+    "phase-preparation/phase10/test/waste-expansion.test.ts",
+    "P2-05 — a cancellation wastes a SET, not a boolean expands the whole bound recipe at the cancelled quantity"
+  ],
+  "keeps an unpriced modifier out of the sale entirely": [
+    "phase-preparation/phase10/test/order-to-sale.test.ts",
+    "aggregateToSaleLines — the sale authority admits one line per variant keeps an unpriced modifier out of the sale entirely"
+  ],
+  "keeps both bindings on that one sale line, so the provenance survives the merge": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "§17 — aggregation keeps every line its own links and economics keeps both bindings on that one sale line, so the provenance survives the merge"
+  ],
+  "keeps both identities distinct when two recipes share a version number": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "V2 §17 — the bound set is recipe IDENTITIES, not version numbers keeps both identities distinct when two recipes share a version number"
+  ],
+  "lets a fractional modifier through aggregation and refuses it at the stock grain, before service": [
+    "phase-preparation/phase10/test/composition.test.ts",
+    "P3-09 — aggregation composes with the grain check it depends on lets a fractional modifier through aggregation and refuses it at the stock grain, before service"
+  ],
+  "names the five fields a record may carry, and no more": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 8 — one writer, and no second valuation names the five fields a record may carry, and no more"
+  ],
+  "never silently loses a step across a grid of line and modifier quantities": [
+    "phase-preparation/phase10/test/order-to-sale.test.ts",
+    "P1-01 — a modifier is scaled by the pack’s one rounding rule never silently loses a step across a grid of line and modifier quantities"
+  ],
+  "never substitutes a version it cannot read": [
+    "phase-preparation/phase10/test/waste-expansion.test.ts",
+    "P2-05 — a cancellation wastes a SET, not a boolean never substitutes a version it cannot read"
+  ],
+  "offers the latest version only while queued": [
+    "phase-preparation/phase10/test/recipe-binding.test.ts",
+    "§56 — the queued candidate is advisory offers the latest version only while queued"
+  ],
+  "owes a set in exactly the states the kitchen says waste from": [
+    "phase-preparation/phase10/test/waste-expansion.test.ts",
+    "P2-05 — a cancellation wastes a SET, not a boolean owes a set in exactly the states the kitchen says waste from"
+  ],
+  "owes a waste movement once preparation began": [
+    "phase-preparation/phase10/test/state-machines.test.ts",
+    "LAW 3 — the waste boundary is the moment a cook takes the ingredients owes a waste movement once preparation began, and still owes it when the dish is ready"
+  ],
+  "reads representability the way inventory_quantity_is_representable does": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§57 — the grain is the component's own unit_decimals, not Q4 reads representability the way inventory_quantity_is_representable does"
+  ],
+  "refuses a DUPLICATE component": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§48 — completeness is exact-set equality, not a count refuses a DUPLICATE component, and not as a quantity mismatch"
+  ],
+  "refuses a WRONG QUANTITY, reporting both figures": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§48 — completeness is exact-set equality, not a count refuses a WRONG QUANTITY, reporting both figures"
+  ],
+  "refuses a WRONG VARIANT as its own case": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§48 — completeness is exact-set equality, not a count refuses a WRONG VARIANT as its own case, not as one missing plus one extra"
+  ],
+  "refuses a bill that aggregates past the sale authority ceiling": [
+    "phase-preparation/phase10/test/order-to-sale.test.ts",
+    "aggregateToSaleLines — the sale authority admits one line per variant refuses a bill that aggregates past the sale authority ceiling, and names the ceiling"
+  ],
+  "refuses a bill whose every line is voided": [
+    "phase-preparation/phase10/test/order-to-sale.test.ts",
+    "aggregateToSaleLines — the sale authority admits one line per variant refuses a bill whose every line is voided rather than committing a sale of nothing"
+  ],
+  "refuses a component that scales to zero instead of consuming none of it": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§49 — a sale binds an immutable recipe version refuses a component that scales to zero instead of consuming none of it"
+  ],
+  "refuses a component that states no unit at all": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§57 — a component quantity is meaningless without its unit refuses a component that states no unit at all"
+  ],
+  "refuses a composed contribution that carries no binding": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "§17 — consumption is per contribution, never per aggregate refuses a composed contribution that carries no binding"
+  ],
+  "refuses a composed line cancelled mid-preparation with nothing bound": [
+    "phase-preparation/phase10/test/waste-expansion.test.ts",
+    "P2-05 — a cancellation wastes a SET, not a boolean refuses a composed line cancelled mid-preparation with nothing bound"
+  ],
+  "refuses a declared precision the inventory authority does not allow": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§57 — the grain is the component's own unit_decimals, not Q4 refuses a declared precision the inventory authority does not allow"
+  ],
+  "refuses a direct waste that names no stock product rather than substituting the order-line id": [
+    "phase-preparation/phase10/test/waste-expansion.test.ts",
+    "P2-05 — a cancellation wastes a SET, not a boolean refuses a direct waste that names no stock product rather than substituting the order-line id"
+  ],
+  "refuses a discount above the subtotal by code, rather than clamping it": [
+    "phase-preparation/phase10/test/bill-discount.test.ts",
+    "distributeBillDiscount — a whole-bill discount becomes line discounts that add up refuses a discount above the subtotal by code, rather than clamping it"
+  ],
+  "refuses a duplicated lineId in middle position": [
+    "phase-preparation/phase10/test/split-bill.test.ts",
+    "§59 — the pure split boundary refuses impossible input refuses a duplicated lineId in middle position"
+  ],
+  "refuses a field the contract does not define, even when it is not a valuation": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 8 — one writer, and no second valuation refuses a field the contract does not define, even when it is not a valuation"
+  ],
+  "refuses a fractional portion of a dish whose component is counted in whole units": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§57 — the grain is the component's own unit_decimals, not Q4 refuses a fractional portion of a dish whose component is counted in whole units"
+  ],
+  "refuses a half bottle on a whole-counted product, naming the nearest representable quantity": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "P2-04 — a DIRECT line is held to the stock product’s grain, before service refuses a half bottle on a whole-counted product, naming the nearest representable quantity"
+  ],
+  "refuses a later version for every reader, which is the recipe-edited-mid-preparation case": [
+    "phase-preparation/phase10/test/recipe-binding.test.ts",
+    "§56 — the bound version governs all four readers refuses a later version for every reader, which is the recipe-edited-mid-preparation case"
+  ],
+  "refuses a modifier that scales away, and names the MODIFIER rather than the line": [
+    "phase-preparation/phase10/test/order-to-sale.test.ts",
+    "P1-01 — a modifier is scaled by the pack’s one rounding rule refuses a modifier that scales away, and names the MODIFIER rather than the line"
+  ],
+  "refuses a movement from a foreign recipe at the same version number": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "V2 §17 — the bound set is recipe IDENTITIES, not version numbers refuses a movement from a foreign recipe at the same version number"
+  ],
+  "refuses a movement made by anyone but the inventory authority": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 8 — one writer, and no second valuation refuses a movement made by anyone but the inventory authority"
+  ],
+  "refuses a movement on an occasion the line does not owe": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 7.7 — exactly once refuses a movement on an occasion the line does not owe"
+  ],
+  "refuses a movement that names NEITHER half of a recipe identity": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "P2-03 — the identity law applies because the line is composed, not because a movement volunteered one refuses a movement that names NEITHER half of a recipe identity"
+  ],
+  "refuses a negative lineTotalMinor rather than aggregating it": [
+    "phase-preparation/phase10/test/split-bill.test.ts",
+    "§59 — the pure split boundary refuses impossible input refuses a negative lineTotalMinor rather than aggregating it"
+  ],
+  "refuses a one-minor-unit shortfall by code, and reports the difference": [
+    "phase-preparation/phase10/test/split-bill.test.ts",
+    "assertAmountsConserve — a settlement split that does not add up is refused, not adjusted refuses a one-minor-unit shortfall by code, and reports the difference"
+  ],
+  "refuses a priced modifier with no catalogue product": [
+    "phase-preparation/phase10/test/order-to-sale.test.ts",
+    "aggregateToSaleLines — the sale authority admits one line per variant refuses a priced modifier with no catalogue product — a quoted extra given away is lost revenue"
+  ],
+  "refuses a product that claims two modes": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§46 — exactly three stock-effect modes, and no fourth refuses a product that claims two modes — I-1, rather than letting a precedence rule decide silently"
+  ],
+  "refuses a recipe authored finer than its component can be counted": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§57 — the grain is the component's own unit_decimals, not Q4 refuses a recipe authored finer than its component can be counted"
+  ],
+  "refuses a recipe read back under a version other than the bound one": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "§17 — consumption is per contribution, never per aggregate refuses a recipe read back under a version other than the bound one"
+  ],
+  "refuses a recipe unit that differs from the stock unit instead of converting it": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§57 — a component quantity is meaningless without its unit refuses a recipe unit that differs from the stock unit instead of converting it"
+  ],
+  "refuses a record judged against another line's fate": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 7.7 — a record is judged against its own line refuses a record judged against another line's fate"
+  ],
+  "refuses a return movement for a composed line": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 7.7 — a refund puts no cooked food back refuses a return movement for a composed line"
+  ],
+  "refuses a service line that moved stock, by its own code": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "SERVICE — a non-stock service consumes nothing (§46) refuses a service line that moved stock, by its own code"
+  ],
+  "refuses a sold line that tries to take its stock as waste, and the reverse": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 7.7 — exactly once refuses a sold line that tries to take its stock as waste, and the reverse"
+  ],
+  "refuses a stock-tracked product that declares no usable precision at all": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "P2-04 — a DIRECT line is held to the stock product’s grain, before service refuses a stock-tracked product that declares no usable precision at all"
+  ],
+  "refuses a valuation nested inside an allowed field, which the key check cannot see": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 8 — one writer, and no second valuation refuses a valuation nested inside an allowed field, which the key check cannot see"
+  ],
+  "refuses an EMPTY bound set rather than letting it disable the law": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "P2-03 — the identity law applies because the line is composed, not because a movement volunteered one refuses an EMPTY bound set rather than letting it disable the law"
+  ],
+  "refuses an EXTRA component nobody asked for": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§48 — completeness is exact-set equality, not a count refuses an EXTRA component nobody asked for"
+  ],
+  "refuses an absent binding and a wrong recipe with distinct codes": [
+    "phase-preparation/phase10/test/recipe-binding.test.ts",
+    "§56 — the bound version governs all four readers refuses an absent binding and a wrong recipe with distinct codes"
+  ],
+  "refuses an unassigned line": [
+    "phase-preparation/phase10/test/split-bill.test.ts",
+    "splitByLines — the assignment must be a partition refuses an unassigned line — nobody paying for a line is how money is lost quietly"
+  ],
+  "refuses contributions that do not account for the billed quantity": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "§17 — consumption is per contribution, never per aggregate refuses contributions that do not account for the billed quantity"
+  ],
+  "refuses every declared field presented in the wrong shape": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 8 — one writer, and no second valuation refuses every declared field presented in the wrong shape"
+  ],
+  "refuses every valuation spelling, including ones no list anticipated": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 8 — one writer, and no second valuation refuses every valuation spelling, including ones no list anticipated"
+  ],
+  "refuses half an identity rather than matching on the number alone": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "V2 §17 — the bound set is recipe IDENTITIES, not version numbers refuses half an identity rather than matching on the number alone"
+  ],
+  "refuses movements recorded against a different recipe version": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§48 — completeness is exact-set equality, not a count refuses movements recorded against a different recipe version (§49)"
+  ],
+  "refuses rather than substitutes when a bound version cannot be read": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "§17 — consumption is per contribution, never per aggregate refuses rather than substitutes when a bound version cannot be read"
+  ],
+  "refuses skipping a step": [
+    "phase-preparation/phase10/test/state-machines.test.ts",
+    "preparation state refuses skipping a step — a queued item is not finished"
+  ],
+  "refuses the MIDDLE component missing, naming it": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§48 — completeness is exact-set equality, not a count refuses the MIDDLE component missing, naming it"
+  ],
+  "refuses the mismatch at validation, before any expansion computes a quantity": [
+    "phase-preparation/phase10/test/stock-effect.test.ts",
+    "§57 — a component quantity is meaningless without its unit refuses the mismatch at validation, before any expansion computes a quantity"
+  ],
+  "refuses the same command re-presented under a DIFFERENT fate, which is a real double take": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 7.7 — exactly once refuses the same command re-presented under a DIFFERENT fate, which is a real double take"
+  ],
+  "refuses the waste-then-sell pair that would take one dish out of stock twice": [
+    "phase-preparation/phase10/test/consumption-occasion.test.ts",
+    "PART 7.7 — exactly once refuses the waste-then-sell pair that would take one dish out of stock twice"
+  ],
+  "refuses to abandon a session that placed orders": [
+    "phase-preparation/phase10/test/state-machines.test.ts",
+    "table session lifecycle refuses to abandon a session that placed orders — that bill is settled or voided"
+  ],
+  "refuses to close a session whose bill the SALE authority still reports unsettled": [
+    "phase-preparation/phase10/test/state-machines.test.ts",
+    "table session lifecycle refuses to close a session whose bill the SALE authority still reports unsettled"
+  ],
+  "refuses to replace a binding a line already carries": [
+    "phase-preparation/phase10/test/recipe-binding.test.ts",
+    "§56 — exactly one transition binds refuses to replace a binding a line already carries"
+  ],
+  "refuses two bound versions that declare different precisions for one component": [
+    "phase-preparation/phase10/test/aggregate-consumption.test.ts",
+    "§17 — a component's precision belongs to the product, not to a recipe version refuses two bound versions that declare different precisions for one component"
+  ],
+  "reports the repeat position, so the caller can see which line it sent twice": [
+    "phase-preparation/phase10/test/split-bill.test.ts",
+    "§59 — the pure split boundary refuses impossible input reports the repeat position, so the caller can see which line it sent twice"
+  ],
+  "rounds HALF_EVEN rather than truncating a billed quantity toward zero": [
+    "phase-preparation/phase10/test/order-to-sale.test.ts",
+    "P1-01 — a modifier is scaled by the pack’s one rounding rule rounds HALF_EVEN rather than truncating a billed quantity toward zero"
+  ],
+  "separates a line voided while queued from one voided after the cook started": [
+    "phase-preparation/phase10/test/waste-expansion.test.ts",
+    "P2-05 — recovering the waste obligation the aggregator drops separates a line voided while queued from one voided after the cook started"
+  ],
+  "still allows a zero line total, which the canonical source allows": [
+    "phase-preparation/phase10/test/split-bill.test.ts",
+    "§59 — the pure split boundary refuses impossible input still allows a zero line total, which the canonical source allows"
+  ]
+}
