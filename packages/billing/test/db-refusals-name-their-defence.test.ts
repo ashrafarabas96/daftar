@@ -293,7 +293,19 @@ describe('a refusal in the DB lane names the defence that refused, not its class
     // accounted for by the LITERAL form. It is not a parser and not
     // exhaustive — no regex over a corpus can be — and the generated footnote
     // now claims exactly this and not "anywhere in the corpus".
-    const broad = /set_config\(\s*'app\.[a-z_]+'|(?<![\w.])SET\s+app\.[a-z_]+/gi;
+    // ROUND 24, THE CHALLENGER'S B-6. The footnote names `SET app.…` and the
+    // pattern demanded `app.` immediately after SET, so `SET LOCAL app.tenant_id`
+    // — the PostgreSQL spelling for the transaction-scoped setting this census
+    // exists to distinguish — was not caught. A hole inside the shape the
+    // sentence names is a false claim, not an admitted residual.
+    // Round 24 also widens it to the other measured misses (the challenger's
+    // F-43): a bound key, an interpolated key, and `set_config (` with a space.
+    // Non-`app.` settings are deliberately not matched. What remains uncovered
+    // is `test/db/helpers/*.ts` and non-`.test.ts` files — the census's declared
+    // corpus — where `cluster.ts`'s own implementation lives; counting a
+    // helper's implementation as a call site would be wrong.
+    const broad =
+      /set_config\s*\(\s*'app\.[a-z_]+'|set_config\s*\(\s*\$\d+|set_config\s*\(\s*[`'"][^`'"]*\$\{|(?<![\w.])SET\s+(?:LOCAL\s+|SESSION\s+)?app\.[a-z_]+/gi;
     const counted = /set_config\('app\.[a-z_]+'[^)]*,\s*false\s*\)/g;
     const unaccounted: string[] = [];
     for (const file of dbTestPaths()) {

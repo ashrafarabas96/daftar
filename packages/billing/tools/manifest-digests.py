@@ -62,6 +62,7 @@ REVIEWER_REPORTS: tuple[str, ...] = (
     "P5-CHALLENGE-47a56c8.md",
     "P5-CHALLENGE-4c451e6.md",
     "P5-CHALLENGE-594178c.md",
+    "P5-CHALLENGE-92aa7c2.md",
     "P5-CHALLENGE-5af0c96.md",
     "P5-CHALLENGE-6171923.md",
     "P5-CHALLENGE-678564e.md",

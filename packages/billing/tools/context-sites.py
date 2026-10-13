@@ -68,7 +68,33 @@ COMMENT = re.compile(r"//.*$")
 # that is not is a PROBLEM, never a quiet zero. It cannot be exhaustive — no
 # regex over a corpus can be — so the footnote the tool renders claims exactly
 # this and not more.
-BROAD = re.compile(r"set_config\(\s*'app\.[a-z_]+'|(?<![\w.])SET\s+app\.[a-z_]+", re.IGNORECASE)
+# ROUND 24, THE CHALLENGER'S B-6: the sentence named `SET app.…` while the
+# pattern required `app.` IMMEDIATELY after SET, so `SET LOCAL app.tenant_id`
+# — the PostgreSQL spelling for the transaction-scoped setting this census
+# exists to distinguish — passed both the law and the census untouched. That
+# is a hole INSIDE the shape the sentence names, which is not what "not a
+# claim of exhaustiveness" covers.
+#
+# ROUND 24 ALSO WIDENS THE NET to the other shapes the challenger measured as
+# misses (its F-43), because the coordinator asked for cover rather than a
+# clause where cover is cheap: a BOUND key `set_config($1, $2, false)`, an
+# INTERPOLATED key `set_config('app.${k}', …)`, and `set_config (` with a
+# space. Ordinary non-`app.` settings — `set_config('statement_timeout', …)` —
+# are deliberately NOT matched, so the net does not cry wolf about settings
+# that are nothing to do with the request context.
+#
+# STILL UNCOVERED, named in the rendered footnote rather than papered over:
+# anything in `test/db/helpers/*.ts` or any non-`.test.ts` file under
+# `test/db`, which is the census's declared corpus — `cluster.ts`'s own
+# internal line lives there, and counting a helper's IMPLEMENTATION as a call
+# site would be wrong, so the scope limit is stated instead.
+BROAD = re.compile(
+    r"set_config\s*\(\s*'app\.[a-z_]+'"
+    r"|set_config\s*\(\s*\$\d+"
+    r"|set_config\s*\(\s*[`'\"][^`'\"]*\$\{"
+    r"|(?<![\w.])SET\s+(?:LOCAL\s+|SESSION\s+)?app\.[a-z_]+",
+    re.IGNORECASE,
+)
 
 
 def unaccounted(db_dir: Path) -> list[str]:
@@ -133,8 +159,9 @@ def render(c: dict) -> list[str]:
         " `set_config('app.…', …, false)`. A site written in either spelling cannot be added or"
         " removed without redding the pure suite. A site written in ANY OTHER spelling is counted"
         " by neither, so a fail-closed detector reds the suite and this check when it finds a"
-        " `set_config('app.…` or a `SET app.…` that neither counted form accounts for — a broad"
-        " net, not a parser, and not a claim of exhaustiveness. Two rounds of history, because the"
+        " `set_config('app.…`, a bound or interpolated `set_config(` key, or a"
+        " `SET`/`SET LOCAL`/`SET SESSION app.…` that neither counted form accounts for — a"
+        " broad net, not a parser, and not a claim of exhaustiveness. **What the net does NOT see**, measured and named rather than implied: anything in `test/db/helpers/*.ts` or any non-`.test.ts` file under `test/db`, which is outside the corpus this census declares — `cluster.ts`'s own internal line lives there, and a helper's implementation is not a call site. Round 24 widened the net to `SET LOCAL`/`SET SESSION` (the challenger's B-6: the sentence named `SET app.…` while the pattern demanded `app.` immediately after `SET`, so the PostgreSQL spelling for the transaction-scoped setting this census exists to distinguish was not caught) and to a bound key, an interpolated key and `set_config (` with a space (its F-43). Two rounds of history, because the"
         " claim has been wrong twice: round 21 added two transaction sites while the law pinned only"
         " the session sum and this footnote claimed the table (B-3), and round 22's replacement"
         " sentence said \"anywhere in the corpus\" while a third spelling — the one `cluster.ts`"
