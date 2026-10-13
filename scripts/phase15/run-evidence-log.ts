@@ -303,6 +303,13 @@ const INSTRUMENTS: readonly Instrument[] = [
     nonZeroMeans: 'the sweep did not notice a reintroduced discarded exit code, so its green verdict is worthless',
   },
   {
+    script: 'verify:exit-codes:phase15:guard',
+    what: "the guard-deletion half of the sweep's provenance rule: the same plant against the real sweep and against a copy with that one line removed",
+    cluster: false,
+    nonZeroMeans:
+      'either the sweep no longer catches a helper that invents its exit code, or it still catches it with the provenance requirement deleted — in which case the red proof credits the catch to the wrong rule',
+  },
+  {
     script: 'verify:handoff-manifest',
     what: "this pack's digests, both directions, and whether its header is current",
     cluster: false,
