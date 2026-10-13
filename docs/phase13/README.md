@@ -16,6 +16,16 @@ script hashes the bytes it is **running from** and compares them with
 blob, an unreachable commit or a foreign repository are **named refusals** (exit 2), not
 skips: "I could not check the checker" must never read as "the checker is fine".
 
+"Anchored to Git" has to mean anchored to the objects, not to whatever the handed
+repository reports. `git replace` rewrites what every read of an object returns, so a
+clone carrying `refs/replace/<blob>` made the gate print "the generator is PINNED" while
+a patched generator ran. Every git invocation in this script therefore runs with
+`--no-replace-objects` **and** `GIT_NO_REPLACE_OBJECTS=1` — the blob read, the branch
+resolution, the committer date the stamp is bounded by, the HEAD read and the
+worktree-cleanliness read alike — and any `refs/replace/` present in the repository is
+listed by name beside the pin's verdict, because being handed one is itself worth
+reading.
+
 The copy in the pack and the copy here are therefore the same bytes by construction. If
 they ever differ, the gate says so and refuses.
 

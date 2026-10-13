@@ -98,11 +98,35 @@ class GitUnavailable(RuntimeError):
     """The worktree could not be measured. Stated, never guessed around."""
 
 
+# R15-01, the challenger's blocking finding: `git replace` rewrites what every
+# read of an object returns, so a reviewer handed a clone carrying
+# `refs/replace/<blob>` got the gate printing "the generator is PINNED ... which
+# is `docs/phase13/regenerate-manifest.py` at <sha>" while a patched generator
+# ran -- every clause of that sentence false, and the sentence is the whole
+# point of the pin. Replace objects are a per-repository redirection the caller
+# controls, so the pin was never anchored to Git; it was anchored to whatever
+# the handed repository said Git was.
+#
+# The remedy is not applied to the blob read alone. A redirection that can move
+# one object can move the commit the subject SHA resolves to, the committer date
+# the stamp is bounded by, and the tree the branch rows are read from, so EVERY
+# git invocation in this file goes through these two, and both of them: the flag
+# for the invocations spelled here, and the environment variable for anything
+# git runs underneath them.
+GIT = ('git', '--no-replace-objects')
+
+
+def git_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env['GIT_NO_REPLACE_OBJECTS'] = '1'
+    return env
+
+
 def git(*args: str) -> str:
     try:
         done = subprocess.run(
-            ('git', '-C', str(REPO), *args),
-            capture_output=True, text=True, timeout=120, check=False,
+            (*GIT, '-C', str(REPO), *args),
+            capture_output=True, text=True, timeout=120, check=False, env=git_env(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise GitUnavailable(f'git {" ".join(args)}: {exc}') from exc
@@ -124,8 +148,9 @@ def find_repo() -> Path:
     if explicit:
         return Path(explicit)
     try:
-        top = subprocess.run(('git', 'rev-parse', '--show-toplevel'),
-                             capture_output=True, text=True, timeout=60, check=False)
+        top = subprocess.run((*GIT, 'rev-parse', '--show-toplevel'),
+                             capture_output=True, text=True, timeout=60, check=False,
+                             env=git_env())
         if top.returncode == 0 and top.stdout.strip():
             return Path(top.stdout.strip())
     except (OSError, subprocess.SubprocessError):
@@ -229,6 +254,8 @@ DELIVERED_REVIEWER_REPORTS = (
     'P13-CHALLENGE-a6d8830.md',
     'P13-CHALLENGE-bcaea5d.md',
     'P13-CHALLENGE-cc4e263.md',
+    # R15, delivered into the pack by the challenger during round 15.
+    'P13-CHALLENGE-f8068cc.md',
     'P13-COORD-DIFF-REVIEW-12fe9a4.md',
 )
 # The SHAPE of a reviewer report, used only to spot a file that wears the name without
@@ -463,8 +490,8 @@ def pin_verdict(subject_sha: str) -> tuple[bool, str]:
     running = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     try:
         committed = subprocess.run(
-            ('git', '-C', str(REPO), 'show', f'{subject_sha}:{GENERATOR_IN_REPO}'),
-            capture_output=True, timeout=120, check=False)
+            (*GIT, '-C', str(REPO), 'show', f'{subject_sha}:{GENERATOR_IN_REPO}'),
+            capture_output=True, timeout=120, check=False, env=git_env())
     except (OSError, subprocess.SubprocessError) as exc:
         return False, (f'the generator pin CANNOT BE CHECKED: git could not be run in {REPO} '
                        f'({exc}). Refusing, because an unchecked checker is not a checked one')
@@ -484,6 +511,24 @@ def pin_verdict(subject_sha: str) -> tuple[bool, str]:
     return True, (f'the generator is PINNED: the bytes running here hash to {running[:16]}…, '
                   f'which is `{GENERATOR_IN_REPO}` at {subject_sha[:7]} — the pack no longer '
                   'certifies its own checker')
+
+
+def replace_refs() -> list[str]:
+    """Any `refs/replace/` in the repository this run was handed, named.
+
+    Disabling the redirection makes the comparison sound; it does not make the
+    redirection's PRESENCE uninteresting. A reviewer who is handed a clone
+    carrying a replace ref is being handed something, and a gate that silently
+    ignores it tells them nothing. So the refs are listed, by name, beside the
+    pin's verdict. This is a DISCLOSURE and not a refusal: with
+    `--no-replace-objects` and `GIT_NO_REPLACE_OBJECTS=1` on every invocation
+    above, the bytes compared are the real ones whether these exist or not.
+    """
+    try:
+        listed = git('for-each-ref', '--format=%(refname) -> %(objectname)', 'refs/replace/')
+    except GitUnavailable as exc:
+        return [f'(could not be listed: {exc})']
+    return [ln.strip() for ln in listed.splitlines() if ln.strip()]
 
 
 def subject_sha_local() -> str:
@@ -632,8 +677,8 @@ def measure_install() -> list[str]:
     manifest = _package_json_path()
     if not manifest.is_file():
         raise GitUnavailable(f'{PACKAGE_JSON} not found under {REPO}')
-    head = subprocess.run(['git', '-C', str(REPO), 'rev-parse', 'HEAD'],
-                          capture_output=True, text=True, check=False)
+    head = subprocess.run([*GIT, '-C', str(REPO), 'rev-parse', 'HEAD'],
+                          capture_output=True, text=True, check=False, env=git_env())
     sha = head.stdout.strip() if head.returncode == 0 else '(unknown)'
     digest = package_manifest_digest()
 
@@ -685,8 +730,8 @@ def measure_install() -> list[str]:
     def mark(ok: bool) -> str:
         return '**present**' if ok else '**ABSENT**'
 
-    dirty = subprocess.run(['git', '-C', str(REPO), 'status', '--porcelain'],
-                           capture_output=True, text=True, check=False)
+    dirty = subprocess.run([*GIT, '-C', str(REPO), 'status', '--porcelain'],
+                           capture_output=True, text=True, check=False, env=git_env())
     worktree = 'clean' if (dirty.returncode == 0 and dirty.stdout.strip() == '') else 'NOT clean'
     rows = [
         f'| measured at | `{sha}`, worktree **{worktree}** |',
@@ -1406,6 +1451,15 @@ def main() -> int:
                      else ' — these differ, so the rows describe that worktree, not the subject '
                           'commit; point P13_REPO at a clone AT the subject SHA to compare them'))
         print(f'  {pin_says}')
+        planted = replace_refs()
+        if planted:
+            print(f'  DISCLOSED: this repository carries {len(planted)} `refs/replace/` '
+                  'entry(ies). Every git invocation in this script runs with '
+                  '`--no-replace-objects` and `GIT_NO_REPLACE_OBJECTS=1`, so the figures above '
+                  'are read from the real objects; the entries are named because their '
+                  'presence is itself worth reading:')
+            for entry in planted:
+                print(f'    {entry}')
 
         if stale:
             return 1
@@ -1486,9 +1540,17 @@ def main() -> int:
     print(f'{MANIFEST.name}: a plain --check agrees — exit {plain.returncode}, '
           'the same figure §3.5b records')
     if recorded[0] != 0:
+        # R15-02, folded into this round: this arm printed "the pack does NOT pass its
+        # own gate" and then returned 0, so a caller that reads the exit code -- which is
+        # what a CI step does, and what the install block's own law says to do -- was told
+        # the regeneration succeeded by a run that had just measured its own refusal. The
+        # regeneration now returns the code the gate returns, so the two cannot disagree.
         print('  the pack does NOT pass its own gate; --check said:')
         for line in plain.stdout.splitlines():
             print(f'  | {line}')
+        print(f'  this regeneration run therefore exits {recorded[0]}, the figure the gate '
+              'returns, and not 0')
+        return recorded[0]
     return 0
 
 
