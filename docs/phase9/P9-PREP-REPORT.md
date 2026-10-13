@@ -3,22 +3,28 @@
 **Status: `PREPARED / NOT PROMOTED`** (master directive Part 9). On the Mission's ladder the
 rung is **`CHALLENGED`**.
 
-**The review record, counted rather than characterised.** Nine challenger rounds have run. Five
-ended in a pass (`9a64289`, `76ab277`, `903e1f4`, `0f4f0e4`, `01f7c2d`) and **two of those five
-signatures were later WITHDRAWN by the challenger itself** — rounds 6 and 7 — when it measured
-the repository's own format gate red at the heads they covered. The remaining rounds ended in a
-REJECT. The last two verdicts are the ones that describe this document: a **REJECT at
-`b6d6101`** (round 8, §3c.21), where the end-state gate I had signed was measured failing open,
-and a **PASS at `6baa1eb`** (round 9), which also closed `C7-P9-01` by independent measurement.
-The coordinator's actual-diff review of `6baa1eb` is a **REJECT on the documents** — three false
-counts in this file, none of them in the schema or the suite — and it is answered in this
-commit. An earlier edition of this header said a challenger "has now passed the work seven
-times" and called `C7-P9-01` "the one blocking item" while §3c.21 already recorded it closed;
-the coordinator redded both, and the correction is this paragraph.
+**The review record, counted rather than characterised.** Nine challenger rounds have run. Six
+ended in a pass — `9a64289`, `76ab277`, `903e1f4`, `0f4f0e4`, `01f7c2d`, `6baa1eb` — and
+**three of those six signatures were later WITHDRAWN by the challenger itself**: `0f4f0e4` and
+`01f7c2d` in round 8, when it measured the repository's own format gate red at those heads, and
+`6baa1eb` in an addendum to round 9, when it re-measured the three counts the coordinator had
+found false in this file and agreed they block. **The signatures that stand are at `9a64289`
+and `903e1f4`, and the current verdict at `6baa1eb` is a REJECT** — from the challenger and from
+the coordinator independently, on three sentences in this document and nothing in the schema or
+the suite. Both are answered in this commit.
 
-**No signature names the subject of THIS document.** The newest signature names `6baa1eb`, and
-this commit is after it; a signature covers one SHA and never transfers (PART 16). A challenger
-PASS is in any case not a promotion and neither is a coordinator accept; see §3c.7.
+An earlier edition of this header said a challenger "has now passed the work seven times" and
+called `C7-P9-01` "the one blocking item" while §3c.21 already recorded it closed. Both were
+redded, and this paragraph is the correction. The first edition of THIS paragraph then said
+round 9 ended in a PASS, which was true when it was written and was withdrawn an hour later;
+that correction is here too, because a header that is right only until the next artifact lands
+is the defect this round is about.
+
+**No signature names the subject of THIS document, and none names its parent either.** The
+newest standing signatures are at `9a64289` and `903e1f4`; a signature covers one SHA and never
+transfers (PART 16), and the one that briefly covered `6baa1eb` was withdrawn by the challenger
+rather than lapsed. A challenger PASS is in any case not a promotion and neither is a
+coordinator accept; see §3c.7.
 
 Three defects in this work were found by me rather than by a reviewer, and each is reported
 against myself: the repository's own format gate was red at a signed head (§3c.20), one
@@ -40,7 +46,7 @@ head of `main`.
 | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | 240 | the model, and why it has this shape |
 | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | 2057 | the schema and its physical invariants — **not a migration** |
 | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | 616 | what the Migration Owner is asked to allocate |
-| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 621 | the PART 13 handoff gate, with a SHA256 per artifact |
+| `docs/phase9/P9-HANDOFF-MANIFEST.md` | 651 | the PART 13 handoff gate, with a SHA256 per artifact |
 | `tests/phase9-prep/p9-booking-schema.test.ts` | 714 | 26 cases: shape, security, grants, ownership, the state contract, collation independence, and the end state — both deferred guards pinned as one row, with a red proof for each of the three wrong triggers round 8 landed and, since round 9, a deletion proof for **every one of the gate's eleven conditions on both guards** |
 | `tests/phase9-prep/p9-booking-concurrency.test.ts` | 407 | 11 proofs against real concurrent transactions |
 | `tests/phase9-prep/p9-booking-negative-controls.test.ts` | 608 | 7 cases: each invariant removed, and the damage measured |
@@ -59,7 +65,7 @@ edition before this one.
 The manifest's own line count is the awkward one: this commit edits
 `P9-HANDOFF-MANIFEST.md`, so a number written for it is stale the moment it is written unless
 it is written last. The 532 in the edition the coordinator reviewed was measured three commits
-earlier; at `6baa1eb` the file was already 591 lines, and this commit takes it to 621. The number above is written after the
+earlier; at `6baa1eb` the file was already 591 lines, and it is 651 here. The number above is written after the
 last edit this commit makes to that file, and re-measuring it is one command:
 
 ```
@@ -397,15 +403,32 @@ actual-diff review — is still owed. The D11 PART 117 label for the same state 
 `PREPARED / NOT PROMOTED`; it names the promotion state, not the ladder rung, and this
 report uses both so neither vocabulary has to be guessed at.
 
-### 3c.22 The challenger's NINTH round at `6baa1eb` — PASS, and the coordinator's REJECT on this file
+### 3c.22 The challenger's NINTH round at `6baa1eb` — a PASS it then WITHDREW, and the coordinator's REJECT on this file
 
 Round 9 ran on its own PostgreSQL 16.15 cluster at `en_US.utf8` built fresh for the round, in
 its own checkout of `6baa1eb`, applying the spec as `daftar_migrator`, and it ran the
-repository's own gate scripts — the condition that cost two earlier signatures. Its verdict is
-**PASS**, scoped to `6baa1eb` and nothing else, with two P3 residuals and no blocker. All four
-of round 8's findings are closed. Then the coordinator's actual-diff review of the same head
-came back **REJECT**, on three false counts in THIS file and nothing in the schema or the
-suite. Both are answered in this one commit.
+repository's own gate scripts — the condition that cost two earlier signatures. Its verdict was
+**PASS**, scoped to `6baa1eb` and nothing else, with two P3 residuals and no blocker, and all
+four of round 8's findings closed. Then the coordinator's actual-diff review of the same head
+came back **REJECT**, on three false counts in THIS file and nothing in the schema or the suite.
+
+**The challenger then withdrew its own PASS.** `P9-CHALLENGE-6baa1eb-ADDENDUM-1.md` re-measures
+all three counts itself rather than relaying the finding, confirms all three, and takes the
+signature off: *"My PASS was unearned, and the fault is mine, not a difference of judgement …
+I verified the digests of the documents while taking their contents on trust. A digest proves a
+file is the file; it proves nothing about whether the sentences in it are true."* It left the
+original report byte-identical on purpose, because the manifest and the coordinator's review
+both cite its SHA256 and silently editing a digested artifact is what this phase has spent nine
+rounds refusing to do. Three of its signatures have now been withdrawn by it — two over a repo
+gate it never ran, one over document counts it never re-measured — and it names the pattern
+itself: twice it verified the artifacts and not the assertions about them. So the verdict at
+`6baa1eb` is REJECT from both reviewers, and everything below is answered in this one commit.
+
+It also found B-1 to be worse than a stale number. It measured the manifest's line count at
+every one of the seventeen commits that touch that file on this branch — 591, 535, 404, 372,
+341, 311, 308, 274, 246, 221, 189, 187, 181, 181, 154, 154, 131 — and **532 is not a stale
+reading of any of them.** A stale count at least names a real past state. That one is mine with
+no mitigation available.
 
 **What round 9 closed by measurement rather than by argument.**
 
@@ -494,6 +517,30 @@ matched `4096` inside a comment I had just written into the function body, so it
 comment instead of the ceiling and the case passed on an unmutated function. It is fixed to
 match the assignment `:= 4096;` and to refuse unless there is exactly one of it. An instrument
 that cannot fail reports what its author hoped for, and this one was mine.
+
+**Three corrections the addendum makes to round 9 itself**, recorded because the review record
+is load-bearing for whoever reads next.
+
+* **The cold lint red is four rules, not two, and the attribution is STRONGER than the round
+  claimed.** Round 9 said the 4220 cold errors were `no-unsafe-assignment` and
+  `no-unsafe-member-access` in `apps/*` and `tests/integration`. Measured, they are
+  `no-unsafe-member-access` 1909, `no-unsafe-assignment` 1399, `no-unsafe-call` 692 and
+  `no-unsafe-return` 220, across `apps`, `packages` and `tests` — `tests/helpers` and
+  `tests/security` included. The distribution is identical to the base commit **rule by rule**,
+  not merely equal in total: four numbers agreeing exactly on a commit this slice is not in, and
+  no phase-9 path in any of them. The challenger's note on itself is the useful part — it
+  published the weaker claim while holding the data for the stronger one.
+* **The two namespace arms were never planted until this round, and the gate holds.** Round 8's
+  decoy was `zz_decoy` in `public`, so neither `n.nspname` nor `pn.nspname` had ever been
+  attacked. Both were planted: a same-named `SECURITY DEFINER` function in schema `zz` with the
+  trigger otherwise unchanged, and the real guard moved onto a table also called `bookings` in
+  schema `zz`. Both are refused by name, both clauses are load-bearing by deletion, and five of
+  the eleven conditions were proved load-bearing in review. All eleven are now proved inside the
+  repository, on both guards, which is F-6.
+* **One correction the challenger does not accept, correctly.** The review said the REPLICA case
+  was not planted. It was, in round 9 §7, and it is the measurement R9-01 rests on — the attack,
+  the hardened configuration that defeats it, the gate refusing that configuration, and the
+  reachability measurement that makes it P3. The spec's new paragraph carries all four.
 
 **The run at this commit.** `npx vitest run tests/phase9-prep`, after `npm ci` and `npm run
 build`, on PostgreSQL **16.15** at `en_US.utf8` (read back from `pg_database`, not assumed),

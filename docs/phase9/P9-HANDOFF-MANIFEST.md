@@ -15,14 +15,16 @@ the Master Continuous Mission's Phase 9 items).
 `PREPARED / NOT PROMOTED` (PART 49, PART 117). On the Mission's ladder
 (`PREPARED → CHALLENGED → READY_TO_PROMOTE → PROMOTION_IN_PROGRESS → ACCEPTED / SEALED`)
 this work stands at **`CHALLENGED`** and not one rung further. That rung was granted, not
-claimed: the same independent challenger has now **run eight times** — REJECT at `51626e1`,
+claimed: the same independent challenger has now **run nine times** — REJECT at `51626e1`,
 PASS-WITH-SCOPE at `76ab277`, PASS at `9a64289`, PASS-WITH-SCOPE at `903e1f4`, REJECT at
 `6e339bf`, PASS-WITH-SCOPE at `0f4f0e4`, PASS-WITH-SCOPE at `01f7c2d` with `C6-P9-01` closed,
-and **REJECT at `b6d6101`** on one P1 — a gate of mine that failed open — in the same round
-that **withdrew the signatures at `0f4f0e4` and `01f7c2d`** because a repository gate was red at
-both — and the coordinator's actual-diff review of `9a64289..01f7c2d` is
-**ACCEPT-WITH-RESIDUALS on the schema and the suite**, while **not accepting this handoff
-gate**: see the Challenger and Coordinator states below. `READY_TO_PROMOTE` is the next rung
+**REJECT at `b6d6101`** on one P1 — a gate of mine that failed open — in the same round that
+**withdrew the signatures at `0f4f0e4` and `01f7c2d`** because a repository gate was red at
+both, and then a PASS at `6baa1eb` that the challenger **withdrew in its own addendum** on the
+same three false document counts the coordinator's review of that head had found. **Three
+signatures have now been withdrawn and the two that stand are at `9a64289` and `903e1f4`**; the
+verdict at `6baa1eb` is REJECT from both reviewers, on sentences in the prep report and nothing
+in the schema or the suite: see the Challenger and Coordinator states below. `READY_TO_PROMOTE` is the next rung
 and its gates are external, below. Neither a challenger PASS nor a coordinator accept is a
 promotion, and both say so in their own reports.
 
@@ -122,7 +124,7 @@ its prefix in the same act.
 |---|---|
 | `P9-BOOKING-DDL-SPEC.sql` | `71cd1b38893d1499ead0157e3c8d55a63f74e36277378d13e82c1395cdad8851` |
 | `P9-MIGRATION-PATCH-REQUEST.md` | `27737c51aed23bba0fc8952f17495e3d6c7adf61044a722b07818e69f7f68226` |
-| `P9-PREP-REPORT.md` | `7a3897784a075d8e145c42f0589e97e92214dfbf328ce356b905c473758ec62e` |
+| `P9-PREP-REPORT.md` | `49d6a187a1c547a6ef25397675bf1896ec597bdeefbfa0ff59b65f0407ee6cfb` |
 | `P9-S0-SCOPE-AND-ARCHITECTURE.md` | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
 | `P9-RETENTION-AND-ERASURE-OPTIONS.md` | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
 
@@ -152,7 +154,7 @@ commit it means.
 | DDL spec (**not a migration**) | `docs/phase9/P9-BOOKING-DDL-SPEC.sql` | yes | `71cd1b38893d1499ead0157e3c8d55a63f74e36277378d13e82c1395cdad8851` |
 | Migration patch request | `docs/phase9/P9-MIGRATION-PATCH-REQUEST.md` | yes | `27737c51aed23bba0fc8952f17495e3d6c7adf61044a722b07818e69f7f68226` |
 | Scope and architecture | `docs/phase9/P9-S0-SCOPE-AND-ARCHITECTURE.md` | yes | `b90129cd9f066fd789ef7659df219a1c9ea95ec62b0f48007558ffccf705ba32` |
-| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `7a3897784a075d8e145c42f0589e97e92214dfbf328ce356b905c473758ec62e` |
+| Prep report (with LIMITATIONS) | `docs/phase9/P9-PREP-REPORT.md` | yes | `49d6a187a1c547a6ef25397675bf1896ec597bdeefbfa0ff59b65f0407ee6cfb` |
 | Retention and erasure options | `docs/phase9/P9-RETENTION-AND-ERASURE-OPTIONS.md` | yes | `2c358ced52646829aafff90e1a987feb9af7a73305109a4bb78df699d06deb55` |
 | Stored run log at the evidence SHA | `/mnt/project-files/phase9/P9-RUN-LOG.txt` | **no — off-Git** | `92dea85ad38b47ae3be0eff1c2fd26409c3289e9a4c47d3a8f069d6079642147` |
 | Independent challenger's PASS-WITH-SCOPE at `0f4f0e4` | `/mnt/project-files/phase9/P9-CHALLENGE-0f4f0e4.md` | **no — off-Git** | `44aad5193b4c22b3cb8ff24f8f25b5d1196de496ab6d7ffe930d4abc0ca66371` |
@@ -167,6 +169,7 @@ commit it means.
 | Mirror refresh record (C7-P9-01 / B-1) | `/mnt/project-files/phase9/P9-MIRROR-REFRESH-01f7c2d.txt` | **no — off-Git** | `168e8be09f920bc668b767a416b9c89cdf5bbfba7c322d463688e3be6e475828` |
 | Independent challenger's REJECT at `b6d6101` (round 8) | `/mnt/project-files/phase9/P9-CHALLENGE-b6d6101.md` | **no — off-Git** | `3815e04b9420077e4b7868a655fa44a5edcc27c8eeaae18c7803e29cb48177b9` |
 | Independent challenger's PASS at `6baa1eb` (round 9) | `/mnt/project-files/phase9/P9-CHALLENGE-6baa1eb.md` | **no — off-Git** | `6c037e3638e2a9b5eabf82504f8bea774059232b1a9afaa6f327e16787c36f6a` |
+| Challenger ADDENDUM 1 — **withdraws the `6baa1eb` signature**, revised verdict REJECT | `/mnt/project-files/phase9/P9-CHALLENGE-6baa1eb-ADDENDUM-1.md` | **no — off-Git** | `da4fdf78618292609daeff61770c2866c7ba9379bab7792abe621394a40dfadd` |
 | Coordinator actual-diff review at `6baa1eb` (REJECT, documents only) | `/mnt/project-files/phase9/P9-COORD-DIFF-REVIEW-6baa1eb.md` | **no — off-Git** | `40b96fcc462b1cd0f499488188f6a907225315fcd52c01d7d6af895fe947e212` |
 | Held patch written after `6baa1eb`, folded into this commit | `/mnt/project-files/phase9/P9-HELD-PATCH-after-6baa1eb.md` | **no — off-Git** | `1a30aef9ff6571a011961107cd195474442675726754307dba3092a00267b942` |
 | Stored run log and digest record for THIS subject | `/mnt/project-files/phase9/P9-RUN-LOG-<subject>.txt`, `P9-EVIDENCE-SHA-<subject>.txt` | **no — off-Git** | written after this commit, with the subject SHA in the filename and in the header; the digest record carries its own `sha256sum -c`-verifiable lines |
@@ -320,9 +323,33 @@ open design items and not fixed under a review's scope.
 
 ## Challenger state
 
-**RUN EIGHT TIMES. Round 8 at `b6d6101`: REJECT on one P1 — a gate of mine that failed open —
-and TWO EARLIER SIGNATURES WITHDRAWN. The signatures that stand are at `9a64289` and
-`903e1f4`. No signature names THIS subject, which answers round 8.**
+**RUN NINE TIMES. Round 9 at `6baa1eb`: a PASS, WITHDRAWN BY THE CHALLENGER ITSELF in
+`P9-CHALLENGE-6baa1eb-ADDENDUM-1.md`, revised verdict REJECT. THREE SIGNATURES HAVE NOW BEEN
+WITHDRAWN. The signatures that stand are at `9a64289` and `903e1f4`. No signature names THIS
+subject or its parent.**
+
+Round 9 reviewed `6baa1eb` on its own fresh PG 16.15 at `en_US.utf8` under Node v24.12.0,
+applying the spec as `daftar_migrator`, and ran the repository's own gate scripts: **109 of 109,
+exit code 0**, re-derived from `--reporter=json` per file rather than from a stream, and
+`prettier --check .` rc 0. Its substantive findings closed everything round 8 rejected on and
+turned limitation 24 from an open question into a closed one by attacking it: a guard body
+cannot be replaced by any principal the spec leaves behind, because §10 revokes CREATE on schema
+`public` from the owner of those functions, and three attempted replacements as that role were
+refused with `42501`. Two P3 residuals, R9-01 and R9-02, are answered in the commit after this
+manifest's subject.
+
+**Then it took its own signature off.** The addendum re-measures the three counts the
+coordinator's review had found false in `P9-PREP-REPORT.md`, confirms all three independently —
+including measuring the manifest's line count at all seventeen commits that touch this file, to
+establish that the published 532 matches none of them — and withdraws the PASS: *"a digest
+proves a file is the file; it proves nothing about whether the sentences in it are true."* It
+also corrected two things in its own round-9 report (the cold lint red is four rules, not two,
+with a distribution identical to the base rule by rule; and the two namespace arms it had not
+planted, now planted and refused) and declined one correction it judged wrong (the REPLICA case
+WAS measured, as R9-01). The report it is amending is left byte-identical, because its SHA256 is
+cited in two other artifacts.
+
+**Round 8, for the record.**
 
 Round 8 reviewed `b6d6101`: **102 of 102, exit code 0** on its own fresh PG 16.15 at
 `en_US.utf8` under Node v24.12.0, with `prettier --check .` and `eslint . --max-warnings 0`
@@ -580,10 +607,12 @@ not sign their own fix** (PART 15), so this is answered and not closed.
 `C7-P9-01` / `B-1` **is closed**, by round 8's own measurement rather than mine, which is the
 condition the coordinator set.
 
-Fifteen findings across eight rounds, plus eleven coordinator residuals, are all discharged in
+Fifteen findings across nine rounds, plus the coordinator's residuals, are all discharged in
 code or in prose at the subject SHA above. **The signatures that stand are at `9a64289` and
 `903e1f4`**: the round-6 and round-7 signatures were withdrawn in round 8 because
-`prettier --check .` was red at the heads they named. Nothing signs this subject.
+`prettier --check .` was red at the heads they named, and the round-9 signature at `6baa1eb` was
+withdrawn by the challenger itself over three false document counts. Nothing signs this
+subject.
 
 Every other remaining item is external and named above: the predecessor seal, the migration
 number, the `bootstrap.sql` patch, the `customers` foreign key, the CI step, and the owner's
@@ -613,7 +642,8 @@ retention decision. PART 7.6's Node 24 rerun is closed and was redone at this su
   candidate SHA in a clean worktree: exit 0 at `9a64289`, `903e1f4`, `6e339bf` and the subject;
   **exit 1 at `0f4f0e4`, `01f7c2d` and `99695bb`**, the same three files at each. It is green at
   the subject; what that does not undo is that it was red while this file claimed the work was
-  ready for a handoff gate, and that the challenger has **withdrawn two signatures** over it.
+  ready for a handoff gate. Counting the round-9 withdrawal, which was over document counts
+  rather than this gate, the challenger has now **withdrawn three signatures** in all.
 * **Not a promotion.** A challenger PASS moves the rung to `CHALLENGED` and nothing further;
   every `READY_TO_PROMOTE` gate below is external and open.
 * Business isolation of a registry read is enforced by `booking_replay_result` itself and
