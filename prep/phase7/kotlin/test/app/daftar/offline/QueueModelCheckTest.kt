@@ -727,16 +727,32 @@ class QueueModelCheckTest {
         // measured. So each of those four codes must be OBSERVED here, in the
         // reachable space, and a code that stops being produced fails by name
         // rather than by nobody noticing.
-        for (honest in listOf(
-            "offline.already_released",
-            "offline.cancel_after_send",
-            "offline.no_attempt_in_flight",
-            "offline.already_sending",
+        //
+        // L-01, from the eighth review, generalises that to the rule the
+        // paragraph above had already stated and this loop had not kept: EVERY
+        // code about which this check makes a CONDITIONAL claim must be
+        // observed, because an implication whose antecedent is never satisfied
+        // is green by vacuity. The four honest-wait codes were listed and
+        // `offline.not_sendable` was not, although the claim E-04 added in the
+        // same commit is exactly of that shape — "if the code is
+        // `not_sendable`, then CAPTURED and the actor may confirm it" — and
+        // `Queue.kt` has one producer of it. A helper that swallowed every
+        // CAPTURED row would have left that claim true of nothing while the
+        // suite stayed green, which is the failure mode this loop exists for,
+        // one code wide and inside the fix itself.
+        for ((code, claim) in listOf(
+            "offline.already_released" to "RecoveryTest's waitIsHonest",
+            "offline.cancel_after_send" to "RecoveryTest's waitIsHonest",
+            "offline.no_attempt_in_flight" to "RecoveryTest's waitIsHonest",
+            "offline.already_sending" to "RecoveryTest's waitIsHonest",
+            "offline.not_sendable" to "the assertion above, that only a CAPTURED row whose actor " +
+                "may confirm it is ever told to confirm a capture",
         )) {
             assertTrue(
-                honest in codesSeen,
-                "$honest is listed in RecoveryTest's waitIsHonest, but nothing in the reachable " +
-                    "space produces it any more: produced = ${codesSeen.sorted()}",
+                code in codesSeen,
+                "$code is relied on by $claim, but nothing in the reachable space produces it " +
+                    "any more, so what is claimed about it is claimed about nothing: " +
+                    "produced = ${codesSeen.sorted()}",
             )
         }
         assertTrue(

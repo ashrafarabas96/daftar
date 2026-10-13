@@ -690,6 +690,14 @@ PROOFS: list[Proof] = [
         expect_red="every reachable configuration honours every invariant",
         why="coordinator finding E-04. Without this arm the next shift\u2019s send of a colleague\u2019s CAPTURED row falls through to `offline.not_sendable`, whose view tells the merchant to confirm the capture \u2014 the one thing L13 forbids that session from doing, so the till shows a button that refuses when pressed. The invariant now asks of every `not_sendable` in the reachable space whether its reader could act on it, computing the answer from the acting scope with the test\u2019s own permission function rather than reading it back from the kernel",
     ),
+    Proof(
+        law="L-01-A-CLAIM-ABOUT-A-CODE-NOTHING-PRODUCES-IS-A-CLAIM-ABOUT-NOTHING",
+        path="src/app/daftar/offline/Queue.kt",
+        find="        if (state == OperationState.CAPTURED && !acting.mayAct(scope, QueueEvent.Release(acting))) {",
+        replace="        if (state == OperationState.CAPTURED) {",
+        expect_red="every reachable configuration honours every invariant",
+        why="challenger finding L-01, the hole inside E-04\u2019s own fix. E-04\u2019s assertion is an implication \u2014 if the code is `offline.not_sendable`, then the row is CAPTURED and its actor may confirm it \u2014 and `Queue.kt` has exactly one producer of that code, in the arm this helper sits above. A helper that fires for EVERY CAPTURED row therefore leaves the implication true of nothing: the suite stayed green while the cashier who captured the sale was told another member must confirm it, on their own row, on their own till. The review\u2019s own bound is why this plant is this shape: the plain inversion, keeping the conjunction, is already red on the invariant, so the hole was exactly one shape wide. The observability loop now covers every code this check makes a conditional claim about, not only the four honest-wait codes",
+    ),
 ]
 
 FAILURE_LINE = re.compile(r"^\s+JUnit Jupiter:(\S+):(.+)\(\)\s*$")

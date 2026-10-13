@@ -69,7 +69,7 @@ class RecoveryTest {
      * is the one the coordinator planted — is an ordinary literal needing no
      * assembly, and it was invisible to all four sweeps in this file at once,
      * which is the worst property a subject-gathering pattern can have: it
-     * narrows every guard built on it, silently, in the same direction. The
+     * narrows every guard built on it, silently, in the same direction.
      * The class is now letters of either case, digits, `_` and `.`, which is
      * every character a code in this kernel can contain and no character that
      * ends one. It deliberately stops at a space or a colon: one kernel string
