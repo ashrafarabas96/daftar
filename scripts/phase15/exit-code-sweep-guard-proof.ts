@@ -39,6 +39,53 @@ const GUARD = "      if (ts.isPropertyAssignment(prop) && prop.name.getText(sf) 
 /** What it replaced, which is the fail-open the challenger measured. */
 const BLANKET = "      if (ts.isPropertyAssignment(prop) && prop.name.getText(sf) === 'status') return true;";
 
+/**
+ * THE SECOND GUARD: THE APPARATUS EXEMPTION (round 14, F-R14-02).
+ *
+ * The sweep skips exactly one file — itself — and earns that skip by measuring
+ * its own inertness. That measurement was a regex naming ONE module specifier,
+ * so a pack whose `exit-code-sweep.ts` imported `spawnSync` from the bare
+ * `'child_process'` and discarded a code kept the exemption and was never
+ * read. The fix resolves the binding through the AST, on both spellings.
+ *
+ * Each spelling is planted into a COPY of the apparatus and swept twice: once
+ * by the real sweep, once by a copy whose inertness check is the old regex.
+ */
+const INERT_AST: readonly string[] = [
+  '  const sf = ast(APPARATUS, text);',
+  '  const imported = new Set<string>();',
+  '  for (const st of sf.statements) {',
+  '    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;',
+  '    if (!/^(?:node:)?child_process$/.test(st.moduleSpecifier.text)) continue;',
+  '    const nb = st.importClause?.namedBindings;',
+  "    if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);",
+  '    if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);',
+  '  }',
+  '  const calls = producerCalls(sf, APPARATUS);',
+];
+/** The round-13 form, which named one spelling and read the text. */
+const INERT_REGEX: readonly string[] = [
+  "  const valueImport = /^import\\s*\\{[^}]*\\bspawnSync\\b[^}]*\\}\\s*from\\s*'node:child_process'/m.test(text);",
+  '  const imported = valueImport ? new Set<string>([`spawnSync`]) : new Set<string>();',
+  '  const calls: readonly unknown[] = [];',
+];
+
+/** Give a copy of the apparatus a real import and a real discarded exit code. */
+function plantIntoApparatus(pack: string, specifier: string): void {
+  const file = join(pack, 'exit-code-sweep.ts');
+  const src = readFileSync(file, 'utf8');
+  writeFileSync(
+    file,
+    `${src}
+import { spawnSync } from '${specifier}';
+export function plantedRunner(): string {
+  const r = spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' });
+  return r.stdout ?? '';
+}
+`,
+  );
+}
+
 function plant(dir: string): void {
   writeFileSync(
     join(dir, PLANT),
@@ -79,9 +126,20 @@ function sweepOver(script: string, pack: string): { readonly ran: boolean; reado
   return { ran, reported: block.includes(PLANT), code: code, out };
 }
 
+/** The same reading, for any file name the unchecked block may carry. */
+function sweepFile(script: string, pack: string, file: string): { readonly ran: boolean; readonly reported: boolean; readonly code: number | null } {
+  const r = spawnSync('npx', ['tsx', script], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: { ...process.env, P15_SWEEP_DIR: pack } });
+  const code = r.status;
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  const ran = r.error === undefined && (code === 0 || code === 1);
+  const header = 'CALLS WHOSE EXIT CODE IS NEVER READ';
+  const block = out.includes(header) ? out.slice(out.indexOf(header)) : '';
+  return { ran, reported: block.includes(file), code };
+}
+
 function main(): number {
   console.log('━'.repeat(78));
-  console.log('PHASE 15 — GUARD-DELETION PROOF: IS PROVENANCE WHAT CATCHES AN INVENTED STATUS?   (PREPARED / NOT PROMOTED)');
+  console.log('PHASE 15 — GUARD-DELETION PROOF: PROVENANCE, AND THE APPARATUS EXEMPTION   (PREPARED / NOT PROMOTED)');
   console.log('━'.repeat(78));
   const me = readFileSync(SWEEP, 'utf8');
   if (!me.includes(GUARD)) {
@@ -116,6 +174,48 @@ function main(): number {
       `  with that one line removed exit ${String(without.code)}  ${without.reported ? 'REPORTED it anyway' : 'said nothing — so that line is what catches it'}`,
     );
     console.log('');
+    // ── THE APPARATUS EXEMPTION, ON BOTH SPELLINGS ────────────────────────
+    const strippedInert = join(tmp, 'sweep-with-the-old-inertness-check.ts');
+    if (!INERT_AST.every((l) => me.includes(l))) {
+      console.log('  the apparatus inertness check is not written in the shape this proof removes, so the');
+      console.log('  second half measures nothing. It must be re-anchored before it is read again.');
+      console.log('');
+      console.log('EXIT 2 — UNMEASURED.');
+      return 2;
+    }
+    writeFileSync(strippedInert, me.replace(INERT_AST.join('\n'), INERT_REGEX.join('\n')));
+
+    const apparatusRows: string[] = [];
+    for (const specifier of ['child_process', 'node:child_process']) {
+      const copy = join(tmp, `pack-${specifier.replace(':', '-')}`);
+      cpSync(join(ROOT, 'scripts/phase15'), copy, { recursive: true });
+      plantIntoApparatus(copy, specifier);
+      const seen = sweepFile(SWEEP, copy, 'exit-code-sweep.ts');
+      const seenStripped = sweepFile(strippedInert, copy, 'exit-code-sweep.ts');
+      apparatusRows.push(
+        `  import from '${specifier}'${specifier === 'child_process' ? '      ' : ' '} real sweep ${seen.ran ? (seen.reported ? 'WITHDREW the exemption and read it' : 'kept the exemption — the file was never read') : `did not run (exit ${String(seen.code)})`}`,
+      );
+      apparatusRows.push(
+        `  ${' '.repeat(`import from '${specifier}'`.length)}${specifier === 'child_process' ? '      ' : ' '} old check  ${seenStripped.ran ? (seenStripped.reported ? 'WITHDREW it too' : 'kept the exemption — so the spelling is what the new check adds') : `did not run (exit ${String(seenStripped.code)})`}`,
+      );
+      if (!seen.ran) problems.push(`the real sweep did not run over the '${specifier}' plant (exit ${String(seen.code)}), so its silence says nothing`);
+      else if (!seen.reported)
+        problems.push(
+          `a pack whose own apparatus imports spawnSync from '${specifier}' and discards a code kept its exemption: the one file the sweep may skip is the one file nobody can see`,
+        );
+      if (!seenStripped.ran)
+        problems.push(
+          `the sweep with the old inertness check did not run over the '${specifier}' plant (exit ${String(seenStripped.code)}), so that arm is UNMEASURED`,
+        );
+      else if (specifier === 'child_process' && seenStripped.reported)
+        problems.push("the OLD inertness check also withdrew the exemption on the bare 'child_process' spelling, so the new check is not what catches it");
+      else if (specifier === 'node:child_process' && !seenStripped.reported)
+        problems.push("the old check did not withdraw the exemption on 'node:child_process' either, so this comparison is not isolating the spelling");
+    }
+    console.log('');
+    console.log('  THE APPARATUS EXEMPTION, MEASURED ON BOTH SPELLINGS OF THE MODULE');
+    for (const row of apparatusRows) console.log(row);
+    console.log('');
     if (problems.length > 0) {
       for (const p of problems) console.log(`  FINDING: ${p}`);
       console.log('');
@@ -123,8 +223,10 @@ function main(): number {
       return 1;
     }
     console.log('The provenance requirement is load-bearing: deleting that one line makes the planted');
-    console.log('  defect invisible, and restoring it makes it visible again. The plant and both runs');
-    console.log('  happen in a throwaway copy; neither this repository nor the pack is written to.');
+    console.log('  defect invisible, and restoring it makes it visible again. The apparatus exemption is');
+    console.log('  withdrawn on BOTH spellings of child_process, and the old check lost the bare one.');
+    console.log('  Every plant and every run happens in a throwaway copy; neither this repository nor');
+    console.log('  the pack is written to.');
     return 0;
   } finally {
     rmSync(tmp, { recursive: true, force: true });

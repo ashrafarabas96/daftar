@@ -49,7 +49,7 @@ import { protectFailingExitCode } from '../../tests/helpers/exit-code';
 protectFailingExitCode();
 
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { devNull as osDevNull } from 'node:os';
@@ -115,6 +115,27 @@ interface Currency {
  */
 const devNull = osDevNull;
 
+/**
+ * The absolute paths this gate will accept a git from, and the PATH its child
+ * is given. Both are fixed here rather than taken from the caller, because the
+ * answer to «which repository did you read» must not depend on who ran it.
+ */
+const GIT_BINARIES: readonly string[] = ['/usr/bin/git', '/bin/git', '/usr/local/bin/git', '/opt/homebrew/bin/git'];
+const SAFE_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+
+function gitBinary(): string | null {
+  for (const candidate of GIT_BINARIES) {
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, fsConstants.X_OK);
+      return candidate;
+    } catch {
+      continue; // not here, not a file, or not executable: try the next one
+    }
+  }
+  return null;
+}
+
 function gitRead(root: string, args: readonly string[], maxBuffer = 64 * 1024 * 1024): SpawnSyncReturns<string> {
   // ROUND 13's F-R13-06 — A FORGED PASS, and the most serious finding this
   // gate has taken. `env: { ...process.env, … }` inherited every GIT_*
@@ -133,6 +154,17 @@ function gitRead(root: string, args: readonly string[], maxBuffer = 64 * 1024 * 
   // disable them), and system and global config are taken out of the question
   // too — a gate whose answer depends on the caller's `~/.gitconfig` is not a
   // gate.
+  //
+  // ROUND 14's F-R14-03 — THE SAME FORGED PASS THROUGH A DOOR THE SCRUB DOES
+  // NOT COVER. Scrubbing GIT_* decides what git is told; it does not decide
+  // WHICH git. `PATH` is not a GIT_* name, so a `git` planted earlier in it
+  // answered every question this gate asks, and a manifest asserting 0 commits
+  // and 0 new files printed «VERIFIED … header current at 45cc461dbc9a» over a
+  // branch carrying 55 and 29. A gate whose instrument the caller supplies is
+  // not a gate, so the binary is taken from a fixed list of absolute paths,
+  // PATH is replaced with the standard one for git's own helpers, and when no
+  // such binary exists this REFUSES BY NAME rather than falling back to the
+  // caller's.
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('GIT_')) env[k] = v;
   env.GIT_NO_REPLACE_OBJECTS = '1';
@@ -140,7 +172,19 @@ function gitRead(root: string, args: readonly string[], maxBuffer = 64 * 1024 * 
   env.GIT_CONFIG_NOSYSTEM = '1';
   env.GIT_CONFIG_GLOBAL = devNull;
   env.GIT_CEILING_DIRECTORIES = root;
-  return spawnSync('git', ['--no-replace-objects', '-c', 'core.quotePath=false', '-C', root, ...args], {
+  env.PATH = SAFE_PATH;
+  const binary = gitBinary();
+  if (binary === null)
+    return {
+      pid: -1,
+      output: [],
+      stdout: '',
+      stderr: '',
+      status: null,
+      signal: null,
+      error: new Error(`no git binary exists at any of ${GIT_BINARIES.join(', ')}, and this gate will not take one from the caller's PATH`),
+    };
+  return spawnSync(binary, ['--no-replace-objects', '-c', 'core.quotePath=false', '-C', root, ...args], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer,
@@ -152,7 +196,7 @@ function arabicToWestern(t: string): string {
   return t.replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
 }
 
-function checkCurrency(manifest: string, root: string, dir: string): Currency {
+function checkCurrency(manifest: string, root: string, dir: string, rounds: number): Currency {
   // A FAILED READ IS NOT AN EMPTY ANSWER (round 13, F-R13-06's second half).
   //
   // This returned '' when git exited non-zero, and every caller below read
@@ -226,6 +270,16 @@ function checkCurrency(manifest: string, root: string, dir: string): Currency {
     { what: 'new phase-owned code files', claimed: claim(/\*\*(\d+) ملف[ًا]* برمجي/), measured: newFiles },
     { what: 'package.json script entries added', claimed: claim(/\*\*(\d+) سكربت/), measured: scriptsAdded },
     { what: 'documents in the off-Git pack, this manifest excluded', claimed: claim(/\*\*(\d+) وثيقة/), measured: docs.length },
+    // ROUND 14's F-R14-04. §1 said «eleven rounds, the last a REJECT at
+    // 1d0574d» while thirteen reports sat in the pack and §8 recorded all
+    // thirteen, and §8 claimed in the same breath that «the round count and
+    // the last verdict are gate-checked». They were not: this list is what is
+    // gate-checked, and it had four rows. A header that overstates its own
+    // gate is the defect the row above was added for, so the count joins the
+    // list rather than the claim being narrowed. WHICH round was last is not
+    // measurable from a directory of SHAs, so §1 states it nowhere and points
+    // at §8, where DIRECTION 4 checks every SHA named against a report.
+    { what: 'challenge rounds with a report in the pack', claimed: claim(/\*\*(\d+) جولة/), measured: rounds },
   ];
   for (const x of pairs) {
     if (x.claimed === null) {
@@ -647,7 +701,10 @@ function main(): void {
   }
 
   // ── direction 3: is the header current? ────────────────────────────────
-  const cur = checkCurrency(manifest, resolve(__dirname, '../..'), DIR);
+  // DIRECTION 4 is computed first because §1's round count is measured from
+  // the reports it finds: one reading of the pack, quoted in both places.
+  const ch = checkChallenges(manifest, DIR);
+  const cur = checkCurrency(manifest, resolve(__dirname, '../..'), DIR, ch.onDisk.length);
   console.log('');
   console.log('DIRECTION 3 — IS THE HEADER CURRENT? (measured from git, not read from the file)');
   console.log(`  HEAD ${cur.headSha}`);
@@ -661,7 +718,6 @@ function main(): void {
   }
 
   // ── direction 4: does the prose agree with the challenge reports? ──────
-  const ch = checkChallenges(manifest, DIR);
   console.log('');
   console.log('DIRECTION 4 — DOES THE PROSE AGREE WITH THE CHALLENGE REPORTS ON DISK?');
   console.log(`  ${ch.onDisk.length} report(s) on disk: ${ch.onDisk.join(', ') || 'none'}`);

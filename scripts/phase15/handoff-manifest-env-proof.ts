@@ -30,7 +30,7 @@
  *   only through the gate the way any reader runs it.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -38,6 +38,11 @@ const ROOT = process.cwd();
 const GATE = join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts');
 const SCRUB = "  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('GIT_')) env[k] = v;";
 const UNSCRUBBED = '  for (const [k, v] of Object.entries(process.env)) env[k] = v;';
+/** The round-14 half: WHICH git, not what it is told (F-R14-03). */
+const PINNED = `  env.PATH = SAFE_PATH;
+  const binary = gitBinary();`;
+/** What it replaced: the binary taken from whatever PATH the caller supplied. */
+const FROM_PATH = "  const binary: string | null = 'git';";
 
 interface Run {
   /** Named `status` so this pack's own exit-code sweep can see it read. */
@@ -67,8 +72,39 @@ function plantRepo(): string {
   git('init', '-q');
   git('config', 'user.email', 'plant@example.invalid');
   git('config', 'user.name', 'plant');
-  git('commit', '-q', '--allow-empty', '-m', 'the decoy head');
+  // A package.json too, so the decoy answers every question the gate asks and
+  // the forged reading is a complete one rather than a half-refusal.
+  writeFileSync(join(dir, 'package.json'), readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  git('add', 'package.json');
+  git('commit', '-q', '-m', 'the decoy head');
   git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  return dir;
+}
+
+/**
+ * A `git` planted earlier in PATH, which answers every question against the
+ * decoy repository by rewriting the `-C <root>` the gate passes. It is not a
+ * GIT_* name, so the scrub never sees it.
+ */
+function plantGitOnPath(decoy: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'p15-env-path-'));
+  const shim = join(dir, 'git');
+  writeFileSync(
+    shim,
+    [
+      '#!/bin/sh',
+      `exec ${JSON.stringify(process.execPath)} -e '`,
+      'const { spawnSync } = require("child_process");',
+      `const decoy = ${JSON.stringify(JSON.stringify(decoy))};`,
+      'const args = process.argv.slice(1);',
+      'for (let i = 0; i < args.length; i += 1) if (args[i] === "-C" && i + 1 < args.length) args[i + 1] = JSON.parse(decoy);',
+      'const r = spawnSync("/usr/bin/git", args, { stdio: "inherit" });',
+      'process.exit(r.status === null ? 1 : r.status);',
+      `' -- "$@"`,
+      '',
+    ].join('\n'),
+  );
+  chmodSync(shim, 0o755);
   return dir;
 }
 
@@ -77,17 +113,24 @@ function main(): number {
   console.log("PHASE 15 — RED PROOF: THE CALLER'S ENVIRONMENT MUST NOT CHOOSE THE REPOSITORY   (PREPARED / NOT PROMOTED)");
   console.log('━'.repeat(78));
   const source = readFileSync(GATE, 'utf8');
-  if (!source.includes(SCRUB)) {
-    console.log('  the gate no longer scrubs its git environment in the shape this proof reads, so');
-    console.log('  nothing here was measured.');
+  const absent = [source.includes(SCRUB) ? null : 'the GIT_* scrub', source.includes(PINNED) ? null : 'the pinned git binary and PATH'].filter(
+    (m): m is string => m !== null,
+  );
+  if (absent.length > 0) {
+    for (const m of absent) console.log(`  NOT FOUND in the gate, in the shape this proof removes: ${m}`);
+    console.log('  Nothing here was measured; the anchors must be restored before this is read again.');
     console.log('');
     console.log('EXIT 2 — UNMEASURED. A proof that cannot find what it is proving proves nothing.');
     return 2;
   }
   const decoy = plantRepo();
+  const shimDir = plantGitOnPath(decoy);
   const stripped = join(ROOT, 'scripts/phase15', `.verify-handoff-manifest-unscrubbed-${String(process.pid)}.tmp.ts`);
+  const unpinned = join(ROOT, 'scripts/phase15', `.verify-handoff-manifest-unpinned-${String(process.pid)}.tmp.ts`);
   const sweep = (): void => {
     rmSync(stripped, { force: true });
+    rmSync(unpinned, { force: true });
+    rmSync(shimDir, { recursive: true, force: true });
     rmSync(decoy, { recursive: true, force: true });
   };
   process.on('exit', sweep);
@@ -96,8 +139,12 @@ function main(): number {
     const truth = measured(clean.out);
     const aimed = runGate(GATE, { GIT_DIR: join(decoy, '.git'), GIT_WORK_TREE: decoy });
     const blinded = runGate(GATE, { GIT_OBJECT_DIRECTORY: join(decoy, 'no-such-objects') });
+    const hijackedPath = `${shimDir}:${process.env.PATH ?? ''}`;
+    const onPath = runGate(GATE, { PATH: hijackedPath });
     writeFileSync(stripped, source.replace(SCRUB, UNSCRUBBED));
     const unscrubbed = runGate(stripped, { GIT_DIR: join(decoy, '.git'), GIT_WORK_TREE: decoy });
+    writeFileSync(unpinned, source.replace(PINNED, FROM_PATH));
+    const unpinnedRun = runGate(unpinned, { PATH: hijackedPath });
 
     const problems: string[] = [];
     // The gate's own codes are 0 and 1. Anything else is the runner failing to
@@ -115,6 +162,8 @@ function main(): number {
     if (aimed.status !== 0 && aimed.status !== 1) bad('the GIT_DIR run', aimed.status);
     if (blinded.status !== 0 && blinded.status !== 1) bad('the GIT_OBJECT_DIRECTORY run', blinded.status);
     if (unscrubbed.status !== 0 && unscrubbed.status !== 1) bad('the unscrubbed guard-deletion copy', unscrubbed.status);
+    if (onPath.status !== 0 && onPath.status !== 1) bad('the run with a git planted in PATH', onPath.status);
+    if (unpinnedRun.status !== 0 && unpinnedRun.status !== 1) bad('the unpinned guard-deletion copy', unpinnedRun.status);
     if (truth === null)
       problems.push('the gate printed no DIRECTION 3 measurement on an untouched run, so there is no baseline and nothing below was measured');
     else {
@@ -126,19 +175,42 @@ function main(): number {
       const stated = measured(blinded.out);
       if (!refused && stated !== truth)
         problems.push(`with its object store taken away the gate stated «${String(stated)}» instead of refusing by name: a failed read became a figure`);
+      if (measured(onPath.out) !== truth)
+        problems.push(
+          `a git planted in PATH changed what this gate measured: «${String(measured(onPath.out))}» against «${truth}» — the caller supplied the instrument, which the GIT_* scrub does not cover`,
+        );
     }
+    // A GUARD DELETION THAT MEASURED NOTHING PROVES NOTHING (round 14, P2).
+    //
+    // These read `forged === truth` alone, so a stripped copy that printed NO
+    // measurement at all — because it crashed, or because the strip did not
+    // compile — passed as «the forged reading, as the defect did», printed
+    // over `null`. An absent reading is UNMEASURED, and it is said so here.
+    const deletion = (what: string, got: string | null): void => {
+      if (truth === null) return;
+      if (got === null) problems.push(`${what} printed no measurement at all, so the deletion is UNMEASURED: it shows nothing about what the guard does`);
+      else if (got === truth)
+        problems.push(
+          `${what} STILL read this repository, so that guard is not what makes the arms above pass and they credit the behaviour to the wrong code`,
+        );
+    };
     const forged = measured(unscrubbed.out);
-    if (truth !== null && forged === truth)
-      problems.push(
-        'with the scrub removed the gate STILL read this repository, so the scrub is not what makes arms 1 and 2 pass and they credit the behaviour to the wrong code',
-      );
+    const forgedPath = measured(unpinnedRun.out);
+    deletion('with the scrub removed the gate', forged);
+    deletion('with the binary taken from PATH the gate', forgedPath);
 
     console.log(`  untouched                  ${String(truth)}`);
     console.log(`  GIT_DIR at a decoy repo    ${String(measured(aimed.out))}`);
     console.log(
       `  GIT_OBJECT_DIRECTORY gone  ${/UNMEASURED, not zero/.test(blinded.out) ? 'refused by name: UNMEASURED, not zero' : String(measured(blinded.out))}`,
     );
-    console.log(`  the scrub removed          ${String(forged)}  ${truth !== null && forged !== truth ? '← the forged reading, as the defect did' : ''}`);
+    console.log(`  git planted in PATH        ${String(measured(onPath.out))}`);
+    console.log(
+      `  the scrub removed          ${String(forged)}  ${truth !== null && forged !== null && forged !== truth ? '← the forged reading, as the defect did' : ''}`,
+    );
+    console.log(
+      `  the binary taken from PATH ${String(forgedPath)}  ${truth !== null && forgedPath !== null && forgedPath !== truth ? '← the forged reading, as round 14 measured it' : ''}`,
+    );
     console.log('');
     if (problems.length > 0) {
       for (const p of problems) console.log(`  FINDING: ${p}`);
@@ -146,9 +218,11 @@ function main(): number {
       console.log(`EXIT 1 — ${String(problems.length)} finding(s).`);
       return 1;
     }
-    console.log("The caller's environment cannot choose this gate's repository, a read that failed is");
-    console.log('  refused by name rather than counted as zero, and the scrub is load-bearing: removing');
-    console.log('  it brings the forged reading back. Nothing outside a throwaway directory was written.');
+    console.log("The caller's environment can choose neither this gate's repository nor the git that");
+    console.log('  reads it, a read that failed is refused by name rather than counted as zero, and both');
+    console.log('  guards are load-bearing: removing either one brings a forged reading back, and a');
+    console.log('  deletion that measured nothing is reported as UNMEASURED rather than counted as proof.');
+    console.log('  Nothing outside a throwaway directory was written.');
     return 0;
   } finally {
     sweep();

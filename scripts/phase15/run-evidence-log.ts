@@ -329,6 +329,13 @@ const INSTRUMENTS: readonly Instrument[] = [
     nonZeroMeans: 'the record cannot tell a crash from a verdict, so every outcome class in this log is a label rather than a reading',
   },
   {
+    script: 'verify:outcome-class:guard',
+    what: "whether the HEADLINE preference is what classifies a contention run, measured by deleting it and re-running the whole arm set (round 14's F-R14-01)",
+    cluster: false,
+    nonZeroMeans:
+      'the classifier reads a contention transcript correctly for some other reason than the rule credited with it, or the arm set no longer reddens when that rule is removed',
+  },
+  {
     script: 'verify:handoff-manifest:prove',
     what: "the ways the manifest's prose and the challenge reports on disk can disagree, and the one way they only appear to",
     cluster: false,
@@ -336,10 +343,10 @@ const INSTRUMENTS: readonly Instrument[] = [
   },
   {
     script: 'verify:handoff-manifest:env',
-    what: "whether the caller's environment can choose which repository the handoff gate measures, and whether a failed git read is refused by name rather than counted as zero",
+    what: "whether the caller's environment can choose which repository the handoff gate measures OR which git reads it, and whether a failed git read is refused by name rather than counted as zero",
     cluster: false,
     nonZeroMeans:
-      "GIT_DIR, GIT_WORK_TREE or GIT_OBJECT_DIRECTORY changed what the gate measured, or a read that failed became a figure — either of which makes the gate's VERIFIED a statement about a repository the caller chose",
+      "GIT_DIR, GIT_WORK_TREE, GIT_OBJECT_DIRECTORY or a `git` planted in PATH changed what the gate measured, or a read that failed became a figure — either of which makes the gate's VERIFIED a statement about a repository, or an instrument, the caller chose",
   },
   {
     script: 'checkpoint:phase15',

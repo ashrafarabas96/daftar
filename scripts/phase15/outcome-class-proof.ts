@@ -62,6 +62,24 @@ interface Case {
  */
 const SUBJECT = 'scripts/phase15/verify-alert-signals.ts';
 
+/**
+ * THE SHAPE `pitr:proof` ACTUALLY PRINTS (round 14, F-R14-01).
+ *
+ * O3b was hand-written as «the shape `pitr:proof` prints it» and left out the
+ * machine record the drill prints IMMEDIATELY BEFORE its headline. The
+ * classifier took that record for the verdict line, so the arm passed while a
+ * real exit-3 transcript was being misclassified. A plant that claims to be a
+ * real shape is now ANCHORED in the instrument it claims to copy: these two
+ * lines must be present in `pitr-proof.ts`, in this order, or nothing here is
+ * measured.
+ */
+const PITR = 'scripts/phase15/pitr-proof.ts';
+const PITR_MACHINE_LINE = 'console.log(`\\nP15_PITR_PROOF: ${JSON.stringify(summary)}`);';
+const PITR_HEADLINE_LINE = 'console.log(`PHASE 15 PITR PROOF: ${summary.result}`);';
+
+/** The record `pitr-proof.ts` prints, with the verdict this case needs in it. */
+const pitrMachine = (result: string): string => `P15_PITR_PROOF: {"status":"PREPARED / NOT PROMOTED","part":104,"sha":"45cc461","result":"${result}"}`;
+
 function copySubject(dir: string, append: string): string {
   const entry = join(dir, 'subject.ts');
   const src = readFileSync(join(ROOT, SUBJECT), 'utf8');
@@ -115,6 +133,10 @@ const CASES: readonly Case[] = [
         entry,
         [
           "console.log('VALIDATORS');",
+          "console.log('LIMITATIONS — printed on PASS as well as on FAIL');",
+          // The machine record the drill prints BEFORE its headline. Omitting
+          // it is what made this arm green over a misclassified transcript.
+          `console.log(${JSON.stringify(pitrMachine('INVALID MEASUREMENT — RESOURCE CONTENTION'))});`,
           "console.log('PHASE 15 PITR PROOF: INVALID MEASUREMENT — RESOURCE CONTENTION');",
           "console.log('  port 55474 was still held 30s after this drill asked for it');",
           'process.exitCode = 3;',
@@ -172,6 +194,59 @@ const CASES: readonly Case[] = [
     why: 'the headline was matched anywhere in the transcript and before the verdict was read, so a run that reached FAIL was downgraded to «did not measure» by a later line of its own output. Only the verdict line speaks for the run',
   },
   {
+    id: 'O3e',
+    what: 'round 14 — an instrument that prints its MACHINE RECORD and no headline at all, declaring contention in it',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [`console.log(${JSON.stringify(pitrMachine('INVALID MEASUREMENT — RESOURCE CONTENTION'))});`, 'process.exitCode = 3;', ''].join('\n'),
+      );
+      return entry;
+    },
+    expect: /DID NOT MEASURE/,
+    why: 'the fallback must read the record\u2019s own `result` rather than treat the blob as a verdict it cannot parse: an instrument that prints only a record still said what it did',
+  },
+  {
+    id: 'O3f',
+    what: 'CONTROL — the headline outranks the record: a machine record saying contention under a headline saying FAIL',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          "console.log('  P1 FAIL — archiving never started');",
+          `console.log(${JSON.stringify(pitrMachine('INVALID MEASUREMENT — RESOURCE CONTENTION'))});`,
+          "console.log('PHASE 15 PITR PROOF: FAIL');",
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /MEASURED, THEN EXITED NON-ZERO/,
+    why: 'a synthetic precedence control: the two cannot disagree in `pitr-proof.ts`, and a classifier that preferred the record would lose a measured failure the moment they could. The line the instrument SPEAKS is the headline',
+  },
+  {
+    id: 'O3g',
+    what: 'CONTROL — the load harness shape: a machine record, then a headline that is not «PHASE 15 …»',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          `console.log(${JSON.stringify('P15_LOAD: {"profile":"smoke","verdict":"FAIL","p95":41.2}')});`,
+          "console.log('P15 LOAD smoke: FAIL — p95 41.2ms over a 15ms bound');",
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /MEASURED, THEN EXITED NON-ZERO/,
+    why: '`load-harness.ts` prints the same record-then-headline shape, and its headline begins «P15 LOAD <profile>:», which the old pattern did not recognise at all — the record stood in for it there too',
+  },
+  {
     id: 'O4',
     what: 'CONTROL — a clean run',
     build: (dir) => {
@@ -201,6 +276,20 @@ function main(): number {
   console.log('━'.repeat(78));
   console.log(`  subject   ${SUBJECT}, copied per case. The tree is READ and never written.`);
   console.log('  Every case below is a REAL process: a real exit code, real stdout, real stderr.');
+  const pitr = readFileSync(join(ROOT, PITR), 'utf8');
+  const machineAt = pitr.indexOf(PITR_MACHINE_LINE);
+  const headlineAt = pitr.indexOf(PITR_HEADLINE_LINE);
+  if (machineAt < 0 || headlineAt < 0 || machineAt > headlineAt) {
+    console.log('');
+    console.log(`  O3b and O3f claim to copy what ${PITR} prints, and this is no longer what it prints:`);
+    console.log(`    machine record line  ${machineAt < 0 ? 'NOT FOUND' : `at offset ${String(machineAt)}`}`);
+    console.log(`    headline line        ${headlineAt < 0 ? 'NOT FOUND' : `at offset ${String(headlineAt)}`}`);
+    console.log('    required order       the record BEFORE the headline, which is what defeated the classifier');
+    console.log('');
+    console.log('EXIT 2 — UNMEASURED. A plant that claims a real shape and cannot find it measures nothing.');
+    return 2;
+  }
+  console.log(`  anchored  ${PITR} still prints its machine record before its headline, which is the shape O3b plants.`);
   console.log('');
 
   let failures = 0;

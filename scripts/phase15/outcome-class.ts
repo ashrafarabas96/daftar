@@ -84,8 +84,28 @@ export const LOADER_MARKERS =
 export const RUNTIME_MARKERS =
   /(?:^|\n)\s*(?:Uncaught )?(?:TypeError|RangeError|ReferenceError|AssertionError|Error):|\n\s+at [^\n]*\(?[^\n]*:\d+:\d+\)?|UnhandledPromiseRejection|FATAL ERROR:|Segmentation fault/;
 
-export const VERDICT_LINE =
-  /^(?:EXIT\s+\d+\s+[—-]|PHASE\s+15\s+[A-Z0-9 /-]+:\s*(?:PASS|FAIL|VERIFIED|UNMEASURED|REJECT|INVALID MEASUREMENT)|P15[A-Z0-9_ ]*:\s*\{)/m;
+/**
+ * A VERDICT AND A MACHINE RECORD ARE NOT THE SAME LINE (round 14, F-R14-01).
+ *
+ * These were one pattern, and `reachedVerdict` took the FIRST line that matched
+ * it. `pitr-proof.ts` prints `P15_PITR_PROOF: {…}` immediately BEFORE its
+ * headline, so the line this record called «the verdict the run reached» was
+ * the JSON blob, and the contention test below — rewritten in round 13 to read
+ * the verdict line rather than the whole transcript — was never once applied to
+ * the headline it was written for. A real exit-3 contention transcript went
+ * back to reading «MEASURED, THEN EXITED NON-ZERO … so the code is its
+ * verdict»: the round-13 fix was a regression, measured against the round-12
+ * classifier over the same bytes. `load-harness.ts` prints the same way.
+ *
+ * So the HEADLINE is its own pattern and is preferred, the machine record is a
+ * fallback for an instrument that prints no headline, and `VERDICT_LINE` stays
+ * the union of the two for any reader that wants «did it reach either».
+ */
+export const VERDICT_HEADLINE = /^(?:EXIT\s+\d+\s+[—-]|(?:PHASE\s+15|P15)[^:\n]*:\s*(?:PASS|FAIL|VERIFIED|UNMEASURED|REJECT|INVALID MEASUREMENT))/m;
+
+export const MACHINE_SUMMARY = /^(?:PHASE\s+15|P15)[^:\n]*:\s*\{/m;
+
+export const VERDICT_LINE = new RegExp(`(?:${VERDICT_HEADLINE.source})|(?:${MACHINE_SUMMARY.source})`, 'm');
 
 /**
  * «I COULD NOT MEASURE» IS NOT A VERDICT ABOUT THE SUBJECT (round 12, F-R12-02a).
@@ -106,11 +126,34 @@ export const VERDICT_LINE =
 export const CONTENTION_VERDICT = /^(?:PHASE\s+15\s+[A-Z0-9 /-]+:\s*)?INVALID MEASUREMENT\b/;
 
 export function reachedVerdict(r: Classifiable): string | null {
-  const line = r.output
+  const lines = r.output.split('\n').map((l) => l.trim());
+  // The headline first, wherever it sits: a machine record printed above it is
+  // this record's own data, not the instrument speaking (F-R14-01).
+  const headline = lines.find((l) => VERDICT_HEADLINE.test(l));
+  if (headline !== undefined) return headline.slice(0, 110);
+  const machine = lines.find((l) => MACHINE_SUMMARY.test(l));
+  return machine === undefined ? null : machine.slice(0, 110);
+}
+
+/**
+ * The `result` field of a machine record, for an instrument that prints one and
+ * no headline. It is read from the WHOLE line, never from the truncated copy
+ * `reachedVerdict` returns for display, and an unparsable or absent record is
+ * `null` — not a result anybody can quote.
+ */
+export function machineResult(out: string): string | null {
+  const line = out
     .split('\n')
     .map((l) => l.trim())
-    .find((l) => VERDICT_LINE.test(l));
-  return line === undefined ? null : line.slice(0, 110);
+    .find((l) => MACHINE_SUMMARY.test(l));
+  if (line === undefined) return null;
+  try {
+    const parsed: unknown = JSON.parse(line.slice(line.indexOf('{')));
+    const value = (parsed as { result?: unknown }).result;
+    return typeof value === 'string' ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 export function outcomeClass(r: Classifiable): string {
@@ -133,7 +176,11 @@ export function outcomeClass(r: Classifiable): string {
   // classification resting on whitespace. It is now read from the VERDICT LINE
   // the run reached, which is the only line that speaks for the run.
   const verdictLine = reachedVerdict(r);
-  if (verdictLine !== null && CONTENTION_VERDICT.test(verdictLine))
+  // What the INSTRUMENT declared: its headline when it printed one, otherwise
+  // the `result` of its machine record. A headline outranks the record, which
+  // is round 13's law unchanged — only the line that speaks for the run counts.
+  const declared = verdictLine !== null && VERDICT_HEADLINE.test(verdictLine) ? verdictLine : machineResult(r.output);
+  if (declared !== null && CONTENTION_VERDICT.test(declared))
     return 'DID NOT MEASURE — the instrument declared INVALID MEASUREMENT (a resource it needed was held), so this exit code is a statement about the RUN and not a verdict about the subject. Re-run it alone; nothing here is evidence either way';
   if (r.counts.readFrom !== null) return 'MEASURED, THEN EXITED NON-ZERO — the instrument reached its own summary line, so the code is its verdict';
   if (verdictLine !== null) return `MEASURED, THEN EXITED NON-ZERO — it printed its own verdict line (“${verdictLine}”), so the code is its verdict`;

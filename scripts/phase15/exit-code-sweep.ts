@@ -71,12 +71,13 @@ const PACK = process.env.P15_SWEEP_DIR ?? join(ROOT, 'scripts/phase15');
  *   own harness.
  *
  *   An exemption taken on trust is how a sweep comes to certify the thing it
- *   was built to catch, so this one is MEASURED, not asserted: the file does not
- *   import `spawnSync` as a value, therefore
- *   it cannot call it, therefore it has no exit code to discard. That is checked
- *   below against this file's own bytes at every run, and the exemption is
- *   printed with the verdict. If a later edit makes this file actually run a
- *   command, the check fails and the exemption is withdrawn.
+ *   was built to catch, so this one is MEASURED, not asserted, and measured
+ *   through the AST rather than over the text (round 14, F-R14-02): the file
+ *   binds `spawnSync` from no spelling of `child_process` and calls it at no
+ *   site, therefore it has no exit code to discard. That is checked below
+ *   against this file's own bytes at every run, and the exemption is printed
+ *   with the verdict. If a later edit makes this file able to run a command,
+ *   the check fails and the exemption is withdrawn.
  */
 const APPARATUS = 'exit-code-sweep.ts';
 
@@ -87,13 +88,36 @@ function apparatusIsInert(dir: string): string | null {
   } catch {
     return null; // not in this copy of the pack: nothing to exempt
   }
-  // Anchored to column 0 on its own line: a value import is a top-level
-  // statement, while the same text INSIDE a plant literal is always indented
-  // as an argument. The unanchored form matched this file's own X1 plant and
-  // withdrew the exemption on the strength of a string — a check fooled by the
-  // very text it exists to tell apart from code.
-  const valueImport = /^import\s*\{[^}]*\bspawnSync\b[^}]*\}\s*from\s*'node:child_process'/m.test(text);
-  return valueImport ? `${APPARATUS} imports spawnSync as a VALUE, so it can run commands and its exemption is withdrawn` : null;
+  // A SPELLING IS NOT A BINDING — HERE TOO (round 14, F-R14-02).
+  //
+  // This was a regex over the text, anchored to column 0 and naming ONE module
+  // specifier: `'node:child_process'`. Round 13's F-R13-01 was that exact
+  // mistake in `producerCalls`, and the fix there left the same hole here. A
+  // pack whose `exit-code-sweep.ts` wrote `import { spawnSync } from
+  // 'child_process'` and threw a code away printed «Measured inert … it does
+  // not import spawnSync as a value» and exited 0: the one file the sweep is
+  // allowed to skip was also the one file whose discarded exit codes nobody
+  // could see.
+  //
+  // So the exemption is decided the way every other decision in this file is:
+  // through the AST, resolving the BINDING. The old comment's worry — that the
+  // check would be fooled by this file's own plant literals — is answered by
+  // construction, because a plant inside a string is not an import clause and
+  // not a call expression, whatever column it starts in.
+  const sf = ast(APPARATUS, text);
+  const imported = new Set<string>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    if (!/^(?:node:)?child_process$/.test(st.moduleSpecifier.text)) continue;
+    const nb = st.importClause?.namedBindings;
+    if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);
+    if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);
+  }
+  const calls = producerCalls(sf, APPARATUS);
+  if (imported.size > 0)
+    return `${APPARATUS} imports spawnSync as a VALUE (as ${[...imported].sort().join(', ')}), so it can run commands and its exemption is withdrawn`;
+  if (calls.length > 0) return `${APPARATUS} CALLS spawnSync at ${String(calls.length)} site(s), so it can run commands and its exemption is withdrawn`;
+  return null;
 }
 
 interface Wrapper {
@@ -830,8 +854,9 @@ function sweep(dir: string): SweepResult {
 function report(dir: string, r: SweepResult): void {
   console.log(`  pack ${dir}`);
   console.log(`  exempt ${APPARATUS} — this instrument's own source, which carries the TEXT of the`);
-  console.log('         defects its red proofs plant. Measured inert at every run: it does not import');
-  console.log('         spawnSync as a value, so it cannot run a command and has no code to discard.');
+  console.log('         defects its red proofs plant. Measured inert at every run, through the AST and');
+  console.log('         on every spelling of the module: it binds spawnSync from neither child_process');
+  console.log('         nor node:child_process and calls it nowhere, so it has no exit code to discard.');
   console.log('');
   console.log('  WRAPPERS THAT DECIDE ON THE EXIT CODE THEMSELVES');
   console.log('    (the matched comparison is printed: a wrapper that only mentions the code, or');
