@@ -15,9 +15,11 @@ lesson, now with a tool.
 
 `--check` is the gate. It fails on three things, not one:
   * a row whose digest no longer matches its file (drift);
-  * a `.md` **or `.json`** file in the directory with no row at all
-    (absence) — round 17 added `.json` to the hashed set and this docstring
-    kept saying `.md` only, which is the coordinator's S-5;
+  * ANY file in the directory with no row at all (absence). Round 17 hashed
+    `.md` and `.json`; round 27 hashes every file, because a list of
+    extensions exempts by looking rather than by being named, and a
+    `P5-EXPORT.txt` measurably slipped through both the table and the seal's
+    freshness ordering (the challenger's F-48);
   * a row naming a file that is not there any more (an orphan).
 
 The manifest's own row is `this file` by necessity — a file cannot carry its
@@ -65,6 +67,7 @@ REVIEWER_REPORTS: tuple[str, ...] = (
     "P5-CHALLENGE-92aa7c2.md",
     "P5-CHALLENGE-6f2c9b7.md",
     "P5-CHALLENGE-85fe33d.md",
+    "P5-CHALLENGE-9bd33bd.md",
     "P5-CHALLENGE-5af0c96.md",
     "P5-CHALLENGE-6171923.md",
     "P5-CHALLENGE-678564e.md",
@@ -143,7 +146,21 @@ def main() -> int:
     # digest table that hashed only the Markdown would have left the one file
     # that decides what those five documents SAY outside the hashed set —
     # the same shape as a check that cannot look at what it reassures about.
-    on_disk = sorted(p.name for p in base.glob("*.md")) + sorted(p.name for p in base.glob("*.json"))
+    # ROUND 27, THE CHALLENGER'S F-48. Round 17 widened the hashed set from
+    # `*.md` to `*.md` + `*.json` and the set stayed a LIST OF EXTENSIONS, which
+    # is the same shape as a name pattern deciding who authored a file: it
+    # exempts by looking, not by being named. Measured on a byte copy: with a
+    # `P5-EXPORT.txt` in the pack, `--check` printed `42 files, 42 rows, 0
+    # problems` at rc 0 while the directory held 43 files, and the seal named a
+    # document fifteen minutes OLDER as the newest, because the freshness
+    # ordering globbed the same two extensions. The same bytes renamed `.md`
+    # were caught at rc 1 — one finding, with its own control.
+    #
+    # The hashed set is now EVERY FILE in the directory. The reviewer-owned
+    # tuple is the only exemption, as it has been since round 22, and the
+    # manifest's own row is `this file` by necessity. Directories are skipped
+    # because a directory has no bytes to hash; nothing else is.
+    on_disk = sorted(p.name for p in base.iterdir() if p.is_file())
     lines = manifest.read_text().split("\n")
     start, end = table_bounds(lines)
 

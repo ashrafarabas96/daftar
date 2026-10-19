@@ -46,6 +46,44 @@ on these bytes.
 """
 from __future__ import annotations
 
+# ROUND 26, THE CHALLENGER'S F-46, AND ROUND 27, THE COORDINATOR'S R-1.
+# Subprocesses inherit the environment, so a PYTHONPATH that shadows a stdlib
+# module changes what the tools compute: with a twenty-line `hashlib.py` on the
+# path, writing then sealing gave rc 0 over a table of twenty-four all-zero
+# digests. `-I` (isolated) ignores PYTHONPATH, PYTHONHOME and the user site
+# directory, so this tool re-execs ITSELF isolated rather than trusting its
+# caller to remember a flag, and passes `-I` to every child.
+#
+# R-1: round 26 put that re-exec BELOW the imports, so a shadowed `datetime`,
+# `subprocess` or `re` was imported — and its top-level code EXECUTED — before
+# the process replaced itself.
+#
+# Measured, and narrower than it first looks, which is why it is stated rather
+# than dramatised: `execv` discards everything the pre-exec process imported,
+# so the shadow could NOT change a sealed figure. A `datetime.py` returning
+# 2099 left no 2099 string anywhere in the record, at either version. What it
+# could do is RUN: a shadow that writes a file and raises executed once and
+# took the tool down at rc 1 (round 26), and executes zero times now. That is
+# the whole of R-1 — an arbitrary-code window, not a wrong number — and the
+# fix costs three lines. The check is now
+# the FIRST statement after the `__future__` directive, which must by language
+# rule come first, and it uses only `sys` (a builtin module) and `posix` (also
+# builtin), never `os`, because `os` is an ordinary stdlib file and is exactly
+# as shadowable as the modules this is defending. `-I` sets
+# `sys.flags.isolated`, so the re-exec happens at most once and cannot loop.
+#
+# What this does NOT cover, named rather than implied: `__future__` itself is
+# imported before the check by language rule, and the interpreter named by
+# `sys.executable` is whatever invoked this file.
+import sys
+
+if not sys.flags.isolated:  # pragma: no cover - the isolated process runs the rest
+    import posix
+
+    _self = __file__ if __file__.startswith("/") else posix.getcwd() + "/" + __file__
+    posix.execv(sys.executable, [sys.executable, "-I", _self, *sys.argv[1:]])
+
+
 import argparse
 import datetime
 import io
@@ -55,16 +93,6 @@ import os
 import sys
 from pathlib import Path
 
-# ROUND 26, THE CHALLENGER'S F-46. Subprocesses inherit the environment, so a
-# PYTHONPATH that shadows a stdlib module changes what the tools compute: with a
-# twenty-line `hashlib.py` on the path, writing then sealing gave rc 0 over a
-# table of twenty-four all-zero digests. `-I` ignores PYTHONPATH, PYTHONHOME and
-# the user site directory, and the challenger measured that it defeats the plant.
-# This tool re-execs ITSELF isolated rather than trusting its caller to remember,
-# and runs its children with `-I` too. `-I` sets `sys.flags.isolated`, so the
-# re-exec happens at most once and cannot loop.
-if not sys.flags.isolated:  # pragma: no cover - the isolated process runs the rest
-    os.execv(sys.executable, [sys.executable, "-I", os.path.abspath(__file__), *sys.argv[1:]])
 
 ROW = re.compile(r"^\| `([^`]+)` \| (.+) \|$")
 # The digest tool's own summary line, the number this tool must agree with.
@@ -90,15 +118,21 @@ def iso(ts: float) -> str:
 
 
 def newest_other(base: Path, manifest: str) -> tuple[float, str]:
-    """The newest mtime over every `.md` and `.json` in the pack but this file.
+    """The newest mtime over every file in the pack but this one.
 
     Read from the filesystem, which is what the row says. A pack with no other
     document is a failure, not a quiet zero.
+
+    ROUND 27, THE CHALLENGER'S F-48: this globbed `*.md` and `*.json`, so a
+    file of any other type was outside the freshness ordering the whole record
+    is read as covering — measured, a tampered `P5-EXPORT.txt` left the seal
+    naming a document fifteen minutes older as the newest. The ordering now
+    covers what the table covers: every file.
     """
     found = [
         (p.stat().st_mtime, p.name)
-        for p in sorted(list(base.glob("*.md")) + list(base.glob("*.json")))
-        if p.name != manifest
+        for p in sorted(base.iterdir())
+        if p.is_file() and p.name != manifest
     ]
     if not found:
         raise SystemExit(f"no documents besides {manifest} in {base} — nothing to order against")
