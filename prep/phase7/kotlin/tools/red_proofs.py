@@ -69,15 +69,32 @@ class Proof:
 # produces it. Each of those plants defeated the old text sweep on its own and
 # is a no-op against the registry, so each is paired with this, because an edit
 # that changes nothing measures nothing.
-CLAIM_SITE = '                            claimAbout("offline.not_sendable", step.code) {'
-A_CLAIM_ABOUT_AN_UNPRODUCED_CODE = (
-    '                            claimAbout("offline.permission_revoked", step.code) {\n'
-    '                                assertEquals(\n'
-    '                                    OperationState.NEEDS_ATTENTION, op.state,\n'
-    '                                    "a permission refusal outside NEEDS_ATTENTION",\n'
-    '                                )\n'
-    '                            }\n'
-) + CLAIM_SITE
+CLAIM_SITE = (
+    '                            claimAbout(\n'
+    '                                "E-04/not-sendable-offers-a-button-its-reader-can-press",\n'
+    '                                "offline.not_sendable",\n'
+    '                                step.code,\n'
+    '                            ) {'
+)
+
+
+def a_claim_about(code: str) -> str:
+    """A lawful claim SITE about `code`, through the helper, inserted above E-04's."""
+    return (
+        '                            claimAbout(\n'
+        '                                "a-plant/a-claim-about-a-code-nothing-produces",\n'
+        '                                ' + code + ',\n'
+        '                                step.code,\n'
+        '                            ) {\n'
+        '                                assertEquals(\n'
+        '                                    OperationState.NEEDS_ATTENTION, op.state,\n'
+        '                                    "a permission refusal outside NEEDS_ATTENTION",\n'
+        '                                )\n'
+        '                            }\n'
+    ) + CLAIM_SITE
+
+
+A_CLAIM_ABOUT_AN_UNPRODUCED_CODE = a_claim_about('"offline.permission_revoked"')
 THE_HARM = (CLAIM_SITE, A_CLAIM_ABOUT_AN_UNPRODUCED_CODE)
 
 PROOFS: list[Proof] = [
@@ -739,14 +756,7 @@ PROOFS: list[Proof] = [
         law="O-01-AN-ASSEMBLED-CODE-REGISTERS-THE-VALUE-IT-TESTS",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
         find=CLAIM_SITE,
-        replace=(
-            '                            claimAbout("offline." + "permission_revoked", step.code) {\n'
-            '                                assertEquals(\n'
-            '                                    OperationState.NEEDS_ATTENTION, op.state,\n'
-            '                                    "a permission refusal outside NEEDS_ATTENTION",\n'
-            '                                )\n'
-            '                            }\n'
-        ) + CLAIM_SITE,
+        replace=a_claim_about('"offline." + "permission_revoked"'),
         expect_red="every reachable configuration honours every invariant",
         why="challenger findings qA and qE of the eleventh review, and the sharpest of them, because the file USED this escape itself: the literal sweep matched a code written as one string, so a code assembled (`\u201coffline.\u201d + \u201cpermission_revoked\u201d`) or interpolated was not enrolled \u2014 and the sweep\u2019s own prose sentinel was assembled three lines above it precisely so the sweep would not see it. A technique a file relies on to hide a string from its own guard is available to whoever writes the next claim. Execution registers the VALUE, so the assembled code is enrolled exactly as the written one is, and the review would not report its green until a control showed the construct live",
     ),
@@ -790,6 +800,60 @@ PROOFS: list[Proof] = [
         expect_red="every reachable configuration honours every invariant",
         why="plant qD of the eleventh review, paired with the harm. The sweep stripped comments before reading the file so that prose could not be load-bearing (N-03), and a STRING holding a comment-opening sequence is not a comment: the block regex ran from that literal to the next closing sequence and deleted 596 lines, with three codes left enrolled and the suite green. The review predicted the two-code anchor would catch this and wrote that prediction down before the run; it did not, because both anchored codes also occur outside the swallowed region \u2014 containment is not survival. The stripper is deleted at this head, along with the sweep it served, so the literal is inert and the harm reds",
         edits=(THE_HARM,),
+    ),
+    Proof(
+        law="P-01-A-REGISTRATION-PROVES-THE-SITE-RAN-NOT-THAT-THE-CLAIM-WAS-EXERCISED",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=CLAIM_SITE,
+        replace=(
+            '                            if (op.state == OperationState.UNKNOWN_OUTCOME) {\n'
+            + CLAIM_SITE
+        ),
+        edits=((
+            '                            }\n                            if (event is QueueEvent.ByScope &&',
+            '                            }\n                            }\n'
+            '                            if (event is QueueEvent.ByScope &&',
+        ),),
+        expect_red="every reachable configuration honours every invariant",
+        why="the twelfth review's blocker, and the only FAIL-OPEN this phase has had since L-01. The site is wrapped in a condition that is REACHED \u2014 UNKNOWN_OUTCOME rows do reach that arm and do produce refusals, so the registration fires and the registry's equality is satisfied \u2014 while `offline.not_sendable` is produced only on CAPTURED rows, so the body runs ZERO times. The review then planted proof 64's own harm underneath it, E-04's refusal arm deleted, and measured the pair GREEN at 98 of 98 against rc 1 red by name on a clean subject: a cashier's own capture refused with \u201canother member must confirm this\u201d, with every assertion in the file passing. The observability loop cannot see it either, because the code IS produced \u2014 by the rows the conditioned site no longer looks at. `claimsExercised` records the branch that actually runs the claim, so this plant now reds by name on the site that never exercised. **A registration certifies that a site ran; only the branch inside it certifies that anything was tested.**",
+    ),
+    Proof(
+        law="P-03-AN-ANCHOR-BOUNDS-THE-LOSS-OF-A-SITE-NOT-OF-A-CODE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=CLAIM_SITE,
+        replace=(
+            '                            claimAbout(\n'
+            '                                "a-second-lawful-site/about-the-same-code",\n'
+            '                                "offline.not_sendable",\n'
+            '                                step.code,\n'
+            '                            ) {\n'
+            '                                assertEquals(\n'
+            '                                    OperationState.CAPTURED, op.state,\n'
+            '                                    "a not_sendable refusal outside CAPTURED",\n'
+            '                                )\n'
+            '                            }\n'
+            '                            if (step.code == "offline.not_sendable") {'
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="the twelfth review's P-03, filed latent and fixed as filed. A second LAWFUL claim about `offline.not_sendable` is added and the original site's registration is removed, its claim left as a bare equality. Keyed on CODES the two sites collapsed into one member, so the set was unchanged and the removal was invisible \u2014 green at 98 of 98 \u2014 while this check's own KDoc promised that a removed registration reddens. No code has two sites today; the promise is what made that latent rather than harmless. The registry is keyed on (site, code) PAIRS now, which is the coordinator's amendment that an anchor bounds the loss of the thing that can be LOST, and what can be lost is a site",
+    ),
+    Proof(
+        law="P-02-A-CLAIM-WRITTEN-AROUND-THE-HELPER-IS-ENROLLED-BY-NOTHING",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=CLAIM_SITE,
+        replace=(
+            '                            when (step.code) {\n'
+            '                                "offline.permission_revoked" ->\n'
+            '                                    assertEquals(\n'
+            '                                        OperationState.NEEDS_ATTENTION, op.state,\n'
+            '                                        "a permission refusal outside NEEDS_ATTENTION",\n'
+            '                                    )\n'
+            '                                else -> {}\n'
+            '                            }\n'
+            + CLAIM_SITE
+        ),
+        expect_red="a claim about a refusal code is written through the registering helper",
+        why="the residual this session disclosed and the twelfth review measured: a conditional claim written AROUND the helper is enrolled by neither registry, so this exact plant \u2014 the tenth review's \u2014 was green at 98 of 98 on the head before this one, with its control (the same construct, a produced code, a false assertion) rc 1 red by name, so the green was genuine vacuity. This is the proof that was RETIRED one round ago because it could no longer redden, and it is restored here reddening through the CONVENTION CHECK the coordinator ruled in: that check derives nothing, states its own fail-open in its message, and can only ADD reds \u2014 a subject set steered by text yields a false green, a prohibition steered by text yields nothing, so its worst case is the residual it replaces. Note which test it reds: the convention check, not the registry",
     ),
     Proof(
         law="O-02-A-STALE-EXEMPTION-REDDENS-WHEREVER-THE-MAP-IS-DECLARED",

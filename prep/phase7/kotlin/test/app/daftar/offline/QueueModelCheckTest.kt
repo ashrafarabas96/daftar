@@ -30,32 +30,81 @@ import kotlin.test.assertTrue
 class QueueModelCheckTest {
     private companion object {
         /**
-         * Every code a conditional claim in this file is written about, as a
-         * literal total.
+         * Every conditional claim in this file, as a literal total of
+         * **(site, code)** pairs.
          *
          * This is an ANCHOR, and it is deliberately not the subject set. The
-         * subject set is `claimsMade`, which is built by EVALUATING the claim
-         * sites: each one registers the code it is about at the moment it
-         * runs, so no spelling, position or formatting of this file decides
-         * what is enrolled. What this set does is BOUND THE LOSS, which is the
-         * eleventh review's ruling and the half the previous four anchors did
-         * not have. The equality fails in both directions: a code here that
-         * `claimsMade` does not contain is a claim site nothing evaluated, and
-         * a code in `claimsMade` that is not here is a claim site nobody wrote
-         * down. Neither can be arrived at quietly, because a count that
-         * survives is not a count that was not lost.
+         * subject sets are `claimsMade` and `claimsExercised`, both built by
+         * EVALUATING the claim sites, so no spelling, position or formatting
+         * of this file decides what is enrolled. What this set does is BOUND
+         * THE LOSS, which was the eleventh review's ruling and is the half the
+         * four anchors before it did not have.
          *
-         * `WaitIsHonest.reasons` is added to this set where it is used, not
-         * copied into it: those four codes are obligations this check inherits
-         * from another file's declaration, and they are read from that
-         * declaration as a VALUE.
+         * **It is keyed on the SITE and not only on the code, which is the
+         * twelfth review's amendment: an anchor bounds the loss of the thing
+         * that can be lost, and what can be lost is a SITE.** Keyed on codes
+         * alone, two sites about one code collapsed into one member, so a
+         * second lawful claim about `offline.not_sendable` would have let the
+         * first site's registration be removed with the set unchanged. No code
+         * has two sites today; the equality's own promise is what made that
+         * latent rather than harmless.
+         *
+         * The equality fails in both directions. A pair here that the registry
+         * does not contain is a claim site nothing evaluated; a pair in the
+         * registry that is not here is a claim site nobody wrote down.
+         *
+         * The four codes `WaitIsHonest` licenses are NOT in this set and are
+         * not registered as claims. They are obligations this check inherits
+         * from another file's declaration, they are read from it as a VALUE,
+         * and they join the observability loop directly. The twelfth review's
+         * P-04: they used to be registered unconditionally two lines above an
+         * equality that added them to its own left-hand side, so that half of
+         * the equality could not fail. An assertion that cannot fail says
+         * nothing, whatever it is about.
          */
-        val CODES_THIS_CHECK_CLAIMS_SOMETHING_ABOUT = setOf(
-            "offline.not_sendable",
-            "offline.another_members_capture",
-            "offline.scope_switched",
-            "offline.already_recorded",
-            "offline.already_abandoned",
+        val CLAIMS_THIS_CHECK_MAKES: Set<Pair<String, String>> = setOf(
+            "E-04/not-sendable-offers-a-button-its-reader-can-press" to "offline.not_sendable",
+            "INV-9a/a-foreign-scope-is-refused-as-a-scope-problem" to "offline.another_members_capture",
+            "INV-9a/a-foreign-scope-is-refused-as-a-scope-problem" to "offline.scope_switched",
+            "INV-15/a-finished-row-answers-in-its-own-terms" to "offline.already_recorded",
+            "INV-15/a-finished-row-answers-in-its-own-terms" to "offline.already_abandoned",
+        )
+
+        /**
+         * Comparisons against a refusal code that this file forbids outside
+         * the registering helper.
+         *
+         * **This is a CONVENTION CHECK and not a derivation. Nothing derives a
+         * subject set from it, and nothing relies on it being complete.** It
+         * exists because the registry enrolls a claim only when the claim goes
+         * through `claimAbout`, so a claim written around the helper is
+         * enrolled by nothing — the residual this session disclosed and the
+         * twelfth review then measured: the tenth review's `when (step.code)`
+         * plant is green at 98 of 98 against the registry alone.
+         *
+         * **Its own fail-open, stated because a reader of this file will
+         * otherwise assume a text check here is a derivation and trust it as
+         * one:** it reads text, so a steered spelling escapes it, exactly as
+         * four spellings escaped the sweep this file used to carry. The
+         * difference is the direction of the failure. A subject set derived
+         * from steered text yields a false GREEN, which is every finding of
+         * the tenth and eleventh reviews. A prohibition that is steered yields
+         * NOTHING: it fails to fire and leaves the residual that already
+         * exists. Its worst case is the status quo and its best case closes a
+         * live hole, so it can only ADD reds.
+         *
+         * The patterns are ASSEMBLED from pieces so that these four lines are
+         * not themselves offenders. Written out, they were — and the check
+         * went RED rather than quiet, which is the direction a convention
+         * check is allowed to fail in. The retired sweep assembled a string
+         * for the opposite reason, to hide it from a subject set; nothing is
+         * derived here, so this is bookkeeping rather than a hole.
+         */
+        val A_COMPARISON_AGAINST_A_CODE = listOf(
+            "step.code" + " ==",
+            "==" + " step.code",
+            "step.code" + " in ",
+            "when (" + "step.code" + ")",
         )
 
         /**
@@ -291,27 +340,126 @@ class QueueModelCheckTest {
      * measured and recorded as a residual rather than argued away, and it is
      * the one thing a text sweep caught that this does not.
      */
-    private val claimsMade = mutableSetOf<String>()
+    private val claimsMade = mutableSetOf<Pair<String, String>>()
 
     /**
-     * Registers `code` as a code this check claims something about, and
-     * returns it, so that what is registered is the very value the claim is
-     * asserted against. A registration written beside the claim could record a
-     * different code from the one the claim tests; a registration that RETURNS
-     * the code it registers cannot.
+     * The claims this check actually EXERCISED: the ones whose body ran,
+     * because the code they are about was the code produced.
+     *
+     * **The twelfth review's blocker, and it was a fail-open rather than a
+     * residual.** `claimsMade` certifies that a site RAN, which is not that
+     * its claim was ever tested. Wrap a site in a condition that is REACHED
+     * but excludes the cases the claim is about — `if (op.state ==
+     * OperationState.UNKNOWN_OUTCOME) { … }` around the `not_sendable` site,
+     * where those rows do refuse and do register, while `not_sendable` is
+     * produced only on CAPTURED rows — and the body runs zero times with the
+     * registry's equality satisfied. The review then planted proof 64's own
+     * harm underneath it: E-04's refusal arm deleted, so a cashier's own
+     * capture is refused with "another member must confirm this", **green at
+     * 98 of 98**, against rc 1 and red by name on a clean subject. The
+     * observability loop cannot see it either, because the code IS produced —
+     * by the rows the conditioned site no longer looks at.
+     *
+     * So the branch that runs the claim records it. A claim never exercised is
+     * a claim asserted of nothing, which is the whole proposition this loop
+     * defends, and it is now asserted rather than assumed.
      */
-    private fun claimingCode(code: String): String {
-        claimsMade += code
+    private val claimsExercised = mutableSetOf<Pair<String, String>>()
+
+    /**
+     * Registers a claim made at `site` about `code`, and returns the code, so
+     * that what is registered is the very value the claim is asserted against.
+     * A registration written beside the claim could record a different code
+     * from the one the claim tests; a registration that RETURNS the code it
+     * registers cannot.
+     *
+     * These sites are exercised by construction: they register the value an
+     * `assertEquals` is about to compare, so there is no branch in which the
+     * registration happens and the claim does not.
+     */
+    private fun claimingCode(site: String, code: String): String {
+        claimsMade += site to code
+        claimsExercised += site to code
         return code
     }
 
     /**
-     * Makes a claim about one refusal code. `claim` runs only where `produced`
-     * is that code, and the code is registered either way: the call is the
-     * claim, and the condition is inside it.
+     * Makes the claim `site` holds about one refusal code. `claim` runs only
+     * where `produced` is that code; the site is recorded as MADE either way
+     * and as EXERCISED only in the branch that runs it, which is the
+     * difference between a site that ran and a claim that was tested.
      */
-    private fun claimAbout(code: String, produced: String, claim: () -> Unit) {
-        if (produced == claimingCode(code)) claim()
+    private fun claimAbout(site: String, code: String, produced: String, claim: () -> Unit) {
+        claimsMade += site to code
+        if (produced == code) {
+            claimsExercised += site to code
+            claim()
+        }
+    }
+
+    /**
+     * A claim about a refusal code is written through `claimAbout`, by
+     * CONVENTION — and this check is a convention check, not a derivation.
+     *
+     * Read `A_COMPARISON_AGAINST_A_CODE`'s KDoc before trusting this: it says
+     * what this cannot do. Nothing derives a subject set from it, nothing
+     * assumes it is complete, and a steered spelling escapes it. It is here
+     * because its failure mode is the residual that already exists rather than
+     * a false green, so it can only ADD reds — which is the coordinator's
+     * ruling after this session disclosed the residual and the twelfth review
+     * measured it: a claim written around the helper is enrolled by nothing,
+     * and the tenth review's `when (step.code)` plant is green against the
+     * registry alone.
+     *
+     * A line whose first non-blank characters begin a comment is treated as
+     * prose, and this file's prose quotes these constructs often. That is a
+     * HEURISTIC, and it is part of the fail-open named above: a claim written
+     * on a line that looks like prose is not seen. It is not a hole in the
+     * registry, which does not read this file at all.
+     */
+    @Test
+    fun `a claim about a refusal code is written through the registering helper`() {
+        val src = File(System.getProperty("p7.src") ?: "prep/phase7/kotlin/src")
+        val tests = System.getProperty("p7.test")?.let(::File) ?: src.parentFile?.resolve("test")
+        val own = tests?.walkTopDown()?.firstOrNull { it.isFile && it.name == "QueueModelCheckTest.kt" }
+        assertTrue(
+            own != null && own.isFile,
+            "this check could not find its own source under ${tests?.path}. It fails rather than " +
+                "finds nothing: a convention check that silently reads an empty file is the one " +
+                "failure mode worse than the convention being unenforced",
+        )
+        val text = own!!.readText()
+        val offenders = text.lines().withIndex().filter { (_, line) ->
+            val code = line.trimStart()
+            val prose = code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")
+            !prose && A_COMPARISON_AGAINST_A_CODE.any { it in code }
+        }.map { (i, line) -> "${i + 1}: ${line.trim()}" }
+        assertEquals(
+            emptyList(), offenders,
+            "a refusal code is compared outside ${"claimAbout"}, so whatever is claimed there is " +
+                "enrolled in neither registry and is asserted of nothing the moment the code " +
+                "stops being produced. Write it as a claim site. This is a CONVENTION CHECK and " +
+                "not a derivation: it can only add reds, and a spelling it does not know escapes " +
+                "it",
+        )
+        // Non-vacuity. The patterns must be able to find something, or this
+        // check passes by not looking: the list is exercised against a line of
+        // each shape it forbids, assembled so that this file does not contain
+        // the shapes it is checked against.
+        val eq = "step.code" + " == " + "\"offline.x\""
+        val sw = "when (" + "step.code" + ")"
+        for (shape in listOf(eq, sw)) {
+            assertTrue(
+                A_COMPARISON_AGAINST_A_CODE.any { it in shape },
+                "none of this check's patterns matches $shape, so it would not notice the " +
+                    "construct it exists to forbid",
+            )
+        }
+        assertTrue(
+            A_COMPARISON_AGAINST_A_CODE.none { it in "codesSeen += step.code" },
+            "this check's patterns match a plain READ of the code, so it forbids the reads this " +
+                "file is built on rather than the comparisons it means to forbid",
+        )
     }
 
     @Test
@@ -361,7 +509,11 @@ class QueueModelCheckTest {
                             // here, not read from the kernel, and the question
                             // "may this session confirm" is asked of the test's
                             // own independent `permittedToAct` with a Release.
-                            claimAbout("offline.not_sendable", step.code) {
+                            claimAbout(
+                                "E-04/not-sendable-offers-a-button-its-reader-can-press",
+                                "offline.not_sendable",
+                                step.code,
+                            ) {
                                 assertEquals(
                                     OperationState.CAPTURED, op.state,
                                     "a ${op.state} row was refused offline.not_sendable, whose view tells " +
@@ -400,6 +552,7 @@ class QueueModelCheckTest {
                                         event.actingScope.businessId == op.scope.businessId
                                 assertEquals(
                                     claimingCode(
+                                        "INV-9a/a-foreign-scope-is-refused-as-a-scope-problem",
                                         if (sameBusiness) {
                                             "offline.another_members_capture"
                                         } else {
@@ -448,6 +601,7 @@ class QueueModelCheckTest {
                                 terminalRefusals++
                                 assertEquals(
                                     claimingCode(
+                                        "INV-15/a-finished-row-answers-in-its-own-terms",
                                         if (op.state == OperationState.SYNCED) {
                                             "offline.already_recorded"
                                         } else {
@@ -782,33 +936,37 @@ class QueueModelCheckTest {
             }
         }
 
-        // The claim registry and its anchor, asserted FIRST because it is the
-        // assertion that says which of the others were real.
+        // The claim registry and its two anchors, asserted FIRST because they
+        // are the assertions that say which of the others were real.
         //
-        // `claimsMade` holds the codes the claim sites above registered as
-        // they ran. The four codes `WaitIsHonest` licenses a wait for are
-        // obligations this check inherits — `RecoveryTest` proves its view
-        // equality over them, and that equality is blind to a code nothing
-        // produces any more (E-04), so each must be OBSERVED here. They are
-        // registered from that declaration as a VALUE, which is the whole of
-        // the eleventh review's ruling: the previous head read them out of
-        // `RecoveryTest`'s source text, anchored on the words of a `mapOf`.
+        // Each claim site above registers the pair (site, code) when it RUNS,
+        // and the branch that runs its body registers the same pair as
+        // EXERCISED. Both are asserted against the same literal total, and the
+        // second is the one the twelfth review's blocker needed: a site
+        // wrapped in a condition that is reached but excludes the cases its
+        // claim is about registers as made, never as exercised, and the claim
+        // is gone while the registry says it was made.
         //
-        // The equality against a literal total is what bounds the loss. A
-        // claim site that stops being evaluated — because a branch became
-        // unreachable, or because somebody removed its registration — is
-        // MISSING here, by name, with the code named. The four anchors this
-        // guard carried before all asked whether something survived, which is
-        // not the same question.
-        for (code in WaitIsHonest.reasons.keys) claimingCode(code)
+        // Keyed on PAIRS, because an anchor bounds the loss of the thing that
+        // can be lost and what can be lost is a site: two sites about one code
+        // collapsed into one member when this was keyed on codes.
         assertEquals(
-            (CODES_THIS_CHECK_CLAIMS_SOMETHING_ABOUT + WaitIsHonest.reasons.keys).toSortedSet(),
-            claimsMade.toSortedSet(),
-            "the set of codes this check registered a claim about is not the set it is written " +
-                "to claim something about. A code missing from the right-hand side is a claim " +
-                "site nothing evaluated, so whatever it asserts was asserted of nothing; a code " +
-                "missing from the left is a claim site that was added without being written " +
+            CLAIMS_THIS_CHECK_MAKES.toSortedSet(compareBy({ it.first }, { it.second })),
+            claimsMade.toSortedSet(compareBy({ it.first }, { it.second })),
+            "the claims this check REGISTERED are not the claims it is written to make. A pair " +
+                "missing from the right-hand side is a claim site nothing evaluated at all; a " +
+                "pair missing from the left is a claim site that was added without being written " +
                 "down here, so nothing bounds what else it changed",
+        )
+        assertEquals(
+            CLAIMS_THIS_CHECK_MAKES.toSortedSet(compareBy({ it.first }, { it.second })),
+            claimsExercised.toSortedSet(compareBy({ it.first }, { it.second })),
+            "a claim this check makes was never EXERCISED: its site ran and registered, and the " +
+                "branch that tests the claim never did, so whatever it asserts was asserted of " +
+                "nothing. A site reached under a condition that excludes the cases its claim is " +
+                "about looks identical to a working one in every other assertion here, which is " +
+                "how a refusal telling a cashier that a colleague must confirm their own capture " +
+                "stayed green at 98 of 98",
         )
 
         // Non-vacuity. A model check that explored three configurations and
@@ -921,7 +1079,15 @@ class QueueModelCheckTest {
         // assertions below are unchanged in substance and now read that
         // registry: an exemption must carry a reason, must not cover a code
         // the space produces, and must name a code something here claims.
-        val claimed = claimsMade.toSet()
+        // The four codes `WaitIsHonest` licenses a wait for are obligations
+        // this check inherits — `RecoveryTest` proves its view equality over
+        // them, and that equality is blind to a code nothing produces any more
+        // (E-04), so each must be OBSERVED in the reachable space here. They
+        // are read from that declaration as a VALUE, which is the eleventh
+        // review's ruling, and they are NOT registered as claims of this file:
+        // registering them put them on both sides of an equality that then
+        // could not fail for them (P-04).
+        val claimed = claimsMade.map { it.second }.toSet() + WaitIsHonest.reasons.keys
         for (key in CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE.keys.sorted()) {
             assertTrue(
                 key in claimed,
