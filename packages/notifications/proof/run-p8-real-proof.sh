@@ -110,6 +110,11 @@ assert_roles(){    # called AFTER bootstrap, because bootstrap is what creates t
 # ---------------------------------------------------------------------
 # 1  Build: the real history, then the overlay, then the fixtures
 # ---------------------------------------------------------------------
+# ROUND 26. The case helpers are read through a variable so that ONE arm can
+# run a build with the vacuity check deleted and require the fail-open to
+# return. Every other build, including every mutant, reads the real file.
+CASE_HELPERS=$HERE/p8-case-helpers.sql
+
 build(){           # build <overlay-file> <logdir>
   local ov=$1
   local ld=$2
@@ -153,20 +158,34 @@ build(){           # build <overlay-file> <logdir>
     || { echo "overlay failed"; return 1; }
   sup "CREATE SCHEMA IF NOT EXISTS p8 AUTHORIZATION daftar_migrator" daftar >/dev/null
   sup "GRANT USAGE ON SCHEMA p8 TO daftar_app, daftar_worker, daftar_platform" daftar >/dev/null
-  "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 -f "$HERE/p8-case-helpers.sql" > "$ld/helpers.log" 2>&1 || return 1
+  "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 -f "$CASE_HELPERS" > "$ld/helpers.log" 2>&1 || return 1
   sup "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA p8 TO daftar_app, daftar_worker, daftar_platform" daftar >/dev/null
   "$B/psql" -h "$D" -p "$P" -U daftar_platform  -d daftar -q -v ON_ERROR_STOP=1 --single-transaction -f "$HERE/p8-real-fixtures.sql" > "$ld/fixtures-1.log" 2>&1 || { echo "fixtures 1 failed"; return 1; }
   "$B/psql" -h "$D" -p "$P" -U daftar_migrator  -d daftar -q -v ON_ERROR_STOP=1 --single-transaction -f "$HERE/p8-real-fixtures-owner.sql" > "$ld/fixtures-2.log" 2>&1 || { echo "fixtures 2 failed"; return 1; }
   return 0
 }
 
-cases(){           # cases <logdir>  — runs every case file as its own role
+# ROUND 26. `cases` takes an OPTIONAL second argument: a directory whose copy
+# of a case file is used in place of the real one. It exists for the vacuity
+# arms below, which neuter one case's WHERE in a copy; every other caller passes
+# one argument and reads the real files, which is asserted by `csrc` resolving
+# to $HERE whenever the override holds no copy of that name.
+csrc(){            # csrc <basename> — the override's copy, else the real file
+  if [ -n "${CASE_OVERRIDE:-}" ] && [ -f "$CASE_OVERRIDE/$1" ]; then
+    echo "$CASE_OVERRIDE/$1"
+  else
+    echo "$HERE/$1"
+  fi
+}
+
+cases(){           # cases <logdir> [override-dir]
   local ld=$1 rc=0 r
+  local CASE_OVERRIDE=${2:-}
   for pair in "daftar_app:p8-real-cases-app.sql" \
               "daftar_migrator:p8-real-cases-owner.sql" \
               "daftar_platform:p8-real-cases-platform.sql"; do
     r=${pair%%:*}; f=${pair#*:}
-    "$B/psql" -h "$D" -p "$P" -U "$r" -d daftar -v ON_ERROR_STOP=1 -f "$HERE/$f" > "$ld/$f.log" 2>&1 || rc=1
+    "$B/psql" -h "$D" -p "$P" -U "$r" -d daftar -v ON_ERROR_STOP=1 -f "$(csrc "$f")" > "$ld/$f.log" 2>&1 || rc=1
   done
   # ROUND 24, O-4. `daftar_worker` holds grants nothing exercised: a
   # column-scoped UPDATE on notifications, an append-only INSERT on attempts,
@@ -177,12 +196,12 @@ cases(){           # cases <logdir>  — runs every case file as its own role
   # commit a baseline AFTER them, run the worker file, then remove the baseline
   # again, so nothing that runs later (the race proof commits) inherits it.
   "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
-            -f "$HERE/p8-real-fixtures-worker.sql" > "$ld/fixtures-worker.log" 2>&1 \
+            -f "$(csrc p8-real-fixtures-worker.sql)" > "$ld/fixtures-worker.log" 2>&1 \
     || { echo "the worker baseline did not commit" >> "$ld/fixtures-worker.log"; rc=1; }
   "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
-            -f "$HERE/p8-real-cases-worker.sql" > "$ld/p8-real-cases-worker.sql.log" 2>&1 || rc=1
+            -f "$(csrc p8-real-cases-worker.sql)" > "$ld/p8-real-cases-worker.sql.log" 2>&1 || rc=1
   "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
-            -f "$HERE/p8-real-fixtures-worker-teardown.sql" > "$ld/fixtures-worker-teardown.log" 2>&1 \
+            -f "$(csrc p8-real-fixtures-worker-teardown.sql)" > "$ld/fixtures-worker-teardown.log" 2>&1 \
     || { echo "the worker baseline was NOT removed" >> "$ld/fixtures-worker-teardown.log"; rc=1; }
   grep -h "PASS" "$ld"/*.sql.log 2>/dev/null | wc -l > "$ld/passes"
   return $rc
@@ -1717,6 +1736,180 @@ fi
 build "$HERE/p8-overlay.sql" "$OUT/final" >/dev/null && cases "$OUT/final" \
   && say "cluster left at the baseline, passes=$(cat "$OUT/final/passes")" \
   || { say "FAIL: could not restore the baseline"; FAILED=1; }
+
+say "=== a permits-case must have MOVED something (round 26, the sixteenth challenge) ==="
+# THE DEFECT, as the challenger measured it on `a7a71e8`. It pointed ONE
+# `WHERE id` at a uuid no fixture creates, so the UPDATE matched zero rows and
+# raised nothing — and FIVE of the seven UPDATE permits-cases passed, at the
+# same `passes=91` as the honest run. My answer to its question had been an
+# argument: the ladder runs on one row, so a neutered `I3-a` would be caught
+# downstream by `I3-d`. It is not. The chain SELF-HEALS: the row stays at
+# `queued`, `I3-b` becomes `queued -> delivered` and is still a forward move,
+# the row still reaches `read`, and `I3-d` is still correctly refused. Only
+# `I3-g` and `N6-a` were caught, each for a reason specific to it.
+#
+# The fix is in `p8-case-helpers.sql`, not in seven read-backs: `case_permits`
+# now refuses by name when the statement affected no row. These arms measure
+# that, with the challenger's own method, one neutered case per copy — and the
+# last one deletes the check ALONE and requires the fail-open to RETURN, because
+# a guard with no deletion arm is a sentence.
+cat > "$PATCHDIR/neuter-case.py" <<'PATCH'
+import re
+import sys
+src, dst, label = sys.argv[1], sys.argv[2], sys.argv[3]
+DEAD = "0fffffff-0000-4000-8000-00000000dead"
+s = open(src, encoding="utf-8").read()
+i = s.find("case_permits('" + label)
+assert i >= 0, "no case_permits whose label starts " + label
+a = s.index("$q$", i) + 3
+b = s.index("$q$", a)
+stmt = s[a:b]
+m = re.search(r"'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'", stmt)
+assert m, "this case's statement names no uuid to point elsewhere"
+# ONE uuid, in ONE case's statement, and nothing else in the file.
+patched = stmt[:m.start()] + "'" + DEAD + "'" + stmt[m.end():]
+assert patched != stmt
+out = s[:a] + patched + s[b:]
+assert out.count(DEAD) == 1, "the dead uuid must appear exactly once"
+open(dst, "w", encoding="utf-8").write(out)
+PATCH
+
+vacuity(){         # vacuity <id> <label-prefix> <case-file>
+  local id=$1
+  local label=$2
+  local file=$3
+  local vd=$OUT/vac-$id
+  mkdir -p "$vd"
+  if ! python3 -I "$PATCHDIR/neuter-case.py" "$HERE/$file" "$vd/$file" "$label" > "$vd/patch.log" 2>&1; then
+    say "VACUITY $id: PLANT NOT ESTABLISHED — the case could not be neutered: $(tail -1 "$vd/patch.log")"
+    FAILED=1; return
+  fi
+  if cmp -s "$HERE/$file" "$vd/$file"; then
+    say "VACUITY $id: PLANT NOT ESTABLISHED — the copy is identical to the real file, so nothing was neutered"
+    FAILED=1; return
+  fi
+  cases "$vd" "$vd" >/dev/null 2>&1
+  if grep -hqF "ERROR:  $label" "$vd"/*.sql.log 2>/dev/null \
+     && grep -hqF "FAIL: VACUOUS" "$vd"/*.sql.log 2>/dev/null; then
+    say "VACUITY $id: with '$label' pointed at a row that does not exist the case REDS BY NAME (FAIL: VACUOUS), so its pass is conditional on the statement doing something"
+  else
+    say "VACUITY $id: FAIL — '$label' matched zero rows and still PASSED, which is the defect the sixteenth challenge measured"
+    grep -h "PASS permitted" "$vd"/*.sql.log 2>/dev/null | head -2 | tee -a "$OUT/run.log"
+    FAILED=1
+  fi
+}
+
+vacuity a  "I3-a queued -> sent"             p8-real-cases-worker.sql
+vacuity b  "I3-b sent -> delivered"          p8-real-cases-worker.sql
+vacuity c  "I3-c delivered -> read"          p8-real-cases-worker.sql
+vacuity f  "I3-f queued -> failed"           p8-real-cases-worker.sql
+vacuity g  "I3-g failed -> delivered"        p8-real-cases-worker.sql
+vacuity n6a "N6-a the customer READS"        p8-real-cases-owner.sql
+vacuity n6d "N6-d the demotion"              p8-real-cases-owner.sql
+
+# THE CONTROLS, and the first draft of them was WRONG in a way worth keeping.
+# I wrote one control — delete the zero-row check alone and require the
+# neutered case to pass again — and it FAILED, because the neutered `I3-a` is
+# now caught by a SECOND guard: round 25's read-back `I3-a2`, which reads the
+# status and finds `queued` where it wants `sent`. So the single control was
+# measuring the pair and attributing to the check. Three arms instead, because
+# two independent guards need one deletion each plus the pair:
+#
+#   CTL-1  the check deleted ALONE  -> still fails, but by the READ-BACK's name
+#   CTL-2  the read-back deleted ALONE -> still fails, by VACUOUS
+#   CTL-3  BOTH deleted -> PASSES, which is `a7a71e8`'s behaviour: the hole
+#          returns. Deleting two at once attributes nothing to either, and is
+#          legitimate here only because the claim is about the PAIR.
+#
+# What the structural check buys over the read-backs is therefore not this
+# case, which both cover: it is the case nobody has written yet. A read-back is
+# per-case and cannot be forgotten only if someone remembers it; the check is
+# the default and fails closed.
+cat > "$PATCHDIR/drop-vacuity-check.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = "    IF n = 0 THEN"
+assert s.count(b) == 1, "the vacuity check is not where this patcher expects it"
+s = s.replace(b, "    IF false THEN", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+cat > "$PATCHDIR/drop-readback.py" <<'PATCH'
+import sys
+src, dst, label = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(src, encoding="utf-8").read()
+a = s.find("SELECT p8.case_equals('" + label)
+assert a >= 0, "no case_equals whose label starts " + label
+b = s.index(");", a) + 2
+while b < len(s) and s[b] == "\n":
+    b += 1
+out = s[:a] + s[b:]
+assert out.count(label) == 0, "the read-back's label still appears after the deletion"
+assert len(out) < len(s)
+open(dst, "w", encoding="utf-8").write(out)
+PATCH
+
+VSRC=p8-real-cases-worker.sql
+VLAB="I3-a queued -> sent"
+VRB="I3-a2"
+
+# CTL-2 first: it needs the REAL helpers, so it runs against the baseline that
+# is already built and costs no rebuild.
+C2=$OUT/vac-ctl2
+mkdir -p "$C2"
+if python3 -I "$PATCHDIR/neuter-case.py" "$HERE/$VSRC" "$C2/n.sql" "$VLAB" >"$C2/patch.log" 2>&1 \
+   && python3 -I "$PATCHDIR/drop-readback.py" "$C2/n.sql" "$C2/$VSRC" "$VRB" >>"$C2/patch.log" 2>&1; then
+  cases "$C2" "$C2" >/dev/null 2>&1
+  if grep -hqF "FAIL: VACUOUS" "$C2"/*.sql.log 2>/dev/null; then
+    say "VACUITY-CTL-2: with the read-back '$VRB' deleted ALONE the neutered case still reds, by VACUOUS — so the zero-row check is a guard in its own right and not a restatement of the read-back"
+  else
+    say "VACUITY-CTL-2: FAIL — with the read-back gone the neutered case did not red by VACUOUS"
+    FAILED=1
+  fi
+else
+  say "VACUITY-CTL-2: PLANT NOT ESTABLISHED — the case could not be neutered with its read-back removed: $(tail -1 "$C2/patch.log")"
+  FAILED=1
+fi
+
+# CTL-1 and CTL-3 share ONE build with the zero-row check deleted from a copy
+# of the helpers. CTL-1 keeps the read-back, CTL-3 drops it too.
+C1=$OUT/vac-ctl1
+C3=$OUT/vac-ctl3
+mkdir -p "$C1" "$C3"
+if python3 -I "$PATCHDIR/drop-vacuity-check.py" "$HERE/p8-case-helpers.sql" "$C1/p8-case-helpers.sql" >"$C1/patch.log" 2>&1 \
+   && ! cmp -s "$HERE/p8-case-helpers.sql" "$C1/p8-case-helpers.sql" \
+   && python3 -I "$PATCHDIR/neuter-case.py" "$HERE/$VSRC" "$C1/$VSRC" "$VLAB" >>"$C1/patch.log" 2>&1 \
+   && python3 -I "$PATCHDIR/drop-readback.py" "$C1/$VSRC" "$C3/$VSRC" "$VRB" >>"$C1/patch.log" 2>&1; then
+  CASE_HELPERS=$C1/p8-case-helpers.sql
+  if build "$HERE/p8-overlay.sql" "$C1/build" >/dev/null 2>&1; then
+    cases "$C1" "$C1" >/dev/null 2>&1
+    if grep -hqF "ERROR:  $VRB" "$C1"/*.sql.log 2>/dev/null \
+       && ! grep -hqF "FAIL: VACUOUS" "$C1"/*.sql.log 2>/dev/null; then
+      say "VACUITY-CTL-1: with the zero-row check deleted ALONE the neutered case still reds — by the READ-BACK '$VRB', and NOT by VACUOUS, so the two guards are independent and this arm attributes to the read-back"
+    else
+      say "VACUITY-CTL-1: FAIL — with the check deleted the case did not red by the read-back's name alone"
+      grep -h "FAIL" "$C1"/*.sql.log 2>/dev/null | head -2 | tee -a "$OUT/run.log"
+      FAILED=1
+    fi
+    if cases "$C3" "$C3" >/dev/null 2>&1; then
+      say "VACUITY-CTL-3: with BOTH the zero-row check and the read-back deleted the neutered case PASSES (passes=$(cat "$C3/passes")) — the hole of a7a71e8 returns, which is what makes the pair responsible for closing it"
+    else
+      say "VACUITY-CTL-3: FAIL — with both guards gone the neutered case still did not pass, so something else is closing this route and is unaccounted for"
+      grep -h "FAIL" "$C3"/*.sql.log 2>/dev/null | head -2 | tee -a "$OUT/run.log"
+      FAILED=1
+    fi
+  else
+    say "VACUITY-CTL-1: PLANT NOT ESTABLISHED — the build with the patched helpers did not come up"
+    FAILED=1
+  fi
+  CASE_HELPERS=$HERE/p8-case-helpers.sql
+  build "$HERE/p8-overlay.sql" "$OUT/final-2" >/dev/null && cases "$OUT/final-2" >/dev/null \
+    && say "cluster restored to the baseline after the vacuity controls, passes=$(cat "$OUT/final-2/passes")" \
+    || { say "FAIL: could not restore the baseline after the vacuity controls"; FAILED=1; }
+else
+  say "VACUITY-CTL-1: PLANT NOT ESTABLISHED — the patched copies could not be built: $(tail -1 "$C1/patch.log")"
+  FAILED=1
+fi
 
 say "=== the check's own STANDARD LIBRARY, measured by planting one (round 23, N-17) ==="
 # The fourteenth challenge's blocker, reproduced here before it was fixed: the
