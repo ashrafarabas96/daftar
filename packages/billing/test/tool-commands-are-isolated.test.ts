@@ -32,12 +32,42 @@
  * without trusting any run: if an un-isolated command is written down
  * anywhere in this repository, this test reds.
  *
+ * ROUND 35, A NOTE ON THE MATCHER'S GREED. A flag's optional value is matched
+ * LAZILY. Greedily, `python3 -I tools/arms/pinned-now-arm.py
+ * tools/seal-check-run.py` — an arm invoked on a file, isolated and correct —
+ * had its flag segment read as `-I tools/arms/pinned-now-arm.py`, so the
+ * strict execution grammar saw a script path and reported a FALSE offence on a
+ * correct command. Lazily the segment is `-I`, the tool is the arm, and
+ * `-X utf8 <tool>` still backtracks into taking `utf8` as the value.
+ *
+ * ROUND 34 — TWO THINGS A READER OF THIS FILE MUST KNOW UP FRONT.
+ *
+ * (1) THE VERDICT IS MEASURED, AND WHAT IT MEASURES IS THE INTERPRETER THIS
+ * RUN HAS. Isolation is no longer modelled; it is obtained by running the
+ * interpreter a document names with exactly its flags and reading
+ * `sys.flags.isolated`. So this law's verdicts are relative to the CPython of
+ * the machine it runs on, and the version is PRINTED BY THE RUN rather than
+ * written here — see `CPYTHON_HERE` below, which the arms report. Judged on
+ * another interpreter the same documents could read differently. That is the
+ * price of execution over a model, taken deliberately after four rounds in
+ * which a hand-written model of CPython's command line was wrong in some
+ * production (F-56, F-58, F-59, F-60).
+ *
+ * (2) ONE GATE HERE IS CHOSEN, NOT MEASURED. A flag segment containing `-c`,
+ * `-m` or `--` is NEVER EXECUTED, and the refusal counts as an offence. Those
+ * load code and end option processing, and the documents this law reads
+ * include reviewers' reports that this author does not control: a law that
+ * reads other people's documents must not become a way to run them. The gate
+ * fails closed — it can produce a false RED and can never hide a hole — but it
+ * is a judgement, not a measurement, and it is written here so nobody has to
+ * infer that from the code.
+ *
  * The law reads RAW source on purpose, unlike `db-refusals-name-their-defence`
  * — a command inside a comment or a docstring is exactly what F-50 was, so
  * stripping comments would strip the defect.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -219,7 +249,7 @@ const TOOLS = SCRIPTS.map((s) => s.split('/').pop() ?? s);
  * test.
  */
 const INVOCATION = new RegExp(
-  String.raw`((?:[A-Za-z0-9_.\-]*/)*python(?:3(?:\.\d+)*)?)((?:\s+-\S+(?:\s+[^-\s]\S*)?)*)\s+(?:\S*/)?(${TOOLS.join('|').replace(/\./g, '\\.')})`,
+  String.raw`((?:[A-Za-z0-9_.\-]*/)*python(?:3(?:\.\d+)*)?)((?:\s+-\S+(?:\s+[^-\s]\S*)??)*)\s+(?:\S*/)?(${TOOLS.join('|').replace(/\./g, '\\.')})`,
   'g',
 );
 
@@ -329,27 +359,169 @@ const interpreterFlags = (captured: string): { flag: string; value?: string }[] 
  * safety gate, not a verdict: it can only produce a false red.
  */
 const PROBE = 'import sys; print(sys.flags.isolated)';
-const NEVER_EXECUTED: ReadonlySet<string> = new Set(['-c', '-m', '--']);
-const verdicts = new Map<string, boolean>();
 
-const isolatedByExecution = (interpreter: string, flags: string): boolean => {
+/**
+ * The interpreter this run measures, printed BY the run. Never a literal: a
+ * version written by hand is the kind of claim this round removed.
+ */
+/**
+ * THE ONE INTERPRETER THIS LAW RUNS, by absolute path, resolved once.
+ *
+ * ROUND 35, THE CHALLENGER'S F-61 (P0). Round 34's verdict spawned the
+ * interpreter SPELLING the document wrote, and a relative spelling resolves
+ * against the suite's working directory. Measured end to end: with an
+ * executable `shimdir/python3` that writes a marker, prints `1` and exits 0,
+ * one line in a repository file reading
+ * `shimdir/python3 tools/manifest-digests.py --dir d --check` left the suite
+ * at 17 passed rc 0 — SILENT — and the shim had run. A document that names the
+ * program chooses the answer.
+ *
+ * So a document's interpreter spelling is DATA TO CLASSIFY, never a program to
+ * run. This is the program, and it is `sys.executable` of the harness's own
+ * `python3`, asked for once with `-I`.
+ */
+const HARNESS_PYTHON = ((): string => {
+  const r = spawnSync('python3', ['-I', '-c', 'import sys; print(sys.executable)'], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+  });
+  const path = r.status === 0 ? (r.stdout ?? '').trim() : '';
+  return path.startsWith('/') ? path : '';
+})();
+
+/** The version this run measures, printed BY the run — never a literal. */
+const CPYTHON_HERE = ((): string => {
+  if (HARNESS_PYTHON === '') return 'NO CPYTHON HERE';
+  const r = spawnSync(HARNESS_PYTHON, ['-I', '-c', 'import sys; print(sys.version.split()[0])'], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    env: { PATH: '/usr/bin:/bin' },
+  });
+  return r.status === 0 ? (r.stdout ?? '').trim() : 'NO CPYTHON HERE';
+})();
+
+/**
+ * Is the spelling a document wrote one this law can CLASSIFY, without running
+ * it, as denoting THIS CPython?
+ *
+ * F-61, instance B. A bare `python`, `python3` or `python3.<this minor>` is
+ * known. An absolute path is known only when `realpath` — which reads the
+ * filesystem and executes nothing — lands on the same binary as the harness's
+ * own interpreter. **Everything else is REFUSED BY NAME**: a relative path
+ * (which names whatever sits beside whoever runs the suite, and was instance
+ * B), an absolute path to some other binary, a version this machine does not
+ * have, any other spelling. Refuse what you cannot classify.
+ */
+const KNOWN_SPELLINGS = ((): ReadonlySet<string> => {
+  const minor = /^(\d+\.\d+)\./.exec(CPYTHON_HERE)?.[1];
+  return new Set(['python', 'python3', ...(minor === undefined ? [] : [`python${minor}`])]);
+})();
+
+const sameBinaryAsHarness = (absolute: string): boolean => {
+  if (HARNESS_PYTHON === '') return false;
+  try {
+    return realpathSync(absolute) === realpathSync(HARNESS_PYTHON);
+  } catch {
+    return false;
+  }
+};
+
+const classifiableInterpreter = (spelling: string): boolean => {
+  if (spelling.startsWith('/')) return sameBinaryAsHarness(spelling);
+  if (spelling.includes('/')) return false;
+  return KNOWN_SPELLINGS.has(spelling);
+};
+
+/**
+ * The argv this law is willing to hand to CPython, or a REFUSAL NAME.
+ *
+ * F-61, instance A, and the inversion both reviewers asked for. Round 34
+ * refused `-c`, `-m` and `--` by EXACT token and handed everything else to the
+ * interpreter; CPython accepts an ATTACHED argument, so `-cprint(7)` was not
+ * `-c` and ran. Measured: `python3 -cprint(7)` prints 7 at rc 0, and one line
+ * in a repository file made `npm test` write a marker file —
+ * `executed-by-the-gate` — while the suite reported a failure for the probe's
+ * OUTPUT, so the red was not a defence: the code had already run.
+ *
+ * The rule is now an ALLOW-LIST, the only direction that covers a spelling
+ * nobody has thought of:
+ *
+ *   - a cluster `-[A-Za-z]+` whose every letter is argument-free and is
+ *     neither `c` nor `m` (a cluster containing either turns the rest into
+ *     attached code: `-Ic` is `-I -c ''`);
+ *   - `-X` or `-W` with one value of plain characters;
+ *   - nothing else, ever.
+ *
+ * Refusal counts as an OFFENCE, so this can only produce a false RED.
+ */
+const EXECUTABLE_LETTERS = new Set('BbdEhiIOPqRsSuVvx?'.split(''));
+const VALUE_FLAGS: ReadonlySet<string> = new Set(['-X', '-W']);
+const PLAIN_VALUE = /^[A-Za-z0-9_.:=,+-]+$/;
+
+const REFUSED_TOKEN = 'REFUSED-UNEXECUTABLE-TOKEN';
+const REFUSED_INTERPRETER = 'REFUSED-UNCLASSIFIABLE-INTERPRETER';
+const REFUSED_NO_PYTHON = 'REFUSED-NO-CPYTHON-HERE';
+
+const executableArgv = (flags: string): { argv: string[] } | { refusal: string; token: string } => {
+  // Tokenised HERE, strictly, rather than through `interpreterFlags`: that
+  // function exists to describe what the matcher found, and it SKIPS a bare
+  // token. A skipped token is a token nobody classified, which is how a script
+  // path reached the interpreter. This loop classifies every token or refuses.
+  const tokens = flags
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t.length > 0);
+  const argv: string[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const t = tokens[i] ?? '';
+    if (VALUE_FLAGS.has(t)) {
+      const value = tokens[i + 1];
+      if (value === undefined || !PLAIN_VALUE.test(value)) return { refusal: REFUSED_TOKEN, token: `${t} ${value ?? '(nothing)'}` };
+      argv.push(t, value);
+      i += 1;
+      continue;
+    }
+    if (!/^-[A-Za-z]+$/.test(t) || ![...t.slice(1)].every((c) => EXECUTABLE_LETTERS.has(c))) {
+      return { refusal: REFUSED_TOKEN, token: t };
+    }
+    argv.push(t);
+  }
+  return { argv };
+};
+
+const verdicts = new Map<string, { isolated: boolean; refusal?: string }>();
+
+/**
+ * ISOLATED, or a named refusal. Nothing that reaches `spawnSync` comes from
+ * the document: the program is `HARNESS_PYTHON` by absolute path, and the
+ * flags are the allow-listed tokens this law has just enumerated.
+ */
+const verdictFor = (interpreter: string, flags: string): { isolated: boolean; refusal?: string } => {
   const key = `${interpreter}\u0000${flags}`;
   const cached = verdicts.get(key);
   if (cached !== undefined) return cached;
-  const parsed = interpreterFlags(flags);
-  let ok = false;
-  if (!parsed.some(({ flag }) => NEVER_EXECUTED.has(flag))) {
-    const argv = parsed.flatMap(({ flag, value }) => (value === undefined ? [flag] : [flag, value]));
-    const r = spawnSync(interpreter, [...argv, '-c', PROBE], {
+  let out: { isolated: boolean; refusal?: string };
+  const parsed = executableArgv(flags);
+  if ('refusal' in parsed) {
+    out = { isolated: false, refusal: `${parsed.refusal} ${parsed.token}` };
+  } else if (HARNESS_PYTHON === '') {
+    out = { isolated: false, refusal: REFUSED_NO_PYTHON };
+  } else if (!classifiableInterpreter(interpreter)) {
+    out = { isolated: false, refusal: `${REFUSED_INTERPRETER} ${interpreter}` };
+  } else {
+    const r = spawnSync(HARNESS_PYTHON, [...parsed.argv, '-c', PROBE], {
       encoding: 'utf8',
       timeout: 10_000,
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+      env: { PATH: '/usr/bin:/bin' },
     });
-    ok = r.status === 0 && (r.stdout ?? '').trim() === '1';
+    out = { isolated: r.status === 0 && (r.stdout ?? '').trim() === '1' };
   }
-  verdicts.set(key, ok);
-  return ok;
+  verdicts.set(key, out);
+  return out;
 };
+
+const isolatedByExecution = (interpreter: string, flags: string): boolean => verdictFor(interpreter, flags).isolated;
 
 /** The spelling-only cluster test, kept for F-59's deletion arm. */
 const isolatedByModel = (flags: string): boolean =>
@@ -399,7 +571,8 @@ const offencesIn = (label: string, text: string): string[] => {
   const found: string[] = [];
   for (const { n, line } of logicalLines(text)) {
     for (const m of line.matchAll(INVOCATION)) {
-      if (!isolatedByExecution(m[1] ?? 'python3', m[2] ?? '')) found.push(`${label}:${n}: ${line.trim()}`);
+      const v = verdictFor(m[1] ?? 'python3', m[2] ?? '');
+      if (!v.isolated) found.push(`${label}:${n}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
     }
   }
   return found;
@@ -452,7 +625,8 @@ const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], nu
     }
     if (inFence && exempt) continue;
     for (const m of line.matchAll(INVOCATION)) {
-      if (!isolatedByExecution(m[1] ?? 'python3', m[2] ?? '')) found.push(`${label}:${n}: ${line.trim()}`);
+      const v = verdictFor(m[1] ?? 'python3', m[2] ?? '');
+      if (!v.isolated) found.push(`${label}:${n}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
     }
   }
   return [found, exemptBlocks];
@@ -526,7 +700,8 @@ describe('every written invocation of the pack tools is isolated', () => {
       for (const { line } of logicalLines(text)) {
         for (const m of line.matchAll(INVOCATION)) {
           seen += 1;
-          if (!isolatedByExecution(m[1] ?? 'python3', m[2] ?? '')) offences.push(`${label}: ${line.trim()}`);
+          const v = verdictFor(m[1] ?? 'python3', m[2] ?? '');
+          if (!v.isolated) offences.push(`${label}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
         }
       }
     }
@@ -917,10 +1092,10 @@ describe('every written invocation of the pack tools is isolated', () => {
     // than of a model: `python3 -XI -c "…isolated"` prints 0, so it is an
     // offence however the letters are spelled.
     for (const flags of [' -XI', ' -WI', ' -XIdev', ' -X -I', ' -W -I']) {
-      expect(isolatedByExecution('python3', flags), `${flags} is read as isolated, but CPython does not isolate it`).toBe(false);
+      expect(isolatedByExecution('python3', flags), `${flags} is read as isolated, but CPython ${CPYTHON_HERE} does not isolate it`).toBe(false);
     }
     for (const flags of [' -I', ' -RI', ' -sI', ' -IsE']) {
-      expect(isolatedByExecution('python3', flags), `${flags} IS isolated in CPython and this law reds on it`).toBe(true);
+      expect(isolatedByExecution('python3', flags), `${flags} IS isolated in CPython ${CPYTHON_HERE} and this law reds on it`).toBe(true);
     }
     // Fails closed on anything that is not a clean `1` at rc 0.
     expect(isolatedByExecution('python3.99', ' -I'), 'a missing interpreter is read as isolated, which is a fail-open').toBe(false);
@@ -934,6 +1109,10 @@ describe('every written invocation of the pack tools is isolated', () => {
     // real commands as isolated -- otherwise this round reds the repository.
     expect(isolatedByExecution('python3', ' -I')).toBe(true);
     expect(isolatedByExecution('/usr/bin/python3', ' -I')).toBe(true);
+    // The bound this round creates, asserted rather than described: the law
+    // can name the interpreter it measured. If the probe cannot run, every
+    // verdict above is an offence by construction and this says so first.
+    expect(CPYTHON_HERE, 'no CPython here, so this law measures nothing and every verdict is a refusal').toMatch(/^3\.\d+\.\d+$/);
   });
 
   it('F-59 guard deletion: the model clears -XI where CPython does not', () => {
@@ -972,5 +1151,83 @@ describe('every written invocation of the pack tools is isolated', () => {
     // by the pack arm above, this is its message half.
     const shaped = looksLikeReviewer();
     expect(shaped.test('P5-CHALLENGE-12345678.md'), 'the name from the F-53 report is no longer reviewer-shaped').toBe(true);
+  });
+  it('F-61: the law never runs what a document supplies — side-effect arms', () => {
+    // ROUND 35, THE CHALLENGER'S F-61 (P0), adopted by the coordinator. These
+    // arms pass only if the refusal is NAMED and the marker file is ABSENT:
+    // a red that arrives after the payload ran is not a defence.
+    const dir = mkdtempSync(join(tmpdir(), 'f61-'));
+    const suiteMarker = join(dir, 'MARKER-SUITE');
+    const shimMarker = join(dir, 'MARKER-SHIM');
+    const shimDir = join(dir, 'shimdir');
+    mkdirSync(shimDir);
+    const shim = join(shimDir, 'python3');
+    writeFileSync(shim, `#!/bin/sh\nprintf executed-by-the-interpreter-path > ${shimMarker}\necho 1\n`);
+    chmodSync(shim, 0o755);
+
+    // INSTANCE A, planted verbatim: one token, no whitespace, so the attached
+    // form survives tokenisation.
+    const payload = `-c__import__("pathlib").Path("${suiteMarker}").write_text("executed-by-the-gate")`;
+    const lineA = `Example: \`python3 ${payload} tools/manifest-digests.py --check\``;
+    const foundA = offencesIn('fixture', lineA);
+    expect(foundA, 'instance A is not reported at all').toHaveLength(1);
+    expect(foundA[0], 'instance A is reported without naming the refusal').toContain('REFUSED-UNEXECUTABLE-TOKEN');
+    expect(existsSync(suiteMarker), 'THE LAW EXECUTED A DOCUMENT PAYLOAD: the marker file exists').toBe(false);
+
+    // INSTANCE B, planted verbatim: a RELATIVE interpreter spelling.
+    const lineB = 'Example: `shimdir/python3 tools/manifest-digests.py --dir d --check`';
+    const foundB = offencesIn('fixture', lineB);
+    expect(foundB, 'instance B is not reported at all').toHaveLength(1);
+    expect(foundB[0], 'instance B is reported without naming the refusal').toContain('REFUSED-UNCLASSIFIABLE-INTERPRETER');
+    expect(existsSync(shimMarker), 'THE LAW RAN A PROGRAM THE DOCUMENT NAMED: the shim marker exists').toBe(false);
+    // An ABSOLUTE path to another binary is refused too, by the same name.
+    const absolute = verdictFor(shim, ' ');
+    expect(absolute.isolated).toBe(false);
+    expect(absolute.refusal, 'an absolute path to another binary is not refused by name').toContain('REFUSED-UNCLASSIFIABLE-INTERPRETER');
+    expect(existsSync(shimMarker), 'the shim ran when its absolute path was classified').toBe(false);
+
+    // GUARD DELETION, one per copy. Each payload must be LIVE: if neither
+    // would do anything when run, these arms prove nothing.
+    const liveA = spawnSync('python3', [payload, 'tools/manifest-digests.py'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: { PATH: '/usr/bin:/bin' },
+    });
+    expect(liveA.status, 'the instance A payload no longer runs, so the token guard guards nothing').toBe(0);
+    expect(existsSync(suiteMarker), 'the instance A payload wrote no marker, so it is not a live payload').toBe(true);
+    rmSync(suiteMarker);
+
+    const liveB = spawnSync(shim, ['tools/manifest-digests.py'], { encoding: 'utf8', timeout: 10_000, env: { PATH: '/usr/bin:/bin' } });
+    expect(liveB.status, 'the shim does not run, so the interpreter guard guards nothing').toBe(0);
+    expect((liveB.stdout ?? '').trim(), 'the shim does not print the 1 that would forge an isolated verdict').toBe('1');
+    expect(existsSync(shimMarker), 'the shim wrote no marker, so it is not a live payload').toBe(true);
+    rmSync(shimMarker);
+
+    // And with both payloads proven live, the law's verdicts are refusals and
+    // the markers stay absent -- which is the whole claim of this round.
+    verdicts.clear();
+    expect(verdictFor('python3', ` ${payload}`).refusal).toContain('REFUSED-UNEXECUTABLE-TOKEN');
+    expect(verdictFor('shimdir/python3', ' ').refusal).toContain('REFUSED-UNCLASSIFIABLE-INTERPRETER');
+    expect(existsSync(suiteMarker), 'a refusal still executed the payload').toBe(false);
+    expect(existsSync(shimMarker), 'a refusal still ran the shim').toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('F-61: the allow-list refuses every form either reviewer named, by name', () => {
+    // The coordinator's list, each refused WITHOUT being run.
+    for (const flags of [' -c__import__("os")', ' -cprint(7)', ' -mthis', ' -c', ' -m', ' --', ' -Ic', ' -Im', ' tools/x.py', ' -X', ' -W']) {
+      const v = verdictFor('python3', flags);
+      expect(v.isolated, `${flags} is cleared`).toBe(false);
+      expect(v.refusal, `${flags} is not refused by name`).toContain('REFUSED-UNEXECUTABLE-TOKEN');
+    }
+    // And the real forms still measure, so the law stays satisfiable.
+    for (const flags of [' -I', ' -RI', ' -sI', ' -IsE', ' -I -X utf8', ' -X utf8 -I']) {
+      expect(verdictFor('python3', flags).isolated, `${flags} is no longer measured as isolated`).toBe(true);
+    }
+    for (const flags of [' -X utf8', ' -W ignore', ' -E -s', '']) {
+      const v = verdictFor('python3', flags);
+      expect(v.isolated, `${flags} is cleared`).toBe(false);
+      expect(v.refusal, `${flags} was refused rather than MEASURED, so the law stopped measuring`).toBeUndefined();
+    }
   });
 });
