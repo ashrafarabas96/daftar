@@ -70,7 +70,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 
 import { describe, expect, it, onTestFinished } from 'vitest';
 
@@ -257,6 +257,9 @@ const REFUSED_PACK_NOT_PINNED = 'REFUSED-PACK-NOT-THE-PINNED-SET';
  * `P5_PACK_DIGEST`, the run it started must be looking at exactly that pack.
  */
 const REFUSED_PACK_MOVED = 'REFUSED-PACK-MOVED-DURING-MEASUREMENT';
+const REFUSED_PACK_COPY_IMPOSSIBLE = 'REFUSED-PACK-COPY-NOT-POSSIBLE';
+const REFUSED_PACK_NAME_NOT_UTF8 = 'REFUSED-PACK-NAME-NOT-UTF8';
+const REFUSED_PACK_ENTRY_NOT_A_FILE = 'REFUSED-PACK-ENTRY-NOT-A-FILE';
 
 /**
  * The pack's identity: every name beside its sha256, sorted, hashed. The gate
@@ -316,12 +319,53 @@ const packDigest = (dir: string): string => {
  */
 const snapshotPack = (dir: string): string => {
   const into = mkdtempSync(join(tmpdir(), 'p5-pack-snapshot-'));
-  for (const name of readdirSync(dir)) {
+  // The challenger's asymmetry note on round 57c: the gate refuses a private
+  // copy that lands inside a tree it measures, and this helper had no twin of
+  // it. `tmpdir()` reads TMPDIR, TMP and TEMP and falls back to /tmp, so the
+  // destination is operator-steerable, and a copy of 87 documents written
+  // inside the repository is a directory this law's own census then walks --
+  // which is how a hardening turns into a false red somewhere else entirely.
+  // Refused here by the same name the gate uses, before anything is copied.
+  const landed = realpathSync(into);
+  for (const tree of [realpathSync(REPO), realpathSync(join(__dirname, '..'))]) {
+    if (landed === tree || landed.startsWith(tree + sep)) {
+      rmSync(into, { recursive: true, force: true });
+      throw new Error(
+        `${REFUSED_PACK_COPY_IMPOSSIBLE}: this arm's private copy of the pack landed at ${landed}, inside ${tree}, which is a tree this law measures. Point TMPDIR at a directory outside the repository`,
+      );
+    }
+  }
+  // The coordinator's R57-C-03 and R57-C-04, the law's half of both. Names are
+  // listed as BUFFERS and round-tripped through UTF-8: a filename that is not
+  // valid UTF-8 reaches a JavaScript string as replacement characters, so this
+  // reader and `tools/law-ran.py` could never be reading one set of names, and
+  // it is refused by name rather than quietly renamed by the decoder. And an
+  // entry that is not a regular file is REFUSED, not skipped -- the signed
+  // `29cef86` refused it through its digest (`<not-a-file>`), and a copier that
+  // skips what it cannot classify drops it out of the measured set in silence.
+  for (const raw of readdirSync(dir, { encoding: 'buffer' })) {
+    const name = raw.toString('utf8');
+    if (!Buffer.from(name, 'utf8').equals(raw)) {
+      rmSync(into, { recursive: true, force: true });
+      throw new Error(
+        `${REFUSED_PACK_NAME_NOT_UTF8}: ${dir} holds a filename that is not valid UTF-8 (${JSON.stringify(raw.toString('latin1'))}), so this law and tools/law-ran.py could not be reading one set of names. Rename it, or say in review why a name like that belongs here`,
+      );
+    }
     const from = join(dir, name);
+    let isFile = false;
     try {
-      if (!statSync(from).isFile()) continue;
-    } catch {
-      continue;
+      isFile = statSync(from).isFile();
+    } catch (error) {
+      rmSync(into, { recursive: true, force: true });
+      throw new Error(
+        `${REFUSED_FILE_NOT_READABLE}: ${from} is in the pack and could not be read at all (${String(error)}), so this law would be measuring a set it never saw whole`,
+      );
+    }
+    if (!isFile) {
+      rmSync(into, { recursive: true, force: true });
+      throw new Error(
+        `${REFUSED_PACK_ENTRY_NOT_A_FILE}: ${from} is in the pack and is not a regular file, so it cannot be copied into the private directory this law measures and would drop out of the measured set in silence. The pack is a flat set of documents`,
+      );
     }
     writeFileSync(join(into, name), readFileSync(from));
   }
@@ -347,7 +391,16 @@ const REFUSED_TEST_WITHOUT_LAW_GATE = 'REFUSED-TEST-DOES-NOT-RUN-THE-LAW';
  * says the command is the whole of what runs. So the script is pinned as a
  * LITERAL, here and in the gate itself.
  */
-const PINNED_TEST_SCRIPT = 'vitest run && python3 -I tools/law-ran.py';
+const PINNED_TEST_SCRIPT = 'vitest run && python3 -I tools/law-ran.py && python3 -I tools/arms/pinned-now-arm.py tools/seal-check-run.py';
+
+/**
+ * The coordinator's R55-C-06 and the challenger's R55-S4 are the same file seen
+ * from two sides. The arm program's BYTES were pinned a round ago and nothing
+ * CALLED it: not `test`, not `gate:law`, no case, no CI. A pin bounds content;
+ * only PLACEMENT bounds reach. So the arm is chained into the command people
+ * run, with `&&` so a red arm stops the command, and its invocation is part of
+ * the byte-equal pin above -- which is what arms the placement itself.
+ */
 
 /**
  * ROUND 53, THE COORDINATOR'S CD-52-01 (P1, a committed one-file fail-open).
@@ -3141,7 +3194,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     }
   });
 
-  it('R54-S1: the two digest readers agree over names chosen to make them disagree', () => {
+  it("R54-S1/R55-S3: the two digest readers agree over the pack's own names and over names built to break them", () => {
     // The pack digest is computed TWICE, once here and once in
     // `tools/law-ran.py`, and the gate hands its value to the run this suite
     // is part of. Two implementations of one definition is the point -- it is
@@ -3156,19 +3209,50 @@ describe('every written invocation of the pack tools is isolated', () => {
     // only by running it. The names are the challenger's pair plus the
     // boundary either side of U+D7FF, which is where the two orders diverge.
     //
+    // R55-S3 (the challenger's P3): five names this arm WRITES are five names
+    // somebody thought of, and its sentence claimed an adversarial set. The
+    // challenger made the two readers disagree in a way those five cannot
+    // expose -- Python ordering with hyphens stripped -- and the probe passed
+    // while the real pack then refused, saying the pack had moved when it had
+    // not, which is the exact failure this arm exists to prevent. So the names
+    // are DERIVED FROM THE SUBJECT as well: every name the pack actually
+    // carries, which is where hyphens, digits, dots and case live, plus the
+    // constructed boundary cases below. A disagreement over any character the
+    // real pack uses is now exposed by the real pack's own names.
+    //
     // F-61 holds: every argument reaching `spawnSync` is a literal or a path
     // this arm made, and the Python it runs is `-I` with a literal program.
     const dir = mkdtempSync(join(tmpdir(), 'r56-digest-'));
     onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
-    for (const [name, body] of [
+    const constructed = [
       ['z\uFFFD.md', 'replacement character'],
       ['z\u{1F600}.md', 'above the BMP'],
       ['z\uD7FF.md', 'the last code point below the surrogates'],
       ['z\uE000.md', 'the first code point above them'],
       ['plain.md', 'ascii'],
-    ] as const) {
+    ] as const;
+    for (const [name, body] of constructed) {
       writeFileSync(join(dir, name), body);
     }
+    const fromSubject = existsSync(PACK)
+      ? readdirSync(PACK).filter((name) => {
+          try {
+            return statSync(join(PACK, name)).isFile();
+          } catch {
+            return false;
+          }
+        })
+      : [];
+    for (const name of fromSubject) {
+      // The NAME is the subject here, not the bytes, so each is written with a
+      // body of its own name: nothing of the pack's content is copied and the
+      // two readers still hash the same bytes under the same name.
+      writeFileSync(join(dir, name), `name derived from the pack: ${name}`);
+    }
+    expect(
+      fromSubject.length,
+      `${REFUSED_PACK_MOVED}: this arm found no names in the pack at ${PACK} to derive from, so it would be testing only the five names it invented (R55-S3)`,
+    ).toBeGreaterThan(0);
     const mine = packDigest(dir);
     // The probe must not LITTER: importing by file path compiles the module,
     // and a `__pycache__` written into `tools/` is an untracked binary file
@@ -3516,9 +3600,22 @@ describe('every written invocation of the pack tools is isolated', () => {
     const pack = snapshotPack(PACK);
     onTestFinished(() => rmSync(pack, { recursive: true, force: true }));
     const digestAtEntry = packDigest(pack);
+    // R55-S2 (the challenger's P3): `digestAtEntry !== sourceAtEntry` has TWO
+    // causes and the old message asserted one of them. It said the pack had
+    // changed while the copy ran, and the challenger produced that sentence by
+    // mutating the SNAPSHOT with the pack untouched. So the source is read
+    // AGAIN at the mismatch, and the message names which of the two moved
+    // rather than guessing -- a refusal that misnames its cause sends the
+    // reader to the wrong directory.
+    const whichMoved =
+      digestAtEntry === sourceAtEntry
+        ? ''
+        : packDigest(PACK) === sourceAtEntry
+          ? `the SOURCE at ${PACK} is unchanged (${sourceAtEntry}), so it is the SNAPSHOT at ${pack} that differs: something wrote into this arm's own private copy`
+          : `the SOURCE at ${PACK} moved while this arm was COPYING it (it was ${sourceAtEntry} before the copy and is ${packDigest(PACK)} now), so the snapshot holds part of one state and part of another`;
     expect(
       digestAtEntry,
-      `${REFUSED_PACK_MOVED}: the pack at ${PACK} changed while this arm was COPYING it (the source was ${sourceAtEntry} before the copy), so the snapshot holds part of one state and part of another and no figure from it belongs to a single instant`,
+      `${REFUSED_PACK_MOVED}: the snapshot and the source disagree and no figure from the snapshot belongs to a single instant. ${whichMoved}`,
     ).toBe(sourceAtEntry);
     const handedDown = (process.env.P5_PACK_DIGEST ?? '').trim();
     expect(
@@ -3626,13 +3723,43 @@ describe('every written invocation of the pack tools is isolated', () => {
       packDigest(pack),
       `${REFUSED_PACK_MOVED}: this arm's own private snapshot at ${pack} changed while it was being read, which means something outside this run is writing into it`,
     ).toBe(digestAtEntry);
-    // And the live pack is read again: the figures above are honest about the
-    // snapshot either way, but a pack that moved during the pass is no longer
-    // the pack they describe, and saying so is this arm's promise.
-    expect(
-      packDigest(PACK),
-      `${REFUSED_PACK_MOVED}: the pack at ${PACK} changed while this arm was reading a snapshot of it (it was ${sourceAtEntry} before the copy). Every figure above is true of the snapshot and none of them describes the pack as it now stands. Re-run against a pack nothing else is writing to, or point P5_PACK_DIR at a private copy`,
-    ).toBe(sourceAtEntry);
+    // R55-S1 (the challenger's P2, and the consequential finding of its round
+    // 55): this arm used to REFUSE when the live pack moved after the copy,
+    // while `tools/law-ran.py` says in writing that refusing on exactly that
+    // "would be a false red about figures that are true of a real instant of
+    // the pack". One diff, two doctrines about one event, and the refusal's own
+    // words conceded it. Worse in practice: the default pack is a directory
+    // sibling sessions write to BY DESIGN, so an ordinary `npm test` went red
+    // whenever anyone enrolled a document during the twenty seconds the suite
+    // reads -- measured by the challenger at `1 failed | 304 passed (305)` --
+    // and a red gate carries no signature.
+    //
+    // So the law agrees with the gate now, and the distinction is WHOSE
+    // directory moved. A movement in a copy the GATE handed down (it hands its
+    // own private directory, and `P5_PACK_DIGEST` is how this run knows) is an
+    // intrusion into a path only two programs can name, and that still refuses
+    // by name above and here. A movement in a SHARED pack nobody promised to
+    // hold still is reported beside the figures, not refused: every figure in
+    // this arm is a statement about the snapshot it names, which is a real
+    // instant of the pack.
+    const sourceAtExit = packDigest(PACK);
+    if (handedDown !== '') {
+      expect(
+        sourceAtExit,
+        `${REFUSED_PACK_MOVED}: the private pack directory the gate handed this run at ${PACK} changed while this arm was reading a snapshot of it (it was ${sourceAtEntry} before the copy), which means something outside the gate and this run is writing into a path only those two can name`,
+      ).toBe(sourceAtEntry);
+    }
+    // When nobody handed a directory down, the pack is the SHARED one, and this
+    // arm makes NO claim about it after the copy: every figure above is a
+    // statement about the snapshot it names, which is a real instant of the
+    // pack. `sourceAtExit` is read because the reader WHO CAN SAY SOMETHING
+    // about a shared pack is the gate -- it prints the movement beside the
+    // figures without refusing (measured) -- and because a reader of this file
+    // should see that the value was looked at and deliberately not asserted on.
+    // Reporting it from HERE was tried and dropped: a `console.log` inside a
+    // passing case did not reach the output in this runner, and a note nobody
+    // reads is not a report (R55-S1).
+    expect(typeof sourceAtExit).toBe('string');
   });
   it('reads the seal refusal by NAME, and a silent seal classifies nothing', () => {
     // B-12's reader, armed sequentially rather than through a race: both of

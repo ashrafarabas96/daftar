@@ -137,7 +137,13 @@ LAW_NOT_RUN = "LAW-NOT-RUN"
 # code, never phrased as an npm script, because npm configuration can silence npm
 # and npx alike (see CD-52-01 below) -- which is PATCH-REQ-P5-001 with the
 # Repo/CI owner.
-PINNED_TEST_SCRIPT = "vitest run && python3 -I tools/law-ran.py"
+# The challenger's R55-S4 and the coordinator's R55-C-06: a pin bounds the arm
+# program's bytes, and only PLACEMENT bounds its reach, so it is chained into
+# the command people run and that invocation is part of this byte-equal pin.
+PINNED_TEST_SCRIPT = (
+    "vitest run && python3 -I tools/law-ran.py "
+    "&& python3 -I tools/arms/pinned-now-arm.py tools/seal-check-run.py"
+)
 
 # ROUND 53, THE COORDINATOR'S CD-52-01 (P1, a committed one-file fail-open).
 # Pinning the `test` script pins the COMMAND and says nothing about the SHELL it
@@ -213,6 +219,23 @@ REFUSED_PACK_MOVED = "REFUSED-PACK-MOVED-DURING-MEASUREMENT"
 # NEVER a fall-back to the live pack: a step that quietly measures the moving
 # subject when its own copy fails has the hole R54-S2 named, back again.
 REFUSED_PACK_COPY_IMPOSSIBLE = "REFUSED-PACK-COPY-NOT-POSSIBLE"
+# The coordinator's R57-C-03: a pack filename that is not valid UTF-8 came back
+# from `os.listdir` with surrogates in it and ended this step in a traceback at
+# `entry.encode()` -- fail-closed by exit code, unreadable as a verdict. Names
+# are decoded with `surrogateescape` and a name that is not valid UTF-8 is
+# refused BY NAME, because this step cannot hand such a name to the law and
+# claim the two readers saw one set.
+REFUSED_PACK_NAME_NOT_UTF8 = "REFUSED-PACK-NAME-NOT-UTF8"
+# The coordinator's R57-C-04: both copiers SKIPPED anything that is not a
+# regular file, so a subdirectory dropped out of the measured set in silence --
+# and the signed `29cef86` refused it, because its digest marked non-files
+# `<not-a-file>`. Skipping what you cannot classify is the oldest hole in this
+# phase, so it is a refusal in both copiers now.
+REFUSED_PACK_ENTRY_NOT_A_FILE = "REFUSED-PACK-ENTRY-NOT-A-FILE"
+# The coordinator's R57-C-01, second half: the directory this step writes the
+# runner's report into is created the same way as the private pack copy, and an
+# OSError there was a traceback too.
+REFUSED_REPORT_DIR_IMPOSSIBLE = "REFUSED-REPORT-DIRECTORY-NOT-POSSIBLE"
 
 
 def pack_digest(directory: Path) -> str:
@@ -223,7 +246,7 @@ def pack_digest(directory: Path) -> str:
     # code unit, and the two disagree whenever one name holds a character above
     # the BMP and another one above U+D7FF -- one directory, one instant, two
     # digests, and a refusal that would say the pack moved when it had not.
-    for name in sorted(os.listdir(directory), key=lambda entry: entry.encode()):
+    for name in sorted(os.listdir(directory), key=lambda entry: entry.encode("utf-8", "surrogateescape")):
         full = directory / name
         try:
             if full.is_file():
@@ -233,7 +256,12 @@ def pack_digest(directory: Path) -> str:
         except OSError:
             digest = "<unreadable>"
         rows.append(f"{name}\x00{digest}")
-    return hashlib.sha256("\n".join(rows).encode()).hexdigest()
+    # R57-C-03: a name that is not valid UTF-8 comes back from `os.listdir`
+    # with surrogates, and `.encode()` on those raises -- which is how this
+    # function ended a run in a traceback. It hashes BYTES, so it encodes as
+    # bytes; the refusal for such a name is a named one at the copy, and this
+    # function must survive long enough to reach it.
+    return hashlib.sha256("\n".join(rows).encode("utf-8", "surrogateescape")).hexdigest()
 
 # The pinned git invocation: an ABSOLUTE program, a `/usr/bin` PATH, replace
 # objects disabled, and an environment with no `GIT_*` of its own, because
@@ -486,6 +514,15 @@ def main() -> int:
             "so a binary planted in one could fabricate the report this step reads"
         )
 
+    # R53-S1, the other default: npm's global config lives beside the node that
+    # runs it, and is read whether or not a variable names it. The coordinator's
+    # R57-C-01: this check used to sit AFTER the private pack copy, so its
+    # refusal left 87 copied documents behind in a temporary directory. Nothing
+    # here depends on the copy, so it runs BEFORE it, where there is nothing to
+    # leak -- the cheapest form of that fix, and the one with no cleanup path to
+    # get wrong.
+    refuse_if_sets_shell("npm's default global config", Path(node).parent.parent / "etc" / "npmrc")
+
     # R53-F1: the pack is pinned by digest for the duration of the run this
     # step starts, so the figures below and the set the law checks are one
     # instant. A pack that is absent is left to the law's declared UNMEASURED
@@ -498,21 +535,43 @@ def main() -> int:
     # every digest check green, because comparing two endpoints keeps no journal
     # of the window between them. So the window is REMOVED rather than policed:
     # this step COPIES the pack into a private directory, hands THAT directory
-    # and its digest down, and the run it starts measures a subject no other
-    # session can name. A write to the live pack after the copy then changes
-    # nothing the run claims, which is why there is no longer a refusal for it;
+    # and its digest down, and the run it starts measures a subject no sibling
+    # SESSION can name (the challenger's R55-S5: it set out to measure that
+    # claim false and measured it TRUE as written -- sessions here share nothing
+    # but /mnt/project-files, so another session's glob runs in its own
+    # container). The narrower truth the same residual asks for: any process in
+    # THIS container can name and write the directory -- a worker this session
+    # starts, anything the suite itself runs, a stray script -- and for that
+    # family it is DETECTION ON READ doing the work, not unreachability. Both of
+    # the challenger's straddles came from exactly such a process and both were
+    # refused by name, which is the arm below, not this sentence.
+    #
+    # A write to the live pack after the copy changes nothing the run claims, which is why there is no longer a refusal for it;
     # refusing on it would be a false red about figures that are true of a real
     # instant of the pack.
     #
-    # The SOURCE is digested on both sides of the copy, because copying 86 files
+    # The SOURCE is digested on both sides of the copy, because copying the pack
     # is not an instant either, and a copy that straddles a write holds part of
     # one state and part of another. What remains is a change that happens and
     # reverts ENTIRELY between those two reads; closing that needs a filesystem
     # snapshot, which is not this package's to arrange, and it is declared.
     pack_snapshot: Path | None = None
+    source_before: str | None = None
     subject_pack: Path | None = pack_dir if os.environ.get("P5_PACK_DIR") else None
     pinned_pack = None
     if pack_dir.is_dir():
+        # R57-C-03: the names are checked BEFORE anything is digested or copied,
+        # because every later step reads them and a refusal is only useful if it
+        # arrives before the traceback would.
+        for entry in sorted(os.listdir(pack_dir), key=lambda name: name.encode("utf-8", "surrogateescape")):
+            try:
+                entry.encode("utf-8")
+            except UnicodeEncodeError:
+                refuse(
+                    f"{REFUSED_PACK_NAME_NOT_UTF8}: {pack_dir} holds a filename that is not valid UTF-8 "
+                    f"({entry.encode('utf-8', 'surrogateescape')!r}), so this step and the law could not be "
+                    "reading one set of names. Rename it, or say in review why a name like that belongs here"
+                )
         source_before = pack_digest(pack_dir)
         try:
             pack_snapshot = Path(tempfile.mkdtemp(prefix="law-ran-pack-")).resolve()
@@ -525,7 +584,14 @@ def main() -> int:
             # 86 documents deep, so it is refused by name rather than used: the
             # destination is part of the instrument, not an implementation
             # detail of `mkdtemp`.
-            inside = [root for root in (root.resolve(), package) if pack_snapshot.is_relative_to(root)]
+            # R57-C-02: the PACK itself joins the list. A private copy made
+            # inside the directory it is copying is a copier walking its own
+            # output, and the set it measures is then not the pack's.
+            inside = [
+                tree
+                for tree in (root.resolve(), package, pack_dir.resolve())
+                if pack_snapshot.is_relative_to(tree)
+            ]
             if inside:
                 shutil.rmtree(pack_snapshot, ignore_errors=True)
                 refuse(
@@ -541,10 +607,31 @@ def main() -> int:
                 f"{pack_dir}: measuring a directory other sessions write to is the hole this copy exists "
                 "to close"
             )
-        for name in sorted(os.listdir(pack_dir), key=lambda entry: entry.encode()):
+        for name in sorted(os.listdir(pack_dir), key=lambda entry: entry.encode("utf-8", "surrogateescape")):
             full = pack_dir / name
+            # R57-C-03: a name that does not round-trip through UTF-8 carries
+            # surrogates from `surrogateescape`, and the law reads names as
+            # JavaScript strings, so the two readers could never agree on such
+            # a set. Refused by name instead of crashing on it.
+            try:
+                name.encode("utf-8")
+            except UnicodeEncodeError:
+                shutil.rmtree(pack_snapshot, ignore_errors=True)
+                refuse(
+                    f"{REFUSED_PACK_NAME_NOT_UTF8}: {pack_dir} holds a filename that is not valid UTF-8 "
+                    f"({name.encode('utf-8', 'surrogateescape')!r}), so this step and the law could not be "
+                    "reading one set of names. Rename it, or say in review why a name like that belongs here"
+                )
+            # R57-C-04: anything that is not a regular file is REFUSED, not
+            # skipped. The signed `29cef86` refused it through its digest, and
+            # a copier that skips what it cannot classify re-opens that hole.
             if not full.is_file():
-                continue
+                shutil.rmtree(pack_snapshot, ignore_errors=True)
+                refuse(
+                    f"{REFUSED_PACK_ENTRY_NOT_A_FILE}: {full} is in the pack and is not a regular file, so "
+                    "it cannot be copied into the private directory this step measures and would drop out "
+                    "of the measured set in silence. The pack is a flat set of documents"
+                )
             try:
                 shutil.copyfile(full, pack_snapshot / name)
             except OSError as exc:
@@ -567,11 +654,17 @@ def main() -> int:
         subject_pack = pack_snapshot
         pinned_pack = pack_digest(pack_snapshot)
 
-    # R53-S1, the other default: npm's global config lives beside the node that
-    # runs it, and is read whether or not a variable names it.
-    refuse_if_sets_shell("npm's default global config", Path(node).parent.parent / "etc" / "npmrc")
 
-    out = Path(tempfile.mkdtemp(prefix="law-ran-")) / "report.json"
+    try:
+        out = Path(tempfile.mkdtemp(prefix="law-ran-")) / "report.json"
+    except OSError as exc:
+        # R57-C-01: a traceback here left the private pack copy behind as well.
+        shutil.rmtree(pack_snapshot, ignore_errors=True) if pack_snapshot is not None else None
+        refuse(
+            f"{REFUSED_REPORT_DIR_IMPOSSIBLE}: this step could not create the directory it writes the "
+            f"runner's report into ({exc}), so it has nowhere to read the run's figures from and will not "
+            "guess them"
+        )
     try:
         done = subprocess.run(
             [str(node), str(runner), "run", "--reporter=json", f"--outputFile={out}"],
@@ -606,6 +699,19 @@ def main() -> int:
                 **({"P5_PACK_DIGEST": pinned_pack} if pinned_pack else {}),
             },
         )
+        # The challenger's R55-S1: the law no longer refuses when the SHARED
+        # pack moves after the copy, because the figures describe the private
+        # copy, which is a real instant. But a movement is worth SAYING, and
+        # this step is the reader that can say it: its stdout is what an
+        # operator reads, and a note is not a refusal.
+        if pack_dir.is_dir() and source_before is not None:
+            source_at_exit = pack_digest(pack_dir)
+            if source_at_exit != source_before:
+                print(
+                    f"note: the pack at {pack_dir} moved while this step measured a private copy of it "
+                    f"({source_before} -> {source_at_exit}). Every figure below describes the copy, which is "
+                    "a real instant of the pack; nothing below describes the pack as it now stands"
+                )
         if pack_snapshot is not None and pinned_pack is not None:
             after = pack_digest(pack_snapshot)
             if after != pinned_pack:
