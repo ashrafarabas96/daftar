@@ -68,9 +68,9 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 
 import { describe, expect, it, onTestFinished } from 'vitest';
 
@@ -80,7 +80,12 @@ const REPO = join(__dirname, '..', '..', '..');
 // measured the default pack -- two halves of one `npm test` on different
 // subjects. An empty or blank value reads as UNSET here, exactly as it does in
 // `tools/law-ran.py`, which forwards the variable only when it is non-empty.
-const PACK = (process.env.P5_PACK_DIR ?? '').trim() || '/mnt/project-files/phase5';
+// The SHARED pack: the directory sibling sessions enrol documents into by
+// design. It is named here as well as reached through `PACK`, because the
+// reporter the challenger's R56-S1 asks for is about THIS directory even when
+// the gate has handed down a private copy as the subject.
+const SHARED_PACK = '/mnt/project-files/phase5';
+const PACK = (process.env.P5_PACK_DIR ?? '').trim() || SHARED_PACK;
 const REVIEWER_REPORTS_FILE = join(__dirname, '..', 'tools', 'reviewer-reports.json');
 
 /**
@@ -260,6 +265,11 @@ const REFUSED_PACK_MOVED = 'REFUSED-PACK-MOVED-DURING-MEASUREMENT';
 const REFUSED_PACK_COPY_IMPOSSIBLE = 'REFUSED-PACK-COPY-NOT-POSSIBLE';
 const REFUSED_PACK_NAME_NOT_UTF8 = 'REFUSED-PACK-NAME-NOT-UTF8';
 const REFUSED_PACK_ENTRY_NOT_A_FILE = 'REFUSED-PACK-ENTRY-NOT-A-FILE';
+// R56-S2: a digest handed down names the gate's own private copy, and when
+// the directory it names is NOT one, the contract this run was started under
+// is broken -- so it is a refusal of its own rather than a movement refusal
+// whose sentence would be untrue.
+const REFUSED_PACK_NOT_PRIVATE = 'REFUSED-PACK-HANDED-DOWN-DIRECTORY-NOT-PRIVATE';
 
 /**
  * The pack's identity: every name beside its sha256, sorted, hashed. The gate
@@ -292,6 +302,156 @@ const packDigest = (dir: string): string => {
       return `${name}\u0000${digest}`;
     });
   return createHash('sha256').update(rows.join('\n')).digest('hex');
+};
+
+/**
+ * ROUND 60, THE CHALLENGER'S R56-S1 (P3). Two windows, and only one of them was
+ * reported. A write to the SHARED pack during the plain `vitest run` that
+ * `npm test` starts FIRST was refused by nobody (correctly, since every figure
+ * is a statement about a private snapshot) and REPORTED by nobody: the gate is
+ * a LATER process, so its own `source_before` is taken after that run has
+ * finished, and the law's attempt to say it from inside a passing case was
+ * dropped because a `console.log` there did not reach this runner's output.
+ *
+ * So the law reads the shared pack when this FILE IS COLLECTED and compares at
+ * the end of the pack arm, from `onTestFinished`, which does reach the output --
+ * measured, by holding a sibling write across the arm. The window covered is
+ * therefore collection-to-end-of-that-arm, which is most of the file's run and
+ * is not the whole of it: a write in the seconds before collection or after
+ * that arm is still reported by nobody, and that is the bound, stated.
+ *
+ * It is a NOTE and not a refusal, for the reason `tools/law-ran.py` gives in
+ * writing: refusing on a shared pack moving after the copy is a false red about
+ * figures that are true of a real instant of the pack (R55-S1).
+ */
+const sharedPackAtCollection = existsSync(SHARED_PACK) ? packDigest(SHARED_PACK) : '';
+const reportSharedPackMovement = (): void => {
+  if (sharedPackAtCollection === '') return;
+  const now = existsSync(SHARED_PACK) ? packDigest(SHARED_PACK) : '<absent>';
+  if (now === sharedPackAtCollection) return;
+  console.log(
+    `note: the shared pack at ${SHARED_PACK} moved while this suite ran (${sharedPackAtCollection} -> ${now}). ` +
+      'Nothing in this run is false: every figure describes the private snapshot it names, which is a real instant ' +
+      'of the pack. But a green run of this suite may not be read as "the pack held still" (R56-S1)',
+  );
+};
+
+/**
+ * ROUND 60, THE CHALLENGER'S R56-S2 (P3). The pivot that decided whether a
+ * movement is an INTRUSION used to be `handedDown !== ''` -- the presence of a
+ * value the caller supplies. The challenger set `P5_PACK_DIGEST` to the correct
+ * digest of a SHARED directory, wrote into it during the pass, and got R55-S1's
+ * false red back, under a refusal that called a shared directory "the private
+ * pack directory the gate handed this run". Nothing in that test established
+ * that the directory was private.
+ *
+ * Privacy is established from the properties only the gate's own
+ * `tempfile.mkdtemp(prefix='law-ran-pack-')` produces: that name, inside the
+ * resolved temporary directory, a directory, mode 700, owned by this uid.
+ * Returns '' when the directory has them, and otherwise the reason it does not,
+ * because a refusal that cannot say WHY sends the reader nowhere.
+ */
+const GATE_COPY_PREFIX = 'law-ran-pack-';
+const notTheGatesPrivateCopy = (dir: string): string => {
+  let resolved: string;
+  try {
+    resolved = realpathSync(dir);
+  } catch (error) {
+    return `it cannot be resolved at all (${String(error)})`;
+  }
+  if (!basename(resolved).startsWith(GATE_COPY_PREFIX)) {
+    return `its name is ${JSON.stringify(basename(resolved))}, which does not start with the ${JSON.stringify(
+      GATE_COPY_PREFIX,
+    )} that the gate's mkdtemp gives its private copy`;
+  }
+  let temp = tmpdir();
+  try {
+    temp = realpathSync(temp);
+  } catch {
+    // An unresolvable tmpdir is not a reason to call a directory private: the
+    // comparison below then fails and the caller refuses, which is the safe way
+    // round.
+  }
+  if (dirname(resolved) !== temp) {
+    return `it sits in ${dirname(resolved)}, not in the temporary directory ${temp} where the gate creates it`;
+  }
+  let st;
+  try {
+    st = statSync(resolved);
+  } catch (error) {
+    return `it cannot be stat'ed (${String(error)})`;
+  }
+  if (!st.isDirectory()) return 'it is not a directory';
+  // eslint-disable-next-line no-bitwise
+  const mode = st.mode & 0o777;
+  if (mode !== 0o700) return `its permissions are ${mode.toString(8)}, not the 700 that mkdtemp creates`;
+  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  if (uid !== undefined && st.uid !== uid) return `it is owned by uid ${st.uid}, not by this run's uid ${uid}`;
+  return '';
+};
+
+/**
+ * ROUND 60, AND IT IS THE HALF OF R56-S2 THAT PROPERTIES ALONE CANNOT REACH.
+ * The predicate above measures what `mkdtemp(prefix='law-ran-pack-')` PRODUCES
+ * -- that name, in the temporary directory, mode 700, this uid -- and anyone
+ * who can export an environment variable can also `mkdir -m 700` a directory
+ * with all four. Properties are not provenance.
+ *
+ * Provenance is readable, though, and not by anything the forger supplies: a
+ * run the gate started is a DESCENDANT of the gate, so this walks its own
+ * parent chain in `/proc` and looks for `tools/law-ran.py` in a cmdline. A
+ * wrapper script that exports `P5_PACK_DIGEST` is not that program, which is
+ * exactly the family the challenger's attack came from.
+ *
+ * Returns '' when an ancestor is the gate, and otherwise the reason it cannot
+ * say so -- including "no /proc", which is a declared limit rather than a pass:
+ * the caller refuses on any non-empty answer, so a platform without `/proc`
+ * reds instead of waving the claim through. This container is Linux and the
+ * suite's own cases read `/proc` elsewhere.
+ */
+const GATE_PROGRAM = 'tools/law-ran.py';
+const notStartedByTheGate = (): string => {
+  if (!existsSync('/proc/self/status')) {
+    return 'this platform has no /proc, so a run cannot be shown to descend from the gate at all';
+  }
+  const seen: string[] = [];
+  let pid = process.pid;
+  for (let hop = 0; hop < 32; hop += 1) {
+    let status: string;
+    try {
+      status = readFileSync(`/proc/${pid}/status`, 'utf8');
+    } catch (error) {
+      return `the parent chain stopped at pid ${pid}, which cannot be read (${String(error)})`;
+    }
+    const parent = /^PPid:\s*([0-9]+)$/m.exec(status);
+    if (parent === null) return `pid ${pid} reports no parent, so the chain cannot be followed`;
+    pid = Number(parent[1]);
+    if (pid <= 1) break;
+    let argv: string[] = [];
+    try {
+      argv = readFileSync(`/proc/${pid}/cmdline`)
+        .toString('utf8')
+        .split('\0')
+        .filter((word) => word.length > 0);
+    } catch {
+      // A process that exited between the two reads leaves no cmdline. The walk
+      // continues: an unreadable link in the chain is reported by the sentence
+      // below if no gate is found above it, and never read as a pass.
+    }
+    seen.push(`${pid}: ${argv.join(' ').slice(0, 100)}`);
+    // THE FIRST VERSION OF THIS LINE SAID `cmdline.includes(GATE_PROGRAM)`, AND
+    // IT PASSED THE ATTACK IT WAS WRITTEN TO CATCH. Measured: the shell that
+    // launched the forged run had the string `tools/law-ran.py` in its own
+    // command line -- it computed the digest with a `python3 -c` program that
+    // names the gate -- so an ANCESTOR matched and the arm called a hand-built
+    // directory the gate's private copy. A substring over a whole command line
+    // is a claim about text; being the gate is a claim about ARGV. So: argv[0]
+    // is a python interpreter, and one of its arguments IS the gate's path.
+    const program = argv[0] ?? '';
+    const runsTheGate = argv.slice(1).some((word) => word === GATE_PROGRAM || word.endsWith(`/${GATE_PROGRAM}`) || word.endsWith(`\\${GATE_PROGRAM}`));
+    if (basename(program).startsWith('python') && runsTheGate) return '';
+  }
+  return `no ancestor of this process is ${GATE_PROGRAM}; the chain is ${JSON.stringify(seen.slice(0, 8))}`;
 };
 
 /**
@@ -3080,9 +3240,14 @@ describe('every written invocation of the pack tools is isolated', () => {
       /pool:\s*'forks'/.test(runnerConfig),
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not pin the pool, so the execution model these cases are measured in is whatever the installed runner defaults to`,
     ).toBe(true);
+    // R56-S4's enumeration, the one entry of it this law did not yet read:
+    // `sequence.concurrent` makes every case in a file run CONCURRENTLY, which
+    // would let this arm's pack snapshot race the arms that write temporary
+    // directories, and the law's serial assumptions are written nowhere else.
+    // `maxConcurrency` bounds how many run at once, not whether they do.
     expect(
-      /sequence:\s*\{\s*shuffle:\s*false\s*\}/.test(runnerConfig),
-      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not pin sequence.shuffle to false, so a random case order could make an order-dependent pass or failure irreproducible -- which is the one thing a measured record cannot survive`,
+      /sequence:\s*\{\s*shuffle:\s*false,\s*concurrent:\s*false\s*\}/.test(runnerConfig),
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not pin sequence.shuffle AND sequence.concurrent to false, so a random case order could make an order-dependent pass or failure irreproducible -- which is the one thing a measured record cannot survive -- or every case in a file could run at once, racing the temporary directories these arms write`,
     ).toBe(true);
     //
     // THE RESIDUAL THIS ARM DOES NOT CLOSE, STATED AS MEASURED -- AND THE
@@ -3303,6 +3468,17 @@ describe('every written invocation of the pack tools is isolated', () => {
     for (const [name, body] of constructed) {
       writeFileSync(join(dir, name), body);
     }
+    // ROUND 60, AND THIS IS THE ARM THAT SHOULD HAVE CAUGHT R56-S3 A ROUND
+    // EARLIER. The two readers can part company over an entry's KIND as well as
+    // over its name, and they did: `statSync(full).isFile()` RAISES on a
+    // dangling symlink, so this reader labelled it `<unreadable>`, while
+    // `Path.is_file()` answers false and raises nothing, so the gate labelled it
+    // `<not-a-file>` -- one directory, one instant, two digests, and
+    // REFUSED-PACK-MOVED would have fired saying the pack had moved when it had
+    // not. Measured by adding these two entries, which red this arm before the
+    // gate's digest was changed to classify from ONE `stat`.
+    mkdirSync(join(dir, 'a-subdirectory-in-the-pack'));
+    symlinkSync(join(dir, 'no-such-target-ever'), join(dir, 'dangling-symlink.md'));
     const fromSubject = existsSync(PACK)
       ? readdirSync(PACK).filter((name) => {
           try {
@@ -3611,6 +3787,15 @@ describe('every written invocation of the pack tools is isolated', () => {
   });
 
   it('holds over the pack documents this author owns, when the pack is present', () => {
+    // R56-S1: the shared pack's own window gets a reader, and it is registered
+    // as the FIRST statement of this arm. THE FIRST VERSION OF THIS LINE SAT AT
+    // THE END OF THE ARM, where the comparison belongs, and the measurement of
+    // it printed NOTHING: the arm had already refused, so `onTestFinished` was
+    // never reached and the callback was never registered. A reporter that only
+    // speaks when nothing else went wrong is a reporter that is silent exactly
+    // when a reader needs it. Registered here, it runs whether this arm passes,
+    // fails or returns early.
+    onTestFinished(reportSharedPackMovement);
     // The pack lives outside the repository, so this arm is measured HERE and
     // not in CI; that limit is written into the handoff rather than left for a
     // reader to discover. Reviewer-owned reports are exempt BY EXACT NAME:
@@ -3687,6 +3872,30 @@ describe('every written invocation of the pack tools is isolated', () => {
       `${REFUSED_PACK_MOVED}: the snapshot and the source disagree and no figure from the snapshot belongs to a single instant. ${whichMoved}`,
     ).toBe(sourceAtEntry);
     const handedDown = (process.env.P5_PACK_DIGEST ?? '').trim();
+    // R56-S2 (the challenger's P3 on `45be4ad`): a digest handed down is a claim
+    // that the directory named with it is the gate's own private copy, and that
+    // claim is CHECKED here rather than believed. The challenger exported the
+    // correct digest of a SHARED directory and got a refusal that called it "the
+    // private pack directory the gate handed this run" -- a true red with a
+    // false sentence in it, and R55-S1's false red reachable again through an
+    // environment variable. Privacy now comes from what only the gate's
+    // `mkdtemp` produces, so the wrong thing to export is refused BY ITS OWN
+    // NAME and the movement refusal below is only ever said about a directory
+    // that really is private.
+    if (handedDown !== '') {
+      const why = notTheGatesPrivateCopy(PACK);
+      expect(
+        why,
+        `${REFUSED_PACK_NOT_PRIVATE}: this run was handed a pack digest in P5_PACK_DIGEST, which only tools/law-ran.py sets and only for the private copy it made, but ${PACK} is not such a directory: ${why}. Run this suite through \`npm test\`, or unset P5_PACK_DIGEST to measure a shared pack as a shared pack`,
+      ).toBe('');
+      // Properties are not provenance: the four above can be built by hand, so
+      // the claim is also checked against something the caller cannot supply.
+      const notDescended = notStartedByTheGate();
+      expect(
+        notDescended,
+        `${REFUSED_PACK_NOT_PRIVATE}: this run was handed a pack digest in P5_PACK_DIGEST, so it claims to have been started by tools/law-ran.py, and ${notDescended}. A directory with mkdtemp's own name, mode and owner can be built by hand; being the gate's child cannot`,
+      ).toBe('');
+    }
     expect(
       handedDown === '' || handedDown === digestAtEntry,
       `${REFUSED_PACK_MOVED}: the gate that started this run measured the pack at ${handedDown} and this run reads ${digestAtEntry}, so the figures this run produces and the set the gate checked are two different instants`,
@@ -3821,13 +4030,21 @@ describe('every written invocation of the pack tools is isolated', () => {
     // When nobody handed a directory down, the pack is the SHARED one, and this
     // arm makes NO claim about it after the copy: every figure above is a
     // statement about the snapshot it names, which is a real instant of the
-    // pack. `sourceAtExit` is read because the reader WHO CAN SAY SOMETHING
-    // about a shared pack is the gate -- it prints the movement beside the
-    // figures without refusing (measured) -- and because a reader of this file
-    // should see that the value was looked at and deliberately not asserted on.
-    // Reporting it from HERE was tried and dropped: a `console.log` inside a
-    // passing case did not reach the output in this runner, and a note nobody
-    // reads is not a report (R55-S1).
+    // pack. `sourceAtExit` is read so that a reader of this file sees the value
+    // was looked at and deliberately not asserted on.
+    //
+    // R56-S1 (the challenger's P3), AND THE PREVIOUS WORDING HERE WAS THE FALSE
+    // SENTENCE IT NAMED. It said the reader who can say something about a shared
+    // pack is the gate. The gate can say it only about ITS OWN window: it is a
+    // later process in `npm test`, so a write during the plain `vitest run` that
+    // runs FIRST is invisible to it, and this arm had stopped reporting that
+    // write because a `console.log` inside a passing case did not reach this
+    // runner's output. One event, reported by nobody, under a sentence claiming
+    // otherwise. The remedy is above: `reportSharedPackMovement` compares the
+    // shared pack at this FILE's collection with the shared pack now, and says
+    // so from `onTestFinished`, which does reach the output -- measured by
+    // holding a sibling write across this arm and reading the note in the run's
+    // own stdout.
     expect(typeof sourceAtExit).toBe('string');
   });
   it('reads the seal refusal by NAME, and a silent seal classifies nothing', () => {

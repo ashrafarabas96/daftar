@@ -81,6 +81,15 @@ export default defineConfig({
      *   sequence.shuffle random ORDER would make an order-dependent pass or
      *                    failure irreproducible, which is the one thing a
      *                    measured record cannot survive. Pinned false.
+     *   sequence.concurrent  every case in a file running AT ONCE, which is a
+     *                    different setting from maxConcurrency: that one bounds
+     *                    how many run together, this one decides whether they
+     *                    do. The pack arm reads a private snapshot while its
+     *                    neighbours write temporary directories and spawn
+     *                    processes, and the serial order those arms assume is
+     *                    written down nowhere else. Pinned false. ROUND 60, the
+     *                    last entry of the enumeration the challenger's R56-S4
+     *                    asked for.
      *   dangerouslyIgnoreUnhandledErrors  an unhandled rejection inside a case
      *                    would be SWALLOWED and the file would stay green.
      *                    Pinned false, and it is the clearest example of a
@@ -94,7 +103,7 @@ export default defineConfig({
     pool: 'forks',
     fileParallelism: false,
     maxConcurrency: 1,
-    sequence: { shuffle: false },
+    sequence: { shuffle: false, concurrent: false },
     dangerouslyIgnoreUnhandledErrors: false,
   },
 });

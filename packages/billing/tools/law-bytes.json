@@ -3,10 +3,10 @@
   "pinned": {
     "package.json": "9286ab6fd2bc7e90ad5bae1e966cb78a0e9f4464698c5008ef5cffe937229c03",
     "test/law-bytes-are-pinned.test.ts": "319eec4eac78982d01af2bc367e1c9d1bf0a41b1f336dc37dbd960c1ce090df6",
-    "test/tool-commands-are-isolated.test.ts": "5f164d9cc93b897cefae6f409ecebbd2a04e9ab24dd7cd6433f7693db50f9ec6",
+    "test/tool-commands-are-isolated.test.ts": "b6d5cf4dfc36ab43c2f6abfc98c5272312a30cb26fb598fadbb0ec9af72d386b",
     "tools/arms/pinned-now-arm.py": "c87a679de0970c8472035d7e49d5dd5da4270cacd3945584376ad9fe8e559af4",
     "tools/context-sites.py": "1daa1968bc7b109925145118ab7acc20803c0a76cb587e336292b8d910e38eb6",
-    "tools/law-ran.py": "7c56525e0ff2ae53bda37810d7c8d2a6962510a77052aede4953d3386a1bf7d0",
+    "tools/law-ran.py": "15058d76a57ec13344d74e3b4b85562a1420900128db59e667742e44f50c6c63",
     "tools/manifest-digests.py": "352d91ee7469ae6d578c6594022fdf92233066131309652ee42c4f9805f75ff4",
     "tools/pack-set.json": "59f51ef3022eb81d1548202af85a97a43a2d044faf1a7d42eaef3dd0e1586506",
     "tools/reviewer-reports.json": "00e4defa31cf23ea527445bde3a741f5fa8d0f9a06a7cf0f3f984fdddca62bf2",
@@ -14,6 +14,6 @@
     "tools/status-block.py": "bff5123897bad5da75865d32a79ef1d9534986abdc9a1b9418c11a2dcae628cb",
     "tsconfig.build.json": "fc260cbe86688e06932291129be27acbf84fb4b0744efa4cefa4544de09f6f59",
     "tsconfig.json": "2a0f802f2e7d00013ca325c1ce8c0da1fa13d148c20176a09d954897a85d5fd1",
-    "vitest.config.ts": "45b1e29d2e17ce6ef083edb2fc24c997bd5ed91d751932b84eee61ee899923b6"
+    "vitest.config.ts": "e1c0bc1cf988b30ee1ce6e19ed7733bb404950bdfb740d0dd0cf54ce63a1c18a"
   }
 }

@@ -103,6 +103,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -232,6 +233,17 @@ REFUSED_PACK_NAME_NOT_UTF8 = "REFUSED-PACK-NAME-NOT-UTF8"
 # `<not-a-file>`. Skipping what you cannot classify is the oldest hole in this
 # phase, so it is a refusal in both copiers now.
 REFUSED_PACK_ENTRY_NOT_A_FILE = "REFUSED-PACK-ENTRY-NOT-A-FILE"
+# The challenger's R56-S3 (P4): ONE condition, TWO refusal names. A dangling
+# symlink in the pack was REFUSED-FILE-NOT-READABLE to the law (its `statSync`
+# raises) and REFUSED-PACK-ENTRY-NOT-A-FILE here (`Path.is_file()` answers
+# false and raises nothing), so an operator comparing the two reads two causes
+# for one file. Worse, and found by measuring it rather than by reading the
+# reports: the two DIGEST functions parted company over the same entry --
+# `<unreadable>` there, `<not-a-file>` here -- so one directory at one instant
+# had two digests and REFUSED-PACK-MOVED would have fired SAYING the pack
+# moved when it had not. Both readers classify by ONE `stat` now, whose
+# failure is this name and whose non-regular answer is the name above.
+REFUSED_FILE_NOT_READABLE = "REFUSED-FILE-NOT-READABLE"
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -248,11 +260,18 @@ def pack_digest(directory: Path) -> str:
     # digests, and a refusal that would say the pack moved when it had not.
     for name in sorted(os.listdir(directory), key=lambda entry: entry.encode("utf-8", "surrogateescape")):
         full = directory / name
+        # R56-S3, the half that is a digest rather than a refusal: the kind is
+        # read from ONE `stat`, whose failure is the unreadable branch, because
+        # the law's `statSync(full).isFile()` RAISES on a dangling symlink while
+        # `Path.is_file()` answers false -- two labels for one entry, which is
+        # two digests for one instant. Measured by the agreement arm, which now
+        # builds a subdirectory and a dangling symlink as well as names.
         try:
-            if full.is_file():
-                digest = hashlib.sha256(full.read_bytes()).hexdigest()
-            else:
-                digest = "<not-a-file>"
+            digest = (
+                hashlib.sha256(full.read_bytes()).hexdigest()
+                if stat.S_ISREG(full.stat().st_mode)
+                else "<not-a-file>"
+            )
         except OSError:
             digest = "<unreadable>"
         rows.append(f"{name}\x00{digest}")
@@ -625,7 +644,20 @@ def main() -> int:
             # R57-C-04: anything that is not a regular file is REFUSED, not
             # skipped. The signed `29cef86` refused it through its digest, and
             # a copier that skips what it cannot classify re-opens that hole.
-            if not full.is_file():
+            # R56-S3: an entry that cannot be read AT ALL is the law's
+            # REFUSED-FILE-NOT-READABLE, by the same name and in the same order,
+            # so one condition has one cause in both readers. A dangling symlink
+            # reaches this branch; `Path.is_file()` used to swallow it into the
+            # name below.
+            try:
+                entry_mode = full.stat().st_mode
+            except OSError as exc:
+                shutil.rmtree(pack_snapshot, ignore_errors=True)
+                refuse(
+                    f"{REFUSED_FILE_NOT_READABLE}: {full} is in the pack and could not be read at all "
+                    f"({exc}), so this step would be handing down a set it never saw whole"
+                )
+            if not stat.S_ISREG(entry_mode):
                 shutil.rmtree(pack_snapshot, ignore_errors=True)
                 refuse(
                     f"{REFUSED_PACK_ENTRY_NOT_A_FILE}: {full} is in the pack and is not a regular file, so "
