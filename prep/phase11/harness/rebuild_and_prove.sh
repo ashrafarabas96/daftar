@@ -89,9 +89,12 @@ python3 -I $H/check_fenced_figures.py --selftest || { echo "the fenced-figure ch
 python3 -I $H/check_fenced_figures.py
 RC_FIGURES=$?
 if [ $RC_FIGURES -ne 0 ]; then
-  echo "A document of this phase shows a figure nothing emits (exit 1), or the check "
-  echo "matched nothing at all (exit 2). Either way this run would publish a number "
-  echo "with no instrument behind it. Refusing to run."
+  echo "A document of this phase shows a figure nothing emits (exit 1), the check "
+  echo "matched nothing at all (exit 2), or it REFUSED because the haystack could not "
+  echo "be derived from a commit -- git absent, or this tree in no repository (exit 5). "
+  echo "In every case this run would publish a number with no instrument behind it, or "
+  echo "would have checked it against the working directory rather than against the "
+  echo "commit. Refusing to run."
   exit $RC_FIGURES
 fi
 # And the figures THIS instrument produces are generated into the documents,
@@ -102,7 +105,9 @@ python3 -I $H/check_fenced_figures.py --check-blocks
 RC_BLOCKS=$?
 if [ $RC_BLOCKS -ne 0 ]; then
   echo "A generated figure block in a document of this phase disagrees with a fresh "
-  echo "run of its generator (exit 1), or nothing is enrolled at all (exit 2). Run "
+  echo "run of its generator -- which includes a line outside a block that RESTATES "
+  echo "what a generator prints, in any wording (exit 1) -- or nothing is enrolled at "
+  echo "all (exit 2), or the haystack could not be derived from a commit (exit 5). Run "
   echo "\`python3 -I $H/check_fenced_figures.py --regenerate\` and commit what it "
   echo "prints. Refusing to run."
   exit $RC_BLOCKS

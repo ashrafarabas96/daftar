@@ -32,6 +32,26 @@ each one an answer to a challenge round that defeated the last.
     fence syntaxes a fifth, so the fourth design **NORMALISES before matching**
     rather than adding alternatives, and defines the boolean set once, closed.
 
+  * Round 15 defeated the fourth design twice over. It planted ten
+    unconditional transformations in the stripper, one per copy, and EIGHT of
+    them hid from the identity probe, because a hand-written probe set carries
+    a completeness claim no better than a hand-written table: so every
+    transformation is now behind a NAMED guard that the function's own source
+    is parsed to check. And it rejected a figure of mine as unreproducible,
+    which turned out to be a fail-open rather than a typo -- a gitignored
+    `__pycache__` in my tree was in the haystack, carrying this file's own
+    prose.
+  * Round 16 defeated the fifth design in three places, each one a hole of the
+    same shape as the fix that preceded it. The haystack was read FROM THE
+    FILESYSTEM, so excluding artefacts by name could not name the file nobody
+    has written yet: it is now derived from the COMMIT by running git, and
+    read from the object store. The structural parse covered every
+    transformation and nothing that DECIDES, so `figures_on` could rebind its
+    input or return early under a test nobody named: the decision frame is
+    parsed too. And the generated blocks were enrolled BY A SENTINEL, one
+    regex per generator, so round 15's own figure reworded by six words walked
+    past it: enrolment is now AGREEMENT WITH WHAT `--regenerate` WOULD WRITE.
+
 THE SAME ROUND REJECTED THE COMPLETENESS CLAIM OVER THE GUARDS, which matters
 more than any of the nine. The previous header said, in bold, that every guard
 in the matcher had been deleted on its own and the arms it reds recorded, and
@@ -52,9 +72,12 @@ because there are no rows: the table is computed.
 
 WHAT IT CHECKS. Every `*.md` anywhere under the phase directory, including
 subdirectories. A line whose decoration strips away to nothing but
-`key=<number|boolean>` is a candidate, and the exact token must appear
-somewhere under `prep/phase11/harness/` **excluding markdown** -- in an
-instrument or in a committed run-evidence file.
+`key=<number|boolean>` is a candidate, and the exact token must appear in **the
+commit** under `prep/phase11/harness/`, **excluding markdown** -- in an
+instrument or in a committed run-evidence file. Not in the directory: in the
+commit. A file the commit does not carry cannot legitimise a figure, and the
+run names the commit it read and every file under the harness that differs
+from it.
 
 NORMALISATION, in four steps, in this order, each one separately deletable and
 separately measured:
@@ -131,12 +154,13 @@ this header is a command away rather than a sentence:
 
     python3 -I prep/phase11/harness/check_fenced_figures.py --surface
 
-At the head that introduced this design it prints **8 of 17**: of seventeen
-documented figure-shaped lines, eight would red the gate if a document wrote
-them, seven pass because something already emits them, and two are the
-exempted tokens. Round 14 measured 13 of 16 over ITS OWN list of shapes, which
-is not this list; the two numbers are each true of their own set and are not
-comparable, and this one is the one a reader can reproduce. The escape hatch
+What it prints is NOT WRITTEN HERE, and that is round 15's finding applied to
+this file's own header: the count is generated into the manifest, in the
+`surface` block, by the command above. Of the documented shapes, some would red
+the gate if a document wrote them, some pass because something already emits
+them, and the two exempted tokens are not candidates at all. Round 14 measured
+its own list of shapes, which is not this list; two such counts are each true
+of their own set and are not comparable. The escape hatch
 for every red shape is named above -- prose on the line, or an inline code
 span -- and neither requires a waiver list, which would move the hole from
 shape to time.
@@ -145,13 +169,21 @@ AND IT REFUSES TO BE INERT. If the scan finds no candidate at all, the matcher
 has stopped matching the documents it is pointed at, and a check that measures
 nothing must not report a pass. That is exit 2.
 
-EXITS: 0 clean, 1 a figure nothing emits, 2 inert, 4 invoked without `-I`.
+EXITS: 0 clean, 1 a figure nothing emits, 2 inert, 4 invoked without `-I`,
+5 a NAMED REFUSAL -- git absent, or the harness in no repository, so the
+haystack cannot be derived from a commit. It never falls back to the walk.
 
-ITS RED PROOFS, in three layers. `--selftest` runs **every shape any round
+ITS RED PROOFS, in layers. `--selftest` runs **every shape any round
 planted**, each as its own hermetic arm with its expected exit, plus the false
 positives round 13 measured as arms that must now come back clean, and then
-deletes each guard in turn and requires it to flip an arm; the proof script
-runs all of it before the real scan. Pointed at the documents and harness of
+deletes each guard in turn and requires it to flip an arm -- the guards over
+the haystack among them, so "derived from the commit" is measured by a scratch
+file and a gitignored `.pyc` that must not legitimise a plant, and by a
+directory that is no repository and must be refused. It then parses the
+stripper, the splitter and the decision frame for a transformation or a
+decision no name covers, plants both kinds, and runs the enrolment rule
+against a reworded figure. The proof script runs all of it before the real
+scan. Pointed at the documents and harness of
 `51686d9` -- the head round 10 rejected -- it names both occurrences of
 `superuser_sees=130` by file and line and exits 1. And the real
 `rebuild_and_prove.sh` refuses at step `0c` on a planted figure, exit 1, with
@@ -187,9 +219,12 @@ if not sys.flags.isolated:
     raise SystemExit(4)
 
 import ast
+import atexit
 import inspect
 import os
 import re
+import shutil
+import subprocess
 import tempfile
 import textwrap
 import unicodedata
@@ -241,7 +276,7 @@ def _fold_digits(s):
 # THIS LIST IS THE AUTHORITY. `figure_on()` applies exactly these and nothing
 # else, and `--selftest` deletes each one in turn and requires it to flip an
 # arm. There is no hand-written table to disagree with it.
-GUARDS = (
+MATCHER_GUARDS = (
     "nfkc",
     "format characters",
     "non-ascii digits",
@@ -268,6 +303,19 @@ GUARDS = (
     "named exemptions",
     "planted tokens",
 )
+
+# The guards over the HAYSTACK -- over what counts as something this tree
+# emits, rather than over what a line says. They are listed apart because the
+# paragraph above is about `figure_on`, and they are deleted and measured by
+# `--selftest` in exactly the same way: each one reds an arm by name or the
+# phase stops.
+HAYSTACK_GUARDS = (
+    "haystack from the commit",
+    "markdown is not evidence",
+    "the checker is not its own evidence",
+)
+
+GUARDS = MATCHER_GUARDS + HAYSTACK_GUARDS
 
 def _is_figure(s, skip=()):
     """Is `s` a bare `key=<number|boolean>`? The narrowest part of the design.
@@ -377,14 +425,36 @@ def _segments(line, skip=()):
     return parts
 
 
+def _exempted(s, skip=()):
+    """Is `s` one of the two tokens the coordinator exempted by exact name?
+
+    A function of its own, and not a clause in the decision below, because
+    `R16-S1` parses that decision and a clause is somewhere a narrowing can
+    hide. Here the guard is a named branch the parse can read.
+    """
+    if "named exemptions" not in skip:
+        return s in EXEMPT
+    return False
+
+
 def figures_on(line, skip=()):
-    """Every figure this line reports, in order. Empty when it reports none."""
+    """Every figure this line reports, in order. Empty when it reports none.
+
+    THE DECISION FRAME. `R16-S1`: the structural parse proved every
+    TRANSFORMATION was behind a named guard, and round 16 pointed out that it
+    said nothing about the function that decides what to do with the result. A
+    rebinding of `line` here, or one early `return out` under a test nobody
+    named, defeats every guard below it while `_strip` stays pristine. So this
+    function, `tokens_in` and `_exempted` are parsed too: no statement may
+    rebind a parameter or a loop target, and every test must be a named guard
+    or a call to a module function. `--selftest` plants both shapes.
+    """
     out = []
     for part in _segments(line, skip):
         s = _strip(part, skip)
         if not _is_figure(s, skip):
             continue
-        if "named exemptions" not in skip and s in EXEMPT:
+        if _exempted(s, skip):
             continue
         out.append(s)
     return out
@@ -416,57 +486,256 @@ def documents(docs_dir):
     return sorted(out)
 
 
-ARTEFACT_DIRS = ("__pycache__",)
-ARTEFACT_SUFFIXES = (".pyc", ".pyo", ".so", ".o")
+# ── the haystack, derived from the COMMIT and not from the working tree ────
+# `R16-F1`. Round 15 closed a fail-open -- a gitignored `.pyc` carrying this
+# file's own prose -- by excluding compiled artefacts and this file's bytecode
+# BY NAME. Round 16 rejected that as the wrong kind of fix, and it was right:
+# the reasoning error was "not committed, therefore not in the subject", when
+# the haystack was read from the FILESYSTEM and had nothing to do with what was
+# committed. An enumeration of artefact directories and suffixes cannot name
+# the file nobody has written yet -- a `scratch.log`, an editor backup, a
+# `.orig` left by a merge, a tarball unpacked in the wrong directory -- so it
+# moves the hole from SHAPE to TIME, which is this phase's own `P7` lesson.
+#
+# So the subject set is DERIVED FROM EXECUTION of git at a resolved commit, and
+# the content is read FROM THE OBJECT STORE. A file that is not in that commit
+# cannot legitimise a figure, whatever it is called; the artefact enumeration is
+# DELETED rather than extended, and `__pycache__` is out of the haystack now
+# because it is not committed, not because someone remembered to name it.
+#
+# THE READ IS HARDENED, as `P14` hardened its own local git reads, because a
+# haystack an environment variable can redirect is no haystack: every `GIT_*`
+# variable is scrubbed (`GIT_DIR` beats `-C`, so scrubbing comes first),
+# replace objects are disabled by flag AND by environment, grafts are pointed
+# at the null device, system and global configuration are ignored, `PATH` is
+# pinned starting at `/usr/bin`, the binary is resolved once from a fixed list
+# of absolute paths, and an absent git, a directory that is not a repository or
+# a commit that does not resolve is A NAMED REFUSAL with a non-zero exit --
+# never a silent fallback to the walk this round deleted. Shallowness is not
+# refused: one commit's tree and its blobs are complete in a shallow clone,
+# which is all this reads, and `P8`'s ruling is about a shallow graph's
+# definite "no".
+#
+# WHAT IT COSTS, stated because it is a real cost and not a detail: content
+# that exists only in the working tree does not count, so a figure whose
+# evidence is written but not yet committed REDS until it is committed. The run
+# prints the commit it read and the files under the harness that differ from it,
+# so the one surprise this design can produce names itself in the output.
+
+GIT_CANDIDATES = ("/usr/bin/git", "/bin/git", "/usr/local/bin/git")
+FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-def haystack_files(root):
-    """The files whose contents count as something this tree emits.
+class Refusal(Exception):
+    """A named refusal. The haystack is never guessed and never falls back."""
 
-    **Markdown is excluded.** A document is not an instrument, and a markdown
-    file under the harness used to be both outside the scan and inside the
-    haystack -- so one file could hide a fabricated figure and legitimise it
-    elsewhere at the same time. That was round 12's `E4a`/`E4b`.
 
-    **COMPILED ARTEFACTS ARE EXCLUDED, and this file is excluded by STEM.**
-    Round 15 rejected a figure of mine as un-reproducible: `--surface` printed
-    8 on my tree and 9 on three clean checkouts. The cause was not a retyped
-    number. `__pycache__/check_fenced_figures.cpython-313.pyc` sat in my
-    working tree, gitignored and therefore invisible to `git status`, and it
-    carried this file's own string constants -- including a token quoted in
-    the prose above. So the by-name exclusion one line below ("a token quoted
-    in this file's own prose proves nothing") was DEFEATED BY THE BYTECODE
-    CACHE, and the gate's verdict depended on whether anyone had ever
-    imported the module. A haystack that includes build output is a haystack
-    nobody can reproduce, which is a fail-open: the figure passed here and
-    redded everywhere else. Matching by stem closes the companion hole of a
-    `.pyc` for any excluded source file, and the run prints the inventory
-    below so the verdict names its own input.
+def _git_binary():
+    for cand in GIT_CANDIDATES:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    raise Refusal(
+        "GIT-ABSENT: none of %s is an executable file, so the haystack cannot be "
+        "derived from the commit. The check refuses instead of reading the working "
+        "tree." % ", ".join(GIT_CANDIDATES)
+    )
+
+
+def _git_env():
+    """The environment for a local read, built by scrubbing rather than by adding.
+
+    `GIT_DIR` beats `-C`, `GIT_REPLACE_REF_BASE` redirects objects and
+    `GIT_ALTERNATE_OBJECT_DIRECTORIES` adds stores, so the inherited `GIT_*`
+    set goes FIRST and whole; what follows then cannot be undone by a key this
+    file forgot to name.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["PATH"] = "/usr/bin:/bin"
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_GRAFT_FILE"] = os.devnull
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["LC_ALL"] = "C"
+    return env
+
+
+def _git(root, argv, stdin=None):
+    proc = subprocess.run(
+        [_git_binary(), "--no-replace-objects", "-C", root] + list(argv),
+        env=_git_env(),
+        input=stdin,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        raise Refusal(
+            "GIT-FAILED: `git %s` in %s exited %d: %s"
+            % (
+                " ".join(argv),
+                root,
+                proc.returncode,
+                proc.stderr.decode("utf-8", "replace").strip().replace("\n", " "),
+            )
+        )
+    return proc.stdout
+
+
+def _toplevel(root):
+    out = _git(root, ["rev-parse", "--show-toplevel"]).decode("utf-8", "surrogateescape")
+    top = out.strip()
+    if not top or not os.path.isdir(top):
+        raise Refusal(
+            "GIT-NO-REPO: `rev-parse --show-toplevel` in %s returned %r, so there is no "
+            "commit to derive the haystack from." % (root, top)
+        )
+    return top
+
+
+def _commit_of(root):
+    sha = _git(root, ["rev-parse", "--verify", "HEAD^{commit}"]).decode("ascii", "replace").strip()
+    if not FULL_SHA.match(sha):
+        raise Refusal(
+            "GIT-UNRESOLVED: `rev-parse --verify HEAD^{commit}` in %s did not return a "
+            "full 40-character object name (%r)." % (root, sha)
+        )
+    return sha
+
+
+def _tracked_paths(top, sha, relpath):
+    """The paths the COMMIT holds under `relpath`, repo-root-relative.
+
+    `-z` so a path with a space or a quote cannot be mis-split, and
+    `--full-tree` so the answer does not depend on the working directory.
+    """
+    out = _git(top, ["ls-tree", "-r", "-z", "--full-tree", "--name-only", sha, "--", relpath])
+    names = [n for n in out.decode("utf-8", "surrogateescape").split("\0") if n]
+    if not names:
+        raise Refusal(
+            "GIT-EMPTY-SUBJECT: commit %s holds no file under %s, so the haystack would "
+            "be empty and every figure would red for the wrong reason." % (sha[:12], relpath)
+        )
+    return sorted(names)
+
+
+def _blobs(top, sha, names):
+    """The contents of those paths, read from the object store in one batch."""
+    if not names:
+        return []
+    stdin = "".join("%s:%s\n" % (sha, n) for n in names).encode("utf-8", "surrogateescape")
+    out = _git(top, ["cat-file", "--batch"], stdin=stdin)
+    read = []
+    at = 0
+    for name in names:
+        nl = out.find(b"\n", at)
+        if nl < 0:
+            raise Refusal("GIT-BATCH: the object stream ended before %s" % name)
+        header = out[at:nl].decode("utf-8", "replace").split()
+        if len(header) != 3 or header[1] != "blob":
+            raise Refusal(
+                "GIT-OBJECT: %s:%s is not a blob (`cat-file --batch` said %r)"
+                % (sha[:12], name, " ".join(header))
+            )
+        size = int(header[2])
+        read.append(out[nl + 1 : nl + 1 + size].decode("utf-8", "replace"))
+        at = nl + 1 + size + 1
+    return read
+
+
+def _differs_from_commit(root):
+    """The files under `root` the working tree holds that the commit does not
+    agree with: changed, untracked, or ignored. Reporting only -- nothing here
+    decides anything -- and best effort, because a report that can refuse
+    would make the refusal about the report.
+
+    It exists because `R15-F1` was a file nobody could see: gitignored, so
+    `git status` said clean, and read by the gate all the same. Whatever the
+    commit does not carry is now out of the haystack AND named in the output.
+    """
+    try:
+        top = _toplevel(root)
+        rel = os.path.relpath(os.path.abspath(root), top)
+        changed = _git(top, ["diff", "--no-ext-diff", "--name-only", "HEAD", "--", rel])
+        extra = _git(
+            top, ["ls-files", "-z", "--others", "--exclude-standard", "--", rel]
+        )
+        ignored = _git(
+            top, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--", rel]
+        )
+    except (Refusal, OSError):
+        return None
+    out = []
+    out += [x for x in changed.decode("utf-8", "surrogateescape").split("\n") if x]
+    out += [x for x in extra.decode("utf-8", "surrogateescape").split("\0") if x]
+    out += [x for x in ignored.decode("utf-8", "surrogateescape").split("\0") if x]
+    return sorted(set(out))
+
+
+_HAYSTACK = {}
+
+
+def haystack(root, skip=()):
+    """(label, paths, text): what this tree emits, and where that was read from.
+
+    Cached per (root, guards) because one process measures one commit: the
+    object store cannot change under a run, and the arms would otherwise spawn
+    a subprocess per guard per arm.
     """
     stem = os.path.splitext(os.path.basename(__file__))[0]
-    out = []
-    for d, subdirs, files in os.walk(root):
-        subdirs[:] = [x for x in sorted(subdirs) if x not in ARTEFACT_DIRS]
-        for f in sorted(files):
-            if f.endswith(".md"):
-                continue
-            if f.endswith(ARTEFACT_SUFFIXES):
-                continue
-            if os.path.splitext(f)[0] == stem:
-                continue  # a token quoted in this file's own prose proves nothing
-            out.append(os.path.join(d, f))
-    return out
+    from_commit = "haystack from the commit" not in skip
+    drop_md = "markdown is not evidence" not in skip
+    drop_self = "the checker is not its own evidence" not in skip
+    key = (os.path.abspath(root), from_commit, drop_md, drop_self)
+    if key in _HAYSTACK:
+        return _HAYSTACK[key]
+
+    def keep(name):
+        base = os.path.basename(name)
+        if drop_md and base.endswith(".md"):
+            return False
+        # By STEM, so a `.pyc` of an excluded source is excluded with it. Under
+        # the git derivation that is belt and braces; with the derivation
+        # deleted it is the round-15 design, which is what the arm measures.
+        if drop_self and os.path.splitext(base)[0] == stem:
+            return False
+        return True
+
+    if from_commit:
+        top = _toplevel(root)
+        sha = _commit_of(root)
+        rel = os.path.relpath(os.path.abspath(root), top)
+        paths = [n for n in _tracked_paths(top, sha, rel) if keep(n)]
+        text = "\n".join(_blobs(top, sha, paths))
+        label = "commit %s" % sha
+    else:
+        paths = []
+        read = []
+        for d, subdirs, files in os.walk(root):
+            subdirs[:] = sorted(subdirs)
+            for f in sorted(files):
+                p = os.path.join(d, f)
+                if not keep(p):
+                    continue
+                paths.append(os.path.relpath(p, root))
+                try:
+                    read.append(open(p, encoding="utf-8", errors="replace").read())
+                except OSError:
+                    pass
+        text = "\n".join(read)
+        label = "the working tree (the git derivation is deleted)"
+    got = (label, paths, text)
+    _HAYSTACK[key] = got
+    return got
 
 
-def emitted_strings(root):
+def emitted_strings(root, skip=()):
     """What the instruments and the committed evidence under `root` emit."""
-    blob = []
-    for path in haystack_files(root):
-        try:
-            blob.append(open(path, encoding="utf-8", errors="replace").read())
-        except OSError:
-            pass
-    return "\n".join(blob)
+    return haystack(root, skip)[2]
+
+
+def haystack_files(root, skip=()):
+    """The paths whose contents count as something this tree emits."""
+    return haystack(root, skip)[1]
 
 
 def planted_tokens():
@@ -496,8 +765,15 @@ def planted_tokens():
 
 
 def scan(docs_dir, harness_dir, quiet=False, skip=()):
-    """0 = every quoted figure is emitted. 1 = a finding. 2 = inert."""
-    haystack = emitted_strings(harness_dir)
+    """0 = every quoted figure is emitted. 1 = a finding. 2 = inert. 5 = a
+    NAMED REFUSAL: the haystack could not be derived from a commit, so the
+    check says so and exits non-zero instead of reading the working tree."""
+    try:
+        label, files, emitted = haystack(harness_dir, skip)
+    except Refusal as why:
+        if not quiet:
+            print("  REFUSED: %s" % why)
+        return 5
     docs = documents(docs_dir)
     planted = () if "planted tokens" in skip else planted_tokens()
     seen = 0
@@ -506,17 +782,25 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
         rel = os.path.relpath(path, docs_dir)
         for n, raw, tok in tokens_in(path, skip):
             seen += 1
-            if tok not in haystack or tok in planted:
+            if tok not in emitted or tok in planted:
                 findings.append((rel, n, tok, raw))
     if not quiet:
         # The inventory, because a verdict that does not name its own input is
         # a verdict nobody can reproduce: `R15-F1` was a gitignored `.pyc` in
         # this very directory, and nothing in the output said it was being read.
         print(
-            "quoted figures: %d documents, %d haystack files, %d candidate figures, "
-            "%d not emitted"
-            % (len(docs), len(haystack_files(harness_dir)), seen, len(findings))
+            "quoted figures: %d documents, haystack from %s (%d files), %d candidate "
+            "figures, %d not emitted" % (len(docs), label, len(files), seen, len(findings))
         )
+        # Named, not silent: `R15-F1` was a gitignored file the gate read and
+        # the output never mentioned. These no longer count, and they are no
+        # longer invisible either.
+        extra = _differs_from_commit(harness_dir)
+        for name in extra or []:
+            print(
+                "  NOT IN THE HAYSTACK: %s differs from that commit (changed, untracked "
+                "or ignored). Nothing it contains legitimises a figure." % name
+            )
     if seen == 0:
         if not quiet:
             print(
@@ -760,59 +1044,117 @@ def identity_test():
     return ok
 
 
-def _world(d):
-    """One hermetic world: a synthetic document tree and a synthetic harness."""
-    docs = os.path.join(d, "docs")
+FAKE_PROOFS = (
+    'case("a", "SELECT 1", "present=true")\n'
+    'case("b", "SELECT 2", "deleted=0")\n'
+)
+PLANT = "fabricated_count=999"
+# The haystack arms cannot use `PLANT`: it is a token the arms plant, so the
+# `planted tokens` guard catches it whatever the haystack says, and a haystack
+# guard measured with it reds nothing. `R15-S4`'s own arm keeps `PLANT`,
+# because a planted token in the evidence IS its finding.
+PROBE = "world_probe=404"
+
+# The worlds the arms run in. The haystack is derived from a COMMIT now, so a
+# world is a repository: `tracked` is committed, `untracked` is written after
+# the commit and is exactly what `R16-F1` is about -- a file in the directory
+# that the commit does not carry.
+WORLDS = {
+    "plain": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    # R12-E4b: a markdown file under the harness, in both roles at once.
+    "md": ({"fake_proofs.py": FAKE_PROOFS, "README.md": PROBE + "\n"}, {}),
+    # R15-S4: the committed run log carries the selftest's own output.
+    "runlog": (
+        {
+            "fake_proofs.py": FAKE_PROOFS,
+            "RUN-EVIDENCE.txt": (
+                "  catch  N0 control: a bare line            rc=1 (want 1) -> as required\n"
+                + PLANT
+                + "\n"
+            ),
+        },
+        {},
+    ),
+    # R16-F1: a scratch file in the working tree, committed nowhere.
+    "untracked": ({"fake_proofs.py": FAKE_PROOFS}, {"scratch.log": PROBE + "\n"}),
+    # R16-F1: round 15's own fail-open, gitignored exactly as it was.
+    "pyc": (
+        {"fake_proofs.py": FAKE_PROOFS, ".gitignore": "__pycache__/\n"},
+        {"__pycache__/check_fenced_figures.cpython-313.pyc": PROBE + "\n"},
+    ),
+    # R16-F1: a directory that is no repository. Not committed on purpose: the
+    # arm below requires the check to REFUSE here rather than fall back to the
+    # walk, which is the whole difference between a guard and a preference.
+    "norepo": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    # R16-F1: the checker's own prose, committed, under its own name.
+    "stem": (
+        {"fake_proofs.py": FAKE_PROOFS, "check_fenced_figures.py": "# " + PROBE + "\n"},
+        {},
+    ),
+}
+
+_WORLDS = {}
+
+
+def _write(root, name, body):
+    path = os.path.join(root, name)
+    parent = os.path.dirname(path)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent)
+    open(path, "w", encoding="utf-8").write(body)
+
+
+def _world_harness(kind):
+    """The harness half of one hermetic world, as a real commit.
+
+    Built once per process per kind. The haystack is read from the object
+    store, so an arm needs a repository and not a directory -- and a fresh
+    `git init` per arm per deleted guard would be some thousands of
+    subprocesses for no new information.
+    """
+    if kind in _WORLDS:
+        return _WORLDS[kind]
+    tracked, untracked = WORLDS[kind]
+    d = tempfile.mkdtemp(prefix="p11-world-%s-" % kind)
+    atexit.register(shutil.rmtree, d, True)
     harness = os.path.join(d, "harness")
-    os.makedirs(os.path.join(docs, "sub"), exist_ok=True)
-    os.makedirs(harness, exist_ok=True)
-    open(os.path.join(harness, "fake_proofs.py"), "w", encoding="utf-8").write(
-        'case("a", "SELECT 1", "present=true")\n'
-        'case("b", "SELECT 2", "deleted=0")\n'
+    os.makedirs(harness)
+    for name, body in sorted(tracked.items()):
+        _write(harness, name, body)
+    if kind == "norepo":
+        _WORLDS[kind] = harness
+        return harness
+    _git(d, ["init", "-q"])
+    _git(d, ["add", "-A", "--", "harness"])
+    _git(
+        d,
+        [
+            "-c",
+            "user.name=phase11",
+            "-c",
+            "user.email=phase11@example.invalid",
+            "commit",
+            "-q",
+            "--no-gpg-sign",
+            "-m",
+            "world: %s" % kind,
+        ],
     )
-    return docs, harness
+    for name, body in sorted(untracked.items()):
+        _write(harness, name, body)
+    _WORLDS[kind] = harness
+    return harness
 
 
-def _arm(body, skip=(), relpath="docs/a.md"):
+def _arm(body, skip=(), relpath="a.md", kind="plain"):
+    """One document line, weighed against one world. `relpath` is under docs."""
+    harness = _world_harness(kind)
     with tempfile.TemporaryDirectory() as d:
-        docs, harness = _world(d)
-        open(os.path.join(d, relpath), "w", encoding="utf-8").write(body + "\n")
+        docs = os.path.join(d, "docs")
+        os.makedirs(docs)
+        _write(docs, relpath, body + "\n")
         return scan(docs, harness, quiet=True, skip=skip)
 
-
-def _arm_e4b(skip=()):
-    """A fabricated figure in markdown UNDER THE HARNESS must not make the same
-    token lawful in a scanned document. Round 13 noted, correctly, that this
-    arm puts the synthetic harness beside the synthetic docs, so its README is
-    never scanned: it measures the haystack half only. The scan half is `E4a`,
-    and the real tree's geometry -- one file in both roles -- is exercised by
-    the plant driven through `rebuild_and_prove.sh`."""
-    with tempfile.TemporaryDirectory() as d:
-        docs, harness = _world(d)
-        open(os.path.join(harness, "README.md"), "w", encoding="utf-8").write(
-            "fabricated_count=999\n"
-        )
-        open(os.path.join(docs, "a.md"), "w", encoding="utf-8").write("fabricated_count=999\n")
-        return scan(docs, harness, quiet=True, skip=skip)
-
-
-
-def _arm_r15s4(skip=()):
-    """A token the selftest plants is never evidence of itself.
-
-    `R15-S4`: the committed run log carries the selftest's output, so from
-    that commit the token every round uses for its fabricated figure was in
-    the haystack and passed in any document. Here the synthetic harness holds
-    a run log containing it, exactly as the real one does, and the document
-    writes it as a plain line. It must still be caught."""
-    with tempfile.TemporaryDirectory() as d:
-        docs, harness = _world(d)
-        open(os.path.join(harness, "RUN-EVIDENCE.txt"), "w", encoding="utf-8").write(
-            "  catch  N0 control: a bare line            rc=1 (want 1) -> as required\n"
-            "fabricated_count=999\n"
-        )
-        open(os.path.join(docs, "a.md"), "w", encoding="utf-8").write("fabricated_count=999\n")
-        return scan(docs, harness, quiet=True, skip=skip)
 
 def _arms_with(skip=()):
     """(label, want, runner) for every arm, with `skip` left out of the matcher.
@@ -823,9 +1165,34 @@ def _arms_with(skip=()):
     arms = [(label, 1, (lambda b=body: _arm(b, skip))) for label, body in CATCH]
     arms += [(label, 2, (lambda b=body: _arm(b, skip))) for label, body in SKIP]
     arms += [(label, 0, (lambda b=body: _arm(b, skip))) for label, body in PASSES]
-    arms.append(("R12 E4a markdown in a subdirectory", 1, lambda: _arm("fabricated_count=999", skip, "docs/sub/README.md")))
-    arms.append(("R12 E4b a doc is not its own evidence", 1, lambda: _arm_e4b(skip)))
-    arms.append(("R15-S4 a planted token is not its own evidence", 1, lambda: _arm_r15s4(skip)))
+    # `R12-E4a` is a location, not a line: the same plant in a subdirectory.
+    arms.append(
+        (
+            "R12 E4a markdown in a subdirectory",
+            1,
+            lambda: _arm(PLANT, skip, "sub/README.md"),
+        )
+    )
+    # The haystack arms. Each names the file that must NOT legitimise the plant,
+    # and each is the arm the matching guard in `HAYSTACK_GUARDS` reds when it
+    # is deleted -- which is how "the haystack is derived from the commit" is a
+    # measured claim rather than a sentence in this header.
+    for label, kind, token in (
+        ("R12 E4b a doc is not its own evidence", "md", PROBE),
+        ("R15-S4 a planted token is not its own evidence", "runlog", PLANT),
+        ("R16-F1 an untracked scratch file is not evidence", "untracked", PROBE),
+        ("R16-F1 a gitignored .pyc is not evidence", "pyc", PROBE),
+        ("R16-F1 the checker is not its own evidence", "stem", PROBE),
+    ):
+        arms.append((label, 1, (lambda k=kind, x=token: _arm(x, skip, "a.md", k))))
+    # Fail-closed, measured: no commit, no haystack, no verdict.
+    arms.append(
+        (
+            "R16-F1 a directory that is no repository is refused",
+            5,
+            (lambda: _arm(PROBE, skip, "a.md", "norepo")),
+        )
+    )
     return arms
 
 
@@ -1073,6 +1440,236 @@ def structure_test():
     return ok
 
 
+# ── the decision frame: the function that DECIDES, parsed too ──────────────
+# `R16-S1`. The structural check above proves that every TRANSFORMATION is
+# behind a named guard. Round 16 pointed out what it says nothing about: the
+# function that decides what to do with the result. `figures_on` can rebind
+# `line`, or return early under a test nobody named, and every guard in
+# `_strip` stays pristine while the gate decides nothing. The plant the round
+# used was `line = line.replace(";", "")` in `figures_on` -- the same
+# statement the structural check refuses inside `_strip` and had no opinion
+# about one frame up -- and a narrowing early return beside it.
+#
+# So the decision is parsed on the same principle, with two rules:
+#
+#   1. No statement rebinds a PARAMETER or a `for` TARGET. The input a
+#      decision reads must be the input it was given.
+#   2. Every `if` -- statement or expression -- tests a NAMED GUARD or calls a
+#      module function. A predicate written inline is somewhere a narrowing
+#      hides; moved into a function of its own it is readable by this parse and
+#      by the guard matrix. `_exempted` above exists for exactly that reason.
+#
+# ITS OWN BOUND: this proves the frame takes no decision outside a named guard
+# or a named function. It does not prove the named function is honest -- that
+# is what the arms are for -- and `_is_figure` is the shape the review arm is
+# about, so the three tests that ARE the shape are listed by their exact
+# source. An exception is itself a claim: if the source stops containing it,
+# the entry reds instead of quietly covering nothing.
+
+DECISION_MODULES = ("re", "os", "unicodedata", "ast", "inspect")
+
+DECISION_EXCEPTIONS = {
+    "_is_figure": (
+        "'=' not in s",
+        "not key or not val",
+        "spelled in bools",
+    ),
+}
+
+
+def _guard_test(test):
+    """`"<name>" not in skip` or `"<name>" in skip`, or None."""
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return None
+    if not isinstance(test.ops[0], (ast.NotIn, ast.In)):
+        return None
+    if not isinstance(test.left, ast.Constant) or not isinstance(test.left.value, str):
+        return None
+    right = test.comparators[0]
+    if not isinstance(right, ast.Name) or right.id != "skip":
+        return None
+    return test.left.value
+
+
+def _module_call(node):
+    """A call to a module-level function, or to one of this file's imports."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return True
+    if (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id in DECISION_MODULES
+    ):
+        return True
+    return False
+
+
+def decision_frame(fn, exceptions=()):
+    """(ok, msgs, tests) for one decision function's AST."""
+    name = fn.name
+    msgs = []
+    params = {a.arg for a in fn.args.args}
+    targets = set()
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.For, ast.comprehension)):
+            for sub in ast.walk(node.target):
+                if isinstance(sub, ast.Name):
+                    targets.add(sub.id)
+    tests = []
+    used = set()
+    keys = set()
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            bound = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in bound:
+                for sub in ast.walk(target):
+                    if isinstance(sub, ast.Name) and sub.id in (params | targets):
+                        msgs.append(
+                            "%s: line %d rebinds `%s`, which is %s -- a decision frame "
+                            "reads the input it was given"
+                            % (
+                                name,
+                                node.lineno,
+                                sub.id,
+                                "a parameter" if sub.id in params else "a loop target",
+                            )
+                        )
+            continue
+        if isinstance(node, (ast.If, ast.IfExp)):
+            test = node.test
+            tests.append(test)
+            inner = test
+            if isinstance(inner, ast.UnaryOp) and isinstance(inner.op, ast.Not):
+                inner = inner.operand
+            key = _guard_test(inner)
+            if key is not None:
+                keys.add(key)
+                continue
+            if _module_call(inner):
+                continue
+            src = ast.unparse(test)
+            if src in exceptions:
+                used.add(src)
+                continue
+            msgs.append(
+                "%s: line %d decides on `%s`, which is neither a named guard nor a call "
+                "to a function -- a predicate written inline is where a narrowing hides"
+                % (name, node.lineno, src)
+            )
+    for src in exceptions:
+        if src not in used:
+            msgs.append(
+                "%s: the listed exception `%s` is not in the function any more, so the "
+                "entry covers nothing and must go" % (name, src)
+            )
+    return not msgs, msgs, keys
+
+
+def _decision_of(func):
+    src = textwrap.dedent(inspect.getsource(func))
+    return ast.parse(src).body[0]
+
+
+# The decision functions, and the plants round 16 used. The template is
+# `figures_on`'s own shape; each plant is inserted where a statement would sit.
+_DECISION_TEMPLATE = '''def _decided(line, skip=()):
+    out = []
+    for part in _segments(line, skip):
+        s = _strip(part, skip)
+        %s
+        if not _is_figure(s, skip):
+            continue
+        out.append(s)
+    return out
+'''
+
+DECISION_PLANTS = (
+    ("R16-S1 rebind the input", 'line = line.replace(";", "")'),
+    ("R16-S1 rebind the parameter wholesale", "skip = ()"),
+    ("R16-S1 rebind the loop target", "part = part.strip()"),
+    (
+        "R16-S1 narrowing early return",
+        'if "\\u2060" in line:\n            return out',
+    ),
+    (
+        "R16-S1 silent truncation",
+        "if len(out) > 1:\n            return out[:1]",
+    ),
+    (
+        "R16-S1 inline predicate on the value",
+        'if s.endswith("%"):\n            continue',
+    ),
+    (
+        "R16-S1 a guard with a clause bolted on",
+        'if _exempted(s, skip) and "%" in s:\n            continue',
+    ),
+)
+
+
+def decision_test():
+    """The real decision frame must pass; every planted decision must not."""
+    ok = True
+    for func in (figures_on, tokens_in, _exempted):
+        fn = _decision_of(func)
+        good, msgs, keys = decision_frame(fn, DECISION_EXCEPTIONS.get(func.__name__, ()))
+        for m in msgs:
+            print("  decision **FAILED**: %s" % m)
+        compiled = {c for c in func.__code__.co_consts if isinstance(c, str)}
+        drifted = sorted(k for k in keys if k not in compiled)
+        if drifted:
+            print(
+                "  decision **FAILED**: %s names guards the compiled function does not "
+                "hold (%s)" % (func.__name__, ", ".join(drifted))
+            )
+            good = False
+        print(
+            "  decision %-18s every test a named guard or a call, no input rebound -> %s"
+            % (func.__name__, "as required" if good else "FAILED")
+        )
+        ok = ok and good
+    # `_is_figure` is the shape the review arm is about, so its three tests
+    # that are the shape itself are listed -- and the listing is live.
+    fn = _decision_of(_is_figure)
+    good, msgs, _keys = decision_frame(fn, DECISION_EXCEPTIONS["_is_figure"])
+    for m in msgs:
+        print("  decision **FAILED**: %s" % m)
+    print(
+        "  decision %-18s every test a named guard, a call, or one of %d listed as the "
+        "shape -> %s"
+        % (
+            "_is_figure",
+            len(DECISION_EXCEPTIONS["_is_figure"]),
+            "as required" if good else "FAILED",
+        )
+    )
+    ok = ok and good
+    # The negative control: the template with nothing planted must PASS, or
+    # the parse refuses everything and measures nothing.
+    clean = ast.parse(_DECISION_TEMPLATE % "pass").body[0]
+    clean_ok, clean_msgs, _k = decision_frame(clean)
+    if not clean_ok:
+        for m in clean_msgs:
+            print("  decision **FAILED** (control): %s" % m)
+        ok = False
+    refused = 0
+    for label, stmt in DECISION_PLANTS:
+        planted = ast.parse(_DECISION_TEMPLATE % stmt).body[0]
+        plant_ok, _m, _k = decision_frame(planted)
+        if plant_ok:
+            print("  decision **FAILED**: %s hid from the parse" % label)
+            ok = False
+        else:
+            refused += 1
+    print(
+        "  decision: %d of %d planted decisions refused, the unplanted frame accepted "
+        "-- %s" % (refused, len(DECISION_PLANTS), "all of them" if ok else "FAILURES ABOVE")
+    )
+    return ok
+
+
 # ── provenance: an arm must carry the plant of the finding it names ─────────
 # `R15-S2` was invisible to everything above it. The computed matrix reported
 # `dash marker` measured, because an arm named for the finding existed and
@@ -1096,6 +1693,25 @@ PROVENANCE = {
         None,
         "reported as a collision in the haystack, not as a document line",
     ),
+    "R16-F1 an untracked scratch file is not evidence": (
+        None,
+        "a file in the directory that the commit does not carry -- reported as the "
+        "haystack's input, not as a document line",
+    ),
+    "R16-F1 a gitignored .pyc is not evidence": (
+        None,
+        "round 15's own `__pycache__/check_fenced_figures.cpython-313.pyc`, gitignored, "
+        "which the round quoted as the fail-open",
+    ),
+    "R16-F1 a directory that is no repository is refused": (
+        None,
+        "the round's own demand that the derivation not fall back -- a refusal, "
+        "reported as the design and not as a line",
+    ),
+    "R16-F1 the checker is not its own evidence": (
+        None,
+        "this file's own prose, committed under its own name",
+    ),
     "R14-F1 heading": (None, "`### fabricated_count=999`, quoted by the author in the answer"),
     "R14-F1 plain -- comment": (
         None,
@@ -1113,6 +1729,7 @@ PROVENANCE = {
     "R14-S1 hyphen in the key": (None, "a hyphen in the key, named as a shape"),
     "R14-S1 behind a -- marker": (None, "a figure after a `--` marker, named as a shape"),
     "R14-S3 percent on a real figure": (None, "`deleted=0%`, quoted in the finding"),
+    "R14-S3 control: the figure itself": ("deleted=0", None),
     "R14-S3 percent inside brackets": (None, "`(deleted=0%)`, quoted in the finding"),
     "R13-S1 N16 backticked comment": (None, "a backticked comment after a figure"),
     "R12 in a backtick fence": (None, "a fenced block, the caught control of round 12"),
@@ -1156,6 +1773,13 @@ def provenance_test():
     ok = True
     bodies = dict(CATCH)
     bodies.update(dict(SKIP))
+    bodies.update(dict(PASSES))
+    # The arms appended by `_arms_with` -- the haystack arms -- name findings
+    # too, and until round 16 nothing required them to record one: the loop
+    # read `CATCH` and `SKIP` only. They have no body in a table, so their
+    # entry must be a description.
+    for label, _want, _run in _arms_with():
+        bodies.setdefault(label, None)
     verbatim = 0
     described = 0
     for label in sorted(bodies):
@@ -1170,6 +1794,13 @@ def provenance_test():
             ok = False
             continue
         quoted, described_as = PROVENANCE[label]
+        if quoted is not None and bodies[label] is None:
+            print(
+                "  provenance **FAILED**: the arm %r has no body in a table, so a "
+                "verbatim plant cannot be checked against it" % label
+            )
+            ok = False
+            continue
         if quoted is None:
             described += 1
             continue
@@ -1194,7 +1825,7 @@ def provenance_test():
 # rejected over a number in a document that disagreed with the instrument the
 # sentence beside it named. The second time the number had actually been
 # measured -- on a tree carrying a gitignored `__pycache__`, which is the
-# fail-open `haystack_files` closes above -- so care was not the missing
+# fail-open the git derivation closes above -- so care was not the missing
 # ingredient and more care would not have helped.
 #
 # So the figures these documents quote from this instrument are GENERATED INTO
@@ -1232,9 +1863,14 @@ def emit_guard_matrix():
 
 
 def emit_arm_counts():
+    # `3 others` used to be a literal here and in the selftest's own summary.
+    # Round 16 adds three haystack arms, and a hand-written count of the arms
+    # that are not in a table is the same mistake as a hand-written table:
+    # computed from the list the selftest actually runs.
+    others = len(_arms_with()) - len(CATCH) - len(SKIP) - len(PASSES)
     return [
-        "%d catch arms, %d skip arms, %d pass arms, 3 others"
-        % (len(CATCH), len(SKIP), len(PASSES), )
+        "%d catch arms, %d skip arms, %d pass arms, %d others"
+        % (len(CATCH), len(SKIP), len(PASSES), others)
     ]
 
 
@@ -1260,15 +1896,68 @@ def emit_surface():
     return lines
 
 
+# `R16-S2`: the enrolment used to be A SENTINEL -- one regex per generator,
+# matched against the document, with anything outside a block that matched it
+# reported. Round 16 reworded round 15's own figure by six words and walked
+# through: `8 of 17 realistic figure-shaped lines` became `8 of the 17
+# realistic shapes`, which no sentinel of mine named. Writing a looser regex
+# would be patching escape N+1 of a wrong idea for the fifth time in this
+# file, so the sentinels are DELETED. A figure is now recognised BY AGREEMENT
+# WITH WHAT `--regenerate` WOULD WRITE: the generator is run, its claim line is
+# read, and a line outside the blocks that shares both a number and a word with
+# it is a restatement -- however it is worded, in whatever digits, because the
+# comparison is made on the folded, lower-cased line.
 GENERATORS = {
-    "guard-matrix": (emit_guard_matrix, (r"\d+ guards, every one of them deleted",)),
-    "arm-counts": (emit_arm_counts, (r"\d+ catch arms, \d+ skip arms",)),
-    "surface": (emit_surface, (r"\d+ of \d+ realistic figure-shaped lines",)),
+    "guard-matrix": emit_guard_matrix,
+    "arm-counts": emit_arm_counts,
+    "surface": emit_surface,
 }
+
+_BODIES = {}
 
 
 def _block_body(name):
-    return "\n".join(GENERATORS[name][0]())
+    """What `--regenerate` would write for one generator. Memoised: a generator
+    is deterministic within a run, and `--check-blocks` asks every document."""
+    if name not in _BODIES:
+        _BODIES[name] = "\n".join(GENERATORS[name]())
+    return _BODIES[name]
+
+
+# A word long enough to carry a subject, and a number STANDING ON ITS OWN: a
+# digit run inside `d15315e19cb3` is part of a digest, not a figure, and
+# counting it made a digest line a restatement of anything with a `17` in it.
+WORD = re.compile(r"[a-z][a-z-]{4,}")
+NUMBER = re.compile(r"(?<![0-9a-z])[0-9]+(?![0-9a-z])")
+
+
+def _claim_of(name):
+    """The generator's own claim: the last line it prints that says anything.
+
+    Read from the generator, not from a list here, so a generator that changes
+    its wording changes what counts as a restatement of it in the same run.
+    """
+    said = [line for line in _block_body(name).split("\n") if line.strip()]
+    return said[-1] if said else ""
+
+
+def _shared(line, claim):
+    """(numbers, words) a document line has in common with a generator's claim.
+
+    Folded and lower-cased on both sides, so `٤٠ catch arms` and `40 CATCH
+    arms` are the same restatement -- the same normalisation the matcher
+    applies, for the same reason.
+
+    A number of ONE digit does not count. `2`, `3` and `9` carry no subject,
+    and this file's own lesson is that a net whose price nobody measures is
+    worse than no net: with single digits counted, the pack's own prose redded
+    in 17 places that restate nothing. With them left out the rule reds twice
+    on prose that means something else, which is the cost, and `--check-blocks`
+    on this pack is where that cost is visible rather than asserted.
+    """
+    a, b = _fold_digits(line.lower()), _fold_digits(claim.lower())
+    numbers = {n for n in NUMBER.findall(a) if len(n) >= 2} & set(NUMBER.findall(b))
+    return numbers, set(WORD.findall(a)) & set(WORD.findall(b))
 
 
 def _find_blocks(text, name):
@@ -1322,7 +2011,6 @@ def check_blocks(docs_dir, quiet=False):
         rel = os.path.relpath(path, docs_dir)
         text = open(path, encoding="utf-8").read()
         for name in sorted(GENERATORS):
-            _emit, sentinels = GENERATORS[name]
             spans = _find_blocks(text, name)
             enrolled += len(spans)
             want = _wrapped(_block_body(name))
@@ -1334,19 +2022,32 @@ def check_blocks(docs_dir, quiet=False):
                         "`--regenerate` -- and commit what it prints."
                         % (rel, name, CMD % name)
                     )
-            # the generator's own sentence, anywhere outside its blocks
-            inside = []
-            for start, stop in spans:
-                inside.append((start, stop))
-            for rx in sentinels:
-                for m in re.finditer(rx, text):
-                    if not any(a <= m.start() < b for a, b in inside):
-                        findings.append(
-                            "%s:%d quotes `%s` outside the generated block for `%s`. An "
-                            "instrument's figure is generated into the document or it is "
-                            "not written at all."
-                            % (rel, text[: m.start()].count("\n") + 1, m.group(0), name)
+            # A RESTATEMENT of the generator's claim, anywhere outside its
+            # blocks: shares a number with it and a word with it. Derived from
+            # the generator, so a reworded figure is caught by what it says
+            # rather than by the form it says it in.
+            claim = _claim_of(name)
+            at = 0
+            for lineno, line in enumerate(text.split("\n"), 1):
+                start, at = at, at + len(line) + 1
+                if any(a <= start < b or a < at <= b for a, b in spans):
+                    continue
+                numbers, words = _shared(line, claim)
+                if numbers and words:
+                    findings.append(
+                        "%s:%d restates the figure `%s` produces -- it shares %s and %s "
+                        "with the line that generator prints, outside its block. An "
+                        "instrument's figure is generated into the document or it is "
+                        "not written at all; a block is enrolled by agreement with "
+                        "`--regenerate`, not by a sentence this file knows the shape of."
+                        % (
+                            rel,
+                            lineno,
+                            name,
+                            ", ".join(sorted(numbers)),
+                            ", ".join(sorted(words)),
                         )
+                    )
     if not quiet:
         print("generated blocks: %d enrolled, %d finding(s)" % (enrolled, len(findings)))
     for f in findings:
@@ -1361,24 +2062,91 @@ def check_blocks(docs_dir, quiet=False):
         return 2
     return 1 if findings else 0
 
+# The block arms. `R16-S2` asked for one thing in particular -- that round
+# 15's figure, REWORDED, reds -- and the rule is useless if it also reds the
+# unreworded document, so the control is an arm too.
+BLOCK_ARMS = (
+    ("R16-S2 a correct block, and numbers of other instruments", 0, ""),
+    ("R16-S2 the claim typed verbatim outside the block", 1, "@@CLAIM@@"),
+    (
+        "R16-S2 the claim REWORDED, which no sentinel named",
+        1,
+        "there are @@N@@ catch arms and 15 skip arms in the selftest",
+    ),
+    (
+        "R16-S2 the claim reworded in Arabic-Indic digits",
+        1,
+        "\u0664\u0660 catch arms, and the skip arms beside them",
+    ),
+    ("R16-S2 a block whose body was edited", 1, None),
+)
+
+
+def _blocks_arm(extra, edit=False):
+    """One synthetic document: a correct `arm-counts` block plus one line."""
+    with tempfile.TemporaryDirectory() as d:
+        docs = os.path.join(d, "docs")
+        os.makedirs(docs)
+        body = _block_body("arm-counts")
+        if edit:
+            body = body.replace("catch arms", "catch arms (edited by hand)")
+        text = (
+            "# a synthetic document\n\n"
+            "121 cases, 13 races and 93 migrations are other instruments' figures.\n\n"
+            + extra
+            + "\n\n"
+            + (BEGIN % ("arm-counts", CMD % "arm-counts"))
+            + _wrapped(body)
+            + (END % "arm-counts")
+            + "\n"
+        )
+        _write(docs, "a.md", text)
+        return check_blocks(docs, quiet=True)
+
+
+def blocks_test():
+    ok = True
+    for label, want, extra in BLOCK_ARMS:
+        if extra is None:
+            rc = _blocks_arm("", edit=True)
+        else:
+            filled = extra.replace("@@CLAIM@@", _claim_of("arm-counts")).replace(
+                "@@N@@", str(len(CATCH))
+            )
+            rc = _blocks_arm(filled)
+        good = rc == want
+        print(
+            "  blocks %-46s rc=%d (want %d) -> %s"
+            % (label, rc, want, "as required" if good else "**SELFTEST FAILED**")
+        )
+        ok = ok and good
+    print(
+        "  blocks: %d arms over the enrolment rule -- %s"
+        % (len(BLOCK_ARMS), "all as required" if ok else "FAILURES ABOVE")
+    )
+    return ok
+
+
 def selftest():
     ok = True
     for label, want, run in _arms_with():
         rc = run()
         good = rc == want
-        kind = {1: "catch ", 2: "skip  ", 0: "pass  "}[want]
+        kind = {1: "catch ", 2: "skip  ", 0: "pass  ", 5: "refuse"}[want]
         print(
             "  %s %-34s rc=%d (want %d) -> %s"
             % (kind, label, rc, want, "as required" if good else "**SELFTEST FAILED**")
         )
         ok = ok and good
     print(
-        "  %d catch arms, %d skip arms, %d pass arms, 3 others -- %s"
-        % (len(CATCH), len(SKIP), len(PASSES), "all as required" if ok else "FAILURES ABOVE")
+        "  %s -- %s"
+        % (emit_arm_counts()[0], "all as required" if ok else "FAILURES ABOVE")
     )
     ok = guard_matrix() and ok
     ok = identity_test() and ok
     ok = structure_test() and ok
+    ok = decision_test() and ok
+    ok = blocks_test() and ok
     ok = provenance_test() and ok
     return 0 if ok else 1
 
@@ -1396,21 +2164,31 @@ def surface():
     return 0
 
 
-if __name__ == "__main__":
-    args = sys.argv[1:]
+def _main(args):
     if "--selftest" in args:
-        raise SystemExit(selftest())
+        return selftest()
     if "--surface" in args:
-        raise SystemExit(surface())
+        return surface()
     if "--regenerate" in args:
-        raise SystemExit(regenerate(PHASE_DIR))
+        return regenerate(PHASE_DIR)
     if "--check-blocks" in args:
-        raise SystemExit(check_blocks(PHASE_DIR))
+        return check_blocks(PHASE_DIR)
     if "--emit" in args:
         name = args[args.index("--emit") + 1]
         if name not in GENERATORS:
             sys.stderr.write("no such generator: %s\n" % name)
-            raise SystemExit(3)
+            return 3
         print(_block_body(name))
-        raise SystemExit(0)
-    raise SystemExit(scan(PHASE_DIR, os.path.join(PHASE_DIR, "harness")))
+        return 0
+    return scan(PHASE_DIR, os.path.join(PHASE_DIR, "harness"))
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(_main(sys.argv[1:]))
+    except Refusal as why:
+        # Every entry point, not only the scan: `--surface` and
+        # `--check-blocks` read the haystack too, and a refusal that only one
+        # of them honours is a fail-open in the other two.
+        sys.stderr.write("check_fenced_figures.py REFUSED: %s\n" % why)
+        raise SystemExit(5)

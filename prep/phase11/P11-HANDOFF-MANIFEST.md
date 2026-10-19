@@ -36,11 +36,11 @@ Each document exists in **two places**: the shared project-files location (the c
 |---|---|---|---|
 | `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8be8503e62d4e280eb3918fb0d01ca20482135b0d7193eb0fd0ce46080230759` |
 | `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `b38f81c3d6ece206bd819b8f89bb2617c763fb7d66c307810edad88939976b36` |
-| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `157f818eea0ca456d80ad669ac857c97d53b65b2cdc4bfda068d5e96dbb7da20` |
+| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `15b35fb236e5990672cc09dbcda43f0c595df92ad1c1304440072cca702bf8ef` |
 | `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `6923f0add88d2a0bc31b89fa1b91be8ce20a7540fa6f95e20bf42ae2dd791979` |
 | `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `983e026a9bc6c7fe3b65cfc22fb7672ee33d30cd042e6f31ee176a1bb23055f1` |
-| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `c35b6cd031596bdd94b64c9debf8e07fc3bf6153d632ec37d72de988ffbf94fb` |
-| `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `9f6bb9e868160e05353634bee4d4330093fde9178f6578a67b8e3a052b20bd16`|
+| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `a84d923e6a29412fd9e4a06e91324a112250271dee57db97ad295b60f9f3f1b3` |
+| `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `180830b48401dc12323ce070b1c2256925f104d9f7028554914e70c21196bbf4`|
 | `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
 | `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
 
@@ -995,8 +995,11 @@ key class                  reds  1 arm(s): named: UPPERCASE key
 boolean case folding       reds  1 arm(s): R14-S1 boolean True
 named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
 planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
+haystack from the commit   reds  3 arm(s): R16-F1 an untracked scratch file is not evidence, R16-F1 a gitignored .pyc is not evidence, R16-F1 a directory that is no repository is refused
+markdown is not evidence   reds  1 arm(s): R12 E4b a doc is not its own evidence
+the checker is not its own evidence reds  1 arm(s): R16-F1 the checker is not its own evidence
 
-25 guards, every one of them deleted and measured
+28 guards, every one of them deleted and measured
 ```
 
 <!-- END GENERATED guard-matrix -->
@@ -1167,7 +1170,7 @@ The counts in this section and the two blocks in §7.14 are generated:
 <!-- BEGIN GENERATED arm-counts: python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts -->
 
 ```text
-40 catch arms, 15 skip arms, 2 pass arms, 3 others
+40 catch arms, 15 skip arms, 2 pass arms, 7 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -1276,9 +1279,150 @@ plants — a figure behind a marker with text before it, and a Devanagari
 figure, which produced a green run with two fabricated figures in the owner's
 document at `3838711` — are each named and refused here.
 
-**A SIXTEENTH round is owed** narrow on `3838711..HEAD`, with the coordinator
-diff review after it. **`24f6ebe` is still the last fully signed head**, and
+**A SIXTEENTH round was asked for** on `3838711..28659e7` and has been
+answered; §7.16 below is that answer, and a SEVENTEENTH is owed on
+`28659e7..HEAD` with the coordinator diff review after it. **`24f6ebe` is still the last fully signed head**, and
 nothing in this phase is self-signed.
+
+## 7.16 The SIXTEENTH round — `REJECT` at `28659e7`: the haystack was read from the FILESYSTEM, the frame that DECIDES was unparsed, and the enrolment was a SENTINEL
+
+Three findings, and each one is a hole of the same shape as the fix that
+preceded it. The round reproduced everything else: the digests with `ls`
+sorting, the published checker byte-identical to the committed one, the
+computed guard matrix re-run guard by guard, and the four published plant
+probes in both directions.
+
+**`R16-F1` (BLOCKER) — "not committed, therefore not in the subject" was
+never true, because the haystack was read from the filesystem.** Round 15's
+answer excluded `__pycache__`, four compiled suffixes and this file by stem.
+The round's objection is the one this phase has already learned once, in `P7`:
+**an enumerated exemption fixes a SHAPE hole and opens a TIME hole**, because
+no list can name the file nobody has written yet — a `scratch.log`, an editor
+backup, a `.orig` from a merge, an archive unpacked in the wrong directory.
+The verdict still depended on what happened to be lying in a directory.
+
+**Implemented as ruled: the subject set is DERIVED FROM EXECUTION of git at a
+resolved commit, and the content is read FROM THE OBJECT STORE.** `git ls-tree
+-r -z --full-tree` at the commit `rev-parse --verify HEAD^{commit}` resolves,
+then `git cat-file --batch` for the blobs; a file the commit does not carry
+cannot legitimise a figure, whatever it is called, and **the artefact lists are
+DELETED rather than extended** — `__pycache__` is out because it is not
+committed, not because someone remembered to name it. The read is hardened as
+Phase 14 hardened its own local reads, and for the same reason: every `GIT_*`
+variable is scrubbed first, because `GIT_DIR` beats `-C`; replace objects are
+disabled by flag **and** by environment; grafts point at the null device;
+system and global configuration are ignored; `PATH` is pinned starting at
+`/usr/bin`; the binary is resolved once from a fixed list of absolute paths.
+Shallowness is not refused, and the reason is stated: one commit's tree and
+blobs are complete in a shallow clone, which is all this reads, while `P8`'s
+ruling is about a shallow graph's definite "no".
+
+**It FAILS CLOSED, and that is measured, not promised.** An absent git, a
+directory that is no repository, a commit that does not resolve, or a harness
+path the commit does not hold is a **named refusal with its own exit (5)** —
+never a silent fall back to the walk this round deleted, because a fallback
+would make the whole derivation a preference. The arms: an untracked
+`scratch.log` carrying the plant, a **gitignored `__pycache__/*.pyc` carrying
+the plant** — round 15's own fail-open, planted deliberately — and a
+directory that is no repository, which must refuse. **Deleting the git
+derivation reds all three by name**, which is what makes "derived from the
+commit" a claim with a red proof rather than a sentence in a header. Two more
+haystack guards are now measured the same way: markdown is not evidence (round
+12's `E4b`) and the checker is not its own evidence.
+
+**What it costs, stated because it is a real cost.** Content that exists only
+in the working tree does not count, so a figure whose evidence is written but
+not yet committed REDS until the commit exists. The run therefore prints **the
+commit it read** and **every file under the harness that differs from it** —
+changed, untracked or ignored — so the one surprise this design can produce
+names itself in the output. At this head that list names the gitignored
+`.pyc` of `R15-F1` by path, in the ordinary output of the ordinary run, which
+is exactly what no run said before.
+
+**`R16-S1` (`P2`) — the structural parse covered every transformation and
+nothing that DECIDES.** `figures_on` could rebind `line`, or return early
+under a test nobody named, and every guard in `_strip` would stay pristine
+while the gate decided nothing; the round planted
+`line = line.replace(";", "")` one frame up from where the same statement is
+refused. **So the decision frame is parsed too**, on two rules: no statement
+rebinds a parameter or a `for` target, and every test — statement or
+expression — is a named guard or a call to a function. An inline predicate is
+somewhere a narrowing hides; moved into a function of its own it is readable by
+the parse and by the guard matrix, which is why the exemption check is now a
+function and not a clause. Seven planted decisions are refused — two kinds of
+rebinding, a narrowing early return, a silent truncation, an inline predicate
+on the value, and a guard with a clause bolted on — and **the unplanted frame
+is accepted**, so the parse is not refusing everything and measuring nothing.
+`_is_figure` is the shape the arm is about, so the three tests that ARE the
+shape are listed by their exact source; **a listed exception is itself a claim
+and goes red when the source stops containing it.**
+
+**Its own bound:** this proves the frame takes no decision outside a named
+guard or a named function. It does not prove the named function is honest —
+that is what the arms are for.
+
+**`R16-S2` (`P2`) — the enrolment was a sentinel, and round 15's own figure
+walked past it reworded by six words.** One regex per generator is a list of
+spellings, which is the mistake this file has now made four times in four
+designs. **The sentinels are deleted.** A figure is recognised BY AGREEMENT
+WITH WHAT `--regenerate` WOULD WRITE: the generator is run, its claim line is
+read from its output, and a line outside the blocks that shares both a number
+and a word with that line is a restatement — in whatever wording, and in
+whatever digit family, because both sides are folded and lower-cased the way
+the matcher folds a figure.
+
+**Its price was measured, not estimated, and it is not nothing.** With every
+number counted, the pack's own prose redded in seventeen places that restate
+nothing: `2`, `3` and `9` carry no subject. With single digits excluded the
+rule reds twice on this pack, both times on a long prose line sharing one weak
+word with a claim — so **two words of prose were changed and nothing else**:
+`would have refused` became `no longer refuse` in the mutation paragraph of the
+conservation-laws pack, and `applies every file` became `applies each file` in
+the live-DDL proof. Neither touches a figure or a finding. **The bound:** a
+restatement sharing neither a multi-digit number nor a long word with the
+generator's line still passes. Five arms measure the rule: a correct block
+beside other instruments' figures must pass; the claim typed verbatim, the
+claim reworded as the round reworded it, the claim reworded in Arabic-Indic
+digits, and a block edited by hand must each red.
+
+**`R16-A1`, found by the author while answering, and recorded because the
+challenger would have found it: a figure typed in this instrument's own
+header.** The header asserted a `--surface` count at `28659e7` that the
+command did not print at that head — the `R15-F1` defect exactly, surviving
+in the one file the gate does not read, because the scan and the enrolment read
+markdown only. The header no longer states the number at all: it names the
+command and points at the generated block. **The structural bound stays open
+and is disclosed here:** a figure typed in a non-markdown file is checked by no
+instrument of this phase.
+
+**Also fixed, found by my own instruments:** `3 others` was a literal in the
+arm-counts generator and in the selftest's own summary line, and round 16 adds
+arms that are not in a table. A hand-written count of the arms outside the
+tables is the same mistake as a hand-written table, so it is computed from the
+list the selftest actually runs — which is why the generated block in §7.15
+moves at this head.
+
+**Still disclosed, not closed:** everything §7.15 lists, plus the two bounds
+named above. **No signature is claimed here.** This is the author answering;
+the round-17 challenge on `28659e7..HEAD` and the coordinator diff review
+after it are owed, and `24f6ebe` is still the last fully signed head.
+
+**EVIDENCE AT THIS HEAD.** The run is
+`prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND16.txt`, run
+`p11-20261019T103931Z-5324`: Pack A 121 cases twice and Pack B 53 cases twice
+with 0 failed, the Pack A races and the Pack B races with 0 findings, 80 frozen
+entries and 0 digest mismatches, and **every `EXIT_*` 0** — including
+`EXIT_GENERATED_BLOCKS` and `EXIT_FENCED_FIGURES` at step `0c`, which is where
+this round's work is exercised — on PostgreSQL 16.15 at `en_US.utf8` with both
+roles `NOSUPERUSER NOBYPASSRLS`. The harness digest moves to `d87adcee…`; the
+pack digests do not move, and neither does the migrations tree. That run's tree
+was dirty, because the evidence of a commit cannot be committed before it, and
+the clean-tree re-run at the pushed SHA is published beside it together with
+the plant probes for this round: an untracked scratch file, a gitignored `.pyc`,
+a directory that is no repository, and the reworded figure. **The one output to
+read first** is the scan's own inventory line, which now names the commit it
+read and lists every file under the harness that differs from it — the
+gitignored `.pyc` of `R15-F1` among them, by path, in an ordinary run.
 
 ---
 
