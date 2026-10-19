@@ -3015,6 +3015,25 @@ describe('every written invocation of the pack tools is isolated', () => {
       scripts['test'],
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: the \`test\` script is not the pinned command. It must be exactly \`${PINNED_TEST_SCRIPT}\` -- \`&&\` so a red first leg stops the second, and nothing after the gate to discard its exit code. If this command must change, change it HERE in the same commit and say why in the message`,
     ).toBe(PINNED_TEST_SCRIPT);
+    // ROUND 59: the runner's per-case clock is part of what decides whether
+    // this law RUNS to a verdict. At vitest's 5000ms default, a container under
+    // load turned the heaviest case into `Test timed out in 5000ms` -- rc 1,
+    // one failed case, and no refusal name anywhere -- which is the root cause
+    // of the red this pack recorded at 21:11:05 rather than calling it a flake,
+    // reproduced deliberately with twelve busy loops on four CPUs. The value
+    // lives in `vitest.config.ts`, whose bytes are pinned; it is READ here so
+    // that it is not merely pinned, because a number nobody reads can drift
+    // back to a false-red default in a diff that looks like a cleanup.
+    const runnerConfig = readFileSync(join(__dirname, '..', 'vitest.config.ts'), 'utf8');
+    const clock = /testTimeout:\s*([0-9_]+)/.exec(runnerConfig);
+    expect(
+      clock,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts sets no testTimeout, so every case in this law runs on the runner's 5000ms default -- and the three heaviest here measure 2.0s to 3.2s on an idle container, so ordinary machine load produces a red with NO refusal name in it`,
+    ).not.toBeNull();
+    expect(
+      Number((clock?.[1] ?? '0').replace(/_/g, '')),
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts sets a per-case timeout under 60000ms, which is close enough to this law's own measured durations that machine load alone can red it without naming a refusal`,
+    ).toBeGreaterThanOrEqual(60_000);
     //
     // THE RESIDUAL THIS ARM DOES NOT CLOSE, STATED AS MEASURED -- AND THE
     // PREVIOUS WORDING OF THIS PARAGRAPH WAS FALSE, which R51-F1 measured and

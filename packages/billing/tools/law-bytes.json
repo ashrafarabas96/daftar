@@ -3,7 +3,7 @@
   "pinned": {
     "package.json": "9286ab6fd2bc7e90ad5bae1e966cb78a0e9f4464698c5008ef5cffe937229c03",
     "test/law-bytes-are-pinned.test.ts": "319eec4eac78982d01af2bc367e1c9d1bf0a41b1f336dc37dbd960c1ce090df6",
-    "test/tool-commands-are-isolated.test.ts": "1ce71dc883bdb84f35b38a406756023a26a96bed468b7f540706cd4601384299",
+    "test/tool-commands-are-isolated.test.ts": "7c73560717d8b2b8c9b2e2731bf5560349e726b59044077a8959ea2c7765a093",
     "tools/arms/pinned-now-arm.py": "c87a679de0970c8472035d7e49d5dd5da4270cacd3945584376ad9fe8e559af4",
     "tools/context-sites.py": "1daa1968bc7b109925145118ab7acc20803c0a76cb587e336292b8d910e38eb6",
     "tools/law-ran.py": "7c56525e0ff2ae53bda37810d7c8d2a6962510a77052aede4953d3386a1bf7d0",
@@ -14,6 +14,6 @@
     "tools/status-block.py": "bff5123897bad5da75865d32a79ef1d9534986abdc9a1b9418c11a2dcae628cb",
     "tsconfig.build.json": "fc260cbe86688e06932291129be27acbf84fb4b0744efa4cefa4544de09f6f59",
     "tsconfig.json": "2a0f802f2e7d00013ca325c1ce8c0da1fa13d148c20176a09d954897a85d5fd1",
-    "vitest.config.ts": "b370d6848b97f0e8974637cb8165fcb5df611e2c6fea67f3755c80234fd1515e"
+    "vitest.config.ts": "82aba25a587ba826ef48517da8c489f92cd21074ba8b3a666604ac84c7590b23"
   }
 }
