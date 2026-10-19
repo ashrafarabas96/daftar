@@ -81,6 +81,46 @@ const offencesIn = (label: string, text: string): string[] => {
   return found;
 };
 
+/**
+ * The same scan over a Markdown document, with one exemption: a fenced block
+ * whose opening fence declares `f-50-quote`.
+ *
+ * Found immediately after this law first ran against the published pack. These
+ * documents have to QUOTE the defect — §3.1 of the checkpoint and §21.2 of the
+ * response show the forged green beside the isolated run, which is the whole
+ * evidence for F-50 — and a law that forbids writing the defect down forbids
+ * reporting it. The exemption is therefore a sentence someone writes on the
+ * fence, visible in the diff, never inferred from what the line looks like: a
+ * rule that exempted `PYTHONPATH=…` lines by shape would exempt exactly the
+ * command an attacker wants a reader to copy. The marker does not appear in
+ * the copied text, and `quoted` below reds if the exemption ever stops being
+ * used, so it cannot outlive its reason.
+ */
+const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], number] => {
+  const found: string[] = [];
+  let exemptBlocks = 0;
+  let inFence = false;
+  let exempt = false;
+  text.split('\n').forEach((line, i) => {
+    if (/^\s*```/.test(line)) {
+      if (inFence) {
+        inFence = false;
+        exempt = false;
+      } else {
+        inFence = true;
+        exempt = /f-50-quote/.test(line);
+        if (exempt) exemptBlocks += 1;
+      }
+      return;
+    }
+    if (inFence && exempt) return;
+    for (const m of line.matchAll(INVOCATION)) {
+      if (!isolated(m[1] ?? '')) found.push(`${label}:${i + 1}: ${line.trim()}`);
+    }
+  });
+  return [found, exemptBlocks];
+};
+
 const readable = (p: string): string | null => {
   try {
     const t = readFileSync(p, 'utf8');
@@ -135,6 +175,21 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(offencesIn('fixture', '[sys.executable, "-I", str(tools / "status-block.py")]')).toStrictEqual([]);
   });
 
+  it('exempts a DECLARED quotation block, and nothing else', () => {
+    const quoted = ['```text f-50-quote', '$ python3 tools/manifest-digests.py --check', '```'].join('\n');
+    const undeclared = ['```text', '$ python3 tools/manifest-digests.py --check', '```'].join('\n');
+    const after = ['```text f-50-quote', '$ python3 tools/manifest-digests.py --check', '```', '', 'Run it with `python3 tools/status-block.py --dir d`.'].join(
+      '\n',
+    );
+
+    expect(offencesOutsideQuotedBlocks('doc', quoted)).toStrictEqual([[], 1]);
+    // Without the declaration the very same line is an offence, which is what
+    // makes the exemption a sentence someone wrote rather than a shape.
+    expect(offencesOutsideQuotedBlocks('doc', undeclared)[0]).toHaveLength(1);
+    // And the exemption ends with its block: prose after the fence is covered.
+    expect(offencesOutsideQuotedBlocks('doc', after)[0]).toHaveLength(1);
+  });
+
   it('holds over the pack documents this author owns, when the pack is present', () => {
     // The pack lives outside the repository, so this arm is measured HERE and
     // not in CI; that limit is written into the handoff rather than left for a
@@ -147,15 +202,22 @@ describe('every written invocation of the pack tools is isolated', () => {
     }
     const reviewerOwned = /^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-f]{7}\.md$/;
     const offences: string[] = [];
+    let quoted = 0;
     let mine = 0;
     for (const name of readdirSync(PACK)) {
       if (reviewerOwned.test(name)) continue;
       const text = readable(join(PACK, name));
       if (text === null) continue;
       mine += 1;
-      offences.push(...offencesIn(name, text));
+      const [found, exempted] = offencesOutsideQuotedBlocks(name, text);
+      offences.push(...found);
+      quoted += exempted;
     }
     expect(mine, 'no author-owned document was read from the pack').toBeGreaterThan(0);
+    expect(
+      quoted,
+      'no declared `f-50-quote` block was found: the documents stopped quoting the defect, so that exemption is dead and should be deleted rather than left standing',
+    ).toBeGreaterThan(0);
     expect(offences, 'an author-owned pack document prints an un-isolated command, which is the half of F-50 that routes the reader').toStrictEqual([]);
   });
 });
