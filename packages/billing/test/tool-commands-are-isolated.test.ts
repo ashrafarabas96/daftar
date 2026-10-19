@@ -75,7 +75,12 @@ import { dirname, join, relative } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
 
 const REPO = join(__dirname, '..', '..', '..');
-const PACK = process.env.P5_PACK_DIR ?? '/mnt/project-files/phase5';
+// R52-03 (P3, the coordinator's): `??` let an EMPTY STRING through, so
+// `P5_PACK_DIR=''` made this half measure nothing while the gate's own half
+// measured the default pack -- two halves of one `npm test` on different
+// subjects. An empty or blank value reads as UNSET here, exactly as it does in
+// `tools/law-ran.py`, which forwards the variable only when it is non-empty.
+const PACK = (process.env.P5_PACK_DIR ?? '').trim() || '/mnt/project-files/phase5';
 const REVIEWER_REPORTS_FILE = join(__dirname, '..', 'tools', 'reviewer-reports.json');
 
 /**
@@ -252,6 +257,24 @@ const REFUSED_TEST_WITHOUT_LAW_GATE = 'REFUSED-TEST-DOES-NOT-RUN-THE-LAW';
  * LITERAL, here and in the gate itself.
  */
 const PINNED_TEST_SCRIPT = 'vitest run && python3 -I tools/law-ran.py';
+
+/**
+ * ROUND 53, THE COORDINATOR'S CD-52-01 (P1, a committed one-file fail-open).
+ * Pinning the `test` script's bytes pins the COMMAND; it says nothing about the
+ * SHELL that command is handed to. One committed file — `packages/billing/.npmrc`
+ * holding `script-shell=/bin/true` — makes npm hand every script to a program
+ * that runs nothing, so `npm test` and `npm run gate:law` both exit 0 with a
+ * plant present and NOTHING runs at all. Measured before this fix. It also
+ * defeats the CI closure named in the residual below, which is why
+ * PATCH-REQ-P5-001 now asks for a CI step that runs `python3 -I
+ * tools/law-ran.py` DIRECTLY rather than through npm.
+ *
+ * Nothing read that file, so the refusal is its ABSENCE being required: an
+ * `.npmrc` beside this package, or at the repository root, is refused BY NAME.
+ * If one is ever legitimately needed, it is a reviewed change and this sentence
+ * changes with it.
+ */
+const REFUSED_NPM_CONFIG = 'REFUSED-NPM-CONFIG-PRESENT';
 
 /**
  * ROUND 51, THE COORDINATOR'S P3. An arm that read a pack document with no
@@ -2808,6 +2831,18 @@ describe('every written invocation of the pack tools is isolated', () => {
       lawRan,
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: \`npm test\` no longer runs \`python3 -I tools/law-ran.py\`, so the command people actually run can be made to collect neither law file and still exit 0 (CD-50-01). The gate must be chained into \`test\` itself, not only offered as \`gate:law\``,
     ).toStrictEqual(['gate:law', 'test']);
+    // CD-52-01: and no npm configuration stands between that command and a
+    // shell that runs it. `script-shell` is the one that silences everything
+    // here, but any `.npmrc` can set it, so the file's presence is what is
+    // refused rather than a key inside it -- a whitelist of keys is a list of
+    // the ones thought of (B-10), and this is a file that need not exist.
+    for (const where of [join(__dirname, '..'), REPO]) {
+      expect(
+        existsSync(join(where, '.npmrc')),
+        `${REFUSED_NPM_CONFIG}: ${join(where, '.npmrc')} exists. npm configuration can replace the shell every script is handed to -- \`script-shell=/bin/true\` makes \`npm test\` and \`npm run gate:law\` exit 0 with nothing run at all -- so this law requires that no such file exists. If one is legitimately needed, that is a reviewed change and this arm changes with it`,
+      ).toBe(false);
+    }
+
     // CD-51-01: and the script is the pinned LITERAL, byte for byte. A regex
     // match says the gate's command appears somewhere in the script; equality
     // says it is the whole of what runs, so `;` or `|| true` after it, or a
@@ -2826,9 +2861,14 @@ describe('every written invocation of the pack tools is isolated', () => {
     // must now change a PINNED LITERAL that two programs declare, so it sits
     // in the diff beside a digest line, and the gate -- which still runs --
     // names the defect in the output rather than going quiet. The terminus is
-    // a check that does not pass through `package.json`: a CI step running
-    // `npm run gate:law` and reading its exit code. This package has no CI and
-    // is not in the root workspaces; that is PATCH-REQ-P5-001, with the
+    // a check that does not pass through this package's own files at all: a CI
+    // step that runs `python3 -I tools/law-ran.py` DIRECTLY and reads its exit
+    // code -- not `npm test` and not `npm run gate:law`, because npm
+    // CONFIGURATION is part of what an author controls here. CD-52-01 is the
+    // proof: one committed `.npmrc` with `script-shell=/bin/true` makes npm and
+    // npx alike run nothing and exit 0, so a CI step phrased as an npm script
+    // would have been silenced by that same single file. This package has no CI
+    // and is not in the root workspaces; that is PATCH-REQ-P5-001, with the
     // Repo/CI owner, and it is the closure of this regress rather than
     // hygiene.
 
@@ -3181,7 +3221,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       // the default-absent branch is UNMEASURED AT RUNTIME here, because the
       // pack IS mounted in this container and nothing can unmount it from
       // inside a test.
-      const namedByOperator = (process.env.P5_PACK_DIR ?? '').length > 0;
+      const namedByOperator = (process.env.P5_PACK_DIR ?? '').trim().length > 0;
       expect(
         namedByOperator,
         `${REFUSED_PACK_NOT_PINNED}: P5_PACK_DIR names ${PACK} and there is no such directory, so the pack this gate was pointed at does not exist and ${pinnedPackSet().length} pinned author-owned names went unchecked. Unset P5_PACK_DIR to measure the default pack, or point it at a real one`,

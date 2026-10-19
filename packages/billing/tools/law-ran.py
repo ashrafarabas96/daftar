@@ -119,6 +119,22 @@ LAW_NOT_RUN = "LAW-NOT-RUN"
 # -- which is PATCH-REQ-P5-001 with the Repo/CI owner.
 PINNED_TEST_SCRIPT = "vitest run && python3 -I tools/law-ran.py"
 
+# ROUND 53, THE COORDINATOR'S CD-52-01 (P1, a committed one-file fail-open).
+# Pinning the `test` script pins the COMMAND and says nothing about the SHELL it
+# is handed to. One committed `packages/billing/.npmrc` holding
+# `script-shell=/bin/true` made `npm test` and `npm run gate:law` both exit 0
+# with a plant present and NOTHING run. Nothing read that file, so what is
+# required is its ABSENCE: this step refuses by name if an `.npmrc` sits beside
+# the package or at the repository root. The file's PRESENCE is the subject, not
+# a key inside it -- a whitelist of keys is a list of the ones someone thought
+# of, and this is a file that need not exist at all.
+#
+# This also moves the terminus named in the docstring: a CI step must run
+# `python3 -I tools/law-ran.py` DIRECTLY, not through npm, because npm
+# configuration can replace the shell that would have run it. PATCH-REQ-P5-001
+# says so.
+REFUSED_NPM_CONFIG = "REFUSED-NPM-CONFIG-PRESENT"
+
 # The literal counts. A count stated as a law is tested as a function, and a
 # count stated as a number must be the number -- "more than zero tests ran" is
 # the kind of bound this phase has been burned by four times. Change these in
@@ -142,6 +158,18 @@ def main() -> int:
     )
     args = ap.parse_args()
     package = Path(args.package).resolve()
+
+    # CD-52-01: no npm configuration may stand between the pinned command and
+    # the shell that runs it. Checked here as well as in the law, so neither is
+    # the only reader.
+    for where in (package, package.parent.parent):
+        if (where / ".npmrc").is_file():
+            refuse(
+                f"{REFUSED_NPM_CONFIG}: {where / '.npmrc'} exists. npm configuration can replace the shell every "
+                "script is handed to -- `script-shell=/bin/true` makes `npm test` and `npm run gate:law` exit 0 with "
+                "nothing run at all -- so this step requires that no such file exists. A CI step must run this gate "
+                "directly, not through npm"
+            )
 
     # CD-51-01: the `test` script must be the pinned literal, read from the
     # package manifest by this program as well as by the law, so neither is the
