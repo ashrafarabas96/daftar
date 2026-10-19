@@ -455,7 +455,17 @@ const notStartedByTheGate = (): string => {
     // argument is RESOLVED and compared with the one gate in this package. A
     // word that does not resolve is simply not a match, and not an error
     // either: the walk continues and the sentence below reports the chain.
-    const ourGate = realpathSync(join(__dirname, '..', GATE_PROGRAM));
+    // ROUND 60e: compared as a FILE, by device and inode, not as a resolved
+    // PATH. `realpathSync` follows symlinks, so a symlinked gate already
+    // matched, but a HARD LINK and a bind mount give the real file a second
+    // path that resolves to itself -- and a path comparison would have refused
+    // the real gate reached that way, which is a false red of the same shape as
+    // the clock. The identity of a file is its (dev, ino).
+    const ourGateStat = statSync(join(__dirname, '..', GATE_PROGRAM));
+    const sameFile = (candidate: string): boolean => {
+      const st = statSync(candidate);
+      return st.dev === ourGateStat.dev && st.ino === ourGateStat.ino;
+    };
     // A RELATIVE argument resolves against the ANCESTOR's working directory,
     // not against this process's: `npm test` runs the gate as
     // `python3 -I tools/law-ran.py` with the package as its cwd, and resolving
@@ -472,7 +482,7 @@ const notStartedByTheGate = (): string => {
     const runsTheGate = argv.slice(1).some((word) => {
       for (const candidate of ancestorCwd === '' ? [word] : [word, join(ancestorCwd, word)]) {
         try {
-          if (realpathSync(candidate) === ourGate) return true;
+          if (sameFile(candidate)) return true;
         } catch {
           // Not this word.
         }
@@ -3553,6 +3563,25 @@ describe('every written invocation of the pack tools is isolated', () => {
     // gate's digest was changed to classify from ONE `stat`.
     mkdirSync(join(dir, 'a-subdirectory-in-the-pack'));
     symlinkSync(join(dir, 'no-such-target-ever'), join(dir, 'dangling-symlink.md'));
+    // ROUND 60e, the entries with MORE THAN TWO answers, because an entry's
+    // kind is where these two implementations parted company once already. A
+    // symlink to a directory resolves but is not a file; a symlink LOOP raises
+    // ELOOP rather than ENOENT, which is a different errno through a different
+    // branch of each reader; a FIFO stats cleanly and is not a regular file.
+    // Each must land in the SAME label on both sides or the two digests differ
+    // for one directory at one instant.
+    symlinkSync(join(dir, 'a-subdirectory-in-the-pack'), join(dir, 'symlink-to-a-directory.md'));
+    symlinkSync(join(dir, 'loop-b.md'), join(dir, 'loop-a.md'));
+    symlinkSync(join(dir, 'loop-a.md'), join(dir, 'loop-b.md'));
+    const fifo = spawnSync(HARNESS_PYTHON, ['-I', '-B', '-c', 'import os, sys; os.mkfifo(sys.argv[1])', join(dir, 'a-fifo.md')], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { PATH: '/usr/bin:/bin' },
+    });
+    expect(
+      fifo.status,
+      `${REFUSED_PACK_MOVED}: this arm could not create a FIFO to compare the two readers over, so one kind of entry stays untested here: ${JSON.stringify((fifo.stderr ?? '').trim().slice(0, 200))}`,
+    ).toBe(0);
     const fromSubject = existsSync(PACK)
       ? readdirSync(PACK).filter((name) => {
           try {
