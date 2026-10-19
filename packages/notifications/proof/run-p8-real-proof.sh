@@ -398,6 +398,12 @@ fi
 # are kept; what is fixed is that the second named the wrong cause, and sent a
 # reader who reads the LAST failure looking for an export that was never missing.
 ANCHOR_DIR_REJECTED=0
+# ROUND 21, N-16: a rejection by THIS gate's precondition leaves ANCHOR_ARGS
+# empty, so the authoritative run below printed the check's "no --git-dir was
+# given" — true of the command line it received, false about what the operator
+# did, and the same sentence the no-anchor red prints. Third time that sentence
+# has misnamed its cause. The flag makes the gate say which it was.
+ANCHOR_PRECOND_REJECTED=0
 case "$P8_ANCHOR_DIR" in
   -*) say "FAIL: ARGUMENT INJECTION — P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR is option-shaped, so the anchor's directory cannot be told from this gate's own flags; refusing"
       FAILED=1; ANCHOR_DIR_REJECTED=1; P8_ANCHOR_DIR="" ;;
@@ -410,7 +416,7 @@ elif [ -z "$P8_ANCHOR_DIR" ]; then
   FAILED=1
 elif ! anchor_git "$P8_ANCHOR_DIR" rev-parse --verify "${P8_ANCHOR_PIN}^{commit}" >/dev/null 2>&1; then
   say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR does not contain the anchor commit $P8_ANCHOR_PIN"
-  FAILED=1
+  FAILED=1; ANCHOR_PRECOND_REJECTED=1
 # ROUND 20, N-11: this precondition used to test CONTAINMENT only — the very
 # relation round 19 declared insufficient — so the gate announced an anchor and
 # the check then refused it, and every arm behind the announcement reported
@@ -427,17 +433,30 @@ elif ! anchor_git "$P8_ANCHOR_DIR" merge-base --is-ancestor "$P8_ANCHOR_PIN" HEA
   # first version of this precondition refused any shallow anchor and reddened
   # the whole gate against this container's own checkout, which was shallow
   # (532 of 930 commits) while answering the ancestry question CORRECTLY.
-  if [ "$(anchor_git "$P8_ANCHOR_DIR" rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
+  #
+  # ROUND 21, N-14: `git rev-parse` ECHOES an option it does not recognise and
+  # exits 0 (measured: `rev-parse --is-shallow-repositoryX` prints the word and
+  # returns 0), so a test for "= true" reads a non-answer as "not shallow" and
+  # then asserts, in the refusal below, something the probe never established.
+  # Only the two literals are answers; anything else is undecided and says so.
+  _sh=$(anchor_git "$P8_ANCHOR_DIR" rev-parse --is-shallow-repository 2>/dev/null)
+  if [ "$_sh" = true ]; then
     say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR holds $P8_ANCHOR_PIN but is SHALLOW and its ancestry answer was negative, which a truncated graph cannot distinguish from absence; pass a complete checkout (fetch-depth 0, no --depth on any later fetch)"
+  elif [ "$_sh" != false ]; then
+    say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR holds $P8_ANCHOR_PIN, its ancestry answer was negative, and this git did not answer whether the repository is shallow (it said '$_sh'), so whether that negative means anything is UNDECIDED; refusing rather than calling it a lineage failure"
   else
     say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR holds $P8_ANCHOR_PIN but does not DESCEND from it, so it is a repository that happens to hold the object; the check would refuse it as ANCHOR LINEAGE and every arm behind this line would report itself untested instead of naming its own guard"
   fi
-  FAILED=1
+  FAILED=1; ANCHOR_PRECOND_REJECTED=1
 else
   ANCHOR_ARGS=(--git-dir "$P8_ANCHOR_DIR")
   say "the frozen boundary is anchored to $P8_ANCHOR_PIN (the ONE pin, read out of the check itself) in $P8_ANCHOR_DIR, which CONTAINS it, is not shallow, and DESCENDS from it, read with replacement objects disabled"
 fi
 CLAIM_ARGS=(--expect-covered "$P8_EXPECT_COVERED" --expect-boundary "$P8_EXPECT_BOUNDARY" --expect-covered-digest "$P8_EXPECT_COVERED_DIGEST")
+if [ "$ANCHOR_PRECOND_REJECTED" = 1 ]; then
+  say "FAIL: the anchor directory WAS given and was rejected by this gate's own precondition above (lineage, shallowness, or containment) — so the check below runs with no --git-dir and will say so, and that sentence is about the command line this gate built, not about a missing export"
+  FAILED=1
+fi
 INTEGRITY_OUT=$OUT/frozen-integrity.log
 # ROUND 17, N-2: the authoritative run must SAY that the anchor leg ran. Round
 # 16's evidence for its strongest leg was the ABSENCE of a complaint, which is
@@ -665,7 +684,7 @@ anchor_is_loadbearing(){   # anchor_is_loadbearing <id> <setup> <expect>
   local expect=$3
   local sand=$OUT/anchor-$id
   if [ "${#ANCHOR_ARGS[@]}" -eq 0 ]; then
-    say "ANCHOR-MUT $id: FAIL — no anchor was resolved, so this round's guard is untested"
+    say "ANCHOR-MUT $id: PLANT NOT ESTABLISHED — no anchor was resolved, so this guard is UNMEASURED; failing closed under that name"
     FAILED=1; return
   fi
   rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
@@ -674,7 +693,7 @@ anchor_is_loadbearing(){   # anchor_is_loadbearing <id> <setup> <expect>
   ( cd "$sand" && eval "$setup" ) >/dev/null 2>&1
   if [ "$(copied_digest "$REPO/infrastructure/database")" \
      = "$(copied_digest "$sand/infrastructure/database")" ]; then
-    say "ANCHOR-MUT $id: FAIL — the plant did not land; the sandbox is identical to the source"
+    say "ANCHOR-MUT $id: PLANT NOT ESTABLISHED — the plant did not land; the sandbox is identical to the source, so there is nothing for the guard to refuse; failing closed under that name"
     FAILED=1; return
   fi
   local bare=$sand/bare.log anch=$sand/anchored.log
@@ -769,14 +788,14 @@ anchor_identity(){   # anchor_identity <id> <doctor-the-anchor-clone> <extra-arg
   local work=$OUT/anchorid-$id
   rm -rf "$work"; mkdir -p "$work"
   if [ -z "$P8_ANCHOR_DIR" ]; then
-    say "ANCHOR-ID $id: FAIL — no anchor directory, so this plant is untested"
+    say "ANCHOR-ID $id: PLANT NOT ESTABLISHED — no anchor directory, so this plant is UNMEASURED; failing closed under that name"
     FAILED=1; return
   fi
   # A CLONE of the anchor repository, so the real one is never written to. No
   # frozen migration is touched in any real tree: what is doctored is a ref and a
   # commit inside a throwaway clone.
   if ! git clone -q "$P8_ANCHOR_DIR" "$work/anchor" 2>"$work/clone.log"; then
-    say "ANCHOR-ID $id: FAIL — could not clone the anchor repository: $(tail -1 "$work/clone.log")"
+    say "ANCHOR-ID $id: PLANT NOT ESTABLISHED — could not clone the anchor repository: $(tail -1 "$work/clone.log"); failing closed under that name"
     FAILED=1; return
   fi
   git -C "$work/anchor" config user.email p8@local >/dev/null 2>&1
@@ -837,7 +856,7 @@ PLANT
   if python3 "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only >"$work/inner.log" 2>&1; then
     say "ANCHOR-ID $id: the forged tree is internally consistent, as the plant requires"
   else
-    say "ANCHOR-ID $id: FAIL — the forged tree is not internally consistent ($(head -1 "$work/inner.log")), so it does not reach the anchor at all"
+    say "ANCHOR-ID $id: PLANT NOT ESTABLISHED — the forged tree is not internally consistent ($(head -1 "$work/inner.log")), so it does not reach the anchor at all; failing closed under that name"
     FAILED=1; return
   fi
   local out=$work/guarded.log
@@ -986,7 +1005,7 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
     "ARGUMENT INJECTION — --inner-guards-only was given" \
     --git-dir "$P8_ANCHOR_DIR" --inner-guards-only
 else
-  say "ARGSHAPE v: FAIL — no anchor directory, so this arm is untested"; FAILED=1
+  say "ARGSHAPE v: PLANT NOT ESTABLISHED — no anchor directory, so this arm is UNMEASURED; failing closed under that name"; FAILED=1
 fi
 # (w) THE HONEST SPACED PATH. The quoting fix is only proved by a caller a
 #     naive implementation would truncate: this directory's name contains a
@@ -1012,11 +1031,11 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
       "ANCHOR LEG EXERCISED: pin=$P8_ANCHOR_PIN dir=$SPACED/anchor" \
       --git-dir "$SPACED/anchor"
   else
-    say "ARGSHAPE w: FAIL — could not clone the anchor into a spaced path: $(tail -1 "$OUT/spaced-clone.log")"
+    say "ARGSHAPE w: PLANT NOT ESTABLISHED — could not clone the anchor into a spaced path: $(tail -1 "$OUT/spaced-clone.log"); failing closed under that name"
     FAILED=1
   fi
 else
-  say "ARGSHAPE w: FAIL — no anchor directory, so this arm is untested"; FAILED=1
+  say "ARGSHAPE w: PLANT NOT ESTABLISHED — no anchor directory, so this arm is UNMEASURED; failing closed under that name"; FAILED=1
 fi
 # (x) THE ENVIRONMENT UNDERNEATH. GIT_DIR BEATS -C, measured in this container:
 #     with GIT_DIR set to an empty repository, `git -C <anchor> rev-parse
@@ -1039,7 +1058,7 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
     --git-dir "$P8_ANCHOR_DIR"
   ARG_SHAPE_ENV=()
 else
-  say "ARGSHAPE x: FAIL — no anchor directory, so this arm is untested"; FAILED=1
+  say "ARGSHAPE x: PLANT NOT ESTABLISHED — no anchor directory, so this arm is UNMEASURED; failing closed under that name"; FAILED=1
 fi
 
 
@@ -1088,7 +1107,7 @@ guard_control(){   # guard_control <id> <patcher> <tampered|honest> <present|abs
   local nog=$work/no-guard.py pat=0
   python3 "$patcher" "$HERE/p8-frozen-integrity.py" "$nog" >"$work/patch.log" 2>&1 || pat=$?
   if [ "$pat" -ne 0 ] || [ ! -s "$nog" ]; then
-    say "GUARD-CTL $id: FAIL — the patcher did not apply (exit $pat: $(tail -1 "$work/patch.log")), so this arm measured nothing"
+    say "GUARD-CTL $id: PLANT NOT ESTABLISHED — the patcher did not apply (exit $pat: $(tail -1 "$work/patch.log")), so this arm measured nothing; failing closed under that name"
     FAILED=1; return
   fi
   local out=$work/out.log rc=0
@@ -1197,7 +1216,7 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
   guard_control y5 "$PATCHDIR/token.py" honest absent \
     "ANCHOR LEG EXERCISED:" --git-dir "$P8_ANCHOR_DIR"
 else
-  say "GUARD-CTL: FAIL — no anchor directory, so none of this round's guards is measured"
+  say "GUARD-CTL: PLANT NOT ESTABLISHED — no anchor directory, so none of these guards is measured; failing closed under that name"
   FAILED=1
 fi
 
@@ -1220,7 +1239,7 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
   cp -r "$REPO/infrastructure/database/migrations" "$LIN/tree/infrastructure/database/migrations"
   cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$LIN/tree/infrastructure/database/"
   if ! git clone -q "$P8_ANCHOR_DIR" "$LIN/orphan" 2>"$LIN/clone.log"; then
-    say "LINEAGE: FAIL — could not clone the anchor repository: $(tail -1 "$LIN/clone.log")"
+    say "LINEAGE: PLANT NOT ESTABLISHED — could not clone the anchor repository: $(tail -1 "$LIN/clone.log"); failing closed under that name"
     FAILED=1
   else
     ( cd "$LIN/orphan" \
@@ -1233,14 +1252,14 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
     # The plant only measures lineage if the OBJECT is still present: a clone
     # that lost it would red for "not reachable", which is a different guard.
     if ! git -C "$LIN/orphan" cat-file -e "${P8_ANCHOR_PIN}^{commit}" 2>/dev/null; then
-      say "LINEAGE: FAIL — the doctored clone no longer holds the pin at all, so this plant tests reachability, not lineage"
+      say "LINEAGE: PLANT NOT ESTABLISHED — the doctored clone no longer holds the pin at all, so this plant would test reachability, not lineage; failing closed under that name"
       FAILED=1
     elif git -C "$LIN/orphan" merge-base --is-ancestor "$P8_ANCHOR_PIN" HEAD 2>/dev/null; then
-      say "LINEAGE: FAIL — the doctored clone still descends from the pin, so the plant did not land"
+      say "LINEAGE: PLANT NOT ESTABLISHED — the doctored clone still descends from the pin, so there is nothing for the lineage guard to refuse; failing closed under that name"
       FAILED=1
     else
       if [ "$(git -C "$LIN/orphan" rev-parse --is-shallow-repository)" = true ]; then
-        say "LINEAGE: FAIL — the plant is SHALLOW, so round 20's completeness guard would decide this arm instead of the lineage guard it names; unshallow the anchor (fetch-depth 0)"
+        say "LINEAGE: PLANT NOT ESTABLISHED — the plant is SHALLOW, so the completeness guard would decide this arm instead of the lineage guard it names; pass a complete anchor (fetch-depth 0); failing closed under that name"
         FAILED=1
       else
       say "LINEAGE: the plant holds the pin as an object and is not descended from it, and is not shallow, as required"
@@ -1274,7 +1293,7 @@ PATCH
     fi
   fi
 else
-  say "LINEAGE: FAIL — no anchor directory, so the lineage guard is untested"
+  say "LINEAGE: PLANT NOT ESTABLISHED — no anchor directory, so the lineage guard is UNMEASURED; failing closed under that name"
   FAILED=1
 fi
 
@@ -1304,7 +1323,7 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
   GRF=$OUT/grafts
   rm -rf "$GRF"; mkdir -p "$GRF"
   if ! git clone -q "$P8_ANCHOR_DIR" "$GRF/repo" 2>"$GRF/clone.log"; then
-    say "GRAFTS: FAIL — could not clone the anchor repository: $(tail -1 "$GRF/clone.log")"
+    say "GRAFTS: PLANT NOT ESTABLISHED — could not clone the anchor repository: $(tail -1 "$GRF/clone.log"); failing closed under that name"
     FAILED=1
   else
     ( cd "$GRF/repo" \
@@ -1315,10 +1334,10 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
       && git commit -q --allow-empty -m "unrelated to the frozen history" ) \
       >"$GRF/build.log" 2>&1
     if ! git -C "$GRF/repo" rev-parse --verify -q "${P8_ANCHOR_PIN}^{commit}" >/dev/null; then
-      say "GRAFTS: FAIL — the plant no longer holds the pin, so it tests reachability rather than grafts"
+      say "GRAFTS: PLANT NOT ESTABLISHED — the plant no longer holds the pin, so it would test reachability rather than grafts; failing closed under that name"
       FAILED=1
     elif git -C "$GRF/repo" merge-base --is-ancestor "$P8_ANCHOR_PIN" HEAD 2>/dev/null; then
-      say "GRAFTS: FAIL — the plant already descends from the pin before any graft, so the graft would prove nothing"
+      say "GRAFTS: PLANT NOT ESTABLISHED — the plant already descends from the pin before any graft, so the graft would prove nothing; failing closed under that name"
       FAILED=1
     else
       mkdir -p "$GRF/repo/.git/info"
@@ -1355,7 +1374,7 @@ PATCH
         nog=$GRF/no-scrub.py; pat=0
         python3 "$PATCHDIR/graftfile.py" "$HERE/p8-frozen-integrity.py" "$nog" >"$GRF/patch.log" 2>&1 || pat=$?
         if [ "$pat" -ne 0 ] || [ ! -s "$nog" ]; then
-          say "GUARD-CTL y10: FAIL — the patcher did not apply (exit $pat: $(tail -1 "$GRF/patch.log")), so this arm measured nothing"
+          say "GUARD-CTL y10: PLANT NOT ESTABLISHED — the patcher did not apply (exit $pat: $(tail -1 "$GRF/patch.log")); failing closed under that name"
           FAILED=1
         else
           yout=$GRF/y10.log; yrc=0
@@ -1371,28 +1390,68 @@ PATCH
     fi
   fi
 else
-  say "GRAFTS: FAIL — no anchor directory, so the graft scrub is untested"
+  say "GRAFTS: PLANT NOT ESTABLISHED — no anchor directory, so the graft scrub is UNMEASURED; failing closed under that name"
   FAILED=1
 fi
 
 say "=== the anchor's COMPLETENESS, measured ==="
+# ROUND 21, N-13 — THE ROUND-13 BLOCKER, AND IT WAS THIS PLANT.
+#
+# Round 20 built the trap by `clone --depth 1` of the anchor and then fetching
+# the pin. That lands only when the anchor's HEAD is a STRICT descendant of the
+# pin. The independent challenger's authoritative anchor is a full clone of the
+# Phase 4 line whose HEAD *is* the pin — so the shallow clone's HEAD was the pin
+# itself, `merge-base --is-ancestor <pin> HEAD` answered 0 (a commit is its own
+# ancestor; no truncation involved, so this round's own rule says that YES is
+# sound), the check correctly accepted and printed the token, and the ARM then
+# said "an answer computed from a truncated graph was accepted". The guard was
+# right and the arm called it broken. Reproduced here before any change, with an
+# anchor detached onto the pin: shallow true, pin present, is-ancestor 0.
+#
+# Two things were wrong, and the coordinator's ruling generalises the second to
+# every plant in this file:
+#   (1) the trap was not BUILT so that it could exist. A descendant must exist
+#       BEFORE the shallow clone is taken. Committing on top of the shallow
+#       clone does NOT work — the pin becomes HEAD's visible parent and the
+#       answer is YES again; measured, as the challenger said it would be.
+#   (2) the arm asserted "holds the pin" and "is shallow" and NOT the one thing
+#       its verdict depends on: that the ancestry answer there is NEGATIVE. A
+#       plant that does not assert the answer it traps reports the guard as
+#       broken.
+#
+# So: every precondition is asserted, and a precondition that does not hold is
+# reported as PLANT NOT ESTABLISHED — a named state of its own, never as a guard
+# failure — and still fails closed under that name.
 if [ -n "$P8_ANCHOR_DIR" ]; then
   SHAL=$OUT/shallow
   rm -rf "$SHAL"; mkdir -p "$SHAL"
-  if ! git clone -q --depth 1 "file://$P8_ANCHOR_DIR" "$SHAL/repo" 2>"$SHAL/clone.log"; then
-    say "SHALLOW: FAIL — could not make a shallow clone of the anchor repository: $(tail -1 "$SHAL/clone.log")"
+  if ! git clone -q "$P8_ANCHOR_DIR" "$SHAL/full" 2>"$SHAL/clone.log"; then
+    say "SHALLOW: PLANT NOT ESTABLISHED — could not clone the anchor repository: $(tail -1 "$SHAL/clone.log"); the completeness guard is UNMEASURED here and this gate fails closed under that name"
+    FAILED=1
+  elif ! git -C "$SHAL/full" -c user.email=p8@local -c user.name=p8 \
+         commit -q --allow-empty -m "a descendant, so the trap can exist" 2>"$SHAL/commit.log"; then
+    say "SHALLOW: PLANT NOT ESTABLISHED — could not create a descendant of the anchor's HEAD: $(tail -1 "$SHAL/commit.log"); the completeness guard is UNMEASURED here and this gate fails closed under that name"
+    FAILED=1
+  elif ! git clone -q --depth 1 "file://$SHAL/full" "$SHAL/repo" 2>"$SHAL/shclone.log"; then
+    say "SHALLOW: PLANT NOT ESTABLISHED — could not make a shallow clone: $(tail -1 "$SHAL/shclone.log"); the completeness guard is UNMEASURED here and this gate fails closed under that name"
     FAILED=1
   elif ! git -C "$SHAL/repo" fetch -q --depth 1 origin "$P8_ANCHOR_PIN" 2>"$SHAL/fetch.log"; then
-    say "SHALLOW: FAIL — could not fetch the pin into the shallow clone: $(tail -1 "$SHAL/fetch.log")"
+    say "SHALLOW: PLANT NOT ESTABLISHED — could not fetch the pin into the shallow clone: $(tail -1 "$SHAL/fetch.log"); the completeness guard is UNMEASURED here and this gate fails closed under that name"
     FAILED=1
   elif ! git -C "$SHAL/repo" rev-parse --verify -q "${P8_ANCHOR_PIN}^{commit}" >/dev/null; then
-    say "SHALLOW: FAIL — the shallow clone does not hold the pin, so this plant tests absence, not shallowness"
+    say "SHALLOW: PLANT NOT ESTABLISHED — the shallow clone does not hold the pin, so it would test absence rather than shallowness; UNMEASURED, failing closed"
     FAILED=1
   elif [ "$(git -C "$SHAL/repo" rev-parse --is-shallow-repository)" != true ]; then
-    say "SHALLOW: FAIL — the clone is not shallow, so the plant did not land"
+    say "SHALLOW: PLANT NOT ESTABLISHED — the clone is not shallow; UNMEASURED, failing closed"
+    FAILED=1
+  # THE assertion round 20 was missing: the trap exists only if plain git, in
+  # that clone, answers NEGATIVELY. Where it answers 0 the guard has nothing to
+  # refuse and its acceptance is correct.
+  elif git -C "$SHAL/repo" merge-base --is-ancestor "$P8_ANCHOR_PIN" HEAD 2>/dev/null; then
+    say "SHALLOW: PLANT NOT ESTABLISHED — plain git calls the pin an ancestor in the shallow clone, so there is no truncated NO to trap and nothing here is evidence about the completeness guard; UNMEASURED, failing closed. (This is the round-13 blocker: with an anchor whose HEAD *is* the pin, round 20 reached this state and blamed the guard instead.)"
     FAILED=1
   else
-    say "SHALLOW: the plant holds the pin and is shallow, as required"
+    say "SHALLOW: the plant holds the pin, is shallow, and plain git answers NEGATIVELY there — all three asserted, as required"
     sout=$SHAL/out.log; src=0
     python3 "$HERE/p8-frozen-integrity.py" "$REPO" --git-dir "$SHAL/repo" >"$sout" 2>&1 || src=$?
     if [ "$src" -eq 0 ]; then
@@ -1402,7 +1461,7 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
       say "SHALLOW: FAIL — it refused (rc=$src) but did not name shallowness: $(head -1 "$sout")"
       FAILED=1
     elif grep -qF "happens to hold rather than a commit this code descends from" "$sout"; then
-      say "SHALLOW: FAIL — it still says the repository merely HOLDS the pin, which is the false sentence this round removes"
+      say "SHALLOW: FAIL — it still says the repository merely HOLDS the pin, which is the false sentence round 20 removed"
       FAILED=1
     else
       say "SHALLOW: refused, and named it — 'that repository is SHALLOW', without the false 'happens to hold' sentence"
@@ -1423,21 +1482,55 @@ PATCH
     nog=$SHAL/no-probe.py; pat=0
     python3 "$PATCHDIR/shallowprobe.py" "$HERE/p8-frozen-integrity.py" "$nog" >"$SHAL/patch.log" 2>&1 || pat=$?
     if [ "$pat" -ne 0 ] || [ ! -s "$nog" ]; then
-      say "GUARD-CTL y9: FAIL — the patcher did not apply (exit $pat: $(tail -1 "$SHAL/patch.log")), so this arm measured nothing"
+      say "GUARD-CTL y9: PLANT NOT ESTABLISHED — the patcher did not apply (exit $pat: $(tail -1 "$SHAL/patch.log")); UNMEASURED, failing closed"
       FAILED=1
     else
       yout=$SHAL/y9.log; yrc=0
       python3 "$nog" "$REPO" --git-dir "$SHAL/repo" >"$yout" 2>&1 || yrc=$?
       if grep -qF "happens to hold rather than a commit this code descends from" "$yout"; then
-        say "GUARD-CTL y9: with the probe deleted the FALSE sentence returns (rc $yrc, 'happens to hold'), so the probe is what makes the refusal true"
+        say "GUARD-CTL y9: with the routing deleted the FALSE sentence returns (rc $yrc, 'happens to hold'), so the routing is what makes the refusal true"
       else
-        say "GUARD-CTL y9: FAIL — with the probe deleted the old false sentence did not return (rc $yrc: $(head -1 "$yout")), so this arm credits the probe with something else"
+        say "GUARD-CTL y9: FAIL — with the routing deleted the old false sentence did not return (rc $yrc: $(head -1 "$yout")), so this arm credits it with something else"
+        FAILED=1
+      fi
+    fi
+
+    # ROUND 21, y11 — N-14's three-state read, measured by breaking the PROBE
+    # rather than the routing. With the probe made to return a non-answer, the
+    # check must say UNDECIDED and must NOT assert that the repository is
+    # complete. Before this round it read the non-answer as "not shallow" and
+    # printed round 19's sentence with a parenthetical asserting exactly what
+    # the probe had failed to establish.
+    cat > "$PATCHDIR/probeanswer.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = '        shallow_said = shallow_out.decode("utf-8", "replace").strip()'
+assert s.count(a) == 1, "the probe's answer is not read where this expects it"
+s = s.replace(a, a + '\n        shallow_said = "--is-shallow-repository"', 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+    nob=$SHAL/no-answer.py; pat2=0
+    python3 "$PATCHDIR/probeanswer.py" "$HERE/p8-frozen-integrity.py" "$nob" >"$SHAL/patch2.log" 2>&1 || pat2=$?
+    if [ "$pat2" -ne 0 ] || [ ! -s "$nob" ]; then
+      say "GUARD-CTL y11: PLANT NOT ESTABLISHED — the patcher did not apply (exit $pat2: $(tail -1 "$SHAL/patch2.log")); UNMEASURED, failing closed"
+      FAILED=1
+    else
+      bout=$SHAL/y11.log; brc=0
+      python3 "$nob" "$REPO" --git-dir "$SHAL/repo" >"$bout" 2>&1 || brc=$?
+      if [ "$brc" -eq 0 ]; then
+        say "GUARD-CTL y11: FAIL — with the probe answering nothing the check still PASSED (rc 0), so a non-answer is being read as an answer"
+        FAILED=1
+      elif grep -qF "ANCHOR COMPLETENESS" "$bout"; then
+        say "GUARD-CTL y11: a non-answer from the probe is refused as UNDECIDED and named — 'ANCHOR COMPLETENESS' (rc $brc), so absence is not read as 'not shallow'"
+      else
+        say "GUARD-CTL y11: FAIL — it refused (rc $brc) but not as an undecided probe: $(head -1 "$bout")"
         FAILED=1
       fi
     fi
   fi
 else
-  say "SHALLOW: FAIL — no anchor directory, so the completeness guard is untested"
+  say "SHALLOW: PLANT NOT ESTABLISHED — no anchor directory, so the completeness guard is UNMEASURED; failing closed under that name"
   FAILED=1
 fi
 
@@ -1494,18 +1587,24 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
   # check inside it is patched. Measured the hard way twice: without
   # node_modules the copy aborted on a missing tsx, and without apps/ the
   # project applier failed.
-  for _e in "$REPO"/*; do
-    _b=$(basename "$_e"); [ "$_b" = packages ] && continue
-    ln -s "$_e" "$Y7/repo/$_b"
-  done
-  for _e in "$REPO"/packages/*; do
-    _b=$(basename "$_e"); [ "$_b" = notifications ] && continue
-    ln -s "$_e" "$Y7/repo/packages/$_b"
-  done
-  for _e in "$REPO"/packages/notifications/*; do
-    _b=$(basename "$_e"); [ "$_b" = proof ] && continue
-    ln -s "$_e" "$Y7/repo/packages/notifications/$_b"
-  done
+  # `*` does not match a dotfile, so each level is swept twice: once for the
+  # visible entries and once for `.[!.]*` (which excludes `.` and `..`, and
+  # expands to itself when nothing matches, hence the -e test). `.git` is the
+  # one deliberate omission: a symlink to it would let a git write inside the
+  # copy mutate the REAL repository, which this pack may never do.
+  _farm(){   # _farm <source dir> <dest dir> <basename to skip>
+    local _src=$1 _dst=$2 _skip=$3 _e _b
+    for _e in "$_src"/* "$_src"/.[!.]*; do
+      [ -e "$_e" ] || continue
+      _b=$(basename "$_e")
+      [ "$_b" = "$_skip" ] && continue
+      [ "$_b" = .git ] && continue
+      ln -s "$_e" "$_dst/$_b"
+    done
+  }
+  _farm "$REPO" "$Y7/repo" packages
+  _farm "$REPO/packages" "$Y7/repo/packages" notifications
+  _farm "$REPO/packages/notifications" "$Y7/repo/packages/notifications" proof
   cp -r "$HERE" "$Y7/repo/packages/notifications/proof"
   cat > "$PATCHDIR/notoken.py" <<'PATCH'
 import sys
@@ -1537,7 +1636,7 @@ PATCH
     "$Y7/repo/packages/notifications/proof/run-p8-real-proof.sh" \
     >"$Y7/patch.log" 2>&1 || pat=$?
   if [ "$pat" -ne 0 ]; then
-    say "GUARD-CTL y7: FAIL — the patcher did not apply (exit $pat: $(tail -1 "$Y7/patch.log")), so this arm measured nothing"
+    say "GUARD-CTL y7: PLANT NOT ESTABLISHED — the patcher did not apply (exit $pat: $(tail -1 "$Y7/patch.log")); failing closed under that name"
     FAILED=1
   else
     y7rc=0
@@ -1554,7 +1653,7 @@ PATCH
     fi
   fi
 else
-  say "GUARD-CTL y7: FAIL — no anchor directory, so the token requirement is untested"
+  say "GUARD-CTL y7: PLANT NOT ESTABLISHED — no anchor directory, so the token requirement is UNMEASURED; failing closed under that name"
   FAILED=1
 fi
 

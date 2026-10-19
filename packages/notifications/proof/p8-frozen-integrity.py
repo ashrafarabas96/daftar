@@ -202,14 +202,6 @@ import subprocess
 import sys
 
 
-def _arg(name, default=None):
-    if name in sys.argv:
-        i = sys.argv.index(name)
-        if i + 1 < len(sys.argv):
-            return sys.argv[i + 1]
-    return default
-
-
 # The anchor commit, pinned to all FORTY characters, in the check itself.
 #
 # ROUND 16, N-1" (route two): this was a seven-character abbreviation supplied by
@@ -340,10 +332,16 @@ def main():
     #   (1) NO value option may consume an option-shaped token. Round 17 refused
     #       that for --git-dir alone; the hole was the four options it did not
     #       cover.
-    #   (2) the parser RECORDS what it parsed, and every reader below reads that
-    #       record. There is one parse and one consumer, so the two cannot
-    #       disagree again — `_argv_values`/`_argv_flags` replace `_arg`'s second
-    #       walk over sys.argv.
+    #   (2) the parser RECORDS what it parsed, into the local `values` and `seen`
+    #       dictionaries, and every reader below reads those. There is one parse
+    #       and one consumer, so the two cannot disagree again.
+    #
+    # ROUND 21, N-15: the helper those readers replaced, `_arg`, was left in the
+    # file — dead, and still walking sys.argv, which is exactly the second walk
+    # this change exists to remove. It is deleted. The sentence above also named
+    # `_argv_values`/`_argv_flags`, which never existed; two local dictionaries
+    # did the work. A comment that names a helper the reader cannot find sends
+    # the next author looking for it.
     value_opts = ("--git-dir", "--git-anchor", "--expect-covered", "--expect-boundary",
                   "--expect-covered-digest")
     flag_opts = ("--inner-guards-only",)
@@ -611,10 +609,29 @@ def main():
         # not: it descends from it. A lie in a refusal is the mirror image of a
         # lie in a pass, so shallowness is probed BEFORE a 1 is believed and is
         # routed to the undecided branch, naming itself.
-        shallow_rc, shallow_out, _shallow_err = _git(anchor_dir, "rev-parse",
-                                                     "--is-shallow-repository")
-        shallow = (shallow_rc == 0
-                   and shallow_out.decode("utf-8", "replace").strip() == "true")
+        #
+        # ROUND 21, N-14: this read was `rc == 0 and out == "true"`, which makes
+        # a NON-ANSWER mean "not shallow" — and `git rev-parse` ECHOES an option
+        # it does not recognise and exits 0 (measured:
+        # `rev-parse --is-shallow-repositoryX` prints the word back, rc 0). So on
+        # a git without the option the refusal below would assert, in its own
+        # parenthetical, that the repository is not shallow when nothing had
+        # established it. Only the two literals are answers. Anything else —
+        # a non-zero exit, an echoed option, empty output — is UNDECIDED and
+        # refuses under its own name, because this whole family of findings is
+        # about reading absence as evidence.
+        shallow_rc, shallow_out, shallow_err = _git(anchor_dir, "rev-parse",
+                                                    "--is-shallow-repository")
+        shallow_said = shallow_out.decode("utf-8", "replace").strip()
+        if shallow_rc != 0 or shallow_said not in ("true", "false"):
+            sys.stderr.write("INTEGRITY FAIL: ANCHOR COMPLETENESS — this git did not answer "
+                             "whether %s is a shallow repository (exit %d, output %r%s), so "
+                             "whether its ancestry answer can be trusted is UNDECIDED. Refusing "
+                             "rather than reading a non-answer as 'not shallow'\n"
+                             % (anchor_dir, shallow_rc, shallow_said,
+                                (": " + shallow_err) if shallow_err else ""))
+            return 1
+        shallow = shallow_said == "true"
         rc, _out, err = _git(anchor_dir, "merge-base", "--is-ancestor",
                              anchor_sha, "HEAD")
         if shallow and rc != 0:
