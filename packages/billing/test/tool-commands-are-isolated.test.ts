@@ -448,7 +448,37 @@ const notStartedByTheGate = (): string => {
     // is a claim about text; being the gate is a claim about ARGV. So: argv[0]
     // is a python interpreter, and one of its arguments IS the gate's path.
     const program = argv[0] ?? '';
-    const runsTheGate = argv.slice(1).some((word) => word === GATE_PROGRAM || word.endsWith(`/${GATE_PROGRAM}`) || word.endsWith(`\\${GATE_PROGRAM}`));
+    // AND THE SECOND VERSION OF THIS LINE WAS A SUFFIX MATCH, WHICH IS A CLAIM
+    // ABOUT A PATH AND NOT ABOUT A FILE: any `tools/law-ran.py` anywhere on the
+    // filesystem satisfied it, so a copy of the gate under a directory of
+    // someone's own choosing counted as the gate this law is part of. The
+    // argument is RESOLVED and compared with the one gate in this package. A
+    // word that does not resolve is simply not a match, and not an error
+    // either: the walk continues and the sentence below reports the chain.
+    const ourGate = realpathSync(join(__dirname, '..', GATE_PROGRAM));
+    // A RELATIVE argument resolves against the ANCESTOR's working directory,
+    // not against this process's: `npm test` runs the gate as
+    // `python3 -I tools/law-ran.py` with the package as its cwd, and resolving
+    // that word here would have failed and produced a FALSE RED on the one path
+    // this check exists to let through. The cwd is read from the same /proc
+    // entry the chain is walked with.
+    let ancestorCwd = '';
+    try {
+      ancestorCwd = realpathSync(`/proc/${pid}/cwd`);
+    } catch {
+      // Unreadable cwd leaves only the absolute form below, which is the safe
+      // way round: a word that cannot be resolved is not a match.
+    }
+    const runsTheGate = argv.slice(1).some((word) => {
+      for (const candidate of ancestorCwd === '' ? [word] : [word, join(ancestorCwd, word)]) {
+        try {
+          if (realpathSync(candidate) === ourGate) return true;
+        } catch {
+          // Not this word.
+        }
+      }
+      return false;
+    });
     if (basename(program).startsWith('python') && runsTheGate) return '';
   }
   return `no ancestor of this process is ${GATE_PROGRAM}; the chain is ${JSON.stringify(seen.slice(0, 8))}`;
