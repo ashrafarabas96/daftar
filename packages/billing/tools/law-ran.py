@@ -244,6 +244,17 @@ REFUSED_PACK_ENTRY_NOT_A_FILE = "REFUSED-PACK-ENTRY-NOT-A-FILE"
 # moved when it had not. Both readers classify by ONE `stat` now, whose
 # failure is this name and whose non-regular answer is the name above.
 REFUSED_FILE_NOT_READABLE = "REFUSED-FILE-NOT-READABLE"
+# ROUND 60c, MEASURED AGAINST THIS STEP ITSELF AND IT WAS A FAIL-OPEN.
+# This step read the runner's JSON report and threw the runner's own EXIT
+# CODE away. A file planted with an unhandled rejection and one passing
+# assertion made `vitest run` exit 1 -- "Unhandled Errors", "Errors 1
+# error" -- while every case in the report was `passed` and `success` was
+# true, so this step printed "0 skipped, 0 failed" and exited 0. The
+# gate's verdict disagreed with the runner's, in the direction that hides
+# a hole: an unhandled rejection, an error in a teardown, or a worker that
+# dies after the report is written are all invisible to a reader of cases.
+# The exit code is a verdict too, and this step may not discard it.
+REFUSED_RUNNER_NONZERO = "REFUSED-RUNNER-EXITED-NONZERO"
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -776,6 +787,16 @@ def main() -> int:
         refuse("the report has no testResults list, so nothing in it says what ran")
 
     problems: list[str] = []
+    # ROUND 60c: FIRST, because it is the one problem that is true of the run as
+    # a whole and not of a case, and because the cases below can all be clean
+    # while it holds.
+    if done.returncode != 0:
+        problems.append(
+            f"{REFUSED_RUNNER_NONZERO}: the runner this step started exited {done.returncode} even though the "
+            "report it wrote carries the cases below. A clean set of cases is not a clean RUN: an unhandled "
+            "rejection, an error thrown in a hook after a case ended, or a worker that dies once the report is "
+            f"written all look like this. Last stderr: {done.stderr.strip()[-400:]!r}"
+        )
     for relative, expected in EXPECTED.items():
         matches = [r for r in report["testResults"] if str(r.get("name", "")) == str(package / relative)]
         if len(matches) != 1:

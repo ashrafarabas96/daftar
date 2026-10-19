@@ -6,7 +6,7 @@
     "test/tool-commands-are-isolated.test.ts": "8c383303086f965d3da77eac0651665e761761287ff65a94080ab677c68f1769",
     "tools/arms/pinned-now-arm.py": "c87a679de0970c8472035d7e49d5dd5da4270cacd3945584376ad9fe8e559af4",
     "tools/context-sites.py": "1daa1968bc7b109925145118ab7acc20803c0a76cb587e336292b8d910e38eb6",
-    "tools/law-ran.py": "15058d76a57ec13344d74e3b4b85562a1420900128db59e667742e44f50c6c63",
+    "tools/law-ran.py": "ad5a5d32307b603b1c514f46c3a15363d32a0c71e5b28cc27eb8aa03f51356df",
     "tools/manifest-digests.py": "352d91ee7469ae6d578c6594022fdf92233066131309652ee42c4f9805f75ff4",
     "tools/pack-set.json": "59f51ef3022eb81d1548202af85a97a43a2d044faf1a7d42eaef3dd0e1586506",
     "tools/reviewer-reports.json": "00e4defa31cf23ea527445bde3a741f5fa8d0f9a06a7cf0f3f984fdddca62bf2",
