@@ -369,11 +369,23 @@ if [ -n "${P8_GIT_ANCHOR_SHA:-}" ] && [ "${P8_GIT_ANCHOR_SHA}" != "$P8_ANCHOR_PI
 elif [ -n "${P8_GIT_ANCHOR_SHA:-}" ]; then
   say "note: P8_GIT_ANCHOR_SHA is set to the pin itself, which steers nothing; the check carries the pin"
 fi
+# ROUND 18, the diagnostic half of N-6. The refusal below clears the variable and
+# the next branch then reported "P8_GIT_ANCHOR_DIR is not set" — a sentence that
+# is internally true and names a state THIS PATH created one line earlier, not
+# anything the operator did. It is the same family as N-6 itself, where
+# `--git-dir=VALUE` produced "no --git-dir was given": true about the variable,
+# false about the command line it was handed. Two named refusals for one cause
+# are kept; what is fixed is that the second named the wrong cause, and sent a
+# reader who reads the LAST failure looking for an export that was never missing.
+ANCHOR_DIR_REJECTED=0
 case "$P8_ANCHOR_DIR" in
   -*) say "FAIL: ARGUMENT INJECTION — P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR is option-shaped, so the anchor's directory cannot be told from this gate's own flags; refusing"
-      FAILED=1; P8_ANCHOR_DIR="" ;;
+      FAILED=1; ANCHOR_DIR_REJECTED=1; P8_ANCHOR_DIR="" ;;
 esac
-if [ -z "$P8_ANCHOR_DIR" ]; then
+if [ "$ANCHOR_DIR_REJECTED" = 1 ]; then
+  say "FAIL: P8_GIT_ANCHOR_DIR was REJECTED above as option-shaped, not left unset, so this gate now runs with no anchor at all and the frozen boundary has no witness outside the tree under test; refusing to report a pass"
+  FAILED=1
+elif [ -z "$P8_ANCHOR_DIR" ]; then
   say "FAIL: P8_GIT_ANCHOR_DIR is not set, so the frozen boundary has no witness outside the tree under test; refusing to report a pass without it"
   FAILED=1
 elif ! git -C "$P8_ANCHOR_DIR" rev-parse --verify "${P8_ANCHOR_PIN}^{commit}" >/dev/null 2>&1; then
@@ -954,6 +966,145 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
   ARG_SHAPE_ENV=()
 else
   say "ARGSHAPE x: FAIL — no anchor directory, so this arm is untested"; FAILED=1
+fi
+
+
+say "=== the round-17 and round-18 argument guards, measured BY DELETING THEM ==="
+# ROUND 18, N-7. The pack's own rule is that a guard whose absence changes
+# nothing was not the reason anything was refused, and round 17 shipped three
+# new refusals and a token requirement with no deletion control for any of them.
+# The challenger supplied all three and found them load-bearing; they are arms
+# here now, so the next round measures them without being asked.
+#
+# Each arm patches a COPY of the check (never the shipped file), asserts on every
+# replacement, READS THE PATCHER'S OWN EXIT CODE, and then requires the OLD
+# behaviour to come back. An arm whose patcher did not apply says so.
+tamper_consistently(){   # tamper_consistently <sandbox-root>
+  local sand=$1
+  rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
+  cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
+  cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+  printf '\n-- mutant\n' >> "$sand/infrastructure/database/migrations/0006_rls.sql"
+  python3 - "$sand" <<'TAMPER'
+import hashlib, json, os, sys
+root = sys.argv[1]
+mp = os.path.join(root, "infrastructure", "database", "MIGRATION_MANIFEST.json")
+f = os.path.join(root, "infrastructure", "database", "migrations", "0006_rls.sql")
+h = hashlib.sha256(open(f, "rb").read()).hexdigest()
+m = json.load(open(mp))
+m["migrations"] = [dict(r, sha256=h) if r["name"] == "0006_rls.sql" else r
+                   for r in m["migrations"]]
+json.dump(m, open(mp, "w"))
+TAMPER
+}
+
+guard_control(){   # guard_control <id> <patcher> <tampered|honest> <present|absent> <text> [args...]
+  local id=$1 patcher=$2 subject=$3 want=$4 text=$5
+  shift 5
+  local work=$OUT/guardctl-$id
+  rm -rf "$work"; mkdir -p "$work"
+  local sand=$work/tree
+  if [ "$subject" = tampered ]; then
+    tamper_consistently "$sand"
+  else
+    rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
+    cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
+    cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+  fi
+  local nog=$work/no-guard.py pat=0
+  python3 "$patcher" "$HERE/p8-frozen-integrity.py" "$nog" >"$work/patch.log" 2>&1 || pat=$?
+  if [ "$pat" -ne 0 ] || [ ! -s "$nog" ]; then
+    say "GUARD-CTL $id: FAIL — the patcher did not apply (exit $pat: $(tail -1 "$work/patch.log")), so this arm measured nothing"
+    FAILED=1; return
+  fi
+  local out=$work/out.log rc=0
+  python3 "$nog" "$sand" "$@" > "$out" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    say "GUARD-CTL $id: FAIL — with the guard deleted the check still refused (rc=$rc: $(head -1 "$out")), so the refusal this arm credits to the guard came from somewhere else"
+    FAILED=1; return
+  fi
+  if [ "$want" = present ] && grep -qF "$text" "$out"; then
+    say "GUARD-CTL $id: with the guard deleted the old fail-open RETURNS (rc 0, '$text'), so the guard is what closes it"
+  elif [ "$want" = absent ] && ! grep -qF "$text" "$out"; then
+    say "GUARD-CTL $id: with the print deleted '$text' is ABSENT, so requiring it is what makes the leg's claim load-bearing"
+  else
+    say "GUARD-CTL $id: FAIL — rc 0 as expected, but the output does not show '$text' $want"
+    head -2 "$out" | tee -a "$OUT/run.log"
+    FAILED=1
+  fi
+}
+
+PATCHDIR=$OUT/guard-patchers
+mkdir -p "$PATCHDIR"
+cat > "$PATCHDIR/injection.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = '    if anchor_dir is not None and anchor_dir.startswith("-"):'
+assert s.count(a) == 1, "the option-shaped refusal is not where this expects it"
+s = s.replace(a, "    if False:", 1)
+b = "    if inner_only and anchor_dir is not None:"
+assert s.count(b) == 1, "the incoherence refusal is not where this expects it"
+s = s.replace(b, "    if False:", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+cat > "$PATCHDIR/vocabulary.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+head = "        sys.stderr.write(\"INTEGRITY FAIL: ARGUMENT INJECTION — unrecognised argument"
+assert s.count(head) == 1, "the unrecognised-argument refusal is not where this expects it"
+i = s.index(head)
+tail = "        return 1\n"
+j = s.index(tail, i) + len(tail)
+s = s[:i] + "        i += 1\n        continue\n" + s[j:]
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+cat > "$PATCHDIR/printpin.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = '    if argv == ["--print-pin"]:'
+assert s.count(a) == 1, "the print-pin mode guard is not where this expects it"
+s = s.replace(a, '    if "--print-pin" in argv:', 1)
+b = '    if "--print-pin" in argv:\n        sys.stderr.write("INTEGRITY FAIL: ARGUMENT INJECTION — --print-pin is a MODE'
+assert s.count(b) == 1, "the print-pin company refusal is not where this expects it"
+s = s.replace(b, '    if False:\n        sys.stderr.write("INTEGRITY FAIL: ARGUMENT INJECTION — --print-pin is a MODE', 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+cat > "$PATCHDIR/token.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = '        print("ANCHOR LEG EXERCISED: pin=%s dir=%s covered=%d anchored=%d boundary=%s"'
+assert s.count(a) == 1, "the pass token is not where this expects it"
+s = s.replace(a, '        print("ANCHOR LEG (suppressed by the round-18 control) pin=%s dir=%s covered=%d anchored=%d boundary=%s"', 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+
+if [ -n "$P8_ANCHOR_DIR" ]; then
+  # (y1) round 17's two injection refusals deleted: the flag AS the path.
+  guard_control y1 "$PATCHDIR/injection.py" tampered present \
+    "ANCHOR LEG NOT EXERCISED" --git-dir --inner-guards-only
+  # (y2) the same, with the flag BESIDE the path.
+  guard_control y2 "$PATCHDIR/injection.py" tampered present \
+    "ANCHOR LEG NOT EXERCISED" --git-dir "$P8_ANCHOR_DIR" --inner-guards-only
+  # (y3) round 18's argument-vocabulary refusal deleted: the `=` spelling the
+  #      check does not parse, honoured beside the opt-out it does.
+  guard_control y3 "$PATCHDIR/vocabulary.py" tampered present \
+    "ANCHOR LEG NOT EXERCISED" "--git-dir=$P8_ANCHOR_DIR" --inner-guards-only
+  # (y4) round 18's mode guard reverted to round 17's membership test: the pin
+  #      is printed and nothing is verified, on a tampered tree.
+  guard_control y4 "$PATCHDIR/printpin.py" tampered present \
+    "$P8_ANCHOR_PIN" --git-dir "$P8_ANCHOR_DIR" --expect-covered "$P8_EXPECT_COVERED" --print-pin
+  # (y5) the pass token's PRINT deleted, on an HONEST tree: the token the
+  #      authoritative run requires is then absent, which is what makes that
+  #      requirement evidence rather than decoration.
+  guard_control y5 "$PATCHDIR/token.py" honest absent \
+    "ANCHOR LEG EXERCISED:" --git-dir "$P8_ANCHOR_DIR"
+else
+  say "GUARD-CTL: FAIL — no anchor directory, so none of this round's guards is measured"
+  FAILED=1
 fi
 
 say "=== the claimed figures, measured (the weaker leg) ==="

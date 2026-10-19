@@ -281,16 +281,80 @@ def main():
     # commits, the authoritative leg passed on a tampered tree while the runner
     # printed "pinned in the check, all forty characters" — false. There is now
     # ONE pin in the pack, here, and every other reader asks for it.
-    if "--print-pin" in sys.argv:
+    #
+    # ROUND 18, N-5: this was `if "--print-pin" in sys.argv`, a membership test
+    # over the WHOLE vector, placed BEFORE the usage check, before --git-dir is
+    # read, and before both ARGUMENT INJECTION refusals round 17 added. So the
+    # mode flag was a door in front of every door: measured on a tampered tree
+    # with a REAL anchor directory and the REAL claim literals, the shipped check
+    # printed the pin and exited 0, verifying nothing. The remedy the challenger
+    # named: --print-pin is honoured only when it is the ENTIRE request, and in
+    # company it is refused by name like any other injected argument.
+    argv = sys.argv[1:]
+    if argv == ["--print-pin"]:
         print(ANCHOR_PIN)
         return 0
-    if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
+    if "--print-pin" in argv:
+        sys.stderr.write("INTEGRITY FAIL: ARGUMENT INJECTION — --print-pin is a MODE, not an "
+                         "option: it asks this check to print its pin and verify nothing, so it "
+                         "is honoured only as the entire request. Here it arrived alongside %d "
+                         "other argument(s), which is the shape an injected flag takes; refusing "
+                         "rather than answering a question nobody asked\n" % (len(argv) - 1))
+        return 1
+    if not argv or argv[0].startswith("-"):
         sys.stderr.write("usage: p8-frozen-integrity.py <repo-root> --git-dir PATH "
                          "[--git-anchor SHA] [--inner-guards-only] [--expect-covered N] "
                          "[--expect-boundary NAME] [--expect-covered-digest HEX]\n"
                          "       p8-frozen-integrity.py --print-pin\n")
         return 2
-    repo = sys.argv[1]
+    # ROUND 18, N-6: the whole argument vector is now VALIDATED before any of it
+    # is read. `_arg` matches an exact element followed by its value, so the
+    # `--git-dir=VALUE` spelling was not parsed at all — and while that is
+    # fail-closed alone ("no --git-dir was given"), it was NOT fail-closed in
+    # company: round 17's incoherence refusal is guarded by `anchor_dir is not
+    # None`, and in the = spelling anchor_dir is None, so
+    # `--git-dir=<real anchor> --inner-guards-only` exited 0 on a tampered tree.
+    # Measured before this fix. An argument this check silently IGNORES is the
+    # same hole as an argument it silently PREFERS, so an option-shaped token it
+    # does not recognise is refused by name, and so is a repeated option, whose
+    # resolution `_arg` was deciding by position alone.
+    value_opts = ("--git-dir", "--git-anchor", "--expect-covered", "--expect-boundary",
+                  "--expect-covered-digest")
+    flag_opts = ("--inner-guards-only",)
+    i = 1
+    seen = {}
+    while i < len(argv):
+        tok = argv[i]
+        if tok in value_opts:
+            if i + 1 >= len(argv):
+                sys.stderr.write("INTEGRITY FAIL: ARGUMENT INJECTION — %s was given with no "
+                                 "value, so what it was meant to name cannot be known; refusing "
+                                 "rather than falling back to a default this run did not ask "
+                                 "for\n" % tok)
+                return 1
+            seen[tok] = seen.get(tok, 0) + 1
+            i += 2
+            continue
+        if tok in flag_opts:
+            seen[tok] = seen.get(tok, 0) + 1
+            i += 1
+            continue
+        sys.stderr.write("INTEGRITY FAIL: ARGUMENT INJECTION — unrecognised argument '%s'. This "
+                         "check does not parse it, and an argument it IGNORES is the same hole as "
+                         "one it silently prefers: the `--git-dir=VALUE` spelling was ignored "
+                         "while `--inner-guards-only` beside it was honoured, which turned the "
+                         "anchor leg off at exit 0. Use the space-separated spelling; refusing "
+                         "rather than proceeding with a vector this check does not "
+                         "understand\n" % tok)
+        return 1
+    repeated = sorted(name for name, n in seen.items() if n > 1)
+    if repeated:
+        sys.stderr.write("INTEGRITY FAIL: ARGUMENT INJECTION — %s given more than once, and this "
+                         "check reads the FIRST occurrence, so which one governs would be decided "
+                         "by position rather than by the caller; refusing\n"
+                         % ", ".join(repeated))
+        return 1
+    repo = argv[0]
     anchor_sha = _arg("--git-anchor", ANCHOR_PIN)
     anchor_dir = _arg("--git-dir")
     inner_only = "--inner-guards-only" in sys.argv
