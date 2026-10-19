@@ -1082,33 +1082,33 @@ of my probe shapes: with `nfkc` skipped a full-width separator is not an `=`,
 so refusing that shape was correct and my expectation was wrong. The instrument
 was right twice and I was wrong twice, before the round.
 
-<!-- BEGIN GENERATED guard-matrix: python3 -I prep/phase11/harness/check_fenced_figures.py --emit guard-matrix -->
+<!-- BEGIN GENERATED guard-matrix: /usr/bin/python3 -I prep/phase11/harness/check_fenced_figures.py --emit guard-matrix --run-capture $P11_RUN_CAPTURE -->
 
 ```text
 each guard deleted on its own, and the arms that stop answering:
 
-html character references  reds  4 arm(s): C25-F1 a decimal character reference for the `=`, C25-F1 a hexadecimal character reference for the `=`, C25-F1 a named character reference for the `=` +1 more
+html character references  reds  5 arm(s): R26-F1 an &nbsp; entity, C25-F1 a decimal character reference for the `=`, C25-F1 a hexadecimal character reference for the `=` +2 more
 nfkc                       reds  1 arm(s): R14-S1 full-width equals
-format characters          reds  1 arm(s): R14-S1 zero-width space
+format characters          reds  1 arm(s): R14-S1 a zero-width space after the sign
+whitespace around the equals reds  8 arm(s): R26-F1 a space before the value, R26-F1 a space on both sides, R26-F1 a space before the equals +5 more
 non-ascii digits           reds  5 arm(s): R14-S1 arabic-indic digits, R14-S1 extended arabic digits, R15-S3 devanagari digits +2 more
 html comment markers       reds  1 arm(s): attached: an HTML comment with no spaces
 inline code span           reds  1 arm(s): named: inline code span only
 positive scan              reds 21 arm(s): R13 trailing period, R13 trailing semicolon, R13 parentheses +18 more
 key boundary               reds  1 arm(s): key boundary: a key that is the tail of an uppercase name
 value boundary             reds  1 arm(s): value boundary: a date is not a figure
-figure value class         reds  9 arm(s): R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +6 more
+figure value class         reds 10 arm(s): R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +7 more
 boolean spellings          reds  2 arm(s): R14-S1 boolean t as psql prints, R14-S1 boolean f as psql prints
-signed values              reds  2 arm(s): R14-S1 negative, R14-S1 positive sign
+signed values              reds  3 arm(s): R14-S1 negative, R14-S1 positive sign, R14-S1 a zero-width space after the sign
 percent in the value       reds  2 arm(s): R14-S3 percent on a real figure, R14-S3 percent inside brackets
 hyphen in the key          reds  1 arm(s): R24-F1 a fabricated figure whose hyphenated key ends in an emitted one
 key class                  reds  2 arm(s): named: UPPERCASE key, key boundary: a key that is the tail of an uppercase name
 boolean case folding       reds  1 arm(s): R14-S1 boolean True
 named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
 planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
-haystack from the commit   reds 17 arm(s): R16-F1 an untracked scratch file is not evidence, R16-F1 a gitignored .pyc is not evidence, R16-F1 a directory that is no repository is refused +14 more
-only what can run emits    reds  2 arm(s): R12 E4b a doc is not its own evidence, R25-F1 a committed transcript emits nothing
-no repository redirects the subject reds 10 arm(s): R17 a repository planted inside the haystack is refused, R18-F1 planted at the harness, run from the repository root, R18-F1 planted at the harness, run from the harness directory +7 more
-the checker is not its own evidence reds  1 arm(s): R16-F1 the checker is not its own evidence
+only a run emits           reds  9 arm(s): R26-S1 a comment in an instrument emits nothing, R26-S1 a committed .py nothing runs emits nothing, R26-S1 an unapplied mutation world emits nothing +6 more
+the same spelling on both sides reds  1 arm(s): R26-F1 a padded figure in the output is the same figure
+no repository redirects the subject reds  2 arm(s): R17 a repository planted inside the haystack is refused, R20-S2 git's toplevel and the census disagree
 
 22 guards, every one of them deleted on its own and measured
 ```
@@ -1153,26 +1153,28 @@ round 15's `R15-F1` is why, and §7.15 gives the reason the number was wrong.
 The challenger's list of 16 is not this list, so those numbers are each true of
 their own set and are not comparable.
 
-<!-- BEGIN GENERATED surface: python3 -I prep/phase11/harness/check_fenced_figures.py --emit surface -->
+<!-- BEGIN GENERATED surface: /usr/bin/python3 -I prep/phase11/harness/check_fenced_figures.py --emit surface --run-capture $P11_RUN_CAPTURE -->
 
 ```text
-port = 55512           not a candidate (exempted or not a figure)
-migrations = 87        not a candidate (exempted or not a figure)
-rows = 59              REDS THE GATE
-axes = 2               passes: something emits it
-variants = 6           REDS THE GATE
-cases = 121            REDS THE GATE
-races = 13             REDS THE GATE
-entries = 80           REDS THE GATE
-copies = 1             REDS THE GATE
-attempts = 3           REDS THE GATE
-deleted = 0            passes: something emits it
-present = true         passes: something emits it
-owner_sees = 0         passes: something emits it
-chosen = 1             passes: something emits it
-identities = 2         passes: something emits it
-ratio = 0.5            REDS THE GATE
-enabled = false        REDS THE GATE
+key                    value      the gate's answer on `key=value`
+
+port                   55512      not a candidate (exempted or not a figure)
+migrations             87         not a candidate (exempted or not a figure)
+rows                   59         REDS THE GATE
+axes                   2          passes: something emits it
+variants               6          REDS THE GATE
+cases                  121        REDS THE GATE
+races                  13         REDS THE GATE
+entries                80         REDS THE GATE
+copies                 1          REDS THE GATE
+attempts               3          REDS THE GATE
+deleted                0          passes: something emits it
+present                true       passes: something emits it
+owner_sees             0          passes: something emits it
+chosen                 1          passes: something emits it
+identities             2          passes: something emits it
+ratio                  0.5        REDS THE GATE
+enabled                false      REDS THE GATE
 
 9 of 17 realistic figure-shaped lines would red the gate if a document wrote them
 ```
@@ -1278,10 +1280,10 @@ proof script runs it at step `0c` beside the figure scan, reporting
 than discouraged, which is the only form of the rule that survives six rounds.
 The counts in this section and the two blocks in §7.14 are generated:
 
-<!-- BEGIN GENERATED arm-counts: python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts -->
+<!-- BEGIN GENERATED arm-counts: /usr/bin/python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts --run-capture $P11_RUN_CAPTURE -->
 
 ```text
-70 catch arms, 16 skip arms, 2 pass arms, 25 others
+81 catch arms, 16 skip arms, 2 pass arms, 35 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -1436,13 +1438,20 @@ directory that is no repository, a commit that does not resolve, or a harness
 path the commit does not hold is a **named refusal with its own exit (5)** —
 never a silent fall back to the walk this round deleted, because a fallback
 would make the whole derivation a preference. The arms: an untracked
-`scratch.log` carrying the plant, a **gitignored `__pycache__/*.pyc` carrying
-the plant** — round 15's own fail-open, planted deliberately — and a
-directory that is no repository, which must refuse. **Deleting the git
-derivation reds all three by name**, which is what makes "derived from the
-commit" a claim with a red proof rather than a sentence in a header. Two more
-haystack guards are now measured the same way: markdown is not evidence (round
-12's `E4b`) and the checker is not its own evidence.
+`scratch.py` carrying the plant, a **gitignored `__pycache__/*.pyc` carrying
+the plant** — round 15's own fail-open, planted deliberately, with an
+`ignored_output.py` beside it — and a directory that is no repository, which
+must refuse.
+
+**Swept at `§7.27`, because this paragraph was false at `bc54e4c` and round 26
+reported it (`R26-F3`).** It said the untracked plant was a `scratch.log` after
+that commit had changed it to a `scratch.py`, and it credited a guard called
+*markdown is not evidence* that the same commit DELETED. Both halves are the
+standing lesson twice over: a sentence that credits an arm to a plant no arm
+uses, and a claim about a guard set the guard set contradicts. What decides
+these worlds now is `only a run emits`, and the guard whose deletion reds them
+is that one — the git derivation, the suffix whitelist and the stem exclusion
+are its CONTROL, which is what the arms are measured against.
 
 **What it costs, stated because it is a real cost.** Content that exists only
 in the working tree does not count, so a figure whose evidence is written but
@@ -2190,9 +2199,14 @@ to look at.**
 residual.**
 
 ```
--def scan(docs_dir, harness_dir, quiet=False, skip=()):
-+def scan(docs_dir, harness_dir, quiet=False, skip=("hyphen in the key",)):
+-def scan(…, skip=()):
++def scan(…, skip=("hyphen in the key",)):
 ```
+
+(The parameter list is elided: under `R26-F1`'s whitespace class the full
+signature's `quiet=False` is a figure-shaped token, and no run of this phase
+prints it. The literal the guard matrix mutates is in
+`check_fenced_figures.py`; what matters here is the default that was added.)
 
 `_main` calls `scan()` with no `skip`, so the default switches a named guard off
 for every real run, and the gates returned `0/0/0` with a fabricated figure
@@ -2929,8 +2943,12 @@ legitimate and one is about a sentence that was false.
 
 The gate's question has always been whether a figure a document quotes is a
 figure something in this tree EMITS. What it actually compared against was the
-text of every tracked file under `prep/phase11/harness/`, and twenty-seven of
-those files are `RUN-EVIDENCE-*.txt` — recordings of past runs. So the real
+text of every tracked file under `prep/phase11/harness/`, and most of those
+files are `RUN-EVIDENCE-*.txt` — recordings of past runs. The count is in the
+generated `pack-counts` block of §7.27 and not in this sentence: round 26
+blocked it here as *twenty-seven*, where `git ls-tree` says forty-four, and a
+figure about the instrument spelled in words is a figure nothing in this pack
+can catch. So the real
 rule was: *a figure is legitimate if it appears in a transcript somebody
 committed.* Anyone who can write a `.txt` file into that directory could
 legitimise any figure, and the standing lesson this phase keeps relearning
@@ -3080,7 +3098,7 @@ is why nothing is allowed to claim they match.
 | `C25-S4` — a value on the NEXT line | carried, P3, and the header now says the matcher is per line |
 | `C25-S5` — the shell's two untracked sites are unarmed | carried, P3, and stated in the header: no arm anywhere executes `rebuild_and_prove.sh`, so every shell refusal in this pack is in that position, and in both worlds the two readers still refused |
 | `R25-S3` — `SELF-READ-DIR-ABSENT` and `SELF-UNTRACKED-UNREADABLE` are read by no arm by name | carried, P3, named with `HARNESS-HEAD-DISAGREES` as `UNMEASURED-at-runtime` |
-| `R25-S4` — nothing bound the guard set | **fixed:** `guard_set_test` parses the COMMITTED bytes, collects every `skip` key the code reads and requires it to be exactly `GUARDS`. 23 and 23 at this head |
+| `R25-S4` — nothing bound the guard set | **fixed:** `guard_set_test` parses the COMMITTED bytes, collects every `skip` key the code reads and requires it to be exactly `GUARDS`. Neither count is written here any more: the `skip` keys are a row of the generated `pack-counts` block of §7.27 and the guard count is the `guard-matrix` block's own summary. Round 26 blocked the figure that stood here, which gave both as 23 where the selftest printed 22 |
 | `R25-S5` — the second reader's untracked law is scoped to `tree_state()` | carried, P3, and it is deliberate: the deciding-BYTES check runs over narrow worlds that hold an instrument and no repository around it. The independent second reader for that direction is the migrations digest comparison, which refuses on difference |
 | `R25-S6` / `G6` | carried, not this phase's: cold root `npm run build` returns 1 on `main` too |
 
@@ -3108,16 +3126,16 @@ the arm restores the process-wide generation flag, because the first version of
 it left the tree laws suspended for every arm that followed and six tree arms
 then reported that the real run does not name its own refusals.
 
-<!-- BEGIN GENERATED backtick-cost: python3 -I prep/phase11/harness/check_fenced_figures.py --emit backtick-cost -->
+<!-- BEGIN GENERATED backtick-cost: /usr/bin/python3 -I prep/phase11/harness/check_fenced_figures.py --emit backtick-cost --run-capture $P11_RUN_CAPTURE -->
 
 ```text
 the price of the last decoration removal, measured:
 
-candidates with the guard deleted      114
-document lines that would red          48
-distinct tokens in them                19
+candidates with the guard deleted      138
+document lines that would red          64
+distinct tokens in them                32
 
-deleting `inline code span` would red 48 document line(s) carrying 19 distinct token(s); it is a disclosed bound and not a hole
+deleting `inline code span` would red 64 document line(s) carrying 32 distinct token(s); it is a disclosed bound and not a hole
 ```
 
 <!-- END GENERATED backtick-cost -->
@@ -3150,6 +3168,247 @@ reserved, examined, exampled, or written in a filename or a comment; and
 `OD-P11-07` is the owner's alone.
 
 ---
+
+## 7.27 ROUND 26 (`REJECT` at `bc54e4c`, by two independent challengers) and the coordinator's diff review of the same head (`NO-SIGN`) — a figure is legitimate because A RUN PRINTED it
+
+Four blockers, in one commit on the coordinator's ruling, because two of them
+move the same unit and the third is what the first two left false. The two
+challenge reports and the review agree on the cause and reached it from three
+directions: **the authority over a figure was still a set of FILES**, and a
+file is text somebody can type.
+
+### `R26-F1` (`P1`, fail-open) — a space made the figure invisible
+
+The matcher required the key, the `=` and the value to be ADJACENT. A figure
+written with a space on either side of its `=` was therefore not weighed and
+found legitimate: it was not weighed at all, so no count moved and no line of
+output named it. The challenger committed three fabricated figures in that
+spelling on a clean tree and drove the whole authoritative suite to
+`EXIT_SCRIPT 0`, with the candidate count unmoved — round 14's headline
+reproduced, needing no entity, no Unicode and no edit under `harness/`.
+
+It is round 14's own class. A zero-width space before the value was closed
+then, by deleting Unicode category `Cf`; its VISIBLE sibling was left open and
+named nowhere. The entity step this pack added at `bc54e4c` made it worse in
+one direction: `&nbsp;` resolves to U+00A0 and NFKC folds that to a plain
+space, so a normalisation moved a shape OUT of the matcher's reach.
+
+**Fixed by naming the CLASS.** Whitespace that TOUCHES an `=` is deleted, by
+Unicode category (`Zs`, `Zl`, `Zp`, `Cc`, `Cf`) and not as a list of
+characters — a list of four would move the hole from shape to TIME on the
+fifth. The same rule is applied to the HAYSTACK, under a guard of its own
+(`the same spelling on both sides`), because a run that prints a padded figure
+emits that figure. Eight arms, one per spelling: a space before the value, a
+space on each side, a space before the `=`, a tab, a no-break space, a narrow
+no-break space, an `&nbsp;` entity, and the padded shape this pack's own
+output prints.
+
+**The generator that depended on the hole.** The `--surface` inventory wrote
+each probe shape with spaces around its `=` *because the matcher refused that
+spelling* — the comment in the emitter said so. So the one spelling a reader
+of this pack is most habituated to was the one spelling the matcher never saw,
+and a planter did not have to invent anything: they could copy the table. That
+block prints a key column and a value column now and writes no `=` anywhere,
+so it asserts no figure and leans on no rule.
+
+**The cost, measured before the fix was claimed.** Over the nine documents the
+whitespace class turns 21 candidate figures into 42 occurrences, and the
+`--surface` inventory's own rows were the bulk of them. Outside that block
+nine tokens are left, of which three were backed by nothing a run prints:
+they are re-spelled, each where it is written, and named below.
+
+### `R26-S1` / `C26-F1` (`P1`, fail-open) — the haystack was a whitelist over SOURCE TEXT
+
+Round 25 replaced the recordings with the files this tree can RUN (`.py`,
+`.sh`, `.sql`). The direction was right and the KIND of authority was not. A
+second independent challenger measured what the suffix rule admits, and the
+coordinator ruled it a blocker:
+
+* a `#` comment appended to an instrument the run executes legitimised a
+  fabricated figure, with the whole authoritative pack reaching `EXIT_SCRIPT 0`;
+* a committed `.py` that nothing imports or runs did the same;
+* and it shipped open in a second way: most of the admitted `.sql` files are
+  `M*.sql` mutation worlds the authoritative run never applies, and a `--`
+  comment in one of them backed a figure.
+
+Four of the six attacks did not move the one figure the output carried about
+the set, its file count.
+
+**So the haystack is WHAT THIS RUN PRINTED.** `rebuild_and_prove.sh` captures
+its own output to a file outside the work tree — it re-enters itself once
+through `tee` — and hands the path to the gate as `--run-capture`. A figure in
+these documents is legitimate because a run of this phase printed it. A comment
+prints nothing. A file nothing runs prints nothing. A mutation world that is
+never applied prints nothing. A recording of an older run carries another
+commit's `RUN_HEAD` and is refused by name.
+
+Four named refusals, each with an arm that reads the NAME and not the exit
+code: no capture at all; a capture inside the repository that holds the
+subject (which is round 25's committed recording reached by another route); a
+capture whose `RUN_HEAD` is not this commit; and an empty one.
+
+**What was deleted, and what became the control.** Three guard entries —
+`haystack from the commit`, `only what can run emits` and `the checker is not
+its own evidence` — are DELETED rather than carried. With the new rule present,
+deleting any of them changed no verdict anywhere, and a guard that reds nothing
+is deleted or armed with no third option. All three behaviours survive as the
+CONTROL that deleting `only a run emits` restores, exactly as they stood at
+`bc54e4c`, which is what makes the three attacks above measurable as a FLIP
+rather than assertable as closed. The census (`no repository redirects the
+subject`) stays a guard: the capture is held against this commit, so which
+repository the head is resolved from still decides a verdict.
+
+**Where the gate runs changed with it.** The scan, `--check-blocks` and the
+gate's own selftest ran at step 0c, before the database was recreated. A
+capture is worth only what has been printed into it, so all three now run at
+**step 7b**, after both proof suites, both idempotence passes and both race
+programs. Step 0c keeps the one check that must precede everything which reads
+the harness: the deciding files against the commit's own blobs.
+
+**What it costs, and the three lines that paid it.** A figure no run of this
+phase prints now reds, whatever any file says about it. Three document lines
+were re-spelled rather than emitted, and each is a quotation rather than a
+measurement:
+
+| where | what it was | what it is |
+|---|---|---|
+| `P11-LIVE-DDL-PROOF.md` | an abridged `INSERT` quoting a boolean column with its value | the column named, the value elided |
+| `P11-LIVE-DDL-PROOF.md` (two lines) | an exit code written as a figure | the same exit code in prose |
+| `P11-HANDOFF-MANIFEST.md` and `P11-S0-REPORT-AR.md` | the `C21-F1` diff quoted with its whole parameter list | the parameter list elided, with the reason under it |
+
+### `R26-F2` (`P1`, measured false) — two figures this pack wrote about its own instrument
+
+Both were re-counted with the command they name, and both were wrong:
+
+* the recordings in the old haystack were given as *twenty-seven* in three
+  documents — this manifest, the conservation law's own row and the Arabic
+  report — where `git ls-tree` says forty-four, with the instrument's own
+  header saying so one file away. A reader sent to that sentence acts
+  differently: the MAGNITUDE is what made `R25-F1` a blocker rather than a
+  note.
+* the guard binding was given as *23 and 23 at this head* where the selftest
+  printed a smaller number, twice, for both halves of it.
+
+Neither was catchable by anything in this pack: one was spelled in words, the
+other sat in a table row outside a block. That is the disclosed
+`figure spelled out in words` residual doing exactly what a residual does, and
+a reason to re-count by hand rather than a reason the figure was acceptable.
+
+**Both are generated now.** The prose that carried them points at this block
+and states no count:
+
+<!-- BEGIN GENERATED pack-counts: /usr/bin/python3 -I prep/phase11/harness/check_fenced_figures.py --emit pack-counts --run-capture $P11_RUN_CAPTURE -->
+
+```text
+what this pack counts, read from the commit and from this file:
+
+files the commit holds under the harness     72
+of them recordings of past runs              48
+skip keys the committed source reads         22
+arms the selftest runs                       134
+```
+
+<!-- END GENERATED pack-counts -->
+
+### `R26-F3` / `C26-S3` — the guard moved and four specification sentences did not
+
+`bc54e4c` swept the OUTCOME sentence and left the discipline half. Each of
+these was false at that head, measurably, and each is swept here:
+
+| where | what it said |
+|---|---|
+| the gate's own **WHAT IT CHECKS** paragraph | that the token must appear in the commit under the harness, excluding markdown, in an instrument or in a committed run-evidence file — the rule round 25 blocked, stated as the specification, and the first thing every reviewer of this pack reads |
+| `emitted_strings`' docstring | "what the instruments and the committed evidence under `root` emit" |
+| the conservation law's own row, edited by that very commit | that the arm reds when a quoted line cannot be found in the harness **or in a published evidence file** |
+| this manifest's arm paragraph | that the untracked arm's plant is a `scratch.log` (that commit had changed it to a `scratch.py`) and that **markdown is not evidence** is measured the same way (that commit DELETED it) |
+
+### `R26-S6`, `C26-S1`, `C26-S4` — three smaller things the coordinator ruled in
+
+* **`R26-S6`.** `GENERATION-FRAME-INADMISSIBLE`, `MODULE-ATTR-REBOUND` and
+  `SELF-READ-DIR-ABSENT` are read BY NAME now, not by an exit code of 5. The
+  last was declared `UNMEASURED-at-runtime` by `R25-S3` and is measured here as
+  a UNIT arm, written as one rather than dressed as a world: the law is called
+  with a repository that holds no `prep/phase11` at all, which is the state the
+  refusal is about.
+* **`C26-S1`.** The driver pinned `git` absolutely and scrubbed its whole
+  environment, and then asked `PATH` for `python3` at seventeen sites — every
+  verdict in the pack. The coordinator measured a planted interpreter forging
+  two gates' baseline lines byte for byte, and `-I` cannot help, because the
+  flag is handed to the planted binary and the isolation refusal lives inside
+  the file that binary never runs. `PY=/usr/bin/python3` is resolved once,
+  asserted executable, printed with its version and its isolation flag, and
+  used at every site.
+* **`C26-S4`.** A refusal said the commit "does not hold" a file the commit
+  does hold — what it does not hold is a DECIDING entry at that path — and
+  called a three-line text transcript "a deciding file this harness can
+  execute", which was `C26-F1` asserted by the instrument itself. Reworded.
+
+### Three things this round found by running, and none of them was reported
+
+* **A new guard took another guard's deletion control away.** With whitespace
+  adjacent to the `=` deleted, round 14's own arm for `format characters` (a
+  zero-width space before the value) kept redding when that guard was deleted,
+  so the guard was credited with nothing and the selftest said so. Under the
+  positive scan a `Cf` inside the key or the value leaves a SHORTER figure
+  that still matches, so neither of those is a control either. The arm that
+  flips is a format character after the SIGN: there the value class needs a
+  digit where the character sits, and the bare value has no key.
+* **The whitespace class opened a hole in its own fix, in the haystack.** The
+  categories it deletes include the LINE TERMINATORS, and the haystack is one
+  blob of text: deleting a newline that touches an `=` JOINS the line ending in
+  `=` to the line below it, so a capture holding a key and its `=` at the end
+  of one line and a value at the start of the next would have emitted a figure
+  no run printed on any line. Found by reading the verdict's own inventory —
+  the line count it printed for the capture was smaller than `wc -l` on the
+  file, which is what a joined line looks like from outside. The class is
+  whitespace WITHIN a line now, with the terminators DERIVED BY EXECUTION
+  (`str.splitlines`, the rule the readers already split on) rather than listed,
+  and an arm measures it: a world whose run printed the figure across two
+  lines legitimises nothing. The inventory counts the capture's own lines now,
+  before the spelling rule touches it, so a reader can compare it with `wc -l`.
+* **`planted tokens` is louder under the new rule than it was under the old
+  one.** The selftest prints every arm's label, an arm's label carries the
+  token that arm plants, and the driver runs the selftest into the same
+  capture the gate then reads. So the planted tokens are in the haystack of
+  every real run, and the guard that refuses them is what keeps this
+  instrument's own output from legitimising its own probes. `R15-S4`'s cause,
+  in a third place.
+
+### Residuals, each stated as what it is
+
+| id | `P` | what |
+|---|---|---|
+| `R26-S5` | P2 | **the honest limit of this round.** A capture is a FILE. The gate can require that it lie outside the subject's repository and carry this commit's `RUN_HEAD`, and it does; what ties it to a RUN is the process lineage of the driver that wrote it, which nothing executable here can verify. A planter who can run processes on the measuring host can write one. That is weaker than "a run printed it" sounds and stronger than "a file says so": the attacker this pack is built against lands a commit |
+| `R26-S7` | P3 | the capture GROWS during the run: the scan's own output joins it before `--check-blocks` reads it, so a token the scan quotes in a finding is in the capture the generators then read. The run is already red when that happens, and the generated blocks are compared against the committed ones in the same step |
+| `C26-S2` | P3 | the haystack's REACH is the harness as the driver runs it. The run also applies 87 migrations, `bootstrap.sql` and the pack DDL; a figure one of those genuinely prints is a FALSE RED, not a hole. Those files are pinned by their own digests, and the refusal's wording names the scope |
+| `R26-S2` | P3 | `GENERATION-FRAME-INADMISSIBLE` is bounded by `frame_admissible()` alone; a refusal raised inside an arm's own world construction would still write a block of non-answers. Not built — stated |
+| `R26-S3` | P3 | answered in part: the haystack's inventory line prints a digest and a line count of the capture, not a file count, so an arrival in the set is visible in the verdict itself |
+| `R26-S4` | P3 | `--check-blocks` reds on any document edit now that two blocks depend on the documents. Disclosed, and never to be read as protection against a planted line: it compares a block with a fresh generator run and nothing else |
+| `R17-S3` | P3 | the transcripts are still not SCANNED as documents. Under this round's rule they have no standing either — a transcript neither legitimises a figure nor is weighed for one — which is smaller than it was and not closed |
+| `R25-S1` | P2 | the inline code span, deferred again on the coordinator's ruling and with the second challenger's own recommendation withdrawn: the price is generated into the `backtick-cost` block of §7.26 rather than restated here, and whitespace outranked it |
+| carried | — | the substring haystack; dates and values continuing into `[0-9A-Za-z_-]`; uppercase keys; non-numeric values; the two named exemptions; `C25-S3`, `C25-S4`, `C25-S5`; `R25-S3`; `R25-S5`; a planter who commits; `G6` |
+| standing | — | **no CI has ever run the Phase 11 pack**, and nothing a planter inserts reaches a repository gate |
+
+**THE EVIDENCE FOR THIS SECTION**, both committed under the harness and both
+outside the haystack by the very rule they are evidence for — a transcript is a
+file, and under this round's rule a file legitimises nothing:
+`harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND26.txt` (the whole suite from zero on
+a fresh clone, `EXIT_SCRIPT 0`, the figure gate run last at step 7b against
+that run's own output) and `harness/RUN-EVIDENCE-PROBE-ROUND26.txt` (eleven
+committed plant worlds: seven whitespace spellings of one fabricated figure,
+the three shapes the old suffix whitelist admitted, and the pass direction).
+Each names the commit it measured and states that this commit's tree is that
+one plus these two files, the regenerated figures of the two generated blocks
+that counting these two files moves, and the lines naming them.
+
+**WHAT THIS HEAD CLAIMS, AND WHAT IT DOES NOT.** No signature, and none is
+claimed: an author does not sign their own work. This commit answers four
+blockers and three smaller rulings and is owed round 27 and a coordinator diff
+review. `24f6ebe` is still the last fully signed head; `READY_TO_PROMOTE` =
+**NO**; **no migration number exists** — none allocated, reserved, examined,
+exampled, or written in a filename or a comment; `OD-P11-07` is the owner's
+alone; and no CI has ever run this pack, so the gate's own authority is
+`UNMEASURED` outside this container.
 
 ## 8. Coordinator state
 

@@ -457,8 +457,19 @@ def check(harness_dir=None):
         rel = os.path.relpath(os.path.realpath(os.path.join(harness_dir, n)), top)
         if rel not in tracked:
             msgs.append(
-                "HARNESS-FILE-UNCOMMITTED: `%s` is a deciding file this harness can "
-                "execute and commit %s does not hold it." % (rel, sha[:12])
+                # `C26-S4`, the coordinator's P3: this sentence used to say
+                # the commit "does not hold it", and in the symlink world the
+                # commit DID hold the path -- what it does not hold is a
+                # DECIDING entry at that path. It also called a three-line
+                # text transcript "a deciding file this harness can execute",
+                # which is `C26-F1` asserted by the instrument itself. Both
+                # halves are the reader's time spent looking for something
+                # they will find.
+                "HARNESS-FILE-UNCOMMITTED: `%s` is a path this law reads as deciding "
+                "(it is under the harness and carries one of %s) and commit %s holds "
+                "no deciding entry for it. The commit may hold the path itself; what "
+                "it does not hold is a deciding file there, which is what this law "
+                "compares." % (rel, ", ".join(DECIDING_SUFFIXES), sha[:12])
             )
             continue
         try:

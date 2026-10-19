@@ -94,14 +94,32 @@ measured before the change was claimed, the way round 13's widening was:
 
 WHAT IT CHECKS. Every `*.md` anywhere under the phase directory, including
 subdirectories. Every occurrence of `key=<number|boolean>` on a line is a
-candidate, and the exact token must appear in **the
-commit** under `prep/phase11/harness/`, **excluding markdown** -- in an
-instrument or in a committed run-evidence file. Not in the directory: in the
-commit. A file the commit does not carry cannot legitimise a figure, and the
-run names the commit it read and every file under the harness that differs
-from it.
+candidate, and the exact token must appear in **WHAT THIS RUN PRINTED** --
+the output of `rebuild_and_prove.sh`, captured by that script outside the work
+tree and handed here as `--run-capture PATH`. Not in a file under the harness:
+in the output of a run. A figure is legitimate because a run of this phase
+PRINTED it.
 
-NORMALISATION, in five steps, in this order, each one separately deletable and
+`R26-S1` and the coordinator's `C26-F1` are why, and the sentence that stood
+here until this round -- "the exact token must appear in the commit under
+`prep/phase11/harness/`, excluding markdown, in an instrument or in a
+committed run-evidence file" -- is the rule they blocked, twice over: round 25
+blocked the committed recordings (anyone who can type a file there can
+legitimise any figure), and round 26 blocked what replaced it (a `#` comment,
+a committed `.py` nothing runs, and a `--` comment in a mutation world the run
+never applies, each one legitimising a fabricated figure with the whole
+authoritative pack green). A whitelist of SUFFIXES is a whitelist over source
+TEXT, and source text is alterable text. What a run prints is not.
+
+What that costs, stated because it is real: a figure no run of this phase
+prints REDS, whatever is written about it in any file -- and the discharge is
+the one this gate has always prescribed, to have a case EMIT it and paste what
+it emits. Three document lines were re-spelled rather than emitted this round
+and each is named in `§7.27` of the manifest. The reach is the harness's own
+instruments as the driver runs them (`C26-S2`): a figure a migration or a pack
+DDL genuinely prints is a false red, named there and not hidden here.
+
+NORMALISATION, in six steps, in this order, each one separately deletable and
 separately measured:
 
   0. **HTML CHARACTER REFERENCES RESOLVED**, first, so a reference TO a
@@ -121,16 +139,35 @@ separately measured:
      the digits to their ASCII spellings.
   2. **Format characters deleted** (Unicode category `Cf`), which is where
      U+200B ZERO WIDTH SPACE goes. NFKC does not remove it.
-  3. **Arabic-Indic and Extended Arabic-Indic digits mapped to ASCII**, which
+  3. **WHITESPACE THAT TOUCHES THE `=` DELETED**, by Unicode category (`Zs`,
+     `Zl`, `Zp`, `Cc`, `Cf`) and not as a list of characters. `R26-F1`: the
+     matcher required the key, the `=` and the value to be ADJACENT, so
+     `rows = 81737` was not weighed at all, and three fabricated figures in
+     that spelling -- the spelling this pack's own padded output prints --
+     walked the whole authoritative suite to `EXIT_SCRIPT 0`. It is round 14's
+     class: the zero-width space before the value was closed then by deleting
+     `Cf`, and the VISIBLE sibling of that shape was left open. Step 0 made it
+     worse in one direction, because `&nbsp;` resolves to U+00A0 and NFKC folds
+     it to a plain space -- a normalisation that moves a shape OUT of the
+     matcher's reach. The same rule is applied to the HAYSTACK under
+     `the same spelling on both sides`, so a run that prints `rows = 59` emits
+     the figure `rows=59`. Measured cost on this pack's own nine documents
+     before the fix was claimed: the 17 rows of the `--surface` inventory,
+     which wrote its probe shapes with spaces around the `=` BECAUSE the
+     matcher refused them. That block prints the key and the value in two
+     columns now and writes no `=` at all; the generator does not depend on a
+     hole any more. One arm per spelling: space, tab, both sides, no-break
+     space, narrow no-break space, `&nbsp;`, and the padded shape.
+  4. **Arabic-Indic and Extended Arabic-Indic digits mapped to ASCII**, which
      NFKC also does not do: U+0669 has no compatibility decomposition. The
      owner's Arabic report writes every figure he reads in these digits, so
      this is the spelling the documents actually use, not an exotic one.
-  4. **The boolean set, closed**: `true`, `false`, `t`, `f`, in any case, and
+  5. **The boolean set, closed**: `true`, `false`, `t`, `f`, in any case, and
      nothing else. `t` and `f` are what `psql` prints, which is what these
      documents transcribe, and the previous class claimed booleans while
      admitting one spelling of two.
 
-Steps 1-3 are the same cause as **Phase 6's open `G-A`**, where a mistyped key,
+Steps 1-4 are the same cause as **Phase 6's open `G-A`**, where a mistyped key,
 U+200B and U+FF1A are all accepted. Two phases, one cause; raised to the
 coordinator rather than solved twice, and `OD-P6-09` stays with the owner.
 
@@ -419,6 +456,90 @@ EMITTING_SUFFIXES = (".py", ".sh", ".sql")
 
 EXEMPT = ("port=55512", "migrations=87")
 
+# `R26-F1`. The whitespace a figure may be written with around its `=`, BY
+# CATEGORY and not as a list of characters: `Zs` is every space separator Unicode
+# has, `Zl` and `Zp` the line and paragraph separators, `Cc` the control
+# characters a tab and a vertical tab are, and `Cf` the format characters round
+# 14 closed on their own. A list of four characters would move the hole from
+# SHAPE to TIME on the fifth, which is this phase's own standing lesson.
+WHITESPACE_CATEGORIES = ("Zs", "Zl", "Zp", "Cc", "Cf")
+
+
+def _breaks_a_line(c):
+    """Does this character end a line? Asked of Python rather than listed."""
+    return len(("a" + c + "b").splitlines()) > 1
+
+
+# `R26-F1`'s own second measurement, found by reading the verdict's inventory
+# rather than by a reviewer: the categories above include the LINE
+# TERMINATORS, and the haystack is one blob of text. Deleting a newline that
+# touches an `=` therefore JOINS the line that ends in `=` to the line below
+# it, so a capture holding `total=` at the end of one line and `55` at the
+# start of the next would emit `total=55` -- a figure no run printed on any
+# line. The class is whitespace WITHIN a line, and which characters end a line
+# is DERIVED BY EXECUTION (`str.splitlines`, the same rule the readers split
+# on) over the whole range the terminators live in, rather than written out as
+# a list of six that reopens on the seventh.
+LINE_TERMINATORS = frozenset(c for c in map(chr, range(0x3000)) if _breaks_a_line(c))
+
+
+def _close_equals(s):
+    """The line with the whitespace that TOUCHES an `=` deleted.
+
+    `R26-F1`, a fail-open round 26 drove end to end: the matcher required the
+    key, the `=` and the value to be ADJACENT, so `rows = 81737` was never
+    weighed -- not weighed and found legitimate, not weighed at all. Three
+    fabricated figures in that spelling walked the whole authoritative suite to
+    `EXIT_SCRIPT 0`.
+
+    It is round 14's class, not a new one. A zero-width space before the value
+    was closed then by deleting category `Cf`; the VISIBLE sibling of that shape
+    was left open, and this round's first normalisation step made it worse in
+    one direction, because `&nbsp;` and `U+00A0` are folded by NFKC into exactly
+    the spelling the pattern could not see. A normalisation that moves a shape
+    OUT of the matcher's reach is not a normalisation of a spelling.
+
+    Deleting whitespace adjacent to the `=` rather than admitting it in the
+    PATTERN is deliberate: the candidate a verdict then reports is the figure's
+    one canonical spelling (`rows=81737`), which is the string the haystack is
+    searched for, so a reader is not shown one spelling and told about another.
+    The same rule is applied to the haystack under `the same spelling on both
+    sides`, because a run that PRINTS `rows = 59` emits that figure.
+
+    The pack's own prose was measured BEFORE this was claimed as a fix: 21
+    candidate figures become 42 occurrences over the nine documents, of which
+    the `--surface` inventory's own seventeen rows were the bulk -- that block
+    wrote its probe shapes with spaces around the `=` precisely because the
+    matcher refused them, which is a generator that depended on the hole. It
+    names the key and the value in two columns now and writes no `=` at all.
+    """
+    chars = list(s)
+    n = len(chars)
+    keep = [True] * n
+
+    def padding(c):
+        # Whitespace WITHIN a line: a line terminator is not padding, because
+        # deleting one would join two lines into a figure neither of them
+        # carries.
+        return (
+            unicodedata.category(c) in WHITESPACE_CATEGORIES
+            and c not in LINE_TERMINATORS
+        )
+
+    for i, c in enumerate(chars):
+        if c != "=":
+            continue
+        j = i - 1
+        while j >= 0 and padding(chars[j]):
+            keep[j] = False
+            j -= 1
+        j = i + 1
+        while j < n and padding(chars[j]):
+            keep[j] = False
+            j += 1
+    return "".join(c for c, k in zip(chars, keep) if k)
+
+
 def _fold_digits(s):
     """Every decimal digit family, not three named ones.
 
@@ -444,6 +565,7 @@ MATCHER_GUARDS = (
     "html character references",
     "nfkc",
     "format characters",
+    "whitespace around the equals",
     "non-ascii digits",
     "html comment markers",
     "inline code span",
@@ -467,38 +589,60 @@ MATCHER_GUARDS = (
 # `--selftest` in exactly the same way: each one reds an arm by name or the
 # phase stops.
 HAYSTACK_GUARDS = (
-    "haystack from the commit",
-    # `R25-F1`, round 25's blocker and the standing lesson behind it: DERIVE
-    # SUBJECT SETS FROM EXECUTION, NOT FROM ALTERABLE TEXT. A committed
-    # transcript is a RECORDING of a run, and a figure is legitimate here only
-    # because an instrument EMITS it. The two are not the same claim, and the
-    # difference was realised at `36c9094`: round 24's attack tokens
-    # (`overlay_routine=4242`, `core_routine=1`) entered the haystack with the
-    # probe transcript this pack committed as evidence, so from that commit on
-    # they passed in any document -- `R15-S4`'s cause from a source
-    # `planted_tokens()` cannot reach, because it derives from the arm bodies.
-    # Anyone who can type a file into this directory could legitimise any
-    # figure, which is exactly what a haystack must not be.
+    # `R26-S1`, ruled a blocker by the coordinator after the second
+    # challenger measured the previous rule end to end: a `#` comment in an
+    # instrument, and a committed `.py` that nothing imports or runs,
+    # legitimised a fabricated figure and the whole authoritative pack reached
+    # `EXIT_SCRIPT 0`. It shipped open in a second way too -- eleven of the
+    # admitted files were `M*.sql` mutation worlds the authoritative run never
+    # applies, and a `--` comment in one of them backed a figure.
     #
-    # Stated POSITIVELY, which is the whole of the round's own warning: the
-    # first form of this fix dropped `.txt` and round 25 had already named
-    # what that is -- an exclusion by shape moves the hole from shape to TIME,
-    # because the next recording arrives under the next suffix (`.log`,
-    # `.out`, no extension at all). So the haystack is the files that can RUN,
-    # `EMITTING_SUFFIXES`, and everything else emits nothing whatever it is
-    # called. A new recording is outside by default rather than until someone
-    # remembers to exclude it.
-    "only what can run emits",
-    # `markdown is not evidence` stood here from round 12 to round 25 and is
-    # DELETED, not carried: a `.md` is not a file this tree can run, so the
-    # positive rule above already excludes it, the guard red no arm, and a
-    # guard that reds nothing is deleted or armed with no third option. The
-    # shape round 12 reported -- a markdown file under the harness, inside the
-    # haystack and outside the scan -- is still measured, by the arm that used
-    # to measure this guard, against the rule that now decides it. Behaviour
-    # unchanged: measured, with the arm's verdict unmoved.
+    # The direction of round 25's fix was right and its KIND of authority was
+    # not: `.py`, `.sh` and `.sql` was a whitelist over SOURCE TEXT, and source
+    # text is alterable text. So the haystack is THE OUTPUT THIS RUN PRINTED,
+    # captured by `rebuild_and_prove.sh` outside the work tree and handed to
+    # this gate as `--run-capture`. A figure is legitimate because a run of
+    # this phase printed it. A comment prints nothing; a file nothing runs
+    # prints nothing; a mutation world that is never applied prints nothing; a
+    # recording of an older run carries another commit's `RUN_HEAD` and is
+    # refused by name.
+    #
+    # Deleting this guard restores the ENTIRE tree-derived haystack of
+    # `bc54e4c` -- the commit derivation, the suffix whitelist, the anchor and
+    # the stem exclusion -- which is what the arms below are measured against,
+    # and what makes "the hole is closed" a measurement rather than a claim.
+    # The four guard entries that rule stood on are deleted with it: they are
+    # the CONTROL now, not the law, and a guard that reds nothing is deleted or
+    # armed with no third option.
+    "only a run emits",
+    # The spelling rule, applied to the haystack as well as to the line, under
+    # a name of its own so one entry decides one site: a run that prints
+    # `rows = 59` emits the figure `rows=59`, and without this the whitespace
+    # class of `R26-F1` would red every figure the pack's own padded output
+    # reports.
+    "the same spelling on both sides",
+    # `haystack from the commit`, `only what can run emits` and `the checker is
+    # not its own evidence` stood here and are DELETED, not carried. Each one
+    # was a rule about which FILES emit, and no file emits any more: with
+    # `only a run emits` present, deleting any of the three changed no verdict
+    # anywhere, and a guard that reds nothing is deleted or armed with no third
+    # option. All three behaviours survive as the CONTROL that deleting
+    # `only a run emits` restores -- the commit derivation, the suffix
+    # whitelist and the stem exclusion, exactly as they stood at `bc54e4c` --
+    # and the arms that measured them (a markdown file, a committed
+    # transcript, an untracked `.py`, a gitignored `.pyc`, the checker's own
+    # prose) still red, against the rule that decides them now.
+    #
+    # The census stays a guard of its own: the capture is held against THIS
+    # commit, so which repository the head is resolved from still decides a
+    # verdict, and the anchor arms read the difference by name.
+    # The suffix whitelist `only what can run emits` stood here for one round
+    # and is DELETED with the three entries above it, for the reason the second
+    # challenger of round 26 measured: `.py`, `.sh` and `.sql` is a whitelist
+    # over SOURCE TEXT. It survives as part of the control, in `keep()`, where
+    # deleting `only a run emits` restores it; and round 25's own arm -- a
+    # committed transcript -- still reds, against the rule that decides it now.
     "no repository redirects the subject",
-    "the checker is not its own evidence",
 )
 
 GUARDS = MATCHER_GUARDS + HAYSTACK_GUARDS
@@ -635,6 +779,8 @@ def _strip(line, skip=()):
         s = unicodedata.normalize("NFKC", s)
     if "format characters" not in skip:
         s = "".join(c for c in s if unicodedata.category(c) != "Cf")
+    if "whitespace around the equals" not in skip:
+        s = _close_equals(s)
     if "non-ascii digits" not in skip:
         s = _fold_digits(s)
     if "html comment markers" not in skip:
@@ -907,6 +1053,75 @@ def _differs_from_commit(root):
 
 _HAYSTACK = {}
 
+# THE ONE PLACE the capture's path is kept: set by `_main` from the command
+# line, and set and restored by `_arm` around one arm's own world, so a world's
+# output is never this process's and this process's is never a world's. A
+# second source for it would be a haystack nobody read.
+_RUN_CAPTURE = []
+
+# The line `rebuild_and_prove.sh` prints, and the only thing that ties a
+# capture to a commit. It is not a proof of provenance and is not written as
+# one: see `R26-S5` in the header.
+RUN_HEAD_LINE = re.compile(r"^RUN_HEAD\s*:\s*([0-9a-f]{40})\s*$", re.M)
+
+
+def _run_capture_text(path, sha, top):
+    """The output this run printed, or a NAMED refusal. Never a fallback.
+
+    `R26-S1`. Four refusals, each by its own name, because the previous design
+    could not tell a file someone typed from something a run produced:
+
+      1. No capture at all is `RUN-CAPTURE-ABSENT`. The gate is a step of the
+         driver, which captures its own output; with no capture there is no run
+         to read and the gate refuses rather than reading the tree.
+      2. A capture INSIDE the repository that holds the subject is refused:
+         that is the committed recording round 25 blocked, reached by another
+         route.
+      3. An unreadable or empty capture is refused, so a figure never reds for
+         the wrong reason.
+      4. A capture whose `RUN_HEAD` is not this commit is refused: a run of
+         another commit says nothing about this one, which is what makes a
+         recording of an older run worthless here rather than merely stale.
+    """
+    if not path:
+        raise Refusal(
+            "RUN-CAPTURE-ABSENT: no run capture was given. A figure is legitimate here "
+            "because a run of this phase PRINTED it, so this gate reads the output of "
+            "the run it is a step of (`--run-capture PATH`, which "
+            "`rebuild_and_prove.sh` writes outside the work tree and hands over). "
+            "There is no fall back to reading the files."
+        )
+    ap = os.path.realpath(path)
+    anchor = os.path.realpath(top)
+    if (ap + os.sep).startswith(anchor + os.sep):
+        raise Refusal(
+            "RUN-CAPTURE-INSIDE-THE-SUBJECT: the capture %s lies inside the repository "
+            "%s that holds the subject, where a committed or planted file could stand "
+            "in for the output of a run. The capture is written outside the work tree "
+            "or it is not read." % (ap, anchor)
+        )
+    try:
+        data = open(ap, encoding="utf-8", errors="replace").read()
+    except OSError as why:
+        raise Refusal("RUN-CAPTURE-UNREADABLE: %s could not be read (%s)." % (ap, why))
+    if not data.strip():
+        raise Refusal(
+            "RUN-CAPTURE-EMPTY: %s holds no output, so every figure would red for the "
+            "wrong reason." % ap
+        )
+    heads = sorted(set(RUN_HEAD_LINE.findall(data)))
+    if sha not in heads:
+        raise Refusal(
+            "RUN-CAPTURE-NOT-THIS-HEAD: the capture %s carries %s and the subject's "
+            "HEAD is %s. A run of another commit says nothing about this one."
+            % (
+                ap,
+                ", ".join(h[:12] for h in heads) or "no `RUN_HEAD : <sha>` line",
+                sha[:12],
+            )
+        )
+    return data
+
 
 def _subject_top(root, checked=True):
     """The ONE repository that contains the subject, or a named refusal.
@@ -1067,18 +1282,22 @@ def _subject_top(root, checked=True):
 
 
 def haystack(root, skip=()):
-    """(label, paths, text): what this tree emits, and where that was read from.
+    """(label, paths, text): what EMITS here, and where that was read from.
 
-    Cached per (root, guards) because one process measures one commit: the
-    object store cannot change under a run, and the arms would otherwise spawn
-    a subprocess per guard per arm.
+    Since `R26-S1` the first answer is the output of the run this gate is a
+    step of, and the tree derivation below is the CONTROL that deleting
+    `only a run emits` restores.
+
+    Cached per (root, guards, capture) because one process measures one run:
+    the object store cannot change under a run, and the arms would otherwise
+    spawn a subprocess per guard per arm.
     """
     stem = os.path.splitext(os.path.basename(__file__))[0]
-    from_commit = "haystack from the commit" not in skip
+    from_run = "only a run emits" not in skip
+    same_spelling = "the same spelling on both sides" not in skip
+    capture = _RUN_CAPTURE[0] if _RUN_CAPTURE else None
     anchored = "no repository redirects the subject" not in skip
-    drop_self = "the checker is not its own evidence" not in skip
-    runnable_only = "only what can run emits" not in skip
-    key = (os.path.abspath(root), from_commit, anchored, drop_self, runnable_only)
+    key = (os.path.abspath(root), from_run, same_spelling, capture, anchored)
     if key in _HAYSTACK:
         return _HAYSTACK[key]
 
@@ -1093,56 +1312,74 @@ def haystack(root, skip=()):
         # their source, which is what the gate has always meant by `emits`;
         # the recordings stay committed, under their digests, as the evidence a
         # reader opens. They simply stop deciding.
-        if runnable_only and os.path.splitext(base)[1] not in EMITTING_SUFFIXES:
+        if os.path.splitext(base)[1] not in EMITTING_SUFFIXES:
             return False
         # By STEM, so a `.pyc` of an excluded source is excluded with it. Under
         # the git derivation that is belt and braces; with the derivation
         # deleted it is the round-15 design, which is what the arm measures.
-        if drop_self and os.path.splitext(base)[0] == stem:
+        if os.path.splitext(base)[0] == stem:
             return False
         return True
 
-    if from_commit:
+    if from_run:
+        # The anchor and the head are still resolved from the repository,
+        # because the capture is checked AGAINST this commit and must not lie
+        # inside it. Deleting the census therefore changes which repository's
+        # head the capture is held to, which the anchor arms read by name.
         top = _subject_top(root, anchored)
         sha = _commit_of(top if anchored else root)
-        # `R20-S1`: `realpath`, not `abspath`. The anchor is resolved, so a
-        # subject reached through a SYMLINK kept the link's spelling here while
-        # the repository was found at the resolved path -- git then rejected the
-        # pathspec and told the operator their haystack was "outside
-        # repository", which is not what had happened. Identity and spelling
-        # again, on the path this time.
-        rel = os.path.relpath(os.path.realpath(root), top)
-        paths = [n for n in _tracked_paths(top, sha, rel) if keep(n)]
-        text = "\n".join(_blobs(top, sha, paths))
-        label = "commit %s" % sha
-    else:
-        paths = []
-        read = []
-        for d, subdirs, files in os.walk(root):
-            subdirs[:] = sorted(subdirs)
-            for f in sorted(files):
-                p = os.path.join(d, f)
-                if not keep(p):
-                    continue
-                paths.append(os.path.relpath(p, root))
-                try:
-                    read.append(open(p, encoding="utf-8", errors="replace").read())
-                except OSError:
-                    pass
-        text = "\n".join(read)
-        label = "the working tree (the git derivation is deleted)"
+        text = _run_capture_text(capture, sha, top)
+        # Counted on what the capture HOLDS, before the spelling rule touches
+        # it: a reader compares this with `wc -l` on the file.
+        lines = text.count("\n") + 1
+        if same_spelling:
+            text = _close_equals(text)
+        digest = hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()
+        # `R26-S3`: the set is named by a DIGEST and a size, not by a count of
+        # files, so an arrival in it is visible in the verdict's own inventory.
+        label = (
+            "the output this run printed (%s, %d lines, sha256 %s of the text weighed, "
+            "RUN_HEAD %s)"
+            % (os.path.basename(os.path.realpath(capture)), lines, digest[:12], sha[:12])
+        )
+        got = (label, [os.path.realpath(capture)], text)
+        _HAYSTACK[key] = got
+        return got
+
+    # THE CONTROL, and nothing else reaches it: `bc54e4c`'s haystack exactly,
+    # the commit's own files filtered by the suffix whitelist and the stem
+    # exclusion. It is restored by deleting `only a run emits`, which is what
+    # makes the three `R26-S1` attacks -- a comment in an instrument, a `.py`
+    # nothing runs, a `--` comment in a mutation world the run never applies --
+    # measurable as a flip rather than assertable as closed. The working-tree
+    # walk that used to stand here as the control of the commit derivation is
+    # deleted with the guard it was the control of.
+    top = _subject_top(root, anchored)
+    sha = _commit_of(top if anchored else root)
+    rel = os.path.relpath(os.path.realpath(root), top)
+    paths = [n for n in _tracked_paths(top, sha, rel) if keep(n)]
+    text = "\n".join(_blobs(top, sha, paths))
+    if same_spelling:
+        text = _close_equals(text)
+    label = "commit %s (%d files, the git derivation is the control)" % (sha, len(paths))
     got = (label, paths, text)
     _HAYSTACK[key] = got
     return got
 
 
 def emitted_strings(root, skip=()):
-    """What the instruments and the committed evidence under `root` emit."""
+    """What a run of this phase PRINTED.
+
+    `R26-F3` and the coordinator's `C26-S3`: the sentence that stood here said
+    "what the instruments and the committed evidence under `root` emit", which
+    was round 25's own blocker written as the specification -- the OUTCOME
+    sentence was swept at `bc54e4c` and this, the discipline half, was not.
+    Moving a guard needs two sweeps."""
     return haystack(root, skip)[2]
 
 
 def haystack_files(root, skip=()):
-    """The paths whose contents count as something this tree emits."""
+    """Where that output was read from: one capture, or the control's file set."""
     return haystack(root, skip)[1]
 
 
@@ -1855,8 +2092,8 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
         # a verdict nobody can reproduce: `R15-F1` was a gitignored `.pyc` in
         # this very directory, and nothing in the output said it was being read.
         print(
-            "quoted figures: %d documents, haystack from %s (%d files), %d candidate "
-            "figures, %d not emitted" % (len(docs), label, len(files), seen, len(findings))
+            "quoted figures: %d documents, haystack from %s, %d candidate figures, "
+            "%d not emitted" % (len(docs), label, seen, len(findings))
         )
         # `R19-S3`: said rather than assumed. The parse ran above; a reader who
         # is told nothing about it has to take the header's word for it.
@@ -1992,6 +2229,40 @@ CATCH = [
     ("attached: a table cell opened with no padding", "|fabricated_count=999"),
     ("attached: a table cell closed with no padding", "fabricated_count=999|"),
     ("attached: a label with no space", "result:fabricated_count=999"),
+    # `R26-F1`, the fail-open round 26 drove end to end with three fabricated
+    # figures and `EXIT_SCRIPT 0`. One arm per SPELLING of the whitespace, and
+    # the class is Unicode's own (`Zs`, `Zl`, `Zp`, `Cc`, `Cf`) rather than
+    # these five characters: an arm measures a spelling, the category decides
+    # the rule. The last two are the composition this round's first
+    # normalisation step created -- `&nbsp;` resolves to `U+00A0` and NFKC
+    # folds it to a plain space -- which is a shape that did not exist before
+    # the entity step and was open the moment it did.
+    ("R26-F1 a space before the value", "fabricated_count= 999"),
+    ("R26-F1 a space on both sides", "fabricated_count = 999"),
+    ("R26-F1 a space before the equals", "fabricated_count =999"),
+    ("R26-F1 a tab before the value", "fabricated_count=\t999"),
+    ("R26-F1 a no-break space", "fabricated_count=\u00a0999"),
+    ("R26-F1 a narrow no-break space", "fabricated_count=\u202f999"),
+    ("R26-F1 an &nbsp; entity", "fabricated_count=&nbsp;999"),
+    ("R26-F1 the padded shape the pack prints", "rows = 81737 fabricated_count = 999"),
+    # Measured consequence of the step above, and the reason these two arms
+    # exist: deleting whitespace that touches the `=` also deletes a format
+    # character there, so round 14's own arm (a zero-width space BEFORE the
+    # value) stopped flipping when `format characters` was deleted and that
+    # guard red nothing. The class `format characters` decides is a `Cf`
+    # ANYWHERE in the figure, which the whitespace step does not reach: inside
+    # the value, and inside the key.
+    ("R14-S1 a zero-width space inside the value", "fabricated_count=9\u200b99"),
+    ("R14-S1 a zero-width space inside the key", "fabricated_co\u200bunt=999"),
+    # The one of the three that FLIPS, and it took the measurement to find:
+    # under the positive scan a `Cf` inside the key or the value leaves a
+    # SHORTER figure that still matches (`unt=999`, `fabricated_count=9`), so
+    # the arm reds with the guard deleted too and the guard was credited with
+    # nothing. After the SIGN there is no shorter figure to find: the value
+    # class needs a digit where the format character sits, and `999` alone has
+    # no key, so with `format characters` deleted this line is not a candidate
+    # at all.
+    ("R14-S1 a zero-width space after the sign", "fabricated_count=-\u200b999"),
     # `R24-F1`: the five shapes the challenger drove through `50a45a0` as
     # committed commits on throwaway clones, with the whole suite green. Each
     # one is caught here by the figure's own description rather than by a row of
@@ -2202,6 +2473,10 @@ FAKE_PROOFS = (
     'case("a", "SELECT 1", "present=true")\n'
     'case("b", "SELECT 2", "deleted=0")\n'
 )
+# What a RUN of `fake_proofs.py` PRINTS -- the two cases it holds, as output
+# and not as source. Since `R26-S1` this is a world's haystack: the file's text
+# emits nothing, and what the run printed is the whole of what emits.
+FAKE_RUN_OUTPUT = "  a  SELECT 1 -> present=true\n  b  SELECT 2 -> deleted=0\n"
 PLANT = "fabricated_count=999"
 # The haystack arms cannot use `PLANT`: it is a token the arms plant, so the
 # `planted tokens` guard catches it whatever the haystack says, and a haystack
@@ -2282,7 +2557,66 @@ WORLDS = {
         {"fake_proofs.py": FAKE_PROOFS, "check_fenced_figures.py": "# " + PROBE + "\n"},
         {},
     ),
+    # `R26-S1`, the three shapes the second challenger measured through
+    # `bc54e4c` with the whole pack green. Each is COMMITTED, each is a file
+    # the previous rule admitted, and none of them produces anything: a
+    # comment in an instrument the run executes, a `.py` nothing imports or
+    # runs, and a `--` comment in a mutation world the authoritative run never
+    # applies. With `only a run emits` deleted all three legitimise the figure,
+    # which is the flip that makes the fix measured.
+    "comment": ({"fake_proofs.py": FAKE_PROOFS + "# " + PROBE + "\n"}, {}),
+    "unrun": ({"fake_proofs.py": FAKE_PROOFS, "notes_dump.py": PROBE + "\n"}, {}),
+    "mutation": (
+        {"fake_proofs.py": FAKE_PROOFS, "M10-noop.sql": "-- " + PROBE + "\n"},
+        {},
+    ),
+    # The PASS direction of the new rule: the run PRINTED the figure, so the
+    # figure is legitimate. Nothing in this world's files carries it.
+    "printed": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    # `the same spelling on both sides`: the run printed the figure PADDED, the
+    # way this pack's own output prints it, and the document writes it bare.
+    "padded": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    # The capture's own four refusals, each read by NAME in
+    # `capture_names_test`.
+    "split": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    "nocapture": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    "capture-inside": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    "capture-otherhead": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    "capture-empty": ({"fake_proofs.py": FAKE_PROOFS}, {}),
 }
+
+# What each world's run printed, where it is not just what `fake_proofs.py`
+# prints.
+WORLD_OUTPUT = {
+    # `R15-S4`, and it is LOUDER under the new rule than it was under the old
+    # one. The selftest prints every arm's label, and an arm's label carries
+    # the token that arm plants; `rebuild_and_prove.sh` runs the selftest into
+    # the same capture the figure gate then reads. So the planted tokens are
+    # genuinely in the haystack of every real run, and `planted_tokens()` is
+    # what keeps a token this instrument printed from legitimising itself. The
+    # world says so by printing the plant the way the selftest prints it.
+    "runlog": FAKE_RUN_OUTPUT
+    + "  catch  N0 control: a bare line            rc=1 (want 1) -> as required\n"
+    + PLANT
+    + "\n",
+    "printed": FAKE_RUN_OUTPUT + "  c  SELECT 3 -> " + PROBE + "\n",
+    # The line-terminator half of `R26-F1`: the run printed the key and its
+    # `=` at the end of one line and the value at the start of the next. That
+    # is not a figure any line of the output carries, and deleting the newline
+    # would have made one.
+    "split": FAKE_RUN_OUTPUT + "  c  SELECT 3 -> " + PROBE.replace("=", "=\n"),
+    "padded": FAKE_RUN_OUTPUT
+    + "  c  SELECT 3 -> "
+    + PROBE.replace("=", "\u00a0=\t")
+    + "\n",
+}
+
+# The worlds whose subject is the CAPTURE rather than the tree: no capture at
+# all, a capture inside the repository that holds the subject, a capture of
+# another commit, and an empty one.
+CAPTURE_WORLDS = ("nocapture", "capture-inside", "capture-otherhead", "capture-empty")
+
+_CAPTURES = {}
 
 _WORLDS = {}
 
@@ -2357,14 +2691,79 @@ def _world_harness(kind):
     return harness
 
 
+def _capture_file(tag, sha, output, at=None):
+    """One capture, written where `at` says or outside every repository.
+
+    The `RUN_HEAD` line is the one `rebuild_and_prove.sh` prints, so a capture
+    names the commit whose run produced it.
+    """
+    body = "RUN_HEAD          : %s\n" % sha + output
+    if at is not None:
+        open(at, "w", encoding="utf-8").write(body)
+        return at
+    fd, path = tempfile.mkstemp(prefix="p11-capture-%s-" % tag, suffix=".txt")
+    os.close(fd)
+    atexit.register(os.unlink, path)
+    open(path, "w", encoding="utf-8").write(body)
+    return path
+
+
+def _world_capture(kind, harness):
+    """The file the world's run printed, written OUTSIDE the world's repository.
+
+    One per kind per process, like the world itself. The `RUN_HEAD` line is the
+    one the driver prints, so a capture is tied to the commit it is weighed
+    against; the four `CAPTURE_WORLDS` deviate from that on purpose, each in
+    one way, so each refusal has an arm that reads its name.
+    """
+    if kind in _CAPTURES:
+        return _CAPTURES[kind]
+    if kind == "nocapture":
+        _CAPTURES[kind] = None
+        return None
+    try:
+        sha = _commit_of(harness)
+    except Refusal:
+        # `norepo`: there is no commit to name. The refusal this world
+        # measures is raised before the capture is read.
+        sha = "0" * 40
+    if kind == "capture-otherhead":
+        sha = "1" * 40
+    output = WORLD_OUTPUT.get(kind, FAKE_RUN_OUTPUT)
+    if kind == "capture-empty":
+        fd, path = tempfile.mkstemp(prefix="p11-capture-empty-", suffix=".txt")
+        os.close(fd)
+        atexit.register(os.unlink, path)
+        open(path, "w", encoding="utf-8").write("")
+    elif kind == "capture-inside":
+        # INSIDE the world's own repository, which is the committed recording
+        # round 25 blocked, reached by another route.
+        path = _capture_file(kind, sha, output, at=os.path.join(harness, "RUN-CAPTURE.txt"))
+    else:
+        path = _capture_file(kind, sha, output)
+    _CAPTURES[kind] = path
+    return path
+
+
 def _arm(body, skip=(), relpath="a.md", kind="plain"):
-    """One document line, weighed against one world. `relpath` is under docs."""
+    """One document line, weighed against one world. `relpath` is under docs.
+
+    The world's own capture is installed for the length of the arm and taken
+    away again: an arm reads what ITS run printed, and never what this
+    process's run printed.
+    """
     harness = _world_harness(kind)
-    with tempfile.TemporaryDirectory() as d:
-        docs = os.path.join(d, "docs")
-        os.makedirs(docs)
-        _write(docs, relpath, body + "\n")
-        return scan(docs, harness, quiet=True, skip=skip)
+    capture = _world_capture(kind, harness)
+    was = list(_RUN_CAPTURE)
+    _RUN_CAPTURE[:] = [capture] if capture else []
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            docs = os.path.join(d, "docs")
+            os.makedirs(docs)
+            _write(docs, relpath, body + "\n")
+            return scan(docs, harness, quiet=True, skip=skip)
+    finally:
+        _RUN_CAPTURE[:] = was
 
 
 # ── R18-F1: the anchor, measured at three POSITIONS and three WORKING ──────
@@ -2492,21 +2891,47 @@ def _gitfile_world():
 def _gitfile_arm(skip=()):
     """The census and git disagree: a named refusal, from the harness seat."""
     subject, harness = _gitfile_world()
+    capture = _seat_capture("gitfile", subject)
     was = os.getcwd()
     with tempfile.TemporaryDirectory() as docs_at:
         docs = os.path.join(docs_at, "docs")
         os.makedirs(docs)
         _write(docs, "a.md", PROBE + "\n")
+        held = list(_RUN_CAPTURE)
+        _RUN_CAPTURE[:] = [capture]
         try:
             os.chdir(harness)
             return scan(docs, harness, quiet=True, skip=skip)
         finally:
             os.chdir(was)
+            _RUN_CAPTURE[:] = held
+
+
+_SEAT_CAPTURES = {}
+
+
+def _seat_capture(tag, root):
+    """The capture for a world whose harness sits inside a repository.
+
+    The head is the OUTER repository's, which is the head of the run that
+    produced the output. With the census deleted the gate resolves a PLANTED
+    repository's head instead, and the capture of this run does not carry it --
+    which is the difference `capture_names_test` reads by name.
+    """
+    if tag in _SEAT_CAPTURES:
+        return _SEAT_CAPTURES[tag]
+    try:
+        sha = _commit_of(root)
+    except Refusal:
+        sha = "0" * 40
+    _SEAT_CAPTURES[tag] = _capture_file(tag, sha, FAKE_RUN_OUTPUT)
+    return _SEAT_CAPTURES[tag]
 
 
 def _anchor_arm(where, cwd_kind, skip=()):
     """One anchor world, weighed from one working directory."""
     root, harness, sibling = _anchor_world(where)
+    capture = _seat_capture("anchor-%s" % where, root)
     seat = {
         "the repository root": root,
         "the harness directory": harness,
@@ -2517,11 +2942,14 @@ def _anchor_arm(where, cwd_kind, skip=()):
         docs = os.path.join(docs_at, "docs")
         os.makedirs(docs)
         _write(docs, "a.md", PROBE + "\n")
+        held = list(_RUN_CAPTURE)
+        _RUN_CAPTURE[:] = [capture]
         try:
             os.chdir(seat)
             return scan(docs, harness, quiet=True, skip=skip)
         finally:
             os.chdir(was)
+            _RUN_CAPTURE[:] = held
 
 
 def _arms_with(skip=()):
@@ -2552,8 +2980,52 @@ def _arms_with(skip=()):
         ("R16-F1 a gitignored .pyc is not evidence", "pyc", PROBE),
         ("R16-F1 the checker is not its own evidence", "stem", PROBE),
         ("R25-F1 a committed transcript emits nothing", "transcript", PROBE),
+        # `R26-S1`: the three shapes the previous rule admitted. Each is the
+        # deletion control of `only a run emits` as well as an arm of its own:
+        # with the guard deleted the tree's text decides again and all three
+        # pass.
+        ("R26-S1 a comment in an instrument emits nothing", "comment", PROBE),
+        ("R26-S1 a committed .py nothing runs emits nothing", "unrun", PROBE),
+        ("R26-S1 an unapplied mutation world emits nothing", "mutation", PROBE),
     ):
         arms.append((label, 1, (lambda k=kind, x=token: _arm(x, skip, "a.md", k))))
+    # The PASS direction of the same rule, which is what keeps it from being a
+    # net that reds everything: the run PRINTED the figure.
+    arms.append(
+        (
+            "R26-S1 what the run printed is emitted",
+            0,
+            (lambda: _arm(PROBE, skip, "a.md", "printed")),
+        )
+    )
+    # The other direction of the same rule, and a hole this round found in its
+    # own fix: a figure split across two PRINTED lines is not a figure the run
+    # printed.
+    arms.append(
+        (
+            "R26-F1 a figure split across two printed lines emits nothing",
+            1,
+            (lambda: _arm(PROBE, skip, "a.md", "split")),
+        )
+    )
+    # `the same spelling on both sides`: the run printed it PADDED, the
+    # document writes it bare, and they are one figure.
+    arms.append(
+        (
+            "R26-F1 a padded figure in the output is the same figure",
+            0,
+            (lambda: _arm(PROBE, skip, "a.md", "padded")),
+        )
+    )
+    # The capture's four refusals. `capture_names_test` reads each one BY NAME;
+    # these assert the exit, which is what a reader of the summary sees.
+    for label, kind in (
+        ("R26-S1 no capture is a refusal", "nocapture"),
+        ("R26-S1 a capture inside the subject is refused", "capture-inside"),
+        ("R26-S1 a capture of another head is refused", "capture-otherhead"),
+        ("R26-S1 an empty capture is refused", "capture-empty"),
+    ):
+        arms.append((label, 5, (lambda k=kind: _arm(PROBE, skip, "a.md", k))))
     # Fail-closed, measured: no commit, no haystack, no verdict.
     arms.append(
         (
@@ -4317,6 +4789,70 @@ def decision_test():
 # are listed too, with the description, so the gap is visible rather than
 # absent. An arm whose label names a finding with no entry here FAILS.
 PROVENANCE = {
+    # `R26-F1`, round 26's blocker: the challenger's report quotes its three
+    # fabricated figures and its own nine-line matcher battery. Each arm below
+    # records a DESCRIPTION rather than the verbatim line, for the reason the
+    # `R24-F1` entries give: an arm body's figures are PLANTED, and the
+    # round's own probe token would plant a token beside a real key.
+    "R26-F1 a space before the value": (
+        None, "a space between the `=` and the value, the round's own first row"),
+    "R26-F1 a space on both sides": (
+        None, "a space on each side of the `=`, the shape the three fabricated "
+              "figures were written in and the shape this pack's padded output prints"),
+    "R26-F1 a space before the equals": (
+        None, "a space between the key and the `=`"),
+    "R26-F1 a tab before the value": (
+        None, "a tab between the `=` and the value, category `Cc`"),
+    "R26-F1 a no-break space": (
+        None, "U+00A0 between the `=` and the value, which NFKC folds to a plain "
+              "space -- the composition the round reported"),
+    "R26-F1 a narrow no-break space": (
+        None, "U+202F between the `=` and the value, folded the same way"),
+    "R26-F1 an &nbsp; entity": (
+        None, "the `&nbsp;` character reference before the value, resolved by step 0 "
+              "and then folded by NFKC into the spelling the matcher could not see"),
+    "R26-F1 the padded shape the pack prints": (
+        None, "two padded pairs on one line, the shape the `--surface` inventory "
+              "printed until this round"),
+    "R26-F1 a figure split across two printed lines emits nothing": (
+        None, "the hole this round found inside its own fix: the run printed the key "
+              "and its `=` at the end of one line and the value at the start of the "
+              "next, so deleting whitespace beside the `=` would JOIN two printed "
+              "lines into a figure neither of them carries"),
+    "R26-F1 a padded figure in the output is the same figure": (
+        None, "the pass direction: the run PRINTED the figure padded and the document "
+              "writes it bare, which is one figure under `the same spelling on both "
+              "sides`"),
+    "R14-S1 a zero-width space inside the value": (
+        None, "a format character inside the value rather than beside the `=`"),
+    "R14-S1 a zero-width space inside the key": (
+        None, "a format character inside the key"),
+    "R14-S1 a zero-width space after the sign": (
+        None, "a format character between the sign and the digits, which is the only "
+              "one of the three that leaves no shorter figure for the positive scan "
+              "to find"),
+    # `R26-S1` / `C26-F1`: the second challenger's three worlds, and the
+    # capture's four refusals.
+    "R26-S1 a comment in an instrument emits nothing": (
+        None, "a `#` comment carrying the figure, committed in an instrument the run "
+              "executes -- the first of the three shapes the suffix rule admitted"),
+    "R26-S1 a committed .py nothing runs emits nothing": (
+        None, "a committed `.py` that nothing imports or runs, carrying the figure"),
+    "R26-S1 an unapplied mutation world emits nothing": (
+        None, "a `--` comment carrying the figure in a committed `.sql` world"),
+    "R26-S1 what the run printed is emitted": (
+        None, "the pass direction of the same rule: the figure is in what the run "
+              "printed and in none of the world's files"),
+    "R26-S1 no capture is a refusal": (
+        None, "the gate asked for a verdict with no run to read"),
+    "R26-S1 a capture inside the subject is refused": (
+        None, "a capture written INSIDE the repository that holds the subject, which "
+              "is round 25's committed recording reached by another route"),
+    "R26-S1 a capture of another head is refused": (
+        None, "a capture whose `RUN_HEAD` is another commit"),
+    "R26-S1 an empty capture is refused": (
+        None, "a capture with nothing in it, which would otherwise red every figure "
+              "for the wrong reason"),
     # `R24-F1`, and the coordinator's `F2` beside it: the round reported a
     # DEFECT over shapes -- "the unit is still derived subtractively, and both
     # lists are whitelists" -- and demonstrated it with five fenced lines, then
@@ -4646,8 +5182,12 @@ def provenance_test():
 # round running.
 #
 # WHAT IS ENROLLED, named exactly, because a net is read as covering the
-# variants of what it names: the three figures THIS instrument produces -- the
-# guard matrix, the arm counts and the false-positive surface. Figures from
+# variants of what it names: the figures THIS instrument produces -- the guard
+# matrix, the arm counts, the false-positive surface, the price of the last
+# decoration removal, and since `R26-F2` the pack's own counts (the files the
+# commit holds under the harness, how many of them are recordings, the guard
+# count and the `skip` keys the committed source reads), which were the two
+# figures round 26 measured false in this pack's prose. Figures from
 # the other instruments (`121 cases`, `53 cases`, the race counts, the digests)
 # are NOT enrolled here; they are pinned by the committed run evidence and by
 # the fenced-figure arm itself, and enrolling them means giving each of those
@@ -4655,7 +5195,14 @@ def provenance_test():
 # file.
 BEGIN = "<!-- BEGIN GENERATED %s: %s -->"
 END = "<!-- END GENERATED %s -->"
-CMD = "python3 -I prep/phase11/harness/check_fenced_figures.py --emit %s"
+# `C26-S1` (the interpreter by absolute path) and `R26-S1` (a generator reads
+# the haystack, so it needs the run's capture): the command a reader is given
+# is the command that reproduces the block. `$P11_RUN_CAPTURE` is the variable
+# `rebuild_and_prove.sh` exports for the run it is in.
+CMD = (
+    "/usr/bin/python3 -I prep/phase11/harness/check_fenced_figures.py --emit %s "
+    "--run-capture $P11_RUN_CAPTURE"
+)
 
 
 # `R17-S2`: the emitters now produce (SUBJECT, CLAIM) ROWS, and the block is
@@ -4763,6 +5310,64 @@ def claims_backtick_cost():
     return list(_backtick_rows())
 
 
+def _pack_count_rows():
+    """The counts this pack's own prose keeps getting wrong, computed.
+
+    `R26-F2`: two figures this pack WROTE were false at `bc54e4c`, and both
+    were figures about the instrument itself -- the recordings in the old
+    haystack given as "twenty-seven" in three documents where `git ls-tree`
+    says forty-four, and the guard binding given as "23 and 23" where the
+    selftest prints 22 and 22. Neither was catchable by anything here: one was
+    spelled in words, the other sat in a table row outside a block, which is
+    the disclosed `figure spelled out in words` residual doing what a residual
+    does.
+
+    So they are GENERATED, from the same reads the instrument makes, and the
+    prose that used to carry them points here instead. Spelled in two columns
+    with no `=`, like every block this file writes since `R26-F1`, so the
+    block itself asserts no figure.
+    """
+    if "counts" not in _ROWS:
+        harness = os.path.join(PHASE_DIR, "harness")
+        top = _subject_top(harness)
+        sha = _commit_of(top)
+        rel = os.path.relpath(os.path.realpath(harness), top)
+        names = [os.path.basename(n) for n in _tracked_paths(top, sha, rel)]
+        recordings = [n for n in names if n.startswith("RUN-EVIDENCE")]
+        _msgs, text = committed_text(os.path.basename(os.path.realpath(__file__)))
+        read = set()
+        if text is not None:
+            for node in ast.walk(ast.parse(text)):
+                key = _guard_test(node) if isinstance(node, ast.Compare) else None
+                if key is not None:
+                    read.add(key)
+        # The guard COUNT is not a row here: `guard-matrix` already prints it
+        # as its own summary, and two generated blocks claiming one figure is
+        # how `--check-blocks` reports a restatement -- correctly, since a
+        # figure with two generators has two places to drift. What this block
+        # adds is the `skip` keys the committed source reads, which is the
+        # other half of the binding round 26 measured false.
+        rows = [
+            ("files the commit holds under the harness", len(names)),
+            ("of them recordings of past runs", len(recordings)),
+            ("skip keys the committed source reads", len(read)),
+            ("arms the selftest runs", len(_arms_with())),
+        ]
+        _ROWS["counts"] = [(label, str(n)) for label, n in rows]
+    return _ROWS["counts"]
+
+
+def emit_pack_counts():
+    lines = ["what this pack counts, read from the commit and from this file:", ""]
+    for label, n in _pack_count_rows():
+        lines.append("%-44s %s" % (label, n))
+    return lines
+
+
+def claims_pack_counts():
+    return list(_pack_count_rows())
+
+
 def emit_guard_matrix():
     lines = ["each guard deleted on its own, and the arms that stop answering:", ""]
     for guard, flipped in _guard_rows():
@@ -4811,20 +5416,33 @@ def claims_arm_counts():
 
 def emit_surface():
     # `R23-F1`'s cost, and the one place it had to be paid. A candidate is a
-    # TOKEN since round 23, so this INVENTORY of probe shapes -- nine of whose
+    # TOKEN since round 23, so this INVENTORY of probe shapes -- most of whose
     # rows are figure-shaped by construction, because that is what it measures
-    # the price of -- became nine reports of figures no instrument emits, and
-    # the scan red on them. The probes are not reports: each is written here
-    # with SPACES around the `=`, which the matcher's own key class refuses, so
-    # the inventory says what shape was measured without being a set of claims.
-    # The verdict beside each row is the gate's answer on the BARE token.
+    # the price of -- became reports of figures no instrument emits, and the
+    # scan red on them. The probes are not reports, and this block must say
+    # what shape was measured without asserting it.
     #
-    # Not an exemption and not a list: nothing is excused anywhere, this block
-    # simply stops asserting figures. A fabricated figure written into this
-    # block still reds, because `--check-blocks` compares the block with a
-    # fresh run of this generator.
+    # `R26-F1`. Until this round it did that by writing each shape with SPACES
+    # around the `=`, "which the matcher's own key class refuses" -- a
+    # generator that depended on the hole round 26 drove three fabricated
+    # figures through, and the one spelling a reader of this pack is most
+    # habituated to. With the whitespace class closed that device is gone and
+    # nothing takes its place: the KEY and the VALUE are printed in two
+    # columns and no `=` is written anywhere in the block, so there is no
+    # figure here to assert, to exempt or to hide.
+    #
+    # Not an exemption and not a list: nothing is excused anywhere. A
+    # fabricated figure written into this block still reds, because
+    # `--check-blocks` compares the block with a fresh run of this generator.
     rows = _surface_rows()
-    lines = ["%-22s %s" % (shape.replace("=", " = ", 1), verdict) for shape, verdict in rows]
+    lines = [
+        "%-22s %-10s %s" % ("key", "value", "the gate's answer on `key=value`"),
+        "",
+    ]
+    lines += [
+        "%-22s %-10s %s" % (shape.partition("=")[0], shape.partition("=")[2], verdict)
+        for shape, verdict in rows
+    ]
     red = len([1 for _shape, verdict in rows if verdict == "REDS THE GATE"])
     lines.append("")
     lines.append(
@@ -4863,6 +5481,7 @@ GENERATORS = {
     "arm-counts": (emit_arm_counts, claims_arm_counts),
     "surface": (emit_surface, claims_surface),
     "backtick-cost": (emit_backtick_cost, claims_backtick_cost),
+    "pack-counts": (emit_pack_counts, claims_pack_counts),
 }
 
 _BODIES = {}
@@ -5862,6 +6481,85 @@ def frame_gate_test():
     return good
 
 
+def capture_names_test():
+    """`R26-S6`: four capture refusals and three older ones, read BY NAME.
+
+    An exit code of 5 says a run stopped; it does not say which law stopped it,
+    and this phase has twice found a world that was fail-closed by another
+    tool's error message rather than by the rule it was credited to. So each
+    refusal here is printed with its own name and asserted on the name.
+
+    The three at the end are the ones the coordinator named: the generator's
+    frame gate, the module-attribute pin, and `SELF-READ-DIR-ABSENT`, which
+    `R25-S3` declared UNMEASURED-at-runtime. The last is a UNIT arm and is
+    written as one rather than dressed as a world: `_untracked` is called with
+    a repository that holds no `prep/phase11`, which is the state the refusal
+    is about, and the name it returns is read.
+    """
+    ok = True
+    for kind, want in (
+        ("nocapture", "RUN-CAPTURE-ABSENT"),
+        ("capture-inside", "RUN-CAPTURE-INSIDE-THE-SUBJECT"),
+        ("capture-otherhead", "RUN-CAPTURE-NOT-THIS-HEAD"),
+        ("capture-empty", "RUN-CAPTURE-EMPTY"),
+    ):
+        harness = _world_harness(kind)
+        capture = _world_capture(kind, harness)
+        held = list(_RUN_CAPTURE)
+        _RUN_CAPTURE[:] = [capture] if capture else []
+        try:
+            haystack(harness)
+            name = "NO REFUSAL"
+        except Refusal as why:
+            name = str(why).split(":")[0]
+        finally:
+            _RUN_CAPTURE[:] = held
+        good = name == want
+        ok = ok and good
+        print(
+            "  capture R26-S1 %-18s refuses as %-31s (want %s) -> %s"
+            % (kind, name, want, "as required" if good else "**SELFTEST FAILED**")
+        )
+    # The generator's frame gate, by name and not by rc.
+    saved = list(_FRAME_PARSED)
+    try:
+        _FRAME_PARSED[:] = [("a refusal planted for this arm only",)]
+        why = _generation_refused()
+    finally:
+        _FRAME_PARSED[:] = saved
+    name = (why or "NO REFUSAL").split(":")[0]
+    good = name == "GENERATION-FRAME-INADMISSIBLE"
+    ok = ok and good
+    print(
+        "  capture R26-S6 the generator refuses as %-31s (want "
+        "GENERATION-FRAME-INADMISSIBLE) -> %s"
+        % (name, "as required" if good else "**SELFTEST FAILED**")
+    )
+    # `SELF-READ-DIR-ABSENT`, measured at last: a repository that holds no
+    # `prep/phase11` at all.
+    d = tempfile.mkdtemp(prefix="p11-readdir-")
+    atexit.register(shutil.rmtree, d, True)
+    os.makedirs(os.path.join(d, "infrastructure", "database", "migrations"))
+    _write(d, "keep.txt", "a repository with no phase directory\n")
+    _git(d, ["init", "-q"])
+    _git(d, ["add", "-A", "--", "."])
+    _git(
+        d,
+        ["-c", "user.name=phase11", "-c", "user.email=phase11@example.invalid",
+         "commit", "-q", "--no-gpg-sign", "-m", "read-dir world"],
+    )
+    msgs = _untracked(d)
+    name = (msgs[0] if msgs else "NO REFUSAL").split(":")[0]
+    good = name == "SELF-READ-DIR-ABSENT"
+    ok = ok and good
+    print(
+        "  capture R25-S3 an absent read directory refuses as %-24s (want "
+        "SELF-READ-DIR-ABSENT) -> %s"
+        % (name, "as required" if good else "**SELFTEST FAILED**")
+    )
+    return ok
+
+
 def anchor_names_test():
     """`R19-S2`, read the way a refusal has to be read: by NAME.
 
@@ -5878,6 +6576,8 @@ def anchor_names_test():
         for label, skip in (("with the anchor", ()), ("with the anchor deleted",
                             ("no repository redirects the subject",))):
             root, harness, sibling = _anchor_world("bare")
+            held = list(_RUN_CAPTURE)
+            _RUN_CAPTURE[:] = [_seat_capture("anchor-bare", root)]
             was = os.getcwd()
             try:
                 os.chdir({"the repository root": root,
@@ -5890,6 +6590,7 @@ def anchor_names_test():
                     names[label] = str(why).split(":")[0]
             finally:
                 os.chdir(was)
+                _RUN_CAPTURE[:] = held
         good = names["with the anchor"] == "GIT-BARE-REPOSITORY"
         ok = ok and good
         print(
@@ -6769,6 +7470,7 @@ def selftest():
         % (emit_arm_counts()[0], "all as required" if ok else "FAILURES ABOVE")
     )
     ok = identity_arms_test() and ok
+    ok = capture_names_test() and ok
     ok = guard_set_test() and ok
     ok = frame_gate_test() and ok
     ok = anchor_names_test() and ok
@@ -6864,6 +7566,15 @@ VERDICT_FLAGS = ("--selftest", "--check-blocks", "--surface")
 
 
 def _main(args):
+    if "--run-capture" in args:
+        at = args.index("--run-capture") + 1
+        if at >= len(args):
+            sys.stderr.write(
+                "check_fenced_figures.py REFUSED: RUN-CAPTURE-ABSENT: `--run-capture` "
+                "was given with no path.\n"
+            )
+            return 5
+        _RUN_CAPTURE[:] = [args[at]]
     gen = [a for a in args if a in GENERATION_FLAGS]
     verdict = [a for a in args if a in VERDICT_FLAGS]
     if gen and verdict:

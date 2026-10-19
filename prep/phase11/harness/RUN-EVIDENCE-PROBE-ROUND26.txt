@@ -1,0 +1,110 @@
+P11 — ROUND 26'S OWN SHAPES, DRIVEN END TO END ON COMMITTED CLONES
+==================================================================
+
+WHAT THIS IS. Eleven worlds, each a throwaway clone of this branch checked out
+at
+
+    d7dcb536670d3cc4ed3ba0ca87d9aeff641b863a
+
+with one or two lines APPENDED and COMMITTED, so every row is measured on a
+CLEAN tree by the gate run from inside that clone. `work tree clean: 0 entries`
+is printed for each. The subject commit is this commit's tree minus this file,
+`RUN-EVIDENCE-AUTHORITATIVE-ROUND26.txt`, the regenerated figures of the two
+blocks that counting these two files moves, and the lines of §7.27 naming them.
+
+THE CAPTURE EACH WORLD IS GIVEN is the REAL authoritative run's output with its
+`RUN_HEAD` line retargeted to that world's own commit — which is exactly what
+someone who can write a capture would do, and the point of every red row is
+that retargeting a capture does not put a figure INTO it. The real capture is
+1327 lines, sha256
+9cdc73eb6e29803443ecb120fda8088822721d70befe14dda3467165e0fdc8b7.
+
+WHAT EACH ROW MEASURES. Worlds 1–7 are `R26-F1`: the same fabricated figure
+written bare, then with a space on each side of the `=`, a space before the
+value, a tab, U+00A0, U+202F, and the `&nbsp;` character reference. Worlds 8–10
+are `R26-S1` / `C26-F1`: the figure plus a `#` comment in `proofs.py` which the
+run DOES execute, plus a committed `.py` nothing imports, plus a `--` comment
+in `world.sql` which the run DOES apply — the three shapes the old suffix
+whitelist admitted. World 11 is the PASS direction: a figure the run genuinely
+PRINTED, written padded in the document, which is one figure under `the same
+spelling on both sides`.
+
+HOW TO READ IT. Ten reds, each naming the WRITTEN spelling beside the figure it
+normalises to, and one pass. `1 not emitted` and `scan rc=1` is the gate
+refusing; `0 not emitted` and `rc=0` is the gate accepting a figure the run
+printed. Before this round every one of worlds 2–10 was GREEN at
+`EXIT_SCRIPT 0` with the fabricated figure in a document.
+
+P11 - ROUND 26'S OWN SHAPES, DRIVEN ON COMMITTED CLONES
+=======================================================
+
+subject commit : d7dcb536670d3cc4ed3ba0ca87d9aeff641b863a
+real capture   : /var/tmp/p26cap7.txt (1327 lines, sha256 9cdc73eb6e298034)
+each world: one or two lines APPENDED and COMMITTED, clean tree, gate run from the clone.
+
+--- world 1: the control: a fabricated figure, bare spelling
+    committed 11c82cfb194b26a1dadc7300a1c420cfe11ae15e, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the output this run printed (cap1.txt, 1328 lines, sha256 cd428791c16c of the text weighed, RUN_HEAD 11c82cfb194b), 17 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT EMITTED: P11-OPEN-DECISIONS.md:64 reports `probe26_bare=8841`, and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+--- world 2: R26-F1 a space on each side of the equals
+    committed e0ac5184174fd6a8c30616fa733feb4ff848dd7e, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the output this run printed (cap2.txt, 1328 lines, sha256 590b66340fb4 of the text weighed, RUN_HEAD e0ac5184174f), 17 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT EMITTED: P11-OPEN-DECISIONS.md:64 reports `probe26_sp=8841` (written as `probe26_sp = 8841`), and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+--- world 3: R26-F1 a space before the value only
+    committed 07cef7cb4a87299c512911e4b5af6deef93985d0, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the output this run printed (cap3.txt, 1328 lines, sha256 a680efe3c18a of the text weighed, RUN_HEAD 07cef7cb4a87), 17 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT EMITTED: P11-OPEN-DECISIONS.md:64 reports `probe26_sv=8841` (written as `probe26_sv= 8841`), and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+--- world 4: R26-F1 a tab before the value
+    committed ef2840608589f3bc14582146bcedafd71ec88abc, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the output this run printed (cap4.txt, 1328 lines, sha256 f51f94e838f7 of the text weighed, RUN_HEAD ef2840608589), 17 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT EMITTED: P11-OPEN-DECISIONS.md:64 reports `probe26_tb=8841` (written as `probe26_tb=	8841`), and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+--- world 5: R26-F1 a no-break space before the value
+    committed 1621f082ad8338dbb229ced79df57ed0cfe9d12e, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the output this run printed (cap5.txt, 1328 lines, sha256 c6c1789291ce of the text weighed, RUN_HEAD 1621f082ad83), 17 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT EMITTED: P11-OPEN-DECISIONS.md:64 reports `probe26_nb=8841` (written as `probe26_nb= 8841`), and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+--- world 6: R26-F1 a narrow no-break space before the value
+    committed 10e335021a53e16896f0d77905b52c30ef2bbbd6, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the output this run printed (cap6.txt, 1328 lines, sha256 ba84f7176b16 of the text weighed, RUN_HEAD 10e335021a53), 17 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT EMITTED: P11-OPEN-DECISIONS.md:64 reports `probe26_nn=8841` (written as `probe26_nn= 8841`), and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+--- world 7: R26-F1 an &nbsp; entity before the value
+    committed 58716a3196fc418e4a5937f1da21f2de08579d7c, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the output this run printed (cap7.txt, 1328 lines, sha256 4979103adff3 of the text weighed, RUN_HEAD 58716a3196fc), 17 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT EMITTED: P11-OPEN-DECISIONS.md:64 reports `probe26_en=8841` (written as `probe26_en=&nbsp;8841`), and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+--- world 8: R26-S1 the figure plus a # comment in proofs.py, which the run executes
+    committed a5cd73f3ac378b973a2df17a9f7d82e514cfcef6, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the output this run printed (cap8.txt, 1328 lines, sha256 9739d61d6963 of the text weighed, RUN_HEAD a5cd73f3ac37), 17 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT EMITTED: P11-OPEN-DECISIONS.md:64 reports `probe26_cm=8842`, and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+--- world 9: R26-S1 the figure plus a committed .py nothing imports or runs
+    committed ffeecb2c7fdd6755c2fe3507eb8610043f78d744, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the output this run printed (cap9.txt, 1328 lines, sha256 31fd8ad7b88b of the text weighed, RUN_HEAD ffeecb2c7fdd), 17 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT EMITTED: P11-OPEN-DECISIONS.md:64 reports `probe26_py=8843`, and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+--- world 10: R26-S1 the figure plus a -- comment in world.sql, which the run DOES apply
+    committed 4ac649ad72cc0932966e7ee98a8fb55364b62957, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the output this run printed (cap10.txt, 1328 lines, sha256 b74e887337f3 of the text weighed, RUN_HEAD 4ac649ad72cc), 17 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT EMITTED: P11-OPEN-DECISIONS.md:64 reports `probe26_sq=8844`, and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+--- world 11: the PASS direction: a figure the run DID print, padded in the document
+    committed 573beb271f41851d3f24de008df7dba338ca4c1e, work tree clean: 0 entries
+    scan rc=0
+      quoted figures: 9 documents, haystack from the output this run printed (cap11.txt, 1328 lines, sha256 72b2cd28873b of the text weighed, RUN_HEAD 573beb271f41), 17 candidate figures, 0 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+DONE

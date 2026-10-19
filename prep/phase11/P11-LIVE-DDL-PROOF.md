@@ -880,7 +880,7 @@ Measured at `0db9450` on the world's TSHIRT, which registers two axes and holds
 one committed cell:
 
 ```
-INSERT INTO product_variants (… is_base = false, attributes='{}') -> rc=0 (NOT REFUSED)
+INSERT INTO product_variants (… is_base …, attributes='{}') -> rc=0 (NOT REFUSED)
 non-base '{}' variants on this MATRIX product: 1
 its own stock key: 5.0000
 ```
@@ -925,7 +925,7 @@ archived (the pack permits it: 2 archived, 0 live), then the documented next
 step:
 
 ```
-INSERT INTO product_matrix_axes (… 'material', 3) -> rc=3 catalog.matrix_axis_set_frozen
+INSERT INTO product_matrix_axes (… 'material', 3) -> rc 3, catalog.matrix_axis_set_frozen
 ```
 
 The read was `WHERE NOT v.is_base` with no `status` filter, so an archived
@@ -1242,7 +1242,7 @@ is not a spelling but a measured cross-tenant hole: `(business_id =
 business_id)` installed as `tenant_membership`'s USING and WITH CHECK — **the
 policy name unchanged, so the set pin beside it passes** — made a cross-tenant
 read return 6 rows instead of 0 and a cross-tenant INSERT return rc=0 instead of
-rc=3. **Form 4** is added: `(col = col)` and `NOT (col <> col)` over a column the
+rc 3. **Form 4** is added: `(col = col)` and `NOT (col <> col)` over a column the
 catalogue marks `attnotnull`, and `col IS NOT DISTINCT FROM col` whatever the
 nullability, because that one is true of the NULL rows too. Both directions are
 proved — over a nullable column the self-comparison is **not** called a

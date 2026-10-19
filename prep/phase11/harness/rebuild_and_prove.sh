@@ -20,6 +20,44 @@
 # rather than producing an off-target green.
 # ─────────────────────────────────────────────────────────────────────────────
 set -o pipefail
+
+# `C26-S1`, the coordinator's P2: this file pinned `git` absolutely and scrubbed
+# its whole environment, and then asked `PATH` for `python3` at seventeen sites
+# -- every verdict in the pack. A `python3` placed first on `PATH` that honours
+# `-I` by ignoring it forges each gate's baseline line byte for byte, and `-I`
+# cannot help: the flag is handed to the planted binary, and the
+# `sys.flags.isolated` refusal lives inside the file that binary never runs.
+# The regress ends OUTSIDE the file under attack, which for an interpreter means
+# an absolute path, resolved once here and printed, exactly as `gitq` does one
+# function below.
+PY=/usr/bin/python3
+if [ ! -x "$PY" ]; then
+  echo "PYTHON-ABSENT: $PY is not an executable file, so every gate below would be run"
+  echo "by whatever \`PATH\` resolves \`python3\` to. That is the one thing this pin is"
+  echo "for. Refusing to run."
+  exit 5
+fi
+
+# `R26-S1`, and the whole of what makes a figure legitimate here now: THE
+# OUTPUT OF THIS RUN. The haystack used to be the text of the files under
+# `prep/phase11/harness/`, and the second challenger of round 26 drove a
+# fabricated figure through it with a `#` comment and with a committed `.py`
+# that nothing runs -- source text is alterable text. So this script captures
+# its OWN output to a file outside the work tree and hands the path to the
+# figure gate, which runs at the END of the run rather than at step 0c,
+# because a capture is only worth what has been printed into it.
+#
+# The capture is made by re-entering this script once with its output through
+# `tee`. `pipefail` is set above and the exit status taken is the script's own,
+# not `tee`'s.
+if [ -z "${P11_RUN_CAPTURE:-}" ]; then
+  P11_RUN_CAPTURE="$(mktemp -t p11-run-capture-XXXXXXXX)" || exit 5
+  export P11_RUN_CAPTURE
+  bash "$0" "$@" 2>&1 | tee -a "$P11_RUN_CAPTURE"
+  RC_OUTER=${PIPESTATUS[0]}
+  exit $RC_OUTER
+fi
+
 REPO=${P11_REPO:-/home/user/daftar}
 S=${P11_SCRATCH:-/var/tmp/p11u}
 PORT=${P11_PORT:-55512}
@@ -50,7 +88,7 @@ gitq () {
 # bytes on disk; `status` is kept beside it only to LIST entries for a human,
 # never to decide. The reader is a deciding file whose own bytes are compared
 # at step 0c-0, and it refuses itself if they moved.
-TREE_STATE="$(python3 -I $H/check_harness_bytes.py --tree-state 2>/var/tmp/p11-treestate.$$ || true)"
+TREE_STATE="$($PY -I $H/check_harness_bytes.py --tree-state 2>/var/tmp/p11-treestate.$$ || true)"
 TREE_WHY="$(cat /var/tmp/p11-treestate.$$ 2>/dev/null; rm -f /var/tmp/p11-treestate.$$)"
 # THE COORDINATOR'S `F5` on `50a45a0`. This used to be
 # `[ "$TREE_STATE" = "no" ] || DIRTY="$TREE_STATE"`, which reads an EMPTY
@@ -165,6 +203,13 @@ echo "HOST_KERNEL       : $(uname -sr)"
 echo "SOURCE_REPO       : $(gitq config --get remote.origin.url)"
 echo "SOURCE_BRANCH     : $(gitq rev-parse --abbrev-ref HEAD)"
 echo "SOURCE_SHA        : $(gitq rev-parse HEAD)"
+# The line the figure gate reads: a capture is weighed against ONE commit, and
+# a capture that does not carry this head is refused by name
+# (`RUN-CAPTURE-NOT-THIS-HEAD`). It is not a proof of provenance and is not
+# written as one -- see `R26-S5` in the gate's own header.
+echo "RUN_HEAD          : $(gitq rev-parse HEAD)"
+echo "RUN_CAPTURE       : $P11_RUN_CAPTURE   (this run's own output, outside the work tree: the figure gate's haystack)"
+echo "PYTHON            : $PY   ($($PY -I -c 'import sys;print(sys.version.split()[0], "isolated" if sys.flags.isolated else "NOT ISOLATED")'))"
 echo "SOURCE_TREE_DIRTY : $TREE_STATE   (measured against the commit's own blobs, path by path, from the bytes on disk)"
 # `R23-F2`, the coordinator's measurement: this line used to read the migrations
 # TREE OBJECT out of HEAD, so it printed the same digest whether or not the files
@@ -197,7 +242,7 @@ fi
 # prints what it MEASURED, from the commit, over the documents the commit
 # actually lists.
 echo "DOCUMENT DIGESTS, from the commit (no table pins these; this is the authority):"
-python3 -I $H/check_harness_bytes.py --doc-digests | sed 's/^/  /'
+$PY -I $H/check_harness_bytes.py --doc-digests | sed 's/^/  /'
 echo "MIGRATIONS_TREE   : $(gitq rev-parse HEAD:infrastructure/database/migrations)  (the tree object HEAD holds, for comparison with a clean checkout)"
 echo "MANIFEST_SHA256   : $(sha256sum $REPO/infrastructure/database/MIGRATION_MANIFEST.json | cut -d' ' -f1)"
 echo "BOOTSTRAP_SHA256  : $(sha256sum $REPO/infrastructure/database/bootstrap.sql | cut -d' ' -f1)"
@@ -215,21 +260,24 @@ echo "NODE_VERSION      : $(node -v) (repository engines: $(node -e "process.std
 echo "FIXTURES          : world.sql (Pack A)$(test -f $H/world_b.sql && echo ', world_b.sql (Pack B, with its definer fixture)'). Within the packs present, no fixture and no case is skipped; a pack that is not on the branch is named as skipped above and below."
 echo
 
-# ── 0c. the documents' quoted figures ───────────────────────────────────────
+# ── 0c. the deciding files against the commit ───────────────────────────────
+# `R26-S1`: this step was "the documents' quoted figures" until this round, and
+# the scan, `--check-blocks` and the gate's own selftest have moved to step 7b,
+# because their haystack is now what this run prints and at this point it has
+# printed the identity block and nothing else. What stays here is the one check
+# that must precede everything which reads the harness: the deciding files
+# against the commit's own blobs.
 # Round 10 rejected a head over a figure shown as output that no instrument
 # emitted. Round 11 made the honest objection that the arm added in answer was
 # a rule in a document with nothing enforcing it. This is the enforcement.
 #
-# WHERE IT RUNS, stated exactly, because the first version of this comment got
-# it wrong and said "before a cluster exists": steps 0 and 0b above create and
-# start the scratch cluster, so this step runs AFTER the cluster is up and
-# BEFORE the database is dropped and recreated, before the roles are
-# bootstrapped and before any migration or pack is applied. Nothing under test
-# has been touched when it refuses. It is numbered 0c rather than 0 because 0
-# and 0b were already taken -- the first version collided with them.
-#
-# Its own red proof runs before it, as the renderer's selftest does.
-echo "=== 0c. the documents' quoted figures (every key=value shown as output must be emitted by something) ==="
+# WHERE IT RUNS, stated exactly: steps 0 and 0b above create and start the
+# scratch cluster, so this step runs AFTER the cluster is up and BEFORE the
+# database is dropped and recreated, before the roles are bootstrapped and
+# before any migration or pack is applied. Nothing under test has been touched
+# when it refuses. It is numbered 0c rather than 0 because 0 and 0b were
+# already taken -- the first version collided with them.
+echo "=== 0c. the deciding files, against the commit's own blobs (the figure gate itself runs at step 7b) ==="
 # 0c-0. THE DECIDING FILES AGAINST THE COMMIT, before anything that reads them.
 # The coordinator's `C21-F1` left this instrument through a DEFAULT ARGUMENT --
 # `def scan(..., skip=("hyphen in the key",))` switches a named guard off for
@@ -247,7 +295,7 @@ echo "=== 0c. the documents' quoted figures (every key=value shown as output mus
 # tree is refused by name by this script above, by the scan and by this reader,
 # so no admissible transcript comes out of such a tree.
 echo "--- 0c-0. the deciding files against the commit ---"
-python3 -I $H/check_harness_bytes.py
+$PY -I $H/check_harness_bytes.py
 RC_HARNESS_BYTES=$?
 if [ $RC_HARNESS_BYTES -ne 0 ]; then
   echo "A deciding file on disk is not the file the commit holds, a deciding file is "
@@ -263,45 +311,13 @@ if [ $RC_HARNESS_BYTES -ne 0 ]; then
   echo "EXIT_HARNESS_BYTES: $RC_HARNESS_BYTES  (refused at step 0c-0; nothing below ran)"
   exit $RC_HARNESS_BYTES
 fi
-python3 -I $H/check_fenced_figures.py --selftest || { echo "the fenced-figure check cannot fail; refusing to trust it"; exit 1; }
-python3 -I $H/check_fenced_figures.py
-RC_FIGURES=$?
-if [ $RC_FIGURES -ne 0 ]; then
-  echo "A document of this phase shows a figure nothing emits (exit 1), the check "
-  echo "matched nothing at all (exit 2), or it REFUSED because the haystack could not "
-  echo "be derived from ONE commit -- git absent, no repository above this tree, MORE "
-  echo "THAN ONE repository containing it (which the gate refuses to choose between "
-  echo "rather than redirect the whole derivation, whoever put the second one there: "
-  echo "run this in a workspace that is not nested inside another repository), a BARE "
-  echo "repository an ancestor walk cannot see, a disagreement with git\'s own "
-  echo "discovery, or a DECISION FRAME the closed sub-language does not admit -- which "
-  echo "now includes a listed module ATTRIBUTE rebound since this file imported it, a "
-  echo "frame function whose source is not the code that runs, and a CONSTANT the "
-  echo "frame function whose source is not the code that runs, or a DECIDING FILE whose "
-  echo "bytes are not the bytes the commit holds -- there is no pinned digest to move "
-  echo "any more, and no refusal here tells its reader what would silence it (exit 5). "
-  echo "In every case this run would publish a number with no instrument behind it, or "
-  echo "would have checked it against the working directory rather than against the "
-  echo "commit. Refusing to run."
-  exit $RC_FIGURES
-fi
-# And the figures THIS instrument produces are generated into the documents,
-# never typed: two rounds in a row were rejected over a number written beside
-# the command that prints it. A block that differs from a fresh run, or one of
-# their sentences written outside a block, stops the run here.
-python3 -I $H/check_fenced_figures.py --check-blocks
-RC_BLOCKS=$?
-if [ $RC_BLOCKS -ne 0 ]; then
-  echo "A generated figure block in a document of this phase disagrees with a fresh "
-  echo "run of its generator -- which includes a clause outside a block that RESTATES "
-  echo "what a generator prints, or CONTRADICTS any one of its rows, in any wording "
-  echo "(exit 1) -- or nothing is enrolled at "
-  echo "all (exit 2), or the haystack could not be derived from a commit, or the "
-  echo "decision frame is not one the rules admit (exit 5). Run "
-  echo "\`python3 -I $H/check_fenced_figures.py --regenerate\` and commit what it "
-  echo "prints. Refusing to run."
-  exit $RC_BLOCKS
-fi
+# `R26-S1`: the figure scan and the block check used to stand HERE, at step 0c,
+# and they cannot any more. Their haystack is what this run printed, so they
+# run at step 7b, after the proofs and the races, when there is a run to read.
+# The selftest stays here: it builds its own worlds and reads nothing of this
+# run.
+RC_FIGURES=0
+RC_BLOCKS=0
 echo
 
 # ── 1. the database ─────────────────────────────────────────────────────────
@@ -326,12 +342,12 @@ echo "=== 2. bootstrap.sql (the runtime roles + extensions), as the deployment a
 # unmatched placeholder through unrendered — and the check now has a case
 # that fails it, run here BEFORE anything is rendered or applied.
 echo "--- 2a. the renderer's own check, proved red before it is trusted ---"
-python3 -I $H/render_bootstrap.py --selftest || { echo "the bootstrap renderer's completeness check is inert; refusing to run"; exit 1; }
-python3 -I $H/render_bootstrap.py "$REPO/infrastructure/database/bootstrap.sql" "$S/sql/bootstrap.rendered.sql" || exit 1
+$PY -I $H/render_bootstrap.py --selftest || { echo "the bootstrap renderer's completeness check is inert; refusing to run"; exit 1; }
+$PY -I $H/render_bootstrap.py "$REPO/infrastructure/database/bootstrap.sql" "$S/sql/bootstrap.rendered.sql" || exit 1
 chmod 644 "$S/sql/bootstrap.rendered.sql"
 $Q "$PSQL_P -U postgres -d daftar -X -q -v ON_ERROR_STOP=1 -f $S/sql/bootstrap.rendered.sql" || exit 1
 echo "=== 3. migrations 0000..0086 as daftar_migrator (NOT superuser) ==="
-python3 -I $H/run_migrations.py $REPO/infrastructure/database/migrations daftar_migrator || exit 1
+$PY -I $H/run_migrations.py $REPO/infrastructure/database/migrations daftar_migrator || exit 1
 
 # Each pack is applied in ONE transaction, stated here rather than left to a
 # reader's assumption (finding P2-09): its end-state assertion is the last
@@ -448,11 +464,11 @@ if [ -n "$P11_MUTATION_SQL" ]; then
 fi
 
 echo "=== 6. proofs (Pack A, apparel) ==="
-python3 -I $H/proofs.py
+$PY -I $H/proofs.py
 RC_PROOFS=$?; RC=$RC_PROOFS
 if [ -f "$H/proofs_b.py" ]; then
   echo "=== 6a2. proofs (Pack B, lot/expiry) ==="
-  python3 -I $H/proofs_b.py
+  $PY -I $H/proofs_b.py
   RC_B=$?; [ $RC_B -ne 0 ] && RC=$RC_B
 else
   RC_B="n/a (Pack B is not on the branch at this SHA)"
@@ -468,16 +484,16 @@ fi
 # wrote. The second green is not a second proof of the laws; it is the proof
 # that the first green was about the schema and not about the sequence.
 echo "=== 6c. the same suites, a SECOND time on the same database (idempotence) ==="
-python3 -I $H/proofs.py | tail -2
+$PY -I $H/proofs.py | tail -2
 RC_PROOFS2=${PIPESTATUS[0]}; [ $RC_PROOFS2 -ne 0 ] && RC=$RC_PROOFS2
 if [ -f "$H/proofs_b.py" ]; then
-  python3 -I $H/proofs_b.py | tail -2
+  $PY -I $H/proofs_b.py | tail -2
   RC_B2=${PIPESTATUS[0]}; [ $RC_B2 -ne 0 ] && RC=$RC_B2
 else
   RC_B2="n/a"
 fi
 echo "=== 6b. real concurrency: the races, two live backends, no sleep() (Pack A) ==="
-python3 -I $H/races.py
+$PY -I $H/races.py
 RCR=$?; [ $RCR -ne 0 ] && RC=$RCR
 # The overlay's own races, carried here from the second independent
 # challenge's `pb3race.py` rather than left in its evidence directory: a law
@@ -485,7 +501,7 @@ RCR=$?; [ $RCR -ne 0 ] && RC=$RCR
 # cannot re-prove when §3.6's writer lands.
 if [ -f "$H/races_b.py" ]; then
   echo "=== 6d. real concurrency: the lot overlay's races (Pack B) ==="
-  python3 -I $H/races_b.py
+  $PY -I $H/races_b.py
   RCRB=$?; [ $RCRB -ne 0 ] && RC=$RCRB
 else
   RCRB="n/a"
@@ -496,13 +512,56 @@ echo "=== 7. the frozen tree, after the run ==="
 # the byte comparison now, re-run after everything above, and the migrations'
 # disk digest is printed again so a reader can compare it with the one printed
 # before the run rather than take a word for it.
-AFTER_STATE="$(python3 -I $H/check_harness_bytes.py --tree-state 2>/var/tmp/p11-after.$$ || true)"
+AFTER_STATE="$($PY -I $H/check_harness_bytes.py --tree-state 2>/var/tmp/p11-after.$$ || true)"
 echo "tree differs from the commit, after the run: $AFTER_STATE   (by the bytes on disk, every committed path)"
 [ "$AFTER_STATE" = "no" ] || sed 's/^/  /' /var/tmp/p11-after.$$
 rm -f /var/tmp/p11-after.$$
 echo "MIGRATIONS_SHA256 after the run: $(cat $(ls -1 $REPO/infrastructure/database/migrations/*.sql | sort) | sha256sum | cut -d' ' -f1)"
+echo
+echo "=== 7b. the quoted figures, against WHAT THIS RUN PRINTED ==="
+# The gate's own red proof runs first, as it always has -- and HERE rather than
+# at step 0c, because `blocks_test` runs the generators and the generators read
+# the haystack, which is this run's output. A selftest of the figure gate that
+# could not read a run would have to skip that arm, and this pack does not skip
+# what it cannot classify.
+$PY -I $H/check_fenced_figures.py --selftest --run-capture "$P11_RUN_CAPTURE" || { echo "the fenced-figure check cannot fail; refusing to trust it"; RC=1; }
+# `R26-S1`. The haystack is the capture above, which by now holds every line
+# this run has printed: the migrations, both proof suites twice, both race
+# programs, every digest and every exit code. A figure in a document of this
+# phase is legitimate because it is in there.
+$PY -I $H/check_fenced_figures.py --run-capture "$P11_RUN_CAPTURE"
+RC_FIGURES=$?
+if [ $RC_FIGURES -ne 0 ]; then
+  echo "A document of this phase shows a figure THIS RUN DID NOT PRINT (exit 1), the "
+  echo "check matched nothing at all (exit 2), or it REFUSED (exit 5) -- the capture "
+  echo "is absent, unreadable, empty, inside the repository that holds the subject, or "
+  echo "carries another commit'\''s RUN_HEAD; or the haystack'\''s anchor could not be "
+  echo "resolved to ONE repository -- git absent, no repository above this tree, MORE "
+  echo "THAN ONE repository containing it (which the gate refuses to choose between, "
+  echo "whoever put the second one there: run this in a workspace that is not nested "
+  echo "inside another repository), a BARE repository an ancestor walk cannot see, a "
+  echo "disagreement with git'\''s own discovery -- or a DECISION FRAME the closed "
+  echo "sub-language does not admit, which includes a listed module ATTRIBUTE rebound "
+  echo "since this file imported it, a frame function whose source is not the code "
+  echo "that runs, and a DECIDING FILE whose bytes are not the bytes the commit holds. "
+  echo "In every case a figure in these documents would be standing on something other "
+  echo "than a run of this phase, and this run is not evidence for it."
+fi
+$PY -I $H/check_fenced_figures.py --check-blocks --run-capture "$P11_RUN_CAPTURE"
+RC_BLOCKS=$?
+if [ $RC_BLOCKS -ne 0 ]; then
+  echo "A generated figure block in a document of this phase disagrees with a fresh "
+  echo "run of its generator -- which includes a clause outside a block that RESTATES "
+  echo "what a generator prints, or CONTRADICTS any one of its rows, in any wording "
+  echo "(exit 1) -- or nothing is enrolled at all (exit 2), or the capture or the "
+  echo "frame was refused (exit 5). Run"
+  echo "\`$PY -I $H/check_fenced_figures.py --regenerate --run-capture $P11_RUN_CAPTURE\`"
+  echo "and commit what it prints."
+fi
+[ $RC_FIGURES -ne 0 ] && RC=$RC_FIGURES
+[ $RC_BLOCKS -ne 0 ] && RC=$RC_BLOCKS
 gitq status --porcelain -- infrastructure/database | wc -l | sed 's/^/what git status lists under infrastructure\/database, for a reader: /'
-python3 -I - <<PY
+$PY -I - <<PY
 import json,hashlib,os
 m=json.load(open('$REPO/infrastructure/database/MIGRATION_MANIFEST.json'))
 d='$REPO/infrastructure/database/migrations'
@@ -519,8 +578,8 @@ echo "EXIT_PROOFS_B     : $RC_B  (prep/phase11/harness/proofs_b.py)"
 echo "EXIT_PROOFS_A_RUN2: $RC_PROOFS2  (the same file, the same database -- idempotence)"
 echo "EXIT_PROOFS_B_RUN2: $RC_B2  (the same file, the same database -- idempotence)"
 echo "EXIT_HARNESS_BYTES: $RC_HARNESS_BYTES  (prep/phase11/harness/check_harness_bytes.py, run at step 0c-0 before anything that reads the harness: every deciding file's bytes against the blob the resolved commit holds, by a reader that shares no code with the checker)"
-echo "EXIT_GENERATED_BLOCKS: $RC_BLOCKS  (prep/phase11/harness/check_fenced_figures.py --check-blocks, run at step 0c beside the figure scan)"
-echo "EXIT_FENCED_FIGURES: $RC_FIGURES  (prep/phase11/harness/check_fenced_figures.py, run at step 0c: after the cluster is up, before the database is recreated)"
+echo "EXIT_GENERATED_BLOCKS: $RC_BLOCKS  (prep/phase11/harness/check_fenced_figures.py --check-blocks, run at step 7b beside the figure scan, against this run'\''s own output)"
+echo "EXIT_FENCED_FIGURES: $RC_FIGURES  (prep/phase11/harness/check_fenced_figures.py, run at step 7b: after the proofs and the races, because its haystack is what this run printed)"
 echo "EXIT_RACES        : $RCR  (prep/phase11/harness/races.py)"
 echo "EXIT_RACES_B      : $RCRB  (prep/phase11/harness/races_b.py)"
 echo "EXIT_SCRIPT       : $RC  (0 means every step above returned 0)"
