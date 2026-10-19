@@ -698,6 +698,22 @@ PROOFS: list[Proof] = [
         expect_red="every reachable configuration honours every invariant",
         why="challenger finding L-01, the hole inside E-04\u2019s own fix. E-04\u2019s assertion is an implication \u2014 if the code is `offline.not_sendable`, then the row is CAPTURED and its actor may confirm it \u2014 and `Queue.kt` has exactly one producer of that code, in the arm this helper sits above. A helper that fires for EVERY CAPTURED row therefore leaves the implication true of nothing: the suite stayed green while the cashier who captured the sale was told another member must confirm it, on their own row, on their own till. The review\u2019s own bound is why this plant is this shape: the plain inversion, keeping the conjunction, is already red on the invariant, so the hole was exactly one shape wide. The observability loop now covers every code this check makes a conditional claim about, not only the four honest-wait codes",
     ),
+    Proof(
+        law="M-01-A-DERIVED-SUBJECT-SET-ENROLLS-THE-NEXT-CLAIM",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find='                            if (step.code == "offline.not_sendable") {',
+        replace=(
+            '                            if (step.code == "offline.permission_revoked") {\n'
+            '                                assertEquals(\n'
+            '                                    OperationState.NEEDS_ATTENTION, op.state,\n'
+            '                                    "a permission refusal outside NEEDS_ATTENTION",\n'
+            '                                )\n'
+            '                            }\n'
+            '                            if (step.code == "offline.not_sendable") {'
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="challenger finding M-01, and the review\u2019s own plant: a sixth conditional claim, about `offline.permission_revoked`, which reaches a row only as `lastCode` and never as `step.code`. The review measured it green at 98 of 98 against the hand-written five \u2014 L-01 again, inside the guard L-01 produced. With the subject set now READ out of this file, the same plant enrolls itself and fails by absence: the claim is about a code the reachable space does not produce, and the loop says so by name. This is the third subject set in this phase to be moved from a list to a derivation, after the vocabulary sweep\u2019s alphabet and the capture counter\u2019s file, and it is the coordinator\u2019s ruling for the class",
+    ),
 ]
 
 FAILURE_LINE = re.compile(r"^\s+JUnit Jupiter:(\S+):(.+)\(\)\s*$")

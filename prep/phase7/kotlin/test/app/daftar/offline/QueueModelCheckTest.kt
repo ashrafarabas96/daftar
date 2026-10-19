@@ -1,5 +1,6 @@
 package app.daftar.offline
 
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -26,6 +27,31 @@ import kotlin.test.assertTrue
  * allowed to be deleted quietly — each names the other.
  */
 class QueueModelCheckTest {
+    private companion object {
+        /**
+         * The shape a conditional claim about a code takes in this file. M-01:
+         * the set of codes this check makes claims about is read with this,
+         * out of this file, rather than written out beside the rule that says
+         * it must not be.
+         */
+        val CLAIM_ON_A_CODE = Regex("""step\.code == "(offline\.[A-Za-z0-9_.]+)"""")
+
+        /** A code literal, for reading `RecoveryTest`'s own declaration. */
+        val CODE_IN_A_LITERAL = Regex(""""(offline\.[A-Za-z0-9_.]+)"""")
+
+        /**
+         * Claims about a code the reachable space cannot produce, each with
+         * the reason it is nevertheless written.
+         *
+         * The coordinator's ruling for this class of guard is that a subject
+         * set is derived from the source and an exception is NAMED with a
+         * reason; this is that map. It is empty, and an entry is a decision to
+         * be argued, not a line to be added quietly: a claim about a code
+         * nothing produces is exactly what L-01 was.
+         */
+        val CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE: Map<String, String> = emptyMap()
+    }
+
     private val key = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
     private val digest = "sha256:0d5f1f2b"
     private val wrongDigest = "sha256:deadbeef"
@@ -197,6 +223,60 @@ class QueueModelCheckTest {
         "${op.id}|${op.scope}|${op.effect}|${op.payloadDigest}|${op.amountMinorUnits}|${op.currency}|" +
             "${op.state}|${op.attempts}|${op.lastCode}|" +
             "${op.replayed}|${op.payloadMinimized}|${h.serverCommitted}|${h.everSent}"
+
+    /**
+     * Codes a conditional claim in this file is written about, read out of
+     * this file.
+     *
+     * M-01. The pattern is the shape every claim here takes — `step.code ==
+     * "offline.…"` inside the refusal arm — so a claim is enrolled by being
+     * written and not by being remembered. A guard that cannot find its own
+     * source FAILS: a sweep that quietly finds nothing is the one failure mode
+     * worse than the one it replaces.
+     */
+    private fun conditionalClaimCodes(): Set<String> {
+        val src = File(System.getProperty("p7.src") ?: "prep/phase7/kotlin/src")
+        val tests = System.getProperty("p7.test")?.let(::File) ?: src.parentFile?.resolve("test")
+        val own = tests?.walkTopDown()?.firstOrNull { it.isFile && it.name == "QueueModelCheckTest.kt" }
+        assertTrue(
+            own != null && own.isFile,
+            "this check could not find its own source under ${tests?.path}, so the set of codes " +
+                "it makes claims about cannot be derived and nothing here is guarded",
+        )
+        val codes = CLAIM_ON_A_CODE.findAll(own!!.readText()).map { it.groupValues[1] }.toSet()
+        assertTrue(
+            "offline.not_sendable" in codes,
+            "the claim sweep did not find the one claim this file is known to make " +
+                "(offline.not_sendable), so its pattern no longer matches this file: found = " +
+                "${codes.sorted()}",
+        )
+        return codes
+    }
+
+    /**
+     * The codes `RecoveryTest` licenses a wait for, read out of that file
+     * rather than copied here. Copying them is how they went stale: the four
+     * were a hand-list in this file while the authority for them lived in
+     * another (L-01).
+     */
+    private fun waitIsHonestCodes(): Set<String> {
+        val src = File(System.getProperty("p7.src") ?: "prep/phase7/kotlin/src")
+        val tests = System.getProperty("p7.test")?.let(::File) ?: src.parentFile?.resolve("test")
+        val file = tests?.walkTopDown()?.firstOrNull { it.isFile && it.name == "RecoveryTest.kt" }
+        assertTrue(file != null && file.isFile, "RecoveryTest.kt was not found under ${tests?.path}")
+        val text = file!!.readText()
+        val start = text.indexOf("val waitIsHonest = mapOf(")
+        assertTrue(start >= 0, "RecoveryTest no longer declares waitIsHonest where this check reads it")
+        val end = text.indexOf("\n        )", start)
+        assertTrue(end > start, "RecoveryTest's waitIsHonest declaration did not close where expected")
+        val codes = CODE_IN_A_LITERAL.findAll(text.substring(start, end)).map { it.groupValues[1] }.toSet()
+        assertTrue(
+            "offline.already_sending" in codes,
+            "the waitIsHonest sweep did not find the code that declaration is known to carry, " +
+                "so its pattern no longer matches: found = ${codes.sorted()}",
+        )
+        return codes
+    }
 
     @Test
     fun `every reachable configuration honours every invariant`() {
@@ -728,30 +808,42 @@ class QueueModelCheckTest {
         // reachable space, and a code that stops being produced fails by name
         // rather than by nobody noticing.
         //
-        // L-01, from the eighth review, generalises that to the rule the
-        // paragraph above had already stated and this loop had not kept: EVERY
+        // L-01, from the eighth review, generalised that to the rule the
+        // paragraph above had already stated and the loop had not kept: EVERY
         // code about which this check makes a CONDITIONAL claim must be
         // observed, because an implication whose antecedent is never satisfied
-        // is green by vacuity. The four honest-wait codes were listed and
-        // `offline.not_sendable` was not, although the claim E-04 added in the
-        // same commit is exactly of that shape — "if the code is
-        // `not_sendable`, then CAPTURED and the actor may confirm it" — and
-        // `Queue.kt` has one producer of it. A helper that swallowed every
-        // CAPTURED row would have left that claim true of nothing while the
-        // suite stayed green, which is the failure mode this loop exists for,
-        // one code wide and inside the fix itself.
-        for ((code, claim) in listOf(
-            "offline.already_released" to "RecoveryTest's waitIsHonest",
-            "offline.cancel_after_send" to "RecoveryTest's waitIsHonest",
-            "offline.no_attempt_in_flight" to "RecoveryTest's waitIsHonest",
-            "offline.already_sending" to "RecoveryTest's waitIsHonest",
-            "offline.not_sendable" to "the assertion above, that only a CAPTURED row whose actor " +
-                "may confirm it is ever told to confirm a capture",
-        )) {
+        // is green by vacuity.
+        //
+        // M-01, from the ninth, is that the loop which stated that rule was
+        // five pairs WRITTEN BY HAND. The rule was in the comment and nothing
+        // derived it, so the next conditional claim a reviewer adds is not
+        // enrolled: the review planted `if (step.code ==
+        // "offline.permission_revoked")`, a code that reaches a row only as
+        // `lastCode` and never as `step.code`, and the suite stayed green at 98
+        // of 98. That is L-01 again, inside the guard L-01 produced, and it is
+        // the third time this phase that a subject set gathered by hand let the
+        // harm in through what the hand had not written down — after the
+        // vocabulary sweep's alphabet (E-01) and the capture counter's file
+        // (K-03).
+        //
+        // So the subject sets are now DERIVED, which is the coordinator's
+        // ruling for this class of guard: a guard states its subject set as a
+        // derivation from the source, and an exception goes in a named map
+        // with its reason. Both sets this loop needs are read rather than
+        // listed — the codes this file writes a conditional claim about, out of
+        // this file, and the codes `RecoveryTest` licenses a wait for, out of
+        // that file. A claim added to either place is enrolled by being
+        // written.
+        val claimed = conditionalClaimCodes() + waitIsHonestCodes()
+        for (code in claimed.sorted()) {
+            val exemption = CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE[code]
+            if (exemption != null) continue
             assertTrue(
                 code in codesSeen,
-                "$code is relied on by $claim, but nothing in the reachable space produces it " +
-                    "any more, so what is claimed about it is claimed about nothing: " +
+                "a conditional claim is written about $code, but nothing in the reachable space " +
+                    "produces it, so what is claimed about it is claimed about nothing. Either the " +
+                    "producer is gone, or the claim belongs in " +
+                    "CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE with its reason. " +
                     "produced = ${codesSeen.sorted()}",
             )
         }
