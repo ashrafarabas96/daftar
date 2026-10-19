@@ -59,6 +59,10 @@ ARM_LABELS = (
     "RETIREMENT-NET",
     "VACUITY",
     "VACUITY-CTL",
+    "WITNESS",
+    "WITNESS-CTL",
+    "HATCH",
+    "BASELINE",
     "I1-conc",
 )
 

@@ -90,7 +90,10 @@ SELECT p8.case_equals('A6d and app_bypass() itself still says no', app_bypass(),
 -- daftar_platform` must be refused, since daftar_app is not a member of it.
 -- That refusal is the mechanism §6 rests on, so it is asserted, not assumed.
 SELECT p8.case_refuses('A7 the app may not become the platform',
-                       'SET ROLE daftar_platform', 'permission denied to set role');
+                       'SET ROLE daftar_platform', 'permission denied to set role',
+                       -- S-5: the subject is the ROLE. If `daftar_platform` did not exist the
+                       -- refusal would still arrive, and would mean something else entirely.
+                       $w$EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_platform')$w$);
 
 -- ---- A8: back in scope, the row is still there ----
 -- A guard against the shape of failure where an isolation suite passes because
@@ -108,7 +111,10 @@ SELECT p8.case_equals('A9 an empty scope sees nothing', (SELECT count(*) FROM no
 -- ---- A10: the quarantine is unreadable to the app tier ----
 SELECT p8.case_refuses('A10 the app may not read unattributed events',
                        'SELECT count(*) FROM notification_provider_quarantine',
-                       'permission denied for table notification_provider_quarantine');
+                       'permission denied for table notification_provider_quarantine',
+                       -- S-5: the subject is the RELATION. A refusal to read a table that is
+                       -- not there reads the same as a refusal to read one that is.
+                       $w$to_regclass('notification_provider_quarantine') IS NOT NULL$w$);
 
 -- ---- A11: the SETTINGS relation is isolated, measured and not merely asserted ----
 -- ROUND 12, R-4. The overlay's §7 asserts that every tenant-scoped relation is

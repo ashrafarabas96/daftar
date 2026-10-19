@@ -47,16 +47,27 @@
 #     The sixteenth challenge counted it (R-4) and corrected its own earlier
 #     figure doing so: a literal comparison had read `A-4` here and `A4` in the
 #     live files as two different cases. Normalising that spelling, this
-#     directory declares **93** case ids and **55** of them have no live
-#     counterpart by name. **Ten are carried** — the ports above, plus `A-6`,
-#     `G-3`, `G-4`, `N6-j`, `I9c2-a`, `I9c2-b`, `R-1` and `R-2`, which are
-#     re-expressed under other live ids, and `I8-a`/`I8-b`, carried for the
-#     worker only. **Forty-five are not**, for four different reasons: 23 are
-#     constraints the real overlay DOES carry under the name the retired case
-#     expected, with nothing exercising the refusal; 16 are accepted paths or
-#     catalogue censuses with no named constraint; 4 name a principal the frozen
-#     role set does not contain (`G-5` with `H-1`/`H-2`/`H-4`); and 2 are grant
-#     censuses on the app role. Each of the fifty-five is named, one by one, in
+#     directory declares **93** case ids and **56** of them have no live
+#     counterpart by name — **ROUND 27 CORRECTION**: this block said 55, which
+#     is the TABLE's row count, not the figure the published rule gives. One of
+#     the 56 is not an id at all but the loop-constructed family
+#     `'I1b-' || (i+1)` below, which a static scan cannot enumerate, so it is
+#     counted once in the 56 and excluded from the table's 55. The two numbers
+#     are different things and each is now named as what it is.
+#     **Ten are carried**: eight re-expressed under other live ids — `A-6`,
+#     `G-3`, `G-4`, `N6-j`, `I9c2-a`, `I9c2-b`, `R-1`, `R-2`, of which `G-3`
+#     and `G-4` ARE the worker ports named above — and `I8-a`/`I8-b`, carried
+#     for the worker only. **Forty-five are not**, and **ROUND 27 CORRECTION**
+#     (the coordinator's F-4): the split published in round 25 UNDERSTATED the
+#     unexercised refusals. It put 23 in one group and 16 in "accepted paths or
+#     catalogue censuses", but four of those sixteen are `case_refuses` —
+#     `I8e-a`, `I8e-d`, `I9a1-c` and `I9c1` — so a reader counting refusals got
+#     23 where the number is **27**. Classifying by the helper each case calls,
+#     rather than by what its label reads like, the forty-five are: **27
+#     refusals that nothing exercises** (23 naming a constraint the overlay
+#     carries, 4 naming none), **8 accepted paths**, **4 catalogue censuses**,
+#     **4** naming a principal the frozen role set does not contain (`G-5` with
+#     `H-1`/`H-2`/`H-4`), and **2** grant censuses on the app role. Each of the fifty-five is named, one by one, in
 #     `P8-HANDOFF-MANIFEST.md`, section "THE RETIRED IDS, ONE BY ONE". A
 #     constraint present but unexercised is NOT the same as an absent one, and
 #     it is NOT the same as a measured one either: that is the distinction this
@@ -73,11 +84,15 @@ echo "         quarantine H-3* as the real daftar_worker, with mutants 14 and 15
 echo "         (round 24)." >&2
 echo "         NOT covered, UNMEASURED at runtime: H-1, H-2, H-4 — they are rules" >&2
 echo "         about a WEBHOOK principal and the frozen role set has no such role." >&2
-echo "         THE COUNT (round 25, R-4): of the 93 case ids declared here, 55 have" >&2
-echo "         no live counterpart by name. TEN are carried, FORTY-FIVE are not:" >&2
-echo "         23 constraints present in the overlay with the refusal unexercised," >&2
-echo "         16 accepted paths or catalogue censuses, 4 with no live principal," >&2
-echo "         2 grant censuses on the app role. Every one is named in" >&2
+echo "         THE COUNT (round 25; corrected round 27): of the 93 case ids declared" >&2
+echo "         here, 56 have no live counterpart by name. One of the 56 is not an" >&2
+echo "         id but the loop-constructed family 'I1b-' || (i+1), which a static" >&2
+echo "         scan cannot enumerate, so the table names 55. TEN are carried," >&2
+echo "         FORTY-FIVE are not:" >&2
+echo "         27 REFUSALS that nothing exercises (23 naming a constraint the" >&2
+echo "         overlay carries, 4 naming none), 8 accepted paths, 4 catalogue" >&2
+echo "         censuses, 4 with no live principal, 2 grant censuses on the app" >&2
+echo "         role. Every one is named in" >&2
 echo "         P8-HANDOFF-MANIFEST.md, 'THE RETIRED IDS, ONE BY ONE'." >&2
 echo "         Kept for the record, never deleted. Refusing with exit 2." >&2
 exit 2

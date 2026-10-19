@@ -108,9 +108,19 @@ def _p8_own_dir_match(entry):
     **`realpath` resolves symlinks; it does not traverse mount points.** So the
     bind mount is caught by `samefile` ALONE, this reading is the only thing
     standing between that spelling and the planted module, and an arm for it is
-    three lines rather than impossible. Arm `y20` deletes this reading alone,
-    leaving `realpath` standing, and requires the bind spelling to go rc 0 with
-    the planted module imported, which is the only evidence this pack accepts.
+    three lines rather than impossible.
+
+    **ROUND 27 CORRECTION (the coordinator's F-1, P1).** This paragraph used to
+    end "Arm `y20` deletes this reading alone", and that was false of THIS file:
+    every `y20` arm patches `p8-frozen-integrity.py`, and deleting the
+    `samefile` reading in this copy left gate 6 at `FAILED=0` — a sentence that
+    credits an arm to a file no arm touches, which is round 24's defect family
+    one file over. The arms for this copy are `y21a` and `y21b`: the first
+    requires this program to refuse the bind spelling by its OWN name and to
+    say `matched by samefile`, the second deletes that reading here alone and
+    requires the refusal to go away. The gate also holds this block
+    byte-identical across the three programs, so an arm on one keeps meaning
+    something about the others.
 
     What produced the false sentence is the defect below it (round 16's R-2):
     the refusal printed `_P8_OWN_REAL`, this file's own directory, under the
@@ -121,6 +131,7 @@ def _p8_own_dir_match(entry):
     An entry that does not exist is not this directory, and `samefile` raises on
     it, so that is the only error swallowed here.
     """
+    # <<< P8-IDENTITY-GUARD-BEGIN >>>
     absolute = _p8os.path.abspath(entry or ".")
     if _p8os.path.realpath(absolute) == _P8_OWN_REAL:
         return "realpath"
@@ -148,6 +159,7 @@ if _p8_hit_by is not None:
         ". A module planted beside this file would be imported in preference to "
         "the standard library. Refusing\n")
     raise SystemExit(1)
+# <<< P8-IDENTITY-GUARD-END >>>
 import json
 import os
 import shutil

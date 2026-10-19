@@ -212,6 +212,20 @@ build "$HERE/p8-overlay.sql" "$OUT/baseline" || { say "BASELINE BUILD FAILED"; e
 say "migrations applied = $(cat "$OUT/baseline/applied")"
 if cases "$OUT/baseline"; then
   say "baseline cases rc=0 passes=$(cat "$OUT/baseline/passes")"
+  # ROUND 27, the coordinator's F-3 (P3). Nothing asserted this figure. Every
+  # document in the pack quotes it, every mutant arm is read against it, and
+  # the run printed whatever it happened to count — so a case silently lost to
+  # a syntax slip, a renamed file or a dropped `SELECT` would lower the number
+  # and nothing would red. It is now a LITERAL, compared, and a case added
+  # deliberately must raise it here in the same commit.
+  P8_EXPECT_CASES=98
+  _cases_got=$(cat "$OUT/baseline/passes" | xargs)
+  if [ "$_cases_got" != "$P8_EXPECT_CASES" ]; then
+    say "FAIL: BASELINE CASE COUNT — expected $P8_EXPECT_CASES, measured $_cases_got. A case was added, lost or renamed: if it was added, raise the literal in this runner in the same commit; if it was lost, the pack is measuring less than every document in it claims"
+    FAILED=1
+  else
+    say "BASELINE CASE COUNT: $_cases_got, equal to the literal this runner declares — the figure every document quotes is now asserted and not merely printed"
+  fi
 else
   say "BASELINE CASES FAILED"; grep -h "FAIL\|ERROR" "$OUT"/baseline/*.sql.log | head -5 | tee -a "$OUT/run.log"; exit 1
 fi
@@ -1737,6 +1751,154 @@ build "$HERE/p8-overlay.sql" "$OUT/final" >/dev/null && cases "$OUT/final" \
   && say "cluster left at the baseline, passes=$(cat "$OUT/final/passes")" \
   || { say "FAIL: could not restore the baseline"; FAILED=1; }
 
+say "=== a refusal must have a SUBJECT, and the zero-row hatch must be armed (round 27, S-5) ==="
+# S-5 (P2), measured by the sixteenth challenger on `787aa11`. It pointed `W-2`
+# — the worker may not rewrite the obligation key — at a uuid no fixture
+# creates, and the case PASSED: rc 0, `passes=98`, the figure a clean run
+# prints. The reason is NOT the permits vacuity in another costume. The
+# column-scoped GRANT refuses the statement before any row is read, so
+# `permission denied` arrives whether the row is there or not, and `ROW_COUNT`
+# is the wrong instrument because a REFUSED statement affects zero rows by
+# construction — a row-count check on `case_refuses` would red every refuses
+# case in the pack. And it is worse than the permits hole in one way: a vacuous
+# permits-case leaves a row unmoved, which is readable, and is exactly what the
+# read-backs read; a vacuous refuses-case has nothing to read back, because the
+# statement is SUPPOSED to have no effect.
+#
+# So the guard is a WITNESS, declared by the case and asserted BEFORE the
+# statement: see `p8-case-helpers.sql`. Which cases need one is derived from the
+# case's own expectation rather than from a list — a case expecting a PERMISSION
+# denial must call the four-argument form, and the three-argument form refuses
+# it by name. These arms measure both halves.
+cat > "$PATCHDIR/neuter-refuses.py" <<'PATCH'
+import re
+import sys
+src, dst, label = sys.argv[1], sys.argv[2], sys.argv[3]
+DEAD = "0fffffff-0000-4000-8000-00000000dead"
+s = open(src, encoding="utf-8").read()
+i = s.find("case_refuses('" + label)
+assert i >= 0, "no case_refuses whose label starts " + label
+# The whole call: from the label to the `);` that closes it. Both the statement
+# and the witness live inside, and BOTH are pointed away — which is the
+# challenger's own method, and the only way the witness can be false.
+j = s.index(");", i)
+call = s[i:j]
+uuid = re.compile(r"'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'")
+found = uuid.findall(call)
+assert found, "this case names no uuid to point elsewhere"
+patched = uuid.sub("'" + DEAD + "'", call)
+out = s[:i] + patched + s[j:]
+assert out != s
+open(dst, "w", encoding="utf-8").write(out)
+PATCH
+cat > "$PATCHDIR/drop-witness-check.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = "  IF ok IS NOT TRUE THEN"
+assert s.count(b) == 1, "the witness check is not where this patcher expects it"
+s = s.replace(b, "  IF false THEN", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+
+WIT=$OUT/witness
+mkdir -p "$WIT"
+if python3 -I "$PATCHDIR/neuter-refuses.py" "$HERE/p8-real-cases-worker.sql" \
+        "$WIT/p8-real-cases-worker.sql" "W-2 may NOT rewrite" >"$WIT/patch.log" 2>&1; then
+  cases "$WIT" "$WIT" >/dev/null 2>&1
+  if grep -hqF "FAIL: NO SUBJECT" "$WIT"/*.sql.log 2>/dev/null; then
+    say "WITNESS w2: with 'W-2' and its witness pointed at a row that does not exist the case REDS BY NAME (FAIL: NO SUBJECT), so the refusal is no longer evidence about an empty set — the exact case the sixteenth challenge passed at rc 0"
+  else
+    say "WITNESS w2: FAIL — W-2 pointed at a row that does not exist did not red by NO SUBJECT, which is S-5 unfixed"
+    grep -h "PASS\|FAIL" "$WIT"/*.sql.log 2>/dev/null | grep "W-2" | head -2 | tee -a "$OUT/run.log"
+    FAILED=1
+  fi
+else
+  say "WITNESS w2: PLANT NOT ESTABLISHED — W-2 could not be pointed elsewhere: $(tail -1 "$WIT/patch.log")"
+  FAILED=1
+fi
+
+# The attribution: the witness check deleted ALONE must bring the vacuous pass
+# back, at the clean figure, which is what the challenger measured.
+WC=$OUT/witness-ctl
+mkdir -p "$WC"
+if python3 -I "$PATCHDIR/drop-witness-check.py" "$HERE/p8-case-helpers.sql" "$WC/p8-case-helpers.sql" >"$WC/patch.log" 2>&1 \
+   && ! cmp -s "$HERE/p8-case-helpers.sql" "$WC/p8-case-helpers.sql" \
+   && cp "$WIT/p8-real-cases-worker.sql" "$WC/p8-real-cases-worker.sql"; then
+  CASE_HELPERS=$WC/p8-case-helpers.sql
+  if build "$HERE/p8-overlay.sql" "$WC/build" >/dev/null 2>&1; then
+    if cases "$WC" "$WC" >/dev/null 2>&1; then
+      say "WITNESS-CTL: with the witness check deleted ALONE the neutered 'W-2' PASSES again (passes=$(cat "$WC/passes")) — the vacuous pass of 787aa11 returns, so the witness is what closes it"
+    else
+      say "WITNESS-CTL: FAIL — with the witness check deleted the neutered W-2 still reddened, so the arm above is measuring something else"
+      grep -h "FAIL" "$WC"/*.sql.log 2>/dev/null | head -2 | tee -a "$OUT/run.log"
+      FAILED=1
+    fi
+  else
+    say "WITNESS-CTL: PLANT NOT ESTABLISHED — the build with the patched helpers did not come up"
+    FAILED=1
+  fi
+  CASE_HELPERS=$HERE/p8-case-helpers.sql
+  build "$HERE/p8-overlay.sql" "$OUT/final-3" >/dev/null && cases "$OUT/final-3" >/dev/null \
+    || { say "FAIL: could not restore the baseline after the witness control"; FAILED=1; }
+else
+  say "WITNESS-CTL: PLANT NOT ESTABLISHED — the witness check could not be deleted from a copy of the helpers"
+  FAILED=1
+fi
+
+# And the three-argument form must REFUSE a permission-denial case, because that
+# is what makes the discipline fail closed for a case written tomorrow rather
+# than for the seven that exist today.
+cat > "$WIT/unwitnessed.sql" <<'SQL'
+SET search_path = p8, public;
+BEGIN;
+SET LOCAL app.tenant_id   = '11111111-1111-4111-8111-111111111111';
+SET LOCAL app.business_id = 'bbbbbbbb-0000-4000-8000-000000000001';
+SELECT p8.case_refuses('HATCH-A a permission case with no witness',
+                       'SELECT count(*) FROM notification_provider_quarantine',
+                       'permission denied for table notification_provider_quarantine');
+ROLLBACK;
+SQL
+if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -v ON_ERROR_STOP=1 \
+             -f "$WIT/unwitnessed.sql" >"$WIT/unwitnessed.log" 2>&1; then
+  say "WITNESS unwitnessed: FAIL — a case expecting a PERMISSION denial was accepted by the three-argument form, so a case written tomorrow can still measure an empty set"
+  FAILED=1
+elif grep -qF "WITNESS REQUIRED" "$WIT/unwitnessed.log"; then
+  say "WITNESS unwitnessed: the three-argument form REFUSES a permission-denial case by name (WITNESS REQUIRED), so the discipline is derived from the case's own expectation and not from a list that must name cases in advance"
+else
+  say "WITNESS unwitnessed: FAIL — it refused, but not by WITNESS REQUIRED"
+  head -2 "$WIT/unwitnessed.log" | tee -a "$OUT/run.log"; FAILED=1
+fi
+
+# THE ZERO-ROW HATCH, armed. `case_permits_rows(label, stmt, 0)` is the escape
+# for a permit that genuinely means zero. An escape nobody measures is a hole
+# with a name, so: a case DECLARING 0 whose statement affects a row must red.
+cat > "$WIT/hatch.sql" <<'SQL'
+SET search_path = p8, public;
+BEGIN;
+SET LOCAL app.tenant_id   = '11111111-1111-4111-8111-111111111111';
+SET LOCAL app.business_id = 'bbbbbbbb-0000-4000-8000-000000000001';
+SELECT p8.case_permits_rows('HATCH-B a declared zero whose statement matches nothing',
+  $h$UPDATE notification_settings SET max_consent_age_seconds = max_consent_age_seconds
+      WHERE business_id = '0fffffff-0000-4000-8000-00000000dead'$h$, 0);
+SELECT p8.case_permits_rows('HATCH-C a declared zero whose statement DOES affect a row',
+  $h$UPDATE notification_settings SET max_consent_age_seconds = max_consent_age_seconds
+      WHERE business_id = 'bbbbbbbb-0000-4000-8000-000000000001'$h$, 0);
+ROLLBACK;
+SQL
+if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -v ON_ERROR_STOP=1 \
+             -f "$WIT/hatch.sql" >"$WIT/hatch.log" 2>&1; then
+  say "HATCH: FAIL — a case DECLARING 0 rows passed while its statement affected one, so the escape hatch asserts nothing"
+  FAILED=1
+elif grep -qF "HATCH-B a declared zero whose statement matches nothing PASS permitted, 0 row(s) as declared" "$WIT/hatch.log" \
+     && grep -qF "FAIL: permitted, but affected 1 row(s) and this case DECLARES 0" "$WIT/hatch.log" \
+     && grep -qF "HATCH-C" "$WIT/hatch.log"; then
+  say "HATCH: a declared zero PASSES when it is true and REDS when the statement starts affecting a row (HATCH-B then HATCH-C), so the escape from the vacuity check is itself a claim and not a way around it"
+else
+  say "HATCH: FAIL — the declared-zero hatch did not behave as both halves require"
+  grep -E "HATCH-[BC]" "$WIT/hatch.log" | head -3 | tee -a "$OUT/run.log"; FAILED=1
+fi
+
 say "=== a permits-case must have MOVED something (round 26, the sixteenth challenge) ==="
 # THE DEFECT, as the challenger measured it on `a7a71e8`. It pointed ONE
 # `WHERE id` at a uuid no fixture creates, so the UPDATE matched zero rows and
@@ -1926,7 +2088,18 @@ say "=== the check's own STANDARD LIBRARY, measured by planting one (round 23, N
 # fail-open to return — including on an honest tree, which is what makes such a
 # plant usable by someone who wants the gate quiet rather than broken.
 ISO=$OUT/iso
-rm -rf "$ISO"; mkdir -p "$ISO/planted" "$ISO/tree/infrastructure/database" "$ISO/clean/infrastructure/database"
+# ROUND 27, S-4 (P3), the other half. `rm -rf "$ISO"` was unchecked, and the
+# bind arms below mount INSIDE $ISO. Deleting through a live mount reaches the
+# bind SOURCE, which here is the planted copy — recoverable, but it is the
+# shape of an accident that is not recoverable elsewhere. So the mount table is
+# read first and the run refuses rather than recursing into one, and the
+# deletion itself is checked.
+if grep -qF " $ISO" /proc/mounts 2>/dev/null; then
+  say "ABORT: something is still mounted under $ISO ($(grep -F " $ISO" /proc/mounts | head -1)); refusing to rm -rf through a live mount"
+  exit 2
+fi
+rm -rf "$ISO" || { say "ABORT: $ISO could not be removed, so the plant below would run against last time's files"; exit 2; }
+mkdir -p "$ISO/planted" "$ISO/tree/infrastructure/database" "$ISO/clean/infrastructure/database"
 for _t in tree clean; do
   cp -r "$REPO/infrastructure/database/migrations" "$ISO/$_t/infrastructure/database/migrations"
   cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$ISO/$_t/infrastructure/database/"
@@ -1990,6 +2163,23 @@ s = open(src, encoding="utf-8").read()
 b = "        if _p8os.path.samefile(absolute, _P8_OWN_DIR):"
 assert s.count(b) == 1, "the samefile reading is not where this patcher expects it"
 s = s.replace(b, "        if False:", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+# ROUND 27, the sixteenth challenger's S-1 (P2). It reverted ONE expression —
+# the refusal's `realpath(entry) = <value as read>` back to round 24's
+# `which resolves to <the script's own directory>` — and BOTH y17 and y20a still
+# passed, because they greped the LABEL of the reason (`matched by realpath`,
+# `matched by samefile`) and nothing read the value. The arms now require the
+# value, and `y20d` is what holds that requirement responsible: with the
+# expression reverted the refusal is still correct about WHICH reading matched,
+# and the arm must nevertheless refuse to credit it.
+cat > "$PATCHDIR/revert-value.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = '"; realpath(entry) = " + _p8os.path.realpath(_p8os.path.abspath(_p8_hit or "."))'
+assert s.count(b) == 1, "the value expression is not where this patcher expects it"
+s = s.replace(b, '"; which resolves to " + _P8_OWN_REAL', 1)
 open(dst, "w", encoding="utf-8").write(s)
 PATCH
 cat > "$PATCHDIR/drop-path-test.py" <<'PATCH'
@@ -2107,10 +2297,11 @@ if [ "$ISO_OK" = 1 ]; then
                "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
       say "FAIL: GUARD-CTL y17 — a SYMLINKED spelling of the subject's own directory defeated the second test, which is round 15's O-1 unfixed"
       FAILED=1
-    elif grep -q "NOT ISOLATED" "$_o" && grep -q "matched by realpath" "$_o"; then
-      say "GUARD-CTL y17: a symlinked spelling of the same directory is refused on IDENTITY, and the refusal names WHICH reading matched (realpath) — round 24 greped for a phrase printed in both cases, which is how a wrong attribution went unseen"
+    elif grep -q "NOT ISOLATED" "$_o" && grep -q "matched by realpath" "$_o" \
+         && grep -qF "realpath(entry) = $ISO/planted" "$_o"; then
+      say "GUARD-CTL y17: a symlinked spelling of the same directory is refused on IDENTITY, the refusal names WHICH reading matched (realpath) AND prints realpath(entry) as read — round 27: greping the LABEL of the reason leaves the VALUE it reports unarmed, and the value is the expression round 24 got wrong"
     else
-      say "FAIL: GUARD-CTL y17 — it refused, but not on identity with both spellings named"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+      say "FAIL: GUARD-CTL y17 — it refused, but this arm requires THREE things of the message and one is missing: the NOT ISOLATED refusal, 'matched by realpath' as the reading, and realpath(entry) printed as the value read"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
     fi
     # y18 — the second test DELETED ALONE, first test left standing. Without
     # this control y16/y17 prove only that something refused; with it, the
@@ -2131,78 +2322,197 @@ if [ "$ISO_OK" = 1 ]; then
       fi
     fi
 
-    # ----------------------------------------------------------------
-    # y20 — the `samefile` reading, which round 24 called untestable
-    # ----------------------------------------------------------------
-    # ROUND 25, R-1 (P1, measured-false). `realpath` resolves symlinks and does
-    # NOT traverse mount points, so a bind mount of the proof directory is the
-    # case `samefile` alone catches. Round 24 asserted the opposite and called
-    # the reading UNEXERCISED; the arm is three lines. It needs mount
-    # privileges, and a missing privilege is a PLANT NOT ESTABLISHED under its
-    # own name — never a silent skip, because a skipped arm reads exactly like
-    # a passing one.
-    BINDPOINT=$ISO/bindpoint
-    mkdir -p "$BINDPOINT"
-    if ! mount --bind "$ISO/planted" "$BINDPOINT" 2>"$ISO/bind.log"; then
-      say "ISOLATION: PLANT NOT ESTABLISHED — this container may not bind-mount ($(head -1 "$ISO/bind.log")), so the one spelling the samefile reading exists for cannot be built here"
-      FAILED=1
-    else
-      # The arm's own precondition, measured rather than assumed: the bind path
-      # must NOT resolve through (or `realpath` would catch it and the arm would
-      # be attributing the wrong reading), and it must be the same inode.
-      _pre=$(python3 -I -c "
+  fi
+
+  # ----------------------------------------------------------------
+  # y20 — the `samefile` reading, which round 24 called untestable
+  # ----------------------------------------------------------------
+  # ROUND 25, R-1 (P1, measured-false). `realpath` resolves symlinks and does
+  # NOT traverse mount points, so a bind mount of the proof directory is the
+  # case `samefile` alone catches. Round 24 asserted the opposite and called
+  # the reading UNEXERCISED; the arm is three lines. It needs mount
+  # privileges, and a missing privilege is a PLANT NOT ESTABLISHED under its
+  # own name — never a silent skip, because a skipped arm reads exactly like
+  # a passing one.
+  #
+  # ROUND 27, S-3 (P3). These three arms used to sit inside the `else` of the
+  # SYMLINK plant, so a container where `ln -sfn` failed reddened on the
+  # spelling plant and then ran NO bind arm and named none — which is the
+  # silent skip the paragraph above forbids, two conditions deep. No-symlink
+  # and no-mount-namespace are different conditions and each gets its own
+  # sentence, so the block is hoisted to sit directly under the plant it
+  # actually depends on.
+  BINDPOINT=$ISO/bindpoint
+  mkdir -p "$BINDPOINT"
+  if ! mount --bind "$ISO/planted" "$BINDPOINT" 2>"$ISO/bind.log"; then
+    say "ISOLATION: PLANT NOT ESTABLISHED — this container may not bind-mount ($(head -1 "$ISO/bind.log")), so the one spelling the samefile reading exists for cannot be built here"
+    FAILED=1
+  else
+    # The arm's own precondition, measured rather than assumed: the bind path
+    # must NOT resolve through (or `realpath` would catch it and the arm would
+    # be attributing the wrong reading), and it must be the same inode.
+    _pre=$(python3 -I -c "
 import os, sys
 b, srcdir = sys.argv[1], sys.argv[2]
 print('rp-differs' if os.path.realpath(b) != os.path.realpath(srcdir) else 'rp-same',
-      'same-inode' if os.path.samefile(b, srcdir) else 'other-inode')" "$BINDPOINT" "$ISO/planted")
-      if [ "$_pre" != "rp-differs same-inode" ]; then
-        say "ISOLATION: PLANT NOT ESTABLISHED — the bind mount is not the shape this arm measures (got '$_pre'); on a platform where realpath traverses the mount, y16's reading would catch it and y20 would attribute the wrong one"
+    'same-inode' if os.path.samefile(b, srcdir) else 'other-inode')" "$BINDPOINT" "$ISO/planted")
+    if [ "$_pre" != "rp-differs same-inode" ]; then
+      say "ISOLATION: PLANT NOT ESTABLISHED — the bind mount is not the shape this arm measures (got '$_pre'); on a platform where realpath traverses the mount, y16's reading would catch it and y20 would attribute the wrong one"
+      FAILED=1
+    else
+      say "ISOLATION: the bind spelling holds — realpath differs and the inode is the same, which is the one case the samefile reading exists for"
+      # Unpatched: the bind spelling must refuse, and the refusal must say
+      # WHICH reading caught it.
+      _o=$ISO/y20a.log
+      if python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" \
+                 "$ISO/planted/p8-frozen-integrity.py" "$ISO/tree" \
+                 "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+        say "FAIL: GUARD-CTL y20a — a bind mount of the subject's own directory was on sys.path and the check measured anyway"
         FAILED=1
+      elif grep -q "NOT ISOLATED" "$_o" && grep -q "matched by samefile" "$_o" \
+           && grep -qF "realpath(entry) = $BINDPOINT" "$_o"; then
+        say "GUARD-CTL y20a: a BIND MOUNT of the same directory is refused, the refusal names samefile as the reading that caught it, AND it prints realpath(entry) = the bind path AS READ — not the script's own directory, which is the expression round 24 got wrong and that no arm read"
       else
-        say "ISOLATION: the bind spelling holds — realpath differs and the inode is the same, which is the one case the samefile reading exists for"
-        # Unpatched: the bind spelling must refuse, and the refusal must say
-        # WHICH reading caught it.
-        _o=$ISO/y20a.log
-        if python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" \
-                   "$ISO/planted/p8-frozen-integrity.py" "$ISO/tree" \
+        say "FAIL: GUARD-CTL y20a — it refused, but not by the samefile reading"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+      fi
+      # The attribution: that reading DELETED ALONE, realpath left standing.
+      _nos=$ISO/planted/no-samefile.py
+      if ! python3 -I "$PATCHDIR/drop-samefile.py" "$ISO/planted/p8-frozen-integrity.py" "$_nos" >"$ISO/patch3.log" 2>&1; then
+        say "FAIL: GUARD-CTL y20 — the samefile reading could not be deleted alone, so y20a is unattributed"
+        head -2 "$ISO/patch3.log" | tee -a "$OUT/run.log"; FAILED=1
+      else
+        _o=$ISO/y20b.log
+        if python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" "$_nos" "$ISO/tree" \
                    "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
-          say "FAIL: GUARD-CTL y20a — a bind mount of the subject's own directory was on sys.path and the check measured anyway"
-          FAILED=1
-        elif grep -q "NOT ISOLATED" "$_o" && grep -q "matched by samefile" "$_o"; then
-          say "GUARD-CTL y20a: a BIND MOUNT of the same directory is refused, and the refusal names samefile as the reading that caught it"
+          say "GUARD-CTL y20b: with the samefile reading deleted ALONE the bind spelling goes rc 0 on a tampered tree, so that reading is the only thing standing between it and the planted module — round 24's 'UNEXERCISED' sentence was false"
         else
-          say "FAIL: GUARD-CTL y20a — it refused, but not by the samefile reading"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+          say "FAIL: GUARD-CTL y20b — with the samefile reading deleted the bind spelling was still refused, so y20a is not measuring that reading"
+          head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
         fi
-        # The attribution: that reading DELETED ALONE, realpath left standing.
-        _nos=$ISO/planted/no-samefile.py
-        if ! python3 -I "$PATCHDIR/drop-samefile.py" "$ISO/planted/p8-frozen-integrity.py" "$_nos" >"$ISO/patch3.log" 2>&1; then
-          say "FAIL: GUARD-CTL y20 — the samefile reading could not be deleted alone, so y20a is unattributed"
-          head -2 "$ISO/patch3.log" | tee -a "$OUT/run.log"; FAILED=1
+        # And the deletion must be SURGICAL: the plain spelling must still be
+        # refused by the reading that was left standing.
+        _o=$ISO/y20c.log
+        if python3 -I "$PATCHDIR/with-path-entry.py" "$ISO/planted" "$_nos" "$ISO/tree" \
+                   "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+          say "FAIL: GUARD-CTL y20c — deleting the samefile reading also disabled the realpath one, so y20b's green says nothing about which reading matters"
+          FAILED=1
+        elif grep -q "matched by realpath" "$_o"; then
+          say "GUARD-CTL y20c: the same deletion leaves the plain spelling refused by realpath, so y20b measured ONE reading and not the whole test"
         else
-          _o=$ISO/y20b.log
-          if python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" "$_nos" "$ISO/tree" \
-                     "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
-            say "GUARD-CTL y20b: with the samefile reading deleted ALONE the bind spelling goes rc 0 on a tampered tree, so that reading is the only thing standing between it and the planted module — round 24's 'UNEXERCISED' sentence was false"
-          else
-            say "FAIL: GUARD-CTL y20b — with the samefile reading deleted the bind spelling was still refused, so y20a is not measuring that reading"
-            head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
-          fi
-          # And the deletion must be SURGICAL: the plain spelling must still be
-          # refused by the reading that was left standing.
-          _o=$ISO/y20c.log
-          if python3 -I "$PATCHDIR/with-path-entry.py" "$ISO/planted" "$_nos" "$ISO/tree" \
-                     "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
-            say "FAIL: GUARD-CTL y20c — deleting the samefile reading also disabled the realpath one, so y20b's green says nothing about which reading matters"
-            FAILED=1
-          elif grep -q "matched by realpath" "$_o"; then
-            say "GUARD-CTL y20c: the same deletion leaves the plain spelling refused by realpath, so y20b measured ONE reading and not the whole test"
-          else
-            say "FAIL: GUARD-CTL y20c — the plain spelling refused, but not by realpath"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
-          fi
+          say "FAIL: GUARD-CTL y20c — the plain spelling refused, but not by realpath"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
         fi
       fi
-      umount "$BINDPOINT" || say "ISOLATION: NOTE — the bind mount at $BINDPOINT could not be unmounted; it is inside this run's own output directory"
+      # y20d — the arm's OWN requirement, held responsible. With round 24's
+      # wrong value expression put back, the refusal still names the right
+      # reading, so every label grep still matches; only the VALUE differs.
+      # This arm requires that y20a's value requirement would have caught it.
+      _rev=$ISO/planted/reverted-value.py
+      if ! python3 -I "$PATCHDIR/revert-value.py" "$ISO/planted/p8-frozen-integrity.py" "$_rev" >"$ISO/patch4.log" 2>&1; then
+        say "FAIL: GUARD-CTL y20d — round 24's value expression could not be put back, so y20a's value requirement is unattributed"
+        head -2 "$ISO/patch4.log" | tee -a "$OUT/run.log"; FAILED=1
+      else
+        _o=$ISO/y20d.log
+        python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" "$_rev" "$ISO/tree" \
+                   "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1
+        if grep -q "matched by samefile" "$_o" \
+           && ! grep -qF "realpath(entry) = $BINDPOINT" "$_o"; then
+          say "GUARD-CTL y20d: with round 24's value expression put back the refusal still names samefile — every LABEL grep still matches — and y20a's value requirement does NOT, so the requirement is what reads the value and not the label"
+        else
+          say "FAIL: GUARD-CTL y20d — the reverted value expression was not distinguishable by y20a's own requirement, so greping the value adds nothing and S-1 is not closed"
+          head -3 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+        fi
+      fi
     fi
+    # ----------------------------------------------------------------
+  # y21 — the OTHER TWO COPIES of the identity guard, armed
+  # ----------------------------------------------------------------
+  # ROUND 27, the coordinator's F-1 (P1, MEASURED-FALSE). `p8-plant.py` and
+  # `p8-mutants.py` carry the same identity guard and the same docstring, and
+  # that docstring says "Arm `y20` deletes this reading alone". It does not:
+  # every `y20` arm patches `p8-frozen-integrity.py`, and the coordinator
+  # measured that deleting the `samefile` reading in either of the other two
+  # leaves gate 6 at `FAILED=0`. A sentence that credits an arm to a file no arm
+  # touches is the same defect family as round 24's: prose that a reader would
+  # ACT on, and that is not true of the thing it describes.
+  #
+  # Both halves of the ruling are done rather than the cheaper one. These arms
+  # delete the reading in each copy, one deletion per copy, and require the
+  # refusal to go away BY NAME; and the block itself is then held identical
+  # across the three programs by bytes, so arming one copy keeps meaning
+  # something about the others.
+  for _prog in p8-plant.py p8-mutants.py; do
+    case "$_prog" in
+      p8-plant.py)   _tag=y21a; _ctl=y21b; _args="tail-renumber"; _expect="PLANT FAIL: NOT ISOLATED";;
+      p8-mutants.py) _tag=y21c; _ctl=y21d; _args="1 $ISO/mut-overlay.sql"; _expect="MUTANT FAIL: NOT ISOLATED";;
+    esac
+    cp "$HERE/$_prog" "$ISO/planted/$_prog"
+    cp "$HERE/p8-overlay.sql" "$ISO/mut-overlay.sql"
+    # Unpatched: the bind spelling must refuse, naming the reading.
+    _o=$ISO/$_tag.log
+    if python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" \
+               "$ISO/planted/$_prog" $_args >"$_o" 2>&1; then
+      say "FAIL: GUARD-CTL $_tag — $_prog ran with a bind mount of its own directory on sys.path and did not refuse"
+      FAILED=1
+    elif grep -qF "$_expect" "$_o" && grep -q "matched by samefile" "$_o"; then
+      say "GUARD-CTL $_tag: $_prog refuses the BIND spelling by its own name ($_expect) and names samefile as the reading — this copy now has an arm of its own, which is what F-1 said the docstring was claiming without one"
+    else
+      say "FAIL: GUARD-CTL $_tag — $_prog refused, but not by its own NOT ISOLATED refusal naming samefile"
+      head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+    fi
+    # The attribution: that reading deleted ALONE in THIS copy.
+    _nos2=$ISO/planted/no-samefile-$_prog
+    if ! python3 -I "$PATCHDIR/drop-samefile.py" "$ISO/planted/$_prog" "$_nos2" >"$ISO/patch-$_tag.log" 2>&1; then
+      say "FAIL: GUARD-CTL $_ctl — the samefile reading could not be deleted from $_prog alone, so $_tag is unattributed"
+      head -2 "$ISO/patch-$_tag.log" | tee -a "$OUT/run.log"; FAILED=1
+    else
+      _o=$ISO/$_ctl.log
+      python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" "$_nos2" $_args >"$_o" 2>&1
+      if grep -qF "$_expect" "$_o"; then
+        say "FAIL: GUARD-CTL $_ctl — with the samefile reading deleted from $_prog the bind spelling was STILL refused on isolation, so $_tag is not measuring that reading"
+        head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+      else
+        say "GUARD-CTL $_ctl: with the samefile reading deleted ALONE from $_prog the bind spelling is no longer refused on isolation, so that reading is this copy's own guard and not the other file's"
+      fi
+    fi
+  done
+  # And the block is the SAME block in all three: arming one copy says something
+  # about the others only while they are identical, and a divergence is how a
+  # guard quietly loses a reading in one file. The comparison is made between
+  # the sentinels `P8-IDENTITY-GUARD-BEGIN`/`-END`, which bound the EXECUTABLE
+  # region — the docstring above it legitimately differs, because each copy
+  # names its own arms — and with ONE declared normalisation: each program's
+  # refusal names itself (`INTEGRITY FAIL`, `PLANT FAIL`, `MUTANT FAIL`), which
+  # is deliberate, so that prefix is replaced by a token before comparing.
+  # Declaring the normalisation is the point: an unnormalised "identical" claim
+  # would be false, and a silently normalised one would hide a real divergence.
+  _gb=$ISO/guardblock
+  mkdir -p "$_gb"
+  for _prog in p8-frozen-integrity.py p8-plant.py p8-mutants.py; do
+    sed -n '/P8-IDENTITY-GUARD-BEGIN/,/P8-IDENTITY-GUARD-END/p' "$HERE/$_prog" \
+      | sed -E 's/"(INTEGRITY|PLANT|MUTANT) FAIL: /"<SELF> FAIL: /' > "$_gb/$_prog.block"
+  done
+  _gbl=$(wc -l < "$_gb/p8-frozen-integrity.py.block" | xargs)
+  if [ "$_gbl" -lt 20 ]; then
+    say "FAIL: ISOLATION — the identity guard extracted to only $_gbl lines, so the sentinels have moved and this comparison is measuring the wrong region"
+    FAILED=1
+  elif cmp -s "$_gb/p8-frozen-integrity.py.block" "$_gb/p8-plant.py.block" \
+     && cmp -s "$_gb/p8-frozen-integrity.py.block" "$_gb/p8-mutants.py.block"; then
+    say "ISOLATION: the identity guard is IDENTICAL in all three programs ($_gbl lines between the sentinels, with each program's own FAIL prefix normalised to <SELF> and nothing else), so y20 and y21 measure the same block and a divergence reds here rather than in a reader's assumption"
+  else
+    say "FAIL: ISOLATION — the identity guard is NOT identical across the three programs, so an arm on one says nothing about the others"
+    for _prog in p8-plant.py p8-mutants.py; do diff "$_gb/p8-frozen-integrity.py.block" "$_gb/$_prog.block" | head -4 | tee -a "$OUT/run.log"; done
+    FAILED=1
+  fi
+
+  # ROUND 27, S-4 (P3). This was the one statement in the section that did not
+  # fail closed: a NOTE with no `FAILED`. A bind mount left behind sits inside
+  # this run's own output directory, and the next run's `rm -rf "$ISO"` would
+  # then be deleting through a live mount — so it is a refusal, and the mount
+  # is left in place rather than removed under a reader's feet.
+  if ! umount "$BINDPOINT" 2>"$ISO/umount.log"; then
+    say "FAIL: ISOLATION — the bind mount at $BINDPOINT could not be unmounted ($(head -1 "$ISO/umount.log")); it is INSIDE this run's output directory, so a later rm -rf would delete through a live mount. Failing rather than reporting a note"
+    FAILED=1
+  fi
   fi
 fi
 

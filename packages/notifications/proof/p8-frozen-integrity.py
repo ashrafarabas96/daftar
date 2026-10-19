@@ -286,6 +286,7 @@ def _p8_own_dir_match(entry):
     An entry that does not exist is not this directory, and `samefile` raises on
     it, so that is the only error swallowed here.
     """
+    # <<< P8-IDENTITY-GUARD-BEGIN >>>
     absolute = _p8os.path.abspath(entry or ".")
     if _p8os.path.realpath(absolute) == _P8_OWN_REAL:
         return "realpath"
@@ -313,6 +314,7 @@ if _p8_hit_by is not None:
         ". A module planted beside this file would be imported in preference to "
         "the standard library. Refusing\n")
     raise SystemExit(1)
+# <<< P8-IDENTITY-GUARD-END >>>
 
 import hashlib
 import json

@@ -388,6 +388,18 @@ CREATE TABLE notification_provider_statuses (
     FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id),
   CONSTRAINT provider_statuses_verified_has_message_id
     CHECK (verification <> 'verified' OR provider_message_id IS NOT NULL),
+  -- NAMED GAP, round 27 (the coordinator's F-4, P3; it predates this commit and
+  -- is not introduced by it). `provider_event_id` is NULLABLE, and in
+  -- PostgreSQL a UNIQUE index treats NULLs as DISTINCT, so this constraint does
+  -- NOT de-duplicate two landings that arrive with no provider event id: both
+  -- insert. The name says "event once" and the guarantee is "once per event id
+  -- THAT EXISTS". Nothing in this pack claims more than that today, and no case
+  -- asserts the NULL pair is refused — which is the honest state, not a silent
+  -- one. Tightening it (NULLS NOT DISTINCT, or requiring the id and refusing a
+  -- landing without one) is a DDL decision with a real consequence for a
+  -- provider that omits the field, so it is an owner decision and is raised as
+  -- one rather than taken here. Until it is taken, a reader should read this
+  -- constraint as scoped to landings that carry an id.
   CONSTRAINT provider_statuses_event_once UNIQUE (provider, provider_event_id)
 );
 
