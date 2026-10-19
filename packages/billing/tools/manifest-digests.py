@@ -82,6 +82,8 @@ if not sys.flags.isolated:
 
 import argparse
 import hashlib
+import io
+import json
 import re
 from pathlib import Path
 
@@ -108,29 +110,47 @@ ROW = re.compile(
 # is exactly the fail-open shape this phase keeps finding. The list is shared
 # by the walk that writes the rows and by the coverage self-test below, so a
 # name can never be exempt in one and hashed in the other.
-REVIEWER_REPORTS: tuple[str, ...] = (
-    "P5-CHALLENGE-04e72cd.md",
-    "P5-CHALLENGE-07d308a.md",
-    "P5-CHALLENGE-0c16546.md",
-    "P5-CHALLENGE-421e425.md",
-    "P5-CHALLENGE-47a56c8.md",
-    "P5-CHALLENGE-4c451e6.md",
-    "P5-CHALLENGE-594178c.md",
-    "P5-CHALLENGE-92aa7c2.md",
-    "P5-CHALLENGE-6f2c9b7.md",
-    "P5-CHALLENGE-85fe33d.md",
-    "P5-CHALLENGE-9bd33bd.md",
-    "P5-CHALLENGE-5af0c96.md",
-    "P5-CHALLENGE-6171923.md",
-    "P5-CHALLENGE-678564e.md",
-    "P5-CHALLENGE-7a9737c.md",
-    "P5-COORD-DIFF-REVIEW-2108d26.md",
-    "P5-COORD-DIFF-REVIEW-4c451e6.md",
-    "P5-COORD-DIFF-REVIEW-4fb8e1d.md",
-    "P5-COORD-DIFF-REVIEW-9bd33bd.md",
-    "P5-CHALLENGE-6e690d8.md",
-    "P5-COORD-DIFF-REVIEW-6e690d8.md",
-)
+REVIEWER_REPORTS_FILE = "reviewer-reports.json"
+
+
+def reviewer_reports() -> tuple[str, ...]:
+    """The enumerated names, read from the ONE file both instruments read.
+
+    ROUND 28, THE CHALLENGER'S B-10 (P1). The names used to live in this file
+    as a tuple, while `test/tool-commands-are-isolated.test.ts` described the
+    same set with a name PATTERN thirty lines below a commit message arguing
+    that exemptions must never be keyed on shape. Measured, identical bytes one
+    name apart: an author document called `P5-CHALLENGE-1234567.md` was exempt
+    from that law, and three reviewer names this tool accepts — eight hex, a
+    `-R2` suffix, uppercase — were scanned and blamed on the author. A set
+    described twice is two sets.
+
+    It FAILS CLOSED. A missing, unreadable, malformed or empty list refuses;
+    nothing here falls back to a pattern, because a fallback is the hole.
+    """
+    path = Path(__file__).resolve().parent / REVIEWER_REPORTS_FILE
+    try:
+        raw = json.loads(io.open(path, encoding="utf-8").read())
+    except FileNotFoundError:
+        raise SystemExit(f"no {REVIEWER_REPORTS_FILE} beside this tool at {path}")
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{REVIEWER_REPORTS_FILE} is not valid JSON: {exc}")
+    if not isinstance(raw, dict):
+        raise SystemExit(f"{REVIEWER_REPORTS_FILE} must be a JSON object")
+    names = raw.get("reviewer_reports")
+    if not isinstance(names, list) or not names:
+        raise SystemExit(
+            f"{REVIEWER_REPORTS_FILE} has no non-empty 'reviewer_reports' list — refusing rather "
+            f"than treating every reviewer report as the author's"
+        )
+    if not all(isinstance(n, str) and n and "/" not in n for n in names):
+        raise SystemExit(f"{REVIEWER_REPORTS_FILE}: every entry must be a bare file name")
+    if len(set(names)) != len(names):
+        raise SystemExit(f"{REVIEWER_REPORTS_FILE} lists a name twice")
+    return tuple(names)
+
+
+REVIEWER_REPORTS: tuple[str, ...] = reviewer_reports()
 
 # The DETECTOR exists to fail closed, never to exempt. A file whose name says
 # it is a reviewer report but which is absent from the list above is a

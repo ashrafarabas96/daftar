@@ -43,16 +43,84 @@ import { describe, expect, it } from 'vitest';
 
 const REPO = join(__dirname, '..', '..', '..');
 const PACK = process.env.P5_PACK_DIR ?? '/mnt/project-files/phase5';
-
-/** The four tools whose invocations must be isolated. */
-const TOOLS = ['context-sites.py', 'status-block.py', 'manifest-digests.py', 'seal-check-run.py'] as const;
+const REVIEWER_REPORTS_FILE = join(__dirname, '..', 'tools', 'reviewer-reports.json');
 
 /**
- * Any written invocation of one of the four, isolated or not. `python3`,
- * `python`, and an absolute or relative path to the file all count, because
- * what matters is what a reader can copy.
+ * The reviewer-owned pack documents, by EXACT name, read from the ONE file
+ * `manifest-digests.py` reads.
+ *
+ * ROUND 28, THE CHALLENGER'S B-10 (P1, blocking). This was
+ * `/^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-f]{7}\.md$/` — a name PATTERN,
+ * thirty lines below a commit message of mine arguing that an exemption must
+ * never be keyed on shape. It failed both ways at once, measured on identical
+ * bytes one name apart: an AUTHOR document called `P5-CHALLENGE-1234567.md`
+ * was exempt from this law, and three reviewer names `manifest-digests.py`
+ * accepts — eight hex (round 23's F-42, exactly), a `-R2` suffix, uppercase —
+ * were scanned and blamed on the author, which would have demanded correcting
+ * a reviewer's frozen report.
+ *
+ * A set described twice is two sets, so neither instrument describes it any
+ * more: both read the list. It FAILS CLOSED — a missing or malformed file
+ * throws here rather than falling back to a pattern, because the fallback is
+ * the hole.
  */
-const INVOCATION = new RegExp(String.raw`python3?\s+((?:-\S+\s+)*)(?:\S*/)?(${TOOLS.join('|').replace(/\./g, '\\.')})`, 'g');
+const reviewerOwned = (): ReadonlySet<string> => {
+  const raw: unknown = JSON.parse(readFileSync(REVIEWER_REPORTS_FILE, 'utf8'));
+  const names = (raw as { reviewer_reports?: unknown }).reviewer_reports;
+  if (!Array.isArray(names) || names.length === 0 || !names.every((n) => typeof n === 'string' && n.length > 0)) {
+    throw new Error(`${REVIEWER_REPORTS_FILE} has no non-empty list of reviewer report names`);
+  }
+  return new Set(names as string[]);
+};
+
+const TOOLS_DIR = join(__dirname, '..', 'tools');
+/** This file, by its exact path from the repository root. */
+const SELF = 'packages/billing/test/tool-commands-are-isolated.test.ts';
+
+/**
+ * Scripts that must not be invoked un-isolated, DERIVED rather than listed:
+ * every `*.py` under `tools/`, recursively.
+ *
+ * ROUND 28, THE COORDINATOR'S B-11 RULING, which is this project's standing
+ * class ruling — a subject set is derived from the tree, with exceptions in a
+ * named map that goes red when an exception stops being true. The first
+ * version named the four tools, so the fifth script, including the arm this
+ * round added, was outside its own law on the day it was written.
+ */
+const EXEMPT_SCRIPTS: ReadonlyMap<string, string> = new Map();
+
+/** Every `*.py` under `tools/`, as a path relative to `tools/`. */
+const pythonScripts = (dir: string, prefix = ''): string[] => {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    if (entry === '__pycache__') continue;
+    const p = join(dir, entry);
+    const rel = prefix ? `${prefix}/${entry}` : entry;
+    if (statSync(p).isDirectory()) out.push(...pythonScripts(p, rel));
+    else if (entry.endsWith('.py')) out.push(rel);
+  }
+  return out;
+};
+
+const SCRIPTS = pythonScripts(TOOLS_DIR);
+
+/** The basenames the invocation regex looks for. */
+const TOOLS = SCRIPTS.map((s) => s.split('/').pop() ?? s);
+
+/**
+ * Any written invocation of one of the four, isolated or not. `python`,
+ * `python3`, a VERSIONED interpreter (`python3.13`), and an absolute or
+ * relative path to either the interpreter or the tool all count, because what
+ * matters is what a reader can copy.
+ *
+ * ROUND 28, THE CHALLENGER'S F-52 (P2). The first version read `python3?`, so
+ * `python3.13 tools/manifest-digests.py` and `/usr/bin/python3.13 …` were
+ * GREEN — a net naming shapes and missing variants of the shapes it names,
+ * which is B-6's lesson from round 24 applied to this law. This pack's own
+ * environment notes pin exact interpreter versions, so writing `python3.13` is
+ * a natural thing for one of these documents to do.
+ */
+const INVOCATION = new RegExp(String.raw`python(?:3(?:\.\d+)*)?\s+((?:-\S+\s+)*)(?:\S*/)?(${TOOLS.join('|').replace(/\./g, '\\.')})`, 'g');
 
 /** `-I` present among the flags of one matched invocation. */
 const isolated = (flags: string): boolean => flags.split(/\s+/).some((f) => f === '-I' || (/^-[A-Za-z]+$/.test(f) && f.includes('I')));
@@ -70,14 +138,37 @@ const walk = (dir: string, out: string[] = []): string[] => {
   return out;
 };
 
+/**
+ * The text as LOGICAL lines, joining shell continuations, each keeping the
+ * 1-based number of the line it started on.
+ *
+ * F-52's second half: a command split with a trailing `\` was invisible to a
+ * scan reading one line at a time, and splitting a long command is exactly
+ * what these documents do.
+ */
+const logicalLines = (text: string): { n: number; line: string }[] => {
+  const out: { n: number; line: string }[] = [];
+  const raw = text.split('\n');
+  for (let i = 0; i < raw.length; i += 1) {
+    const start = i;
+    let line = raw[i] ?? '';
+    while (/\\\s*$/.test(line) && i + 1 < raw.length) {
+      i += 1;
+      line = `${line.replace(/\\\s*$/, ' ')}${(raw[i] ?? '').trim()}`;
+    }
+    out.push({ n: start + 1, line });
+  }
+  return out;
+};
+
 /** Offending lines in one text, as `path:line: text`. */
 const offencesIn = (label: string, text: string): string[] => {
   const found: string[] = [];
-  text.split('\n').forEach((line, i) => {
+  for (const { n, line } of logicalLines(text)) {
     for (const m of line.matchAll(INVOCATION)) {
-      if (!isolated(m[1] ?? '')) found.push(`${label}:${i + 1}: ${line.trim()}`);
+      if (!isolated(m[1] ?? '')) found.push(`${label}:${n}: ${line.trim()}`);
     }
-  });
+  }
   return found;
 };
 
@@ -101,7 +192,7 @@ const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], nu
   let exemptBlocks = 0;
   let inFence = false;
   let exempt = false;
-  text.split('\n').forEach((line, i) => {
+  for (const { n, line } of logicalLines(text)) {
     if (/^\s*```/.test(line)) {
       if (inFence) {
         inFence = false;
@@ -111,13 +202,13 @@ const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], nu
         exempt = /f-50-quote/.test(line);
         if (exempt) exemptBlocks += 1;
       }
-      return;
+      continue;
     }
-    if (inFence && exempt) return;
+    if (inFence && exempt) continue;
     for (const m of line.matchAll(INVOCATION)) {
-      if (!isolated(m[1] ?? '')) found.push(`${label}:${i + 1}: ${line.trim()}`);
+      if (!isolated(m[1] ?? '')) found.push(`${label}:${n}: ${line.trim()}`);
     }
-  });
+  }
   return [found, exemptBlocks];
 };
 
@@ -142,7 +233,12 @@ describe('every written invocation of the pack tools is isolated', () => {
       scanned += 1;
       const label = relative(REPO, p);
       // Not this file: it quotes the defect on purpose, four lines above.
-      if (label.endsWith('tool-commands-are-isolated.test.ts')) {
+      //
+      // By its EXACT repository path. Found while building B-10's before arm:
+      // an `endsWith` skip is the same shape-keyed exemption B-10 is about,
+      // and it skipped a copy of this file named
+      // `__b10_before.test.ts`... wholesale. One hole of a class is enough.
+      if (label === SELF) {
         continue;
       }
       for (const line of text.split('\n')) {
@@ -168,11 +264,61 @@ describe('every written invocation of the pack tools is isolated', () => {
     ]);
     expect(offencesIn('fixture', '$ python3 ./tools/seal-check-run.py --dir p --tests t')).toHaveLength(1);
     expect(offencesIn('fixture', 'python3 -E -s tools/status-block.py --dir d')).toHaveLength(1);
+    // F-52, the two forms the first version missed, and the line number of a
+    // continuation must be the line the command STARTS on.
+    expect(offencesIn('fixture', 'python3.13 tools/manifest-digests.py --check')).toHaveLength(1);
+    expect(offencesIn('fixture', '/usr/bin/python3.13 tools/manifest-digests.py --check')).toHaveLength(1);
+    expect(offencesIn('fixture', 'python3 \\\n    tools/manifest-digests.py --check')).toStrictEqual(['fixture:1: python3  tools/manifest-digests.py --check']);
+    expect(offencesIn('fixture', 'python3.13 -I tools/manifest-digests.py --check')).toStrictEqual([]);
+    expect(offencesIn('fixture', 'python3 -I \\\n    tools/manifest-digests.py --check')).toStrictEqual([]);
     // And it must NOT red on the forms that are correct, or the law would be
     // unsatisfiable and someone would delete it.
     expect(offencesIn('fixture', '    python3 -I tools/context-sites.py --dir d --tests t')).toStrictEqual([]);
     expect(offencesIn('fixture', 'python3 -I -X faulthandler tools/manifest-digests.py')).toStrictEqual([]);
     expect(offencesIn('fixture', '[sys.executable, "-I", str(tools / "status-block.py")]')).toStrictEqual([]);
+  });
+
+  it('derives its subject set from the tree, and every script in it carries the guard', () => {
+    // B-11. The set is what is under `tools/`, not what someone remembered to
+    // list, and each exception is a sentence that reds when it stops being
+    // true.
+    expect(SCRIPTS.length, 'no Python script was derived from tools/, so every law here is vacuous').toBeGreaterThan(4);
+    for (const [name, reason] of EXEMPT_SCRIPTS) {
+      expect(SCRIPTS, `${name} is exempted (${reason}) but is no longer under tools/`).toContain(name);
+    }
+    const unguarded = SCRIPTS.filter((rel) => {
+      if (EXEMPT_SCRIPTS.has(rel)) return false;
+      const src = readFileSync(join(TOOLS_DIR, rel), 'utf8');
+      return !/if not sys\.flags\.isolated:/.test(src);
+    });
+    expect(unguarded, 'a script under tools/ does not refuse an un-isolated run, and is not a named exception').toStrictEqual([]);
+  });
+
+  it('shares ONE enumerated list with manifest-digests.py, and neither describes it', () => {
+    // B-10's remedy, asserted rather than asserted-in-prose: a set described
+    // twice is two sets, so the arm is that NEITHER instrument carries its own
+    // copy. If someone pastes the names back into either file, this reds.
+    const tool = readFileSync(join(__dirname, '..', 'tools', 'manifest-digests.py'), 'utf8');
+    expect(tool, 'manifest-digests.py no longer reads the shared list').toContain('reviewer-reports.json');
+    const literalNames = tool.match(/"P5-(?:CHALLENGE|COORD-DIFF-REVIEW)-[^"]*"/g) ?? [];
+    expect(literalNames, 'manifest-digests.py carries its own copy of the names again').toStrictEqual([]);
+    const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
+    // This file may NAME the shapes while explaining B-10; it may not key an
+    // exemption on them. The test for that is that the only place a name
+    // reaches `exempt` is the shared file.
+    expect(here, 'this law reads the shared list').toContain('reviewer-reports.json');
+    expect(reviewerOwned().size, 'the shared list is empty, so every reviewer report would be scanned').toBeGreaterThan(5);
+
+    // The four names from the challenger's B-10 table, each resolved the ONLY
+    // way left: membership of the shared list. A name absent from it is the
+    // author's, whatever it looks like -- which is the fail-open half -- and a
+    // name present in it is exempt in both instruments, which is the
+    // fail-closed half that was misattributing reviewer reports to me.
+    const list = reviewerOwned();
+    expect(list.has('P5-CHALLENGE-1234567.md'), 'a reviewer-SHAPED name nobody enumerated is exempt again').toBe(false);
+    expect(list.has('P5-CHALLENGE-12345678.md'), 'F-42 width, exempt by shape again').toBe(false);
+    expect(list.has('P5-CHALLENGE-9BD33BD.md'), 'uppercase shape exempt again').toBe(false);
+    expect(list.has('P5-CHALLENGE-9bd33bd.md'), 'a real reviewer report fell out of the shared list').toBe(true);
   });
 
   it('exempts a DECLARED quotation block, and nothing else', () => {
@@ -200,12 +346,12 @@ describe('every written invocation of the pack tools is isolated', () => {
       expect(existsSync(PACK), `no pack at ${PACK}: this arm is UNMEASURED here, by absence`).toBe(false);
       return;
     }
-    const reviewerOwned = /^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-f]{7}\.md$/;
+    const exempt = reviewerOwned();
     const offences: string[] = [];
     let quoted = 0;
     let mine = 0;
     for (const name of readdirSync(PACK)) {
-      if (reviewerOwned.test(name)) continue;
+      if (exempt.has(name)) continue;
       const text = readable(join(PACK, name));
       if (text === null) continue;
       mine += 1;

@@ -28,10 +28,24 @@ Run it isolated, like every other tool here. Without `-I` the import of
 
 from __future__ import annotations
 
+# ROUND 28, the coordinator's B-11 ruling. This arm is a `.py` under `tools/`
+# like any other, so it carries the same guard, above every other import. It
+# would otherwise rely on the guard inside the module it imports, which is a
+# defence belonging to a different file and reached only after this one has
+# already run.
+import sys
+
+if not sys.flags.isolated:
+    raise SystemExit(
+        "refusing to run without -I: run "
+        "`python3 -I tools/arms/pinned-now-arm.py tools/seal-check-run.py`. "
+        "Without isolation PYTHONPATH and the user site directory are on sys.path "
+        "before this file is read, so what this tool computes is not this tool's."
+    )
+
 import hashlib
 import importlib.util
 import pathlib
-import sys
 import tempfile
 
 
