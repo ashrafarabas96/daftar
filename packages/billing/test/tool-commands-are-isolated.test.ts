@@ -69,7 +69,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 
 import { describe, expect, it, onTestFinished } from 'vitest';
@@ -2880,6 +2880,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       'package.json',
       'test/law-bytes-are-pinned.test.ts',
       'test/tool-commands-are-isolated.test.ts',
+      'tools/arms/pinned-now-arm.py',
       'tools/context-sites.py',
       'tools/law-ran.py',
       'tools/manifest-digests.py',
@@ -3113,6 +3114,29 @@ describe('every written invocation of the pack tools is isolated', () => {
       expect(
         sets,
         `${REFUSED_NPM_CONFIG}: ${key} names ${file}, which sets ${sets.join(', ')}. That replaces the shell npm hands every script to, from a file outside the two this law checks`,
+      ).toStrictEqual([]);
+    }
+
+    // The coordinator's R55-C-04: npm reads its DEFAULT user config
+    // (`~/.npmrc`) and its default global config (beside the node that runs
+    // it) whether or not a variable names either one, and `tools/law-ran.py`
+    // checks both. Until this arm, the gate was their ONLY reader, which is
+    // the single-reader shape R53-03 closed for the env half: run the suite
+    // without the gate and a default config setting `script-shell` went
+    // unread. The twin lives here, reading the same two paths by the same
+    // rule, and neither file is required to exist.
+    const defaults = [
+      { what: "npm's default user config", file: join(homedir(), '.npmrc') },
+      { what: "npm's default global config", file: join(dirname(dirname(process.execPath)), 'etc', 'npmrc') },
+    ].filter(({ file }) => existsSync(file));
+    for (const { what, file } of defaults) {
+      const sets = readFileSync(file, 'utf8')
+        .split('\n')
+        .map((line) => (line.split('=', 1)[0] ?? '').trim().toLowerCase().replace(/_/g, '-'))
+        .filter((name) => name === 'script-shell' || name === 'shell');
+      expect(
+        sets,
+        `${REFUSED_NPM_CONFIG}: ${what} at ${file} sets ${sets.join(', ')}. npm reads that file with no variable naming it, so the pinned command would be handed to a program of someone else's choosing on every run`,
       ).toStrictEqual([]);
     }
   });

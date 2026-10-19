@@ -59,16 +59,24 @@ times. What keeps it honest here is not the number: the keys of EXPECTED are
 matched against the report's ABSOLUTE PATHS under the package, and those two
 files' BYTES are pinned in `tools/law-bytes.json`, checked by the law itself
 and by its separate reader. So either the law ran -- in which case the pin was
-checked and the 25 and the 1 are the law's own cases -- or it did not, in which
-case this step refuses. Replacing the law with 25 cases that are not the law
-moves a digest, which is the declared limit below, not a hole.
+checked and the counts are the law's own cases -- or it did not, in which case
+this step refuses. Replacing the law with the same number of cases that are
+not the law moves a digest, which is the declared limit below, not a hole.
+
+The counts are written ONCE, in EXPECTED below, and this prose names none of
+them (R55-C-02's neighbour, the coordinator's R55-C-03: this paragraph said
+"25" two rounds after EXPECTED said 26, and a figure repeated in prose drifts
+from the constant it describes the moment either moves).
 
 THE REMAINING LIMIT, STATED ONCE: a hostile EXECUTION ENVIRONMENT is outside
 any check that lives in this repository. The `node` binary and the contents of
-`node_modules` are not pinned here -- they come from `npm ci` against the
-committed lockfile -- and a `python3` that lies cannot be caught by a Python
-file it is running. This step bounds which PROGRAM it starts and reports its
-path; it does not bound what that program is.
+`node_modules` are not pinned here, and a `python3` that lies cannot be caught
+by a Python file it is running. This step bounds which PROGRAM it starts and
+reports its path; it does not bound what that program is. (The coordinator's
+R55-C-05: the clause that used to stand here said those contents come from
+`npm ci` against the committed lockfile. For THIS package that is false -- it
+is outside the root `workspaces`, so the root `npm ci` installs none of its
+dependencies, which is PATCH-REQ-P5-001's other half.)
 """
 
 from __future__ import annotations
@@ -507,7 +515,24 @@ def main() -> int:
     if pack_dir.is_dir():
         source_before = pack_digest(pack_dir)
         try:
-            pack_snapshot = Path(tempfile.mkdtemp(prefix="law-ran-pack-"))
+            pack_snapshot = Path(tempfile.mkdtemp(prefix="law-ran-pack-")).resolve()
+            # The challenger's question about the sentence above: can the
+            # environment steer where this copy lands? Measured -- TMPDIR, TMP
+            # and TEMP all fall back, and the candidate list `tempfile` consults
+            # after them is ['/tmp', '/var/tmp', '/usr/tmp', CWD]. The last one
+            # is this PACKAGE. A private copy of the pack written inside the
+            # tree this step measures is a directory the suite's own arms walk,
+            # 86 documents deep, so it is refused by name rather than used: the
+            # destination is part of the instrument, not an implementation
+            # detail of `mkdtemp`.
+            inside = [root for root in (root.resolve(), package) if pack_snapshot.is_relative_to(root)]
+            if inside:
+                shutil.rmtree(pack_snapshot, ignore_errors=True)
+                refuse(
+                    f"{REFUSED_PACK_COPY_IMPOSSIBLE}: the private directory this step measures the pack in "
+                    f"landed at {pack_snapshot}, inside {inside[0]}, which is a tree this step and the run "
+                    "it starts both measure. Point TMPDIR at a directory outside the repository"
+                )
         except OSError as exc:
             refuse(
                 f"{REFUSED_PACK_COPY_IMPOSSIBLE}: this step could not create the private directory it "
@@ -628,6 +653,24 @@ def main() -> int:
         not_passed = sorted({str(c.get("status")) for c in cases if c.get("status") != "passed"})
         if not_passed:
             problems.append(f"{relative} has cases that did not pass: {', '.join(not_passed)}")
+            # The coordinator's R55-C-01 (P2): the refusal NAME lives in the
+            # law's own assertion message, and this step used to throw the
+            # report's `failureMessages` away -- so when a suite-side arm
+            # fired, the operator read "has cases that did not pass" and never
+            # the name that says WHICH law refused. A refusal nobody can read
+            # by name is a refusal that gets retried blindly. The messages are
+            # the report's, quoted, truncated, and attributed to the case.
+            for case in cases:
+                if case.get("status") == "passed":
+                    continue
+                title = str(case.get("fullName") or case.get("title") or "<unnamed case>")
+                said = [str(m).strip() for m in (case.get("failureMessages") or []) if str(m).strip()]
+                if not said:
+                    problems.append(f"{relative} :: {title} did not pass and the report carries no message for it")
+                    continue
+                for message in said:
+                    first = message.splitlines()[0][:400]
+                    problems.append(f"{relative} :: {title} said: {first}")
         if result.get("status") != "passed":
             problems.append(f"{relative} as a file is {result.get('status')!r}, not 'passed'")
 

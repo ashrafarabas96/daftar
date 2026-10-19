@@ -90,6 +90,10 @@ const LAW_FILES = [
   'tsconfig.json',
   'tsconfig.build.json',
   'tools/law-ran.py',
+  // The coordinator's R55-C-06 (P4): the arm program the seal tool's branches
+  // are exercised through had no pin row, so its bytes were the one instrument
+  // of this law that could change without moving a digest.
+  'tools/arms/pinned-now-arm.py',
   // R48-F3: everything the law reads as CONFIGURATION, because an enrolment
   // line here exempted a document from the law entirely and looked like
   // routine bookkeeping while doing it.
