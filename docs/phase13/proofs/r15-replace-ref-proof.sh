@@ -196,10 +196,13 @@ import re
 import sys
 src, dst = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 s = src.read_text(encoding='utf-8')
-m = re.search(r'\n    served_id = hashlib\.sha1.*?\n(?=    pinned = )', s, re.S)
+# A-02 moved the re-hash into `served_object()`, where the commit, the trees and the
+# blob all pass through the one comparison. Deleting it there removes every guard that
+# covers this case, which is what arm 3b is for.
+m = re.search(r'\n    served = hashlib\.sha1\(.*?\n(?=    if served != oid:)', s, re.S)
 if not m:
     raise SystemExit('the re-hash check is not where this proof expects it; the proof needs updating')
-s = s[:m.start()] + '\n    served_id = recorded_id  # GUARD DELETED for arm 3b\n' + s[m.end():]
+s = s[:m.start()] + '\n    served = oid  # GUARD DELETED for arm 3b\n' + s[m.end():]
 compile(s, str(dst), 'exec')
 dst.write_text(s, encoding='utf-8')
 print('    replaced the re-hash with the id the store claims')

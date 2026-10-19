@@ -41,6 +41,23 @@ object (`sha1("blob <len>\0" + data)`), and a mismatch is a named refusal. That 
 statement the store cannot lie about, and it subsumes the replacement case — with both
 git guards stripped, a `replace` plant refuses anyway.
 
+That was still the store's word, one level up. The id the re-hash compared against came
+from `rev-parse <sha>:<path>`, which resolves commit → tree → … → blob by reading those
+same unverified objects. So tamper the **tree** instead: swap one 20-byte id inside the
+`docs/phase13` tree object, write it back under that tree's own id, and put the forged
+generator in as a perfectly honest blob — the re-hash then agrees with a forged record of
+a forged object. Or leave every tree and the blob honest and tamper only the **commit**,
+stored under the anchored SHA with its `parent` line intact. Both were measured accepted
+at `8215af5`, which also made that gate's own sentence false as measured. So the chain is
+now walked down from the one input that is not an answer from the store — the 40-character
+subject SHA — and the commit, every tree on the path and then the blob are each re-hashed
+as Git defines an object, with each next id taken from the bytes just verified. The first
+mismatch is a named refusal. What that still does not close is stated rather than implied,
+in `verified_chain()` and in the pin's own sentence: the subject SHA is itself read from a
+ref in that store, so it holds only as far as a reader comparing the printed SHA with the
+one in the signature, and WHICH repository the gate is handed remains a residual no code
+in this pack can close.
+
 `proofs/r15-replace-ref-proof.sh` is the red proof for the replacement case, and it needs
 no pack:
 `sh docs/phase13/proofs/r15-replace-ref-proof.sh [<sha>]` builds its own clone, plants
@@ -53,10 +70,23 @@ which is how one knows the arms mean anything.
 five arms: arm 0 establishes git's own behaviour on a tampered loose object, arm 1 accepts
 an honest prepared store, arm 2 refuses the forgery **by name** with no replace ref in
 sight, arm 3 shows the re-hash catching a `replace` plant with both git guards stripped,
-and arm 4 deletes the re-hash and requires both forgeries to succeed again.
+and arm 4 deletes the re-hash and requires both forgeries to succeed again. It is
+necessary and not sufficient: it keeps the blob case honest, and the chain is the next
+script's subject.
 
-The CI job `phase13-proofs` runs both scripts and **asserts their exit codes**; a step that
-merely ran them and printed output would report rather than check. Note what that job does
+`proofs/a02-object-chain-proof.sh` is the red proof for the chain, in six arms: A accepts
+an honest prepared store, B keeps A-01's blob forgery refused by name, **C** forges the
+`docs/phase13` tree under its own id with an honest blob beneath it, **E** forges only the
+commit object under the anchored SHA with every tree and the blob honest, D shows the walk
+catching a `replace` plant with both git guards stripped, and F deletes the re-hash and
+requires the tree forgery to succeed again. G, deliberately last, reads what the accepted
+verdict of arm A actually claims. Aimed at `8215af5` it goes red at arm C with "THE TREE
+FORGERY PASSED", which is how one knows the arms mean anything. Every arm that forges
+**plants the bytes it runs**: an honest running copy would be refused by the plain SHA-256
+comparison and the arm would pass for a reason unrelated to the guard under test.
+
+The CI job `phase13-proofs` runs all three scripts and **asserts their exit codes**; a step
+that merely ran them and printed output would report rather than check. Note what that job does
 and does not cover today: this workflow's `push` trigger is `main` and `phase/**`, so it
 does not fire on this preparation branch. It fires on a pull request from it, and the
 branch filter is the Repo Owner's to widen.

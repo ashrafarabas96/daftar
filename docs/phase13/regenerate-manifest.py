@@ -479,6 +479,140 @@ GENERATOR_IN_REPO = 'docs/phase13/regenerate-manifest.py'
 OBJECT_ID_RE = re.compile(r'^[0-9a-f]{40}$')
 
 
+# A-02: a tree entry's mode, so a walk that expects a directory is never handed
+# something else. A submodule (160000) or a symlink (120000) on this path is a
+# refusal and not a guess.
+TREE_MODE = b'40000'
+BLOB_MODES = (b'100644', b'100755')
+
+
+def tree_entries(data: bytes) -> list[tuple[bytes, bytes, str]]:
+    """The entries of a tree object, parsed from the bytes Git stores.
+
+    `<mode> <name>\0<20 raw bytes>`, repeated. Parsed from the bytes this walk
+    has just re-hashed rather than taken from `ls-tree`, because that is the
+    whole point of A-02: a second `git` call would be a second question put to
+    the store whose answers are in doubt.
+    """
+    out: list[tuple[bytes, bytes, str]] = []
+    i = 0
+    while i < len(data):
+        nul = data.find(b'\x00', i)
+        if nul < 0 or nul + 21 > len(data):
+            raise ValueError(f'truncated tree entry at byte {i} of {len(data)}')
+        head = data[i:nul]
+        if b' ' not in head:
+            raise ValueError(f'tree entry with no mode at byte {i}')
+        mode, name = head.split(b' ', 1)
+        out.append((mode, name, data[nul + 1:nul + 21].hex()))
+        i = nul + 21
+    return out
+
+
+def served_object(oid: str, typ: str) -> tuple[bytes | None, str]:
+    """One object's bytes, RE-HASHED as Git defines an object before they are used.
+
+    `sha1("<type> <len>\0" + content)`, compared with the id the object was
+    asked for. Git itself does not do this on read (A-01, measured), so every
+    id this module compares against is computed here from the bytes actually
+    handed over. Returns (bytes, '') or (None, reason) -- never bytes it has
+    not checked.
+    """
+    try:
+        got = subprocess.run((*GIT, '-C', str(REPO), 'cat-file', typ, oid),
+                             capture_output=True, timeout=120, check=False, env=git_env())
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f'git could not be run in {REPO} ({exc})'
+    if got.returncode != 0:
+        detail = got.stderr.decode('utf-8', 'replace').strip().splitlines()
+        why = detail[0] if detail else f'git exited {got.returncode}'
+        return None, f'the {typ} object {oid} is not readable in {REPO} — {why}'
+    served = hashlib.sha1(b'%s %d\x00' % (typ.encode('ascii'), len(got.stdout))
+                          + got.stdout).hexdigest()
+    if served != oid:
+        return None, (f'the {typ} object SERVED AS {oid} HASHES TO {served} '
+                      f'({len(got.stdout)} bytes)')
+    return got.stdout, ''
+
+
+def verified_chain(subject_sha: str, path: str) -> tuple[str | None, list[str], str]:
+    """Walk commit -> tree -> ... -> blob, re-hashing every object on the way.
+
+    A-02, the challenger's second addendum and a P1 fail-open that went straight
+    THROUGH the A-01 fix. A-01 stopped the store serving forged bytes under a
+    real blob id, by re-hashing the bytes against the id the tree records. But
+    that id was itself read with `rev-parse <sha>:<path>`, which resolves
+    commit -> tree -> ... -> blob out of the same store that A-01 had just shown
+    cannot be taken at its word. So the attacker moves one level up and tampers
+    with the TREE instead: one 20-byte id swapped inside the `docs/phase13` tree
+    object, written back under that tree's own id, and the forged generator goes
+    in as a perfectly HONEST blob. Then `recorded_id == served_id` and the
+    re-hash matches -- because what it matches is a forged record of a forged
+    object. Measured on the real gate: `ok=True`, with `refs/replace/` empty,
+    the flag and the environment variable with nothing to disable, and HEAD,
+    the worktree and the branch all resolving correctly. Stronger still: leave
+    every tree and the blob HONEST and tamper only the commit object, stored
+    under the anchored sha with its `parent` line intact -- also `ok=True`.
+    And the sentence the gate printed, "the id the tree at <sha> RECORDS", was
+    then FALSE as measured: the tree at that sha, hashed properly, records the
+    real blob.
+
+    A re-hash is only as good as the id it compares against. So the chain is
+    walked down from the one input that is not an answer from the store -- the
+    40-character subject sha -- and every object on it is re-hashed as Git
+    defines an object: the commit, each tree on the path, then the blob. The id
+    for the next step is taken from the bytes of the object just verified, never
+    from a second question to the store. The first mismatch is a refusal BY NAME.
+
+    What this does NOT close, stated rather than implied: the subject sha itself
+    is handed to this function, and `subject_sha_local()` reads it from a ref in
+    that same store. A store that lies about its refs prints a different sha --
+    so the anchor holds only as far as a reader comparing the printed sha with
+    the one in the signature, which is why the pin's sentence names it. The
+    standing residual of WHICH repository the gate is handed is unchanged and
+    no code in this pack can close it.
+
+    Returns (blob id, steps verified, '') or (None, steps verified, reason).
+    """
+    steps: list[str] = []
+    commit, why = served_object(subject_sha, 'commit')
+    if commit is None:
+        return None, steps, f'the COMMIT itself could not be verified: {why}'
+    head = commit.split(b'\n', 1)[0]
+    tree_id = head[5:].decode('ascii', 'replace') if head.startswith(b'tree ') else ''
+    if not OBJECT_ID_RE.match(tree_id):
+        return None, steps, (f'the verified commit {subject_sha[:12]} does not begin with a '
+                             f'`tree <id>` line, so the walk has nowhere to go: its first line '
+                             f'is {head[:64]!r}')
+    steps.append(f'commit={subject_sha[:12]} -> tree={tree_id[:12]}')
+    oid, parts = tree_id, path.split('/')
+    for depth, part in enumerate(parts):
+        where = '/'.join(parts[:depth]) or 'the repository root'
+        tree, why = served_object(oid, 'tree')
+        if tree is None:
+            return None, steps, f'the TREE at `{where}` could not be verified: {why}'
+        try:
+            entries = tree_entries(tree)
+        except ValueError as exc:
+            return None, steps, (f'the verified tree {oid[:12]} at `{where}` does not parse as '
+                                 f'a tree object: {exc}')
+        hits = [e for e in entries if e[1] == part.encode('utf-8')]
+        if len(hits) != 1:
+            found = 'is absent from' if not hits else f'appears {len(hits)} times in'
+            return None, steps, (f'`{part}` {found} the verified tree {oid[:12]} at `{where}` '
+                                 f'({len(entries)} entries). Refusing rather than guessing which')
+        mode, _, nxt = hits[0]
+        last = depth == len(parts) - 1
+        want = BLOB_MODES if last else (TREE_MODE,)
+        if mode not in want:
+            kind = 'a file' if last else 'a directory'
+            return None, steps, (f'`{part}` in the verified tree {oid[:12]} at `{where}` has mode '
+                                 f'{mode.decode("ascii", "replace")}, which is not {kind}; a '
+                                 f'submodule or a symlink on this path is a refusal, not a guess')
+        steps.append(f'{part}={nxt[:12]}')
+        oid = nxt
+    return oid, steps, ''
+
 def pin_verdict(subject_sha: str) -> tuple[bool, str]:
     """Is the generator running here the one committed at the SHA it is judging?
 
@@ -515,61 +649,62 @@ def pin_verdict(subject_sha: str) -> tuple[bool, str]:
     still records the real id, so the re-hash refuses anyway. The guards stay regardless
     -- they are free, and they keep the replace case out of this comparison entirely.
 
+    A-02, the challenger's next addendum, then showed that THAT was still the store's
+    word: the id the re-hash compared against came from `rev-parse <sha>:<path>`, which
+    resolves commit -> tree -> ... -> blob out of the same unverified store. Tamper the
+    TREE, or the COMMIT, and the re-hash matches a forged record of a forged object --
+    measured both ways at `8215af5`, ok=True, with the printed sentence false as measured.
+    So the id is no longer read at all: `verified_chain()` walks down from the 40-character
+    subject sha and re-hashes the commit, every tree on the path and then the blob, taking
+    each next id from the bytes it has just verified. See its docstring for what that still
+    does not close.
+
     Returns (ok, sentence). Every failure is BY NAME, and a failure is fail-closed:
-    unreachable commit, absent blob, foreign repository and now bytes that are not the
-    object they are served as, are refusals, not skips, because "I could not check the
-    checker" must never read as "the checker is fine".
+    unreachable commit, absent blob, foreign repository, bytes that are not the object they
+    are served as, and now an object on the PATH that is not the object it is named as, are
+    refusals, not skips, because "I could not check the checker" must never read as "the
+    checker is fine".
     """
     running = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    try:
-        recorded = subprocess.run(
-            (*GIT, '-C', str(REPO), 'rev-parse', f'{subject_sha}:{GENERATOR_IN_REPO}'),
-            capture_output=True, timeout=120, check=False, env=git_env())
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, (f'the generator pin CANNOT BE CHECKED: git could not be run in {REPO} '
-                       f'({exc}). Refusing, because an unchecked checker is not a checked one')
-    recorded_id = recorded.stdout.decode('utf-8', 'replace').strip() if recorded.returncode == 0 else ''
-    try:
-        committed = subprocess.run(
-            (*GIT, '-C', str(REPO), 'show', f'{subject_sha}:{GENERATOR_IN_REPO}'),
-            capture_output=True, timeout=120, check=False, env=git_env())
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, (f'the generator pin CANNOT BE CHECKED: git could not be run in {REPO} '
-                       f'({exc}). Refusing, because an unchecked checker is not a checked one')
-    if committed.returncode != 0:
-        detail = committed.stderr.decode('utf-8', 'replace').strip().splitlines()
-        why = detail[0] if detail else f'git exited {committed.returncode}'
-        return False, (f'the generator pin CANNOT BE CHECKED: `{GENERATOR_IN_REPO}` is not '
-                       f'readable at {subject_sha[:7]} in {REPO} — {why}. Either the commit is '
-                       'unreachable here, the blob is absent at that commit, or this is not the '
-                       'repository that commit belongs to')
-    if not OBJECT_ID_RE.match(recorded_id):
-        return False, (f'the generator pin CANNOT BE CHECKED: `git rev-parse '
-                       f'{subject_sha[:7]}:{GENERATOR_IN_REPO}` did not yield an object id in '
-                       f'{REPO}. Refusing: without the id the TREE records there is nothing to '
-                       'check the served bytes against, and the store\'s own word for what it '
-                       'handed over is exactly what A-01 forges')
-    served_id = hashlib.sha1(b'blob %d\x00' % len(committed.stdout) + committed.stdout).hexdigest()
-    if served_id != recorded_id:
+    if not OBJECT_ID_RE.match(subject_sha):
+        return False, (f'the generator pin CANNOT BE CHECKED: `{subject_sha}` is not a full '
+                       '40-character object id. An abbreviation is resolved BY the store this '
+                       'walk exists to distrust, so there would be no anchor left (A-02). '
+                       'Refusing')
+    recorded_id, steps, why = verified_chain(subject_sha, GENERATOR_IN_REPO)
+    if recorded_id is None:
+        walked = ' -> '.join(steps) if steps else 'nothing'
+        return False, (f'the repository SERVED AN OBJECT THAT IS NOT THE ONE IT NAMES (A-02):\n'
+                       f'    {why}\n'
+                       f'    re-hashed and verified before the refusal: {walked}\n'
+                       '  git does not verify an object\'s hash when it reads it, so neither the '
+                       'blob id written in a tree nor the tree id written in a commit may be taken '
+                       'from the store\'s word for it. The chain is walked down from the subject '
+                       'sha and every object on it re-hashed; this one did not hash to the id it '
+                       'was served as. Refusing by name')
+    blob, why = served_object(recorded_id, 'blob')
+    if blob is None:
         return False, (f'the repository SERVED BYTES THAT ARE NOT THE OBJECT IT NAMES (A-01):\n'
-                       f'    the tree at {subject_sha[:7]} records `{GENERATOR_IN_REPO}` as '
-                       f'{recorded_id}\n'
-                       f'    the {len(committed.stdout)} bytes handed over hash to {served_id}\n'
+                       f'    the verified chain from {subject_sha[:7]} records '
+                       f'`{GENERATOR_IN_REPO}` as {recorded_id}\n'
+                       f'    {why}\n'
                        '  git does not verify a loose object when it reads it, so a prepared '
                        'object store can serve anything under a real id. This is NOT a '
                        'replacement and no `refs/replace/` need exist; the commit, the tree and '
                        'the branch resolution can all be correct. Refusing by name')
-    pinned = hashlib.sha256(committed.stdout).hexdigest()
+    pinned = hashlib.sha256(blob).hexdigest()
     if pinned != running:
         return False, (f'the generator RUNNING HERE is not the one committed at '
                        f'{subject_sha[:7]}:\n    running   {running}\n    committed {pinned}\n'
                        f'  the file is `{Path(__file__).name}` in this directory and '
                        f'`{GENERATOR_IN_REPO}` in the repository; they must be the same bytes')
-    return True, (f'the generator is PINNED: the bytes running here hash to {running[:16]}…, '
-                  f'and the {len(committed.stdout)} bytes the repository served re-hash to '
-                  f'{served_id[:12]}…, which is the id the tree at {subject_sha[:7]} RECORDS for '
-                  f'`{GENERATOR_IN_REPO}` — so the store was not taken at its word (A-01) and the '
-                  'pack no longer certifies its own checker')
+    return True, (f'the generator is PINNED, and the chain to it was RE-HASHED object by object '
+                  f'(A-02): {" -> ".join(steps)}. The {len(blob)} bytes served for that blob '
+                  f'id re-hash to {recorded_id[:12]}…, which is the id the verified tree at '
+                  f'{subject_sha[:7]} RECORDS for `{GENERATOR_IN_REPO}`, and the bytes running '
+                  f'here hash to {running[:16]}… — so no id in this comparison was taken from '
+                  f'the store\'s word for it (A-01), only the subject sha {subject_sha[:12]}… '
+                  'itself, which a reader must compare with the one in the signature')
 
 
 def replace_refs() -> list[str]:

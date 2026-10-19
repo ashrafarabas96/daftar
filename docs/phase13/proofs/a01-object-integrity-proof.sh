@@ -22,7 +22,12 @@
 #
 # The remedy under test: read the id the TREE records, re-hash the bytes handed
 # over as Git itself defines an object, sha1("blob <len>\0" + data), and refuse
-# by name on mismatch. That is a statement the store cannot lie about.
+# by name on mismatch.
+#
+# A-02, the challenger's NEXT addendum, then showed that the id this compares
+# against was itself read from the store -- so this script is necessary and not
+# sufficient, and `a02-object-chain-proof.sh` covers the tree and the commit. The
+# two together are what the pin now rests on; this one keeps the blob case honest.
 #
 #   usage: sh docs/phase13/proofs/a01-object-integrity-proof.sh [<subject sha>]
 #
@@ -219,10 +224,13 @@ import re
 import sys
 src, dst = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 s = src.read_text(encoding='utf-8')
-m = re.search(r'\n    served_id = hashlib\.sha1.*?\n(?=    pinned = )', s, re.S)
+# A-02 moved the re-hash into `served_object()`, where the commit, the trees and the
+# blob all pass through it. Deleting it there is still exactly "delete the A-01 check",
+# and it is the only place left that performs one.
+m = re.search(r'\n    served = hashlib\.sha1\(.*?\n(?=    if served != oid:)', s, re.S)
 if not m:
     raise SystemExit('the re-hash check is not where this proof expects it; the proof needs updating')
-s = s[:m.start()] + ("\n    served_id = recorded_id  # GUARD DELETED for arm 4\n") + s[m.end():]
+s = s[:m.start()] + '\n    served = oid  # GUARD DELETED for arm 4\n' + s[m.end():]
 compile(s, str(dst), 'exec')
 dst.parent.mkdir(parents=True, exist_ok=True)
 dst.write_text(s, encoding='utf-8')

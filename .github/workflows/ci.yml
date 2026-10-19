@@ -75,6 +75,9 @@ jobs:
       - name: A-01 - the generator pin resists a store that serves forged bytes
         run: |
           sh docs/phase13/proofs/a01-object-integrity-proof.sh
+      - name: A-02 - the generator pin re-hashes the whole object chain
+        run: |
+          sh docs/phase13/proofs/a02-object-chain-proof.sh
 
   # -------------------------------------------------------------------------
   # 2. Backend: install, manifest, gate, static guards, format/lint/typecheck,
