@@ -341,9 +341,9 @@ SELECT p8.case_equals('X3 the guard is a STATEMENT trigger on TRUNCATE, not a ro
 -- =====================================================================
 -- I-8f / N-6  ONE LIVE CHANNEL, and the arrival fact that keeps it live
 -- =====================================================================
--- ROUND 22, OD-P8-14. This family existed only in `p8-ddl-cases.sql`, which
--- runs against a PROTOTYPE, and in `n6-arrival-fact.sql`, which is a prototype
--- by its own header. Measured before porting: no case in this file named
+-- ROUND 22, OD-P8-14. This family existed only in the retired prototype gate's
+-- own case file (see `proof/retired/`), which runs against a PROTOTYPE, and in
+-- `n6-arrival-fact.sql`, which is a prototype by its own header. Measured before porting: no case in this file named
 -- `deliveries_one_live_channel`, and `p8-mutants.py` mutated the arrival CHECK
 -- at the relation but NOT the conjunct inside the partial index. So deleting
 -- `AND NOT arrival_ever_recorded` from the real overlay reddened nothing, and

@@ -12,20 +12,46 @@
 # through the membership relation, not through a key, because the real `users`
 # has no business dimension.
 #
-# WHAT COVERS ITS INVARIANTS NOW. `run-p8-real-proof.sh`, against the REAL
-# relations: the I-8f / N-6 family was ported in round 22 as cases
-# `I8f-a`..`I8f-e` and `N6-a`..`N6-i`, and mutant 13 removes the arrival
-# conjunct from the real overlay's partial index and requires `N6-e` to red by
-# name. That coverage was MEASURED before this file was retired (baseline 54 ->
-# 69 cases, `MUT 13: RED at 'N6-e ...'`), because retiring a gate whose
-# invariants nothing else exercises is a deletion wearing a retirement's name.
+# WHAT COVERS ITS INVARIANTS NOW, AND WHAT DOES NOT. Retiring a gate whose
+# invariants nothing else exercises is a deletion wearing a retirement's name,
+# so this is stated family by family and not as one sentence.
+#
+#   * I-8f / N-6 — ported in round 22 into `run-p8-real-proof.sh` as cases
+#     `I8f-a`..`I8f-e` and `N6-a`..`N6-i`, with mutant 13 removing the arrival
+#     conjunct from the real overlay's partial index and requiring `N6-e` to red
+#     by name. Measured before this file was retired: baseline 54 -> 69 cases.
+#   * `W-1`..`W-7`, the worker's grants, and `I3-a`..`I3-i`, the status ladder —
+#     ported in round 24 into `p8-real-cases-worker.sql`, which runs as the REAL
+#     `daftar_worker` under the real policies, with mutant 15 widening the
+#     column-scoped `UPDATE` grant (must red `W-2`) and mutant 14 dropping the
+#     monotonic trigger (must red `I3-d`). Baseline 69 -> 91 cases.
+#     **ROUND 24 CORRECTION.** Round 22's version of this file said the
+#     invariants were covered by the live gate, full stop, and the handoff said
+#     the role cases were superseded. Both were FALSE for this family: no live
+#     case ran as `daftar_worker` at all, which the fifteenth challenge (O-4)
+#     and the coordinator's diff review (C-1) each measured independently by
+#     widening a worker grant and watching the gate stay green. The claim is
+#     narrowed to what is measured, and the sentence that was wrong is left
+#     visible rather than quietly replaced.
+#   * `H-3` (the quarantine) — ported in round 24 as `H-3`, `H-3b`, `H-3c`,
+#     because the worker is the live principal that holds its `INSERT`.
+#   * `H-1`, `H-2`, `H-4` — **UNMEASURED at runtime, and not covered here.**
+#     They are rules about a WEBHOOK principal, the frozen role set contains no
+#     webhook role (an open owner item in the overlay's §6), and the live worker
+#     both reads `notifications` and holds `UPDATE (status, ...)`. They are not
+#     approximated with a principal that is not the subject of the rule; they
+#     wait on the administrator's role-creation step at promotion.
 #
 # It is kept, not deleted, so a reader can see what was measured and how.
 # It refuses rather than runs: a retired gate that still executes is a gate.
 set -u
 echo "RETIRED: this gate was retired in round 22 (OD-P8-14) and does not run." >&2
-echo "         Its invariants are covered by run-p8-real-proof.sh: cases I8f-a..I8f-e," >&2
-echo "         N6-a..N6-i, and mutant 13 on the real overlay's partial index." >&2
+echo "         COVERED by run-p8-real-proof.sh on the real schema: I8f-a..I8f-e and" >&2
+echo "         N6-a..N6-i with mutant 13 (round 22); W-1..W-7, I3-a..I3-i and the" >&2
+echo "         quarantine H-3* as the real daftar_worker, with mutants 14 and 15" >&2
+echo "         (round 24)." >&2
+echo "         NOT covered, UNMEASURED at runtime: H-1, H-2, H-4 — they are rules" >&2
+echo "         about a WEBHOOK principal and the frozen role set has no such role." >&2
 echo "         Kept for the record, never deleted. Refusing with exit 2." >&2
 exit 2
 # =====================================================================

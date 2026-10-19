@@ -53,13 +53,58 @@ if not sys.flags.isolated:
         "with an instrument the subject can supply\n")
     raise SystemExit(1)
 import os as _p8os  # noqa: E402  — deliberate: nothing is imported above the test
+# ROUND 24, O-1 (round 15's challenge). The first version of this test compared
+# path SPELLING. `abspath` normalises `.`, `..` and repeated slashes but never
+# resolves a symlink, so a `sys.path` entry that is a SYMLINK to this very
+# directory compared unequal, the test passed, and the challenger measured
+# round 14's whole fail-open returning through it — with the refusal's own
+# sentence, "a module planted beside this file would be imported in preference
+# to the standard library", true of the case it let through. Identity is what
+# the test is about, so both sides are resolved with `realpath`. `abspath` stays
+# because `realpath` of a relative entry still has to be taken against the
+# working directory, and the refusal now names BOTH spellings: the entry as
+# written and what it resolves to.
 _P8_OWN_DIR = _p8os.path.dirname(_p8os.path.abspath(__file__))
-if any(_p8os.path.abspath(p or ".") == _P8_OWN_DIR for p in sys.path):
+_P8_OWN_REAL = _p8os.path.realpath(_P8_OWN_DIR)
+
+
+def _p8_is_own_dir(entry):
+    """Is this sys.path entry THIS directory, however it is spelled?
+
+    Two independent readings, because each catches what the other cannot.
+    `realpath` resolves symlinks and so answers for a symlinked spelling even
+    when the directory has been removed from under us. `samefile` compares the
+    device and inode, which answers for a BIND MOUNT of the same directory —
+    whose `realpath` is genuinely different while the directory is the same one.
+    An entry that does not exist is not this directory, and `samefile` raises on
+    it, so that is the only error swallowed here.
+
+    **The `samefile` reading is UNEXERCISED at runtime, and is named as such
+    rather than reported as proved.** Measured in this container: a bind mount
+    of this directory IS caught, but by the `realpath` reading — on this kernel
+    the bind path resolves through to the source — so no arm distinguishes the
+    second reading. It is kept because a platform whose bind path does not
+    resolve through would otherwise be a hole, and the alternative is code with
+    a silent gap rather than a named one. Arms y16 and y17 exercise the
+    `realpath` reading on the plain and symlinked spellings; y18 deletes this
+    whole test alone and shows the fail-open return.
+    """
+    absolute = _p8os.path.abspath(entry or ".")
+    if _p8os.path.realpath(absolute) == _P8_OWN_REAL:
+        return True
+    try:
+        return _p8os.path.samefile(absolute, _P8_OWN_DIR)
+    except OSError:
+        return False
+
+
+_p8_hit = next((p for p in sys.path if _p8_is_own_dir(p)), None)
+if _p8_hit is not None:
     sys.stderr.write(
         "MUTANT FAIL: NOT ISOLATED — isolated mode was requested and this "
-        "interpreter still has " + _P8_OWN_DIR + " on sys.path, so a module "
-        "planted beside this file would be imported in preference to the "
-        "standard library. Refusing\n")
+        "interpreter still has " + repr(_p8_hit) + ", which resolves to " +
+        _P8_OWN_REAL + ", on sys.path, so a module planted beside this file "
+        "would be imported in preference to the standard library. Refusing\n")
     raise SystemExit(1)
 
 
@@ -270,6 +315,35 @@ def drop_arrival_release_term(s):
                            "             AND final_status_verified)"), 1)
 
 
+def drop_status_monotonic(s):
+    """Remove the monotonic-status trigger and leave its functions in place.
+
+    ROUND 24, O-4. The ladder was a DATABASE rule with no database case: six
+    vitest files exercise it in TypeScript, where no `UPDATE` ever reaches a
+    trigger, so dropping this trigger reddened nothing. `I3-d` (read -> sent) is
+    the case that must red, and it reds by its own label: without the trigger a
+    regression is simply accepted, because the CHECK constraint admits every
+    token on the ladder in any order.
+    """
+    import re
+    m = re.search(r"CREATE TRIGGER notifications_status_monotonic[^;]*;", s)
+    assert m, "the monotonic status trigger was not found"
+    return s[:m.start()] + s[m.end():]
+
+
+def widen_worker_update_grant(s):
+    """Give the worker UPDATE on the whole relation instead of three columns.
+
+    ROUND 24, O-4. `W-2` asserts that the worker cannot rewrite an obligation
+    key, and the only thing that refuses it is the column list in this GRANT —
+    no trigger and no policy says anything about that column. Until this mutant
+    existed, deleting the column list reddened nothing.
+    """
+    old = "GRANT UPDATE (status, last_error_code, updated_at) ON notifications TO daftar_worker;"
+    assert old in s, "the worker's column-scoped UPDATE grant was not found in the shape this mutant edits"
+    return s.replace(old, "GRANT UPDATE ON notifications TO daftar_worker;", 1)
+
+
 MUTANTS = {
     "1":  [drop_restrictive],
     "1b": [drop_restrictive, blind_sec7],
@@ -289,6 +363,8 @@ MUTANTS = {
     "11":  [drop_preferences_tenant_key],
     "12":  [drop_obligation_once],
     "13":  [drop_arrival_release_term],
+    "14":  [drop_status_monotonic],
+    "15":  [widen_worker_update_grant],
 }
 
 

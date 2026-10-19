@@ -168,6 +168,22 @@ cases(){           # cases <logdir>  — runs every case file as its own role
     r=${pair%%:*}; f=${pair#*:}
     "$B/psql" -h "$D" -p "$P" -U "$r" -d daftar -v ON_ERROR_STOP=1 -f "$HERE/$f" > "$ld/$f.log" 2>&1 || rc=1
   done
+  # ROUND 24, O-4. `daftar_worker` holds grants nothing exercised: a
+  # column-scoped UPDATE on notifications, an append-only INSERT on attempts,
+  # and the quarantine INSERT; and the status ladder was a database rule tested
+  # only in TypeScript. The worker cannot create an obligation — that is case
+  # W-3 — so its cases need rows that are already committed, which the three
+  # files above cannot leave behind because each rolls itself back. Hence:
+  # commit a baseline AFTER them, run the worker file, then remove the baseline
+  # again, so nothing that runs later (the race proof commits) inherits it.
+  "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+            -f "$HERE/p8-real-fixtures-worker.sql" > "$ld/fixtures-worker.log" 2>&1 \
+    || { echo "the worker baseline did not commit" >> "$ld/fixtures-worker.log"; rc=1; }
+  "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
+            -f "$HERE/p8-real-cases-worker.sql" > "$ld/p8-real-cases-worker.sql.log" 2>&1 || rc=1
+  "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+            -f "$HERE/p8-real-fixtures-worker-teardown.sql" > "$ld/fixtures-worker-teardown.log" 2>&1 \
+    || { echo "the worker baseline was NOT removed" >> "$ld/fixtures-worker-teardown.log"; rc=1; }
   grep -h "PASS" "$ld"/*.sql.log 2>/dev/null | wc -l > "$ld/passes"
   return $rc
 }
@@ -304,6 +320,8 @@ mutate_refuses 10 "P8-OVERLAY-E(4): the quarantine claims an isolation it cannot
 mutate         10b "A12 the quarantine is not under RLS, because it has no tenant to scope by"
 mutate         11  "T2 every tenant-scoped relation carries a composite tenant key"
 mutate         13  "N6-e but the obligation is NOT released: no second channel"
+mutate         14  "I3-d read -> sent is a regression"
+mutate         15  "W-2 may NOT rewrite the obligation key — the UPDATE grant is column-scoped"
 mutate_race    12
 
 # <<< P8-Y7-CUT-END-A >>>
@@ -1743,10 +1761,40 @@ import sys
 src, dst = sys.argv[1], sys.argv[2]
 s = open(src, encoding="utf-8").read()
 a = "if not sys.flags.isolated:"
-b = "if any(_p8os.path.abspath(p or \".\") == _P8_OWN_DIR for p in sys.path):"
+b = "if _p8_hit is not None:"
 assert s.count(a) == 1, "the isolated-mode test is not where this patcher expects it"
 assert s.count(b) == 1, "the sys.path test is not where this patcher expects it"
 s = s.replace(a, "if False:", 1).replace(b, "if False:", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+
+# ROUND 24, O-2. `unisolate.py` above deletes BOTH tests in one patch, so y14
+# and y15 cannot say which of the two closed the route — and the challenger
+# measured the consequence: the second test was never exercised by any arm
+# (y12 runs isolated, so no entry derived from the tree is on the path; y13
+# runs un-isolated, so the FIRST test returns before the second is read), and
+# a real defect lived in it unseen for a round. These two helpers exist so the
+# second test has arms of its own: one that runs it, and one that deletes it
+# ALONE.
+cat > "$PATCHDIR/with-path-entry.py" <<'PATCH'
+import runpy
+import sys
+entry, script = sys.argv[1], sys.argv[2]
+sys.argv = [script] + sys.argv[3:]
+sys.path.insert(0, entry)
+runpy.run_path(script, run_name="__main__")
+PATCH
+cat > "$PATCHDIR/drop-path-test.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = "if not sys.flags.isolated:"
+b = "if _p8_hit is not None:"
+assert s.count(a) == 1, "the isolated-mode test is not where this patcher expects it"
+assert s.count(b) == 1, "the sys.path test is not where this patcher expects it"
+# ONLY the second test, and the first one left standing: that is the whole
+# point of this patcher next to `unisolate.py`.
+s = s.replace(b, "if False:", 1)
 open(dst, "w", encoding="utf-8").write(s)
 PATCH
 
@@ -1812,6 +1860,69 @@ if [ "$ISO_OK" = 1 ]; then
       head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
     fi
   fi
+
+  # ------------------------------------------------------------------
+  # y16/y17/y18 — the SECOND test, which until round 24 no arm reached
+  # ------------------------------------------------------------------
+  # The construction is the only one that can reach it: isolated mode, so the
+  # first test returns, and an entry put on `sys.path` afterwards, which is
+  # what `-I` cannot prevent (a `.pth` in site-packages does the same thing
+  # outside the subject). Under this pack's real invocation, `python3 -I <abs
+  # path>`, no entry derived from the tree is on the path at all, so this is a
+  # belt-and-braces test being MEASURED rather than a live route.
+  ln -sfn "$ISO/planted" "$ISO/spelling"
+  _sl_real=$(cd "$ISO/spelling" && pwd -P)
+  if [ ! -L "$ISO/spelling" ] || [ "$_sl_real" != "$ISO/planted" ]; then
+    say "ISOLATION: PLANT NOT ESTABLISHED — the second spelling is not a symlink to the directory the check lives in, so y17 would measure two different directories"
+    FAILED=1
+  else
+    say "ISOLATION: the two spellings hold — '$ISO/spelling' is a symlink resolving to '$ISO/planted', so y16 and y17 differ only in HOW the same directory is named"
+    # y16 — the directory by its own name: the second test must refuse.
+    _o=$ISO/y16.log
+    if python3 -I "$PATCHDIR/with-path-entry.py" "$ISO/planted" \
+               "$ISO/planted/p8-frozen-integrity.py" "$ISO/tree" \
+               "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+      say "FAIL: GUARD-CTL y16 — isolated mode was on and the subject's own directory was on sys.path, and the check measured anyway"
+      FAILED=1
+    elif grep -q "NOT ISOLATED" "$_o" && grep -q "still has" "$_o"; then
+      say "GUARD-CTL y16: the subject's directory on sys.path under isolated mode is refused by the SECOND test (NOT ISOLATED … still has), which no arm reached before this round"
+    else
+      say "FAIL: GUARD-CTL y16 — it refused, but not by the second test"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+    fi
+    # y17 — the SAME directory under a symlinked name. This is round 15's O-1:
+    # the first version of the test compared spelling, so this arm passed the
+    # check and the whole fail-open came back. It must refuse, and the refusal
+    # must name both the entry as written and what it resolves to.
+    _o=$ISO/y17.log
+    if python3 -I "$PATCHDIR/with-path-entry.py" "$ISO/spelling" \
+               "$ISO/planted/p8-frozen-integrity.py" "$ISO/tree" \
+               "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+      say "FAIL: GUARD-CTL y17 — a SYMLINKED spelling of the subject's own directory defeated the second test, which is round 15's O-1 unfixed"
+      FAILED=1
+    elif grep -q "NOT ISOLATED" "$_o" && grep -q "which resolves to" "$_o"; then
+      say "GUARD-CTL y17: a symlinked spelling of the same directory is refused on IDENTITY, and the refusal names the entry and what it resolves to"
+    else
+      say "FAIL: GUARD-CTL y17 — it refused, but not on identity with both spellings named"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+    fi
+    # y18 — the second test DELETED ALONE, first test left standing. Without
+    # this control y16/y17 prove only that something refused; with it, the
+    # refusal is attributed to the second test, and the hole it closes is shown
+    # to be a real one: rc 0 on a tampered tree with the plant in play.
+    _nop=$ISO/planted/no-path-test.py
+    if ! python3 -I "$PATCHDIR/drop-path-test.py" "$ISO/planted/p8-frozen-integrity.py" "$_nop" >"$ISO/patch2.log" 2>&1; then
+      say "FAIL: GUARD-CTL y18 — the second test could not be deleted alone, so the arms above are unattributed"
+      head -2 "$ISO/patch2.log" | tee -a "$OUT/run.log"; FAILED=1
+    else
+      _o=$ISO/y18.log
+      if python3 -I "$PATCHDIR/with-path-entry.py" "$ISO/spelling" "$_nop" "$ISO/tree" \
+                 "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+        say "GUARD-CTL y18: with the second test deleted ALONE the fail-open returns (rc 0 on a tampered tree), so y16 and y17 are the second test's own arms and the route is real"
+      else
+        say "FAIL: GUARD-CTL y18 — with the second test deleted the check still refused, so y16/y17 are not measuring that test"
+        head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+      fi
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------------
@@ -1824,10 +1935,23 @@ fi
 # lesson as the y7 sentinels, which counted themselves.
 say "=== the retirement of the prototype gate, measured ==="
 RET_DIR=$HERE/retired
-RET_RUNNER="run-p8-ddl""-proof.sh"
+# ROUND 24. The SET is declared once, here, in the concatenated form, and both
+# arms below read it: the presence check and the net. The first version of this
+# round's widened net caught THIS FILE, because the presence list spelled the
+# five case files plainly a few lines above — the y7 lesson one level up, where
+# what the net matched was not a sentinel but the arm's own inventory. One
+# declaration also means a retired file cannot be present-checked and left out
+# of the net, or the reverse.
+#
+# The first element is the runner's STEM, so the net catches the runner with or
+# without `.sh` (round 15's O-3 measured the extensionless spelling slipping
+# through), and the presence check appends the extension to it.
+RET_NET=("run-p8-ddl""-proof" "p8-ddl""-prototype.sql" "p8-ddl""-cases.sql"
+         "p8-role""-cases-app.sql" "p8-role""-cases-worker.sql" "p8-role""-cases-webhook.sql")
+RET_RUNNER="${RET_NET[0]}.sh"
+RET_FILES=("$RET_RUNNER" "${RET_NET[@]:1}")
 RET_MISSING=
-for _f in "$RET_RUNNER" p8-ddl-prototype.sql p8-ddl-cases.sql \
-          p8-role-cases-app.sql p8-role-cases-worker.sql p8-role-cases-webhook.sql; do
+for _f in "${RET_FILES[@]}"; do
   [ -f "$RET_DIR/$_f" ] || RET_MISSING="$RET_MISSING $_f"
 done
 if [ -n "$RET_MISSING" ]; then
@@ -1855,15 +1979,52 @@ fi
 # directory itself, and this arm (which holds no literal). Anything else is a
 # list that would send a reader to a gate that does not run. The repository is
 # scanned rather than the manifest, because the manifest is not in the tree.
+# ROUND 24, O-3. Until this round the net held ONE spelling of ONE of the six
+# retired files. The challenger measured two sentences that slipped through: a
+# gate list naming the runner WITHOUT its `.sh`, and a gate list naming the
+# prototype's own SQL file instead of its runner. A reader sent to either goes
+# to a gate that does not run, which is the whole purpose of this arm. The set
+# is now declared once above, in the concatenated form, and the examples are
+# NOT quoted here — a comment that spells the names is itself a hit, which is
+# how the first version of this fix reddened on this very file. The sentences
+# are reproduced in the handoff, which is not in the tree being scanned.
+RET_ARGS=()
+for _n in "${RET_NET[@]}"; do RET_ARGS+=(-e "$_n"); done
+
+# ROUND 24. A clean scan is not evidence about the spellings a net cannot see,
+# which is how O-3 stood for two rounds: the arm reported "no file names it" and
+# was right about the one spelling it knew. So the net is PLANTED first, in a
+# temporary directory OUTSIDE the repository (the live scan must not see these
+# sentences), with every spelling built from the declared set rather than typed
+# — a planted sentence typed here would be a hit on this file. Three sentences
+# must be caught and one must NOT be: a net that matches everything proves as
+# little as one that matches nothing.
+NET_T=$OUT/retnet
+rm -rf "$NET_T"; mkdir -p "$NET_T"
+printf 'gate 11: bash proof/%s\n' "$RET_RUNNER"     > "$NET_T/full.md"
+printf 'gate 11: the prototype via proof/%s\n' "${RET_NET[0]}" > "$NET_T/stem.md"
+printf 'the DDL prototype proof (%s) must pass\n' "${RET_NET[1]}" > "$NET_T/sqlname.md"
+printf 'gate 6: bash proof/run-p8-real-proof.sh\n'  > "$NET_T/control.md"
+NET_HITS=$(grep -rlI "${RET_ARGS[@]}" "$NET_T" 2>/dev/null | sed 's#.*/##' | sort | tr '\n' ' ')
+if [ "$NET_HITS" = "full.md sqlname.md stem.md " ]; then
+  say "RETIREMENT-NET y19: the net catches the runner's full name, its extensionless stem and a list naming a retired case file, and does NOT match the live gate's own line"
+else
+  say "FAIL: RETIREMENT-NET y19 — the net caught [$NET_HITS] instead of exactly the three planted spellings, so the scan below is not evidence about the spellings it misses"
+  FAILED=1
+fi
+
 RET_HITS=$(grep -rlI --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=retired \
                      --exclude-dir=dist --exclude-dir=coverage \
-                     -e "$RET_RUNNER" "$REPO" 2>/dev/null || true)
+                     "${RET_ARGS[@]}" "$REPO" 2>/dev/null || true)
 if [ -n "$RET_HITS" ]; then
-  say "FAIL: RETIREMENT — a live file still names the retired gate, so some list points at a gate that does not run:"
+  say "FAIL: RETIREMENT — a live file still names a retired file, so some list points at a gate that does not run:"
   printf '%s\n' "$RET_HITS" | tee -a "$OUT/run.log"
+  for _f in $RET_HITS; do
+    grep -nI "${RET_ARGS[@]}" "$_f" 2>/dev/null | head -3 | tee -a "$OUT/run.log"
+  done
   FAILED=1
 else
-  say "RETIREMENT: no file outside retired/ names the retired gate, so no live list points at it"
+  say "RETIREMENT: no file outside retired/ names any of the ${#RET_NET[@]} retired spellings (the runner with or without .sh, and each retired case file), so no live list points at it"
 fi
 
 say "RUN=$RUN FAILED=$FAILED"
