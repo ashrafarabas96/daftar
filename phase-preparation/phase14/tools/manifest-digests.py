@@ -66,6 +66,32 @@ MARKER = '# P14-HANDOFF-MANIFEST.md'
 MARKER_PY = re.compile(r'^' + re.escape(MARKER) + r'[ \t\r\f\v]*$')
 MARKER_ERE = '^' + MARKER.replace('.', '[.]') + '[[:space:]]*$'
 
+# CHALLENGE R22-P1-02, a FAIL-OPEN with narrow reach, and R22-P2-01, both in the
+# PATH pin round 21 added. Two defects in one line.
+#   (a) The pin read '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:...',
+#       so its first two entries PRECEDE /usr/bin -- and /usr/local/bin is
+#       exactly where a locally installed binary goes. Measured by the
+#       challenger with a shim written to /usr/local/bin/git: rc 0, no refusal,
+#       "all 3 revision(s)", and the provenance line naming
+#       /usr/local/bin/git. Narrower than GIT_DIR, because it needs write
+#       access to a system directory, but it is the very mechanism the pin was
+#       added to close, and it is also an HONEST-MISTAKE surface: a CI step
+#       that installs a newer git into /usr/local/bin silently changes which
+#       binary this gate runs. So the pin is REORDERED with the system
+#       locations first.
+#   (b) The binary was resolved TWICE on the same string -- `shutil.which` for
+#       the provenance line, and `subprocess` independently for the call -- so
+#       the line ASSERTED a binary by a second lookup instead of REPORTING the
+#       one that ran. It is resolved ONCE, here, and passed ABSOLUTE.
+# With no git anywhere on the pinned path (an ordinary image with git in /opt,
+# /nix/store or a Homebrew prefix) the subject answered rc 1 with a
+# FileNotFoundError TRACEBACK -- and rc 1 is this gate's STALE code, so a
+# runner could not tell "the manifest is stale" from "this tool could not run
+# at all" (R22-P2-01). That condition is now a NAMED refusal at the
+# CONFIGURATION code, 2, in main() below.
+_PINNED_PATH = '/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin:/usr/local/sbin'
+_GIT_BIN = shutil.which('git', path=_PINNED_PATH)
+
 def main():
     ap = argparse.ArgumentParser()
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -106,6 +132,14 @@ def main():
                   ' compared. This is not a stale manifest and must not be read as one.'
                   % (label, path), file=sys.stderr)
             return 2
+    # CHALLENGE R22-P2-01: refuse by NAME, at the CONFIGURATION code, when the
+    # pinned path holds no git at all. rc 1 is this gate's STALE verdict; an
+    # absent binary is not a verdict about this manifest.
+    if _GIT_BIN is None:
+        print('CONFIGURATION ERROR: no `git` executable was found on the pinned'
+              ' PATH (%s), so no history could be read and nothing here is a'
+              ' verdict about this manifest.' % _PINNED_PATH, file=sys.stderr)
+        return 2
     lines = open(a.manifest, encoding='utf-8').read().split('\n')
 
     # ROUND-9 CHALLENGE P2-02, second remedy: a committed reviewer's digest must
@@ -239,9 +273,14 @@ def main():
         # rather than inherited, so it is one more key in a dict that exists.
         # Measured: the real pack is unchanged under the pinned PATH, and git
         # resolves to /usr/bin/git here.
+        # CHALLENGE R22-P1-02: the pin is reordered (/usr/bin and /bin FIRST) and
+        # the binary is the ONE object resolved at import, passed ABSOLUTE, so
+        # no lookup inside the child can reach a shim earlier on a path. The
+        # pinned PATH is still set, because it is what any process this git
+        # starts will inherit.
         _env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull,
-                    PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')
-        return subprocess.run(['git','-C',_md,'--no-replace-objects',
+                    PATH=_PINNED_PATH)
+        return subprocess.run([_GIT_BIN,'-C',_md,'--no-replace-objects',
                                '-c','core.quotePath=false'] + list(argv),
                               capture_output=True, text=True, env=_env)
     def _quoted(path):
@@ -932,13 +971,13 @@ def main():
     _ptop = _g('rev-parse','--show-toplevel')
     _pdir = _g('rev-parse','--absolute-git-dir')
     _pver = _g('--version')
-    _pwhich = shutil.which('git', path=('/usr/local/sbin:/usr/local/bin:'
-                                       '/usr/sbin:/usr/bin:/sbin:/bin'))
+    # CHALLENGE R22-P1-02, second half: this line REPORTS the object that ran --
+    # _GIT_BIN, resolved once at import and passed absolute to every call --
+    # instead of asserting a binary by a second lookup on the same string.
     print('read: repository %s; git directory %s; %s at %s'
           % ((_ptop.stdout.strip() or 'NONE (no repository was walked)'),
              (_pdir.stdout.strip() or 'NONE'),
-             (_pver.stdout.strip() or 'git version UNKNOWN'),
-             (_pwhich or 'git NOT FOUND on the pinned PATH')))
+             (_pver.stdout.strip() or 'git version UNKNOWN'), _GIT_BIN))
     print('manifest: %d artifact row(s) + the manifest itself; %d file(s) in %s;'
           ' reviewer-row history %s'
           % (len(listed), len(on_disk), a.dir, history))

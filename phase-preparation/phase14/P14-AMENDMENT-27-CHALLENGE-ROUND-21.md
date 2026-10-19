@@ -20,12 +20,30 @@ sweep printed exactly **one** FAIL — `git-dir-decoy-refused` at rc 0 — while
 forgery (`NO WITNESS …` and `HISTORY NOT VERIFIED … the manifest is not in a git repository here`).
 
 I reproduced that before changing anything, and then ran the stronger test the pack has been
-asking of itself since round 16: a **guard-deletion run of the whole sweep**, from a copy of the
-pack with only the `GIT_*` scrub reverted. All three GIT arms now print FAIL at rc 0:
+asking of itself since round 16: a **guard-deletion run of the whole sweep**.
 
-    FAIL  git-dir-decoy-refused          rc=0 (required 1) …
-    FAIL  git-dir-in-pack-decoy-refused  rc=0 (required 1) …
-    FAIL  git-binary-shim-refused        rc=0 (required 1) …
+~~from a copy of the pack with only the `GIT_*` scrub reverted. All three GIT arms now print FAIL
+at rc 0:~~
+
+    ~~FAIL  git-dir-decoy-refused          rc=0 (required 1) …~~
+    ~~FAIL  git-dir-in-pack-decoy-refused  rc=0 (required 1) …~~
+    ~~FAIL  git-binary-shim-refused        rc=0 (required 1) …~~
+
+**RETRACTED IN ROUND 22 (`R22-P1-01`), and it is the same shape as the claim struck one paragraph
+above.** Three FAILs did appear, but not from the deletion this sentence names: that copy reverted
+the whole built environment and dropped the `PATH` pin along with the scrub, so it deleted **two**
+guards and the sentence credited one. Measured in round 22, one deletion per copy:
+
+| the one thing deleted | GIT arms that go FAIL |
+|---|---|
+| `_env = dict(os.environ)` — scrub reverted, both `GIT_*` keys and the `PATH` pin kept | **2**: `git-dir-decoy-refused`, `git-dir-in-pack-decoy-refused` |
+| the `PATH` pin removed from `_env.update(…)`, scrub kept | **1**: `git-binary-shim-refused` |
+
+**One guard per arm**, which is the stronger fact and the one that should have been published: the
+shim arm cannot be held by the scrub, because the shim is a directory prepended to `PATH` and the
+pin is what excludes it. The conclusion the sentence was drawing — that these arms are not
+tautologies — survives; the measurement under it did not. Corrected in
+`P14-AMENDMENT-28-CHALLENGE-ROUND-22.md`.
 
 Both GIT_DIR arms now require **`REVIEWER ROW REWRITTEN IN HISTORY: P14-CHALLENGE-test.md`**, the
 refusal that is about the forgery. The other four proofs that key on the header

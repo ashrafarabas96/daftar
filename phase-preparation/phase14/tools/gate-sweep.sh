@@ -1325,6 +1325,57 @@ else
          git-binary-shim "$sn" "$wn"
   fail=$((fail+1))
 fi
+
+# ---- ROUND 22 (R22-P1-02 and R22-P2-01), both inside the PATH pin round 21
+# added. The pin put /usr/local/sbin and /usr/local/bin BEFORE /usr/bin, and
+# /usr/local/bin is where a locally installed binary lands: the challenger
+# measured a shim THERE winning the lookup, rc 0 with no refusal. That exact
+# arm is NOT shipped here and is a NAMED RESIDUAL, with its reason: it can only
+# be built by writing an executable called `git` into a system directory, and a
+# gate that does that leaves every later git call in this container redirected
+# if it is killed between the write and the removal. The amendment carries the
+# measurement instead, taken by hand, with the file removed in the same command.
+# What IS shipped are two arms that need no system write, because they copy the
+# tool into a temporary directory and change ONE constant in the copy.
+P22=$(mktemp -d); SCRATCH="${SCRATCH:-} $P22"
+mkdir -p "$P22/nogit/tools" "$P22/empty" "$P22/first/tools" "$P22/last/tools"
+PIN_SHIPPED='/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin:/usr/local/sbin'
+# arm 1: no git anywhere on the pinned path. At abe95fc this was a
+# FileNotFoundError TRACEBACK at rc 1 -- and rc 1 is this gate's STALE code, so
+# a runner could not tell a stale manifest from a tool that could not run.
+cp "$HERE/manifest-digests.py" "$P22/nogit/tools/"
+sed -i "s|^_PINNED_PATH = .*|_PINNED_PATH = '$P22/empty'|" "$P22/nogit/tools/manifest-digests.py"
+ng=$(python3 -I -c "import shutil,sys; print(shutil.which('git', path=sys.argv[1]) or 'NONE')" "$P22/empty")
+pin_ok=$(grep -c "^_PINNED_PATH = '$PIN_SHIPPED'$" "$HERE/manifest-digests.py")
+pin_sib=$(grep -c "^_PINNED_PATH = '$PIN_SHIPPED'$" "$HERE/citation-provenance.py")
+if [ "$ng" = NONE ] && [ "$pin_ok" = 1 ] && [ "$pin_sib" = 1 ] && [ "$(grep -c '^_PINNED_PATH = ' "$P22/nogit/tools/manifest-digests.py")" = 1 ]; then
+  named pinned-path-no-git-refused 2 "CONFIGURATION ERROR: no \`git\` executable was found on the pinned PATH" \
+    "python3 -I $P22/nogit/tools/manifest-digests.py $A20"
+else
+  printf 'FAIL  %-26s premise not built (git on the empty path %s want NONE, shipped pin rows %s/%s want 1/1) — nothing was proved\n' \
+         pinned-path-no-git "$ng" "$pin_ok" "$pin_sib"
+  fail=$((fail+1))
+fi
+# arm 2: the ORDER of the pinned path is what decides, and the shipped order
+# puts the system locations first. Two copies, the shim directory inserted into
+# the pin FIRST in one and LAST in the other. The first copy is the PREMISE: if
+# a shim ahead of /usr/bin could not win even there, the arm below would prove
+# nothing. The second copy is the SHIPPED order and must refuse by the law.
+for arm in first last; do
+  cp "$HERE/manifest-digests.py" "$P22/$arm/tools/"
+  if [ "$arm" = first ]; then NEWPIN="$SH:$PIN_SHIPPED"; else NEWPIN="$PIN_SHIPPED:$SH"; fi
+  sed -i "s|^_PINNED_PATH = .*|_PINNED_PATH = '$NEWPIN'|" "$P22/$arm/tools/manifest-digests.py"
+done
+fr=$( cd /tmp && python3 -I "$P22/first/tools/manifest-digests.py" $A20 2>&1 ); frc=$?
+if [ "$frc" = 0 ] && ! printf '%s' "$fr" | grep -q 'REVIEWER ROW REWRITTEN IN HISTORY'; then
+  named pinned-path-order-decides 1 "REVIEWER ROW REWRITTEN IN HISTORY: P14-CHALLENGE-test.md" \
+    "python3 -I $P22/last/tools/manifest-digests.py $A20"
+else
+  printf 'FAIL  %-26s premise not built (shim-first copy rc %s want 0 with no row refusal) — nothing was proved\n' \
+         pinned-path-order "$frc"
+  fail=$((fail+1))
+fi
+rm -rf "$P22"
 rm -rf "$E20"
 rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"
 

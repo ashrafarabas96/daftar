@@ -19,7 +19,7 @@ generated table; --check regenerates it and exits 1 when DOC's block is stale,
 which is what `P14-GATE-032` runs so the table cannot drift from the trees it
 describes. A table that cannot detect its own staleness is a claim again.
 """
-import argparse, os, re, subprocess, sys, collections
+import argparse, os, re, shutil, subprocess, sys, collections
 
 # ROUND-6 CHALLENGE P2-01: this pattern carried SEVEN extensions and the
 # sentence it fed said "35 cited files". `json` was not among them, so
@@ -71,11 +71,20 @@ ANCHOR = '93084f82b8e36ad49ebb207c0b6e7435d7fcb49f'
 GIT_ENV = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
 # CHALLENGE R21-P2-01, the sibling half: the caller's PATH chose this tool's git
 # too, so the binary is pinned in the same built environment.
+# CHALLENGE R22-P1-02, the sibling half, for the fourth round running on the
+# rule that a remedy is not applied until every sibling tool carries it. Round
+# 21's pin put /usr/local/sbin and /usr/local/bin BEFORE /usr/bin, which is
+# where a locally installed binary lands; measured in the other tool, a shim at
+# /usr/local/bin/git won the lookup. The pin is reordered with the system
+# locations first, and the binary is resolved ONCE and passed ABSOLUTE, so no
+# lookup inside a child can reach a shim earlier on some path.
+_PINNED_PATH = '/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin:/usr/local/sbin'
+_GIT_BIN = shutil.which('git', path=_PINNED_PATH)
 GIT_ENV.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull,
-               PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')
+               PATH=_PINNED_PATH)
 
 def git(repo, *args):
-    return subprocess.run(['git','-C',repo,'--no-replace-objects',*args],
+    return subprocess.run([_GIT_BIN,'-C',repo,'--no-replace-objects',*args],
                           capture_output=True, text=True, env=GIT_ENV)
 
 def tracked(repo, rev):
@@ -96,7 +105,15 @@ def main():
     # the gate reported `BLOCK IS STALE`. A LOCATION problem printed as a
     # CONTENT verdict, with two fixed points selected by cwd. --pack is the one
     # argument that cannot be wrong, so the repository is read from it.
-    _top = subprocess.run(['git','-C',ap.get_default('pack'),
+    # CHALLENGE R22-P2-01, the sibling half: with no git on the pinned path the
+    # next line raised FileNotFoundError at rc 1, and rc 1 is this tool's STALE
+    # verdict. An absent binary is a CONFIGURATION error, refused by name at 2.
+    if _GIT_BIN is None:
+        print('CONFIGURATION ERROR: no `git` executable was found on the pinned'
+              ' PATH (%s), so no provenance could be read and nothing here is a'
+              ' verdict about this block.' % _PINNED_PATH, file=sys.stderr)
+        return 2
+    _top = subprocess.run([_GIT_BIN,'-C',ap.get_default('pack'),
                            '--no-replace-objects','rev-parse','--show-toplevel'],
                           capture_output=True, text=True, env=GIT_ENV)
     ap.add_argument('--repo', default=(_top.stdout.strip() or '.'))
