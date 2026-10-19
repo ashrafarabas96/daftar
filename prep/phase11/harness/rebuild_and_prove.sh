@@ -52,8 +52,43 @@ gitq () {
 # at step 0c-0, and it refuses itself if they moved.
 TREE_STATE="$(python3 -I $H/check_harness_bytes.py --tree-state 2>/var/tmp/p11-treestate.$$ || true)"
 TREE_WHY="$(cat /var/tmp/p11-treestate.$$ 2>/dev/null; rm -f /var/tmp/p11-treestate.$$)"
-DIRTY=""
-[ "$TREE_STATE" = "no" ] || DIRTY="$TREE_STATE"
+# THE COORDINATOR'S `F5` on `50a45a0`. This used to be
+# `[ "$TREE_STATE" = "no" ] || DIRTY="$TREE_STATE"`, which reads an EMPTY
+# answer -- the reader crashed, was deleted, or could not be run -- as a clean
+# tree, and then prints `SOURCE_TREE_DIRTY :` with nothing after it. A figure
+# that is absent is not a figure that says `no`. The reader answers `no` or
+# `YES` and nothing else, so anything else is a refusal of its own.
+case "$TREE_STATE" in
+  no) DIRTY="" ;;
+  YES) DIRTY="YES" ;;
+  *)
+    echo "REFUSED: SOURCE-TREE-STATE-UNREADABLE: the byte reader was asked whether this"
+    echo "work tree is the tree the commit holds and answered $(printf '%s' "${TREE_STATE:-<nothing>}"),"
+    echo "which is neither 'no' nor 'YES'. An absent answer is not a clean tree. What it"
+    echo "said on the way out:"
+    echo "$TREE_WHY" | sed 's/^/  /'
+    echo "EXIT_SOURCE_TREE_STATE: 5  (refused before the cluster and every gate)"
+    exit 5
+    ;;
+esac
+# THE COORDINATOR'S `F1` on `50a45a0`, the blocker, read here by the refusal
+# NAME rather than by an exit code: an UNTRACKED `.sql` in the migrations
+# directory was applied by `run_migrations.py` (`sorted(os.listdir(MIGDIR))`)
+# and the whole run was green -- `APPLIED 88/88`, `SOURCE_TREE_DIRTY : no`.
+# Both readers refuse it now; this is the third site, and it is separate from
+# SOURCE-TREE-DIRTY because a file the commit does not hold is a different
+# thing from a file whose bytes moved, and a reader sent to one name should not
+# be told the other.
+if printf '%s' "$TREE_WHY" | grep -q 'UNTRACKED:'; then
+  echo "REFUSED: SOURCE-TREE-UNTRACKED: a directory this run READS carries a path the"
+  echo "commit does not hold, and the run applies and reads what is on disk, so nothing"
+  echo "below would be a measurement of the committed code. What the reader said:"
+  printf '%s\n' "$TREE_WHY" | grep 'UNTRACKED:' | sed 's/^/  /'
+  echo "and what git status lists, for a reader (it is not what decided above):"
+  gitq status --porcelain | sed 's/^/  /'
+  echo "EXIT_SOURCE_TREE_UNTRACKED: 5  (refused before the cluster and every gate)"
+  exit 5
+fi
 FLAGGED="$(gitq ls-files -v | grep -E '^([a-z]|S) ' || true)"
 if [ -n "$FLAGGED" ]; then
   # `R23-F2` and the coordinator's `F1` on the head before this one: an index
@@ -126,7 +161,32 @@ echo "SOURCE_TREE_DIRTY : $TREE_STATE   (measured against the commit's own blobs
 # appended CREATE TABLE left it unchanged while the planted table ran. Two lines
 # now, and the first is read from the DISK: `ls` sorts, so the bytes hashed are
 # the files in alphabetical order.
-echo "MIGRATIONS_SHA256 : $(cat $(ls -1 $REPO/infrastructure/database/migrations/*.sql | sort) | sha256sum | cut -d' ' -f1)  (the bytes ON DISK, which are what the run below applies)"
+MIG_DISK="$(cat $(ls -1 $REPO/infrastructure/database/migrations/*.sql | sort) | sha256sum | cut -d' ' -f1)"
+# THE COORDINATOR'S `F1`, second half: "`MIGRATIONS_SHA256` is read from disk,
+# so that part of the claim is TRUE. It is a printed figure only, though:
+# nothing compares it and nothing refuses on it." So it is COMPARED here,
+# against the same digest computed over the COMMIT's own blobs in the same
+# order, and a difference is a refusal. This is a second, independent reader of
+# the fact the untracked law above reads -- an extra `.sql` on disk moves this
+# digest whether or not any walk saw it -- and the two are not derived from each
+# other.
+MIG_COMMIT="$(for f in $(gitq ls-tree -r --name-only HEAD infrastructure/database/migrations | grep '\.sql$' | sort); do gitq show "HEAD:$f"; done | sha256sum | cut -d' ' -f1)"
+echo "MIGRATIONS_SHA256 : $MIG_DISK  (the bytes ON DISK, which are what the run below applies)"
+echo "MIGRATIONS_COMMIT : $MIG_COMMIT  (the same digest over the COMMIT's own blobs, in the same order)"
+if [ "$MIG_DISK" != "$MIG_COMMIT" ]; then
+  echo "REFUSED: SOURCE-MIGRATIONS-DIGEST-MOVED: the migrations this run would apply are"
+  echo "not the migrations the commit holds -- a file added, removed or changed -- so the"
+  echo "APPLIED count below would describe a history nobody has reviewed."
+  echo "EXIT_SOURCE_MIGRATIONS_DIGEST: 5  (refused before the cluster and every gate)"
+  exit 5
+fi
+# `R24-F2`: the manifest used to carry a hand-maintained table of document
+# digests, inside one of the documents it named, and a reader who trusted it
+# reviewed bytes the commit does not hold. There is no table now; the run
+# prints what it MEASURED, from the commit, over the documents the commit
+# actually lists.
+echo "DOCUMENT DIGESTS, from the commit (no table pins these; this is the authority):"
+python3 -I $H/check_harness_bytes.py --doc-digests | sed 's/^/  /'
 echo "MIGRATIONS_TREE   : $(gitq rev-parse HEAD:infrastructure/database/migrations)  (the tree object HEAD holds, for comparison with a clean checkout)"
 echo "MANIFEST_SHA256   : $(sha256sum $REPO/infrastructure/database/MIGRATION_MANIFEST.json | cut -d' ' -f1)"
 echo "BOOTSTRAP_SHA256  : $(sha256sum $REPO/infrastructure/database/bootstrap.sql | cut -d' ' -f1)"

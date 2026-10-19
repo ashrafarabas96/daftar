@@ -70,9 +70,31 @@ script refuses on, so a guard added without an arm stops the phase instead of
 silently widening the net. The row count cannot disagree with the guard count
 because there are no rows: the table is computed.
 
+ROUND 24 REJECTED THE SEVENTH DESIGN FOR THE CAUSE THAT RAN THROUGH ALL SIX:
+the candidate was derived SUBTRACTIVELY. Strip the decorations the instrument
+had been taught, split on the separators it had been taught, weigh what is
+left. Both lists were whitelists. Round 23 widened the splitter from the line
+to the whitespace token; round 24 then committed `"k=4242"`, `'k=4242'`,
+`a=1;k=4242`, `a=1,k=4242` and `|a=1|k=4242|` on clean clones and ran the whole
+authoritative suite green on each, and the coordinator added `&`, `/` and a
+bracketed pair list. A straight quote was in no class; a separator that was not
+whitespace left one token for a partition on the first `=`.
+
+**So the derivation is INVERTED, and that is the whole of this head's answer.**
+There is no stripper of decorations and no table of separators. `_figure_pattern`
+describes the FIGURE once -- a key class, `=`, a value class, with the
+surrounding characters CONSTRAINED rather than stripped -- and `_candidates`
+scans each line for every occurrence of it, wherever it sits and whatever is
+around it. What is not a figure is now what FAILS TO MATCH, instead of what the
+stripper had not been taught. Thirteen guards went in that commit, and the
+fourteen decorated shapes rounds 13 and 14 planted are caught by the shape
+itself rather than by fourteen rows. The price on this pack's own prose was
+measured before the change was claimed, the way round 13's widening was:
+22 candidates became 29, nine of them new, and no true sentence reds.
+
 WHAT IT CHECKS. Every `*.md` anywhere under the phase directory, including
-subdirectories. A line whose decoration strips away to nothing but
-`key=<number|boolean>` is a candidate, and the exact token must appear in **the
+subdirectories. Every occurrence of `key=<number|boolean>` on a line is a
+candidate, and the exact token must appear in **the
 commit** under `prep/phase11/harness/`, **excluding markdown** -- in an
 instrument or in a committed run-evidence file. Not in the directory: in the
 commit. A file the commit does not carry cannot legitimise a figure, and the
@@ -118,11 +140,26 @@ figure followed by a backticked comment is caught.
 WHAT IT STILL DOES NOT COVER, named because a net is read as covering the
 variants of the shapes it names:
 
-  * UPPERCASE keys (`GIT_DIRTY_AFTER=0`, `EXIT_FOR_M10-noop=4`). In these
-    documents those are shell commands and log keys, not a case's output.
-  * A figure with prose on the same line (`it printed deleted=0 and stopped`),
-    and a figure that survives only inside an inline code span. Both are a
-    reader's sentence about a value rather than a report of one.
+  * UPPERCASE keys (`GIT_DIRTY_AFTER=0`). In these documents those are shell
+    commands and log keys, not a case's output. The key class is lower-case and
+    the left boundary refuses a key that is the TAIL of a longer identifier, so
+    `FABRICATED_count=999` is not a candidate either, and an arm says so.
+  * A LOWER-CASE SEGMENT AFTER A HYPHEN inside a longer mixed-case identifier.
+    The left boundary admits a key that begins after a hyphen, because that is
+    how a long option (`--port=5`) and an html comment (`<!--k=9-->`) are
+    written, so `EXIT_FOR_M10-noop=4` yields the candidate `noop=4`. That is a
+    FALSE RED if a document ever writes such a shape with a value nothing
+    emits; no document does today, which was measured rather than assumed, and
+    it is a residual rather than a bound because closing it would reopen the
+    long option.
+  * A figure that survives only inside an INLINE CODE SPAN. This is the
+    BACKTICK RULE, it is deliberate, and round 24 names it among the bounds it
+    is not attacking: this pack quotes its own counter-examples, and
+    `superuser_sees=130` is the law's own illustration of a figure nothing
+    emits while `fabricated_count=999` is every round's probe token. Deleting
+    the guard makes those quotations claims and reds nine true sentences, which
+    is a measurement and not a promise. A figure with PROSE on the line is no
+    longer in this list: round 23 closed it.
   * A NON-NUMERIC, NON-BOOLEAN value, which is the deliberate price of closing
     round 13's false positives: an invented refusal name or path shown as
     output is not a candidate. `role=postgres` cannot be checked without
@@ -134,6 +171,9 @@ variants of the shapes it names:
     carries the known cost of one: it cannot name a token not yet written, and
     a fabricated `migrations=87` now passes. It is two literals, it is listed
     in `EXEMPT` where a reader finds it, and deleting it reds an arm.
+  * A DATE, and anything else whose value continues past a hyphen:
+    `date=2026-10-19` is not the figure `date=2026`, and the right boundary
+    refuses it rather than reporting a year. An arm says so.
   * **The haystack is a substring match over one blob**: a token emitted
     anywhere for any reason passes everywhere, so `identities=2` printed by one
     case legitimises `identities=2` written about another. Narrowing it to the
@@ -161,9 +201,8 @@ the gate if a document wrote them, some pass because something already emits
 them, and the two exempted tokens are not candidates at all. Round 14 measured
 its own list of shapes, which is not this list; two such counts are each true
 of their own set and are not comparable. The escape hatch
-for every red shape is named above -- prose on the line, or an inline code
-span -- and neither requires a waiver list, which would move the hole from
-shape to time.
+for every red shape is named above -- an inline code span -- and it requires
+no waiver list, which would move the hole from shape to time.
 
 AND IT REFUSES TO BE INERT. If the scan finds no candidate at all, the matcher
 has stopped matching the documents it is pointed at, and a check that measures
@@ -171,7 +210,13 @@ nothing must not report a pass. That is exit 2.
 
 EXITS: 0 clean, 1 a figure nothing emits, 2 inert, 4 invoked without `-I`,
 5 a NAMED REFUSAL -- git absent, or the harness in no repository, so the
-haystack cannot be derived from a commit. It never falls back to the walk.
+haystack cannot be derived from a commit; or the work tree is not the tree the
+commit holds, by bytes and by modes (`SELF-TREE-DIRTY`), or a tracked path is
+flagged so that git stops looking (`SELF-INDEX-FLAGGED`), or a directory this
+run READS carries a file the commit does not hold (`SELF-TREE-UNTRACKED`, the
+coordinator's `F1` on `50a45a0`: an untracked `.sql` beside the frozen
+migrations was APPLIED, because `run_migrations.py` lists the directory, and
+the whole suite was green). It never falls back to the walk.
 
 ITS RED PROOFS, in layers. `--selftest` runs **every shape any round
 planted**, each as its own hermetic arm with its expected exit, plus the false
@@ -180,7 +225,7 @@ deletes each guard in turn and requires it to flip an arm -- the guards over
 the haystack among them, so "derived from the commit" is measured by a scratch
 file and a gitignored `.pyc` that must not legitimise a plant, and by a
 directory that is no repository and must be refused. It then parses the
-stripper, the splitter and the decision frame for a transformation or a
+spelling normaliser and the decision frame for a transformation or a
 decision no name covers, plants both kinds, and runs the enrolment rule
 against a reworded figure. The proof script runs all of it before the real
 scan. Pointed at the documents and harness of
@@ -257,28 +302,48 @@ PHASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Each pattern here exists because a round planted a figure behind it; none is
 # a guess about markdown.
 CODE_SPAN = re.compile(r"`[^`]*`")
-LEAD_QUOTE = re.compile(r"^[\s>]+")  # blockquote, indentation, leading tab
-LEAD_LIST = re.compile(r"^(?:[-*+]|\d+\.)\s+")  # list item, ordered or not
-LEAD_HEAD = re.compile(r"^#+\s*")
-LEAD_CELL = re.compile(r"^\|\s*")  # table cell
-LEAD_PAREN = re.compile(r"^[(\[]+")
-LEAD_EMPH = re.compile(r"^[*_]{1,3}")
-LABEL = re.compile(r"^[A-Za-z][A-Za-z ]{0,30}:\s*")  # `result: deleted=0`
-MARKER = re.compile(r"(?:(?<=\s)|^)--+(?=\s|$)")  # a `--` comment marker
-# `R23-F1`. A line was ONE candidate after the marker split, and `_is_figure`
-# partitions on the FIRST `=`, so a second `key=value` on the same line landed
-# inside the first one's value and the value stopped matching: `rows=4242 a=1`
-# was not weighed and rejected, it was never a candidate, and neither was the
-# pair beside it. Whitespace splits the line too, so a candidate is a TOKEN.
-SPACES = re.compile(r"\s+")
-TRAIL_EMPH = re.compile(r"[*_]{1,3}$")
-TRAIL_CELL = re.compile(r"\|\s*$")
-# `%` is deliberately absent: it belongs to the value, not to the decoration.
-TRAIL_PUNCT = re.compile(r"[\s.,;:)\]]+$")
 
-# The boolean set, closed. `t` and `f` are what psql prints.
-BOOLEANS = ("true", "false", "t", "f")
-BOOLEANS_UNNORMALISED = ("true", "false")
+# ── the figure, described once ───────────────────────────────────────────────
+# `R24-F1`, and it ends a class of finding that ran from round 13 to round 24.
+# Every design before this one derived a candidate SUBTRACTIVELY: strip the
+# decorations the instrument had been taught, split on the separators it had
+# been taught, and hope each piece was one token. Both were whitelists, and
+# this project has ruled three times that a whitelist of FORMS reopens on the
+# next form. Round 24 drove five shapes through, each one COMMITTED on a
+# throwaway clone with a clean tree and the whole authoritative suite green:
+# `"k=4242"`, `'k=4242'`, `a=1;k=4242`, `a=1,k=4242` and `|a=1|k=4242|`. A
+# straight quote was in no `LEAD_*` or `TRAIL_*` class, and a separator that is
+# not whitespace left one token for a partition on the first `=`.
+#
+# So the derivation is INVERTED, which is the coordinator's binding ruling and
+# the challenger's own prescription. There is no stripper of decorations and no
+# table of separators: `_figure_pattern` describes the FIGURE, and `_candidates`
+# scans the line for every occurrence of it, wherever it sits and whatever
+# surrounds it. What is NOT a figure is now what fails to match, instead of
+# what the stripper had not been taught. Thirteen guards go in this commit --
+# not because anything excuses the shapes they used to catch, but because the
+# shape itself catches them, and a guard that reds nothing is deleted or armed.
+#
+# The two boundaries are what remains of "the surrounding characters", and they
+# are ASYMMETRIC on purpose, each half measured by its own arm:
+#   * on the LEFT a hyphen is a separator -- `--port=5` is a long option and
+#     `<!--k=9-->` an html comment -- so a key may begin after one, and what the
+#     boundary refuses is a key that is the TAIL of a longer identifier
+#     (`FABRICATED_count=999` is the uppercase-key bound, not a figure);
+#   * on the RIGHT a hyphen belongs to the value's own shape -- `date=2026-10-19`
+#     is a date and not the figure `date=2026` -- so a value may not end before
+#     one.
+KEY_START = r"(?<![0-9A-Za-z_])"
+VALUE_END = r"(?![0-9A-Za-z_-])"
+# The CONTROL the `positive scan` guard is measured against: the candidate unit
+# exactly as it stood at `50a45a0`, a whitespace-separated token. Deleting the
+# guard restores it, and round 24's five shapes red.
+TOKEN = r"[^\s]+"
+
+# The boolean set, closed, as the alternation the value class carries. `t` and
+# `f` are what psql prints.
+BOOLEANS = "true|false|t|f"
+BOOLEANS_UNNORMALISED = "true|false"
 
 # Two tokens exempted by exact name, on the coordinator's R14-S2 ruling.
 EXEMPT = ("port=55512", "migrations=87")
@@ -310,18 +375,9 @@ MATCHER_GUARDS = (
     "non-ascii digits",
     "html comment markers",
     "inline code span",
-    "blockquote and indent",
-    "list marker",
-    "heading marker",
-    "table cell (leading)",
-    "bracket",
-    "emphasis (leading)",
-    "dash marker splits the line",
-    "whitespace splits the line",
-    "label prefix",
-    "trailing punctuation",
-    "emphasis (trailing)",
-    "table cell (trailing)",
+    "positive scan",
+    "key boundary",
+    "value boundary",
     "figure value class",
     "boolean spellings",
     "signed values",
@@ -347,24 +403,69 @@ HAYSTACK_GUARDS = (
 
 GUARDS = MATCHER_GUARDS + HAYSTACK_GUARDS
 
-# A guard whose work another guard now does on its own, with the guard that
-# does it. `R23-F1` made every whitespace-separated token a candidate in its
-# own right, and two guards lost their last arm to it: `LEAD_LIST` wants
-# `\s+` after the marker and `MARKER` wants whitespace or the line end after
-# the dashes, and neither can see whitespace inside a segment that was cut on
-# whitespace.
-#
-# The law is still "a guard that reds nothing: delete it or arm it", and this
-# is the arming, not an exemption: the matrix DELETES the subsuming guard and
-# then deletes this one behind it, and the entry fails unless the second
-# deletion reds an arm the first does not. An entry that starts reding arms on
-# its own fails too, because then it is no longer subsumed and the sentence
-# above it has gone stale. Nothing here is a promise: both halves are
-# measured, and the generated block prints both figures.
-SUBSUMED = {
-    "list marker": "whitespace splits the line",
-    "dash marker splits the line": "whitespace splits the line",
-}
+# `R24-F1`. `SUBSUMED` is gone with the thirteen decoration guards it was
+# about: it existed because splitting a line on whitespace took the last arm
+# away from `LEAD_LIST` and `MARKER`, and neither guard exists any more. The law
+# it was the arming of still stands and is now unconditional -- a guard that
+# reds nothing is DELETED or ARMED, with no third option and no entry to sit in.
+
+def _key_class(skip=()):
+    """The key's character class, as the one place that decides it."""
+    hyphen = "[a-z][a-z0-9_]*" if "hyphen in the key" in skip else "[a-z][a-z0-9_-]*"
+    return "[^=]+" if "key class" in skip else hyphen
+
+
+def _value_class(skip=()):
+    """The value's character class: a number in any digit family, or a boolean."""
+    sign = "" if "signed values" in skip else "[-+]?"
+    pct = "" if "percent in the value" in skip else "%?"
+    num = sign + "[0-9](?:[0-9,._]*[0-9])?" + pct
+    words = BOOLEANS_UNNORMALISED if "boolean spellings" in skip else BOOLEANS
+    bools = "(?:" + words + ")" if "boolean case folding" in skip else "(?i:" + words + ")"
+    return ".+" if "figure value class" in skip else num + "|" + bools
+
+
+def _figure_pattern(skip=()):
+    """The ONE pattern this file calls a figure, built from the named guards.
+
+    `R24-F1`: the scan below and `_is_figure` are now the SAME description of a
+    figure, built here once, so a shape cannot be a candidate under one and not
+    under the other -- which is how every finding from round 13 to round 24 was
+    possible. Nothing in it is a list of the places a figure may sit.
+    """
+    lead = "" if "key boundary" in skip else KEY_START
+    tail = "" if "value boundary" in skip else VALUE_END
+    return lead + "(?:" + _key_class(skip) + ")=(?:" + _value_class(skip) + ")" + tail
+
+
+def _candidates(line, skip=()):
+    """Every occurrence of a figure on the line, wherever it sits.
+
+    A POSITIVE SCAN, and the whole of `R24-F1`'s answer. There is no decoration
+    to strip and no separator to know: `re.findall` returns each place the
+    figure's own description matches, so a quote, a semicolon, a comma, a pipe, a
+    table cell, a bullet, a heading, a bracket, a label, an emphasis run and a
+    `--` marker are all handled by not being part of the figure. Only the
+    SPELLINGS are still normalised first, by `_strip`, because a full-width `=`
+    and an Arabic-Indic digit are the same figure written differently rather
+    than a figure with something around it.
+
+    The first branch is the CONTROL the `positive scan` guard is measured
+    against: with the guard deleted the unit is a whitespace-separated token
+    again, exactly as at `50a45a0`, so round 24's own shapes and the fourteen
+    decorated shapes rounds 13 and 14 planted all red. The two scans are two
+    call sites of one admitted module call, and rule 5 names them separately --
+    one by the guard that wraps it, one by nothing -- because an entry admits
+    exactly one site and two sites under one entry is a call nobody read.
+
+    Written as two returns rather than as one call on a pattern chosen above it
+    because the frame's descent follows four levels, and a function whose only
+    work is to choose between two constants spends one of them.
+    """
+    if "positive scan" in skip:
+        return re.findall(TOKEN, _strip(line, skip))
+    return re.findall(_figure_pattern(skip), _strip(line, skip))
+
 
 def _is_figure(s, skip=()):
     """Is `s` a bare `key=<number|boolean>`? The narrowest part of the design.
@@ -372,6 +473,19 @@ def _is_figure(s, skip=()):
     The ONLY decisions here that are not behind a named guard are that the
     string contains an `=` with text on both sides -- which is not a guard but
     the shape the review arm is about.
+
+    Since `R24-F1` this decides with the SAME pattern the scan uses, anchored,
+    and that has a consequence worth stating rather than leaving for a reader:
+    under the positive scan a candidate already matched that pattern, so this
+    call cannot reject one. It is not therefore ornamental and its guards are
+    not therefore unmeasured -- they are measured through `_figure_pattern`,
+    which is what the scan FINDS with, and the guard matrix reads them there.
+    What this function is still needed FOR is the control branch: with
+    `positive scan` deleted a candidate is a whitespace-separated token again
+    and something must decide whether that token is a figure. The partition is
+    kept because it is the shape the review arms are planted against, and
+    because `identity_test` requires that with every guard skipped the only
+    decision left is an `=` with text on both sides.
     """
     if "=" not in s:
         return False
@@ -379,22 +493,16 @@ def _is_figure(s, skip=()):
     if not key or not val:
         return False
     if "key class" not in skip:
-        keyre = r"[a-z][a-z0-9_]*" if "hyphen in the key" in skip else r"[a-z][a-z0-9_-]*"
+        keyre = _key_class(skip)
         if not re.fullmatch(keyre, key):
             return False
     if "figure value class" in skip:
         return True
-    bools = BOOLEANS_UNNORMALISED if "boolean spellings" in skip else BOOLEANS
-    spelled = val if "boolean case folding" in skip else val.lower()
-    if spelled in bools:
-        return True
-    sign = r"" if "signed values" in skip else r"[-+]?"
-    pct = r"" if "percent in the value" in skip else r"%?"
-    return bool(re.fullmatch(sign + r"[0-9][0-9,._]*" + pct, val))
+    return bool(re.fullmatch(_value_class(skip), val))
 
 
 def _strip(line, skip=()):
-    """The line with its decoration and its spellings removed.
+    """The line with its SPELLINGS normalised. No decoration is removed here.
 
     EVERY transformation in this function is behind a named guard, with no
     exception, which is what makes the completeness claim testable rather than
@@ -403,6 +511,22 @@ def _strip(line, skip=()):
     unconditional transformation -- a case fold, a strip, a new rule added in
     a hurry -- shows up there as a difference, which is how `R14-F1` would
     have been found by the instrument instead of by a reader.
+
+    `R24-F1` emptied this function of its decoration rules. Ten leading and
+    trailing patterns, the `--` marker split and the whitespace split are gone,
+    because the positive scan does not care what sits around a figure. Four
+    guards remain and each one is a SPELLING: a shape it normalises is the same
+    figure written differently, which the scan would otherwise miss for a reason
+    that has nothing to do with where the figure sits.
+
+    `inline code span` is the one that is not a spelling, and it is the
+    DISCLOSED BOUND the header names and an arm measures: a figure inside
+    backticks is prose quoting a value, and this pack quotes its own
+    counter-examples -- `superuser_sees=130` is the law's own illustration of a
+    figure nothing emits, and `fabricated_count=999` is every round's probe
+    token. Round 24 lists the backtick rule among the bounds it is NOT
+    attacking. Deleting the guard makes those quotations claims and reds nine
+    true sentences, which is the measurement beside it, not a promise.
     """
     s = line
     if "nfkc" not in skip:
@@ -413,87 +537,9 @@ def _strip(line, skip=()):
         s = _fold_digits(s)
     if "html comment markers" not in skip:
         s = s.replace("<!--", " ").replace("-->", " ")
-    # An inline code span is prose quoting a value, so its content goes --
-    # which also means a backticked comment cannot shelter a bare figure.
     if "inline code span" not in skip:
         s = CODE_SPAN.sub(" ", s)
-    for _ in range(4):  # decoration nests: `> - **x**`
-        before = s
-        # Written out one statement per guard, with the name as a literal.
-        # They used to be a loop over a table of (name, pattern) pairs, which
-        # the structural check below cannot read -- and an indirection the
-        # parse cannot see is an indirection something can hide in.
-        if "blockquote and indent" not in skip:
-            s = LEAD_QUOTE.sub("", s, count=1)
-        if "list marker" not in skip:
-            s = LEAD_LIST.sub("", s, count=1)
-        if "heading marker" not in skip:
-            s = LEAD_HEAD.sub("", s, count=1)
-        if "table cell (leading)" not in skip:
-            s = LEAD_CELL.sub("", s, count=1)
-        if "bracket" not in skip:
-            s = LEAD_PAREN.sub("", s, count=1)
-        if "emphasis (leading)" not in skip:
-            s = LEAD_EMPH.sub("", s, count=1)
-        if s == before:
-            break
-    if "label prefix" not in skip:
-        s = LABEL.sub("", s)
-    for _ in range(4):
-        before = s
-        if "trailing punctuation" not in skip:
-            s = TRAIL_PUNCT.sub("", s, count=1)
-        if "emphasis (trailing)" not in skip:
-            s = TRAIL_EMPH.sub("", s, count=1)
-        if "table cell (trailing)" not in skip:
-            s = TRAIL_CELL.sub("", s, count=1)
-        if s == before:
-            break
     return s
-
-
-def _segments(line, skip=()):
-    """The parts of one line that are each a candidate in their own right.
-
-    A `--` marker SPLITS the line; it does not delete what follows it. The
-    previous design deleted from the marker to the end, which revealed a
-    figure written as `-- figure` (a different guard stripped the leading
-    marker) and DELETED one written as `note -- figure`. Round 15's `R15-S2`
-    is exactly that asymmetry, and it was invisible to the guard matrix
-    because the arm named for the finding carried the leading form while the
-    finding itself was about the trailing one. A split closes both at once and
-    cannot be asymmetric: whatever sits on either side of the marker is
-    weighed on its own.
-
-    `R23-F1`, and it is the shape eight rounds walked past: after the marker
-    split a LINE was one candidate, and `_is_figure` partitions on the FIRST
-    `=`. So `rows=4242 a=1` put `4242 a=1` in the value, the value stopped
-    matching, and the line produced NO candidate at all -- not a candidate
-    weighed and rejected, which the count would have shown, but nothing. The
-    challenger measured `rows=4242 a=1`, `a=1 rows=4242`, a tab between them, a
-    semicolon, two table cells and three pairs, all of them empty, and drove it
-    end to end: `overlay_routine=4242` alone reds, and
-    `core_routine=1 overlay_routine=4242` passes. **And that shape is what this
-    phase's own instruments PRINT** -- `core_routine=1 overlay_routine=0` comes
-    out of Pack B and sits in ten committed transcripts -- so the likeliest
-    thing a reader pastes was the one shape never checked. It is not the
-    disclosed bound, which is about PROSE around a figure: two `key=value`
-    pairs are not prose.
-
-    So WHITESPACE splits the line as well, and a candidate is a TOKEN. The cost
-    in the other direction is measured rather than asserted, the way round 13's
-    widening was: `--surface` reports it against the real haystack, and the
-    enrolled block in the manifest carries the number.
-
-    EVERY transformation here is behind a named guard, for the same reason as
-    in `_strip`, and `--selftest` parses this function to check it.
-    """
-    parts = [line]
-    if "dash marker splits the line" not in skip:
-        parts = MARKER.split(line)
-    if "whitespace splits the line" not in skip:
-        parts = SPACES.split(" ".join(parts))
-    return parts
 
 
 def _exempted(s, skip=()):
@@ -530,13 +576,12 @@ def figures_on(line, skip=()):
     round 16 and round 17 used, and the unplanted frame must still be accepted.
     """
     out = []
-    for part in _segments(line, skip):
-        s = _strip(part, skip)
-        if not _is_figure(s, skip):
+    for cand in _candidates(line, skip):
+        if not _is_figure(cand, skip):
             continue
-        if _exempted(s, skip):
+        if _exempted(cand, skip):
             continue
-        out.append(s)
+        out.append(cand)
     return out
 
 
@@ -1038,12 +1083,19 @@ OBJECT_KEYS = (
     # which is what makes "deleting IT reds a gate" measurable per law.
     "clean-tree",
     "index-flags",
+    # The coordinator's `F1` on `50a45a0`: a law built on `ls-tree HEAD` never
+    # examines a file the commit does not hold, and `run_migrations.py` applies
+    # `sorted(os.listdir(MIGDIR))`. An UNTRACKED `.sql` dropped into the
+    # migrations directory was applied, `APPLIED 88/88`, with
+    # `SOURCE_TREE_DIRTY : no` and every `EXIT_*` 0. Its own key, so deleting
+    # it reds.
+    "untracked-paths",
 )
 
 
 # The two tree laws, named once so the generation suspension below and the
 # keyed deletion arms read the same strings.
-TREE_LAW_KEYS = frozenset(("clean-tree", "index-flags"))
+TREE_LAW_KEYS = frozenset(("clean-tree", "index-flags", "untracked-paths"))
 
 # Set for the whole process by `--regenerate` and `--emit`, and by nothing
 # else. See `_suspend_tree_law_for_generation`.
@@ -1114,11 +1166,16 @@ def _tree_dirty(top):
     from the bytes, which no index flag can move.
 
     WHAT THIS DOES NOT COVER, said here rather than discovered: a file the
-    commit does not hold. An untracked `.py`, `.sh` or `.sql` under the harness
-    is refused by the byte law (`SELF-FILE-UNCOMMITTED`); an untracked document
-    can only ever ADD a figure, and a figure is legitimised by the haystack,
-    which is read from the commit -- so it reds rather than passes. A mode
-    change is not a content change and is not read here. So the sentence this file used to carry --
+    commit does not hold. That sentence used to continue "an untracked document
+    can only ever ADD a figure, so it reds rather than passes", and the
+    coordinator measured it FALSE in the one place it mattered -- an untracked
+    `.sql` in the migrations directory is not read for figures at all, it is
+    APPLIED, and the run was fully green with the planted table in the
+    database. `_untracked` below is that hole closed, by its own key, and this
+    function still reads only what the commit holds. The mode bits ARE read
+    here, in the loop below, since the coordinator's `F2` on the previous head;
+    the sentence saying they were not was stale and is gone (`F6`). So the
+    sentence this file used to carry --
     "an escape therefore has to be COMMITTED to work" -- is replaced by the
     one that is true: a transcript is evidence only when it was produced from a
     CLEAN tree whose `HEAD` is the committed sha, and reviewers run from fresh
@@ -1193,6 +1250,89 @@ def _tree_dirty(top):
             "Moved: %s. " % "; ".join(sorted(moved)[:5]) if moved else "",
             "Missing: %s. " % "; ".join(sorted(gone)[:5]) if gone else "",
             "Mode: %s." % "; ".join(sorted(mode_moved)[:5]) if mode_moved else "",
+        ),
+    )
+
+
+# The directories whose CONTENTS the run reads, rather than the commit's copy
+# of them. Both are named here rather than discovered because this file's own
+# bytes are pinned to the commit: an edit to either name is an edit to the
+# checker, which `self-bytes` refuses unless it is committed and reviewed. Each
+# one is armed below by a plant, and an absent directory is a REFUSAL rather
+# than an empty walk -- fail on ABSENCE, never skip what cannot be classified.
+READ_DIRS = ("infrastructure/database/migrations", "prep/phase11")
+# A suffix the run reads or executes from one of those directories. `.pyc` is
+# deliberately absent: a compiled cache is not read by anything the run
+# executes, and naming it would make every `__pycache__` a refusal.
+READ_SUFFIXES = (".sql", ".py", ".sh", ".md", ".txt")
+
+
+def _untracked(top):
+    """Paths the commit does not hold, under a directory the run READS.
+
+    THE COORDINATOR'S `F1` ON `50a45a0`: a blocker, a measured fail-open, and a
+    REGRESSION this phase introduced. `R23-F2`'s answer replaced
+    `git status --porcelain` with a comparison of every path the COMMIT holds
+    against the bytes on disk -- which is right about index flags and blind in a
+    way `status` was not. `status` lists `?? 0086z_plant.sql`; a walk of
+    `ls-tree HEAD` never looks at a file the commit does not hold. And
+    `run_migrations.py` applies `sorted(os.listdir(MIGDIR))`, so an untracked
+    `.sql` dropped beside the frozen migrations was APPLIED: `APPLIED 88/88`,
+    `SOURCE_TREE_DIRTY : no`, every `EXIT_*` 0, the planted table in
+    `to_regclass`, and the last `schema_migrations` row naming the plant.
+
+    So the law is stated in the other direction as well: not only "every path
+    the commit holds is what is on disk", but "nothing the run reads is a path
+    the commit does not hold". Both halves are needed and neither implies the
+    other.
+
+    WHAT THIS DOES NOT COVER, named rather than discovered: a file whose suffix
+    is not one the run reads, and a directory not named in `READ_DIRS` -- the
+    run executes `npm` and a PostgreSQL build from outside this tree, and
+    neither is pinned by anything here. A planter who COMMITS is not covered by
+    this or by anything executable; that is the declared limit of the chain.
+    """
+    try:
+        sha = _commit_of(top)
+        listed = _git(
+            top, ["ls-tree", "-r", "-z", "--full-tree", "--name-only", sha]
+        ).decode("utf-8", "surrogateescape")
+    except (Refusal, RuntimeError, OSError) as exc:
+        return (
+            "SELF-UNTRACKED-UNREADABLE: whether the work tree at %s carries a file the "
+            "commit does not hold could not be determined (%s)." % (top, exc),
+        )
+    held = {path for path in listed.split("\0") if path}
+    absent = [d for d in READ_DIRS if not os.path.isdir(os.path.join(top, d))]
+    if absent:
+        return (
+            "SELF-READ-DIR-ABSENT: %s is named as a directory this run reads and is not "
+            "a directory at %s, so the law cannot say what the run would read from it. "
+            "An absent subject is a refusal, never an empty walk."
+            % ("; ".join(absent), top),
+        )
+    extra = []
+    for rel_dir in READ_DIRS:
+        for root, dirs, names in os.walk(os.path.join(top, rel_dir), followlinks=True):
+            dirs.sort()
+            for name in sorted(names):
+                if not name.endswith(READ_SUFFIXES):
+                    continue
+                rel = os.path.relpath(os.path.join(root, name), top)
+                if rel not in held:
+                    extra.append(rel)
+    if not extra:
+        return ()
+    return (
+        "SELF-TREE-UNTRACKED: %d path%s under a directory this run reads %s not in the "
+        "commit at %s, and the run reads or applies what is on disk rather than what the "
+        "commit holds, so its output is not evidence. Untracked: %s."
+        % (
+            len(extra),
+            "" if len(extra) == 1 else "s",
+            "is" if len(extra) == 1 else "are",
+            top,
+            "; ".join(sorted(extra)[:5]),
         ),
     )
 
@@ -1488,6 +1628,19 @@ def index_unflagged():
     return _index_flagged(top)
 
 
+def tree_tracked():
+    """The untracked-paths law, consulted live: refusals or nothing."""
+    try:
+        top = _subject_top(_harness_dir())
+    except Refusal as why:
+        return (
+            "SELF-UNTRACKED-ANCHOR-UNRESOLVED: whether the run reads a path the commit "
+            "does not hold cannot be asked without the commit. The anchor refused: %s"
+            % why,
+        )
+    return _untracked(top)
+
+
 def frame_admissible(objects=None):
     """(ok, refusals) for the REAL decision frame, parsed once per process.
 
@@ -1526,6 +1679,8 @@ def _frame_refusals(keys):
         msgs += list(tree_committed())
     if "index-flags" in keys:
         msgs += list(index_unflagged())
+    if "untracked-paths" in keys:
+        msgs += list(tree_tracked())
     for func in (figures_on, tokens_in, _exempted, _is_figure):
         try:
             tree = _source_of(func)
@@ -1555,10 +1710,17 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
     if not admissible:
         if not quiet:
             print(
-                "  REFUSED: FRAME-INADMISSIBLE: the decision frame on disk is not one "
-                "the closed sub-language admits, so nothing it decides is read as a "
-                "verdict. %d refusal(s), the first of them: %s"
-                % (len(refusals), refusals[0])
+                # `R24-S2`: this used to print "FRAME-INADMISSIBLE: the
+                # decision frame on disk is not one the closed sub-language
+                # admits" in front of whatever the first refusal was -- and the
+                # first refusal is usually `SELF-BYTES-UNCOMMITTED` or
+                # `SELF-TREE-DIRTY`, which says nothing about the frame. A
+                # reader sent to the wrong cause reads the wrong file. Every
+                # refusal carries its own NAME, so the refusal leads.
+                "  REFUSED: %s A verdict is read only from a run of the committed tree "
+                "whose decision frame the closed sub-language admits, and %d refusal(s) "
+                "stand in the way of that here."
+                % (refusals[0], len(refusals))
             )
         return 5
     try:
@@ -1685,13 +1847,21 @@ CATCH = [
     # own instruments could print. The last one is Pack B's own output shape
     # with a fabricated number in it, which is the likeliest thing a reader
     # pastes.
-    ("R23-F1 a second pair after the figure", "fabricated_count=999 a=1"),
-    ("R23-F1 a pair before the figure", "a=1 fabricated_count=999"),
-    ("R23-F1 a tab between the pairs", "fabricated_count=999\ta=1"),
-    ("R23-F1 a semicolon between the pairs", "fabricated_count=999; a=1"),
-    ("R23-F1 two table cells", "| fabricated_count=999 | a=1 |"),
-    ("R23-F1 three pairs", "fabricated_count=999 a=1 b=2"),
-    ("R23-F1 the instrument's own shape", "core_routine=1 fabricated_count=999"),
+    # Every key in an arm body is `fabricated_`-prefixed, and that is the
+    # coordinator's `F3` rather than a style: `planted_tokens()` weighs these
+    # bodies and plants every figure it finds, so an arm written with a REAL
+    # key plants a real token. At `50a45a0` these arms carried `a=1`, `b=2` and
+    # `core_routine=1`, and the last of those is Pack B's own output, which
+    # appears 62 times in committed evidence -- so quoting Pack B's own line in
+    # a fence red as NOT EMITTED. The shape an arm measures is two pairs on one
+    # line; whose keys they are was never part of it.
+    ("R23-F1 a second pair after the figure", "fabricated_count=999 fabricated_a=1"),
+    ("R23-F1 a pair before the figure", "fabricated_a=1 fabricated_count=999"),
+    ("R23-F1 a tab between the pairs", "fabricated_count=999\tfabricated_a=1"),
+    ("R23-F1 a semicolon between the pairs", "fabricated_count=999; fabricated_a=1"),
+    ("R23-F1 two table cells", "| fabricated_count=999 | fabricated_a=1 |"),
+    ("R23-F1 three pairs", "fabricated_count=999 fabricated_a=1 fabricated_b=2"),
+    ("R23-F1 the instrument's own shape", "fabricated_routine=1 fabricated_count=999"),
     # And the bound this closes rather than carries: PROSE on the line used to
     # excuse the figure beside it, disclosed as a residual since round 13. A
     # token is weighed wherever it sits now, and `--surface` reports what that
@@ -1711,6 +1881,41 @@ CATCH = [
     ("attached: a table cell opened with no padding", "|fabricated_count=999"),
     ("attached: a table cell closed with no padding", "fabricated_count=999|"),
     ("attached: a label with no space", "result:fabricated_count=999"),
+    # `R24-F1`: the five shapes the challenger drove through `50a45a0` as
+    # committed commits on throwaway clones, with the whole suite green. Each
+    # one is caught here by the figure's own description rather than by a row of
+    # its own, which is the difference between this answer and the last three.
+    ("R24-F1 a double-quoted figure", '"fabricated_count=999"'),
+    ("R24-F1 a single-quoted figure", "'fabricated_count=999'"),
+    ("R24-F1 a semicolon between the pairs, no space", "fabricated_routine=1;fabricated_count=999"),
+    ("R24-F1 a comma between the pairs, no space", "fabricated_routine=1,fabricated_count=999"),
+    ("R24-F1 pipes with no padding", "|fabricated_routine=1|fabricated_count=999|"),
+    # The coordinator's `F2` added four separators the challenger had not run.
+    # They need no rule of their own under the positive scan, which is the
+    # point of measuring them here rather than listing them anywhere.
+    ("R24-F1 an ampersand between the pairs", "fabricated_a=1&fabricated_count=999"),
+    ("R24-F1 a slash between the pairs", "fabricated_a=1/fabricated_count=999"),
+    ("R24-F1 a bracketed pair list", "(fabricated_count=999,fabricated_a=1)"),
+    # And the two shapes the inversion closes that no round had reached: a long
+    # option, which the old key class refused for the leading hyphens, and the
+    # generator's own single-quoted control line, which is the shape round 24
+    # pointed out this pack PRINTS and could not see.
+    ("R24-F1 a long option", "--fabricated_count=999"),
+    # `R24-F1` took `hyphen in the key`'s last arm away, and a guard that reds
+    # nothing is deleted or armed. Its old arm, `fabricated-count=999`, reds
+    # either way now: the left boundary admits a key that begins after a
+    # hyphen, because that is how a long option is written, so with the guard
+    # deleted the scan finds `count=999` instead and a fabricated figure reds
+    # under both keys. What the guard decides is not WHETHER a hyphenated
+    # figure is weighed but WHICH TOKEN is weighed, and that shows only where
+    # the two tokens get different verdicts. `deleted=0` IS emitted and
+    # `zz-deleted=0` is not, so with the guard the arm catches a fabricated
+    # figure and with it deleted the scan weighs `deleted=0` and passes.
+    ("R24-F1 a fabricated figure whose hyphenated key ends in an emitted one", "zz-deleted=0"),
+    (
+        "R24-F1 the pack's own quoted control line",
+        "control: '### fabricated_count=999' still becomes 'fabricated_count=999'",
+    ),
 ]
 SKIP = [
     ("named: inline code span only", "the value `fabricated_count=999` is quoted in prose"),
@@ -1728,6 +1933,13 @@ SKIP = [
     # R14-S2: the two exemptions the coordinator ruled, by exact name.
     ("R14-S2 exempt port=55512", "port=55512"),
     ("R14-S2 exempt migrations=87", "migrations=87"),
+    # `R24-F1`'s two boundaries, one arm each, and both of them keep a bound
+    # this pack already disclosed rather than opening a new one: an uppercase
+    # key is not a figure, and a date is not a figure. Delete the left boundary
+    # and `count=999` is read out of the middle of an uppercase identifier;
+    # delete the right one and `date=2026` is read out of a date.
+    ("key boundary: a key that is the tail of an uppercase name", "FABRICATED_count=999"),
+    ("value boundary: a date is not a figure", "date=2026-10-19"),
 ]
 PASSES = [
     ("an emitted figure", "present=true"),
@@ -1780,29 +1992,22 @@ IDENTITY_PROBE = (
 )
 
 
-# The twelve guards §7.13 of the manifest listed, in this file's names. They
-# are kept as a NEGATIVE CONTROL: `R14-F1` was that the matcher applied more
-# guards than that table named, and the identity test below demonstrates it
-# rather than asserting it -- with only these twelve skipped, the stripper is
-# still not the identity, and what it still does is what the table missed.
-R13_TABLE = (
-    "inline code span",
-    "blockquote and indent",
-    "list marker",
-    "table cell (leading)",
-    "table cell (trailing)",
-    "bracket",
-    "emphasis (leading)",
-    "emphasis (trailing)",
-    "label prefix",
-    "trailing punctuation",
-    "html comment markers",
-    "figure value class",
-)
-R13_TABLE_MISSED = (
-    "### fabricated_count=999",
-    "fabricated_count=999 -- a plain comment",
-)
+# `R24-F1`. §7.13's twelve-row table, and the negative control that RAN it,
+# are gone with the thirteen decoration guards. The control's whole content was
+# "with only those twelve skipped the stripper is still not the identity, and
+# what it still does is what the table missed" -- and there is no longer any
+# decoration rule for a table of decoration rules to miss. What it guarded
+# against, an unnamed transformation in the stripper, is covered by the two
+# things that remain: `identity_test` below, over four guards instead of
+# seventeen, and the structural parse, which refuses a rebinding outside a
+# named guard whether or not anyone wrote a row for it.
+#
+# Two of this pack's own committed lines were that control's printed output,
+# carrying `'fabricated_count=999'` in single quotes -- the exact shape round 24
+# attacked -- and they are the only four findings the inversion produced on this
+# pack's prose. They go with the control that generated them, at the generator,
+# which is where round 23 ruled such a thing is answered rather than in an
+# exemption list.
 
 SHAPES = (
     ("A B=C D", True),
@@ -1843,25 +2048,21 @@ def identity_test():
                 % (shape, got, want)
             )
             ok = False
-    # The negative control: the previous round's twelve-row table, run. A
-    # shape it missed must still be visible with ONLY those twelve skipped --
-    # through the stripper, or through the split, which is where the `--`
-    # form moved when `R15-S2` turned a deletion into a split.
-    for line in R13_TABLE_MISSED:
-        got = _strip(line, R13_TABLE)
-        parts = _segments(line, R13_TABLE)
-        if got == line and parts == [line]:
+    # `R24-F1`: the positive scan is checked here too, in the direction the
+    # identity test is for. With every guard skipped the SCAN must find the
+    # whole token and nothing less, because a scan that still narrowed its
+    # candidate with every guard deleted would be narrowing it somewhere
+    # `GUARDS` does not name.
+    for line in IDENTITY_PROBE:
+        got = _candidates(line, GUARDS)
+        want = [t for t in line.split() if t]
+        if got != want:
             print(
-                "  identity **FAILED**: %r is untouched with only the twelve rows of "
-                "§7.13 skipped, so this file no longer demonstrates R14-F1" % line
+                "  identity **FAILED**: with every guard skipped, the scan of %r found "
+                "%r and the line's own tokens are %r, so the candidate unit is narrowed "
+                "somewhere GUARDS does not name" % (line, got, want)
             )
             ok = False
-        else:
-            shown = "%r" % got if got != line else "%r" % (parts,)
-            print(
-                "  control: with ONLY §7.13's twelve rows skipped, %r still becomes "
-                "%s -- a guard that table never named" % (line, shown)
-            )
     print(
         "  identity: %d probe lines and %d shapes -- %s"
         % (
@@ -2264,30 +2465,15 @@ def guard_matrix():
     """
     ok = True
     print("  -- each guard deleted on its own, and the arms that stop answering --")
-    for guard, flipped, behind in _guard_rows():
+    for guard, flipped in _guard_rows():
         shown = ", ".join(flipped[:3]) + (" +%d more" % (len(flipped) - 3) if len(flipped) > 3 else "")
-        if behind is None:
-            good = bool(flipped)
-            verdict = "measured" if good else "**REDS NOTHING: delete it or arm it**"
-        elif flipped:
-            # The entry says another guard does this one's work, and it is
-            # doing work of its own: the sentence has gone stale.
-            good = False
-            verdict = "**NO LONGER SUBSUMED: it reds arms on its own, drop the entry**"
-        else:
-            good = bool(behind)
-            shown = ", ".join(behind[:3]) + (" +%d more" % (len(behind) - 3) if len(behind) > 3 else "")
-            verdict = (
-                "measured behind %r" % SUBSUMED[guard]
-                if good
-                else "**REDS NOTHING EVEN BEHIND %r: delete it or arm it**" % SUBSUMED[guard]
-            )
-        print("  guard  %-24s reds %2d arm(s): %-52s -> %s" % (guard, len(flipped if behind is None else behind), shown, verdict))
+        good = bool(flipped)
+        verdict = "measured" if good else "**REDS NOTHING: delete it or arm it**"
+        print("  guard  %-24s reds %2d arm(s): %-52s -> %s" % (guard, len(flipped), shown, verdict))
         ok = ok and good
     print(
-        "  %d guards, every one of them deleted and measured, %d of them behind the "
-        "guard that subsumes them -- %s"
-        % (len(GUARDS), len(SUBSUMED), "none reds nothing" if ok else "FAILURES ABOVE")
+        "  %d guards, every one of them deleted on its own and measured -- %s"
+        % (len(GUARDS), "none reds nothing" if ok else "FAILURES ABOVE")
     )
     return ok
 
@@ -2485,7 +2671,7 @@ def _plant_refused(stmt):
 
 # The transformers, as ONE tuple: `decision_test` claims these two are parsed
 # here instead of by the frame's rules, and checks the claim against this.
-TRANSFORMERS = (_strip, _segments)
+TRANSFORMERS = (_strip,)
 
 
 def structure_test():
@@ -2621,7 +2807,7 @@ def structure_test():
 #      only such call; it cannot prove the branch deserves the name. The guard
 #      matrix measures that by deleting the guard and reading which arms stop
 #      giving their verdict.
-#   2. WHAT A TRANSFORMER MAY DO. `_strip` and `_segments` are covered by
+#   2. WHAT A TRANSFORMER MAY DO. `_strip` is covered by
 #      `guarded_transformations`, which proves every rebinding sits inside a
 #      named branch -- and a transformation that DROPS a candidate decides, under
 #      another name. Round 20 named this as where it would look next and it is
@@ -2742,17 +2928,19 @@ FRAME_BUILTINS = ("open", "enumerate", "bool")
 # The only methods it may call on anything. A WHITELIST, so an unknown method
 # -- `.replace`, `.casefold`, `.removeprefix`, `.translate` -- is refused
 # without being anticipated.
-# `.lower` is here because `_is_figure` folds the case of a VALUE inside the
-# `boolean case folding` guard, which the matrix measures. A method call cannot
+# `.lower` left with `R24-F1`: the case of a boolean VALUE is folded by the
+# value class's own inline flag now, so nothing in the frame calls it, and an
+# entry nothing calls is checked for below rather than left to widen the
+# language. A method call cannot
 # smuggle a transformation past rule 4 even so: binding it over the name it
 # came from is a second binding, and deciding on its result is a test the node
 # set does not admit. Every entry is checked to be in use below, so a
 # permissive entry cannot sit here dead.
-FRAME_METHODS = ("append", "rstrip", "strip", "partition", "lower")
+FRAME_METHODS = ("append", "rstrip", "strip", "partition")
 FRAME_MODULES = ("re", "os", "unicodedata")
 # Parsed by `guarded_transformations` rather than by these rules. The claim is
 # checked below against the tuple that function is actually run over.
-PARSED_AS_TRANSFORMERS = ("_strip", "_segments")
+PARSED_AS_TRANSFORMERS = ("_strip",)
 
 # `R18-S1`. The sub-language was closed over node TYPES and OPEN over which
 # module calls may DECIDE: rule 2 admits "a call the frame admits" and rule 3
@@ -2796,13 +2984,24 @@ PARSED_AS_TRANSFORMERS = ("_strip", "_segments")
 DECIDING_MODULE_CALLS = (
     ("_is_figure", "re", "fullmatch", "test", "key class"),
     ("_is_figure", "re", "fullmatch", "return", None),
+    # `R24-F1`'s one new deciding call: the positive scan itself. Its entry
+    # records `None` where a guard would be for the same reason `_is_figure`'s
+    # return entry does -- finding the figures on a line IS this function's
+    # purpose and there is no guard to name. Which PATTERN it scans with is a
+    # named guard, in `_scan_pattern`, and the parse reads it there.
+    # Two call sites, named apart: the control scan sits inside the branch
+    # `"positive scan" in skip` opens, and the real one sits inside no guard.
+    # An entry whose guard is named matches only the site that guard wraps, and
+    # it is listed FIRST so the unguarded entry is left with the other site --
+    # which is how each of the two entries ends up admitting exactly one.
+    ("_candidates", "re", "findall", "return", "positive scan"),
+    ("_candidates", "re", "findall", "return", None),
 )
 
 DECISION_EXCEPTIONS = {
     "_is_figure": (
         "'=' not in s",
         "not key or not val",
-        "spelled in bools",
     ),
 }
 
@@ -3560,8 +3759,7 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce
 # quoted them.
 _DECISION_TEMPLATE = '''def _decided(line, skip=()):
     out = []
-    for part in _segments(line, skip):
-        s = _strip(part, skip)
+    for s in _candidates(line, skip):
 %s
         if not _is_figure(s, skip):
             continue
@@ -3785,20 +3983,36 @@ def decision_test():
             % ", ".join(dead)
         )
         ok = False
+    # Every function either parse covers, for the source/bytecode tie below.
+    compiled = set()
+    for func in (
+        figures_on,
+        tokens_in,
+        _exempted,
+        _is_figure,
+        _candidates,
+        _figure_pattern,
+        _key_class,
+        _value_class,
+    ) + TRANSFORMERS:
+        compiled |= {c for c in func.__code__.co_consts if isinstance(c, str)}
     for func in (figures_on, tokens_in, _exempted, _is_figure):
         fn = _source_of(func)
         good, msgs, keys = decision_frame(fn, DECISION_EXCEPTIONS.get(func.__name__, ()))
         for m in msgs:
             print("  decision **FAILED**: %s" % m)
-        compiled = {c for c in func.__code__.co_consts if isinstance(c, str)}
         drifted = sorted(k for k in keys if k not in compiled)
-        if drifted and func.__name__ not in ("figures_on", "tokens_in"):
-            # The descent collects the callees' keys too, which are not
-            # constants of the caller; the tie is checked on the function that
-            # owns them.
+        if drifted:
+            # `R24-F1` removed the name exemption this check used to carry. It
+            # read "the descent collects the callees' keys too, which are not
+            # constants of the caller", and the remedy was to skip the two
+            # functions that descend -- so a guard name invented in `figures_on`
+            # or `tokens_in` was tied to nothing at all. The tie is now against
+            # the constants of EVERY function the parses cover, which is the
+            # granularity the descent actually has, and no function is skipped.
             print(
-                "  decision **FAILED**: %s names guards the compiled function does not "
-                "hold (%s)" % (func.__name__, ", ".join(drifted))
+                "  decision **FAILED**: %s names guards no compiled function the "
+                "parses cover holds (%s)" % (func.__name__, ", ".join(drifted))
             )
             good = False
         print(
@@ -3929,6 +4143,62 @@ def decision_test():
 # are listed too, with the description, so the gap is visible rather than
 # absent. An arm whose label names a finding with no entry here FAILS.
 PROVENANCE = {
+    # `R24-F1`, and the coordinator's `F2` beside it: the round reported a
+    # DEFECT over shapes -- "the unit is still derived subtractively, and both
+    # lists are whitelists" -- and demonstrated it with five fenced lines, then
+    # the coordinator with four more. Each arm below is one of those shapes
+    # written with this file's own fabricated keys, because an arm body's
+    # figures are PLANTED (the coordinator's `F3`) and the round's own
+    # `overlay_routine=4242` would plant a token beside Pack B's real output.
+    # So each records a description, and the shape it plants is the one the
+    # finding named.
+    "R24-F1 a double-quoted figure": (
+        None,
+        "a figure in straight double quotes, the round's own first shape",
+    ),
+    "R24-F1 a single-quoted figure": (
+        None,
+        "a figure in straight single quotes, which is the shape this pack PRINTS",
+    ),
+    "R24-F1 a semicolon between the pairs, no space": (
+        None,
+        "two pairs joined by a separator that is not whitespace",
+    ),
+    "R24-F1 a comma between the pairs, no space": (
+        None,
+        "the same, with a comma, which the round ran in both orders",
+    ),
+    "R24-F1 pipes with no padding": (
+        None,
+        "the same, as an unpadded markdown table row",
+    ),
+    "R24-F1 an ampersand between the pairs": (
+        None,
+        "the same, with an ampersand, which the coordinator added",
+    ),
+    "R24-F1 a slash between the pairs": (
+        None,
+        "the same, with a slash, which the coordinator added",
+    ),
+    "R24-F1 a bracketed pair list": (
+        None,
+        "the same, bracketed, which the coordinator added",
+    ),
+    "R24-F1 a long option": (
+        None,
+        "a figure written as a long option, which no round reached and the "
+        "inversion closes",
+    ),
+    "R24-F1 the pack's own quoted control line": (
+        None,
+        "the generator's own control line, the two committed fenced lines the "
+        "round pointed at as figures this instrument prints and cannot see",
+    ),
+    "R24-F1 a fabricated figure whose hyphenated key ends in an emitted one": (
+        None,
+        "a fabricated figure whose hyphenated key ends in an emitted one, which "
+        "is what `hyphen in the key` decides now that the scan is positive",
+    ),
     # `R23-F1`: the round measured the DEFECT -- `_is_figure` partitions on the
     # first `=`, so a line carrying two pairs was never a candidate at all --
     # and reported it as that defect over shapes, not as nine document lines.
@@ -4221,23 +4491,17 @@ _ROWS = {}
 
 
 def _guard_rows():
-    """(guard, the arms its deletion reds) for every guard, computed once."""
+    """(guard, the arms its deletion reds) for every guard, computed once.
+
+    `R24-F1` removed the third element. It carried the arms a SUBSUMED guard
+    reds once the guard that subsumes it is gone, and both entries were about
+    decoration rules that no longer exist.
+    """
     if "guard" not in _ROWS:
         def reds(skip):
             return [label for label, want, run in _arms_with(skip) if run() != want]
 
-        rows = []
-        for guard in GUARDS:
-            alone = reds((guard,))
-            behind = None
-            if guard in SUBSUMED:
-                # Measured, not asserted: the arms this guard reds once the
-                # guard that subsumes it is gone, minus the arms that guard's
-                # own deletion already reds.
-                over = SUBSUMED[guard]
-                already = set(reds((over,)))
-                behind = [a for a in reds((guard, over)) if a not in already]
-            rows.append((guard, alone, behind))
+        rows = [(guard, reds((guard,))) for guard in GUARDS]
         _ROWS["guard"] = rows
     return _ROWS["guard"]
 
@@ -4263,27 +4527,14 @@ def _surface_rows():
 
 def emit_guard_matrix():
     lines = ["each guard deleted on its own, and the arms that stop answering:", ""]
-    for guard, flipped, behind in _guard_rows():
+    for guard, flipped in _guard_rows():
         shown = ", ".join(flipped[:3]) + (
             " +%d more" % (len(flipped) - 3) if len(flipped) > 3 else ""
         )
-        if behind is None:
-            lines.append("%-26s reds %2d arm(s): %s" % (guard, len(flipped), shown))
-        else:
-            lines.append(
-                "%-26s reds %2d arm(s) alone, %d behind the guard that subsumes it: %s"
-                % (
-                    guard,
-                    len(flipped),
-                    len(behind),
-                    ", ".join(behind[:3])
-                    + (" +%d more" % (len(behind) - 3) if len(behind) > 3 else ""),
-                )
-            )
+        lines.append("%-26s reds %2d arm(s): %s" % (guard, len(flipped), shown))
     lines.append("")
     lines.append(
-        "%d guards, every one of them deleted and measured; %d of them measured "
-        "behind the guard that subsumes them" % (len(GUARDS), len(SUBSUMED))
+        "%d guards, every one of them deleted on its own and measured" % len(GUARDS)
     )
     return lines
 
@@ -4293,23 +4544,12 @@ def claims_guard_matrix():
     # behind it. The labels are detail, and putting them in the claim gave the
     # comparison a vocabulary of hundreds of words, which matched the pack's
     # ordinary prose everywhere and measured nothing.
-    rows = []
-    for guard, flipped, behind in _guard_rows():
-        if behind is None:
-            rows.append((guard, "reds %d arm(s)" % len(flipped)))
-        else:
-            rows.append(
-                (
-                    guard,
-                    "reds %d arm(s) alone, %d behind the guard that subsumes it"
-                    % (len(flipped), len(behind)),
-                )
-            )
+    rows = [(guard, "reds %d arm(s)" % len(flipped)) for guard, flipped in _guard_rows()]
     rows.append(
         (
             "",
-            "%d guards, every one of them deleted and measured; %d of them measured "
-            "behind the guard that subsumes them" % (len(GUARDS), len(SUBSUMED)),
+            "%d guards, every one of them deleted on its own and measured"
+            % len(GUARDS),
         )
     )
     return rows
@@ -4524,6 +4764,64 @@ def _counts_claimed(text, claim):
     return out
 
 
+def _counted_nouns(claim):
+    """The word each of the claim's own numbers COUNTS.
+
+    `R24-F1` moved the guard count from 30 to 21, and 21 is also the number of
+    a round, a `C21`, a decision id and a count of cases in this pack. The
+    summary rule asked only for A NUMBER AND A LONG WORD in common, and the
+    collision redded six true sentences in five documents -- "Round 21 measured
+    that whole class", "rounds 16 to 21", "Node 24.21.0", "The 21 cases test
+    every clause". A hardening that causes a false red is not hardening, and
+    this file has made that correction once already, for the `30` inside a
+    trigger's name.
+
+    So a restatement of a COUNTED claim has to name the number AND WHAT IS
+    COUNTED. The noun is read from the claim itself -- the first long word
+    after each of its numbers -- so it moves when the generator's wording
+    moves, and it is not a list anyone maintains. The cost is in the other
+    direction and is armed below: a wrong summary figure written with a
+    different noun ("21 checks") is not caught, which is a narrowing of the
+    same shape as the spelled-out `thirty guards` residual the coordinator
+    already ruled a named `P3`.
+    """
+    toks = _tokens(claim)
+    out = set()
+    for i, tok in enumerate(toks):
+        if not tok.isdigit():
+            continue
+        for word in toks[i + 1 : i + 4]:
+            if not word.isdigit() and len(word) >= 4 and word not in STOPWORDS:
+                out.add(word)
+                break
+    return out
+
+
+def _summary_restated(clause, claim):
+    """Does this clause restate a counted summary: the number AND its noun?
+
+    The noun must stand NEAR the number in the clause as well as in the claim,
+    within three tokens on either side, because this pack's table cells put a
+    dozen sentences on one physical line and a noun five sentences away is not
+    a restatement of anything.
+    """
+    nouns = _counted_nouns(claim)
+    if not nouns:
+        return ()
+    folded = _fold_digits(clause.lower())
+    numbers = {n for n in NUMBER.findall(folded) if len(n) >= 2} & set(
+        NUMBER.findall(_fold_digits(claim.lower()))
+    )
+    toks = _tokens(folded)
+    for i, tok in enumerate(toks):
+        if tok not in numbers:
+            continue
+        near = [w for w in toks[max(0, i - 3) : i + 4] if w in nouns]
+        if near:
+            return tok, sorted(set(near))
+    return ()
+
+
 def _shared(text, claim):
     """(numbers, words) a clause has in common with a generator's claim.
 
@@ -4566,11 +4864,11 @@ def _restatements(line, name):
                 # number in common is caught here; one written in words
                 # (`thirty guards`) is the spelled-out residual the coordinator
                 # ruled a named `P3`, and it is named in the manifest.
-                numbers, words = _shared(clause, claim)
-                if numbers and words:
+                restated = _summary_restated(clause, claim)
+                if restated:
                     found.append(
-                        "restates the summary `%s` prints (shares %s and %s)"
-                        % (name, ", ".join(sorted(numbers)), ", ".join(sorted(words)))
+                        "restates the summary `%s` prints (says %s of the %s it counts)"
+                        % (name, restated[0], ", ".join(restated[1]))
                     )
                 continue
             if not _mentions(clause, subject):
@@ -4670,10 +4968,11 @@ def check_blocks(docs_dir, quiet=False):
     if not admissible:
         if not quiet:
             print(
-                "  REFUSED: FRAME-INADMISSIBLE: the decision frame on disk is not one "
-                "the closed sub-language admits, so the generated blocks are not read "
-                "as evidence. %d refusal(s), the first of them: %s"
-                % (len(refusals), refusals[0])
+                # `R24-S2`, as above: the refusal leads under its own name.
+                "  REFUSED: %s A generated block is read as evidence only from a run of "
+                "the committed tree whose decision frame the closed sub-language admits, "
+                "and %d refusal(s) stand in the way of that here."
+                % (refusals[0], len(refusals))
             )
         return 5
     findings = []
@@ -4745,6 +5044,21 @@ BLOCK_ARMS = (
         "@@AN@@ catch arms, and the skip arms beside them",
     ),
     ("R16-S2 a block whose body was edited", 1, None),
+    # The narrowed summary rule, measured from both sides. `R24-F1` moved the
+    # guard count onto a number this pack already uses for a round, a decision
+    # id and a count of cases, and the rule as it stood redded six true
+    # sentences. What it must still catch is the count restated ABOUT THE THING
+    # COUNTED; what it must not raise is the same number about something else.
+    (
+        "C-R24 the guard-matrix summary restated in prose",
+        1,
+        "the matcher applies @@G@@ guards and each one is deleted on its own",
+    ),
+    (
+        "C-R24 control: the same number, about a round rather than the guards",
+        0,
+        "round @@G@@ measured that whole class again one level up",
+    ),
     # `R17-S2`. The enrolment now compares EVERY row the generators print, not
     # one claim per block, so a verdict belonging to a different row is a
     # finding wherever it is written. The challenger's plant is the first of
@@ -4819,6 +5133,7 @@ def blocks_test():
             filled = (
                 extra.replace("@@CLAIM@@", _claims_of("arm-counts")[0][1])
                 .replace("@@N@@", str(len(CATCH)))
+                .replace("@@G@@", str(len(GUARDS)))
                 .replace(
                     "@@AN@@",
                     "".join(chr(0x0660 + int(d)) for d in str(len(CATCH))),
@@ -5464,6 +5779,14 @@ def _deciding_copy(prefix, mutate=None, exclude=(), after=None):
         if not os.path.isdir(os.path.dirname(dst)):
             os.makedirs(os.path.dirname(dst))
         shutil.copy2(os.path.join(here, rel), dst)
+    # `untracked-paths` (the coordinator's `F1`) refuses an absent read
+    # directory rather than walking nothing, so an arm world is a repository
+    # that HAS one: a single committed migration, which every arm world then
+    # shares and which the untracked arm plants beside.
+    migrations = os.path.join(world, "infrastructure", "database", "migrations")
+    os.makedirs(migrations)
+    with open(os.path.join(migrations, "0001_arm_world.sql"), "w", encoding="utf-8") as fh:
+        fh.write("-- the arm world's own migration, so the directory the run reads exists\n")
     if mutate is not None:
         mutate(copy)
     _git(world, ["init", "-q"])
@@ -5662,6 +5985,32 @@ def live_byte_keys_arm():
     return ok
 
 
+def _reader_run(program, copy, extra=(), want_stdout=False):
+    """(refusal names, rc[, stdout]) from running one reader over one world.
+
+    `--tree-state` prints its verdict on stdout and its reasons on stderr, so
+    the two streams are kept apart here; every other invocation only needs the
+    names and the rc.
+    """
+    got = subprocess.run(
+        [sys.executable, "-I", program] + list(extra) + ["--harness", copy],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=180,
+    )
+    names = sorted(
+        {
+            line.split("REFUSED: ", 1)[1].split(":")[0]
+            for line in (got.stdout + "\n" + got.stderr).splitlines()
+            if line.startswith("REFUSED: ")
+        }
+    )
+    if want_stdout:
+        return names, got.returncode, got.stdout
+    return names, got.returncode
+
+
 def tree_law_arm():
     """`R23`: the clean-tree and index-flag laws, deleted by key, read by name.
 
@@ -5711,24 +6060,45 @@ def tree_law_arm():
     def _unlink_doc(copy):
         os.unlink(os.path.join(copy, doc_rel))
 
+    def _plant_sql(copy):
+        # THE COORDINATOR'S `F1`: an UNTRACKED `.sql` beside the frozen
+        # migrations, which `run_migrations.py` applies because it lists the
+        # DIRECTORY. The arm world carries one committed migration, so this is
+        # exactly the attack: a second file the commit does not hold.
+        top = os.path.dirname(os.path.dirname(os.path.dirname(copy)))
+        target = os.path.join(
+            top, "infrastructure", "database", "migrations", "0002z_arm_plant.sql"
+        )
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write("CREATE TABLE public.p11_arm_plant(x int);\n")
+
     for label, after, want, key in (
         ("a committed DOCUMENT drifted on disk", _drift_doc, "SELF-TREE-DIRTY", "clean-tree"),
         ("an executable bit the commit does not carry", _chmod_doc, "SELF-TREE-DIRTY", "clean-tree"),
         ("a committed document DELETED from the tree", _unlink_doc, "SELF-TREE-DIRTY", "clean-tree"),
         ("the same drift behind --assume-unchanged", _flag_doc, "SELF-INDEX-FLAGGED", "index-flags"),
+        # The coordinator's `F1` world, this head's blocker.
+        ("an UNTRACKED migration the run would apply", _plant_sql, "SELF-TREE-UNTRACKED", "untracked-paths"),
     ):
         _world, copy = _deciding_copy("p11-treearm-", mutate=_write_doc, after=after)
         names, scanned = _live_names(copy, frozenset(OBJECT_KEYS))
         deleted, deleted_rc = _live_names(copy, frozenset(OBJECT_KEYS) - {key})
+        # THE COORDINATOR'S `F4`, first weakness: every one of these arms passed
+        # an explicit key set, so `objects=None` -- which is what a real run
+        # consults -- was covered by nothing. The same world is read again the
+        # way the run reads it.
+        real, real_rc = _live_names(copy, None)
         good = (
             want in names
             and scanned == 5
             and want not in deleted
+            and want in real
+            and real_rc == 5
         )
         ok = ok and good
         print(
             "  tree   R23 %s: the run named %s and the scan rc=%d; with `%s` DELETED %s "
-            "and the scan rc=%d -> %s"
+            "and the scan rc=%d; as the REAL run reads it (objects=None) %s, rc=%d -> %s"
             % (
                 label,
                 ", ".join(names) or "NOTHING",
@@ -5736,9 +6106,169 @@ def tree_law_arm():
                 key,
                 "that name is gone" if want not in deleted else "IT STILL REDS",
                 deleted_rc,
+                "it names it too" if want in real else "IT IS NOT NAMED",
+                real_rc,
                 "as required" if good else "**SELFTEST FAILED**",
             )
         )
+    # THE COORDINATOR'S `F4`, `D11`: forcing `_GENERATING` true makes
+    # `_objects_enabled` drop both tree laws in a REAL run, and no arm read
+    # that. The suspension is deleted here the way the keyed arms delete a
+    # key -- in the live consultation -- and the name the key owns must go.
+    _world, copy = _deciding_copy("p11-genarm-", mutate=_write_doc, after=_drift_doc)
+    names, scanned = _live_names(copy, None)
+    _GENERATING.append(True)
+    try:
+        forced, forced_rc = _live_names(copy, None)
+    finally:
+        _GENERATING.pop()
+    good = (
+        "SELF-TREE-DIRTY" in names
+        and scanned == 5
+        and "SELF-TREE-DIRTY" not in forced
+    )
+    ok = ok and good
+    print(
+        "  tree   C-F4 D11 the generation suspension forced on in a real run: the run "
+        "named %s and the scan rc=%d; forced, %s and the scan rc=%d (the second reader "
+        "still refuses, which is the backstop the coordinator measured) -> %s"
+        % (
+            ", ".join(names) or "NOTHING",
+            scanned,
+            "SELF-TREE-DIRTY is gone" if "SELF-TREE-DIRTY" not in forced else "IT STILL REDS",
+            forced_rc,
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
+    # THE COORDINATOR'S `F4`, `D6`/`D7`/`D8` and the untracked law's own half:
+    # four single-line deletions inside the SECOND READER that kept the
+    # selftest green. The reader is a separate program, so each deletion is
+    # applied by value to a COPY of it that lives outside the harness copy, and
+    # the arm reads the refusal NAME in each direction.
+    reader = os.path.join(_harness_dir(), "check_harness_bytes.py")
+    with open(reader, "r", encoding="utf-8") as fh:
+        rtext = fh.read()
+    for label, old, new, want, after in (
+        (
+            "D6 the reader's index-flag detection",
+            '        if tag == "S" or tag.islower():',
+            "        if False:",
+            "HARNESS-INDEX-FLAGGED",
+            _flag_doc,
+        ),
+        (
+            "D7 the reader's mode check",
+            '            if executable != (mode == "100755"):',
+            "            if False:",
+            "HARNESS-TREE-DIRTY",
+            _chmod_doc,
+        ),
+        (
+            "D8 the reader's missing-file arm",
+            "    count = len(moved) + len(gone) + len(modes)",
+            "    count = len(moved) + len(modes)",
+            "HARNESS-TREE-DIRTY",
+            _unlink_doc,
+        ),
+    ):
+        if rtext.count(old) != 1:
+            print(
+                "  tree   C-F4 **SELFTEST FAILED**: the line `%s` deletes is not in the "
+                "second reader exactly once" % label
+            )
+            ok = False
+            continue
+        _world, copy = _deciding_copy("p11-readerarm-", mutate=_write_doc, after=after)
+        cut_path = os.path.join(
+            os.path.dirname(copy), "reader_with_%s_deleted.py" % label.split()[0]
+        )
+        with open(cut_path, "w", encoding="utf-8") as fh:
+            fh.write(rtext.replace(old, new, 1))
+        got = _reader_run(reader, copy)
+        lost = _reader_run(cut_path, copy)
+        good = (
+            want in got[0] and got[1] == 5 and want not in lost[0]
+        )
+        ok = ok and good
+        print(
+            "  tree   C-F4 %s: the reader named %s and rc=%d; with it DELETED %s and "
+            "rc=%d -> %s"
+            % (
+                label,
+                ", ".join(got[0]) or "NOTHING",
+                got[1],
+                "that name is gone" if want not in lost[0] else "IT STILL REDS",
+                lost[1],
+                "as required" if good else "**SELFTEST FAILED**",
+            )
+        )
+    # The untracked law's own half in the second reader, which is asked through
+    # `--tree-state` rather than through `check()`: the byte law answers about
+    # the harness's deciding bytes and is run over worlds that hold a harness
+    # and no repository around it, where an absent read directory is true and
+    # means nothing.
+    old = "    extra = []\n    for rel_dir in READ_DIRS:"
+    if rtext.count(old) != 1:
+        print(
+            "  tree   C-F1 **SELFTEST FAILED**: the line this control deletes is not in "
+            "the second reader exactly once"
+        )
+        ok = False
+    else:
+        _world, copy = _deciding_copy("p11-untrackarm-", mutate=_write_doc, after=_plant_sql)
+        cut_path = os.path.join(os.path.dirname(copy), "reader_with_the_untracked_law_deleted.py")
+        with open(cut_path, "w", encoding="utf-8") as fh:
+            fh.write(rtext.replace(old, "    extra = []\n    for rel_dir in ():", 1))
+        got = _reader_run(reader, copy, ("--tree-state",), True)
+        lost = _reader_run(cut_path, copy, ("--tree-state",), True)
+        good = (
+            "HARNESS-TREE-UNTRACKED" in got[0]
+            and got[1] == 5
+            and got[2].strip() == "YES"
+            and "HARNESS-TREE-UNTRACKED" not in lost[0]
+            and lost[1] == 0
+            and lost[2].strip() == "no"
+        )
+        ok = ok and good
+        print(
+            "  tree   C-F1 the reader's untracked law, through --tree-state: an untracked "
+            "migration gave %r rc=%d naming %s; with the walk DELETED %r rc=%d -> %s"
+            % (
+                got[2].strip(),
+                got[1],
+                ", ".join(got[0]) or "NOTHING",
+                lost[2].strip(),
+                lost[1],
+                "as required" if good else "**SELFTEST FAILED**",
+            )
+        )
+    # THE COORDINATOR'S `F4`, second weakness: "the reader's `--tree-state`
+    # path has no arm at all". It is the path the SHELL asks for the figure it
+    # prints, so a hole there is a hole in `SOURCE_TREE_DIRTY`.
+    _world, copy = _deciding_copy("p11-statearm-", mutate=_write_doc, after=_drift_doc)
+    clean_world, clean_copy = _deciding_copy("p11-statearm-clean-", mutate=_write_doc)
+    dirty_names, dirty_rc, dirty_out = _reader_run(reader, copy, ("--tree-state",), True)
+    clean_names, clean_rc, clean_out = _reader_run(reader, clean_copy, ("--tree-state",), True)
+    good = (
+        "HARNESS-TREE-DIRTY" in dirty_names
+        and dirty_rc == 5
+        and dirty_out.strip() == "YES"
+        and clean_rc == 0
+        and clean_out.strip() == "no"
+    )
+    ok = ok and good
+    print(
+        "  tree   C-F4 the reader's --tree-state path: a drifted tree printed %r rc=%d "
+        "naming %s, a clean one printed %r rc=%d -> %s"
+        % (
+            dirty_out.strip(),
+            dirty_rc,
+            ", ".join(dirty_names) or "NOTHING",
+            clean_out.strip(),
+            clean_rc,
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
     # The second reader's own half, deleted by value in a COPY of the reader
     # that lives outside the harness copy, so what reds is the law and not the
     # reader's own blob. The reader is a separate program: its deletion control
@@ -5899,7 +6429,28 @@ def _suspend_tree_law_for_generation():
     _GENERATING.append(True)
 
 
+# The flags that SUSPEND the two tree laws, and the flags that produce a
+# VERDICT. The coordinator's caveat on judgement call (a): the dispatch below
+# takes the first flag it matches, so `--regenerate --check-blocks` suspended
+# the laws and then returned the generation branch's 0 -- no committed entry
+# point passes both, but a reader who typed them would have read a 0 that no
+# verdict path produced. An entry point given one of each is refused.
+GENERATION_FLAGS = ("--regenerate", "--emit")
+VERDICT_FLAGS = ("--selftest", "--check-blocks", "--surface")
+
+
 def _main(args):
+    gen = [a for a in args if a in GENERATION_FLAGS]
+    verdict = [a for a in args if a in VERDICT_FLAGS]
+    if gen and verdict:
+        sys.stderr.write(
+            "check_fenced_figures.py REFUSED: ENTRY-POINT-AMBIGUOUS: %s suspends the "
+            "clean-tree and index-flag laws because a generator must be able to run in "
+            "a tree that is not yet clean, and %s is a verdict, which is read only from "
+            "a run of the committed tree. One invocation cannot be both.\n"
+            % (", ".join(gen), ", ".join(verdict))
+        )
+        return 5
     if "--decision-constants" in args:
         # Not a generated block in a document: a digest a reader regenerates
         # when a constant changes on purpose, printed above the text it is taken

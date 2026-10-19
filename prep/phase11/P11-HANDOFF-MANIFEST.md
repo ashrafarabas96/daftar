@@ -30,19 +30,40 @@
 
 ## 2. Artifacts
 
-Each document exists in **two places**: the shared project-files location (the canonical working copy) and `prep/phase11/` in Git on the prep branch. The SHA256 is of the shared copy as of this revision (2026-10-12, after the Pack A proof run, after V2's concurrency round, **and after V3 was applied** — exit codes, PG16 settled, and the §7 fact correction); the Git copies are byte-identical, which is what the commit proves.
+Each document exists in **two places**: the shared project-files location, which
+is a copy for a reader, and `prep/phase11/` in Git on the prep branch, which is
+the subject. `prep/phase11/ddl/` and `prep/phase11/harness/` are in Git only,
+because they are executable rather than prose.
 
-| artifact | shared location | in Git | SHA256 (shared copy) |
-|---|---|---|---|
-| `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8be8503e62d4e280eb3918fb0d01ca20482135b0d7193eb0fd0ce46080230759` |
-| `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `b38f81c3d6ece206bd819b8f89bb2617c763fb7d66c307810edad88939976b36` |
-| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `c9b3e23e7a2af9048daa07184e622733aa211683e0cd475e3949fc866337d578` |
-| `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `6923f0add88d2a0bc31b89fa1b91be8ce20a7540fa6f95e20bf42ae2dd791979` |
-| `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `983e026a9bc6c7fe3b65cfc22fb7672ee33d30cd042e6f31ee176a1bb23055f1` |
-| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `25acaf2dcfdf9767b3aeaf2d956a3dc3df343cdd6bf66ae6c39edccbf9cb3faa` |
-| `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `180830b48401dc12323ce070b1c2256925f104d9f7028554914e70c21196bbf4`|
-| `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
-| `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
+**There is no digest table here any more, and its absence is the fix
+(`R24-F2`).** This section used to carry one row per document with a SHA256 of
+the shared copy, under the sentence *"the Git copies are byte-identical, which
+is what the commit proves"*. Round 24 measured that sentence FALSE at the head
+that wrote it: the four documents the commit edited differed between the two
+paths, and five of the seven published digests named bytes that were at neither.
+A reviewer who took the sentence at its word would have reviewed, for four of
+seven documents, bytes the commit does not hold — against a head whose own
+discipline is that evidence counts only from the committed tree.
+
+It is the same class §2a ruled for the harness, and the ruling was not swept
+through to the artefacts: **a pin inside the thing it pins is not a pin, and a
+table a planter edits in the same commit is the same mistake with one more file
+in it.** Two sweeps, not one — the outcome sentence and the discipline sentence.
+
+**So the authority is the commit, and the run prints what it measured.**
+`harness/check_harness_bytes.py --doc-digests` lists every `.md` the commit
+holds under `prep/phase11/`, with each one's digest taken from the blob, and
+`rebuild_and_prove.sh` prints that list in its identity block above every other
+figure. The document set is read from the commit by listing it, not from a list
+of names, so a document added tomorrow is covered the day it is written and a
+deleted one stops being claimed. For a head under review, the same rows are
+published beside the artefacts under `/mnt/project-files/phase11/` with the
+head's own sha in their names; the unversioned copies at that location are
+convenience copies for a reader and pin nothing.
+
+A reader who wants the identity of any one document runs
+`git show <sha>:prep/phase11/<name> | sha256sum`. That is the only identity this
+section claims, and nothing in the harness reads this section.
 
 ### 2a. The deciding files are read from the COMMIT
 
@@ -1029,19 +1050,21 @@ that is exactly what happened. So:
    unconditional transformation — a case fold, a strip, a rule added in a
    hurry — comes back as a difference.
 
-**AND THAT CLAIM IS RUN, NOT ASSERTED,** because a counterfactual about an
-instrument is still a claim about an instrument. §7.13's twelve rows are kept
-in the file as a negative control, and the selftest skips exactly those twelve
-and prints what the stripper still does:
-
-```text
-  control: with ONLY §7.13's twelve rows skipped, '### fabricated_count=999' still becomes 'fabricated_count=999' -- the two guards that table never named
-  control: with ONLY §7.13's twelve rows skipped, 'fabricated_count=999 -- a plain comment' still becomes 'fabricated_count=999' -- the two guards that table never named
-```
-
-So the mechanism **does** catch `R14-F1`, demonstrated on the very table that
-missed it, and it reds if a later head renames those two guards out of
-existence.
+**THAT CLAIM USED TO BE RUN HERE, AND §7.25 DELETED THE CONTROL THAT RAN IT.**
+§7.13's twelve rows were kept in the file as a negative control: the selftest
+skipped exactly those twelve and printed what the stripper still did, which
+demonstrated `R14-F1` on the very table that missed it. `R24-F1` inverted the
+candidate derivation and deleted all thirteen decoration guards, so there is no
+longer any decoration rule for a table of decoration rules to miss, and the
+control had nothing left to demonstrate. Two of its printed lines were the only
+four findings the inversion produced on this pack's own prose, because they
+carried a figure in single quotes — the exact shape round 24 attacked — and
+they go with the control that generated them, at the generator, which is where
+round 23 ruled such a thing is answered rather than in an exemption list. What
+the control guarded against, an unnamed transformation in the stripper, is
+still covered by the identity test above, over four guards instead of
+seventeen, and by the structural parse, which refuses a rebinding outside a
+named guard whether or not anyone wrote a row for it.
 
 **MY OWN INSTRUMENT THEN FOUND TWO THINGS IN ME**, which is the only evidence
 worth having that it is an instrument. The matrix reported that a guard I had
@@ -1061,25 +1084,16 @@ nfkc                       reds  1 arm(s): R14-S1 full-width equals
 format characters          reds  1 arm(s): R14-S1 zero-width space
 non-ascii digits           reds  5 arm(s): R14-S1 arabic-indic digits, R14-S1 extended arabic digits, R15-S3 devanagari digits +2 more
 html comment markers       reds  1 arm(s): attached: an HTML comment with no spaces
-inline code span           reds  1 arm(s): attached: a backticked word against the figure
-blockquote and indent      reds  2 arm(s): attached: an HTML comment with no spaces, attached: a blockquote with no space
-list marker                reds  0 arm(s) alone, 2 behind the guard that subsumes it: R13 list item, R13 nested list item
-heading marker             reds  1 arm(s): attached: a heading with no space
-table cell (leading)       reds  1 arm(s): attached: a table cell opened with no padding
-bracket                    reds  2 arm(s): R13 parentheses, R14-S3 percent inside brackets
-emphasis (leading)         reds  1 arm(s): R13 bold
-dash marker splits the line reds  0 arm(s) alone, 4 behind the guard that subsumes it: R14-F1 plain -- comment, R14-S1 behind a -- marker, R15-S2 text before the marker +1 more
-whitespace splits the line reds  8 arm(s): R23-F1 a second pair after the figure, R23-F1 a pair before the figure, R23-F1 a tab between the pairs +5 more
-label prefix               reds  1 arm(s): attached: a label with no space
-trailing punctuation       reds  5 arm(s): R13 trailing semicolon, R13 parentheses, R14-S3 percent inside brackets +2 more
-emphasis (trailing)        reds  1 arm(s): R13 bold
-table cell (trailing)      reds  1 arm(s): attached: a table cell closed with no padding
-figure value class         reds  8 arm(s): R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +5 more
+inline code span           reds  1 arm(s): named: inline code span only
+positive scan              reds 21 arm(s): R13 trailing period, R13 trailing semicolon, R13 parentheses +18 more
+key boundary               reds  1 arm(s): key boundary: a key that is the tail of an uppercase name
+value boundary             reds  1 arm(s): value boundary: a date is not a figure
+figure value class         reds  9 arm(s): R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +6 more
 boolean spellings          reds  2 arm(s): R14-S1 boolean t as psql prints, R14-S1 boolean f as psql prints
 signed values              reds  2 arm(s): R14-S1 negative, R14-S1 positive sign
-percent in the value       reds  3 arm(s): R13 percent, R14-S3 percent on a real figure, R14-S3 percent inside brackets
-hyphen in the key          reds  1 arm(s): R14-S1 hyphen in the key
-key class                  reds  1 arm(s): named: UPPERCASE key
+percent in the value       reds  2 arm(s): R14-S3 percent on a real figure, R14-S3 percent inside brackets
+hyphen in the key          reds  1 arm(s): R24-F1 a fabricated figure whose hyphenated key ends in an emitted one
+key class                  reds  2 arm(s): named: UPPERCASE key, key boundary: a key that is the tail of an uppercase name
 boolean case folding       reds  1 arm(s): R14-S1 boolean True
 named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
 planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
@@ -1088,7 +1102,7 @@ no repository redirects the subject reds 10 arm(s): R17 a repository planted ins
 markdown is not evidence   reds  1 arm(s): R12 E4b a doc is not its own evidence
 the checker is not its own evidence reds  1 arm(s): R16-F1 the checker is not its own evidence
 
-30 guards, every one of them deleted and measured; 2 of them measured behind the guard that subsumes them
+21 guards, every one of them deleted on its own and measured
 ```
 
 <!-- END GENERATED guard-matrix -->
@@ -1259,7 +1273,7 @@ The counts in this section and the two blocks in §7.14 are generated:
 <!-- BEGIN GENERATED arm-counts: python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts -->
 
 ```text
-55 catch arms, 14 skip arms, 2 pass arms, 24 others
+66 catch arms, 16 skip arms, 2 pass arms, 24 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -2723,6 +2737,173 @@ minus those two `.txt` files, which are not deciding files.
 coordinator diff review after it are owed on this range; **`24f6ebe` is still the
 last fully signed head**, `READY_TO_PROMOTE = NO`, no migration number exists,
 and `OD-P11-07` is the owner's alone.
+
+---
+
+## 7.25 ROUND 24 (`REJECT` at `50a45a0`) and the coordinator's diff review of the same head (`NO-SIGN`) — a candidate is FOUND, not carved out
+
+**What was rejected, and it is one cause with two faces.** The challenger's
+`R24-F1` and the coordinator's `F2` are the same finding: the candidate unit was
+derived **subtractively**. Strip the decorations the instrument had been taught,
+split on the separators it had been taught, weigh what is left. Both were
+whitelists, and this project has ruled three times that a whitelist of forms
+reopens on the next form. Round 23 had just widened the splitter from the line
+to the whitespace token; round 24 then committed five fenced lines on five
+throwaway clones, each with a clean tree and **the whole authoritative suite
+green**, and the coordinator added four more:
+
+| the committed fenced line | at `50a45a0` | at this head |
+|---|---|---|
+| `overlay_routine=4242` (control) | scan **1** | scan **1** |
+| `"overlay_routine=4242"` | scan **0** | scan **1** |
+| `'overlay_routine=4242'` | scan **0** | scan **1** |
+| `core_routine=1;overlay_routine=4242` | scan **0** | scan **1** |
+| `core_routine=1,overlay_routine=4242` | scan **0** | scan **1** |
+| `|core_routine=1|overlay_routine=4242|` | scan **0** | scan **1** |
+| `core_routine=1&overlay_routine=4242` | scan **0** | scan **1** |
+| `core_routine=1/overlay_routine=4242` | scan **0** | scan **1** |
+| `(overlay_routine=4242,core_routine=1)` | scan **0** | scan **1** |
+
+A straight quote was in no `LEAD_*` or `TRAIL_*` class and is named nowhere in
+the header's disclosed bounds; a separator that is not whitespace left one token
+for a partition on the first `=`, and the value `1;overlay_routine=4242` is not
+a number, so the figure was **not weighed and found innocent — it was never a
+candidate**. And the quoted shape is this pack's own output: two committed
+fenced lines in this file, printed by `--selftest` itself, carried a figure in
+single quotes.
+
+**THE ANSWER IS NOT A TENTH ROW.** The derivation is **inverted**, which is the
+challenger's own prescription and the coordinator's binding ruling.
+`_figure_pattern` describes the figure **once** — a key class, `=`, a value
+class, with the surrounding characters **constrained rather than stripped** —
+and `_candidates` scans each line for every occurrence of it, wherever it sits
+and whatever is around it. What is not a figure is now **what fails to match**,
+instead of what the stripper had not been taught.
+
+What that cost in code, which is the measurement that says it is a
+simplification and not a rename:
+
+1. **Thirteen guards deleted**, with `_segments` and `SUBSUMED` and the
+   twelve-row negative control of §7.13: `inline code span` stays as the
+   disclosed backtick rule, and `blockquote and indent`, `list marker`,
+   `heading marker`, `table cell (leading)`, `table cell (trailing)`,
+   `bracket`, `emphasis (leading)`, `emphasis (trailing)`, `label prefix`,
+   `trailing punctuation`, `dash marker splits the line` and
+   `whitespace splits the line` are gone. **The fourteen decorated shapes
+   rounds 13 and 14 planted are all still caught**, by the shape itself: they
+   are arms on the new boundaries now rather than arms on thirteen rules.
+2. **Three guards replace them, each armed by its own measured arm.**
+   `positive scan` reds **21** arms — delete it and the candidate unit is a
+   whitespace-separated token again, exactly as at `50a45a0`, and round 24's
+   shapes go quiet. `key boundary` and `value boundary` are the surviving
+   constraint on the surrounding characters, and they are **asymmetric on
+   purpose**: on the left a hyphen is a separator, so a key may begin after one
+   (which is how `--port=5` and `<!--k=9-->` are written, and both are caught
+   now where neither was before); on the right a hyphen belongs to the value's
+   own shape, so a value may not end before one (`date=2026-10-19` is a date
+   and not the figure `date=2026`). Each half has an arm that reds only when
+   that half is deleted.
+3. **`_strip` keeps four spellings and nothing else**: NFKC, format characters,
+   every decimal digit family, and the html comment markers. A shape it
+   normalises is the same figure written differently; nothing it does is about
+   where the figure sits.
+
+**THE PRICE, MEASURED BEFORE THE FIX WAS CLAIMED**, which is round 23's own
+ruling applied to round 24's answer. Measured on this pack's nine documents,
+from a scratch clone of the committed tree: candidates rose from **22 to 23**,
+and **no true sentence reds**. The inversion produced exactly four findings on
+this pack's prose, all four on two lines — the printed output of §7.13's
+negative control, carrying `'fabricated_count=999'` in single quotes, which is
+the very shape round 24 attacked. They are answered **at the generator**, where
+round 23 ruled such a thing is answered: the control is deleted along with the
+thirteen guards it was about, because there is no longer any decoration rule for
+a table of decoration rules to miss. Nothing is exempted anywhere.
+
+**One residual this creates, named rather than discovered.** The left boundary
+admits a key that begins after a hyphen, so a lower-case segment inside a longer
+mixed-case identifier is read as a key: `EXIT_FOR_M10-noop=4` yields the
+candidate `noop=4`. That is a FALSE RED if a document ever writes such a shape
+with a value nothing emits. No document does today — measured, not assumed — and
+it is a residual rather than a bound, because closing it would reopen the long
+option.
+
+---
+
+**THE COORDINATOR'S `F1` (BLOCKER) — a fail-open this phase INTRODUCED, and a
+regression from `78f9392`.** Round 23's answer replaced `git status --porcelain`
+with a comparison of every path the **commit** holds against the bytes on disk.
+That is right about index flags and blind in a way `status` was not: a walk of
+`ls-tree HEAD` never examines a file the commit does not hold, and `status`
+lists `?? …`. `run_migrations.py` applies `sorted(os.listdir(MIGDIR))`, so an
+**untracked** `.sql` dropped beside the frozen migrations was APPLIED — the
+coordinator measured `APPLIED 88/88`, `SOURCE_TREE_DIRTY : no`, every `EXIT_*`
+`0`, the planted table in `to_regclass`, and the last `schema_migrations` row
+naming the plant.
+
+So the law is stated in **both** directions now, and neither half implies the
+other: every path the commit holds is what is on disk, **and nothing the run
+reads is a path the commit does not hold**. `_untracked` is a key of its own
+(`untracked-paths`) in the checker, the same walk in the second reader behind
+`--tree-state`, and a third refusal in the shell, each under its own name
+(`SELF-TREE-UNTRACKED`, `HARNESS-TREE-UNTRACKED`, `SOURCE-TREE-UNTRACKED`). A
+directory the run reads that is **absent** is a refusal, not an empty walk. And
+the coordinator's second sentence about that figure — "`MIGRATIONS_SHA256` is
+read from disk, so that part of the claim is TRUE; it is a printed figure only,
+though: nothing compares it and nothing refuses on it" — is answered by
+comparing it against the same digest computed over the **commit's own blobs** in
+the same order, which is a second and independent reader of the fact: an extra
+`.sql` moves that digest whether or not any walk saw it.
+
+**The coordinator's other five, each answered and each armed.**
+
+* **`F3`** (P3, false red): the new `R23-F1` arm carried `core_routine=1`, so
+  `planted_tokens()` planted it, and Pack B's real output
+  `core_routine=1 overlay_routine=0` — 62 times in committed evidence — redded
+  when quoted. **Every key in every arm body is `fabricated_`-prefixed now**;
+  whose keys they are was never part of the shape an arm measures.
+* **`F4`** (P2): four single-line deletions kept the selftest green — the second
+  reader's index-flag detection, its mode check and its missing-file arm, and
+  `_objects_enabled`'s generation suspension forced on. Each has an arm now,
+  read by refusal name, with the deletion applied by value to a copy of the
+  reader or in the live consultation. The two weaknesses behind it are closed
+  too: every tree arm is now also read **the way the real run reads it**
+  (`objects=None`), and the reader's `--tree-state` path — which is where the
+  shell gets the figure it prints — has an arm in both directions.
+* **`F5`** (P3): the shell read an EMPTY `--tree-state` answer as a clean tree.
+  The reader answers `no` or `YES`; anything else is `SOURCE-TREE-STATE-UNREADABLE`.
+* **`F6`** (P3): the stale sentence saying a mode change "is not read here" is
+  gone; the code has read it since the previous round.
+* **Judgement call (a)'s caveat**: `--regenerate --check-blocks` returned the
+  generation branch's `0`, because the first matching flag won. An entry point
+  given both a generation flag and a verdict flag is refused
+  (`ENTRY-POINT-AMBIGUOUS`).
+* **Judgement call (c)'s caveat** is carried as a named residual: a hand-typed
+  TRUE restatement written as markdown emphasis (`the selftest runs _55_ catch
+  arms`) is admitted by the `NUMBER` boundary, and a hand-typed figure can go
+  stale later.
+
+**`R24-S2`** (the refusal naming the wrong cause first) and **`R24-S3`** (the
+header still listing "a figure with prose on the same line", which round 23
+closed) are swept.
+
+**AND ONE FINDING OF MY OWN, FOUND BY MEASURING RATHER THAN BY READING.** The
+inversion moved the guard count from 30 to **21**, and 21 is also the number of
+a round, of a `C21`, of a decision id and of a count of cases in this pack. The
+summary-restatement rule asked only for **a number and a long word** in common,
+and the collision redded **six true sentences in five documents** — "Round 21
+measured that whole class", "rounds 16 to 21", "Node 24.21.0", "The 21 cases
+test every clause". A hardening that causes a false red is not hardening, and
+this file had already made that correction once, for the `30` inside a trigger's
+name. So a restatement of a counted claim must now name the number **and what is
+counted**, where the noun is read from the claim itself — the first long word
+after each of its own numbers — so it moves when the generator's wording moves
+and is not a list anyone maintains. Both directions are armed: the count
+restated about the guards is caught, the same number about a round is not.
+
+**WHAT THIS HEAD CLAIMS, AND WHAT IT DOES NOT.** No signature. Round 25 and a
+coordinator diff review are owed; `24f6ebe` is still the last fully signed head;
+`READY_TO_PROMOTE` = **NO**; **no migration number exists**; and `OD-P11-07` is
+the owner's alone.
 
 ---
 

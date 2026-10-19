@@ -317,6 +317,71 @@ def _tree_dirty(top):
     )
 
 
+# The directories whose CONTENTS a run reads, rather than the commit's copy of
+# them, and the suffixes it reads or executes from them. Named here as well as
+# in the checker, on purpose: this is the SECOND reader, and two derivations
+# that share a list bound drift rather than truth -- but a reader that asked
+# the checker for the list would not be a second reader at all. An absent
+# directory is a refusal, not an empty walk.
+READ_DIRS = ("infrastructure/database/migrations", "prep/phase11")
+READ_SUFFIXES = (".sql", ".py", ".sh", ".md", ".txt")
+
+
+def _untracked(top, sha):
+    """Paths the commit does not hold, under a directory a run READS.
+
+    THE COORDINATOR'S `F1` ON `50a45a0`, the blocker. A law that walks
+    `ls-tree HEAD` never examines a file the commit does not hold, and
+    `run_migrations.py` applies `sorted(os.listdir(MIGDIR))`: an untracked
+    `.sql` beside the frozen migrations was applied with `APPLIED 88/88`,
+    `SOURCE_TREE_DIRTY : no` and every `EXIT_*` 0. `git status --porcelain`,
+    which round 23 replaced, did list it -- so the fix for one hole opened
+    another, and both halves are needed: every path the commit holds is what is
+    on disk, AND nothing a run reads is a path the commit does not hold.
+    """
+    try:
+        listed = _git(
+            top, ["ls-tree", "-r", "-z", "--full-tree", "--name-only", sha]
+        ).decode("utf-8", "surrogateescape")
+    except (Anchor, RuntimeError, OSError) as exc:
+        return (
+            "HARNESS-UNTRACKED-UNREADABLE: whether the work tree at %s carries a file "
+            "the commit does not hold could not be determined (%s)." % (top, exc),
+        )
+    held = {path for path in listed.split("\0") if path}
+    absent = [d for d in READ_DIRS if not os.path.isdir(os.path.join(top, d))]
+    if absent:
+        return (
+            "HARNESS-READ-DIR-ABSENT: %s is named as a directory a run reads and is not "
+            "a directory at %s, so this reader cannot say what would be read from it."
+            % ("; ".join(absent), top),
+        )
+    extra = []
+    for rel_dir in READ_DIRS:
+        for root, dirs, names in os.walk(os.path.join(top, rel_dir), followlinks=True):
+            dirs.sort()
+            for name in sorted(names):
+                if not name.endswith(READ_SUFFIXES):
+                    continue
+                rel = os.path.relpath(os.path.join(root, name), top)
+                if rel not in held:
+                    extra.append(rel)
+    if not extra:
+        return ()
+    return (
+        "HARNESS-TREE-UNTRACKED: %d path%s under a directory a run reads %s not in the "
+        "commit at %s, and a run reads or applies what is on disk, so its transcript is "
+        "not evidence. Untracked: %s."
+        % (
+            len(extra),
+            "" if len(extra) == 1 else "s",
+            "is" if len(extra) == 1 else "are",
+            top,
+            "; ".join(sorted(extra)[:5]),
+        ),
+    )
+
+
 def _index_flagged(top):
     """The tracked paths whose index entry says git is to stop looking at them.
 
@@ -366,6 +431,12 @@ def check(harness_dir=None):
             "HARNESS-ANCHOR-UNRESOLVED: the deciding files are read against the commit "
             "and the commit could not be resolved (%s)." % exc,
         )
+    # `_untracked` is deliberately NOT consulted here. `check()` answers one
+    # question -- are the harness's DECIDING BYTES the bytes the commit holds --
+    # and it is run over narrow worlds that hold a harness and no repository
+    # around it, where 'a directory this run reads is absent' is true and means
+    # nothing. The whole-tree question is `tree_state()` below, which is what the
+    # shell asks and what the checker's own `untracked-paths` key asks in process.
     dirty = tuple(_tree_dirty(top)) + tuple(_index_flagged(top))
     rel_root = os.path.relpath(os.path.realpath(harness_dir), top)
     try:
@@ -445,6 +516,35 @@ def digests(harness_dir=None):
     return sha, rows
 
 
+def doc_digests(harness_dir=None):
+    """(sha, rows) — every phase document's digest, read FROM THE COMMIT.
+
+    `R24-F2`. The manifest carried a hand-maintained table of document digests,
+    inside one of the documents it named, and said the shared copies and the Git
+    copies were byte-identical. This commit's predecessor made that false for
+    the four documents it edited, and five of seven published digests named
+    bytes at neither path. §2a had already ruled the class: a pin inside the
+    thing it pins is not a pin, and a table a planter edits in the same commit
+    is the same mistake with one more file in it.
+
+    So there is no table. The run prints what it MEASURED, derived by listing
+    the phase directory IN THE COMMIT rather than from a list of names, so a
+    document added tomorrow is covered the day it is written and a document
+    deleted stops being claimed.
+    """
+    harness_dir = harness_dir or _here()
+    top, sha = _census_top(os.path.realpath(harness_dir))
+    phase = os.path.dirname(os.path.relpath(os.path.realpath(harness_dir), top))
+    names = _git(
+        top, ["ls-tree", "-z", "--name-only", "%s:%s" % (sha, phase)]
+    ).decode("utf-8", "surrogateescape")
+    rows = []
+    for n in sorted(x for x in names.split("\0") if x.endswith(".md")):
+        blob = _git(top, ["show", "%s:%s/%s" % (sha, phase, n)])
+        rows.append("%s  %s" % (hashlib.sha256(blob).hexdigest(), n))
+    return sha, rows
+
+
 def tree_state(harness_dir=None):
     """(ok, refusals) for the WHOLE committed tree, by the bytes on disk.
 
@@ -458,7 +558,7 @@ def tree_state(harness_dir=None):
     """
     harness_dir = harness_dir or _here()
     try:
-        top, _sha = _census_top(os.path.realpath(harness_dir))
+        top, sha = _census_top(os.path.realpath(harness_dir))
     except Anchor as why:
         return False, (str(why),)
     except (RuntimeError, OSError) as exc:
@@ -467,7 +567,7 @@ def tree_state(harness_dir=None):
             "the commit could not be resolved (%s)." % exc,
         )
     return (lambda bad: (not bad, bad))(
-        tuple(_tree_dirty(top)) + tuple(_index_flagged(top))
+        tuple(_tree_dirty(top)) + tuple(_index_flagged(top)) + tuple(_untracked(top, sha))
     )
 
 
@@ -475,17 +575,22 @@ def _main(argv):
     harness_dir = None
     want_digests = False
     want_tree_state = False
+    want_doc_digests = False
     rest = list(argv)
     while rest:
         a = rest.pop(0)
         if a == "--digests":
             want_digests = True
+        elif a == "--doc-digests":
+            want_doc_digests = True
         elif a == "--tree-state":
             want_tree_state = True
         elif a == "--harness" and rest:
             harness_dir = rest.pop(0)
         else:
-            sys.stderr.write("usage: [--digests] [--tree-state] [--harness DIR]\n")
+            sys.stderr.write(
+                "usage: [--digests] [--doc-digests] [--tree-state] [--harness DIR]\n"
+            )
             return 2
     if want_tree_state:
         ok, msgs = tree_state(harness_dir)
@@ -495,6 +600,12 @@ def _main(argv):
         for m in msgs:
             sys.stderr.write("REFUSED: %s\n" % m)
         return 0 if ok else 5
+    if want_doc_digests:
+        sha, rows = doc_digests(harness_dir)
+        print("the phase documents as commit %s holds them:" % sha)
+        for r in rows:
+            print(r)
+        return 0
     if want_digests:
         sha, rows = digests(harness_dir)
         print("the deciding files as commit %s holds them:" % sha)

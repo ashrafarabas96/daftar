@@ -1,0 +1,102 @@
+P11 — ROUND 24's OWN SHAPES, DRIVEN END TO END ON COMMITTED CLONES
+==================================================================
+
+Eleven throwaway clones of the candidate head, each with ONE fenced line
+appended to a committed document and COMMITTED, each with a clean work tree,
+each measured by the scan, the generated-block check and the second reader.
+Nine of the eleven lines are the shapes round 24 and the coordinator's `F2`
+drove through `50a45a0` with the whole authoritative suite green; the first is
+the bare control, and the tenth and eleventh are the long option and the
+prose-on-the-line shape, which no round reached.
+
+At `50a45a0` the control red and every other row passed. Here every row reds,
+and the figure is named with its file and line.
+
+The candidate head these worlds are children of is
+
+    3186fcf335371d0d3d987c770402a133fb708f30
+
+which is THIS commit's tree minus this file and
+`RUN-EVIDENCE-AUTHORITATIVE-ROUND24.txt`.
+
+-----------------------------------------------------------------------------
+
+candidate head: 3186fcf335371d0d3d987c770402a133fb708f30
+
+--- world 1: overlay_routine=4242
+    committed a3fc63c9656eddf96ed59109fdb8c18928f78d7d, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit a3fc63c9656eddf96ed59109fdb8c18928f78d7d (64 files), 24 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 2: "overlay_routine=4242"
+    committed f1b35150584542abd3e148ddf3945cea25faa8e8, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit f1b35150584542abd3e148ddf3945cea25faa8e8 (64 files), 24 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 3: 'overlay_routine=4242'
+    committed cc0735509d86a3e72c02edf39e104cb806edd515, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit cc0735509d86a3e72c02edf39e104cb806edd515 (64 files), 24 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 4: core_routine=1;overlay_routine=4242
+    committed a77e3ea4135c329a4633884ca9d9d6e7a72c284d, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit a77e3ea4135c329a4633884ca9d9d6e7a72c284d (64 files), 25 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 5: core_routine=1,overlay_routine=4242
+    committed 18274485a377427d191d35790e528d6bff2517b5, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit 18274485a377427d191d35790e528d6bff2517b5 (64 files), 25 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 6: |core_routine=1|overlay_routine=4242|
+    committed 82cada3b16516e894544304e3a143136ea49cbf4, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit 82cada3b16516e894544304e3a143136ea49cbf4 (64 files), 25 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 7: core_routine=1&overlay_routine=4242
+    committed ba2db1168fb93b58e5763011ee34c4682de98a89, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit ba2db1168fb93b58e5763011ee34c4682de98a89 (64 files), 25 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 8: core_routine=1/overlay_routine=4242
+    committed 9e348cd80617cc92f65bab0cb2fbfd46a9c7e226, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit 9e348cd80617cc92f65bab0cb2fbfd46a9c7e226 (64 files), 25 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 9: (overlay_routine=4242,core_routine=1)
+    committed 9c119778e212ae054c7fca6d62854310afeda5cc, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit 9c119778e212ae054c7fca6d62854310afeda5cc (64 files), 25 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 10: --overlay_routine=4242
+    committed b0987f6570e3a95b2cf38014bafab4f923726abc, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit b0987f6570e3a95b2cf38014bafab4f923726abc (64 files), 24 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 11: the generator printed overlay_routine=4242 and stopped
+    committed 00189317ae63e4ac765d2067147f548a19b9aec3, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=0  reader rc=0
+    quoted figures: 9 documents, haystack from commit 00189317ae63e4ac765d2067147f548a19b9aec3 (64 files), 24 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+DONE
