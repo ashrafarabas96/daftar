@@ -606,7 +606,7 @@ describe('the unguarded objects and the unnamed refusals (R-C2, R-C3, R-C4)', ()
   });
 });
 
-describe("the challenger's REJECT at a869aab — the leaf the remedy itself left unchecked, and a law dropped by a typo", () => {
+describe("the challenger's REJECT at a869aab — the leaf the remedy itself left unchecked, and a law dropped by a typo in the CHECKS FIELD name (a typo in a STOCK KEY is a different class, and only its case-and-space half is closed: `G-A` below)", () => {
   it('C-A: a boxed asOf carrying an undeclared field is refused, where it used to be accepted AND handed back by reference', () => {
     // Measured by the independent challenger at `a869aab`, inside the remedy's
     // own return value: `isCanonicalInstant` runs a regex, a regex stringifies,
@@ -932,6 +932,82 @@ describe("the challenger's REJECT at a869aab — the leaf the remedy itself left
         ['zzz', whole],
       ]).lines[1]?.quantity,
     ).toBe('3.0000');
+  });
+
+  it('G-A: the partial miss the fold does NOT recognise is still ACCEPTED, pinned at the bare digest with the unlawful quantity it lets through', () => {
+    // The challenger's finding at `e2464ce`, reproduced before any remedy and
+    // then left OPEN on purpose. The near-miss rule folds with
+    // `trim().toLowerCase()`, so it sees a wrong key only when that key folds
+    // ONTO a priced one. A key with one wrong hex digit, or with the variant
+    // forgotten, folds onto nothing: it is not in `seen`, it is not a near miss,
+    // and rule 3 does not fire because the OTHER key matches. So the line the
+    // mistyped key was meant to govern goes unexamined and its fractional
+    // quantity on a whole-unit product is accepted — the same silent acceptance
+    // `F-A` was rated P1 for, for every spelling the fold cannot recognise.
+    //
+    // This case EXISTS to pin that acceptance, not to approve of it: the close
+    // is the owner's fork (`OD-P6-08`), because the per-key rule that would
+    // catch it refuses the legitimate superset rule 3 permits — measured in
+    // `P6-ROUND28-PER-KEY-COST-PROBE.log`. The case is therefore written so a
+    // per-key mutation REDS it; if the fork is ever taken, this case is what
+    // records the change rather than a silent green.
+    const other = stockKeyOf({ productId: OTHER_PRODUCT, variantId: null });
+    const twoLines: CommercialQuoteInput = {
+      quoteId: QUOTE_ID,
+      orderId: ORDER,
+      version: 1,
+      currency: 'ILS',
+      lines: [
+        { stockKey: other, productId: OTHER_PRODUCT, variantId: null, quantity: '2.0000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '2000' },
+        { stockKey: KEY, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '5500' },
+      ],
+      displayedTotalMinor: '7500',
+      issuedAt: '2026-10-01T09:00:00Z',
+      expiresAt: '2026-10-01T10:00:00Z',
+    };
+    const whole = WHOLE_UNITS.get(KEY);
+    if (whole === undefined) throw new Error('the fixture must declare the whole-unit product');
+    // The quantity really is unlawful for this product, shown by the honest
+    // declaration: without it the acceptance below would prove nothing.
+    const honest = refusalOf(
+      () =>
+        buildCommercialQuote(twoLines, {
+          unitPrecisionByStockKey: new Map([
+            [other, whole],
+            [KEY, whole],
+          ]),
+        }),
+      'both keys declared honestly',
+    );
+    expect(honest.code).toBe('order.quote_quantity_invalid');
+    expect(honest.details?.stated).toBe('5.5000');
+    // The bytes of the same quote with the law not applied at all, which is what
+    // each mistyped spelling below is accepted as.
+    const bare = buildCommercialQuote(twoLines).digest;
+    const mistypedVariant = `${VARIANT.slice(0, -1)}d`;
+    const spellings: readonly string[] = [
+      // One wrong hex digit in the variant.
+      `${PRODUCT}:${mistypedVariant}`,
+      // The variant forgotten: a key that is canonical for the product ALONE.
+      stockKeyOf({ productId: PRODUCT, variantId: null }),
+    ];
+    for (const spelling of spellings) {
+      // The plant is proved to be what it claims: a key this quote does not
+      // price, and one the fold does not recognise as a near miss of a priced
+      // key. Without these two assertions the arm could be passing because the
+      // spelling is really an exact match (the defect that once made a fold arm
+      // vacuous) or a near miss under another name.
+      expect(spelling).not.toBe(KEY);
+      expect(spelling.trim().toLowerCase()).not.toBe(KEY);
+      const accepted = buildCommercialQuote(twoLines, {
+        unitPrecisionByStockKey: new Map([
+          [other, whole],
+          [spelling, whole],
+        ]),
+      });
+      expect(accepted.digest).toBe(bare);
+      expect(accepted.lines[1]?.quantity).toBe('5.5000');
+    }
   });
 
   it('E-A: the no-MATCH rule does NOT run on the re-verification path, where another refusal owns that fact', () => {

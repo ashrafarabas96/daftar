@@ -765,6 +765,23 @@ export interface CommercialQuoteChecks {
   //    (`F-A`). The fold recognises the mistake and never matches a declaration:
   //    a key is matched for the law by exact equality only.
   //
+  //    **WHAT RULE 4 DOES NOT REACH, and it is the larger half of the class**
+  //    (`G-A`, the challenger at `e2464ce`): the fold is `trim().toLowerCase()`,
+  //    so it sees a wrong key only when that key FOLDS ONTO a priced one. A key
+  //    with one wrong hex digit, or with the variant forgotten, folds onto
+  //    nothing and is therefore ACCEPTED beside one correct key — the same
+  //    silent acceptance `F-A` was rated P1 for, at the same bare digest, for
+  //    every spelling the fold does not recognise. It is accepted and not
+  //    closed, and the suite pins it with an UNLAWFUL quantity behind the
+  //    mistyped key so the cost is visible.
+  //
+  //    It is left open because the close is not decidable here: an unpriced key
+  //    that is not a near miss is indistinguishable from the legitimate superset
+  //    rule 3 permits, and the per-key rule that would catch it charges that
+  //    superset — measured, `P6-ROUND28-PER-KEY-COST-PROBE.log`. That fork is
+  //    the owner's and it is carried on `OD-P6-08`, the same question as the
+  //    decision card already with him, rather than opened as a new one.
+  //
   // What the STRING SHAPE of a MATCHING key is beyond that — a key this quote
   // prices exactly — is the caller's business and this package states no rule
   // for it. Rules 3 and 4 are coordinator defaults, both REVERSIBLE on the
@@ -1047,11 +1064,14 @@ function buildQuote(input: CommercialQuoteInput, checks: CommercialQuoteChecks |
   // — was true of a single-key container and false of a partial miss. That is
   // the `C-A` class: a correct guard under a claim the guard does not support.
   //
-  // So the partial miss is closed by the NEAR-MISS rule below rather than by
-  // widening this one: a silent fractional quantity on a whole-unit product is a
-  // fail-open, and the measurement showed the cheap close costs a genuine
-  // superset nothing. The per-key alternative was measured too and does charge
-  // it — `P6-ROUND28-PER-KEY-COST-PROBE.log` — which is why it was not taken.
+  // So the CASE-and-SPACE half of the partial miss is closed by the near-miss
+  // rule below rather than by widening this one: a silent fractional quantity on
+  // a whole-unit product is a fail-open, and the measurement showed that cheap
+  // close costs a genuine superset nothing. The per-key alternative was measured
+  // too and does charge it — `P6-ROUND28-PER-KEY-COST-PROBE.log` — which is why
+  // it was not taken, and why the rest of the class (a mistyped key, a missing
+  // variant) is still ACCEPTED rather than closed. Rule 4's own paragraph in the
+  // contract above says so, and `OD-P6-08` carries the question.
   //
   // The cost of what IS refused here is real: a caller that keeps ONE precision
   // map for many quotes is refused on a quote none of whose products that map
@@ -1068,7 +1088,9 @@ function buildQuote(input: CommercialQuoteInput, checks: CommercialQuoteChecks |
   // A DECLARED KEY THAT IS NOT A PRICED KEY BUT WOULD BE ONE if it were trimmed
   // and case-folded (`F-A`). It is refused BEFORE the all-miss rule, because it
   // is the more specific statement of what went wrong and the refusal should
-  // say so.
+  // say so. CASE AND SPACE ONLY — a key the fold does not recognise is not
+  // reached by this (`G-A`), and the contract above states that rather than
+  // leaving it to be inferred from the implementation.
   //
   // This folding never ACCEPTS anything: a key is matched for the law by exact
   // equality and only ever by that. The fold exists to recognise a MISTAKE, so
