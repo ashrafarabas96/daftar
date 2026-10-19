@@ -269,6 +269,12 @@ DELIVERED_REVIEWER_REPORTS = (
     # the name is reported as a lookalike -- so leaving it out would have put their
     # report into my digest table and named it suspicious in the same run.
     'P13-CHALLENGE-8215af5.md',
+    # R18, the narrow round on 8215af5..3c72703: PASS-WITH-SCOPE, and the two P3
+    # findings answered in this commit. Enumerated here rather than in a commit of
+    # its own, because this commit exists anyway and theirs did not.
+    'P13-CHALLENGE-3c72703.md',
+    # The coordinator's diff review of the same range, which SIGNS it.
+    'P13-COORD-DIFF-REVIEW-3c72703.md',
 )
 # The SHAPE of a reviewer report, used only to spot a file that wears the name without
 # being on the list, and MY OWN round records, which are hashed and are anchored to a
@@ -705,13 +711,22 @@ def pin_verdict(subject_sha: str) -> tuple[bool, str]:
                        f'{subject_sha[:7]}:\n    running   {running}\n    committed {pinned}\n'
                        f'  the file is `{Path(__file__).name}` in this directory and '
                        f'`{GENERATOR_IN_REPO}` in the repository; they must be the same bytes')
+    # R18-01, the challenger's other P3 at `3c72703`: this sentence ASKS the reader to
+    # compare the subject sha with the one in the signature, and then printed 12 of its
+    # 40 characters -- `grep -oE '\b[0-9a-f]{40}\b'` over the whole `--check` output
+    # returned NOTHING. The gate enforced the full-40 law on its input (the abbreviated
+    # sha above is a refusal) and not on its own output. So every id that is part of the
+    # signed triple is printed IN FULL here: the subject sha, and the generator's SHA-256
+    # on both sides of the comparison. The blob id stays abbreviated -- it is disclosure,
+    # not an element of the triple.
     return True, (f'the generator is PINNED, and the chain to it was RE-HASHED object by object '
                   f'(A-02): {" -> ".join(steps)}. The {len(blob)} bytes served for that blob '
                   f'id re-hash to {recorded_id[:12]}…, which is the id the verified tree at '
-                  f'{subject_sha[:7]} RECORDS for `{GENERATOR_IN_REPO}`, and the bytes running '
-                  f'here hash to {running[:16]}… — so no id in this comparison was taken from '
-                  f'the store\'s word for it (A-01), only the subject sha {subject_sha[:12]}… '
-                  'itself, which a reader must compare with the one in the signature')
+                  f'{subject_sha} RECORDS for `{GENERATOR_IN_REPO}`, and the bytes running '
+                  f'here hash to {running} — so no id in this comparison was taken from '
+                  f'the store\'s word for it (A-01), only the subject sha {subject_sha} '
+                  'itself, which a reader must compare with the one in the signature (R18-01: '
+                  'an id a reader is asked to COMPARE is printed in full, not abbreviated)')
 
 
 def replace_refs() -> list[str]:
@@ -801,16 +816,36 @@ def git_record_rows() -> list[str]:
 
 
 def git_observation_rows() -> list[str]:
-    """Where the reader happens to be standing. Regenerated, never compared."""
+    """Where the reader happens to be standing. Regenerated, never compared.
+
+    R18-02, the challenger's P3 at `3c72703`: the record table offers the
+    `origin/<branch>` row as a SECOND source -- "read with `git ls-remote`, never
+    inferred from a successful push" -- but `origin` is read from the config of the
+    repository this run was handed, which is the repository the pin exists to
+    distrust. They measured it: point `origin` at a bare repository on your own
+    disk, push the branch into it, and every row comes out TRUE, with `Pushed?`
+    reading yes, about a remote made a minute earlier. I reproduced it with a bare
+    clone on this disk and the gate's own resolver: same shas, same `Pushed? yes`,
+    and nothing in any row naming which remote answered.
+
+    The URL does not CLOSE that -- nothing here can, any more than it can close
+    which repository the gate is handed. It makes it VISIBLE, which is the
+    difference between a residual a reader can act on and one they cannot see.
+    """
     head = git('rev-parse', 'HEAD')
     checked_out = git('rev-parse', '--abbrev-ref', 'HEAD')
     dirty = git('status', '--porcelain')
+    try:
+        origin = git('remote', 'get-url', 'origin')
+    except GitUnavailable as exc:
+        origin = f'(no `origin` could be read: {exc})'
     try:
         _sha, how = resolve_ref(BRANCH, {})
     except GitUnavailable:
         how = 'the remote only; this clone holds no ref for it'
     return [
         f'| How the branch ref resolved here | **{how}** | a reviewer\'s clone usually holds the branch only as `refs/remotes/origin/<name>`; both spellings are accepted |',
+        f'| The remote that answered `ls-remote` | `{origin}` | `git remote get-url origin`, so the second source in the table above is NAMED. It is read from the config of the repository this run was handed, so a crafted remote makes every row above true about itself (`R18-02`); naming it does not close that, it lets the reader see it |',
         f'| Checked out at regeneration | `{checked_out}` at `{head}` | a detached review worktree reports `HEAD`; that is normal and is not a defect |',
         f'| Worktree at regeneration | **{"clean" if not dirty else f"DIRTY in {len(dirty.splitlines())} path(s)"}** |'
         ' a dirty tree makes a SHA-bound claim measured in it unbound |',

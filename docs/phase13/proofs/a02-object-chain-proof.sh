@@ -269,6 +269,14 @@ BLOB=$(git -C "$WORK/src" --no-replace-objects rev-parse "$SUBJECT:$GEN_IN_REPO"
 PLANT=$(git -C "$WORK/replrepo" hash-object -w "$WORK/pD/regenerate-manifest.py")
 git -C "$WORK/replrepo" replace -f "$BLOB" "$PLANT" >/dev/null
 echo "    planted refs/replace/$BLOB -> $PLANT"
+# The gate's own `env=git_env()` is what this arm stripped, so the subprocess now
+# inherits the CALLER's environment -- and a caller who happens to export
+# GIT_NO_REPLACE_OBJECTS=1 would disable the plant without the gate doing anything,
+# making this arm a statement about that shell. Unset it here, and assert it is unset,
+# so the arm measures the gate and not the environment it was invoked from.
+unset GIT_NO_REPLACE_OBJECTS
+[ -z "${GIT_NO_REPLACE_OBJECTS:-}" ] || fail "arm D: GIT_NO_REPLACE_OBJECTS is still set, so the replacement would be disabled by the environment and not by the gate"
+echo "    GIT_NO_REPLACE_OBJECTS is unset in this arm, so only the gate can disable the plant"
 python3 -B "$WORK/drv.py" "$WORK/pD/regenerate-manifest.py" "$WORK/replrepo" "$SUBJECT" > "$WORK/armD.out"
 sed 's/^/    /' "$WORK/armD.out"
 grep -q '^VERDICT ok=False' "$WORK/armD.out" \

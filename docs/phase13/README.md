@@ -85,7 +85,20 @@ FORGERY PASSED", which is how one knows the arms mean anything. Every arm that f
 **plants the bytes it runs**: an honest running copy would be refused by the plain SHA-256
 comparison and the arm would pass for a reason unrelated to the guard under test.
 
-The CI job `phase13-proofs` runs all three scripts and **asserts their exit codes**; a step
+`proofs/r18-disclosure-proof.sh` covers the two disclosures round 18 asked for, in four arms:
+**A** the pin's sentence prints all 40 characters of the subject SHA and the full generator
+SHA-256 — the two elements of the signed triple it names — because a sentence that asks the
+reader to compare an id and prints 12 of its characters asks for something the reader cannot do;
+**B** abbreviates them again and requires the comparison to become impossible; **C** points a
+victim clone's `origin` at a bare repository this script creates, and requires the observation
+rows to NAME it; **D** deletes that row and requires the crafted remote to go invisible again.
+`R18_ARMS=AB` and `R18_ARMS=CD` select a subset, because the two findings are independent and a
+shell script stops at its first red: aimed at `3c72703`, `AB` goes red at A and `CD` goes red at
+C, where the table reads `Pushed?` **yes** about a directory the script made a moment earlier.
+Neither fix CLOSES anything — the first makes a comparison possible, the second makes a residual
+visible — and that is why both were P3 and neither is a guard.
+
+The CI job `phase13-proofs` runs all four scripts and **asserts their exit codes**; a step
 that merely ran them and printed output would report rather than check. Note what that job does
 and does not cover today: this workflow's `push` trigger is `main` and `phase/**`, so it
 does not fire on this preparation branch. It fires on a pull request from it, and the

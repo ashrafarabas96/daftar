@@ -78,6 +78,9 @@ jobs:
       - name: A-02 - the generator pin re-hashes the whole object chain
         run: |
           sh docs/phase13/proofs/a02-object-chain-proof.sh
+      - name: R18 - the gate discloses the sha to compare and the remote that answered
+        run: |
+          sh docs/phase13/proofs/r18-disclosure-proof.sh
 
   # -------------------------------------------------------------------------
   # 2. Backend: install, manifest, gate, static guards, format/lint/typecheck,
