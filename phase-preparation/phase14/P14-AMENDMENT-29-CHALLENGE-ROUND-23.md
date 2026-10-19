@@ -58,8 +58,14 @@ round 21's header-keyed proof, one file along. `sibling-no-git-refused` is the a
 **sibling's own sentence** rather than the other tool's, with the premise that the empty pinned
 path holds no git and that the shipped pin appears verbatim once in that tool.
 
-**Guard-deletion, read by NAME, one deletion per copy**, four copies of this pack inside a clone of
-the branch, baseline included:
+**Guard-deletion, read by NAME, one deletion per copy**, ~~four~~ **THREE** copies of this pack
+inside a clone of the branch, baseline included — corrected in round 24 (`R24-P3-02`): the table
+below holds a baseline and two deletions, which is three copies. The word *four* was carried
+verbatim from amendment 28 §4, where the table did hold a baseline and three deletions. It is a
+stale count rather than a false exit code, and it misled in the one direction that matters: a
+reader counting coverage would conclude a third deletion had been taken and red nothing, and the
+third deletion a reader reaches for is exactly the one that was missing —
+`P14-AMENDMENT-30-CHALLENGE-ROUND-24.md` takes it, as a fourth copy, and it reds.
 
 | the one thing deleted | arms that go FAIL beyond the baseline |
 |---|---|
@@ -118,8 +124,16 @@ a fresh clone of the pushed head and reported to the reviewers.
   here: this round commits THREE documents, two reviewer reports and this amendment, not two.)
 * `tools/citation-provenance.py` — rc 0, and `--check P14-MIGRATION-PATCH-REQUEST.md` rc 0.
 * `tools/retracted-claims.py` — rc 0, 27 claims across 39 pack documents.
-* repository `npm run format` — rc 0. Gate list derived from the diff: it touches only `.md`, `.py`
-  and `.sh` under the pack, and the repository has no shell or python gate.
+* repository `npm run format` — rc 0. ~~Gate list derived from the diff: it touches only `.md`,
+  `.py` and `.sh` under the pack, and the repository has no shell or python gate.~~
+  **CORRECTED IN ROUND 24 (`R24-P3-03`).** The sentence is true and the rc 0 is honest, and what
+  it leaves a reader to assume is that the markdown was gated. Measured with prettier's own
+  answer rather than read off `.prettierignore`: the amendment `.md` is
+  `{ "ignored": true, "inferredParser": null }`, and `manifest-digests.py` and `gate-sweep.sh`
+  are `{ "ignored": false, "inferredParser": null }`. `*.md` is ignored repository-wide and
+  `.py`/`.sh` have no parser, so `prettier --check .` reads **no file in this diff**: this diff's
+  repository-gate set is **EMPTY**, which is also why no repository gate can go red on account of
+  this commit. The rc 0 is a true statement about the repository, not evidence about the diff.
 
 ## 7. Residuals at this head, signed by neither reviewer
 

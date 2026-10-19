@@ -1419,6 +1419,25 @@ else
          sibling-no-git "$sibng" "$sibpin"
   fail=$((fail+1))
 fi
+# ---- ROUND 24 (R24-P3-01), the challenger's, and it is R-COORD-1's own class
+# one file along INSIDE the commit that closed R-COORD-1: the try/except added
+# to the sibling in that commit is a real guard -- shipped it answers rc 2 with
+# its own named refusal where the unwrapped form answers rc 1 and a traceback --
+# and NOTHING in this tree noticed its removal. A guard whose deletion reds
+# nothing is unmeasured, whatever its text says. Same construction as
+# git-binary-unrunnable-refused, pointed at the sibling and keyed on the
+# SIBLING'S OWN sentence, so neither arm can pass on the other tool's refusal.
+mkdir -p "$P23/sibunrun/tools"
+cp "$HERE/citation-provenance.py" "$P23/sibunrun/tools/"
+sed -i "s|^_PINNED_PATH = .*|_PINNED_PATH = '$P23/bad'|" "$P23/sibunrun/tools/citation-provenance.py"
+if [ "$sel" = "$P23/bad/git" ] && [ "$badrc" != 0 ] && [ "$sibpin" = 1 ]; then
+  named sibling-unrunnable-refused 2 "could not be run (.*), so no provenance could be read" \
+    "python3 -I $P23/sibunrun/tools/citation-provenance.py --repo $REPO"
+else
+  printf 'FAIL  %-26s premise not built (which() selected %s, running it gave rc %s want non-zero, shipped pin in the sibling %s want 1) — nothing was proved\n' \
+         sibling-unrunnable "$sel" "$badrc" "$sibpin"
+  fail=$((fail+1))
+fi
 rm -rf "$P23"
 rm -rf "$P22"
 rm -rf "$E20"
