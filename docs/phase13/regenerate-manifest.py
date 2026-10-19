@@ -278,6 +278,9 @@ DELIVERED_REVIEWER_REPORTS = (
     # R19, the narrow round on 3c72703..3c62561: PASS-WITH-SCOPE, both P3s closed, no
     # finding open at that head.
     'P13-CHALLENGE-3c62561.md',
+    # The coordinator's diff review of the same range, which SIGNS it -- so 3c62561
+    # carries all three signatures. It does NOT cover 1421bff or anything after it.
+    'P13-COORD-DIFF-REVIEW-3c62561.md',
 )
 # The SHAPE of a reviewer report, used only to spot a file that wears the name without
 # being on the list, and MY OWN round records, which are hashed and are anchored to a
