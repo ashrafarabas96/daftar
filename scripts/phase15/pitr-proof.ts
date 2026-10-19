@@ -1054,7 +1054,22 @@ async function redProofs(t: Timeline): Promise<void> {
       } else {
         const done = waitForRecovery(RECOVERED.port, 45_000);
         if (!done.ok) {
-          p.outcome = `RED AS REQUIRED — recovery never reached the target and never promoted: ${done.detail}`;
+          // «Never promoted» is read from a refused connection, and a cluster
+          // that never came up refuses connections for its own reasons. The
+          // same attribution F-R19-02 closed one branch above applies here:
+          // a bind failure is contention, and the server log's own last words
+          // are quoted so a reader can see WHY it stayed in recovery rather
+          // than taking this arm's word for it.
+          const log = serverLog(RECOVERED.dir);
+          const bind = /could not bind IPv4 address|could not create any TCP\/IP sockets|Address already in use/.test(log);
+          const tail = log
+            .split('\n')
+            .filter((l) => /FATAL|PANIC|could not|requested|recovery|restore/i.test(l))
+            .slice(-3)
+            .join(' | ');
+          p.outcome = bind
+            ? `INVALID MEASUREMENT — RESOURCE CONTENTION: the recovered cluster never took port ${RECOVERED.port}, so «never promoted» says nothing about segment ${holed} (${tail})`
+            : `RED AS REQUIRED — recovery never reached the target and never promoted: ${done.detail} | server log: ${tail}`;
         } else {
           // Promoted despite the hole. With the TARGET's own segment missing
           // it cannot have reached that target, so what matters is whether it
