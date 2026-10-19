@@ -807,13 +807,105 @@ const REFUSED_OPEN_QUOTE = 'REFUSED-UNTERMINATED-QUOTE-BLOCK';
 const FENCE = /^\s*```/;
 
 /**
+ * ROUND 41, THE CHALLENGER'S F-69 (P1, a FAIL-OPEN) and the coordinator's
+ * ruling on the CLASS. `FENCE` above accepts ANY leading whitespace, while
+ * CommonMark allows a fence opener at most THREE columns of indentation: at
+ * four the line is an indented code block and its backticks are CONTENT. So a
+ * four-space or tab-indented declaration opened the exemption in this law
+ * while the renderer opened no fence at all, and the offence after it was
+ * ordinary visible prose to the reader and invisible here. Measured green at
+ * `616f87e`, and confirmed against `marked` 18.1.1 rather than asserted.
+ *
+ * Three fence holes in a row, so the coordinator ruled on the class: a
+ * hand-written regex for "what the reader sees as a fence" is a MODEL of the
+ * renderer. No CommonMark tokenizer is in this repository's lockfile (checked:
+ * no marked, markdown-it, commonmark, micromark or remark-parse), and the
+ * lockfile is not this author's to change, so the rules are implemented
+ * EXACTLY instead, and a differential arm measures this reader against a real
+ * renderer wherever one can be resolved.
+ *
+ * The rules, from CommonMark 0.31 §4.5: an opener is three or more backticks
+ * or tildes with at most three columns of indentation, tabs expanded to
+ * four-column tab stops first; a backtick opener's info string may not contain
+ * a backtick; a closer is the SAME character, AT LEAST AS LONG as the opener,
+ * at most three columns indented, and carries nothing but whitespace after it.
+ *
+ * KNOWN SIMPLIFICATION, declared: this reader is flat, so it does not shift
+ * the indentation baseline inside a list item or a block quote, where a fence
+ * may legitimately sit deeper. There it reads a real fence as content and
+ * SCANS the lines inside it — a false RED, which is the safe direction, and
+ * the differential arm below reds on it rather than leaving it to a reviewer.
+ */
+const indentColumns = (raw: string): { cols: number; rest: string } => {
+  let cols = 0;
+  let i = 0;
+  for (; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === ' ') cols += 1;
+    else if (ch === '\t') cols += 4 - (cols % 4);
+    else break;
+  }
+  return { cols, rest: raw.slice(i) };
+};
+
+type FenceOpen = { char: string; len: number; declared: boolean };
+
+/** A fence OPENER by CommonMark's rules, or null. */
+const fenceOpener = (raw: string, honourDeclaration: boolean): FenceOpen | null => {
+  const { cols, rest } = indentColumns(raw);
+  if (cols > 3) return null;
+  const m = /^(`{3,}|~{3,})([^\n]*)$/.exec(rest);
+  if (m === null) return null;
+  const run = m[1] ?? '';
+  const info = m[2] ?? '';
+  const char = run.slice(0, 1);
+  if (char === '`' && info.includes('`')) return null;
+  return { char, len: run.length, declared: honourDeclaration && /f-50-quote/.test(info) };
+};
+
+/** Does this line CLOSE that opener? Same character, at least as long, nothing but whitespace after. */
+const fenceCloser = (raw: string, open: FenceOpen): boolean => {
+  const { cols, rest } = indentColumns(raw);
+  if (cols > 3) return false;
+  const m = /^(`{3,}|~{3,})[ \t]*$/.exec(rest);
+  if (m === null) return false;
+  const run = m[1] ?? '';
+  return run.slice(0, 1) === open.char && run.length >= open.len;
+};
+
+/**
+ * The lines of a document that this reader treats as a fence DELIMITER --
+ * an opener, or the closer that matches it. An odd count is a document that
+ * ends inside a fence, which is what the census is for.
+ */
+const fenceDelimiterLines = (text: string): number[] => {
+  const out: number[] = [];
+  let open: FenceOpen | null = null;
+  text.split('\n').forEach((raw, i) => {
+    if (open === null) {
+      const o = fenceOpener(raw, false);
+      if (o !== null) {
+        open = o;
+        out.push(i + 1);
+      }
+      return;
+    }
+    if (fenceCloser(raw, open)) {
+      open = null;
+      out.push(i + 1);
+    }
+  });
+  return out;
+};
+
+/**
  * The fence lines of a document, counted off its RAW lines.
  *
  * ROUND 39, THE COORDINATOR'S C-01. One reader, used by the scan AND by the
  * fence census, so the two cannot disagree about where a block ends -- the
  * census was blind to C-01 for exactly that reason.
  */
-const fenceLineCount = (text: string): number => text.split('\n').filter((l) => FENCE.test(l)).length;
+const fenceLineCount = (text: string): number => fenceDelimiterLines(text).length;
 
 /**
  * Join continuation lines WITHIN one region, never across a fence.
@@ -836,17 +928,101 @@ const joinWithin = (records: { n: number; raw: string }[]): { n: number; line: s
   return out;
 };
 
+/**
+ * The lines a document holds INSIDE a fence, derived from the one delimiter
+ * machine rather than from a second walk. An unclosed fence runs to the end of
+ * the document, which is what the F-66 refusal reports.
+ */
+const fencedBodyLines = (text: string): Set<number> => {
+  const delimiters = fenceDelimiterLines(text);
+  const total = text.split('\n').length;
+  const out = new Set<number>();
+  for (let i = 0; i < delimiters.length; i += 2) {
+    const start = delimiters[i] ?? 0;
+    const end = delimiters[i + 1] ?? total + 1;
+    for (let l = start + 1; l < end; l += 1) out.add(l);
+  }
+  return out;
+};
+
+/**
+ * A real CommonMark renderer's lexer, when one can be resolved, or null.
+ *
+ * ROUND 41, THE COORDINATOR'S RULING: a hand-written regex for "what the
+ * reader sees as a fence" is a MODEL of the renderer, so the reader above owes
+ * a DIFFERENTIAL against a real one. No tokenizer is in this repository's
+ * lockfile and the lockfile is not this author's to change, so this resolves
+ * one if the environment offers it -- `P5_MARKDOWN_RENDERER` naming a module,
+ * or `marked` on the resolution path -- and declares itself UNMEASURED BY
+ * ABSENCE otherwise. It never installs anything, and the gate never passes
+ * because a renderer was missing: it says so by name.
+ */
+const rendererLexer = (): ((text: string) => { type?: string; raw?: string; text?: string; codeBlockStyle?: string }[]) | null => {
+  const candidates = [process.env.P5_MARKDOWN_RENDERER, 'marked'].filter((x): x is string => typeof x === 'string' && x !== '');
+  for (const id of candidates) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require(id) as { lexer?: (t: string) => { type?: string; raw?: string; text?: string; codeBlockStyle?: string }[] };
+      const lexer = mod.lexer;
+      if (typeof lexer === 'function') return (t: string) => lexer(t);
+    } catch {
+      // not resolvable here; try the next candidate
+    }
+  }
+  return null;
+};
+
+/**
+ * The lines a REAL renderer puts inside a FENCED code block -- an indented
+ * code block is not one.
+ *
+ * Positions come from CHARACTER OFFSETS into the original text, not from
+ * counting the lines each token reports: a token's `raw` does not always carry
+ * the newline that ended the line before it, and summing those spans drifts by
+ * one line per paragraph. Measured: summing spans put every pack document's
+ * fences one or more lines late, which would have read as a disagreement the
+ * reader did not have.
+ */
+const rendererFencedBodyLines = (
+  lexer: (text: string) => { type?: string; raw?: string; text?: string; codeBlockStyle?: string }[],
+  text: string,
+): Set<number> => {
+  const out = new Set<number>();
+  const lineAt = (offset: number): number => {
+    let line = 1;
+    for (let i = 0; i < offset && i < text.length; i += 1) if (text[i] === '\n') line += 1;
+    return line;
+  };
+  let pos = 0;
+  for (const token of lexer(text)) {
+    const raw = token.raw ?? '';
+    const at = text.indexOf(raw, pos);
+    const startOffset = at === -1 ? pos : at;
+    if (token.type === 'code' && token.codeBlockStyle !== 'indented') {
+      const leadingBlank = (/^(\n*)/.exec(raw)?.[1] ?? '').length;
+      const openerLine = lineAt(startOffset + leadingBlank);
+      const body = token.text ?? '';
+      const bodyCount = body === '' ? 0 : body.split('\n').length;
+      for (let l = openerLine + 1; l <= openerLine + bodyCount; l += 1) out.add(l);
+    }
+    pos = startOffset + raw.length;
+  }
+  return out;
+};
+
 const scanDocument = (
   label: string,
   text: string,
   honourDeclaration: boolean,
   refuseUnterminated: boolean,
   fencesFromRawLines: boolean,
+  commonMarkFences: boolean,
 ): [string[], number] => {
   const found: string[] = [];
   let exemptBlocks = 0;
   let inFence = false;
   let exempt = false;
+  let open: FenceOpen | null = null;
 
   // ROUND 39, C-01 (P1, a FAIL-OPEN): fences are recognised on RAW lines,
   // BEFORE any continuation joining, and continuations are then joined only
@@ -874,18 +1050,40 @@ const scanDocument = (
   };
 
   for (const { n, raw } of lines) {
-    if (FENCE.test(raw)) {
+    // ROUND 41, F-69: the delimiters come from the CommonMark rules above,
+    // opener and closer each by their own rule. `commonMarkFences` is how an
+    // arm deletes this and restores the old "any indentation, any ``` line
+    // toggles" reader, under which the four-space fixture goes green-wrong.
+    if (commonMarkFences) {
+      if (open === null) {
+        // ROUND 35, THE COORDINATOR: a declared quotation block IS an
+        // exemption, so it owes a deletion arm like every other one. The
+        // recognition lives in `fenceOpener` and nowhere else, and
+        // `honourDeclaration` is how an arm deletes it -- one implementation,
+        // so no copy can drift from the live scan.
+        const o = fenceOpener(raw, honourDeclaration);
+        if (o !== null) {
+          flush();
+          open = o;
+          inFence = true;
+          exempt = o.declared;
+          if (exempt) exemptBlocks += 1;
+          continue;
+        }
+      } else if (fenceCloser(raw, open)) {
+        flush();
+        open = null;
+        inFence = false;
+        exempt = false;
+        continue;
+      }
+    } else if (FENCE.test(raw)) {
       flush();
       if (inFence) {
         inFence = false;
         exempt = false;
       } else {
         inFence = true;
-        // ROUND 35, THE COORDINATOR: a declared quotation block IS an
-        // exemption, so it owes a deletion arm like every other one. The
-        // recognition lives HERE and nowhere else, and `honourDeclaration`
-        // is how an arm deletes it -- one implementation, so no copy can
-        // drift from the live scan the way a hand-kept twin would.
         exempt = honourDeclaration && /f-50-quote/.test(raw);
         if (exempt) exemptBlocks += 1;
       }
@@ -902,8 +1100,8 @@ const scanDocument = (
   return [found, exemptBlocks];
 };
 
-/** The live scan: fences off raw lines, the declaration honoured, an open one refused. The ONLY caller of all three. */
-const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], number] => scanDocument(label, text, true, true, true);
+/** The live scan: CommonMark fences off raw lines, the declaration honoured, an open one refused. The ONLY caller of all four. */
+const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], number] => scanDocument(label, text, true, true, true, true);
 
 /**
  * Files that may contain a NUL byte and still not be read by this law, by
@@ -1182,39 +1380,70 @@ describe('every written invocation of the pack tools is isolated', () => {
     // SECOND run of that same option strays too: the project's own rule for
     // telling a bystander from a defect. The direction stays a false RED, and
     // a real writer writes on both runs.
-    const strayFor = (name: string): string[] => {
+    //
+    // ROUND 41, R39-01 (P3): "strayed on both runs" is a CONFIRMED double
+    // observation, not an ATTRIBUTION -- a recurrent bystander satisfies it,
+    // and the challenger measured exactly that (two different
+    // `p5-limit-registry-*` directories blamed on `-X warn_default_encoding`
+    // under 50 ms churn). So the comparison is now TREATMENT versus CONTROL
+    // with digits normalised, the form it measured both ways: a `-I` spawn
+    // with no `-X` at all strays under the same churn, while `-X perf_jit`
+    // leaves `jit-N.dump` on both treatment runs and nothing on the control.
+    // A plain set intersection would not do: a real writer's name carries its
+    // pid, so it differs per run and the intersection is empty for the genuine
+    // case too -- which is why the digits are normalised and a control run is
+    // what separates them.
+    const normalise = (entries: readonly string[]): string[] => entries.map((e) => e.replace(/\d+/g, 'N')).sort();
+    const strayFor = (name: string | null): string[] => {
       const probe = mkdtempSync(join(tmpdir(), 'r3702-'));
       try {
         const before = new Set(readdirSync('/tmp'));
-        const r = spawnSync(HARNESS_PYTHON, ['-I', '-X', name, '-c', PROBE], {
+        const argv = name === null ? ['-I', '-c', PROBE] : ['-I', '-X', name, '-c', PROBE];
+        const r = spawnSync(HARNESS_PYTHON, argv, {
           encoding: 'utf8',
           timeout: 10_000,
           cwd: probe,
           env: { PATH: '/usr/bin:/bin', TMPDIR: probe },
         });
         const stray = readdirSync('/tmp').filter((e) => !before.has(e) && !e.startsWith('r3702-'));
-        expect(readdirSync(probe), `-X ${name} is accepted by this filter and WRITES a file: it belongs in X_WRITES_FILES`).toStrictEqual([]);
-        expect(r.status === 0 || r.status === 1, `-X ${name} neither ran nor failed cleanly`).toBe(true);
+        expect(readdirSync(probe), `-X ${name ?? '(control)'} is accepted by this filter and WRITES a file: it belongs in X_WRITES_FILES`).toStrictEqual([]);
+        expect(r.status === 0 || r.status === 1, `-X ${name ?? '(control)'} neither ran nor failed cleanly`).toBe(true);
         return stray;
       } finally {
         rmSync(probe, { recursive: true, force: true });
       }
     };
-    // The blame rule itself, as a function this arm can RUN rather than a
-    // comment: nothing is blamed on an option unless a second run strays too.
-    const blame = (first: readonly string[], second: readonly string[]): readonly string[] => (first.length === 0 ? [] : second);
+    // The attribution rule itself, as a function this arm can RUN rather than
+    // a comment: an entry is blamed on an option only when it appears, with
+    // digits normalised, in BOTH treatment runs and NOT in a no-option
+    // control.
+    const blame = (first: readonly string[], second: readonly string[], control: readonly string[]): readonly string[] => {
+      const t2 = normalise(second);
+      const c = normalise(control);
+      return normalise(first).filter((e) => t2.includes(e) && !c.includes(e));
+    };
     for (const name of X_OPTION_NAMES) {
       const first = strayFor(name);
-      const second = first.length === 0 ? [] : strayFor(name);
+      if (first.length === 0) continue;
+      const second = strayFor(name);
+      const control = strayFor(null);
       expect(
-        blame(first, second),
-        `-X ${name} is accepted by this filter and wrote into /tmp on TWO consecutive runs, where no cwd or TMPDIR can contain it (the first run left ${first.join(', ')}): it belongs in X_WRITES_FILES`,
+        blame(first, second, control),
+        `-X ${name} is accepted by this filter and wrote into /tmp on both of two runs while a no-option control run did not, where no cwd or TMPDIR can contain it (first run left ${first.join(', ')}): it belongs in X_WRITES_FILES`,
       ).toStrictEqual([]);
     }
-    // Armed on the rule, both directions: a bystander entry seen once is not
-    // blamed, and an option that strays on both runs still is.
-    expect(blame(['p5-limit-registry-JI2U8U'], []), 'a /tmp entry another process created inside the window is blamed on an -X option again').toStrictEqual([]);
-    expect(blame(['jit-1836.dump'], ['jit-2145.dump']), 'an option that writes into /tmp on both runs is no longer blamed').toStrictEqual(['jit-2145.dump']);
+    // Armed on the rule, three directions, the middle one being R39-01 itself.
+    expect(blame(['p5-limit-registry-JI2U8U'], [], []), 'a /tmp entry another process created inside the window is blamed on an -X option again').toStrictEqual(
+      [],
+    );
+    expect(
+      blame(['p5-limit-registry-099RnJ'], ['p5-limit-registry-HZNOEE'], ['p5-limit-registry-eVZu1D']),
+      'RECURRENT churn is still attributed to an option: the rule confirms a double observation instead of attributing it, which is R39-01',
+    ).toStrictEqual([]);
+    expect(
+      blame(['jit-1836.dump'], ['jit-2145.dump'], []),
+      'an option that writes into /tmp on both runs, where the control run writes nothing, is no longer blamed',
+    ).toStrictEqual(['jit-N.dump']);
 
     // And the forms that have no side effect outside the probe still pass, or
     // this is a gate rather than a filter.
@@ -1314,7 +1543,9 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(twoBs, 'fixture (d) does not actually carry two trailing backslashes').toContain('quoted \\\\');
     const foundTwo = offencesOutsideQuotedBlocks('BS2', twoBs);
     expect(foundTwo[0], 'the double-backslash form hides the offence: the shape is wider than one backslash').toHaveLength(1);
-    expect(scanDocument('BS2', twoBs, true, true, false)[0], 'reading fences off joined lines no longer hides the double-backslash form').toStrictEqual([]);
+    expect(scanDocument('BS2', twoBs, true, true, false, true)[0], 'reading fences off joined lines no longer hides the double-backslash form').toStrictEqual(
+      [],
+    );
 
     // ROUND 40, THE CHALLENGER'S FIXTURE (b), as a CONTROL on the COUPLING:
     // with NO later ordinary block, the same bytes are never green. Under the
@@ -1327,33 +1558,37 @@ describe('every written invocation of the pack tools is isolated', () => {
     const bFixed = offencesOutsideQuotedBlocks('B', noLater);
     expect(bFixed[0], 'fixture (b) is not reported at all under the raw-line reader').toHaveLength(1);
     expect(bFixed[0][0], "fixture (b)'s offence is reported without naming the refusal").toContain(REFUSED_INTERPRETER);
-    const bJoined = scanDocument('B', noLater, true, true, false);
+    const bJoined = scanDocument('B', noLater, true, true, false, true);
     expect(bJoined[0].join('\n'), 'with no later block the joined-lines reader goes green too, so F-66 is not what caught the uncoupled form').toContain(
       REFUSED_OPEN_QUOTE,
     );
 
     // GUARD DELETION: with fences read off JOINED lines again, the offence
     // goes green-wrong -- the fail-open the coordinator measured.
-    const joined = scanDocument('BS', bs, true, true, false);
+    const joined = scanDocument('BS', bs, true, true, false, true);
     expect(joined[0], 'reading fences off joined lines no longer hides the offence, so the raw-line reader is not what found it').toStrictEqual([]);
 
     // THE SWEEP the coordinator asked for, as a claim this file can check:
     // every fence recognition must be applied to a RAW line. Needles
     // assembled, or each counts its own literal.
     const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
-    const call = ['FENCE', '.test('].join('');
-    // The needle is assembled, so it does not appear literally in this file
-    // and cannot count itself -- B-10's shape, watched for every time.
-    const allFenceTests = here.split(call).length - 1;
-    const onRaw = here.split(`${call}raw)`).length - 1;
-    const onSplitLines = here.split(`${call}l)`).length - 1;
-    expect(onRaw + onSplitLines, 'a fence is recognised on something other than a raw line, which is C-01 again').toBe(allFenceTests);
-    // The other two scans recognise NO structure, so joining cannot hide
-    // anything there: they read every line. Measured as the absence of a
-    // fence test outside the two sites above.
-    expect(allFenceTests, 'the fence reader grew a third site: it owes this arm a case').toBe(2);
+    // ROUND 41: the recognition now lives in `fenceOpener` and `fenceCloser`,
+    // and both must be asked about a RAW line. Needles assembled, or each
+    // counts its own literal -- B-10's shape, watched for every time.
+    const openerCall = ['fenceOpener', '('].join('');
+    const closerCall = ['fenceCloser', '('].join('');
+    const askedOnRaw = here.split(`${openerCall}raw`).length - 1 + (here.split(`${closerCall}raw`).length - 1);
+    const askedAtAll = here.split(openerCall).length - 1 + (here.split(closerCall).length - 1);
+    // Four call sites: each reader asked once by the census and once by the
+    // scan. Their own definitions are `const fenceOpener =`, not calls.
+    expect(askedAtAll, 'the fence reader grew a call site: it owes this arm a case').toBe(4);
+    expect(askedOnRaw, 'a fence is recognised on something other than a raw line, which is C-01 again').toBe(askedAtAll);
+    // And the OLD any-indentation reader survives in exactly one place: the
+    // deletion path, which an arm selects with `commonMarkFences` false.
+    const loose = ['FENCE', '.test('].join('');
+    expect(here.split(loose).length - 1, 'the any-indentation fence reader is live again, which is F-69').toBe(1);
     // And the raw-line reader is deleted from one arm only, counted by shape.
-    const rawDeleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*true,\s*true,\s*false\)/g) ?? []).length;
+    const rawDeleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*true,\s*true,\s*false,\s*true\)/g) ?? []).length;
     // Three arms delete the raw-line reader: this fixture, the challenger's
     // double-backslash form, and its fixture (b) coupling control. A fourth
     // caller would be a live one, which is C-01 back.
@@ -1363,6 +1598,141 @@ describe('every written invocation of the pack tools is isolated', () => {
     // raw-line fence reader has broken F-52's continuation handling.
     expect(offencesIn('fixture', 'python3 \\\n    tools/manifest-digests.py --check')).toHaveLength(1);
     expect(offencesOutsideQuotedBlocks('CONT', 'python3 -I \\\n    tools/manifest-digests.py --check')[0]).toStrictEqual([]);
+  });
+
+  it('F-69: a fence the RENDERER does not see is not a fence here either', () => {
+    // ROUND 41, THE CHALLENGER'S F-69 (P1, a FAIL-OPEN) and the coordinator's
+    // ruling on the class. The old reader was `/^\s*```/` -- ANY leading
+    // whitespace -- while CommonMark allows an opener at most THREE columns of
+    // indentation; at four the line is an indented code block and its
+    // backticks are CONTENT. So a four-space declaration opened the exemption
+    // HERE while the renderer opened no fence at all, and the offence after it
+    // was a visible, copyable paragraph to the reader and invisible to this
+    // law. The challenger measured it green at `616f87e` and confirmed what
+    // the reader sees with `marked` 18.1.1.
+    const offence = 'shimdir/python3 tools/manifest-digests.py --check';
+    const doc = (indent: string, open = '```text f-50-quote', close = '```'): string =>
+      ['Intro paragraph.', '', `${indent}${open}`, '', offence, '', `${indent}${close}`, '', 'Outro.'].join('\n');
+
+    // (a) four spaces: an offence the reader sees as prose, reported by name.
+    const four = offencesOutsideQuotedBlocks('FOUR', doc('    '));
+    expect(four[0], '(a) a four-space indented declaration still exempts prose the reader sees').toHaveLength(1);
+    expect(four[0][0], '(a) the offence is reported without naming the refusal').toContain(REFUSED_INTERPRETER);
+    expect(four[1], '(a) a line the renderer treats as content was counted as a quotation block').toBe(0);
+
+    // (b) a TAB is the same hole, because CommonMark expands it to a
+    // four-column tab stop and the old `\s*` matched it. A fix keyed on
+    // literal spaces would leave this open -- the challenger's point.
+    const tab = offencesOutsideQuotedBlocks('TAB', doc('\t'));
+    expect(tab[0], '(b) a tab-indented declaration exempts prose the reader sees').toHaveLength(1);
+    expect(tab[1], '(b) a tab-indented line was counted as a quotation block').toBe(0);
+
+    // (c) THREE spaces is NOT a defect: the renderer makes a real fence there,
+    // so law and reader agree and GREEN is the right answer.
+    const three = offencesOutsideQuotedBlocks('THREE', doc('   '));
+    expect(three[0], '(c) a three-space fence is a real fence to the renderer: the exemption must hold').toStrictEqual([]);
+    expect(three[1], '(c) the three-space declared block was not counted exactly once').toBe(1);
+
+    // (d) DELETION CONTROL, and the measurement of the fail-open itself: the
+    // old any-indentation reader is preserved behind `commonMarkFences`, so
+    // running (a) and (b) through it is the behaviour of `616f87e` executed
+    // rather than described. Both go GREEN-WRONG; (c) stays green, so the
+    // deletion is confined to the indentation rule.
+    expect(
+      scanDocument('FOUR', doc('    '), true, true, true, false)[0],
+      '(d) the four-space form no longer hides the offence under the old reader, so the indentation rule is not what found it',
+    ).toStrictEqual([]);
+    expect(scanDocument('TAB', doc('\t'), true, true, true, false)[0], '(d) the tab form no longer hides the offence under the old reader').toStrictEqual([]);
+    expect(
+      scanDocument('THREE', doc('   '), true, true, true, false)[0],
+      '(d) the three-space form changed under the old reader, so the control is not confined to the indentation rule',
+    ).toStrictEqual([]);
+
+    // (e) A TILDE fence is a fence, and its declaration is honoured; the
+    // offence after its close is scanned.
+    const tilde = ['~~~text f-50-quote', offence, '~~~', '', offence].join('\n');
+    const tildeFound = offencesOutsideQuotedBlocks('TILDE', tilde);
+    expect(tildeFound[1], '(e) a tilde-fenced declaration is not recognised as a quotation block').toBe(1);
+    expect(tildeFound[0], '(e) the tilde block exempted its inside but not the prose after it').toHaveLength(1);
+
+    // (f) A SHORTER closer does not close: the block runs to end of input, so
+    // the F-66 refusal fires instead of the tail being silently exempt.
+    const shortClose = ['````text f-50-quote', offence, '```', '', offence].join('\n');
+    expect(
+      offencesOutsideQuotedBlocks('SHORT', shortClose)[0].join('\n'),
+      '(f) a closer shorter than its opener closed the block, so the tail was exempted in silence',
+    ).toContain(REFUSED_OPEN_QUOTE);
+    // And a closer AT LEAST as long does close it, or this is a gate.
+    const longClose = ['````text f-50-quote', offence, '`````', '', offence].join('\n');
+    expect(offencesOutsideQuotedBlocks('LONG', longClose)[0], '(f) a longer closer failed to close the block').toHaveLength(1);
+
+    // (g) A backtick opener whose info string contains a backtick is not an
+    // opener at all, by CommonMark's rule, so nothing after it is exempt.
+    const backtickInfo = ['```text `f-50-quote`', '', offence].join('\n');
+    expect(
+      offencesOutsideQuotedBlocks('INFO', backtickInfo)[1],
+      '(g) an info string carrying a backtick opened a quotation block the renderer does not open',
+    ).toBe(0);
+    expect(offencesOutsideQuotedBlocks('INFO', backtickInfo)[0], '(g) the offence after a non-opener was exempted').toHaveLength(1);
+
+    // THE DIFFERENTIAL ARM the coordinator ruled for: this reader against a
+    // REAL renderer, over every fixture and every author-owned pack document,
+    // redding on any disagreement about which lines sit inside a fence. The
+    // arm is the instrument; the fixtures above are its examples. Reviewer
+    // documents are measured OUTSIDE this gate on purpose -- F-68's lesson:
+    // a disagreement over bytes the author may not edit must not red the
+    // author's package.
+    const lexer = rendererLexer();
+    const fixtures: [string, string][] = [
+      ['four', doc('    ')],
+      ['tab', doc('\t')],
+      ['three', doc('   ')],
+      ['tilde', tilde],
+      ['short-close', shortClose],
+      ['long-close', longClose],
+      ['info-backtick', backtickInfo],
+      ['no-close', ['Intro.', '', '    ```text f-50-quote', '', offence].join('\n')],
+      ['plain', ['```text f-50-quote', offence, '```'].join('\n')],
+    ];
+    if (lexer === null) {
+      // By ABSENCE, and said by name rather than passed over: no CommonMark
+      // tokenizer is resolvable here, so the differential did not run. Set
+      // `P5_MARKDOWN_RENDERER` to a module exporting `lexer`, or add one to
+      // the lockfile (PATCH-REQ-P5-003), and this arm measures every case.
+      expect(
+        lexer,
+        'NO COMMONMARK RENDERER RESOLVED: the differential arm is UNMEASURED here, by absence — set P5_MARKDOWN_RENDERER or add a tokenizer to the lockfile',
+      ).toBeNull();
+    } else {
+      const disagreements: string[] = [];
+      const compare = (label: string, text: string): void => {
+        const mine = fencedBodyLines(text);
+        const theirs = rendererFencedBodyLines(lexer, text);
+        const only = (a: Set<number>, b: Set<number>): number[] => [...a].filter((l) => !b.has(l)).sort((x, y) => x - y);
+        const mineOnly = only(mine, theirs);
+        const theirsOnly = only(theirs, mine);
+        if (mineOnly.length > 0 || theirsOnly.length > 0) {
+          disagreements.push(
+            `${label}: exempt here but not in the renderer ${JSON.stringify(mineOnly)}; inside a fence for the renderer but scanned here ${JSON.stringify(theirsOnly)}`,
+          );
+        }
+      };
+      for (const [label, text] of fixtures) compare(label, text);
+      if (existsSync(PACK)) {
+        const exemptNames = reviewerOwned();
+        const reviewerShaped = looksLikeReviewer();
+        for (const name of readdirSync(PACK)) {
+          if (exemptNames.has(name) || reviewerShaped.test(name)) continue;
+          const text = readable(join(PACK, name));
+          if (typeof text !== 'string') continue;
+          compare(name, text);
+        }
+      }
+      expect(
+        disagreements,
+        'THIS READER AND A REAL RENDERER DISAGREE about which lines are inside a fence: a line exempt here that the renderer shows as prose is a fail-open, and the reverse is a false RED',
+      ).toStrictEqual([]);
+    }
   });
 
   it('F-66: a declared quotation block left OPEN refuses, instead of hiding the tail', () => {
@@ -1399,9 +1769,9 @@ describe('every written invocation of the pack tools is isolated', () => {
 
     // GUARD DELETION, one deletion: without the end-of-input refusal, (d) goes
     // green again -- the control -- while (c) stays red.
-    const withoutCheck = scanDocument('D', d, true, false, true);
+    const withoutCheck = scanDocument('D', d, true, false, true, true);
     expect(withoutCheck[0], 'with the end-of-input refusal deleted (d) still reports, so the check is not what reports it').toStrictEqual([]);
-    expect(scanDocument('C', c, true, false, true)[0], 'the deletion also changed (c), so it is not a pure deletion').toHaveLength(1);
+    expect(scanDocument('C', c, true, false, true, true)[0], 'the deletion also changed (c), so it is not a pure deletion').toHaveLength(1);
 
     // Reachability, measured rather than assumed: no pack entry THIS LAW SCANS
     // has an odd fence count today, so the shape has no live instance -- it
@@ -1466,7 +1836,7 @@ describe('every written invocation of the pack tools is isolated', () => {
 
     // And the two knobs are each reachable from one arm only.
     const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
-    const openDeleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*true,\s*false,\s*true\)/g) ?? []).length;
+    const openDeleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*true,\s*false,\s*true,\s*true\)/g) ?? []).length;
     expect(openDeleting, 'a second caller deletes the end-of-input refusal: it must be an arm, counted here').toBe(2);
     // ROUND 40, R38-02: and no walk of the pack narrows its own subject by
     // file name, so the census and the scan read the same entries. The needle
@@ -1509,7 +1879,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     // THREE: delete the recognition and the very same block reds, by name.
     // One deletion, in the one place the recognition lives.
     verdicts.clear();
-    const deleted = scanDocument('doc', quotedLive, false, true, true);
+    const deleted = scanDocument('doc', quotedLive, false, true, true, true);
     expect(deleted[1], 'the deletion still counted an exempt block').toBe(0);
     expect(deleted[0], 'with the declaration no longer recognised the block is still exempt, so the exemption is not what makes it exempt').toHaveLength(1);
     expect(deleted[0][0], 'the deletion reds without naming the refusal').toContain('REFUSED-UNCLASSIFIABLE-INTERPRETER');
@@ -1528,12 +1898,12 @@ describe('every written invocation of the pack tools is isolated', () => {
     // The needles are ASSEMBLED, or each one counts its own literal and the
     // arm reports one caller too many -- B-10's self-counting shape, for the
     // third time in this file.
-    const honourNeedle = ['scanDocument(label,', 'text,', 'true,', 'true,', 'true)'].join(' ');
+    const honourNeedle = ['scanDocument(label,', 'text,', 'true,', 'true,', 'true,', 'true)'].join(' ');
     const honouring = here.split(honourNeedle).length - 1;
     // Counted by SHAPE rather than by one spelling, so a differently written
     // deleting caller is counted too: any `scanDocument(...)` whose last
     // argument is `false`.
-    const deleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*false,\s*true,\s*true\)/g) ?? []).length;
+    const deleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*false,\s*true,\s*true,\s*true\)/g) ?? []).length;
     expect(honouring, 'the live wrapper that honours the declaration is no longer the only one').toBe(1);
     expect(deleting, 'a second caller deletes the declaration recognition: it must be an arm, counted here').toBe(1);
   });
