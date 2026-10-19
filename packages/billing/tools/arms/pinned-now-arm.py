@@ -47,6 +47,7 @@ import hashlib
 import importlib.util
 import pathlib
 import tempfile
+import types
 
 
 # Importing a file writes `tools/__pycache__/` beside it, which is an untracked
@@ -57,11 +58,57 @@ sys.dont_write_bytecode = True
 
 
 def load(path: str):
+    """Load the subject, and REFUSE unless what came back is that file.
+
+    ROUND 29, the challenger's B-11, third remedy. Measured by it: a
+    `sitecustomize.py` that swaps `importlib.util` — both
+    `sys.modules["importlib.util"]` and the attribute on the real `importlib`
+    package — hands this function a fake and the real file is never read. It
+    printed `4/4 branches as specified` at rc 0 with the argument pointing at
+    `/nonexistent/seal-check-run.py`. An arm that reports four branches of a
+    function it never loaded witnesses nothing, and witnessing is this file's
+    only job.
+
+    The guard above now removes the un-isolated path that delivers that plant,
+    but the guard's SILENCE is not evidence — that is this round's own lesson —
+    so the arm also checks what it got: the file exists and is non-empty, the
+    spec's origin and the module's `__file__` are the path it was given, and
+    the attribute under test is a real function from that module.
+    """
+    # Resolved, because the import machinery answers with an absolute origin and
+    # the comparison must be between the same two things.
+    target = pathlib.Path(path).resolve()
+    if not target.is_file():
+        raise SystemExit(f"no file at {path} — refusing to report branches of a module not loaded")
+    size = target.stat().st_size
+    if size == 0:
+        raise SystemExit(f"{path} is empty — refusing to report branches of an empty module")
+
     spec = importlib.util.spec_from_file_location("seal_check_run", path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"cannot load {path}")
+    if getattr(spec, "origin", None) != str(target):
+        raise SystemExit(
+            f"the import machinery returned a spec for {getattr(spec, 'origin', None)!r} when "
+            f"{str(target)!r} was asked for — refusing: something between this arm and the file "
+            f"is answering for it"
+        )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    if getattr(mod, "__file__", None) != str(target):
+        raise SystemExit(
+            f"the loaded module reports __file__ {getattr(mod, '__file__', None)!r}, not "
+            f"{str(target)!r} — refusing to attribute its answers to that file"
+        )
+    subject = getattr(mod, "pinned_now", None)
+    if not isinstance(subject, types.FunctionType):
+        raise SystemExit(
+            f"{path} has no `pinned_now` FUNCTION to exercise — refusing rather than reporting "
+            f"branches of whatever this is"
+        )
+    if getattr(subject, "__module__", None) != "seal_check_run":
+        raise SystemExit("`pinned_now` did not come from the module just loaded — refusing")
+    print(f"subject: {target} ({size} bytes), pinned_now loaded from that file")
     return mod
 
 
