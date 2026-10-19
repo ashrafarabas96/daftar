@@ -50,8 +50,20 @@ def main():
     # where the repository happened to sit, which is round 8's defect again.
     # The skip is now relative to the pack, and a run that scanned NO document
     # refuses: measuring nothing is not a pass.
+    # CHALLENGE R26-P1-01: the two instruments over this directory must enumerate
+    # the SAME domain. The whole of that fail-open was an asymmetry -- a file this
+    # tool read and `manifest-digests.py` could not see, which is how a plant
+    # moved a published document count while the pin stayed green. So the one
+    # structural exclusion is written here too: a directory that IS a git
+    # repository (HEAD, objects and refs present) is a repository, not pack
+    # content. The test is structure, not spelling.
+    def _is_repo_dir(p):
+        return (os.path.isfile(os.path.join(p,'HEAD'))
+                and os.path.isdir(os.path.join(p,'objects'))
+                and os.path.isdir(os.path.join(p,'refs')))
     files = []
     for root, _dirs, names in os.walk(a.pack):
+        _dirs[:] = [x for x in sorted(_dirs) if not _is_repo_dir(os.path.join(root,x))]
         relroot = os.path.relpath(root, a.pack)
         if relroot == 'tools' or relroot.startswith('tools' + os.sep):
             continue                      # the list itself quotes every claim

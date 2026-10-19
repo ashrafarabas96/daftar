@@ -224,6 +224,14 @@ fi
 gate citation-provenance "python3 -I $HERE/citation-provenance.py --check $DOC"
 gate manifest-digests    "python3 -I $HERE/manifest-digests.py --dir $PACK --check"
 offrepo manifest-shared "$SHARED" "python3 -I $HERE/manifest-digests.py --dir $SHARED --check"
+# CHALLENGE R26-P3-02 and the coordinator's wording: a PRE-COMMIT comparison,
+# so an uncommitted reviewer report reds BEFORE a push instead of after one.
+# Twice in consecutive rounds a review sat in the shared folder while the
+# commit went out without it, and both times a lane read after the push is
+# what found it. The pack lane here is the SHA's own (`--dir $PACK`); the
+# folder is read only for the reviewer-prefixed names it holds, which is why
+# this is an off-repository lane and not part of the figure quoted for a SHA.
+offrepo reports-in-tree "$SHARED" "python3 -I $HERE/manifest-digests.py --dir $PACK --witness $SHARED --reports-in-tree --check"
 gate retracted-claims    "python3 -I $HERE/retracted-claims.py --pack $PACK --check"
 # R12-P2-02's lesson applied to this run's ENTRY condition, after two sweeps
 # answered 1 on both DB lanes with "Connection refused" and no attribution: the
@@ -288,6 +296,7 @@ if [ -n "$WT2" ]; then
     else printf 'FAIL  %-26s rc=%s with the pack at %s — the verdict depends on where the pack lives\n' \
                 "$nm" "$rc" "$WP"; fail=$((fail+1)); fi
   done
+
 fi
 
 # ---- red proofs: a gate that has never failed is an unfenced gate.
@@ -347,6 +356,68 @@ named() { # name | expected-rc | required message | command
     fail=$((fail+1))
   fi
 }
+
+# MOVED here from the worktree block above, where it printed `named: command not
+# found` EIGHT times and the sweep carried on: `named` is defined below that
+# block, so every one of these arms silently did nothing and no line said so.
+# That is this pack's own recurring defect -- a lane that reports nothing reads
+# as a lane that passed -- so the arms now run where the helper exists AND
+# `plant` refuses by name if it ever does not.
+if [ -n "$WT2" ]; then
+  WP="$WT2/phase-preparation/phase14"; WH="$WP/tools"
+  # CHALLENGE R26-P1-01, a FAIL-OPEN the challenger measured with five plants and
+  # the coordinator rebuilt independently: this manifest's enumeration was a
+  # non-recursive, case-sensitive `os.listdir` over `.md`/`.yaml`, so four of
+  # those five plants left `--check` at rc 0 — and an invisible file still
+  # reached a PUBLISHED figure, because `retracted-claims.py` walks recursively
+  # and moved from 41 pack documents to 42 with one of them planted. The
+  # enumeration is now a walk with no extension filter and two declared
+  # subtrees. These arms are the plants themselves, run against the WORKTREE's
+  # pack so the history leg is readable, ONE at a time and each removed before
+  # the next, with a baseline that must be green or every arm below is vacuous.
+  # The worktree is checked out at HEAD, so its pack is the COMMITTED one. These
+  # arms must measure the pack as it stands now, uncommitted changes included,
+  # or they would prove last commit's enumeration. So the current pack's files
+  # are copied over the worktree's before planting -- the worktree is still a
+  # real checkout of this repository, which is what the history leg needs, and
+  # the REAL pack is never planted in, so an interrupted run cannot leave a
+  # planted file in it.
+  cp -p "$PACK"/*.md "$PACK"/*.yaml "$WP/" 2>/dev/null
+  cp -p "$PACK"/tools/* "$WP/tools/" 2>/dev/null
+  printf '   plants run against the CURRENT pack copied into %s (worktree at HEAD, files from %s)\n' \
+         "$WP" "$PACK"
+  plant() { # name | path to plant, relative to the pack | required message
+    local nm="$1" rel="$2" msg="$3"
+    if ! type named >/dev/null 2>&1; then
+      printf 'FAIL  %-26s the `named` helper does not exist here, so this arm asked nothing\n' "$nm"
+      fail=$((fail+1)); return 0
+    fi
+    mkdir -p "$(dirname "$WP/$rel")"
+    printf 'planted by gate-sweep.sh for %s\n' "$nm" > "$WP/$rel"
+    named "$nm" 1 "$msg" \
+      "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+    rm -f "$WP/$rel"
+  }
+  named plant-baseline 0 "every artifact row matches the file on disk" \
+    "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+  plant plant-txt-top-level     zz-planted.txt              "zz-planted.txt: ARTIFACT WITH NO ROW"
+  plant plant-upper-case-md     P14-CHALLENGE-ZZZZZZZ.MD    "P14-CHALLENGE-ZZZZZZZ.MD: ARTIFACT WITH NO ROW"
+  plant plant-lower-case-md     P14-CHALLENGE-ZZZZZZZ.md    "P14-CHALLENGE-ZZZZZZZ.md: ARTIFACT WITH NO ROW"
+  plant plant-under-tools       tools/zz-planted.md         "tools/: row says"
+  plant plant-under-proofs      proofs/zz-planted.md        "proofs/: row says"
+  plant plant-two-deep          proofs/cases/zz-planted.sql "proofs/: row says"
+  # A first-level directory nothing declares: the refusal that names the domain.
+  plant plant-new-subdirectory  zz-dir/zz-planted.md        "SUBTREE WITH NO ROW: zz-dir/"
+  rm -rf "$WP/zz-dir"
+  # and the baseline again, so a plant left behind by any arm above is not
+  # carried silently into the rest of this run.
+  named plant-baseline-restored 0 "every artifact row matches the file on disk" \
+    "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+else
+  printf 'FAIL  %-26s no second worktree, so the seven plant arms of R26-P1-01 asked nothing\n' \
+         plant-arms-not-run
+  fail=$((fail+1))
+fi
 
 # (a) --repo is not a repository at all, and IS an ancestor of the pack, so the
 # ancestry refusal cannot fire instead. This is the world that printed 12 rows.
