@@ -85,7 +85,7 @@ Each document exists in **two places**: the shared project-files location (the c
 |---|---|
 | `RUN_ID` / `RUN_AT_UTC` | **`p11-20261012T145825Z-6848`** / start `2026-10-12T14:58:25Z`, end `2026-10-12T14:59:44Z` |
 | `DB_COLLATION` | **`en_US.utf8 / en_US.utf8 / UTF8`** — of the database under test |
-| `HARNESS_SHA256` | `6cc552919e1e25029b2bc7d75a5dcd416abdb17850b9796fc2177e8a55900c79` (the seven harness files hashed together) |
+| `HARNESS_SHA256` | `6cc552919e1e25029b2bc7d75a5dcd416abdb17850b9796fc2177e8a55900c79` (the seven harness files hashed together). Reproduce it, and every other `HARNESS_SHA256` row here, as `cat $(ls <files>) | sha256sum`: **`ls` sorts**, so the order hashed is alphabetical, not the order the script lists. The set grew to nine files and then to ten (§7.11) |
 | `BOOTSTRAP_SHA256` | `19df5cca37a6a887ede923e6f108163e579ac42f68cb0c8b48730eb2f2a3c507` |
 | re-run command | `git checkout 2da2000 && bash prep/phase11/harness/rebuild_and_prove.sh` — it creates its own `en_US.utf8` cluster and reads nothing outside the repository |
 | `SOURCE_BRANCH` / `SOURCE_SHA` | `claude/phase11-prep-re0epv` / **`2da200009e119e36ebde2eabdab9a14299f0a1a1`** (earlier logs: `e27acaf…`, `99dbbe7…`, `d813de2…`, across which the Pack A DDL was byte-identical at `7561f8f8…d3a8` — the digest the challenge reviewed; **at this SHA the DDL itself changed**, so no earlier claim carries forward) |
@@ -588,6 +588,82 @@ ledger's history. That is also why `TRUNCATE`-style pruning is safe at all
 said this head is signable on the same evidence once those two sentences are
 fixed, and that it will not re-run the suite unless a pack digest moves —
 neither of which is a signature, and neither is mine to give.
+
+---
+
+## 7.11 The ELEVENTH round — **`PASS`** at `24f6ebe`, and the first head of this phase with ALL THREE LINKS COMPLETE
+
+Narrow on `51686d9..24f6ebe`. **`PASS`, with no finding open** — the first head
+here to pass with nothing owed to the challenger. Frozen at
+`/mnt/project-files/phase11/P11-CHALLENGE-24f6ebe.md`, sha256
+`34f0f80391c64294aea398dec646941a69a93e0a46f0963dd44b00659f38d75f`, 136 lines /
+7,231 bytes — digest, line count and byte count re-verified on disk by this
+author rather than taken from the verdict.
+
+**The coordinator diff review then SIGNED the same SHA**, on a clone pinned to
+the full 40 characters, with its report at
+`/mnt/project-files/phase11/P11-COORD-DIFF-REVIEW-24f6ebe.md`, sha256
+`7a5e0c14bc088dbd7b8ca380335e029c32cc09345363b3ea7503306f4c8d2275`, 171 lines.
+It re-ran the clean suite itself on PG 16.15 at `en_US.utf8` over the real 87
+migrations with both roles `NOSUPERUSER NOBYPASSRLS` (Pack A 121 / 0 failed,
+Pack B 53 / 0 failed, two passes, on a rebuild) and confirmed that `M21` reds
+exactly `PA8-O1`, `PA9-P1` and `PA9-P2` with the control holding. It carries
+two residuals, **both `P3` and neither a fail-open**: `PA9-O4`, where
+dual-identity rows persist and only the owner can write them, so only
+attribution is lost; and `MPR-10`, where owner pruning is a no-op, so the cost
+is growth only.
+
+So `24f6ebe` is **author → independent challenger `PASS` → coordinator diff
+review SIGNED**. That is the complete chain this phase requires, and it is the
+first time this phase has had it. It remains **`PREPARED`, not promoted**:
+`READY_TO_PROMOTE` = **NO**, no migration number exists, and the signature
+covers `24f6ebe` alone with `f87a7ce0…` / `d5820ada…` / `f1e6775d…`.
+
+**This commit is a new SHA and therefore carries NO signature.** It was held
+until the review returned, on the coordinator's instruction, precisely so the
+signed head stayed signed; the two things folded into it are:
+
+**1. This section**, the record of the round, which could not be written at
+`24f6ebe` without voiding the signature it records.
+
+**2. `harness/check_fenced_figures.py` — the review arm made EXECUTABLE.** The
+challenger's closing note on round 11 was that
+`figure-that-no-instrument-emits` was a rule in a document with nothing
+enforcing it, and offered an executable form without asking for it; the
+coordinator adopted it. The check reads the FENCED blocks of this phase's
+documents, takes the lines that are nothing but a lowercase `key=value` token,
+and requires each token to appear somewhere under `prep/phase11/harness/` —
+which holds both the instruments and the committed run evidence. It is now
+**step 0 of `rebuild_and_prove.sh`**, before a cluster exists, and the run
+refuses on it: `EXIT_FENCED_FIGURES` is in the exit-code block, exit 1 is a
+figure nothing emits and **exit 2 is the check having matched nothing at all**,
+which it must not report as a pass.
+
+Its own red proof is `--selftest`, three hermetic arms (a token nothing emits →
+1, an emitted token → 0, no token at all → 2), run by the proof script before
+the real scan. **And it was proved against the real defect, not only its
+fixtures:** pointed at the documents and harness of `51686d9`, the head round
+10 rejected, it reports both occurrences of `superuser_sees=130` by file and
+line with exit 1; at `24f6ebe` it reports 6 candidate tokens, 0 not emitted,
+exit 0. What it does NOT cover is named in the file: prose, UPPERCASE
+assignments, a token inside a longer line, outcome transcripts of the shape
+`-> rc=0`, and the arm's second direction — whether an emitted figure is a
+quantity the moment decides, which is not mechanisable and stays a rule.
+
+`check_fenced_figures.py` **joins the `HARNESS_SHA256` set** in the same
+commit, because an instrument a run refuses on is part of what the run must
+pin. That digest therefore moves here, by design, and a round is owed on this
+SHA.
+
+**Carried from the coordinator, for anyone reproducing a digest:**
+`HARNESS_SHA256` is `cat $(ls <files>) | sha256sum`, and **`ls` sorts its
+arguments**, so the bytes hashed are alphabetical, not the order the script
+lists them. Concatenating as written gives a different number — a reader's
+artefact, not a tree mismatch. The note is on the digest rows in §6 here and
+in `P11-LIVE-DDL-PROOF.md` §1.
+
+**A TWELFTH round is owed** narrow on `24f6ebe..HEAD`. Nothing here is
+self-signed.
 
 ---
 

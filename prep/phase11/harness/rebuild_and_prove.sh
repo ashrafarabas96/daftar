@@ -58,11 +58,35 @@ echo "MANIFEST_SHA256   : $(sha256sum $REPO/infrastructure/database/MIGRATION_MA
 echo "BOOTSTRAP_SHA256  : $(sha256sum $REPO/infrastructure/database/bootstrap.sql | cut -d' ' -f1)"
 echo "PACK_A_DDL_SHA256 : $(sha256sum $REPO/prep/phase11/ddl/p11-pack-a-apparel.sql | cut -d' ' -f1)"
 echo "PACK_B_DDL_SHA256 : $(test -f $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry.sql && sha256sum $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry.sql | cut -d' ' -f1 || echo 'absent at this SHA — Pack B is not on the branch yet, and the run below skips it by name rather than silently')"
-echo "HARNESS_SHA256    : $(cat $(ls $H/proofs.py $H/proofs_b.py $H/races.py $H/races_b.py $H/run_migrations.py $H/render_bootstrap.py $H/world.sql $H/world_b.sql $H/rebuild_and_prove.sh 2>/dev/null) | sha256sum | cut -d' ' -f1)"
+# NOTE ON REPRODUCING THIS DIGEST: `ls` SORTS its arguments, so the bytes
+# hashed are the files in ALPHABETICAL order, not in the order written below.
+# Concatenating them in the written order gives a different, wrong digest.
+# `check_fenced_figures.py` joined the set when step 0 started depending on it:
+# an instrument a run refuses on is part of what the run must pin.
+echo "HARNESS_SHA256    : $(cat $(ls $H/check_fenced_figures.py $H/proofs.py $H/proofs_b.py $H/races.py $H/races_b.py $H/run_migrations.py $H/render_bootstrap.py $H/world.sql $H/world_b.sql $H/rebuild_and_prove.sh 2>/dev/null) | sha256sum | cut -d' ' -f1)"
 echo "PG_VERSION        : $($PG/postgres --version)"
 echo "PG_CLUSTER_DIR    : $S/data (port $PORT, socket $SOCK)"
 echo "NODE_VERSION      : $(node -v) (repository engines: $(node -e "process.stdout.write(require('$REPO/package.json').engines.node)")) -- NO npm suite is run here"
 echo "FIXTURES          : world.sql (Pack A)$(test -f $H/world_b.sql && echo ', world_b.sql (Pack B, with its definer fixture)'). Within the packs present, no fixture and no case is skipped; a pack that is not on the branch is named as skipped above and below."
+echo
+
+# ── 0. the documents' fenced figures ────────────────────────────────────────
+# Round 10 rejected a head over a figure shown inside a fenced block that no
+# instrument emitted. Round 11 made the honest objection that the arm added in
+# answer was a rule in a document with nothing enforcing it. This is the
+# enforcement, and it runs FIRST -- before a cluster exists -- for the same
+# reason the renderer's selftest does: a defect a check can see should stop the
+# run before anything expensive happens. Its own red proof runs before it.
+echo "=== 0. the documents' fenced figures (every quoted key=value must be emitted by something) ==="
+python3 -I $H/check_fenced_figures.py --selftest || { echo "the fenced-figure check cannot fail; refusing to trust it"; exit 1; }
+python3 -I $H/check_fenced_figures.py
+RC_FIGURES=$?
+if [ $RC_FIGURES -ne 0 ]; then
+  echo "A document of this phase shows a figure nothing emits (exit 1), or the check "
+  echo "matched nothing at all (exit 2). Either way this run would publish a number "
+  echo "with no instrument behind it. Refusing to run."
+  exit $RC_FIGURES
+fi
 echo
 
 # ── 1. the database ─────────────────────────────────────────────────────────
@@ -269,6 +293,7 @@ echo "EXIT_PROOFS_A     : $RC_PROOFS  (prep/phase11/harness/proofs.py)"
 echo "EXIT_PROOFS_B     : $RC_B  (prep/phase11/harness/proofs_b.py)"
 echo "EXIT_PROOFS_A_RUN2: $RC_PROOFS2  (the same file, the same database -- idempotence)"
 echo "EXIT_PROOFS_B_RUN2: $RC_B2  (the same file, the same database -- idempotence)"
+echo "EXIT_FENCED_FIGURES: $RC_FIGURES  (prep/phase11/harness/check_fenced_figures.py, run at step 0)"
 echo "EXIT_RACES        : $RCR  (prep/phase11/harness/races.py)"
 echo "EXIT_RACES_B      : $RCRB  (prep/phase11/harness/races_b.py)"
 echo "EXIT_SCRIPT       : $RC  (0 means every step above returned 0)"
