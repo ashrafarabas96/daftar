@@ -770,9 +770,49 @@ class QueueModelCheckTest {
         var custodyRecords = 0
         var refusalsWithNothingSent = 0
         var custodyRecordsBeforeAnErase = 0
-        var waitsJudged = 0
         var terminalRefusals = 0
-        var transmissionsJudged = 0
+        // U-01, the seventeenth review, and the fourth appearance of one family
+        // — Q-01 the site, R-01 the denominator, S-01 the cover, U-01 the
+        // counter. A literal total on a counter bounds how many rows the gate
+        // ADMITS and says nothing about whether the judgment on the next line
+        // still runs: `waitsJudged++` and the `assertTrue` beneath it were two
+        // statements with nothing tying them. Measured, three plants, each the
+        // suite's whole 99 of 99 GREEN at rc 0 with every anchor passing:
+        // deleting the wait assertion while keeping the increment; the same for
+        // the transmission assertion, the judgment this file's previous round
+        // exists to protect; and keeping the assertion but skipping it for
+        // UNKNOWN_OUTCOME rows with the counter untouched — the judgment then
+        // evaluated for 609 of 939 rows. So the sentence "these bound the LOSS"
+        // was measured FALSE for the plainest loss there is, and the true one is
+        // narrower: a total bounds the gate's reach.
+        //
+        // The judgment and its count are now ONE statement. Deleting the
+        // judgment deletes the count, and the counts are kept PER STATE, so a
+        // predicate narrowed to skip a state drops that state's total to zero
+        // rather than hiding inside a surviving sum. The per-state figures are
+        // the ones the sixteenth review's own probe measured.
+        val judgmentsByState = mutableMapOf<Pair<String, OperationState>, Int>()
+        fun judged(name: String, state: OperationState, holds: Boolean, message: () -> String) {
+            judgmentsByState[name to state] = (judgmentsByState[name to state] ?: 0) + 1
+            if (!holds) fail(message())
+        }
+        // The helper's own arm, and it is here rather than in a review's notes
+        // because deleting the `if (!holds)` line above is a ONE-LINE edit that
+        // no count can catch: every count would survive it and every anchor
+        // would pass while nothing in this loop judged anything. So a judgment
+        // known false is put to the helper on every run, under a name of its
+        // own, and the helper must refuse it.
+        var theHelperRefusedAKnownFalseJudgment = false
+        try {
+            judged("the helper's own arm", OperationState.QUEUED, false) { "a known-false judgment" }
+        } catch (expected: AssertionError) {
+            theHelperRefusedAKnownFalseJudgment = true
+        }
+        assertTrue(
+            theHelperRefusedAKnownFalseJudgment,
+            "the helper that counts and judges in one statement did not refuse a judgment known " +
+                "to be false, so it has stopped judging and every count below counts nothing",
+        )
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
         val codesSeen = mutableSetOf<String>()
@@ -962,13 +1002,11 @@ class QueueModelCheckTest {
                             if (view.action == RecoveryAction.WAIT_IT_IS_IN_PROGRESS ||
                                 view.message in assertsSomethingLeftTheDevice
                             ) {
-                                waitsJudged++
-                                assertTrue(
-                                    op.state in somethingIsGenuinelyPending,
+                                judged("waits", op.state, op.state in somethingIsGenuinelyPending) {
                                     "a ${op.state} row refused ${step.code}, which tells the merchant to " +
                                         "wait (${view.message} / ${view.action}) while nothing is pending: " +
-                                        "$op on $event",
-                                )
+                                        "$op on $event"
+                                }
                             }
                             if (view.message in assertsSomethingLeftTheDevice) {
                                 // T-02, the sixteenth review: this judgment was
@@ -976,12 +1014,10 @@ class QueueModelCheckTest {
                                 // counter at all, so narrowing its condition
                                 // removed it in silence. It is counted now, and
                                 // the count is pinned with the others below.
-                                transmissionsJudged++
-                                assertTrue(
-                                    op.attempts > 0,
+                                judged("transmissions", op.state, op.attempts > 0) {
                                     "a refusal with nothing sent (${step.code}) is shown as " +
-                                        "${view.message}, which asserts a transmission: $op on $event",
-                                )
+                                        "${view.message}, which asserts a transmission: $op on $event"
+                                }
                             }
                             if (op.attempts == 0) refusalsWithNothingSent++
 
@@ -1585,6 +1621,9 @@ class QueueModelCheckTest {
             terminalRefusals > 0,
             "no refusal on a finished row was judged, so INV-15 defends nothing",
         )
+        val waitsJudged = judgmentsByState.entries.filter { it.key.first == "waits" }.sumOf { it.value }
+        val transmissionsJudged =
+            judgmentsByState.entries.filter { it.key.first == "transmissions" }.sumOf { it.value }
         assertTrue(
             waitsJudged > 0,
             "no refusal anywhere told the merchant to wait, so INV-9b judged nothing",
@@ -1637,15 +1676,22 @@ class QueueModelCheckTest {
         // T-02, the sixteenth review. The five anchors above bound the loss of
         // the two classes the fifteenth review happened to attack, and the
         // review that answered it left nine other gated judgments in this loop
-        // bounded by `> 0` — witness survival, which is the form this lane
-        // retired in round 18 and which a narrowing cannot break while one
-        // witness remains. The review measured the cost: narrowing the two wait
-        // judgments to exclude CAPTURED rows, and narrowing the transmission
-        // judgment alone, were both 99 of 99 GREEN with every anchor, total and
-        // ratio intact — and the judgments removed are two this phase exists to
-        // make, that a till never tells a cashier to wait while nothing is
-        // pending and never shows a refusal as something that left the device
-        // when nothing was sent.
+        // bounded by `> 0` — witness survival, which a narrowing cannot break
+        // while one witness remains.
+        //
+        // U-02, the seventeenth review, correcting what this comment used to
+        // say. It credited the sixteenth review's own two plants with removing
+        // "two judgments this phase exists to make". That is FALSE and its
+        // author has withdrawn it: both plants exclude CAPTURED rows, and
+        // CAPTURED reaches neither judgment — it is absent from
+        // `somethingIsGenuinelyPending` and carries `attempts == 0`, so such a
+        // row at either branch would fail the assertion that branch makes.
+        // Re-measured against THIS head rather than quoted: both are 99 of 99
+        // GREEN at rc 0 with every total in place, and their cost is ZERO
+        // judgments. A plant that changes nothing measures nothing. The shape
+        // the review named was real; its demonstration was not, and the
+        // demonstration that works excludes a state the space does produce,
+        // which is what the two proofs for these anchors plant.
         //
         // So every counter in this loop carries a LITERAL TOTAL. The `> 0`
         // assertions above are kept for what they say that a total does not —
@@ -1687,6 +1733,31 @@ class QueueModelCheckTest {
             312, transmissionsJudged,
             "a different number of refusals was judged for being shown as something that left " +
                 "the device, which is the judgment that had no counter at all until T-02",
+        )
+        // U-01, per STATE. The totals above bound the gate's reach; these bound
+        // it per class, because a predicate narrowed to skip one state keeps a
+        // surviving sum plausible while that state is judged not at all. The
+        // figures are the reachable space's own, and they sum to the two totals.
+        assertEquals(
+            mapOf(
+                "waits" to mapOf(
+                    OperationState.QUEUED to 399,
+                    OperationState.IN_FLIGHT to 210,
+                    OperationState.UNKNOWN_OUTCOME to 330,
+                ),
+                "transmissions" to mapOf(
+                    OperationState.QUEUED to 72,
+                    OperationState.IN_FLIGHT to 180,
+                    OperationState.UNKNOWN_OUTCOME to 60,
+                ),
+                "the helper's own arm" to mapOf(OperationState.QUEUED to 1),
+            ),
+            judgmentsByState.entries
+                .groupBy { it.key.first }
+                .mapValues { (_, rows) -> rows.associate { it.key.second to it.value } },
+            "a different number of rows reached a counted judgment, PER STATE. A judgment " +
+                "deleted takes its whole row with it; a condition narrowed to skip one state " +
+                "drops that state to nothing while the sum stays plausible",
         )
         assertTrue(edges > 1_000, "only $edges edges were explored")
     }

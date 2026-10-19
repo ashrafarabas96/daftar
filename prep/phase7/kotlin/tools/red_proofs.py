@@ -25,6 +25,44 @@ Exit 0 only when every proof is satisfied.
 """
 from __future__ import annotations
 
+# F-A, the coordinator's actual-diff review of `184f7d7`: a P1 fail-open,
+# pre-existing and measured rather than argued. `tools/red-proofs.sh` ran this
+# file as `python3 red_proofs.py`, with no `-I`, so Python prepended THIS
+# DIRECTORY to `sys.path` and a file dropped beside this one shadowed the
+# standard library. Reproduced here before it was fixed: with one guard hollowed
+# so the run genuinely fails, the wrapper returns **rc 1** on its own and
+# **rc 0** with a planted `tools/shutil.py` whose `atexit` hook calls
+# `os._exit(0)` — the SAME output, `SELF-TEST FAILED (1 of 16): the guards are
+# not armed.`, under both. A verdict the calling command throws away cannot be
+# recovered by anything the file does later, so the refusal is here, ABOVE every
+# import but `sys`, and it NAMES itself: an arm that reads a return code or a
+# digest instead of a refusal name is unarmed.
+#
+# This refusal never re-execs. Re-exec is how a program loses the very property
+# it is checking: the second interpreter's flags are chosen by whatever built the
+# command line, and the first one has already imported whatever was planted.
+import sys
+
+if not sys.flags.isolated:
+    print(
+        "REFUSED-P7-HARNESS-NOT-ISOLATED: this harness was started without -I, so the "
+        "directory holding it is on sys.path and any file beside it shadows the standard "
+        "library. Run it as `/usr/bin/python3 -I prep/phase7/kotlin/tools/red_proofs.py`. "
+        "Refusing rather than re-exec'ing: a re-exec would import the planted module first."
+    )
+    raise SystemExit(2)
+
+if "--isolation-probe" in sys.argv:
+    # Reached only WITH -I, because the refusal above exits first without it.
+    # The isolation arms below spawn THIS rather than `--self-test`: the first
+    # draft of them spawned the self-test from inside the self-test, which
+    # spawns it again without end. It reached 561 processes and 10.4 GB before
+    # the Kotlin compiler was OOM-killed and the recursion was caught.
+    # Disclosed because this harness's own rule is that a guard which cannot be
+    # run is not a guard, and that version could not be run at all.
+    print("P7-ISOLATION-PROBE: isolated, so no file beside this one is importable")
+    raise SystemExit(0)
+
 import os
 import re
 import shutil
@@ -1181,6 +1219,77 @@ PROOFS: list[Proof] = [
         ),
     ),
     Proof(
+        law="U-01-DELETING-THE-WAIT-JUDGMENT-TAKES-ITS-COUNT-WITH-IT",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find='                                judged("waits", op.state, op.state in somethingIsGenuinelyPending) {\n                                    "a ${op.state} row refused ${step.code}, which tells the merchant to " +\n                                        "wait (${view.message} / ${view.action}) while nothing is pending: " +\n                                        "$op on $event"\n                                }\n',
+        replace="",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the seventeenth review's U-01, as the plant it built. A literal total on a counter "
+            "bounds how many rows the gate ADMITS and says nothing about whether the judgment "
+            "beside it still runs: `waitsJudged++` and its `assertTrue` were two statements with "
+            "nothing tying them, and deleting the assertion while keeping the increment was the "
+            "whole suite at 99 of 99 GREEN, rc 0, with the 939 anchor present and PASSING. The "
+            "judgment and its count are ONE statement now, so this plant cannot keep the count"
+        ),
+    ),
+    Proof(
+        law="U-01-DELETING-THE-TRANSMISSION-JUDGMENT-TAKES-ITS-COUNT-WITH-IT",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find='                                judged("transmissions", op.state, op.attempts > 0) {\n                                    "a refusal with nothing sent (${step.code}) is shown as " +\n                                        "${view.message}, which asserts a transmission: $op on $event"\n                                }\n',
+        replace="",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the same, on the judgment the round before this one exists to protect \u2014 that a "
+            "refusal is never shown as something that left the device when nothing was sent. Its "
+            "brand-new anchor did not notice its deletion: 99 of 99 GREEN with 312 passing"
+        ),
+    ),
+    Proof(
+        law="U-01-THE-HELPER-THAT-COUNTS-AND-JUDGES-CANNOT-STOP-JUDGING",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find='            if (!holds) fail(message())\n',
+        replace="",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the cost of the fix, named and then armed. Routing both judgments through one helper "
+            "moves the whole question onto ONE line, and deleting that line is an edit no count "
+            "can catch: every count survives it and every anchor passes while nothing in the loop "
+            "judges anything. So a judgment known FALSE is put to the helper on every run, under "
+            "a name of its own, and the helper must refuse it. This plant deletes the line and "
+            "the arm reds by name"
+        ),
+    ),
+    Proof(
+        law="U-01-THE-TRANSMISSION-JUDGMENTS-CONTENT-IS-NOT-ARMED-BY-ITS-COUNT",
+        path="src/app/daftar/offline/Recovery.kt",
+        find=(
+            '        "offline.payload_changed_after_capture" ->\n'
+            "            view(MerchantMessage.DETAILS_CHANGED_SINCE_CAPTURE, "
+            "RecoveryAction.THIS_NEEDS_A_DEVELOPER)"
+        ),
+        replace=(
+            '        "offline.payload_changed_after_capture" ->\n'
+            "            view(MerchantMessage.ALREADY_SENDING, RecoveryAction.THIS_NEEDS_A_DEVELOPER)"
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "F-E, the coordinator's actual-diff review of `184f7d7`, and it is that review's own "
+            "plant rather than one of this author's: the transmission judgment's CONTENT was armed "
+            "by nothing here. `184f7d7` added `transmissionsJudged` and pinned it at 312, and none "
+            "of the frozen refusals was that judgment's message, so hollowing the assertion to "
+            "`true` left the suite at 99 of 99 with the counter and every literal total untouched "
+            "\u2014 one changed line, invisible to both instruments. A count bounds the gate's "
+            "REACH and never what the judgment says, which is U-01 one layer down. The review "
+            "built the severity rather than asserting it: this code is produced 6 times with "
+            "`attempts == 0`, all on QUEUED rows, measured, so pointing it at a message that "
+            "asserts a transmission is a refusal shown to a cashier as something that left the "
+            "device when nothing was sent. It is caught twice over \u2014 here, and by "
+            "`RecoveryTest` reading the same mapping independently in another file \u2014 which is "
+            "why the review rated the gap P3 and recorded that its attack did not escape"
+        ),
+    ),
+    Proof(
         law="R-03-A-SWEEPS-TOTAL-READ-FROM-ITS-OWN-LIST-MOVES-WITH-A-NARROWING",
         path="test/app/daftar/offline/OutcomeExhaustiveTest.kt",
         # The find is anchored to the newline before its EIGHT spaces: this
@@ -1548,6 +1657,18 @@ def cover_failures(
 # reason was right on the day it was harvested. A law with no entry here is a
 # FAILED proof, not an unchecked one.
 EXPECTED_REFUSAL: dict[str, str | tuple[str, ...]] = {
+    'U-01-THE-TRANSMISSION-JUDGMENTS-CONTENT-IS-NOT-ARMED-BY-ITS-COUNT': (
+        'org.opentest4j.AssertionFailedError: a refusal with nothing sent (offline.payload_changed_after_capture) is shown as ALREADY_SENDING, which asserts a transmission: Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=QUEUED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) on Send(digestNow=sha256:deadbeef, actingScope=tenant-1/business-1/member-1)'
+    ),
+    'U-01-DELETING-THE-WAIT-JUDGMENT-TAKES-ITS-COUNT-WITH-IT': (
+        'org.opentest4j.AssertionFailedError: no refusal anywhere told the merchant to wait, so INV-9b judged nothing'
+    ),
+    'U-01-DELETING-THE-TRANSMISSION-JUDGMENT-TAKES-ITS-COUNT-WITH-IT': (
+        'org.opentest4j.AssertionFailedError: a different number of refusals was judged for being shown as something that left the device, which is the judgment that had no counter at all until T-02 ==> expected: <312> but was: <0>'
+    ),
+    'U-01-THE-HELPER-THAT-COUNTS-AND-JUDGES-CANNOT-STOP-JUDGING': (
+        'org.opentest4j.AssertionFailedError: the helper that counts and judges in one statement did not refuse a judgment known to be false, so it has stopped judging and every count below counts nothing'
+    ),
     'R-03-A-SWEEPS-TOTAL-READ-FROM-ITS-OWN-LIST-MOVES-WITH-A-NARROWING': (
         'org.opentest4j.AssertionFailedError: THE-SWEEPS-DOMAIN-CHANGED: the server codes this exhaustive sweep walks are not the ones it claims to walk, so every claim made over it is made over a narrower space than it names. codes = [null, ,    , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.idempotency_conflict, sales.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED, accounting.period_closed] ==> expected: <[null, ,    , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.idempotency_conflict, sales.idempotency_conflict, inventory.insufficient_stock, customer.credit_limit_exceeded, VALIDATION_FAILED, accounting.period_closed]> but was: <[null, ,    , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.idempotency_conflict, sales.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED, accounting.period_closed]>'
     ),
@@ -1682,8 +1803,7 @@ EXPECTED_REFUSAL: dict[str, str | tuple[str, ...]] = {
     # added one line above it and 827 became 828. The fragments carry the prose and
     # the spelling that distinguishes this proof from its neighbour, and no coordinate.
     'P-02-A-CLAIM-WRITTEN-AROUND-THE-HELPER-IS-ENROLLED-BY-NOTHING': (
-        'org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout, so whatever is claimed there is enrolled in neither registry and is asserted of nothing the moment the code stops being produced. Write it as a claim site. This is a CONVENTION CHECK and not a derivation: it can only add reds, and a spelling it does not know escapes it ==> expected: <[]> but was: <[',
-        'when (step.code) {]>',
+        'org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout, so whatever is claimed there is enrolled in neither registry and is asserted of nothing the moment the code stops being produced. Write it as a claim site. This is a CONVENTION CHECK and not a derivation: it can only add reds, and a spelling it does not know escapes it ==> expected: <[]> but was: <[<LINE>: when (step.code) {]>'
     ),
     'P-03-AN-ANCHOR-BOUNDS-THE-LOSS-OF-A-SITE-NOT-OF-A-CODE': (
         'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture), (a-second-lawful-site/about-the-same-code, offline.not_sendable)]>'
@@ -1828,8 +1948,7 @@ EXPECTED_REFUSAL: dict[str, str | tuple[str, ...]] = {
     # added one line above it and 827 became 828. The fragments carry the prose and
     # the spelling that distinguishes this proof from its neighbour, and no coordinate.
     'Q-03-A-LOCAL-VARIABLE-IS-NOT-A-SPELLING': (
-        'org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout, so whatever is claimed there is enrolled in neither registry and is asserted of nothing the moment the code stops being produced. Write it as a claim site. This is a CONVENTION CHECK and not a derivation: it can only add reds, and a spelling it does not know escapes it ==> expected: <[]> but was: <[',
-        'val codeHere = step.code]>',
+        'org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout, so whatever is claimed there is enrolled in neither registry and is asserted of nothing the moment the code stops being produced. Write it as a claim site. This is a CONVENTION CHECK and not a derivation: it can only add reds, and a spelling it does not know escapes it ==> expected: <[]> but was: <[<LINE>: val codeHere = step.code]>'
     ),
     'R-01-A-COVER-THAT-NAMES-A-CLAIM-THAT-IS-NOT-THERE-COVERS-NOTHING': (
         'org.opentest4j.AssertionFailedError: the gap the claim at INV-9a/a-foreign-scope-is-refused-as-a-scope-problem leaves is declared to be covered by the claim at INV-9c/a-claim-that-is-not-in-this-map about offline.another_members_capture over every production, and that claim is not in CLAIMS_THIS_CHECK_MAKES with that domain, so the cover names nothing that judges those 6 productions ==> expected: <EVERY_PRODUCTION> but was: <null>'
@@ -1905,7 +2024,37 @@ def failures_with_details(log: str) -> dict[str, str]:
     return {name: " | ".join(lines) for name, lines in out.items()}
 
 
-LINE_COORDINATE = re.compile(r"<\[\d+: ")
+BARE_ASSERTION = re.compile(r"[\w.]+(?:Error|Exception): expected: <[^>]*> but was: <[^>]*>")
+
+# U-04, the seventeenth review. The rule as stated was about COORDINATES; as
+# implemented it was `<\[\d+: `, which is one printing format of one check. Six
+# renderings of the same coordinate were put to it and five walked through:
+# `<[a, 827: ` (not first in the list), `<[827:` (no space), `at line 827`,
+# `<[827] `, `File.kt:827`. So the pattern now names the SHAPES a coordinate
+# takes rather than one check's current output, and the first draft of it was
+# run over the whole table to make sure it reds nothing that is not one — a
+# hardening that causes a false red is not hardening.
+LINE_COORDINATE = re.compile(
+    r"\.kt:\d+"                     # File.kt:827
+    r"|\bline\s+\d+\b"              # at line 827
+    r"|(?<![\w.])\d{1,6}:(?=\s|\S)"  # 827: foo  and  827:foo
+    r"|(?<![\w.])\d{1,6}\]"          # 827]
+)
+
+# U-03, the same review, and it is the bill for the fragments. They bought
+# freedom from the coordinate and sold the SET: `refusal_mismatch` returned None
+# for a refusal listing TWO offenders, and for one listing FIVE, as long as the
+# pinned one came last — and the list is ordered by line number, so any
+# un-enrolled spelling at a LOWER line was invisible to F-2. The answer is the
+# other half of what that review offered: NORMALISE the coordinate out and
+# freeze the message WHOLE. Applied to both sides, so the comparison is
+# symmetric, and the expectation then pins the whole list again.
+A_COORDINATE_IN_A_LISTING = re.compile(r"(?<![\d.])\d{1,6}(?=: )")
+
+
+def without_coordinates(text: str) -> str:
+    """`827: foo` becomes `<LINE>: foo`, so a frozen message can pin the SET."""
+    return A_COORDINATE_IN_A_LISTING.sub("<LINE>", text)
 
 
 def declared_fragments(law: str) -> tuple[str, ...]:
@@ -1952,7 +2101,12 @@ def refusal_mismatch(law: str, expect_red: str, details: dict[str, str]) -> str 
             f"{law}: no expected refusal is declared for this proof, so a red run proves the "
             f"named test failed and not WHY it failed (F-2)"
         )
-    printed = [text for name, text in details.items() if expect_red in name]
+    # U-03: both sides are normalised, so a message carrying a coordinate can be
+    # frozen WHOLE — which is what pins the number of offenders listed.
+    expected = tuple(without_coordinates(fragment) for fragment in expected)
+    printed = [
+        without_coordinates(text) for name, text in details.items() if expect_red in name
+    ]
     if any(all(fragment in text for fragment in expected) for text in printed):
         return None
     return (
@@ -1961,6 +2115,80 @@ def refusal_mismatch(law: str, expect_red: str, details: dict[str, str]) -> str 
         f"\u2014 a proof that reddens for an unrelated reason measures the test's existence, "
         f"not the law (F-2)"
     )
+
+
+# F-D, the coordinator's review of `184f7d7`. This file opens by saying "every
+# law in `Laws.kt` has an entry here", and nothing in it enforced that. Arrivals
+# refused — an expectation for a law no proof carries is caught — but departures
+# did not: removing 89 `Proof` objects TOGETHER WITH their 89 expectations, which
+# is what one coherent edit to this file looks like, was `ALL 2 RED PROOFS
+# SATISFIED`, exit 0, with the PASS banner naming the reduced number and nothing
+# comparing it to a set. A count the file computes from itself is not a census.
+#
+# So the SET comes from the KERNEL: every law id declared in `Laws.kt` must
+# prefix at least one proof, a proof naming a law id the kernel does not declare
+# is stale, and the number of declared ids is pinned as a literal so that a
+# deletion THERE cannot shrink the obligation here. Unreadable is a REFUSAL, not
+# an empty set — an absent file would otherwise discharge the whole census.
+LAW_ID_IN_THE_KERNEL = re.compile(r'"(P7-L\d+-[A-Z0-9-]+)"')
+LAWS_THE_KERNEL_DECLARES = 20
+LAWS_KT = os.path.join("src", "app", "daftar", "offline", "Laws.kt")
+
+
+def law_ids_the_kernel_declares(root: str) -> set[str]:
+    path = os.path.join(root, LAWS_KT)
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError as exc:
+        raise CannotRead(f"{LAWS_KT} could not be read ({exc}), so the law set is unknown")
+    ids = set(LAW_ID_IN_THE_KERNEL.findall(text))
+    if len(ids) != LAWS_THE_KERNEL_DECLARES:
+        raise CannotRead(
+            f"{LAWS_KT} declares {len(ids)} law ids and this census is pinned to "
+            f"{LAWS_THE_KERNEL_DECLARES}. A law added there needs a proof here; a law removed "
+            f"there needs this number changed with its reason. Read: {sorted(ids)}"
+        )
+    return ids
+
+
+def census_failures(proofs: list[Proof], root: str = ROOT) -> list[str]:
+    try:
+        declared = law_ids_the_kernel_declares(root)
+    except CannotRead as exc:
+        return [f"THE PROOF CENSUS COULD NOT BE TAKEN, which is a refusal and not a pass: {exc}"]
+    carried = {proof.law for proof in proofs}
+    failures = []
+    # A proof names the law's NUMBER and then says in its own words which defect
+    # it plants, so the match is on `P7-L<n>-` and not on the whole declared id.
+    # That is the one join between two independently written name spaces here,
+    # and getting it wrong in either direction is a false red, which is not
+    # hardening: the first draft of this census compared whole ids and reported
+    # eighteen stale proofs and an uncovered law, all four of them wrong.
+    def number(name: str) -> str | None:
+        head = re.match(r"(P7-L\d+)-", name)
+        return head.group(1) if head else None
+
+    declared_numbers = {number(law) for law in declared} - {None}
+    carried_numbers = {number(name) for name in carried} - {None}
+    uncovered = sorted(
+        law for law in declared if number(law) not in carried_numbers
+    )
+    if uncovered:
+        failures.append(
+            f"{len(uncovered)} law(s) the kernel declares carry no proof in this file, so this "
+            f"file's own opening claim is false and a departure of proofs would pass unnoticed: "
+            f"{uncovered}"
+        )
+    stale = sorted(
+        name for name in carried
+        if name.startswith("P7-L") and number(name) not in declared_numbers
+    )
+    if stale:
+        failures.append(
+            f"{len(stale)} proof(s) name a law id the kernel does not declare, so they describe a "
+            f"law that has been renamed or removed: {stale}"
+        )
+    return failures
 
 
 def self_test() -> int:
@@ -2072,6 +2300,117 @@ def self_test() -> int:
         ) == [],
     )
 
+    # U-03's arms. The fragments used to pass a refusal listing TWO offenders,
+    # or five, as long as the pinned one came last — and the list is ordered by
+    # line number, so an un-enrolled spelling at a LOWER line was invisible.
+    # Now that the message is frozen whole with the coordinate normalised, the
+    # SET is pinned again: one offender matches, two do not.
+    one = (
+        "org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout "
+        "==> expected: <[]> but was: <[868: val codeHere = step.code]>"
+    )
+    two = one.replace(
+        "<[868: val codeHere = step.code]>",
+        "<[12: when (step.code) {, 868: val codeHere = step.code]>",
+    )
+    globals()["EXPECTED_REFUSAL"] = dict(EXPECTED_REFUSAL)
+    EXPECTED_REFUSAL["SET-PIN-ARM"] = without_coordinates(one)
+    expect(
+        "a whole frozen message matches the refusal it was frozen from",
+        refusal_mismatch("SET-PIN-ARM", "t", {"t": one}) is None,
+    )
+    expect(
+        "a refusal listing a SECOND offender no longer matches (U-03)",
+        refusal_mismatch("SET-PIN-ARM", "t", {"t": two}) is not None,
+    )
+    expect(
+        "the coordinate is normalised on both sides, so neither side's line number matters",
+        refusal_mismatch("SET-PIN-ARM", "t", {"t": one.replace("868:", "1204:")}) is None,
+    )
+    del EXPECTED_REFUSAL["SET-PIN-ARM"]
+
+    # F-D's arms: the census must refuse a DEPARTURE, refuse a proof naming a
+    # law the kernel does not declare, refuse an unreadable law file rather than
+    # treat it as an empty obligation, and pass clean on the file as it stands.
+    expect(
+        "the census refuses when proofs have departed",
+        any("carry no proof in this file" in f for f in census_failures(PROOFS[:2])),
+    )
+    expect(
+        "the census refuses a proof naming a law the kernel does not declare",
+        any(
+            "name a law id the kernel does not declare" in f
+            for f in census_failures(
+                PROOFS + [Proof(law="P7-L99-A-LAW-THE-KERNEL-NEVER-DECLARED", path="p",
+                                find="a", replace="b", expect_red="t", why="w")]
+            )
+        ),
+    )
+    expect(
+        "an unreadable law file is a refusal, not an empty obligation",
+        any("COULD NOT BE TAKEN" in f for f in census_failures(PROOFS, root="/nonexistent-p7")),
+    )
+    expect(
+        "the census passes on the law set and proofs as they stand",
+        census_failures(PROOFS) == [],
+    )
+
+    # F-A's arm, and it is the only branch here that measures something OUTSIDE
+    # this file's own functions: the isolation refusal is a property of how this
+    # file is STARTED, so the only way to test it is to start it. Both
+    # directions, by REFUSAL NAME rather than by exit code, because a code is
+    # exactly what the fail-open destroyed.
+    me = os.path.abspath(__file__)
+    loose = subprocess.run(
+        [sys.executable, me, "--isolation-probe"], capture_output=True, text=True
+    )
+    expect(
+        "started without -I, this harness refuses BY NAME",
+        "REFUSED-P7-HARNESS-NOT-ISOLATED" in loose.stdout and loose.returncode != 0,
+    )
+    tight = subprocess.run(
+        [sys.executable, "-I", me, "--isolation-probe"], capture_output=True, text=True
+    )
+    expect(
+        "started with -I, the refusal does not fire and the probe answers",
+        "REFUSED-P7-HARNESS-NOT-ISOLATED" not in tight.stdout
+        and "P7-ISOLATION-PROBE: isolated" in tight.stdout
+        and tight.returncode == 0,
+    )
+    # And the WRAPPER, pinned by bytes rather than by a regex over its text: a
+    # pattern says the flag APPEARS somewhere, and only byte equality says the
+    # command the wrapper runs is the whole command it runs. The refusal above
+    # makes a wrapper without `-I` fail closed; this makes a wrapper EDITED to
+    # drop the flag a refusal here as well, which is the half a reader of the
+    # wrapper alone would miss.
+    wrapper = os.path.join(os.path.dirname(me), "red-proofs.sh")
+    try:
+        wrapper_text = open(wrapper, encoding="utf-8").read()
+    except OSError:
+        wrapper_text = ""
+    # The pin reads the wrapper's CODE lines, not its prose: a "must not
+    # contain" over the whole file trips on a comment that quotes the very
+    # mistake it describes, which is a false red, and a hardening that causes a
+    # false red is not hardening. So: exactly one `exec` among the code lines,
+    # and that line byte-equal to the pinned one.
+    wrapper_code = [
+        line for line in wrapper_text.split("\n")
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    execs = [line for line in wrapper_code if line.startswith("exec ")]
+    expect(
+        "the wrapper runs the pinned interpreter in isolated mode, verbatim and once",
+        execs == ['exec "$PY" -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/red_proofs.py" "$@"']
+        and "PY=/usr/bin/python3" in wrapper_code,
+    )
+    expect(
+        "no module file sits beside this harness where it could shadow the standard library",
+        sorted(
+            f for f in os.listdir(os.path.dirname(me))
+            if f.endswith(".py") and f != os.path.basename(me)
+        ) == [],
+    )
+
     for name, ok in checks:
         print(f"  SELF-TEST {'ok  ' if ok else 'FAIL'} {name}")
     bad = [name for name, ok in checks if not ok]
@@ -2144,6 +2483,22 @@ def main() -> int:
     if probe.returncode != 0:
         print("THE GUARDS ARE NOT ARMED — no proof below means anything. Fix the self-test first.")
         return 1
+    # F-B, the coordinator's review of `184f7d7`: the CALL above could be
+    # deleted and every proof below would still report, with nothing saying the
+    # guards had never been armed — an exit code is not a presence check. So the
+    # self-test's own banner is PARSED, its absence is a refusal, and its branch
+    # count is carried onto the PASS line at the end. A reader of the last line
+    # can then tell armed from unarmed without scrolling, and a deletion of this
+    # block takes the count off that line with it.
+    armed = re.search(r"SELF-TEST: (\d+) of (\d+) guard branches armed\.", probe.stdout)
+    if armed is None or armed.group(1) != armed.group(2):
+        print(
+            "REFUSED-P7-SELF-TEST-DID-NOT-REPORT: the self-test subprocess exited 0 without "
+            "printing its `SELF-TEST: N of N guard branches armed.` line, so nothing here "
+            "measured whether the guards are armed."
+        )
+        return 1
+    guards_armed = armed.group(1)
     print()
 
     baseline_tree = tempfile.mkdtemp(prefix="p7-baseline-")
@@ -2282,6 +2637,7 @@ def main() -> int:
     failures.extend(cover_failures(covers, declared_covers, reddened))
     failures.extend(exemption_failures(PROOFS))
     failures.extend(coordinate_failures())
+    failures.extend(census_failures(PROOFS))
 
     # §83: the baseline must RESTORE green. Each proof ran in its own copy, so
     # nothing could have leaked into the original — but "could not have" is an
@@ -2306,7 +2662,22 @@ def main() -> int:
             print(f"  - {f}")
         return 1
 
-    print(f"ALL {len(PROOFS)} RED PROOFS SATISFIED over a {baseline_cases}-case green baseline.")
+    if harvesting:
+        # F-C, the coordinator's review of `184f7d7`: a harvest run SKIPS the
+        # declared-refusal comparison by construction — that is what harvesting
+        # is for — so printing the same final sentence as a verifying run makes
+        # the weaker run indistinguishable from the stronger one in a pasted log.
+        print(
+            f"HARVEST RUN COMPLETE: {len(PROOFS)} proofs red against their named test, with "
+            f"{guards_armed} guard branches armed. THIS IS NOT A VERIFYING RUN: the refusal each "
+            "proof declares was PRINTED above for freezing, not compared. Re-run without "
+            "--harvest before citing a verdict."
+        )
+        return 0
+    print(
+        f"ALL {len(PROOFS)} RED PROOFS SATISFIED over a {baseline_cases}-case green baseline, "
+        f"with {guards_armed} of {guards_armed} guard branches armed."
+    )
     print()
     print("LIMITATIONS, printed on PASS because they are true on PASS:")
     print("  1. These proofs measure THE SUITE, not the kernel's fitness for the Android app.")
@@ -2324,13 +2695,33 @@ def main() -> int:
     print("  7. Each proof's expected refusal (F-2) was HARVESTED from a measured run and then")
     print("     frozen. It proves the reason a proof reds has not CHANGED since it was read; it")
     print("     does not prove the reason was the right one on the day it was harvested.")
-    print("  8. 88 of those 91 refusals name the law or the refusal in prose. Three are bare")
-    print("     assertion text carrying the values that identify them, and ONE (P7-L8) is")
-    print("     exempted from freezing its values because its own plant draws them \u2014 an")
-    print("     exemption this harness measures against the plants, in both directions.")
-    print("     TWO are frozen as fragments around a line NUMBER rather than whole, because a")
-    print("     coordinate moves when a line is added above it; the whole-message form is")
-    print("     refused wherever it reappears.")
+    print("     F-F, measured by the coordinator over the table: eight distinct containment pairs")
+    print("     exist and six are between proofs that also name the SAME test, so for those the")
+    print("     refusal adds nothing beyond `the named test failed` \u2014 which is the state F-2")
+    print("     exists to improve on. It is not a hole, because each plant runs in its own tree")
+    print("     carrying only its own defect, so the assertion that fires is still that plant's;")
+    print("     it is the claim being weaker for those proofs than this limitation reads.")
+    # U-05, the seventeenth review: this limitation used to state "88 of those
+    # 91", a figure no command reproduced. The counts are DERIVED here, from the
+    # table itself, by predicates the next reader can apply by hand: a BARE
+    # expectation is one whose text after the exception class is nothing but
+    # `expected: <…> but was: <…>`, and a FRAGMENT expectation is one stored as
+    # a tuple. A figure in prose that no command reproduces is the shape this
+    # lane keeps finding, and a printed figure is the only kind worth stating.
+    bare = sorted(
+        law for law, text in EXPECTED_REFUSAL.items()
+        if isinstance(text, str) and BARE_ASSERTION.fullmatch(text) is not None
+    )
+    fragments = sorted(law for law, text in EXPECTED_REFUSAL.items() if isinstance(text, tuple))
+    named = len(EXPECTED_REFUSAL) - len(bare) - len(fragments)
+    print(f"  8. {named} of those {len(EXPECTED_REFUSAL)} refusals name the law or the refusal in")
+    print(f"     prose. {len(bare)} are bare assertion text carrying the values that identify")
+    print(f"     them ({', '.join(bare)}), and {len(HARM_IS_NONDETERMINISTIC)} (P7-L8) is exempted")
+    print("     from freezing its values because its own plant draws them \u2014 an exemption this")
+    print("     harness measures against the plants, in both directions.")
+    print(f"     {len(fragments)} are frozen as FRAGMENTS rather than whole, because a coordinate")
+    print("     moves when a line is added above it; the whole-message form is refused wherever")
+    print(f"     it reappears ({', '.join(fragments)}).")
     print("  9. The omission arm deletes the print loop on a copy and requires a refusal, so")
     print("     that line is load-bearing twice over \u2014 but the ARM's own removal is bounded")
     print("     by review and not by measurement. The regress stops here, and is named here")
