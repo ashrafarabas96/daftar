@@ -4,9 +4,12 @@
  *
  * N-6 is not here, because it is not in this package: it is the DDL's release
  * clause depending on an ordering enforced on another column of another
- * relation. Its proof is executable SQL — `proof/run-p8-ddl-proof.sh`, case
- * N6-e — because the defect is reachable only from direct SQL, which is the
- * threat model the trigger exists for and the one a pure test cannot reach.
+ * relation. Its proof is executable SQL — `proof/run-p8-real-proof.sh`, case
+ * N6-e, on the REAL overlay, with mutant 13 removing the arrival conjunct and
+ * requiring that case to red — because the defect is reachable only from direct
+ * SQL, which is the threat model the trigger exists for and the one a pure test
+ * cannot reach. (Round 22: the case used to live in the prototype gate, which
+ * is retired under OD-P8-14; it was ported before that gate was retired.)
  *
  * What is here is N-7 and N-8.
  */

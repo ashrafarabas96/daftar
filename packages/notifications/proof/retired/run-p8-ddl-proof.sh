@@ -1,5 +1,34 @@
 #!/usr/bin/env bash
 # =====================================================================
+# RETIRED — this gate does not run. Round 22, open item OD-P8-14.
+# =====================================================================
+# WHY. Round 11 replaced the standalone transcription this gate measures with
+# an OVERLAY on the real frozen schema, and from round 12 the authoritative gate
+# sections stopped listing this gate. Round 12 also gave `p8-ddl-prototype.sql`
+# a composite foreign key to `users (id, business_id)` while that file's own
+# stub is global, so the prototype has not APPLIED since — the gate has been
+# red, failing closed, and unlisted, for nine rounds. The composite key was a
+# rule the pack had already retracted in writing: the user reference goes
+# through the membership relation, not through a key, because the real `users`
+# has no business dimension.
+#
+# WHAT COVERS ITS INVARIANTS NOW. `run-p8-real-proof.sh`, against the REAL
+# relations: the I-8f / N-6 family was ported in round 22 as cases
+# `I8f-a`..`I8f-e` and `N6-a`..`N6-i`, and mutant 13 removes the arrival
+# conjunct from the real overlay's partial index and requires `N6-e` to red by
+# name. That coverage was MEASURED before this file was retired (baseline 54 ->
+# 69 cases, `MUT 13: RED at 'N6-e ...'`), because retiring a gate whose
+# invariants nothing else exercises is a deletion wearing a retirement's name.
+#
+# It is kept, not deleted, so a reader can see what was measured and how.
+# It refuses rather than runs: a retired gate that still executes is a gate.
+set -u
+echo "RETIRED: this gate was retired in round 22 (OD-P8-14) and does not run." >&2
+echo "         Its invariants are covered by run-p8-real-proof.sh: cases I8f-a..I8f-e," >&2
+echo "         N6-a..N6-i, and mutant 13 on the real overlay's partial index." >&2
+echo "         Kept for the record, never deleted. Refusing with exit 2." >&2
+exit 2
+# =====================================================================
 # Phase 8 — the DDL proof. Applies the prototype of `P8-DDL-SPEC.md` to a
 # real PostgreSQL 16 cluster at `en_US.utf8` as a NOSUPERUSER NOBYPASSRLS
 # NOCREATEROLE migrator, then runs every invariant, grant and isolation

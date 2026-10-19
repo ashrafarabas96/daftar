@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """Verify that no frozen migration was modified — WITHOUT relying on git's
 silence, and WITHOUT letting the manifest decide what has to be checked.
 
@@ -195,11 +195,59 @@ Exit 0 only when the manifest names no file twice, the covered set satisfies the
 numbering law, that set equals the manifest's rows, and every file in it matches
 its recorded digest. Every other path exits non-zero and names its cause.
 """
+import sys
+
+# =====================================================================
+# ROUND 23, N-17 (P1, FAIL-OPEN) — THIS BLOCK SITS ABOVE EVERY IMPORT
+# =====================================================================
+# Python prepends the script's own directory to `sys.path`, and this script
+# lives INSIDE the tree it judges. So every module it imports is resolved,
+# first, from the subject: `hashlib`, which computes every digest, and
+# `subprocess`, which carries every answer git gives about the anchor. The
+# fourteenth challenge measured the consequence — a commit that modifies a
+# frozen migration AND adds `proof/hashlib.py` exited 0, printed
+# `ANCHOR LEG EXERCISED` with the right pin, and reproduced the pinned
+# covered-set digest exactly, because that digest is a hash OVER per-file
+# digests and every one of them came from the plant. Reproduced here before it
+# was fixed.
+#
+# This is the phase's own defect family one level below its four earlier
+# depths: not the quantity read from the subject, but the INSTRUMENT that
+# computes it. It is also a standing project lesson from another phase
+# (P5 B-9/F-50) which this pack failed to apply.
+#
+# WHY THE ORDER IS WHAT IT IS. `sys` is a BUILT-IN module, never loaded from a
+# file, so it cannot be shadowed by a planted one. That is why it is the only
+# name imported above this test, and everything else comes after.
+#
+# WHY TWO TESTS AND NOT ONE. `sys.flags.isolated` says what was ASKED for;
+# whether the script's directory is actually off `sys.path` depends on the
+# interpreter's version. The flag alone would pass on an interpreter where `-I`
+# does not drop it, leaving the hole open with the guard green — the exact shape
+# this phase keeps finding. So the second test MEASURES the path rather than
+# trusting the flag.
+if not sys.flags.isolated:
+    sys.stderr.write(
+        "INTEGRITY FAIL: NOT ISOLATED — started without `-I`, so Python put this "
+        "program's own directory, which is inside the tree under test, first on "
+        "sys.path; every module it needs would then be resolved from the subject "
+        "it is judging. Re-run as `python3 -I`. Refusing rather than measuring "
+        "with an instrument the subject can supply\n")
+    raise SystemExit(1)
+import os as _p8os  # noqa: E402  — deliberate: nothing is imported above the test
+_P8_OWN_DIR = _p8os.path.dirname(_p8os.path.abspath(__file__))
+if any(_p8os.path.abspath(p or ".") == _P8_OWN_DIR for p in sys.path):
+    sys.stderr.write(
+        "INTEGRITY FAIL: NOT ISOLATED — isolated mode was requested and this "
+        "interpreter still has " + _P8_OWN_DIR + " on sys.path, so a module "
+        "planted beside this file would be imported in preference to the "
+        "standard library. Refusing\n")
+    raise SystemExit(1)
+
 import hashlib
 import json
 import os
 import subprocess
-import sys
 
 
 # The anchor commit, pinned to all FORTY characters, in the check itself.

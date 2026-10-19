@@ -337,4 +337,140 @@ SELECT p8.case_equals('X3 the guard is a STATEMENT trigger on TRUNCATE, not a ro
      AND (tgtype & 32) <> 0      -- TRUNCATE
      AND (tgtype & 1) = 0), 1::bigint);  -- not FOR EACH ROW
 
+
+-- =====================================================================
+-- I-8f / N-6  ONE LIVE CHANNEL, and the arrival fact that keeps it live
+-- =====================================================================
+-- ROUND 22, OD-P8-14. This family existed only in `p8-ddl-cases.sql`, which
+-- runs against a PROTOTYPE, and in `n6-arrival-fact.sql`, which is a prototype
+-- by its own header. Measured before porting: no case in this file named
+-- `deliveries_one_live_channel`, and `p8-mutants.py` mutated the arrival CHECK
+-- at the relation but NOT the conjunct inside the partial index. So deleting
+-- `AND NOT arrival_ever_recorded` from the real overlay reddened nothing, and
+-- the retirement of the prototype gate would have retired the only place the
+-- rule was exercised. These cases put it on the REAL relations, through the
+-- real policies, and mutant 13 removes the conjunct and requires N6-e to red.
+--
+-- The rule, in one sentence: a closed delivery that failed AFTER the customer
+-- had already received the message does NOT release the obligation, because
+-- releasing it opens a second channel and the customer is told twice.
+
+INSERT INTO notifications (id, tenant_id, business_id, kind, consent_class, customer_id,
+                           locale, subject_refs, obligation_key, source_event_id)
+VALUES ('0fffffff-0000-4000-8000-0000000000f1',
+        '11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+        'invoice_issued', 'transactional', 'cccccccc-0000-4000-8000-000000000001',
+        'ar', '{}'::jsonb, 'B1|event:n6a|invoice_issued|customer:1',
+        '0eeeeeee-0000-4000-8000-0000000000f1');
+
+SELECT p8.case_permits('I8f-a a first delivery, ACCEPTED, with its provider message id', $q$
+  INSERT INTO notification_deliveries (id, tenant_id, business_id, notification_id, channel,
+                                       provider, delivery_key, delivery_state, provider_message_id)
+  VALUES ('0ddddddd-0000-4000-8000-0000000000f1'::uuid,
+          '11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0fffffff-0000-4000-8000-0000000000f1', 'whatsapp', 'meta_cloud',
+          'B1|event:n6a|invoice_issued|customer:1::whatsapp', 'accepted', 'wamid.n6a')
+$q$);
+SELECT p8.case_refuses('I8f-b a second channel while the first is ACCEPTED', $q$
+  INSERT INTO notification_deliveries (tenant_id, business_id, notification_id, channel,
+                                       provider, delivery_key, delivery_state)
+  VALUES ('11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0fffffff-0000-4000-8000-0000000000f1', 'sms', 'twilio',
+          'B1|event:n6a|invoice_issued|customer:1::sms', 'queued')
+$q$, 'deliveries_one_live_channel');
+SELECT p8.case_permits('I8f-c a WITHHELD channel is recorded beside the live one', $q$
+  INSERT INTO notification_deliveries (tenant_id, business_id, notification_id, channel,
+                                       provider, delivery_key, delivery_state, withheld_reason)
+  VALUES ('11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0fffffff-0000-4000-8000-0000000000f1', 'email', 'ses',
+          'B1|event:n6a|invoice_issued|customer:1::email', 'withheld', 'quiet_hours')
+$q$);
+SELECT p8.case_refuses('I8f-d and a live channel is still refused with a withheld one present', $q$
+  INSERT INTO notification_deliveries (tenant_id, business_id, notification_id, channel,
+                                       provider, delivery_key, delivery_state)
+  VALUES ('11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0fffffff-0000-4000-8000-0000000000f1', 'inapp', 'inapp',
+          'B1|event:n6a|invoice_issued|customer:1::inapp', 'queued')
+$q$, 'deliveries_one_live_channel');
+
+-- The arrival, recorded by the trigger rather than by the caller.
+SELECT p8.case_permits('N6-a the customer READS the message, verified', $q$
+  UPDATE notification_deliveries SET final_status = 'read', final_status_verified = true
+   WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid
+$q$);
+SELECT p8.case_equals('N6-b and the arrival fact was SET by the trigger, not by the writer',
+  (SELECT arrival_ever_recorded FROM notification_deliveries
+    WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid), true);
+SELECT p8.case_refuses('N6-c clearing the arrival fact is refused BEFORE it is re-derived', $q$
+  UPDATE notification_deliveries SET arrival_ever_recorded = false
+   WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid
+$q$, 'notification.arrival_fact_cleared');
+
+-- The N-6 write itself: a direct-SQL demotion to a verified failure, closed.
+SELECT p8.case_permits('N6-d the demotion to a verified failure still lands, and closes', $q$
+  UPDATE notification_deliveries
+     SET delivery_state = 'closed', final_status = 'failed', final_status_verified = true
+   WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid
+$q$);
+SELECT p8.case_equals('N6-d2 the arrival fact SURVIVED the demotion',
+  (SELECT arrival_ever_recorded FROM notification_deliveries
+    WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid), true);
+SELECT p8.case_refuses('N6-e but the obligation is NOT released: no second channel', $q$
+  INSERT INTO notification_deliveries (tenant_id, business_id, notification_id, channel,
+                                       provider, delivery_key, delivery_state)
+  VALUES ('11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0fffffff-0000-4000-8000-0000000000f1', 'sms', 'twilio',
+          'B1|event:n6a|invoice_issued|customer:1::sms2', 'queued')
+$q$, 'deliveries_one_live_channel');
+SELECT p8.case_refuses('N6-f an arrival asserted at INSERT with the fact unset', $q$
+  INSERT INTO notification_deliveries (tenant_id, business_id, notification_id, channel,
+                                       provider, delivery_key, delivery_state,
+                                       final_status, final_status_verified, arrival_ever_recorded)
+  VALUES ('11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0fffffff-0000-4000-8000-0000000000f1', 'inapp', 'inapp',
+          'B1|event:n6a|invoice_issued|customer:1::unset', 'closed', 'delivered', true, false)
+$q$, 'deliveries_arrival_fact_agrees');
+
+-- The OTHER direction, and it is the half that keeps the rule honest: a
+-- GENUINE pre-arrival failure must still release the obligation, or the fix
+-- would withhold a notification the business honestly still owes.
+INSERT INTO notifications (id, tenant_id, business_id, kind, consent_class, customer_id,
+                           locale, subject_refs, obligation_key, source_event_id)
+VALUES ('0fffffff-0000-4000-8000-0000000000f2',
+        '11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+        'payment_overdue', 'transactional', 'cccccccc-0000-4000-8000-000000000001',
+        'ar', '{}'::jsonb, 'B1|event:n6b|payment_overdue|customer:1',
+        '0eeeeeee-0000-4000-8000-0000000000f2');
+SELECT p8.case_permits('N6-g a delivery that failed, verified, BEFORE any arrival', $q$
+  INSERT INTO notification_deliveries (tenant_id, business_id, notification_id, channel,
+                                       provider, delivery_key, delivery_state,
+                                       final_status, final_status_verified)
+  VALUES ('11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0fffffff-0000-4000-8000-0000000000f2', 'whatsapp', 'meta_cloud',
+          'B1|event:n6b|payment_overdue|customer:1::whatsapp', 'closed', 'failed', true)
+$q$);
+SELECT p8.case_permits('N6-h the fallback channel IS permitted — the rule forbids the second message, not the first', $q$
+  INSERT INTO notification_deliveries (tenant_id, business_id, notification_id, channel,
+                                       provider, delivery_key, delivery_state)
+  VALUES ('11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0fffffff-0000-4000-8000-0000000000f2', 'sms', 'twilio',
+          'B1|event:n6b|payment_overdue|customer:1::sms', 'queued')
+$q$);
+SELECT p8.case_refuses('N6-i and only ONE fallback at a time', $q$
+  INSERT INTO notification_deliveries (tenant_id, business_id, notification_id, channel,
+                                       provider, delivery_key, delivery_state)
+  VALUES ('11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0fffffff-0000-4000-8000-0000000000f2', 'email', 'ses',
+          'B1|event:n6b|payment_overdue|customer:1::email', 'queued')
+$q$, 'deliveries_one_live_channel');
+
+-- And the conjunct itself, read out of the catalogue: a reader who deletes it
+-- from the overlay would otherwise see only N6-e go red, with no sentence
+-- saying WHICH term was lost.
+SELECT p8.case_equals('I8f-e the partial index still carries the arrival conjunct', (
+  SELECT count(*) FROM pg_indexes
+   WHERE tablename = 'notification_deliveries'
+     AND indexname = 'deliveries_one_live_channel'
+     AND indexdef LIKE '%NOT arrival_ever_recorded%'), 1::bigint);
+
 ROLLBACK;

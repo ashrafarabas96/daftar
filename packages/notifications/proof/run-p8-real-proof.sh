@@ -215,7 +215,7 @@ plant(){           # plant <id> <dir> — mutate a COPY, and refuse a no-op
   local md=$2
   mkdir -p "$md"
   cp "$HERE/p8-overlay.sql" "$md/overlay.sql"
-  python3 "$MUT" "$id" "$md/overlay.sql" > "$md/plant.log" 2>&1 || return 1
+  python3 -I "$MUT" "$id" "$md/overlay.sql" > "$md/plant.log" 2>&1 || return 1
   cmp -s "$md/overlay.sql" "$HERE/p8-overlay.sql" && return 1
   return 0
 }
@@ -303,6 +303,7 @@ mutate         9b "A10 the app may not read unattributed events"
 mutate_refuses 10 "P8-OVERLAY-E(4): the quarantine claims an isolation it cannot have"
 mutate         10b "A12 the quarantine is not under RLS, because it has no tenant to scope by"
 mutate         11  "T2 every tenant-scoped relation carries a composite tenant key"
+mutate         13  "N6-e but the obligation is NOT released: no second channel"
 mutate_race    12
 
 # <<< P8-Y7-CUT-END-A >>>
@@ -347,7 +348,7 @@ fi
 # forty characters" — false. There is ONE pin in the pack now, in the check, and
 # this script ASKS for it. It still refuses what it reads, because a derived
 # value is not an unchecked one.
-P8_ANCHOR_PIN=$(python3 "$HERE/p8-frozen-integrity.py" --print-pin 2>/dev/null)
+P8_ANCHOR_PIN=$(python3 -I "$HERE/p8-frozen-integrity.py" --print-pin 2>/dev/null)
 case "$P8_ANCHOR_PIN" in
   [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
   *) say "FAIL: the check did not report a forty-character anchor pin (got '$P8_ANCHOR_PIN'), so this gate has nothing to require of it"; FAILED=1 ;;
@@ -464,7 +465,7 @@ INTEGRITY_OUT=$OUT/frozen-integrity.log
 # injection above produced exactly that: a quiet exit 0 whose next line said the
 # leg had not run. The token is required, and the pin and directory inside it
 # must be the ones this gate asked for.
-if python3 "$HERE/p8-frozen-integrity.py" "$REPO" "${ANCHOR_ARGS[@]}" "${CLAIM_ARGS[@]}" > "$INTEGRITY_OUT" 2>&1; then
+if python3 -I "$HERE/p8-frozen-integrity.py" "$REPO" "${ANCHOR_ARGS[@]}" "${CLAIM_ARGS[@]}" > "$INTEGRITY_OUT" 2>&1; then
   while IFS= read -r line; do say "$line"; done < "$INTEGRITY_OUT"
   WANT_TOKEN="ANCHOR LEG EXERCISED: pin=$P8_ANCHOR_PIN dir=$P8_ANCHOR_DIR"
   if [ -n "$P8_ANCHOR_DIR" ] && ! grep -qF "$WANT_TOKEN" "$INTEGRITY_OUT"; then
@@ -563,7 +564,7 @@ integrity_must_refuse(){   # integrity_must_refuse <id> <setup> <expect> [extra-
   # ROUND 16: `--inner-guards-only` is now how a run says it is NOT exercising
   # the anchor. It used to be the absence of a flag, which is how round 15's
   # check came to print a pass line with its strongest leg never run.
-  if python3 "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only "$@" > "$out" 2>&1; then
+  if python3 -I "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only "$@" > "$out" 2>&1; then
     say "INTEGRITY-MUT $id: FAIL — the check PASSED on a broken tree"
     FAILED=1; return
   fi
@@ -603,7 +604,7 @@ integrity_must_refuse d \
 #     exactly this, and re-labelled 0006_rls.sql — the file that creates RLS —
 #     as one of the files past the attested range. It must now refuse BY NAME.
 integrity_must_refuse e \
-  "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql && python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[r for r in m['migrations'] if r['name']!='0006_rls.sql'];json.dump(m,open(p,'w'))\"" \
+  "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql && python3 -I -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[r for r in m['migrations'] if r['name']!='0006_rls.sql'];json.dump(m,open(p,'w'))\"" \
   "UNLISTED      0006_rls.sql"
 # (f) an extra file planted INSIDE the attested range with no row of its own.
 #     RE-AIMED in round 14: `0006a_sneak.sql` now trips the numbering law as a
@@ -617,7 +618,7 @@ integrity_must_refuse f \
 # (g) frozenThrough moved BACKWARDS to a file that does exist, which would
 #     shrink the attested set without touching a single digest.
 integrity_must_refuse g \
-  "python3 -c \"import json,os;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));od=sorted(f for f in os.listdir('infrastructure/database/migrations') if f.endswith('.sql'));m['frozenThrough']=od[5];json.dump(m,open(p,'w'))\"" \
+  "python3 -I -c \"import json,os;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));od=sorted(f for f in os.listdir('infrastructure/database/migrations') if f.endswith('.sql'));m['frozenThrough']=od[5];json.dump(m,open(p,'w'))\"" \
   "a row for a file beyond frozenThrough"
 # (h) frozenThrough naming a file that is not there — RE-AIMED in round 14. The
 #     old plant used `9999_nope.sql`, which sorts ABOVE every file, so with the
@@ -630,7 +631,7 @@ integrity_must_refuse g \
 #     (read as 0079a_nope.sql)" and exits 0 on a boundary naming no file. The
 #     plant now aims there.
 integrity_must_refuse h \
-  "python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['frozenThrough']='0079a_nope.sql';json.dump(m,open(p,'w'))\"" \
+  "python3 -I -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['frozenThrough']='0079a_nope.sql';json.dump(m,open(p,'w'))\"" \
   "the attested boundary cannot be located"
 # (i) ROUND 14's BLOCKER, N-1, measured: a frozen migration DELETED together
 #     with its manifest row. Round 13 closed "a row excuses a file"; this is the
@@ -638,14 +639,14 @@ integrity_must_refuse h \
 #     gate 6 exited 0 reporting "79 files ... all 79 matching". The numbering is
 #     what anchors the set now, so the hole must be NAMED.
 integrity_must_refuse i \
-  "rm infrastructure/database/migrations/0050_accounting_report_indexes.sql && python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[r for r in m['migrations'] if r['name']!='0050_accounting_report_indexes.sql'];json.dump(m,open(p,'w'))\"" \
+  "rm infrastructure/database/migrations/0050_accounting_report_indexes.sql && python3 -I -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[r for r in m['migrations'] if r['name']!='0050_accounting_report_indexes.sql'];json.dump(m,open(p,'w'))\"" \
   "MISSING NUMBER 0050"
 # (j) ROUND 14, N-2: a SECOND row for one file, carrying the digest of an edited
 #     copy and leaving the original row in place. The rows were read into a dict,
 #     so the last one won silently and the check reported a pass on a record
 #     holding two digests for one name.
 integrity_must_refuse j \
-  "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql && python3 -c \"import json,hashlib;p='infrastructure/database/MIGRATION_MANIFEST.json';h=hashlib.sha256(open('infrastructure/database/migrations/0006_rls.sql','rb').read()).hexdigest();m=json.load(open(p));m['migrations'].append({'name':'0006_rls.sql','sha256':h});json.dump(m,open(p,'w'))\"" \
+  "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql && python3 -I -c \"import json,hashlib;p='infrastructure/database/MIGRATION_MANIFEST.json';h=hashlib.sha256(open('infrastructure/database/migrations/0006_rls.sql','rb').read()).hexdigest();m=json.load(open(p));m['migrations'].append({'name':'0006_rls.sql','sha256':h});json.dump(m,open(p,'w'))\"" \
   "DUPLICATE ROW 0006_rls.sql"
 # (k) two files claiming one number — the renumbering route into a hole, which
 #     the same numbering equality refuses as a repetition rather than a gap.
@@ -657,7 +658,7 @@ integrity_must_refuse k \
 #     diagnosed (b)'s plant earlier. A ghost row leaves the directory untouched,
 #     so it reaches the equality rather than the numbering law.
 integrity_must_refuse l \
-  "python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations'].append({'name':'0013a_ghost.sql','sha256':'0'*64});json.dump(m,open(p,'w'))\"" \
+  "python3 -I -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations'].append({'name':'0013a_ghost.sql','sha256':'0'*64});json.dump(m,open(p,'w'))\"" \
   "ORPHANED ROW  0013a_ghost.sql — NO SUCH FILE"
 
 # ---------------------------------------------------------------------
@@ -697,14 +698,14 @@ anchor_is_loadbearing(){   # anchor_is_loadbearing <id> <setup> <expect>
     FAILED=1; return
   fi
   local bare=$sand/bare.log anch=$sand/anchored.log
-  if python3 "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only > "$bare" 2>&1; then
+  if python3 -I "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only > "$bare" 2>&1; then
     say "ANCHOR-MUT $id: bare — the tree is internally consistent and round 14's check PASSES it ($(grep -c . "$bare") lines, exit 0)"
   else
     say "ANCHOR-MUT $id: FAIL — the bare arm went RED, so this plant is not evidence about the anchor"
     head -2 "$bare" | tee -a "$OUT/run.log"
     FAILED=1; return
   fi
-  if python3 "$HERE/p8-frozen-integrity.py" "$sand" "${ANCHOR_ARGS[@]}" > "$anch" 2>&1; then
+  if python3 -I "$HERE/p8-frozen-integrity.py" "$sand" "${ANCHOR_ARGS[@]}" > "$anch" 2>&1; then
     say "ANCHOR-MUT $id: FAIL — the ANCHORED arm passed too; the fail-open is still open"
     FAILED=1; return
   fi
@@ -724,19 +725,19 @@ say "=== the plants round 14 called correct (the anchor, measured) ==="
 #     pass the round-14 check — the count is not what makes it work, the
 #     coordination is.
 anchor_is_loadbearing m \
-  "python3 '$HERE/p8-plant.py' tail-renumber" \
+  "python3 -I '$HERE/p8-plant.py' tail-renumber" \
   "the attested boundary has MOVED"
 # (n) THE CHALLENGER'S PLANT B: the boundary moved down to the sixth migration
 #     with every row above it deleted. 6 files, 6 rows, all matching, and the
 #     other 81 files reported as merely beyond the manifest's coverage.
 anchor_is_loadbearing n \
-  "python3 '$HERE/p8-plant.py' boundary-shrink" \
+  "python3 -I '$HERE/p8-plant.py' boundary-shrink" \
   "the attested boundary has MOVED"
 # (o) THE COORDINATOR'S LIMIT CASE: one row, the boundary at 0000. The numbering
 #     law round 14 added is SATISFIED by [0], which is the plainest statement of
 #     why pinning the low end was necessary but not sufficient.
 anchor_is_loadbearing o \
-  "python3 '$HERE/p8-plant.py' limit-one" \
+  "python3 -I '$HERE/p8-plant.py' limit-one" \
   "the attested boundary has MOVED"
 # (p) THE WHOLE-RECORD FORGERY: a frozen file edited AND its manifest row
 #     updated to the edited digest. This is mutant (a) with the record brought
@@ -744,7 +745,7 @@ anchor_is_loadbearing o \
 #     manifest is what was forged. Only content read from the pinned commit sees
 #     it.
 anchor_is_loadbearing p \
-  "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql && python3 -c \"import json,hashlib;p='infrastructure/database/MIGRATION_MANIFEST.json';h=hashlib.sha256(open('infrastructure/database/migrations/0006_rls.sql','rb').read()).hexdigest();m=json.load(open(p));m['migrations']=[dict(r,sha256=h) if r['name']=='0006_rls.sql' else r for r in m['migrations']];json.dump(m,open(p,'w'))\"" \
+  "printf '\n-- mutant\n' >> infrastructure/database/migrations/0006_rls.sql && python3 -I -c \"import json,hashlib;p='infrastructure/database/MIGRATION_MANIFEST.json';h=hashlib.sha256(open('infrastructure/database/migrations/0006_rls.sql','rb').read()).hexdigest();m=json.load(open(p));m['migrations']=[dict(r,sha256=h) if r['name']=='0006_rls.sql' else r for r in m['migrations']];json.dump(m,open(p,'w'))\"" \
   "ANCHOR DRIFT  0006_rls.sql"
 # (q) A COVERED FILE RENAMED IN PLACE, row carried: same number, same bytes, a
 #     different name. The numbering law holds, the equality holds, the digests
@@ -752,7 +753,7 @@ anchor_is_loadbearing p \
 #     because the count and the digest-over-digests are both unchanged. This one
 #     is caught by the anchor's FILE LIST and by nothing else in the pack.
 anchor_is_loadbearing q \
-  "mv infrastructure/database/migrations/0013_security_boundary.sql infrastructure/database/migrations/0013_security_boundaries.sql && python3 -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[dict(r,name='0013_security_boundaries.sql') if r['name']=='0013_security_boundary.sql' else r for r in m['migrations']];json.dump(m,open(p,'w'))\"" \
+  "mv infrastructure/database/migrations/0013_security_boundary.sql infrastructure/database/migrations/0013_security_boundaries.sql && python3 -I -c \"import json;p='infrastructure/database/MIGRATION_MANIFEST.json';m=json.load(open(p));m['migrations']=[dict(r,name='0013_security_boundaries.sql') if r['name']=='0013_security_boundary.sql' else r for r in m['migrations']];json.dump(m,open(p,'w'))\"" \
   "NOT IN TREE   0013_security_boundary.sql"
 
 # ---------------------------------------------------------------------
@@ -840,7 +841,7 @@ anchor_identity(){   # anchor_identity <id> <doctor-the-anchor-clone> <extra-arg
   cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
   cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
   printf '\n-- mutant\n' >> "$sand/infrastructure/database/migrations/0006_rls.sql"
-  python3 - "$sand" <<'PLANT'
+  python3 -I - "$sand" <<'PLANT'
 import hashlib, json, os, sys
 root = sys.argv[1]
 mp = os.path.join(root, "infrastructure", "database", "MIGRATION_MANIFEST.json")
@@ -853,7 +854,7 @@ json.dump(m, open(mp, "w"))
 PLANT
   # The subject must be a tree the round-15 check calls correct, or the plant is
   # evidence about something else.
-  if python3 "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only >"$work/inner.log" 2>&1; then
+  if python3 -I "$HERE/p8-frozen-integrity.py" "$sand" --inner-guards-only >"$work/inner.log" 2>&1; then
     say "ANCHOR-ID $id: the forged tree is internally consistent, as the plant requires"
   else
     say "ANCHOR-ID $id: PLANT NOT ESTABLISHED — the forged tree is not internally consistent ($(head -1 "$work/inner.log")), so it does not reach the anchor at all; failing closed under that name"
@@ -861,7 +862,7 @@ PLANT
   fi
   local out=$work/guarded.log
   # shellcheck disable=SC2086  # deliberate flag lists
-  if python3 "$HERE/p8-frozen-integrity.py" "$sand" --git-dir "$work/anchor" $extra > "$out" 2>&1; then
+  if python3 -I "$HERE/p8-frozen-integrity.py" "$sand" --git-dir "$work/anchor" $extra > "$out" 2>&1; then
     say "ANCHOR-ID $id: FAIL — the check CONFIRMED a forged tree against a doctored anchor"
     FAILED=1; return
   fi
@@ -877,7 +878,7 @@ PLANT
   # nothing was not the reason the plant was refused.
   local nog=$work/no-guards.py
   local pat=0
-  python3 - "$HERE/p8-frozen-integrity.py" "$nog" <<'DELETE' || pat=$?
+  python3 -I - "$HERE/p8-frozen-integrity.py" "$nog" <<'DELETE' || pat=$?
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 s = open(src, encoding="utf-8").read()
@@ -904,7 +905,7 @@ DELETE
     FAILED=1; return
   fi
   # shellcheck disable=SC2086
-  if python3 "$nog" "$sand" --git-dir "$work/anchor" $extra > "$work/no-guards.log" 2>&1; then
+  if python3 -I "$nog" "$sand" --git-dir "$work/anchor" $extra > "$work/no-guards.log" 2>&1; then
     say "ANCHOR-ID $id: guard-deletion arm PASSES, so this round's guard is what refused it"
   else
     say "ANCHOR-ID $id: FAIL — refused even with this round's guards deleted ($(head -1 "$work/no-guards.log")), so it is not evidence about them"
@@ -974,7 +975,7 @@ arg_shape(){   # arg_shape <id> <refuse|pass> <expect-text> [args...]
   # scoped to that call in bash, and a subshell would lose FAILED, so the
   # environment travels explicitly.
   env ${ARG_SHAPE_ENV[@]+"${ARG_SHAPE_ENV[@]}"} \
-      python3 "$HERE/p8-frozen-integrity.py" "$sand" "$@" > "$out" 2>&1 || rc=$?
+      python3 -I "$HERE/p8-frozen-integrity.py" "$sand" "$@" > "$out" 2>&1 || rc=$?
   if [ "$mode" = refuse ] && [ "$rc" -eq 0 ]; then
     say "ARGSHAPE $id: FAIL — the check exited 0 on an injected argument; first line: $(head -1 "$out")"
     FAILED=1; return
@@ -1078,7 +1079,7 @@ tamper_consistently(){   # tamper_consistently <sandbox-root>
   cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
   cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
   printf '\n-- mutant\n' >> "$sand/infrastructure/database/migrations/0006_rls.sql"
-  python3 - "$sand" <<'TAMPER'
+  python3 -I - "$sand" <<'TAMPER'
 import hashlib, json, os, sys
 root = sys.argv[1]
 mp = os.path.join(root, "infrastructure", "database", "MIGRATION_MANIFEST.json")
@@ -1105,13 +1106,13 @@ guard_control(){   # guard_control <id> <patcher> <tampered|honest> <present|abs
     cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
   fi
   local nog=$work/no-guard.py pat=0
-  python3 "$patcher" "$HERE/p8-frozen-integrity.py" "$nog" >"$work/patch.log" 2>&1 || pat=$?
+  python3 -I "$patcher" "$HERE/p8-frozen-integrity.py" "$nog" >"$work/patch.log" 2>&1 || pat=$?
   if [ "$pat" -ne 0 ] || [ ! -s "$nog" ]; then
     say "GUARD-CTL $id: PLANT NOT ESTABLISHED — the patcher did not apply (exit $pat: $(tail -1 "$work/patch.log")), so this arm measured nothing; failing closed under that name"
     FAILED=1; return
   fi
   local out=$work/out.log rc=0
-  python3 "$nog" "$sand" "$@" > "$out" 2>&1 || rc=$?
+  python3 -I "$nog" "$sand" "$@" > "$out" 2>&1 || rc=$?
   if [ "$rc" -ne 0 ]; then
     say "GUARD-CTL $id: FAIL — with the guard deleted the check still refused (rc=$rc: $(head -1 "$out")), so the refusal this arm credits to the guard came from somewhere else"
     FAILED=1; return
@@ -1263,7 +1264,7 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
         FAILED=1
       else
       say "LINEAGE: the plant holds the pin as an object and is not descended from it, and is not shallow, as required"
-      if python3 "$HERE/p8-frozen-integrity.py" "$LIN/tree" --git-dir "$LIN/orphan" >"$LIN/guarded.log" 2>&1; then
+      if python3 -I "$HERE/p8-frozen-integrity.py" "$LIN/tree" --git-dir "$LIN/orphan" >"$LIN/guarded.log" 2>&1; then
         say "LINEAGE: FAIL — an HONEST tree was confirmed against a repository that merely HOLDS the pin"
         FAILED=1
       elif grep -qF "ANCHOR LINEAGE" "$LIN/guarded.log"; then
@@ -1349,7 +1350,7 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
       else
         say "GRAFTS: the plant is grafted — plain git now calls the pin an ancestor of an unrelated history, as required"
         gout=$GRF/out.log; grc=0
-        python3 "$HERE/p8-frozen-integrity.py" "$REPO" --git-dir "$GRF/repo" >"$gout" 2>&1 || grc=$?
+        python3 -I "$HERE/p8-frozen-integrity.py" "$REPO" --git-dir "$GRF/repo" >"$gout" 2>&1 || grc=$?
         if [ "$grc" -eq 0 ]; then
           say "GRAFTS: FAIL — a grafted witness was accepted (rc 0), so the lineage guard reads the graft file"
           FAILED=1
@@ -1372,13 +1373,13 @@ s = s.replace(a, "    pass", 1)
 open(dst, "w", encoding="utf-8").write(s)
 PATCH
         nog=$GRF/no-scrub.py; pat=0
-        python3 "$PATCHDIR/graftfile.py" "$HERE/p8-frozen-integrity.py" "$nog" >"$GRF/patch.log" 2>&1 || pat=$?
+        python3 -I "$PATCHDIR/graftfile.py" "$HERE/p8-frozen-integrity.py" "$nog" >"$GRF/patch.log" 2>&1 || pat=$?
         if [ "$pat" -ne 0 ] || [ ! -s "$nog" ]; then
           say "GUARD-CTL y10: PLANT NOT ESTABLISHED — the patcher did not apply (exit $pat: $(tail -1 "$GRF/patch.log")); failing closed under that name"
           FAILED=1
         else
           yout=$GRF/y10.log; yrc=0
-          python3 "$nog" "$REPO" --git-dir "$GRF/repo" >"$yout" 2>&1 || yrc=$?
+          python3 -I "$nog" "$REPO" --git-dir "$GRF/repo" >"$yout" 2>&1 || yrc=$?
           if [ "$yrc" -eq 0 ] && grep -qF "ANCHOR LEG EXERCISED:" "$yout"; then
             say "GUARD-CTL y10: with the graft-file scrub deleted the grafted witness is ACCEPTED again (rc 0, 'ANCHOR LEG EXERCISED:'), so the scrub is what closes it"
           else
@@ -1453,7 +1454,7 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
   else
     say "SHALLOW: the plant holds the pin, is shallow, and plain git answers NEGATIVELY there — all three asserted, as required"
     sout=$SHAL/out.log; src=0
-    python3 "$HERE/p8-frozen-integrity.py" "$REPO" --git-dir "$SHAL/repo" >"$sout" 2>&1 || src=$?
+    python3 -I "$HERE/p8-frozen-integrity.py" "$REPO" --git-dir "$SHAL/repo" >"$sout" 2>&1 || src=$?
     if [ "$src" -eq 0 ]; then
       say "SHALLOW: FAIL — an answer computed from a truncated graph was accepted (rc 0)"
       FAILED=1
@@ -1480,13 +1481,13 @@ s = s.replace(a, "        if False:", 1)
 open(dst, "w", encoding="utf-8").write(s)
 PATCH
     nog=$SHAL/no-probe.py; pat=0
-    python3 "$PATCHDIR/shallowprobe.py" "$HERE/p8-frozen-integrity.py" "$nog" >"$SHAL/patch.log" 2>&1 || pat=$?
+    python3 -I "$PATCHDIR/shallowprobe.py" "$HERE/p8-frozen-integrity.py" "$nog" >"$SHAL/patch.log" 2>&1 || pat=$?
     if [ "$pat" -ne 0 ] || [ ! -s "$nog" ]; then
       say "GUARD-CTL y9: PLANT NOT ESTABLISHED — the patcher did not apply (exit $pat: $(tail -1 "$SHAL/patch.log")); UNMEASURED, failing closed"
       FAILED=1
     else
       yout=$SHAL/y9.log; yrc=0
-      python3 "$nog" "$REPO" --git-dir "$SHAL/repo" >"$yout" 2>&1 || yrc=$?
+      python3 -I "$nog" "$REPO" --git-dir "$SHAL/repo" >"$yout" 2>&1 || yrc=$?
       if grep -qF "happens to hold rather than a commit this code descends from" "$yout"; then
         say "GUARD-CTL y9: with the routing deleted the FALSE sentence returns (rc $yrc, 'happens to hold'), so the routing is what makes the refusal true"
       else
@@ -1511,13 +1512,13 @@ s = s.replace(a, a + '\n        shallow_said = "--is-shallow-repository"', 1)
 open(dst, "w", encoding="utf-8").write(s)
 PATCH
     nob=$SHAL/no-answer.py; pat2=0
-    python3 "$PATCHDIR/probeanswer.py" "$HERE/p8-frozen-integrity.py" "$nob" >"$SHAL/patch2.log" 2>&1 || pat2=$?
+    python3 -I "$PATCHDIR/probeanswer.py" "$HERE/p8-frozen-integrity.py" "$nob" >"$SHAL/patch2.log" 2>&1 || pat2=$?
     if [ "$pat2" -ne 0 ] || [ ! -s "$nob" ]; then
       say "GUARD-CTL y11: PLANT NOT ESTABLISHED — the patcher did not apply (exit $pat2: $(tail -1 "$SHAL/patch2.log")); UNMEASURED, failing closed"
       FAILED=1
     else
       bout=$SHAL/y11.log; brc=0
-      python3 "$nob" "$REPO" --git-dir "$SHAL/repo" >"$bout" 2>&1 || brc=$?
+      python3 -I "$nob" "$REPO" --git-dir "$SHAL/repo" >"$bout" 2>&1 || brc=$?
       if [ "$brc" -eq 0 ]; then
         say "GUARD-CTL y11: FAIL — with the probe answering nothing the check still PASSED (rc 0), so a non-answer is being read as an answer"
         FAILED=1
@@ -1631,7 +1632,7 @@ assert "GUARD-CTL y7" not in r and "=== the token requirement" not in r, \
 open(run, "w", encoding="utf-8").write(r)
 PATCH
   pat=0
-  python3 "$PATCHDIR/notoken.py" \
+  python3 -I "$PATCHDIR/notoken.py" \
     "$Y7/repo/packages/notifications/proof/p8-frozen-integrity.py" \
     "$Y7/repo/packages/notifications/proof/run-p8-real-proof.sh" \
     >"$Y7/patch.log" 2>&1 || pat=$?
@@ -1659,13 +1660,13 @@ fi
 
 say "=== the claimed figures, measured (the weaker leg) ==="
 integrity_must_refuse m2 \
-  "python3 '$HERE/p8-plant.py' tail-renumber" \
+  "python3 -I '$HERE/p8-plant.py' tail-renumber" \
   "COVERED COUNT  expected 80, measured 79" "${CLAIM_ARGS[@]}"
 integrity_must_refuse n2 \
-  "python3 '$HERE/p8-plant.py' boundary-shrink" \
+  "python3 -I '$HERE/p8-plant.py' boundary-shrink" \
   "COVERED COUNT  expected 80, measured 6" "${CLAIM_ARGS[@]}"
 integrity_must_refuse o2 \
-  "python3 '$HERE/p8-plant.py' limit-one" \
+  "python3 -I '$HERE/p8-plant.py' limit-one" \
   "COVERED COUNT  expected 80, measured 1" "${CLAIM_ARGS[@]}"
 
 # git is still consulted WHERE THERE IS A WORK TREE, as a second opinion on the
@@ -1698,6 +1699,172 @@ fi
 build "$HERE/p8-overlay.sql" "$OUT/final" >/dev/null && cases "$OUT/final" \
   && say "cluster left at the baseline, passes=$(cat "$OUT/final/passes")" \
   || { say "FAIL: could not restore the baseline"; FAILED=1; }
+
+say "=== the check's own STANDARD LIBRARY, measured by planting one (round 23, N-17) ==="
+# The fourteenth challenge's blocker, reproduced here before it was fixed: the
+# check lives inside the tree it judges, so Python put its own directory first
+# on sys.path and `hashlib` — which computes every digest — was resolved from
+# the subject. A commit that modified a frozen migration AND added
+# `proof/hashlib.py` exited 0, printed ANCHOR LEG EXERCISED with the right pin,
+# and REPRODUCED the pinned covered-set digest, because that digest is a hash
+# over per-file digests and every one of them came from the plant.
+#
+# The controls run the other way round from this pack's usual ones: what is
+# being shown load-bearing is the ABSENCE of isolation. So y12/y13 require the
+# guarded forms to red, and y14/y15 delete the guard and require the old
+# fail-open to return — including on an honest tree, which is what makes such a
+# plant usable by someone who wants the gate quiet rather than broken.
+ISO=$OUT/iso
+rm -rf "$ISO"; mkdir -p "$ISO/planted" "$ISO/tree/infrastructure/database" "$ISO/clean/infrastructure/database"
+for _t in tree clean; do
+  cp -r "$REPO/infrastructure/database/migrations" "$ISO/$_t/infrastructure/database/migrations"
+  cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$ISO/$_t/infrastructure/database/"
+done
+printf '\n-- tamper\n' >> "$ISO/tree/infrastructure/database/migrations/0006_rls.sql"
+cp "$HERE/p8-frozen-integrity.py" "$ISO/planted/p8-frozen-integrity.py"
+# The shim: it delegates to the REAL hashlib from the next entry on sys.path and
+# strips the appended bytes before hashing, so every digest it returns is the
+# digest of the file as it was BEFORE the tamper.
+cat > "$ISO/planted/hashlib.py" <<'SHIM'
+import sys, os, importlib.util, importlib.machinery
+_d = os.path.dirname(os.path.abspath(__file__))
+_spec = importlib.machinery.PathFinder.find_spec(
+    'hashlib', [x for x in sys.path if os.path.abspath(x or '.') != _d])
+_real = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_real)
+class _H:
+    def __init__(self, inner): self._i = inner
+    def update(self, b): self._i.update(b.replace(b"\n-- tamper\n", b""))
+    def hexdigest(self): return self._i.hexdigest()
+def sha256(*a, **k): return _H(_real.sha256(*a, **k))
+def __getattr__(n): return getattr(_real, n)
+SHIM
+cat > "$PATCHDIR/unisolate.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = "if not sys.flags.isolated:"
+b = "if any(_p8os.path.abspath(p or \".\") == _P8_OWN_DIR for p in sys.path):"
+assert s.count(a) == 1, "the isolated-mode test is not where this patcher expects it"
+assert s.count(b) == 1, "the sys.path test is not where this patcher expects it"
+s = s.replace(a, "if False:", 1).replace(b, "if False:", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+
+ISO_OK=1
+if [ ! -f "$ISO/planted/hashlib.py" ] || [ ! -s "$ISO/planted/p8-frozen-integrity.py" ]; then
+  say "ISOLATION: PLANT NOT ESTABLISHED — the planted module or the copied check is missing"
+  FAILED=1; ISO_OK=0
+elif ! cmp -s "$HERE/p8-frozen-integrity.py" "$ISO/planted/p8-frozen-integrity.py"; then
+  say "ISOLATION: PLANT NOT ESTABLISHED — the copied check is not byte-identical to the real one, so the arms below would measure a different program"
+  FAILED=1; ISO_OK=0
+elif [ "$(copied_digest "$REPO/infrastructure/database")" \
+     = "$(copied_digest "$ISO/tree/infrastructure/database")" ]; then
+  say "ISOLATION: PLANT NOT ESTABLISHED — the tamper did not land, so there is nothing for the plant to hide"
+  FAILED=1; ISO_OK=0
+else
+  say "ISOLATION: the plant holds — a byte-identical copy of the check, a planted hashlib beside it, and a frozen migration modified in the tree it judges"
+fi
+
+if [ "$ISO_OK" = 1 ]; then
+  ISO_CLAIM=(--expect-covered "$P8_EXPECT_COVERED" --expect-boundary "$P8_EXPECT_BOUNDARY"
+             --expect-covered-digest "$P8_EXPECT_COVERED_DIGEST")
+  # y12 — isolated, plant present, tamper present: the plant must not reach it.
+  _o=$ISO/y12.log
+  if python3 -I "$ISO/planted/p8-frozen-integrity.py" "$ISO/tree" "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+    say "FAIL: GUARD-CTL y12 — with isolated mode the check PASSED on a tampered tree, so the planted module still reached it"
+    FAILED=1
+  elif grep -qF -e "ANCHOR DRIFT" "$_o"; then
+    say "GUARD-CTL y12: isolated, the plant does not reach it — refused by name (ANCHOR DRIFT), so isolated mode is what closes the route"
+  else
+    say "FAIL: GUARD-CTL y12 — it refused, but not as ANCHOR DRIFT"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+  fi
+  # y13 — NOT isolated, guard present: the guard must refuse before any digest.
+  _o=$ISO/y13.log
+  if python3 "$ISO/planted/p8-frozen-integrity.py" "$ISO/tree" "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+    say "FAIL: GUARD-CTL y13 — started without isolated mode and it PASSED, so the isolation precondition is not load-bearing"
+    FAILED=1
+  elif grep -qF -e "NOT ISOLATED" "$_o"; then
+    say "GUARD-CTL y13: started without \`-I\`, the precondition refuses by name (NOT ISOLATED) before it measures anything"
+  else
+    say "FAIL: GUARD-CTL y13 — it refused, but not as NOT ISOLATED"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+  fi
+  # y14 — the guard DELETED, not isolated, plant and tamper present: the old
+  # fail-open must RETURN, or the guard is not what closes the hole.
+  _nog=$ISO/planted/no-guard.py
+  if ! python3 -I "$PATCHDIR/unisolate.py" "$ISO/planted/p8-frozen-integrity.py" "$_nog" >"$ISO/patch.log" 2>&1; then
+    say "ISOLATION: PLANT NOT ESTABLISHED — the guard-deletion patcher did not match its anchors"
+    head -2 "$ISO/patch.log" | tee -a "$OUT/run.log"; FAILED=1
+  else
+    _o=$ISO/y14.log
+    if python3 "$_nog" "$ISO/tree" "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+      say "GUARD-CTL y14: with the isolation precondition deleted the old fail-open RETURNS (rc 0 on a tampered tree, ANCHOR LEG EXERCISED and the pinned digest both reproduced), so the precondition is what closes it"
+    else
+      say "FAIL: GUARD-CTL y14 — with the guard deleted the check still refused, so this arm is not measuring the hole it names"
+      head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+    fi
+    # y15 — the same, on an HONEST tree: the plant must not red it, which is
+    # what makes it a bypass rather than a breaker.
+    _o=$ISO/y15.log
+    if python3 "$_nog" "$ISO/clean" "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+      say "GUARD-CTL y15: the same plant leaves an HONEST tree green, so it is a BYPASS and not a breaker — which is what makes it usable to keep a gate quiet"
+    else
+      say "FAIL: GUARD-CTL y15 — the plant reddened an honest tree, so y14's green is not evidence about the route"
+      head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------
+# 5  The RETIREMENT of the prototype gate, measured (round 22, OD-P8-14)
+# ---------------------------------------------------------------------
+# A retirement that is only written down is a claim. Three things are measured
+# here: the files are still PRESENT (retired, never deleted), the retired runner
+# REFUSES rather than runs, and no live gate list still names it. The name is
+# built by concatenation so that this arm is not its own match — the same
+# lesson as the y7 sentinels, which counted themselves.
+say "=== the retirement of the prototype gate, measured ==="
+RET_DIR=$HERE/retired
+RET_RUNNER="run-p8-ddl""-proof.sh"
+RET_MISSING=
+for _f in "$RET_RUNNER" p8-ddl-prototype.sql p8-ddl-cases.sql \
+          p8-role-cases-app.sql p8-role-cases-worker.sql p8-role-cases-webhook.sql; do
+  [ -f "$RET_DIR/$_f" ] || RET_MISSING="$RET_MISSING $_f"
+done
+if [ -n "$RET_MISSING" ]; then
+  say "FAIL: RETIREMENT — a retired file is MISSING, so it was deleted rather than retired:$RET_MISSING"
+  FAILED=1
+else
+  say "RETIREMENT: all six retired files are present under retired/, none deleted"
+fi
+
+# The retired runner must refuse. A retired gate that still executes is a gate.
+if [ -f "$RET_DIR/$RET_RUNNER" ]; then
+  RET_OUT=$(bash "$RET_DIR/$RET_RUNNER" 2>&1); RET_RC=$?
+  if [ "$RET_RC" -eq 0 ]; then
+    say "FAIL: RETIREMENT — the retired runner exited 0, so it still runs"
+    FAILED=1
+  elif ! printf '%s' "$RET_OUT" | grep -qF -e "RETIRED: this gate was retired"; then
+    say "FAIL: RETIREMENT — the retired runner refused (rc $RET_RC) without saying it is retired, so a reader sees a broken gate rather than a retired one"
+    FAILED=1
+  else
+    say "RETIREMENT: the retired runner refuses by name (rc $RET_RC) and says what covers it now"
+  fi
+fi
+
+# And no LIVE gate list may still name it. Permitted homes: the retired
+# directory itself, and this arm (which holds no literal). Anything else is a
+# list that would send a reader to a gate that does not run. The repository is
+# scanned rather than the manifest, because the manifest is not in the tree.
+RET_HITS=$(grep -rlI --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=retired \
+                     --exclude-dir=dist --exclude-dir=coverage \
+                     -e "$RET_RUNNER" "$REPO" 2>/dev/null || true)
+if [ -n "$RET_HITS" ]; then
+  say "FAIL: RETIREMENT — a live file still names the retired gate, so some list points at a gate that does not run:"
+  printf '%s\n' "$RET_HITS" | tee -a "$OUT/run.log"
+  FAILED=1
+else
+  say "RETIREMENT: no file outside retired/ names the retired gate, so no live list points at it"
+fi
 
 say "RUN=$RUN FAILED=$FAILED"
 exit $FAILED
