@@ -73,6 +73,28 @@ const reviewerOwned = (): ReadonlySet<string> => {
   return new Set(names as string[]);
 };
 
+/**
+ * The name SHAPE of a reviewer report, read from the same shared file.
+ *
+ * ROUND 30, THE CHALLENGER'S F-53 (P2). This pattern decides WORDING, never an
+ * exemption — keying an exemption on shape is B-10 itself, and
+ * `reviewerOwned()` above remains the only thing that exempts. The defect it
+ * fixes: an unenumerated reviewer-shaped report was reported as "an
+ * author-owned pack document", which is false about ownership and routes the
+ * reader to the one repair the pack forbids, editing a reviewer's frozen bytes.
+ * The other instrument already had the true sentence; this borrows it rather
+ * than inventing a second one, and the pattern is shared so the two messages
+ * cannot drift apart.
+ */
+const looksLikeReviewer = (): RegExp => {
+  const raw: unknown = JSON.parse(readFileSync(REVIEWER_REPORTS_FILE, 'utf8'));
+  const pattern = (raw as { looks_like_reviewer?: unknown }).looks_like_reviewer;
+  if (typeof pattern !== 'string' || pattern.length === 0) {
+    throw new Error(`${REVIEWER_REPORTS_FILE} has no 'looks_like_reviewer' pattern`);
+  }
+  return new RegExp(pattern);
+};
+
 const TOOLS_DIR = join(__dirname, '..', 'tools');
 /** This file, by its exact path from the repository root. */
 const SELF = 'packages/billing/test/tool-commands-are-isolated.test.ts';
@@ -241,7 +263,12 @@ describe('every written invocation of the pack tools is isolated', () => {
       if (label === SELF) {
         continue;
       }
-      for (const line of text.split('\n')) {
+      // Through `logicalLines`, like the other two scans. ROUND 30: F-52's
+      // continuation fix went into the pack scans and NOT into this one, which
+      // reads the repository -- the half of the law that runs in CI. The
+      // challenger measured F-52 on pack documents, so the gap survived its
+      // round; a fix applied to two of three call sites is not applied.
+      for (const { line } of logicalLines(text)) {
         for (const m of line.matchAll(INVOCATION)) {
           seen += 1;
           if (!isolated(m[1] ?? '')) offences.push(`${label}: ${line.trim()}`);
@@ -319,6 +346,16 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(list.has('P5-CHALLENGE-12345678.md'), 'F-42 width, exempt by shape again').toBe(false);
     expect(list.has('P5-CHALLENGE-9BD33BD.md'), 'uppercase shape exempt again').toBe(false);
     expect(list.has('P5-CHALLENGE-9bd33bd.md'), 'a real reviewer report fell out of the shared list').toBe(true);
+
+    // F-53's half of the sharing: the SHAPE lives in that one file too, so the
+    // two instruments cannot say different things about the same file. It
+    // decides wording only; `list` above is still the only exemption.
+    expect(tool, 'manifest-digests.py no longer reads the shared shape').toContain('looks_like_reviewer');
+    const shaped = looksLikeReviewer();
+    expect(shaped.test('P5-CHALLENGE-12345678.md'), 'the shared shape no longer recognises a reviewer name').toBe(true);
+    expect(shaped.test('P5-NOTE-FOR-READERS.md'), 'the shared shape now matches an author document').toBe(false);
+    const literalShape = tool.match(/\^P5-\(CHALLENGE\|COORD-DIFF-REVIEW\)/g) ?? [];
+    expect(literalShape, 'manifest-digests.py carries its own copy of the shape again').toStrictEqual([]);
   });
 
   it('exempts a DECLARED quotation block, and nothing else', () => {
@@ -347,7 +384,9 @@ describe('every written invocation of the pack tools is isolated', () => {
       return;
     }
     const exempt = reviewerOwned();
+    const shaped = looksLikeReviewer();
     const offences: string[] = [];
+    const unenumerated: string[] = [];
     let quoted = 0;
     let mine = 0;
     for (const name of readdirSync(PACK)) {
@@ -356,7 +395,10 @@ describe('every written invocation of the pack tools is isolated', () => {
       if (text === null) continue;
       mine += 1;
       const [found, exempted] = offencesOutsideQuotedBlocks(name, text);
-      offences.push(...found);
+      // F-53. A scanned file whose NAME has the reviewer shape is reported as
+      // what it is -- unenumerated -- not as the author's. Shape routes the
+      // sentence; only the list decides the exemption.
+      (shaped.test(name) ? unenumerated : offences).push(...found);
       quoted += exempted;
     }
     expect(mine, 'no author-owned document was read from the pack').toBeGreaterThan(0);
@@ -364,6 +406,10 @@ describe('every written invocation of the pack tools is isolated', () => {
       quoted,
       'no declared `f-50-quote` block was found: the documents stopped quoting the defect, so that exemption is dead and should be deleted rather than left standing',
     ).toBeGreaterThan(0);
+    expect(
+      unenumerated,
+      'UNENUMERATED reviewer report prints an un-isolated command: add it to tools/reviewer-reports.json by its EXACT name — it is not exempt by looking like one, and do NOT edit a reviewer’s frozen report to satisfy this law',
+    ).toStrictEqual([]);
     expect(offences, 'an author-owned pack document prints an un-isolated command, which is the half of F-50 that routes the reader').toStrictEqual([]);
   });
 });

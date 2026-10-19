@@ -167,9 +167,29 @@ REVIEWER_REPORTS: tuple[str, ...] = reviewer_reports()
 # sha, a full one, and `…-v2`. It still catches only the two name shapes the
 # reviewers use; anything outside them is hashed as the author's, which is the
 # safe direction.
-LOOKS_LIKE_REVIEWER = re.compile(
-    r"^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-fA-F]{6,40}(-[A-Za-z0-9]+)?\.md$"
-)
+def looks_like_reviewer_pattern() -> str:
+    """The name SHAPE, read from the same file as the enumerated list.
+
+    ROUND 30, the challenger's F-53. The shape decides WORDING and detection,
+    never an exemption — that distinction is B-10 — and the other instrument
+    needs the same shape to say the same true sentence about the same file, so
+    it is not described twice either. Fails closed with the list.
+    """
+    path = Path(__file__).resolve().parent / REVIEWER_REPORTS_FILE
+    raw = json.loads(io.open(path, encoding="utf-8").read())
+    pattern = raw.get("looks_like_reviewer")
+    if not isinstance(pattern, str) or not pattern:
+        raise SystemExit(
+            f"{REVIEWER_REPORTS_FILE} has no 'looks_like_reviewer' pattern — refusing rather than "
+            f"detecting reviewer-looking names by a shape written somewhere else"
+        )
+    try:
+        return re.compile(pattern).pattern
+    except re.error as exc:
+        raise SystemExit(f"{REVIEWER_REPORTS_FILE}: 'looks_like_reviewer' is not a regex: {exc}")
+
+
+LOOKS_LIKE_REVIEWER = re.compile(looks_like_reviewer_pattern())
 
 
 def reviewer_list_problems(on_disk: list[str]) -> list[str]:
