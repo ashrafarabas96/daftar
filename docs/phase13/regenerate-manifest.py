@@ -284,6 +284,9 @@ DELIVERED_REVIEWER_REPORTS = (
     # R20, the narrow round on 3c62561..524a0b0: PASS-WITH-SCOPE, no finding, and the
     # signature extended to that head.
     'P13-CHALLENGE-524a0b0.md',
+    # R21, on 524a0b0..34c171b: PASS-WITH-SCOPE, no finding. It rides the comment
+    # correction below rather than a commit of its own, which is the rule stated there.
+    'P13-CHALLENGE-34c171b.md',
 )
 # THE FIXED POINT, stated because this list has now moved the head four times for
 # bookkeeping. A reviewer's report about head H arrives AFTER H, so enumerating it needs a
@@ -293,9 +296,17 @@ DELIVERED_REVIEWER_REPORTS = (
 # AUTHORSHIP and two files the author can create went unhashed and were credited to a
 # reviewer. So the enumeration stays by name, and this is the last commit made for
 # enumeration alone. From here a trailing reviewer report leaves `--check` at exit 1 with
-# ONE row -- "no digest row, and no named exemption covers it", naming their file -- which
-# is a true statement about a file that is not mine, disclosed rather than cleared by
-# moving a signed head. The next name goes in whenever a commit exists for its own reason.
+# FOUR stale rows and one disclosure line, which have exactly ONE cause between them: the
+# §3 digest row for their file, the coverage row -- "no digest row, and no named exemption
+# covers it", naming it -- and the two dependent §3.5b rows, the artifact count and the
+# exit code, which are stale BECAUSE the first two are. The `HASHED AS MINE` line beside
+# them says the same thing from the other direction. This paragraph said ONE row until the
+# round-21 reviewer measured it and counted four, which is the R18-01 class again: a
+# statement about the gate's own OUTPUT, written from what the rule intends rather than
+# from a run. The count is written here so a later reader does not go hunting a second
+# cause that does not exist. All of it is a true statement about a file that is not mine,
+# disclosed rather than cleared by moving a signed head. The next name goes in whenever a
+# commit exists for its own reason, which is what carried this one.
 # The SHAPE of a reviewer report, used only to spot a file that wears the name without
 # being on the list, and MY OWN round records, which are hashed and are anchored to a
 # hexadecimal subject so that `RESPONSE2-probe` is not one of them.
