@@ -1479,7 +1479,12 @@ BEGIN
   --
   -- AND WHEN IT FIRES, IT STATES WHAT IT OBSERVED AND READS THE OTHER
   -- CANDIDATE CAUSE BEFORE NAMING ONE (`TL-P4-COORD-R55` ordered items 2 and
-  -- 3, F13-2 and F13-3). Until this round this probe raised
+  -- 3, F13-2 and F13-3). Until ROUND 13 -- the round `TL-P4-COORD-R55` ruled
+  -- on, named here because «this round» is a floating referent that falsifies
+  -- itself the moment another round lands. That is the defect round 28
+  -- corrected further down this same block -- where the text now reads
+  -- UNTIL `27a7c998` -- and left standing here, eight lines above a line it
+  -- edited (`TL-P4-COORD-R93` §4; round 29 FINDING 4) -- this probe raised
   -- `installment.plan_fact_blind`, whose message had just been rewritten to
   -- say, categorically, «THE CAUSE IS ROW SECURITY … look in `pg_policy` and
   -- not in `pg_index`». THAT CLAIM IS FALSE OF THIS SITE. This read is BY
@@ -1773,6 +1778,35 @@ BEGIN
     -- routine's own lock found no row to take. Both causes are in the
     -- message, with the remedy of each, because a refusal that prescribes one
     -- remedy for two causes sends half its readers to the wrong place.
+    --
+    -- AND THE TWO CAUSES DO NOT NEED THE SAME STATE, WHICH WAS UNSTATED
+    -- UNTIL ROUND 30 AND IS THE THING A READER GETS WRONG HERE
+    -- (`TL-P4-COORD-R93` §6 item 6; round 29 FINDING 6, which measured the
+    -- divergence ingredient standalone and could not construct either cause
+    -- through the shipped guard):
+    --
+    --   CAUSE 1 NEEDS A SECOND BYPASS ON TOP OF THE UNENFORCING INDEX. For
+    --   the two countings to diverge through the index state, an ACTIVE plan
+    --   row must exist in the heap that the unenforcing partial index does
+    --   NOT hold. Clearing `indisready` is a catalogue write and removes no
+    --   existing index entry, so such a row must have been WRITTEN while the
+    --   index was not ready -- and at this head every non-DELETE plan write
+    --   in that state is refused by the hoisted reading above before it
+    --   reaches this loop. So cause 1 additionally requires the sync trigger
+    --   to have been DISABLED or DROPPED, or the row to have been placed by a
+    --   superuser catalogue or heap write. That is a reading of the control
+    --   flow plus PostgreSQL's catalogue semantics, DESIGN ONLY, and it is
+    --   not asserted as measured: no arm constructs it.
+    --
+    --   CAUSE 2 NEEDS NO UNENFORCING INDEX AT ALL, and therefore reaches this
+    --   RAISE on the NON-DELETE path too. A plan committed by another
+    --   transaction between the two count statements produces the
+    --   disagreement with every index of the relation enforcing, so the
+    --   hoisted reading above finds nothing to refuse and the write arrives
+    --   here. The DELETE path is NOT the only route to this refusal, and the
+    --   suites' narrower sentence about the DELETE path is about cause 1.
+    --   PROVEN IN LIVE CODE; the window itself is UNMEASURED, exactly as the
+    --   disclosure below part 3a's cross-check says.
     IF v_active_ix IS DISTINCT FROM v_active THEN
       RAISE EXCEPTION 'installment.plan_index_disagrees: invoice %/% carries % plan(s) with status = ''active'' when counted with the status test in a FILTER above the scan -- a spelling the PARTIAL unique index cannot serve, by the predicate-implication rule -- and % when counted with status = ''active'' in the WHERE, which it can. THE FIRST READING IS NOT «OVER THE ROWS THEMSELVES» AND IS NO LONGER DESCRIBED AS IT WAS (TL-P4-COORD-R55 ordered item 3): it is index-served too, by installment_plans_pkey in every statistics-free plan, so what the two readings establish is that THE PARTIAL UNIQUE INDEX disagrees with another access path, not that either is a heap scan. Both readings are of the same rows in the same transaction. The index-served reading can only under-report, and it does so when the index holds no entry for a row that qualifies for it -- which is an index that is PRESENT AND NOT ENFORCING (indisready false, the state an interrupted CREATE INDEX CONCURRENTLY or REINDEX CONCURRENTLY leaves, which pg_indexes renders identically to the correct one) and which REINDEX will refuse. TWO STATES REACH THIS AND THE REMEDY DIFFERS: if the index is unenforcing, nothing may be derived from the bound it is supposed to hold and the index must be rebuilt before any plan is written; if installment_plans_active_exclusive has been dropped, another transaction may have committed a plan on this invoice between these two readings and the remedy is to restore that trigger so that a plan write takes the invoice row first',
         v_business, v_invoice, v_active, v_active_ix USING ERRCODE = 'P0001';
@@ -2107,15 +2141,40 @@ BEGIN
     -- statement of a plpgsql routine takes a fresh snapshot, so a transaction
     -- that commits SECOND in the round-11 challenger's two-writer race sees
     -- the first one's committed plan HERE even though its own sync could not
-    -- see it. That is the arm that catches the race when the index is not
-    -- enforcing. The sync's copy catches the single-transaction state, which
+    -- see it.
+    --
+    -- WHAT THAT CATCHES AT THIS HEAD, FIRST, BECAUSE THIS BODY IS WHAT AN
+    -- OPERATOR READS (`TL-P4-COORD-R93` §2, round 29 FINDING 2, BLOCKING;
+    -- head-first shape per `TL-P4-COORD-R92` §1). It catches the race in the
+    -- states where both writers are ADMITTED -- the index ENFORCING, or the
+    -- index DROPPED -- and it catches NOTHING while an index of
+    -- `installment_plans` is present-but-unenforcing. UNTIL `27a7c998` THIS
+    -- PARAGRAPH SAID "that is the arm that catches the race when the index is
+    -- not enforcing", AND THAT IS NOW HISTORY: `27a7c998` hoisted the
+    -- `pg_index` reading of `installment_plan_fact_sync()` out of
+    -- `IF NOT v_seen`, so in the unenforcing state the sync raises
+    -- `installment.plan_index_unenforcing` inside each writer's OWN
+    -- statement, both transactions abort, and this DEFERRABLE INITIALLY
+    -- DEFERRED routine never reaches COMMIT to catch anything. NO WRITER IS
+    -- ADMITTED THERE. Measured in
+    -- `tests/integration/phase4-s7-installment-concurrency-db.test.ts`, case
+    -- `E3 the same race with the index NOT ENFORCING: NO writer is admitted
+    -- and both are refused BY NAME (F-1)` -- cited by case name, not by line,
+    -- because lines move and three rounds of bare line citations in this
+    -- slice were wrong.
+    --
+    -- The sync's copy catches the single-transaction state, which
     -- this one would also catch but one statement later, with a less precise
     -- name attached to the write that caused it.
     --
     -- WHAT IT DOES NOT CATCH IS DECLARED RATHER THAN ASSUMED: at `REPEATABLE
     -- READ` and `SERIALIZABLE` a transaction's snapshot cannot hold a
-    -- concurrently committed plan at all, so with the index not enforcing
-    -- this count reads 1 in both arms of such a race. What refuses THERE is
+    -- concurrently committed plan at all, so with the index DROPPED this
+    -- count reads 1 in both arms of such a race. **DROPPED AND NOT
+    -- "NOT ENFORCING", WHICH IS WHAT STOOD HERE AND WAS THE SAME DEFECT ONE
+    -- PARAGRAPH DOWN:** an index present-but-unenforcing is refused by the
+    -- sync before either writer completes, so that state never reaches this
+    -- count at all. What refuses THERE is
     -- the invoice row lock of section 3a-ter -- `40001` by the snapshot rules
     -- -- and, if that is bypassed too, the READER's own count, which runs in
     -- a later transaction and is therefore total. Section 3a-ter's table
@@ -3798,16 +3857,61 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 --     is what serialises the two `active` inserters, that it holds at all
 --     three isolation levels -- AND THAT IT IS THE ONLY THING THAT DOES, so
 --     with the index present-but-unenforcing both writers committed and the
---     reader served the pre-installment figure silently. What answers now:
---     the INVOICE ROW LOCK of section 3a-ter at `READ COMMITTED` (the loser
---     blocks, re-reads on a fresh snapshot and is refused
---     `installment.plan_active_conflict`); `40001` at `REPEATABLE READ` and
---     `SERIALIZABLE`; the SYNC's own `count(*)` with the BEFORE trigger
---     DROPPED and the index NOT ENFORCING, which refuses
---     `installment.plan_active_unbounded` (measured); and the reader's fourth
---     count in a later transaction, which is total because it reads committed
---     rows. The loser is therefore NOT handed a serialisation failure dressed
---     as a blinded read, which was this entry's question.
+--     reader served the pre-installment figure silently.
+--
+--     WHAT ANSWERS AT THIS HEAD, STATED FIRST BECAUSE THIS LIST IS WHAT AN
+--     OPERATOR READS (`TL-P4-COORD-R93` §1, round 29 FINDING 1, BLOCKING;
+--     the head-first shape is `TL-P4-COORD-R92` §1's and is not redesigned
+--     here). In the PRESENT-BUT-UNENFORCING state NO PLAN WRITE IS ADMITTED
+--     AT ALL. `installment_plan_fact_sync()` reads `pg_index` for every index
+--     of `installment_plans` UNCONDITIONALLY on every non-DELETE plan event
+--     and refuses `installment.plan_index_unenforcing` BEFORE any `count(*)`
+--     of that routine is taken -- the reading and the refusal are the
+--     `WHERE x.indrelid = 'public.installment_plans'::regclass` block that
+--     opens section 3a's `IF TG_OP <> 'DELETE'`, cited by that identifier
+--     rather than by a bare line because line numbers into this file have
+--     been given wrongly in three consecutive rounds (line and SHA together,
+--     measured: `spec:1605-1615 @ b9682e1`). So in that state there is no
+--     loser to serialise and no blinded read to dress it as: BOTH writers are
+--     refused BY NAME. Measured in
+--     `tests/integration/phase4-s7-installment-concurrency-db.test.ts`, case
+--     `E3 the same race with the index NOT ENFORCING: NO writer is admitted
+--     and both are refused BY NAME (F-1)` -- cited by case name, not by line.
+--
+--     WHAT ANSWERED UNTIL `27a7c998`, IN THE PAST TENSE, AND WHAT THE THREE
+--     MECHANISMS BELOW ARE NOW SCOPED TO. Until `27a7c998` the enforcement
+--     reading sat inside `IF NOT v_seen`, so the present-but-unenforcing
+--     state admitted writes, and these were the mechanisms that answered the
+--     race in it:
+--       (1) the INVOICE ROW LOCK of section 3a-ter at `READ COMMITTED` (the
+--           loser blocks, re-reads on a fresh snapshot and is refused
+--           `installment.plan_active_conflict`), and
+--       (2) `40001` at `REPEATABLE READ` and `SERIALIZABLE`.
+--           Both still answer when the index is **DROPPED** rather than
+--           present-but-unenforcing, because a dropped index leaves no
+--           `pg_index` row for the hoisted reading to match, so that reading
+--           cannot fire -- that is a reading of the control flow above and
+--           NOT a measurement, and it is not labelled as one. The same two
+--           with the index ENFORCING are cases `E2 two concurrent plan
+--           creations on ONE invoice, index ENFORCING: the loser is refused
+--           BY NAME, not 23505 (F-4)` and `E5 REPEATABLE READ and
+--           SERIALIZABLE: 40001, and NOT this slice's name` of that suite,
+--           and those two are measured.
+--       (3) the SYNC's own `count(*)` with the BEFORE trigger DROPPED and the
+--           index NOT ENFORCING, refusing `installment.plan_active_unbounded`.
+--           **THIS CLAUSE CARRIED A `(measured)` LABEL AND THE LABEL IS
+--           WITHDRAWN RATHER THAN RE-POINTED.** That state admits no write at
+--           this head, so the claim has no construction; the sibling suite of
+--           the same commit declares it **UNMEASURED** in terms, in the `E4`
+--           case's "WHAT IS THEREBY **UNMEASURED** HERE" paragraph, and that
+--           suite also records that the AFTER arm's count remains measured
+--           single-threaded by the fact suite's section R16. Nothing is
+--           re-measured here.
+--     And the reader's fourth count in a later transaction is untouched by
+--     all of this and is still total, because it reads committed rows. The
+--     loser is therefore NOT handed a serialisation failure dressed as a
+--     blinded read, which was this entry's question -- and at this head it is
+--     handed no write at all.
 --
 --     AND ONE THING THIS ROUND EXPECTED AND DID NOT FIND. The deferred
 --     verifier's `count(*)` was written as the arm that catches two writers
@@ -4541,8 +4645,8 @@ DECLARE
   -- of any pinned signature, which is the one shape a digest of a signature
   -- cannot see.
   c_bodies    CONSTANT TEXT[][] := ARRAY[
-    ['public.installment_plan_fact_sync()',                       'cb071293da97de0c314fb2b895b1565a4d3d2d58fa3828515e7c93941906ec3f'],
-    ['public.installment_plan_fact_verify()',                     'd83b0657a3b9896eccfb66313ad5ca2bf9080158739bf5a9d1e6cb553e423f7c'],
+    ['public.installment_plan_fact_sync()',                       '4224aa2d6d30729e892a4cbdf24d5113d7d804dd350e595c7b5f9b19edeb0be9'],
+    ['public.installment_plan_fact_verify()',                     '50f02f27f3f411a97f3140fa05d24980f2a3dfdd4b376bc5b8c0f67fe4b946c3'],
     ['public.installment_plan_active_exclusive()',                '972604870115f80909906ebf4a184d2de56f3c3568c91d0a7b66d288778515c2'],
     ['public.installment_schedule_verify()',                      'c69837085b4386c24f939412a851c0b7d09d2e51ba0dda5182f90ccf1c8f8408'],
     ['public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)', '61d797de3fcb5f8e7fdb687414e09a2d734de630bdd954c48995661708b122f6'],

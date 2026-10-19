@@ -441,8 +441,18 @@ describe('P4-S7 the installment.* rendering contract', () => {
     //    case, and it is a theorem of filter-then-`[0]`.
     //
     //    A PLANT CARRYING THE SAME MESSAGE IS REFUSED BY A DIFFERENT ARM OF
-    //    ROUND 17 — its `expect(lines).toHaveLength(1)` pin at its own
-    //    `:321`, which reds BEFORE its scope reads `lines[0]` at all — and
+    //    ROUND 17 — the `expect(lines).toHaveLength(1)` pin that immediately
+    //    follows this block's own `const lines = r.logged.filter(…)` in
+    //    section (2) above, CITED BY THAT IDENTIFIER AND NOT BY A LINE
+    //    NUMBER. A bare `` `:321` `` stood here and was FALSE AT BOTH SHAs:
+    //    measured with `grep -n 'toHaveLength(1)'` on each blob, that pin is
+    //    at `:334 @ 27a7c998` and `:346 @ b9682e1`, and `:321` is a comment
+    //    line at each. Three readers produced three different wrong values
+    //    for it across rounds 28, 29 and the `R92` reading, which is why the
+    //    remedy here is an anchor and not a better number
+    //    (`TL-P4-COORD-R93` §3). Where a line is still useful it is given
+    //    WITH ITS SHA. That pin reds BEFORE its scope reads `lines[0]` at
+    //    all — and
     //    NOT by any ordering of the log. No ordering is asserted here and
     //    none is available: `filter` preserves emission order and nothing
     //    orders the shipped `logger.error` call first, so a same-message

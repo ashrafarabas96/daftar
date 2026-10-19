@@ -2153,11 +2153,26 @@ beforeAll(async () => {
   //
   //    THAT WAS A FAIL-OPEN IN THE SHIPPED GUARD AND NOT A DEFECT OF THIS
   //    INSTRUMENT. It was written up as `PATCH-REQ-P4S7-FINDING-C`; the probe
-  //    it was about is at `spec:1618-1620` AT THIS HEAD (`SELECT EXISTS …
-  //    INTO v_seen`) and was at
-  //    `spec:1513-1515` at the parent — the hoist added 47 lines above it and
-  //    round 28 added more, so the pointer is given for THIS head and the
-  //    parent's is labelled as the parent's. **IT WAS CLOSED BY
+  //    it was about is the `SELECT EXISTS … INTO v_seen` probe of
+  //    `installment_plan_fact_sync()`, CITED BY THAT IDENTIFIER because a
+  //    bare `spec:NNNN` into a file that moves has now been given wrongly in
+  //    three consecutive rounds by three different readers
+  //    (`TL-P4-COORD-R93` §3). Where a line is useful it is given WITH ITS
+  //    SHA and never alone. Measured, `git show <sha>:<spec> | grep -n 'INTO
+  //    v_seen'`: `spec:1513-1515 @ 54e3bbb7`, `spec:1573-1575 @ 27a7c998`,
+  //    `spec:1618-1620 @ b9682e1`.
+  //
+  //    AND THE SHIFT ABOVE THAT PROBE IS **60** LINES, NOT THE 47 THIS
+  //    COMMENT SHIPPED ON A `+` LINE (`TL-P4-COORD-R93` §5; round 29
+  //    FINDING 3 (ii)). Measured between `54e3bbb7` and `27a7c998` over the
+  //    text above the probe: 61 lines added, 1 removed, net 60, which is
+  //    1575 − 1515. **47 is a different quantity** — `27a7c998`'s net gain
+  //    over the WHOLE file, 5501 → 5548 lines — and the file lost 13 lines
+  //    below the probe, which is where the two figures part. `TL-P4-COORD-
+  //    R91` §2's "citations above ~1510 are off by 47" is wrong by that same
+  //    13, and `TL-P4-COORD-R92` §2.2 narrowed the class to one member
+  //    without correcting the magnitude, which is how this round inherited
+  //    it. **IT WAS CLOSED BY
   //    `27a7c998bdbf261cbc87902a4bb3c0ad23faedc6`**, which hoisted the
   //    `pg_index` reading out of `IF NOT v_seen`. Round 26 was not authorised
   //    to redesign the guard and did not; round 27 was, and did.
@@ -4469,6 +4484,22 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // WRITER about. Its runtime reachability is **UNMEASURED at this head**,
     // it is NOT dead code and is not claimed to be, and it is not asserted
     // here on a path the shipped guard no longer takes.
+    //
+    // AND THE SENTENCE ABOVE IS STILL COARSER THAN THE REFUSAL'S TWO CAUSES,
+    // WHICH IS SAID RATHER THAN LEFT TO BE INFERRED (`TL-P4-COORD-R93` §6
+    // item 6; round 29 FINDING 6). The refusal names TWO causes and they do
+    // not need the same state. CAUSE 1 — the index not holding an active row
+    // the heap holds — additionally needs the SYNC TRIGGER BYPASSED, because
+    // clearing `indisready` removes no existing index entry, so the row must
+    // have been written while the index was not ready and every such
+    // non-DELETE write is refused by the hoisted reading first. CAUSE 2 — a
+    // concurrent committer between the two count statements at
+    // `READ COMMITTED` with `installment_plans_active_exclusive` dropped —
+    // needs NO unenforcing index at all, and therefore reaches the writer's
+    // cross-check on the NON-DELETE path too, which "reachable on the DELETE
+    // path" does not say. Both refinements are written where the refusal is
+    // described, above the `IF v_active_ix IS DISTINCT FROM v_active` arm in
+    // the specification. Neither is measured here.
     const e = String(M['R3_second_no_trigger']);
     expect(e, 'the second active plan was not refused while an index of the relation is unenforcing').toContain('installment.plan_index_unenforcing');
     expect(e, 'the refusal does not state the index state it observed').toContain('are not enforcing');

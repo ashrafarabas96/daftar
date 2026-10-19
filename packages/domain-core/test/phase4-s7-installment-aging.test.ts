@@ -4312,10 +4312,19 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
    * `installment_plans_pkey` occurred ZERO times in this specification. Part 9
    * read the three enforcement flags of exactly ONE index, and the writer's
    * blindness probe reads the handed row BY PRIMARY KEY — so one catalogue
-   * flag on the primary key made EVERY lawful plan write fail, under a name
+   * flag on the primary key made A lawful plan write fail, under a name
    * whose message said the cause was row security and told the operator not to
    * look in `pg_index`, while the whole end-state block reported OK and the
    * reader served a figure.
+   *
+   * «EVERY» STOOD HERE AND WAS FALSE OF THE ROUND IT DESCRIBES
+   * (`TL-P4-COORD-R90` §6's fourth copy, ordered in `TL-P4-COORD-R93` §6
+   * item 6; round 29 FINDING 5). In round 13 the detection was conditional on
+   * the planner choosing the unenforcing index, and on a `Seq Scan` the probe
+   * found the row and nothing refused — so the universal was never true of
+   * round 13. Since `27a7c998` the runtime reading is unconditional on every
+   * non-DELETE plan event, which makes the universal true of THIS head; it is
+   * not back-dated to the round that measured the single write.
    *
    * And there was NO law anywhere that an index physically describes its own
    * heap: the round-12 corruption was repaired with two executable `REINDEX`

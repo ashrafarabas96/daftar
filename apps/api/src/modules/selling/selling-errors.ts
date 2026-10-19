@@ -739,9 +739,17 @@ const INSTALLMENT_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
   // INSIDE the failing event, on the three refusal paths whose other
   // candidate cause is row security. It exists because one catalogue flag on
   // `installment_plans_pkey` — an index the specification did not name once —
-  // made every lawful plan write fail under `plan_fact_blind`, whose message
+  // made A lawful plan write fail under `plan_fact_blind`, whose message
   // had just been rewritten to say the cause was row security and to look in
-  // `pg_policy` and not in `pg_index`. A refusal must state what it observed;
+  // `pg_policy` and not in `pg_index`. «EVERY» STOOD HERE AND WAS FALSE OF
+  // THE ROUND IT DESCRIBES (`TL-P4-COORD-R90` §6's remaining copy under
+  // `apps/**`, ordered in `TL-P4-COORD-R93` §6 item 6; round 29 FINDING 5):
+  // in round 13 that detection was conditional on the planner choosing the
+  // unenforcing index, and on a `Seq Scan` the probe found the row and
+  // nothing refused. Since `27a7c998` the runtime reading is unconditional on
+  // every non-DELETE plan event, so the universal is true of THIS head and is
+  // NOT back-dated to the round that measured the single write. A refusal
+  // must state what it observed;
   // this is the name for the state the code can establish, and
   // `plan_fact_blind` now keeps only the state in which the index
   // explanation has been EXCLUDED by a reading. It is an estate defect — an
