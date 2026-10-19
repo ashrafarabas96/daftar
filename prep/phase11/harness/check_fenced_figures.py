@@ -687,8 +687,16 @@ _HAYSTACK = {}
 
 
 def _subject_top(root, checked=True):
-    """The repository the subject belongs to, resolved so a PLANTED repository
-    cannot become it.
+    """The ONE repository that contains the subject, or a named refusal.
+
+    What this does and does not claim, stated exactly, because round 18
+    rejected the sentence that used to stand here: it does NOT claim that no
+    repository can be planted. It claims that if more than one repository
+    contains the haystack, this function REFUSES BY NAME and lists them,
+    instead of choosing one -- and that the answer does not depend on the
+    working directory the run was started from. Choosing was the defect:
+    round 17 anchored on `cwd`, and round 18 moved the plant one level up so
+    that the plant WAS the anchor from the harness directory.
 
     `R17`, ranked a fail-open by the coordinator over the challenger's own
     milder ranking: `_toplevel` resolved UPWARD from the harness directory, so
@@ -701,18 +709,25 @@ def _subject_top(root, checked=True):
     own HEAD, because `_commit_of` was called once and its answer went only
     into a label.
 
-    Three assertions now, each a NAMED refusal:
+    Four assertions, each a NAMED refusal, and `cwd` is in none of them:
 
-      1. The toplevel is resolved from the directory the run was INVOKED in
-         when the subject lies inside it -- the repository a reader thinks they
-         are measuring -- and only otherwise from the subject itself, which is
-         what the hermetic arms need.
-      2. The subject must be a STRICT subdirectory of that toplevel. A subject
-         that is its own repository is the challenger's plant exactly.
-      3. No `.git` may sit anywhere between the toplevel and the subject, or
-         anywhere inside the subject, and `HEAD` resolved FROM THE SUBJECT must
-         be the same commit as `HEAD` resolved from the toplevel. The first is
-         by name, the second is by value, and a redirect has to beat both.
+      1. A CENSUS of every ancestor of the subject up to `/`, and of the
+         subject itself, for a `.git` entry -- a directory, or the file a
+         worktree leaves. None is `GIT-NO-REPOSITORY`. More than one is
+         `GIT-NESTED-REPO`, listing them all: two repositories contain the
+         haystack, one of them is a plant, and the gate does not pick.
+      2. The subject must be a STRICT subdirectory of the one that is left. A
+         subject that is its own repository is round 17's plant exactly.
+      3. No `.git` anywhere INSIDE the subject, which is the one position the
+         census cannot reach, because it is not an ancestor.
+      4. By value: `HEAD` resolved FROM THE SUBJECT must be the same commit as
+         `HEAD` resolved from that repository.
+
+    The arms plant a repository at the harness, one level above it and two
+    levels above it, and run each from three working directories -- the
+    repository root, the harness directory and an unrelated subdirectory --
+    because the defect round 18 reported was invisible from one `cwd` and live
+    from another.
     """
     subject = os.path.realpath(root)
     if not checked:
@@ -723,9 +738,44 @@ def _subject_top(root, checked=True):
         # restores that behaviour by value and not by approximation -- which is
         # what makes the published probe's third direction mean anything.
         return os.path.realpath(_toplevel(subject))
-    cwd = os.path.realpath(os.getcwd())
-    anchor = cwd if (subject + os.sep).startswith(cwd + os.sep) else subject
-    top = os.path.realpath(_toplevel(anchor))
+    # `R18-F1`: the anchor is STRUCTURAL and the working directory plays no part
+    # in it. Round 17 anchored it to the directory the run was invoked in, and
+    # round 18 moved the planted repository ONE LEVEL UP, to `prep/phase11`:
+    # that repository then WAS the toplevel, so there was nothing "between" it
+    # and the subject to find, the subject was a strict subdirectory of it, and
+    # its HEAD agreed with itself. All three assertions passed, and the
+    # protection turned out to depend on an operator's `cwd` -- it held from the
+    # repository root and failed when the file was run FROM THE HARNESS
+    # DIRECTORY, which is how it is most naturally run.
+    #
+    # So: every ancestor of the subject up to `/`, and the subject itself, is
+    # examined for a `.git` entry (a directory, or the file a worktree leaves).
+    # MORE THAN ONE is a refusal that lists them all -- the gate does not pick
+    # between two repositories, because picking is what let the subject choose.
+    # Exactly one is the anchor.
+    repos = []
+    at = subject
+    while True:
+        if os.path.exists(os.path.join(at, ".git")):
+            repos.append(at)
+        parent = os.path.dirname(at)
+        if parent == at:
+            break
+        at = parent
+    if not repos:
+        raise Refusal(
+            "GIT-NO-REPOSITORY: no ancestor of the haystack %s holds a `.git`, so there "
+            "is no commit to derive the subject set from. This is a refusal and not a "
+            "fall back to reading the directory." % subject
+        )
+    if len(repos) > 1:
+        raise Refusal(
+            "GIT-NESTED-REPO: %d repositories contain the haystack %s (%s). The gate "
+            "does not choose between them: one of them is a plant, and choosing is what "
+            "let the subject pick the commit it was judged against."
+            % (len(repos), subject, ", ".join(repos))
+        )
+    top = repos[0]
     if not (subject + os.sep).startswith(top + os.sep):
         raise Refusal(
             "GIT-SUBJECT-IS-A-REPO: the subject %s is the repository root itself (or "
@@ -733,22 +783,10 @@ def _subject_top(root, checked=True):
             "BE the toplevel. The haystack must be a strict subdirectory of the "
             "repository it is read from." % subject
         )
-    # 3a, by name: every directory from the toplevel down to the subject, and
-    # everything under the subject.
-    walk_down = []
-    rel = os.path.relpath(subject, top).split(os.sep)
-    at = top
-    for part in rel:
-        at = os.path.join(at, part)
-        walk_down.append(at)
-    for d in walk_down:
-        dotgit = os.path.join(d, ".git")
-        if os.path.exists(dotgit):
-            raise Refusal(
-                "GIT-NESTED-REPO: %s exists below the repository root %s, so git would "
-                "resolve the subject against IT and not against the repository this run "
-                "was invoked on." % (dotgit, top)
-            )
+    # Every directory between the toplevel and the subject is already covered:
+    # it is an ancestor of the subject, so a `.git` there is a second
+    # repository and the census above refused it by name. What the census does
+    # NOT reach is a repository planted DEEPER, inside the haystack itself.
     for d, subdirs, _files in os.walk(subject):
         if ".git" in subdirs or ".git" in _files:
             raise Refusal(
@@ -762,7 +800,7 @@ def _subject_top(root, checked=True):
         raise Refusal(
             "GIT-HEAD-DISAGREES: HEAD resolved from the subject %s is %s, and HEAD "
             "resolved from the repository root %s is %s. One of them is not the "
-            "repository this run was invoked on." % (subject, here[:12], top, there[:12])
+            "repository that holds the subject." % (subject, here[:12], top, there[:12])
         )
     return top
 
@@ -1275,6 +1313,90 @@ def _arm(body, skip=(), relpath="a.md", kind="plain"):
         return scan(docs, harness, quiet=True, skip=skip)
 
 
+# ── R18-F1: the anchor, measured at three POSITIONS and three WORKING ──────
+# DIRECTORIES.
+#
+# Round 17's arm planted a repository AT the harness and refused it. Round 18
+# moved the plant ONE LEVEL UP and it passed -- not because the assertions were
+# wrong, but because the anchor was resolved from `cwd`, so the same tree
+# refused from the repository root and passed when the file was run from the
+# harness directory. A position is not a measurement unless the `cwd` it is
+# measured from is one of several.
+#
+# Each world: an outer repository, the harness three directories down
+# (`prep/phase11/harness`, the real layout), and for the planted positions a
+# second repository at the harness, one level above it, or two. Each is run
+# from the outer root, from the harness itself and from an unrelated sibling.
+ANCHOR_POSITIONS = ("none", "at", "up1", "up2")
+ANCHOR_CWDS = ("the repository root", "the harness directory", "an unrelated subdir")
+_ANCHOR = {}
+
+
+def _anchor_world(where):
+    """(root, harness, sibling) for one anchor world, built once per process."""
+    if where in _ANCHOR:
+        return _ANCHOR[where]
+    d = tempfile.mkdtemp(prefix="p11-anchor-%s-" % where)
+    atexit.register(shutil.rmtree, d, True)
+    rel = os.path.join("prep", "phase11", "harness")
+    harness = os.path.join(d, rel)
+    os.makedirs(harness)
+    sibling = os.path.join(d, "apps")
+    os.makedirs(sibling)
+    _write(harness, "fake_proofs.py", FAKE_PROOFS)
+    _write(sibling, "keep.txt", "a sibling that is not an ancestor of the harness\n")
+    _git(d, ["init", "-q"])
+    _git(d, ["add", "-A", "--", "."])
+    _git(
+        d,
+        ["-c", "user.name=phase11", "-c", "user.email=phase11@example.invalid",
+         "commit", "-q", "--no-gpg-sign", "-m", "anchor world: %s" % where],
+    )
+    if where != "none":
+        at = {
+            "at": harness,
+            "up1": os.path.join(d, "prep", "phase11"),
+            "up2": os.path.join(d, "prep"),
+        }[where]
+        # The plant carries the token, committed in ITSELF and in nothing else,
+        # so if its commit is ever read the figure looks emitted. The file is
+        # written INSIDE THE HAYSTACK and committed in the plant: the derivation
+        # lists the subject's path within whatever repository it resolves, so a
+        # token at the plant's own root would be outside that path and the
+        # guard-deletion control would measure nothing. Round 18's own plant
+        # had to satisfy the same condition to pass.
+        _write(harness, "PROBE-PLANTED.txt", PROBE + "\n")
+        _git(at, ["init", "-q"])
+        _git(at, ["add", "-A", "--", "."])
+        _git(
+            at,
+            ["-c", "user.name=phase11", "-c", "user.email=phase11@example.invalid",
+             "commit", "-q", "--no-gpg-sign", "-m", "the planted repository"],
+        )
+    _ANCHOR[where] = (d, harness, sibling)
+    return _ANCHOR[where]
+
+
+def _anchor_arm(where, cwd_kind, skip=()):
+    """One anchor world, weighed from one working directory."""
+    root, harness, sibling = _anchor_world(where)
+    seat = {
+        "the repository root": root,
+        "the harness directory": harness,
+        "an unrelated subdir": sibling,
+    }[cwd_kind]
+    was = os.getcwd()
+    with tempfile.TemporaryDirectory() as docs_at:
+        docs = os.path.join(docs_at, "docs")
+        os.makedirs(docs)
+        _write(docs, "a.md", PROBE + "\n")
+        try:
+            os.chdir(seat)
+            return scan(docs, harness, quiet=True, skip=skip)
+        finally:
+            os.chdir(was)
+
+
 def _arms_with(skip=()):
     """(label, want, runner) for every arm, with `skip` left out of the matcher.
 
@@ -1322,6 +1444,29 @@ def _arms_with(skip=()):
             (lambda: _arm(PROBE, skip, "a.md", "nested")),
         )
     )
+    # `R18-F1`: the same question at three positions and from three working
+    # directories. `none` is the control -- the figure is not emitted, so the
+    # honest answer is a red -- and every planted position must refuse from
+    # every seat. Deleting the anchor turns the three planted positions into
+    # passes, which is the fail-open restored by value.
+    for where in ANCHOR_POSITIONS:
+        for seat in ANCHOR_CWDS:
+            arms.append(
+                (
+                    "R18-F1 %s, run from %s"
+                    % (
+                        {
+                            "none": "no planted repository",
+                            "at": "planted at the harness",
+                            "up1": "planted one level above",
+                            "up2": "planted two levels above",
+                        }[where],
+                        seat,
+                    ),
+                    1 if where == "none" else 5,
+                    (lambda w=where, s=seat: _anchor_arm(w, s, skip)),
+                )
+            )
     return arms
 
 
@@ -1636,6 +1781,19 @@ def structure_test():
 # the frame does not call. `--check-blocks`, `scan`, the emitters and the
 # selftest machinery are not in the frame and are not parsed -- they decide
 # nothing about whether a document's figure is emitted.
+#
+# A FOURTH, added because round 18 found it live and NOT in the three above:
+# the rules are closed over node TYPES and were open over WHICH MODULE CALLS
+# MAY DECIDE. Rule 2 admitted "a call the frame admits" and rule 3 admitted an
+# attribute call on a module in `FRAME_MODULES`, so `if re.match("zz_", s)`
+# planted in the real `figures_on` was admissible as written -- and it could
+# not simply be banned, because `_is_figure` decides on `re.fullmatch`
+# legitimately. `DECIDING_MODULE_CALLS` now names the (function, module,
+# attribute) triples that may decide, each checked to be live, and every other
+# attribute call in a test position is refused by name. What remains outside,
+# stated rather than derived: a decision on a LISTED pair is trusted to the
+# named guard that wraps it and to the honesty of that guard's name, which is
+# the second exclusion above and not a new one.
 
 FRAME_NODES = frozenset(
     (
@@ -1684,6 +1842,23 @@ FRAME_MODULES = ("re", "os", "unicodedata")
 # Parsed by `guarded_transformations` rather than by these rules. The claim is
 # checked below against the tuple that function is actually run over.
 PARSED_AS_TRANSFORMERS = ("_strip", "_segments")
+
+# `R18-S1`. The sub-language was closed over node TYPES and OPEN over which
+# module calls may DECIDE: rule 2 admits "a call the frame admits" and rule 3
+# admits an attribute call on a module in `FRAME_MODULES`, so
+# `if re.match("zz_", s): continue` planted in the real `figures_on` was
+# admissible under the rules as written -- selftest 0, scan 0, parse silent,
+# fabricated figure through. Banning module calls outright is not available:
+# `_is_figure` decides on `re.fullmatch` legitimately, inside the `key class`
+# guard the matrix measures.
+#
+# So the pairs that may decide are NAMED, per function, and every other
+# attribute call in a test position is refused by name. Each entry is checked
+# to be live below, for the same reason `FRAME_METHODS` is: a permissive entry
+# nothing uses only widens the language.
+DECIDING_MODULE_CALLS = (
+    ("_is_figure", "re", "fullmatch"),
+)
 
 DECISION_EXCEPTIONS = {
     "_is_figure": (
@@ -1737,7 +1912,10 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
     being defined here.
     """
     lookup = lookup or _frame_lookup
-    seen = set() if _seen is None else _seen
+    # `R18-S2`: the names on the CURRENT descent, copied at each level rather
+    # than accumulated. A cumulative set would make two siblings calling one
+    # helper look like re-entry; a path makes re-entry mean re-entry.
+    seen = set(_seen or ())
     seen.add(fn.name)
     name = fn.name
     msgs = []
@@ -1763,6 +1941,7 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
                 exempt.add(id(sub))
 
     # Rule 2: every decision.
+    decided = set()
     for test in tests:
         if id(test) in exempt:
             continue
@@ -1774,7 +1953,28 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
             keys.add(key)
             continue
         if isinstance(inner, ast.Call):
-            continue  # classified by rule 3 below, like every other call
+            func = inner.func
+            on_module = (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id in FRAME_MODULES
+            )
+            if on_module:
+                pair = (name, func.value.id, func.attr)
+                if pair in DECIDING_MODULE_CALLS:
+                    decided.add(pair)
+                else:
+                    msgs.append(
+                        "%s: line %d DECIDES on `%s.%s(...)`, which is not on the "
+                        "deciding-call list. An admitted module call is admitted as a "
+                        "CALL; deciding on one is a narrowing, and `R18-S1` planted "
+                        "exactly this one."
+                        % (name, test.lineno, func.value.id, func.attr)
+                    )
+            # Anything else in a test position is a call the frame classifies
+            # under rule 3 below, which is where a method on the value is
+            # refused.
+            continue
         msgs.append(
             "%s: line %d decides on `%s`, which is neither a named guard nor a call the "
             "frame admits -- a predicate written inline is where a narrowing hides"
@@ -1831,7 +2031,21 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
                         "parses is exactly where R17-S1 says a decision hides."
                         % (name, node.lineno, func.id)
                     )
-                elif what in ("function", "planted") and func.id not in seen:
+                elif what in ("function", "planted") and func.id in seen:
+                    # Round 18 asked whether the descent terminates. It did,
+                    # by SKIPPING a name already on the path -- so a helper
+                    # that calls itself, or a mutual pair, was parsed as
+                    # admissible and then recursed at RUN time until the
+                    # interpreter stopped it with a `RecursionError`. A
+                    # traceback tells a reader the instrument broke. This
+                    # phase refuses BY NAME.
+                    msgs.append(
+                        "%s: line %d calls `%s`, which is already on this descent (%s) "
+                        "-- a frame that re-enters a function is refused by name, not "
+                        "followed until the interpreter's own limit stops it"
+                        % (name, node.lineno, func.id, " -> ".join(sorted(seen)))
+                    )
+                elif what in ("function", "planted"):
                     if _depth >= 4:
                         msgs.append(
                             "%s: the descent into `%s` is deeper than this parse follows, "
@@ -1865,6 +2079,13 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
                     % (name, node.lineno)
                 )
 
+    for pair in DECIDING_MODULE_CALLS:
+        if pair[0] == name and pair not in decided:
+            msgs.append(
+                "%s: the deciding-call entry `%s.%s` is not a test in this function any "
+                "more, so it permits a decision nothing takes -- a permissive entry "
+                "nothing uses only widens the language" % (name, pair[1], pair[2])
+            )
     for src in exceptions:
         if src not in used:
             msgs.append(
@@ -1894,6 +2115,28 @@ _PLANTED_HELPER = '''def _r17_helper(s):
     return False
 '''
 
+# `R18-S2`'s two shapes, as the round ran them: a helper that calls itself, and
+# a mutual pair. Both used to be parsed as admissible -- the descent skipped a
+# name it had already seen -- and then recursed at RUN time until the
+# interpreter raised. They are plants here so the parse has to name them.
+_PLANTED_SELF = '''def _r18_self(s):
+    if _r18_self(s):
+        return True
+    return False
+'''
+
+_PLANTED_H1 = '''def _r18_h1(s):
+    if _r18_h2(s):
+        return True
+    return False
+'''
+
+_PLANTED_H2 = '''def _r18_h2(s):
+    if _r18_h1(s):
+        return True
+    return False
+'''
+
 DECISION_PLANTS = (
     ("R17-F1 comprehension filter", '        out = [x for x in out if not x.startswith("zz_")]'),
     ("R17-F1 helper this file does not define", '        if _r17_helper(s):\n            continue'),
@@ -1912,6 +2155,11 @@ DECISION_PLANTS = (
     ("R16-S1 inline predicate on the value", '        if s.endswith("%"):\n            continue'),
     ("R16-S1 a guard with a clause bolted on", '        if _exempted(s, skip) and "%" in s:\n            continue'),
     ("R17-S1 an unguarded method on the value", '        s = s.replace(";", "")'),
+    # Round 18's three. The first is the `P1`: admissible under the rules as
+    # round 17 wrote them, because `re` is a module the frame admits.
+    ("R18-S1 a decision on an admitted module call", '        if re.match("zz_", s):\n            continue'),
+    ("R18-S2 a helper that calls itself", '        if _r18_self(s):\n            continue'),
+    ("R18-S2 a mutual pair of helpers", '        if _r18_h1(s):\n            continue'),
 )
 
 
@@ -1919,8 +2167,14 @@ def _plant_lookup(name):
     """The frame's lookup, plus the planted helper -- so `R17-S1`'s remedy is
     measured as the rule says it is: a helper the frame calls is DESCENDED
     into, and the decision inside it is refused there."""
-    if name == "_r17_helper":
-        return ("planted", ast.parse(_PLANTED_HELPER).body[0])
+    planted = {
+        "_r17_helper": _PLANTED_HELPER,
+        "_r18_self": _PLANTED_SELF,
+        "_r18_h1": _PLANTED_H1,
+        "_r18_h2": _PLANTED_H2,
+    }
+    if name in planted:
+        return ("planted", ast.parse(planted[name]).body[0])
     return _frame_lookup(name)
 
 
@@ -1968,8 +2222,9 @@ def decision_test():
             )
             good = False
         print(
-            "  decision %-14s node set + one decision form + classified calls + one "
-            "binding per name -> %s" % (func.__name__, "as required" if good else "FAILED")
+            "  decision %-14s node set + decisions on named guards or listed calls + "
+            "classified calls + one binding per name + no re-entry -> %s"
+            % (func.__name__, "as required" if good else "FAILED")
         )
         ok = ok and good
     # The negative control: the template with nothing planted must PASS, or the
@@ -2028,6 +2283,54 @@ PROVENANCE = {
         None,
         "round 15's own `__pycache__/check_fenced_figures.cpython-313.pyc`, gitignored, "
         "which the round quoted as the fail-open",
+    ),
+    "R18-F1 no planted repository, run from the repository root": (
+        None,
+        "the control: the round's part 1, where the figure is committed and emitted by nothing, so the honest answer is a red, from the seat that already refused at `2dbce28` -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 no planted repository, run from the harness directory": (
+        None,
+        "the control: the round's part 1, where the figure is committed and emitted by nothing, so the honest answer is a red, from THE SEAT THE ROUND RAN FROM, where the plant passed -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 no planted repository, run from an unrelated subdir": (
+        None,
+        "the control: the round's part 1, where the figure is committed and emitted by nothing, so the honest answer is a red, from a seat that is not an ancestor of the harness, where it also passed -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 planted at the harness, run from the repository root": (
+        None,
+        "the round's part 2, which refused at `2dbce28` as claimed, from the seat that already refused at `2dbce28` -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 planted at the harness, run from the harness directory": (
+        None,
+        "the round's part 2, which refused at `2dbce28` as claimed, from THE SEAT THE ROUND RAN FROM, where the plant passed -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 planted at the harness, run from an unrelated subdir": (
+        None,
+        "the round's part 2, which refused at `2dbce28` as claimed, from a seat that is not an ancestor of the harness, where it also passed -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 planted one level above, run from the repository root": (
+        None,
+        "the round's part 3, quoted as `rc=0 haystack from a59d9360... 0 not emitted *** PASSES ***`, from the seat that already refused at `2dbce28` -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 planted one level above, run from the harness directory": (
+        None,
+        "the round's part 3, quoted as `rc=0 haystack from a59d9360... 0 not emitted *** PASSES ***`, from THE SEAT THE ROUND RAN FROM, where the plant passed -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 planted one level above, run from an unrelated subdir": (
+        None,
+        "the round's part 3, quoted as `rc=0 haystack from a59d9360... 0 not emitted *** PASSES ***`, from a seat that is not an ancestor of the harness, where it also passed -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 planted two levels above, run from the repository root": (
+        None,
+        "the same move one directory further out, which the round's discharge covers and its table does not, from the seat that already refused at `2dbce28` -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 planted two levels above, run from the harness directory": (
+        None,
+        "the same move one directory further out, which the round's discharge covers and its table does not, from THE SEAT THE ROUND RAN FROM, where the plant passed -- reported as a table of exit codes, not as a line",
+    ),
+    "R18-F1 planted two levels above, run from an unrelated subdir": (
+        None,
+        "the same move one directory further out, which the round's discharge covers and its table does not, from a seat that is not an ancestor of the harness, where it also passed -- reported as a table of exit codes, not as a line",
     ),
     "R17 a repository planted inside the haystack is refused": (
         None,
@@ -2711,7 +3014,23 @@ def blocks_test():
 
 
 def selftest():
-    ok = True
+    # THE PARSES RUN FIRST, and an inadmissible frame is not executed.
+    #
+    # `R18-S2`: a self-calling helper and a mutual pair were parsed as
+    # admissible (the descent skipped a name already on the path) and then
+    # recursed at RUN time until the interpreter raised `RecursionError`. The
+    # refusal they earn now is worth nothing if the arms run the frame first
+    # and the reader gets a traceback instead. So the structural parse and the
+    # decision parse come before anything that executes the matcher, and a
+    # frame the rules do not admit stops the selftest here, by name.
+    ok = structure_test()
+    ok = decision_test() and ok
+    if not ok:
+        print(
+            "  THE FRAME IS INADMISSIBLE: the arms are NOT run, because running a frame "
+            "the rules refuse would report its behaviour as if the rules had passed."
+        )
+        return 1
     for label, want, run in _arms_with():
         rc = run()
         good = rc == want
@@ -2727,8 +3046,6 @@ def selftest():
     )
     ok = guard_matrix() and ok
     ok = identity_test() and ok
-    ok = structure_test() and ok
-    ok = decision_test() and ok
     ok = blocks_test() and ok
     ok = provenance_test() and ok
     return 0 if ok else 1

@@ -91,9 +91,9 @@ RC_FIGURES=$?
 if [ $RC_FIGURES -ne 0 ]; then
   echo "A document of this phase shows a figure nothing emits (exit 1), the check "
   echo "matched nothing at all (exit 2), or it REFUSED because the haystack could not "
-  echo "be derived from a commit -- git absent, this tree in no repository, or a "
-  echo "repository PLANTED between the toplevel and the harness, which would have "
-  echo "redirected the whole derivation (exit 5). "
+  echo "be derived from ONE commit -- git absent, no repository above this tree, or "
+  echo "MORE THAN ONE repository containing it, which is a plant the gate refuses to "
+  echo "choose between rather than redirect the whole derivation (exit 5). "
   echo "In every case this run would publish a number with no instrument behind it, or "
   echo "would have checked it against the working directory rather than against the "
   echo "commit. Refusing to run."

@@ -36,10 +36,10 @@ Each document exists in **two places**: the shared project-files location (the c
 |---|---|---|---|
 | `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8be8503e62d4e280eb3918fb0d01ca20482135b0d7193eb0fd0ce46080230759` |
 | `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `b38f81c3d6ece206bd819b8f89bb2617c763fb7d66c307810edad88939976b36` |
-| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `60cecbf3ed51f586dddd0d18c20536c7e4c3fcfb8111884f2bdc7ae636f820eb` |
+| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `188ca4ba4927bf2807c78977a5cf15c474c844d55dfc6cdba42d076345e47c22` |
 | `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `6923f0add88d2a0bc31b89fa1b91be8ce20a7540fa6f95e20bf42ae2dd791979` |
 | `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `983e026a9bc6c7fe3b65cfc22fb7672ee33d30cd042e6f31ee176a1bb23055f1` |
-| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `3704de229eea8cd3d94883d072c77e6b023d9f5e257ef72a82b8c79d8053c3a3` |
+| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `a012c2815cf4690544c0e47194bb20c4aedb4ef031e799ad2a0e07dc083eb1dc` |
 | `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `180830b48401dc12323ce070b1c2256925f104d9f7028554914e70c21196bbf4`|
 | `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
 | `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
@@ -854,8 +854,8 @@ Each of these twelve was deleted on its own and the arms it reds recorded:
 | HTML-comment strip | HTML comment |
 | **the figure value class** | **all seven `R13-S3` false positives** |
 
-The selftest at that head had **20 catch and 13 skip arms**, with 4 others: every shape either round planted, the named exclusions, and the seven
-false positives as arms that must now come back clean. The skip arms land on
+The selftest at that head carried an arm for every shape either round planted, for the named exclusions, and for the seven
+false positives that must now come back clean. **The counts are not written here**, and that is deliberate: a hand-written arm count in prose is the defect `R16-A1` names, and the live numbers are in the generated block of §7.14. The skip arms land on
 exit **2** — no candidate at all — which is the inert refusal doing double duty
 as the negative assertion.
 
@@ -995,8 +995,8 @@ key class                  reds  1 arm(s): named: UPPERCASE key
 boolean case folding       reds  1 arm(s): R14-S1 boolean True
 named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
 planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
-haystack from the commit   reds  4 arm(s): R16-F1 an untracked scratch file is not evidence, R16-F1 a gitignored .pyc is not evidence, R16-F1 a directory that is no repository is refused +1 more
-no repository redirects the subject reds  1 arm(s): R17 a repository planted inside the haystack is refused
+haystack from the commit   reds 13 arm(s): R16-F1 an untracked scratch file is not evidence, R16-F1 a gitignored .pyc is not evidence, R16-F1 a directory that is no repository is refused +10 more
+no repository redirects the subject reds 10 arm(s): R17 a repository planted inside the haystack is refused, R18-F1 planted at the harness, run from the repository root, R18-F1 planted at the harness, run from the harness directory +7 more
 markdown is not evidence   reds  1 arm(s): R12 E4b a doc is not its own evidence
 the checker is not its own evidence reds  1 arm(s): R16-F1 the checker is not its own evidence
 
@@ -1171,7 +1171,7 @@ The counts in this section and the two blocks in §7.14 are generated:
 <!-- BEGIN GENERATED arm-counts: python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts -->
 
 ```text
-40 catch arms, 15 skip arms, 2 pass arms, 8 others
+40 catch arms, 15 skip arms, 2 pass arms, 20 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -1283,8 +1283,9 @@ document at `3838711` — are each named and refused here.
 **A SIXTEENTH round was asked for** on `3838711..28659e7` and has been
 answered; §7.16 below is that answer. **A SEVENTEENTH round was asked for** on
 `28659e7..7bd9c09`, returned `REJECT`, and has been answered: §7.17 is that
-answer, and an EIGHTEENTH is owed on `7bd9c09..HEAD` with the coordinator diff
-review after it. **`24f6ebe` is still the last fully signed head**, and
+answer. **An EIGHTEENTH round was asked for** on `7bd9c09..2dbce28`, returned
+`REJECT`, and has been answered: §7.18 is that answer, and a NINETEENTH is owed
+on `2dbce28..HEAD` with the coordinator diff review after it. **`24f6ebe` is still the last fully signed head**, and
 nothing in this phase is self-signed.
 
 ## 7.16 The SIXTEENTH round — `REJECT` at `28659e7`: the haystack was read from the FILESYSTEM, the frame that DECIDES was unparsed, and the enrolment was a SENTINEL
@@ -1500,7 +1501,9 @@ inside the harness directory became the toplevel; the haystack commit, and the
 “differs from that commit” report the design leans on to announce itself, then
 both came from the redirected repository, and a fabricated figure passed. The
 discharge is four assertions, each with its own refusal name: the toplevel is
-resolved once from the repository the run was **invoked against**, the subject
+resolved once from the repository the run was **invoked against** — which round
+18 measured false, because it made the answer depend on the operator's working
+directory and §7.18 replaces it — the subject
 must be a strict subdirectory of it, any `.git` between the toplevel and the
 subject or inside the subject is refused, and `HEAD` read from the subject must
 equal `HEAD` read from the toplevel. The arm is the challenger's own nested
@@ -1553,7 +1556,7 @@ author answering; the round-18 challenge on `7bd9c09..HEAD` and the coordinator
 diff review after it are owed, and **`24f6ebe` is still the last fully signed
 head**. `READY_TO_PROMOTE = NO`.
 
-**EVIDENCE AT THIS HEAD.** The run is
+**EVIDENCE AT THE ROUND-17 HEAD (`2dbce28`).** The run is
 `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND17.txt`, run
 `p11-20261019T120040Z-18946`: Pack A 121 cases twice and Pack B 53 cases twice
 with 0 failed, the Pack A races and the Pack B races with 0 findings, 80 frozen
@@ -1570,6 +1573,127 @@ repository must REFUSE by name, and with the one guard deleted the planted
 repository is accepted and the figure passes — and **the six decision shapes
 driven through the real `figures_on`**, one at a time, in a clean clone, each
 refused by name, with the unplanted file accepted as the control.
+
+## 7.18 The EIGHTEENTH round — `REJECT` at `2dbce28`: the planted repository was closed AT the harness and open ONE LEVEL ABOVE
+
+The round confirmed that `R17-S2` is fully closed — all three plants that
+walked through at `7bd9c09` red here, including `rows=59 passes`, which is
+`R15-F1`'s own shape written into a document — and that the closed sub-language
+turned back four of its five frame plants. Then it defeated this instrument in
+the same place twice: **a sentence I wrote about a guard, and a position one
+directory outside the arm I built for it.**
+
+**`R18-F1` (BLOCKER) — the anchor depended on the operator's working
+directory.** §7.17 said the toplevel is "resolved once from the repository the
+run was invoked against", and the checker's own docstring said it is "resolved
+so a PLANTED repository cannot become it". It became it. `_subject_top`
+anchored on `cwd` when the subject lay inside `cwd`, resolved the toplevel from
+there, and then searched for a stray `.git` **from that toplevel down to the
+subject** — so when the plant IS the toplevel there is nothing "between" it and
+the subject, the subject is a strict subdirectory of it, and its `HEAD` agrees
+with itself. All assertions passed. The round planted at `prep/phase11`, one
+level above the harness, with the fabricated figure committed and the tree
+clean: refused from the repository root, and **`rc 0` with `0 not emitted` when
+run from the harness directory** — which is how the file is most naturally run,
+and how the challenger had run it in every round since the thirteenth.
+
+**Implemented as the coordinator ruled, and the working directory is now in
+none of it.** The anchor is a CENSUS: every ancestor of the haystack up to `/`,
+and the haystack itself, is examined for a `.git` entry — a directory, or the
+file a worktree leaves. **None** is `GIT-NO-REPOSITORY`. **More than one** is
+`GIT-NESTED-REPO`, and the refusal lists them all, because two repositories
+contain the haystack, one of them is a plant, and **choosing between them is
+exactly what let the subject pick the commit it was judged against**. The one
+that is left must contain the subject strictly, hold no `.git` anywhere inside
+the subject — the one position a census of ancestors cannot reach — and its
+`HEAD` must equal `HEAD` resolved from the subject. The old downward walk is
+deleted rather than kept beside the census: every directory it looked at is an
+ancestor, so the census refuses there by name already.
+
+**Measured at three positions and from three working directories**, because a
+position is not a measurement unless the seat it is measured from is one of
+several: a plant at the harness, one level above and two levels above, each run
+from the repository root, from the harness directory and from a sibling that is
+no ancestor of it, plus the unplanted control, whose figure is emitted by
+nothing and must red. Deleting the one guard turns every planted position into
+a pass, and the guard matrix reports that by arm name.
+
+**`R18-S1` (`P1`) — the sub-language was closed over node TYPES and open over
+which MODULE CALLS may decide.** `if re.match("zz_", s): continue` in the real
+`figures_on` passed everything: selftest, `--check-blocks`, the scan, and the
+frame parse was silent. **This was not a contradiction of the four rules; it is
+what rule 2 and rule 3 say together** — rule 2 admits "a call the frame
+admits", rule 3 admits an attribute call on a module in `FRAME_MODULES`, and
+`re` is one. It could not be banned outright either, because `_is_figure`
+decides on `re.fullmatch` legitimately, inside the `key class` guard the matrix
+measures. **So the pairs that may decide are NAMED**, per function, in
+`DECIDING_MODULE_CALLS`; every other attribute call in a test position is
+refused by name; and each entry is checked to be live, for the reason
+`FRAME_METHODS` is — a permissive entry nothing uses only widens the language.
+The round's own plant is an arm. **What made this a `P1` rather than a note was
+the paragraph meant to bound the design:** three exclusions were listed under
+this project's own rule that a net is read as covering the variants of what it
+names, and the one that worked was not among them. A fourth is now stated
+there, and it says what remains: a decision on a listed pair is trusted to the
+named guard that wraps it and to the honesty of that guard's name.
+
+**`R18-S2` (`P3`) — the descent terminated by skipping, and then crashed.** I
+had asked the challenger to check that the recursive descent terminates. The
+parse did terminate, by skipping a name already on the path, which meant a
+self-calling helper and a mutual pair were parsed as **admissible** — and then
+recursed at RUN time until the interpreter raised `RecursionError`. It failed
+closed, which is why this is a `P3`, but a traceback tells a reader the
+instrument broke rather than that the frame is inadmissible. Re-entry is now a
+NAMED refusal that prints the path, and the visited set is the names on the
+CURRENT descent, copied at each level: a cumulative set would make two siblings
+calling one helper look like re-entry. Both shapes are plants.
+
+**`R18-S3` (`P3`) — the three carried residuals, measured rather than
+accepted.** The challenger measured all three and reports them as disclosed. It
+adds one thing worth keeping: the non-markdown bound is the one that has already
+produced a real defect once, which I found myself at `7bd9c09`. They stay
+carried and named.
+
+**Recorded because the challenger was precise about it and a reader should not
+credit it to the wrong instrument:** of the five frame plants round 18 tried,
+**two were caught by the ARMS and not by the four rules** — the `.strip(<every
+char>)` plant by a pass-arm returning `rc 1` where it wants 0, and a default
+argument shadowing `_is_figure` by the catch arms returning `rc 2` where they
+want 1. That is a real defence, and the one this project trusts most, but it is
+not the parse. Two of the round's own arms were **invalid as run** and it says
+so in its verdict: a symlink pointing the harness at a decoy, and a worktree of
+the decoy, both put the process's physical directory inside the decoy, so the
+decoy WAS the subject and reading its commit was correct behaviour.
+
+**Still disclosed, not closed:** everything §7.15, §7.16 and §7.17 list, plus
+the three carried residuals. **No signature is claimed here.** This is the
+author answering; the round-19 challenge on `2dbce28..HEAD` and the coordinator
+diff review after it are owed, and **`24f6ebe` is still the last fully signed
+head**. `READY_TO_PROMOTE = NO`.
+
+**EVIDENCE AT THIS HEAD.** The run is
+`prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND18.txt`, run
+`p11-20261019T125447Z-9610`: Pack A 121 cases twice and Pack B 53 cases twice
+with 0 failed, the Pack A races and the Pack B races with 0 findings, 80 frozen
+entries and 0 digest mismatches, and **every `EXIT_*` 0** — including
+`EXIT_GENERATED_BLOCKS` and `EXIT_FENCED_FIGURES` at step `0c`, which is where
+this round's work is exercised — on PostgreSQL 16.15 at `en_US.utf8` with both
+roles `NOSUPERUSER NOBYPASSRLS`. The harness digest moves to `fdcc6572…`; the
+pack digests do not move, and neither does the migrations tree. That run's tree
+was dirty, because the evidence of a commit cannot be committed before it, and
+the clean-tree re-run at the pushed SHA is published beside it with this
+round's two gate probes: **the planted repository at three positions, each run
+from three working directories**, with the unplanted control and the
+guard-deletion run; and **round 18's three frame shapes driven through the real
+`figures_on`**, where the number to read is the count of tracebacks, because
+`R18-S2`'s whole point is that a named refusal is not a `RecursionError`.
+
+**One ordering change the round forced, recorded because it changes what the
+gate does and not only what it says:** `--selftest` now runs the structural
+parse and the decision parse FIRST, and a frame the rules do not admit stops
+the selftest there, by name, with the arms NOT run. A refusal earned by a
+re-entrant frame is worth nothing if the arms execute that frame first and the
+reader gets a traceback instead of the refusal.
 
 ---
 
