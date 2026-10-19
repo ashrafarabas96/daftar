@@ -202,7 +202,14 @@ def reviewer_list_problems(on_disk: list[str]) -> list[str]:
                 f"STALE reviewer-report list: {name} is enumerated but not in the pack"
             )
     for name in on_disk:
-        if LOOKS_LIKE_REVIEWER.match(name) and name not in REVIEWER_REPORTS:
+        # F-54, ROUND 32. `match` plus a `$` anchor is NOT the JS predicate:
+        # Python's `$` also matches just before a final newline, so
+        # `P5-CHALLENGE-9bd33bd.md\n` -- a legal POSIX file name -- was True
+        # here and false in the other instrument, which routed one name two
+        # ways. `fullmatch` has to consume the whole name, so the two engines
+        # agree. Measured both ways before and after; the restriction is
+        # written beside the pattern in reviewer-reports.json.
+        if LOOKS_LIKE_REVIEWER.fullmatch(name) and name not in REVIEWER_REPORTS:
             problems.append(
                 f"UNENUMERATED reviewer report: {name} — add it to REVIEWER_REPORTS by its exact "
                 "name; it is not exempt by looking like one"

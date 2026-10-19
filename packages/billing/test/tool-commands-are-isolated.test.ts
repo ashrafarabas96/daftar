@@ -37,7 +37,8 @@
  * stripping comments would strip the defect.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -199,8 +200,33 @@ const TOOLS = SCRIPTS.map((s) => s.split('/').pop() ?? s);
  * which is B-6's lesson from round 24 applied to this law. This pack's own
  * environment notes pin exact interpreter versions, so writing `python3.13` is
  * a natural thing for one of these documents to do.
+ *
+ * ROUND 32, THE COORDINATOR'S F-56 (P1, a fail-open, and it predates round
+ * 31). The flag run was `(?:-\S+\s+)*`, so a flag that takes a SEPARATE
+ * argument broke the match outright and the law went green on the command.
+ * Measured by me on the old pattern before changing it:
+ *
+ *   python3 -X utf8 tools/manifest-digests.py --dir pack --check  -> 0 matches
+ *   python3 -W ignore tools/status-block.py --dir d               -> 0 matches
+ *   python3 -X dev tools/seal-check-run.py --dir p --tests t      -> 0 matches
+ *
+ * Those are exactly the commands a reader copies, and `-X utf8` does nothing
+ * to stop a `sitecustomize` plant, so this law's own header sentence -- that
+ * it reds on any un-isolated invocation written anywhere -- was FALSE as
+ * measured. Each flag may now carry one non-flag argument, and backtracking
+ * still lets the tool name win when a flag has none. The property is that NO
+ * flag form stops the match, and the differential arm below is its deletion
+ * test.
  */
-const INVOCATION = new RegExp(String.raw`python(?:3(?:\.\d+)*)?\s+((?:-\S+\s+)*)(?:\S*/)?(${TOOLS.join('|').replace(/\./g, '\\.')})`, 'g');
+const INVOCATION = new RegExp(String.raw`python(?:3(?:\.\d+)*)?((?:\s+-\S+(?:\s+[^-\s]\S*)?)*)\s+(?:\S*/)?(${TOOLS.join('|').replace(/\./g, '\\.')})`, 'g');
+
+/**
+ * The flag run the OLD pattern accepted: flags only, none taking a separate
+ * argument. Kept for ONE purpose — F-56's guard deletion, which is this
+ * pattern itself. It must MISS a form the current one catches, or the fix is
+ * not a fix.
+ */
+const INVOCATION_BEFORE_F56 = new RegExp(String.raw`python(?:3(?:\.\d+)*)?\s+((?:-\S+\s+)*)(?:\S*/)?(${TOOLS.join('|').replace(/\./g, '\\.')})`, 'g');
 
 /** `-I` present among the flags of one matched invocation. */
 const isolated = (flags: string): boolean => flags.split(/\s+/).some((f) => f === '-I' || (/^-[A-Za-z]+$/.test(f) && f.includes('I')));
@@ -253,6 +279,19 @@ const offencesIn = (label: string, text: string): string[] => {
 };
 
 /**
+ * How many invocations the scan SEES in one text, isolated or not.
+ *
+ * F-56's lesson in one function: every fixture below asserts a match count as
+ * well as an offence count, because a fixture that stops matching reads
+ * exactly like a fixture that passes.
+ */
+const matchCount = (text: string, re: RegExp = INVOCATION): number => {
+  let n = 0;
+  for (const { line } of logicalLines(text)) n += [...line.matchAll(re)].length;
+  return n;
+};
+
+/**
  * The same scan over a Markdown document, with one exemption: a fenced block
  * whose opening fence declares `f-50-quote`.
  *
@@ -292,11 +331,35 @@ const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], nu
   return [found, exemptBlocks];
 };
 
-const readable = (p: string): string | null => {
+/**
+ * Files that may contain a NUL byte and still not be read by this law, by
+ * EXACT repository-relative path (pack documents by bare name).
+ *
+ * ROUND 32, THE COORDINATOR'S F-57 (P2, a fail-open). `readable` used to
+ * return null for any file containing a NUL byte, with the sentence "a binary
+ * file is not a document and its bytes are not commands" — so ONE NUL byte
+ * anywhere in a file exempted it from the law, in the pack half and in the
+ * repository half alike. Measured before the fix: the repository walk and the
+ * pack hold NO file with a NUL byte, so refusing instead of skipping costs
+ * nothing today and the exemption was paying for nothing.
+ *
+ * A real binary therefore has to be NAMED here, as a claim in the diff, the
+ * way B-11's ruling requires — and each entry reds when the file it names
+ * stops existing, so the map cannot outlive its reason.
+ */
+const EXEMPT_BINARIES: ReadonlyMap<string, string> = new Map();
+
+/**
+ * One file's text, or `BINARY` when it holds a NUL byte, or null when it
+ * cannot be read at all. The caller must REFUSE a `BINARY` by name rather
+ * than skip it.
+ */
+const BINARY = Symbol('binary');
+
+const readable = (p: string): string | typeof BINARY | null => {
   try {
     const t = readFileSync(p, 'utf8');
-    // A binary file is not a document and its bytes are not commands.
-    return t.includes('\u0000') ? null : t;
+    return t.includes('\u0000') ? BINARY : t;
   } catch {
     return null;
   }
@@ -305,13 +368,20 @@ const readable = (p: string): string | null => {
 describe('every written invocation of the pack tools is isolated', () => {
   it('finds no un-isolated invocation anywhere in the repository', () => {
     const offences: string[] = [];
+    const binaries: string[] = [];
     let scanned = 0;
     let seen = 0;
     for (const p of walk(REPO)) {
       const text = readable(p);
       if (text === null) continue;
-      scanned += 1;
       const label = relative(REPO, p);
+      // F-57. A NUL byte is REFUSED by name, never skipped: one NUL used to
+      // exempt a whole file from this law.
+      if (text === BINARY) {
+        if (!EXEMPT_BINARIES.has(label)) binaries.push(label);
+        continue;
+      }
+      scanned += 1;
       // Not this file: it quotes the defect on purpose, four lines above.
       //
       // By its EXACT repository path. Found while building B-10's before arm:
@@ -332,6 +402,13 @@ describe('every written invocation of the pack tools is isolated', () => {
           if (!isolated(m[1] ?? '')) offences.push(`${label}: ${line.trim()}`);
         }
       }
+    }
+    expect(
+      binaries,
+      'a file in this repository holds a NUL byte, so this law cannot read it: name it in EXEMPT_BINARIES with the reason, which is a claim in the diff — do not widen the skip',
+    ).toStrictEqual([]);
+    for (const [name] of EXEMPT_BINARIES) {
+      expect(existsSync(join(REPO, name)), `${name} is exempted as a binary but is no longer in the repository`).toBe(true);
     }
     expect(scanned, 'the walk read no files, so this law measured nothing').toBeGreaterThan(50);
     expect(seen, 'no invocation of the four tools was found anywhere, so this law is vacuous — the tools or their names moved').toBeGreaterThan(0);
@@ -445,6 +522,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     const shaped = looksLikeReviewer();
     const offences: string[] = [];
     const unclassified: string[] = [];
+    const packBinaries: string[] = [];
     let quoted = 0;
     let mine = 0;
     for (const name of readdirSync(PACK)) {
@@ -460,6 +538,11 @@ describe('every written invocation of the pack tools is isolated', () => {
       }
       const text = readable(join(PACK, name));
       if (text === null) continue;
+      // F-57, the same refusal on this side.
+      if (text === BINARY) {
+        if (!EXEMPT_BINARIES.has(name)) packBinaries.push(name);
+        continue;
+      }
       mine += 1;
       const [found, exempted] = offencesOutsideQuotedBlocks(name, text);
       offences.push(...found);
@@ -475,6 +558,7 @@ describe('every written invocation of the pack tools is isolated', () => {
         'a reviewer-shaped pack document is in neither the shared list nor the seal refusals, so NOTHING classifies it: enrol it in tools/reviewer-reports.json by its EXACT name, and do NOT edit a reviewer frozen report',
       ).toStrictEqual([]);
     }
+    expect(packBinaries, 'a pack document holds a NUL byte, so this law cannot read it: name it in EXEMPT_BINARIES with the reason').toStrictEqual([]);
     expect(mine, 'no author-owned document was read from the pack').toBeGreaterThan(0);
     expect(
       quoted,
@@ -502,5 +586,103 @@ describe('every written invocation of the pack tools is isolated', () => {
     // The instrument this law delegates to must exist, as a file, where the
     // delegation says it is -- a moved tool would make the delegation vacuous.
     expect(existsSync(SEAL), `the seal this law delegates to is not at ${SEAL}`).toBe(true);
+  });
+  it('sees an invocation whatever flag form it carries — F-56', () => {
+    // Each of these was 0 matches under the old pattern, which is the
+    // fail-open: a flag taking a separate argument broke the match, so the
+    // command went unread and the law printed nothing.
+    const forms = [
+      'python3 -X utf8 tools/manifest-digests.py --dir pack --check',
+      'python3 -W ignore tools/status-block.py --dir d',
+      'python3 -X dev tools/seal-check-run.py --dir p --tests t',
+      'python3 -X utf8 -W ignore tools/context-sites.py --dir d --tests t',
+      '/usr/bin/python3.13 -X dev tools/manifest-digests.py --check',
+    ];
+    for (const form of forms) {
+      expect(matchCount(form), `the scan does not SEE this form at all: ${form}`).toBe(1);
+      expect(offencesIn('fixture', form), `seen but not reported: ${form}`).toHaveLength(1);
+    }
+    // And the isolated versions of the same forms must stay green, or the law
+    // is unsatisfiable and someone deletes it.
+    for (const form of ['python3 -I -X utf8 tools/manifest-digests.py --check', 'python3 -X utf8 -I tools/status-block.py --dir d']) {
+      expect(matchCount(form), `the scan does not see ${form}`).toBe(1);
+      expect(offencesIn('fixture', form), `a correctly isolated command is reported: ${form}`).toStrictEqual([]);
+    }
+  });
+
+  it('F-56 guard deletion: the old flag run MISSES what the new one catches', () => {
+    // ONE deletion, one property. Restoring the old pattern must lose at least
+    // one form the current pattern reports -- otherwise the change above is
+    // decoration and this arm says so.
+    const form = 'python3 -X utf8 tools/manifest-digests.py --dir pack --check';
+    expect(matchCount(form, INVOCATION_BEFORE_F56), 'the OLD pattern now matches this form, so this arm proves nothing').toBe(0);
+    expect(matchCount(form, INVOCATION), 'the CURRENT pattern misses the form F-56 is about').toBe(1);
+  });
+
+  it('F-57 guard deletion: a NUL byte is reported, not skipped', () => {
+    // The fail-open was `readable` returning null for a NUL-containing file,
+    // which both scans treat as "continue". So the deletion test is that
+    // `readable` does NOT return null here.
+    const dir = mkdtempSync(join(tmpdir(), 'f57-'));
+    const file = join(dir, 'doc.md');
+    writeFileSync(file, `\u0000python3 tools/manifest-digests.py --check\n`);
+    const text = readable(file);
+    expect(text, 'a NUL-containing file is skipped again, which exempts it from this law').not.toBe(null);
+    expect(text).toBe(BINARY);
+    // A readable file still comes back as text, or the refusal would swallow
+    // every document.
+    const plain = join(dir, 'plain.md');
+    writeFileSync(plain, 'python3 -I tools/manifest-digests.py --check\n');
+    expect(typeof readable(plain)).toBe('string');
+    rmSync(dir, { recursive: true, force: true });
+    // Nothing is exempt today: measured, neither the repository walk nor the
+    // pack holds a NUL byte, so an entry here would be paying for nothing.
+    expect(EXEMPT_BINARIES.size, 'a binary exemption exists: it must be named with a reason and justified in the round that adds it').toBe(0);
+  });
+  it('F-54: one pattern string, two engines, one verdict', () => {
+    // The shape is shared as TEXT and compiled by two engines, so "shared"
+    // was true of the string and false of the predicate. Measured on the live
+    // pattern: `P5-CHALLENGE-9bd33bd.md` + a newline was True in Python's
+    // re.match and false in JS RegExp.test, because Python's `$` also matches
+    // before a final newline -- so one name was routed to the seal by one
+    // instrument and read as the author's by the other, which is exactly the
+    // drift the sharing exists to prevent.
+    const shaped = looksLikeReviewer();
+    const cases = ['P5-CHALLENGE-9bd33bd.md', 'P5-CHALLENGE-9bd33bd.md\n', 'P5-NOTE-FOR-READERS.md', 'P5-CHALLENGE-9bd33bd.md.bak', 'P5-CHALLENGE-12345678.md'];
+    const here = cases.map((n) => shaped.test(n));
+    // The OTHER engine's verdicts, read from the seal's own compiled pattern
+    // as a subprocess -- never imported, and never re-implemented here.
+    const probe = [
+      'import io,json,re,sys',
+      'raw=json.load(io.open(sys.argv[1],encoding="utf-8"))',
+      'pat=re.compile(raw["looks_like_reviewer"])',
+      'print("".join("1" if pat.fullmatch(n) else "0" for n in sys.argv[2:]))',
+    ].join('\n');
+    const r = spawnSync('python3', ['-I', '-c', probe, REVIEWER_REPORTS_FILE, ...cases], { encoding: 'utf8' });
+    expect(r.status, `the cross-engine probe did not run: ${r.stderr ?? ''}`).toBe(0);
+    const there = (r.stdout ?? '').trim();
+    expect(there, 'the probe printed no verdicts').toHaveLength(cases.length);
+    expect(
+      here.map((b) => (b ? '1' : '0')).join(''),
+      `the two engines disagree about ${cases.join(', ')}: one of them routes a name to the seal while the other reads it as the author's`,
+    ).toBe(there);
+
+    // The probe is only the other engine if it does what the SEAL does, so
+    // the seal's own call is asserted. Reverting it to `match` must not leave
+    // this arm green.
+    const seal = readFileSync(SEAL, 'utf8');
+    expect(seal, 'the seal no longer reads the shared shape with fullmatch semantics, so the two engines can drift again').toContain(
+      'LOOKS_LIKE_REVIEWER.fullmatch(',
+    );
+    expect(/LOOKS_LIKE_REVIEWER\.match\(/.test(seal), 'the seal reads the shared shape with `match` again, which accepts a trailing newline JS rejects').toBe(
+      false,
+    );
+
+    // F-54's guard deletion: with `match` the SAME probe disagrees, which is
+    // what makes the line above load-bearing rather than decorative.
+    const before = probe.replace('pat.fullmatch(n)', 'pat.match(n)');
+    const r2 = spawnSync('python3', ['-I', '-c', before, REVIEWER_REPORTS_FILE, ...cases], { encoding: 'utf8' });
+    expect(r2.status).toBe(0);
+    expect((r2.stdout ?? '').trim(), 'the old Python call now agrees with JS, so F-54 does not reproduce and this arm proves nothing').not.toBe(there);
   });
 });

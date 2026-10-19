@@ -20,12 +20,15 @@
     "P5-CHALLENGE-a5cd19a.md",
     "P5-CHALLENGE-bc81b17.md",
     "P5-CHALLENGE-bcf8084.md",
+    "P5-CHALLENGE-c2c77f6.md",
     "P5-COORD-DIFF-REVIEW-2108d26.md",
     "P5-COORD-DIFF-REVIEW-4c451e6.md",
     "P5-COORD-DIFF-REVIEW-4fb8e1d.md",
     "P5-COORD-DIFF-REVIEW-6e690d8.md",
-    "P5-COORD-DIFF-REVIEW-9bd33bd.md"
+    "P5-COORD-DIFF-REVIEW-9bd33bd.md",
+    "P5-COORD-DIFF-REVIEW-c2c77f6.md"
   ],
   "_looks_like_reviewer_is_for_MESSAGES_and_detection_only": "ROUND 30, the challenger's F-53 (P2). This pattern must NEVER decide an exemption — that is B-10, and `reviewer_reports` above is the only thing that exempts. It decides WORDING: a file whose name has this shape but is absent from the list is an UNENUMERATED reviewer report, not an author-owned document, and telling the author to edit it routes them to the one repair the pack forbids for a reviewer's frozen bytes. Both instruments read this one pattern so the two messages cannot drift apart.",
-  "looks_like_reviewer": "^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-fA-F]{6,40}(-[A-Za-z0-9]+)?\\.md$"
+  "looks_like_reviewer": "^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-fA-F]{6,40}(-[A-Za-z0-9]+)?\\.md$",
+  "_looks_like_reviewer_restriction": "F-54, round 32: this pattern is TEXT compiled by two engines. Python's end anchor also matches before a final newline and JS's does not, so the Python side must read it with fullmatch semantics and the JS side with ^...$ and no m flag. Use only constructs both engines read identically: no \\\\Z, no lookbehind, no named groups, no inline flags. A cross-engine arm in test/tool-commands-are-isolated.test.ts reds if the two verdicts differ on the same name."
 }
