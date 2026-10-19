@@ -743,6 +743,8 @@ const isolatedBeforeF58 = (flags: string): boolean => flags.split(/\s+/).some((f
  */
 const REFUSED_LINES_NOT_ALL_TESTED = 'REFUSED-LINES-NOT-ALL-TESTED';
 const REFUSED_CONTENT_NOT_ALL_READ = 'REFUSED-CONTENT-NOT-ALL-READ';
+const REFUSED_DOCUMENTS_NOT_ALL_SCANNED = 'REFUSED-DOCUMENTS-NOT-ALL-SCANNED';
+const REFUSED_FILE_NOT_READABLE = 'REFUSED-FILE-NOT-READABLE';
 const REFUSED_SHEBANG_NOT_ISOLATED = 'REFUSED-SHEBANG-NOT-ISOLATED';
 const REFUSED_SHEBANG_WOULD_NOT_RUN = 'REFUSED-SHEBANG-WOULD-NOT-RUN';
 const REFUSED_RUNNABLE_WITHOUT_SHEBANG = 'REFUSED-RUNNABLE-WITHOUT-SHEBANG';
@@ -1111,15 +1113,103 @@ const bareVerdict = (name: string, toolsDir: string): { isolated: boolean; refus
   return shebangIsolation(shebangOf(join(toolsDir, rel)));
 };
 
+/**
+ * The directory names this law does not read, as ONE list, used by both the
+ * walk and the independent enumeration below.
+ *
+ * A shared list moves both sides of a comparison together, which is exactly
+ * the F-73 (B) shape -- so the list is itself a CLAIM, pinned to a literal by
+ * an arm. Widening it reds rather than quietly exempting a subtree.
+ */
+const UNREAD_DIRS: readonly string[] = ['.git', 'node_modules', 'dist', '.next'];
+
 /** Every file of the repository, excluding what is not ours to read. */
 const walk = (dir: string, out: string[] = []): string[] => {
   for (const entry of readdirSync(dir)) {
-    if (entry === '.git' || entry === 'node_modules' || entry === 'dist' || entry === '.next') {
+    if (UNREAD_DIRS.includes(entry)) {
       continue;
     }
     const p = join(dir, entry);
     if (statSync(p).isDirectory()) walk(p, out);
     else out.push(p);
+  }
+  return out;
+};
+
+/**
+ * The repository's files, enumerated INDEPENDENTLY of `walk`.
+ *
+ * ROUND 47, F-76 (P1, A FAIL-OPEN), THE CHALLENGER'S: every invariant in this
+ * law was PER DOCUMENT. Nothing bounded WHICH documents were read. The
+ * repository half asserted only `scanned > 50` over a tree of some 1327 files,
+ * and the counter incremented ABOVE the skip below it -- so a `continue` on a
+ * path, placed after the counter, hid a real planted offence at 23 passed with
+ * every character-identity invariant intact, and a filter inside `walk` hid it
+ * too, moving the counter by one against a floor of 50.
+ *
+ * That is F-73 and F-74 one level up, and the same two lessons apply. P7 R11:
+ * **an anchor must BOUND LOSS -- a literal total, a count equality -- not
+ * witness survival**, and 50 out of 1327 is witness survival. F-67/F-69: a
+ * derived set must not be derived from a representation the subject can alter,
+ * so the expectation cannot come from the same `walk` call the loop consumes,
+ * or a filter inside `walk` moves both sides at once.
+ *
+ * So this is a SECOND traversal, written differently on purpose -- an explicit
+ * stack instead of recursion, `readdirSync` with file types instead of
+ * `statSync` -- reading the same filesystem. A skip in either one is a
+ * difference against the other, and MEASURED: a filter inside `walk` reds as a
+ * document unread, a filter inside `treeFiles` reds as a document scanned but
+ * never enumerated, and a `continue` on the path in the loop reds as a
+ * document unread, each naming the path.
+ *
+ * THE DECLARED LIMIT, in R42-01's voice, because it cannot be bounded from
+ * inside this file: the SAME filter written into BOTH traversals moves both
+ * sides of the equality together and passes. I measured that too -- 23 passed.
+ * It is two edits in two functions that share no line, in a diff a reviewer
+ * reads, which is the bar this law holds everywhere else and not a claim that
+ * no such edit exists. Nothing here claims the document set cannot be
+ * narrowed; it claims that narrowing it in one place reds, by name, with the
+ * path.
+ */
+const treeFiles = (root: string): string[] => {
+  const out: string[] = [];
+  const stack: string[] = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop() ?? root;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (UNREAD_DIRS.includes(entry.name)) continue;
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) stack.push(p);
+      else out.push(p);
+    }
+  }
+  return out;
+};
+
+/**
+ * The document-set refusal: the labels actually handed to `scanLines` against
+ * the labels the independent enumeration says must be handed to it, as a
+ * FUNCTION of the two sets so an arm can run it over its own domain.
+ *
+ * Equality both ways. A document MISSING is the fail-open F-76 names; a
+ * document SURPLUS means the two traversals disagree, which is a drift between
+ * the instrument and its expectation and must be read, not ignored. The
+ * refusal carries the counts and the first few names, so the reader is told
+ * WHICH documents went unread rather than that some number moved.
+ */
+const documentRefusal = (expected: readonly string[], scanned: readonly string[]): string[] => {
+  const got = new Set(scanned);
+  const want = new Set(expected);
+  const missing = expected.filter((l) => !got.has(l));
+  const surplus = scanned.filter((l) => !want.has(l));
+  const out: string[] = [];
+  if (missing.length > 0) {
+    out.push(`${REFUSED_DOCUMENTS_NOT_ALL_SCANNED} ${scanned.length}/${expected.length} documents, unread: ${missing.slice(0, 5).join(', ')}`);
+  }
+  if (surplus.length > 0) {
+    out.push(
+      `${REFUSED_DOCUMENTS_NOT_ALL_SCANNED} ${scanned.length}/${expected.length} documents, scanned but not enumerated: ${surplus.slice(0, 5).join(', ')}`,
+    );
   }
   return out;
 };
@@ -1400,19 +1490,32 @@ describe('every written invocation of the pack tools is isolated', () => {
   it('finds no un-isolated invocation anywhere in the repository', () => {
     const offences: string[] = [];
     const binaries: string[] = [];
-    let scanned = 0;
+    const unreadable: string[] = [];
+    // F-76: the labels this loop ACTUALLY handed to `scanLines`, recorded so
+    // the set can be compared with one derived independently of this loop and
+    // of the walk that feeds it. A count cannot do this job: the honest `SELF`
+    // skip already made the old counter count one file more than the law read,
+    // which is why that counter could not be turned into a conservation law
+    // where it stood.
+    const scannedLabels: string[] = [];
     let seen = 0;
     for (const p of walk(REPO)) {
       const text = readable(p);
-      if (text === null) continue;
       const label = relative(REPO, p);
+      // F-76: a file this law cannot read is REFUSED BY NAME, not skipped.
+      // This used to be a bare `continue`, which is the one silent skip left
+      // in this half -- and a silent skip is what every finding in this file
+      // has been about.
+      if (text === null) {
+        unreadable.push(label);
+        continue;
+      }
       // F-57. A NUL byte is REFUSED by name, never skipped: one NUL used to
       // exempt a whole file from this law.
       if (text === BINARY) {
         if (!EXEMPT_BINARIES.has(label)) binaries.push(label);
         continue;
       }
-      scanned += 1;
       // Not this file: it quotes the defect on purpose, four lines above.
       //
       // By its EXACT repository path. Found while building B-10's before arm:
@@ -1433,6 +1536,11 @@ describe('every written invocation of the pack tools is isolated', () => {
       const scan = scanLines(label, text, false, TOOLS_DIR);
       seen += scan.seen;
       offences.push(...scan.found);
+      // RECORDED LAST, after the scan has returned -- the same discipline as
+      // the line counter inside `scanLines`: a `continue` placed anywhere
+      // above this, on the path or on the content, drops the label and shows
+      // up as a document the enumeration expected and the law never read.
+      scannedLabels.push(label);
     }
     expect(
       binaries,
@@ -1441,7 +1549,29 @@ describe('every written invocation of the pack tools is isolated', () => {
     for (const [name] of EXEMPT_BINARIES) {
       expect(existsSync(join(REPO, name)), `${name} is exempted as a binary but is no longer in the repository`).toBe(true);
     }
-    expect(scanned, 'the walk read no files, so this law measured nothing').toBeGreaterThan(50);
+    expect(
+      unreadable,
+      `a file in this repository cannot be read at all, so this law never saw it: ${REFUSED_FILE_NOT_READABLE} — name why, which is a claim in the diff, and do not restore the silent skip`,
+    ).toStrictEqual([]);
+    // ROUND 47, F-76 (P1, a fail-open), THE CHALLENGER'S: the document SET is
+    // now a conservation law, not a floor. The expectation comes from
+    // `treeFiles`, a traversal written separately from `walk`, minus the two
+    // exemptions this law NAMES -- `SELF`, and whatever `EXEMPT_BINARIES`
+    // holds, which another arm pins at zero. Nothing discovered BY the loop is
+    // subtracted, because an expectation the loop can edit is not an
+    // expectation: a binary or an unreadable file reds above AND reds here.
+    const expectedLabels = treeFiles(REPO)
+      .map((p) => relative(REPO, p))
+      .filter((l) => l !== SELF && !EXEMPT_BINARIES.has(l));
+    // The vacuity bound belongs on the INDEPENDENT enumeration, where it
+    // bounds the enumerator being empty, and it is no longer the law: the law
+    // is the equality below. 50 out of a tree in the high hundreds was witness
+    // survival, which P7 R11 says an anchor may not be.
+    expect(expectedLabels.length, 'the independent enumeration found almost nothing, so the comparison below would be vacuous').toBeGreaterThan(50);
+    expect(
+      documentRefusal(expectedLabels, scannedLabels),
+      'the law did not read every document the repository holds: a skip on the PATH, or a filter inside the walk, is hiding a file from this law — the refusal above names which',
+    ).toStrictEqual([]);
     expect(seen, 'no invocation of the four tools was found anywhere, so this law is vacuous — the tools or their names moved').toBeGreaterThan(0);
     expect(
       offences,
@@ -2034,6 +2164,58 @@ describe('every written invocation of the pack tools is isolated', () => {
     // Each line is read by every matcher, so a matcher that goes missing is a
     // refusal rather than a smaller expectation.
     expect(MATCHERS, 'the matcher count changed without this expectation changing with it').toBe(2);
+
+    // ROUND 47, F-76 (P1, A FAIL-OPEN), THE CHALLENGER'S: the same class one
+    // level up -- every invariant was per DOCUMENT, and nothing bounded WHICH
+    // documents were read. Both of its attacks were reproduced here before
+    // anything changed, with a planted file in the repository clone carrying
+    // an un-isolated command: a `continue` on the path placed after the old
+    // counter, 23 passed; a filter inside `walk`, 23 passed. The control, law
+    // unmodified, reported the plant by name.
+    //
+    // The refusal is armed over its domain, in BOTH directions. A document
+    // missing is the fail-open; a document scanned but never enumerated means
+    // the two traversals disagree, which is a drift that must be read rather
+    // than ignored.
+    const docs = ['a.md', 'b.md', 'c.md'];
+    expect(documentRefusal(docs, docs), 'a complete scan is refused').toStrictEqual([]);
+    expect(documentRefusal(docs, []), 'a scan that read NOTHING is cleared').toHaveLength(1);
+    expect(documentRefusal(docs, ['a.md', 'b.md']), 'a scan that skipped one document is cleared').toHaveLength(1);
+    expect(documentRefusal(docs, [...docs, 'd.md']), 'a document scanned but never enumerated is cleared').toHaveLength(1);
+    expect(documentRefusal(docs, ['a.md', 'b.md', 'd.md']), 'one skipped and one surplus is cleared').toHaveLength(2);
+    expect(documentRefusal([], []), 'two empty sets are refused, which would make the live comparison vacuous').toStrictEqual([]);
+    const docRefusal = documentRefusal(docs, ['a.md', 'b.md'])[0] ?? '';
+    expect(docRefusal, 'the document refusal does not name itself').toContain(REFUSED_DOCUMENTS_NOT_ALL_SCANNED);
+    expect(docRefusal, 'the document refusal does not carry both counts').toContain('2/3');
+    expect(docRefusal, 'the document refusal does not say WHICH document went unread').toContain('c.md');
+
+    // The two traversals must agree on the live tree, or the equality above is
+    // bought with a false RED rather than measured. Measured here, so a drift
+    // between `walk` and `treeFiles` is named by this arm and not by the law.
+    expect(
+      new Set(treeFiles(REPO).map((p) => relative(REPO, p))),
+      'the two traversals disagree on this repository: one of them is skipping something the other reads',
+    ).toStrictEqual(new Set(walk(REPO).map((p) => relative(REPO, p))));
+
+    // And the shared exclusion list is a CLAIM, pinned to its literal: it is
+    // the one thing both traversals read, so widening it would move both sides
+    // of the equality together -- the F-73 (B) shape. Four names, each of them
+    // And the document refusal's ONE live call site, counted with an
+    // assembled whitespace-insensitive needle, for the same reason the content
+    // guard has one: a guard whose removal nothing notices is not a guard.
+    // Deleting or renaming the call in the repository walk reds here.
+    const docSite = new RegExp(['documentRefusal\\(', 'expectedLabels,', 'scannedLabels\\)'].join('\\s*'), 'g');
+    const here47 = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
+    expect(
+      (here47.match(docSite) ?? []).length,
+      'the repository walk no longer compares the documents it read with the documents the tree holds: the guard was deleted or renamed',
+    ).toBe(1);
+
+    // a directory this law has no business reading.
+    expect(
+      [...UNREAD_DIRS],
+      'the list of directories this law does not read has changed: a subtree has been exempted, which is a claim in the diff',
+    ).toStrictEqual(['.git', 'node_modules', 'dist', '.next']);
   });
 
   it('F-62/F-64: a value may not choose a program, a directory, or a module', () => {
