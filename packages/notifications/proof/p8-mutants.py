@@ -68,43 +68,68 @@ _P8_OWN_DIR = _p8os.path.dirname(_p8os.path.abspath(__file__))
 _P8_OWN_REAL = _p8os.path.realpath(_P8_OWN_DIR)
 
 
-def _p8_is_own_dir(entry):
-    """Is this sys.path entry THIS directory, however it is spelled?
+def _p8_own_dir_match(entry):
+    """Which reading says this sys.path entry IS this directory? None if neither.
 
-    Two independent readings, because each catches what the other cannot.
-    `realpath` resolves symlinks and so answers for a symlinked spelling even
-    when the directory has been removed from under us. `samefile` compares the
-    device and inode, which answers for a BIND MOUNT of the same directory —
-    whose `realpath` is genuinely different while the directory is the same one.
+    Two independent readings, because each catches a case the other cannot, and
+    the caller is told WHICH one matched — a refusal that names the wrong reason
+    is how the round-24 version of this comment came to be false.
+
+    `realpath` resolves symlinks, so it catches the plain spelling, a symlinked
+    spelling and a relative one. `samefile` compares device and inode, so it
+    catches a BIND MOUNT of this directory.
+
+    **ROUND 25 CORRECTION, and it was a P1 measured-false claim.** Round 24 said
+    here that the `samefile` reading was UNEXERCISED because a bind mount "is
+    caught by the `realpath` reading — on this kernel the bind path resolves
+    through to the source". That is wrong, as the sixteenth challenge measured
+    and as was reproduced here before this was written:
+
+        realpath(bindpoint) = /…/bindpoint      realpath(src) = /…/proof
+        realpath equal      = False             samefile      = True
+
+    **`realpath` resolves symlinks; it does not traverse mount points.** So the
+    bind mount is caught by `samefile` ALONE, this reading is the only thing
+    standing between that spelling and the planted module, and an arm for it is
+    three lines rather than impossible. Arm `y20` deletes this reading alone,
+    leaving `realpath` standing, and requires the bind spelling to go rc 0 with
+    the planted module imported, which is the only evidence this pack accepts.
+
+    What produced the false sentence is the defect below it (round 16's R-2):
+    the refusal printed `_P8_OWN_REAL`, this file's own directory, under the
+    words "which resolves to", so the bind case LOOKED like a `realpath` match
+    in the one place a reader would check. The message now prints
+    `realpath(entry)` and names the reading that matched.
+
     An entry that does not exist is not this directory, and `samefile` raises on
     it, so that is the only error swallowed here.
-
-    **The `samefile` reading is UNEXERCISED at runtime, and is named as such
-    rather than reported as proved.** Measured in this container: a bind mount
-    of this directory IS caught, but by the `realpath` reading — on this kernel
-    the bind path resolves through to the source — so no arm distinguishes the
-    second reading. It is kept because a platform whose bind path does not
-    resolve through would otherwise be a hole, and the alternative is code with
-    a silent gap rather than a named one. Arms y16 and y17 exercise the
-    `realpath` reading on the plain and symlinked spellings; y18 deletes this
-    whole test alone and shows the fail-open return.
     """
     absolute = _p8os.path.abspath(entry or ".")
     if _p8os.path.realpath(absolute) == _P8_OWN_REAL:
-        return True
+        return "realpath"
     try:
-        return _p8os.path.samefile(absolute, _P8_OWN_DIR)
+        if _p8os.path.samefile(absolute, _P8_OWN_DIR):
+            return "samefile"
     except OSError:
-        return False
+        pass
+    return None
 
 
-_p8_hit = next((p for p in sys.path if _p8_is_own_dir(p)), None)
-if _p8_hit is not None:
+_p8_hit = None
+_p8_hit_by = None
+for _p8_entry in sys.path:
+    _p8_hit_by = _p8_own_dir_match(_p8_entry)
+    if _p8_hit_by is not None:
+        _p8_hit = _p8_entry
+        break
+if _p8_hit_by is not None:
     sys.stderr.write(
         "MUTANT FAIL: NOT ISOLATED — isolated mode was requested and this "
-        "interpreter still has " + repr(_p8_hit) + ", which resolves to " +
-        _P8_OWN_REAL + ", on sys.path, so a module planted beside this file "
-        "would be imported in preference to the standard library. Refusing\n")
+        "interpreter still has " + repr(_p8_hit) + " on sys.path, which IS this "
+        "program's own directory " + _P8_OWN_DIR + " — matched by " + _p8_hit_by +
+        "; realpath(entry) = " + _p8os.path.realpath(_p8os.path.abspath(_p8_hit or ".")) +
+        ". A module planted beside this file would be imported in preference to "
+        "the standard library. Refusing\n")
     raise SystemExit(1)
 
 

@@ -1761,10 +1761,10 @@ import sys
 src, dst = sys.argv[1], sys.argv[2]
 s = open(src, encoding="utf-8").read()
 a = "if not sys.flags.isolated:"
-b = "if _p8_hit is not None:"
+b = "\nif _p8_hit_by is not None:"
 assert s.count(a) == 1, "the isolated-mode test is not where this patcher expects it"
-assert s.count(b) == 1, "the sys.path test is not where this patcher expects it"
-s = s.replace(a, "if False:", 1).replace(b, "if False:", 1)
+assert s.count(b) == 1, "the identity test is not where this patcher expects it"
+s = s.replace(a, "if False:", 1).replace(b, "\nif False:", 1)
 open(dst, "w", encoding="utf-8").write(s)
 PATCH
 
@@ -1784,17 +1784,32 @@ sys.argv = [script] + sys.argv[3:]
 sys.path.insert(0, entry)
 runpy.run_path(script, run_name="__main__")
 PATCH
+# ROUND 25, R-1. The sixteenth challenge measured that `realpath` resolves
+# symlinks but does NOT traverse mount points, so a BIND MOUNT of the proof
+# directory is caught by the `samefile` reading ALONE — and round 24's comment
+# claimed the opposite, which was a measured-false sentence and the reason no
+# arm existed. This patcher deletes that one reading, leaving `realpath`
+# standing, so arm y20 can hold it responsible for the case only it catches.
+cat > "$PATCHDIR/drop-samefile.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = "        if _p8os.path.samefile(absolute, _P8_OWN_DIR):"
+assert s.count(b) == 1, "the samefile reading is not where this patcher expects it"
+s = s.replace(b, "        if False:", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
 cat > "$PATCHDIR/drop-path-test.py" <<'PATCH'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 s = open(src, encoding="utf-8").read()
 a = "if not sys.flags.isolated:"
-b = "if _p8_hit is not None:"
+b = "\nif _p8_hit_by is not None:"
 assert s.count(a) == 1, "the isolated-mode test is not where this patcher expects it"
-assert s.count(b) == 1, "the sys.path test is not where this patcher expects it"
+assert s.count(b) == 1, "the identity test is not where this patcher expects it"
 # ONLY the second test, and the first one left standing: that is the whole
 # point of this patcher next to `unisolate.py`.
-s = s.replace(b, "if False:", 1)
+s = s.replace(b, "\nif False:", 1)
 open(dst, "w", encoding="utf-8").write(s)
 PATCH
 
@@ -1899,8 +1914,8 @@ if [ "$ISO_OK" = 1 ]; then
                "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
       say "FAIL: GUARD-CTL y17 — a SYMLINKED spelling of the subject's own directory defeated the second test, which is round 15's O-1 unfixed"
       FAILED=1
-    elif grep -q "NOT ISOLATED" "$_o" && grep -q "which resolves to" "$_o"; then
-      say "GUARD-CTL y17: a symlinked spelling of the same directory is refused on IDENTITY, and the refusal names the entry and what it resolves to"
+    elif grep -q "NOT ISOLATED" "$_o" && grep -q "matched by realpath" "$_o"; then
+      say "GUARD-CTL y17: a symlinked spelling of the same directory is refused on IDENTITY, and the refusal names WHICH reading matched (realpath) — round 24 greped for a phrase printed in both cases, which is how a wrong attribution went unseen"
     else
       say "FAIL: GUARD-CTL y17 — it refused, but not on identity with both spellings named"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
     fi
@@ -1921,6 +1936,79 @@ if [ "$ISO_OK" = 1 ]; then
         say "FAIL: GUARD-CTL y18 — with the second test deleted the check still refused, so y16/y17 are not measuring that test"
         head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
       fi
+    fi
+
+    # ----------------------------------------------------------------
+    # y20 — the `samefile` reading, which round 24 called untestable
+    # ----------------------------------------------------------------
+    # ROUND 25, R-1 (P1, measured-false). `realpath` resolves symlinks and does
+    # NOT traverse mount points, so a bind mount of the proof directory is the
+    # case `samefile` alone catches. Round 24 asserted the opposite and called
+    # the reading UNEXERCISED; the arm is three lines. It needs mount
+    # privileges, and a missing privilege is a PLANT NOT ESTABLISHED under its
+    # own name — never a silent skip, because a skipped arm reads exactly like
+    # a passing one.
+    BINDPOINT=$ISO/bindpoint
+    mkdir -p "$BINDPOINT"
+    if ! mount --bind "$ISO/planted" "$BINDPOINT" 2>"$ISO/bind.log"; then
+      say "ISOLATION: PLANT NOT ESTABLISHED — this container may not bind-mount ($(head -1 "$ISO/bind.log")), so the one spelling the samefile reading exists for cannot be built here"
+      FAILED=1
+    else
+      # The arm's own precondition, measured rather than assumed: the bind path
+      # must NOT resolve through (or `realpath` would catch it and the arm would
+      # be attributing the wrong reading), and it must be the same inode.
+      _pre=$(python3 -I -c "
+import os, sys
+b, srcdir = sys.argv[1], sys.argv[2]
+print('rp-differs' if os.path.realpath(b) != os.path.realpath(srcdir) else 'rp-same',
+      'same-inode' if os.path.samefile(b, srcdir) else 'other-inode')" "$BINDPOINT" "$ISO/planted")
+      if [ "$_pre" != "rp-differs same-inode" ]; then
+        say "ISOLATION: PLANT NOT ESTABLISHED — the bind mount is not the shape this arm measures (got '$_pre'); on a platform where realpath traverses the mount, y16's reading would catch it and y20 would attribute the wrong one"
+        FAILED=1
+      else
+        say "ISOLATION: the bind spelling holds — realpath differs and the inode is the same, which is the one case the samefile reading exists for"
+        # Unpatched: the bind spelling must refuse, and the refusal must say
+        # WHICH reading caught it.
+        _o=$ISO/y20a.log
+        if python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" \
+                   "$ISO/planted/p8-frozen-integrity.py" "$ISO/tree" \
+                   "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+          say "FAIL: GUARD-CTL y20a — a bind mount of the subject's own directory was on sys.path and the check measured anyway"
+          FAILED=1
+        elif grep -q "NOT ISOLATED" "$_o" && grep -q "matched by samefile" "$_o"; then
+          say "GUARD-CTL y20a: a BIND MOUNT of the same directory is refused, and the refusal names samefile as the reading that caught it"
+        else
+          say "FAIL: GUARD-CTL y20a — it refused, but not by the samefile reading"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+        fi
+        # The attribution: that reading DELETED ALONE, realpath left standing.
+        _nos=$ISO/planted/no-samefile.py
+        if ! python3 -I "$PATCHDIR/drop-samefile.py" "$ISO/planted/p8-frozen-integrity.py" "$_nos" >"$ISO/patch3.log" 2>&1; then
+          say "FAIL: GUARD-CTL y20 — the samefile reading could not be deleted alone, so y20a is unattributed"
+          head -2 "$ISO/patch3.log" | tee -a "$OUT/run.log"; FAILED=1
+        else
+          _o=$ISO/y20b.log
+          if python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" "$_nos" "$ISO/tree" \
+                     "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+            say "GUARD-CTL y20b: with the samefile reading deleted ALONE the bind spelling goes rc 0 on a tampered tree, so that reading is the only thing standing between it and the planted module — round 24's 'UNEXERCISED' sentence was false"
+          else
+            say "FAIL: GUARD-CTL y20b — with the samefile reading deleted the bind spelling was still refused, so y20a is not measuring that reading"
+            head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+          fi
+          # And the deletion must be SURGICAL: the plain spelling must still be
+          # refused by the reading that was left standing.
+          _o=$ISO/y20c.log
+          if python3 -I "$PATCHDIR/with-path-entry.py" "$ISO/planted" "$_nos" "$ISO/tree" \
+                     "${ANCHOR_ARGS[@]}" "${ISO_CLAIM[@]}" >"$_o" 2>&1; then
+            say "FAIL: GUARD-CTL y20c — deleting the samefile reading also disabled the realpath one, so y20b's green says nothing about which reading matters"
+            FAILED=1
+          elif grep -q "matched by realpath" "$_o"; then
+            say "GUARD-CTL y20c: the same deletion leaves the plain spelling refused by realpath, so y20b measured ONE reading and not the whole test"
+          else
+            say "FAIL: GUARD-CTL y20c — the plain spelling refused, but not by realpath"; head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+          fi
+        fi
+      fi
+      umount "$BINDPOINT" || say "ISOLATION: NOTE — the bind mount at $BINDPOINT could not be unmounted; it is inside this run's own output directory"
     fi
   fi
 fi

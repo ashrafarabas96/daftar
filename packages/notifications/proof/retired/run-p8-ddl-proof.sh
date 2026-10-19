@@ -41,6 +41,27 @@
 #     both reads `notifications` and holds `UPDATE (status, ...)`. They are not
 #     approximated with a principal that is not the subject of the rule; they
 #     wait on the administrator's role-creation step at promotion.
+#   * EVERY OTHER retired case — **ROUND 25, and this is the honest count.**
+#     The lines above name the families that were ported; they do not say how
+#     much of this file that is, and a reader could take "covered" for "all".
+#     The sixteenth challenge counted it (R-4) and corrected its own earlier
+#     figure doing so: a literal comparison had read `A-4` here and `A4` in the
+#     live files as two different cases. Normalising that spelling, this
+#     directory declares **93** case ids and **55** of them have no live
+#     counterpart by name. **Ten are carried** — the ports above, plus `A-6`,
+#     `G-3`, `G-4`, `N6-j`, `I9c2-a`, `I9c2-b`, `R-1` and `R-2`, which are
+#     re-expressed under other live ids, and `I8-a`/`I8-b`, carried for the
+#     worker only. **Forty-five are not**, for four different reasons: 23 are
+#     constraints the real overlay DOES carry under the name the retired case
+#     expected, with nothing exercising the refusal; 16 are accepted paths or
+#     catalogue censuses with no named constraint; 4 name a principal the frozen
+#     role set does not contain (`G-5` with `H-1`/`H-2`/`H-4`); and 2 are grant
+#     censuses on the app role. Each of the fifty-five is named, one by one, in
+#     `P8-HANDOFF-MANIFEST.md`, section "THE RETIRED IDS, ONE BY ONE". A
+#     constraint present but unexercised is NOT the same as an absent one, and
+#     it is NOT the same as a measured one either: that is the distinction this
+#     block exists to keep, because the sentence that had to be corrected twice
+#     in this file was each time a coverage claim wider than its measurement.
 #
 # It is kept, not deleted, so a reader can see what was measured and how.
 # It refuses rather than runs: a retired gate that still executes is a gate.
@@ -52,6 +73,12 @@ echo "         quarantine H-3* as the real daftar_worker, with mutants 14 and 15
 echo "         (round 24)." >&2
 echo "         NOT covered, UNMEASURED at runtime: H-1, H-2, H-4 — they are rules" >&2
 echo "         about a WEBHOOK principal and the frozen role set has no such role." >&2
+echo "         THE COUNT (round 25, R-4): of the 93 case ids declared here, 55 have" >&2
+echo "         no live counterpart by name. TEN are carried, FORTY-FIVE are not:" >&2
+echo "         23 constraints present in the overlay with the refusal unexercised," >&2
+echo "         16 accepted paths or catalogue censuses, 4 with no live principal," >&2
+echo "         2 grant censuses on the app role. Every one is named in" >&2
+echo "         P8-HANDOFF-MANIFEST.md, 'THE RETIRED IDS, ONE BY ONE'." >&2
 echo "         Kept for the record, never deleted. Refusing with exit 2." >&2
 exit 2
 # =====================================================================

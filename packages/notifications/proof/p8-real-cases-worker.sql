@@ -140,18 +140,29 @@ $q$, 'quarantine_verification_in');
 -- ---------------------------------------------------------------------
 -- I3-*: the status ladder as a DATABASE rule, not an application convention
 -- ---------------------------------------------------------------------
+-- ROUND 25, R-3 (the sixteenth challenge, not a defect but a silence). Seven
+-- `case_permits` in this pack are UPDATEs, and `case_permits` does not read
+-- ROW_COUNT: an UPDATE the policy filters to zero rows raises nothing, so such
+-- a case passes on a row that never moved. Five of them are the ladder permits
+-- below, and they WERE protected — but only implicitly, by the refusals that
+-- follow them, since `I3-d` can only be refused as a regression if `I3-a`..`I3-c`
+-- actually landed. Implicit protection is lost the moment someone reorders or
+-- drops a case, and nothing said so. Each permit now reads its own value back.
 -- The ranks are queued 0, sent 1, failed 2, delivered 3, read 4, and the
 -- trigger admits only a STRICT increase. `failed` sitting below the arrivals is
 -- the whole point: a failure is not terminal, an arrival is.
 SELECT p8.case_permits('I3-a queued -> sent', $q$
   UPDATE notifications SET status = 'sent' WHERE id = '0fffffff-0000-4000-8000-0000000000a2'
 $q$);
+SELECT p8.case_equals('I3-a2 and the row is at sent, read back rather than assumed', (SELECT status FROM notifications WHERE id = '0fffffff-0000-4000-8000-0000000000a2'), 'sent');
 SELECT p8.case_permits('I3-b sent -> delivered', $q$
   UPDATE notifications SET status = 'delivered' WHERE id = '0fffffff-0000-4000-8000-0000000000a2'
 $q$);
+SELECT p8.case_equals('I3-b2 and the row is at delivered', (SELECT status FROM notifications WHERE id = '0fffffff-0000-4000-8000-0000000000a2'), 'delivered');
 SELECT p8.case_permits('I3-c delivered -> read', $q$
   UPDATE notifications SET status = 'read' WHERE id = '0fffffff-0000-4000-8000-0000000000a2'
 $q$);
+SELECT p8.case_equals('I3-c2 and the row is at read, which is what makes the three refusals below regressions', (SELECT status FROM notifications WHERE id = '0fffffff-0000-4000-8000-0000000000a2'), 'read');
 SELECT p8.case_refuses('I3-d read -> sent is a regression', $q$
   UPDATE notifications SET status = 'sent' WHERE id = '0fffffff-0000-4000-8000-0000000000a2'
 $q$, 'notification.status_regression');
@@ -165,9 +176,11 @@ $q$, 'notification.status_not_on_the_ladder');
 SELECT p8.case_permits('I3-f queued -> failed', $q$
   UPDATE notifications SET status = 'failed' WHERE id = '0fffffff-0000-4000-8000-0000000000a3'
 $q$);
+SELECT p8.case_equals('I3-f2 and the row is at failed', (SELECT status FROM notifications WHERE id = '0fffffff-0000-4000-8000-0000000000a3'), 'failed');
 SELECT p8.case_permits('I3-g failed -> delivered — a late arrival is EVIDENCE, not a regression', $q$
   UPDATE notifications SET status = 'delivered' WHERE id = '0fffffff-0000-4000-8000-0000000000a3'
 $q$);
+SELECT p8.case_equals('I3-g2 and the row is at delivered, so the late arrival really landed', (SELECT status FROM notifications WHERE id = '0fffffff-0000-4000-8000-0000000000a3'), 'delivered');
 SELECT p8.case_refuses('I3-h delivered -> failed is refused: the arrival is terminal', $q$
   UPDATE notifications SET status = 'failed' WHERE id = '0fffffff-0000-4000-8000-0000000000a3'
 $q$, 'notification.status_regression');

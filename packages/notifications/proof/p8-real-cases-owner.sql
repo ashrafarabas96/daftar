@@ -398,6 +398,12 @@ SELECT p8.case_permits('N6-a the customer READS the message, verified', $q$
   UPDATE notification_deliveries SET final_status = 'read', final_status_verified = true
    WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid
 $q$);
+-- ROUND 25, R-3: the UPDATE reads its own value back, because `case_permits`
+-- does not read ROW_COUNT and an UPDATE the policy filters to nothing raises
+-- no error. `N6-b` below reads the arrival FACT, which the trigger derives;
+-- this reads the column the statement itself set.
+SELECT p8.case_equals('N6-a2 and the final status really is read',
+  (SELECT final_status FROM notification_deliveries WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid), 'read');
 SELECT p8.case_equals('N6-b and the arrival fact was SET by the trigger, not by the writer',
   (SELECT arrival_ever_recorded FROM notification_deliveries
     WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid), true);
@@ -412,6 +418,9 @@ SELECT p8.case_permits('N6-d the demotion to a verified failure still lands, and
      SET delivery_state = 'closed', final_status = 'failed', final_status_verified = true
    WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid
 $q$);
+SELECT p8.case_equals('N6-d3 and the row really is closed and failed',
+  (SELECT delivery_state || '/' || final_status FROM notification_deliveries
+    WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid), 'closed/failed');
 SELECT p8.case_equals('N6-d2 the arrival fact SURVIVED the demotion',
   (SELECT arrival_ever_recorded FROM notification_deliveries
     WHERE id = '0ddddddd-0000-4000-8000-0000000000f1'::uuid), true);
