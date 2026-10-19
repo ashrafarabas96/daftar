@@ -218,7 +218,10 @@ const TOOLS = SCRIPTS.map((s) => s.split('/').pop() ?? s);
  * flag form stops the match, and the differential arm below is its deletion
  * test.
  */
-const INVOCATION = new RegExp(String.raw`python(?:3(?:\.\d+)*)?((?:\s+-\S+(?:\s+[^-\s]\S*)?)*)\s+(?:\S*/)?(${TOOLS.join('|').replace(/\./g, '\\.')})`, 'g');
+const INVOCATION = new RegExp(
+  String.raw`((?:[A-Za-z0-9_.\-]*/)*python(?:3(?:\.\d+)*)?)((?:\s+-\S+(?:\s+[^-\s]\S*)?)*)\s+(?:\S*/)?(${TOOLS.join('|').replace(/\./g, '\\.')})`,
+  'g',
+);
 
 /**
  * The flag run the OLD pattern accepted: flags only, none taking a separate
@@ -263,6 +266,11 @@ const NO_ARG_FLAGS: ReadonlySet<string> = new Set([
   '-O',
   '-P',
   '-q',
+  // F-60, round 34: `-R` is argument-free in CPython and was missing. It now
+  // matters only for TOKENISATION — it decides whether the next token is this
+  // flag's value — because the isolation VERDICT no longer comes from a list.
+  '-R',
+  '-?',
   '-s',
   '-S',
   '-u',
@@ -294,8 +302,58 @@ const interpreterFlags = (captured: string): { flag: string; value?: string }[] 
   return out;
 };
 
-/** `-I` present as a FLAG — never as another flag's value. */
-const isolated = (flags: string): boolean => interpreterFlags(flags).some(({ flag }) => flag === '-I' || (/^-[A-Za-z]+$/.test(flag) && flag.includes('I')));
+/**
+ * Is the invocation ISOLATED? ASKED OF CPYTHON, never of a model of it.
+ *
+ * ROUND 34, THE COORDINATOR'S CLASS RULING after the challenger's F-59 (P1).
+ * Four rounds running, a hand-written model of CPython's command line was
+ * wrong in some production: F-56 (a flag with a separate value broke the
+ * match), F-58 (a VALUE spelled `-I` read as the flag), F-59 (`-XI`, a cluster
+ * CARRYING a value, read as the flag — measured un-isolated, 0 at rc 0, and
+ * cleared by this law end to end at 14 passed rc 0), F-60 (`-R` missing, a
+ * false red). The ruling is Phase 7's: derive the verdict from EXECUTION.
+ *
+ * The tokeniser's job is now only to FIND an invocation and split its flag
+ * segment. The verdict runs the interpreter the document names, with exactly
+ * those flags, then `-c "import sys; print(sys.flags.isolated)"`, in an
+ * environment holding nothing but PATH — needed to resolve a bare `python3` —
+ * with a timeout, and caches the answer per distinct interpreter-and-flags
+ * pair. ISOLATED means it printed `1` and exited 0. **Everything else is an
+ * OFFENCE**: rc not 0, a timeout, a missing interpreter, any other output. So
+ * it fails closed, and a wrong model can now only produce a false RED.
+ *
+ * TWO FORMS ARE REFUSED WITHOUT BEING RUN, and refusing counts as an offence:
+ * `-c` and `-m` load code and end option processing, `--` ends it, so running
+ * a segment carrying them would execute whatever a document names. A law that
+ * reads other people's documents must not become a way to run them. That is a
+ * safety gate, not a verdict: it can only produce a false red.
+ */
+const PROBE = 'import sys; print(sys.flags.isolated)';
+const NEVER_EXECUTED: ReadonlySet<string> = new Set(['-c', '-m', '--']);
+const verdicts = new Map<string, boolean>();
+
+const isolatedByExecution = (interpreter: string, flags: string): boolean => {
+  const key = `${interpreter}\u0000${flags}`;
+  const cached = verdicts.get(key);
+  if (cached !== undefined) return cached;
+  const parsed = interpreterFlags(flags);
+  let ok = false;
+  if (!parsed.some(({ flag }) => NEVER_EXECUTED.has(flag))) {
+    const argv = parsed.flatMap(({ flag, value }) => (value === undefined ? [flag] : [flag, value]));
+    const r = spawnSync(interpreter, [...argv, '-c', PROBE], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    });
+    ok = r.status === 0 && (r.stdout ?? '').trim() === '1';
+  }
+  verdicts.set(key, ok);
+  return ok;
+};
+
+/** The spelling-only cluster test, kept for F-59's deletion arm. */
+const isolatedByModel = (flags: string): boolean =>
+  interpreterFlags(flags).some(({ flag }) => flag === '-I' || (/^-[A-Za-z]+$/.test(flag) && flag.includes('I')));
 
 /** The whitespace split F-58 is about, kept only for its deletion arm. */
 const isolatedBeforeF58 = (flags: string): boolean => flags.split(/\s+/).some((f) => f === '-I' || (/^-[A-Za-z]+$/.test(f) && f.includes('I')));
@@ -341,7 +399,7 @@ const offencesIn = (label: string, text: string): string[] => {
   const found: string[] = [];
   for (const { n, line } of logicalLines(text)) {
     for (const m of line.matchAll(INVOCATION)) {
-      if (!isolated(m[1] ?? '')) found.push(`${label}:${n}: ${line.trim()}`);
+      if (!isolatedByExecution(m[1] ?? 'python3', m[2] ?? '')) found.push(`${label}:${n}: ${line.trim()}`);
     }
   }
   return found;
@@ -394,7 +452,7 @@ const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], nu
     }
     if (inFence && exempt) continue;
     for (const m of line.matchAll(INVOCATION)) {
-      if (!isolated(m[1] ?? '')) found.push(`${label}:${n}: ${line.trim()}`);
+      if (!isolatedByExecution(m[1] ?? 'python3', m[2] ?? '')) found.push(`${label}:${n}: ${line.trim()}`);
     }
   }
   return [found, exemptBlocks];
@@ -468,7 +526,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       for (const { line } of logicalLines(text)) {
         for (const m of line.matchAll(INVOCATION)) {
           seen += 1;
-          if (!isolated(m[1] ?? '')) offences.push(`${label}: ${line.trim()}`);
+          if (!isolatedByExecution(m[1] ?? 'python3', m[2] ?? '')) offences.push(`${label}: ${line.trim()}`);
         }
       }
     }
@@ -782,10 +840,12 @@ describe('every written invocation of the pack tools is isolated', () => {
     // ONE deletion, one property. The old function must say ISOLATED where the
     // new one says otherwise, or the change above is decoration.
     expect(isolatedBeforeF58(' -X -I'), 'the old split no longer reads the value as a flag, so this arm proves nothing').toBe(true);
-    expect(isolated(' -X -I'), 'the new verdict still reads a value as the isolation flag').toBe(false);
+    expect(isolatedByExecution('python3', ' -X -I'), 'the new verdict still reads a value as the isolation flag').toBe(false);
     // And it must agree with the old one everywhere the old one was right.
     for (const flags of [' -I', ' -I -X utf8', ' -X utf8 -I', ' -E -s', ' -X utf8', '']) {
-      expect(isolated(flags), `the two verdicts differ on ${JSON.stringify(flags)}, which F-58 is not about`).toBe(isolatedBeforeF58(flags));
+      expect(isolatedByExecution('python3', flags), `the two verdicts differ on ${JSON.stringify(flags)}, which F-58 is not about`).toBe(
+        isolatedBeforeF58(flags),
+      );
     }
   });
   it('enumerates the flag grammar it claims to cover, and tests every production', () => {
@@ -821,6 +881,15 @@ describe('every written invocation of the pack tools is isolated', () => {
       { text: '-I -X utf8 ', isolated: true, production: 'NOARG then VALUED' },
       { text: '-X utf8 -I ', isolated: true, production: 'VALUED then NOARG' },
       { text: '-X utf8 -W ignore -I ', isolated: true, production: 'two VALUED then NOARG' },
+      { text: '-XI ', isolated: false, production: 'CLUSTER carrying a value: -X with option I — F-59, measured 0' },
+      { text: '-WI ', isolated: false, production: 'CLUSTER carrying a value — F-59, measured 0' },
+      { text: '-XIdev ', isolated: false, production: 'CLUSTER, value-taking letter then a tail — F-59, measured 0' },
+      { text: '-RI ', isolated: true, production: 'CLUSTER all argument-free, -R included — F-60, measured 1' },
+      { text: '-R -I ', isolated: true, production: 'argument-free -R then -I — F-60, measured 1' },
+      { text: '-sI ', isolated: true, production: 'CLUSTER all argument-free — the ruling asks for this one' },
+      { text: '-IsE ', isolated: true, production: 'CLUSTER all argument-free, -I first' },
+      { text: '-R ', isolated: false, production: 'argument-free -R alone isolates nothing' },
+      { text: '-m trace ', isolated: false, production: 'REFUSED unrun: -m loads code' },
     ];
     const toolPaths = ['manifest-digests.py', 'tools/manifest-digests.py', './tools/manifest-digests.py', '/home/u/p/tools/manifest-digests.py'];
     let productions = 0;
@@ -842,5 +911,66 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(productions, 'the grammar table collapsed, so this arm measures almost nothing').toBe(
       interpreters.length * (flagForms.length * toolPaths.length + 2),
     );
+  });
+  it('the verdict comes from CPython, and everything else is an offence', () => {
+    // The coordinator's red proofs, each one asked of the interpreter rather
+    // than of a model: `python3 -XI -c "…isolated"` prints 0, so it is an
+    // offence however the letters are spelled.
+    for (const flags of [' -XI', ' -WI', ' -XIdev', ' -X -I', ' -W -I']) {
+      expect(isolatedByExecution('python3', flags), `${flags} is read as isolated, but CPython does not isolate it`).toBe(false);
+    }
+    for (const flags of [' -I', ' -RI', ' -sI', ' -IsE']) {
+      expect(isolatedByExecution('python3', flags), `${flags} IS isolated in CPython and this law reds on it`).toBe(true);
+    }
+    // Fails closed on anything that is not a clean `1` at rc 0.
+    expect(isolatedByExecution('python3.99', ' -I'), 'a missing interpreter is read as isolated, which is a fail-open').toBe(false);
+    expect(isolatedByExecution('/nonexistent/python3', ' -I'), 'an unresolvable interpreter path is read as isolated').toBe(false);
+    expect(isolatedByExecution('python3', ' --no-such-option -I'), 'a usage error is read as isolated').toBe(false);
+    // And the two forms that are refused rather than run, because executing
+    // them would run code a document names.
+    expect(isolatedByExecution('python3', ' -I -m trace'), 'a segment carrying -m was executed or cleared').toBe(false);
+    expect(isolatedByExecution('python3', ' -I -c pass'), 'a segment carrying -c was executed or cleared').toBe(false);
+    // The whole law is over documents, so the live scan must still see the
+    // real commands as isolated -- otherwise this round reds the repository.
+    expect(isolatedByExecution('python3', ' -I')).toBe(true);
+    expect(isolatedByExecution('/usr/bin/python3', ' -I')).toBe(true);
+  });
+
+  it('F-59 guard deletion: the model clears -XI where CPython does not', () => {
+    // ONE deletion, one property: restoring the cluster heuristic turns `-XI`
+    // green, which is what made F-59 a fail-open.
+    expect(isolatedByModel(' -XI'), 'the model no longer clears -XI, so this arm proves nothing').toBe(true);
+    expect(isolatedByExecution('python3', ' -XI'), 'the verdict still clears a cluster that carries a value').toBe(false);
+    expect(offencesIn('fixture', 'python3 -XI tools/manifest-digests.py --check'), 'the scan does not report -XI').toHaveLength(1);
+    // F-60 travels with it: with the cluster rule and without `-R` in the
+    // tokeniser's list, `-RI` and `-R -I` would have become false reds.
+    expect(NO_ARG_FLAGS.has('-R'), 'F-60 regressed: -R is argument-free in CPython').toBe(true);
+    expect(offencesIn('fixture', 'python3 -RI tools/manifest-digests.py --check'), '-RI is isolated in CPython and this law reds on it').toStrictEqual([]);
+    expect(offencesIn('fixture', 'python3 -R -I tools/manifest-digests.py --check'), '-R -I is isolated in CPython and this law reds on it').toStrictEqual([]);
+  });
+  it("F-53: no message in this law claims a reviewer-shaped document is the author's", () => {
+    // F-53 (P2) was that the refusal called an unenumerated reviewer-shaped
+    // report "an author-owned pack document", which is false about ownership
+    // and routes the reader to the one repair the pack forbids — editing a
+    // reviewer's frozen bytes. Round 30 fixed the SENTENCE; round 31's B-12
+    // remedy closed it BY CONSTRUCTION, because such a document is no longer
+    // read by this law at all. This arm is what makes that structural rather
+    // than incidental: the only sentence a reader can reach for such a name
+    // routes them to the shared list, and the ownership sentence is reachable
+    // only for a document the list does not shape-match.
+    const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
+    expect(here, 'the unclassified branch no longer tells the reader to enrol the name').toContain('enrol it in tools/reviewer-reports.json by its EXACT name');
+    expect(here, "the unclassified branch no longer warns against editing a reviewer's report").toContain('do NOT edit a reviewer');
+    // The ownership sentence exists exactly once, on the author-owned bucket.
+    // The needle is ASSEMBLED, not written, or this arm's own copy of the
+    // sentence would be the second occurrence it complains about -- the
+    // self-counting shape B-10's before arm taught us to watch for.
+    const needle = ['an author-owned pack', 'document prints an', 'un-isolated command'].join(' ');
+    const ownership = here.split(needle).length - 1;
+    expect(ownership, 'the ownership sentence is written more than once, so one of them can drift').toBe(1);
+    // And the shaped name never reaches that bucket: the routing is asserted
+    // by the pack arm above, this is its message half.
+    const shaped = looksLikeReviewer();
+    expect(shaped.test('P5-CHALLENGE-12345678.md'), 'the name from the F-53 report is no longer reviewer-shaped').toBe(true);
   });
 });
