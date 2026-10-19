@@ -275,6 +275,9 @@ DELIVERED_REVIEWER_REPORTS = (
     'P13-CHALLENGE-3c72703.md',
     # The coordinator's diff review of the same range, which SIGNS it.
     'P13-COORD-DIFF-REVIEW-3c72703.md',
+    # R19, the narrow round on 3c72703..3c62561: PASS-WITH-SCOPE, both P3s closed, no
+    # finding open at that head.
+    'P13-CHALLENGE-3c62561.md',
 )
 # The SHAPE of a reviewer report, used only to spot a file that wears the name without
 # being on the list, and MY OWN round records, which are hashed and are anchored to a
@@ -715,10 +718,17 @@ def pin_verdict(subject_sha: str) -> tuple[bool, str]:
     # compare the subject sha with the one in the signature, and then printed 12 of its
     # 40 characters -- `grep -oE '\b[0-9a-f]{40}\b'` over the whole `--check` output
     # returned NOTHING. The gate enforced the full-40 law on its input (the abbreviated
-    # sha above is a refusal) and not on its own output. So every id that is part of the
-    # signed triple is printed IN FULL here: the subject sha, and the generator's SHA-256
-    # on both sides of the comparison. The blob id stays abbreviated -- it is disclosure,
-    # not an element of the triple.
+    # sha above is a refusal) and not on its own output. So the two elements of the signed
+    # triple that this gate CAN print are printed IN FULL here: the subject sha, and the
+    # generator's SHA-256 on both sides of the comparison. The blob id stays abbreviated --
+    # it is disclosure, not an element of the triple.
+    #
+    # Round 19 observed, correctly, that "every element of the triple" was a word doing
+    # more work than the code can: the third element is this pack's MANIFEST digest, and a
+    # file cannot contain its own digest -- that is §3.5b's cycle, not an omission. The
+    # reader computes it with `sha256sum` on the file they hold, which is the only way it
+    # could ever be checked, so no claim here is weakened. The wording is corrected rather
+    # than left to be read as a promise about three ids when it can only be about two.
     return True, (f'the generator is PINNED, and the chain to it was RE-HASHED object by object '
                   f'(A-02): {" -> ".join(steps)}. The {len(blob)} bytes served for that blob '
                   f'id re-hash to {recorded_id[:12]}…, which is the id the verified tree at '
