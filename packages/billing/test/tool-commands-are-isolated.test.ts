@@ -97,14 +97,59 @@ const REVIEWER_REPORTS_FILE = join(__dirname, '..', 'tools', 'reviewer-reports.j
  * throws here rather than falling back to a pattern, because the fallback is
  * the hole.
  */
-const reviewerOwned = (): ReadonlySet<string> => {
+const REFUSED_ENROLLED_BYTES_MOVED = 'REFUSED-ENROLLED-BYTES-MOVED';
+
+/**
+ * ROUND 50, THE CHALLENGER'S R48-F3 (P1), and the reason this reader is strict
+ * about a file it used to read loosely.
+ *
+ * Enrolment was a LIST OF NAMES, so ONE routine-looking line exempted any
+ * document from this law -- measured, with a plant enrolled: 303 passed. The
+ * line looks like the bookkeeping this round does three times, so it is
+ * CAMOUFLAGED rather than licensed, which is the opposite of the byte pin's
+ * property that an edit must be deliberate and visible.
+ *
+ * Three teeth, and the third is the one that holds. (1) It is a MAP from EXACT
+ * NAME to sha256, and an entry is accepted only when the name is
+ * REVIEWER-SHAPED and the value is 64 hex characters -- so enrolling an
+ * author-owned document is REFUSED BY NAME here instead of exempting it, and
+ * shape is used to REFUSE rather than to exempt, which is B-10's rule and not
+ * its violation. (2) The bytes are verified against the recorded digest
+ * wherever the pack is present, which also closes the one case the seal's
+ * name-set comparison was the only net for: an enrolled report rewritten
+ * between the passes. (3) This file is pinned in `tools/law-bytes.json`, so
+ * every enrolment moves a digest there too and is refused unless that pin
+ * moves in the SAME commit.
+ *
+ * DECLARED LIMIT: a plant renamed into reviewer shape, enrolled WITH its true
+ * digest, with the pin updated in the same commit, passes. That is the two-file
+ * limit again, and in the diff it is a new reviewer name beside two new
+ * digests -- which is what review reads.
+ */
+const enrolment = (): ReadonlyMap<string, string> => {
   const raw: unknown = JSON.parse(readFileSync(REVIEWER_REPORTS_FILE, 'utf8'));
-  const names = (raw as { reviewer_reports?: unknown }).reviewer_reports;
-  if (!Array.isArray(names) || names.length === 0 || !names.every((n) => typeof n === 'string' && n.length > 0)) {
-    throw new Error(`${REVIEWER_REPORTS_FILE} has no non-empty list of reviewer report names`);
+  const table = (raw as { reviewer_reports?: unknown }).reviewer_reports;
+  if (table === null || typeof table !== 'object' || Array.isArray(table) || Object.keys(table).length === 0) {
+    throw new Error(`${REVIEWER_REPORTS_FILE} has no non-empty MAP of reviewer report name to sha256`);
   }
-  return new Set(names as string[]);
+  const shape = looksLikeReviewer();
+  const out = new Map<string, string>();
+  for (const [name, value] of Object.entries(table as Record<string, unknown>)) {
+    if (name.length === 0 || name.includes('/')) throw new Error(`${REVIEWER_REPORTS_FILE}: every key must be a bare file name`);
+    if (!shape.test(name)) {
+      throw new Error(
+        `${REVIEWER_REPORTS_FILE}: ${name} is enrolled as reviewer-owned but is not a reviewer-shaped name, so this enrolment would exempt an author-owned document from this law`,
+      );
+    }
+    if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) {
+      throw new Error(`${REVIEWER_REPORTS_FILE}: ${name} carries ${JSON.stringify(value)} rather than a sha256 of its bytes`);
+    }
+    out.set(name, value);
+  }
+  return out;
 };
+
+const reviewerOwned = (): ReadonlySet<string> => new Set(enrolment().keys());
 
 /**
  * The name SHAPE of a reviewer report, read from the same shared file.
@@ -174,6 +219,29 @@ const looksLikeReviewer = (): RegExp => {
  * document's authorship out of its bytes — an author document named in
  * reviewer shape AND enumerated is outside both scans.
  */
+/**
+ * ROUND 50, THE CHALLENGER'S R48-F2 (P2). The pack arm's subject set was a
+ * LIVE SHARED DIRECTORY, so a REPO GATE's verdict was not a property of the
+ * commit: any writer in the pack could turn it red or green after it was
+ * measured — it did, at 16:23Z — and `P5_PACK_DIR` could be pointed at an
+ * empty directory with no file edit at all. The author-owned set is now PINNED
+ * IN THE REPOSITORY, in `tools/pack-set.json`, and this is the name it refuses
+ * by. Reviewer-owned reports are deliberately not pinned: they arrive
+ * mid-review, they are already enrolled by exact name, and a reviewer dropping
+ * a report must not red the author's suite.
+ */
+const REFUSED_PACK_NOT_PINNED = 'REFUSED-PACK-NOT-THE-PINNED-SET';
+
+/** The pinned author-owned set, read from the repository and not from the pack. */
+const pinnedPackSet = (): string[] => {
+  const raw = JSON.parse(readFileSync(join(__dirname, '..', 'tools', 'pack-set.json'), 'utf8')) as { names?: unknown };
+  const names = raw.names;
+  if (!Array.isArray(names) || names.length === 0 || !names.every((n) => typeof n === 'string' && n.length > 0)) {
+    throw new Error(`${REFUSED_PACK_NOT_PINNED}: tools/pack-set.json has no non-empty list of names, so nothing names the set this gate measures`);
+  }
+  return [...(names as string[])].sort();
+};
+
 const SEAL = join(__dirname, '..', 'tools', 'manifest-digests.py');
 
 /** The seal's own output over a pack, as a subprocess — never imported. */
@@ -2647,10 +2715,23 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(
       Object.keys(lawPin.pinned ?? {}).sort(),
       'the external pin no longer names exactly the files the law is written in, so one of them is unpinned or a row checks nothing',
-    ).toStrictEqual(['test/law-bytes-are-pinned.test.ts', 'test/tool-commands-are-isolated.test.ts']);
+    ).toStrictEqual([
+      'package.json',
+      'test/law-bytes-are-pinned.test.ts',
+      'test/tool-commands-are-isolated.test.ts',
+      'tools/context-sites.py',
+      'tools/law-ran.py',
+      'tools/manifest-digests.py',
+      'tools/reviewer-reports.json',
+      'tools/seal-check-run.py',
+      'tools/status-block.py',
+      'tsconfig.build.json',
+      'tsconfig.json',
+      'vitest.config.ts',
+    ]);
     expect(
       existsSync(join(__dirname, 'law-bytes-are-pinned.test.ts')),
-      "the separate reader that pins this law's bytes is gone, so an edit anywhere in this file would no longer be refused by name",
+      `LAW-BYTES-MOVED: the separate reader that pins this law's bytes is gone, so an edit anywhere in this file would no longer be refused by name (CD-49-02: this refusal carries the name a deletion arm reads)`,
     ).toBe(true);
     // And the pin's own digest for THIS file is re-derived here, independently
     // of that reader, so the mutual pin is measured from both sides rather
@@ -2662,6 +2743,21 @@ describe('every written invocation of the pack tools is isolated', () => {
       selfDigest,
       'this file does not match its external pin: if the change is intended, update tools/law-bytes.json in the SAME commit and say why in the message',
     ).toBe((lawPin.pinned ?? {})['test/tool-commands-are-isolated.test.ts']);
+
+    // ROUND 50, CD-49-01's other half. The pin covers the files that decide
+    // collection, but a pin cannot say that the step which checks EXECUTION is
+    // still wired up. `tools/law-ran.py` runs outside this suite, as its own
+    // npm script, and refuses by name (LAW-NOT-RUN) when the law's cases did
+    // not run; this is what reds when that step is taken out of package.json.
+    // Together: the law not running is caught there, that step being removed
+    // is caught here, and both edited together with the pin updated is the
+    // declared limit.
+    const scripts = (JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
+    const lawRan = Object.values(scripts).filter((command) => new RegExp(['python3', '-I', 'tools/law-ran\\.py'].join('\\s+')).test(command));
+    expect(
+      lawRan.length,
+      'LAW-BYTES-MOVED: no package.json script runs `python3 -I tools/law-ran.py` any more, so nothing outside this suite asserts that this law was collected and ran',
+    ).toBe(1);
 
     // CD-48-02 (P3), THE COORDINATOR'S: replacing the expectation source with
     // the handed text left the suite green, because no file in this repository
@@ -2977,7 +3073,17 @@ describe('every written invocation of the pack tools is isolated', () => {
     // they are frozen bytes quoting the old text, and correcting a reviewer's
     // report would be worse than the defect.
     if (!existsSync(PACK)) {
-      expect(existsSync(PACK), `no pack at ${PACK}: this arm is UNMEASURED here, by absence`).toBe(false);
+      // DECLARED LIMIT, R48-F2: a pack that is absent ALTOGETHER is reported
+      // UNMEASURED rather than refused, because the pack lives outside the
+      // repository and nothing mounts it in CI. An existing directory that is
+      // not the pack DOES refuse, by name, against the pinned set below —
+      // which is the half of the attack a gate can see. This branch is quoted
+      // in every dispatch so a reader is never told this arm measured the pack
+      // when it did not.
+      expect(
+        existsSync(PACK),
+        `no pack at ${PACK}: this arm is UNMEASURED here, by absence; ${pinnedPackSet().length} pinned author-owned names went unchecked`,
+      ).toBe(false);
       return;
     }
     const exempt = reviewerOwned();
@@ -2988,9 +3094,25 @@ describe('every written invocation of the pack tools is isolated', () => {
     const packUnreadable: string[] = [];
     // CD-48-01: this half reads the auditor's record too, so it resets it.
     resetAuditRecord();
-    let mine = 0;
+    const mineNames: string[] = [];
+    const recorded = enrolment();
+    const movedBytes: string[] = [];
     for (const name of readdirSync(PACK)) {
-      if (exempt.has(name)) continue;
+      if (exempt.has(name)) {
+        // R48-F3: a reviewer's report is not READ by this law -- its bytes are
+        // frozen and the author may not edit them -- but it is now WEIGHED.
+        // The digest beside the name is the reviewer's own announced sha256,
+        // so a frozen report rewritten after enrolment is refused by name.
+        const bytes = diskText(join(PACK, name));
+        const actual =
+          bytes === null
+            ? null
+            : createHash('sha256')
+                .update(readFileSync(join(PACK, name)))
+                .digest('hex');
+        if (actual !== recorded.get(name)) movedBytes.push(`${name}: ${actual ?? '<unreadable>'} is not the enrolled ${recorded.get(name) ?? '<no row>'}`);
+        continue;
+      }
       // B-12. A reviewer-shaped name the list does not classify is NOT read
       // here. F-53 had made the sentence true -- "unenumerated", not
       // "author-owned" -- while leaving the red itself on the author's
@@ -3012,7 +3134,7 @@ describe('every written invocation of the pack tools is isolated', () => {
         if (!EXEMPT_BINARIES.has(name)) packBinaries.push(name);
         continue;
       }
-      mine += 1;
+      mineNames.push(name);
       // CD-47-01: the second reader here too, so the pack half is bounded
       // against disk exactly as the repository half is.
       const onDisk = diskText(join(PACK, name));
@@ -3030,12 +3152,27 @@ describe('every written invocation of the pack tools is isolated', () => {
         'a reviewer-shaped pack document is in neither the shared list nor the seal refusals, so NOTHING classifies it: enrol it in tools/reviewer-reports.json by its EXACT name, and do NOT edit a reviewer frozen report',
       ).toStrictEqual([]);
     }
+    expect(
+      movedBytes,
+      `${REFUSED_ENROLLED_BYTES_MOVED}: an enrolled reviewer report's bytes are not the ones enrolled beside its name. A reviewer may re-issue a report, and then the digest in tools/reviewer-reports.json moves in the SAME commit that says so; the author does NOT edit a reviewer's file`,
+    ).toStrictEqual([]);
     expect(packBinaries, 'a pack document holds a NUL byte, so this law cannot read it: name it in EXEMPT_BINARIES with the reason').toStrictEqual([]);
     expect(
       packUnreadable,
       `a pack document cannot be read at all, so this law never saw it: ${REFUSED_FILE_NOT_READABLE} — name why, and do not restore the silent skip`,
     ).toStrictEqual([]);
-    expect(mine, 'no author-owned document was read from the pack').toBeGreaterThan(0);
+    expect(mineNames.length, `${REFUSED_PACK_NOT_PINNED}: no author-owned document was read from the pack at ${PACK} at all`).toBeGreaterThan(0);
+    // R48-F2: and the set it read is the set the REPOSITORY names, so this
+    // gate's verdict belongs to the commit. A directory that is not the pack —
+    // an empty one, a copy with documents missing, a plant added — refuses by
+    // name here, with the identity of what differs rather than a count.
+    const pinnedNames = pinnedPackSet();
+    const missing = pinnedNames.filter((n) => !mineNames.includes(n));
+    const extra = [...mineNames].sort().filter((n) => !pinnedNames.includes(n));
+    expect(
+      { missing, extra },
+      `${REFUSED_PACK_NOT_PINNED}: the author-owned documents read from ${PACK} are not the set tools/pack-set.json names. If the pack legitimately gained or lost an author-owned document, update that pin in the SAME commit and say why in the message`,
+    ).toStrictEqual({ missing: [], extra: [] });
     // ROUND 42: no `quoted` counter any more. There is no exemption to keep
     // alive, and nothing in a document is skipped: an attack line that must
     // appear is NEUTRALISED (`<python3> …`), which the arm below pins.

@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "gate:law": "python3 -I tools/law-ran.py",
     "lint": "eslint src test --max-warnings 0",
     "test:db": "./test/db/run-db-proof.sh"
   },

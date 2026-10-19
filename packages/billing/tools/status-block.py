@@ -229,9 +229,19 @@ def main() -> int:
     if not src.is_file():
         sys.exit(f"no {SOURCE} in {base}")
     st = json.loads(src.read_text())
-    # The head is validated BEFORE anything is rendered or compared, so a sha
-    # that does not exist is never written into a document in the first place.
+    # ROUND 50, THE COORDINATOR'S P2, and it is a sentence that was FALSE. This
+    # comment used to say a sha that does not exist is "never written into a
+    # document", while the loop below went on writing: measured, `wrote 5
+    # documents, 1 problem`. The remedy is the behaviour and not the sentence.
+    # In rewrite mode a bad head now REFUSES BEFORE the first write, so the
+    # claim and the code agree; in --check mode the problems are reported with
+    # everything else, because reporting is what --check is for.
     problems: list[str] = sha_problems(st, Path(args.repo).resolve())
+    if problems and not args.check:
+        for p in problems:
+            print(p)
+        print(f"refusing to write {SOURCE}'s block into any document while the declared head is wrong")
+        return 1
     block = render(st)
     documents: list[str] = st["documents"]
 

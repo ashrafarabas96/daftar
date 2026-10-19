@@ -1,0 +1,33 @@
+{
+  "_what_this_is": "The PINNED author-owned document set of the Phase 5 pack, held in the repository so that a REPO GATE measures a NAMED pack state. ROUND 50, the challenger's R48-F2 (P2): the pack arm's subject set was a live shared directory (P5_PACK_DIR, default /mnt/project-files/phase5), so its verdict was not a property of the commit — any writer could turn the gate red or green after it was measured, and P5_PACK_DIR could be pointed at an empty directory with no file edit at all. The arm now refuses by name (REFUSED-PACK-NOT-THE-PINNED-SET) unless the author-owned documents it read are EXACTLY these names. Reviewer-owned reports are deliberately NOT here: they arrive mid-review and are already enrolled by exact name in reviewer-reports.json, and a reviewer dropping a report must not red the author's suite. DECLARED LIMIT: a pack that is absent altogether is still reported UNMEASURED by absence, because the pack lives outside the repository and no CI mounts it; that branch is visible in the arm and quoted in every dispatch.",
+  "count": 26,
+  "names_sha256": "04cfc745f2a2786a6c168dc94380af790594887a985bcf360d76d12d858f3fde",
+  "names": [
+    "P5-CHALLENGE-RESPONSE-2597219.md",
+    "P5-CHALLENGER-BRIEF.md",
+    "P5-CHECKPOINT.md",
+    "P5-CI-PATCH-REQUEST-002.md",
+    "P5-CI-PATCH-REQUEST-003.md",
+    "P5-CONTRACT-DIFF-SUBSCRIPTION-INVOICES.md",
+    "P5-COVERAGE-TRUTH.md",
+    "P5-ENTITLEMENT-RECONCILIATION-CONTRACT.md",
+    "P5-EVIDENCE-LEDGER.md",
+    "P5-HANDOFF-MANIFEST.md",
+    "P5-MIGRATION-PATCH-REQUEST.md",
+    "P5-PREP-REPORT-AR-R2.md",
+    "P5-PREP-REPORT-AR-R3.md",
+    "P5-PREP-REPORT-AR-R4.md",
+    "P5-PREP-REPORT-AR-R5.md",
+    "P5-PREP-REPORT-AR-R6.md",
+    "P5-PREP-REPORT-AR-R8.md",
+    "P5-PREP-REPORT-AR.md",
+    "P5-R2-OWNER-RULINGS-AND-NODE24-EVIDENCE.md",
+    "P5-R3-DIRECTIVE-11-RECORD.md",
+    "P5-R4-MASTER-MISSION-RECORD.md",
+    "P5-R5-MISSION-V2-RECORD.md",
+    "P5-R6-MISSION-V3-RECORD.md",
+    "P5-RED-PROOF-RECORD.md",
+    "P5-S0-CONTRACT-PACK.md",
+    "P5-STATUS.json"
+  ]
+}

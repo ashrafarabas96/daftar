@@ -65,12 +65,39 @@ const ROOT = dirname(__dirname);
 const PIN = join(ROOT, 'tools', 'law-bytes.json');
 
 /**
- * The files the law is written in. Written out HERE as well as in the pin, so
+ * The files the law is written in AND the files that decide whether it runs.
+ * Written out HERE as well as in the pin, so
  * that dropping an entry from the pin is a disagreement rather than a smaller
  * obligation -- an expectation the subject can shrink is no expectation, which
  * is F-76's lesson about named exemptions in a new place.
  */
-const LAW_FILES = ['test/tool-commands-are-isolated.test.ts', 'test/law-bytes-are-pinned.test.ts'];
+const LAW_FILES = [
+  // The law itself, and this reader.
+  'test/tool-commands-are-isolated.test.ts',
+  'test/law-bytes-are-pinned.test.ts',
+  // ROUND 50, the coordinator's CD-49-01 (P1): round 49 pinned the law's
+  // BYTES and nothing about whether the law RUNS. One line in the vitest
+  // config, or one flag in the test script, left the law uncollected with a
+  // green suite and an untouched pin. So the pin covers every file that
+  // decides COLLECTION or EXECUTION, and the separate step `tools/law-ran.py`
+  // (an npm script of its own, outside the suite) refuses by name when the
+  // law's own cases did not run.
+  'vitest.config.ts',
+  'package.json',
+  'tsconfig.json',
+  'tsconfig.build.json',
+  'tools/law-ran.py',
+  // R48-F3: everything the law reads as CONFIGURATION, because an enrolment
+  // line here exempted a document from the law entirely and looked like
+  // routine bookkeeping while doing it.
+  'tools/reviewer-reports.json',
+  // And the tools the law EXECUTES: an edit to one of these changes what the
+  // law measures without touching the law.
+  'tools/manifest-digests.py',
+  'tools/status-block.py',
+  'tools/context-sites.py',
+  'tools/seal-check-run.py',
+];
 
 describe('the law is written in bytes that something outside it pins', () => {
   it('refuses by name when any file the law lives in has moved', () => {

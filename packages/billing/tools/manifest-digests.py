@@ -112,6 +112,26 @@ ROW = re.compile(
 # name can never be exempt in one and hashed in the other.
 REVIEWER_REPORTS_FILE = "reviewer-reports.json"
 
+# R48-F3: the enrolment reader needs the SHAPE to refuse a non-reviewer name,
+# and the shape reader below needs nothing from it, so the pattern is read once
+# here, from the same file, with the same fail-closed rules.
+def _looks_like_reviewer_early() -> "re.Pattern[str]":
+    path = Path(__file__).resolve().parent / REVIEWER_REPORTS_FILE
+    try:
+        raw = json.loads(io.open(path, encoding="utf-8").read())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"{REVIEWER_REPORTS_FILE} cannot be read for its name shape: {exc}")
+    pattern = raw.get("looks_like_reviewer") if isinstance(raw, dict) else None
+    if not isinstance(pattern, str) or not pattern:
+        raise SystemExit(f"{REVIEWER_REPORTS_FILE} has no 'looks_like_reviewer' pattern")
+    try:
+        return re.compile(pattern)
+    except re.error as exc:
+        raise SystemExit(f"{REVIEWER_REPORTS_FILE}: 'looks_like_reviewer' is not a regex: {exc}")
+
+
+LOOKS_LIKE_REVIEWER_EARLY = _looks_like_reviewer_early()
+
 
 def reviewer_reports() -> tuple[str, ...]:
     """The enumerated names, read from the ONE file both instruments read.
@@ -138,19 +158,44 @@ def reviewer_reports() -> tuple[str, ...]:
     if not isinstance(raw, dict):
         raise SystemExit(f"{REVIEWER_REPORTS_FILE} must be a JSON object")
     names = raw.get("reviewer_reports")
-    if not isinstance(names, list) or not names:
+    # ROUND 50, THE CHALLENGER'S R48-F3 (P1). This was a LIST of names, so one
+    # routine-looking line exempted any document from the law -- measured at
+    # 303 passed with a plant enrolled. It is a MAP from exact name to sha256
+    # now, and an entry is accepted only if the NAME is reviewer-shaped and the
+    # VALUE is 64 hex characters, so enrolling an author-owned document is
+    # refused here instead of exempting it. A list is refused outright rather
+    # than tolerated: a reader that accepts both shapes accepts the weaker one.
+    if not isinstance(names, dict) or not names:
         raise SystemExit(
-            f"{REVIEWER_REPORTS_FILE} has no non-empty 'reviewer_reports' list — refusing rather "
-            f"than treating every reviewer report as the author's"
+            f"{REVIEWER_REPORTS_FILE} has no non-empty 'reviewer_reports' MAP of name to sha256 — "
+            f"refusing rather than treating every reviewer report as the author's"
         )
-    if not all(isinstance(n, str) and n and "/" not in n for n in names):
-        raise SystemExit(f"{REVIEWER_REPORTS_FILE}: every entry must be a bare file name")
-    if len(set(names)) != len(names):
-        raise SystemExit(f"{REVIEWER_REPORTS_FILE} lists a name twice")
+    for name, value in names.items():
+        if not isinstance(name, str) or not name or "/" in name:
+            raise SystemExit(f"{REVIEWER_REPORTS_FILE}: every key must be a bare file name")
+        if not LOOKS_LIKE_REVIEWER_EARLY.fullmatch(name):
+            raise SystemExit(
+                f"{REVIEWER_REPORTS_FILE}: {name} is enrolled as reviewer-owned but is not a "
+                f"reviewer-shaped name, so this enrolment would exempt an author-owned document"
+            )
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise SystemExit(
+                f"{REVIEWER_REPORTS_FILE}: {name} carries {value!r} rather than a sha256 of its bytes"
+            )
     return tuple(names)
 
 
 REVIEWER_REPORTS: tuple[str, ...] = reviewer_reports()
+
+
+def enrolled_digests() -> dict[str, str]:
+    """The sha256 recorded beside each enrolled name, read from the same file."""
+    path = Path(__file__).resolve().parent / REVIEWER_REPORTS_FILE
+    raw = json.loads(io.open(path, encoding="utf-8").read())
+    return dict(raw["reviewer_reports"])
+
+
+ENROLLED_DIGESTS: dict[str, str] = enrolled_digests()
 
 # The DETECTOR exists to fail closed, never to exempt. A file whose name says
 # it is a reviewer report but which is absent from the list above is a
@@ -192,8 +237,17 @@ def looks_like_reviewer_pattern() -> str:
 LOOKS_LIKE_REVIEWER = re.compile(looks_like_reviewer_pattern())
 
 
-def reviewer_list_problems(on_disk: list[str]) -> list[str]:
-    """The coverage self-test of the enumerated list, used in BOTH modes."""
+def reviewer_list_problems(on_disk: list[str], base: Path) -> list[str]:
+    """The coverage self-test of the enumerated list, used in BOTH modes.
+
+    ROUND 50, R48-F3: it checks the BYTES of every enrolled report too. A
+    reviewer-owned row carries a marker and not a digest -- the author must not
+    hash a reviewer's report into the manifest -- so without this the one case
+    the seal's name-set comparison was the only net for (an ENROLLED file
+    rewritten between the passes) had no net that reads content at all. The
+    digest lives beside the name in the shared enrolment file, which is where a
+    reviewer's own announced sha256 belongs, and it is refused BY NAME.
+    """
     problems: list[str] = []
     present = set(on_disk)
     for name in REVIEWER_REPORTS:
@@ -202,6 +256,15 @@ def reviewer_list_problems(on_disk: list[str]) -> list[str]:
                 f"STALE reviewer-report list: {name} is enumerated but not in the pack"
             )
     for name in on_disk:
+        recorded = ENROLLED_DIGESTS.get(name)
+        if recorded is not None:
+            actual = digest(base / name)
+            if actual != recorded:
+                problems.append(
+                    f"ENROLLED-BYTES-MOVED: {name} is {actual} and the enrolment records "
+                    f"{recorded} — an enrolled report's bytes moved, so either a frozen report was "
+                    f"rewritten or the recorded digest is wrong"
+                )
         # F-54, ROUND 32. `match` plus a `$` anchor is NOT the JS predicate:
         # Python's `$` also matches just before a final newline, so
         # `P5-CHALLENGE-9bd33bd.md\n` -- a legal POSIX file name -- was True
@@ -266,7 +329,7 @@ def main() -> int:
     lines = manifest.read_text().split("\n")
     start, end = table_bounds(lines)
 
-    list_problems = reviewer_list_problems(on_disk)
+    list_problems = reviewer_list_problems(on_disk, base)
 
     if not args.check:
         if list_problems:
