@@ -2308,5 +2308,25 @@ else
   say "RETIREMENT: no file outside retired/ names any of the ${#RET_NET[@]} retired spellings (the runner with or without .sh, and each retired case file), so no live list points at it"
 fi
 
+# ---------------------------------------------------------------------
+# The ARM CENSUS, as a conservation law rather than a pattern in a document
+# ---------------------------------------------------------------------
+# Round 26: ten new arms ran and the published `grep` pattern reported the same
+# 74 as the round before, because the pattern has no `VACUITY` alternative and
+# `grep -o` does not match a line it was not told about. A count rule that
+# cannot name a new label measures the rule, not the apparatus, and it fails
+# silently and downwards while the author reads the old number as continuity.
+# `p8-arm-census.py` declares which labels ARE arms and which deliberately are
+# NOT, and REFUSES on an arm-shaped line whose label is in neither set. So a new
+# arm cannot be added without the census being told, and the failure is a red
+# gate instead of an unchanged number. It runs as a SUBPROCESS, isolated, never
+# imported, and it reads this run's own log.
+if CENSUS_OUT=$(python3 -I "$HERE/p8-arm-census.py" "$OUT/run.log" 2>&1); then
+  say "$(printf '%s' "$CENSUS_OUT" | head -1)"
+else
+  say "FAIL: ARM CENSUS refused this run's log — $(printf '%s' "$CENSUS_OUT" | head -3 | tr '\n' ' ')"
+  FAILED=1
+fi
+
 say "RUN=$RUN FAILED=$FAILED"
 exit $FAILED
