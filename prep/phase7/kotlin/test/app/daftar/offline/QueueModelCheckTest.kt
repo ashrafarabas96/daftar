@@ -658,6 +658,31 @@ class QueueModelCheckTest {
                 "file is built on rather than the comparisons it means to forbid",
         )
 
+        // S-01, the fifteenth review: a cover is checked for the STRENGTH of
+        // its domain and for its RATIO, never for WHAT IT ASSERTS. A claim
+        // whose body cannot fail satisfies both halves, because a body that
+        // asserts nothing still RUNS on every production of its code — and the
+        // review measured that with a decoy cover and E-04's harm live: 99 of
+        // 99, with this session's own E-04 proof STAYING GREEN.
+        //
+        // Nothing inside this file can close that. An instrument in the subject
+        // can bind a claim's EXISTENCE, its DECLARATION and its FREQUENCY; what
+        // a claim MEANS is bound by a defect planted against it, which is what
+        // `tools/red_proofs.py` is for. So the obligation is written where it
+        // can be enforced and the reference is written here: every claim named
+        // as a cover must have a red proof of its own, the harness requires one
+        // by EXECUTION — it reads the lines printed below from a RUN of this
+        // suite, not from this file's text, and matches them against the proofs
+        // that actually reddened in that run — and a cover with no such proof
+        // fails the harness. **And the harness is a required step in no gate
+        // and no workflow**, which is round 14's R-02 and is still true, so
+        // this obligation is conditional on the harness being run at a head.
+        for ((claim, cover) in WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT) {
+            if (cover is WhatCoversTheRest.AnotherClaimOverEveryProduction) {
+                println("P7-COVER-CLAIM|${cover.site}|${claim.second}")
+            }
+        }
+
         // FAIL-CLOSED, by declaration and before any measurement: a claim
         // declared over a domain narrower than every production of its code
         // must say here what covers the productions it leaves out. The
@@ -1566,6 +1591,42 @@ class QueueModelCheckTest {
             "the set of messages that assert a transmission does not contain the one the " +
                 "kernel actually produces for a cancel after a send, so INV-9b judges nothing",
         )
+        // S-02, the fifteenth review. The numerator and the denominator of a
+        // narrow claim are gated by ONE expression — deliberately, because two
+        // copies of a predicate drift apart — and the consequence is that
+        // NARROWING that expression moves both: the ratio holds by
+        // construction, the complement counter absorbs exactly what the
+        // narrowing expelled, and every R-01 instrument stays green. Five
+        // lines added inside the existing `&&` chain, with no new value, claim
+        // or map entry, were measured at 99 of 99, and the model check then
+        // stopped judging which CODE and which LAW a colleague's captured row
+        // is refused with, silently.
+        //
+        // A ratio cannot see that, so these are LITERAL TOTALS per class: an
+        // anchor that bounds the LOSS rather than one a narrowing preserves.
+        // They are facts about this kernel's reachable space at this head, and
+        // they are meant to be brittle — a change to what the space produces
+        // must be a deliberate edit here, with the reason in the commit, and
+        // never an unnoticed consequence of narrowing a predicate somewhere
+        // else. The totals, not merely their sum: a narrowing that moves rows
+        // from one class to the other keeps the sum and breaks a class.
+        assertEquals(
+            1_131, timesTheCodeWasProduced["offline.another_members_capture"] ?: 0,
+            "the reachable space produces offline.another_members_capture a different number of " +
+                "times than this anchor records",
+        )
+        assertEquals(
+            1_125, timesProducedOnAForeignScopeRefusal["offline.another_members_capture"] ?: 0,
+            "a different number of offline.another_members_capture refusals is now classed as a " +
+                "foreign-scope refusal, which is the class INV-9a judges",
+        )
+        assertEquals(
+            6, timesProducedOnACaptureSomebodyElseMustConfirm["offline.another_members_capture"] ?: 0,
+            "a different number of offline.another_members_capture refusals is now classed as a " +
+                "capture somebody else must confirm",
+        )
+        assertEquals(2_925, foreignScopeRefusals, "a different number of foreign-scope refusals")
+        assertEquals(969, terminalRefusals, "a different number of refusals of a finished row")
         assertTrue(edges > 1_000, "only $edges edges were explored")
     }
 

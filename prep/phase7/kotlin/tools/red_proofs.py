@@ -1133,9 +1133,63 @@ PROOFS: list[Proof] = [
         expect_red="a claim about a refusal code is written through the registering helper",
         why="the coordinator's condition on R-01: the accounting must be FAIL-CLOSED, so a new domain is a failure until its accounting exists rather than a hole waiting for a search to reach it. Three things stand between a domain and silence, and this plant is the one that tests the first: the denominator's `when` is exhaustive with no `else`, so the compiler refuses a value with no denominator; a DECLARED narrow domain with no entry in this map reds here, before any count is read; and a MEASURED gap with no cover reds in the model check. Emptying the map leaves every count true \u2014 the search is unchanged \u2014 and reds on the declaration alone, which is what makes the rule independent of what this particular search happens to reach",
     ),
+    Proof(
+        law="S-02-NARROWING-THE-PREDICATE-THAT-DEFINES-A-DOMAIN-MOVES-BOTH-COUNTS-TOGETHER",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=(
+            "                            val aForeignScopeRefusal = event is QueueEvent.ByScope &&\n"
+            "                                !permittedToAct(event.actingScope, op.scope, event)"
+        ),
+        replace=(
+            "                            val aForeignScopeRefusal = event is QueueEvent.ByScope &&\n"
+            "                                !permittedToAct(event.actingScope, op.scope, event) &&\n"
+            "                                !(\n"
+            "                                    op.state == OperationState.CAPTURED &&\n"
+            "                                        event.actingScope.tenantId == op.scope.tenantId &&\n"
+            "                                        event.actingScope.businessId == op.scope.businessId\n"
+            "                                    )"
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="the fifteenth review's S-02, and it is the cost of the design that answered the attack announced before it. The predicate that defines the narrow domain is hoisted ONCE and read by both the counter and the branch \u2014 deliberately, because two copies of a predicate drift apart \u2014 so NARROWING it moves the numerator and the denominator together: `ran == denominator` holds by construction, the complement counter's own `!aForeignScopeRefusal && state == CAPTURED` absorbs exactly what the narrowing expelled, the measured gap still has its declared cover, and every R-01 instrument stays green. Five lines inside an existing `&&`, no new value, claim or map entry, **99 of 99 at `ae18b10`** \u2014 and the model check silently stopped judging which CODE and which LAW a colleague's captured row is refused with, which the review then showed by an A/B on a law-id harm: red in both trees from a hand-written unit test, red in the model check only on the unnarrowed one. A ratio cannot see a narrowing that moves both of its terms, so what reds this plant is a LITERAL TOTAL PER CLASS: an anchor that bounds the LOSS instead of one the narrowing preserves. 1,125 foreign-scope productions of the code become 1,110 and the anchor names the class",
+    ),
 ]
 
 FAILURE_LINE = re.compile(r"^\s+JUnit Jupiter:(\S+):(.+)\(\)\s*$")
+
+# The fifteenth review's S-01. A cover declared in `QueueModelCheckTest` is
+# checked there for the STRENGTH of its domain and for its RATIO, never for
+# what it asserts: a claim whose body cannot fail satisfies both, because a
+# body that asserts nothing still RUNS on every production of its code. The
+# review measured it — a decoy cover with E-04's harm live, 99 of 99 green,
+# and E-04's own proof staying green with it.
+#
+# What a claim MEANS is bound by a defect planted against it, so the obligation
+# belongs here rather than in the subject: **every claim named as a cover must
+# have a proof in this file, and that proof must have gone RED in THIS run.**
+#
+# Both sides of the check are derived by EXECUTION, which is the rule this lane
+# learned the hard way: the covers come from the lines the SUITE PRINTS in the
+# baseline run, never from reading the Kotlin source (a subject that writes the
+# text deciding what is checked decides what is checked), and the proofs come
+# from this run's own verdicts, never from a count written down. A cover with
+# no entry here FAILS the harness, and so does one whose proof did not redden.
+A_PROOF_DEFENDS_THIS_COVER: dict[tuple[str, str], str] = {
+    (
+        "INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it",
+        "offline.another_members_capture",
+    ): "INV-9C-A-COLLEAGUES-CAPTURE-IS-REFUSED-ONLY-WHERE-THE-ACTOR-MAY-NOT-RELEASE-IT",
+}
+
+COVER_CLAIM_LINE = re.compile(r"^P7-COVER-CLAIM\|(.+)\|(.+)$")
+
+
+def covers_the_suite_declared(log: str) -> set[tuple[str, str]]:
+    """The covers a RUN of the suite printed. Execution, not source text."""
+    return {
+        (m.group(1).strip(), m.group(2).strip())
+        for line in log.splitlines()
+        if (m := COVER_CLAIM_LINE.match(line.strip()))
+    }
 
 
 def run_suite(tree: str) -> tuple[int, set[str], str]:
@@ -1165,6 +1219,12 @@ def main() -> int:
     tests = re.search(r"\[\s*(\d+) tests successful", log)
     baseline_cases = int(tests.group(1)) if tests else 0
     print(f"BASELINE: exit 0, {baseline_cases} cases green\n")
+    covers = covers_the_suite_declared(log)
+    print(
+        f"COVERS THE SUITE DECLARED AT RUNTIME: {len(covers)}"
+        + (f" \u2014 {sorted(covers)}" if covers else " \u2014 none")
+        + "\n"
+    )
 
     # One proof per tree, and the trees are independent, so they run in
     # parallel. This is scheduling, not correctness: every proof does exactly
@@ -1229,6 +1289,30 @@ def main() -> int:
             failures.append(failure)
         print(f"  [{i:2}] {proof.law}\n       plant: {proof.why}\n       expect red: {proof.expect_red}\n       {verdict}")
 
+    # S-01: every cover the SUITE ITSELF printed must have a proof here, and
+    # that proof must have reddened in this run. Both halves read execution:
+    # the covers from the baseline run's output, the verdicts from the results
+    # above. A cover with no proof is a name pointing at an assertion nothing
+    # tested, which is exactly the hole the review measured.
+    reddened = {
+        proof.law for _i, proof, failure, _verdict in results if failure is None
+    }
+    for cover in sorted(covers):
+        law = A_PROOF_DEFENDS_THIS_COVER.get(cover)
+        if law is None:
+            failures.append(
+                f"the claim at {cover[0]} is named as the cover for a narrow domain about "
+                f"{cover[1]}, and no proof in this file is declared to defend it \u2014 a cover "
+                f"checked for its domain and its ratio but never for what it asserts is a name, "
+                f"and a claim whose body cannot fail satisfies both of those checks"
+            )
+        elif law not in reddened:
+            failures.append(
+                f"the claim at {cover[0]} is named as the cover for a narrow domain about "
+                f"{cover[1]}, and the proof declared to defend it ({law}) did not redden in this "
+                f"run, so what that cover asserts is bound by nothing here"
+            )
+
     # §83: the baseline must RESTORE green. Each proof ran in its own copy, so
     # nothing could have leaked into the original — but "could not have" is an
     # argument, and this is a measurement. It also catches the case the argument
@@ -1265,6 +1349,8 @@ def main() -> int:
     print("  4. No performance or timing claim is made by anything in this directory; the")
     print("     delays asserted are the schedule's own arithmetic, never a measured wait.")
     print("  5. This is a RECORD, not a required CI step. Phase 7 is PREPARED / NOT PROMOTED.")
+    print("  6. The cover obligation above (S-01) is enforced HERE and nowhere else, so it is")
+    print("     conditional on this harness being run at a head \u2014 which limitation 5 is about.")
     return 0
 
 
