@@ -469,6 +469,43 @@ const EXECUTABLE_LETTERS = new Set('BbdEhiIOPqRsSuVvx'.split(''));
 const VALUE_FLAGS: ReadonlySet<string> = new Set(['-X', '-W']);
 const PLAIN_VALUE = /^[A-Za-z0-9_.:=,+-]+$/;
 
+/**
+ * ROUND 36, THE COORDINATOR'S F-62 (P2, worse than reported) AND F-64 (P3).
+ * The value is the last free text a document still controls, and two of its
+ * uses reach outside the probe:
+ *
+ *   - `-X pycache_prefix=..` passes `PLAIN_VALUE` because it needs no slash,
+ *     and writes a bytecode tree ABOVE the current directory. Measured: from
+ *     `<scratch>/inner` it wrote `<scratch>/usr/lib/python3.13/...`, so a
+ *     disposable cwd alone does not contain it -- `..` simply leaves. In the
+ *     repository it reached `packages/usr/`, with the planting run GREEN.
+ *   - `-W ignore::this.X` names a DOTTED warning category, and CPython
+ *     resolves one by IMPORTING its module: `this` ran its top-level code
+ *     inside the probe. A module the document plants in the cwd is not
+ *     importable (the env carries no PYTHONPATH and `-I` is not required for
+ *     that here), but any stdlib module is.
+ *
+ * So the value is now allow-listed per flag, not merely per character class.
+ * `-W` takes an action with at most a DOTLESS builtin-shaped category; `-X`
+ * takes a known-shaped option whose value carries no `.` or `..` segment and
+ * never `pycache_prefix`, whose entire purpose is to write files. Everything
+ * else is refused by name, so this stays a false-RED direction.
+ */
+const DOT_SEGMENT = (value: string): boolean => value.split(/[=,:]/).some((part) => part === '.' || part === '..');
+const W_VALUE = /^[A-Za-z]+(::[A-Za-z]+)?$/;
+// Options whose PURPOSE is to write a file. `pycache_prefix` writes a bytecode
+// tree under its value; `perf` writes `/tmp/perf-<pid>.map`, and that path is a
+// FIXED literal in CPython -- measured here: with TMPDIR pointed at a scratch
+// directory the map still landed in /tmp. So a disposable directory cannot
+// contain this class and the option is refused by name.
+const X_WRITES_FILES = new Set(['pycache_prefix', 'perf']);
+
+const valueIsExecutable = (flag: string, value: string): boolean => {
+  if (!PLAIN_VALUE.test(value) || DOT_SEGMENT(value)) return false;
+  if (flag === '-W') return W_VALUE.test(value);
+  return !X_WRITES_FILES.has(value.split('=')[0] ?? value);
+};
+
 const REFUSED_TOKEN = 'REFUSED-UNEXECUTABLE-TOKEN';
 const REFUSED_INTERPRETER = 'REFUSED-UNCLASSIFIABLE-INTERPRETER';
 const REFUSED_NO_PYTHON = 'REFUSED-NO-CPYTHON-HERE';
@@ -487,7 +524,7 @@ const executableArgv = (flags: string): { argv: string[] } | { refusal: string; 
     const t = tokens[i] ?? '';
     if (VALUE_FLAGS.has(t)) {
       const value = tokens[i + 1];
-      if (value === undefined || !PLAIN_VALUE.test(value)) return { refusal: REFUSED_TOKEN, token: `${t} ${value ?? '(nothing)'}` };
+      if (value === undefined || !valueIsExecutable(t, value)) return { refusal: REFUSED_TOKEN, token: `${t} ${value ?? '(nothing)'}` };
       argv.push(t, value);
       i += 1;
       continue;
@@ -527,7 +564,10 @@ const probeIsolated = (argv: readonly string[], ownCwd: boolean): boolean => {
     const r = spawnSync(HARNESS_PYTHON, [...argv, '-c', PROBE], {
       encoding: 'utf8',
       timeout: 10_000,
-      env: { PATH: '/usr/bin:/bin' },
+      // TMPDIR too, for anything that honours it. `-X perf` does NOT -- its
+      // path is a fixed `/tmp` literal, measured -- which is why that option
+      // is refused by name rather than contained here.
+      env: scratch === undefined ? { PATH: '/usr/bin:/bin' } : { PATH: '/usr/bin:/bin', TMPDIR: scratch },
       ...(scratch === undefined ? {} : { cwd: scratch }),
     });
     return r.status === 0 && (r.stdout ?? '').trim() === '1';
@@ -861,44 +901,68 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(offencesOutsideQuotedBlocks('doc', after)[0]).toHaveLength(1);
   });
 
-  it('F-62: an allow-listed value writes only into a directory this law owns', () => {
-    // ROUND 36, THE CHALLENGER'S F-62 (P2). `-X pycache_prefix=<name>` needs
-    // no path separator, so it passes the value filter, and CPython writes its
-    // startup bytecode under <cwd>/<name>/... . The repair is the cwd, not a
-    // refusal by name: whatever an allow-listed value writes must land
-    // somewhere nobody keeps.
-    const flags = ' -I -X pycache_prefix=p5pyc';
-    const parsed = executableArgv(flags);
-    expect('argv' in parsed, 'the value no longer reaches argv, so this arm measures nothing').toBe(true);
-    const argv = 'argv' in parsed ? parsed.argv : [];
-    expect(argv, 'the allow-list no longer passes the pycache_prefix value through').toStrictEqual(['-I', '-X', 'pycache_prefix=p5pyc']);
+  it('F-62/F-64: a value may not choose a program, a directory, or a module', () => {
+    // ROUND 36. The challenger's F-62 (P2) and the coordinator's measurement
+    // of it, which was worse: `-X pycache_prefix=..` passes PLAIN_VALUE, needs
+    // no slash, and writes ABOVE the current directory -- in the repository it
+    // reached `packages/usr/`, with the planting run GREEN. Plus its F-64
+    // (P3): a DOTTED `-W` category is resolved by IMPORTING its module, so
+    // `-W ignore::this.X` ran stdlib `this` inside the probe.
+    //
+    // Three guards, because one would close one instance: the `pycache_prefix`
+    // option is refused by name (writing files is its whole purpose), any
+    // value carrying a `.` or `..` SEGMENT is refused (that is what escapes a
+    // directory), a `-W` value must be an action with at most a DOTLESS
+    // category -- and the probe still runs in a directory this law owns, now
+    // as TMPDIR as well, which is what contains everything else.
+    const refusals: [string, string][] = [
+      ['-X pycache_prefix=p5pyc', 'the option whose purpose is writing files'],
+      ['-X pycache_prefix=..', 'the escape the coordinator measured into packages/usr/'],
+      ['-X pycache_prefix=../..', 'two levels of it'],
+      ['-X somewhere=..', 'a dot segment under any other option name'],
+      ['-W ignore::this.X', 'a dotted warning category, which CPython imports'],
+      ['-W ignore::evilmod.Boom', "the challenger's planted module"],
+    ];
+    for (const [flags, why] of refusals) {
+      const parsed = executableArgv(` ${flags}`);
+      expect('refusal' in parsed, `${flags} reaches CPython: ${why}`).toBe(true);
+      const v = verdictFor('python3', ` -I ${flags}`);
+      expect(v.isolated, `${flags} was cleared as isolated`).toBe(false);
+      expect(v.refusal, `${flags} is refused without a name`).toContain(REFUSED_TOKEN);
+    }
 
-    // THE GUARD: run it the way the law does. Nothing lands beside the suite.
-    const before = existsSync(join(process.cwd(), 'p5pyc'));
-    expect(before, 'a p5pyc directory exists before this arm ran, so the arm cannot attribute one').toBe(false);
+    // And the forms that have no side effect outside the probe still pass, or
+    // this is a gate rather than a filter.
+    for (const flags of [' -I -X dev', ' -I -X importtime', ' -I -X frozen_modules=off', ' -I -W error::DeprecationWarning', ' -I -W ignore']) {
+      expect(verdictFor('python3', flags).isolated, `${flags} is isolated in CPython ${CPYTHON_HERE} and this law reds on it`).toBe(true);
+    }
+
+    // THE CLASS GUARD, measured DIRECTLY on the mechanism rather than through
+    // the allow-list. Both options that write are now refused by name, so no
+    // document-reachable value exercises the owned directory today: it is
+    // defence in depth, and that is a bound, not a dead guard. So the arm
+    // hands `probeIsolated` the refused argv itself -- the layer below the
+    // allow-list -- and measures the directory.
+    const argv = ['-I', '-X', 'pycache_prefix=p5pyc'];
     expect(probeIsolated(argv, true), 'the probe no longer reports this isolated command as isolated').toBe(true);
     expect(existsSync(join(process.cwd(), 'p5pyc')), 'THE PROBE WROTE INTO THE WORKING TREE: a directory the gate created is sitting beside the suite').toBe(
       false,
     );
 
-    // GUARD DELETION, in a directory this arm owns so that deleting the guard
-    // cannot dirty the repository either. With `ownCwd` false the probe
-    // inherits the cwd, and the same command must leave the bytecode behind --
-    // otherwise the guard above is guarding nothing.
-    const deleted = mkdtempSync(join(tmpdir(), 'f62-'));
+    // GUARD DELETION, one deletion, run inside a directory the arm owns so
+    // that proving the hole cannot dirty the repository.
+    const owned = mkdtempSync(join(tmpdir(), 'f62-'));
+    onTestFinished(() => rmSync(owned, { recursive: true, force: true }));
     const previous = process.cwd();
     try {
-      process.chdir(deleted);
+      process.chdir(owned);
       expect(probeIsolated(argv, false), 'the deletion changed the verdict, so it is not a pure deletion').toBe(true);
-      const written = readdirSync(deleted);
-      expect(written, 'with the guard deleted the allow-listed value wrote nothing, so the guard guards nothing').toStrictEqual(['p5pyc']);
+      expect(readdirSync(owned), 'with the guard deleted the value wrote nothing, so the guard guards nothing').toStrictEqual(['p5pyc']);
     } finally {
       process.chdir(previous);
-      rmSync(deleted, { recursive: true, force: true });
     }
 
-    // And `false` is reachable from this arm only: a live verdict that stopped
-    // owning its directory would dirty the tree silently.
+    // And `false` is reachable from this arm only.
     const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
     const deleting = (here.match(/probeIsolated\((?:[^()]|\([^()]*\))*false\)/g) ?? []).length;
     const owning = (here.match(/probeIsolated\((?:[^()]|\([^()]*\))*true\)/g) ?? []).length;
