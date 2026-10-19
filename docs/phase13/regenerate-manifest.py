@@ -287,6 +287,11 @@ DELIVERED_REVIEWER_REPORTS = (
     # R21, on 524a0b0..34c171b: PASS-WITH-SCOPE, no finding. It rides the comment
     # correction below rather than a commit of its own, which is the rule stated there.
     'P13-CHALLENGE-34c171b.md',
+    # R22, on 34c171b..783c396: PASS-WITH-SCOPE, no finding of any severity.
+    'P13-CHALLENGE-783c396.md',
+    # The coordinator's diff review of the same head, which SIGNS it -- so 783c396 carries
+    # all three links. It names two residuals, R-1 and R-2, both recorded in the manifest.
+    'P13-COORD-DIFF-REVIEW-783c396.md',
 )
 # THE FIXED POINT, stated because this list has now moved the head four times for
 # bookkeeping. A reviewer's report about head H arrives AFTER H, so enumerating it needs a
@@ -295,18 +300,22 @@ DELIVERED_REVIEWER_REPORTS = (
 # SHAPE instead of by name is exactly the R14-01 fail-open, where a name decided
 # AUTHORSHIP and two files the author can create went unhashed and were credited to a
 # reviewer. So the enumeration stays by name, and this is the last commit made for
-# enumeration alone. From here a trailing reviewer report leaves `--check` at exit 1 with
-# FOUR stale rows and one disclosure line, which have exactly ONE cause between them: the
-# §3 digest row for their file, the coverage row -- "no digest row, and no named exemption
-# covers it", naming it -- and the two dependent §3.5b rows, the artifact count and the
-# exit code, which are stale BECAUSE the first two are. The `HASHED AS MINE` line beside
-# them says the same thing from the other direction. This paragraph said ONE row until the
-# round-21 reviewer measured it and counted four, which is the R18-01 class again: a
-# statement about the gate's own OUTPUT, written from what the rule intends rather than
-# from a run. The count is written here so a later reader does not go hunting a second
-# cause that does not exist. All of it is a true statement about a file that is not mine,
+# enumeration alone. From here N trailing reviewer reports leave `--check` at exit 1 with
+# 2N + 2 stale rows and N disclosure lines: a §3 digest row and a coverage row -- "no
+# digest row, and no named exemption covers it" -- per report, plus the two §3.5b rows,
+# the artifact count and the exit code, which are stale BECAUSE those are and do not
+# multiply. The `HASHED AS MINE` lines say the same from the other direction. Measured at
+# N=1, four rows, by the round-21 reviewer; measured again at N=2, six rows, when a
+# challenge report and a coordinator diff review for the same head both landed before this
+# commit -- which is the ordinary case, not the exception. This paragraph said ONE row
+# before the first of those measurements and FOUR before the second, both times because
+# the number was written from what the rule intends rather than from a run: the R18-01
+# class, and an UNDERcount sends the reader hunting a cause that does not exist. Hence the
+# general form, and hence `P13-AL-83` -- a count in prose over a quantity that can repeat
+# is written as a FUNCTION of the repetition or it is a measurement of one case wearing
+# the clothes of a law. All of it is a true statement about files that are not mine,
 # disclosed rather than cleared by moving a signed head. The next name goes in whenever a
-# commit exists for its own reason, which is what carried this one.
+# commit exists for its own reason, which is what carried these two.
 # The SHAPE of a reviewer report, used only to spot a file that wears the name without
 # being on the list, and MY OWN round records, which are hashed and are anchored to a
 # hexadecimal subject so that `RESPONSE2-probe` is not one of them.
