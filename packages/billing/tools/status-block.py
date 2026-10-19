@@ -99,10 +99,16 @@ from pathlib import Path
 #
 # What this does NOT claim: that the head is the head a reviewer should be at,
 # or that it is pushed. It claims the object exists and that the two spellings
-# are the same object. `challenger_sha` and the verdict fields are PROSE, by
+# are the same object. `challenger_covers` and the verdict fields are PROSE, by
 # design -- they carry sentences such as "nothing in this phase is signed" --
 # so they are not sha fields and are not validated as such; the shas inside
-# them are pinned where they are measured, in the ledger.
+# them are pinned where they are measured, in the ledger. ROUND 51 renames that
+# field: it was `challenger_sha`, which READ as a sha field and rendered as
+# "names `nothing in this phase is signed`". The name now says what the field
+# is -- what the challenger's verdict COVERS -- so a reader is not told a
+# sentence is a sha. Owed since the round-49 ledger (section 0ad, item 2) and
+# riding this commit because a commit whose only content is a record is a
+# review loop.
 SHA_FULL = re.compile(r"^[0-9a-f]{40}$")
 SHA_SHORT = re.compile(r"^[0-9a-f]{7,40}$")
 REFUSED_SHA_SHAPE = "REFUSED-STATUS-SHA-SHAPE"
@@ -190,7 +196,7 @@ def render(st: dict) -> list[str]:
         f"| **READY_TO_PROMOTE** | **{st['ready_to_promote']}** |",
         f"| **Branch head** | `{st['head']}`{'' if st['head_pushed'] else ' — **NOT PUSHED**'} |",
         f"| **Run id at that head** | `{st['run_id']}` |",
-        f"| **Challenger verdict** | {st['challenger_verdict']} — **names `{st['challenger_sha']}`** |",
+        f"| **Challenger verdict** | {st['challenger_verdict']} — **covers: {st['challenger_covers']}** |",
         f"| **Coordinator diff review** | {st['coordinator_review']} |",
         f"| **Does any verdict cover the head?** | **{st['head_covered']}** |",
         f"| **Author self-signature** | {st['self_signature']} |",

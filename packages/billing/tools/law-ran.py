@@ -40,6 +40,35 @@ missing law file, a test count that is not the literal one, a single skipped
 or todo case, or any failure at all is a refusal naming LAW-NOT-RUN. There is
 no path through this file that prints a pass without having seen the law's own
 test counts in a run it started.
+
+ROUND 51, THE CHALLENGER'S R49-F2 (P2). This step used to resolve `npx` from
+the INHERITED PATH, so whoever controls the environment controls what "the
+suite" means: a stand-in `npx` in an untracked `node_modules/.bin`, even above
+the repository, printed this file's pass sentence with no test run. The runner
+is now resolved ABSOLUTELY under the package -- `node_modules/vitest/vitest.mjs`
+in the package, else at the repository root where npm hoists it -- never
+through PATH and never through `node_modules/.bin`, which is the symlink
+surface the attack used. The child gets a REBUILT environment whose PATH starts
+at `/usr/bin`, and the runner's own path is PRINTED beside the counts so the
+sentence says which program produced them. An absent runner is a refusal by
+name, not a fallback.
+
+WHY THE LITERAL COUNTS ARE NOT A BARE PROJECTION (the challenger's stated next
+target). A count is a projection, and this phase has lost that argument three
+times. What keeps it honest here is not the number: the keys of EXPECTED are
+matched against the report's ABSOLUTE PATHS under the package, and those two
+files' BYTES are pinned in `tools/law-bytes.json`, checked by the law itself
+and by its separate reader. So either the law ran -- in which case the pin was
+checked and the 25 and the 1 are the law's own cases -- or it did not, in which
+case this step refuses. Replacing the law with 25 cases that are not the law
+moves a digest, which is the declared limit below, not a hole.
+
+THE REMAINING LIMIT, STATED ONCE: a hostile EXECUTION ENVIRONMENT is outside
+any check that lives in this repository. The `node` binary and the contents of
+`node_modules` are not pinned here -- they come from `npm ci` against the
+committed lockfile -- and a `python3` that lies cannot be caught by a Python
+file it is running. This step bounds which PROGRAM it starts and reports its
+path; it does not bound what that program is.
 """
 
 from __future__ import annotations
@@ -95,18 +124,44 @@ def main() -> int:
     args = ap.parse_args()
     package = Path(args.package).resolve()
 
-    npx = shutil.which("npx", path=os.environ.get("PATH", "/usr/bin:/bin"))
-    if npx is None:
-        refuse("no npx on PATH, so this step could not run the suite at all")
+    # R49-F2: the runner is resolved as a PATH ON DISK under the package, not
+    # by a PATH lookup and not through `node_modules/.bin`. Both candidates are
+    # named in the refusal so a reader knows where it looked.
+    candidates = [
+        package / "node_modules" / "vitest" / "vitest.mjs",
+        package.parent.parent / "node_modules" / "vitest" / "vitest.mjs",
+    ]
+    runner = next((c for c in candidates if c.is_file()), None)
+    if runner is None:
+        refuse("no vitest entry at " + " or ".join(str(c) for c in candidates) + ", so this step could not run the suite at all")
+
+    # `node` itself cannot be pinned by a file in this repository (see the
+    # remaining limit in this module's docstring): it is resolved on a PATH
+    # that starts at /usr/bin, and whichever one answers is PRINTED below.
+    pinned_path = "/usr/bin:/bin:" + os.environ.get("PATH", "")
+    node = shutil.which("node", path=pinned_path)
+    if node is None:
+        refuse(f"no node on {pinned_path!r}, so this step could not run the suite at all")
 
     out = Path(tempfile.mkdtemp(prefix="law-ran-")) / "report.json"
     try:
         done = subprocess.run(
-            [str(npx), "vitest", "run", "--reporter=json", f"--outputFile={out}"],
+            [str(node), str(runner), "run", "--reporter=json", f"--outputFile={out}"],
             cwd=str(package),
             capture_output=True,
             text=True,
             timeout=1800,
+            # The child's environment is REBUILT, not inherited: nothing of
+            # PYTHONPATH, NODE_OPTIONS, NODE_PATH, VITEST_* or GIT_* reaches
+            # it. Its PATH is DERIVED from the node this step resolved -- the
+            # suite itself spawns the repository's own tooling (`prettier`,
+            # `python3`), and a PATH without that directory makes those spawns
+            # exit 127, which is a FALSE red rather than a defence.
+            env={
+                "PATH": f"{Path(node).parent}:/usr/bin:/bin",
+                "HOME": os.environ.get("HOME", "/tmp"),
+                "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+            },
         )
         if not out.is_file():
             refuse(f"the suite wrote no report (rc {done.returncode}); last stderr: {done.stderr.strip()[-400:]!r}")
@@ -153,7 +208,11 @@ def main() -> int:
         refuse("; ".join(problems))
 
     total = report.get("numTotalTests")
-    print(f"{sum(EXPECTED.values())} law cases ran inside {total} total, 0 skipped, 0 failed: " + ", ".join(f"{k}={v}" for k, v in EXPECTED.items()))
+    print(
+        f"{sum(EXPECTED.values())} law cases ran inside {total} total, 0 skipped, 0 failed: "
+        + ", ".join(f"{k}={v}" for k, v in EXPECTED.items())
+        + f" (runner: {node} {runner})"
+    )
     return 0
 
 

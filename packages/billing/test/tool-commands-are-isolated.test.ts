@@ -232,6 +232,21 @@ const looksLikeReviewer = (): RegExp => {
  */
 const REFUSED_PACK_NOT_PINNED = 'REFUSED-PACK-NOT-THE-PINNED-SET';
 
+/**
+ * ROUND 51, THE COORDINATOR'S CD-50-01 (P1). A gate that is only OFFERED as
+ * its own script is a gate nobody runs: `npm test` could be made to collect
+ * neither law file and still exit 0. This is the name the arm below refuses by
+ * when the law gate is no longer chained into the command people run.
+ */
+const REFUSED_TEST_WITHOUT_LAW_GATE = 'REFUSED-TEST-DOES-NOT-RUN-THE-LAW';
+
+/**
+ * ROUND 51, THE COORDINATOR'S P3. An arm that read a pack document with no
+ * guard failed with ENOENT when the pack was absent -- a stack trace, not a
+ * verdict, and indistinguishable from a broken test. Absence is named.
+ */
+const REFUSED_REPO_HEAD_NOT_READABLE = 'REFUSED-REPO-HEAD-NOT-READABLE';
+
 /** The pinned author-owned set, read from the repository and not from the pack. */
 const pinnedPackSet = (): string[] => {
   const raw = JSON.parse(readFileSync(join(__dirname, '..', 'tools', 'pack-set.json'), 'utf8')) as { names?: unknown };
@@ -2722,6 +2737,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       'tools/context-sites.py',
       'tools/law-ran.py',
       'tools/manifest-digests.py',
+      'tools/pack-set.json',
       'tools/reviewer-reports.json',
       'tools/seal-check-run.py',
       'tools/status-block.py',
@@ -2752,12 +2768,33 @@ describe('every written invocation of the pack tools is isolated', () => {
     // Together: the law not running is caught there, that step being removed
     // is caught here, and both edited together with the pin updated is the
     // declared limit.
+    //
+    // CD-50-01 (P1), THE COORDINATOR'S, AND IT IS THE SAME HOLE ONE STEP OUT.
+    // A gate in its own script is a gate NOBODY RUNS. The coordinator measured
+    // it: with `exclude: ['test/db/**'].concat('test/l*-pinned.test.ts',
+    // 'test/tool-c*.test.ts')` in the vitest config, `npm test` printed 277
+    // passed and exited 0 WITH THE PLANT PRESENT, because the pin check lives
+    // in an excluded file and nothing called `gate:law` -- not `test`, not CI
+    // (there is none for this package), not a hook. Pinning the config's bytes
+    // does not help: the pin check is in a file the config just excluded.
+    // So the law gate is now chained into THE COMMAND PEOPLE ACTUALLY RUN.
+    // `npm test` is `vitest run && python3 -I tools/law-ran.py`, and
+    // `law-ran.py` starts its own run and refuses LAW-NOT-RUN unless both law
+    // files were collected and ran their literal case counts -- so the
+    // exclusion above now reds `npm test` itself. This arm is what reds when
+    // the chaining is taken back out, and it reads the SCRIPT NAMES, not a
+    // count: a gate present under some other name is not a gate `npm test`
+    // reaches.
     const scripts = (JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
-    const lawRan = Object.values(scripts).filter((command) => new RegExp(['python3', '-I', 'tools/law-ran\\.py'].join('\\s+')).test(command));
+    const runsTheGate = new RegExp(['python3', '-I', 'tools/law-ran\\.py'].join('\\s+'));
+    const lawRan = Object.entries(scripts)
+      .filter(([, command]) => runsTheGate.test(command))
+      .map(([name]) => name)
+      .sort();
     expect(
-      lawRan.length,
-      'LAW-BYTES-MOVED: no package.json script runs `python3 -I tools/law-ran.py` any more, so nothing outside this suite asserts that this law was collected and ran',
-    ).toBe(1);
+      lawRan,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: \`npm test\` no longer runs \`python3 -I tools/law-ran.py\`, so the command people actually run can be made to collect neither law file and still exit 0 (CD-50-01). The gate must be chained into \`test\` itself, not only offered as \`gate:law\``,
+    ).toStrictEqual(['gate:law', 'test']);
 
     // CD-48-02 (P3), THE COORDINATOR'S: replacing the expectation source with
     // the handed text left the suite green, because no file in this repository
@@ -3080,6 +3117,39 @@ describe('every written invocation of the pack tools is isolated', () => {
       // which is the half of the attack a gate can see. This branch is quoted
       // in every dispatch so a reader is never told this arm measured the pack
       // when it did not.
+      //
+      // R49-S2 (P3), THE CHALLENGER'S AND THE COORDINATOR'S, AND THIS
+      // SENTENCE WAS FALSE WHEN THEY READ IT. Until round 51 an absent pack
+      // did not reach this branch's verdict at all: the status-head arm below
+      // read `P5-STATUS.json` out of the pack with no guard, so a directory
+      // that does not exist failed with a raw `ENOENT`, not with the
+      // UNMEASURED-by-absence this comment claimed. Safer than a silent pass,
+      // and still a false sentence that changes what a reader does: someone
+      // wiring this package into CI would conclude no pack mount is needed.
+      // The remedy is the behaviour, not the sentence — that arm is a literal
+      // base now and reads its head from the repository — and the sentence is
+      // true as measured at this head: an absent pack dir is 303 passed with
+      // this branch's notice and no exception, an empty one reds
+      // REFUSED-PACK-NOT-THE-PINNED-SET.
+      //
+      // THE COORDINATOR ASKED FOR A NAMED REFUSAL ON ABSENCE, and this is the
+      // line where a refusal is right and where it would be a FALSE RED. A
+      // pack nobody named is a pack nobody promised: the default path is not
+      // mounted in a cold clone or in any CI this package might one day reach,
+      // and refusing there would red a gate for a subject the environment
+      // never had. A pack SOMEONE NAMED is different — `P5_PACK_DIR` set to a
+      // directory that is not there is an operator error, and silence about it
+      // would be the skip this whole file is about. So: named and absent
+      // REFUSES BY NAME; the default simply not being mounted is the declared
+      // limit, reported. MEASURED: named and absent reds by the name below;
+      // the default-absent branch is UNMEASURED AT RUNTIME here, because the
+      // pack IS mounted in this container and nothing can unmount it from
+      // inside a test.
+      const namedByOperator = (process.env.P5_PACK_DIR ?? '').length > 0;
+      expect(
+        namedByOperator,
+        `${REFUSED_PACK_NOT_PINNED}: P5_PACK_DIR names ${PACK} and there is no such directory, so the pack this gate was pointed at does not exist and ${pinnedPackSet().length} pinned author-owned names went unchecked. Unset P5_PACK_DIR to measure the default pack, or point it at a real one`,
+      ).toBe(false);
       expect(
         existsSync(PACK),
         `no pack at ${PACK}: this arm is UNMEASURED here, by absence; ${pinnedPackSet().length} pinned author-owned names went unchecked`,
@@ -3561,7 +3631,43 @@ describe('every written invocation of the pack tools is isolated', () => {
     const dir = mkdtempSync(join(tmpdir(), 'r49-status-'));
     onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
     const tool = join(TOOLS_DIR, 'status-block.py');
-    const real = JSON.parse(readFileSync(join(PACK, 'P5-STATUS.json'), 'utf8')) as Record<string, unknown>;
+    // ROUND 51, THE COORDINATOR'S P3. This base used to be read from the
+    // pack's own `P5-STATUS.json`, which made the arm fail with ENOENT -- a
+    // stack trace in a test name, not a verdict -- whenever `P5_PACK_DIR`
+    // named a directory that is not there. Worse, it tied a REPO GATE to a
+    // live shared directory again, which is exactly R48-F2. The base is a
+    // literal here and the head is read from the repository this law lives in,
+    // so the arm measures the TOOL and nothing else, and absence is refused BY
+    // NAME rather than thrown.
+    const headProbe = spawnSync('/usr/bin/git', ['--no-replace-objects', 'rev-parse', 'HEAD'], {
+      cwd: REPO,
+      encoding: 'utf8',
+      env: { PATH: '/usr/bin', GIT_NO_REPLACE_OBJECTS: '1' },
+      timeout: 60_000,
+    });
+    const headFull = (headProbe.stdout ?? '').trim();
+    expect(
+      /^[0-9a-f]{40}$/.test(headFull),
+      `${REFUSED_REPO_HEAD_NOT_READABLE}: \`git rev-parse HEAD\` in ${REPO} did not answer with a resolved 40-character sha, so this arm cannot build a status block whose head is real: ${JSON.stringify(
+        (headProbe.stderr ?? '').trim().slice(0, 200),
+      )}`,
+    ).toBe(true);
+    const real: Record<string, unknown> = {
+      ladder: 'PREPARED / NOT PROMOTED',
+      ready_to_promote: 'NO',
+      head: headFull.slice(0, 7),
+      head_full: headFull,
+      head_pushed: true,
+      run_id: 'P5-SCRATCH-ARM',
+      challenger_verdict: 'scratch',
+      challenger_covers: 'scratch',
+      coordinator_review: 'scratch',
+      head_covered: 'NO',
+      self_signature: 'none',
+      next_owed: 'scratch',
+      note: 'a scratch status block built by this arm; it is never written into the pack',
+      documents: ['P5-SCRATCH.md'],
+    };
     // One document, carrying the sentinel pair, so the tool gets as far as the
     // head check in every case below.
     // The sentinel pair verbatim: a malformed pair exits inside the tool

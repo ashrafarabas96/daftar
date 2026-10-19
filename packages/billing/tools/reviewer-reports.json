@@ -35,6 +35,7 @@
     "P5-CHALLENGE-bcf8084.md": "2f9d22fa49031ae0cf6d262a425a0ae3304be9eda479f648316e4bf190804518",
     "P5-CHALLENGE-c01f57c.md": "da68b4759efb89aba826d414f6ee3bab0efee0790f07a2a9d9e3d2324d511295",
     "P5-CHALLENGE-c2c77f6.md": "bfc4e0aea14b5dfbcff412cbb9f7322cb0deca72c2bcf435c3de673f06f5c3a6",
+    "P5-CHALLENGE-cb3eb67.md": "84f346bc17aa7b9e184a1081facc9dfe5f36f1046ddc4222677a80eb34cb4822",
     "P5-CHALLENGE-e5d3783.md": "64958fbe32763363f1f4482291a76371435289366bf2ab52ce71e92d2920bd3f",
     "P5-CHALLENGE-e6c46cd.md": "a0748e2f9d973280b310a11c0d9ff715e00e91f851b0a2bfbf91c6e045f6d680",
     "P5-CHALLENGE-f4efd29.md": "cbee610407a9b0a377eb355df07b830566cdf4c64edea37d28f3993b3b0875d1",
@@ -50,6 +51,7 @@
     "P5-COORD-DIFF-REVIEW-9bd33bd.md": "75450d80a1d4bc3b82a1024411a80d759a98346c33fb9067d56e958dfea44bc5",
     "P5-COORD-DIFF-REVIEW-c01f57c.md": "fed8fb500abe6892a28a43dd2d73f267350941b13b275ed290c334b4e331a912",
     "P5-COORD-DIFF-REVIEW-c2c77f6.md": "c12ccf61c5975c51fb9d85da5702ceb615461973a00382a4d77a6d2aeacdf719",
+    "P5-COORD-DIFF-REVIEW-cb3eb67.md": "9221d28394154abedbd51279df2636903b4f251e6a0f8bb5e99b9859d299567d",
     "P5-COORD-DIFF-REVIEW-e5d3783.md": "dfd19d192d09b9945a131235e6ece66cef517c9b24aed4f456eb80c0eb9bc6ab"
   },
   "_looks_like_reviewer_is_for_MESSAGES_and_detection_only": "ROUND 30, the challenger's F-53 (P2). This pattern must NEVER decide an exemption — that is B-10, and `reviewer_reports` above is the only thing that exempts. It decides WORDING: a file whose name has this shape but is absent from the list is an UNENUMERATED reviewer report, not an author-owned document, and telling the author to edit it routes them to the one repair the pack forbids for a reviewer's frozen bytes. Both instruments read this one pattern so the two messages cannot drift apart.",

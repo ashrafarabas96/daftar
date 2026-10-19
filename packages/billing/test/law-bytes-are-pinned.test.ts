@@ -91,6 +91,13 @@ const LAW_FILES = [
   // line here exempted a document from the law entirely and looked like
   // routine bookkeeping while doing it.
   'tools/reviewer-reports.json',
+  // R49-S1 (P3), THE CHALLENGER'S: this was the one file of that class left
+  // out. `tools/pack-set.json` names the author-owned pack documents the gate
+  // measures, so an unpinned edit to it changes the gate's SUBJECT SET. The
+  // challenger could not measure a hide through it -- adding a plant's name
+  // removes the set refusal and the scan then catches the plant on its own,
+  // 1 failed | 302 passed -- so it is pinned for the class, not for a hole.
+  'tools/pack-set.json',
   // And the tools the law EXECUTES: an edit to one of these changes what the
   // law measures without touching the law.
   'tools/manifest-digests.py',
