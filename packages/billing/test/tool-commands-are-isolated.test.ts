@@ -2651,7 +2651,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     }
   });
 
-  it('F-73: the live scan READS every character of every logical line, and the expectation is not its own', () => {
+  it('F-73: the live scan READS every character of every logical line, and the expectation is not its own', (ctx) => {
     // ROUND 43, R41-01 (P2), THE CHALLENGER'S. The regression guard was a
     // list of seven identifiers, and it was keyed to one INSTANCE and one
     // SPELLING: the challenger added a second declared-quotation reader to the
@@ -3214,6 +3214,50 @@ describe('every written invocation of the pack tools is isolated', () => {
     // lives in `vitest.config.ts`, whose bytes are pinned; it is READ here so
     // that it is not merely pinned, because a number nobody reads can drift
     // back to a false-red default in a diff that looks like a cleanup.
+    // ROUND 60d, AND IT IS A FAIL-OPEN OF EVERYTHING BELOW THIS LINE. Reading
+    // the settings out of `vitest.config.ts` -- even reading them by value, even
+    // with the file's bytes pinned -- says what the FILE asks for and not what
+    // the RUN does, because vitest takes the same settings on the command line:
+    // `--testTimeout=5000` and `--sequence.concurrent` restore the two
+    // dangerous defaults with the config, its pin and the floor below all
+    // green. Measured, from the run's own task object:
+    //
+    //   plain                                       timeout 120000, concurrent undefined
+    //   --testTimeout=5000 --sequence.concurrent    timeout 5000,   concurrent true
+    //
+    // It is the same rung as `.npmrc` setting `script-shell` while the
+    // command's TEXT was pinned: the shell is part of the command, and the
+    // command line is part of the runner. So the EFFECTIVE values are read
+    // first, out of the run this case is executing in, and the file is read
+    // after that -- the file reader stays because it catches a config edited to
+    // drop a setting, which the run reader cannot distinguish from a default
+    // that happens to be right.
+    const task = (ctx as unknown as { task?: Record<string, unknown> }).task;
+    expect(
+      typeof task,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: this runner gave the case no task object, so this arm cannot read the settings the RUN is actually using and would be left reading the config file alone, which a command-line flag overrides`,
+    ).toBe('object');
+    const effective = task ?? {};
+    expect(
+      Number(effective.timeout ?? 0),
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: the per-case timeout this RUN is using is ${String(effective.timeout)}ms, under the 60000ms floor, whatever vitest.config.ts says -- so machine load alone can red this law without naming a refusal. A --testTimeout flag or a VITEST_ environment key reaches this value without touching the config or its pin`,
+    ).toBeGreaterThanOrEqual(60_000);
+    expect(
+      effective.concurrent === true,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: this RUN is executing the law's cases CONCURRENTLY, whatever vitest.config.ts says, so the pack arm's snapshot races the arms that write temporary directories and the serial order these cases assume does not hold`,
+    ).toBe(false);
+    expect(
+      Number(effective.retry ?? 0),
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: this RUN retries a failed case ${String(effective.retry)} times, whatever vitest.config.ts says, and a red case retried green reports as passed in the JSON the gate reads with the case count unchanged`,
+    ).toBe(0);
+    expect(
+      effective.shuffle === true,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: this RUN is shuffling case order, whatever vitest.config.ts says, so an order-dependent pass or failure here is not reproducible`,
+    ).toBe(false);
+    expect(
+      String(effective.mode),
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: this case's mode in this RUN is ${String(effective.mode)}, not 'run' -- a skipped or todo case asserts nothing, and the gate's count would not see the difference if the mode were applied to others`,
+    ).toBe('run');
     const runnerConfigFile = readFileSync(join(__dirname, '..', 'vitest.config.ts'), 'utf8');
     // The COMMENTS are stripped before anything is read out of this file, and
     // the first version of this arm is why: the reasons written beside each
