@@ -228,8 +228,77 @@ const INVOCATION = new RegExp(String.raw`python(?:3(?:\.\d+)*)?((?:\s+-\S+(?:\s+
  */
 const INVOCATION_BEFORE_F56 = new RegExp(String.raw`python(?:3(?:\.\d+)*)?\s+((?:-\S+\s+)*)(?:\S*/)?(${TOOLS.join('|').replace(/\./g, '\\.')})`, 'g');
 
-/** `-I` present among the flags of one matched invocation. */
-const isolated = (flags: string): boolean => flags.split(/\s+/).some((f) => f === '-I' || (/^-[A-Za-z]+$/.test(f) && f.includes('I')));
+/**
+ * The interpreter flags of one matched invocation, as FLAG and VALUE rather
+ * than as words.
+ *
+ * ROUND 33, THE CHALLENGER'S F-58 (P2, a fail-open, and round 32 introduced
+ * it). F-56 taught the MATCHER that a flag can take a separate value; this
+ * function still re-split the captured text on whitespace, so a VALUE spelled
+ * `-I` was read as the isolation flag:
+ *
+ *   python3 -X -I tools/manifest-digests.py   -> matched, READ AS ISOLATED
+ *   python3 -W -I tools/status-block.py       -> matched, READ AS ISOLATED
+ *
+ * Both are working commands that run UN-isolated, measured here:
+ *
+ *   python3 -X -I -c "import sys; print(sys.flags.isolated)"  -> 0, rc 0
+ *   python3 -W -I -c "import sys; print(sys.flags.isolated)"  -> 0, rc 0
+ *   python3 -I    -c "import sys; print(sys.flags.isolated)"  -> 1, rc 0
+ *
+ * A false green on a working command is F-50's own shape, so the verdict is
+ * computed from the same structure the matcher uses. It fails CLOSED: only
+ * flags known to take no argument are read as flags on their own; anything
+ * else consumes the next token as its value, so an unfamiliar flag swallows a
+ * following `-I` and the command reads as NOT isolated.
+ */
+const NO_ARG_FLAGS: ReadonlySet<string> = new Set([
+  '-B',
+  '-b',
+  '-d',
+  '-E',
+  '-h',
+  '-i',
+  '-I',
+  '-O',
+  '-P',
+  '-q',
+  '-s',
+  '-S',
+  '-u',
+  '-v',
+  '-V',
+  '-x',
+  '--help',
+  '--version',
+]);
+
+const interpreterFlags = (captured: string): { flag: string; value?: string }[] => {
+  const tokens = captured
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t.length > 0);
+  const out: { flag: string; value?: string }[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const t = tokens[i] ?? '';
+    if (!t.startsWith('-')) continue;
+    const short = /^-[A-Za-z]+$/.test(t);
+    const takesNoArgument = NO_ARG_FLAGS.has(t) || (short && [...t.slice(1)].every((c) => NO_ARG_FLAGS.has(`-${c}`))) || t.includes('=');
+    if (takesNoArgument) {
+      out.push({ flag: t });
+      continue;
+    }
+    out.push({ flag: t, value: tokens[i + 1] });
+    i += 1;
+  }
+  return out;
+};
+
+/** `-I` present as a FLAG — never as another flag's value. */
+const isolated = (flags: string): boolean => interpreterFlags(flags).some(({ flag }) => flag === '-I' || (/^-[A-Za-z]+$/.test(flag) && flag.includes('I')));
+
+/** The whitespace split F-58 is about, kept only for its deletion arm. */
+const isolatedBeforeF58 = (flags: string): boolean => flags.split(/\s+/).some((f) => f === '-I' || (/^-[A-Za-z]+$/.test(f) && f.includes('I')));
 
 /** Every file of the repository, excluding what is not ours to read. */
 const walk = (dir: string, out: string[] = []): string[] => {
@@ -684,5 +753,94 @@ describe('every written invocation of the pack tools is isolated', () => {
     const r2 = spawnSync('python3', ['-I', '-c', before, REVIEWER_REPORTS_FILE, ...cases], { encoding: 'utf8' });
     expect(r2.status).toBe(0);
     expect((r2.stdout ?? '').trim(), 'the old Python call now agrees with JS, so F-54 does not reproduce and this arm proves nothing').not.toBe(there);
+  });
+  it('F-58: a flag VALUE spelled -I is not the isolation flag', () => {
+    // Measured in this container: `python3 -X -I -c "…sys.flags.isolated"`
+    // prints 0 and exits 0, so these are working, UN-isolated commands.
+    for (const form of [
+      'python3 -X -I tools/manifest-digests.py --check',
+      'python3 -W -I tools/status-block.py --dir d',
+      'python3 -X -I -W ignore tools/seal-check-run.py --dir p --tests t',
+    ]) {
+      expect(matchCount(form), `the scan does not see ${form}`).toBe(1);
+      expect(offencesIn('fixture', form), `read as isolated although -I is a flag's VALUE: ${form}`).toHaveLength(1);
+    }
+    // The real thing still passes, including when a value-taking flag follows.
+    for (const form of [
+      'python3 -I -X utf8 tools/manifest-digests.py --check',
+      'python3 -X utf8 -I tools/status-block.py --dir d',
+      'python3 -I tools/context-sites.py --dir d --tests t',
+    ]) {
+      expect(offencesIn('fixture', form), `a genuinely isolated command is reported: ${form}`).toStrictEqual([]);
+    }
+    // Fails closed on a flag nobody here has enumerated: it consumes the next
+    // token, so an unknown flag cannot launder a following -I.
+    expect(offencesIn('fixture', 'python3 --some-new-option -I tools/manifest-digests.py --check')).toHaveLength(1);
+  });
+
+  it('F-58 guard deletion: the whitespace split reads the value as the flag', () => {
+    // ONE deletion, one property. The old function must say ISOLATED where the
+    // new one says otherwise, or the change above is decoration.
+    expect(isolatedBeforeF58(' -X -I'), 'the old split no longer reads the value as a flag, so this arm proves nothing').toBe(true);
+    expect(isolated(' -X -I'), 'the new verdict still reads a value as the isolation flag').toBe(false);
+    // And it must agree with the old one everywhere the old one was right.
+    for (const flags of [' -I', ' -I -X utf8', ' -X utf8 -I', ' -E -s', ' -X utf8', '']) {
+      expect(isolated(flags), `the two verdicts differ on ${JSON.stringify(flags)}, which F-58 is not about`).toBe(isolatedBeforeF58(flags));
+    }
+  });
+  it('enumerates the flag grammar it claims to cover, and tests every production', () => {
+    // The coordinator's ruling on F-58: state the grammar, then test every
+    // production of it rather than the plant that produced the finding. The
+    // grammar this law claims is
+    //
+    //   INVOCATION := INTERPRETER FLAG* TOOLPATH ARGS?
+    //   INTERPRETER := python | python3 | python3.N | PATH/python3[.N]
+    //   FLAG        := NOARG | COMBINED | ATTACHED | VALUED
+    //   NOARG       := -I | -E | -s | …            (takes nothing)
+    //   COMBINED    := -Es | -Iu | …               (short flags, all NOARG)
+    //   ATTACHED    := -X utf8=1 | --opt=value     (value carries its own '=')
+    //   VALUED      := -X utf8 | -W ignore | -m trace | --unknown v
+    //   TOOLPATH    := name | tools/name | ./tools/name | /abs/tools/name
+    //
+    // and the verdict is ISOLATED only when `-I` appears as a FLAG.
+    const interpreters = ['python', 'python3', 'python3.13', '/usr/bin/python3', '/usr/bin/python3.13'];
+    const flagForms: { text: string; isolated: boolean; production: string }[] = [
+      { text: '', isolated: false, production: 'no flags' },
+      { text: '-I ', isolated: true, production: 'NOARG, the real thing' },
+      { text: '-E ', isolated: false, production: 'NOARG, not -I' },
+      { text: '-E -s ', isolated: false, production: 'NOARG twice' },
+      { text: '-Iu ', isolated: true, production: 'COMBINED containing I' },
+      { text: '-Es ', isolated: false, production: 'COMBINED without I' },
+      { text: '-X utf8 ', isolated: false, production: 'VALUED, separate value' },
+      { text: '-W ignore ', isolated: false, production: 'VALUED, separate value' },
+      { text: '-m trace ', isolated: false, production: 'VALUED, module' },
+      { text: '-X utf8=1 ', isolated: false, production: 'ATTACHED value' },
+      { text: '-X -I ', isolated: false, production: 'VALUED whose VALUE is spelled -I — F-58' },
+      { text: '-W -I ', isolated: false, production: 'VALUED whose VALUE is spelled -I — F-58' },
+      { text: '--some-new-option -I ', isolated: false, production: 'unknown flag consumes the next token: fails closed' },
+      { text: '-I -X utf8 ', isolated: true, production: 'NOARG then VALUED' },
+      { text: '-X utf8 -I ', isolated: true, production: 'VALUED then NOARG' },
+      { text: '-X utf8 -W ignore -I ', isolated: true, production: 'two VALUED then NOARG' },
+    ];
+    const toolPaths = ['manifest-digests.py', 'tools/manifest-digests.py', './tools/manifest-digests.py', '/home/u/p/tools/manifest-digests.py'];
+    let productions = 0;
+    for (const interp of interpreters) {
+      for (const { text, isolated: want, production } of flagForms) {
+        for (const tool of toolPaths) {
+          const form = `${interp} ${text}${tool} --check`;
+          productions += 1;
+          expect(matchCount(form), `the scan does not SEE this production (${production}): ${form}`).toBe(1);
+          expect(offencesIn('fixture', form), `${production}: expected ${want ? 'no offence' : 'an offence'} — ${form}`).toHaveLength(want ? 0 : 1);
+        }
+      }
+      // Whitespace is part of the grammar too: extra spaces and a shell
+      // continuation must not change the verdict.
+      expect(offencesIn('fixture', `${interp}   -X   -I    tools/manifest-digests.py`), 'extra whitespace changes the verdict').toHaveLength(1);
+      expect(offencesIn('fixture', `${interp} -X -I \\\n    tools/manifest-digests.py`), 'a continuation changes the verdict').toHaveLength(1);
+      productions += 2;
+    }
+    expect(productions, 'the grammar table collapsed, so this arm measures almost nothing').toBe(
+      interpreters.length * (flagForms.length * toolPaths.length + 2),
+    );
   });
 });
