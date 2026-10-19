@@ -344,13 +344,19 @@ const interpreterFlags = (captured: string): { flag: string; value?: string }[] 
  * false red). The ruling is Phase 7's: derive the verdict from EXECUTION.
  *
  * The tokeniser's job is now only to FIND an invocation and split its flag
- * segment. The verdict runs the interpreter the document names, with exactly
- * those flags, then `-c "import sys; print(sys.flags.isolated)"`, in an
- * environment holding nothing but PATH — needed to resolve a bare `python3` —
- * with a timeout, and caches the answer per distinct interpreter-and-flags
- * pair. ISOLATED means it printed `1` and exited 0. **Everything else is an
- * OFFENCE**: rc not 0, a timeout, a missing interpreter, any other output. So
+ * segment. ISOLATED means CPython printed `1` and exited 0. **Everything else
+ * is an OFFENCE**: rc not 0, a timeout, no CPython here, any other output. So
  * it fails closed, and a wrong model can now only produce a false RED.
+ *
+ * ROUND 35 CHANGED THE DISCIPLINE, NOT THE OUTCOME. Round 34 ran the
+ * interpreter SPELLING the document wrote, with that document's flag segment
+ * as argv; F-61 (P0) measured both halves of that as a way to run a document.
+ * The sentences above are about the OUTCOME and still hold. WHEN AND WHAT THIS
+ * LAW RUNS is now stated by `HARNESS_PYTHON`, `classifiableInterpreter` and
+ * `executableArgv` below, and nowhere else: one interpreter, resolved here by
+ * absolute path, with argv this law classified token by token. A document's
+ * interpreter spelling and flags are DATA, and an unclassifiable one is
+ * refused by name instead of run.
  *
  * TWO FORMS ARE REFUSED WITHOUT BEING RUN, and refusing counts as an offence:
  * `-c` and `-m` load code and end option processing, `--` ends it, so running
@@ -360,10 +366,6 @@ const interpreterFlags = (captured: string): { flag: string; value?: string }[] 
  */
 const PROBE = 'import sys; print(sys.flags.isolated)';
 
-/**
- * The interpreter this run measures, printed BY the run. Never a literal: a
- * version written by hand is the kind of claim this round removed.
- */
 /**
  * THE ONE INTERPRETER THIS LAW RUNS, by absolute path, resolved once.
  *
