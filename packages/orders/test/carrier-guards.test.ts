@@ -753,6 +753,87 @@ describe("the challenger's REJECT at a869aab — the leaf the remedy itself left
     expect(buildCommercialQuote(HALF_UNIT).lines[0]?.quantity).toBe('5.5000');
   });
 
+  it('E-A: a LAWFUL quote with a SUPERSET container is accepted, which is the cost a per-key rule would charge', () => {
+    // This case exists because my own evidence was weaker than I thought it was.
+    // The superset case above refuses for the QUANTITY, inside the line loop,
+    // before any key rule runs — so it does not pin the key rule's cost at all,
+    // and the per-key mutation reddened only one case rather than the two I
+    // expected. Measured directly: under a per-key rule this quote is refused
+    // `order.quote_field_undeclared`, and that is the cost of the stronger rule
+    // the challenger offered and I did not take.
+    const other = stockKeyOf({ productId: OTHER_PRODUCT, variantId: null });
+    const lawful: CommercialQuoteInput = {
+      quoteId: QUOTE_ID,
+      orderId: ORDER,
+      version: 1,
+      currency: 'ILS',
+      lines: [
+        { stockKey: KEY, productId: PRODUCT, variantId: VARIANT, quantity: '2.0000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '2000' },
+      ],
+      displayedTotalMinor: '2000',
+      issuedAt: '2026-10-01T09:00:00Z',
+      expiresAt: '2026-10-01T10:00:00Z',
+    };
+    const whole = WHOLE_UNITS.get(KEY);
+    if (whole === undefined) throw new Error('the fixture must declare the whole-unit product');
+    const superset = new Map([
+      [KEY, whole],
+      [other, whole],
+    ]);
+    expect(buildCommercialQuote(lawful, { unitPrecisionByStockKey: superset }).lines[0]?.quantity).toBe('2.0000');
+  });
+
+  it('F-A: a PARTIAL miss is ACCEPTED ON PURPOSE — one correct key, one mis-cased, and the law not applied', () => {
+    // The challenger's round-27 finding, pinned as the contract rather than
+    // fixed: rule 3 is an ALL-miss test, so one matching key satisfies it and a
+    // second key with the wrong case or a trailing space goes unexamined. This
+    // case exists so the next reader cannot read that silence as coverage, and
+    // it is the half that must be DELETED if the owner rules the other way —
+    // `OD-P6-08`'s neighbourhood, and the mutation record carries the
+    // measurement of what a per-key rule would cost instead.
+    const other = stockKeyOf({ productId: OTHER_PRODUCT, variantId: null });
+    const twoLines: CommercialQuoteInput = {
+      quoteId: QUOTE_ID,
+      orderId: ORDER,
+      version: 1,
+      currency: 'ILS',
+      lines: [
+        { stockKey: other, productId: OTHER_PRODUCT, variantId: null, quantity: '2.0000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '2000' },
+        { stockKey: KEY, productId: PRODUCT, variantId: VARIANT, quantity: '5.5000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '5500' },
+      ],
+      displayedTotalMinor: '7500',
+      issuedAt: '2026-10-01T09:00:00Z',
+      expiresAt: '2026-10-01T10:00:00Z',
+    };
+    const whole = WHOLE_UNITS.get(KEY);
+    if (whole === undefined) throw new Error('the fixture must declare the whole-unit product');
+    // The CONTROL first: declared honestly, the whole-unit law refuses 5.5000.
+    const refused = refusalOf(
+      () =>
+        buildCommercialQuote(twoLines, {
+          unitPrecisionByStockKey: new Map([
+            [other, whole],
+            [KEY, whole],
+          ]),
+        }),
+      'both keys declared honestly',
+    );
+    expect(refused.code).toBe('order.quote_quantity_invalid');
+    // And the partial miss is accepted, at the digest of the same quote with no
+    // `checks` at all — which is the whole of what is being pinned.
+    const bare = buildCommercialQuote(twoLines).digest;
+    for (const nearMiss of [KEY.toUpperCase(), `${KEY} `]) {
+      const built = buildCommercialQuote(twoLines, {
+        unitPrecisionByStockKey: new Map([
+          [other, whole],
+          [nearMiss, whole],
+        ]),
+      });
+      expect(built.digest).toBe(bare);
+      expect(built.lines[1]?.quantity).toBe('5.5000');
+    }
+  });
+
   it('E-A: the no-MATCH rule does NOT run on the re-verification path, where another refusal owns that fact', () => {
     // The scoping is measured, not assumed: applying it there made the sales
     // authority's own coverage refusal answer under a different code and

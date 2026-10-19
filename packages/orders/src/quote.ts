@@ -750,16 +750,22 @@ export interface CommercialQuoteChecks {
   //    not others is legitimate, and the line is then bounded only by the
   //    storage scale, exactly as if no `checks` had been passed;
   // 3. a container that is supplied, is not empty, and matches NO line this
-  //    quote prices is refused when the quote is BUILT, because the container
-  //    and the lines come from one caller in one breath and a total mismatch can
-  //    only be a mistake. That is what catches a key whose shape is wrong — the
-  //    wrong case, a trailing space — which rule 1 cannot see. It is a
-  //    coordinator default and REVERSIBLE on the owner's word (`OD-P6-08`'s
-  //    neighbourhood); the cost is that a caller holding ONE precision map for
-  //    many quotes must pass the subset that covers this one.
+  //    quote prices AT ALL is refused when the quote is BUILT, because the
+  //    container and the lines come from one caller in one breath and a total
+  //    mismatch can only be a mistake. It is a coordinator default and
+  //    REVERSIBLE on the owner's word (`OD-P6-08`'s neighbourhood); the cost is
+  //    that a caller holding ONE precision map for many quotes must pass the
+  //    subset that covers this one.
   //
-  // What the STRING SHAPE of a matching key is beyond that — trimming, case
-  // folding — is the caller's business and this package states no rule for it.
+  // What the STRING SHAPE of a key is beyond that — trimming, case folding — is
+  // the caller's business and this package states no rule for it. **So a PARTIAL
+  // miss is ACCEPTED: a container that names one priced key correctly and
+  // another with the wrong case or a trailing space satisfies rule 3, and that
+  // second line's quantity is bounded only by the storage scale, exactly as if
+  // the key had been absent.** That is the published contract and the suite pins
+  // it, because it was measured (`F-A`) rather than reasoned about: an earlier
+  // version of this contract claimed rule 3 caught a wrongly shaped key, and it
+  // does so only when NO key matches.
 }
 
 /** The `checks` contract as a LIST, for the same reason `APPROVAL_FIELDS` is one. */
@@ -1010,20 +1016,38 @@ function buildQuote(input: CommercialQuoteInput, checks: CommercialQuoteChecks |
     sum += lineTotalMinor;
   }
 
-  // A SUPPLIED container that matches no priced line, refused as the mirror of
-  // `checkout-intent`'s "the checkout carries a position the confirmed quote
-  // does not price" (`E-A`, the coordinator's ruling). It catches what a type
-  // check cannot: a key whose SHAPE is wrong — trailing whitespace, the wrong
-  // case, another product's key — declares a law for a line this quote does not
-  // carry, and the quantity it was meant to bound goes through unchecked.
+  // A SUPPLIED container that matches NO priced line at all, refused as the
+  // mirror of `checkout-intent`'s "the checkout carries a position the confirmed
+  // quote does not price" (`E-A`, the coordinator's ruling).
   //
-  // The cost is stated, because it is real: a caller that keeps ONE precision
+  // WHAT THIS IS AND IS NOT, narrowed to the guard after `F-A` showed my claim
+  // was wider than it. This is an ALL-MISS test: one matching key satisfies it
+  // and every other key then goes unexamined. So a container that declares the
+  // key of line A correctly and line B's key mis-cased or with a trailing space
+  // IS ACCEPTED, and line B's quantity goes unbounded at the digest of the same
+  // quote with no `checks` at all. The challenger measured exactly that, and the
+  // earlier version of this comment — "it catches a key whose SHAPE is wrong"
+  // — was true of a single-key container and false of a partial miss. That is
+  // the `C-A` class: a correct guard under a claim the guard does not support.
+  //
+  // The partial miss is left ACCEPTED ON PURPOSE, not by oversight, and the
+  // suite pins it as such so the next reader cannot read today's silence as
+  // coverage: the SHAPE of a key is the caller's business under rule 3 of the
+  // contract above (the coordinator's standing ruling), and a near-miss rule
+  // would be this package deciding that question. It is `OD-P6-08`'s
+  // neighbourhood and the owner's answer governs it, together with this whole
+  // rule. My own view is recorded rather than acted on: the cheap near-miss
+  // refusal — a declared key that is NOT a priced key but equals one after
+  // trimming and case folding — would close the measured hole and charges a
+  // genuine superset nothing, and I would take it if the owner rules that way.
+  //
+  // The cost of what IS refused here is real: a caller that keeps ONE precision
   // map for many quotes is refused on a quote none of whose products that map
   // covers, and must pass the subset or drop the key. Saying "check nothing"
   // stays lawful two ways — no `checks`, or an EMPTY container — so the refusal
   // only ever answers a container that claims something and matches nothing.
   // This is a coordinator default and is REVERSIBLE on the owner's word; the
-  // contract line above says what it buys and the suite pins both halves.
+  // contract line above says what it buys and the suite pins every half.
   //
   // It runs HERE, after the loop, because the keys it compares against are the
   // CANONICAL keys the lines were proved to carry, not the strings the caller
