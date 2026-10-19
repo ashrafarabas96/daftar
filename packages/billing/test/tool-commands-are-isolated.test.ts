@@ -924,34 +924,40 @@ const BARE_PATH = new RegExp(String.raw`(?:^|&&|\||;)\s*(?:[$>#]\s+)?((?:[A-Za-z
  * expectation is read from the RAW TEXT, never from `logicalLines`:
  *
  *   - `rawExpectation` splits the text itself and derives, with no help from
- *     `logicalLines`, how many logical lines it must produce and how many
- *     NON-WHITESPACE characters those lines must carry. The continuation
- *     joiner conserves non-whitespace characters except the one backslash it
- *     consumes per join, which is why the count subtracts the joins. Both
- *     numbers are also measured AGAINST `logicalLines` on every document the
- *     law reads, so the derivation cannot drift from the function it predicts.
- *   - `matchesOf` is the only way a matcher is applied, and it counts the
+ *     `logicalLines`, how many logical lines it must produce and WHICH
+ *     non-whitespace characters those lines must carry, in order. The
+ *     continuation joiner conserves non-whitespace characters except the one
+ *     backslash it consumes per join, which is why that backslash is dropped
+ *     where it is consumed. Both are measured AGAINST `logicalLines` over
+ *     every shape that makes the joiner do something, so the derivation cannot
+ *     drift from the function it predicts.
+ *   - `matchesOf` is the only way a matcher is applied, and it records the
  *     non-whitespace characters of the very string it matches -- one argument,
- *     so there is no counting one string and matching another without editing
+ *     so there is no recording one string and matching another without editing
  *     this function, which is a visible change to the instrument and not a
- *     skip. A blanked line is a shortfall; a dropped line is a shortfall
- *     against a raw-derived expectation; a third matcher is a surplus, because
- *     the test is equality.
+ *     skip.
+ *
+ * ROUND 45, THE COORDINATOR'S CD-44-01 (P1, A FAIL-OPEN), is why the
+ * comparison is by IDENTITY and not by count: round 44 compared how MANY
+ * characters were read, so a substitution of the same length -- measured, in
+ * the matcher's input and inside `logicalLines` alike -- left every number
+ * equal and hid the offence. A blanked line, a dropped line, a substituted
+ * line and a matcher that went missing are all differences now; a matcher
+ * nobody declared is a surplus, because the test is equality.
  */
-const nonSpaceCount = (s: string): number => {
-  // A char loop rather than `s.match(/\S/g)`: this runs twice per line over
-  // every file of the repository, and the regex form allocated an array per
-  // call, which took the repository walk past its 5 s budget often enough to
-  // make the test intermittently time out. Same quantity, no allocation.
-  let n = 0;
-  for (let i = 0; i < s.length; i += 1) {
-    const c = s.charCodeAt(i);
-    // space, tab, LF, CR, FF, VT -- the whitespace `\S` excludes in the text
-    // this law reads, which is ASCII source and Markdown.
-    if (c !== 32 && (c < 9 || c > 13)) n += 1;
-  }
-  return n;
-};
+/**
+ * The non-whitespace characters of a string, in order.
+ *
+ * ROUND 45, THE COORDINATOR'S CD-44-01 (P1, A FAIL-OPEN): round 44 compared
+ * HOW MANY characters the matchers read, not WHICH. A count-preserving
+ * substitution -- `line.replace(/\S/g, 'x')` on the planted line, written
+ * either into the matcher's input or into `logicalLines`' own `out.push` --
+ * left every number identical and hid the offence at 23 passed. I reproduced
+ * both spellings before changing anything. A quantity is not an identity, and
+ * this is the same mistake as counting lines reached instead of content read,
+ * one level down.
+ */
+const nonSpaceOf = (s: string): string => s.replace(/\s+/g, '');
 
 /** How many matchers every line is read by. Equality, so a third one reds. */
 const MATCHERS = 2;
@@ -961,17 +967,21 @@ const MATCHERS = 2;
  * alone: the number of logical lines, and the non-whitespace characters they
  * must carry between them.
  */
-const rawExpectation = (text: string): { lines: number; content: number } => {
+const rawExpectation = (text: string): { lines: number; content: string } => {
   const raw = text.replace(/\r/g, '').split('\n');
   let lines = 0;
-  let joins = 0;
+  const parts: string[] = [];
   for (let i = 0; i < raw.length; i += 1) {
+    const self = raw[i] ?? '';
     // A raw line is swallowed by the one before it exactly when that one ends
     // in a continuation backslash -- which chains, and needs no state.
-    if (i > 0 && /\\$/.test((raw[i - 1] ?? '').trim())) joins += 1;
-    else lines += 1;
+    if (i === 0 || !/\\$/.test((raw[i - 1] ?? '').trim())) lines += 1;
+    // The joiner eats exactly one backslash per join: this line's own, when a
+    // next line exists to be carried into it.
+    const consumed = i + 1 < raw.length && /\\$/.test(self.trim());
+    parts.push(nonSpaceOf(consumed ? self.trim().replace(/\\$/, '') : self));
   }
-  return { lines, content: nonSpaceCount(text.replace(/\r/g, '')) - joins };
+  return { lines, content: parts.join('') };
 };
 
 /**
@@ -984,8 +994,44 @@ const rawExpectation = (text: string): { lines: number; content: number } => {
 const conservationRefusal = (label: string, tested: number, total: number): string | undefined =>
   tested === total ? undefined : `${label}: ${REFUSED_LINES_NOT_ALL_TESTED} ${tested}/${total}`;
 
-const contentRefusal = (label: string, read: number, expected: number): string | undefined =>
-  read === expected ? undefined : `${label}: ${REFUSED_CONTENT_NOT_ALL_READ} ${read}/${expected}`;
+/**
+ * The content refusal, comparing the exact characters a matcher was handed with
+ * the exact characters the raw text says it must see. CD-44-01: equality of
+ * strings, not of counts, so a substitution that preserves the count is a
+ * difference here. The message carries the two lengths and the index of the
+ * FIRST divergence rather than the text itself, because a refusal that pastes
+ * a document into a test log is unreadable and may itself carry a command.
+ */
+const contentRefusal = (label: string, read: string, expected: string): string | undefined => {
+  if (read === expected) return undefined;
+  let at = 0;
+  while (at < read.length && at < expected.length && read[at] === expected[at]) at += 1;
+  return `${label}: ${REFUSED_CONTENT_NOT_ALL_READ} ${read.length}/${expected.length} chars, first divergence at ${at}`;
+};
+
+/**
+ * Both invariants of one scanned document, as ONE function returning what the
+ * scan must report.
+ *
+ * ROUND 45, THE COORDINATOR'S CD-44-02 (P3): in round 44 each refusal was
+ * pushed at its own site and DELETING EITHER PUSH left the committed suite
+ * green -- a guard whose removal nothing notices. There is one push now, its
+ * site is counted in this file by an arm, and this function is armed over its
+ * own domain, so the guard cannot be removed silently.
+ */
+const invariantOffences = (label: string, tested: number, read: readonly string[], expected: { lines: number; content: string }): string[] => {
+  const out: string[] = [];
+  const lines = conservationRefusal(label, tested, expected.lines);
+  if (lines !== undefined) out.push(lines);
+  // Every matcher must have been handed the whole document, so a matcher that
+  // went missing is a shortfall and a matcher nobody counted is a surplus.
+  if (read.length !== MATCHERS) out.push(`${label}: ${REFUSED_CONTENT_NOT_ALL_READ} ${read.length} of ${MATCHERS} matchers read this document`);
+  for (const seen of read) {
+    const content = contentRefusal(label, seen, expected.content);
+    if (content !== undefined) out.push(content);
+  }
+  return out;
+};
 
 const scriptIndexes = new Map<string, ReadonlyMap<string, string>>();
 
@@ -1125,9 +1171,11 @@ const FENCE = /^\s*```/;
  * counter still ran -- is not expressible through this function without
  * editing the function.
  */
-let contentRead = 0;
+let reads = new Map<RegExp, string[]>();
 const matchesOf = (s: string, re: RegExp): RegExpMatchArray[] => {
-  contentRead += nonSpaceCount(s);
+  const seen = reads.get(re);
+  if (seen === undefined) reads.set(re, [nonSpaceOf(s)]);
+  else seen.push(nonSpaceOf(s));
   return [...s.matchAll(re)];
 };
 
@@ -1161,7 +1209,10 @@ const scanLines = (label: string, text: string, honourExemption: boolean, toolsD
   let exempt = false;
   let tested = 0;
   let seen = 0;
-  const readBefore = contentRead;
+  // The recorder is per scan, and `scanLines` is not reentrant: every caller in
+  // this file scans one document at a time, which is what lets the reads of
+  // this document be compared with this document's expectation.
+  reads = new Map<RegExp, string[]>();
   for (const { n, line } of logicalLines(text)) {
     if (honourExemption) {
       if (FENCE.test(line)) {
@@ -1208,15 +1259,18 @@ const scanLines = (label: string, text: string, honourExemption: boolean, toolsD
   // carries a line the skip matches, this refusal fires on that document. The
   // arm below measures exactly that pair.
   if (!honourExemption) {
-    const expected = rawExpectation(text);
-    // Both numbers come from the RAW TEXT. F-73 (B) moved `total` by editing
-    // `logicalLines`, which is exactly what a raw-derived expectation refuses
-    // to follow -- and the arm below measures `logicalLines` against this
-    // prediction on every document, so a drift between them is itself a red.
-    const short = conservationRefusal(label, tested, expected.lines);
-    if (short !== undefined) found.push(short);
-    const unread = contentRefusal(label, contentRead - readBefore, MATCHERS * expected.content);
-    if (unread !== undefined) found.push(unread);
+    // The expectation comes from the RAW TEXT. F-73 (B) moved the total by
+    // editing `logicalLines`, which is exactly what a raw-derived expectation
+    // refuses to follow -- and an arm measures `logicalLines` against this
+    // prediction on every shape, so a drift between them is itself a red.
+    found.push(
+      ...invariantOffences(
+        label,
+        tested,
+        [...reads.values()].map((parts) => parts.join('')),
+        rawExpectation(text),
+      ),
+    );
   }
   return { found, tested, seen };
 };
@@ -1307,14 +1361,21 @@ describe('every written invocation of the pack tools is isolated', () => {
       'an un-isolated invocation is written down: a reader who copies it runs the tool with PYTHONPATH and the user site directory on sys.path, which is F-50',
     ).toStrictEqual([]);
     // ROUND 44: an EXPLICIT timeout, not a weakened assertion. This test reads
-    // every file of the repository and now counts characters twice per line, so
-    // it ran close to vitest's 5 s default and timed out roughly once in four
-    // full-suite runs on this container -- a red that said nothing about the
-    // code under test. I made the counter allocation-free first (the walk's own
-    // test time went from about 4.1 s to about 2.5 s, measured here, three runs
-    // each, and that is a figure about THIS container and nothing else), and
-    // this margin is for the parallel load of a full run. Nothing is skipped:
-    // every assertion above still has to pass.
+    // every file of the repository, and since round 45 it compares the exact
+    // characters each matcher was handed with the characters the raw text
+    // implies -- which is string building, and it costs. Measured on THIS
+    // container, three runs each and a figure about nothing else: about 4.1 s
+    // with the round-44 counter, about 2.5 s once that counter was
+    // allocation-free, about 3.5-6.3 s now that the comparison is by identity.
+    // Against vitest's 5 s default that timed out roughly once in four
+    // full-suite runs -- a red that said nothing about the code under test.
+    //
+    // I kept string equality rather than a rolling digest on purpose: a law
+    // under adversarial review has to be auditable by reading it, a digest
+    // would have traded that for speed this test does not need, and the
+    // refusal can say WHERE the content first diverged. Nothing is skipped:
+    // every assertion above still has to pass, and the budget is for the
+    // parallel load of a full run.
   }, 60_000);
 
   it('proves the scan can see an un-isolated invocation at all', () => {
@@ -1787,24 +1848,54 @@ describe('every written invocation of the pack tools is isolated', () => {
       const lines = logicalLines(text);
       const predicted = rawExpectation(text);
       expect(predicted.lines, `${why}: the raw-derived line count does not predict logicalLines`).toBe(lines.length);
-      expect(predicted.content, `${why}: the raw-derived content count does not predict the characters logicalLines carries`).toBe(
-        lines.reduce((n, l) => n + nonSpaceCount(l.line), 0),
+      expect(predicted.content, `${why}: the raw-derived characters do not predict what logicalLines carries, in order`).toBe(
+        lines.map((l) => nonSpaceOf(l.line)).join(''),
       );
     }
 
-    // And the content refusal as a function over its domain, both directions:
-    // short is a blanked or dropped line, surplus is a matcher nobody counted.
-    for (const n of [0, 1, 2, 97]) {
-      expect(contentRefusal('doc', n, n), `${n} of ${n} characters read is refused`).toBeUndefined();
-      for (const read of [n - 1, n + 1]) {
-        const bad = contentRefusal('doc', read, n);
-        expect(bad, `${read} of ${n} characters read is cleared`).toBeDefined();
-        expect(bad, 'the content refusal does not name itself').toContain(REFUSED_CONTENT_NOT_ALL_READ);
-        expect(bad, 'the content refusal does not carry both counts').toContain(`${read}/${n}`);
-      }
+    // CD-44-01: the content refusal compares CHARACTERS, not how many of them.
+    // Armed over its domain, including the case that defeated round 44 -- a
+    // substitution of the same length.
+    for (const seq of ['', 'a', 'python3-Itools/status-block.py', 'x'.repeat(97)]) {
+      expect(contentRefusal('doc', seq, seq), `identical content is refused: ${seq.slice(0, 20)}`).toBeUndefined();
     }
-    // The live scan reads each line with every matcher, so the expectation is
-    // a multiple and not a sum of guesses: one matcher short reds.
+    for (const [read, expected, why] of [
+      ['axc', 'abc', 'ONE character substituted, same length -- CD-44-01 itself'],
+      ['xxx', 'abc', 'every character substituted, same length'],
+      ['ab', 'abc', 'a character missing'],
+      ['abcd', 'abc', 'a character too many'],
+      ['', 'abc', 'nothing read at all'],
+      ['abc', '', 'read where nothing was expected'],
+    ] as [string, string, string][]) {
+      const bad = contentRefusal('doc', read, expected);
+      expect(bad, `cleared although the content differs: ${why}`).toBeDefined();
+      expect(bad, 'the content refusal does not name itself').toContain(REFUSED_CONTENT_NOT_ALL_READ);
+      expect(bad, 'the content refusal does not carry both lengths').toContain(`${read.length}/${expected.length}`);
+    }
+    expect(contentRefusal('doc', 'axc', 'abc'), 'the refusal does not say where the content first diverged').toContain('divergence at 1');
+
+    // CD-44-02: both invariants go through ONE function, and that function is
+    // armed over its domain -- clean, a matcher missing, a short line count,
+    // substituted content, and a matcher nobody declared.
+    const expectation = { lines: 2, content: 'abc' };
+    expect(invariantOffences('doc', 2, ['abc', 'abc'], expectation), 'a clean document is refused').toStrictEqual([]);
+    expect(invariantOffences('doc', 2, ['abc'], expectation), 'a document only one matcher read is cleared').toHaveLength(1);
+    expect(invariantOffences('doc', 1, ['abc', 'abc'], expectation), 'a short line count is cleared').toHaveLength(1);
+    expect(invariantOffences('doc', 2, ['abc', 'axc'], expectation), 'one matcher reading substituted content is cleared').toHaveLength(1);
+    expect(invariantOffences('doc', 2, ['axc', 'axc'], expectation), 'both matchers reading substituted content is cleared').toHaveLength(2);
+    expect(invariantOffences('doc', 2, ['abc', 'abc', 'abc'], expectation), 'a third matcher nobody declared is cleared').toHaveLength(1);
+    // And its ONE call site in the live scan, counted with an assembled needle:
+    // delete or rename the push and this arm reds.
+    // Needle assembled, and whitespace-insensitive because Prettier decides how
+    // this call wraps: the first version of this arm matched a one-line
+    // spelling and went to 0 the moment the formatter broke the call across
+    // lines, which is a false RED but the same lesson as B-10 -- an in-file
+    // needle must survive the formatter that owns the file.
+    const pushSite = new RegExp(['found\\.push\\(', '\\.\\.\\.invariantOffences\\('].join('\\s*'), 'g');
+    const self = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
+    expect((self.match(pushSite) ?? []).length, 'the live scan no longer reports its own invariants: the guard was deleted or renamed').toBe(1);
+    // Each line is read by every matcher, so a matcher that goes missing is a
+    // refusal rather than a smaller expectation.
     expect(MATCHERS, 'the matcher count changed without this expectation changing with it').toBe(2);
   });
 
