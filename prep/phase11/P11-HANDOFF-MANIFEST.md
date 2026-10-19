@@ -410,8 +410,16 @@ directions, reproduced in this container as `daftar_app`:
 **Answer, in ONE commit:** the clause is DELETED (not repaired — PostgreSQL does
 not expose the subtransaction-to-top-level mapping from SQL, and the `txid`
 predicate plus the RLS `WITH CHECK` already carry everything it was meant to).
-Nine permanent cases, `PA7-S1`…`PA7-S9`, every arm as `daftar_app` with no
-superuser: the savepoint exploit, its top-level isolating control, the zero-row
+Nine permanent cases, `PA7-S1`…`PA7-S9`. **Eight of the nine run as
+`daftar_app` with no superuser in the session. `PA7-S6` is the exception and
+must be**: it is the read-back witness that asserts nothing committed, and a
+witness has to be sighted — run under `daftar_app`, row-level security would
+hide the very rows it exists to prove absent, so an empty read would be
+indistinguishable from a clean state. It runs as the harness default, which is
+`postgres`. The sentence that stood here claimed all nine ran as `daftar_app`,
+which was **false as written** and is corrected rather than reinterpreted; the
+instrument was right and the claim about it was wrong (finding `P3` of the
+eighth round). The nine are: the savepoint exploit, its top-level isolating control, the zero-row
 no-op variant of the same exploit, the lawful savepoint build, the
 `BEGIN ... EXCEPTION` shape, the zero-row statement that records a consenting
 row for free, the rolled-back write that correctly records none, `TRUNCATE`
@@ -431,7 +439,45 @@ Evidence: `RUN-EVIDENCE-AUTHORITATIVE-ROUND7.txt` and
 typecheck figure is quoted as attribution anywhere** — the challenger retracted
 its round-6 attribution and the two-number table is the only gate reference.
 
-**An EIGHTH round is owed**, and **nothing here is self-signed.**
+**The EIGHTH round was run; see §7.8.** Nothing here is self-signed.
+
+---
+
+## 7.8 The EIGHTH independent challenge round (2026-10-19) — `REJECT` on one documentation claim, answered
+
+Narrow on `2bfb6d5..02befb6`. **One finding, documentation only, no code change
+asked for and no re-measurement:** §7.7 above claimed all nine of
+`PA7-S1`…`PA7-S9` ran "as `daftar_app` with no superuser". Eight do; `PA7-S6`
+runs as the harness default and **must**, because it is the read-back witness
+and under `daftar_app` row-level security would hide the rows it exists to
+prove absent. The instrument was right and the sentence was wrong; §7.7 and
+`P11-LIVE-DDL-PROOF.md` §15.2 are corrected in place.
+
+**Answered with one addition of substance**, because the round also named the
+leg §15.3's argument was missing: with the `xmin` filter gone, the RLS
+`WITH CHECK` carries the plant defence alone, and a policy binds a table's
+owner only under `FORCE ROW LEVEL SECURITY`. That leg is now `PA8-O1` in this
+repository's own suite — the same plant refused as `daftar_migrator`, the
+table's owner — so the claim rests on this tree's instrument rather than on a
+report outside it. §16.1 has the three-arm table.
+
+Confirmed by the challenger and recorded in §16.2: `PA7-S5`'s rolled-back
+savepoint (no correct refusal turned into a correct-looking pass), `R7-06`
+tested by **defeating** it (a prepack granting `TRUNCATE` makes the rebuild
+exit 7 with `catalog.migration_end_state_invalid` by name, control exits 0),
+and `M20`'s attribution with the limit as this phase states it. Two residuals
+are named and were not attacked: reaching `COMMIT` with zero ledger rows and
+real state to judge, and ledger growth / `UNLOGGED` / pruning as a denial path.
+§16.3 records one compression of mine — a relay that dropped §15.3's "on the
+unmutated schema" qualifier — which is the same defect as the finding, one
+level down.
+
+Figures: Pack A **116 cases 0 failed on both passes** (the one new case is
+`PA8-O1`), Pack B 53 ×2 0 failed, 9 + 4 races 0 findings, every `EXIT_*` 0.
+The challenger's own two-number gate table at `02befb6` is identical in every
+cell to `2bfb6d5`; no cold figure is quoted as attribution.
+
+**A NINTH round is owed**, and **nothing here is self-signed.**
 `READY_TO_PROMOTE` = **NO**; **no migration number exists**; no CI has executed
 any of it. `OD-P11-07` is the owner's.
 

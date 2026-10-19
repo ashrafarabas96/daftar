@@ -1990,7 +1990,13 @@ is what made the exploit cheap: a no-op supplies the agreeing row for free.
 
 ### 15.2 Both faces, reproduced here before the clause was touched
 
-`PROVEN BY TEST`, every arm as `daftar_app` with no superuser in the session:
+`PROVEN BY TEST`. **Eight of the nine arms run as `daftar_app` with no
+superuser in the session; the ninth, `PA7-S6`, runs as the harness default
+(`postgres`) and must** — it is the read-back witness, and under `daftar_app`
+row-level security would hide the rows it exists to prove absent, making an
+empty read indistinguishable from a clean state. Finding `P3` of the eighth
+round caught the manifest claiming all nine ran as `daftar_app`; the
+instrument was right and the sentence was wrong.
 
 | shape | at `2bfb6d5` | at this head |
 |---|---|---|
@@ -2077,3 +2083,72 @@ cannot be accepted on the strength of its refusals alone.
    (`v_rows = 0`), and that branch is exercised only by `M14`'s neighbourhood,
    not by a shape an application can produce, now that a zero-row statement is
    known to record one.
+
+## 16. The EIGHTH independent challenge: `REJECT` on one DOCUMENTATION claim, and the leg the deletion argument was missing
+
+The eighth round was narrow on `2bfb6d5..02befb6` and rejected the head on
+**one item, with no code change asked for and no re-measurement**: a sentence
+in `P11-HANDOFF-MANIFEST.md` claimed that all nine of `PA7-S1`…`PA7-S9` ran
+"as `daftar_app` with no superuser". **Eight do. `PA7-S6` does not, and must
+not** — it is the read-back witness, and under `daftar_app` row-level security
+would hide the very rows it exists to prove absent, so an empty read would be
+indistinguishable from a clean state. The instrument was right and the claim
+about it was wrong. Both the manifest and §15.2's lead sentence are corrected
+in place rather than reinterpreted.
+
+That is a small finding with a general shape this phase has paid for before: a
+summary sentence that rounds a measured set up to "every". The list was
+accurate case by case; the sentence over it was not, and nothing in the suite
+would ever have caught it, because a document is not an instrument.
+
+### 16.1 The leg the round-7 argument needed — now measured HERE
+
+Deleting the `xmin` filter left the RLS `WITH CHECK (txid =
+pg_current_xact_id())` carrying the plant defence **alone**. §15.3 argued that
+this is sufficient, and the argument was stated as measured "by name as
+`daftar_app`". A policy only binds the table's **owner** when the table is
+`FORCE ROW LEVEL SECURITY`, and that leg was never stated. The challenger
+attacked it three ways and the argument held. It is now also a permanent case
+in this repository's own suite, so it does not rest on a document outside it:
+
+| arm | result |
+|---|---|
+| `PA6-L2` — a future `xid8` planted as `daftar_app` | `new row violates row-level security policy` |
+| **`PA8-O1`** — the same plant as the table's OWNER, `daftar_migrator` | **`new row violates row-level security policy`** |
+| `PA6-L1` — `recorded_identity` supplied by hand as `daftar_app` | `permission denied for table catalog_grid_ctx_ledger` |
+
+`PROVEN BY TEST` on this tree, run in §16.2's figures. The end state already
+asserts `relrowsecurity AND relforcerowsecurity`; `PA8-O1` is what makes that
+assertion mean something behaviourally rather than catalogue-deep.
+
+### 16.2 What the eighth round confirmed, and what it did not attack
+
+Confirmed by the challenger on `02befb6`, measured independently: `PA7-S5`'s
+rolled-back savepoint commits on both arms with rows present afterwards, so
+the deletion turned no correct refusal into a correct-looking pass; `R7-06`'s
+end-state assertion was tested by **defeating** it — a prepack granting
+`TRUNCATE` on one of the four relations makes the rebuild exit 7 with
+`catalog.migration_end_state_invalid` by name, against a control that exits 0;
+and `M20`'s attribution and its stated limit are both correct as this file
+carries them.
+
+**Still not attacked, and named rather than counted** — these are additions to
+§15.5 and neither is a finding:
+
+1. **Reaching `COMMIT` with zero ledger rows and real state to judge.** The
+   challenger's attack set was the zero-row no-op, the rolled-back savepoint
+   and a `DELETE`-only chain, and none of them got there. The `v_rows = 0`
+   branch therefore remains exercised only by `M14`'s neighbourhood.
+2. **Ledger growth, `UNLOGGED`, and pruning as a denial path.** Not attacked
+   this round at all. `MPR-10` carries the decision; nothing here measures the
+   failure mode.
+
+### 16.3 One correction to a relay of mine, which is not a correction to this file
+
+My handoff to the challenger compressed §15.3's sentence about `M20` to "the
+attributing pair is `PA7-S1` against `PA7-S2`" and dropped the qualifier this
+file carries — **"on the unmutated schema, where both are refused."** Without
+that qualifier the sentence reads as though `PA7-S2` measures something under
+`M20`, and under `M20` `PA7-S2` measures a duplicate key. The file was right;
+the one-line summary of it was not. Recorded because it is the same defect as
+the finding above, one level down: the compression, not the measurement.

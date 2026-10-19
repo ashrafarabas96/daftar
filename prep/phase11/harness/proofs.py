@@ -923,6 +923,18 @@ case("PA7-S8 and the exploit built on that free consent -- harmful chain in a sa
 case("PA7-S9 R7-06: TRUNCATE on the governed relations is not granted to the application role, so no write can escape the recorder",
      f"TRUNCATE product_variants;",
      "permission denied for table product_variants", role="daftar_app", pre=rls_a_ctx)
+# The eighth round attacked the plant defence from a direction my own argument
+# needed and had not stated: the ledger's write policy now carries that defence
+# ALONE, and a policy only binds the table's OWNER when the table is FORCE RLS.
+# The challenger measured it as `daftar_migrator`; this is the same arm in this
+# suite, so the claim rests on this repository's own instrument rather than on a
+# document outside it. FORCE ROW LEVEL SECURITY is asserted in the pack's end
+# state; this case is what makes the assertion mean something.
+case("PA8-O1 the plant is refused for the OWNER too, because the ledger is FORCE RLS and a policy binds its owner",
+     "BEGIN;\n"
+     "INSERT INTO catalog_grid_ctx_ledger (txid) VALUES ((pg_current_xact_id()::text::bigint + 7000)::text::xid8);\n"
+     "COMMIT;",
+     "new row violates row-level security policy", role="daftar_migrator", pre=rls_a_ctx)
 case("PA7-S6 and nothing from the two refused savepoint chains committed: no axis of theirs exists and nothing is outside its grid",
      f"SELECT 'sp=' || count(*)::text FROM product_attribute_axes WHERE axis_code IN ('spaxis','spaxisb','tlaxis','tlaxisb','sprb2','zraxis');\n"
      f"""SELECT 'outside=' || count(*)::text FROM product_variants v

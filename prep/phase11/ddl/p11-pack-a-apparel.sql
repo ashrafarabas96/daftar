@@ -1023,8 +1023,12 @@ BEGIN
   -- visible here with `txid = pg_current_xact_id()` can only have been
   -- written by this transaction. Another transaction cannot insert one --
   -- the RLS `WITH CHECK (txid = pg_current_xact_id())` refuses it, measured
-  -- by name as `daftar_app` -- and an uncommitted stranger's row is not
-  -- visible in this snapshot at all. `txid` is `xid8`, epoch-extended, so the
+  -- by name as `daftar_app` AND as the table's OWNER, because the ledger is
+  -- FORCE ROW LEVEL SECURITY and a policy therefore binds its owner too
+  -- (PA6-L2 and PA8-O1; the owner leg is the one this argument needed and did
+  -- not state until the eighth round asked for it, since deleting the `xmin`
+  -- filter left this policy carrying the plant defence alone) -- and an
+  -- uncommitted stranger's row is not visible in this snapshot at all. `txid` is `xid8`, epoch-extended, so the
   -- key does not wrap and there is no 32-bit comparison left to stand alone.
   -- Rows written inside a ROLLED BACK savepoint stay invisible, which is
   -- correct: work that was undone has no identity to answer for.
