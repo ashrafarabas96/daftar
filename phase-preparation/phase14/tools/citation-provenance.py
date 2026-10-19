@@ -69,7 +69,10 @@ ANCHOR = '93084f82b8e36ad49ebb207c0b6e7435d7fcb49f'
 # The scrub stays inside this module's git calls, which are local reads;
 # it is NOT exported to the sweep or to CI, which fetch.
 GIT_ENV = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
-GIT_ENV.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
+# CHALLENGE R21-P2-01, the sibling half: the caller's PATH chose this tool's git
+# too, so the binary is pinned in the same built environment.
+GIT_ENV.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull,
+               PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')
 
 def git(repo, *args):
     return subprocess.run(['git','-C',repo,'--no-replace-objects',*args],

@@ -15,7 +15,7 @@ with no file. --check exits 1 if any cell is stale or any artifact is unlisted,
 which is what the handoff gate runs. The manifest lists the files as they stand
 in the SHARED FOLDER, so --dir defaults there; `--dir .` checks the repo copy.
 """
-import argparse, hashlib, os, re, subprocess, sys
+import argparse, hashlib, os, re, shutil, subprocess, sys
 
 # ROUND-9 CHALLENGE P2-02: the unsigned placeholder used to be sixty-four
 # ZEROS, which is a well-formed digest. One `sed` over a challenge row turned
@@ -226,7 +226,21 @@ def main():
         # full-object-name fetch. GIT_EXEC_PATH is not set in this container, so
         # whether dropping it matters is UNMEASURED and named, not a pass.
         _env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
-        _env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
+        # CHALLENGE R21-P2-01, ruled a P2 and fixed anyway, with the reason
+        # recorded so round 22 does not re-find it: `python3 -I` already stops
+        # the caller's environment supplying this tool's PYTHON, while the same
+        # environment still supplied its GIT. A two-line shim earlier on PATH
+        # that execs the real git with `--git-dir` at a decoy answered rc 0 with
+        # NO refusal where the subject refuses by row; with PATH pinned in this
+        # same dict, both arms refuse. The argument against calling it a P0 is
+        # true -- whoever sets PATH chose the python3 too, so unlike GIT_DIR it
+        # is not something an honest unrelated step exports by accident -- and
+        # the argument for fixing it is that this environment is already BUILT
+        # rather than inherited, so it is one more key in a dict that exists.
+        # Measured: the real pack is unchanged under the pinned PATH, and git
+        # resolves to /usr/bin/git here.
+        _env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull,
+                    PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')
         return subprocess.run(['git','-C',_md,'--no-replace-objects',
                                '-c','core.quotePath=false'] + list(argv),
                               capture_output=True, text=True, env=_env)
@@ -908,6 +922,23 @@ def main():
                              ' silently, so restore the row or record the withdrawal.'
                              % (nm, signed_history[nm][:12]))
             refused.append(nm)
+    # CHALLENGE R21-P3-01: the verdict carried NO provenance -- which is exactly
+    # what made R20-P0-01 invisible, since "27 revisions" and "26 revisions"
+    # were the same exit code and the same sentence one number apart, with
+    # nothing saying which repository had been read. The repository walked, its
+    # git directory and the git binary are now part of the output, so the
+    # questions those rounds turned on are answered in the verdict instead of
+    # in the environment.
+    _ptop = _g('rev-parse','--show-toplevel')
+    _pdir = _g('rev-parse','--absolute-git-dir')
+    _pver = _g('--version')
+    _pwhich = shutil.which('git', path=('/usr/local/sbin:/usr/local/bin:'
+                                       '/usr/sbin:/usr/bin:/sbin:/bin'))
+    print('read: repository %s; git directory %s; %s at %s'
+          % ((_ptop.stdout.strip() or 'NONE (no repository was walked)'),
+             (_pdir.stdout.strip() or 'NONE'),
+             (_pver.stdout.strip() or 'git version UNKNOWN'),
+             (_pwhich or 'git NOT FOUND on the pinned PATH')))
     print('manifest: %d artifact row(s) + the manifest itself; %d file(s) in %s;'
           ' reviewer-row history %s'
           % (len(listed), len(on_disk), a.dir, history))

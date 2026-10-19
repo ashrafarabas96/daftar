@@ -1268,22 +1268,61 @@ fn=$(GIT_DIR="$E20/f/repo/.git" git rev-list HEAD | wc -l | tr -d ' ')
 A20="--manifest $WR/pack/P14-HANDOFF-MANIFEST.md --dir $WR/pack --witness $E20/none --check"
 if [ "$wn" = 4 ] && [ "$fn" = 3 ] && [ "$wn" != "$fn" ]; then
   # At 911f2b1 this arm was rc 0, no refusal, "all 3 revision(s)".
-  named git-dir-decoy-refused 1 "REFUSED: P14-CHALLENGE-test.md" \
+  # CHALLENGE R21-P1-01: `REFUSED: <report>` is the HEADER every refusal about
+  # that report prints, and the reason is in the STALE line beneath it, so a
+  # proof keyed on the header passes for ANY refusal about that file. Both
+  # GIT_DIR arms now require the ROW refusal itself.
+  named git-dir-decoy-refused 1 "REVIEWER ROW REWRITTEN IN HISTORY: P14-CHALLENGE-test.md" \
     "GIT_DIR=$E20/f/repo/.git python3 -I $HERE/manifest-digests.py $A20"
 else
   printf 'FAIL  %-26s premise not built (pack repo walk %s want 4, GIT_DIR walk %s want 3) — nothing was proved\n' \
          git-dir-decoy "$wn" "$fn"
   fail=$((fail+1))
 fi
-# arm two: a RELATIVE GIT_DIR, resolved against the CALLER's cwd (/tmp, which is
-# where `named` runs and holds no repository). The refusal must be the row
-# refusal, not a "not in a git repository" that happens to exit non-zero.
-if [ ! -e /tmp/.git ]; then
-  named git-dir-relative-refused 1 "REFUSED: P14-CHALLENGE-test.md" \
-    "GIT_DIR=.git python3 -I $HERE/manifest-digests.py $A20"
+# arm two, rebuilt after CHALLENGE R21-P1-02: a relative GIT_DIR resolves against
+# the directory `-C` moved to, NOT the caller's cwd -- measured by the challenger
+# with two repositories. The old arm therefore asserted a path (/tmp/.git) that
+# did not decide it, and it passed with the guard deleted. The right form is a
+# STRONGER attack: because resolution is against the manifest's own directory,
+# the decoy can sit INSIDE THE PACK, so the redirection is repository-supplied
+# rather than caller-supplied. Premise as in arm one: the decoy's walk differs
+# from the pack repository's walk.
+DEC="$WR/pack/decoy.git"
+rm -rf "$E20/d"; mkdir -p "$E20/d/pack"
+cp "$WR/pack/P14-HANDOFF-MANIFEST.md" "$WR/pack/P14-CHALLENGE-test.md" "$E20/d/pack/"
+( cd "$E20/d" && git init -q . && git -c user.email=p14@local -c user.name=p14 add -A \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'in-pack decoy 1' \
+  && printf 'in-pack decoy note\n' >> pack/P14-HANDOFF-MANIFEST.md \
+  && git -c user.email=p14@local -c user.name=p14 commit -qam 'in-pack decoy 2' \
+  && printf 'in-pack decoy note 2\n' >> pack/P14-HANDOFF-MANIFEST.md \
+  && git -c user.email=p14@local -c user.name=p14 commit -qam 'in-pack decoy 3' ) >/dev/null 2>&1
+cp -r "$E20/d/.git" "$DEC"
+dn=$(GIT_DIR="$DEC" git rev-list HEAD | wc -l | tr -d ' ')
+if [ "$dn" = 3 ] && [ "$wn" = 4 ]; then
+  # At 911f2b1 this arm was rc 0, no refusal, over the decoy's 3 revisions.
+  named git-dir-in-pack-decoy-refused 1 "REVIEWER ROW REWRITTEN IN HISTORY: P14-CHALLENGE-test.md" \
+    "GIT_DIR=decoy.git python3 -I $HERE/manifest-digests.py $A20"
 else
-  printf 'FAIL  %-26s premise not built (/tmp/.git exists, so a relative GIT_DIR is not pointing at nothing) — nothing was proved\n' \
-         git-dir-relative
+  printf 'FAIL  %-26s premise not built (in-pack decoy walk %s want 3, pack repo walk %s want 4) — nothing was proved\n' \
+         git-dir-in-pack-decoy "$dn" "$wn"
+  fail=$((fail+1))
+fi
+# ---- ROUND 21 (R21-P2-01), ruled a P2 and fixed: `python3 -I` stopped the
+# caller's environment supplying the tool's PYTHON while the same environment
+# still supplied its GIT. A shim earlier on PATH that execs the real git with
+# --git-dir at the decoy answered rc 0 with NO refusal; with PATH pinned in the
+# built environment, the row refusal holds. Premise: the shim really does
+# redirect, i.e. the walk git serves through it differs from the pack's.
+SH="$E20/shim"; mkdir -p "$SH"
+printf '#!/bin/sh\nexec /usr/bin/git --git-dir=%s "$@"\n' "$E20/f/repo/.git" > "$SH/git"
+chmod +x "$SH/git"
+sn=$(PATH="$SH:$PATH" git rev-list HEAD 2>/dev/null | wc -l | tr -d ' ')
+if [ "$sn" = 3 ] && [ "$wn" = 4 ] && [ -x "$SH/git" ]; then
+  named git-binary-shim-refused 1 "REVIEWER ROW REWRITTEN IN HISTORY: P14-CHALLENGE-test.md" \
+    "PATH=$SH:\$PATH python3 -I $HERE/manifest-digests.py $A20"
+else
+  printf 'FAIL  %-26s premise not built (walk through the shim %s want 3, pack repo walk %s want 4) — nothing was proved\n' \
+         git-binary-shim "$sn" "$wn"
   fail=$((fail+1))
 fi
 rm -rf "$E20"

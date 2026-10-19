@@ -42,11 +42,23 @@ redirected or not.
 
 **Two red proofs, one per direction.** `git-dir-decoy-refused` builds W and the decoy, asserts from
 git that the pack repository's walk is 4 and the walk `GIT_DIR` serves is 3 — different, so the
-redirection is really in effect — and then requires the row refusal. `git-dir-relative-refused`
+redirection is really in effect — and then requires the row refusal. ~~`git-dir-relative-refused`
 uses a relative `GIT_DIR` resolved against the caller's working directory, asserts that nothing is
 there, and requires **the row refusal specifically**, because at `911f2b1` that arm already exited
-non-zero for a reason that had nothing to do with the forgery. A refusal naming a cause that is not
-the cause is a defect this pack has named eight times; it is not acceptable as a defence.
+non-zero for a reason that had nothing to do with the forgery.~~ A refusal naming a cause that is
+not the cause is a defect this pack has named eight times; it is not acceptable as a defence.
+
+**RETRACTED IN ROUND 21 (`R21-P1-01` and `R21-P1-02`), and it was the arm this sentence was proud
+of.** Two things were wrong. Both proofs required `REFUSED: P14-CHALLENGE-test.md`, which is the
+**header** every refusal about that report prints, not the row refusal — so with the scrub deleted
+the relative arm stayed green, refusing for an unrelated reason, and the sweep printed exactly one
+FAIL where it should have printed two. And a relative `GIT_DIR` resolves against the directory
+`-C` moved to, **not** the caller's working directory, so the premise that arm asserted
+(`/tmp/.git` does not exist) did not decide it. Corrected in
+`P14-AMENDMENT-27-CHALLENGE-ROUND-21.md`: both arms now require
+`REVIEWER ROW REWRITTEN IN HISTORY: …`, and the relative arm is rebuilt as the stronger attack the
+resolution rule actually allows — a decoy **inside the pack**, so the redirection is
+repository-supplied rather than caller-supplied.
 
 **One cost, measured, stated rather than discovered later.** This container exports **eleven**
 `GIT_*` variables, among them `GIT_CONFIG_COUNT=3` (a `url.insteadOf` rewrite and
