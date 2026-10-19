@@ -107,10 +107,23 @@ Taken after the last write to any document of this round, which is the manifest 
 18's rule, **no count of the manifest's own revisions is quoted here**; that figure is measured in
 a fresh clone of the pushed head and reported to the reviewers.
 
-* `tools/gate-sweep.sh` — rc 0, **79 ok**, `0 gate(s)/proof(s) not as required`, from four working
-  directories, with the cluster up. 78 at `32017cf`; the one added is `sibling-unrunnable-refused`.
-* `tools/manifest-digests.py --check` — rc 0 in both lanes, 72 artifact rows + the manifest,
-  72 files, **1 revision found by the marker**.
+* `tools/gate-sweep.sh` — ~~rc 0, **79 ok**, `0 gate(s)/proof(s) not as required`, from four
+  working directories, with the cluster up~~ — **STRUCK in
+  `P14-AMENDMENT-31-CHALLENGE-ROUND-25.md` on the reviewer's `R25-P2-01` and `R25-P3-02`, and
+  enforced as retracted claim 28.** The figure was true when it was taken and it is **not
+  reproducible at this head**, which is what this section claims for it. The sweep's
+  `manifest-shared` lane reads `/mnt/project-files/phase14`, a folder every session in this project
+  writes; the coordinator's review of `32017cf` was written there at **09:08:24 UTC**, after this
+  measurement and before the push, and from that moment the sweep answers **rc 1, 78 ok, `1
+  gate(s)/proof(s) not as required`** at this same head, `manifest-shared` FAILing `STALE:
+  P14-COORD-DIFF-REVIEW-32017cf.md: ARTIFACT WITH NO ROW`. The reproducible figure for a SHA is the
+  clone-pinned lane in the next bullet. 78 ok at `32017cf`; the one added this round is
+  `sibling-unrunnable-refused`, and that arm and its deletion row do reproduce.
+* `tools/manifest-digests.py --check` — rc 0 ~~in both lanes~~ **in the clone-pinned lane**
+  (`--dir` pointed at the pack inside a clone of this head), 72 artifact rows + the manifest,
+  72 files, **1 revision found by the marker**. *"Both lanes" is struck for the same cause:* the
+  default-`--dir` lane reads the shared folder, and from 09:08:24 UTC it answers 73 files there
+  against 72 rows. The row and file counts above are the clone-pinned figures and they reproduce.
 * `tools/citation-provenance.py` — rc 0, and `--check P14-MIGRATION-PATCH-REQUEST.md` rc 0.
 * `tools/retracted-claims.py` — rc 0, 27 claims across 40 pack documents.
 * repository `npm run format` — rc 0, reported as a statement about the repository: by §3 this

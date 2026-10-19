@@ -18,7 +18,14 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd); PACK=$(dirname "$HERE")
 REPO=$(git -C "$PACK" rev-parse --show-toplevel)
 DOC="$PACK/P14-MIGRATION-PATCH-REQUEST.md"
-SHARED=/mnt/project-files/phase14
+# CHALLENGE R25-P3-02 (the reviewer's): this path is the project's SHARED pack
+# folder, written by every session in this project, so no lane that reads it is
+# a property of any commit. It stays in the sweep -- a stale mirror is worth
+# knowing about -- but it is counted apart, below, and it is overridable so that
+# the separation itself can be measured. The override hides nothing: `offrepo`
+# prints the directory it read, its file count and its newest mtime on every
+# run, beside the outcome.
+SHARED=${P14_SHARED:-/mnt/project-files/phase14}
 NODB=0; [ "${1:-}" = --no-db ] && NODB=1
 fail=0
 
@@ -132,6 +139,62 @@ gate() { # name | command (absolute paths only)
   esac
 }
 
+# CHALLENGE R25-P3-02, measured by the reviewer and not inferred: `manifest-shared`
+# ran as a counted gate, so this sweep's `ok` count and its exit code were not
+# properties of any commit. Amendment 30 section 5 published rc 0 / 79 ok for a
+# head, truly; about twenty minutes later, with the commit unchanged, the same
+# sweep at the same head answered rc 1 / 78 ok, because another session had
+# written a file into the shared folder. A figure a reviewer cannot reproduce
+# from the SHA is the thing this lane exists to prevent.
+#
+# So a lane whose subject is a directory outside this repository runs here
+# instead. It is NOT weaker: it runs the same command from the same four
+# directories, it prints the same exit codes with their paths, and a difference
+# still moves this script's exit code, so nothing can read a green rc while the
+# mirror is stale. What changes is the ARITHMETIC a reader may quote for a SHA:
+# this lane never touches `fail` and never prints `ok`, it prints `obs`, and the
+# directory it read, that directory's file count and its newest mtime go on the
+# line above the outcome -- because an observation of a folder is only a fact
+# with the instant it was taken.
+offrepo_fail=0
+offrepo() { # name | directory read (not a property of any SHA) | command
+  local name="$1" subj="$2"; shift 2
+  local first="" rc d o out1="" nfiles newest
+  nfiles=$(find "$subj" -maxdepth 1 -type f 2>/dev/null | wc -l)
+  newest=$(find "$subj" -maxdepth 1 -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -1)
+  [ -n "$newest" ] && newest=$(date -u -d "@${newest%.*}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  printf 'read  %-26s %s — %s file(s), newest %s, read at %s\n' \
+         "$name" "$subj" "${nfiles:-?}" "${newest:-<none>}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for d in $DIRS; do
+    o=$( cd "$d" && eval "$@" 2>&1 ); rc=$?
+    if [ -z "$out1" ]; then
+      out1=$(printf '%s' "$o" | grep -m1 -E 'Permission denied|No such file|command not found|CAUSE:|[Ee]rror:|ERROR|could not' | cut -c1-120)
+      [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 -E 'FAIL|STALE|CONFIGURATION ERROR|MEASUREMENT|ABORTED' | cut -c1-120)
+      [ -z "$out1" ] && out1=$(printf '%s' "$o" | grep -m1 . | cut -c1-120)
+    fi
+    printf '      %-3s %s\n' "$rc" "$d"
+    if [ -z "$first" ]; then first=$rc
+    elif [ "$rc" != "$first" ]; then
+      printf 'OFF-REPO-DIFFERS %-13s rc=%s from one directory and rc=%s from %s — and this lane is\n' \
+             "$name" "$first" "$rc" "$d"
+      printf '      read from four directories like every other, so that is still a defect\n'
+      first="$rc!"
+    fi
+  done
+  case "$first" in
+    *'!'*) offrepo_fail=$((offrepo_fail+1)) ;;
+    0) printf 'obs   %-26s rc=0 identical from %s directories — an observation of the directory\n' \
+              "$name" "$NDIRS"
+       printf '      above at the instant above, NOT a verdict about this or any commit\n' ;;
+    *) printf 'OFF-REPO-DIFFERS %-13s rc=%s identical from %s directories — the directory above does\n' \
+              "$name" "$first" "$NDIRS"
+       printf '      not match this tree. Fail-closed, it moves this script exit code, and it is\n'
+       printf '      NOT counted in the gate figure a reader may quote for this commit\n'
+       printf '      first line: %s\n' "${out1:-<no output>}"
+       offrepo_fail=$((offrepo_fail+1)) ;;
+  esac
+}
+
 printf '== every gate, from %s working directories\n' "$NDIRS"
 printf '   pack=%s\n   repo=%s\n   worktree=%s\n   host=%s  date=%s\n' \
        "$PACK" "$REPO" "${WT2:-<none>}" "$(hostname)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -160,7 +223,7 @@ fi
 # prove it prints the limit.
 gate citation-provenance "python3 -I $HERE/citation-provenance.py --check $DOC"
 gate manifest-digests    "python3 -I $HERE/manifest-digests.py --dir $PACK --check"
-gate manifest-shared     "python3 -I $HERE/manifest-digests.py --dir $SHARED --check"
+offrepo manifest-shared "$SHARED" "python3 -I $HERE/manifest-digests.py --dir $SHARED --check"
 gate retracted-claims    "python3 -I $HERE/retracted-claims.py --pack $PACK --check"
 # R12-P2-02's lesson applied to this run's ENTRY condition, after two sweeps
 # answered 1 on both DB lanes with "Connection refused" and no attribution: the
@@ -1583,5 +1646,9 @@ fi
 [ -n "$WT2" ] && git -C "$REPO" worktree remove --force "$WT2" >/dev/null 2>&1
 rm -rf "$WT"
 
-echo "== $fail gate(s)/proof(s) not as required"
-[ "$fail" -eq 0 ] || exit 1
+echo "== $fail gate(s)/proof(s) not as required — this figure and the ok lines above are"
+echo "==    reproducible from this commit alone, and it is the one to quote for a SHA"
+echo "== $offrepo_fail off-repository lane(s) differ — see the read line(s) above: that is a"
+echo "==    statement about a directory at the instant it was read, not about any commit,"
+echo "==    and it is NOT included in the figure on the two lines above"
+[ "$fail" -eq 0 ] && [ "$offrepo_fail" -eq 0 ] || exit 1
