@@ -937,16 +937,18 @@ const BARE_PATH = new RegExp(String.raw`(?:^|&&|\||;)\s*(?:[$>#]\s+)?((?:[A-Za-z
  * expectation is read from the RAW TEXT, never from `logicalLines`:
  *
  *   - `rawExpectation` splits the text itself and derives, with no help from
- *     `logicalLines`, how many logical lines it must produce and WHICH
- *     non-whitespace characters those lines must carry, in order. The
- *     continuation joiner conserves non-whitespace characters except the one
- *     backslash it consumes per join, which is why that backslash is dropped
- *     where it is consumed. Both are measured AGAINST `logicalLines` over
- *     every shape that makes the joiner do something, so the derivation cannot
- *     drift from the function it predicts.
+ *     `logicalLines`, how many logical lines it must produce and EXACTLY which
+ *     characters those lines must carry, in order, WHITESPACE INCLUDED. It
+ *     normalises only what the join rule itself defines, and the three things
+ *     it defines are written out at the function: a trailing CR is dropped
+ *     from each raw line, a trailing continuation backslash and the whitespace
+ *     after it become one space, and a line carried into the one above it is
+ *     trimmed at both ends. Nothing else is touched. All of it is measured
+ *     AGAINST `logicalLines` over every shape that makes the joiner do
+ *     something, so the derivation cannot drift from the function it predicts.
  *   - `matchesOf` is the only way a matcher is applied, and it records the
- *     non-whitespace characters of the very string it matches -- one argument,
- *     so there is no recording one string and matching another without editing
+ *     very string it matches, character for character -- one argument, so
+ *     there is no recording one string and matching another without editing
  *     this function, which is a visible change to the instrument and not a
  *     skip.
  *
@@ -957,18 +959,34 @@ const BARE_PATH = new RegExp(String.raw`(?:^|&&|\||;)\s*(?:[$>#]\s+)?((?:[A-Za-z
  * equal and hid the offence. A blanked line, a dropped line, a substituted
  * line and a matcher that went missing are all differences now; a matcher
  * nobody declared is a surplus, because the test is equality.
+ *
+ * ROUND 47, THE COORDINATOR'S CD-46-01 (P1, A FAIL-OPEN), is why that identity
+ * is over EVERY character and not over a projection of them. Round 45 recorded
+ * and expected `nonSpaceOf(...)`, the non-whitespace characters alone, while
+ * `INVOCATION` depends on the whitespace between the interpreter and the tool.
+ * So `matchesOf(/f-51-quote/.test(line) ? line.replace(/\s+/g, '') : line,
+ * INVOCATION)` on the live path changed the MATCH OUTCOME while leaving the
+ * RECORDED string identical: the planted un-isolated command went unreported
+ * at 23 passed. I reproduced it before changing anything. CD-44-01 said a
+ * quantity is not an identity; CD-46-01 is the same sentence one step further
+ * -- a PROJECTION is not an identity either, and any projection is defeated by
+ * a change confined to its complement. There is no projection here now, which
+ * is why `nonSpaceOf` survives only inside the arm that proves the old one
+ * would have cleared these attacks.
  */
 /**
  * The non-whitespace characters of a string, in order.
  *
- * ROUND 45, THE COORDINATOR'S CD-44-01 (P1, A FAIL-OPEN): round 44 compared
- * HOW MANY characters the matchers read, not WHICH. A count-preserving
- * substitution -- `line.replace(/\S/g, 'x')` on the planted line, written
- * either into the matcher's input or into `logicalLines`' own `out.push` --
- * left every number identical and hid the offence at 23 passed. I reproduced
- * both spellings before changing anything. A quantity is not an identity, and
- * this is the same mistake as counting lines reached instead of content read,
- * one level down.
+ * THIS IS NOT PART OF THE LAW, and it must not go back into it. Round 45
+ * recorded and expected this projection, and the coordinator's CD-46-01 (P1, a
+ * fail-open) defeated it with an edit confined to the projection's complement:
+ * collapsing the whitespace of the planted line changed what `INVOCATION`
+ * matched and left this value identical, so the offence went unreported at 23
+ * passed. It survives for exactly one purpose: the arm below hands the
+ * collapsed and the whitespace-inserted spellings to `invariantOffences` and
+ * shows BOTH that they red now and that their projections are equal to the
+ * expectation's -- which is the measurement that the round-45 law cleared
+ * them. Using it in `matchesOf` or `rawExpectation` reopens CD-46-01.
  */
 const nonSpaceOf = (s: string): string => s.replace(/\s+/g, '');
 
@@ -977,22 +995,42 @@ const MATCHERS = 2;
 
 /**
  * What `logicalLines` must produce for this text, derived from the RAW TEXT
- * alone: the number of logical lines, and the non-whitespace characters they
- * must carry between them.
+ * alone: the number of logical lines, and EXACTLY the characters they must
+ * carry between them, in order, whitespace included.
+ *
+ * CD-46-01: the only normalisation here is the normalisation the join rule
+ * itself performs, and the join rule performs three things and no others --
+ *
+ *   1. a trailing CR is dropped from each raw line (and only a TRAILING one: a
+ *      CR in the middle of a line is content, and `logicalLines` keeps it);
+ *   2. a trailing continuation backslash, with whatever whitespace follows it,
+ *      becomes exactly ONE SPACE, because that is what the joiner substitutes;
+ *   3. a raw line CARRIED into the one above it is trimmed at both ends,
+ *      because the joiner appends it trimmed.
+ *
+ * Every other character, space and tab included, is reproduced as it stands.
+ * Anything beyond those three would be a projection, and a projection is what
+ * CD-46-01 walked through.
  */
 const rawExpectation = (text: string): { lines: number; content: string } => {
-  const raw = text.replace(/\r/g, '').split('\n');
+  const raw = text.split('\n').map((l) => l.replace(/\r$/, ''));
   let lines = 0;
   const parts: string[] = [];
   for (let i = 0; i < raw.length; i += 1) {
     const self = raw[i] ?? '';
     // A raw line is swallowed by the one before it exactly when that one ends
-    // in a continuation backslash -- which chains, and needs no state.
-    if (i === 0 || !/\\$/.test((raw[i - 1] ?? '').trim())) lines += 1;
-    // The joiner eats exactly one backslash per join: this line's own, when a
-    // next line exists to be carried into it.
-    const consumed = i + 1 < raw.length && /\\$/.test(self.trim());
-    parts.push(nonSpaceOf(consumed ? self.trim().replace(/\\$/, '') : self));
+    // in a continuation backslash -- which chains, and needs no state. The
+    // joiner's own test tolerates whitespace after the backslash, so this one
+    // does too, and the answer does not depend on trimming either side.
+    const carried = i > 0 && /\\\s*$/.test(raw[i - 1] ?? '');
+    if (!carried) lines += 1;
+    // What the joiner has in hand for this raw line: trimmed if it was carried
+    // in, as it stands if it opened the logical line.
+    const own = carried ? self.trim() : self;
+    // The joiner eats exactly one backslash per join -- this line's own, and
+    // only when a next line exists to be carried into it -- and leaves a
+    // single space in its place.
+    parts.push(i + 1 < raw.length && /\\\s*$/.test(own) ? own.replace(/\\\s*$/, ' ') : own);
   }
   return { lines, content: parts.join('') };
 };
@@ -1178,17 +1216,23 @@ const FENCE = /^\s*```/;
  * historical fixture. The live scan passes false and exempts nothing.
  */
 /**
- * The ONLY way a matcher is applied to a line, and the thing that counts what
- * was read: one argument, so the string counted IS the string matched.
+ * The ONLY way a matcher is applied to a line, and the thing that records what
+ * was read: one argument, so the string recorded IS the string matched.
  * F-73 (A) -- feeding the matcher a blanked copy of the line while the line
  * counter still ran -- is not expressible through this function without
  * editing the function.
+ *
+ * CD-46-01: `s` is recorded VERBATIM. Recording any function of it, however
+ * innocent -- and `nonSpaceOf` was the innocent one -- makes every edit inside
+ * that function's kernel invisible here while the matcher, which reads the
+ * whole string, behaves differently. The recorded string must be the matched
+ * string, not a summary of it.
  */
 let reads = new Map<RegExp, string[]>();
 const matchesOf = (s: string, re: RegExp): RegExpMatchArray[] => {
   const seen = reads.get(re);
-  if (seen === undefined) reads.set(re, [nonSpaceOf(s)]);
-  else seen.push(nonSpaceOf(s));
+  if (seen === undefined) reads.set(re, [s]);
+  else seen.push(s);
   return [...s.matchAll(re)];
 };
 
@@ -1222,13 +1266,20 @@ const matchesOf = (s: string, re: RegExp): RegExpMatchArray[] => {
  * WHAT THIS LAW MEASURES, exactly:
  *   - `tested` against `rawExpectation(text).lines`: every logical line the
  *     RAW TEXT implies is reached by the matchers.
- *   - the characters each matcher was handed, compared for IDENTITY with the
- *     characters the raw text says it must see, in order.
+ *   - EVERY character each matcher was handed, whitespace included, compared
+ *     for IDENTITY with the characters the raw text says it must see, in
+ *     order, with no projection of either side.
  *   - the number of matchers that read the document.
  * So content WITHHELD from a matcher is caught, and so is content DISGUISED on
  * the way to it -- a reversal or a same-length substitution moves the sequence
- * even though it moves no count, which is F-74/CD-44-01 and the reason this is
- * an identity and not a quantity.
+ * even though it moves no count (F-74/CD-44-01, why this is an identity and
+ * not a quantity), and collapsing or inserting whitespace moves the sequence
+ * even though it moves no non-whitespace character (CD-46-01, why the identity
+ * is over every character and not over the non-whitespace ones). What makes
+ * that second sentence a measurement and not a hope is the arm that hands both
+ * whitespace spellings to `invariantOffences` and asserts that their
+ * non-whitespace projections are EQUAL to the expectation's: the attack that
+ * walked through round 45 reds here, and it is the attack and not a cousin.
  *
  * WHAT IT DOES NOT MEASURE, and this is the whole of the list: a skip whose
  * predicate NO scanned line satisfies, which hides nothing until a document
@@ -1605,7 +1656,11 @@ describe('every written invocation of the pack tools is isolated', () => {
     // on `f-51-quote`, and a deleted name re-declared as a function rather
     // than as a `const` binding, which is the only form these needles read).
     // The guard is the CONSERVATION LAW in the test below, which is derived
-    // from execution and reds on any skip under any name.
+    // from execution. CD-46-02 (P3): this sentence used to end "and reds on
+    // any skip under any name", which the law's own statement had already
+    // recorded as MEASURED FALSE -- a skip whose predicate no scanned line
+    // satisfies hides nothing but reds nothing either. What the law measures,
+    // and the one thing it does not, is written out where it is defined.
     const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
     const liveNeedle = ['scanLines(label,', 'text,', 'false,'].join(' ');
     expect(here.split(liveNeedle).length - 1, 'the live callers passing false are not the two counted here: a third scan has appeared').toBe(2);
@@ -1777,10 +1832,13 @@ describe('every written invocation of the pack tools is isolated', () => {
     //
     //   - every logical line the RAW TEXT implies is reached by the matchers
     //     (`tested` against `rawExpectation(text).lines`), and
-    //   - every non-whitespace character of those lines is READ by each of the
-    //     `MATCHERS` matchers (`contentRead` against `MATCHERS *
-    //     rawExpectation(text).content`), counted inside `matchesOf`, which is
-    //     the only way a matcher is applied.
+    //   - each of the `MATCHERS` matchers was handed EXACTLY the characters
+    //     those lines carry, whitespace included, in order -- the strings
+    //     recorded verbatim inside `matchesOf`, which is the only way a
+    //     matcher is applied, compared for identity with
+    //     `rawExpectation(text).content`. CD-46-01: it was the non-whitespace
+    //     characters here until round 47, and a whitespace-only disguise
+    //     walked through the gap.
     //
     // What that leaves UNMEASURED is stated below and unchanged: a skip whose
     // predicate no scanned line satisfies.
@@ -1883,12 +1941,22 @@ describe('every written invocation of the pack tools is isolated', () => {
       ['CRLF throughout', 'a\r\nb \\\r\n    c\r\n'],
       ['two backslashes', 'a \\\\\nb'],
       ['nothing but newlines', '\n\n\n'],
+      // CD-46-01's shapes: now that the expectation carries whitespace, every
+      // place the joiner touches whitespace has to be predicted exactly, and
+      // every place it does not has to be left alone exactly.
+      ['leading and trailing spaces, no join', '   a   \n  b  '],
+      ['tabs and runs of spaces', '\ta  \t b\t\n   \t'],
+      ['whitespace after the continuation backslash', 'a \\   \n   b   '],
+      ['a continuation with nothing before the backslash', '\\\nb'],
+      ['a CR in the MIDDLE of a line, which is content', 'a\rb\nc'],
+      ['a line that is only whitespace', 'a\n   \t  \nb'],
+      ['a chain whose carried lines are indented', 'a \\\n    b \\\n\t\tc'],
     ] as [string, string][]) {
       const lines = logicalLines(text);
       const predicted = rawExpectation(text);
       expect(predicted.lines, `${why}: the raw-derived line count does not predict logicalLines`).toBe(lines.length);
       expect(predicted.content, `${why}: the raw-derived characters do not predict what logicalLines carries, in order`).toBe(
-        lines.map((l) => nonSpaceOf(l.line)).join(''),
+        lines.map((l) => l.line).join(''),
       );
     }
 
@@ -1923,6 +1991,36 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(invariantOffences('doc', 2, ['abc', 'axc'], expectation), 'one matcher reading substituted content is cleared').toHaveLength(1);
     expect(invariantOffences('doc', 2, ['axc', 'axc'], expectation), 'both matchers reading substituted content is cleared').toHaveLength(2);
     expect(invariantOffences('doc', 2, ['abc', 'abc', 'abc'], expectation), 'a third matcher nobody declared is cleared').toHaveLength(1);
+
+    // CD-46-01 (P1, A FAIL-OPEN), THE COORDINATOR'S: round 45 recorded and
+    // expected the NON-WHITESPACE characters, and `INVOCATION` depends on the
+    // whitespace between the interpreter and the tool -- so an edit confined
+    // to the whitespace changed what matched while leaving the record
+    // identical, and the planted un-isolated command went unreported at 23
+    // passed. Reproduced in this container before anything changed.
+    //
+    // Armed as the two spellings of that attack, in both directions: COLLAPSE
+    // the whitespace away, and INSERT whitespace that was never there. Each
+    // must red by name AND must have the same non-whitespace projection as the
+    // expectation -- that second assertion is what makes this arm a
+    // measurement rather than a hope, because it shows the round-45 law
+    // CLEARED these exact strings. If a projection is ever put back into
+    // `matchesOf` or `rawExpectation`, these two go green and say so.
+    const wsText = 'python3 -I tools/status-block.py --dir d\n  two  spaces\there\t\n';
+    const wsExpected = rawExpectation(wsText);
+    expect(wsExpected.content, 'the whitespace fixture carries no whitespace, so this arm measures nothing').toMatch(/\s/);
+    for (const [why, read] of [
+      ['whitespace collapsed away', nonSpaceOf(wsExpected.content)],
+      ['whitespace inserted where there was none', wsExpected.content.replace(/python3/g, 'python3 ')],
+    ] as [string, string][]) {
+      expect(read, `${why}: the attack did not change the string at all`).not.toBe(wsExpected.content);
+      expect(nonSpaceOf(read), `${why}: the attack is visible to the round-45 projection, so it is not the attack that defeated it`).toBe(
+        nonSpaceOf(wsExpected.content),
+      );
+      const offences = invariantOffences('doc', wsExpected.lines, [read, wsExpected.content], wsExpected);
+      expect(offences, `${why}: cleared, so the whitespace of the string a matcher read is not measured -- CD-46-01 is open again`).toHaveLength(1);
+      expect(offences[0], `${why}: the refusal does not name itself`).toContain(REFUSED_CONTENT_NOT_ALL_READ);
+    }
     // And its ONE call site in the live scan, counted with an assembled needle:
     // delete or rename the push and this arm reds.
     // Needle assembled, and whitespace-insensitive because Prettier decides how

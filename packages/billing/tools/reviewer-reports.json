@@ -41,7 +41,8 @@
     "P5-CHALLENGE-4b8ebe6.md",
     "P5-CHALLENGE-121aaeb.md",
     "P5-COORD-DIFF-REVIEW-71f88d2.md",
-    "P5-CHALLENGE-71f88d2.md"
+    "P5-CHALLENGE-71f88d2.md",
+    "P5-COORD-DIFF-REVIEW-c01f57c.md"
   ],
   "_looks_like_reviewer_is_for_MESSAGES_and_detection_only": "ROUND 30, the challenger's F-53 (P2). This pattern must NEVER decide an exemption — that is B-10, and `reviewer_reports` above is the only thing that exempts. It decides WORDING: a file whose name has this shape but is absent from the list is an UNENUMERATED reviewer report, not an author-owned document, and telling the author to edit it routes them to the one repair the pack forbids for a reviewer's frozen bytes. Both instruments read this one pattern so the two messages cannot drift apart.",
   "looks_like_reviewer": "^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-fA-F]{6,40}(-[A-Za-z0-9]+)?\\.md$",
