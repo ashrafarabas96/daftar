@@ -1,0 +1,7 @@
+{
+  "_what_this_is": "The external pin on the law's own bytes. ROUND 49, the coordinator's CD-48-01 (P1, a one-path fail-open): every guard inside the law was still a check written inside the thing it checks, and the caller decided whether the audit ran at all. The regress does not terminate inside those files, so it terminates here: a sha256 per file, held OUTSIDE them, checked by test/law-bytes-are-pinned.test.ts with its own reader and no shared code, and by the law itself from the other side, so the two files pin each other. Any edit to the law in any path changes a digest here and is refused by name (LAW-BYTES-MOVED). THE DECLARED LIMIT: an edit to the law AND to this pin together passes, and is bounded only by review of the diff, where it is a changed digest sitting beside the change it licenses. Updating a digest here is a deliberate act with a visible diff line, and the commit message must say why.",
+  "pinned": {
+    "test/tool-commands-are-isolated.test.ts": "7ba5d1dcfdb9fc902a07b85533b0ae320e7da2864d454661312a6d136a068ebf",
+    "test/law-bytes-are-pinned.test.ts": "22dc563ca06c8d7e42c6a7b9c007487270b7ed77d567bf15ec79e611ad13b5b5"
+  }
+}

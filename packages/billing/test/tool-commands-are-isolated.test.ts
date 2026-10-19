@@ -67,6 +67,7 @@
  * stripping comments would strip the defect.
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -1015,9 +1016,11 @@ const MATCHERS = 2;
  * A trailing `\\` is an ESCAPED BACKSLASH, not a continuation. So a line
  * continues exactly when its trailing backslash run is ODD, which is what the
  * shell does and what the joiner's own one-backslash substitution assumes. The
- * same predicate decides both sides, so the parity cannot be read one way by
- * the function and the other way by its expectation. I reproduced the drift
- * and then ran a 300,000-case fuzz over pieces built from backslash runs of
+ * ROUND 49, F-79, the challenger's: `rawExpectation` used to CALL this
+ * predicate, so a one-line edit here moved the joiner and its own expectation
+ * together and passed every pinned example. It counts the run itself now, and
+ * an edit here is caught as a DISAGREEMENT between the two. I reproduced the
+ * original drift and then ran a 300,000-case fuzz over pieces built from backslash runs of
  * one, two and three, blank lines, tabs, runs of spaces and bare CRs: 197
  * mismatches before, 0 after, and the fuzz is kept as an arm.
  */
@@ -1031,53 +1034,85 @@ const continuesLine = (s: string): boolean => {
  * alone: the number of logical lines, and EXACTLY the characters they must
  * carry between them, in order, whitespace included.
  *
- * CD-46-01: the only normalisation here is the normalisation the join rule
- * itself performs, and the join rule performs three things and no others --
+ * ROUND 49, F-80, the challenger's, and it is the second time this derivation
+ * was WRONG rather than merely weak. It read each raw line's OWN ending and
+ * decided from that whether the next line was swallowed. The joiner does not
+ * work that way: it re-tests the LINE IT HAS BUILT, and a join can leave a
+ * backslash at the end of it. A backslash, a space, a backslash and two
+ * newlines joins TWICE and yields ONE logical line holding one space, where
+ * this derivation predicted two lines carrying the backslash. Exactly three
+ * strings of length five diverge, measured -- the same shape with a space, a
+ * TAB and a CR in the middle -- and the previous round's "exhaustive" arm
+ * stopped at length FOUR, so the bound I stated was true and the agreement a
+ * reader would take from it was not. The arm below runs to length SEVEN now,
+ * 335,923 strings, and the bound it states is the bound it ran.
  *
- *   1. a trailing CR is dropped from each raw line (and only a TRAILING one: a
- *      CR in the middle of a line is content, and `logicalLines` keeps it);
- *   2. a trailing CONTINUATION backslash, with whatever whitespace follows it,
- *      becomes exactly ONE SPACE, because that is what the joiner substitutes
- *      -- and "continuation" means an ODD trailing backslash run, since `\\`
- *      is an escaped backslash. CD-47-02: both sides used to test for ANY
- *      trailing backslash, which made the joiner consume one and RE-CHAIN on
- *      the residue, so this list was NOT exhaustive and my sentence that the
- *      derivation "cannot drift" was false. See `continuesLine`;
- *   3. a raw line CARRIED into the one above it is trimmed at both ends,
- *      because the joiner appends it trimmed.
+ * So this is a CHARACTER MACHINE over the whole text, and it is deliberately a
+ * different implementation from the joiner it predicts: no split on newline,
+ * no array of raw lines, its own parity count, and -- F-79 -- no call to
+ * `continuesLine`. A predictor that called the same predicate moved with it.
+ * The RULE is shared, because a predictor of some other rule would prove
+ * nothing; the CODE is not.
+ *
+ * The rule, which is the joiner's and nothing besides --
+ *
+ *   1. a trailing CR is dropped where a raw line ends (and only a TRAILING
+ *      one: a CR inside a line is content, and `logicalLines` keeps it);
+ *   2. the line BUILT SO FAR continues when its trailing backslash run,
+ *      looking past whitespace, is ODD -- a doubled backslash is an escaped
+ *      backslash and not a continuation (CD-47-02) -- and that last backslash,
+ *      with the whitespace after it, becomes exactly ONE SPACE;
+ *   3. a raw line carried into the one above it arrives trimmed at both ends;
+ *   4. and rule 2 is then applied AGAIN to the result, which is F-80.
  *
  * Every other character, space and tab included, is reproduced as it stands.
- * Anything beyond those three would be a projection, and a projection is what
+ * Anything beyond those four would be a projection, and a projection is what
  * CD-46-01 walked through.
  *
- * "Three things and no others" is a claim about a function, so it is tested as
- * one: the fuzz arm generates documents out of backslash runs of one, two and
- * three, blank lines, tabs, runs of spaces and bare CRs, and requires this
- * derivation to predict `logicalLines` exactly on every case. It was 197
- * mismatches in 300,000 before CD-47-02 and 0 after. If a fourth normalisation
- * is ever added to the joiner and not to this list, that arm is what says so.
+ * "Four things and no others" is a claim about a function, so it is tested as
+ * one: the exhaustive arm compares this derivation against `logicalLines` on
+ * every string of length 0 to 7 over the six characters that matter, and the
+ * seeded fuzz adds longer documents with its corpus coverage counted. It was
+ * 197 mismatches in 300,000 before CD-47-02, 0 after, and 3 in 9,331 at length
+ * five before F-80.
  */
 const rawExpectation = (text: string): { lines: number; content: string } => {
-  const raw = text.split('\n').map((l) => l.replace(/\r$/, ''));
-  let lines = 0;
-  const parts: string[] = [];
-  for (let i = 0; i < raw.length; i += 1) {
-    const self = raw[i] ?? '';
-    // A raw line is swallowed by the one before it exactly when that one ends
-    // in a continuation backslash -- which chains, and needs no state. The
-    // joiner's own test tolerates whitespace after the backslash, so this one
-    // does too, and the answer does not depend on trimming either side.
-    const carried = i > 0 && continuesLine(raw[i - 1] ?? '');
-    if (!carried) lines += 1;
-    // What the joiner has in hand for this raw line: trimmed if it was carried
-    // in, as it stands if it opened the logical line.
-    const own = carried ? self.trim() : self;
-    // The joiner eats exactly one backslash per join -- this line's own, and
-    // only when a next line exists to be carried into it -- and leaves a
-    // single space in its place.
-    parts.push(i + 1 < raw.length && continuesLine(own) ? own.replace(/\\\s*$/, ' ') : own);
+  // A trailing CR goes exactly where a raw line ends: before a newline, or at
+  // the end of the text. Nothing else about a CR is touched.
+  const s = text.replace(/\r(?=\n)/g, '').replace(/\r$/, '');
+  const built: string[] = [];
+  let current = '';
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i] ?? '';
+    if (ch !== '\n') {
+      current += ch;
+      i += 1;
+      continue;
+    }
+    // At a newline, count the backslash run ending the line BUILT SO FAR,
+    // looking past whitespace, by hand rather than through the predicate the
+    // joiner uses (F-79).
+    let end = current.length;
+    while (end > 0 && /\s/.test(current[end - 1] ?? '')) end -= 1;
+    let run = 0;
+    while (end - run > 0 && current[end - run - 1] === '\\') run += 1;
+    if (run % 2 === 1) {
+      // An odd run: this newline is swallowed. The backslash and the
+      // whitespace after it become one space, the next raw line arrives
+      // trimmed, and the loop tests the RESULT again (F-80).
+      let next = i + 1;
+      while (next < s.length && s[next] !== '\n') next += 1;
+      current = `${current.slice(0, end - 1)} ${s.slice(i + 1, next).trim()}`;
+      i = next;
+    } else {
+      built.push(current);
+      current = '';
+      i += 1;
+    }
   }
-  return { lines, content: parts.join('') };
+  built.push(current);
+  return { lines: built.length, content: built.join('') };
 };
 
 /**
@@ -1501,11 +1536,30 @@ const scanLines = (
 };
 
 /**
- * One document, SCANNED AND AUDITED -- with the audit done HERE, outside the
- * function it audits, which is the whole point.
+ * The audited scan, and the record of what it audited, SEALED IN ONE SCOPE.
  *
- * The three independent readings a document gets, and why each is a separate
- * function:
+ * ROUND 49, THE COORDINATOR'S CD-48-01 (P1, a one-path fail-open). The caller
+ * used to keep the record, and a caller can record a label it never scanned:
+ * `if (text.includes(...)) { push(label); continue; }` gave 23 passed with a
+ * planted document, because the document-set law was satisfied by a push the
+ * caller made on its own authority.
+ *
+ * MY FIRST FIX WAS NOT ENOUGH AND I MEASURED IT FAILING. Moving the record to
+ * a module-level binding and pushing to it inside the auditor left it writable
+ * by every line in this file, so the same edit -- with the new name -- passed
+ * again as soon as the external byte pin was updated alongside it. The comment
+ * I had written there, that nothing a caller does can put a label in the
+ * record, was FALSE. A false sentence about a guard is worse than the gap it
+ * describes, so it is gone and this is what replaced it.
+ *
+ * The record is CLOSED OVER. `record` exists only inside this scope; the only
+ * thing that pushes to it is the auditor itself; the outside world gets a
+ * reset and a COPY. A label in the record was put there by the function that
+ * audits, and that is enforced by SCOPE rather than by convention -- an edit
+ * that fabricates an entry has to be written inside the auditor, which is
+ * where the audit is and where the external byte pin sees it.
+ *
+ * The three independent readings a document gets, and why each is separate:
  *   - `scanLines` applies the matchers and REPORTS what it reached and read.
  *   - `rawExpectation` says what the matchers must have been handed, derived
  *     from the raw text with no help from `logicalLines`.
@@ -1515,24 +1569,33 @@ const scanLines = (
  *     disagree with, so it defaults to the text itself.
  *
  * An early return, a `continue`, a blanked line, a filtered path or a
- * projection anywhere in one of those three paths is a disagreement between
- * two of them, and a disagreement is a refusal by name. Only an edit that
- * changes the SAME behaviour in two of them at once passes, which is the
- * general limit written down and measured at the arm.
+ * projection in one of those paths is a disagreement between two of them, and
+ * a disagreement is a refusal by name. What remains -- a caller that DISCARDS
+ * what the auditor returned -- is not closable by another audit, and is caught
+ * by the external byte pin instead.
  */
-const auditedScan = (
-  label: string,
-  text: string,
-  expectationSource: string = text,
-  toolsDir: string = TOOLS_DIR,
-): { found: string[]; seen: number; tested: number } => {
-  const scan = scanLines(label, text, false, toolsDir);
+const { auditedScan, resetAuditRecord, auditedLabels } = (() => {
+  const record: string[] = [];
   return {
-    found: [...scan.found, ...invariantOffences(label, scan.tested, scan.read, rawExpectation(expectationSource))],
-    seen: scan.seen,
-    tested: scan.tested,
+    auditedScan: (
+      label: string,
+      text: string,
+      expectationSource: string = text,
+      toolsDir: string = TOOLS_DIR,
+    ): { found: string[]; seen: number; tested: number } => {
+      const scan = scanLines(label, text, false, toolsDir);
+      const found = [...scan.found, ...invariantOffences(label, scan.tested, scan.read, rawExpectation(expectationSource))];
+      // Recorded by the AUDITOR, after the audit has run.
+      record.push(label);
+      return { found, seen: scan.seen, tested: scan.tested };
+    },
+    resetAuditRecord: (): void => {
+      record.length = 0;
+    },
+    /** A COPY: a caller may read what was audited and may not add to it. */
+    auditedLabels: (): string[] => [...record],
   };
-};
+})();
 
 /**
  * Files that may contain a NUL byte and still not be read by this law, by
@@ -1620,13 +1683,15 @@ describe('every written invocation of the pack tools is isolated', () => {
     const offences: string[] = [];
     const binaries: string[] = [];
     const unreadable: string[] = [];
+    // CD-48-01: the record belongs to the auditor. This loop resets it and
+    // reads it; it does not write to it.
+    resetAuditRecord();
     // F-76: the labels this loop ACTUALLY handed to `scanLines`, recorded so
     // the set can be compared with one derived independently of this loop and
     // of the walk that feeds it. A count cannot do this job: the honest `SELF`
     // skip already made the old counter count one file more than the law read,
     // which is why that counter could not be turned into a conservation law
     // where it stood.
-    const scannedLabels: string[] = [];
     let seen = 0;
     for (const p of walk(REPO)) {
       const text = readable(p);
@@ -1674,11 +1739,6 @@ describe('every written invocation of the pack tools is isolated', () => {
       // identity whose expectation no longer shares a reader with it.
       const drifted = diskRefusal(label, text, onDisk);
       if (drifted !== undefined) offences.push(drifted);
-      // RECORDED LAST, after the scan has returned -- the same discipline as
-      // the line counter inside `scanLines`: a `continue` placed anywhere
-      // above this, on the path or on the content, drops the label and shows
-      // up as a document the enumeration expected and the law never read.
-      scannedLabels.push(label);
     }
     expect(
       binaries,
@@ -1707,7 +1767,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     // survival, which P7 R11 says an anchor may not be.
     expect(expectedLabels.length, 'the independent enumeration found almost nothing, so the comparison below would be vacuous').toBeGreaterThan(50);
     expect(
-      documentRefusal(expectedLabels, scannedLabels),
+      documentRefusal(expectedLabels, auditedLabels()),
       'the law did not read every document the repository holds: a skip on the PATH, or a filter inside the walk, is hiding a file from this law — the refusal above names which',
     ).toStrictEqual([]);
     expect(seen, 'no invocation of the four tools was found anywhere, so this law is vacuous — the tools or their names moved').toBeGreaterThan(0);
@@ -2330,12 +2390,14 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(coverage.joined, 'the fuzz corpus barely makes the joiner do anything, so it is not testing the join rule').toBeGreaterThan(2000);
 
     // AND AN EXHAUSTIVE SEARCH, which is what a fuzz cannot be: every string
-    // of length 0 to 4 over the alphabet that matters. 1555 cases, no
+    // of length 0 to 7 over the alphabet that matters. 335,923 cases, no
     // generator, no seed, no sampling -- so no generator bias is possible and
     // the result BOUNDS LOSS over that domain instead of surviving a witness.
     // The challenger's exhaustive search of exactly this shape found the one
     // divergence class in a single member, `\\` + two newlines, which is how
-    // F-78 and CD-47-02 are the same finding; it must be empty now.
+    // F-78 and CD-47-02 are the same finding. ROUND 49, F-80: it stopped at
+    // length FOUR and three strings of length FIVE diverged, so the number
+    // below is the length actually run and not the length that was cheap.
     const alphabet = ['a', ' ', '\t', '\\', '\r', '\n'];
     const exhaustive: string[] = [];
     let exhaustiveCases = 0;
@@ -2349,11 +2411,11 @@ describe('every written invocation of the pack tools is isolated', () => {
       if (depth === 0) return;
       for (const ch of alphabet) walkStrings(prefix + ch, depth - 1);
     };
-    walkStrings('', 4);
-    expect(exhaustiveCases, 'the exhaustive search did not cover the domain it claims: 1 + 6 + 36 + 216 + 1296 strings').toBe(1555);
+    walkStrings('', 7);
+    expect(exhaustiveCases, 'the exhaustive search did not cover the domain it claims: every string of length 0 to 7 over six characters').toBe(335923);
     expect(
       exhaustive,
-      'the derivation and logicalLines disagree on a string of four characters or fewer, so the pair is not in agreement over its domain',
+      'the derivation and logicalLines disagree on a string of seven characters or fewer, so the pair is not in agreement over its domain',
     ).toStrictEqual([]);
     expect(mismatches, 'the raw-derived expectation does not predict logicalLines on these documents, so the law can false-RED on an honest one').toStrictEqual(
       [],
@@ -2492,7 +2554,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     // whitespace-insensitive needle, for the same reason the content guard has
     // one: a guard whose removal nothing notices is not a guard. Deleting or
     // renaming the call in the repository walk reds here.
-    const docSite = new RegExp(['documentRefusal\\(', 'expectedLabels,', 'scannedLabels\\)'].join('\\s*'), 'g');
+    const docSite = new RegExp(['documentRefusal\\(', 'expectedLabels,', 'auditedLabels\\(\\)\\)'].join('\\s*'), 'g');
     const here47 = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
     expect(
       (here47.match(docSite) ?? []).length,
@@ -2550,6 +2612,69 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(
       (here47.match(diskSite) ?? []).length,
       'the text the law consumed is no longer compared with the bytes on disk in both halves: one of the two guards was deleted or renamed',
+    ).toBe(2);
+
+    // ROUND 49, THE COORDINATOR'S CD-48-01 (P1, A ONE-PATH FAIL-OPEN), AND
+    // THE RULING THAT ENDS THIS CLASS: stop adding audits around audits.
+    //
+    // The caller decided whether the audit ran at all. Measured, each a single
+    // edit to the caller loop with a planted document, each 23 passed: record
+    // the label and `continue` before the scan; a `try`/`catch` that swallows
+    // a throw; a filter over the scan's own offences before pushing them. The
+    // first two are closed structurally -- `auditedScan` records the label
+    // itself now, so a label nobody audited is a label nobody recorded. THE
+    // THIRD IS NOT, and no further audit can close it: whoever calls an audit
+    // can discard what it returns, and an audit written to catch that would
+    // itself be called by someone. That is the regress, and it does not
+    // terminate inside this file.
+    //
+    // So it terminates OUTSIDE it, in the bytes. `tools/law-bytes.json` pins a
+    // sha256 for each file the law is written in, and `law-bytes-are-pinned`
+    // checks it with its own reader, its own `createHash` and no code shared
+    // with anything here -- because a shared helper would move subject and
+    // instrument together, which is F-73 (B) and CD-47-01 over again. Any edit
+    // to the law, in any path, whether it skips, swallows, filters or
+    // rewrites, changes those bytes and is refused BY NAME. The edit does not
+    // have to be anticipated or classified; it only has to exist.
+    //
+    // THIS ARM IS THE OTHER HALF OF THE MUTUAL PIN. The two files pin each
+    // other through the same JSON: deleting the separate reader reds here,
+    // editing this file reds there, and dropping a row from the pin reds in
+    // both, because each checks the pinned SET as well as the digests.
+    const lawPin = JSON.parse(readFileSync(join(__dirname, '..', 'tools', 'law-bytes.json'), 'utf8')) as {
+      pinned?: Record<string, string>;
+    };
+    expect(
+      Object.keys(lawPin.pinned ?? {}).sort(),
+      'the external pin no longer names exactly the files the law is written in, so one of them is unpinned or a row checks nothing',
+    ).toStrictEqual(['test/law-bytes-are-pinned.test.ts', 'test/tool-commands-are-isolated.test.ts']);
+    expect(
+      existsSync(join(__dirname, 'law-bytes-are-pinned.test.ts')),
+      "the separate reader that pins this law's bytes is gone, so an edit anywhere in this file would no longer be refused by name",
+    ).toBe(true);
+    // And the pin's own digest for THIS file is re-derived here, independently
+    // of that reader, so the mutual pin is measured from both sides rather
+    // than asserted from one.
+    const selfDigest = createHash('sha256')
+      .update(readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts')))
+      .digest('hex');
+    expect(
+      selfDigest,
+      'this file does not match its external pin: if the change is intended, update tools/law-bytes.json in the SAME commit and say why in the message',
+    ).toBe((lawPin.pinned ?? {})['test/tool-commands-are-isolated.test.ts']);
+
+    // CD-48-02 (P3), THE COORDINATOR'S: replacing the expectation source with
+    // the handed text left the suite green, because no file in this repository
+    // or the pack disagrees with its own bytes -- so that argument is
+    // UNMEASURED AT RUNTIME and its removal was noticed by nothing. The same
+    // remedy the other unmeasured guards got: count the two sites where the
+    // expectation is derived from the SECOND reader rather than from the
+    // string the scanner was handed. `diskRefusal` still catches CD-47-01 on
+    // its own; this is what keeps the expectation's own source honest.
+    const sourceSite = new RegExp(['auditedScan\\(', '(?:label|name),', 'text,', 'onDisk \\?\\? text,'].join('\\s*'), 'g');
+    expect(
+      (here47.match(sourceSite) ?? []).length,
+      'the expectation is no longer derived from the bytes the second reader found in both halves: one of the two sites now derives it from the text the scanner was handed',
     ).toBe(2);
 
     // THE GENERAL LIMIT, written down ONCE and MEASURED, in R42-01's voice.
@@ -2861,6 +2986,8 @@ describe('every written invocation of the pack tools is isolated', () => {
     const unclassified: string[] = [];
     const packBinaries: string[] = [];
     const packUnreadable: string[] = [];
+    // CD-48-01: this half reads the auditor's record too, so it resets it.
+    resetAuditRecord();
     let mine = 0;
     for (const name of readdirSync(PACK)) {
       if (exempt.has(name)) continue;
@@ -3281,5 +3408,84 @@ describe('every written invocation of the pack tools is isolated', () => {
       expect(v.isolated, `${flags} is cleared`).toBe(false);
       expect(v.refusal, `${flags} was refused rather than MEASURED, so the law stopped measuring`).toBeUndefined();
     }
+  });
+
+  it("ROUND 49, the coordinator's addendum (d): the status block refuses a head that does not resolve, by name", () => {
+    // A SHA THAT APPEARS ANYWHERE IS NOT THE SHA A DOCUMENT DECLARES -- P15's
+    // lesson, and `status-block.py` renders a head into five documents. It
+    // never asked whether that head exists, so a typo, a stale abbreviation or
+    // a sha from another branch rendered cleanly into all five and the pack
+    // then SAID it five times. It now refuses by name, and ABSENCE refuses
+    // too: this arm runs the tool over a scratch pack, one defect at a time,
+    // and reads the refusal NAME out of its output rather than its exit code.
+    //
+    // F-61 holds: every argument that reaches `spawnSync` here is a literal or
+    // a path this test made. Nothing a document supplies is passed.
+    const dir = mkdtempSync(join(tmpdir(), 'r49-status-'));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    const tool = join(TOOLS_DIR, 'status-block.py');
+    const real = JSON.parse(readFileSync(join(PACK, 'P5-STATUS.json'), 'utf8')) as Record<string, unknown>;
+    // One document, carrying the sentinel pair, so the tool gets as far as the
+    // head check in every case below.
+    // The sentinel pair verbatim: a malformed pair exits inside the tool
+    // before the head is ever looked at, which would make this arm pass for
+    // the wrong reason.
+    const begin = '<!-- P5-STATUS:BEGIN \u2014 generated by tools/status-block.py; edit P5-STATUS.json -->';
+    writeFileSync(join(dir, 'P5-SCRATCH.md'), `# scratch\n\n${begin}\n<!-- P5-STATUS:END -->\n`);
+    const run = (status: Record<string, unknown>, repo: string): string => {
+      writeFileSync(join(dir, 'P5-STATUS.json'), JSON.stringify({ ...real, ...status, documents: ['P5-SCRATCH.md'] }));
+      const r = spawnSync('python3', ['-I', tool, '--dir', dir, '--repo', repo, '--check'], { encoding: 'utf8', timeout: 60_000 });
+      return `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    };
+    const absent = '0000000000000000000000000000000000000000';
+    expect(run({ head: '33522c3', head_full: undefined }, REPO), 'a missing full sha was accepted').toContain('REFUSED-STATUS-SHA-SHAPE');
+    expect(run({ head: '33522c3', head_full: '33522c3' }, REPO), 'an abbreviation standing in for the full sha was accepted').toContain(
+      'REFUSED-STATUS-SHA-SHAPE',
+    );
+    expect(run({ head: 'deadbee', head_full: real['head_full'] }, REPO), 'a head that is not a prefix of the full sha was accepted').toContain(
+      'REFUSED-STATUS-SHA-SHAPE',
+    );
+    expect(run({ head: '0000000', head_full: absent }, REPO), 'a well-formed sha that is in no repository was accepted').toContain(
+      'REFUSED-STATUS-SHA-NOT-RESOLVED',
+    );
+    // ABSENCE: a repository that is not one refuses rather than skipping.
+    expect(run({}, dir), 'a missing repository was treated as a pass').toContain('REFUSED-STATUS-SHA-NOT-RESOLVED');
+    // And the law stays satisfiable: the pack's own head passes.
+    expect(run({}, REPO), "the pack's own declared head does not resolve, so this arm is refusing everything").not.toContain('REFUSED-STATUS-SHA');
+  });
+
+  it("F-79: the continuation rule is bounded by its own ARITHMETIC, not by the other derivation's agreement", () => {
+    // F-79, THE COORDINATOR'S ADDENDUM, and it is the difference between
+    // AGREEMENT and TRUTH. The exhaustive arm above compares the two
+    // derivations with each other; before this round they shared this
+    // predicate, so they agreed on any parity rule, right or wrong, and the
+    // rule's correctness rested on the five examples below. The rule is
+    // closed-form, so it is asserted as a LAW over its own domain instead:
+    // a line continues exactly when the backslash run that ends it, looking
+    // past trailing whitespace, is ODD. Nine run lengths by eight endings by
+    // four heads, 288 cases, every one checked against the arithmetic and not
+    // against the other derivation -- so the challenger's own edit (a
+    // continuation followed by a TAB is not one) is refused here even if
+    // something made both derivations read it the same way. The five examples
+    // are kept below, inside this domain, for the regressions they NAME.
+    const runEndings = ['', ' ', '  ', '\t', ' \t', '\t ', '\r', ' \r\t'];
+    const runHeads = ['', 'echo a', 'echo a ', 'x\\y'];
+    const parityFailures: string[] = [];
+    let parityCases = 0;
+    for (let n = 0; n <= 8; n += 1) {
+      for (const tail of runEndings) {
+        for (const head of runHeads) {
+          parityCases += 1;
+          const subject = `${head}${'\\'.repeat(n)}${tail}`;
+          const truth = n % 2 === 1;
+          if (continuesLine(subject) !== truth) parityFailures.push(`${JSON.stringify(subject)}: run ${n} should be ${truth ? 'a continuation' : 'none'}`);
+        }
+      }
+    }
+    expect(parityCases, 'the parity law did not run over the domain it claims: 9 run lengths by 8 endings by 4 heads').toBe(288);
+    expect(
+      parityFailures.slice(0, 5),
+      'continuesLine does not implement the odd-run rule over its own domain, so the two derivations may agree on a rule that is WRONG',
+    ).toStrictEqual([]);
   });
 });
