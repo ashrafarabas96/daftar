@@ -1192,8 +1192,674 @@ def covers_the_suite_declared(log: str) -> set[tuple[str, str]]:
     }
 
 
-def run_suite(tree: str) -> tuple[int, set[str], str]:
-    """Compile and run the suite in `tree`. Returns (rc, failing test names, log)."""
+# The coordinator's F-1, of `771b525`. Deriving the cover set from EXECUTION
+# bounds forgery — a printed line that nothing declares fails closed — and it
+# does not bound OMISSION: delete the loop that prints those lines and the set
+# is empty, every cover in it is vacuously defended, and the harness exits 0.
+# The review measured exactly that.
+#
+# Omission is bounded by a SECOND derivation that cannot be deleted by the same
+# edit, and by comparing the two SETS rather than trusting either. This one
+# reads the DECLARATIONS out of the test source, which is the representation the
+# subject itself writes — weak on its own, for the reason this lane has recorded
+# since the eleventh review, and that is the point: the two derivations have
+# different weaknesses, so a disagreement between them is a refusal.
+#
+# What the pair cannot catch is an edit that removes the print loop AND the
+# declaration together. That is not left to an argument either: deleting the
+# declaration leaves a narrow domain with no cover entry, and the suite's own
+# convention test reds on it before any count is read (proof 88). Three
+# instruments, each deletable, no single deletion silent.
+COVER_MAP_DECL = "val WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT:"
+COVER_MAP_FILE = "test/app/daftar/offline/QueueModelCheckTest.kt"
+A_WIDER_COVER = "AnotherClaimOverEveryProduction"
+NOTHING_IS_LEFT_OUT = "NothingIsLeftOut"
+KOTLIN_STRING = re.compile(r'"([^"\\\n]*)"')
+
+
+class CannotRead(Exception):
+    """The declarations could not be read. A reader that cannot read REFUSES."""
+
+
+def _balanced_mapof(text: str) -> str:
+    """The body of the `mapOf(` that follows the declaration, by paren depth."""
+    at = text.find(COVER_MAP_DECL)
+    if at < 0:
+        raise CannotRead(f"{COVER_MAP_DECL} is not in {COVER_MAP_FILE}")
+    opener = text.find("mapOf(", at)
+    if opener < 0:
+        raise CannotRead("the declaration is not followed by a mapOf(")
+    i = opener + len("mapOf(")
+    depth, start, in_string = 1, i, False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start:i]
+        i += 1
+    raise CannotRead("the mapOf( that follows the declaration is never closed")
+
+
+def _entries(body: str) -> list[str]:
+    """Top-level comma-separated entries of a Kotlin map literal body."""
+    out, depth, in_string, current = [], 0, False, []
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if in_string:
+            if ch == "\\":
+                current.append(body[i : i + 2])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            out.append("".join(current))
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+    if "".join(current).strip():
+        out.append("".join(current))
+    return [e for e in out if e.strip()]
+
+
+def covers_the_source_declares(text: str) -> set[tuple[str, str]]:
+    """The covers the TEST SOURCE declares, as (covering site, code) pairs.
+
+    The same pair shape the suite prints, so the two sets are comparable. A
+    shape this cannot read is a refusal, never an empty set: an unreadable
+    declaration that counted as zero covers would be the same hole again.
+    """
+    declared: set[tuple[str, str]] = set()
+    for entry in _entries(_balanced_mapof(text)):
+        wider, nothing = A_WIDER_COVER in entry, NOTHING_IS_LEFT_OUT in entry
+        if wider == nothing:
+            raise CannotRead(
+                "an entry names neither exactly one of "
+                f"{A_WIDER_COVER} and {NOTHING_IS_LEFT_OUT}: {' '.join(entry.split())[:120]}"
+            )
+        if nothing:
+            continue
+        literals = KOTLIN_STRING.findall(entry)
+        if len(literals) != 3:
+            raise CannotRead(
+                f"an entry naming {A_WIDER_COVER} holds {len(literals)} readable string "
+                f"literals, and this reader requires exactly 3 (narrow claim, code, covering "
+                f"site): {' '.join(entry.split())[:120]}"
+            )
+        _narrow, code, site = literals
+        declared.add((site, code))
+    return declared
+
+
+def cover_failures(
+    printed: set[tuple[str, str]],
+    declared: set[tuple[str, str]],
+    reddened: set[str],
+) -> list[str]:
+    """Every refusal the cover obligation owes, over its three derivations.
+
+    Pure, and called from `main` with the real sets and from `--self-test` with
+    crafted ones, which is how each branch below is armed: a branch deleted here
+    is a `--self-test` failure, and the self-test runs as this harness's own
+    first step. A guard nothing can redden is not a guard.
+    """
+    failures: list[str] = []
+    for cover in sorted(declared - printed):
+        failures.append(
+            f"the cover naming {cover[0]} for a narrow domain about {cover[1]} is DECLARED in "
+            f"{COVER_MAP_FILE} and was never PRINTED by the run \u2014 the loop that prints the "
+            f"declared covers is how this harness learns what to check, so a cover missing from "
+            f"the run is an unbounded cover, not an absent one (F-1: omission)"
+        )
+    for cover in sorted(printed - declared):
+        failures.append(
+            f"the run PRINTED a cover naming {cover[0]} for a narrow domain about {cover[1]} "
+            f"that no declaration in {COVER_MAP_FILE} contains \u2014 the two derivations of "
+            f"this set disagree, and a disagreement is a refusal (F-1: forgery)"
+        )
+    for cover in sorted(printed):
+        law = A_PROOF_DEFENDS_THIS_COVER.get(cover)
+        if law is None:
+            failures.append(
+                f"the claim at {cover[0]} is named as the cover for a narrow domain about "
+                f"{cover[1]}, and no proof in this file is declared to defend it \u2014 a cover "
+                f"checked for its domain and its ratio but never for what it asserts is a name, "
+                f"and a claim whose body cannot fail satisfies both of those checks"
+            )
+        elif law not in reddened:
+            failures.append(
+                f"the claim at {cover[0]} is named as the cover for a narrow domain about "
+                f"{cover[1]}, and the proof declared to defend it ({law}) did not redden in this "
+                f"run, so what that cover asserts is bound by nothing here"
+            )
+    return failures
+
+
+# The coordinator's F-2, of `771b525`, and pre-existing: "reddened" has always
+# meant THE NAMED TEST FAILED, never WHY it failed. The review measured the
+# consequence — INV-9c's assertion hollowed out, and the proof declared to
+# defend that cover still reds, through `a claim this check makes was never
+# EXERCISED` rather than through the law. A proof that reddens for an unrelated
+# reason measures the test's existence, not the law.
+#
+# So every proof also names the REFUSAL it expects, and the refusal the runner
+# printed under the named test must contain it. The strings below were HARVESTED
+# from a measured run and then frozen — they are not predictions, and this is
+# said plainly because a harvested expectation proves that the reason has not
+# CHANGED, which is what F-2 is about, and proves nothing about whether the
+# reason was right on the day it was harvested. A law with no entry here is a
+# FAILED proof, not an unchecked one.
+EXPECTED_REFUSAL: dict[str, str] = {
+    'E-03-A-CODE-NO-QUEUE-STATE-EVER-PRODUCES': (
+        'org.opentest4j.AssertionFailedError: the set of refusals that tell a merchant something is in progress is not the set of refusals the model check has proven can only be produced while something is pending on the device (P7-L20-A-DESTRUCTION-IS-RECORDED-BEFORE-IT-HAPPENS). A code that belongs here needs its state proven in QueueModelCheckTest first; a code that no longer belongs is a line to delete from waitIsHonest, with its reason ==> expected: <[offline.already_released, offline.already_sending, offline.cancel_after_send, offline.no_attempt_in_flight]> but was: <[offline.already_released, offline.already_sending, offline.cancel_after_send, offline.no_attempt_in_flight, offline.session_expired]>'
+    ),
+    'E-04-A-REFUSAL-MAY-NOT-OFFER-A-BUTTON-ITS-READER-CANNOT-PRESS': (
+        'org.opentest4j.AssertionFailedError: a session that may not confirm this row was told to confirm it (offline.not_sendable): Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=CAPTURED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) on Send(digestNow=sha256:0d5f1f2b, actingScope=tenant-1/business-1/member-2)'
+    ),
+    'HARNESS-AN-UNMAPPED-REFUSAL-CODE-CANNOT-REACH-A-TILL': (
+        'org.opentest4j.AssertionFailedError: these codes reach a merchant as a generic device-software problem, which erases what they could actually do about it. If one of them genuinely is a device defect, add it to deliberatelyADeveloperProblem WITH ITS REASON rather than widening this test ==> expected: <[]> but was: <[offline.a_newly_added_refusal]>'
+    ),
+    'HARNESS-THE-BENIGN-FALLBACK-GUARD-CAN-SEE': (
+        "org.opentest4j.AssertionFailedError: a command's effect class was defaulted to BENIGN (P7-L11-NO-DEFAULT-EFFECT-CLASS) ==> expected: <[]> but was: <[CommandEffects.kt: EffectClass = EffectClass.BENIGN]>"
+    ),
+    'HARNESS-THE-EXHAUSTIVE-SWEEP-CANNOT-SHRINK': (
+        'org.opentest4j.AssertionFailedError: expected: <184800> but was: <26400>'
+    ),
+    'HARNESS-THE-MERCHANT-VIEW-SWEEP-CATCHES-A-REAL-MISS': (
+        'org.opentest4j.AssertionFailedError: these codes reach a merchant as a generic device-software problem, which erases what they could actually do about it. If one of them genuinely is a device defect, add it to deliberatelyADeveloperProblem WITH ITS REASON rather than widening this test ==> expected: <[]> but was: <[offline.absence_not_fenced]>'
+    ),
+    'HARNESS-THE-MODEL-CHECK-IS-NOT-VACUOUS': (
+        'org.opentest4j.AssertionFailedError: some event never moved anything, so its transitions were never checked ==> expected: <[Release, CancelByMerchant, Send, ProcessDeath, Observe, ResolveByMerchant, RetentionDeadlineReached, RestorePayload]> but was: <[Release, CancelByMerchant, Send, Observe, RetentionDeadlineReached, ResolveByMerchant, RestorePayload]>'
+    ),
+    'HARNESS-THE-RACE-TEST-MUST-DETECT-A-SECOND-COMMIT': (
+        'org.opentest4j.AssertionFailedError: fencing=true, original lands between: the server holds 2 operations for one sale'
+    ),
+    'HARNESS-THE-SCOPE-SEARCH-CANNOT-STOP-OFFERING-A-FOREIGN-SESSION': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]>'
+    ),
+    'HARNESS-THE-SCOPE-SEARCH-CANNOT-STOP-OFFERING-THE-NEXT-SHIFT': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]>'
+    ),
+    'HARNESS-THE-SEARCH-CANNOT-STOP-OFFERING-A-RESTORE': (
+        'org.opentest4j.AssertionFailedError: some event never moved anything, so its transitions were never checked ==> expected: <[Release, CancelByMerchant, Send, ProcessDeath, Observe, ResolveByMerchant, RetentionDeadlineReached, RestorePayload]> but was: <[Release, CancelByMerchant, ProcessDeath, Send, Observe, RetentionDeadlineReached, ResolveByMerchant]>'
+    ),
+    'HARNESS-THE-SEARCH-CANNOT-STOP-OFFERING-A-RETENTION-DEADLINE': (
+        'org.opentest4j.AssertionFailedError: some event never moved anything, so its transitions were never checked ==> expected: <[Release, CancelByMerchant, Send, ProcessDeath, Observe, ResolveByMerchant, RetentionDeadlineReached, RestorePayload]> but was: <[Release, CancelByMerchant, ProcessDeath, Send, Observe, ResolveByMerchant]>'
+    ),
+    'HARNESS-THE-STATE-COVERAGE-GUARD-CAN-FAIL-ON-SYNCED': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]>'
+    ),
+    'INV-13-A-RELEASE-ONLY-EVER-MOVES-AN-UNSENT-ROW': (
+        'org.opentest4j.AssertionFailedError: a Release(actingScope=tenant-1/business-1/member-1) moved a row that had already been sent: Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=UNKNOWN_OUTCOME, attempts=1, lastCode=null, replayed=false, schema=1, minimized=false) (P7-L5-NO-LOCAL-DELETE-BEFORE-A-CONFIRMED-OUTCOME) ==> expected: <0> but was: <1>'
+    ),
+    'INV-13-A-TERMINAL-ROW-IS-NOT-CANCELLED-TWICE': (
+        'org.opentest4j.AssertionFailedError: an already-abandoned row was abandoned a second time, clearing it twice. Expected value to be of type <app.daftar.offline.Step$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Moved (Kotlin reflection is not available)>.'
+    ),
+    'INV-14-A-FOREIGN-SESSION-NEVER-ACTS-UNRECORDED': (
+        "org.opentest4j.AssertionFailedError: a move by the row's own session was recorded as a custody action: Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=CAPTURED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) on Release(actingScope=tenant-1/business-1/member-1)"
+    ),
+    'INV-14-THE-RECORD-NAMES-THE-ACTOR-NOT-THE-ROW': (
+        'org.opentest4j.AssertionFailedError: the record names the wrong actor ==> expected: <tenant-1/business-1/member-2> but was: <tenant-1/business-1/member-1>'
+    ),
+    'INV-14-THE-RECORD-SAYS-WHAT-WAS-DONE': (
+        'org.opentest4j.AssertionFailedError: the record says CancelByMerchant about a Send(digestNow=sha256:0d5f1f2b, actingScope=tenant-1/business-1/member-2): Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=QUEUED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) ==> expected: <Send> but was: <CancelByMerchant>'
+    ),
+    'INV-15-A-FINISHED-ROW-ANSWERS-IN-ITS-OWN-TERMS': (
+        'org.opentest4j.AssertionFailedError: a session that may not confirm this row was told to confirm it (offline.not_sendable): Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=CAPTURED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) on Send(digestNow=sha256:0d5f1f2b, actingScope=tenant-1/business-1/member-2)'
+    ),
+    'INV-9B-A-NEW-CODE-MAY-NOT-SAY-WAIT-BY-DEFAULT': (
+        'org.opentest4j.AssertionFailedError: the set of refusals that tell a merchant something is in progress is not the set of refusals the model check has proven can only be produced while something is pending on the device (P7-L20-A-DESTRUCTION-IS-RECORDED-BEFORE-IT-HAPPENS). A code that belongs here needs its state proven in QueueModelCheckTest first; a code that no longer belongs is a line to delete from waitIsHonest, with its reason ==> expected: <[offline.already_released, offline.already_sending, offline.cancel_after_send, offline.no_attempt_in_flight]> but was: <[offline.already_released, offline.already_sending, offline.another_members_capture, offline.cancel_after_send, offline.no_attempt_in_flight]>'
+    ),
+    'INV-9B-THE-ACTION-IS-WHAT-INSTRUCTS-THE-MERCHANT': (
+        'org.opentest4j.AssertionFailedError: a NEEDS_ATTENTION row refused offline.waiting_on_a_person, which tells the merchant to wait (SALE_NEEDS_YOUR_ATTENTION / WAIT_IT_IS_IN_PROGRESS) while nothing is pending: Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=NEEDS_ATTENTION, attempts=1, lastCode=IDEMPOTENCY_KEY_REUSED, replayed=false, schema=1, minimized=false) on Release(actingScope=tenant-1/business-1/member-1)'
+    ),
+    'INV-9C-A-COLLEAGUES-CAPTURE-IS-REFUSED-ONLY-WHERE-THE-ACTOR-MAY-NOT-RELEASE-IT': (
+        "org.opentest4j.AssertionFailedError: a session that MAY release this row was told it is another member's capture (offline.another_members_capture), whose view tells the merchant a colleague must confirm it: Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=CAPTURED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) on Send(digestNow=sha256:0d5f1f2b, actingScope=tenant-1/business-1/member-1)"
+    ),
+    'J-03-AN-OVERLOAD-IS-A-DEFAULT-WITH-A-DIFFERENT-SHAPE': (
+        'org.opentest4j.AssertionFailedError: the kernel declares more than one capture function. A second one is a way to capture without stating what the operation is worth, whatever its body passes for null ==> expected: <1> but was: <2>'
+    ),
+    'K-02-A-CODE-NEED-NOT-BE-A-LITERAL-TO-REACH-A-MERCHANT': (
+        'org.opentest4j.AssertionFailedError: the classifier produced offline.cancel_after_send for status 401 / errorCode null, and the merchant is told CANNOT_CANCEL_AFTER_SENDING / WAIT_IT_IS_IN_PROGRESS — but the server has answered and this row is waiting on a person, so nothing is pending on the device to wait for'
+    ),
+    'K-03-A-SECOND-WAY-IN-NEED-NOT-BE-IN-THE-SAME-FILE': (
+        'org.opentest4j.AssertionFailedError: the kernel declares more than one capture function. A second one is a way to capture without stating what the operation is worth, whatever its body passes for null ==> expected: <1> but was: <2>'
+    ),
+    'L-01-A-CLAIM-ABOUT-A-CODE-NOTHING-PRODUCES-IS-A-CLAIM-ABOUT-NOTHING': (
+        "org.opentest4j.AssertionFailedError: a session that MAY release this row was told it is another member's capture (offline.another_members_capture), whose view tells the merchant a colleague must confirm it: Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=CAPTURED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) on Send(digestNow=sha256:0d5f1f2b, actingScope=tenant-1/business-1/member-1)"
+    ),
+    'L13-TWO-DIFFERENT-REFUSALS-MAY-NOT-SHARE-ONE-VIEW': (
+        'org.opentest4j.AssertionFailedError: Release(actingScope=tenant-1/business-1/member-bob) was refused for the wrong reason ==> expected: <offline.another_members_capture> but was: <offline.scope_switched>'
+    ),
+    'M-01-O-01-A-CLAIM-IS-ENROLLED-BY-BEING-EVALUATED': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture), (a-plant/a-claim-about-a-code-nothing-produces, offline.permission_revoked)]>'
+    ),
+    'N-02-AN-EXEMPTION-MAY-NOT-HIDE-A-LIVE-OBLIGATION': (
+        'org.opentest4j.AssertionFailedError: the exemption for offline.not_sendable is stale in the direction that matters: the reachable space DOES produce it, so the claim about it is measurable and the exemption is hiding a live obligation rather than excusing an unmeasurable one'
+    ),
+    'N-02-AN-EXEMPTION-MUST-NAME-A-CODE-SOMETHING-CLAIMS': (
+        'org.opentest4j.AssertionFailedError: offline.a_code_no_claim_mentions is exempted from the observability loop, but no claim site in this check registered it and WaitIsHonest does not license it, so the exemption is stale and the next reader will take it for a justified one: claimed = [offline.already_abandoned, offline.already_recorded, offline.already_released, offline.already_sending, offline.another_members_capture, offline.cancel_after_send, offline.no_attempt_in_flight, offline.not_sendable, offline.scope_switched]'
+    ),
+    'N-02-AN-EXEMPTION-WITHOUT-A-REASON-IS-NOT-AN-EXEMPTION': (
+        'org.opentest4j.AssertionFailedError: offline.not_sendable is exempted with no reason given, and an exemption without a reason is the silent weakening this loop exists to make impossible'
+    ),
+    'O-01-A-CLAIM-WHOSE-REGISTRATION-IS-REMOVED-IS-A-CLAIM-NOTHING-BOUNDS': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]>'
+    ),
+    'O-01-A-LINE-THAT-LOOKS-LIKE-THE-INSTRUMENTS-IS-NOT-THE-INSTRUMENTS': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture), (a-plant/a-claim-about-a-code-nothing-produces, offline.permission_revoked)]>'
+    ),
+    'O-01-A-STRING-LITERAL-IS-NOT-A-COMMENT': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture), (a-plant/a-claim-about-a-code-nothing-produces, offline.permission_revoked)]>'
+    ),
+    'O-01-AN-ASSEMBLED-CODE-REGISTERS-THE-VALUE-IT-TESTS': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture), (a-plant/a-claim-about-a-code-nothing-produces, offline.permission_revoked)]>'
+    ),
+    'O-01-THE-COMPANION-S-SPELLING-IS-NOT-PART-OF-THE-GUARD': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture), (a-plant/a-claim-about-a-code-nothing-produces, offline.permission_revoked)]>'
+    ),
+    'O-02-A-STALE-EXEMPTION-REDDENS-WHEREVER-THE-MAP-IS-DECLARED': (
+        'org.opentest4j.AssertionFailedError: offline.a_code_no_claim_mentions is exempted from the observability loop, but no claim site in this check registered it and WaitIsHonest does not license it, so the exemption is stale and the next reader will take it for a justified one: claimed = [offline.already_abandoned, offline.already_recorded, offline.already_released, offline.already_sending, offline.another_members_capture, offline.cancel_after_send, offline.no_attempt_in_flight, offline.not_sendable, offline.scope_switched]'
+    ),
+    'O-03-A-CLAIM-SITE-NOTHING-EVALUATES-REGISTERS-NOTHING': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]>'
+    ),
+    'P-01-A-REGISTRATION-PROVES-THE-SITE-RAN-NOT-THAT-THE-CLAIM-WAS-EXERCISED': (
+        'org.opentest4j.AssertionFailedError: a claim this check makes was never EXERCISED: its site ran and registered, and the branch that tests the claim never did, so whatever it asserts was asserted of nothing. A site reached under a condition that excludes the cases its claim is about looks identical to a working one in every other assertion here, which is how a refusal telling a cashier that a colleague must confirm their own capture stayed green at 98 of 98 ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]>'
+    ),
+    'P-02-A-CLAIM-WRITTEN-AROUND-THE-HELPER-IS-ENROLLED-BY-NOTHING': (
+        'org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout, so whatever is claimed there is enrolled in neither registry and is asserted of nothing the moment the code stops being produced. Write it as a claim site. This is a CONVENTION CHECK and not a derivation: it can only add reds, and a spelling it does not know escapes it ==> expected: <[]> but was: <[827: when (step.code) {]>'
+    ),
+    'P-03-AN-ANCHOR-BOUNDS-THE-LOSS-OF-A-SITE-NOT-OF-A-CODE': (
+        'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture), (a-second-lawful-site/about-the-same-code, offline.not_sendable)]>'
+    ),
+    'P7-L1-DEVICE-IS-NOT-AUTHORITY': (
+        'org.opentest4j.AssertionFailedError: status 500 / code null produced Synced(replayed=false, law=P7-L6-A-REPLAY-IS-A-SUCCESS) — only a 2xx means the server committed (P7-L1-DEVICE-IS-NOT-AUTHORITY)'
+    ),
+    'P7-L1-DEVICE-IS-NOT-AUTHORITY-AT-THE-SCREEN': (
+        'org.opentest4j.AssertionFailedError: a CAPTURED FINANCIAL operation is presented as recorded money (P7-L1-DEVICE-IS-NOT-AUTHORITY) ==> expected: <SYNCED> but was: <CAPTURED>'
+    ),
+    'P7-L10-NO-LAST-WRITE-WINS-ON-MATERIAL-STATE': (
+        'org.opentest4j.AssertionFailedError: LAST_WRITE_WINS became legal for WRITE_COMMAND / FINANCIAL (P7-L10-NO-LAST-WRITE-WINS-ON-MATERIAL-STATE)'
+    ),
+    'P7-L11-NO-DEFAULT-EFFECT-CLASS': (
+        'org.opentest4j.AssertionFailedError: Expected an exception of class app.daftar.offline.UnclassifiedCommand to be thrown, but was completed successfully.'
+    ),
+    'P7-L12-QUEUE-ROW-CARRIES-ITS-OWNER': (
+        'org.opentest4j.AssertionFailedError: OwnerScope(tenant-1, , member-1) was accepted. Expected an exception of class java.lang.IllegalArgumentException to be thrown, but was completed successfully.'
+    ),
+    'P7-L13-A-PERSON-STILL-CANNOT-ACT-ON-ANOTHER-MEMBERS-CAPTURE': (
+        'org.opentest4j.AssertionFailedError: Release(actingScope=tenant-1/business-1/member-bob) by another member was allowed. Expected value to be of type <app.daftar.offline.Step$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Moved (Kotlin reflection is not available)>.'
+    ),
+    'P7-L13-AN-UNRELEASED-CAPTURE-HAS-AN-EXIT': (
+        'org.opentest4j.AssertionFailedError: a capture left behind by a shift change had no exit at all. Expected value to be of type <app.daftar.offline.Step$Moved (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Refused (Kotlin reflection is not available)>.'
+    ),
+    'P7-L13-NO-SEND-UNDER-A-SCOPE-IT-WAS-NOT-CAPTURED-UNDER': (
+        'org.opentest4j.AssertionFailedError: a cross-business send was allowed. Expected value to be of type <app.daftar.offline.Step$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Moved (Kotlin reflection is not available)>.'
+    ),
+    'P7-L13-ONLY-THE-CAPTURER-CONFIRMS-A-CAPTURE': (
+        'org.opentest4j.AssertionFailedError: another member confirmed a capture they cannot be shown to have witnessed. Expected value to be of type <app.daftar.offline.Step$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Moved (Kotlin reflection is not available)>.'
+    ),
+    'P7-L13-THE-BUSINESS-IS-NEVER-RELAXED': (
+        'org.opentest4j.AssertionFailedError: Send(digestNow=sha256:5e4d3c2b, actingScope=tenant-1/business-2/member-alice) from tenant-1/business-2/member-alice was allowed. Expected value to be of type <app.daftar.offline.Step$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Moved (Kotlin reflection is not available)>.'
+    ),
+    'P7-L13-THE-SEND-EFFECT-CARRIES-ITS-OWN-BUSINESS': (
+        "org.opentest4j.AssertionFailedError: a send carried a scope that is not the row's own: Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=QUEUED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) on Send(digestNow=sha256:0d5f1f2b, actingScope=tenant-1/business-1/member-2) (P7-L13-NO-SEND-UNDER-A-SCOPE-IT-WAS-NOT-CAPTURED-UNDER) ==> expected: <tenant-1/business-1/member-1> but was: <tenant-1/business-1/member-2>"
+    ),
+    'P7-L14-AN-UNREADABLE-QUEUE-ROW-IS-REFUSED': (
+        'org.opentest4j.AssertionFailedError: schema 2 was admitted. Expected an exception of class app.daftar.offline.UnreadableQueueRow to be thrown, but was completed successfully.'
+    ),
+    'P7-L15-NO-REENTRY-UNDER-A-NEW-KEY-BEFORE-THE-ORIGINAL-IS-SETTLED': (
+        'org.opentest4j.AssertionFailedError: re-entry under a new key was permitted. Expected value to be of type <app.daftar.offline.Reentry$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Reentry$Permitted (Kotlin reflection is not available)>.'
+    ),
+    'P7-L15-THE-RE-ENTRY-GATE-MUST-REACH-THE-TILL': (
+        'org.opentest4j.AssertionFailedError: the set of refusals that stop the till is not the set of re-entry refusals ==> expected: <[offline.original_already_committed, offline.original_unsettled, offline.absence_not_fenced, offline.prior_state_undetermined]> but was: <[offline.original_already_committed, offline.prior_state_undetermined, offline.absence_not_fenced]>'
+    ),
+    'P7-L16-EXPIRY-MINIMIZES-THE-PAYLOAD-NEVER-THE-OBLIGATION': (
+        'org.opentest4j.AssertionFailedError: expiry cleared the local row, which is the silent loss of money this law forbids'
+    ),
+    'P7-L16-MINIMIZATION-MUST-NOT-MAKE-SETTLEMENT-IMPOSSIBLE': (
+        'org.opentest4j.AssertionFailedError: a minimized row was queued for sending with no payload to send. Expected value to be of type <app.daftar.offline.Step$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Moved (Kotlin reflection is not available)>.'
+    ),
+    'P7-L17-AN-UNFENCED-ABSENCE-SETTLES-NOTHING': (
+        'org.opentest4j.AssertionFailedError: an absence that the original can still contradict was treated as settling it. Expected value to be of type <app.daftar.offline.Reentry$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Reentry$Permitted (Kotlin reflection is not available)>.'
+    ),
+    'P7-L17-NOTHING-MAY-INFER-A-FENCE': (
+        'org.opentest4j.AssertionFailedError: a fenced absence was inferred rather than stated by the server (P7-L17-AN-UNFENCED-ABSENCE-SETTLES-NOTHING) ==> expected: <[]> but was: <[Reconciliation.kt: status == 404) ReceiptLookup.ABSENT_FENCED]>'
+    ),
+    'P7-L18-THE-ORIGINAL-KEY-OUTRANKS-A-NEW-ONE': (
+        'org.opentest4j.AssertionFailedError: a recoverable original was not resent under its own key when the receipt said COMMITTED. Expected value to be of type <app.daftar.offline.Reentry$UseOriginalKey (Kotlin reflection is not available)>, actual <class app.daftar.offline.Reentry$Refused (Kotlin reflection is not available)>.'
+    ),
+    'P7-L19-A-STALE-ROW-IS-NOT-A-CURRENT-ONE': (
+        "org.opentest4j.AssertionFailedError: a restored backup's attempts == 0 was read as a fact about now (P7-L19-AN-UNVOUCHED-STORE-CANNOT-REPORT-ABSENCE) ==> expected: <UNDETERMINED> but was: <NEVER_SENT>"
+    ),
+    'P7-L19-AN-UNVOUCHED-STORE-CANNOT-REPORT-ABSENCE': (
+        'org.opentest4j.AssertionFailedError: an install that cannot vouch for its store reported an absence, which is F-01 ==> expected: <UNDETERMINED> but was: <NONE>'
+    ),
+    'P7-L19-UNDETERMINED-IS-NOT-ROUTED-TO-A-REFUSAL': (
+        'org.opentest4j.AssertionFailedError: (UNDETERMINED, COMMITTED, ORIGINAL_LOST) must not permit a new key. Expected value to be of type <app.daftar.offline.Reentry$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Reentry$Permitted (Kotlin reflection is not available)>.'
+    ),
+    'P7-L2-KEY-MINTED-AT-CAPTURE-AND-IMMUTABLE': (
+        'org.opentest4j.AssertionFailedError: expected: <9f8e7d6c-5b4a-4938-8271-615243f5e6d7> but was: <9f8e7d6c-5b4a-4938-8271-615243f5e6d7-1>'
+    ),
+    'P7-L20-A-FINISHED-ROW-DOES-NOT-SAY-WAIT': (
+        'org.opentest4j.AssertionFailedError: a DISCARDED row refused Release(actingScope=tenant-1/business-1/member-1) as offline.already_released ==> expected: <offline.already_abandoned> but was: <offline.already_released>'
+    ),
+    'P7-L20-A-RE-ENTRY-REFUSAL-DOES-NOT-SAY-WAIT': (
+        'org.opentest4j.AssertionFailedError: re-entry refused offline.absence_not_fenced for (UNKNOWN, ABSENT_UNFENCED, ORIGINAL_LOST) and the merchant is told CANNOT_CONFIRM_ORIGINAL_ENDED / WAIT_IT_IS_IN_PROGRESS — but re-entry is reached because the local row is gone, so nothing is pending on this device to wait for (P7-L20-A-DESTRUCTION-IS-RECORDED-BEFORE-IT-HAPPENS)'
+    ),
+    'P7-L20-A-STOCKTAKE-IS-NOT-DENOMINATED': (
+        'java.lang.IllegalArgumentException: a INVENTORY capture must state what it is worth; a destroyed row cannot be described later'
+    ),
+    'P7-L20-AN-ABANDONED-ROW-IS-NOT-A-SENT-ONE': (
+        'org.opentest4j.AssertionFailedError: a DISCARDED row refused Release(actingScope=tenant-1/business-1/member-1) as offline.cancel_after_send, which describes a row that is still live; the merchant is then told WAIT_IT_IS_IN_PROGRESS ==> expected: <offline.already_abandoned> but was: <offline.cancel_after_send>'
+    ),
+    'P7-L20-THE-ERASE-CARRIES-ITS-RECORD': (
+        'org.opentest4j.AssertionFailedError: the next shift was handed a bare erase, so the capture can be destroyed undescribed'
+    ),
+    'P7-L20-THE-KERNEL-DOES-NOT-JUDGE-A-TOTAL': (
+        'java.lang.IllegalArgumentException: a FINANCIAL capture must state what it is worth; a destroyed row cannot be described later'
+    ),
+    'P7-L20-THE-RECORD-SAYS-WHAT-WAS-LOST': (
+        'org.opentest4j.AssertionFailedError: the record cannot say how much was lost ==> expected: <12500> but was: <null>'
+    ),
+    'P7-L3-PAYLOAD-FROZEN-AT-CAPTURE': (
+        'org.opentest4j.AssertionFailedError: Expected value to be of type <app.daftar.offline.Step$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Moved (Kotlin reflection is not available)>.'
+    ),
+    'P7-L3-PAYLOAD-FROZEN-AT-CAPTURE-ACROSS-A-RESTORE': (
+        'org.opentest4j.AssertionFailedError: Expected value to be of type <app.daftar.offline.Step$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Moved (Kotlin reflection is not available)>.'
+    ),
+    'P7-L4-A-DEVICE-DEFECT-IS-NOT-A-MERCHANT-PROBLEM': (
+        'org.opentest4j.AssertionFailedError: expected: <THIS_NEEDS_A_DEVELOPER> but was: <ESCALATE_TO_A_SUPERVISOR>'
+    ),
+    'P7-L4-NO-SILENT-RESOLUTION-OF-A-MATERIAL-CONFLICT': (
+        'org.opentest4j.AssertionFailedError: Expected value to be of type <app.daftar.offline.Step$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Moved (Kotlin reflection is not available)>.'
+    ),
+    'P7-L5-NO-LOCAL-DELETE-BEFORE-A-CONFIRMED-OUTCOME': (
+        'org.opentest4j.AssertionFailedError: a sent sale was cancellable because it had returned to QUEUED. Expected value to be of type <app.daftar.offline.Step$Refused (Kotlin reflection is not available)>, actual <class app.daftar.offline.Step$Moved (Kotlin reflection is not available)>.'
+    ),
+    'P7-L6-A-REPLAY-IS-A-SUCCESS': (
+        'org.opentest4j.AssertionFailedError: status 200 gave NeedsAttention(code=offline.duplicate, diverged=false, law=P7-L6-A-REPLAY-IS-A-SUCCESS)'
+    ),
+    'P7-L7-A-LOST-RESPONSE-RESOLVES-ONLY-BY-REPLAY': (
+        'org.opentest4j.AssertionFailedError: attempt 1 gave NeedsAttention(code=offline.network, diverged=false, law=P7-L7-A-LOST-RESPONSE-RESOLVES-ONLY-BY-REPLAY)'
+    ),
+    # The ONE exemption, and it is a claim this file tests rather than a note:
+    # this plant's harm IS nondeterminism — it replaces a derived delay with
+    # `java.util.Random().nextLong()` — so the numbers in its refusal differ
+    # every run, and freezing them froze one run's dice. Measured: the harvest
+    # read `expected: <696> but was: <587>` and the verification run printed
+    # `expected: <311> but was: <571>`, which is the new check catching its own
+    # author. What is frozen is the REFUSAL; the numbers are the harm's own
+    # randomness. `HARM_IS_NONDETERMINISTIC` below keeps the exemption honest
+    # in both directions.
+    'P7-L8-THE-DEVICE-CLOCK-IS-NOT-AUTHORITY': (
+        'was not reproducible'
+    ),
+    'P7-L9-A-READ-CACHE-IS-REPLACED-NOT-MERGED': (
+        'org.opentest4j.AssertionFailedError: a cached read of FINANCIAL state may only be replaced ==> expected: <[SERVER_REPLACES]> but was: <[SERVER_REPLACES, FIELD_MERGE]>'
+    ),
+    'Q-01-A-CLAIM-EXERCISED-ONCE-IS-NOT-A-CLAIM-EXERCISED-OVER-ITS-DOMAIN': (
+        'org.opentest4j.AssertionFailedError: the claim at E-04/not-sendable-offers-a-button-its-reader-can-press about offline.not_sendable ran 6 times where its declared domain EVERY_PRODUCTION was reached 12 times. A claim that runs on some of its cases is asserted of the rest not at all, and a site reached under a condition that excludes the cases its claim is about registers and counts exactly like a working one until this ratio is read ==> expected: <12> but was: <6>'
+    ),
+    'Q-02-A-LABEL-NAMES-ONE-SITE': (
+        "org.opentest4j.AssertionFailedError: the label E-04/not-sendable-offers-a-button-its-reader-can-press occurs 3 times in this file's code, and it is declared for 1 claim(s) and named by 0 cover(s), so it should occur 2 times: once for each declaration, once for each cover that names it, and once at the single site that carries it. A label on two sites makes the registry's pairs collapse, which is how a site that asserts nothing can stand in for one that does ==> expected: <2> but was: <3>"
+    ),
+    'Q-02-TWO-SITES-UNDER-ONE-LABEL-RUN-TWICE-THEIR-DOMAIN': (
+        'org.opentest4j.AssertionFailedError: the claim at E-04/not-sendable-offers-a-button-its-reader-can-press about offline.not_sendable ran 12 times where its declared domain EVERY_PRODUCTION was reached 6 times. A claim that runs on some of its cases is asserted of the rest not at all, and a site reached under a condition that excludes the cases its claim is about registers and counts exactly like a working one until this ratio is read ==> expected: <6> but was: <12>'
+    ),
+    'Q-03-A-LOCAL-VARIABLE-IS-NOT-A-SPELLING': (
+        'org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout, so whatever is claimed there is enrolled in neither registry and is asserted of nothing the moment the code stops being produced. Write it as a claim site. This is a CONVENTION CHECK and not a derivation: it can only add reds, and a spelling it does not know escapes it ==> expected: <[]> but was: <[827: val codeHere = step.code]>'
+    ),
+    'R-01-A-COVER-THAT-NAMES-A-CLAIM-THAT-IS-NOT-THERE-COVERS-NOTHING': (
+        'org.opentest4j.AssertionFailedError: the gap the claim at INV-9a/a-foreign-scope-is-refused-as-a-scope-problem leaves is declared to be covered by the claim at INV-9c/a-claim-that-is-not-in-this-map about offline.another_members_capture over every production, and that claim is not in CLAIMS_THIS_CHECK_MAKES with that domain, so the cover names nothing that judges those 6 productions ==> expected: <EVERY_PRODUCTION> but was: <null>'
+    ),
+    'R-01-A-GAP-DECLARED-EMPTY-IS-MEASURED-EMPTY-OR-IT-REDS': (
+        'org.opentest4j.AssertionFailedError: the claim at INV-9a/a-foreign-scope-is-refused-as-a-scope-problem declares that nothing falls outside ON_A_FOREIGN_SCOPE_REFUSAL (every production of this code is a foreign-scope refusal), and 6 productions of offline.another_members_capture fall outside it. A reason is not a measurement ==> expected: <0> but was: <6>'
+    ),
+    'R-01-A-NARROW-DOMAIN-S-GAP-MUST-BE-COVERED-BY-SOMETHING-NAMED': (
+        'org.opentest4j.AssertionFailedError: the claim at E-04/not-sendable-offers-a-button-its-reader-can-press is declared over WHERE_THE_ACTOR_MAY_RELEASE, which was reached 6 times, while offline.not_sendable was produced 12 times in all. The 6 productions outside it are judged by this claim not at all, and nothing in WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT names what does cover them'
+    ),
+    'R-01-A-NARROW-DOMAIN-WITH-NO-DECLARED-COVER-IS-A-FAILURE-BEFORE-IT-IS-MEASURED': (
+        'org.opentest4j.AssertionFailedError: the claim INV-9a/a-foreign-scope-is-refused-as-a-scope-problem about offline.another_members_capture is declared over ON_A_FOREIGN_SCOPE_REFUSAL, which is narrower than every production of its code, and nothing in WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT says what covers the productions it leaves out. A narrow domain with no declared cover is a claim about part of a code and silence about the rest'
+    ),
+    'S-02-NARROWING-THE-PREDICATE-THAT-DEFINES-A-DOMAIN-MOVES-BOTH-COUNTS-TOGETHER': (
+        'org.opentest4j.AssertionFailedError: a different number of offline.another_members_capture refusals is now classed as a foreign-scope refusal, which is the class INV-9a judges ==> expected: <1125> but was: <1110>'
+    ),
+}
+
+# A refusal whose text a plant makes nondeterministic cannot be frozen whole,
+# and an exemption nobody checks is where the next hole goes. So the exemption
+# is read off the PROOFS THEMSELVES, in both directions: a law exempted whose
+# plant draws nothing is a stale exemption, and a plant that draws whose law is
+# not exempted is an expectation that will rot on the next run. Read from the
+# objects this run holds, never from this file's text.
+DRAWS_RATHER_THAN_DERIVES = re.compile(r"Random|currentTimeMillis|nanoTime|UUID\.randomUUID")
+HARM_IS_NONDETERMINISTIC: frozenset[str] = frozenset(
+    {"P7-L8-THE-DEVICE-CLOCK-IS-NOT-AUTHORITY"}
+)
+
+
+def plant_text(proof: Proof) -> str:
+    """Everything a plant writes into the tree, as one string."""
+    parts = [proof.find, proof.replace]
+    for edit in proof.edits:
+        parts.extend(edit[1:] if len(edit) == 3 else edit)
+    return "\n".join(parts)
+
+
+def exemption_failures(proofs: tuple[Proof, ...] | list[Proof]) -> list[str]:
+    """The exemption above, measured against the plants in this run."""
+    draws = {proof.law for proof in proofs if DRAWS_RATHER_THAN_DERIVES.search(plant_text(proof))}
+    failures = []
+    for law in sorted(HARM_IS_NONDETERMINISTIC - draws):
+        failures.append(
+            f"{law} is exempted from freezing the VALUES in its refusal because its plant draws "
+            f"them, and this run's plant for it draws nothing \u2014 a stale exemption is a "
+            f"refusal nobody is binding"
+        )
+    for law in sorted(draws - HARM_IS_NONDETERMINISTIC):
+        failures.append(
+            f"{law}'s plant draws a value rather than deriving it, so the numbers in its refusal "
+            f"differ every run, and it is not in HARM_IS_NONDETERMINISTIC \u2014 a frozen "
+            f"expectation holding those numbers would pass once and rot"
+        )
+    return failures
+
+
+FAILURE_DETAIL = re.compile(r"^\s+=>\s+(.+)$")
+
+
+def failures_with_details(log: str) -> dict[str, str]:
+    """Each failing test, with the refusal lines the runner printed under it."""
+    out: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in log.splitlines():
+        named = FAILURE_LINE.match(line)
+        if named:
+            current = named.group(2).strip()
+            out.setdefault(current, [])
+            continue
+        if current is not None and (detail := FAILURE_DETAIL.match(line)):
+            out[current].append(detail.group(1).strip())
+    return {name: " | ".join(lines) for name, lines in out.items()}
+
+
+def refusal_mismatch(law: str, expect_red: str, details: dict[str, str]) -> str | None:
+    """None when the named test's own refusal is the one this law declares."""
+    expected = EXPECTED_REFUSAL.get(law)
+    if not expected:
+        return (
+            f"{law}: no expected refusal is declared for this proof, so a red run proves the "
+            f"named test failed and not WHY it failed (F-2)"
+        )
+    printed = [text for name, text in details.items() if expect_red in name]
+    if any(expected in text for text in printed):
+        return None
+    return (
+        f"{law}: '{expect_red}' failed, but not with the refusal this proof declares. "
+        f"expected to contain: {expected!r}; printed: {printed or 'no refusal line at all'} "
+        f"\u2014 a proof that reddens for an unrelated reason measures the test's existence, "
+        f"not the law (F-2)"
+    )
+
+
+def self_test() -> int:
+    """Arm every branch of the two guards above, as a SUBPROCESS of the harness.
+
+    The coordinator's review of `771b525` proved the `did not redden` branch by
+    DELETING it, and recorded that no plant reaches it. A plant cannot: the
+    guards live in this file, and this file is the instrument rather than the
+    subject. So they are armed here, and `main` runs this as its own first step
+    through a separate interpreter \u2014 never by importing it, because a gate
+    inside the set it measures has to run as a subprocess.
+    """
+    cover = ("INV-9c/x", "offline.c")
+    other = ("DECOY/x", "offline.c")
+    checks: list[tuple[str, bool]] = []
+
+    def expect(name: str, ok: bool) -> None:
+        checks.append((name, ok))
+
+    with_entry = dict(A_PROOF_DEFENDS_THIS_COVER)
+    with_entry[cover] = "SOME-LAW"
+    globals()["A_PROOF_DEFENDS_THIS_COVER"] = with_entry
+    expect(
+        "a declared cover the run never printed is a refusal (F-1: omission)",
+        any("F-1: omission" in f for f in cover_failures(set(), {cover}, {"SOME-LAW"})),
+    )
+    expect(
+        "a printed cover no declaration contains is a refusal (F-1: forgery)",
+        any("F-1: forgery" in f for f in cover_failures({cover}, set(), {"SOME-LAW"})),
+    )
+    expect(
+        "a printed and declared cover with a reddened proof is clean",
+        cover_failures({cover}, {cover}, {"SOME-LAW"}) == [],
+    )
+    expect(
+        "a cover no proof is declared to defend is a refusal",
+        any("no proof in this file is declared" in f for f in cover_failures({other}, {other}, set())),
+    )
+    expect(
+        "a cover whose proof did not redden is a refusal",
+        any("did not redden" in f for f in cover_failures({cover}, {cover}, set())),
+    )
+    globals()["A_PROOF_DEFENDS_THIS_COVER"] = {
+        k: v for k, v in with_entry.items() if k != cover
+    }
+    expect(
+        "an unreadable declaration REFUSES rather than reading as zero covers",
+        _refuses_to_read(),
+    )
+    expect(
+        "a readable declaration of one cover reads as that one cover",
+        covers_the_source_declares(_SAMPLE_SOURCE) == {("INV-9c/x", "offline.c")},
+    )
+    globals()["EXPECTED_REFUSAL"] = {"SOME-LAW": "the number this law is about"}
+    expect(
+        "a named test failing with the declared refusal is clean (F-2)",
+        refusal_mismatch("SOME-LAW", "SomeTest", {"SomeTest:a case": "the number this law is about"})
+        is None,
+    )
+    expect(
+        "a named test failing with some OTHER refusal is a refusal (F-2)",
+        (refusal_mismatch("SOME-LAW", "SomeTest", {"SomeTest:a case": "never EXERCISED"}) or "")
+        .find("F-2") > 0,
+    )
+    expect(
+        "a law with no declared refusal is a refusal (F-2)",
+        (refusal_mismatch("NO-ENTRY", "SomeTest", {"SomeTest:a case": "anything"}) or "")
+        .find("F-2") > 0,
+    )
+
+    drawn = Proof(
+        law="DRAWN", path="p", find="val a = derived()",
+        replace="val a = java.util.Random().nextLong()", expect_red="t", why="w",
+    )
+    derived = Proof(
+        law="P7-L8-THE-DEVICE-CLOCK-IS-NOT-AUTHORITY", path="p", find="val a = derived()",
+        replace="val a = alsoDerived()", expect_red="t", why="w",
+    )
+    expect(
+        "a plant that DRAWS its values with no exemption is a refusal",
+        any("would pass once and rot" in f for f in exemption_failures([drawn])),
+    )
+    expect(
+        "an exemption whose plant draws nothing is a refusal",
+        any("stale exemption" in f for f in exemption_failures([derived])),
+    )
+    expect(
+        "the exempted law's own drawing plant is clean",
+        exemption_failures(
+            [Proof(law="P7-L8-THE-DEVICE-CLOCK-IS-NOT-AUTHORITY", path="p",
+                   find="val a = derived()", replace="val a = java.util.Random().nextLong()",
+                   expect_red="t", why="w")]
+        ) == [],
+    )
+
+    for name, ok in checks:
+        print(f"  SELF-TEST {'ok  ' if ok else 'FAIL'} {name}")
+    bad = [name for name, ok in checks if not ok]
+    if bad:
+        print(f"SELF-TEST FAILED ({len(bad)} of {len(checks)}): the guards are not armed.")
+        return 1
+    print(f"SELF-TEST: {len(checks)} of {len(checks)} guard branches armed.")
+    return 0
+
+
+_SAMPLE_SOURCE = """
+        val WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT:
+            Map<Pair<String, String>, WhatCoversTheRest> = mapOf(
+            ("INV-9a/x" to "offline.c")
+                to WhatCoversTheRest.AnotherClaimOverEveryProduction(
+                    "INV-9c/x",
+                ),
+        )
+"""
+
+
+def _refuses_to_read() -> bool:
+    """Three unreadable shapes, each of which must RAISE rather than return."""
+    for broken in (
+        "nothing here declares anything",
+        _SAMPLE_SOURCE.replace("mapOf(", "mapOf"),
+        _SAMPLE_SOURCE.replace('"INV-9c/x",', ""),
+        _SAMPLE_SOURCE.replace("AnotherClaimOverEveryProduction", "SomethingElse"),
+    ):
+        try:
+            covers_the_source_declares(broken)
+        except CannotRead:
+            continue
+        return False
+    return True
+
+
+def run_suite(tree: str) -> tuple[int, set[str], dict[str, str], str]:
+    """Compile and run the suite in `tree`.
+
+    Returns (rc, failing test names, each failing test's printed refusal, log).
+    The refusals are read for F-2: a red run has to say WHY it went red.
+    """
     env = dict(os.environ)
     env["P7_SRC"] = os.path.join(tree, "src")
     env["P7_TEST"] = os.path.join(tree, "test")
@@ -1204,14 +1870,31 @@ def run_suite(tree: str) -> tuple[int, set[str], str]:
     )
     log = proc.stdout + proc.stderr
     failing = {m.group(2).strip() for line in log.splitlines() if (m := FAILURE_LINE.match(line))}
-    return proc.returncode, failing, log
+    return proc.returncode, failing, failures_with_details(log), log
 
 
 def main() -> int:
+    harvesting = "--harvest" in sys.argv
+
+    # The guards' own guard, and it runs FIRST, in its own interpreter. A gate
+    # inside the set it measures runs as a subprocess, never imported: an
+    # imported self-test shares this process's globals, and this process is the
+    # thing being tested.
+    probe = subprocess.run(
+        [sys.executable, "-I", os.path.abspath(__file__), "--self-test"],
+        capture_output=True, text=True,
+    )
+    sys.stdout.write(probe.stdout)
+    sys.stdout.write(probe.stderr)
+    if probe.returncode != 0:
+        print("THE GUARDS ARE NOT ARMED — no proof below means anything. Fix the self-test first.")
+        return 1
+    print()
+
     baseline_tree = tempfile.mkdtemp(prefix="p7-baseline-")
     for part in ("src", "test"):
         shutil.copytree(os.path.join(ROOT, part), os.path.join(baseline_tree, part))
-    rc, failing, log = run_suite(baseline_tree)
+    rc, failing, _details, log = run_suite(baseline_tree)
     if rc != 0:
         print("BASELINE IS NOT GREEN — no red proof means anything against a red tree.")
         print(log[-4000:])
@@ -1223,6 +1906,20 @@ def main() -> int:
     print(
         f"COVERS THE SUITE DECLARED AT RUNTIME: {len(covers)}"
         + (f" \u2014 {sorted(covers)}" if covers else " \u2014 none")
+    )
+    # F-1's second derivation, read from the subject's own text, compared as a
+    # SET against the one above. Unreadable is a refusal, never zero.
+    declared_covers: set[tuple[str, str]] = set()
+    unreadable: str | None = None
+    try:
+        declared_covers = covers_the_source_declares(
+            open(os.path.join(ROOT, COVER_MAP_FILE), encoding="utf-8").read()
+        )
+    except (CannotRead, OSError) as cannot:
+        unreadable = str(cannot)
+    print(
+        f"COVERS THE SOURCE DECLARES: "
+        + (f"REFUSED \u2014 {unreadable}" if unreadable else f"{len(declared_covers)} \u2014 {sorted(declared_covers) or 'none'}")
         + "\n"
     )
 
@@ -1263,7 +1960,7 @@ def main() -> int:
                 )
             open(target, "w", encoding="utf-8").write(after)
 
-        rc, failing, _log = run_suite(tree)
+        rc, failing, details, _log = run_suite(tree)
         named = any(proof.expect_red in name for name in failing)
         if rc == 0:
             return (
@@ -1278,10 +1975,26 @@ def main() -> int:
                 f"(failed instead: {sorted(failing) or 'nothing named — did it compile?'})",
                 "RED, BUT NOT THE NAMED TEST",
             )
-        return (i, proof, None, f"RED as required ({len(failing)} case(s) failed)")
+        if harvesting:
+            printed = " | ".join(text for name, text in sorted(details.items()) if proof.expect_red in name)
+            print(f"HARVEST\t{proof.law}\t{printed}")
+            return (i, proof, None, f"RED as required ({len(failing)} case(s) failed)")
+        mismatch = refusal_mismatch(proof.law, proof.expect_red, details)
+        if mismatch is not None:
+            return (i, proof, mismatch, "RED, BUT NOT WITH THE DECLARED REFUSAL")
+        return (i, proof, None, f"RED as required ({len(failing)} case(s) failed), with the refusal it declares")
 
     print(f"Running {len(PROOFS)} proofs across {workers} worker(s); each in its own tree.\n")
     failures: list[str] = []
+    # An expectation for a law no proof carries is a STALE expectation: it was
+    # harvested from a proof that has since been renamed or removed, and it
+    # would read as coverage. A missing one is caught per proof, below.
+    stale = sorted(set(EXPECTED_REFUSAL) - {proof.law for proof in PROOFS})
+    if stale and not harvesting:
+        failures.append(
+            f"{len(stale)} expected refusal(s) are declared for laws no proof carries, so they "
+            f"describe nothing this run measured: {stale}"
+        )
     with ThreadPoolExecutor(max_workers=workers) as pool:
         results = sorted(pool.map(run_one, enumerate(PROOFS, start=1)), key=lambda r: r[0])
     for i, proof, failure, verdict in results:
@@ -1297,27 +2010,20 @@ def main() -> int:
     reddened = {
         proof.law for _i, proof, failure, _verdict in results if failure is None
     }
-    for cover in sorted(covers):
-        law = A_PROOF_DEFENDS_THIS_COVER.get(cover)
-        if law is None:
-            failures.append(
-                f"the claim at {cover[0]} is named as the cover for a narrow domain about "
-                f"{cover[1]}, and no proof in this file is declared to defend it \u2014 a cover "
-                f"checked for its domain and its ratio but never for what it asserts is a name, "
-                f"and a claim whose body cannot fail satisfies both of those checks"
-            )
-        elif law not in reddened:
-            failures.append(
-                f"the claim at {cover[0]} is named as the cover for a narrow domain about "
-                f"{cover[1]}, and the proof declared to defend it ({law}) did not redden in this "
-                f"run, so what that cover asserts is bound by nothing here"
-            )
+    if unreadable is not None:
+        failures.append(
+            f"the covers {COVER_MAP_FILE} declares could not be read, so the set the run printed "
+            f"is bounded by nothing: {unreadable} \u2014 a reader that cannot read REFUSES, "
+            f"because an unreadable declaration counting as zero covers is the hole F-1 names"
+        )
+    failures.extend(cover_failures(covers, declared_covers, reddened))
+    failures.extend(exemption_failures(PROOFS))
 
     # §83: the baseline must RESTORE green. Each proof ran in its own copy, so
     # nothing could have leaked into the original — but "could not have" is an
     # argument, and this is a measurement. It also catches the case the argument
     # misses: a proof that reached outside its copy.
-    rc, _, log = run_suite(baseline_tree)
+    rc, _, _, log = run_suite(baseline_tree)
     restored = re.search(r"\[\s*(\d+) tests successful", log)
     restored_cases = int(restored.group(1)) if restored else -1
     if rc != 0 or restored_cases != baseline_cases:
@@ -1351,8 +2057,15 @@ def main() -> int:
     print("  5. This is a RECORD, not a required CI step. Phase 7 is PREPARED / NOT PROMOTED.")
     print("  6. The cover obligation above (S-01) is enforced HERE and nowhere else, so it is")
     print("     conditional on this harness being run at a head \u2014 which limitation 5 is about.")
+    print("  7. Each proof's expected refusal (F-2) was HARVESTED from a measured run and then")
+    print("     frozen. It proves the reason a proof reds has not CHANGED since it was read; it")
+    print("     does not prove the reason was the right one on the day it was harvested.")
+    print("  8. 86 of those 89 refusals name the law or the refusal in prose. Three are bare")
+    print("     assertion text carrying the values that identify them, and ONE (P7-L8) is")
+    print("     exempted from freezing its values because its own plant draws them \u2014 an")
+    print("     exemption this harness measures against the plants, in both directions.")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(self_test() if "--self-test" in sys.argv else main())
