@@ -3024,7 +3024,18 @@ describe('every written invocation of the pack tools is isolated', () => {
     // lives in `vitest.config.ts`, whose bytes are pinned; it is READ here so
     // that it is not merely pinned, because a number nobody reads can drift
     // back to a false-red default in a diff that looks like a cleanup.
-    const runnerConfig = readFileSync(join(__dirname, '..', 'vitest.config.ts'), 'utf8');
+    const runnerConfigFile = readFileSync(join(__dirname, '..', 'vitest.config.ts'), 'utf8');
+    // The COMMENTS are stripped before anything is read out of this file, and
+    // the first version of this arm is why: the reasons written beside each
+    // setting quote values (`retry: 1` as the measurement that hid a red), and
+    // the reader matched the PROSE before the setting -- refusing that retry
+    // was 1 when the code set it to 0. A reader a comment can fool is the shape
+    // this phase hunts, so it reads CODE.
+    const runnerConfig = runnerConfigFile.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    expect(
+      runnerConfig.includes('defineConfig'),
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: stripping comments from vitest.config.ts left nothing that looks like a config, so this arm would be reading its own blind spot rather than the runner's settings`,
+    ).toBe(true);
     const clock = /testTimeout:\s*([0-9_]+)/.exec(runnerConfig);
     expect(
       clock,
@@ -3034,6 +3045,45 @@ describe('every written invocation of the pack tools is isolated', () => {
       Number((clock?.[1] ?? '0').replace(/_/g, '')),
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts sets a per-case timeout under 60000ms, which is close enough to this law's own measured durations that machine load alone can red it without naming a refusal`,
     ).toBeGreaterThanOrEqual(60_000);
+    // ROUND 59, THE COORDINATOR'S FOLLOW-UP on the gap this author named: the
+    // clock was ONE default of the runner that decides whether this law reaches
+    // a verdict, and it was not the only one. Each setting below is read here,
+    // by value, because pinning the config's BYTES says only that the file did
+    // not change -- it says nothing about a dependency bump changing what the
+    // ABSENCE of a setting means. `allowOnly` measured TRUE by default in this
+    // version, and one `it.only` in this file leaves every other case skipped.
+    //
+    // Why each can decide a verdict is written beside it in `vitest.config.ts`.
+    // The two that fail OPEN if they drift are `retry` (a non-deterministic red
+    // passes on a second attempt -- measured: with `retry: 1` and the clock back
+    // at 5000ms under load, this round's timeout red came back GREEN) and
+    // `dangerouslyIgnoreUnhandledErrors` (an unhandled rejection is swallowed
+    // and the file stays green). The rest fail CLOSED through the gate's own
+    // per-file case count, and are pinned so the diff never has to argue it.
+    for (const [key, want] of [
+      ['retry', '0'],
+      ['bail', '0'],
+      ['allowOnly', 'false'],
+      ['passWithNoTests', 'false'],
+      ['isolate', 'true'],
+      ['fileParallelism', 'false'],
+      ['maxConcurrency', '1'],
+      ['dangerouslyIgnoreUnhandledErrors', 'false'],
+    ] as const) {
+      const found = new RegExp(`\\b${key}:\\s*([A-Za-z0-9_']+)`).exec(runnerConfig);
+      expect(
+        found?.[1],
+        `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not set ${key} to ${want}, so this law's verdict depends on what the runner's DEFAULT for ${key} happens to be in the installed version -- and a default is not a decision. Set it explicitly in the same commit, with the reason beside it`,
+      ).toBe(want);
+    }
+    expect(
+      /pool:\s*'forks'/.test(runnerConfig),
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not pin the pool, so the execution model these cases are measured in is whatever the installed runner defaults to`,
+    ).toBe(true);
+    expect(
+      /sequence:\s*\{\s*shuffle:\s*false\s*\}/.test(runnerConfig),
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not pin sequence.shuffle to false, so a random case order could make an order-dependent pass or failure irreproducible -- which is the one thing a measured record cannot survive`,
+    ).toBe(true);
     //
     // THE RESIDUAL THIS ARM DOES NOT CLOSE, STATED AS MEASURED -- AND THE
     // PREVIOUS WORDING OF THIS PARAGRAPH WAS FALSE, which R51-F1 measured and
