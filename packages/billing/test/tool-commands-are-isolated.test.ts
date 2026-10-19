@@ -799,13 +799,78 @@ const REFUSED_OPEN_QUOTE = 'REFUSED-UNTERMINATED-QUOTE-BLOCK';
  * `refuseUnterminated` is how the arm deletes this check: with it false, the
  * tail is silently exempt again and fixture (d) goes green.
  */
-const scanDocument = (label: string, text: string, honourDeclaration: boolean, refuseUnterminated: boolean): [string[], number] => {
+const FENCE = /^\s*```/;
+
+/**
+ * The fence lines of a document, counted off its RAW lines.
+ *
+ * ROUND 39, THE COORDINATOR'S C-01. One reader, used by the scan AND by the
+ * fence census, so the two cannot disagree about where a block ends -- the
+ * census was blind to C-01 for exactly that reason.
+ */
+const fenceLineCount = (text: string): number => text.split('\n').filter((l) => FENCE.test(l)).length;
+
+/**
+ * Join continuation lines WITHIN one region, never across a fence.
+ *
+ * `logicalLines` joins over the whole document, which is what C-01 exploited:
+ * a backslash on the last quoted line swallowed the closing fence. Structure
+ * first, joining second.
+ */
+const joinWithin = (records: { n: number; raw: string }[]): { n: number; line: string }[] => {
+  const out: { n: number; line: string }[] = [];
+  for (let i = 0; i < records.length; i += 1) {
+    const start = records[i]?.n ?? 0;
+    let line = records[i]?.raw ?? '';
+    while (/\\\s*$/.test(line) && i + 1 < records.length) {
+      i += 1;
+      line = `${line.replace(/\\\s*$/, ' ')}${(records[i]?.raw ?? '').trim()}`;
+    }
+    out.push({ n: start, line });
+  }
+  return out;
+};
+
+const scanDocument = (
+  label: string,
+  text: string,
+  honourDeclaration: boolean,
+  refuseUnterminated: boolean,
+  fencesFromRawLines: boolean,
+): [string[], number] => {
   const found: string[] = [];
   let exemptBlocks = 0;
   let inFence = false;
   let exempt = false;
-  for (const { n, line } of logicalLines(text)) {
-    if (/^\s*```/.test(line)) {
+
+  // ROUND 39, C-01 (P1, a FAIL-OPEN): fences are recognised on RAW lines,
+  // BEFORE any continuation joining, and continuations are then joined only
+  // within a region. Reading fences off joined lines let a trailing backslash
+  // on the last quoted line swallow the closing fence, so the exemption ran
+  // on into prose the reader sees as copyable -- green over an un-isolated
+  // command. `fencesFromRawLines` is how the arm deletes this, and with it
+  // false the fixture goes green-wrong, which is the control.
+  //
+  // THE CLASS, in one line: never recognise structure on text something else
+  // has already rewritten.
+  const lines = fencesFromRawLines ? text.split('\n').map((raw, i) => ({ n: i + 1, raw })) : logicalLines(text).map(({ n, line }) => ({ n, raw: line }));
+
+  let region: { n: number; raw: string }[] = [];
+  const flush = (): void => {
+    if (region.length === 0) return;
+    const joinable = fencesFromRawLines ? joinWithin(region) : region.map(({ n, raw }) => ({ n, line: raw }));
+    for (const { n, line } of joinable) {
+      for (const m of line.matchAll(INVOCATION)) {
+        const v = verdictFor(m[1] ?? 'python3', m[2] ?? '');
+        if (!v.isolated) found.push(`${label}:${n}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
+      }
+    }
+    region = [];
+  };
+
+  for (const { n, raw } of lines) {
+    if (FENCE.test(raw)) {
+      flush();
       if (inFence) {
         inFence = false;
         exempt = false;
@@ -816,25 +881,24 @@ const scanDocument = (label: string, text: string, honourDeclaration: boolean, r
         // recognition lives HERE and nowhere else, and `honourDeclaration`
         // is how an arm deletes it -- one implementation, so no copy can
         // drift from the live scan the way a hand-kept twin would.
-        exempt = honourDeclaration && /f-50-quote/.test(line);
+        exempt = honourDeclaration && /f-50-quote/.test(raw);
         if (exempt) exemptBlocks += 1;
       }
       continue;
     }
     if (inFence && exempt) continue;
-    for (const m of line.matchAll(INVOCATION)) {
-      const v = verdictFor(m[1] ?? 'python3', m[2] ?? '');
-      if (!v.isolated) found.push(`${label}:${n}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
-    }
+    region.push({ n, raw });
   }
+  flush();
+
   if (refuseUnterminated && inFence && exempt) {
     found.push(`${label}: ${REFUSED_OPEN_QUOTE}: a declared quotation block is never closed, so the rest of this document was NOT scanned`);
   }
   return [found, exemptBlocks];
 };
 
-/** The live scan: the declaration is honoured, an open one refused. The ONLY caller of both. */
-const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], number] => scanDocument(label, text, true, true);
+/** The live scan: fences off raw lines, the declaration honoured, an open one refused. The ONLY caller of all three. */
+const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], number] => scanDocument(label, text, true, true, true);
 
 /**
  * Files that may contain a NUL byte and still not be read by this law, by
@@ -1185,6 +1249,60 @@ describe('every written invocation of the pack tools is isolated', () => {
     }
   });
 
+  it('C-01: a trailing backslash does not carry a declared block past its fence', () => {
+    // ROUND 39, THE COORDINATOR'S C-01 (P1, a FAIL-OPEN it measured itself,
+    // present since before the signed head). `logicalLines` joins any line
+    // ending in a backslash to the next RAW line, so when the last line
+    // INSIDE a declared block ends in a backslash -- an ordinary quoted
+    // multi-line shell command -- the closing fence is swallowed into it and
+    // never seen as a fence. The exemption then stays open; a later ordinary
+    // block "closes" it, so neither the end-of-input refusal nor the fence
+    // census fires, and the raw fence count is even. In CommonMark the
+    // backslash is literal inside a fence and the fence closes, so the reader
+    // sees the offence as copyable PROSE.
+    const offence = 'shimdir/python3 tools/manifest-digests.py --check';
+    const bs = ['```text f-50-quote', '$ echo quoted \\', '```', '', offence, '', '```text', '```'].join('\n');
+
+    const found = offencesOutsideQuotedBlocks('BS', bs);
+    expect(found[0], 'the offence after a backslash-ended quoted line is HIDDEN: the exemption ran past its fence').toHaveLength(1);
+    expect(found[0][0], 'the offence is reported without naming the refusal').toContain(REFUSED_INTERPRETER);
+    expect(found[1], 'the declared block was not counted exactly once').toBe(1);
+
+    // The same bytes with the backslash removed must behave identically, or
+    // the fix is about the backslash rather than about the fence.
+    const plain = bs.replace('$ echo quoted \\', '$ echo quoted');
+    expect(offencesOutsideQuotedBlocks('PLAIN', plain)[0], 'the backslash-free form disagrees with the backslash form').toHaveLength(1);
+
+    // GUARD DELETION: with fences read off JOINED lines again, the offence
+    // goes green-wrong -- the fail-open the coordinator measured.
+    const joined = scanDocument('BS', bs, true, true, false);
+    expect(joined[0], 'reading fences off joined lines no longer hides the offence, so the raw-line reader is not what found it').toStrictEqual([]);
+
+    // THE SWEEP the coordinator asked for, as a claim this file can check:
+    // every fence recognition must be applied to a RAW line. Needles
+    // assembled, or each counts its own literal.
+    const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
+    const call = ['FENCE', '.test('].join('');
+    // The needle is assembled, so it does not appear literally in this file
+    // and cannot count itself -- B-10's shape, watched for every time.
+    const allFenceTests = here.split(call).length - 1;
+    const onRaw = here.split(`${call}raw)`).length - 1;
+    const onSplitLines = here.split(`${call}l)`).length - 1;
+    expect(onRaw + onSplitLines, 'a fence is recognised on something other than a raw line, which is C-01 again').toBe(allFenceTests);
+    // The other two scans recognise NO structure, so joining cannot hide
+    // anything there: they read every line. Measured as the absence of a
+    // fence test outside the two sites above.
+    expect(allFenceTests, 'the fence reader grew a third site: it owes this arm a case').toBe(2);
+    // And the raw-line reader is deleted from one arm only, counted by shape.
+    const rawDeleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*true,\s*true,\s*false\)/g) ?? []).length;
+    expect(rawDeleting, 'a second caller reads fences off joined lines: it must be an arm, counted here').toBe(1);
+
+    // And a continuation INSIDE ordinary prose must still be joined, or the
+    // raw-line fence reader has broken F-52's continuation handling.
+    expect(offencesIn('fixture', 'python3 \\\n    tools/manifest-digests.py --check')).toHaveLength(1);
+    expect(offencesOutsideQuotedBlocks('CONT', 'python3 -I \\\n    tools/manifest-digests.py --check')[0]).toStrictEqual([]);
+  });
+
   it('F-66: a declared quotation block left OPEN refuses, instead of hiding the tail', () => {
     // ROUND 37, THE CHALLENGER'S F-66 (P1). The exemption was released only by
     // the next fence line, so a declared opener that is never closed hid every
@@ -1219,9 +1337,9 @@ describe('every written invocation of the pack tools is isolated', () => {
 
     // GUARD DELETION, one deletion: without the end-of-input refusal, (d) goes
     // green again -- the control -- while (c) stays red.
-    const withoutCheck = scanDocument('D', d, true, false);
+    const withoutCheck = scanDocument('D', d, true, false, true);
     expect(withoutCheck[0], 'with the end-of-input refusal deleted (d) still reports, so the check is not what reports it').toStrictEqual([]);
-    expect(scanDocument('C', c, true, false)[0], 'the deletion also changed (c), so it is not a pure deletion').toHaveLength(1);
+    expect(scanDocument('C', c, true, false, true)[0], 'the deletion also changed (c), so it is not a pure deletion').toHaveLength(1);
 
     // Reachability, measured rather than assumed: no document THIS LAW SCANS
     // has an odd fence count today, so the shape has no live instance -- it
@@ -1247,8 +1365,9 @@ describe('every written invocation of the pack tools is isolated', () => {
         // A binary is not a document; the law refuses one elsewhere, and this
         // census only counts fences.
         if (typeof text !== 'string') continue;
-        const fences = [...text.split('\n')].filter((l) => /^\s*```/.test(l)).length;
-        if (fences % 2 === 1) odd.push(name);
+        // ROUND 39: the ONE raw-line fence reader, shared with the scan, so
+        // the census cannot disagree with it about where a block ends.
+        if (fenceLineCount(text) % 2 === 1) odd.push(name);
       }
       expect(
         odd,
@@ -1274,7 +1393,7 @@ describe('every written invocation of the pack tools is isolated', () => {
 
     // And the two knobs are each reachable from one arm only.
     const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
-    const openDeleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*true,\s*false\)/g) ?? []).length;
+    const openDeleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*true,\s*false,\s*true\)/g) ?? []).length;
     expect(openDeleting, 'a second caller deletes the end-of-input refusal: it must be an arm, counted here').toBe(2);
   });
 
@@ -1310,7 +1429,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     // THREE: delete the recognition and the very same block reds, by name.
     // One deletion, in the one place the recognition lives.
     verdicts.clear();
-    const deleted = scanDocument('doc', quotedLive, false, true);
+    const deleted = scanDocument('doc', quotedLive, false, true, true);
     expect(deleted[1], 'the deletion still counted an exempt block').toBe(0);
     expect(deleted[0], 'with the declaration no longer recognised the block is still exempt, so the exemption is not what makes it exempt').toHaveLength(1);
     expect(deleted[0][0], 'the deletion reds without naming the refusal').toContain('REFUSED-UNCLASSIFIABLE-INTERPRETER');
@@ -1329,12 +1448,12 @@ describe('every written invocation of the pack tools is isolated', () => {
     // The needles are ASSEMBLED, or each one counts its own literal and the
     // arm reports one caller too many -- B-10's self-counting shape, for the
     // third time in this file.
-    const honourNeedle = ['scanDocument(label,', 'text,', 'true,', 'true)'].join(' ');
+    const honourNeedle = ['scanDocument(label,', 'text,', 'true,', 'true,', 'true)'].join(' ');
     const honouring = here.split(honourNeedle).length - 1;
     // Counted by SHAPE rather than by one spelling, so a differently written
     // deleting caller is counted too: any `scanDocument(...)` whose last
     // argument is `false`.
-    const deleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*false,\s*true\)/g) ?? []).length;
+    const deleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*false,\s*true,\s*true\)/g) ?? []).length;
     expect(honouring, 'the live wrapper that honours the declaration is no longer the only one').toBe(1);
     expect(deleting, 'a second caller deletes the declaration recognition: it must be an arm, counted here').toBe(1);
   });
