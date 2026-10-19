@@ -742,6 +742,7 @@ const isolatedBeforeF58 = (flags: string): boolean => flags.split(/\s+/).some((f
  * one `chmod` from `manifest-digests.py`'s shape. Not a list of names.
  */
 const REFUSED_LINES_NOT_ALL_TESTED = 'REFUSED-LINES-NOT-ALL-TESTED';
+const REFUSED_CONTENT_NOT_ALL_READ = 'REFUSED-CONTENT-NOT-ALL-READ';
 const REFUSED_SHEBANG_NOT_ISOLATED = 'REFUSED-SHEBANG-NOT-ISOLATED';
 const REFUSED_SHEBANG_WOULD_NOT_RUN = 'REFUSED-SHEBANG-WOULD-NOT-RUN';
 const REFUSED_RUNNABLE_WITHOUT_SHEBANG = 'REFUSED-RUNNABLE-WITHOUT-SHEBANG';
@@ -774,7 +775,9 @@ const shebangOf = (p: string): string => {
   return first.startsWith('#!') ? first : '';
 };
 
-const shebangVerdicts = new Map<string, { isolated: boolean; refusal?: string }>();
+const REFUSED_SHEBANG_NOT_CPYTHON = 'REFUSED-SHEBANG-DID-NOT-ANSWER-AS-CPYTHON';
+
+const shebangVerdicts = new Map<string, { isolated: boolean; refusal?: string; executable?: string }>();
 
 /**
  * Does this shebang line start an ISOLATED interpreter? MEASURED, never
@@ -787,26 +790,67 @@ const shebangVerdicts = new Map<string, { isolated: boolean; refusal?: string }>
  * under test -- and the single program argument is the scratch path this law
  * has just written.
  */
-const shebangIsolation = (shebang: string): { isolated: boolean; refusal?: string } => {
+const shebangIsolation = (shebang: string): { isolated: boolean; refusal?: string; executable?: string } => {
   const cached = shebangVerdicts.get(shebang);
   if (cached !== undefined) return cached;
-  let out: { isolated: boolean; refusal?: string };
+  let out: { isolated: boolean; refusal?: string; executable?: string };
   if (shebang === '') {
     out = { isolated: false, refusal: REFUSED_RUNNABLE_WITHOUT_SHEBANG };
   } else {
     const dir = mkdtempSync(join(tmpdir(), 'p5shebang-'));
     try {
       const script = join(dir, 'shebang-probe.py');
-      writeFileSync(script, `${shebang}\nimport sys\nprint(sys.flags.isolated)\n`, 'utf8');
+      // ROUND 44, R42-02 (P3), THE CHALLENGER'S: the probe used to print one
+      // digit, so `#!/usr/bin/env -S sh -c "echo 1" --` was cleared as an
+      // isolated CPython. The answer now has to come FROM PYTHON: the
+      // implementation name, the version as three integers, and the resolved
+      // interpreter path. What this closes is a shebang that does not start
+      // CPython at all -- R42-02's class, a mistake. It does not close an
+      // author who writes a shebang that echoes a convincing line on purpose;
+      // the refusal name says what was measured, and a deceptive shebang is a
+      // diff a reviewer reads, not a quantity this law can bound.
+      // The NONCE is what makes the answer unforgeable by a shebang that never
+      // runs the script: it exists only in this file, written microseconds
+      // ago, and only an interpreter that EXECUTES THE BODY can print it. I
+      // found the need for it by arming the deceptive case -- a shell shebang
+      // echoing a whole convincing answer line was cleared until the nonce
+      // went in, so this is measured rather than assumed.
+      const nonce = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+      writeFileSync(
+        script,
+        `${shebang}\nimport sys\nprint(sys.flags.isolated, sys.implementation.name, '.'.join(str(v) for v in sys.version_info[:3]), sys.executable, ${JSON.stringify(nonce)})\n`,
+        'utf8',
+      );
       chmodSync(script, 0o755);
+      // ROUND 44, R42-01 (P3), THE CHALLENGER'S, DECLARED HERE BECAUSE IT IS A
+      // SCOPE LIMIT AND NOT A BUG: `env -S` resolves `python3` through PATH,
+      // and this probe runs under a PINNED `PATH=/usr/bin:/bin`. So a green
+      // verdict is a statement about the `python3` THIS PATH resolves -- the
+      // resolved path is carried out in `executable` and recorded -- and not
+      // about whatever a reader's own PATH finds. The challenger measured a
+      // shim first on PATH taking the `-I` and being able to drop it. It is
+      // P3 because `-S python3 -I` is a complete fix for the harm this law
+      // names and because someone who controls a reader's PATH controls
+      // everything that reader runs; it is worth this sentence because a
+      // WRITTEN `shimdir/python3` is refused by name here, so interpreter
+      // identity is already a hazard this law takes seriously.
       const r = spawnSync(script, [], { encoding: 'utf8', timeout: 10_000, cwd: dir, env: { PATH: '/usr/bin:/bin', TMPDIR: dir } });
-      const stdout = (r.stdout ?? '').trim();
-      if (r.status !== 0 || (stdout !== '0' && stdout !== '1')) {
+      const fields = (r.stdout ?? '').trim().split(/\s+/);
+      const [isolated, implementation, version, executable, echoed] = fields;
+      if (r.status !== 0 || fields.length !== 5 || (isolated !== '0' && isolated !== '1')) {
         // Refused, not skipped: a shebang this law cannot RUN is a shebang it
         // cannot clear, and an unreadable answer is not a green one.
         out = { isolated: false, refusal: `${REFUSED_SHEBANG_WOULD_NOT_RUN} ${shebang}` };
+      } else if (
+        echoed !== nonce ||
+        implementation !== 'cpython' ||
+        !/^3\.\d+\.\d+$/.test(version ?? '') ||
+        executable === undefined ||
+        !existsSync(executable)
+      ) {
+        out = { isolated: false, refusal: `${REFUSED_SHEBANG_NOT_CPYTHON} ${shebang} -> ${(r.stdout ?? '').trim().slice(0, 80)}` };
       } else {
-        out = stdout === '1' ? { isolated: true } : { isolated: false, refusal: `${REFUSED_SHEBANG_NOT_ISOLATED} ${shebang}` };
+        out = isolated === '1' ? { isolated: true, executable } : { isolated: false, refusal: `${REFUSED_SHEBANG_NOT_ISOLATED} ${shebang}`, executable };
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -854,13 +898,94 @@ const shebangOffences = (dir: string): string[] => {
 const BARE_PATH = new RegExp(String.raw`(?:^|&&|\||;)\s*(?:[$>#]\s+)?((?:[A-Za-z0-9_.\-]*/)+(${TOOLS.join('|').replace(/\./g, '\\.')}))`, 'g');
 
 /**
- * The conservation refusal, as a FUNCTION of the two counts, so an arm can run
- * it over its whole domain instead of trusting the one call site: equal is the
- * only clean answer, and short refuses by name. A count stated as a law is
- * tested as a function -- [[daftar-a-count-stated-as-a-law-is-tested-as-a-function]].
+ * ROUND 44, THE CHALLENGER'S F-73 (P1, A FAIL-OPEN), AND THE COORDINATOR'S
+ * RULING.
+ *
+ * Round 43's conservation law counted the lines the loop REACHED, and both of
+ * those words were load-bearing in the wrong direction. The challenger found
+ * two single edits on the live path, each leaving the whole suite green while
+ * hiding an un-isolated command in an author-owned document that the same line
+ * without its token reds on:
+ *
+ *   (A) blank the CONTENT, keep the count:
+ *       `const probeLine = /f-51-quote/.test(line) ? '' : line;` and match on
+ *       `probeLine`. `tested += 1` still runs, so tested === total.
+ *   (B) drop the line INSIDE `logicalLines`, which is where `total` came
+ *       from, so both sides of the comparison moved together.
+ *
+ * I reproduced both before changing anything: the planted line reds normally
+ * (1 failed), and under each edit the suite is 23 passed with the offence
+ * invisible. (B) is P7 R11's lesson in my own file -- a subject set derived
+ * from a representation the subject can alter -- and my sentence "any skip
+ * added to the live path reds it, whatever it is called and however it is
+ * spelled" was FALSE for both spellings, which blocks on its own.
+ *
+ * So the invariant is now over the CONTENT the matchers actually read, and the
+ * expectation is read from the RAW TEXT, never from `logicalLines`:
+ *
+ *   - `rawExpectation` splits the text itself and derives, with no help from
+ *     `logicalLines`, how many logical lines it must produce and how many
+ *     NON-WHITESPACE characters those lines must carry. The continuation
+ *     joiner conserves non-whitespace characters except the one backslash it
+ *     consumes per join, which is why the count subtracts the joins. Both
+ *     numbers are also measured AGAINST `logicalLines` on every document the
+ *     law reads, so the derivation cannot drift from the function it predicts.
+ *   - `matchesOf` is the only way a matcher is applied, and it counts the
+ *     non-whitespace characters of the very string it matches -- one argument,
+ *     so there is no counting one string and matching another without editing
+ *     this function, which is a visible change to the instrument and not a
+ *     skip. A blanked line is a shortfall; a dropped line is a shortfall
+ *     against a raw-derived expectation; a third matcher is a surplus, because
+ *     the test is equality.
+ */
+const nonSpaceCount = (s: string): number => {
+  // A char loop rather than `s.match(/\S/g)`: this runs twice per line over
+  // every file of the repository, and the regex form allocated an array per
+  // call, which took the repository walk past its 5 s budget often enough to
+  // make the test intermittently time out. Same quantity, no allocation.
+  let n = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    // space, tab, LF, CR, FF, VT -- the whitespace `\S` excludes in the text
+    // this law reads, which is ASCII source and Markdown.
+    if (c !== 32 && (c < 9 || c > 13)) n += 1;
+  }
+  return n;
+};
+
+/** How many matchers every line is read by. Equality, so a third one reds. */
+const MATCHERS = 2;
+
+/**
+ * What `logicalLines` must produce for this text, derived from the RAW TEXT
+ * alone: the number of logical lines, and the non-whitespace characters they
+ * must carry between them.
+ */
+const rawExpectation = (text: string): { lines: number; content: number } => {
+  const raw = text.replace(/\r/g, '').split('\n');
+  let lines = 0;
+  let joins = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    // A raw line is swallowed by the one before it exactly when that one ends
+    // in a continuation backslash -- which chains, and needs no state.
+    if (i > 0 && /\\$/.test((raw[i - 1] ?? '').trim())) joins += 1;
+    else lines += 1;
+  }
+  return { lines, content: nonSpaceCount(text.replace(/\r/g, '')) - joins };
+};
+
+/**
+ * The conservation refusals, as FUNCTIONS of the counts, so an arm can run
+ * them over their whole domain instead of trusting one call site: equal is the
+ * only clean answer either way round, and anything else refuses by name. A
+ * count stated as a law is tested as a function --
+ * [[daftar-a-count-stated-as-a-law-is-tested-as-a-function]].
  */
 const conservationRefusal = (label: string, tested: number, total: number): string | undefined =>
   tested === total ? undefined : `${label}: ${REFUSED_LINES_NOT_ALL_TESTED} ${tested}/${total}`;
+
+const contentRefusal = (label: string, read: number, expected: number): string | undefined =>
+  read === expected ? undefined : `${label}: ${REFUSED_CONTENT_NOT_ALL_READ} ${read}/${expected}`;
 
 const scriptIndexes = new Map<string, ReadonlyMap<string, string>>();
 
@@ -994,6 +1119,19 @@ const FENCE = /^\s*```/;
  * historical fixture. The live scan passes false and exempts nothing.
  */
 /**
+ * The ONLY way a matcher is applied to a line, and the thing that counts what
+ * was read: one argument, so the string counted IS the string matched.
+ * F-73 (A) -- feeding the matcher a blanked copy of the line while the line
+ * counter still ran -- is not expressible through this function without
+ * editing the function.
+ */
+let contentRead = 0;
+const matchesOf = (s: string, re: RegExp): RegExpMatchArray[] => {
+  contentRead += nonSpaceCount(s);
+  return [...s.matchAll(re)];
+};
+
+/**
  * ROUND 43, R41-02 (P3), THE CHALLENGER'S: this is now the ONLY loop over
  * `matchAll`. There used to be three -- `offencesIn`, `scanDocument` and the
  * repository walk's own inline copy -- and with the exemption gone the first
@@ -1023,6 +1161,7 @@ const scanLines = (label: string, text: string, honourExemption: boolean, toolsD
   let exempt = false;
   let tested = 0;
   let seen = 0;
+  const readBefore = contentRead;
   for (const { n, line } of logicalLines(text)) {
     if (honourExemption) {
       if (FENCE.test(line)) {
@@ -1037,14 +1176,14 @@ const scanLines = (label: string, text: string, honourExemption: boolean, toolsD
       }
       if (inFence && exempt) continue;
     }
-    for (const m of line.matchAll(INVOCATION)) {
+    for (const m of matchesOf(line, INVOCATION)) {
       seen += 1;
       const v = verdictFor(m[1] ?? 'python3', m[2] ?? '');
       if (!v.isolated) found.push(`${label}:${n}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
     }
     // F-72: the same line, read for a tool invoked by its own path with no
     // interpreter token on it. The verdict is the tool's shebang, measured.
-    for (const m of line.matchAll(BARE_PATH)) {
+    for (const m of matchesOf(line, BARE_PATH)) {
       seen += 1;
       const v = bareVerdict(m[2] ?? '', toolsDir);
       if (!v.isolated) found.push(`${label}:${n}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
@@ -1069,8 +1208,15 @@ const scanLines = (label: string, text: string, honourExemption: boolean, toolsD
   // carries a line the skip matches, this refusal fires on that document. The
   // arm below measures exactly that pair.
   if (!honourExemption) {
-    const short = conservationRefusal(label, tested, logicalLines(text).length);
+    const expected = rawExpectation(text);
+    // Both numbers come from the RAW TEXT. F-73 (B) moved `total` by editing
+    // `logicalLines`, which is exactly what a raw-derived expectation refuses
+    // to follow -- and the arm below measures `logicalLines` against this
+    // prediction on every document, so a drift between them is itself a red.
+    const short = conservationRefusal(label, tested, expected.lines);
     if (short !== undefined) found.push(short);
+    const unread = contentRefusal(label, contentRead - readBefore, MATCHERS * expected.content);
+    if (unread !== undefined) found.push(unread);
   }
   return { found, tested, seen };
 };
@@ -1160,7 +1306,16 @@ describe('every written invocation of the pack tools is isolated', () => {
       offences,
       'an un-isolated invocation is written down: a reader who copies it runs the tool with PYTHONPATH and the user site directory on sys.path, which is F-50',
     ).toStrictEqual([]);
-  });
+    // ROUND 44: an EXPLICIT timeout, not a weakened assertion. This test reads
+    // every file of the repository and now counts characters twice per line, so
+    // it ran close to vitest's 5 s default and timed out roughly once in four
+    // full-suite runs on this container -- a red that said nothing about the
+    // code under test. I made the counter allocation-free first (the walk's own
+    // test time went from about 4.1 s to about 2.5 s, measured here, three runs
+    // each, and that is a figure about THIS container and nothing else), and
+    // this margin is for the parallel load of a full run. Nothing is skipped:
+    // every assertion above still has to pass.
+  }, 60_000);
 
   it('proves the scan can see an un-isolated invocation at all', () => {
     // The law above is a prohibition, so it needs a non-vacuity witness: a
@@ -1407,6 +1562,32 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(broken.isolated, 'a shebang that cannot run was cleared').toBe(false);
     expect(broken.refusal, 'an unrunnable shebang is not refused by name').toContain(REFUSED_SHEBANG_WOULD_NOT_RUN);
 
+    // ROUND 44, R42-02 (P3), THE CHALLENGER'S: the probe used to accept any
+    // process that printed `1`, so a shebang that starts a SHELL was cleared
+    // as an isolated CPython. The answer has to come from python now.
+    for (const [shebang, why] of [
+      ['#!/usr/bin/env -S sh -c "echo 1" --', "the challenger's own: a shell that prints the digit and never runs the tool"],
+      ['#!/usr/bin/env -S sh -c "echo 1 cpython 3.13.16 /usr/bin/python3" --', 'the same shell, imitating the whole answer'],
+    ] as [string, string][]) {
+      const v = shebangIsolation(shebang);
+      expect(v.isolated, `cleared as an isolated CPython: ${why}`).toBe(false);
+      expect(v.refusal, `refused without naming why: ${why}`).toBeDefined();
+    }
+    // The second of those is a DELIBERATELY DECEPTIVE shebang rather than a
+    // mistake, and it was CLEARED when I first armed it -- echoing a whole
+    // convincing answer line was enough. What refuses it now is the NONCE,
+    // which exists only in the probe script this law has just written, so only
+    // an interpreter that executes the body can print it. Both classes are
+    // measured, not one.
+
+    // ROUND 44, R42-01 (P3): a green verdict is a statement about the
+    // `python3` that THIS pinned PATH resolves, and the law now carries that
+    // path out so a record can name it rather than implying universality.
+    const resolved = shebangIsolation('#!/usr/bin/env -S python3 -I');
+    expect(resolved.executable, 'the verdict does not say which interpreter answered').toBeDefined();
+    expect(existsSync(resolved.executable ?? ''), 'the interpreter the probe reports does not exist').toBe(true);
+    expect(resolved.executable ?? '', 'the reported interpreter is not an absolute path').toMatch(/^\//);
+
     // THE BARE FORM IS SEEN, in the three spellings the challenger measured as
     // invisible -- and each is GREEN now only because the shebang isolates.
     for (const form of [
@@ -1474,7 +1655,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     }
   });
 
-  it('R41-01: the live scan TESTS every logical line, whatever a skip would be called', () => {
+  it('F-73: the live scan READS every character of every logical line, and the expectation is not its own', () => {
     // ROUND 43, R41-01 (P2), THE CHALLENGER'S. The regression guard was a
     // list of seven identifiers, and it was keyed to one INSTANCE and one
     // SPELLING: the challenger added a second declared-quotation reader to the
@@ -1485,10 +1666,24 @@ describe('every written invocation of the pack tools is isolated', () => {
     // `function` form of the very same name
     // passes.
     //
-    // A conservation law does not care what the skip is called. The live scan
-    // must TEST every logical line of the document; `tested` counts the lines
-    // it reaches the matchers with, and any `continue`, filter, exemption or
-    // early return on the live path takes that count below the total.
+    // ROUND 44, F-73 (P1, a fail-open), THE CHALLENGER'S: that law counted the
+    // lines the loop REACHED, against a total it read from `logicalLines`, and
+    // both halves were exploitable in one edit -- blank the content and keep
+    // the count, or drop the line inside `logicalLines` so both sides move
+    // together. My sentence here used to say "any skip added to the live path
+    // reds it, whatever it is called and however it is spelled". That was
+    // MEASURED FALSE for two spellings, and a reader sent to it stops auditing
+    // the live path, so it is replaced by what the law now actually measures:
+    //
+    //   - every logical line the RAW TEXT implies is reached by the matchers
+    //     (`tested` against `rawExpectation(text).lines`), and
+    //   - every non-whitespace character of those lines is READ by each of the
+    //     `MATCHERS` matchers (`contentRead` against `MATCHERS *
+    //     rawExpectation(text).content`), counted inside `matchesOf`, which is
+    //     the only way a matcher is applied.
+    //
+    // What that leaves UNMEASURED is stated below and unchanged: a skip whose
+    // predicate no scanned line satisfies.
     //
     // The fixture carries every structural shape I can name that has ever been
     // used to hide a line from this law, so the law is measured where the
@@ -1571,6 +1766,46 @@ describe('every written invocation of the pack tools is isolated', () => {
       scanLines('control', shapes, true).found.some((o) => o.includes(REFUSED_LINES_NOT_ALL_TESTED)),
       'the exemption arm is itself refused for testing fewer lines, so the control cannot show what the exemption hid',
     ).toBe(false);
+
+    // F-73's expectation is only worth anything if it PREDICTS `logicalLines`
+    // without consulting it. Measured on every shape that makes the joiner do
+    // something, including the degenerate ones: if the prediction and the
+    // function ever disagree, the live refusal fires on a real document, so
+    // this arm is what keeps a raw-derived total honest rather than merely
+    // independent.
+    for (const [why, text] of [
+      ['the shape fixture', shapes],
+      ['an empty document', ''],
+      ['one line, no newline', 'python3 -I tools/status-block.py --dir d'],
+      ['a trailing backslash at end of input', 'a \\'],
+      ['a chain of continuations', 'a \\\nb \\\nc'],
+      ['a continuation onto a blank line', 'a \\\n\nb'],
+      ['CRLF throughout', 'a\r\nb \\\r\n    c\r\n'],
+      ['two backslashes', 'a \\\\\nb'],
+      ['nothing but newlines', '\n\n\n'],
+    ] as [string, string][]) {
+      const lines = logicalLines(text);
+      const predicted = rawExpectation(text);
+      expect(predicted.lines, `${why}: the raw-derived line count does not predict logicalLines`).toBe(lines.length);
+      expect(predicted.content, `${why}: the raw-derived content count does not predict the characters logicalLines carries`).toBe(
+        lines.reduce((n, l) => n + nonSpaceCount(l.line), 0),
+      );
+    }
+
+    // And the content refusal as a function over its domain, both directions:
+    // short is a blanked or dropped line, surplus is a matcher nobody counted.
+    for (const n of [0, 1, 2, 97]) {
+      expect(contentRefusal('doc', n, n), `${n} of ${n} characters read is refused`).toBeUndefined();
+      for (const read of [n - 1, n + 1]) {
+        const bad = contentRefusal('doc', read, n);
+        expect(bad, `${read} of ${n} characters read is cleared`).toBeDefined();
+        expect(bad, 'the content refusal does not name itself').toContain(REFUSED_CONTENT_NOT_ALL_READ);
+        expect(bad, 'the content refusal does not carry both counts').toContain(`${read}/${n}`);
+      }
+    }
+    // The live scan reads each line with every matcher, so the expectation is
+    // a multiple and not a sum of guesses: one matcher short reds.
+    expect(MATCHERS, 'the matcher count changed without this expectation changing with it').toBe(2);
   });
 
   it('F-62/F-64: a value may not choose a program, a directory, or a module', () => {
