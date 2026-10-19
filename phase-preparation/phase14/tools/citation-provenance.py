@@ -53,9 +53,19 @@ END   = '<!-- END GENERATED citation-provenance -->'
 # cannot substitute another tree for the anchor's.
 ANCHOR = '93084f82b8e36ad49ebb207c0b6e7435d7fcb49f'
 
+# CHALLENGE R19-P0-01's scope half, measured rather than assumed: this tool had
+# `--no-replace-objects` and NO graft control, and its classification is
+# history-derived, so one line in `.git/info/grafts` turns its block stale
+# (rc 1) in a clone where it is current. That direction is fail-closed, so it
+# was not a second fail-open -- but the class reaches here and one key closes
+# both tools, so every git call of this tool now runs with the graft file
+# pointed at os.devnull. GIT_SHALLOW_FILE is deliberately NOT set: it makes
+# `rev-parse --is-shallow-repository` answer true on a full clone.
+GIT_ENV = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
+
 def git(repo, *args):
     return subprocess.run(['git','-C',repo,'--no-replace-objects',*args],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env=GIT_ENV)
 
 def tracked(repo, rev):
     r = git(repo,'ls-tree','-r','--name-only',rev)
@@ -76,8 +86,8 @@ def main():
     # CONTENT verdict, with two fixed points selected by cwd. --pack is the one
     # argument that cannot be wrong, so the repository is read from it.
     _top = subprocess.run(['git','-C',ap.get_default('pack'),
-                           'rev-parse','--show-toplevel'],
-                          capture_output=True, text=True)
+                           '--no-replace-objects','rev-parse','--show-toplevel'],
+                          capture_output=True, text=True, env=GIT_ENV)
     ap.add_argument('--repo', default=(_top.stdout.strip() or '.'))
     ap.add_argument('--base', default='93084f8')
     ap.add_argument('--other', default='6fc505d')

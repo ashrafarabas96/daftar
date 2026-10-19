@@ -1204,6 +1204,42 @@ for arm in base other; do
   fi
 done
 rm -rf "$R18"
+
+# ---- ROUND 19 (R19-P0-01), the same class one mechanism along: GRAFTS are not
+# disabled by --no-replace-objects or GIT_NO_REPLACE_OBJECTS. One line naming
+# the forging commit with no parents truncates `rev-list HEAD` to a single
+# commit, and the refusal restored in round 18 went away again at rc 0. A check
+# is no remedy here either: the SECOND arm puts the graft file somewhere else
+# with GIT_GRAFT_FILE, so `.git/info/grafts` is ABSENT while the truncation
+# still applies. Each arm asserts from git that the truncation is really in
+# effect -- the walk git serves is shorter than the one it serves with the
+# graft file pointed at /dev/null -- before it requires the refusal.
+G19=$(mktemp -d); SCRATCH="${SCRATCH:-} $G19"
+for arm in default elsewhere; do
+  mkreplace18 "$G19/$arm" base
+  R="$G19/$arm/repo"; MAN="$R/pack/P14-HANDOFF-MANIFEST.md"
+  # the replace refs are this proof's noise: delete them, so the ONLY
+  # truncation in the world is the graft.
+  ( cd "$R" && for r in $(git replace -l); do git replace -d "$r"; done ) >/dev/null 2>&1
+  GF="$R/.git/info/grafts"; PRE=""
+  if [ "$arm" = elsewhere ]; then GF="$G19/$arm/grafts-elsewhere"; PRE="GIT_GRAFT_FILE=$GF"; fi
+  ( cd "$R" && git rev-parse HEAD ) > "$GF" 2>/dev/null
+  nrep=$(cd "$R" && git for-each-ref refs/replace | wc -l | tr -d ' ')
+  ngraft=$(cd "$R" && env $PRE git rev-list HEAD 2>/dev/null | wc -l | tr -d ' ')
+  nfull=$(cd "$R" && GIT_GRAFT_FILE=/dev/null git rev-list HEAD 2>/dev/null | wc -l | tr -d ' ')
+  ndefault=0; [ -f "$R/.git/info/grafts" ] && ndefault=1
+  want_default=1; [ "$arm" = elsewhere ] && want_default=0
+  if [ "$nrep" = 0 ] && [ "$ngraft" = 1 ] && [ "$nfull" = 4 ] && [ "$ndefault" = "$want_default" ]; then
+    # At 06cbc8f both arms were rc 0 over "all 1 revision(s)" with NO refusal.
+    named "graft-$arm-refused" 1 "REFUSED: P14-CHALLENGE-test.md" \
+      "$PRE python3 -I $HERE/manifest-digests.py --manifest $MAN --dir $R/pack --witness $G19/$arm/none --check"
+  else
+    printf 'FAIL  %-26s premise not built (replace refs %s want 0, grafted walk %s want 1, ungrafted %s want 4, file at default path %s want %s) — nothing was proved\n' \
+           "graft-$arm" "$nrep" "$ngraft" "$nfull" "$ndefault" "$want_default"
+    fail=$((fail+1))
+  fi
+done
+rm -rf "$G19"
 rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"
 
 red retracted-claim-planted \

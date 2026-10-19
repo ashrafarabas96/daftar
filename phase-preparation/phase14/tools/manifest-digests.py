@@ -189,7 +189,27 @@ def main():
         # reinstated through the environment. This is the Phase 8 and Phase 13
         # lesson, written down in both and applied in the sibling tool, missing
         # from the one tool whose entire output is a claim about history.
-        _env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1')
+        # CHALLENGE R19-P0-01, the SAME CLASS one mechanism along: neither
+        # `--no-replace-objects` nor GIT_NO_REPLACE_OBJECTS disables GRAFTS.
+        # One line in `.git/info/grafts` naming the forging commit with no
+        # parents truncated `rev-list HEAD` to 1 commit WITH the flag set,
+        # and the refusal that had just been restored went away again at
+        # rc 0. A check is no remedy here either: with GIT_GRAFT_FILE
+        # pointing at a file somewhere else, `.git/info/grafts` is absent
+        # and the truncation still applies. git does print a deprecation
+        # hint on stderr, which this helper captures and discards, but the
+        # hint is not the remedy: `-c advice.graftFileDeprecated=false`
+        # silences it while the history stays truncated, the judged
+        # repository's own config can set that key, and a later git drops
+        # the hint along with the support. Pointing GIT_GRAFT_FILE at
+        # os.devnull is the remedy, and it covers BOTH arms. NOT added
+        # beside it: GIT_SHALLOW_FILE, measured by the challenger -- with
+        # that variable set, `rev-parse --is-shallow-repository` answers
+        # true on a full clone and this tool would refuse sound
+        # repositories with its shallow-boundary sentence. Shallowness is
+        # already handled by name.
+        _env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1',
+                    GIT_GRAFT_FILE=os.devnull)
         return subprocess.run(['git','-C',_md,'--no-replace-objects',
                                '-c','core.quotePath=false'] + list(argv),
                               capture_output=True, text=True, env=_env)
