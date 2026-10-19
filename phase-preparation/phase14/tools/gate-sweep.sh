@@ -1107,6 +1107,103 @@ for w in plain binary; do
   fi
 done
 rm -rf "$C17"
+
+# ---- ROUND 18 (R18-P0-01), a FAIL-OPEN. No git call of manifest-digests.py
+# disabled replace objects, and git honours refs/replace by default in every
+# subcommand the tool uses, so the history witness was supplied by a ref inside
+# the repository under judgement. The remedy is the FLAG on the helper, not a
+# check: the SECOND arm below moves the refs to refs/other/ with
+# GIT_REPLACE_REF_BASE, leaving refs/replace EMPTY, so any gate that merely
+# greps for replace refs reports clean while the forgery still passes.
+mkreplace18() { # $1 world dir, $2 base|other
+  local W="$1" MODE="$2"
+  rm -rf "$W"; mkdir -p "$W/repo/pack"
+  cp "$PACK/P14-HANDOFF-MANIFEST.md" "$W/repo/pack/P14-HANDOFF-MANIFEST.md"
+  printf 'a reviewer report, true content\n' > "$W/repo/pack/P14-CHALLENGE-test.md"
+  # a manifest carrying ONE row, for that report, with its TRUE digest
+  python3 -I - "$W" <<'R18A'
+import hashlib, sys
+W=sys.argv[1]
+b=open(W+'/repo/pack/P14-CHALLENGE-test.md','rb').read()
+p=W+'/repo/pack/P14-HANDOFF-MANIFEST.md'
+s=open(p,encoding='utf-8').read().split('\n')
+row='| `P14-CHALLENGE-test.md` | a test reviewer report | `%s` | %s |' % (
+    hashlib.sha256(b).hexdigest(), len(b))
+out=[l for l in s if not l.startswith('| `')]
+i=[n for n,l in enumerate(out) if l.startswith('|---')][0]
+open(p,'w',encoding='utf-8').write('\n'.join(out[:i+1]+[row]+out[i+1:]))
+R18A
+  ( cd "$W/repo" && git init -q . \
+    && git -c user.email=p14@local -c user.name=p14 add -A \
+    && git -c user.email=p14@local -c user.name=p14 commit -q -m 'honest 1' \
+    && printf 'an honest later note\n' >> pack/P14-HANDOFF-MANIFEST.md \
+    && git -c user.email=p14@local -c user.name=p14 commit -qam 'honest 2' \
+    && printf 'another honest note\n' >> pack/P14-HANDOFF-MANIFEST.md \
+    && git -c user.email=p14@local -c user.name=p14 commit -qam 'honest 3' ) >/dev/null 2>&1
+  # the forgery: the report grows a line nobody received, and its row is re-signed
+  printf 'an appended line nobody received\n' >> "$W/repo/pack/P14-CHALLENGE-test.md"
+  python3 -I - "$W" <<'R18B'
+import hashlib, re, sys
+W=sys.argv[1]
+b=open(W+'/repo/pack/P14-CHALLENGE-test.md','rb').read()
+p=W+'/repo/pack/P14-HANDOFF-MANIFEST.md'
+s=open(p,encoding='utf-8').read()
+s=re.sub(r'(\| `P14-CHALLENGE-test\.md` \| a test reviewer report \| `)[0-9a-f]{64}(` \| )[0-9]+( \|)',
+         r'\g<1>%s\g<2>%d\g<3>' % (hashlib.sha256(b).hexdigest(), len(b)), s)
+open(p,'w',encoding='utf-8').write(s)
+R18B
+  ( cd "$W/repo" && git -c user.email=p14@local -c user.name=p14 commit -qam 'forge: re-sign the row' ) >/dev/null 2>&1
+  # one REPLACEMENT commit per honest revision, each holding a manifest that
+  # already records the forged digest, built with plumbing only.
+  ( cd "$W/repo"
+    FORGED=$(git hash-object -w pack/P14-HANDOFF-MANIFEST.md)
+    OLDEST=$(git rev-list --max-parents=0 HEAD)
+    [ "$MODE" = other ] && export GIT_REPLACE_REF_BASE=refs/other/
+    for rev in $(git rev-list HEAD~1); do
+      git read-tree "$rev"
+      git update-index --add --cacheinfo 100644,$FORGED,pack/P14-HANDOFF-MANIFEST.md
+      t=$(git write-tree)
+      if [ "$rev" = "$OLDEST" ]; then new=$(git commit-tree $t -m replaced)
+      else new=$(git commit-tree $t -p ${rev}^ -m replaced); fi
+      git replace -f "$rev" "$new"
+    done
+    git read-tree HEAD; git checkout-index -af ) >/dev/null 2>&1
+}
+R18=$(mktemp -d); SCRATCH="${SCRATCH:-} $R18"
+for arm in base other; do
+  mkreplace18 "$R18/$arm" "$arm"
+  R="$R18/$arm/repo"; MAN="$R/pack/P14-HANDOFF-MANIFEST.md"
+  BASEREF=refs/replace; [ "$arm" = other ] && BASEREF=refs/other
+  nref=$(cd "$R" && GIT_REPLACE_REF_BASE=$BASEREF/ git for-each-ref "$BASEREF" | wc -l | tr -d ' ')
+  nplain=$(cd "$R" && git for-each-ref refs/replace | wc -l | tr -d ' ')
+  # the true root, read with replacement OFF so the lookup itself cannot be replaced
+  OLD=$(cd "$R" && git --no-replace-objects rev-list --max-parents=0 HEAD | tail -1)
+  # The premise that matters: at the OLDEST revision, the tree git serves WITH
+  # replacement differs from the one it serves with --no-replace-objects, i.e.
+  # the replacement is really in effect for a read of history.
+  if [ "$arm" = other ]; then
+    seen=$(cd "$R" && GIT_REPLACE_REF_BASE=refs/other/ git show "$OLD:pack/P14-HANDOFF-MANIFEST.md" | sha256sum | cut -c1-16)
+  else
+    seen=$(cd "$R" && git show "$OLD:pack/P14-HANDOFF-MANIFEST.md" | sha256sum | cut -c1-16)
+  fi
+  true_=$(cd "$R" && git --no-replace-objects show "$OLD:pack/P14-HANDOFF-MANIFEST.md" | sha256sum | cut -c1-16)
+  want_plain=3; [ "$arm" = other ] && want_plain=0
+  if [ "$nref" = 3 ] && [ "$nplain" = "$want_plain" ] && [ "$seen" != "$true_" ]; then
+    # At c001cd9 both arms were rc 0 over "all 1 revision(s)" with NO refusal.
+    if [ "$arm" = other ]; then
+      named replace-refs-off-base-refused 1 "REFUSED: P14-CHALLENGE-test.md" \
+        "GIT_REPLACE_REF_BASE=refs/other/ python3 -I $HERE/manifest-digests.py --manifest $MAN --dir $R/pack --witness $R18/$arm/none --check"
+    else
+      named replace-refs-refused 1 "REFUSED: P14-CHALLENGE-test.md" \
+        "python3 -I $HERE/manifest-digests.py --manifest $MAN --dir $R/pack --witness $R18/$arm/none --check"
+    fi
+  else
+    printf 'FAIL  %-26s premise not built (%s refs %s want 3, refs/replace %s want %s, replaced read %s vs true %s) — nothing was proved\n' \
+           "replace-refs-$arm" "$BASEREF" "$nref" "$nplain" "$want_plain" "$seen" "$true_"
+    fail=$((fail+1))
+  fi
+done
+rm -rf "$R18"
 rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"
 
 red retracted-claim-planted \

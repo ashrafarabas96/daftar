@@ -172,8 +172,27 @@ def main():
         # is ordinary. Every git call of this tool now runs with quoting OFF,
         # and a path that still arrives quoted is a NAMED REFUSAL below rather
         # than a skip.
-        return subprocess.run(['git','-C',_md,'-c','core.quotePath=false'] + list(argv),
-                              capture_output=True, text=True)
+        # CHALLENGE R18-P0-01, a FAIL-OPEN. Not one git call of this tool
+        # disabled REPLACE OBJECTS, and git honours `refs/replace` by default in
+        # rev-list, log, grep, show and ls-tree -- every subcommand used here.
+        # So the history this whole verdict rests on was supplied by a ref
+        # INSIDE the repository being judged: with one replacement commit per
+        # honest revision, each carrying a manifest that already records the
+        # FORGED digest, a forgery that is refused at rc 1 over 4 revisions
+        # passes at rc 0 over 1. The remedy is the FLAG, not a check: the same
+        # refs under `refs/other/` with `GIT_REPLACE_REF_BASE` set leave
+        # `refs/replace` EMPTY while the forgery still passes, so a gate that
+        # greps for replace refs reports clean. `--no-replace-objects` goes on
+        # the HELPER, before the subcommand, where no call site can forget it --
+        # the shape tools/citation-provenance.py already uses -- and
+        # GIT_NO_REPLACE_OBJECTS is set as well so a replacement cannot be
+        # reinstated through the environment. This is the Phase 8 and Phase 13
+        # lesson, written down in both and applied in the sibling tool, missing
+        # from the one tool whose entire output is a claim about history.
+        _env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1')
+        return subprocess.run(['git','-C',_md,'--no-replace-objects',
+                               '-c','core.quotePath=false'] + list(argv),
+                              capture_output=True, text=True, env=_env)
     def _quoted(path):
         '''True when git handed back a path this tool cannot use verbatim.'''
         return path.startswith('"') or '\\' in path
@@ -731,6 +750,27 @@ def main():
                      ' here means the name holds something this parse does not round-trip. It is'
                      ' refused rather than skipped, because a skipped revision is a record that'
                      ' was never compared.' % history)
+    # CHALLENGE R18, the challenger's own answer to a question I put to them:
+    # the two count proofs pin the FIGURE, not its provenance — a copy whose
+    # count ignores the walk and re-runs the marker leg's command is
+    # byte-identical on the real pack and in both proof worlds, so both proofs
+    # pass for it. That is harmless only while the invariant holds that every
+    # revision the marker leg found was seeded into the walked set, which makes
+    # `len(_marker_revs & set(_revmap))` identically `len(_marker_revs)`. An
+    # invariant a figure's honesty rests on is checked here by name, so a later
+    # change that recomputes the count independently is refused instead of
+    # sailing past two tautological proofs.
+    if not _marker_revs <= set(_revmap):
+        blocked = True
+        _lost = sorted(_marker_revs - set(_revmap))
+        history = ('NOT CHECKED (%d revision(s) the marker leg found are absent from the walked'
+                   ' set, the first being %s, so the count reported beside it would describe'
+                   ' neither set)' % (len(_lost), _lost[0][:12]))
+        stale.append('%s. The summary says how many of the WALKED revisions the marker leg found.'
+                     ' That sentence is only true while every marker-found revision is one of the'
+                     ' walked ones; if it is not, the number is an intersection of two sets that'
+                     ' no longer stand in that relation, and it is refused rather than printed.'
+                     % history)
     if _ambiguous is not None:
         blocked = True
         history = ('AMBIGUOUS (revision %s carries the manifest marker in %d files: %s)'

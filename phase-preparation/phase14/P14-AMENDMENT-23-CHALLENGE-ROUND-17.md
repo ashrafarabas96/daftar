@@ -127,7 +127,14 @@ write, which is the manifest itself.
   directories, with the anchor `93084f82b8e3` present in the repository so `citation-provenance` can
   run. 65 at `b49d612`; the two added are `marker-count-plain` and `marker-count-binary`.
 * `tools/manifest-digests.py --check` — rc 0, 57 artifact rows + the manifest, 57 files,
-  24 revisions, **1 of them found by the marker**, in both lanes.
+  ~~24 revisions~~, **1 of them found by the marker**, in both lanes.
+  **`24 revisions` RETRACTED IN ROUND 18 (`R18-P1-01`).** That is the PARENT's figure: at
+  `c001cd9` the manifest's own history is **25** revisions, because the commit publishing this
+  amendment modifies the manifest and so adds the revision being counted. Rows, files and the
+  marker count reproduce exactly; the revision count did not. See
+  `P14-AMENDMENT-24-CHALLENGE-ROUND-18.md` §2 for the rule this adds: a history-derived number
+  cannot be made safe by measuring it after the last document write, and has to be re-measured in
+  a clone of the PUSHED head.
 * `tools/citation-provenance.py` — rc 0. Its generated block in `P14-MIGRATION-PATCH-REQUEST.md`
   was regenerated this round and then re-checked, because this round's documents moved it.
 * `tools/retracted-claims.py` — rc 0, 24 claims across 33 pack documents, 26 reviewer reports
