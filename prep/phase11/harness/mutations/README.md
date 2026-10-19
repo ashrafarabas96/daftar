@@ -60,6 +60,20 @@ red-proved by restoring what was removed, and `PA7-S1` and `PA7-S3` are the two
 cases that must flip. `M20` is therefore the one mutation in this directory
 whose point is that it is NOT green.
 
+`M21` (round 9, finding `R9-F1`) is `PA8-O1`'s red proof, and it exists because
+a passing case measures nothing until something can make it fail. `PA8-O1` says
+the plant of a row for another transaction is refused for the ledger's OWNER as
+well, because the ledger is FORCE RLS. Three candidates were measured rather
+than reasoned about, and only one isolates that leg: `M15` leaves `PA8-O1`
+green (a FORCE RLS table with no `INSERT` policy is default-deny, so the plant
+is refused for a different reason), `M18` makes BOTH arms commit (it reds the
+predicate for every role at once and attributes nothing to the owner), and
+`M21` — `NO FORCE` with the policy kept — flips exactly one of the two. Its
+`daftar_app` sibling `PA6-L2` is the isolating control and must stay red. The
+apply-time half is a different defence and `M21` does not test it: removing the
+`FORCE ROW LEVEL SECURITY` line from a COPY of the pack makes the rebuild exit
+7 with `catalog.migration_end_state_invalid` by name.
+
 `M11`, `M20` mutate by TEXT SURGERY on the live function body rather than by
 pasting a copy of it, and they REFUSE outright if the text they target is not
 there — `M20` refuses in both directions, including when the clause it restores

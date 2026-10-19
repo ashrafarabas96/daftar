@@ -935,6 +935,61 @@ case("PA8-O1 the plant is refused for the OWNER too, because the ledger is FORCE
      "INSERT INTO catalog_grid_ctx_ledger (txid) VALUES ((pg_current_xact_id()::text::bigint + 7000)::text::xid8);\n"
      "COMMIT;",
      "new row violates row-level security policy", role="daftar_migrator", pre=rls_a_ctx)
+# THE NINTH ROUND, finding R9-F1's smaller arm. The eighth round's three-arm
+# table said the hand-supplied forgery is refused "by privilege", measured as
+# `daftar_app` -- and the OWNER holds `recorded_identity` implicitly, so that
+# leg does not cover it. Measured here rather than argued: it COMMITS, and the
+# chosen string persists. The claim is narrowed to what it is.
+case("PA9-O2 the OWNER can choose what is recorded about itself for its OWN txid: the privilege leg does not bind it",
+     "BEGIN;\n"
+     "INSERT INTO catalog_grid_ctx_ledger (txid, recorded_identity) VALUES (pg_current_xact_id(), 'a-chosen-identity');\n"
+     "SELECT 'chosen=' || count(*)::text FROM catalog_grid_ctx_ledger WHERE txid = pg_current_xact_id() AND recorded_identity = 'a-chosen-identity';\n"
+     "COMMIT;",
+     "chosen=1", role="daftar_migrator", pre=rls_a_ctx, kind="value")
+# AND WHAT IT BUYS, which is the half that matters and is the reason the arm
+# above is a narrowing rather than a finding. UNANIMITY is not "the recorded
+# identity must be honest"; it is "every recorded identity must agree". So a
+# chosen row beside a real write makes the transaction LESS able to commit.
+case("PA9-O3 and it buys the owner nothing on the path the law judges: a chosen row beside a real write is REFUSED",
+     "BEGIN;\n"
+     "INSERT INTO catalog_grid_ctx_ledger (txid, recorded_identity) VALUES (pg_current_xact_id(), 'forged-owner-identity');\n"
+     f"UPDATE product_variants SET status = status WHERE business_id='{A}' AND id='{G2}';\n"
+     "COMMIT;",
+     "catalog.matrix_grid_unverifiable", role="daftar_migrator", pre=rls_a_ctx)
+# THE HONEST NARROWING, stated as a case so it cannot quietly stop being true.
+# A governed write that engages NO live grid has nothing for the closure law to
+# judge, so the deferred check never runs and the two identities are simply
+# recorded. Nothing unlawful lands -- an axis with no matrix is lawful -- and
+# what is lost is ATTRIBUTION, not state. It is a named residual in
+# P11-LIVE-DDL-PROOF.md 16.5, not a claim that the law caught it.
+case("PA9-O4 the narrowing: a governed write engaging no live grid COMMITS with two identities recorded (attribution lost, no unlawful state)",
+     "BEGIN;\n"
+     "INSERT INTO catalog_grid_ctx_ledger (txid, recorded_identity) VALUES (pg_current_xact_id(), 'forged-owner-identity-2');\n"
+     f"INSERT INTO product_attribute_axes (business_id,axis_code,sort_order) VALUES ('{A}','nogridaxis',77) ON CONFLICT DO NOTHING;\n"
+     "SELECT 'identities=' || count(DISTINCT recorded_identity)::text FROM catalog_grid_ctx_ledger WHERE txid = pg_current_xact_id();\n"
+     "COMMIT;\n"
+     # and the axis is removed again AFTER the commit, so this case leaves the
+     # fixture's axis count where it found it. The structural RLS case a few
+     # sections up derives its expected count from the sections that create
+     # axes, by design, and a new case that silently moves that number is the
+     # kind of coupling that makes a suite pass for the wrong reason later.
+     f"DELETE FROM product_attribute_axes WHERE business_id='{A}' AND axis_code='nogridaxis';",
+     "identities=2", role="daftar_migrator", pre=rls_a_ctx, kind="value")
+# R9-F2. The ledger cannot be pruned the way a retention job would prune it,
+# and the failure mode is the dangerous kind: it reports success and then
+# CONFIRMS ITSELF. FORCE RLS binds the owner and no policy matches another
+# transaction's rows, so the owner deletes nothing, reads nothing, and a
+# superuser immediately afterwards still sees every row. Measured here so the
+# MPR-10 paragraph rests on this tree's instrument.
+case("PA9-P1 R9-F2: an owner-written prune deletes NOTHING and its own verification confirms the nothing",
+     "BEGIN;\n"
+     "WITH d AS (DELETE FROM catalog_grid_ctx_ledger RETURNING 1) SELECT 'deleted=' || count(*)::text FROM d;\n"
+     "SELECT 'owner_sees=' || count(*)::text FROM catalog_grid_ctx_ledger;\n"
+     "COMMIT;",
+     "deleted=0\nowner_sees=0", role="daftar_migrator", kind="value")
+case("PA9-P2 and a superuser sees the rows the owner just failed to delete and believed were gone",
+     "SELECT 'present=' || (count(*) > 0)::text FROM catalog_grid_ctx_ledger;",
+     "present=true", kind="value")
 case("PA7-S6 and nothing from the two refused savepoint chains committed: no axis of theirs exists and nothing is outside its grid",
      f"SELECT 'sp=' || count(*)::text FROM product_attribute_axes WHERE axis_code IN ('spaxis','spaxisb','tlaxis','tlaxisb','sprb2','zraxis');\n"
      f"""SELECT 'outside=' || count(*)::text FROM product_variants v

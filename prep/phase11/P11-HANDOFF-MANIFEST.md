@@ -477,9 +477,67 @@ Figures: Pack A **116 cases 0 failed on both passes** (the one new case is
 The challenger's own two-number gate table at `02befb6` is identical in every
 cell to `2bfb6d5`; no cold figure is quoted as attribution.
 
-**A NINTH round is owed**, and **nothing here is self-signed.**
-`READY_TO_PROMOTE` = **NO**; **no migration number exists**; no CI has executed
-any of it. `OD-P11-07` is the owner's.
+**The NINTH round was run; see §7.9.** Nothing here is self-signed.
+
+---
+
+## 7.9 The NINTH independent challenge round (2026-10-19) — **PASS-WITH-SCOPE** at `9c23f17`, two `P3` asks, both answered
+
+Narrow on `02befb6..9c23f17`. **`9c23f17` is the first head of this phase with
+all three review links complete**: the challenger's `PASS-WITH-SCOPE`, and a
+coordinator diff review that signs it after re-running the clean suite itself
+(116 ×2 and 53 ×2). The signature covers `9c23f17` only, with
+`f87a7ce0…` / `d5820ada…` / `02e31c35…`, and **does not transfer** — the follow-up
+commit below changes Pack A and the harness, so this head carries no signature
+and a tenth round is owed narrow on `9c23f17..HEAD`.
+
+Neither ask was a blocker and both are this phase's own standard applied to it:
+
+**`R9-F1` — `PA8-O1`'s red proof was owed.** A passing case measures nothing
+until something can make it fail, and the eighth round added `PA8-O1` with no
+mutation behind it. `M21-drop-force-on-the-ledger.sql` is that mutation; the
+three existing candidates were each measured and only `NO FORCE` with the
+policy kept flips exactly one of the two arms (§16.4 has the table). The same
+finding's smaller arm narrowed §16.1's third claim: the hand-supplied forgery
+is refused **by privilege**, and the owner holds `recorded_identity`
+implicitly, so that leg never covered the owner — measured as `PA9-O2`, where
+it commits and the chosen string persists.
+
+**`R9-F2` — the ledger cannot be pruned the way a retention job would prune
+it.** As the owner, `DELETE` returns `deleted=0` and the owner's own
+verification returns `0`, while a superuser immediately afterwards sees every
+row: FORCE RLS binds the owner and no policy matches another transaction's
+rows, so the job prunes nothing, reports success and confirms itself.
+`MPR-10` therefore has exactly two implementations — all-or-nothing `TRUNCATE`
+by the owner, or a superuser `DELETE` — and a time-windowed owner prune is not
+one of them. `P11-MIGRATION-PATCH-REQUEST.md` §16.6 and `P11-LIVE-DDL-PROOF.md`
+§16.6; `PA9-P1` and `PA9-P2` are the two reads.
+
+**And the third item, recorded as a named residual rather than a finding**
+(§16.5): what the owner's position buys is *nothing on the path the law
+judges* — a chosen row beside a real write is refused for recording two
+identities (`PA9-O3`) — with one honest narrowing, that a governed write
+engaging **no live grid** commits with two identities recorded, because the
+deferred check has nothing to judge. Nothing unlawful lands; **attribution** is
+what is lost (`PA9-O4`).
+
+Also closed by the challenger's own measurement, and recorded as mechanism
+rather than absence: every door that changes governed state records an
+identity — an `ON DELETE CASCADE` from a non-governed parent fires the
+`FOR EACH STATEMENT` recorder and the deletion is attributed; no application
+role holds `DELETE` on `products` or `businesses`; `COPY … FROM` is refused
+outright under row-level security even for the owner; `MERGE` records even when
+it matches nothing; and a session cannot delete its own ledger rows
+mid-transaction. What remains is `TRUNCATE` (closed by `R7-06`) and a trigger
+switched off (owner or superuser only, already named).
+
+Still `UNMEASURED` and named: ledger growth run to an actual failure, `UNLOGGED`
+as a choice, ledger concurrency, what a `businesses` cascade would record, and
+PG18.
+
+**A TENTH round is owed** on `9c23f17..HEAD`, and **nothing here is
+self-signed.** `READY_TO_PROMOTE` = **NO**; **no migration number exists**; no
+CI has executed any of it. `OD-P11-07` is the owner's.
 
 ---
 

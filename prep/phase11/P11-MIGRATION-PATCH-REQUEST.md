@@ -730,3 +730,49 @@ comment stripper, form 4 for Pack B's relations, the `session_replication_role`
 decision, the `ENABLE ALWAYS TRIGGER` question, ledger pruning, whether the
 ledger should be `UNLOGGED`, and this one. **No migration number exists**, and
 an EIGHTH challenge round is owed on Pack A.
+
+### 16.6 `MPR-10` — ledger pruning has exactly two implementations, and the obvious one is not among them (`R9-F2`)
+
+`MPR-10` already carried "ledger pruning" as a decision. The ninth challenge
+round asked for the failure mode to be on the record **before** it is decided,
+because it is the dangerous kind: it reports success and then confirms itself.
+
+Measured on a scratch cluster as the ledger's OWNER, `daftar_migrator`
+(`PA9-P1` and `PA9-P2` in the proof suite):
+
+```
+deleted=0            -- DELETE FROM catalog_grid_ctx_ledger
+owner_sees=0         -- the owner's own verification, in the same transaction
+superuser_sees=130   -- a superuser immediately afterwards
+```
+
+`catalog_grid_ctx_ledger` is `FORCE ROW LEVEL SECURITY`, so its policies bind
+the owner, and neither policy matches another transaction's rows. A retention
+job written as the owner therefore **deletes nothing, returns success, and its
+own verification query agrees with it**. Nothing in the job's output would say
+otherwise.
+
+**So the choice is between exactly two implementations:**
+
+1. **`TRUNCATE` as the owner.** It works. It is all-or-nothing: there is no way
+   to keep a retention window, because the owner cannot see or delete
+   individual rows. Note that `TRUNCATE` fires no trigger here (`R7-06`,
+   §16.5), so this path writes no record of itself.
+2. **`DELETE` as a superuser.** A superuser bypasses row-level security and can
+   apply a time window on `recorded_at`. It requires a superuser in the
+   retention path, which is outside every boundary this phase defines, and the
+   deploy line's roles are all `rolsuper = false, rolbypassrls = false`.
+
+**A time-windowed prune written as the owner is not an option**, and anything
+that looks like one is silently a no-op. A third possibility the Migration
+Owner may prefer — a `DELETE` policy on the ledger scoped to something other
+than the current transaction — is **not** proposed here: it would be the one
+lever unanimity cannot survive, because a role that can remove ledger rows can
+remove the honest ones and leave a forged one behind (that absence is asserted
+in the pack's end state and red-proved by `M14`).
+
+What growth costs until then is bounded rather than guessed:
+`catalog_grid_ctx_ledger_txid_idx` exists, so the deferred check's read does not
+degrade with row count; and the rows are visible to their own snapshot, so
+autovacuum cannot reclaim them. Growth run to an actual failure, and `UNLOGGED`
+as a choice, are both `UNMEASURED` and named as such.

@@ -2116,10 +2116,19 @@ in this repository's own suite, so it does not rest on a document outside it:
 | `PA6-L2` — a future `xid8` planted as `daftar_app` | `new row violates row-level security policy` |
 | **`PA8-O1`** — the same plant as the table's OWNER, `daftar_migrator` | **`new row violates row-level security policy`** |
 | `PA6-L1` — `recorded_identity` supplied by hand as `daftar_app` | `permission denied for table catalog_grid_ctx_ledger` |
+| **`PA9-O2`** — `recorded_identity` supplied by hand **as the OWNER**, for its own `txid` | **`chosen=1` — it COMMITS, and the chosen string persists** |
 
-`PROVEN BY TEST` on this tree, run in §16.2's figures. The end state already
-asserts `relrowsecurity AND relforcerowsecurity`; `PA8-O1` is what makes that
-assertion mean something behaviourally rather than catalogue-deep.
+`PROVEN BY TEST` on this tree. The fourth arm is the ninth round's narrowing of
+the third, and it matters: the third arm is refused **by privilege**, and the
+owner holds `recorded_identity` implicitly, so that leg never covered the
+owner. The claim is narrowed to what was measured rather than left to read as
+though it covered everyone. What the owner's position actually buys is §16.5,
+and the answer measured there is *nothing on the path the law judges*.
+
+The end state already asserts `relrowsecurity AND relforcerowsecurity`;
+`PA8-O1` is what makes that assertion mean something behaviourally rather than
+catalogue-deep — and `M21` (§16.4) is what makes `PA8-O1` mean something, which
+was owed and is the ninth round's finding `R9-F1`.
 
 ### 16.2 What the eighth round confirmed, and what it did not attack
 
@@ -2152,3 +2161,93 @@ that qualifier the sentence reads as though `PA7-S2` measures something under
 `M20`, and under `M20` `PA7-S2` measures a duplicate key. The file was right;
 the one-line summary of it was not. Recorded because it is the same defect as
 the finding above, one level down: the compression, not the measurement.
+
+### 16.4 `R9-F1` — `PA8-O1`'s red proof, which was owed
+
+A passing case measures nothing until something can make it fail. `PA8-O1`
+passed from the moment it was written, and by this phase's own standard — a
+claim the DDL makes should rest on this tree's instrument — the mutation was
+owed. The ninth round asked for it and measured all three existing candidates
+rather than reasoning about them; only one isolates the FORCE leg:
+
+All three candidates were run on this tree at this head, each on its own
+rebuild, and the figures are pass-1 counts over 121 Pack A cases:
+
+| candidate | reds | what happens to `PA8-O1` | why it cannot be the red proof |
+|---|---|---|---|
+| `M15` drop the own-transaction `INSERT` policy | 19 | **stays green** — not among the 19 | a FORCE RLS table with no `INSERT` policy is default-deny, so the plant is still refused, for a *different* reason |
+| `M18` make the write policy `PERMISSIVE` | 2 | commits — and so does `PA6-L2` | the two it reds are exactly both arms, so it reds the predicate for every role at once and attributes nothing to the owner |
+| **`M21` `NO FORCE`, policy kept** | **3** | **commits (`no error`), while `PA6-L2` stays refused** | — it is the only one that leaves the control red |
+
+`M21`'s third and fourth reds are a second, independent confirmation of §16.6:
+without FORCE, the owner's prune **works** — `PA9-P1` fails with `deleted=53`
+and `PA9-P2` with `present=false`. All three of `M21`'s flips are the same leg,
+and `PA6-L2` staying red is what says so.
+
+`M21-drop-force-on-the-ledger.sql` is that mutation. Its `daftar_app` sibling
+`PA6-L2` is the isolating control and must stay red: if both flipped, the
+mutation would be measuring the policy rather than the FORCE leg, which is
+precisely what `M18` does.
+
+The **apply-time** half is defended separately and `M21` does not test it:
+removing the single `ALTER TABLE … FORCE ROW LEVEL SECURITY` line from a COPY
+of Pack A makes the rebuild exit 7 with `catalog.migration_end_state_invalid:
+catalog_grid_ctx_ledger does not have row-level security both ENABLED and
+FORCED`, against a control that exits 0 — measured by the challenger on its own
+copy, with this repository's file byte-identical before and after
+(`f87a7ce0…`). `M21` runs at step 5c, after that assertion has already passed,
+which is the mutation hook's documented ordering limit (see `M13`) and is what
+makes a post-pack mutation of the live catalogue possible at all.
+
+### 16.5 What the owner's position buys — measured, and one honest narrowing
+
+The fourth arm of §16.1 is a narrowing, not a finding, and this is why.
+UNANIMITY is not "the recorded identity must be honest"; it is "every recorded
+identity must agree, and agree with the identity at COMMIT". So a chosen row
+beside a real write makes the transaction **less** able to commit:
+
+* `PA9-O3` — a chosen row, then a lawful variant write on a live grid, as the
+  owner: **rc 3**, `catalog.matrix_grid_unverifiable: this transaction recorded
+  2 different write identities across 2 writing statements`. Nothing lands.
+* The planted row also cannot be removed afterwards: there is no `DELETE`
+  policy, and the owner's own `DELETE` is RLS-filtered to zero rows — which is
+  §16.6's subject from the other direction.
+
+**The narrowing, stated as a case so it cannot quietly stop being true.**
+`PA9-O4`: a governed write that engages **no live grid** — an axis on no
+product's matrix — **commits** with two identities recorded, because the
+deferred closure check has nothing to judge and never runs. Nothing unlawful
+lands (an axis with no matrix is lawful); what is lost is **attribution**. That
+is a named residual, not a claim that the law caught it, and it is the ninth
+round's third recorded item.
+
+### 16.6 `R9-F2` — the ledger cannot be pruned the way it will be pruned
+
+`MPR-10` carries "ledger pruning" as a Migration Owner decision. Before it is
+decided, the failure mode is worth having, and it is the dangerous kind: it
+reports success and then **confirms itself**. Measured on this tree as the
+OWNER, `daftar_migrator`:
+
+```
+deleted=0            -- DELETE FROM catalog_grid_ctx_ledger
+owner_sees=0         -- the owner's own verification, same transaction
+superuser_sees=130   -- a superuser immediately afterwards
+```
+
+`PA9-P1` and `PA9-P2` are those two reads. FORCE RLS binds the owner and no
+policy matches another transaction's rows, so a retention job written as the
+owner prunes nothing, reports success, and verifies its own success. The
+owner's `TRUNCATE` does work and a superuser `DELETE` would.
+
+**And the cause is measured, not inferred.** Under `M21` — the same ledger with
+FORCE dropped and the policies kept — the identical prune **works**:
+`PA9-P1` fails with `deleted=53` and `PA9-P2` with `present=false`. So the
+self-confirming no-op is the FORCE leg's doing and nothing else's.
+
+So `MPR-10` has exactly **two** implementations — all-or-nothing `TRUNCATE` by
+the owner, or a `DELETE` as a superuser — and **a time-windowed owner prune is
+not one of them**. Bounding what growth costs in the meantime:
+`catalog_grid_ctx_ledger_txid_idx` exists, so the law's read does not degrade
+with row count; and the rows are visible to their own snapshot, so autovacuum
+cannot reclaim them. Growth run to an actual failure is `UNMEASURED`, as is
+`UNLOGGED` as a choice.
