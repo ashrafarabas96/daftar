@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * A model check of the queue, not a walk through a few scenarios.
@@ -71,19 +72,95 @@ class QueueModelCheckTest {
                 to ClaimDomain.EVERY_PRODUCTION,
             ("INV-15/a-finished-row-answers-in-its-own-terms" to "offline.already_abandoned")
                 to ClaimDomain.EVERY_PRODUCTION,
+            // INV-9c, and it is here because of the fourteenth review's
+            // R-01: the one claim with a narrow domain leaves productions of
+            // its code outside what it judges, and a COUNTER that measures
+            // that gap is not a cover for it. A cover has to be something
+            // NAMED, and this is the name: every production of
+            // `offline.another_members_capture`, in either class, is a row
+            // this acting session may not RELEASE. Declared over
+            // `EVERY_PRODUCTION`, so it judges the narrow claim's gap and its
+            // own domain at once.
+            ("INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it"
+                to "offline.another_members_capture")
+                to ClaimDomain.EVERY_PRODUCTION,
             // The only claim here whose domain is narrower than every
             // production of its code, and it is narrower for a reason that is
             // itself counted: `offline.another_members_capture` is produced on
             // a foreign-scope refusal, which INV-9a judges, AND by E-04's own
             // arm, where the event is permitted and the release is not. Those
             // are different questions about one code, so this claim's
-            // denominator is the foreign-scope count — and the partition
-            // assertion below requires every production of the code to fall in
-            // one of those two classes, so a third producer reds rather than
-            // hiding in the gap a narrower domain opens.
+            // denominator is the foreign-scope count. What the gap that opens
+            // is covered BY is declared in
+            // `WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT` and asserted, and
+            // the partition assertion below is kept as a second, independent
+            // reading of the same facts rather than as the accounting itself.
             ("INV-9a/a-foreign-scope-is-refused-as-a-scope-problem" to "offline.another_members_capture")
                 to ClaimDomain.ON_A_FOREIGN_SCOPE_REFUSAL,
         )
+
+        /**
+         * What covers the productions a claim's NARROW domain leaves out.
+         *
+         * The fourteenth review's R-01, a fail-open along this file's own
+         * extension path. The denominator is chosen by an exhaustive `when`,
+         * so a new `ClaimDomain` value is forced to supply one — that half was
+         * fail-closed. The accounting was not: it was an
+         * `if (domain == ON_A_FOREIGN_SCOPE_REFUSAL)` around a partition
+         * assertion, so a THIRD value got a denominator and no accounting at
+         * all, and the compiler said nothing. Declaring a third domain the way
+         * this file declares its second — the value, a counter beside the
+         * others, incremented at the top of the refusal arm, a `when` branch —
+         * and wrapping E-04's site in that same condition was measured at
+         * **99 of 99 GREEN with E-04's harm underneath**.
+         *
+         * Two things close it, and the second is the one that bites.
+         *
+         * 1. **The gap is detected by MEASUREMENT, not by the enum.** Any
+         *    claim whose denominator is below every production of its code has
+         *    a gap, whatever its domain is called and whenever that domain was
+         *    added, so there is no per-domain branch for a later author to
+         *    write as `-> {}`.
+         * 2. **A gap must be covered by something NAMED.** A complement
+         *    counter is not a cover: any author can add one, derived from the
+         *    very predicate that narrows the site, and the partition then
+         *    holds by construction — which is exactly how R-01's plant works.
+         *    So a cover is either another claim IN THIS MAP, about the same
+         *    code, declared over `EVERY_PRODUCTION`, whose site is named here
+         *    and asserted to be there; or a reasoned statement that nothing is
+         *    left out, which is asserted by MEASURING the gap at zero. A
+         *    reason that is merely written down covers nothing.
+         *
+         * Checked with no grandfathering, on the coordinator's ruling: the
+         * narrow domain this file already had did not satisfy this rule, and
+         * INV-9c above is the claim that was added so that it does.
+         */
+        val WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT:
+            Map<Pair<String, String>, WhatCoversTheRest> = mapOf(
+            ("INV-9a/a-foreign-scope-is-refused-as-a-scope-problem" to "offline.another_members_capture")
+                to WhatCoversTheRest.AnotherClaimOverEveryProduction(
+                    "INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it",
+                ),
+        )
+
+        /** What a narrow claim's gap is covered by. See the map above. */
+        sealed interface WhatCoversTheRest {
+            /**
+             * Another claim in `CLAIMS_THIS_CHECK_MAKES`, about the SAME code,
+             * declared over `EVERY_PRODUCTION` — so the productions this
+             * claim's domain excludes are inside that one's. The site is named
+             * here and asserted to be present with that domain, so renaming or
+             * narrowing the covering claim reds instead of going quiet.
+             */
+            data class AnotherClaimOverEveryProduction(val site: String) : WhatCoversTheRest
+
+            /**
+             * Nothing is left out. The reason is recorded for the reader, and
+             * the claim is checked by measuring the gap at ZERO rather than by
+             * reading the reason.
+             */
+            data class NothingIsLeftOut(val why: String) : WhatCoversTheRest
+        }
 
         /**
          * What a claim's body is required to have run over: the DENOMINATOR
@@ -430,11 +507,32 @@ class QueueModelCheckTest {
      * as 2N against N, so the pair anchor no longer has to be defended by a
      * convention about labelling.
      *
-     * The residual, named because it is the next thing to attack and the
-     * review has already announced it: a site whose declared DOMAIN is itself
-     * steered. Three of the five claims declare `EVERY_PRODUCTION`, which is
-     * the strongest denominator available, and two declare a narrower one
-     * that is counted independently of the branch the site sits in.
+     * **What this registry does NOT bound, stated here because this is where
+     * its promise is made (the fourteenth review's R-02).** The pairs and the
+     * counts bound a site's EXISTENCE and its FREQUENCY: a site removed, a
+     * site never evaluated, a site that runs on part of its domain, a label on
+     * two sites. They do not bound a site's CONTENT. A DECOY — the same site,
+     * the same label, the same number of runs, with its assertions deleted —
+     * satisfies every equality here, and was measured green at 99 of 99 with
+     * E-04's harm underneath, by this session and then independently by the
+     * review. The only instrument that bounds content is the red-proof
+     * harness, `tools/red_proofs.py`, which reports that same tree as
+     * `the suite stayed GREEN with the defect planted — the law is undefended`
+     * and exits 1. **And that harness is not a required step anywhere:** it
+     * says so in its own limitations, it is run by a person at a head, and no
+     * workflow in this repository runs anything under `prep/phase7`. So the
+     * assurance against a decoy is conditional on the harness being run, and
+     * a reader who takes this registry for the whole guard is reading it
+     * wrong.
+     *
+     * The residual that WAS named here as the next thing to attack — a site
+     * whose declared DOMAIN is itself steered — was attacked, and the
+     * fourteenth review's R-01 found the level above it: not the domain of a
+     * site, but the ACCOUNTING for what a narrow domain leaves out. See
+     * `WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT`. Four of the six claims
+     * declare `EVERY_PRODUCTION`, which is the strongest denominator
+     * available, and the one narrow domain is counted independently of the
+     * branch its site sits in and has its gap covered by a NAMED claim.
      */
     private val claimsExercised = mutableSetOf<Pair<String, String>>()
 
@@ -560,6 +658,30 @@ class QueueModelCheckTest {
                 "file is built on rather than the comparisons it means to forbid",
         )
 
+        // FAIL-CLOSED, by declaration and before any measurement: a claim
+        // declared over a domain narrower than every production of its code
+        // must say here what covers the productions it leaves out. The
+        // coordinator's condition on the fourteenth review's R-01 is that a
+        // new `ClaimDomain` value be a FAILURE until its accounting exists,
+        // not merely that the gap be noticed once a search measures one. The
+        // count equality in the other test reds on a measured gap with no
+        // cover; this reds on the DECLARATION, so a new narrow domain whose
+        // gap this particular search happens not to reach is a red here as
+        // well. The denominator's own `when` is exhaustive with no `else`, so
+        // the compiler already refuses a value with no denominator: between
+        // the three, a domain cannot be added quietly.
+        for ((claim, domain) in CLAIMS_THIS_CHECK_MAKES) {
+            if (domain == ClaimDomain.EVERY_PRODUCTION) continue
+            assertTrue(
+                claim in WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT,
+                "the claim ${claim.first} about ${claim.second} is declared over $domain, which is " +
+                    "narrower than every production of its code, and nothing in " +
+                    "WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT says what covers the productions it " +
+                    "leaves out. A narrow domain with no declared cover is a claim about part of a " +
+                    "code and silence about the rest",
+            )
+        }
+
         // And a site's LABEL names one site, which is the other half of the
         // same convention.
         //
@@ -577,22 +699,32 @@ class QueueModelCheckTest {
         //
         // This closes the deliberate one at the only place it can be seen: a
         // label occurs once where its site is, plus once for each pair
-        // declared under it. It is part of the CONVENTION CHECK and carries
-        // the same fail-open as the rest of it — it reads text, and it is not
-        // what the registry relies on.
+        // declared under it, plus once wherever a COVER names it — and the
+        // last of those three is counted from the declared maps, never from
+        // the text, so a label cannot buy itself an extra occurrence by being
+        // written into a comment or a string. It is part of the CONVENTION
+        // CHECK and carries the same fail-open as the rest of it — it reads
+        // text, and it is not what the registry relies on.
         for ((site, pairs) in CLAIMS_THIS_CHECK_MAKES.keys.groupBy { it.first }) {
             val occurrences = text.lines().count { line ->
                 val code = line.trimStart()
                 val prose = code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")
                 !prose && site in code
             }
+            val namedByACover =
+                WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT.keys.count { it.first == site } +
+                    WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT.values.count {
+                        it is WhatCoversTheRest.AnotherClaimOverEveryProduction && it.site == site
+                    }
+            val expected = pairs.size + 1 + namedByACover
             assertEquals(
-                pairs.size + 1, occurrences,
+                expected, occurrences,
                 "the label $site occurs $occurrences times in this file's code, and it is " +
-                    "declared for ${pairs.size} claim(s), so it should occur ${pairs.size + 1} " +
-                    "times: once for each declaration and once at the single site that carries " +
-                    "it. A label on two sites makes the registry's pairs collapse, which is how " +
-                    "a site that asserts nothing can stand in for one that does",
+                    "declared for ${pairs.size} claim(s) and named by $namedByACover cover(s), so " +
+                    "it should occur $expected times: once for each declaration, once for each " +
+                    "cover that names it, and once at the single site that carries it. A label on " +
+                    "two sites makes the registry's pairs collapse, which is how a site that " +
+                    "asserts nothing can stand in for one that does",
             )
         }
     }
@@ -684,6 +816,39 @@ class QueueModelCheckTest {
                                         ),
                                     "a session that may not confirm this row was told to confirm it " +
                                         "(offline.not_sendable): $op on $event",
+                                )
+                            }
+
+                            // INV-9c, added for the fourteenth review's R-01.
+                            // `offline.another_members_capture` has two
+                            // producers — a foreign-scope refusal inside one
+                            // business, and E-04's own arm on a CAPTURED row —
+                            // and INV-9a judges only the first of them. What
+                            // is true of BOTH is the sentence the merchant is
+                            // shown: this is somebody else's capture, so this
+                            // session may not release it. Asserted over every
+                            // production of the code, which is what makes it a
+                            // cover for INV-9a's narrower domain rather than a
+                            // counter that measures the gap and judges none of
+                            // it. The question is asked of this file's own
+                            // `permittedToAct` with a Release, never of the
+                            // kernel's `mayAct`.
+                            claimAbout(
+                                "INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it",
+                                "offline.another_members_capture",
+                                step.code,
+                            ) {
+                                val acting = (event as? QueueEvent.ByScope)?.actingScope
+                                    ?: fail(
+                                        "offline.another_members_capture was refused on $event, which no " +
+                                            "session performs, so there is no actor whose release it " +
+                                            "could be about: $op",
+                                    )
+                                assertFalse(
+                                    permittedToAct(acting, op.scope, QueueEvent.Release(acting)),
+                                    "a session that MAY release this row was told it is another member's " +
+                                        "capture (offline.another_members_capture), whose view tells the " +
+                                        "merchant a colleague must confirm it: $op on $event",
                                 )
                             }
                             if (aForeignScopeRefusal) {
@@ -1161,13 +1326,62 @@ class QueueModelCheckTest {
                     "condition that excludes the cases its claim is about registers and counts " +
                     "exactly like a working one until this ratio is read",
             )
+            // The fourteenth review's R-01. A narrow domain leaves
+            // productions of its code outside what the claim judges, and the
+            // gap used to be read only for the one domain written so far —
+            // `if (domain == ON_A_FOREIGN_SCOPE_REFUSAL)` — so a THIRD domain
+            // got a denominator and no accounting, with the compiler silent.
+            // The gap is now found by MEASURING it, so no later domain can be
+            // added past it, and a gap must be covered by something NAMED: a
+            // complement counter is not a cover, because an author adds it
+            // from the very predicate that narrowed the site and the partition
+            // then holds by construction.
+            val productionsOutsideTheDeclaredDomain = (timesTheCodeWasProduced[code] ?: 0) - denominator
+            assertTrue(
+                productionsOutsideTheDeclaredDomain >= 0,
+                "the domain $domain declared for the claim at $site was reached $denominator times " +
+                    "while $code was produced ${timesTheCodeWasProduced[code]} times in all, so the " +
+                    "denominator counts rows the total does not and one of the two counters is wrong",
+            )
+            if (productionsOutsideTheDeclaredDomain > 0) {
+                val cover = WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT[claim]
+                    ?: fail(
+                        "the claim at $site is declared over $domain, which was reached $denominator " +
+                            "times, while $code was produced ${timesTheCodeWasProduced[code]} times in " +
+                            "all. The $productionsOutsideTheDeclaredDomain productions outside it are " +
+                            "judged by this claim not at all, and nothing in " +
+                            "WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT names what does cover them",
+                    )
+                when (cover) {
+                    is WhatCoversTheRest.AnotherClaimOverEveryProduction -> assertEquals(
+                        ClaimDomain.EVERY_PRODUCTION,
+                        CLAIMS_THIS_CHECK_MAKES[cover.site to code],
+                        "the gap the claim at $site leaves is declared to be covered by the claim at " +
+                            "${cover.site} about $code over every production, and that claim is not in " +
+                            "CLAIMS_THIS_CHECK_MAKES with that domain, so the cover names nothing that " +
+                            "judges those $productionsOutsideTheDeclaredDomain productions",
+                    )
+                    is WhatCoversTheRest.NothingIsLeftOut -> {
+                        assertTrue(
+                            cover.why.isNotBlank(),
+                            "the claim at $site declares that nothing falls outside $domain and gives " +
+                                "no reason, and a reason nobody wrote is a reason nobody can check",
+                        )
+                        assertEquals(
+                            0, productionsOutsideTheDeclaredDomain,
+                            "the claim at $site declares that nothing falls outside $domain " +
+                                "(${cover.why}), and $productionsOutsideTheDeclaredDomain productions " +
+                                "of $code fall outside it. A reason is not a measurement",
+                        )
+                    }
+                }
+            }
             if (domain == ClaimDomain.ON_A_FOREIGN_SCOPE_REFUSAL) {
-                // A narrower domain opens a gap, so the gap is ACCOUNTED FOR
-                // rather than declared: every production of this code is
-                // either a foreign-scope refusal, which this claim judges, or
-                // E-04's own arm on a CAPTURED row, which the E-04 claim is
-                // about. A third producer of the same code reds here instead
-                // of living in the difference.
+                // Kept as a SECOND and independent reading of the same facts,
+                // and no longer the accounting itself: every production of
+                // this code is either a foreign-scope refusal, which this
+                // claim judges, or E-04's own arm on a CAPTURED row. A third
+                // producer of the same code reds here as well as above.
                 assertEquals(
                     timesTheCodeWasProduced[code] ?: 0,
                     denominator + (timesProducedOnACaptureSomebodyElseMustConfirm[code] ?: 0),

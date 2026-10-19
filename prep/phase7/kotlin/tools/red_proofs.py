@@ -837,11 +837,10 @@ PROOFS: list[Proof] = [
         ),
         edits=(
             (
-                '                            }\n                            if (aForeignScopeRefusal) {\n'
-                '                                foreignScopeRefusals++',
-                '                            }\n                            }\n'
-                '                            if (aForeignScopeRefusal) {\n'
-                '                                foreignScopeRefusals++',
+                '                            }\n\n'
+                "                            // INV-9c, added for the fourteenth review's R-01.",
+                '                            }\n                            }\n\n'
+                "                            // INV-9c, added for the fourteenth review's R-01.",
             ),
             (
                 "src/app/daftar/offline/Queue.kt",
@@ -1009,6 +1008,130 @@ PROOFS: list[Proof] = [
         ),
         expect_red="every reachable configuration honours every invariant",
         why="the third of N-02\u2019s directions, and the cheapest to get wrong: the map\u2019s type requires a reason and nothing required the reason to SAY anything, so whitespace would have bought the same silence as a sentence. The reason is asserted non-blank where it is read",
+    ),
+    Proof(
+        law="R-01-A-NARROW-DOMAIN-S-GAP-MUST-BE-COVERED-BY-SOMETHING-NAMED",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="        enum class ClaimDomain { EVERY_PRODUCTION, ON_A_FOREIGN_SCOPE_REFUSAL }",
+        replace=(
+            "        enum class ClaimDomain {\n"
+            "            EVERY_PRODUCTION, ON_A_FOREIGN_SCOPE_REFUSAL, WHERE_THE_ACTOR_MAY_RELEASE,\n"
+            "        }"
+        ),
+        edits=(
+            (
+                '            ("E-04/not-sendable-offers-a-button-its-reader-can-press" to "offline.not_sendable")\n'
+                "                to ClaimDomain.EVERY_PRODUCTION,",
+                '            ("E-04/not-sendable-offers-a-button-its-reader-can-press" to "offline.not_sendable")\n'
+                "                to ClaimDomain.WHERE_THE_ACTOR_MAY_RELEASE,",
+            ),
+            (
+                "    private val timesProducedOnACaptureSomebodyElseMustConfirm = mutableMapOf<String, Int>()",
+                "    private val timesProducedOnACaptureSomebodyElseMustConfirm = mutableMapOf<String, Int>()\n\n"
+                "    private val timesProducedWhereTheActorMayRelease = mutableMapOf<String, Int>()",
+            ),
+            (
+                "                            val aForeignScopeRefusal = event is QueueEvent.ByScope &&",
+                "                            if (event !is QueueEvent.ByScope ||\n"
+                "                                permittedToAct(\n"
+                "                                    event.actingScope, op.scope, QueueEvent.Release(event.actingScope),\n"
+                "                                )\n"
+                "                            ) {\n"
+                "                                timesProducedWhereTheActorMayRelease[step.code] =\n"
+                "                                    (timesProducedWhereTheActorMayRelease[step.code] ?: 0) + 1\n"
+                "                            }\n"
+                "                            val aForeignScopeRefusal = event is QueueEvent.ByScope &&",
+            ),
+            (
+                "                ClaimDomain.ON_A_FOREIGN_SCOPE_REFUSAL ->\n"
+                "                    timesProducedOnAForeignScopeRefusal[code] ?: 0",
+                "                ClaimDomain.ON_A_FOREIGN_SCOPE_REFUSAL ->\n"
+                "                    timesProducedOnAForeignScopeRefusal[code] ?: 0\n"
+                "                ClaimDomain.WHERE_THE_ACTOR_MAY_RELEASE ->\n"
+                "                    timesProducedWhereTheActorMayRelease[code] ?: 0",
+            ),
+            (
+                CLAIM_SITE,
+                "                            if (event !is QueueEvent.ByScope ||\n"
+                "                                permittedToAct(\n"
+                "                                    event.actingScope, op.scope, QueueEvent.Release(event.actingScope),\n"
+                "                                )\n"
+                "                            ) {\n"
+                + CLAIM_SITE,
+            ),
+            (
+                "                            }\n\n"
+                "                            // INV-9c, added for the fourteenth review's R-01.",
+                "                            }\n                            }\n\n"
+                "                            // INV-9c, added for the fourteenth review's R-01.",
+            ),
+            (
+                "src/app/daftar/offline/Queue.kt",
+                "                    ?: refusalForACaptureSomebodyElseMustConfirm(event.actingScope)\n",
+                "",
+            ),
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="the fourteenth review's R-01, and the hole it measured was in the ACCOUNTING rather than in any site. The denominator was chosen by an exhaustive `when`, so a new `ClaimDomain` value was forced to supply one \u2014 fail-closed. The partition that makes a narrow domain honest was guarded by `if (domain == ON_A_FOREIGN_SCOPE_REFUSAL)`, so a THIRD value got a denominator and no accounting at all, with the compiler silent. This is the review's own plant, seven edits across two files, each one a shape the file already contained and none of them inside the branch the site sits in: the value, a counter beside the others incremented at the TOP of the refusal arm, the `when` branch, E-04's claim redeclared over it, the site wrapped in that same condition, and E-04's refusal arm deleted underneath. **It measured 99 of 99 GREEN at `fe41d84`**, a cashier again told a colleague must confirm their own capture. What reds it now is that the gap is found by MEASURING it \u2014 any denominator below every production of the code is a gap, whatever its domain is called \u2014 and that a gap must be covered by something NAMED, which for this plant does not exist",
+    ),
+    Proof(
+        law="R-01-A-COVER-THAT-NAMES-A-CLAIM-THAT-IS-NOT-THERE-COVERS-NOTHING",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=(
+            "                to WhatCoversTheRest.AnotherClaimOverEveryProduction(\n"
+            '                    "INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it",\n'
+            "                ),"
+        ),
+        replace=(
+            "                to WhatCoversTheRest.AnotherClaimOverEveryProduction(\n"
+            '                    "INV-9c/a-claim-that-is-not-in-this-map",\n'
+            "                ),"
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="a cover is a NAME, so the name has to resolve. The narrow claim's gap is declared to be covered by another claim about the same code over every production, and this plant points that declaration at a site nothing declares \u2014 a rename of the covering claim does the same thing by accident. Without this assertion the cover would be a comment with a type: the author writes a plausible site, the partition is never read, and the productions in the gap are judged by nothing while the file says they are covered",
+    ),
+    Proof(
+        law="R-01-A-GAP-DECLARED-EMPTY-IS-MEASURED-EMPTY-OR-IT-REDS",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=(
+            "                to WhatCoversTheRest.AnotherClaimOverEveryProduction(\n"
+            '                    "INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it",\n'
+            "                ),"
+        ),
+        replace=(
+            "                to WhatCoversTheRest.NothingIsLeftOut(\n"
+            '                    "every production of this code is a foreign-scope refusal",\n'
+            "                ),"
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="the other half of the same requirement, and the one the review warned about: a reason is not a measurement. The second way to cover a gap is to say there is no gap, and an author who says so is believed only to the extent that the gap is then measured at ZERO. Here the sentence is false \u2014 the code has a second producer, E-04's own arm on a CAPTURED row \u2014 and the plant reds with the measured count beside the claim. If the reason alone were enough, this is the edit that would make any narrow domain honest by assertion",
+    ),
+    Proof(
+        law="INV-9C-A-COLLEAGUES-CAPTURE-IS-REFUSED-ONLY-WHERE-THE-ACTOR-MAY-NOT-RELEASE-IT",
+        path="src/app/daftar/offline/Queue.kt",
+        find="        if (state == OperationState.CAPTURED && !acting.mayAct(scope, QueueEvent.Release(acting))) {",
+        replace="        if (state == OperationState.CAPTURED) {",
+        expect_red="every reachable configuration honours every invariant",
+        why="the claim added for R-01 is a claim, so it is defended like one rather than taken on trust. Drop the permission half of this arm and a CAPTURED row is refused `offline.another_members_capture` \u2014 whose view tells the merchant that a colleague must confirm it \u2014 to the very session that captured it and may release it itself. The new claim asks of EVERY production of that code whether this acting session may release the row, computing the answer from the acting scope with this file's own permission function, and reds by name here. Without it the cover for INV-9a's narrow domain would be a name pointing at an assertion that could not fail",
+    ),
+    Proof(
+        law="R-01-A-NARROW-DOMAIN-WITH-NO-DECLARED-COVER-IS-A-FAILURE-BEFORE-IT-IS-MEASURED",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=(
+            "        val WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT:\n"
+            "            Map<Pair<String, String>, WhatCoversTheRest> = mapOf(\n"
+            '            ("INV-9a/a-foreign-scope-is-refused-as-a-scope-problem" to "offline.another_members_capture")\n'
+            "                to WhatCoversTheRest.AnotherClaimOverEveryProduction(\n"
+            '                    "INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it",\n'
+            "                ),\n"
+            "        )"
+        ),
+        replace=(
+            "        val WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT:\n"
+            "            Map<Pair<String, String>, WhatCoversTheRest> = emptyMap()"
+        ),
+        expect_red="a claim about a refusal code is written through the registering helper",
+        why="the coordinator's condition on R-01: the accounting must be FAIL-CLOSED, so a new domain is a failure until its accounting exists rather than a hole waiting for a search to reach it. Three things stand between a domain and silence, and this plant is the one that tests the first: the denominator's `when` is exhaustive with no `else`, so the compiler refuses a value with no denominator; a DECLARED narrow domain with no entry in this map reds here, before any count is read; and a MEASURED gap with no cover reds in the model check. Emptying the map leaves every count true \u2014 the search is unchanged \u2014 and reds on the declaration alone, which is what makes the rule independent of what this particular search happens to reach",
     ),
 ]
 
