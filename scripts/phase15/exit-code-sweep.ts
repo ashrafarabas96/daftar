@@ -63,98 +63,34 @@ const ROOT = process.cwd();
 const PACK = process.env.P15_SWEEP_DIR ?? join(ROOT, 'scripts/phase15');
 
 /**
- * THE ONE EXEMPTION, AND WHY IT IS NOT A HOLE
- *   This file is itself in the pack it reads, and its red proofs contain the
- *   SOURCE TEXT of the defects they plant. A text sweep cannot tell a planted
- *   literal from a call, so without an exemption this instrument reports its
- *   own plants and is permanently red — the same way a red proof can redden its
- *   own harness.
+ * THE EXEMPTION IS GONE (round 19, F-R19-03). THIS FILE IS SWEPT LIKE THE REST.
  *
- *   An exemption taken on trust is how a sweep comes to certify the thing it
- *   was built to catch, so this one is MEASURED, not asserted, and measured
- *   through the AST rather than over the text (round 14, F-R14-02): the file
- *   binds `spawnSync` from no spelling of `child_process` and calls it at no
- *   site, therefore it has no exit code to discard. That is checked below
- *   against this file's own bytes at every run, and the exemption is printed
- *   with the verdict. If a later edit makes this file able to run a command,
- *   the check fails and the exemption is withdrawn.
+ * This file is in the pack it reads, and its red proofs carry the SOURCE TEXT
+ * of the defects they plant, so the original worry was that a sweep would
+ * report its own plant literals. That worry was answered years of rounds ago
+ * by reading the AST instead of the text: a plant inside a string is not a
+ * call expression, whatever column it starts in. What remained was an
+ * exemption that deleted one file from the scan — and it then failed open four
+ * times, each time on the one file whose discarded exit codes nothing else can
+ * see:
+ *
+ *   F-R16-01  the check named one spelling of `child_process` and read the text
+ *   F-R17-02  the producer lived in a sibling, and the check resolved per file
+ *   F-R18-04  the producer was DEFAULT-exported, which the pack map did not carry
+ *   F-R19-03  the sibling was reached by a DYNAMIC import, which the leaf test
+ *             did not walk — while the output said «Any pack import withdraws
+ *             the exemption»
+ *
+ * Each fix enumerated one more form; the next form nobody enumerated reopened
+ * it. The coordinator's ruling on this pack's other four-time fail-open (the
+ * Phase 5 `f-50-quote` exemption) applies here unchanged: DELETE THE
+ * EXEMPTION. The law now scans every file in the pack, this one included.
+ *
+ * MEASURED before deciding, on the real pack: with the exemption removed the
+ * sweep reads `EXIT 0 — every spawnSync in <pack> has its exit code read: 81
+ * site(s)` — three more sites than the 78 it reported while skipping itself,
+ * and all three read. So the exemption was buying nothing and hiding a file.
  */
-const APPARATUS = 'exit-code-sweep.ts';
-
-/** Every module specifier the apparatus imports from INSIDE the pack. */
-function apparatusPackImports(sf: ts.SourceFile): readonly string[] {
-  const found = new Set<string>();
-  for (const st of sf.statements) {
-    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
-    const spec = st.moduleSpecifier.text;
-    if (spec.startsWith('.') || (PACK_SRC?.has(specKey(spec)) ?? false)) found.add(spec);
-  }
-  return [...found].sort();
-}
-
-function apparatusIsInert(dir: string): string | null {
-  let text: string;
-  try {
-    text = readFileSync(join(dir, APPARATUS), 'utf8');
-  } catch {
-    return null; // not in this copy of the pack: nothing to exempt
-  }
-  // A SPELLING IS NOT A BINDING — HERE TOO (round 14, F-R14-02).
-  //
-  // This was a regex over the text, anchored to column 0 and naming ONE module
-  // specifier: `'node:child_process'`. Round 13's F-R13-01 was that exact
-  // mistake in `producerCalls`, and the fix there left the same hole here. A
-  // pack whose `exit-code-sweep.ts` wrote `import { spawnSync } from
-  // 'child_process'` and threw a code away printed «Measured inert … it does
-  // not import spawnSync as a value» and exited 0: the one file the sweep is
-  // allowed to skip was also the one file whose discarded exit codes nobody
-  // could see.
-  //
-  // So the exemption is decided the way every other decision in this file is:
-  // through the AST, resolving the BINDING. The old comment's worry — that the
-  // check would be fooled by this file's own plant literals — is answered by
-  // construction, because a plant inside a string is not an import clause and
-  // not a call expression, whatever column it starts in.
-  const sf = ast(APPARATUS, text);
-  // A LEAF, OR NO EXEMPTION (round 18, F-R18-04).
-  //
-  // Round 17 answered the sibling-file hole by deciding this exemption from
-  // `producersIn()`, the pack resolution. That made the exemption exactly as
-  // complete as the resolution, and round 18 then walked through it on a
-  // DEFAULT export: an apparatus that called a producer and threw the code
-  // away still printed «Measured inert … calls it nowhere» and exited 0. The
-  // one file this sweep deletes from its own scan is the last place to put a
-  // claim that depends on enumerating export forms, because the next form
-  // nobody enumerated reopens it in silence.
-  //
-  // So the exemption no longer asks "did the resolution find a producer here".
-  // It asks a question whose answer cannot be incomplete: does this file
-  // import anything AT ALL from inside the pack? A file that imports no pack
-  // module cannot be handed a producer by one, whatever syntax a sibling uses
-  // to export it. Any pack import withdraws the exemption, and the file is
-  // then swept like every other — which costs nothing when it is in fact
-  // inert, and is the whole point when it is not. This is the pack's own rule
-  // that a check must fail on ABSENCE rather than on a drift it recognises.
-  const packImports = apparatusPackImports(sf);
-  if (packImports.length > 0)
-    return `${APPARATUS} imports ${packImports.join(', ')} from inside the pack, so what it can run depends on what a sibling exports; an exemption that depends on resolving the pack is only as complete as that resolution, and it is withdrawn`;
-  const imported = new Set<string>();
-  for (const st of sf.statements) {
-    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
-    if (!/^(?:node:)?child_process$/.test(st.moduleSpecifier.text)) continue;
-    const nb = st.importClause?.namedBindings;
-    if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);
-    if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);
-  }
-  const p = producersIn(sf, APPARATUS);
-  for (const id of p.ids) if (id !== TOKEN) imported.add(id);
-  for (const m of p.members) imported.add(`<object>.${m}`);
-  const calls = producerCalls(sf, APPARATUS);
-  if (imported.size > 0)
-    return `${APPARATUS} imports spawnSync as a VALUE (as ${[...imported].sort().join(', ')}), so it can run commands and its exemption is withdrawn`;
-  if (calls.length > 0) return `${APPARATUS} CALLS spawnSync at ${String(calls.length)} site(s), so it can run commands and its exemption is withdrawn`;
-  return null;
-}
 
 interface Wrapper {
   readonly name: string;
@@ -643,6 +579,34 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>, seedMemb
       if (key !== null && isProducerValue(pr.initializer)) members.add(key);
     }
   };
+  /** `class C { static go = spawnSync }` — a class body is not an object
+   *  literal, so `C.go(…)` was unseen ACROSS FILES AND IN ONE FILE ALIKE
+   *  (round 19, F-R19-06). A field is a field whichever body declares it. */
+  const fromClassField = (n: ts.ClassLikeDeclaration): void => {
+    for (const m of n.members) {
+      if (!ts.isPropertyDeclaration(m) || m.initializer === undefined) continue;
+      const key = ts.isIdentifier(m.name) || ts.isStringLiteral(m.name) ? m.name.text : null;
+      if (key !== null && isProducerValue(m.initializer)) members.add(key);
+    }
+  };
+  /** A function whose EVERY return is the producer returns the producer
+   *  (round 19, F-R19-06): `const run = makeRunner()` binds it with no
+   *  initializer a name rule can read. A function with no return at all, or
+   *  one return that is not the producer, is not one. */
+  const returnsProducer = (fn: ts.FunctionLikeDeclarationBase): boolean => {
+    if (fn.body === undefined) return false;
+    const rets: ts.Expression[] = [];
+    const scan = (x: ts.Node): void => {
+      if (ts.isFunctionDeclaration(x) || ts.isFunctionExpression(x) || ts.isArrowFunction(x)) {
+        if (x !== fn) return; // a nested function's returns are its own
+      }
+      if (ts.isReturnStatement(x) && x.expression !== undefined) rets.push(x.expression);
+      x.forEachChild(scan);
+    };
+    if (ts.isBlock(fn.body)) scan(fn.body);
+    else rets.push(fn.body);
+    return rets.length > 0 && rets.every((e) => isProducerValue(e));
+  };
   // A fixpoint, because `const a = cp.spawnSync; const b = a;` is two steps and
   // the file may declare them in either order.
   for (let before = -1; before !== ids.size + members.size + ns.size; ) {
@@ -660,6 +624,15 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>, seedMemb
         if (ts.isIdentifier(n.left) && isProducerValue(n.right)) ids.add(n.left.text);
       }
       if (ts.isObjectLiteralExpression(n)) fromField(n);
+      if (ts.isClassDeclaration(n) || ts.isClassExpression(n)) fromClassField(n);
+      // `const run = makeRunner()` where every return of makeRunner is one.
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined) {
+        const init = unwrap(n.initializer);
+        if (ts.isCallExpression(init) && ts.isIdentifier(init.expression)) {
+          const fn = fns.get(init.expression.text);
+          if (fn !== undefined && returnsProducer(fn)) ids.add(n.name.text);
+        }
+      }
       // A producer handed to a local function ARRIVES as that parameter.
       if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) {
         const fn = fns.get(n.expression.text);
@@ -751,9 +724,21 @@ function exportedProducers(sf: ts.SourceFile, p: Producers): Surface {
     const from = PACK_PRODUCER_EXPORTS.get(specKey(st.moduleSpecifier.text));
     if (from === undefined) continue;
     for (const m of from.members) members.add(m);
-    if (st.exportClause === undefined) for (const n of from.ids) ids.add(n);
-    else if (ts.isNamedExports(st.exportClause))
-      for (const el of st.exportClause.elements) if (from.ids.has((el.propertyName ?? el.name).text)) ids.add(el.name.text);
+    if (st.exportClause === undefined) {
+      for (const n of from.ids) ids.add(n);
+    } else if (ts.isNamedExports(st.exportClause)) {
+      for (const el of st.exportClause.elements) {
+        if (from.ids.has((el.propertyName ?? el.name).text)) ids.add(el.name.text);
+      }
+    } else if (ts.isNamespaceExport(st.exportClause)) {
+      // `export * as tools from './prod'` publishes the target's WHOLE surface
+      // under one name: every exported producer of it is then a MEMBER of
+      // `tools`, so `tools.sh(…)` is a call to one (round 19, F-R19-04).
+      // `export *` was carried and this was not, because one has no clause and
+      // the other has a NamespaceExport — a difference in syntax, not in reach.
+      for (const n of from.ids) members.add(n);
+      ids.add(st.exportClause.name.text);
+    }
   }
   return { ids, members };
 }
@@ -895,10 +880,28 @@ function producerCalls(sf: ts.SourceFile, file: string): ts.CallExpression[] {
   return out;
 }
 
-/** `proc.sh(…)` where `proc` is a namespace of a file exporting `sh`. */
+/**
+ * `proc.sh(…)` where `proc` is a namespace of a file exporting `sh`.
+ *
+ * The chain is followed to its ROOT, because a namespace access need not be
+ * one step: `ns.Runner.go(…)` reaches a class field through the module object
+ * (round 19, F-R19-03), and a rule reading only `ns.<name>` saw an expression
+ * whose own `expression` is another access and returned false. Over-reporting
+ * a member name that the namespaced file publishes is this pack's declared
+ * F-R13-01 behaviour; losing the route is a fail-open.
+ */
 function namespaceProducer(c: ts.PropertyAccessExpression, p: Producers): boolean {
-  if (!ts.isIdentifier(c.expression)) return false;
-  const file = p.ns.get(c.expression.text);
+  let root: ts.Expression = c.expression;
+  for (;;) {
+    const x = unwrap(root);
+    if (ts.isPropertyAccessExpression(x) || ts.isElementAccessExpression(x)) root = x.expression;
+    else {
+      root = x;
+      break;
+    }
+  }
+  if (!ts.isIdentifier(root)) return false;
+  const file = p.ns.get(root.text);
   if (file === undefined) return false;
   const s = PACK_PRODUCER_EXPORTS.get(file) ?? EMPTY_SURFACE;
   return s.ids.has(c.name.text) || s.members.has(c.name.text);
@@ -1140,8 +1143,6 @@ interface SweepResult {
   readonly read: readonly Site[];
   readonly wrappers: readonly Wrapper[];
   readonly forwarders: readonly Forwarder[];
-  /** Why the apparatus exemption was WITHDRAWN, or null when it was taken. */
-  readonly apparatusProblem: string | null;
 }
 
 function sweep(dir: string): SweepResult {
@@ -1149,8 +1150,6 @@ function sweep(dir: string): SweepResult {
   const src = new Map(sources(dir));
   PACK_SRC = src;
   resolvePackProducers(src);
-  const apparatusProblem = apparatusIsInert(dir);
-  if (apparatusProblem === null) src.delete(APPARATUS);
   const emptyPack: Site[] = [];
   if (src.size === 0)
     emptyPack.push({
@@ -1246,7 +1245,6 @@ function sweep(dir: string): SweepResult {
         unchecked.push({ file: s.file, line: s.line + 1, text: `${s.text}   — discards the code ${r.d.to}() returns`, bound: null, via: null, how: null });
     }
   }
-  if (apparatusProblem !== null) unchecked.push({ file: APPARATUS, line: 0, text: apparatusProblem, bound: null, via: null, how: null });
   const forwarders: Forwarder[] = [...sitesOf].map(([key, sites]) => ({
     token: `${key.split('::')[1]} (${key.split('::')[0]})`,
     safe: safe.has(key),
@@ -1257,26 +1255,16 @@ function sweep(dir: string): SweepResult {
       how: s.d === null ? null : s.d.kind === 'read' ? s.d.how : `deferred to ${s.d.to}()`,
     })),
   }));
-  return { unchecked, read, wrappers, forwarders, apparatusProblem };
+  return { unchecked, read, wrappers, forwarders };
 }
 
 function report(dir: string, r: SweepResult): void {
   console.log(`  pack ${dir}`);
-  // THE PARAGRAPH IS PRINTED ONLY WHEN WHAT IT SAYS WAS ESTABLISHED (round 18,
-  // F-R18-10). It used to print on every run, including runs that withdrew the
-  // exemption 160 lines below, which is a measured claim contradicted by the
-  // same output that carried it.
-  if (r.apparatusProblem === null) {
-    console.log(`  exempt ${APPARATUS} — this instrument's own source, which carries the TEXT of the`);
-    console.log('         defects its red proofs plant. The exemption is MEASURED at every run and on');
-    console.log('         a question that cannot come back half-answered: this file imports nothing');
-    console.log('         from inside the pack, so no sibling can hand it a producer by any export');
-    console.log('         form, and it binds spawnSync from no spelling of child_process and calls it');
-    console.log('         nowhere. Any pack import withdraws the exemption and the file is swept.');
-  } else {
-    console.log(`  NOT exempt ${APPARATUS} — ${r.apparatusProblem}`);
-    console.log('         It is swept like every other file in the pack.');
-  }
+  // NOTHING IS EXEMPT (round 19, F-R19-03). The paragraph that used to stand
+  // here described an exemption of one file from this scan, and said «Any pack
+  // import withdraws the exemption» while a dynamic import walked past it. The
+  // exemption is deleted, so there is no claim to print: the pack line above
+  // covers every file, this instrument's own source included.
   console.log('');
   console.log('  WRAPPERS THAT DECIDE ON THE EXIT CODE THEMSELVES');
   console.log('    (the matched comparison is printed: a wrapper that only mentions the code, or');
@@ -1624,7 +1612,7 @@ const PLANTS: readonly Plant[] = [
     expect: (r) =>
       r.unchecked.some((s) => s.file === 'planted-x15.ts')
         ? null
-        : 'a helper that discarded the exit code and returned a hand-written `status: 0` was credited as a forwarder, so every command it runs reads as measured. An invented zero is the `sh()` defect this pack found in its own code two rounds earlier. The half this case cannot carry — that it is PROVENANCE catching it — is `npm run verify:exit-codes:phase15:guard`, which runs a copy of this sweep with that requirement removed; it lives in its own instrument because this file must stay unable to run a command at all, which is what its one exemption rests on',
+        : 'a helper that discarded the exit code and returned a hand-written `status: 0` was credited as a forwarder, so every command it runs reads as measured. An invented zero is the `sh()` defect this pack found in its own code two rounds earlier. The half this case cannot carry — that it is PROVENANCE catching it — is `npm run verify:exit-codes:phase15:guard`, which runs a copy of this sweep with that requirement removed; it lives in its own instrument because that half has to run a modified COPY of this sweep as a child process, and this file stays a reader of source — not because it is exempt from its own scan, which it no longer is (round 19, F-R19-03)',
   },
   {
     id: 'X16',
@@ -2113,18 +2101,18 @@ const PLANTS: readonly Plant[] = [
   },
   {
     id: 'X33',
-    what: "round 18's F-R18-04 — THE APPARATUS ITSELF, handed a producer by a sibling it imports",
+    what: "round 19's F-R19-03 — THIS INSTRUMENT'S OWN SOURCE, handed a producer by a sibling it imports DYNAMICALLY",
     plant: (dir) => {
       writeFileSync(
         join(dir, 'planted-x33-lib.ts'),
-        ["import { spawnSync } from 'node:child_process';", 'const x33run = spawnSync;', 'export default x33run;', ''].join('\n'),
+        ["import { spawnSync } from 'node:child_process';", 'export class X33Runner {', '  static go = spawnSync;', '}', ''].join('\n'),
       );
-      // The one file the sweep DELETES from its own scan. Round 17 decided the
-      // exemption from the pack resolution, which made the exemption exactly
-      // as complete as that resolution: a default export walked through it and
-      // the sweep printed «Measured inert … calls it nowhere» over an
-      // apparatus that called a producer and threw the code away.
-      const f = join(dir, APPARATUS);
+      // The file that used to be deleted from this scan. The exemption failed
+      // open four times — the last time on exactly these bytes, where the leaf
+      // test walked `ImportDeclaration` and this import is a CALL. The
+      // exemption is gone, so the only thing holding this file inside the scan
+      // is that nothing takes it out, and that is what this arm measures.
+      const f = join(dir, 'exit-code-sweep.ts');
       const text = readFileSync(f, 'utf8');
       const at = text.lastIndexOf('\nimport ');
       const end = text.indexOf('\n', text.indexOf(';', at)) + 1;
@@ -2132,9 +2120,9 @@ const PLANTS: readonly Plant[] = [
         f,
         text.slice(0, end) +
           [
-            "import x33run from './planted-x33-lib';",
-            'export function x33head(): string {',
-            "  const r = x33run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+            'export async function x33head(): Promise<string> {',
+            "  const x33sib = await import('./planted-x33-lib');",
+            "  const r = x33sib.X33Runner.go('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
             "  return (r.stdout ?? '').trim();",
             '}',
             '',
@@ -2143,9 +2131,89 @@ const PLANTS: readonly Plant[] = [
       );
     },
     expect: (r) =>
-      r.unchecked.some((site) => site.file === APPARATUS)
+      r.unchecked.some((site) => site.file === 'exit-code-sweep.ts')
         ? null
-        : 'THE EXEMPTION IS A FAIL-OPEN AGAIN: the apparatus was handed a producer by a sibling, called it, discarded the code, and was still deleted from the scan — on the one file whose discarded codes nobody else can see',
+        : "this instrument's own source ran a command and discarded the code without being reported — which is what an exemption over it bought every time it failed open, and what deleting the exemption is supposed to make impossible",
+  },
+  {
+    id: 'X34',
+    what: "round 19's F-R19-04 — `export * as ns from` , a NamespaceExport, which publishes nothing on a module surface",
+    plant: (dir) => {
+      writeFileSync(join(dir, 'planted-x34-prod.ts'), ["import { spawnSync } from 'node:child_process';", 'export const sh = spawnSync;', ''].join('\n'));
+      writeFileSync(join(dir, 'planted-x34-barrel.ts'), ["export * as tools from './planted-x34-prod';", ''].join('\n'));
+      writeFileSync(
+        join(dir, 'planted-x34.ts'),
+        [
+          "import { tools } from './planted-x34-barrel';",
+          '// The fifth route over the same wall. `export *` was carried and',
+          '// `export * as ns` was not, because one is an ExportDeclaration with',
+          '// no clause and the other has a NamespaceExport clause.',
+          'export function head(): string {',
+          "  const r = tools.sh('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x34.ts')
+        ? null
+        : 'a discarding call was hidden behind `export * as ns from`: the same bytes in one file are reported, so the boundary is what hid it',
+  },
+  {
+    id: 'X35',
+    what: "round 19's F-R19-06 — the producer as a CLASS FIELD, which was invisible across files and in one file alike",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x35.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          '// Not a boundary defect: the object-literal rule read `{ go: x }` and',
+          '// a class body is not an object literal, so this was unseen even in',
+          '// one file. The sweep claimed every spawnSync had its code read.',
+          'class X35Runner {',
+          '  static go = spawnSync;',
+          '}',
+          'export function head(): string {',
+          "  const r = X35Runner.go('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x35.ts')
+        ? null
+        : 'a discarding call through a class field went unreported, and the sweep still said every spawnSync in the pack has its exit code read',
+  },
+  {
+    id: 'X36',
+    what: "round 19's F-R19-06 — the producer RETURNED from a function, so no binding is ever assigned it",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x36.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          '// Every `return` in this function is the producer, so its result is',
+          '// the producer; a rule that only reads initializers sees a call.',
+          'function makeRunner(): typeof spawnSync {',
+          '  return spawnSync;',
+          '}',
+          'const x36run = makeRunner();',
+          'export function head(): string {',
+          "  const r = x36run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x36.ts')
+        ? null
+        : 'a discarding call was hidden behind a function that RETURNS the producer, which no initializer rule reaches',
   },
   {
     id: 'X9',

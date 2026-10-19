@@ -970,7 +970,11 @@ async function redProofs(t: Timeline): Promise<void> {
 
   // R-P3: remove an archived segment, and require recovery to refuse rather
   // than quietly serve a database short of its target.
-  {
+  //
+  // A LABELLED block, so an arm that cannot be measured leaves THIS proof and
+  // not the function: a bare `return` here would silently drop every red proof
+  // declared below it.
+  redP3: {
     const p: RedProof = {
       id: 'R-P3',
       what: 'delete the last archived WAL segment, then recover to the target that needs it',
@@ -995,6 +999,36 @@ async function redProofs(t: Timeline): Promise<void> {
     if (segments.length < 2 || holed === undefined)
       p.outcome = `INCONCLUSIVE — only ${segments.length} archived segment(s); removing one leaves nothing to recover from`;
     else {
+      // THE PATTERN MUST DEPEND ON THE PLANTED ABSENCE (round 19, F-R19-01).
+      //
+      // `redo done` was in this set, and PostgreSQL prints it at the end of
+      // every successful recovery. So the «does the log name the hole» test
+      // was true whatever the log said: this red proof could not go green,
+      // and a proof that cannot fail measures nothing — including over a
+      // recovery that quietly served a point in time nobody asked for.
+      //
+      // The phrases left are ones only a MISSING segment produces, and they
+      // are checked against a recovery of the INTACT archive first. If the
+      // intact log matches them too, the pattern is not reading the hole and
+      // this arm says INVALID MEASUREMENT rather than claiming a red.
+      const holeNamed =
+        /recovery ended before configured recovery target|could not restore file|requested WAL segment [0-9A-F]+ has already been removed|invalid record length at|missing contrecord/i;
+      const control = recoverTo({ time: t.targetTime }, 'red-p3-control');
+      const controlLog = serverLog(RECOVERED.dir);
+      const controlMatched = holeNamed.test(controlLog);
+      stopCluster(RECOVERED);
+      if (control.contention) {
+        p.outcome = `INVALID MEASUREMENT — RESOURCE CONTENTION on the control recovery, so the pattern was never shown to depend on the hole: ${control.detail}`;
+        break redP3;
+      }
+      if (!control.ok) {
+        p.outcome = `INCONCLUSIVE — the control recovery of the INTACT archive did not complete, so a difference against the holed one attributes nothing: ${control.detail}`;
+        break redP3;
+      }
+      if (controlMatched) {
+        p.outcome = `INVALID MEASUREMENT — the log of a recovery over the INTACT archive already matches the phrases this arm reads as «the hole was named» (${(holeNamed.exec(controlLog) ?? ['?'])[0]}), so the test does not depend on the planted absence`;
+        break redP3;
+      }
       sh(`rm -rf ${copy}; mkdir -p ${copy}; cp ${ARCHIVE}/* ${copy}/ 2>/dev/null; chown -R postgres:postgres ${copy}; rm -f ${copy}/${holed}`);
       stopCluster(RECOVERED);
       rmSync(RECOVERED.dir, { recursive: true, force: true });
@@ -1004,11 +1038,19 @@ async function redProofs(t: Timeline): Promise<void> {
       sh(`printf "\\nport=${RECOVERED.port}\\n" >> ${join(RECOVERED.dir, 'data', 'postgresql.auto.conf')}`);
       const started = startExisting(RECOVERED.dir, 'red-hole');
       if (started.status !== 0) {
-        p.outcome = `RED AS REQUIRED — the cluster refused to start with segment ${holed} missing: ${serverLog(RECOVERED.dir)
+        const log = serverLog(RECOVERED.dir);
+        // A cluster that never took its port refused nothing about the hole
+        // (round 19, F-R19-02). R-P5's drill already reads a bind failure as
+        // contention; this arm started its cluster by hand and did not.
+        const bind = /could not bind IPv4 address|could not create any TCP\/IP sockets|Address already in use/.test(log);
+        const why = log
           .split('\n')
           .filter((l) => /FATAL|could not|requested|recovery/i.test(l))
           .slice(-3)
-          .join(' | ')}`;
+          .join(' | ');
+        p.outcome = bind
+          ? `INVALID MEASUREMENT — RESOURCE CONTENTION: the cluster never took port ${RECOVERED.port}, so its refusal to start says nothing about segment ${holed} (${why})`
+          : `RED AS REQUIRED — the cluster refused to start with segment ${holed} missing: ${why}`;
       } else {
         const done = waitForRecovery(RECOVERED.port, 45_000);
         if (!done.ok) {
@@ -1021,7 +1063,7 @@ async function redProofs(t: Timeline): Promise<void> {
           // point in time they asked for.
           const a = probeEntry(RECOVERED.port, t.tenantA.entryId);
           const log = serverLog(RECOVERED.dir);
-          const named = /recovery ended before configured recovery target|could not restore file|requested WAL segment|redo done/i.test(log);
+          const named = holeNamed.test(log);
           p.outcome = named
             ? `RED AS REQUIRED — promoted, but the log NAMES the hole instead of hiding it, so the operator is not told a target was met when it was not (segment ${holed} missing, entries=${a.entries})`
             : `GREEN — WRONG: recovery promoted with segment ${holed} deleted and said nothing about it; a hole in the archive is invisible and the database served is silently not the requested point in time (entries=${a.entries})`;

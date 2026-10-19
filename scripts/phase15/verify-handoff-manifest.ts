@@ -261,12 +261,14 @@ function checkCurrency(manifest: string, root: string, dir: string, rounds: numb
   // The declared SHA is now RESOLVED and compared, which is the same lesson
   // this pack learned in its sweep twice: a rule that matches a spelling does
   // not resolve a binding.
-  const stated = /\*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\*/.exec(manifest)?.[1] ?? null;
-  if (stated === null)
+  const read = declaredPrepSha(manifest);
+  const stated = read.sha;
+  if (read.problem !== null) problems.push(read.problem);
+  else if (stated === null)
     problems.push(
       `the header declares no exact SHA at all, so nothing here can be measured against HEAD \`${headSha}\`. A handoff must declare the head it describes.`,
     );
-  else if (!headSha.startsWith(stated))
+  else if (stated !== headSha)
     problems.push(
       `the header DECLARES \`${stated}\` as the exact prep SHA, but HEAD is \`${headSha}\`. A handoff must be rewritten at the head it describes, and §3 is re-measured against the SHA this row names — so a stale row silently measures another commit.`,
     );
@@ -467,6 +469,42 @@ function checkChallenges(manifest: string, dir: string): Challenge {
  *     write the column FROM git, and this direction then agrees with it
  *     because both read the same authority, not because one read the other.
  */
+/**
+ * THE SHA THIS DOCUMENT DECLARES, READ FROM THE HEADER TABLE (round 19,
+ * F-R19-05 and F-R19-08).
+ *
+ * Three places read it with one regex over the WHOLE file, matching the row's
+ * two bold cells and a 7-to-40-character hex capture, and took the first match.
+ * Two things follow from that which nobody
+ * intended: a §8 row QUOTING an old header (this file quotes its own rows when
+ * it records a finding, inside fences and out) can be the first match and
+ * become what every gate measures against; and a 7-character abbreviation
+ * satisfies it, so `headSha.startsWith(stated)` passes on a prefix that names
+ * a commit nobody resolved. The document declares its head in ONE place: the
+ * header table, above the first `##` section. That is the only place read, the
+ * full forty characters are required, and more than one declaration is a
+ * refusal rather than a first-match.
+ */
+const PREP_ROW = /^\| \*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\* \|/gm;
+function declaredPrepSha(manifest: string): { readonly sha: string | null; readonly problem: string | null } {
+  const cut = manifest.search(/^## /m);
+  const header = (cut === -1 ? manifest : manifest.slice(0, cut)).replace(/```[\s\S]*?```/g, '');
+  const rows = [...header.matchAll(PREP_ROW)].map((m) => m[1] as string);
+  if (rows.length === 0) return { sha: null, problem: null };
+  if (rows.length > 1)
+    return {
+      sha: null,
+      problem: `the header table declares the exact prep SHA ${String(rows.length)} times (${rows.join(', ')}); which one a gate measures against would be decided by which comes first, so this is refused`,
+    };
+  const only = rows[0] as string;
+  if (only.length !== 40)
+    return {
+      sha: null,
+      problem: `the header declares \`${only}\` as the exact prep SHA, which is ${String(only.length)} characters. A handoff anchors on the FULL forty: a prefix is a search, and a gate that compares a prefix passes on any commit that begins with it`,
+    };
+  return { sha: only, problem: null };
+}
+
 interface FileTable {
   readonly problems: readonly string[];
   readonly rows: number;
@@ -487,7 +525,9 @@ function linesAt(root: string, sha: string, path: string): number | null {
 
 function checkFileTable(manifest: string, root: string): FileTable {
   const problems: string[] = [];
-  const sha = /\*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\*/.exec(manifest)?.[1] ?? null;
+  const read = declaredPrepSha(manifest);
+  const sha = read.sha;
+  if (read.problem !== null) problems.push(read.problem);
   const rows = [...manifest.matchAll(FILE_ROW)].map((m) => ({ path: m[1] as string, lines: Number(m[2]) }));
   if (sha === null) {
     problems.push('the header declares no exact SHA, so the line counts in §3 cannot be measured against anything — an unanchored figure is not a measurement');
@@ -692,7 +732,7 @@ function main(): void {
     // what they are; and direction 5 re-measures them from the same authority
     // afterwards, which is agreement rather than circularity: the claim is
     // checked against git, never against what this branch of the code wrote.
-    const declared = /\*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\*/.exec(rewritten)?.[1] ?? null;
+    const declared = declaredPrepSha(rewritten).sha;
     let repoRows = 0;
     let repoUnreadable = 0;
     if (declared !== null) {

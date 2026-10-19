@@ -1,15 +1,15 @@
 /**
- * PHASE 15 — GUARD-DELETION PROOF FOR THE EXIT-CODE SWEEP'S PROVENANCE RULE
+ * PHASE 15 — GUARD-DELETION PROOF: THE SWEEP'S PROVENANCE RULE AND ITS OWN MEMBERSHIP
  * (PREPARED / NOT PROMOTED)
  *
  * WHY THIS IS ITS OWN INSTRUMENT
- *   `exit-code-sweep.ts` takes exactly one exemption — it does not scan itself —
- *   and that exemption is MEASURED rather than asserted: the file does not
- *   import `spawnSync` as a value, so it cannot run a command, so it has no exit
- *   code to discard. A guard-deletion test has to run a MODIFIED COPY of that
- *   sweep as a child process, which would mean importing `spawnSync` into it and
- *   withdrawing the exemption its own inertness earns. So the child-process half
- *   lives here instead, and the sweep stays inert.
+ *   A guard-deletion test has to run a MODIFIED COPY of the sweep as a child
+ *   process, which means importing `spawnSync` here and running commands. The
+ *   sweep itself must stay a reader of source and nothing else, so the
+ *   child-process half lives in this file. That separation used to also earn
+ *   the sweep an exemption from its own scan; the exemption is DELETED (round
+ *   19, F-R19-03), and this file now measures the opposite claim \u2014 that the
+ *   apparatus is in the swept set, on every shape that once walked past it.
  *
  * WHAT IT MEASURES (round-9B's F-R9B-01)
  *   The sweep used to credit ANY returned object literal carrying a property
@@ -40,37 +40,26 @@ const GUARD = "      if (ts.isPropertyAssignment(prop) && prop.name.getText(sf) 
 const BLANKET = "      if (ts.isPropertyAssignment(prop) && prop.name.getText(sf) === 'status') return true;";
 
 /**
- * THE SECOND GUARD: THE APPARATUS EXEMPTION (round 14, F-R14-02).
+ * THE SECOND GUARD: THE APPARATUS IS IN THE SUBJECT SET (round 19, F-R19-03).
  *
- * The sweep skips exactly one file — itself — and earns that skip by measuring
- * its own inertness. That measurement was a regex naming ONE module specifier,
- * so a pack whose `exit-code-sweep.ts` imported `spawnSync` from the bare
- * `'child_process'` and discarded a code kept the exemption and was never
- * read. The fix resolves the binding through the AST, on both spellings.
+ * The sweep used to skip exactly one file — itself — and earn that skip by
+ * measuring its own inertness. That exemption failed open FOUR times, each
+ * time on the one file whose discarded exit codes nothing else can see
+ * (F-R16-01 a spelling, F-R17-02 a sibling, F-R18-04 a default export,
+ * F-R19-03 a dynamic import), and each fix enumerated one more form. It is
+ * now DELETED: the apparatus is swept like every other file.
  *
- * Each spelling is planted into a COPY of the apparatus and swept twice: once
- * by the real sweep, once by a copy whose inertness check is the old regex.
+ * So the rule this section removes is no longer an inertness check. It is the
+ * membership of the apparatus in the swept set, and the deletion REINSTATES
+ * the exemption in its minimal form — one `delete` of the file name. Every
+ * shape that walked through the old exemption is planted into a copy of the
+ * apparatus and swept twice: by the real sweep, which must read the file, and
+ * by the exempt copy, which must go blind to all of them. An ordinary-file
+ * plant in the same pack copy is the control: the exempt copy must still name
+ * it, or the deletion moves more than the apparatus and attributes nothing.
  */
-const INERT_AST: readonly string[] = [
-  '  const imported = new Set<string>();',
-  '  for (const st of sf.statements) {',
-  '    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;',
-  '    if (!/^(?:node:)?child_process$/.test(st.moduleSpecifier.text)) continue;',
-  '    const nb = st.importClause?.namedBindings;',
-  "    if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);",
-  '    if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);',
-  '  }',
-  '  const p = producersIn(sf, APPARATUS);',
-  '  for (const id of p.ids) if (id !== TOKEN) imported.add(id);',
-  '  for (const m of p.members) imported.add(`<object>.${m}`);',
-  '  const calls = producerCalls(sf, APPARATUS);',
-];
-/** The round-13 form, which named one spelling and read the text. */
-const INERT_REGEX: readonly string[] = [
-  "  const valueImport = /^import\\s*\\{[^}]*\\bspawnSync\\b[^}]*\\}\\s*from\\s*'node:child_process'/m.test(text);",
-  '  const imported = valueImport ? new Set<string>([`spawnSync`]) : new Set<string>();',
-  '  const calls: readonly unknown[] = [];',
-];
+const SELF_BOUND = '  const src = new Map(sources(dir));';
+const SELF_EXEMPT = "  const src = new Map(sources(dir));\n  src.delete('exit-code-sweep.ts');";
 
 /**
  * THE THIRD GUARD: A PRODUCER BOUND THROUGH A CALL (round 15, F-R15-02).
@@ -100,36 +89,18 @@ const DERIVED_SOURCE: readonly string[] = [
   '',
 ];
 
-/**
- * THE FIFTH GUARD: THE APPARATUS EXEMPTION IS A LEAF TEST (round 18, F-R18-04).
- *
- * Round 17 answered the sibling-file hole by deciding the exemption from the
- * pack resolution, which made the exemption exactly as complete as that
- * resolution. Round 18 walked through it on a DEFAULT export: an apparatus
- * that called a producer and discarded the code still printed «Measured inert
- * … calls it nowhere» and the sweep exited 0. The rule removed here is the one
- * that asks a question whose answer cannot be partial — does this file import
- * anything at all from inside the pack — and the arm below plants exactly the
- * shape that defeated the round-17 rule, so the deletion measures the fix and
- * not the old hole.
- */
-const LEAF_BOUND = '  const packImports = apparatusPackImports(sf);';
-const LEAF_BLIND = '  const packImports: readonly string[] = [];';
+/** The two sibling shapes: a STATIC import, and the DYNAMIC one of F-R19-03. */
 const LEAF_LIB = 'planted-leaf-lib.ts';
+const DYN_LIB = 'planted-dyn-lib.ts';
 
-/** The apparatus handed a producer by a sibling it imports, discarding a code. */
+/** A class field on purpose: the shape the producer resolution did not model
+ *  when the leaf rule was written, which is why the exemption fell to it. */
+const RUNNER = (name: string): string =>
+  ["import { spawnSync } from 'node:child_process';", `export class ${name} {`, '  static go = spawnSync;', '}', ''].join('\n');
+
+/** The apparatus handed a producer by a sibling it imports STATICALLY. */
 function plantIntoApparatusFromSibling(pack: string): void {
-  // A STATIC CLASS FIELD, on purpose. The producer resolution models object
-  // literals, destructuring, parameters, fields, namespaces and every export
-  // form round 18 enumerated — and a class member is none of them, so this
-  // plant is invisible to it. That is the point: the leaf rule has to be what
-  // catches the shape NOBODY enumerated, or it is one more entry in a list of
-  // forms, and the next form reopens the exemption exactly as a default export
-  // reopened round 17's.
-  writeFileSync(
-    join(pack, LEAF_LIB),
-    ["import { spawnSync } from 'node:child_process';", 'export class LeafRunner {', '  static go = spawnSync;', '}', ''].join('\n'),
-  );
+  writeFileSync(join(pack, LEAF_LIB), RUNNER('LeafRunner'));
   const file = join(pack, 'exit-code-sweep.ts');
   writeFileSync(
     file,
@@ -137,6 +108,23 @@ function plantIntoApparatusFromSibling(pack: string): void {
 import { LeafRunner } from './${LEAF_LIB.replace('.ts', '')}';
 export function plantedLeafHead(): string {
   const r = LeafRunner.go('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
+  return (r.stdout ?? '').trim();
+}
+`,
+  );
+}
+
+/** The same, through a DYNAMIC import — the shape the leaf rule walked past,
+ *  because it enumerated `ImportDeclaration` and this import is a CALL. */
+function plantIntoApparatusDynamic(pack: string): void {
+  writeFileSync(join(pack, DYN_LIB), RUNNER('DynRunner'));
+  const file = join(pack, 'exit-code-sweep.ts');
+  writeFileSync(
+    file,
+    `${readFileSync(file, 'utf8')}
+export async function plantedDynHead(): Promise<string> {
+  const sib = await import('./${DYN_LIB.replace('.ts', '')}');
+  const r = sib.DynRunner.go('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
   return (r.stdout ?? '').trim();
 }
 `,
@@ -270,7 +258,7 @@ function sweepFile(script: string, pack: string, file: string): { readonly ran: 
 
 function main(): number {
   console.log('━'.repeat(78));
-  console.log('PHASE 15 — GUARD-DELETION PROOF: PROVENANCE, AND THE APPARATUS EXEMPTION   (PREPARED / NOT PROMOTED)');
+  console.log('PHASE 15 — GUARD-DELETION PROOF: PROVENANCE, AND THE APPARATUS IN THE SWEPT SET   (PREPARED / NOT PROMOTED)');
   console.log('━'.repeat(78));
   const me = readFileSync(SWEEP, 'utf8');
   if (!me.includes(GUARD)) {
@@ -305,85 +293,72 @@ function main(): number {
       `  with that one line removed exit ${String(without.code)}  ${without.reported ? 'REPORTED it anyway' : 'said nothing — so that line is what catches it'}`,
     );
     console.log('');
-    // ── THE APPARATUS EXEMPTION, ON BOTH SPELLINGS ────────────────────────
-    const strippedInert = join(tmp, 'sweep-with-the-old-inertness-check.ts');
-    // THE WHOLE BLOCK, not line by line (round 15, measured on this proof).
-    // Checking each line separately passed while the lines had drifted apart,
-    // so `replace()` found nothing, the "stripped" copy was byte-identical to
-    // the real sweep, and both arms agreed — a deletion proof that deleted
-    // nothing and reported the agreement as a result.
-    if (!me.includes(INERT_AST.join('\n'))) {
-      console.log('  the apparatus inertness check is not written, as ONE contiguous block, in the shape');
-      console.log('  this proof removes, so the second half measures nothing. Re-anchor it before reading.');
+    // ── THE APPARATUS IS IN THE SWEPT SET, ON EVERY SHAPE THAT BROKE THE OLD EXEMPTION ─
+    if (!me.includes(SELF_BOUND)) {
+      console.log('  the swept set is not built in the shape this proof removes, so the second section');
+      console.log('  measures nothing. Re-anchor it before reading it again.');
+      console.log(`    expected: ${SELF_BOUND.trim()}`);
       console.log('');
       console.log('EXIT 2 — UNMEASURED.');
       return 2;
     }
-    writeFileSync(strippedInert, me.replace(INERT_AST.join('\n'), INERT_REGEX.join('\n')));
-
+    // The deletion REINSTATES the exemption, in the smallest form it can take:
+    // the apparatus is removed from the set the sweep reads. Nothing else in
+    // the sweep changes, so whatever goes blind is attributable to membership.
+    const exempt = join(tmp, 'sweep-with-the-exemption-reinstated.ts');
+    writeFileSync(exempt, me.replace(SELF_BOUND, SELF_EXEMPT));
     const apparatusRows: string[] = [];
-    for (const specifier of ['child_process', 'node:child_process']) {
-      const copy = join(tmp, `pack-${specifier.replace(':', '-')}`);
+    const shapes: readonly { readonly label: string; readonly plant: (dir: string) => void }[] = [
+      { label: "import from 'child_process'", plant: (d) => plantIntoApparatus(d, 'child_process') },
+      { label: "import from 'node:child_process'", plant: (d) => plantIntoApparatus(d, 'node:child_process') },
+      { label: 'property access on a module', plant: plantIntoApparatusDerived },
+      { label: 'a sibling, STATIC import', plant: plantIntoApparatusFromSibling },
+      { label: 'a sibling, DYNAMIC import', plant: plantIntoApparatusDynamic },
+    ];
+    for (const shape of shapes) {
+      const copy = join(tmp, `pack-self-${shape.label.replace(/[^a-z]+/gi, '-')}`);
       cpSync(join(ROOT, 'scripts/phase15'), copy, { recursive: true });
-      plantIntoApparatus(copy, specifier);
+      shape.plant(copy);
+      // The ordinary-file control rides in the SAME copy: it must stay visible
+      // to both arms, or the deletion moves more than the apparatus.
+      plantSameFile(copy);
       const seen = sweepFile(SWEEP, copy, 'exit-code-sweep.ts');
-      const seenStripped = sweepFile(strippedInert, copy, 'exit-code-sweep.ts');
+      const exempted = sweepFile(exempt, copy, 'exit-code-sweep.ts');
+      const control = sweepFile(exempt, copy, SAME_FILE);
+      const pad = ' '.repeat(Math.max(0, 30 - shape.label.length));
       apparatusRows.push(
-        `  import from '${specifier}'${specifier === 'child_process' ? '      ' : ' '} real sweep ${seen.ran ? (seen.reported ? 'WITHDREW the exemption and read it' : 'kept the exemption — the file was never read') : `did not run (exit ${String(seen.code)})`}`,
+        `  ${shape.label}${pad} real sweep ${seen.ran ? (seen.reported ? 'READ the apparatus and reported it' : 'did NOT report it') : `did not run (exit ${String(seen.code)})`}`,
       );
       apparatusRows.push(
-        `  ${' '.repeat(`import from '${specifier}'`.length)}${specifier === 'child_process' ? '      ' : ' '} old check  ${seenStripped.ran ? (seenStripped.reported ? 'WITHDREW it too' : 'kept the exemption — so the spelling is what the new check adds') : `did not run (exit ${String(seenStripped.code)})`}`,
+        `  ${' '.repeat(shape.label.length)}${pad} exempt     ${exempted.ran ? (exempted.reported ? 'reported it ANYWAY' : 'blind — so membership is what reads it') : `did not run (exit ${String(exempted.code)})`}`,
       );
-      if (!seen.ran) problems.push(`the real sweep did not run over the '${specifier}' plant (exit ${String(seen.code)}), so its silence says nothing`);
+      if (!seen.ran) problems.push(`the real sweep did not run over the ${shape.label} plant (exit ${String(seen.code)}), so its silence says nothing`);
       else if (!seen.reported)
         problems.push(
-          `a pack whose own apparatus imports spawnSync from '${specifier}' and discards a code kept its exemption: the one file the sweep may skip is the one file nobody can see`,
+          `an apparatus that binds a producer by ${shape.label} and discards an exit code was not reported: the file this sweep is written in is the one file nobody else can see`,
         );
-      if (!seenStripped.ran)
+      if (!exempted.ran)
+        problems.push(`the exempt copy did not run over the ${shape.label} plant (exit ${String(exempted.code)}), so that deletion is UNMEASURED`);
+      else if (exempted.reported)
         problems.push(
-          `the sweep with the old inertness check did not run over the '${specifier}' plant (exit ${String(seenStripped.code)}), so that arm is UNMEASURED`,
+          `the copy with the apparatus REMOVED from the swept set still reported it on the ${shape.label} plant, so membership is not what reads it`,
         );
-      else if (specifier === 'child_process' && seenStripped.reported)
-        problems.push("the OLD inertness check also withdrew the exemption on the bare 'child_process' spelling, so the new check is not what catches it");
-      else if (specifier === 'node:child_process' && !seenStripped.reported)
-        problems.push("the old check did not withdraw the exemption on 'node:child_process' either, so this comparison is not isolating the spelling");
+      if (!control.ran)
+        problems.push(`the exempt copy did not run over the ordinary-file control for ${shape.label} (exit ${String(control.code)}): UNMEASURED`);
+      else if (!control.reported)
+        problems.push(
+          `removing the apparatus from the swept set also blinded the sweep to an ORDINARY file (${shape.label} copy), so the deletion attributes nothing`,
+        );
     }
-    // ROUND 16's F-R16-01: the exemption must also fall to a producer the
-    // apparatus reaches by property access. No arm planted that INTO the
-    // apparatus, so the line that was supposed to catch it was anchored and
-    // never exercised, and the sweep printed «it binds spawnSync from neither
-    // child_process nor node:child_process and calls it nowhere» over a copy
-    // that did both.
-    const derivedPack = join(tmp, 'pack-apparatus-derived');
-    cpSync(join(ROOT, 'scripts/phase15'), derivedPack, { recursive: true });
-    plantIntoApparatusDerived(derivedPack);
-    const derivedSeen = sweepFile(SWEEP, derivedPack, 'exit-code-sweep.ts');
-    const derivedStripped = sweepFile(strippedInert, derivedPack, 'exit-code-sweep.ts');
-    apparatusRows.push(
-      `  property access         real sweep ${derivedSeen.ran ? (derivedSeen.reported ? 'WITHDREW the exemption and read it' : 'kept the exemption — the file was never read') : `did not run (exit ${String(derivedSeen.code)})`}`,
-    );
-    apparatusRows.push(
-      `                          old check  ${derivedStripped.ran ? (derivedStripped.reported ? 'WITHDREW it too' : 'kept the exemption — so this is what the new check adds') : `did not run (exit ${String(derivedStripped.code)})`}`,
-    );
-    if (!derivedSeen.ran)
-      problems.push(`the real sweep did not run over the property-access apparatus plant (exit ${String(derivedSeen.code)}), so its silence says nothing`);
-    else if (!derivedSeen.reported)
-      problems.push(
-        'an apparatus that reaches spawnSync by property access on a module object kept its exemption: the one file the sweep may skip is the one file nobody can see',
-      );
-    if (!derivedStripped.ran)
-      problems.push(`the sweep with the old inertness check did not run over that plant (exit ${String(derivedStripped.code)}), so that arm is UNMEASURED`);
-    else if (derivedStripped.reported)
-      problems.push('the OLD inertness check also withdrew the exemption on a property-access binding, so the new check is not what catches it');
 
     console.log('');
     // ROUND 18's F-R18-07: this heading used to say «MEASURED ON EVERY SHAPE
     // THAT CAN BIND THE PRODUCER» over three shapes, and a cross-file shape
-    // then walked through the exemption. A heading that quantifies over every
-    // shape is a claim about shapes nobody has enumerated; what this section
-    // measures is the shapes it names, plus the leaf rule below, which is the
-    // one arm that does not depend on enumerating them.
-    console.log('  THE APPARATUS EXEMPTION, ON THE SHAPES NAMED HERE');
+    // then walked through the exemption. With the exemption deleted the
+    // heading no longer has to quantify over shapes at all: the five rows are
+    // the shapes that each reopened it, and they are now evidence that the
+    // file is read, not that a check withdrew a skip.
+    console.log('  THE APPARATUS, NOW SWEPT LIKE THE REST (the five shapes that broke the old exemption)');
     for (const row of apparatusRows) console.log(row);
     // ── A PRODUCER BOUND THROUGH A CALL, IN AN ORDINARY PACK FILE ─────────
     if (!me.includes(REQUIRE_BOUND)) {
@@ -467,41 +442,6 @@ function main(): number {
     else if (!sameWithout.reported)
       problems.push('removing the PACK rule also blinded the sweep inside ONE file, so the deletion moves more than the boundary and attributes nothing');
 
-    // ── THE APPARATUS EXEMPTION AS A LEAF TEST (round 18, F-R18-04) ──────
-    if (!me.includes(LEAF_BOUND)) {
-      console.log('  the apparatus leaf rule is not written in the shape this proof removes, so the');
-      console.log('  fifth section measures nothing. Re-anchor it before reading it again.');
-      console.log('');
-      console.log('EXIT 2 — UNMEASURED.');
-      return 2;
-    }
-    const strippedLeaf = join(tmp, 'sweep-without-leaf-rule.ts');
-    writeFileSync(strippedLeaf, me.replace(LEAF_BOUND, LEAF_BLIND));
-    const leafPack = join(tmp, 'pack-apparatus-sibling');
-    cpSync(join(ROOT, 'scripts/phase15'), leafPack, { recursive: true });
-    plantIntoApparatusFromSibling(leafPack);
-    const leafReal = sweepFile(SWEEP, leafPack, 'exit-code-sweep.ts');
-    const leafWithout = sweepFile(strippedLeaf, leafPack, 'exit-code-sweep.ts');
-    console.log('');
-    console.log('  THE APPARATUS HANDED A PRODUCER BY A SIBLING IT IMPORTS');
-    console.log('  (this is the shape that defeated the round-17 exemption, which asked the pack');
-    console.log('  resolution instead of asking whether the apparatus imports from the pack at all)');
-    console.log(
-      `  real sweep      exit ${String(leafReal.code)}  ${leafReal.ran ? (leafReal.reported ? 'WITHDREW the exemption and read the apparatus' : 'kept the exemption — the file was never read') : 'did not run'}`,
-    );
-    console.log(
-      `  rule removed    exit ${String(leafWithout.code)}  ${leafWithout.ran ? (leafWithout.reported ? 'WITHDREW it anyway' : 'kept the exemption — so the leaf rule is what catches it') : 'did not run'}`,
-    );
-    if (!leafReal.ran)
-      problems.push(`the real sweep did not run over the sibling-apparatus plant (exit ${String(leafReal.code)}), so its silence says nothing`);
-    else if (!leafReal.reported)
-      problems.push(
-        'an apparatus handed a producer by a sibling kept its exemption and its discarded exit code was never read: the one file the sweep may skip is the one file nobody can see',
-      );
-    if (!leafWithout.ran) problems.push(`the sweep with the leaf rule removed did not run (exit ${String(leafWithout.code)}), so that deletion is UNMEASURED`);
-    else if (leafWithout.reported)
-      problems.push('the sweep with the leaf rule REMOVED still withdrew the exemption, so that rule is not what catches this shape');
-
     console.log('');
     if (problems.length > 0) {
       for (const p of problems) console.log(`  FINDING: ${p}`);
@@ -510,18 +450,18 @@ function main(): number {
       return 1;
     }
     console.log('The provenance requirement is load-bearing: deleting that one line makes the planted');
-    console.log('  defect invisible, and restoring it makes it visible again. The apparatus exemption is');
-    console.log('  withdrawn on BOTH spellings of child_process, and the old check lost the bare one. A');
-    console.log('  producer bound through `createRequire` and renamed is enumerated, and is invisible');
-    console.log('  without the one line that enumerates it. The binding is followed ACROSS a module');
-    console.log('  boundary, and removing that one line blinds the cross-file plant while the SAME');
-    console.log('  bytes in one file stay visible — which is what attributes the boundary to the rule.');
-    console.log('  The apparatus exemption falls to a producer a SIBLING hands it, and does not fall');
-    console.log('  without the leaf rule — the shape that walked through the round-17 exemption.');
-    console.log('  Two attributions are stated narrowly on purpose: removing the require-bound line');
-    console.log('  reddens six plants, not one, because every producer in this pack is derived through');
-    console.log('  that call; and the section above measures the apparatus shapes it names, not every');
-    console.log('  shape that can bind a producer.');
+    console.log('  defect invisible, and restoring it makes it visible again. The apparatus is READ like');
+    console.log('  every other file in the pack, on all five shapes that each reopened the exemption it');
+    console.log('  used to have \u2014 both spellings of child_process, a property access on a module object,');
+    console.log('  and a sibling handing it a producer by a STATIC and by a DYNAMIC import \u2014 and a copy');
+    console.log('  with the file deleted from the swept set goes blind to all five while still naming an');
+    console.log('  ordinary planted file, which is what attributes those reads to membership and not to');
+    console.log('  some other rule. A producer bound through `createRequire` and renamed is enumerated,');
+    console.log('  and is invisible without the one line that enumerates it. The binding is followed');
+    console.log('  ACROSS a module boundary, and removing that one line blinds the cross-file plant while');
+    console.log('  the SAME bytes in one file stay visible.');
+    console.log('  One attribution is stated narrowly on purpose: removing the require-bound line reddens');
+    console.log('  six plants, not one, because every producer in this pack is derived through that call.');
     console.log('  Every plant and every run happens in a throwaway copy; neither this repository nor');
     console.log('  the pack is written to.');
     return 0;

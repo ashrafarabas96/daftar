@@ -160,7 +160,7 @@ const PLANTS: readonly Plant[] = [
       // clean against this same pack, or the red below is credited to the
       // wrong rule.
       const gate = readFileSync(join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts'), 'utf8');
-      const marker = '  else if (!headSha.startsWith(stated))';
+      const marker = '  else if (stated !== headSha)';
       if (!gate.includes(marker))
         throw new Error('M14 could not plant: the currency check no longer compares the DECLARED SHA in the shape this plant removes');
       const stripped = join(dir, 'gate-with-the-old-includes-test.ts');
@@ -181,6 +181,53 @@ const PLANTS: readonly Plant[] = [
         : d.named
           ? null
           : 'the prep-SHA row named another commit and the gate did not say so: §3 is re-measured against the SHA that row names, so every line count in it then describes a commit the reader was never told about',
+  },
+  {
+    id: 'M15',
+    what: "round 19's F-R19-08 — the header declares a 12-character ABBREVIATION of the head, and a prefix comparison accepts it",
+    plant: (dir) => {
+      const f = join(dir, MANIFEST);
+      const text = readFileSync(f, 'utf8');
+      const row = /(\*\*Exact prep SHA\*\* \| \*\*`)([0-9a-f]{40})(`\*\*)/.exec(text);
+      if (row === null) throw new Error('M15 could not plant: the header has no full-length prep-SHA row to abbreviate');
+      // `headSha.startsWith(stated)` passed on any prefix, and git resolves a
+      // 12-character abbreviation, so §3 recounted happily and the gate said
+      // VERIFIED over a document that anchors on a search instead of a commit.
+      // This pack's own law (memory: an anchor is a full 40-char literal).
+      writeFileSync(f, text.replace(row[0], `${String(row[1])}${(row[2] as string).slice(0, 12)}${String(row[3])}`));
+    },
+    expect: () => null,
+    viaHeader: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : /is 12 characters/.test(d.text)
+          ? null
+          : 'the header declared a 12-character prefix as the exact prep SHA and the gate accepted it: a prefix is a search, and every figure anchored on it names whatever commit begins with those characters',
+  },
+  {
+    id: 'M16',
+    what: "round 19's F-R19-05 — the header declares NOTHING and a row quoted in \u00a78 supplies the SHA instead",
+    plant: (dir) => {
+      const f = join(dir, MANIFEST);
+      const text = readFileSync(f, 'utf8');
+      const row = /^\| \*\*Exact prep SHA\*\* \| \*\*`[0-9a-f]{40}`\*\* \|.*$/m.exec(text);
+      if (row === null) throw new Error('M16 could not plant: the header has no prep-SHA row to move');
+      // The row is REMOVED from the header table and re-posted far below, in
+      // the shape this document already uses when it quotes its own rows while
+      // recording a finding. A whole-file first-match read finds the quoted
+      // copy and reports the document as declaring a head it does not.
+      writeFileSync(
+        f,
+        `${text.replace(`${row[0]}\n`, '')}\n\nRecorded, in a throwaway copy only \u2014 a row quoted the way \u00a78 quotes its own rows:\n\n${row[0]}\n`,
+      );
+    },
+    expect: () => null,
+    viaHeader: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : /declares no exact SHA/.test(d.text)
+          ? null
+          : "the header table declared no prep SHA at all and the gate took one from a row quoted further down the file: the document's declaration is wherever a regex happens to match first",
   },
   {
     id: 'M1',
