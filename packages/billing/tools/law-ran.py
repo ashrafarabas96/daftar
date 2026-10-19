@@ -173,13 +173,34 @@ def main() -> int:
     if runner is None:
         refuse("no vitest entry at " + " or ".join(str(c) for c in candidates) + ", so this step could not run the suite at all")
 
-    # `node` itself cannot be pinned by a file in this repository (see the
-    # remaining limit in this module's docstring): it is resolved on a PATH
-    # that starts at /usr/bin, and whichever one answers is PRINTED below.
-    pinned_path = "/usr/bin:/bin:" + os.environ.get("PATH", "")
+    # `node` itself cannot be PINNED by a file in this repository (see the
+    # remaining limit in this module's docstring), but the directories it is
+    # LOOKED FOR IN can be narrowed, and R50-S1 (P3, the challenger's) is why.
+    # `npm run` puts four `node_modules/.bin` directories at the front of PATH,
+    # one of them above the repository root, all untracked by design. With the
+    # inherited tail on the resolution path, a `node` planted in one of them was
+    # resolved and ran: it wrote a fabricated report and this step printed
+    # `26 law cases ran inside 303 total, 0 skipped, 0 failed` at rc 0 with no
+    # test having run and `git status --porcelain` empty. Measured here before
+    # the fix. The challenger's remedy -- drop the inherited tail outright --
+    # would break resolution rather than close it in this container, where
+    # neither /usr/bin/node nor /bin/node exists and node comes from an nvm
+    # prefix; so the tail is KEPT and FILTERED: every directory inside a
+    # `node_modules` tree is dropped from the search, and a node that still
+    # resolves inside one is a refusal BY NAME rather than a runner. The child's
+    # PATH is a separate value, built from the resolved node's own directory, so
+    # this does not reintroduce the exit-127 false red.
+    inherited = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d and "node_modules" not in Path(d).parts]
+    pinned_path = os.pathsep.join(["/usr/bin", "/bin", *inherited])
     node = shutil.which("node", path=pinned_path)
     if node is None:
         refuse(f"no node on {pinned_path!r}, so this step could not run the suite at all")
+    if "node_modules" in Path(node).resolve().parts:
+        refuse(
+            f"the node this step resolved is {node!r}, inside a node_modules tree. "
+            "Those directories are untracked by design and `npm run` puts four of them at the front of PATH, "
+            "so a binary planted in one could fabricate the report this step reads"
+        )
 
     out = Path(tempfile.mkdtemp(prefix="law-ran-")) / "report.json"
     try:
