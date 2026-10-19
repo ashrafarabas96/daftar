@@ -61,7 +61,7 @@ const INERT_AST: readonly string[] = [
   "    if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);",
   '    if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);',
   '  }',
-  '  for (const id of requireBound(sf)) imported.add(id);',
+  '  for (const id of derivedProducers(sf, new Set<string>())) imported.add(id);',
   '  const calls = producerCalls(sf, APPARATUS);',
 ];
 /** The round-13 form, which named one spelling and read the text. */
@@ -79,24 +79,34 @@ const INERT_REGEX: readonly string[] = [
  * nothing and a bare `run(…)` that discarded its code was invisible — in any
  * pack file, not only in the apparatus.
  */
-const REQUIRE_BOUND = '  for (const id of requireBound(sf)) ids.add(id);';
-const REQUIRE_BLIND = '  // the require-bound producers are not added, which is the round-14 shape';
+const REQUIRE_BOUND = '  const ids = derivedProducers(sf, seed);';
+const REQUIRE_BLIND = '  const ids = seed;';
 const REQUIRE_PLANT = 'planted-require-bound.ts';
 
+/**
+ * The producer reached by PROPERTY ACCESS on a module object — round 16's
+ * F-R16-01, which kept the apparatus exemption while the apparatus could run
+ * a command, and F-R16-02, which hid the same shape in an ordinary file.
+ */
+const DERIVED_SOURCE: readonly string[] = [
+  "import { createRequire } from 'node:module';",
+  'const __req = createRequire(__filename);',
+  "const __run = __req('child_process').spawnSync as typeof import('node:child_process').spawnSync;",
+  'export function __plantedHead(): string {',
+  "  const r = __run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+  "  return (r.stdout ?? '').trim();",
+  '}',
+  '',
+];
+
 function plantRequireBound(dir: string): void {
-  writeFileSync(
-    join(dir, REQUIRE_PLANT),
-    [
-      "import { createRequire } from 'node:module';",
-      'const req = createRequire(__filename);',
-      "const { spawnSync: run } = req('child_process') as typeof import('node:child_process');",
-      'export function head(): string {',
-      "  const r = run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
-      "  return (r.stdout ?? '').trim();",
-      '}',
-      '',
-    ].join('\n'),
-  );
+  writeFileSync(join(dir, REQUIRE_PLANT), DERIVED_SOURCE.join('\n'));
+}
+
+/** The same shape, appended to a COPY of the apparatus itself. */
+function plantIntoApparatusDerived(pack: string): void {
+  const file = join(pack, 'exit-code-sweep.ts');
+  writeFileSync(file, `${readFileSync(file, 'utf8')}\n${DERIVED_SOURCE.join('\n')}`);
 }
 
 /** Give a copy of the apparatus a real import and a real discarded exit code. */
@@ -246,8 +256,36 @@ function main(): number {
       else if (specifier === 'node:child_process' && !seenStripped.reported)
         problems.push("the old check did not withdraw the exemption on 'node:child_process' either, so this comparison is not isolating the spelling");
     }
+    // ROUND 16's F-R16-01: the exemption must also fall to a producer the
+    // apparatus reaches by property access. No arm planted that INTO the
+    // apparatus, so the line that was supposed to catch it was anchored and
+    // never exercised, and the sweep printed «it binds spawnSync from neither
+    // child_process nor node:child_process and calls it nowhere» over a copy
+    // that did both.
+    const derivedPack = join(tmp, 'pack-apparatus-derived');
+    cpSync(join(ROOT, 'scripts/phase15'), derivedPack, { recursive: true });
+    plantIntoApparatusDerived(derivedPack);
+    const derivedSeen = sweepFile(SWEEP, derivedPack, 'exit-code-sweep.ts');
+    const derivedStripped = sweepFile(strippedInert, derivedPack, 'exit-code-sweep.ts');
+    apparatusRows.push(
+      `  property access         real sweep ${derivedSeen.ran ? (derivedSeen.reported ? 'WITHDREW the exemption and read it' : 'kept the exemption — the file was never read') : `did not run (exit ${String(derivedSeen.code)})`}`,
+    );
+    apparatusRows.push(
+      `                          old check  ${derivedStripped.ran ? (derivedStripped.reported ? 'WITHDREW it too' : 'kept the exemption — so this is what the new check adds') : `did not run (exit ${String(derivedStripped.code)})`}`,
+    );
+    if (!derivedSeen.ran)
+      problems.push(`the real sweep did not run over the property-access apparatus plant (exit ${String(derivedSeen.code)}), so its silence says nothing`);
+    else if (!derivedSeen.reported)
+      problems.push(
+        'an apparatus that reaches spawnSync by property access on a module object kept its exemption: the one file the sweep may skip is the one file nobody can see',
+      );
+    if (!derivedStripped.ran)
+      problems.push(`the sweep with the old inertness check did not run over that plant (exit ${String(derivedStripped.code)}), so that arm is UNMEASURED`);
+    else if (derivedStripped.reported)
+      problems.push('the OLD inertness check also withdrew the exemption on a property-access binding, so the new check is not what catches it');
+
     console.log('');
-    console.log('  THE APPARATUS EXEMPTION, MEASURED ON BOTH SPELLINGS OF THE MODULE');
+    console.log('  THE APPARATUS EXEMPTION, MEASURED ON EVERY SHAPE THAT CAN BIND THE PRODUCER');
     for (const row of apparatusRows) console.log(row);
     // ── A PRODUCER BOUND THROUGH A CALL, IN AN ORDINARY PACK FILE ─────────
     if (!me.includes(REQUIRE_BOUND)) {

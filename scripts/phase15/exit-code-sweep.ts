@@ -113,7 +113,7 @@ function apparatusIsInert(dir: string): string | null {
     if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);
     if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);
   }
-  for (const id of requireBound(sf)) imported.add(id);
+  for (const id of derivedProducers(sf, new Set<string>())) imported.add(id);
   const calls = producerCalls(sf, APPARATUS);
   if (imported.size > 0)
     return `${APPARATUS} imports spawnSync as a VALUE (as ${[...imported].sort().join(', ')}), so it can run commands and its exemption is withdrawn`;
@@ -494,47 +494,78 @@ function callsTo(sf: ts.SourceFile, a: Aliases, token: string, net: boolean): ts
  * two are not symmetric and the union is the only safe shape.
  */
 /**
- * `spawnSync` BOUND THROUGH A CALL RATHER THAN AN IMPORT (round 15, F-R15-02).
+ * EVERY WAY A NAME COMES TO MEAN `spawnSync` (round 16, F-R16-01/02).
  *
- * `const { spawnSync: run } = createRequire(import.meta.url)('child_process')`
- * binds the producer under a local name with no import declaration anywhere,
- * so the import scan found nothing and `run(…)` — a bare identifier call — was
- * invisible. The net below catches every `<anything>.spawnSync(…)`, so only
- * the DESTRUCTURED form was missing, and it was missing everywhere, not only
- * in the apparatus.
+ * This started as "follow the import", grew "follow `require(…)` destructured
+ * from a string naming child_process", and round 16 measured what that still
+ * could not see: seven of ten shapes, including the plainest of them all —
+ * `import { spawnSync } from 'node:child_process'; const run = spawnSync;` —
+ * each discarding a real exit code under `EXIT 0 … 0 site(s)`. Keying on the
+ * module specifier was the mistake: a specifier can be a template literal, a
+ * variable, a default export, or absent entirely when the module object is
+ * already in hand.
  *
- * The callee of the loading call is deliberately not checked: `require`,
- * `createRequire(…)(…)`, and a local alias of either are all the same act, and
- * the pack's own rule from F-R13-01 is that over-reporting here is noise while
- * under-reporting is a fail-open. What IS checked is the argument — a string
- * naming `child_process` on either spelling.
+ * So the specifier is not read at all. What is read is the NAME the value
+ * comes from, to a fixpoint:
+ *   · a destructure whose key is `spawnSync`, bound or assigned;
+ *   · a binding whose initializer is `<anything>.spawnSync`;
+ *   · a binding whose initializer is a name already known to be the producer.
+ *
+ * This over-reports by construction — an object literal with a `spawnSync`
+ * key would be caught too — and that is the pack's own rule from F-R13-01:
+ * over-reporting here is noise a reader resolves in one line, under-reporting
+ * is a fail-open that hides a command nobody checked. The control X9 is what
+ * keeps the noise honest.
  */
-function requireBound(sf: ts.SourceFile): ReadonlySet<string> {
-  const ids = new Set<string>();
-  const walk = (n: ts.Node): void => {
-    // `unwrap` first: `req('child_process') as typeof import('node:child_process')`
-    // is an AsExpression, and reading the initializer raw missed exactly the
-    // plant this rule exists for — measured, X21 NOT RED.
-    if (ts.isVariableDeclaration(n) && n.initializer !== undefined && ts.isCallExpression(unwrap(n.initializer))) {
-      const init = unwrap(n.initializer) as ts.CallExpression;
-      const arg = init.arguments[0];
-      if (arg !== undefined && ts.isStringLiteral(arg) && /^(?:node:)?child_process$/.test(arg.text) && ts.isObjectBindingPattern(n.name))
-        for (const e of n.name.elements) {
-          const key = e.propertyName ?? e.name;
-          if (ts.isIdentifier(key) && key.text === 'spawnSync' && ts.isIdentifier(e.name)) ids.add(e.name.text);
-        }
-    }
-    n.forEachChild(walk);
+const TOKEN = 'spawnSync';
+
+function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>): ReadonlySet<string> {
+  const ids = new Set<string>(seed);
+  /** `{ spawnSync: x }` / `{ spawnSync }`, as a binding pattern or a target. */
+  const fromDestructure = (n: ts.Node): void => {
+    if (ts.isObjectBindingPattern(n))
+      for (const el of n.elements) {
+        const key = el.propertyName ?? el.name;
+        if (ts.isIdentifier(key) && key.text === TOKEN && ts.isIdentifier(el.name)) ids.add(el.name.text);
+      }
+    if (ts.isObjectLiteralExpression(n))
+      for (const pr of n.properties) {
+        if (ts.isShorthandPropertyAssignment(pr) && pr.name.text === TOKEN) ids.add(pr.name.text);
+        if (ts.isPropertyAssignment(pr) && ts.isIdentifier(pr.name) && pr.name.text === TOKEN && ts.isIdentifier(pr.initializer)) ids.add(pr.initializer.text);
+      }
   };
-  walk(sf);
+  /** `<anything>.spawnSync`, or a name already known to be the producer. */
+  const isProducerValue = (e: ts.Expression): boolean => {
+    const x = unwrap(e);
+    if (ts.isPropertyAccessExpression(x) && x.name.text === TOKEN) return true;
+    if (ts.isElementAccessExpression(x) && ts.isStringLiteral(x.argumentExpression) && x.argumentExpression.text === TOKEN) return true;
+    return ts.isIdentifier(x) && ids.has(x.text);
+  };
+  // A fixpoint, because `const a = cp.spawnSync; const b = a;` is two steps and
+  // the file may declare them in either order.
+  for (let before = -1; before !== ids.size; ) {
+    before = ids.size;
+    const walk = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n)) {
+        fromDestructure(n.name);
+        if (ts.isIdentifier(n.name) && n.initializer !== undefined && isProducerValue(n.initializer)) ids.add(n.name.text);
+      }
+      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        fromDestructure(unwrap(n.left));
+        if (ts.isIdentifier(n.left) && isProducerValue(n.right)) ids.add(n.left.text);
+      }
+      n.forEachChild(walk);
+    };
+    walk(sf);
+  }
   return ids;
 }
 
 function producerCalls(sf: ts.SourceFile, file: string): ts.CallExpression[] {
-  const ids = new Set<string>(['spawnSync']);
-  for (const m of ['node:child_process', 'child_process']) for (const id of aliasesOf(sf, 'spawnSync', m, file).ids) ids.add(id);
-  for (const id of requireBound(sf)) ids.add(id);
-  return callsTo(sf, { ids, ns: new Set<string>() }, 'spawnSync', true);
+  const seed = new Set<string>([TOKEN]);
+  for (const m of ['node:child_process', 'child_process']) for (const id of aliasesOf(sf, TOKEN, m, file).ids) seed.add(id);
+  const ids = derivedProducers(sf, seed);
+  return callsTo(sf, { ids, ns: new Set<string>() }, TOKEN, true);
 }
 
 const unwrap = (e: ts.Expression): ts.Expression => {
@@ -1438,6 +1469,60 @@ const PLANTS: readonly Plant[] = [
       r.unchecked.some((site) => site.file === 'planted-x21.ts')
         ? null
         : 'a discarding call was hidden by binding the producer through a call instead of an import. Following import declarations is not enough: `require`, `createRequire` and a local alias of either bind the same function under any name the file likes',
+  },
+  {
+    id: 'X22',
+    what: "round 16's F-R16-02 — the producer taken as a PROPERTY of a module object, with no destructuring and no specifier to read",
+    plant: (dir) => {
+      const f = join(dir, 'planted-x22.ts');
+      writeFileSync(
+        f,
+        [
+          "import { createRequire } from 'node:module';",
+          'const req = createRequire(__filename);',
+          '// Neither an import clause nor a destructure: the value is reached by',
+          '// property access on whatever the loader returned, and the specifier',
+          '// here is not even a literal. Keying on the module name cannot see it.',
+          "const where = 'child_' + 'process';",
+          "const run = req(where).spawnSync as typeof import('node:child_process').spawnSync;",
+          'export function head(): string {',
+          "  const r = run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x22.ts')
+        ? null
+        : 'a discarding call was hidden by taking the producer as a property of a module object. A rule keyed on the module SPECIFIER cannot see a template literal, a variable, or a module object already in hand; what identifies the producer is the NAME the value comes from',
+  },
+  {
+    id: 'X23',
+    what: "round 16's F-R16-02, the plainest shape of all — an imported binding assigned to another name",
+    plant: (dir) => {
+      const f = join(dir, 'planted-x23.ts');
+      writeFileSync(
+        f,
+        [
+          "import { spawnSync } from 'node:child_process';",
+          '// One line, no indirection, invisible since before round 13: the import',
+          '// is resolved, and then the call is made through a name the resolution',
+          '// never produced.',
+          'const run = spawnSync;',
+          'export function head(): string {',
+          "  const r = run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x23.ts')
+        ? null
+        : 'a discarding call was hidden behind a plain re-binding of the imported name. Resolving the import and stopping there measures the name the import introduced, not the names the file calls the function by',
   },
   {
     id: 'X9',

@@ -115,7 +115,18 @@ export const RUNTIME_MARKERS =
  */
 const SPEAKER = String.raw`(?:PHASE\s+15|P15)[^:\n]*`;
 
-export const VERDICT_HEADLINE = new RegExp(`^(?:EXIT\\s+\\d+\\s+[—-]|${SPEAKER}:\\s*(?:PASS|FAIL|VERIFIED|UNMEASURED|REJECT|INVALID MEASUREMENT))`, 'm');
+/**
+ * The verdicts this pack's instruments print, and the three ways they open a
+ * headline. `VERDICT:` is `backup-restore-proof.ts`, and `EXIT n:` with a
+ * COLON is `gap-list-verification.ts`, `pg-version-matrix.ts` and the evidence
+ * runner itself — round 16 measured both being read as no headline at all, so
+ * the machine record stood in for them and the classifier quoted a JSON blob
+ * as «its own verdict line».
+ */
+const VERDICTS = 'PASS|FAIL|VERIFIED|UNMEASURED|NOT MEASURED|REJECT|INVALID MEASUREMENT';
+const OPENERS = `(?:EXIT\\s+\\d+\\s*[—:-]\\s*|(?:${SPEAKER}|VERDICT):\\s*)`;
+
+export const VERDICT_HEADLINE = new RegExp(`^(?:EXIT\\s+\\d+\\s*[—:-]|(?:${SPEAKER}|VERDICT):\\s*(?:${VERDICTS}))`, 'm');
 
 export const MACHINE_SUMMARY = new RegExp(`^${SPEAKER}:\\s*\\{`, 'm');
 
@@ -137,7 +148,23 @@ export const VERDICT_LINE = new RegExp(`(?:${VERDICT_HEADLINE.source})|(?:${MACH
  * verdict, and it is classified as one; only a run whose verdict line IS the
  * contention headline did not measure.
  */
-export const CONTENTION_VERDICT = new RegExp(`^(?:${SPEAKER}:\\s*)?INVALID MEASUREMENT\\b`);
+export const CONTENTION_VERDICT = new RegExp(`^${OPENERS}?INVALID MEASUREMENT\\b`);
+
+/**
+ * «I COULD NOT MEASURE», IN THE PACK'S OTHER SPELLINGS (round 16, F-R16-04).
+ *
+ * Contention is one way an instrument says it did not measure. `UNMEASURED`
+ * and `NOT MEASURED` are the others, and `verify:role-attributes` prints
+ * «EXIT 2 — NOT MEASURED, which is NOT a clean result.» on a real run at this
+ * head — filed, until now, as «MEASURED, THEN EXITED NON-ZERO … so the code is
+ * its verdict». Same defect as F-R15-01, a third instrument.
+ *
+ * The opener is optional because a machine record declares a BARE verdict —
+ * `pitr-proof.ts`'s own `result` can be the string `UNMEASURED` — and the `^`
+ * anchor is what keeps this honest: a PASS that merely mentions unmeasured
+ * subjects later in its own sentence does not start with the word.
+ */
+export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED)\\b`);
 
 export function reachedVerdict(r: Classifiable): string | null {
   const lines = r.output.split('\n').map((l) => l.trim());
@@ -168,8 +195,11 @@ export function machineResult(out: string): string | null {
     // Reading only the first is how a load run's INVALID MEASUREMENT fell
     // through the fallback as well as past the headline (round 15, F-R15-01).
     const record = parsed as { result?: unknown; verdict?: unknown };
-    for (const value of [record.result, record.verdict]) if (typeof value === 'string') return value;
-    return null;
+    const declared = [record.result, record.verdict].filter((v): v is string => typeof v === 'string');
+    // WHERE TWO KEYS DISAGREE, THE ADVERSE ONE WINS (round 16, F-R16-08).
+    // `result` used to shadow a `verdict` saying something else, which is the
+    // same shape as a later line downgrading a verdict, read the other way up.
+    return declared.find((v) => DID_NOT_MEASURE.test(v)) ?? declared[0] ?? null;
   } catch {
     return null;
   }
@@ -201,6 +231,8 @@ export function outcomeClass(r: Classifiable): string {
   const declared = verdictLine !== null && VERDICT_HEADLINE.test(verdictLine) ? verdictLine : machineResult(r.output);
   if (declared !== null && CONTENTION_VERDICT.test(declared))
     return 'DID NOT MEASURE — the instrument declared INVALID MEASUREMENT (a resource it needed was held), so this exit code is a statement about the RUN and not a verdict about the subject. Re-run it alone; nothing here is evidence either way';
+  if (declared !== null && DID_NOT_MEASURE.test(declared))
+    return `DID NOT MEASURE — the instrument declared that it did not measure (“${declared.slice(0, 70)}”), so this exit code is a statement about the RUN and not a verdict about the subject. Nothing here is evidence either way`;
   if (r.counts.readFrom !== null) return 'MEASURED, THEN EXITED NON-ZERO — the instrument reached its own summary line, so the code is its verdict';
   if (verdictLine !== null) return `MEASURED, THEN EXITED NON-ZERO — it printed its own verdict line (“${verdictLine}”), so the code is its verdict`;
   return 'UNCLASSIFIED NON-ZERO — no crash marker, no summary line and no verdict line this runner recognises; only the log settles it';

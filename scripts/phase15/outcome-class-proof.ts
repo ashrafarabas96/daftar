@@ -86,6 +86,16 @@ const LOAD = 'scripts/phase15/load-harness.ts';
 const LOAD_MACHINE_LINE = '`P15_LOAD: ${JSON.stringify({';
 const LOAD_HEADLINE_LINE = 'console.log(`P15 LOAD ${profile.id}: ${verdict} — ${because}`);';
 const LOAD_CONTENTION_VERDICT = "'INVALID MEASUREMENT': 3,";
+/** The KEY the record declares its outcome under — not merely the line that
+ *  prints it. Round 16: renaming it left O3i and D3 green over a plant that
+ *  no longer matched the instrument (F-R16-03). */
+const LOAD_RECORD_KEY = '        verdict,';
+
+/** The two further instruments round 16 found uncovered (F-R16-04, F-R16-05). */
+const ROLE = 'scripts/phase15/role-attribute-read.ts';
+const ROLE_HEADLINE_LINE = "console.log('EXIT 2 — NOT MEASURED, which is NOT a clean result.');";
+const DR = 'scripts/phase15/backup-restore-proof.ts';
+const DR_HEADLINE_LINE = 'console.log(`VERDICT: FAIL — ${failed.length} validator(s) failed,';
 
 /** The record `load-harness.ts` prints, with the verdict this case needs in it. */
 const loadMachine = (verdict: string): string => `P15_LOAD: {"profile":"P15-LOAD-001","metric":"p95","samples":200,"verdict":"${verdict}"}`;
@@ -158,7 +168,7 @@ const CASES: readonly Case[] = [
       );
       return entry;
     },
-    expect: /DID NOT MEASURE/,
+    expect: /DID NOT MEASURE — the instrument declared INVALID MEASUREMENT/,
     why: '«the drill did not run» read as «the code is its verdict» — the same confusion the distinct exit code was added to end, one layer out in the record that quotes it. A reader of this table would have taken a held port for a failed disaster-recovery drill',
   },
   {
@@ -172,7 +182,11 @@ const CASES: readonly Case[] = [
           "console.log('VALIDATORS');",
           "console.log('  P1 FAIL — archiving never started');",
           "console.log('PHASE 15 PITR PROOF: FAIL');",
-          "console.log('  port 55474 was still held 30s after this drill asked for it');",
+          // The contention sentence the real drill prints beside a FAIL. Round
+          // 16: this arm's `why` claimed to test «contention in the body» over
+          // a transcript that contained none of it, so restoring the whole-
+          // transcript defect left it green (F-R16-06).
+          "console.log('  INVALID MEASUREMENT — RESOURCE CONTENTION: port 55474 was still held 30s after this drill asked for it');",
           'process.exitCode = 1;',
           '',
         ].join('\n'),
@@ -217,7 +231,7 @@ const CASES: readonly Case[] = [
       );
       return entry;
     },
-    expect: /DID NOT MEASURE/,
+    expect: /DID NOT MEASURE — the instrument declared INVALID MEASUREMENT/,
     why: 'the fallback must read the record\u2019s own `result` rather than treat the blob as a verdict it cannot parse: an instrument that prints only a record still said what it did',
   },
   {
@@ -256,7 +270,7 @@ const CASES: readonly Case[] = [
       );
       return entry;
     },
-    expect: /DID NOT MEASURE/,
+    expect: /DID NOT MEASURE — the instrument declared INVALID MEASUREMENT/,
     why: 'round 14 widened the headline pattern to reach this instrument and left the contention pattern narrow, so its «I could not measure» was filed as «the code is its verdict» for a second round. The old O3g planted a FAIL here and was green over exactly that',
   },
   {
@@ -286,8 +300,112 @@ const CASES: readonly Case[] = [
       writeFileSync(entry, [`console.log(${JSON.stringify(loadMachine('INVALID MEASUREMENT'))});`, 'process.exitCode = 3;', ''].join('\n'));
       return entry;
     },
-    expect: /DID NOT MEASURE/,
+    expect: /DID NOT MEASURE — the instrument declared INVALID MEASUREMENT/,
     why: 'the record fallback must read the key the instrument actually writes: `pitr-proof.ts` declares its outcome under `result` and `load-harness.ts` under `verdict`, and a fallback that knows one of the two is a fallback for one instrument',
+  },
+  {
+    id: 'O6',
+    what: "round 16 — the pack's OTHER spelling of «I could not measure»: `verify:role-attributes` on a real exit 2",
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          "console.log('  reading pg_roles on the database the caller named');",
+          "console.log('EXIT 2 — NOT MEASURED, which is NOT a clean result.');",
+          'process.exitCode = 2;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /DID NOT MEASURE/,
+    why: 'contention is one way an instrument says it did not measure; UNMEASURED and NOT MEASURED are the others, and a record that knows only the first files the rest as verdicts about a subject nobody measured',
+  },
+  {
+    id: 'O7',
+    what: 'CONTROL — `backup-restore-proof.ts`\u2019s headline, which opens with VERDICT: and no speaker',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          `console.log(${JSON.stringify('P15_DR_PROOF: {"status":"PREPARED / NOT PROMOTED","pitr":true}')});`,
+          "console.log('VERDICT: FAIL — 2 validator(s) failed, 0 UNMEASURED, 0 red proof(s) did not behave.');",
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /MEASURED, THEN EXITED NON-ZERO — it printed its own verdict line \(“VERDICT: FAIL/,
+    why: 'its headline matched no pattern and its record declares its outcome under neither key, so the classifier quoted the JSON blob as the line the run reached — the F-R14-01 shape, in a third instrument',
+  },
+  {
+    id: 'O8',
+    what: 'CONTROL — the `EXIT n:` headline, with a colon, which three instruments in this pack print',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        ["console.log('EXIT 1: 3 item(s) carry a FINDING — a named, reproducible gap in this tree.');", 'process.exitCode = 1;', ''].join('\n'),
+      );
+      return entry;
+    },
+    expect: /MEASURED, THEN EXITED NON-ZERO/,
+    why: 'the opener was `EXIT n —` with a dash only, so a headline punctuated with a colon was no headline at all',
+  },
+  {
+    id: 'O2b',
+    what: 'a LOADER error with no stack trace and no summary — the half only the loader markers can see',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        ["process.stderr.write('node:internal/modules/esm/resolve ERR_MODULE_NOT_FOUND while loading the instrument\\n');", 'process.exitCode = 1;', ''].join(
+          '\n',
+        ),
+      );
+      return entry;
+    },
+    expect: /CRASHED BEFORE MEASURING/,
+    why: 'round 16 measured LOADER_MARKERS replaceable by a pattern matching nothing with every arm still green: O2 reaches the same class through its stack trace, so no arm was measuring the loader half at all',
+  },
+  {
+    id: 'O3j',
+    what: 'round 16 — a machine record whose own `result` is the bare word UNMEASURED, which `pitr-proof.ts` can print',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(entry, [`console.log(${JSON.stringify(pitrMachine('UNMEASURED'))});`, 'process.exitCode = 1;', ''].join('\n'));
+      return entry;
+    },
+    expect: /DID NOT MEASURE/,
+    why: 'a record declares a BARE verdict with no opener in front of it, so a rule that only recognises «did not measure» after an opener reads the pack\u2019s own UNMEASURED result as a verdict about a subject',
+  },
+  {
+    id: 'O3k',
+    what: 'round 16 — a record whose two outcome keys DISAGREE, one of them saying it did not measure',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [`console.log(${JSON.stringify('P15_X: {"result":"PASS","verdict":"INVALID MEASUREMENT"}')});`, 'process.exitCode = 3;', ''].join('\n'),
+      );
+      return entry;
+    },
+    expect: /DID NOT MEASURE/,
+    why: 'the first key read used to win, so a PASS under one name silently shadowed «I could not measure» under the other — the F-R13-05 shape with the two lines swapped',
+  },
+  {
+    id: 'O6b',
+    what: 'round 16 — «I could not measure» behind the OTHER opener punctuation, a colon',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(entry, ["console.log('EXIT 2: NOT MEASURED — the caller named no database.');", 'process.exitCode = 2;', ''].join('\n'));
+      return entry;
+    },
+    expect: /DID NOT MEASURE/,
+    why: 'three instruments in this pack punctuate that headline with a colon, and an opener list written for one of them speaks for none of the others',
   },
   {
     id: 'O4',
@@ -346,7 +464,26 @@ function main(): number {
     return 2;
   }
   console.log(`  anchored  ${PITR} still prints its machine record before its headline, which is the shape O3b plants.`);
-  console.log(`  anchored  ${LOAD} prints the same way and still declares INVALID MEASUREMENT, which is the shape O3g plants.`);
+  if (!load.includes(LOAD_RECORD_KEY)) {
+    console.log('');
+    console.log(`  O3i plants a record whose outcome key is \`verdict\`, and ${LOAD} no longer declares it under that key.`);
+    console.log('');
+    console.log('EXIT 2 — UNMEASURED. A plant that claims a real shape and cannot find it measures nothing.');
+    return 2;
+  }
+  const role = readFileSync(join(ROOT, ROLE), 'utf8');
+  const dr = readFileSync(join(ROOT, DR), 'utf8');
+  if (!role.includes(ROLE_HEADLINE_LINE) || !dr.includes(DR_HEADLINE_LINE)) {
+    console.log('');
+    console.log(`  O6 and O7 claim to copy what ${ROLE} and ${DR} print, and that is no longer what they print:`);
+    console.log(`    ${ROLE}  ${role.includes(ROLE_HEADLINE_LINE) ? 'still prints its NOT MEASURED headline' : 'NOT FOUND'}`);
+    console.log(`    ${DR}  ${dr.includes(DR_HEADLINE_LINE) ? 'still opens its headline with VERDICT:' : 'NOT FOUND'}`);
+    console.log('');
+    console.log('EXIT 2 — UNMEASURED. A plant that claims a real shape and cannot find it measures nothing.');
+    return 2;
+  }
+  console.log(`  anchored  ${LOAD} prints the same way, declares INVALID MEASUREMENT and still names its outcome \`verdict\`.`);
+  console.log(`  anchored  ${ROLE} still prints «EXIT 2 — NOT MEASURED», and ${DR} still opens with «VERDICT:».`);
   console.log('');
 
   let failures = 0;

@@ -50,57 +50,112 @@ interface Deletion {
 const DELETIONS: readonly Deletion[] = [
   {
     id: 'D1',
-    guard: `  const headline = lines.find((l) => VERDICT_HEADLINE.test(l));
-  if (headline !== undefined) return headline.slice(0, 110);
-  const machine = lines.find((l) => MACHINE_SUMMARY.test(l));
-  return machine === undefined ? null : machine.slice(0, 110);`,
-    without: `  const line = lines.find((l) => VERDICT_LINE.test(l));
-  return line === undefined ? null : line.slice(0, 110);`,
-    arms: ['O3f'],
+    guard:
+      '  const headline = lines.find((l) => VERDICT_HEADLINE.test(l));\n  if (headline !== undefined) return headline.slice(0, 110);\n  const machine = lines.find((l) => MACHINE_SUMMARY.test(l));\n  return machine === undefined ? null : machine.slice(0, 110);',
+    without: '  const line = lines.find((l) => VERDICT_LINE.test(l));\n  return line === undefined ? null : line.slice(0, 110);',
+    arms: ['O3f', 'O7'],
     exact: true,
-    // MEASURED, not assumed: removing this alone leaves O3b GREEN, because the
-    // record fallback added in round 15 reads the same contention out of the
-    // JSON blob. The arm that isolates the PREFERENCE is O3f, where the two
-    // disagree. D4 below removes both routes and is where O3b is covered.
+    // MEASURED, not assumed: this leaves O3b green, because the record
+    // fallback reads the same contention out of the JSON. The arms that
+    // isolate the PREFERENCE are the two where record and headline differ.
     what: 'the HEADLINE is preferred over the machine record printed above it (round 14, F-R14-01)',
   },
   {
     id: 'D2',
-    guard: 'export const CONTENTION_VERDICT = new RegExp(`^(?:${SPEAKER}:\\\\s*)?INVALID MEASUREMENT\\\\b`);',
+    guard: 'export const CONTENTION_VERDICT = new RegExp(`^${OPENERS}?INVALID MEASUREMENT\\\\b`);',
     without: 'export const CONTENTION_VERDICT = /^(?:PHASE\\s+15\\s+[A-Z0-9 /-]+:\\s*)?INVALID MEASUREMENT\\b/;',
     arms: ['O3g'],
     exact: true,
+    // MEASURED, not assumed. The first run of this table found O3e and O3i
+    // still green without the rule, and they were: round 16 added
+    // DID_NOT_MEASURE, which reads INVALID MEASUREMENT too, so both arms
+    // reached «DID NOT MEASURE» down the generic branch and an arm that
+    // asserted only that prefix could not tell the two branches apart. The
+    // branches do not say the same thing — the contention one tells the
+    // reader to re-run the instrument alone, which is an action — so the four
+    // contention arms now assert the CONTENTION sentence. That leaves O3g as
+    // the arm this rule carries: a BARE «INVALID MEASUREMENT» in a record
+    // still matches the narrow pattern's optional prefix, and only the load
+    // harness's «P15 LOAD <profile>:» headline needs the shared speaker.
     what: 'the contention pattern and the headline pattern name the SAME speaker (round 15, F-R15-01)',
   },
   {
     id: 'D3',
-    guard: "    for (const value of [record.result, record.verdict]) if (typeof value === 'string') return value;",
-    without: "    for (const value of [record.result]) if (typeof value === 'string') return value;",
-    arms: ['O3i'],
+    guard: "    const declared = [record.result, record.verdict].filter((v): v is string => typeof v === 'string');",
+    without: "    const declared = [record.result].filter((v): v is string => typeof v === 'string');",
+    arms: ['O3i', 'O3k'],
     exact: true,
+    // MEASURED: O3k dies here too, and honestly. Its plant declares the
+    // adverse outcome under `verdict`, so a fallback that cannot see that key
+    // cannot see the disagreement either. A second arm moving is a finding
+    // only when the rule is not what the arm rests on; here it is.
     what: "the record fallback reads BOTH keys this pack's instruments declare an outcome under (round 15, F-R15-01)",
   },
   {
+    id: 'D5',
+    guard: 'export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED)\\\\b`);',
+    without: 'export const DID_NOT_MEASURE = /(?!)/;',
+    arms: ['O6', 'O3j', 'O6b', 'O3k'],
+    exact: true,
+    what: "\u00abI could not measure\u00bb in the pack's other spellings \u2014 UNMEASURED and NOT MEASURED (round 16, F-R16-04)",
+  },
+  {
+    id: 'D6',
+    guard:
+      'export const LOADER_MARKERS =\n  /ERR_MODULE_NOT_FOUND|Cannot find module|ERR_UNKNOWN_FILE_EXTENSION|ERR_REQUIRE_ESM|SyntaxError:|ERR_INVALID_ARG|MODULE_NOT_FOUND/;',
+    without: 'export const LOADER_MARKERS = /(?!)/;',
+    arms: ['O2b'],
+    exact: true,
+    // Round 16 replaced this with a pattern matching nothing and every arm
+    // stayed green: O2 reaches the same class through its stack trace, so
+    // the loader half was measured by no arm at all (F-R16-07).
+    what: 'the LOADER markers, for a crash that prints no stack trace at all',
+  },
+  {
+    id: 'D7',
+    guard: "export const VERDICT_HEADLINE = new RegExp(`^(?:EXIT\\\\s+\\\\d+\\\\s*[\u2014:-]|(?:${SPEAKER}|VERDICT):\\\\s*(?:${VERDICTS}))`, 'm');",
+    without: "export const VERDICT_HEADLINE = new RegExp(`^(?:EXIT\\\\s+\\\\d+\\\\s+[\u2014-]|${SPEAKER}:\\\\s*(?:${VERDICTS}))`, 'm');",
+    arms: ['O7', 'O8', 'O6b'],
+    exact: true,
+    // MEASURED: O6b dies here as well. Its line is `EXIT 2: NOT MEASURED`,
+    // which must first be READ as a headline before the opener list below can
+    // place the verdict in it, so it rests on both rules. D8 separates them —
+    // it reddens O6b alone.
+    what: 'the openers a HEADLINE may use: `EXIT n:` with a colon, and `VERDICT:` with no speaker (round 16, F-R16-05)',
+  },
+  {
+    id: 'D8',
+    guard: 'const OPENERS = `(?:EXIT\\\\s+\\\\d+\\\\s*[\u2014:-]\\\\s*|(?:${SPEAKER}|VERDICT):\\\\s*)`;',
+    without: 'const OPENERS = `(?:EXIT\\\\s+\\\\d+\\\\s+\u2014\\\\s*|${SPEAKER}:\\\\s*)`;',
+    arms: ['O6b'],
+    exact: true,
+    what: 'the same openers where a NOT-MEASURED verdict may sit',
+  },
+  {
+    id: 'D9',
+    guard: '    return declared.find((v) => DID_NOT_MEASURE.test(v)) ?? declared[0] ?? null;',
+    without: '    return declared[0] ?? null;',
+    arms: ['O3k'],
+    exact: true,
+    what: 'where two record keys disagree, the one saying it did not measure wins (round 16, F-R16-08)',
+  },
+  {
     id: 'D4',
-    guard: `  const headline = lines.find((l) => VERDICT_HEADLINE.test(l));
-  if (headline !== undefined) return headline.slice(0, 110);
-  const machine = lines.find((l) => MACHINE_SUMMARY.test(l));
-  return machine === undefined ? null : machine.slice(0, 110);`,
-    without: `  const line = lines.find((l) => VERDICT_LINE.test(l));
-  return line === undefined ? null : line.slice(0, 110);`,
+    guard:
+      '  const headline = lines.find((l) => VERDICT_HEADLINE.test(l));\n  if (headline !== undefined) return headline.slice(0, 110);\n  const machine = lines.find((l) => MACHINE_SUMMARY.test(l));\n  return machine === undefined ? null : machine.slice(0, 110);',
+    without: '  const line = lines.find((l) => VERDICT_LINE.test(l));\n  return line === undefined ? null : line.slice(0, 110);',
     second: {
-      guard: "    for (const value of [record.result, record.verdict]) if (typeof value === 'string') return value;",
-      without: '    return null;',
+      guard: "    const declared = [record.result, record.verdict].filter((v): v is string => typeof v === 'string');",
+      without: '    const declared: readonly string[] = [];',
     },
     arms: ['O3b'],
-    // Two rules at once, deliberately: O3b is the arm that reproduces round
-    // 14's defect transcript, and at this head TWO independent rules classify
-    // it correctly. Removing either alone leaves it green, which is redundancy
-    // rather than vacuity — but an arm no deletion can redden is measuring
-    // nothing, so the deletion that covers it removes both routes. It reddens
-    // other arms too, by construction, and is not held to `exact`.
     exact: false,
-    what: 'BOTH routes to a contention verdict — the headline preference and the record fallback',
+    // Two rules at once, deliberately: O3b reproduces round 14's defect
+    // transcript and TWO independent rules classify it correctly, so no
+    // single deletion can redden it. An arm no deletion reaches is
+    // measuring nothing, so the deletion that covers it removes both
+    // routes and is not held to `exact`.
+    what: 'BOTH routes to a contention verdict \u2014 the headline preference and the record fallback',
   },
 ];
 
