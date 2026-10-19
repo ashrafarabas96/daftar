@@ -1388,6 +1388,19 @@ function main(): number {
   const redInstruments = results.filter((r) => r.ran && r.exitCode !== 0 && r.exitCode !== null);
   const excused = redInstruments.filter((r) => excuseFor(r.instrument.script, r.exitCode) !== null);
   const unexcused = redInstruments.filter((r) => excuseFor(r.instrument.script, r.exitCode) === null);
+  // A RUN THAT DID NOT MEASURE IS NEITHER A RED NOR A GREEN (round 20, F-R20-05).
+  //
+  // `test:phase15:load-harness` exited 1 in the ed26e00 confirmation run because
+  // port 55432 was still held by the previous instrument's postmaster. The
+  // classifier now reads that from the server's own log, and this is what the
+  // runner's exit code does with it: such a run is reported SEPARATELY, under a
+  // code of its own, because calling it «measured and returned a non-zero exit
+  // code» (EXIT 5) says the instrument weighed its subject, and it never started.
+  // It is NOT excused into silence either: the code stays non-zero, so a
+  // confirmation run with contention in it can never be quoted as rc 0. The
+  // instrument must be re-run alone and the result stated for that run.
+  const didNotMeasure = unexcused.filter((r) => /^DID NOT MEASURE/.test(outcomeClass(r)));
+  const measuredRed = unexcused.filter((r) => !/^DID NOT MEASURE/.test(outcomeClass(r)));
   if (excused.length > 0) {
     console.log(`${excused.length} instrument(s) returned a non-zero code this runner TOLERATES, each named in its source with a reason for THAT code:`);
     for (const r of excused) console.log(`  ${r.instrument.script} exit ${String(r.exitCode)} — ${excuseFor(r.instrument.script, r.exitCode) ?? ''}`);
@@ -1400,9 +1413,9 @@ function main(): number {
     console.log('  the gate cannot notice: `npm run format` was red on committed files for six rounds.');
     return 6;
   }
-  if (unexcused.length > 0) {
-    console.log(`EXIT 5: ${unexcused.length} instrument(s) measured and returned a non-zero exit code that nothing here accounts for:`);
-    for (const r of unexcused) {
+  if (measuredRed.length > 0) {
+    console.log(`EXIT 5: ${measuredRed.length} instrument(s) measured and returned a non-zero exit code that nothing here accounts for:`);
+    for (const r of measuredRed) {
       const sameScript = TOLERATED_NONZERO.find((t) => t.script === r.instrument.script);
       console.log(
         `  ${r.instrument.script} exit ${String(r.exitCode)} — ${outcomeClass(r)}${
@@ -1414,6 +1427,14 @@ function main(): number {
     console.log('  (coordinator round-8 R2). An index instrument red BEFORE its regeneration is the expected');
     console.log('  case: regenerate the documents, then make the confirmation run whose rc can be quoted.');
     return 5;
+  }
+
+  if (didNotMeasure.length > 0) {
+    console.log(`EXIT 8: ${didNotMeasure.length} instrument(s) DID NOT MEASURE — a resource they needed was held, so neither a red nor a green:`);
+    for (const r of didNotMeasure) console.log(`  ${r.instrument.script} exit ${String(r.exitCode)} — ${outcomeClass(r)}`);
+    console.log('  Re-run each one ALONE and state the result for THAT run. This code is deliberately');
+    console.log('  non-zero: a confirmation run carrying contention is not a run whose rc can be quoted.');
+    return 8;
   }
 
   if (!engine.satisfied) {

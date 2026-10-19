@@ -491,6 +491,71 @@ const CASES: readonly Case[] = [
     why: 'the round-18 widening is read only where nothing else spoke for the run; without this control it could silently downgrade every verdict preceded by a skipped subject',
   },
   {
+    id: 'O11',
+    what: "round 20's F-R20-05 — a held port, and the instrument never reached a line of its OWN: the only verdict in the log is vitest's «No test files found»",
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          // The postmaster's own lines, in its own format, as the ed26e00
+          // confirmation run recorded them.
+          `console.log('2026-10-19 19:33:48.772 UTC [15002] LOG:  could not bind IPv4 address "127.0.0.1": Address already in use');`,
+          "console.log('2026-10-19 19:33:48.772 UTC [15002] FATAL:  could not create any TCP/IP sockets');",
+          "console.log('No test files found, exiting with code 1');",
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /DID NOT MEASURE .* could not bind its port/,
+    why: 'every other rule reads a DECLARATION, and an instrument whose cluster never starts declares nothing; without this the second occurrence of a held port was filed UNCLASSIFIED, as the first one was',
+  },
+  {
+    id: 'O11b',
+    what: 'THE CONTROL for O11 — the same bind failure, and then a verdict of the instrument\u2019s own',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          `console.log('2026-10-19 19:33:48.772 UTC [15002] LOG:  could not bind IPv4 address "127.0.0.1": Address already in use');`,
+          "console.log('EXIT 1 — FAIL: two checks failed.');",
+          '// Contention must never downgrade a measurement: a run that reached',
+          '// its own verdict has reached it, whatever its server log also says.',
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /MEASURED, THEN EXITED NON-ZERO/,
+    why: 'the new rule is read ONLY where nothing else spoke for the run; without this control it could downgrade any measured FAIL whose cluster logged a busy port earlier',
+  },
+  {
+    id: 'O11c',
+    what: 'THE SECOND CONTROL for O11 — the English phrase in PROSE the subject writes itself, with no postmaster line format',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          "console.log('checking whether the address already in use case is handled');",
+          "console.log('could not bind IPv4 address is one of the strings this tool greps for');",
+          '// No `[pid] LOG:` anywhere: this is a subject TALKING about a bind',
+          '// failure, not a server reporting one. «a value appearing anywhere in',
+          '// text the subject writes» is the defect family this pack closes.',
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /UNCLASSIFIED NON-ZERO/,
+    why: 'anchoring the rule to the phrase instead of the postmaster\u2019s line format would let any subject mention its way out of a measured red',
+  },
+  {
     id: 'O4',
     what: 'CONTROL — a clean run',
     build: (dir) => {

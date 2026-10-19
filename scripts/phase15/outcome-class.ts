@@ -190,6 +190,38 @@ export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UN
  * to «did not measure», which is the wrong direction to be wrong in.
  */
 export const BARE_REFUSAL = new RegExp('^(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED|NO VERDICT)\\s*[:—-]');
+/**
+ * A CONTENTION THE INSTRUMENT COULD NOT ANNOUNCE (round 20, F-R20-05).
+ *
+ * Every rule above reads a DECLARATION: the instrument reached a line and said
+ * what the run was worth. That is the whole mechanism, and it has one blind
+ * spot — an instrument whose cluster never starts never reaches any line of
+ * its own. In the `ed26e00` confirmation run `test:phase15:load-harness` found
+ * port 55432 held by a postmaster still shutting down, its global setup threw,
+ * and the only verdict in the log was vitest's «No test files found, exiting
+ * with code 1» — a setup failure wearing a filter failure's words. The
+ * classifier had nothing to read and filed it `UNCLASSIFIED NON-ZERO`, which
+ * is honest and useless: the log settles it in two lines, and this is the
+ * second time the same held port has produced the same sentence (the `60458ec`
+ * run, recorded in `pg-cluster.ts`).
+ *
+ * So where NOTHING spoke for the run, the SERVER's own log is read instead of
+ * the instrument's. It is anchored to the postmaster's line format — a `[pid]`
+ * followed by its own severity keyword — and not to the English phrase: a run
+ * that merely MENTIONS a busy port in prose it writes itself must stay
+ * unclassified, because «a value appearing anywhere in text the subject
+ * writes» is the defect family this pack has spent eight rounds closing.
+ * Control `O11c` holds that boundary, and `O11b` holds the other one: a run
+ * that hit the bind failure and then reached its own verdict keeps the
+ * verdict, because contention must never downgrade a measurement.
+ *
+ * This says nothing about the subject. It says the port was held, and the
+ * instrument must be re-run alone before anything is claimed either way.
+ */
+export const SERVER_BIND_FAILURE = new RegExp(
+  String.raw`^.*\[\d+\]\s+(?:LOG|WARNING|FATAL):\s+(?:could not bind \S+ address|could not create any TCP/IP sockets|could not create listen socket)`,
+  'm',
+);
 
 export function reachedVerdict(r: Classifiable): string | null {
   const lines = r.output.split('\n').map((l) => l.trim());
@@ -269,5 +301,10 @@ export function outcomeClass(r: Classifiable): string {
     return `DID NOT MEASURE — the instrument declared that it did not measure (“${declared.slice(0, 70)}”), so this exit code is a statement about the RUN and not a verdict about the subject. Nothing here is evidence either way`;
   if (r.counts.readFrom !== null) return 'MEASURED, THEN EXITED NON-ZERO — the instrument reached its own summary line, so the code is its verdict';
   if (verdictLine !== null) return `MEASURED, THEN EXITED NON-ZERO — it printed its own verdict line (“${verdictLine}”), so the code is its verdict`;
+  // Nothing above spoke for this run: no counts, no verdict line, no bare
+  // refusal. Only here is the SERVER's log read, so this can never downgrade
+  // an instrument that reached a verdict of its own.
+  if (SERVER_BIND_FAILURE.test(r.output))
+    return 'DID NOT MEASURE — the instrument never reached a line of its own, and the SERVER log in this transcript says it could not bind its port, so a resource it needed was held. This exit code is a statement about the RUN; re-run it alone, and nothing here is evidence either way';
   return 'UNCLASSIFIED NON-ZERO — no crash marker, no summary line and no verdict line this runner recognises; only the log settles it';
 }

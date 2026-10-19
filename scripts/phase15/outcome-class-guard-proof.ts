@@ -49,6 +49,18 @@ interface Deletion {
 
 const DELETIONS: readonly Deletion[] = [
   {
+    id: 'D14',
+    guard:
+      "  if (SERVER_BIND_FAILURE.test(r.output))\n    return 'DID NOT MEASURE \u2014 the instrument never reached a line of its own, and the SERVER log in this transcript says it could not bind its port, so a resource it needed was held. This exit code is a statement about the RUN; re-run it alone, and nothing here is evidence either way';",
+    without: '',
+    arms: ['O11'],
+    exact: true,
+    // MEASURED, not assumed: O11b and O11c stay green without the rule, which
+    // is the point of them — one keeps a verdict that was reached, the other
+    // keeps an unclassified run unclassified. Only O11 depends on the rule.
+    what: "the SERVER's own log is read where the instrument reached no line of its own (round 20, F-R20-05)",
+  },
+  {
     id: 'D1',
     guard:
       '  const headline = lines.find((l) => VERDICT_HEADLINE.test(l));\n  if (headline !== undefined) return headline.slice(0, 110);\n  const machine = lines.find((l) => MACHINE_SUMMARY.test(l));\n  return machine === undefined ? null : machine.slice(0, 110);',
