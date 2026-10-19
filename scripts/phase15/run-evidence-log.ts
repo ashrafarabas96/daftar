@@ -1100,6 +1100,57 @@ interface GateResult {
  * the record is the engine the gate ran on rather than the one this process
  * happens to be using.
  */
+/**
+ * AN INSTRUMENT IS NOT FINISHED UNTIL THE PORTS IT HELD ARE FREE (round 20, F-R20-05).
+ *
+ * `pg_ctl stop` returning 0 says the shutdown was ASKED FOR and acknowledged;
+ * it does not say the socket is closed. The gap is small and it is enough: in
+ * the `ed26e00` run the next cluster instrument started inside it, failed to
+ * bind port 55432, and reported «No test files found». That is the SECOND time
+ * the same held port produced that sentence.
+ *
+ * So the runner waits, between cluster instruments, for the shared port to be
+ * bindable — which is the actual question, asked by binding it, not by reading
+ * a teardown's exit code or parsing another tool's output. The bind is done in
+ * a child process so a successful probe cannot leave a listener of its own
+ * behind in this one.
+ *
+ * This REMOVES the common case; it does not replace the classifier rule that
+ * CATCHES it. A port held by something this runner did not start will still
+ * outlast the wait, and `SERVER_BIND_FAILURE` is what reads that.
+ */
+const SHARED_CLUSTER_PORT = Number(process.env['PG_PORT'] ?? 55432);
+const PORT_WAIT_MS = 30_000;
+const PORT_POLL_MS = 500;
+
+function portIsFree(port: number): boolean {
+  const probe = `const s=require('net').createServer();s.once('error',()=>process.exit(1));s.listen(${String(port)},'127.0.0.1',()=>s.close(()=>process.exit(0)));`;
+  const r = spawnSync(process.execPath, ['-e', probe], { encoding: 'utf8', timeout: 5_000 });
+  return r.status === 0;
+}
+
+/**
+ * A SYNCHRONOUS sleep, because this runner is synchronous end to end: it drives
+ * children with `spawnSync` so that the record is written in the order the
+ * instruments ran. `Atomics.wait` on a buffer nobody else can reach is the one
+ * way to wait here without burning the CPU and without pulling in a sleep
+ * binary, which would make the record depend on one more thing in the
+ * container.
+ */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Returns null when the port came free, or a sentence naming what did not. */
+function waitForSharedPort(): string | null {
+  const started = Date.now();
+  while (Date.now() - started < PORT_WAIT_MS) {
+    if (portIsFree(SHARED_CLUSTER_PORT)) return null;
+    sleepSync(PORT_POLL_MS);
+  }
+  return `port ${String(SHARED_CLUSTER_PORT)} was still bound ${String(PORT_WAIT_MS / 1000)}s after the previous cluster instrument returned`;
+}
+
 function runRepoGates(): readonly GateResult[] {
   const out: GateResult[] = [];
   for (const g of REPO_GATES) {
@@ -1235,6 +1286,11 @@ function main(): number {
       `  exit ${res.exitCode === null ? `KILLED (${String(res.signal)})` : String(res.exitCode)}  ${(res.ms / 1000).toFixed(1)}s  log ${res.logBytes} bytes  ${outcomeClass(res)}`,
     );
     results.push(res);
+    if (inst.cluster) {
+      const held = waitForSharedPort();
+      if (held !== null)
+        console.log(`  PORT STILL HELD — ${held}. The next cluster instrument may fail to bind; the classifier reads that from the server's log.`);
+    }
   }
 
   console.log('');
