@@ -2121,40 +2121,107 @@ beforeAll(async () => {
   //    ── IT DID NOT MAKE «EVERY» LAWFUL WRITE FAIL, AND THIS COMMENT USED TO
   //       SAY THAT IT DID (`TL-P4-COORD-R86` §3 FINDING C, round 26 item 1a) ──
   //
-  //    The probe that refuses is an `EXISTS` over `installment_plans` keyed on
-  //    `(business_id, id)`, which is the primary key itself. INDEX-SERVED it
-  //    finds nothing, because at `indisready = false` that index holds no
-  //    entry for the row this statement just wrote, and the write is refused.
-  //    ON A `Seq Scan` IT FINDS THE ROW AND NOTHING REFUSES. So whether this
-  //    state is detected at all is a PLANNER CHOICE, and it was measured
-  //    going the other way: at the round-24 bytes, one run in thirty committed
-  //    the poisoned write and read `R16_lawful_pkey` as `null`, with the
-  //    sibling arm receiving `installment.plan_active_conflict` instead of
-  //    `installment.plan_index_unenforcing`
+  //    ── EVERY SENTENCE OF THIS PARAGRAPH WAS WRITTEN IN THE PRESENT TENSE
+  //       ABOUT A FAIL-OPEN THAT `27a7c998` CLOSED, AND IS NOW HISTORY
+  //       (`TL-P4-COORD-R91` §2; round 28's enumerated sweep, item 1) ──
+  //
+  //    WHAT IS TRUE AT THIS HEAD, FIRST, BECAUSE A READER IS SENT HERE BY
+  //    THREE SHIPPED CITATIONS. `installment_plan_fact_sync()` reads
+  //    `pg_index` for EVERY index of `installment_plans` UNCONDITIONALLY, on
+  //    every non-DELETE plan event, BEFORE the probe — the reading at
+  //    `spec:1605-1613` (`WHERE x.indrelid = 'public.installment_plans'`),
+  //    the refusal at `spec:1615`. So in the state these arms construct, the
+  //    write
+  //    is refused UNDER EVERY PLAN, and whether the state is detected is NOT
+  //    a planner choice any more. The forcing these arms carry is therefore
+  //    no longer load-bearing for the DETECTION; it is kept because it still
+  //    constructs the access path the sibling readings are about, and because
+  //    removing it would change what the control controls for.
+  //
+  //    WHAT WAS TRUE AT THE PARENT `54e3bbb7`, IN THE PAST TENSE. The probe
+  //    that refused WAS an `EXISTS` over `installment_plans` keyed on
+  //    `(business_id, id)`, the primary key itself. INDEX-SERVED it found
+  //    nothing, because at `indisready = false` that index held no entry for
+  //    the row the statement had just written, and the write was refused. ON
+  //    A `Seq Scan` IT FOUND THE ROW AND NOTHING REFUSED — so whether that
+  //    state was detected at all WAS a PLANNER CHOICE, and it was measured
+  //    going the other way: at the round-24 bytes, one run in thirty
+  //    committed the poisoned write and read `R16_lawful_pkey` as `null`,
+  //    with the sibling arm receiving `installment.plan_active_conflict`
+  //    instead of `installment.plan_index_unenforcing`
   //    (`P4-S7-R25-EVIDENCE-control-r16-red-at-34d3d77.log`, run `ctl-16`).
   //
-  //    THAT IS A FAIL-OPEN IN THE SHIPPED GUARD AND NOT A DEFECT OF THIS
-  //    INSTRUMENT. It is written up as `PATCH-REQ-P4S7-FINDING-C` and the
-  //    probe it is about is `spec:1513-1515`; round 26 was NOT authorised to
-  //    redesign it and did not. What round 26 changed is this file: the three
-  //    arms below now FORCE the access path, so the state each one asserts is
-  //    CONSTRUCTED rather than hoped for, and the fail-open is measured
-  //    separately with the path forced the OTHER way rather than asserted
-  //    around. No arm here claims that `indisready = false` keeps the planner
-  //    on the index; usable is not chosen, and round 24's red disproved the
-  //    same belief where §R3 had written it down.
+  //    THAT WAS A FAIL-OPEN IN THE SHIPPED GUARD AND NOT A DEFECT OF THIS
+  //    INSTRUMENT. It was written up as `PATCH-REQ-P4S7-FINDING-C`; the probe
+  //    it was about is at `spec:1618-1620` AT THIS HEAD (`SELECT EXISTS …
+  //    INTO v_seen`) and was at
+  //    `spec:1513-1515` at the parent — the hoist added 47 lines above it and
+  //    round 28 added more, so the pointer is given for THIS head and the
+  //    parent's is labelled as the parent's. **IT WAS CLOSED BY
+  //    `27a7c998bdbf261cbc87902a4bb3c0ad23faedc6`**, which hoisted the
+  //    `pg_index` reading out of `IF NOT v_seen`. Round 26 was not authorised
+  //    to redesign the guard and did not; round 27 was, and did.
+  //
+  //    WHAT ROUND 26 CHANGED IS THIS FILE: the three arms below FORCE the
+  //    access path, so the state each one asserts is CONSTRUCTED rather than
+  //    hoped for, and the fail-open was measured separately with the path
+  //    forced the OTHER way rather than asserted around. No arm here claims
+  //    that `indisready = false` keeps the planner on the index; usable is
+  //    not chosen, and round 24's red disproved the same belief where §R3 had
+  //    written it down.
+  //
+  //    ── AND WHAT §R16 EXECUTES IS ONE DIRECTION, WHICH THE THREE SHIPPED
+  //       CITATIONS TO IT USED TO IMPLY WAS TWO (`TL-P4-COORD-R91` §3) ──
+  //
+  //    §R16 forces the planner AT the indexes and requires the refusal. The
+  //    heap-forced direction — the one in which the poisoned write COMMITS —
+  //    IS NOT CONSTRUCTIBLE AT THIS HEAD AT ALL, because the hoisted reading
+  //    refuses before the probe whatever the plan. So the second direction is
+  //    not merely unexecuted here: this commit REMOVED ITS SUBJECT, and the
+  //    only readings of it that exist are the parent's
+  //    (`P4-S7-R26-EVIDENCE-item1b-failopen-measured.log`,
+  //    `P4-S7-R27-EVIDENCE-redproof1-parent-failopen-reproduced.log`). The
+  //    three citations are corrected rather than executed, and they are
+  //    corrected BECAUSE executing them is impossible, not merely expensive.
+  //
+  //    ── AND THE HOISTED READING'S RELATION SCOPE IS ONE RELATION, NOT TWO
+  //       (`TL-P4-COORD-R91` §3, FINDING C's relation scope) ──
+  //
+  //    `spec:1605-1613` reads `x.indrelid = 'public.installment_plans'` at
+  //    `spec:1612` and nothing else, while part 9a reads every index of
+  //    BOTH `installment_plans` AND `installments`. An unenforcing index of
+  //    `installments` is refused at APPLY time and is NOT refused by the
+  //    hoisted guard at plan-write time. Nobody may read the arms below as
+  //    covering what part 9a covers: they unenforce indexes of
+  //    `installment_plans` only, which is the whole of this guard's reach.
   //
   //    The one forcing every §R16 write below carries: push the planner AT
   //    the relation's indexes, on a backend that has never planned the
   //    trigger bodies' statements. `enable_seqscan = off` DISCOURAGES the
   //    sequential path rather than forbidding it, so this is still the
-  //    planner's decision and the knob's effect is MEASURED ON BOTH SIDES
+  //    planner's decision and the knob's effect WAS MEASURED ON BOTH SIDES
   //    rather than asserted from PostgreSQL's costing: forced this way the
-  //    three arms refuse in every run of round 26's tally, and forced the
-  //    OTHER way the poisoned write COMMITS, deterministically, three runs of
-  //    three. That second reading is round 26 item 1b's measurement of the
-  //    fail-open and it is what shows the knob reaches the plans inside the
+  //    three arms refused in every run of round 26's tally, and forced the
+  //    OTHER way the poisoned write COMMITTED, deterministically, three runs
+  //    of three. That second reading is round 26 item 1b's measurement of the
+  //    fail-open and it is what showed the knob reaches the plans inside the
   //    `SECURITY DEFINER` trigger bodies at all.
+  //
+  //    ── AND THAT WHOLE PARAGRAPH IS ABOUT THE PARENT `54e3bbb7`, WHICH IS
+  //       WHY IT IS IN THE PAST TENSE. `27a7c998` CLOSED IT, AND NEITHER
+  //       `TL-P4-COORD-R91` §2's THREE LINES NOR ROUND 28's SALVAGED DRAFT
+  //       NAMED THIS SENTENCE — round 28's own sweep found it, which is the
+  //       fourth copy and the reason no count here is offered as closed ──
+  //
+  //    «FORCED THE OTHER WAY THE POISONED WRITE COMMITS» STOOD HERE IN THE
+  //    PRESENT TENSE AND IS FALSE AT THIS HEAD. The hoisted `pg_index`
+  //    reading refuses before the probe under EVERY plan, so forcing the
+  //    planner onto the heap no longer admits the write: the heap-forced
+  //    direction has no subject here at all. What the sentence establishes
+  //    about the KNOB -- that `SET LOCAL enable_seqscan` reaches the plans
+  //    inside a `SECURITY DEFINER` trigger body -- was established at the
+  //    parent and is not re-established by anything at this head; it is cited
+  //    from the parent's evidence and not from a reading taken here.
   const FORCE_IX = { knobs: ['SET LOCAL enable_seqscan = off'], freshPool: true } as const;
   const setFlag = async (ix: string, column: string, value: boolean): Promise<string | null> => {
     try {
@@ -2169,13 +2236,25 @@ beforeAll(async () => {
   //    (1) THE APPLY-TIME BLOCK NOW SEES IT. It reported OK at `c0d37ca`.
   M['R16_ratchet_pkey'] = await ratchet();
   //    (2) AND THE LAWFUL WRITE IS REFUSED UNDER A NAME TRUE OF WHAT WAS
-  //        OBSERVED, naming the index and not `pg_policy`. FORCED: the probe
-  //        must be served by the primary key for the state to be detected at
-  //        all, so the planner is pushed at it.
+  //        OBSERVED, naming the index and not `pg_policy`. STILL FORCED, FOR
+  //        A DIFFERENT REASON THAN IT USED TO BE. «The probe must be served
+  //        by the primary key for the state to be detected at all» stood here
+  //        and is FALSE at this head: the refusal is taken from an
+  //        unconditional `pg_index` reading placed BEFORE the probe by
+  //        `27a7c998`, so the detection needs no particular access path and
+  //        this arm would refuse with the planner left alone. The forcing is
+  //        kept because the CONTROL at (4) must carry the identical forcing
+  //        for «identical write» to mean anything, and because dropping it
+  //        would silently change what §R16's sibling readings are about.
   M['R16_lawful_pkey'] = await poisoned([], false, true, FORCE_IX);
   M['R16_lawful_pkey_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
   //    (3) BOTH INDEXES UNENFORCING — the state in which the two counts
-  //        under-report TOGETHER and `plan_index_disagrees` is silent.
+  //        under-report TOGETHER and `plan_index_disagrees` is silent. THAT
+  //        REMAINS A TRUE DESCRIPTION OF THE STATE AND IS NO LONGER WHAT THIS
+  //        ARM REACHES: since `27a7c998` the unconditional `pg_index` reading
+  //        refuses this write BEFORE either count is taken, so the two counts
+  //        are not executed here at all and their agreement is not what this
+  //        arm observes. What it observes is the earlier refusal, by name.
   M['R16_unready_uq'] = await setFlag('installment_plans_one_active_per_invoice_uq', 'indisready', false);
   M['R16_lawful_both'] = await poisoned([], false, true, FORCE_IX);
   M['R16_lawful_both_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
@@ -2313,6 +2392,28 @@ beforeAll(async () => {
   //    CONSTRUCTS that disagreement instead of hoping the planner constructs
   //    it. What is no longer left to chance is the construction of the state,
   //    not the refusal, which is still the thing asserted.
+  //
+  //    ── AND SINCE `27a7c998` THE DISAGREEMENT THIS FORCING CONSTRUCTS IS
+  //       NEVER REACHED ON THIS PATH, WHICH THIS CAPTURE SITE MUST SAY
+  //       BECAUSE IT IS WHERE THE FORCING IS JUSTIFIED (round 28's sweep,
+  //       class (c); `TL-P4-COORD-R91` §1 correction 2) ──
+  //
+  //    The paragraph above is the reason the forcing EXISTS and it remains
+  //    the reason it is KEPT -- it still constructs the state, and the
+  //    control arms are only comparable to it if the forcing is identical.
+  //    But the refusal this write now receives is NOT
+  //    `installment.plan_index_disagrees`: at this head
+  //    `installment_plan_fact_sync()` reads `pg_index` unconditionally on
+  //    every non-DELETE plan event and refuses as
+  //    `installment.plan_index_unenforcing` BEFORE either counting is taken,
+  //    so the two countings are not executed on this path and their
+  //    disagreement is not what §R3 observes. The §R3 case below asserts the
+  //    name it actually receives and says so at length; nothing here claims
+  //    the disagreement arm is exercised. `plan_index_disagrees` is NOT dead:
+  //    it is reachable from the writer on the DELETE path, where no hoisted
+  //    reading stands in front of it, and from the deferred verifier at
+  //    COMMIT -- and NEITHER is constructed by any arm of this suite, so its
+  //    runtime reachability is **UNMEASURED at this head**.
   M['R3_second_no_trigger'] = (await commitPlan(APP_CTX(), { knobs: ['SET LOCAL enable_seqscan = off'], freshPool: true })).error;
   M['R3_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
   M['R3_counts'] = (
@@ -2673,17 +2774,38 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
   })();
   //    AND THE SAME PAIR WITH THE PLANNER LEFT ALONE, so the dependence of
   //    the finding on the ACCESS PATH is itself measured rather than assumed.
-  // ── FINDING E: THE FIVE PLANNER-DEPENDENT READINGS OF THIS SECTION ARE
-  //    NOW TAKEN ON A FORCED PATH, AND THE FREE ONES ARE RECORDED WITHOUT
-  //    BEING ASSERTED (`TL-P4-COORD-R84` §4's shape, which is this phase's
-  //    standard remedy for this class, applied here for the first time).
+  // ── FINDING E: THE **SEVEN** PLANNER-DEPENDENT READINGS OF THIS SECTION.
+  //    THE COUNT IS SEVEN AND NOT FIVE AND NOT SIX, AND IT IS ENUMERATED BY
+  //    KEY SO THE NEXT READER JUDGES IT AGAINST A LIST
+  //    (`TL-P4-COORD-R84` §4's shape; `TL-P4-COORD-R90` §4 added the sixth;
+  //    `TL-P4-COORD-R91` §3's CLAIM-4 item added the seventh. Round 26 said
+  //    five, round 27 said six, and both were wrong by the amount the next
+  //    round found -- so no count here is offered as closed).
+  //
+  //    THE LIST, BY MEASUREMENT KEY:
+  //      1. `R7_state.truth`            -- free; de-asserted, `toBeDefined()`.
+  //      2. `R7_two_readings_free`      -- free; only key PRESENCE asserted.
+  //      3. `R7_plan_truth_free`        -- free plan; only non-emptiness.
+  //      4. `R7_plan_truth_forced`      -- forced plan; asserted `Index`.
+  //      5. `R7_truth_indexserved`      -- VALUE asserted, NO plan read in its
+  //                                        own transaction. See the note at
+  //                                        its assertion: the determined twin
+  //                                        is `R7_truth_ixforced`.
+  //      6. which refusal the READER answers with (`R7_aging`) -- FINDING H,
+  //         found by measurement in round 27, repaired with a forced pair.
+  //      7. `R7_two_readings`           -- VALUE asserted, plan of THAT
+  //                                        statement never read. Its plan is
+  //                                        taken as a SEPARATE statement at
+  //                                        `R7_plan_retired_forced` and is
+  //                                        asserted NOWHERE. See the note at
+  //                                        its assertion.
   //
   //    WHAT WAS WRONG, MEASURED AND NOT ARGUED. §R7 asserted the VALUES of
-  //    five readings whose value depends on the access path:
-  //    `R7_state.truth`, `R7_two_readings_free`, the free plan of the
-  //    `EXISTS`, the forced plan beside it, and `R7_truth_indexserved` --
-  //    which is forced OFF the sequential path but then chooses BETWEEN two
-  //    indexes on `reltuples` alone. Their green was conditional on the
+  //    readings whose value depends on the access path: `R7_state.truth`,
+  //    `R7_two_readings_free`, the free plan of the `EXISTS`, the forced plan
+  //    beside it, and `R7_truth_indexserved` -- which is forced OFF the
+  //    sequential path but then chooses BETWEEN two indexes on `reltuples`
+  //    alone. Their green was conditional on the
   //    AUTOVACUUM DAEMON having vacuumed this relation mid-run: §R2, earlier
   //    in the same run, reads `relpages = 0` / `reltuples = -1` (the
   //    never-vacuumed sentinel) while round 25 read `relpages = 1` /
@@ -4142,13 +4264,33 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
    * block reported OK and the reader served a figure.
    *
    * IT DID NOT MAKE «EVERY» SUCH WRITE FAIL, AND THIS COMMENT USED TO SAY IT
-   * DID (`TL-P4-COORD-R86` §3 FINDING C): the probe that refuses reads the
-   * handed row BY PRIMARY KEY, so the detection is conditional on the planner
-   * choosing the very index that is not enforcing — on a `Seq Scan` the probe
-   * finds the row and NOTHING REFUSES. The three arms below therefore force
-   * the access path; the fail-open in the shipped guard is measured separately
+   * DID (`TL-P4-COORD-R86` §3 FINDING C): the probe that refused read the
+   * handed row BY PRIMARY KEY, so the detection WAS conditional on the
+   * planner choosing the very index that was not enforcing — on a `Seq Scan`
+   * the probe FOUND the row and NOTHING REFUSED. The three arms below
+   * therefore force the access path; the fail-open was measured separately
    * and routed as `PATCH-REQ-P4S7-FINDING-C`, and round 26 did not redesign
    * the guard.
+   *
+   * ── AND IT IS CLOSED. EVERY SENTENCE OF THE PARAGRAPH ABOVE IS NOW ABOUT
+   *    THE PARENT `54e3bbb7` AND NOT ABOUT THIS HEAD
+   *    (`TL-P4-COORD-R91` §2; round 28's sweep, item 1) ──
+   *
+   * `27a7c998bdbf261cbc87902a4bb3c0ad23faedc6` hoisted the `pg_index`
+   * enforcement reading OUT of `IF NOT v_seen` and takes it on every
+   * non-DELETE plan event BEFORE the probe. So at THIS head the detection is
+   * conditional on nothing the planner decides, and a `Seq Scan` refuses
+   * exactly as an index plan does. The sentence «the detection is conditional
+   * on the planner choosing the very index that is not enforcing» was TRUE at
+   * the parent and is FALSE here, which is why it is given in the past tense
+   * and attributed to a SHA rather than reworded into vagueness.
+   *
+   * WHAT THE SCOPE OF THAT REPAIR IS, SO THIS ARM IS NOT READ AS WIDER THAN
+   * IT IS: the hoisted reading covers every index of `installment_plans` and
+   * NO index of `installments`, while the apply-time law part 9a covers both
+   * relations. And the DELETE direction is NOT covered by it at all — the
+   * reading sits inside `IF TG_OP <> 'DELETE'` — which is recorded as open in
+   * the specification and is not closed by this commit or by round 28.
    */
   it('R16 THE END-STATE BLOCK NOW SEES AN UNENFORCING PRIMARY KEY, where it reported OK', () => {
     expect(M['R16_reset']).toBeNull();
@@ -4299,15 +4441,34 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     //
     // WHAT IS THEREBY NO LONGER MEASURED, SAID RATHER THAN LOST:
     // `installment.plan_index_disagrees` was measured at runtime HERE and
-    // nowhere else, and in the unenforcing state it is no longer REACHABLE
-    // from the writer, because the stronger refusal fires first. It is still
-    // specified and still raised twice in the specification (the writer's
-    // cross-check and the deferred verifier's), and it remains reachable in
-    // principle in the state §R17 builds — every flag true while the index
-    // does not physically describe its own heap — which no arm of this suite
-    // asks the WRITER about. So: the refusal's runtime reachability is
-    // **UNMEASURED at this head**, it is not claimed to be dead code, and it
-    // is not asserted here on a path the shipped guard no longer takes.
+    // nowhere else, and on THIS arm's path — a non-DELETE write with an index
+    // unenforcing — it is no longer reached, because the stronger refusal
+    // fires first.
+    //
+    // ── AND THE SENTENCE THAT STOOD HERE WAS WIDER THAN THAT AND WAS FALSE
+    //    (`TL-P4-COORD-R91` §1 correction 2, which corrects `R90` §3 as well
+    //    as this comment; round 28's sweep, class (c)) ──
+    //
+    // It said the name «is no longer REACHABLE from the writer». IT IS
+    // REACHABLE FROM THE WRITER, on the DELETE path, with NO hoisted reading
+    // in front of it. The hoisted reading sits inside `IF TG_OP <> 'DELETE'`,
+    // which closes before the per-invoice loop; a DELETE of an active plan
+    // derives `false`, enters that loop, takes both countings, and raises
+    // `installment.plan_index_disagrees` from the writer's own cross-check
+    // when they disagree. The deferred verifier takes the same pair with no
+    // enforcement reading in front of it either, and raises the same name.
+    // So the correct statement is narrower in the direction this suite
+    // measures and WIDER in reachability than the claim it replaces.
+    //
+    // WHAT IS THEREFORE TRUE: the name is NOT reached on a non-DELETE write
+    // while an index of `installment_plans` is unenforcing; it is reachable
+    // on the DELETE path and at COMMIT in the verifier; it is still raised
+    // twice in the specification; and it remains reachable in principle in
+    // the state §R17 builds — every flag true while the index does not
+    // physically describe its own heap — which no arm of this suite asks the
+    // WRITER about. Its runtime reachability is **UNMEASURED at this head**,
+    // it is NOT dead code and is not claimed to be, and it is not asserted
+    // here on a path the shipped guard no longer takes.
     const e = String(M['R3_second_no_trigger']);
     expect(e, 'the second active plan was not refused while an index of the relation is unenforcing').toContain('installment.plan_index_unenforcing');
     expect(e, 'the refusal does not state the index state it observed').toContain('are not enforcing');
@@ -4426,6 +4587,35 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // AND THE INDEX-SERVED READING OF THE SAME EXISTS, asked for explicitly,
     // IS FALSE: the index holds NEITHER row, because both were written while
     // it was not being maintained. That is the finding in one word.
+    //
+    // ── READING 5 OF FINDING E'S SEVEN: ITS PATH IS **UNMEASURED** AND WHAT
+    //    IT NO LONGER CLAIMS IS SAID HERE (`TL-P4-COORD-R84` §4;
+    //    `TL-P4-COORD-R91` §3's CLAIM-4 item, the weaker instance) ──
+    //
+    //    `R7_truth_indexserved` is captured with `enable_seqscan` and
+    //    `enable_bitmapscan` off AND NO `EXPLAIN` BESIDE IT. So no plan of
+    //    the statement whose value is asserted below was ever read, and this
+    //    file's own rule applies to it: a plan read in another transaction is
+    //    a plan of another planner state, so no sibling reading licenses this
+    //    one's path. Those two knobs DISCOURAGE and do not forbid, and with
+    //    the sequential and bitmap paths discouraged the planner still
+    //    chooses BETWEEN TWO INDEXES on `reltuples` -- and the primary key IS
+    //    enforcing and DOES hold both rows.
+    //
+    //    SO WHAT IS CLAIMED BY THE LINE BELOW IS ONLY: in this fixture state,
+    //    under those two knobs, this `EXISTS` answered `false`. IT IS NOT
+    //    CLAIMED that the partial unique index served it, nor that an index
+    //    served it at all. The DETERMINED form of the same claim is
+    //    `R7_truth_ixforced` immediately below: same statement, same knobs,
+    //    `EXPLAIN` taken in the SAME transaction, and the plan asserted to
+    //    name `installment_plans_one_active_per_invoice_uq` beside the value.
+    //    That is the arm to cite for «the index-served reading is false».
+    //    This one is kept as a redundant corroboration and is NOT retired,
+    //    because retiring an assertion is weakening a gate; its PATH is the
+    //    residual, and the remedy is to take the reading through `readWith`
+    //    so its own plan is read. Round 28 did not execute that remedy: no
+    //    on-target PostgreSQL 16 cluster was available to it, and an
+    //    assertion added without being run is a figure nobody measured.
     expect(M['R7_truth_indexserved'], 'the index-served EXISTS sees a row the index cannot hold').toBe('false');
     // ...AND WHICH INDEX SERVED IT IS NOW READ RATHER THAN ASSUMED. This
     // reading is forced OFF the sequential and bitmap paths, which leaves the
@@ -4462,8 +4652,45 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // THE MEASUREMENT THAT IS THE WHOLE OF F-2: the RETIRED spelling of the
     // reader's bound count, run against this very state, finds NOTHING, while
     // the shipped spelling finds the invoice. One query text, one state, two
-    // answers — and the only difference between them is which access path the
-    // planner may use.
+    // answers.
+    //
+    // ── READING 7 OF FINDING E'S SEVEN. THE CLAUSE «AND THE ONLY DIFFERENCE
+    //    BETWEEN THEM IS WHICH ACCESS PATH THE PLANNER MAY USE» STOOD HERE
+    //    AND IS WITHDRAWN, BECAUSE NO PLAN OF THIS STATEMENT IS READ
+    //    (`TL-P4-COORD-R84` §4; `TL-P4-COORD-R91` §3's CLAIM-4 item) ──
+    //
+    //    `R7_two_readings` is captured on its own connection with
+    //    `enable_seqscan` and `enable_bitmapscan` off and NO `EXPLAIN` in the
+    //    same transaction. The plan of the retired spelling IS taken — at
+    //    `R7_plan_retired_forced`, under the same two knobs, with the same
+    //    query text — but as a SEPARATE statement in a SEPARATE transaction,
+    //    and it is asserted NOWHERE. `R7_plan_retired_free` likewise. So the
+    //    value asserted below has no plan beside it, and the sentence about
+    //    «which access path the planner may use» was a claim about a plan
+    //    nothing in this file reads.
+    //
+    //    WHAT THE LINE BELOW CLAIMS, EXACTLY: in this fixture state, under
+    //    those two knobs, the two spellings of one query text returned `0`
+    //    and `1`. The predicate-implication LAW — that the retired spelling
+    //    MAY be served by the partial unique index and the shipped spelling
+    //    MAY NOT — is established by reading the two texts and by part 9c's
+    //    apply-time plan reading, NOT by this arm. The DETERMINED half of the
+    //    pair is `R7_two_readings_heapforced` below: same text, `HEAP_ONLY`,
+    //    `EXPLAIN` in the same transaction, plan asserted `Seq Scan` and both
+    //    spellings then `1`. That pair is what shows the dependence on the
+    //    path; this one shows only the divergence.
+    //
+    //    RESIDUAL, NAMED: the plan beside this value is **UNMEASURED**. The
+    //    remedy is `readWith(IX_ONLY, TWO_READINGS_SQL, …)` in place of the
+    //    hand-rolled capture, with the plan asserted beside the value — the
+    //    same shape `R7_two_readings_heapforced` already has. Round 28 did
+    //    not execute it: no on-target PostgreSQL 16 cluster was available to
+    //    it, the assertion's outcome depends on which of two usable indexes
+    //    the planner picks for the retired spelling, and shipping an
+    //    unverified assertion is both a figure nobody measured and a gate
+    //    that may red for reasons outside the diff. `R7_plan_retired_forced`
+    //    and `R7_plan_retired_free` stay RECORDED AND UNASSERTED meanwhile,
+    //    which is this phase's standard treatment for a free reading.
     expect(M['R7_two_readings']).toStrictEqual({ retired_spelling: '0', shipped_spelling: '1' });
     // AND THE DEPENDENCE ON THE ACCESS PATH IS ITSELF MEASURED: on the
     // FORCED HEAP PATH both spellings see both rows and AGREE. So the finding
@@ -4551,10 +4778,22 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     //    the clause `R79` §2 withdrew: condition = the snapshot regime, the
     //    regime set by the isolation level, the level pinned, therefore
     //    read. The withdrawal took that support away and left the heading
-    //    contradicted by `:4049-4050` and `:4072-4074` of this same block, which
-    //    are correct and stand. A withdrawal falsifying a TRUE neighbour by
-    //    removing its support is the class `R81` records, and it is why
-    //    this heading is NARROWED rather than re-worded.
+    //    contradicted by two paragraphs of this same block, which are correct
+    //    and stand: «AND WHAT MAKES THE SECOND CAPTURE A SECOND READ IS A
+    //    TRANSACTION BOUNDARY, NOT AN ISOLATION LEVEL» and «THE ISOLATION PIN
+    //    STAYS, AND WHAT IT DOES NOT READ IS SAID», both below. A withdrawal
+    //    falsifying a TRUE neighbour by removing its support is the class
+    //    `R81` records, and it is why this heading is NARROWED rather than
+    //    re-worded.
+    //
+    //    THOSE TWO POINTERS USED TO BE LINE NUMBERS — `:4049-4050` and
+    //    `:4072-4074` — AND THEY WERE ALREADY WRONG AT THE PARENT
+    //    `54e3bbb7`, where they landed on a `for` header and on §R13's prose
+    //    (round 28 measured both). This commit's own insertions moved them
+    //    further. They are replaced by the paragraphs' OWN WORDS, which no
+    //    insertion can shift: a citation that can drift is the defect at one
+    //    remove, which is `TL-P4-COORD-R72` §2's own principle applied to
+    //    this file instead of to `error.filter.ts`.
     //
     //    WHAT GOVERNS WHAT IS STILL WORTH STATING, and this part survived
     //    attack (`R79` §3). `pg_stats` is a view over the CATALOGUE

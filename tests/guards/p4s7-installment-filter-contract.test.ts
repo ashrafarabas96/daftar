@@ -169,11 +169,23 @@ const REGISTERED: readonly string[] = [
   // probe's failure path, so it fired only when that probe was INDEX-SERVED
   // and missed the row; on a SEQUENTIAL SCAN the probe found the row the
   // statement had just written and NOTHING refused — the poisoned write
-  // committed. Measured with the access path forced each way, in
-  // `tests/integration/phase4-s7-installment-fact-db.test.ts` §R16. The
+  // committed. That was measured at the PARENT `54e3bbb7` with the access
+  // path forced each way, and the two directions do NOT live in one place:
+  // the INDEX-forced direction is
+  // `tests/integration/phase4-s7-installment-fact-db.test.ts` §R16, which
+  // still runs; the HEAP-forced direction — the commit — was round 26 item
+  // 1b's separate reading and is NOT CONSTRUCTIBLE at `27a7c998` at all,
+  // because the hoisted reading refuses before the probe under every plan.
+  // So §R16 is evidence of ONE direction and this citation no longer implies
+  // two (`TL-P4-COORD-R91` §3, the three-citation item). The
   // specification now takes that `pg_index` reading UNCONDITIONALLY on every
   // non-DELETE plan event, so any such write is refused while any index of
-  // the relation is unenforcing; the DELETE direction is NOT covered by it.
+  // `installment_plans` is unenforcing. TWO LIMITS OF THAT, STATED HERE
+  // BECAUSE THIS FILE IS WHERE THE NAME IS REGISTERED: the DELETE direction
+  // is NOT covered by it, and the reading is over ONE relation —
+  // `installment_plans` — while the apply-time law part 9a covers
+  // `installments` too, so an unenforcing index of `installments` is refused
+  // at apply time and not at plan-write time.
   // Nothing about THIS file's subject changes: the name is registered either
   // way, and what was false was the scope this comment claimed for it.
   //
