@@ -641,7 +641,7 @@ const executableArgv = (flags: string): { argv: string[] } | { refusal: string; 
  * `ownCwd` is how the arm DELETES this guard: with it false the probe inherits
  * the suite's directory again, and the same line must leave files behind.
  */
-const probeIsolated = (argv: readonly string[], ownCwd: boolean): { isolated: boolean; rejected?: boolean } => {
+const probeIsolated = (argv: readonly string[], ownCwd: boolean): { isolated: boolean; rejected?: boolean; rejection?: string } => {
   const scratch = ownCwd ? mkdtempSync(join(tmpdir(), 'p5probe-')) : undefined;
   try {
     const r = spawnSync(HARNESS_PYTHON, [...argv, '-c', PROBE], {
@@ -660,7 +660,12 @@ const probeIsolated = (argv: readonly string[], ownCwd: boolean): { isolated: bo
     // lists of another program's names -- the gate now reads the
     // INTERPRETER'S OWN REJECTION off stderr. It covers `-X` the same way,
     // and any spelling a later CPython rejects.
-    if (/^Invalid -[XW] option ignored/m.test(r.stderr ?? '')) return { isolated: false, rejected: true };
+    // ROUND 40, R38-03 (P3): the refusal used to be the bare name, so an
+    // offence line carrying two value flags did not say WHICH of them CPython
+    // refused. The stderr line that proves the refusal names it, so it is
+    // carried out with the refusal.
+    const rejection = /^Invalid -[XW] option ignored.*$/m.exec(r.stderr ?? '');
+    if (rejection !== null) return { isolated: false, rejected: true, rejection: (rejection[0] ?? '').trim().slice(0, 120) };
     return { isolated: r.status === 0 && (r.stdout ?? '').trim() === '1' };
   } finally {
     if (scratch !== undefined) rmSync(scratch, { recursive: true, force: true });
@@ -690,7 +695,7 @@ const verdictFor = (interpreter: string, flags: string): { isolated: boolean; re
     // The live verdict always owns its directory; `false` exists for the
     // deletion arm alone, and that arm counts its own call sites.
     const run = probeIsolated(parsed.argv, true);
-    out = run.rejected === true ? { isolated: false, refusal: REFUSED_INTERPRETER_REJECTED } : { isolated: run.isolated };
+    out = run.rejected === true ? { isolated: false, refusal: `${REFUSED_INTERPRETER_REJECTED} ${run.rejection ?? ''}`.trim() } : { isolated: run.isolated };
   }
   verdicts.set(key, out);
   return out;
@@ -1151,6 +1156,10 @@ describe('every written invocation of the pack tools is isolated', () => {
     const rejected = verdictFor('python3', ' -I -W bogus::UserWarning');
     expect(rejected.isolated, 'a bogus -W action is cleared although CPython itself rejects it').toBe(false);
     expect(rejected.refusal, 'the interpreter rejection is not named').toContain(REFUSED_INTERPRETER_REJECTED);
+    // ROUND 40, R38-03 (P3): and it says WHICH option CPython refused, so an
+    // offence line carrying two value flags is actionable.
+    expect(rejected.refusal, 'the refusal does not say which option the interpreter refused').toContain('-W');
+    expect(rejected.refusal, "the refusal does not carry the interpreter's own words about the option").toContain('bogus');
     expect(verdictFor('python3', ' -I -X int_max_str_digits=nonsense').isolated, 'a fatal -X value is read as isolated').toBe(false);
     for (const flags of [' -I -W ignore', ' -I -W error::DeprecationWarning', ' -I -W once::UserWarning']) {
       expect(verdictFor('python3', flags).isolated, `${flags} is a real action and this law reds on it`).toBe(true);
@@ -1162,26 +1171,50 @@ describe('every written invocation of the pack tools is isolated', () => {
     // is run and must write nothing -- in the owned cwd, in its TMPDIR, or in
     // /tmp. A future CPython option that writes to a fixed path would be
     // listed, unsubtracted and accepted, and THIS arm is what catches it.
-    const tmpBefore = new Set(readdirSync('/tmp'));
-    for (const name of X_OPTION_NAMES) {
+    //
+    // ROUND 40, R38-01 (P3): the /tmp delta used to be snapshotted ONCE around
+    // the whole loop, so any entry another process created inside that window
+    // -- measured at roughly 0.3 s, and this package's own `addon-meters`
+    // scratch prefix is a real candidate, since neither config disables
+    // `fileParallelism` -- was attributed to an `-X` option, with a message
+    // sending the reader hunting an option that wrote nothing. The window is
+    // now ONE SPAWN, and a stray entry is not blamed on an option until a
+    // SECOND run of that same option strays too: the project's own rule for
+    // telling a bystander from a defect. The direction stays a false RED, and
+    // a real writer writes on both runs.
+    const strayFor = (name: string): string[] => {
       const probe = mkdtempSync(join(tmpdir(), 'r3702-'));
       try {
+        const before = new Set(readdirSync('/tmp'));
         const r = spawnSync(HARNESS_PYTHON, ['-I', '-X', name, '-c', PROBE], {
           encoding: 'utf8',
           timeout: 10_000,
           cwd: probe,
           env: { PATH: '/usr/bin:/bin', TMPDIR: probe },
         });
+        const stray = readdirSync('/tmp').filter((e) => !before.has(e) && !e.startsWith('r3702-'));
         expect(readdirSync(probe), `-X ${name} is accepted by this filter and WRITES a file: it belongs in X_WRITES_FILES`).toStrictEqual([]);
         expect(r.status === 0 || r.status === 1, `-X ${name} neither ran nor failed cleanly`).toBe(true);
+        return stray;
       } finally {
         rmSync(probe, { recursive: true, force: true });
       }
+    };
+    // The blame rule itself, as a function this arm can RUN rather than a
+    // comment: nothing is blamed on an option unless a second run strays too.
+    const blame = (first: readonly string[], second: readonly string[]): readonly string[] => (first.length === 0 ? [] : second);
+    for (const name of X_OPTION_NAMES) {
+      const first = strayFor(name);
+      const second = first.length === 0 ? [] : strayFor(name);
+      expect(
+        blame(first, second),
+        `-X ${name} is accepted by this filter and wrote into /tmp on TWO consecutive runs, where no cwd or TMPDIR can contain it (the first run left ${first.join(', ')}): it belongs in X_WRITES_FILES`,
+      ).toStrictEqual([]);
     }
-    expect(
-      readdirSync('/tmp').filter((n) => !tmpBefore.has(n) && !n.startsWith('r3702-')),
-      'an option this filter accepts wrote into /tmp, where no cwd or TMPDIR can contain it',
-    ).toStrictEqual([]);
+    // Armed on the rule, both directions: a bystander entry seen once is not
+    // blamed, and an option that strays on both runs still is.
+    expect(blame(['p5-limit-registry-JI2U8U'], []), 'a /tmp entry another process created inside the window is blamed on an -X option again').toStrictEqual([]);
+    expect(blame(['jit-1836.dump'], ['jit-2145.dump']), 'an option that writes into /tmp on both runs is no longer blamed').toStrictEqual(['jit-2145.dump']);
 
     // And the forms that have no side effect outside the probe still pass, or
     // this is a gate rather than a filter.
@@ -1273,6 +1306,32 @@ describe('every written invocation of the pack tools is isolated', () => {
     const plain = bs.replace('$ echo quoted \\', '$ echo quoted');
     expect(offencesOutsideQuotedBlocks('PLAIN', plain)[0], 'the backslash-free form disagrees with the backslash form').toHaveLength(1);
 
+    // ROUND 40, THE CHALLENGER'S FIXTURE (d): TWO trailing backslashes
+    // continue as well, because the joining loop replaces one backslash per
+    // pass and re-tests. A fix keyed on one trailing character would leave
+    // this open; this one reads fences before any pass at all.
+    const twoBs = bs.replace('$ echo quoted \\', '$ echo quoted \\\\');
+    expect(twoBs, 'fixture (d) does not actually carry two trailing backslashes').toContain('quoted \\\\');
+    const foundTwo = offencesOutsideQuotedBlocks('BS2', twoBs);
+    expect(foundTwo[0], 'the double-backslash form hides the offence: the shape is wider than one backslash').toHaveLength(1);
+    expect(scanDocument('BS2', twoBs, true, true, false)[0], 'reading fences off joined lines no longer hides the double-backslash form').toStrictEqual([]);
+
+    // ROUND 40, THE CHALLENGER'S FIXTURE (b), as a CONTROL on the COUPLING:
+    // with NO later ordinary block, the same bytes are never green. Under the
+    // joined-lines reader the swallowed fence leaves the block open to
+    // end-of-input, and F-66's refusal catches it by name; under the raw-line
+    // reader the fence closes and the offence is reported by name. So C-01 is
+    // not a hole in the F-66 fix -- it is a hole that DEFEATS it, and it needs
+    // the later block to do so, which is why the two must be read together.
+    const noLater = ['```text f-50-quote', '$ echo quoted \\', '```', '', offence, ''].join('\n');
+    const bFixed = offencesOutsideQuotedBlocks('B', noLater);
+    expect(bFixed[0], 'fixture (b) is not reported at all under the raw-line reader').toHaveLength(1);
+    expect(bFixed[0][0], "fixture (b)'s offence is reported without naming the refusal").toContain(REFUSED_INTERPRETER);
+    const bJoined = scanDocument('B', noLater, true, true, false);
+    expect(bJoined[0].join('\n'), 'with no later block the joined-lines reader goes green too, so F-66 is not what caught the uncoupled form').toContain(
+      REFUSED_OPEN_QUOTE,
+    );
+
     // GUARD DELETION: with fences read off JOINED lines again, the offence
     // goes green-wrong -- the fail-open the coordinator measured.
     const joined = scanDocument('BS', bs, true, true, false);
@@ -1295,7 +1354,10 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(allFenceTests, 'the fence reader grew a third site: it owes this arm a case').toBe(2);
     // And the raw-line reader is deleted from one arm only, counted by shape.
     const rawDeleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*true,\s*true,\s*false\)/g) ?? []).length;
-    expect(rawDeleting, 'a second caller reads fences off joined lines: it must be an arm, counted here').toBe(1);
+    // Three arms delete the raw-line reader: this fixture, the challenger's
+    // double-backslash form, and its fixture (b) coupling control. A fourth
+    // caller would be a live one, which is C-01 back.
+    expect(rawDeleting, 'a caller reads fences off joined lines outside the three arms here: it must be an arm, counted here').toBe(3);
 
     // And a continuation INSIDE ordinary prose must still be joined, or the
     // raw-line fence reader has broken F-52's continuation handling.
@@ -1341,7 +1403,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(withoutCheck[0], 'with the end-of-input refusal deleted (d) still reports, so the check is not what reports it').toStrictEqual([]);
     expect(scanDocument('C', c, true, false, true)[0], 'the deletion also changed (c), so it is not a pure deletion').toHaveLength(1);
 
-    // Reachability, measured rather than assumed: no document THIS LAW SCANS
+    // Reachability, measured rather than assumed: no pack entry THIS LAW SCANS
     // has an odd fence count today, so the shape has no live instance -- it
     // arrives from a forgotten closing fence or a quoted transcript.
     //
@@ -1359,7 +1421,11 @@ describe('every written invocation of the pack tools is isolated', () => {
       const exemptNames = reviewerOwned();
       const reviewerShaped = looksLikeReviewer();
       const odd: string[] = [];
-      for (const name of readdirSync(PACK).filter((n) => n.endsWith('.md'))) {
+      // ROUND 40, R38-02 (P3): the census counted only `.md` while the scan
+      // below reads EVERY pack entry, so the subject was narrower than the
+      // sentence. It now reads what the scan reads; a directory or an
+      // unreadable entry falls out through `readable`, as it does there.
+      for (const name of readdirSync(PACK)) {
         if (exemptNames.has(name) || reviewerShaped.test(name)) continue;
         const text = readable(join(PACK, name));
         // A binary is not a document; the law refuses one elsewhere, and this
@@ -1388,13 +1454,27 @@ describe('every written invocation of the pack tools is isolated', () => {
     };
     writeFileSync(join(copy, 'P5-CHALLENGE-deadbee.md'), oddBytes);
     writeFileSync(join(copy, 'P5-NOTE-V.md'), oddBytes);
-    const considered = census(readdirSync(copy).filter((n) => n.endsWith('.md')));
-    expect(considered, "the census reds over a reviewer's frozen bytes, which the author may not edit").toStrictEqual(['P5-NOTE-V.md']);
+    // ROUND 40, R38-02: a non-`.md` author-owned entry, which the old census
+    // could not see and the scan always could.
+    writeFileSync(join(copy, 'P5-NOTE-V.txt'), oddBytes);
+    const considered = census(readdirSync(copy));
+    expect(considered.sort(), "the census reds over a reviewer's frozen bytes, which the author may not edit").toStrictEqual(['P5-NOTE-V.md', 'P5-NOTE-V.txt']);
+    expect(
+      census(readdirSync(copy)).filter((x) => x.endsWith('.txt')),
+      'the census is narrower than the scan again: a non-.md author-owned entry is invisible to it',
+    ).toStrictEqual(['P5-NOTE-V.txt']);
 
     // And the two knobs are each reachable from one arm only.
     const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
     const openDeleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*true,\s*false,\s*true\)/g) ?? []).length;
     expect(openDeleting, 'a second caller deletes the end-of-input refusal: it must be an arm, counted here').toBe(2);
+    // ROUND 40, R38-02: and no walk of the pack narrows its own subject by
+    // file name, so the census and the scan read the same entries. The needle
+    // is assembled, or it would count itself.
+    const narrowing = ['readdirSync(PACK)', '.filter('].join('');
+    expect(here.split(narrowing).length - 1, 'a pack walk filters the pack listing by name again: the census was narrower than the scan, which is R38-02').toBe(
+      0,
+    );
   });
 
   it('the declared quotation block is an exemption, and is armed like one', () => {
