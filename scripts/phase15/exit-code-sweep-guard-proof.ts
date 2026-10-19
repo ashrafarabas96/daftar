@@ -69,8 +69,8 @@ const SELF_EXEMPT = "  const src = new Map(sources(dir));\n  src.delete('exit-co
  * nothing and a bare `run(…)` that discarded its code was invisible — in any
  * pack file, not only in the apparatus.
  */
-const REQUIRE_BOUND = '  return derivedProducers(sf, seed, imported.members, imported.ns, imported.returners);';
-const REQUIRE_BLIND = '  return { ids: seed, members: imported.members, ns: imported.ns, returners: imported.returners };';
+const REQUIRE_BOUND = '  return derivedProducers(sf, seed, members, imported.ns, imported.returners);';
+const REQUIRE_BLIND = '  return { ids: seed, members, ns: imported.ns, returners: imported.returners };';
 const REQUIRE_PLANT = 'planted-require-bound.ts';
 
 /**

@@ -338,6 +338,15 @@ const INSTRUMENTS: readonly Instrument[] = [
       'the classifier reads a contention transcript correctly for some other reason than the rule credited with it, or the arm set no longer reddens when that rule is removed',
   },
   {
+    script: 'verify:port-wait:prove',
+    what: 'whether the cluster-port wait is a mechanism or a comment: a real holder in a real other process, held and then released',
+    // It binds ports in the 55900 block, which no instrument in this
+    // inventory declares, so it never contends with one of them.
+    cluster: false,
+    nonZeroMeans:
+      'the wait returned before a held port was free, or did not end when one was released, or polled a value that is not a port instead of refusing it \u2014 any of which makes the gap before a cluster instrument a comment rather than a guarantee',
+  },
+  {
     script: 'verify:handoff-manifest:prove',
     what: "the ways the manifest's prose and the challenge reports on disk can disagree, and the one way they only appear to",
     cluster: false,
