@@ -230,6 +230,32 @@ const PLANTS: readonly Plant[] = [
           : "the header table declared no prep SHA at all and the gate took one from a row quoted further down the file: the document's declaration is wherever a regex happens to match first",
   },
   {
+    id: 'M17',
+    what: "round 20's F-R20-04 — a decoy prep-SHA row inside a FENCE that opens in the header and contains a `## ` line",
+    plant: (dir) => {
+      const f = join(dir, MANIFEST);
+      const text = readFileSync(f, 'utf8');
+      const row = /^\| \*\*Exact prep SHA\*\* \| \*\*`[0-9a-f]{40}`\*\* \|.*$/m.exec(text);
+      if (row === null) throw new Error('M17 could not plant: the header has no prep-SHA row to decoy');
+      // The fence OPENS above the first `## ` and CONTAINS one, so a reader
+      // that cuts the header on the raw text and strips fences afterwards is
+      // left with an unterminated fence: the decoy is inside the slice and the
+      // real row is below the cut. The decoy names a real older commit, so a
+      // gate that reads it will happily re-measure 30 rows against it.
+      const decoy = ['', '```', '| **Exact prep SHA** | **`5af92809e62762917fd9de2ee3a18a9c8a612b8b`** |', '## not a section, inside a fence', '```', ''].join(
+        '\n',
+      );
+      writeFileSync(f, text.replace(row[0], `${row[0]}${decoy}`));
+    },
+    expect: () => null,
+    viaHeader: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.named || /declares no exact SHA/.test(d.text)
+          ? 'a decoy row inside a fenced block became what the gate measured against: the header is wherever a regex matches first, which is what F-R19-05 was supposed to close'
+          : null,
+  },
+  {
     id: 'M1',
     what: 'a challenge report the manifest names is DELETED — the absence case',
     plant: (dir) => {
@@ -649,7 +675,7 @@ function main(): number {
       // A case whose requirement is "the gate must NOT complain" is labelled as
       // such: printing it as RED would read as a planted defect that reddened,
       // which is the opposite of what it measures.
-      const verdict = p.id === 'M4' || p.id === 'M12' ? 'HELD GREEN ' : 'RED';
+      const verdict = p.id === 'M4' || p.id === 'M12' || p.id === 'M17' ? 'HELD GREEN ' : 'RED';
       if (problem === null) console.log(`  ${p.id} ${verdict.padEnd(10)}${p.what}`);
       else {
         failures += 1;
@@ -673,7 +699,7 @@ function main(): number {
   // The sentence used to read «three reddened direction 4», a figure that was
   // true when it was written and quoted long after the arm set had grown
   // (round 18, F-R18-15's own family). It is counted from this run.
-  const held = PLANTS.filter((q) => q.id === 'M4' || q.id === 'M12').length;
+  const held = PLANTS.filter((q) => q.id === 'M4' || q.id === 'M12' || q.id === 'M17').length;
   console.log(`All ${PLANTS.length} plants behaved as required: ${String(PLANTS.length - held)} went red and ${String(held)} had to be HELD GREEN.`);
   console.log('  What this does NOT show: that any round PASSED. A verdict is the challenger’s to');
   console.log('  state and this author’s to quote. The gate checks only that the rounds this file');

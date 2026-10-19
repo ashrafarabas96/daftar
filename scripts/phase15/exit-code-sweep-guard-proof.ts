@@ -69,8 +69,8 @@ const SELF_EXEMPT = "  const src = new Map(sources(dir));\n  src.delete('exit-co
  * nothing and a bare `run(…)` that discarded its code was invisible — in any
  * pack file, not only in the apparatus.
  */
-const REQUIRE_BOUND = '  return derivedProducers(sf, seed, imported.members, imported.ns);';
-const REQUIRE_BLIND = '  return { ids: seed, members: imported.members, ns: imported.ns };';
+const REQUIRE_BOUND = '  return derivedProducers(sf, seed, imported.members, imported.ns, imported.returners);';
+const REQUIRE_BLIND = '  return { ids: seed, members: imported.members, ns: imported.ns, returners: imported.returners };';
 const REQUIRE_PLANT = 'planted-require-bound.ts';
 
 /**
@@ -114,6 +114,26 @@ export function plantedLeafHead(): string {
   );
 }
 
+/**
+ * The apparatus handed the producer by a PARAMETER DEFAULT — the challenger's
+ * own round-20 plant (F-R20-02). It needs no sibling and no import from inside
+ * the pack: the producer arrives in the file's own parameter list, which is why
+ * it walked past five rounds of shape rules while the file was being scanned.
+ */
+function plantIntoApparatusParamDefault(pack: string): void {
+  const file = join(pack, 'exit-code-sweep.ts');
+  writeFileSync(
+    file,
+    `${readFileSync(file, 'utf8')}
+import { spawnSync as plantedDefaultSpawn } from 'node:child_process';
+export function plantedDefaultParam(runner = plantedDefaultSpawn): string {
+  const r = runner('git', ['status', '--porcelain'], { encoding: 'utf8' });
+  return r.stdout ?? '';
+}
+`,
+  );
+}
+
 /** The same, through a DYNAMIC import — the shape the leaf rule walked past,
  *  because it enumerated `ImportDeclaration` and this import is a CALL. */
 function plantIntoApparatusDynamic(pack: string): void {
@@ -142,6 +162,32 @@ export async function plantedDynHead(): Promise<string> {
  * control that shows the boundary is what the rule crosses.
  */
 const PACK_BOUND = '  for (const id of imported.ids) seed.add(id);';
+
+/**
+ * THE SIXTH GUARD: THE CONSERVATIVE FALLBACK (round 20).
+ *
+ * The three callee rules each name a SHAPE — an identifier, a property
+ * access, an element access with a literal key. A callee that is an
+ * expression (`(cond ? run : other)(…)`, `fns[i](…)`) is none of them, and
+ * what reports it is the line that asks whether the callee MENTIONS a
+ * producer at all. Measured when it was added: with it removed the whole plant
+ * set still behaved, which is how a rule becomes decorative — so two plants
+ * exist for it, and this section is what says the line does the work.
+ */
+const FALLBACK_BOUND = '      else if (mentionsProducer(c, p)) out.push(n);';
+const FALLBACK_BLIND = '      else if (false) out.push(n);';
+
+/**
+ * THE SEVENTH GUARD: THE ONE EXCEPTION TO THE CALLEE RULE (round 20).
+ *
+ * A call's callee subtree is not read as a mention, or `const out =
+ * api.run('git')` would bind a producer. The exception is the OBJECT of a
+ * method call, because `map.get('go')` can hand the producer back. Removing
+ * the exception must blind the container plant and nothing else — and the
+ * untouched pack must stay clean WITH it, which is the baseline X0 measures.
+ */
+const OBJECT_BOUND = '      if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) visit(callee.expression);';
+const OBJECT_BLIND = '      if (false) visit(callee.expression);';
 const PACK_BLIND = '  // pack resolution removed';
 const CROSS_LIB = 'planted-cross-lib.ts';
 const CROSS_USER = 'planted-cross-user.ts';
@@ -258,7 +304,7 @@ function sweepFile(script: string, pack: string, file: string): { readonly ran: 
 
 function main(): number {
   console.log('━'.repeat(78));
-  console.log('PHASE 15 — GUARD-DELETION PROOF: PROVENANCE, AND THE APPARATUS IN THE SWEPT SET   (PREPARED / NOT PROMOTED)');
+  console.log('PHASE 15 — GUARD-DELETION PROOF: PROVENANCE, MEMBERSHIP, AND THE ROUND-20 RULES   (PREPARED / NOT PROMOTED)');
   console.log('━'.repeat(78));
   const me = readFileSync(SWEEP, 'utf8');
   if (!me.includes(GUARD)) {
@@ -314,6 +360,7 @@ function main(): number {
       { label: 'property access on a module', plant: plantIntoApparatusDerived },
       { label: 'a sibling, STATIC import', plant: plantIntoApparatusFromSibling },
       { label: 'a sibling, DYNAMIC import', plant: plantIntoApparatusDynamic },
+      { label: 'its own parameter DEFAULT', plant: plantIntoApparatusParamDefault },
     ];
     for (const shape of shapes) {
       const copy = join(tmp, `pack-self-${shape.label.replace(/[^a-z]+/gi, '-')}`);
@@ -358,7 +405,7 @@ function main(): number {
     // heading no longer has to quantify over shapes at all: the five rows are
     // the shapes that each reopened it, and they are now evidence that the
     // file is read, not that a check withdrew a skip.
-    console.log('  THE APPARATUS, NOW SWEPT LIKE THE REST (the five shapes that broke the old exemption)');
+    console.log('  THE APPARATUS, NOW SWEPT LIKE THE REST (five shapes that broke the old exemption, and one that broke the new rule)');
     for (const row of apparatusRows) console.log(row);
     // ── A PRODUCER BOUND THROUGH A CALL, IN AN ORDINARY PACK FILE ─────────
     if (!me.includes(REQUIRE_BOUND)) {
@@ -442,6 +489,102 @@ function main(): number {
     else if (!sameWithout.reported)
       problems.push('removing the PACK rule also blinded the sweep inside ONE file, so the deletion moves more than the boundary and attributes nothing');
 
+    // ── THE ROUND-20 RULES, EACH WITH ITS OWN PLANT SET ────────────────
+    //
+    // These two are measured by running the sweep's OWN `--prove` suite twice:
+    // once as it is, once with the one line replaced. What makes this an
+    // attribution rather than a smoke test is the NAMED arm set: the stripped
+    // copy must redden exactly the arms written for that rule and no others.
+    for (const r of [{ label: 'the conservative callee fallback', bound: FALLBACK_BOUND, blind: FALLBACK_BLIND, arms: ['X44', 'X45'] }]) {
+      if (!me.includes(r.bound)) {
+        console.log(`  ${r.label} is not written in the shape this proof removes, so that section`);
+        console.log('  measures nothing. Re-anchor it before reading it again.');
+        console.log(`    expected: ${r.bound.trim()}`);
+        console.log('');
+        console.log('EXIT 2 — UNMEASURED.');
+        return 2;
+      }
+      const copy = join(tmp, `sweep-without-${r.label.replace(/[^a-z]+/gi, '-')}.ts`);
+      writeFileSync(copy, me.replace(r.bound, r.blind));
+      const run = spawnSync('npx', ['tsx', copy, '--prove'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+      const out = `${run.stdout ?? ''}${run.stderr ?? ''}`;
+      const ran = run.error === undefined && (run.status === 0 || run.status === 1);
+      const moved = [...out.matchAll(/^ {2}(X\d+) NOT RED/gm)].map((m) => m[1] as string).sort();
+      const want = [...r.arms].sort();
+      console.log('');
+      console.log(`  ${r.label.toUpperCase()}`);
+      console.log(`  rule removed    exit ${String(run.status)}  arms that went blind: ${moved.length > 0 ? moved.join(', ') : 'none'}`);
+      console.log(`  required        exactly ${want.join(', ')} — no more, because a deletion that moves other arms attributes nothing`);
+      if (!ran) problems.push(`the copy without ${r.label} did not run (exit ${String(run.status)}), so that deletion is UNMEASURED`);
+      else if (moved.join(',') !== want.join(','))
+        problems.push(
+          `removing ${r.label} blinded ${moved.length > 0 ? moved.join(', ') : 'NO arm at all'} where ${want.join(', ')} was required: a rule no plant depends on is decorative, and a deletion that moves other arms does not attribute`,
+        );
+    }
+
+    // ── THE CALLEE-OBJECT EXCEPTION, ATTRIBUTED AT THE SITE AND NOT AT THE FILE ─
+    //
+    // Measured, and it corrected my first version of this section: with the
+    // exception removed the planted FILE is still named — the conservative
+    // fallback reports `map.get('go')` itself, because that callee's object
+    // holds a producer. So a file-level arm attributes nothing here. What the
+    // exception uniquely buys is the SITE: the call through the binding the
+    // container handed out. This section reads the line.
+    if (!me.includes(OBJECT_BOUND)) {
+      console.log('  the callee-object exception is not written in the shape this proof removes, so');
+      console.log('  this section measures nothing. Re-anchor it before reading it again.');
+      console.log('');
+      console.log('EXIT 2 — UNMEASURED.');
+      return 2;
+    }
+    const objCopy = join(tmp, 'sweep-without-the-callee-object-exception.ts');
+    writeFileSync(objCopy, me.replace(OBJECT_BOUND, OBJECT_BLIND));
+    const objPack = join(tmp, 'pack-container-handoff');
+    cpSync(join(ROOT, 'scripts/phase15'), objPack, { recursive: true });
+    const CONTAINER = 'planted-container.ts';
+    writeFileSync(
+      join(objPack, CONTAINER),
+      [
+        "import { spawnSync } from 'node:child_process';",
+        "const bag = new Map([['go', spawnSync]]);",
+        'export function head(): string {',
+        "  const got = bag.get('go');",
+        "  const r = got?.('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+        "  return (r?.stdout ?? '').trim();",
+        '}',
+        '',
+      ].join('\n'),
+    );
+    const sitesOf = (script: string): { readonly ran: boolean; readonly through: boolean; readonly code: number | null } => {
+      const run = spawnSync('npx', ['tsx', script], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024 * 1024,
+        env: { ...process.env, P15_SWEEP_DIR: objPack },
+      });
+      const out = `${run.stdout ?? ''}${run.stderr ?? ''}`;
+      const header = 'CALLS WHOSE EXIT CODE IS NEVER READ';
+      const block = out.includes(header) ? out.slice(out.indexOf(header)) : '';
+      return { ran: run.error === undefined && (run.status === 0 || run.status === 1), through: block.includes('got?.('), code: run.status };
+    };
+    const objReal = sitesOf(SWEEP);
+    const objWithout = sitesOf(objCopy);
+    console.log('');
+    console.log('  THE CALLEE-OBJECT EXCEPTION (read at the SITE: the call through what the container handed out)');
+    console.log(
+      `  real sweep      exit ${String(objReal.code)}  ${objReal.ran ? (objReal.through ? 'NAMED the call through the handed-out binding' : 'did NOT name it') : 'did not run'}`,
+    );
+    console.log(
+      `  rule removed    exit ${String(objWithout.code)}  ${objWithout.ran ? (objWithout.through ? 'NAMED it anyway' : 'did NOT name it — so the exception is what reads it') : 'did not run'}`,
+    );
+    console.log('  (the planted FILE is named in both arms, by the fallback reading `bag.get` itself — which is');
+    console.log('   why this is attributed at the site)');
+    if (!objReal.ran) problems.push(`the real sweep did not run over the container plant (exit ${String(objReal.code)}), so its silence says nothing`);
+    else if (!objReal.through)
+      problems.push('a producer handed out of a container through a method call was not followed to the call that discarded its exit code');
+    if (!objWithout.ran) problems.push(`the copy without the callee-object exception did not run (exit ${String(objWithout.code)}): UNMEASURED`);
+    else if (objWithout.through) problems.push('the copy WITHOUT the callee-object exception still named that site, so the exception is not what reads it');
+
     console.log('');
     if (problems.length > 0) {
       for (const p of problems) console.log(`  FINDING: ${p}`);
@@ -460,6 +603,12 @@ function main(): number {
     console.log('  and is invisible without the one line that enumerates it. The binding is followed');
     console.log('  ACROSS a module boundary, and removing that one line blinds the cross-file plant while');
     console.log('  the SAME bytes in one file stay visible.');
+    console.log('  The two rules round 20 added carry their own deletions: the conservative callee');
+    console.log('  fallback, removed, blinds exactly X44 and X45 and nothing else; and the one exception');
+    console.log('  to the callee rule \u2014 reading the OBJECT of a method call \u2014 removed, stops the sweep');
+    console.log('  following a producer a container handed out, attributed at the SITE because the');
+    console.log('  planted FILE is named in both arms. The apparatus is read on a sixth shape too: its');
+    console.log('  own parameter DEFAULT, which is the plant round 20 walked into the file with.');
     console.log('  One attribution is stated narrowly on purpose: removing the require-bound line reddens');
     console.log('  six plants, not one, because every producer in this pack is derived through that call.');
     console.log('  Every plant and every run happens in a throwaway copy; neither this repository nor');

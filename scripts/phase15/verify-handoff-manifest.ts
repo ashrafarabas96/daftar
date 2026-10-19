@@ -487,8 +487,20 @@ function checkChallenges(manifest: string, dir: string): Challenge {
  */
 const PREP_ROW = /^\| \*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\* \|/gm;
 function declaredPrepSha(manifest: string): { readonly sha: string | null; readonly problem: string | null } {
-  const cut = manifest.search(/^## /m);
-  const header = (cut === -1 ? manifest : manifest.slice(0, cut)).replace(/```[\s\S]*?```/g, '');
+  // THE FENCES COME OUT FIRST, THEN THE CUT (round 20, F-R20-04).
+  //
+  // This cut the header at the first `^## ` of the RAW text and stripped
+  // fences only from the slice. A fence that OPENS above that line and
+  // CONTAINS one is then unterminated inside the slice, so the strip removes
+  // nothing, a decoy row inside the fence is read, and the real row — now
+  // below the cut — is never seen. Measured by the challenger on a pack copy:
+  // the gate declared `5af9280` and re-measured all 30 §3 rows against it.
+  // It failed CLOSED, so it is a soundness fix rather than a fail-open, and
+  // the order is the whole of it: a fenced block is not part of the header,
+  // wherever its contents happen to look like one.
+  const unfenced = manifest.replace(/```[\s\S]*?```/g, '');
+  const cut = unfenced.search(/^## /m);
+  const header = cut === -1 ? unfenced : unfenced.slice(0, cut);
   const rows = [...header.matchAll(PREP_ROW)].map((m) => m[1] as string);
   if (rows.length === 0) return { sha: null, problem: null };
   if (rows.length > 1)

@@ -476,19 +476,70 @@ function callsTo(sf: ts.SourceFile, a: Aliases, token: string, net: boolean): ts
  * variable, a default export, or absent entirely when the module object is
  * already in hand.
  *
- * So the specifier is not read at all. What is read is the NAME the value
- * comes from, to a fixpoint:
- *   · a destructure whose key is `spawnSync`, bound or assigned;
- *   · a binding whose initializer is `<anything>.spawnSync`;
- *   · a binding whose initializer is a name already known to be the producer.
- *
- * This over-reports by construction — an object literal with a `spawnSync`
- * key would be caught too — and that is the pack's own rule from F-R13-01:
- * over-reporting here is noise a reader resolves in one line, under-reporting
- * is a fail-open that hides a command nobody checked. The control X9 is what
- * keeps the noise honest.
+ * So the specifier is not read at all. What was read instead, from round 16
+ * to round 19, was a LIST OF SHAPES the value could come from — a destructure
+ * key, a property-access initializer, a known name — and that list is what
+ * round 20 replaced: every round added the shapes the previous round's
+ * challenger had walked through, and round 20 walked through five more in one
+ * pass. The rule below asks one question instead of listing shapes, and this
+ * paragraph is kept only because it names the mistake the next reader will be
+ * tempted to repeat: a specifier is not an identity, and a shape list is not
+ * a rule.
  */
 const TOKEN = 'spawnSync';
+
+/**
+ * THE DEFAULT IS INVERTED (round 20, F-R20-01 and F-R20-02).
+ *
+ * Rounds 13 to 19 each added the shapes the previous round's challenger had
+ * walked through: a module spelling, a destructure, a property access, an
+ * element access, a parameter, an object field, four export forms, a dynamic
+ * import, a NamespaceExport, a class field, a returned producer. Round 20
+ * walked through five more in one pass — a parameter DEFAULT, an
+ * `ArrayBindingPattern`, `this.go = spawnSync` in a constructor, an object
+ * GETTER, and the round-19 returned-producer rule itself, which was written
+ * per file and published nothing across the boundary. Measured here with the
+ * challenger's own plants before anything changed: four of them read
+ * `EXIT 0 … 81 site(s)`, the same number as the untouched pack, while the
+ * plain control read `EXIT 1`.
+ *
+ * A list of shapes is a list of the shapes somebody thought of. So the
+ * resolution no longer asks WHICH SHAPE a binding has. It asks one question
+ * about the VALUE REGION of any binding at all:
+ *
+ *   does this region MENTION the producer anywhere outside callee position?
+ *
+ * If it does, every name the binding declares is a producer name. The target
+ * side is read by collecting the names a pattern binds and the property names
+ * a region declares, whatever syntax binds them — so an array pattern, a
+ * nested pattern, a parameter default, a getter, a class member and
+ * `this.x = …` are all one rule, and so is the next form nobody has named.
+ *
+ * TWO DISTINCTIONS KEEP THIS FROM FLAGGING THE WHOLE PACK, and both are
+ * measured rather than argued (the untouched pack must still read EXIT 0):
+ *
+ *   · CALLEE POSITION IS A USE, NOT A FLOW. `const r = spawnSync(…)` binds a
+ *     RESULT, and `const out = api.run('git')` binds a result too. So a call's
+ *     callee subtree is not read as a mention; only its arguments are, and the
+ *     OBJECT of a method call, because a call on a container that holds the
+ *     producer can hand it back. This is also what keeps the wrapper and
+ *     forwarder rules separate from this one: a helper that CALLS the producer
+ *     is a wrapper, measured by its own rules below, not a producer.
+ *   · A FUNCTION THAT RETURNS THE PRODUCER IS NOT THE PRODUCER. Calling it
+ *     yields one; calling the producer runs a command. They are two sets —
+ *     `ids`/`members` and `returners` — and `returners` crosses the module
+ *     boundary, which is what F-R20-01's fifth shape was missing.
+ *
+ * TYPE POSITIONS ARE NOT VALUE FLOW. `go: typeof spawnSync` declares nothing
+ * about what `go` holds, so type nodes are skipped; the plant that writes that
+ * annotation is caught by its constructor ASSIGNMENT instead, which is the
+ * reason it is a producer.
+ *
+ * Over-reporting stays the declared behaviour (F-R13-01): a name this
+ * resolution adds that never holds the producer costs a reader one line, and a
+ * name it misses hides a command nobody checked. The control X9 and the
+ * untouched-pack baseline X0 are what keep the noise honest.
+ */
 
 /** What a file's producer resolution yields: names, member names, namespaces. */
 interface Producers {
@@ -498,6 +549,8 @@ interface Producers {
   readonly members: ReadonlySet<string>;
   /** A namespace local name → the pack file it names. */
   readonly ns: ReadonlyMap<string, string>;
+  /** Names whose CALL yields the producer: `const run = makeRunner()`. */
+  readonly returners: ReadonlySet<string>;
 }
 
 /** Is `e` an expression that MEANS the producer, under `p`? */
@@ -505,9 +558,7 @@ function isProducerExpr(e: ts.Expression, p: Producers): boolean {
   const x = unwrap(e);
   // A CONDITIONAL IS TWO BINDINGS IN ONE (round 18, F-R18-05). `unwrap()`
   // peels wrappers that have exactly one operand; a `?:`, a `||`, a `??` and
-  // an `&&` each have two, and the producer may be in either, so the value is
-  // a producer if EITHER branch is. Reading only the whole expression made
-  // `const run = c ? spawnSync : spawnSync` a non-producer.
+  // an `&&` each have two, and the producer may be in either.
   if (ts.isConditionalExpression(x)) return isProducerExpr(x.whenTrue, p) || isProducerExpr(x.whenFalse, p);
   if (
     ts.isBinaryExpression(x) &&
@@ -523,7 +574,89 @@ function isProducerExpr(e: ts.Expression, p: Producers): boolean {
     (x.argumentExpression.text === TOKEN || p.members.has(x.argumentExpression.text))
   )
     return true;
+  // The CALL of a function that returns the producer IS the producer. Round 19
+  // read this inside one file only, so `const runF = makeRunnerF()` with
+  // `makeRunnerF` exported from a sibling was invisible while the identical
+  // bytes in one file went red (round 20, F-R20-01).
+  if (ts.isCallExpression(x)) {
+    const c = unwrap(x.expression);
+    if (ts.isIdentifier(c) && p.returners.has(c.text)) return true;
+    if (ts.isPropertyAccessExpression(c) && (p.returners.has(c.name.text) || namespaceReturner(c, p))) return true;
+    if (ts.isElementAccessExpression(c) && ts.isStringLiteral(c.argumentExpression) && p.returners.has(c.argumentExpression.text)) return true;
+  }
   return ts.isIdentifier(x) && p.ids.has(x.text);
+}
+
+/**
+ * Does `n` MENTION the producer outside callee position?
+ *
+ * This is the whole of the new rule's left-hand side. A call's callee subtree
+ * is skipped — it is a use, and what the call binds is a RESULT — while its
+ * arguments and the OBJECT of a method call are read. Type nodes are skipped:
+ * an annotation is not a value.
+ */
+function mentionsProducer(n: ts.Node, p: Producers): boolean {
+  let found = false;
+  const visit = (x: ts.Node): void => {
+    if (found || ts.isTypeNode(x)) return;
+    if (ts.isCallExpression(x) || ts.isNewExpression(x)) {
+      if (ts.isCallExpression(x) && isProducerExpr(x, p)) {
+        found = true;
+        return;
+      }
+      // ONE EXCEPTION, and it is the price of the callee rule: a call on an
+      // OBJECT that holds a producer may hand it back — `map.get('go')`,
+      // `list.find(…)`, `box.unwrap()`. The object is read, the method's own
+      // name is not, so `const out = api.run('git')` still binds a result.
+      const callee = unwrap(x.expression);
+      if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) visit(callee.expression);
+      for (const a of x.arguments ?? []) visit(a);
+      return;
+    }
+    if (ts.isExpression(x) && isProducerExpr(x, p)) {
+      found = true;
+      return;
+    }
+    x.forEachChild(visit);
+  };
+  visit(n);
+  return found;
+}
+
+/** Every name a binding pattern binds, at any depth and in any pattern form. */
+function boundNames(name: ts.BindingName): string[] {
+  const out: string[] = [];
+  const walk = (b: ts.Node): void => {
+    if (ts.isIdentifier(b)) out.push(b.text);
+    else if (ts.isObjectBindingPattern(b) || ts.isArrayBindingPattern(b)) for (const el of b.elements) walk(el);
+    else if (ts.isBindingElement(b)) walk(b.name);
+  };
+  walk(name);
+  return out;
+}
+
+/** The property name a property-like declaration declares, when it is static. */
+function declaredMemberName(n: ts.Node): string | null {
+  if (
+    !ts.isPropertyAssignment(n) &&
+    !ts.isShorthandPropertyAssignment(n) &&
+    !ts.isGetAccessorDeclaration(n) &&
+    !ts.isSetAccessorDeclaration(n) &&
+    !ts.isMethodDeclaration(n) &&
+    !ts.isPropertyDeclaration(n)
+  )
+    return null;
+  const nm = n.name;
+  return ts.isIdentifier(nm) || ts.isStringLiteral(nm) || ts.isNumericLiteral(nm) ? nm.text : null;
+}
+
+/** The VALUE region of a property-like declaration: its initializer or body. */
+function memberValueRegion(n: ts.Node): ts.Node | undefined {
+  if (ts.isPropertyAssignment(n)) return n.initializer;
+  if (ts.isShorthandPropertyAssignment(n)) return n.name;
+  if (ts.isPropertyDeclaration(n)) return n.initializer;
+  if (ts.isGetAccessorDeclaration(n) || ts.isSetAccessorDeclaration(n) || ts.isMethodDeclaration(n)) return n.body;
+  return undefined;
 }
 
 /** The module a dynamic `import('./x')` names, or null. */
@@ -534,10 +667,17 @@ function dynamicTarget(e: ts.Expression): string | null {
   return a !== undefined && ts.isStringLiteral(a) ? specKey(a.text) : null;
 }
 
-function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>, seedMembers: ReadonlySet<string>, seedNs: ReadonlyMap<string, string>): Producers {
+function derivedProducers(
+  sf: ts.SourceFile,
+  seed: ReadonlySet<string>,
+  seedMembers: ReadonlySet<string>,
+  seedNs: ReadonlyMap<string, string>,
+  seedReturners: ReadonlySet<string>,
+): Producers {
   const ids = new Set<string>(seed);
   const members = new Set<string>(seedMembers);
   const ns = new Map<string, string>(seedNs);
+  const returners = new Set<string>(seedReturners);
   /** Functions declared in this file, so a producer passed INTO one can be
    *  followed to the parameter it arrives as (round 17, F-R17-01). */
   const fns = new Map<string, ts.FunctionLikeDeclarationBase>();
@@ -550,11 +690,26 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>, seedMemb
     n.forEachChild(collectFns);
   };
   collectFns(sf);
-  const self = (): Producers => ({ ids, members, ns });
-  /** `<anything>.spawnSync`, `<anything>['spawnSync']`, or a known name. */
-  const isProducerValue = (e: ts.Expression): boolean => isProducerExpr(e, self());
-  /** `{ spawnSync: x }` / `{ spawnSync }`, as a binding pattern or a target. */
-  const fromDestructure = (n: ts.Node, from: string | null): void => {
+  const self = (): Producers => ({ ids, members, ns, returners });
+  const mentions = (n: ts.Node | undefined): boolean => n !== undefined && mentionsProducer(n, self());
+  /** Does EVERY return of `fn` yield the producer? A function with no return
+   *  at all, or one return that is not the producer, does not. */
+  const returnsTheProducer = (fn: ts.FunctionLikeDeclarationBase): boolean => {
+    if (fn.body === undefined) return false;
+    const rets: ts.Expression[] = [];
+    const scan = (x: ts.Node): void => {
+      if (x !== fn && (ts.isFunctionDeclaration(x) || ts.isFunctionExpression(x) || ts.isArrowFunction(x))) return;
+      if (ts.isReturnStatement(x) && x.expression !== undefined) rets.push(x.expression);
+      x.forEachChild(scan);
+    };
+    if (ts.isBlock(fn.body)) scan(fn.body);
+    else rets.push(fn.body);
+    return rets.length > 0 && rets.every((e) => isProducerExpr(e, self()));
+  };
+  /** `{ spawnSync: x }` / `{ spawnSync }`, as a binding pattern or a target —
+   *  the KEY side, which the mention rule cannot see: here the producer is
+   *  named by the property it is read FROM, not by a value in the region. */
+  const fromKey = (n: ts.Node, from: string | null): void => {
     if (ts.isObjectBindingPattern(n))
       for (const el of n.elements) {
         const key = el.propertyName ?? el.name;
@@ -562,7 +717,11 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>, seedMemb
         if (key.text === TOKEN) ids.add(el.name.text);
         // `const { sh } = await import('./lib')` — the same binding the static
         // import form already resolved (round 18, F-R18-06).
-        if (from !== null && (PACK_PRODUCER_EXPORTS.get(from)?.ids.has(key.text) ?? false)) ids.add(el.name.text);
+        if (from !== null) {
+          const target = PACK_PRODUCER_EXPORTS.get(from);
+          if (target?.ids.has(key.text) ?? false) ids.add(el.name.text);
+          if (target?.returners.has(key.text) ?? false) returners.add(el.name.text);
+        }
       }
     if (ts.isObjectLiteralExpression(n))
       for (const pr of n.properties) {
@@ -570,83 +729,81 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>, seedMemb
         if (ts.isPropertyAssignment(pr) && ts.isIdentifier(pr.name) && pr.name.text === TOKEN && ts.isIdentifier(pr.initializer)) ids.add(pr.initializer.text);
       }
   };
-  /** `const api = { run: spawnSync }` — the producer under another FIELD name,
-   *  so `api.run(…)` is a call to it (round 17, F-R17-01). */
-  const fromField = (n: ts.ObjectLiteralExpression): void => {
-    for (const pr of n.properties) {
-      if (!ts.isPropertyAssignment(pr)) continue;
-      const key = ts.isIdentifier(pr.name) || ts.isStringLiteral(pr.name) ? pr.name.text : null;
-      if (key !== null && isProducerValue(pr.initializer)) members.add(key);
-    }
-  };
-  /** `class C { static go = spawnSync }` — a class body is not an object
-   *  literal, so `C.go(…)` was unseen ACROSS FILES AND IN ONE FILE ALIKE
-   *  (round 19, F-R19-06). A field is a field whichever body declares it. */
-  const fromClassField = (n: ts.ClassLikeDeclaration): void => {
-    for (const m of n.members) {
-      if (!ts.isPropertyDeclaration(m) || m.initializer === undefined) continue;
-      const key = ts.isIdentifier(m.name) || ts.isStringLiteral(m.name) ? m.name.text : null;
-      if (key !== null && isProducerValue(m.initializer)) members.add(key);
-    }
-  };
-  /** A function whose EVERY return is the producer returns the producer
-   *  (round 19, F-R19-06): `const run = makeRunner()` binds it with no
-   *  initializer a name rule can read. A function with no return at all, or
-   *  one return that is not the producer, is not one. */
-  const returnsProducer = (fn: ts.FunctionLikeDeclarationBase): boolean => {
-    if (fn.body === undefined) return false;
-    const rets: ts.Expression[] = [];
-    const scan = (x: ts.Node): void => {
-      if (ts.isFunctionDeclaration(x) || ts.isFunctionExpression(x) || ts.isArrowFunction(x)) {
-        if (x !== fn) return; // a nested function's returns are its own
-      }
-      if (ts.isReturnStatement(x) && x.expression !== undefined) rets.push(x.expression);
-      x.forEachChild(scan);
-    };
-    if (ts.isBlock(fn.body)) scan(fn.body);
-    else rets.push(fn.body);
-    return rets.length > 0 && rets.every((e) => isProducerValue(e));
-  };
   // A fixpoint, because `const a = cp.spawnSync; const b = a;` is two steps and
-  // the file may declare them in either order.
-  for (let before = -1; before !== ids.size + members.size + ns.size; ) {
-    before = ids.size + members.size + ns.size;
+  // the file may declare them in either order. It terminates because names are
+  // only ever added.
+  for (let before = -1; before !== ids.size + members.size + ns.size + returners.size; ) {
+    before = ids.size + members.size + ns.size + returners.size;
     const walk = (n: ts.Node): void => {
       if (ts.isVariableDeclaration(n)) {
+        const init = n.initializer === undefined ? undefined : unwrap(n.initializer);
         const dyn = n.initializer === undefined ? null : dynamicTarget(n.initializer);
-        fromDestructure(n.name, dyn);
+        fromKey(n.name, dyn);
         // A dynamic import is a namespace under another syntax.
         if (dyn !== null && ts.isIdentifier(n.name)) ns.set(n.name.text, dyn);
-        if (ts.isIdentifier(n.name) && n.initializer !== undefined && isProducerValue(n.initializer)) ids.add(n.name.text);
-      }
-      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-        fromDestructure(unwrap(n.left), null);
-        if (ts.isIdentifier(n.left) && isProducerValue(n.right)) ids.add(n.left.text);
-      }
-      if (ts.isObjectLiteralExpression(n)) fromField(n);
-      if (ts.isClassDeclaration(n) || ts.isClassExpression(n)) fromClassField(n);
-      // `const run = makeRunner()` where every return of makeRunner is one.
-      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined) {
-        const init = unwrap(n.initializer);
-        if (ts.isCallExpression(init) && ts.isIdentifier(init.expression)) {
-          const fn = fns.get(init.expression.text);
-          if (fn !== undefined && returnsProducer(fn)) ids.add(n.name.text);
+        if (init !== undefined) {
+          if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
+            if (returnsTheProducer(init)) for (const nm of boundNames(n.name)) returners.add(nm);
+          } else if (mentions(init)) for (const nm of boundNames(n.name)) ids.add(nm);
         }
       }
+      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        const left = unwrap(n.left);
+        fromKey(left, null);
+        const right = unwrap(n.right);
+        const isFn = ts.isArrowFunction(right) || ts.isFunctionExpression(right);
+        const hit = isFn ? returnsTheProducer(right) : mentions(right);
+        if (hit) {
+          // `run = spawnSync`, `this.go = spawnSync`, `api['go'] = spawnSync`:
+          // the TARGET side is read by what it NAMES, not by its shape.
+          if (ts.isIdentifier(left)) (isFn ? returners : ids).add(left.text);
+          else if (ts.isPropertyAccessExpression(left)) (isFn ? returners : members).add(left.name.text);
+          else if (ts.isElementAccessExpression(left) && ts.isStringLiteral(left.argumentExpression))
+            (isFn ? returners : members).add(left.argumentExpression.text);
+          else if (ts.isObjectBindingPattern(left) || ts.isArrayBindingPattern(left)) for (const nm of boundNames(left)) ids.add(nm);
+        }
+      }
+      // Every property-like declaration, in an object literal or a class body:
+      // a field, a getter, a method, a shorthand. Its VALUE region decides,
+      // and a getter's region is its RETURN, so `get go() { return spawnSync }`
+      // makes `go` HOLD the producer while `go() { return spawnSync }` makes
+      // `obj.go()` YIELD one.
+      {
+        const member = declaredMemberName(n);
+        if (member !== null) {
+          const region = memberValueRegion(n);
+          if (ts.isMethodDeclaration(n)) {
+            if (returnsTheProducer(n)) returners.add(member);
+          } else if (ts.isGetAccessorDeclaration(n)) {
+            if (returnsTheProducer(n)) members.add(member);
+          } else if (region !== undefined) {
+            const r = ts.isExpression(region) ? unwrap(region) : region;
+            if (ts.isArrowFunction(r) || ts.isFunctionExpression(r)) {
+              if (returnsTheProducer(r)) returners.add(member);
+            } else if (mentions(r)) members.add(member);
+          }
+        }
+      }
+      // A PARAMETER DEFAULT is a binding like any other (round 20, F-R20-01):
+      // `function head(run = spawnSync)` hands the producer to `run` with no
+      // call site anywhere in the file.
+      if (ts.isParameter(n) && n.initializer !== undefined && mentions(n.initializer)) for (const nm of boundNames(n.name)) ids.add(nm);
+      // A named function whose every return is the producer.
+      if (ts.isFunctionDeclaration(n) && n.name !== undefined && returnsTheProducer(n)) returners.add(n.name.text);
       // A producer handed to a local function ARRIVES as that parameter.
       if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) {
         const fn = fns.get(n.expression.text);
         if (fn !== undefined)
           n.arguments.forEach((arg, k) => {
             const pm = fn.parameters[k];
-            if (pm !== undefined && ts.isIdentifier(pm.name) && isProducerValue(arg)) ids.add(pm.name.text);
+            if (pm !== undefined && isProducerExpr(arg, self())) for (const nm of boundNames(pm.name)) ids.add(nm);
           });
       }
       n.forEachChild(walk);
     };
     walk(sf);
   }
-  return { ids, members, ns };
+  return { ids, members, ns, returners };
 }
 
 /**
@@ -682,8 +839,12 @@ interface Surface {
   readonly ids: ReadonlySet<string>;
   /** Field names this module stores a producer under, published to importers. */
   readonly members: ReadonlySet<string>;
+  /** Names whose CALL yields the producer. Round 19 computed this per file and
+   *  published none of it, so `const r = makeRunner()` with `makeRunner`
+   *  exported from a sibling was invisible (round 20, F-R20-01). */
+  readonly returners: ReadonlySet<string>;
 }
-const EMPTY_SURFACE: Surface = { ids: new Set<string>(), members: new Set<string>() };
+const EMPTY_SURFACE: Surface = { ids: new Set<string>(), members: new Set<string>(), returners: new Set<string>() };
 let PACK_PRODUCER_EXPORTS: ReadonlyMap<string, Surface> = new Map<string, Surface>();
 /** `file` → `name#index` of each exported function parameter the pack hands a producer to. */
 let PACK_PRODUCER_PARAMS: ReadonlyMap<string, ReadonlySet<string>> = new Map<string, ReadonlySet<string>>();
@@ -706,6 +867,11 @@ function importSources(sf: ts.SourceFile): Map<string, { file: string; orig: str
 function exportedProducers(sf: ts.SourceFile, p: Producers): Surface {
   const ids = new Set<string>();
   const members = new Set<string>(p.members);
+  // `members` and `returners` are published WHOLESALE, as member names have
+  // been since F-R13-01: a name is not a binding, so an importer that calls
+  // `x.<name>()` cannot be resolved to a declaration from here, and
+  // over-reporting a name is the declared cost of never losing one.
+  const returners = new Set<string>(p.returners);
   const isExported = (st: ts.Statement): boolean =>
     ts.canHaveModifiers(st) && (ts.getModifiers(st)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false);
   for (const st of sf.statements) {
@@ -714,6 +880,7 @@ function exportedProducers(sf: ts.SourceFile, p: Producers): Surface {
     // `export default run` and `export = run` are ExportAssignments, which no
     // walk over ExportDeclarations can see (round 18, F-R18-01).
     if (ts.isExportAssignment(st) && isProducerExpr(st.expression, p)) ids.add('default');
+    if (ts.isFunctionDeclaration(st) && st.name !== undefined && isExported(st) && p.returners.has(st.name.text)) returners.add(st.name.text);
     if (!ts.isExportDeclaration(st)) continue;
     if (st.moduleSpecifier === undefined) {
       if (st.exportClause !== undefined && ts.isNamedExports(st.exportClause))
@@ -724,12 +891,14 @@ function exportedProducers(sf: ts.SourceFile, p: Producers): Surface {
     const from = PACK_PRODUCER_EXPORTS.get(specKey(st.moduleSpecifier.text));
     if (from === undefined) continue;
     for (const m of from.members) members.add(m);
+    for (const r of from.returners) returners.add(r);
     if (st.exportClause === undefined) {
       for (const n of from.ids) ids.add(n);
     } else if (ts.isNamedExports(st.exportClause)) {
       for (const el of st.exportClause.elements) {
         if (from.ids.has((el.propertyName ?? el.name).text)) ids.add(el.name.text);
       }
+      for (const el of st.exportClause.elements) if (from.returners.has((el.propertyName ?? el.name).text)) returners.add(el.name.text);
     } else if (ts.isNamespaceExport(st.exportClause)) {
       // `export * as tools from './prod'` publishes the target's WHOLE surface
       // under one name: every exported producer of it is then a MEMBER of
@@ -740,14 +909,15 @@ function exportedProducers(sf: ts.SourceFile, p: Producers): Surface {
       ids.add(st.exportClause.name.text);
     }
   }
-  return { ids, members };
+  return { ids, members, returners };
 }
 
 /** The producer surface this file imports from elsewhere in the pack. */
-function importedProducers(sf: ts.SourceFile): { ids: Set<string>; members: Set<string>; ns: Map<string, string> } {
+function importedProducers(sf: ts.SourceFile): { ids: Set<string>; members: Set<string>; ns: Map<string, string>; returners: Set<string> } {
   const ids = new Set<string>();
   const members = new Set<string>();
   const ns = new Map<string, string>();
+  const returners = new Set<string>();
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
     const target = specKey(st.moduleSpecifier.text);
@@ -757,12 +927,19 @@ function importedProducers(sf: ts.SourceFile): { ids: Set<string>; members: Set<
     // through (round 18, F-R18-02). Over-reporting a field name is the pack's
     // own F-R13-01 rule; losing one across a boundary is a fail-open.
     for (const m of from.members) members.add(m);
+    for (const r of from.returners) returners.add(r);
     if (st.importClause.name !== undefined && from.ids.has('default')) ids.add(st.importClause.name.text);
+    if (st.importClause.name !== undefined && from.returners.has('default')) returners.add(st.importClause.name.text);
     const nb = st.importClause.namedBindings;
-    if (nb !== undefined && ts.isNamedImports(nb)) for (const el of nb.elements) if (from.ids.has((el.propertyName ?? el.name).text)) ids.add(el.name.text);
-    if (nb !== undefined && ts.isNamespaceImport(nb) && from.ids.size + from.members.size > 0) ns.set(nb.name.text, target);
+    if (nb !== undefined && ts.isNamedImports(nb))
+      for (const el of nb.elements) {
+        const orig = (el.propertyName ?? el.name).text;
+        if (from.ids.has(orig)) ids.add(el.name.text);
+        if (from.returners.has(orig)) returners.add(el.name.text);
+      }
+    if (nb !== undefined && ts.isNamespaceImport(nb) && from.ids.size + from.members.size + from.returners.size > 0) ns.set(nb.name.text, target);
   }
-  return { ids, members, ns };
+  return { ids, members, ns, returners };
 }
 
 /** Parameters of this file's exported functions that the PACK hands a producer to. */
@@ -796,7 +973,7 @@ function producersIn(sf: ts.SourceFile, file: string): Producers {
   const imported = importedProducers(sf);
   for (const id of imported.ids) seed.add(id);
   for (const id of packParameterSeed(sf, file)) seed.add(id);
-  return derivedProducers(sf, seed, imported.members, imported.ns);
+  return derivedProducers(sf, seed, imported.members, imported.ns, imported.returners);
 }
 
 /** Which exported parameters of OTHER pack files this file hands a producer to. */
@@ -873,6 +1050,14 @@ function producerCalls(sf: ts.SourceFile, file: string): ts.CallExpression[] {
         (c.argumentExpression.text === TOKEN || p.members.has(c.argumentExpression.text))
       )
         out.push(n);
+      // `makeRunner()(…)` and `map.get('go')(…)` — the callee is itself an
+      // expression that YIELDS the producer, with no binding in between.
+      else if (ts.isCallExpression(c) && isProducerExpr(c, p)) out.push(n);
+      // Anything else whose callee expression MENTIONS a producer outside
+      // callee position — `(cond ? run : other)(…)`, `fns[i](…)`. Conservative
+      // by default: a call this sweep cannot show is NOT the producer is
+      // reported, which is the inversion round 20 turns on.
+      else if (mentionsProducer(c, p)) out.push(n);
     }
     n.forEachChild(walk);
   };
@@ -890,6 +1075,26 @@ function producerCalls(sf: ts.SourceFile, file: string): ts.CallExpression[] {
  * a member name that the namespaced file publishes is this pack's declared
  * F-R13-01 behaviour; losing the route is a fail-open.
  */
+function namespaceRoot(c: ts.PropertyAccessExpression, p: Producers): Surface | null {
+  let root: ts.Expression = c.expression;
+  for (;;) {
+    const x = unwrap(root);
+    if (ts.isPropertyAccessExpression(x) || ts.isElementAccessExpression(x)) root = x.expression;
+    else {
+      root = x;
+      break;
+    }
+  }
+  if (!ts.isIdentifier(root)) return null;
+  const file = p.ns.get(root.text);
+  return file === undefined ? null : (PACK_PRODUCER_EXPORTS.get(file) ?? EMPTY_SURFACE);
+}
+
+/** `ns.makeRunner()` where the namespaced file's `makeRunner` returns one. */
+function namespaceReturner(c: ts.PropertyAccessExpression, p: Producers): boolean {
+  return namespaceRoot(c, p)?.returners.has(c.name.text) ?? false;
+}
+
 function namespaceProducer(c: ts.PropertyAccessExpression, p: Producers): boolean {
   let root: ts.Expression = c.expression;
   for (;;) {
@@ -2214,6 +2419,238 @@ const PLANTS: readonly Plant[] = [
       r.unchecked.some((site) => site.file === 'planted-x36.ts')
         ? null
         : 'a discarding call was hidden behind a function that RETURNS the producer, which no initializer rule reaches',
+  },
+  {
+    id: 'X37',
+    what: "round 20's F-R20-01 \u2014 a PARAMETER DEFAULT: the producer reaches a name with no call site anywhere",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x37.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          '// `run` holds the producer by DEFAULT. Nothing is initialized, no argument',
+          '// is passed and nothing is destructured: the whole flow is one parameter',
+          '// initializer, which every shape-by-shape rule walked past.',
+          'export function head(run = spawnSync): string {',
+          "  const r = run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x37.ts')
+        ? null
+        : 'a producer handed in by a PARAMETER DEFAULT discarded its exit code unseen: the resolution read initializers and patterns, and a default is neither',
+  },
+  {
+    id: 'X38',
+    what: "round 20's F-R20-01 \u2014 an ARRAY binding pattern, where the object-pattern rule read nothing",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x38.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'const [x38run] = [spawnSync];',
+          'export function head(): string {',
+          "  const r = x38run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x38.ts')
+        ? null
+        : 'the producer was bound by an ARRAY pattern and the discarded code went unreported: a pattern is a pattern, whichever bracket it uses',
+  },
+  {
+    id: 'X39',
+    what: "round 20's F-R20-01 \u2014 `this.go = spawnSync` in a constructor: neither a field initializer nor an object literal",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x39.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'class RunnerX39 {',
+          '  go: typeof spawnSync;',
+          '  constructor() {',
+          '    this.go = spawnSync;',
+          '  }',
+          '  head(): string {',
+          "    const r = this.go('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "    return (r.stdout ?? '').trim();",
+          '  }',
+          '}',
+          'export const x39 = new RunnerX39();',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x39.ts')
+        ? null
+        : 'the producer was stored on `this` in a constructor and the discarded code went unreported: an assignment whose target is a property access, which the class-field rule did not read',
+  },
+  {
+    id: 'X40',
+    what: "round 20's F-R20-01 \u2014 an object GETTER handing out the producer",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x40.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'const apiX40 = {',
+          '  get go() {',
+          '    return spawnSync;',
+          '  },',
+          '};',
+          'export function head(): string {',
+          "  const r = apiX40.go('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x40.ts')
+        ? null
+        : 'a GETTER handed out the producer and the discarded code went unreported: the field rule read a PropertyAssignment and a getter is an accessor',
+  },
+  {
+    id: 'X41',
+    what: "round 20's F-R20-01 \u2014 ROUND 19'S OWN RULE across a module boundary: an exported function that returns the producer",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x41-lib.ts'),
+        ["import { spawnSync } from 'node:child_process';", 'export function makeRunnerX41(): typeof spawnSync {', '  return spawnSync;', '}', ''].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x41.ts'),
+        [
+          "import { makeRunnerX41 } from './planted-x41-lib';",
+          '// Round 19 added "a function whose every return is the producer" INSIDE',
+          '// one file and published nothing on the module surface, so the fix that',
+          "// closed F-R19-06 reopened F-R17-01's class for its own shape.",
+          'export function head(): string {',
+          '  const runF = makeRunnerX41();',
+          "  const r = runF('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x41.ts')
+        ? null
+        : "a RETURNER exported from one pack file and called in another hid a discarded exit code: the returner set did not cross the boundary, which is F-R17-01's class reopened by round 19's own fix",
+  },
+  {
+    id: 'X42',
+    what: "round 20's F-R20-01 \u2014 the SAME bytes as X41 in ONE file, so the boundary there is attributable",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x42.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'function makeRunnerX42(): typeof spawnSync {',
+          '  return spawnSync;',
+          '}',
+          'export function head(): string {',
+          '  const runF = makeRunnerX42();',
+          "  const r = runF('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x42.ts')
+        ? null
+        : 'the one-file form of X41 went unreported too, so X41 measures the rule and not the boundary',
+  },
+  {
+    id: 'X43',
+    what: 'round 20, found HERE while enumerating what the new callee rule costs \u2014 a CONTAINER read through a method call',
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x43.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          "const mapX43 = new Map([['go', spawnSync]]);",
+          '// A callee subtree is not read as a mention, because `const out =',
+          '// api.run("git")` binds a RESULT. But a call ON AN OBJECT that holds the',
+          '// producer can hand it back, so the OBJECT is read while the method name',
+          '// is not. Not reported by the challenger: found by asking what the one',
+          '// exception to the callee rule leaves open.',
+          'export function head(): string {',
+          "  const runH = mapX43.get('go');",
+          "  const r = runH?.('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r?.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x43.ts')
+        ? null
+        : 'the producer came back out of a Map through `get` and the discarded code went unreported: a call on an object that holds a producer can return it',
+  },
+  {
+    id: 'X44',
+    what: 'round 20, found HERE \u2014 the callee is a CONDITIONAL, so it resolves to no binding at all',
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x44.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          "const otherX44 = (): { stdout: string } => ({ stdout: '' });",
+          'const pickX44 = process.env.X44 === "1";',
+          '// The callee is neither an identifier, nor a property access, nor an',
+          '// element access with a literal key: it is an expression. The three',
+          '// callee rules below each name a SHAPE, and this is the case that makes',
+          '// the conservative fallback load-bearing rather than decorative.',
+          'export function head(): string {',
+          "  const r = (pickX44 ? spawnSync : otherX44)('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x44.ts')
+        ? null
+        : 'a call whose CALLEE is a conditional carrying the producer discarded its exit code unreported: the callee rules each name a shape, and an expression is not one of them',
+  },
+  {
+    id: 'X45',
+    what: 'round 20, found HERE \u2014 a COMPUTED index into a container of producers',
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x45.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'const fnsX45 = [spawnSync];',
+          'const iX45 = Number(process.env.X45 ?? "0");',
+          'export function head(): string {',
+          "  const r = fnsX45[iX45]?.('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r?.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x45.ts')
+        ? null
+        : 'a call through a COMPUTED index into a container holding the producer went unreported: an element access with a non-literal key resolves to no name, and the fallback is what reads it',
   },
   {
     id: 'X9',
