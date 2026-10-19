@@ -745,12 +745,30 @@ anchor_identity(){   # anchor_identity <id> <doctor-the-anchor-clone> <extra-arg
   git -C "$work/anchor" commit -q -am "p8 round 16 forge (throwaway clone)" 2>/dev/null
   FORGE=$(git -C "$work/anchor" rev-parse p8forge)
   FORGE_SHORT=$(git -C "$work/anchor" rev-parse --short=7 p8forge)
-  git -C "$work/anchor" checkout -q --detach "$P8_ANCHOR_PIN" 2>/dev/null
+  # ROUND 19, found by this round's own run: this used to detach HEAD back onto
+  # the pin, and the new LINEAGE guard then masked two of these three arms. With
+  # HEAD at the pin, the forged commit (s) and (t) NAME is not an ancestor of
+  # HEAD, so with the identity guard deleted the lineage guard refused instead —
+  # and a deletion arm that still reds is reported as "refused even with this
+  # round's guards deleted", which is true and useless. It is this phase's own
+  # lesson for the third time: A GUARD IN FRONT OF A GUARD IS EVIDENCE ABOUT THE
+  # OUTER ONE. HEAD therefore stays on p8forge, which descends from the pin, so
+  # BOTH the pin (r) and the forge (s, t) are ancestors of it and each arm stays
+  # evidence about the guard its comment names. The precondition is asserted
+  # below rather than left to luck.
   ( cd "$work/anchor" && eval "$doctor" ) >"$work/doctor.log" 2>&1
   # The caller cannot name the forged commit, because it does not exist until the
   # lines above make it, so <extra-args> is a template and is filled in here.
   extra=${extra//@FORGE_SHORT@/$FORGE_SHORT}
   extra=${extra//@FORGE@/$FORGE}
+  # ROUND 19: assert what the arms now rest on — the commit this plant will name
+  # is an ancestor of the clone's HEAD, so the lineage guard is not what reds it.
+  for _anc in "$P8_ANCHOR_PIN" "$FORGE"; do
+    if ! git -C "$work/anchor" --no-replace-objects merge-base --is-ancestor "$_anc" HEAD 2>/dev/null; then
+      say "ANCHOR-ID $id: FAIL — $_anc is not an ancestor of the clone's HEAD, so the lineage guard would decide this arm instead of the guard it names"
+      FAILED=1; return
+    fi
+  done
   # The SUBJECT is a tree built to AGREE with the forgery. That is the only
   # subject that tests the anchor's identity: an honest tree disagrees with the
   # forged content and reds for the wrong reason, which is exactly how round 15's
@@ -1104,6 +1122,78 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
     "ANCHOR LEG EXERCISED:" --git-dir "$P8_ANCHOR_DIR"
 else
   say "GUARD-CTL: FAIL — no anchor directory, so none of this round's guards is measured"
+  FAILED=1
+fi
+
+
+say "=== the anchor's LINEAGE, measured ==="
+# ROUND 19, the coordinator's fourth follow-up item. Until now the anchor leg
+# asked only that the repository CONTAIN the pinned object. A commit can be in a
+# repository without being in its history: fetched by sha, left on a deleted
+# branch, reachable only from a note or a stash. The check now requires the pin
+# to be an ANCESTOR of that repository's HEAD — the relation the phrase "the
+# frozen history" actually claims — and the plant below is a repository that
+# holds the object and is not descended from it.
+#
+# What this does NOT close is stated in the check itself and repeated here so no
+# reader has to find it: an editor of the pin can make their forged commit an
+# ancestor as easily as they made it exist. PATCH-REQ-P8-08 still carries that.
+if [ -n "$P8_ANCHOR_DIR" ]; then
+  LIN=$OUT/lineage
+  rm -rf "$LIN"; mkdir -p "$LIN/tree/infrastructure/database"
+  cp -r "$REPO/infrastructure/database/migrations" "$LIN/tree/infrastructure/database/migrations"
+  cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$LIN/tree/infrastructure/database/"
+  if ! git clone -q "$P8_ANCHOR_DIR" "$LIN/orphan" 2>"$LIN/clone.log"; then
+    say "LINEAGE: FAIL — could not clone the anchor repository: $(tail -1 "$LIN/clone.log")"
+    FAILED=1
+  else
+    ( cd "$LIN/orphan" \
+      && git config user.email p8@local && git config user.name p8 \
+      && git checkout -q --orphan p8-unrelated \
+      && git rm -rq --cached . \
+      && printf 'unrelated\n' > u.txt && git add u.txt \
+      && git commit -q -m "an unrelated root, so the pin is HELD here but not descended from" \
+    ) >"$LIN/doctor.log" 2>&1
+    # The plant only measures lineage if the OBJECT is still present: a clone
+    # that lost it would red for "not reachable", which is a different guard.
+    if ! git -C "$LIN/orphan" cat-file -e "${P8_ANCHOR_PIN}^{commit}" 2>/dev/null; then
+      say "LINEAGE: FAIL — the doctored clone no longer holds the pin at all, so this plant tests reachability, not lineage"
+      FAILED=1
+    elif git -C "$LIN/orphan" merge-base --is-ancestor "$P8_ANCHOR_PIN" HEAD 2>/dev/null; then
+      say "LINEAGE: FAIL — the doctored clone still descends from the pin, so the plant did not land"
+      FAILED=1
+    else
+      say "LINEAGE: the plant holds the pin as an object and is not descended from it, as required"
+      if python3 "$HERE/p8-frozen-integrity.py" "$LIN/tree" --git-dir "$LIN/orphan" >"$LIN/guarded.log" 2>&1; then
+        say "LINEAGE: FAIL — an HONEST tree was confirmed against a repository that merely HOLDS the pin"
+        FAILED=1
+      elif grep -qF "ANCHOR LINEAGE" "$LIN/guarded.log"; then
+        say "LINEAGE: refused, and named it — 'ANCHOR LINEAGE'"
+      else
+        say "LINEAGE: FAIL — it refused, but not by the lineage guard's name"
+        head -2 "$LIN/guarded.log" | tee -a "$OUT/run.log"
+        FAILED=1
+      fi
+      # (y6) the deletion arm: with the lineage refusal gone, the same plant must
+      # PASS, or the red above was not this guard's doing.
+      cat > "$PATCHDIR/lineage.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = '        if rc == 1:\n            sys.stderr.write("INTEGRITY FAIL: ANCHOR LINEAGE'
+assert s.count(a) == 1, "the lineage refusal is not where this expects it"
+s = s.replace(a, '        if False:\n            sys.stderr.write("INTEGRITY FAIL: ANCHOR LINEAGE', 1)
+b = '        if rc != 0:\n            sys.stderr.write("INTEGRITY FAIL: ANCHOR LINEAGE — the ancestry'
+assert s.count(b) == 1, "the undecided-lineage refusal is not where this expects it"
+s = s.replace(b, '        if False:\n            sys.stderr.write("INTEGRITY FAIL: ANCHOR LINEAGE — the ancestry', 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+      guard_control y6 "$PATCHDIR/lineage.py" honest present \
+        "ANCHOR LEG EXERCISED:" --git-dir "$LIN/orphan"
+    fi
+  fi
+else
+  say "LINEAGE: FAIL — no anchor directory, so the lineage guard is untested"
   FAILED=1
 fi
 

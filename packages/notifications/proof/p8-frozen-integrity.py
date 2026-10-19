@@ -543,6 +543,35 @@ def main():
         # Every read below names the RESOLVED pin, not the caller's spelling of
         # it, so nothing downstream can be aimed somewhere else by abbreviation.
         anchor_sha = resolved
+        # ROUND 19, the coordinator's fourth follow-up item: the pin must be an
+        # ANCESTOR of the anchor repository's HEAD. Until now the only
+        # requirement was that the repository CONTAIN the object, and a commit
+        # can be in a repository without being in its history at all — fetched
+        # by sha, left on a deleted branch, or reachable only from a stash or a
+        # note. This says the witness must be a commit the code under review
+        # descends FROM, in the same repository, which is the relation the
+        # sentence "the frozen history" actually claims.
+        #
+        # STATED PLAINLY, because the challenger will test it: this does NOT
+        # close the pin edit. Someone who edits ANCHOR_PIN to a forged commit
+        # can make that commit an ancestor of their own HEAD as easily as they
+        # made it exist. It closes a different and smaller thing — an anchor
+        # repository that merely holds the object — and PATCH-REQ-P8-08 still
+        # carries the pin edit alone.
+        rc, _out, err = _git(anchor_dir, "merge-base", "--is-ancestor",
+                             anchor_sha, "HEAD")
+        if rc == 1:
+            sys.stderr.write("INTEGRITY FAIL: ANCHOR LINEAGE — %s exists in %s but is NOT an "
+                             "ancestor of that repository's HEAD, so it is an object the "
+                             "repository happens to hold rather than a commit this code descends "
+                             "from; refusing to call it the frozen history's witness\n"
+                             % (anchor_sha, anchor_dir))
+            return 1
+        if rc != 0:
+            sys.stderr.write("INTEGRITY FAIL: ANCHOR LINEAGE — the ancestry of %s in %s could not "
+                             "be decided (git exit %d: %s), and an undecided lineage is not a "
+                             "passed one\n" % (anchor_sha, anchor_dir, rc, err.strip()))
+            return 1
         rc, out, err = _git(anchor_dir, "show",
                             "%s:infrastructure/database/MIGRATION_MANIFEST.json" % anchor_sha)
         if rc != 0:
