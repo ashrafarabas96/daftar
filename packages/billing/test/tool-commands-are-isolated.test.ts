@@ -528,6 +528,7 @@ const BUILTIN_WARNINGS = ((): ReadonlySet<string> => {
 })();
 
 const REFUSED_W_CATEGORY = 'REFUSED-UNKNOWN-WARNING-CATEGORY';
+const REFUSED_INTERPRETER_REJECTED = 'REFUSED-INTERPRETER-REJECTED-THE-OPTION';
 /**
  * Options whose PURPOSE is to write a file. `pycache_prefix` writes a bytecode
  * tree under its value; `perf` and `perf_jit` write `/tmp/perf-<pid>.map` and
@@ -640,7 +641,7 @@ const executableArgv = (flags: string): { argv: string[] } | { refusal: string; 
  * `ownCwd` is how the arm DELETES this guard: with it false the probe inherits
  * the suite's directory again, and the same line must leave files behind.
  */
-const probeIsolated = (argv: readonly string[], ownCwd: boolean): boolean => {
+const probeIsolated = (argv: readonly string[], ownCwd: boolean): { isolated: boolean; rejected?: boolean } => {
   const scratch = ownCwd ? mkdtempSync(join(tmpdir(), 'p5probe-')) : undefined;
   try {
     const r = spawnSync(HARNESS_PYTHON, [...argv, '-c', PROBE], {
@@ -652,7 +653,15 @@ const probeIsolated = (argv: readonly string[], ownCwd: boolean): boolean => {
       env: scratch === undefined ? { PATH: '/usr/bin:/bin' } : { PATH: '/usr/bin:/bin', TMPDIR: scratch },
       ...(scratch === undefined ? {} : { cwd: scratch }),
     });
-    return r.status === 0 && (r.stdout ?? '').trim() === '1';
+    // ROUND 38, R37-01 (P3). The `-W` ACTION field was unvalidated, so
+    // `-W bogus::UserWarning` was cleared green: CPython prints
+    // `Invalid -W option ignored: invalid action: 'bogus'` and carries on at
+    // rc 0. Rather than writing the six actions down -- F-67's lesson about
+    // lists of another program's names -- the gate now reads the
+    // INTERPRETER'S OWN REJECTION off stderr. It covers `-X` the same way,
+    // and any spelling a later CPython rejects.
+    if (/^Invalid -[XW] option ignored/m.test(r.stderr ?? '')) return { isolated: false, rejected: true };
+    return { isolated: r.status === 0 && (r.stdout ?? '').trim() === '1' };
   } finally {
     if (scratch !== undefined) rmSync(scratch, { recursive: true, force: true });
   }
@@ -680,7 +689,8 @@ const verdictFor = (interpreter: string, flags: string): { isolated: boolean; re
   } else {
     // The live verdict always owns its directory; `false` exists for the
     // deletion arm alone, and that arm counts its own call sites.
-    out = { isolated: probeIsolated(parsed.argv, true) };
+    const run = probeIsolated(parsed.argv, true);
+    out = run.rejected === true ? { isolated: false, refusal: REFUSED_INTERPRETER_REJECTED } : { isolated: run.isolated };
   }
   verdicts.set(key, out);
   return out;
@@ -1063,6 +1073,52 @@ describe('every written invocation of the pack tools is isolated', () => {
     }
     expect(BUILTIN_WARNINGS.has('DeprecationWarning'), 'the warning categories were not read from builtins').toBe(true);
 
+    // ROUND 38, R37-01 (P3): the `-W` ACTION field. CPython prints
+    // `Invalid -W option ignored` and carries on at rc 0, so a bogus action
+    // was cleared green. The gate now reads that rejection off stderr instead
+    // of carrying a list of the six actions.
+    // Measured, both sides: `-W bogus::UserWarning` prints the rejection and
+    // is now refused by name. On the `-X` side this check has NO reachable
+    // instance today, because an unknown option name is refused before
+    // anything is spawned and a bad VALUE is fatal rather than ignored
+    // (`-X int_max_str_digits=nonsense` -> "Fatal Python error", no `1` on
+    // stdout, already an offence). So for `-X` it is a net held open for a
+    // spelling a later CPython decides to ignore: UNMEASURED there, not dead.
+    const rejected = verdictFor('python3', ' -I -W bogus::UserWarning');
+    expect(rejected.isolated, 'a bogus -W action is cleared although CPython itself rejects it').toBe(false);
+    expect(rejected.refusal, 'the interpreter rejection is not named').toContain(REFUSED_INTERPRETER_REJECTED);
+    expect(verdictFor('python3', ' -I -X int_max_str_digits=nonsense').isolated, 'a fatal -X value is read as isolated').toBe(false);
+    for (const flags of [' -I -W ignore', ' -I -W error::DeprecationWarning', ' -I -W once::UserWarning']) {
+      expect(verdictFor('python3', flags).isolated, `${flags} is a real action and this law reds on it`).toBe(true);
+    }
+
+    // ROUND 38, R37-02 (P3), the bound MEASURED each run instead of trusted:
+    // "writes a file" cannot be derived from help text, so the writer set is
+    // hand-classified as a subtraction. So every name the filter now ACCEPTS
+    // is run and must write nothing -- in the owned cwd, in its TMPDIR, or in
+    // /tmp. A future CPython option that writes to a fixed path would be
+    // listed, unsubtracted and accepted, and THIS arm is what catches it.
+    const tmpBefore = new Set(readdirSync('/tmp'));
+    for (const name of X_OPTION_NAMES) {
+      const probe = mkdtempSync(join(tmpdir(), 'r3702-'));
+      try {
+        const r = spawnSync(HARNESS_PYTHON, ['-I', '-X', name, '-c', PROBE], {
+          encoding: 'utf8',
+          timeout: 10_000,
+          cwd: probe,
+          env: { PATH: '/usr/bin:/bin', TMPDIR: probe },
+        });
+        expect(readdirSync(probe), `-X ${name} is accepted by this filter and WRITES a file: it belongs in X_WRITES_FILES`).toStrictEqual([]);
+        expect(r.status === 0 || r.status === 1, `-X ${name} neither ran nor failed cleanly`).toBe(true);
+      } finally {
+        rmSync(probe, { recursive: true, force: true });
+      }
+    }
+    expect(
+      readdirSync('/tmp').filter((n) => !tmpBefore.has(n) && !n.startsWith('r3702-')),
+      'an option this filter accepts wrote into /tmp, where no cwd or TMPDIR can contain it',
+    ).toStrictEqual([]);
+
     // And the forms that have no side effect outside the probe still pass, or
     // this is a gate rather than a filter.
     for (const flags of [' -I -X dev', ' -I -X importtime', ' -I -X frozen_modules=off', ' -I -W error::DeprecationWarning', ' -I -W ignore']) {
@@ -1076,7 +1132,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     // hands `probeIsolated` the refused argv itself -- the layer below the
     // allow-list -- and measures the directory.
     const argv = ['-I', '-X', 'pycache_prefix=p5pyc'];
-    expect(probeIsolated(argv, true), 'the probe no longer reports this isolated command as isolated').toBe(true);
+    expect(probeIsolated(argv, true).isolated, 'the probe no longer reports this isolated command as isolated').toBe(true);
     expect(existsSync(join(process.cwd(), 'p5pyc')), 'THE PROBE WROTE INTO THE WORKING TREE: a directory the gate created is sitting beside the suite').toBe(
       false,
     );
@@ -1088,7 +1144,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     const previous = process.cwd();
     try {
       process.chdir(owned);
-      expect(probeIsolated(argv, false), 'the deletion changed the verdict, so it is not a pure deletion').toBe(true);
+      expect(probeIsolated(argv, false).isolated, 'the deletion changed the verdict, so it is not a pure deletion').toBe(true);
       expect(readdirSync(owned), 'with the guard deleted the value wrote nothing, so the guard guards nothing').toStrictEqual(['p5pyc']);
     } finally {
       process.chdir(previous);
@@ -1167,12 +1223,26 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(withoutCheck[0], 'with the end-of-input refusal deleted (d) still reports, so the check is not what reports it').toStrictEqual([]);
     expect(scanDocument('C', c, true, false)[0], 'the deletion also changed (c), so it is not a pure deletion').toHaveLength(1);
 
-    // Reachability, measured rather than assumed: no live pack document has an
-    // odd fence count today, so this shape has no live instance -- it arrives
-    // from a forgotten closing fence or a quoted transcript.
+    // Reachability, measured rather than assumed: no document THIS LAW SCANS
+    // has an odd fence count today, so the shape has no live instance -- it
+    // arrives from a forgotten closing fence or a quoted transcript.
+    //
+    // ROUND 38, THE CHALLENGER'S F-68 (P2). The first version of this census
+    // walked every `.md` in the pack with NO ownership routing, so a reviewer
+    // report quoting ONE fence line reddened THIS package over bytes the
+    // author may not edit -- the F-53/B-12 shape the scan arm below forbids in
+    // its own words. And the sentence was FALSE for that class: a
+    // reviewer-owned name is never scanned, so an odd fence count implies
+    // nothing about it. Reproduced here on a pack COPY: the same bytes red
+    // under `P5-CHALLENGE-deadbee.md` and under an author name alike. The
+    // census now reads the names the SCAN reads, routed by the one shared
+    // list, and says what the reader can do about it.
     if (existsSync(PACK)) {
+      const exemptNames = reviewerOwned();
+      const reviewerShaped = looksLikeReviewer();
       const odd: string[] = [];
       for (const name of readdirSync(PACK).filter((n) => n.endsWith('.md'))) {
+        if (exemptNames.has(name) || reviewerShaped.test(name)) continue;
         const text = readable(join(PACK, name));
         // A binary is not a document; the law refuses one elsewhere, and this
         // census only counts fences.
@@ -1180,8 +1250,27 @@ describe('every written invocation of the pack tools is isolated', () => {
         const fences = [...text.split('\n')].filter((l) => /^\s*```/.test(l)).length;
         if (fences % 2 === 1) odd.push(name);
       }
-      expect(odd, 'a pack document has an odd number of fence lines, so the tail of it may be unscanned').toStrictEqual([]);
+      expect(
+        odd,
+        'an AUTHOR-OWNED pack document has an odd number of fence lines: close the fence in that document, or, if the odd line is inside a quotation, balance it — the end-of-input refusal above reports the same document by name when the scan runs',
+      ).toStrictEqual([]);
     }
+
+    // And the routing is armed, on a COPY, because the bytes it must not
+    // touch are a reviewer's: the same odd-fence document is skipped under a
+    // reviewer-shaped name and counted under an author name.
+    const copy = mkdtempSync(join(tmpdir(), 'f68-'));
+    onTestFinished(() => rmSync(copy, { recursive: true, force: true }));
+    const oddBytes = ['line one', '```text f-50-quote', '$ echo quoted'].join('\n');
+    const census = (names: string[]): string[] => {
+      const exemptNames = reviewerOwned();
+      const reviewerShaped = looksLikeReviewer();
+      return names.filter((n) => !exemptNames.has(n) && !reviewerShaped.test(n));
+    };
+    writeFileSync(join(copy, 'P5-CHALLENGE-deadbee.md'), oddBytes);
+    writeFileSync(join(copy, 'P5-NOTE-V.md'), oddBytes);
+    const considered = census(readdirSync(copy).filter((n) => n.endsWith('.md')));
+    expect(considered, "the census reds over a reviewer's frozen bytes, which the author may not edit").toStrictEqual(['P5-NOTE-V.md']);
 
     // And the two knobs are each reachable from one arm only.
     const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
