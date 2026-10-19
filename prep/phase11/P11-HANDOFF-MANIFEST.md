@@ -854,8 +854,7 @@ Each of these twelve was deleted on its own and the arms it reds recorded:
 | HTML-comment strip | HTML comment |
 | **the figure value class** | **all seven `R13-S3` false positives** |
 
-The selftest at that head was **20 catch arms, 13 skip arms and 4
-others**: every shape either round planted, the named exclusions, and the seven
+The selftest at that head had **20 catch and 13 skip arms**, with 4 others: every shape either round planted, the named exclusions, and the seven
 false positives as arms that must now come back clean. The skip arms land on
 exit **2** — no candidate at all — which is the inert refusal doing double duty
 as the negative assertion.
@@ -966,33 +965,41 @@ of my probe shapes: with `nfkc` skipped a full-width separator is not an `=`,
 so refusing that shape was correct and my expectation was wrong. The instrument
 was right twice and I was wrong twice, before the round.
 
-| guard deleted | arms | which arms stop answering |
-|---|---|---|
-| `nfkc` | 1 | R14-S1 full-width equals |
-| `format characters` | 1 | R14-S1 zero-width space |
-| `arabic-indic digits` | 2 | R14-S1 arabic-indic digits, R14-S1 extended arabic digits |
-| `html comment markers` | 1 | R13 HTML comment |
-| `inline code span` | 1 | R13-S1 N16 backticked comment |
-| `blockquote and indent` | 5 | R13 leading tab, R13 blockquote, R13 nested list item +2 more |
-| `list marker` | 2 | R13 list item, R13 nested list item |
-| `heading marker` | 1 | R14-F1 heading |
-| `table cell (leading)` | 1 | R13 table cell |
-| `bracket` | 2 | R13 parentheses, R14-S3 percent inside brackets |
-| `emphasis (leading)` | 1 | R13 bold |
-| `dash marker (leading)` | 1 | R14-S1 behind a -- marker |
-| `label prefix` | 1 | R13 colon prefix |
-| `trailing -- comment` | 1 | R14-F1 plain -- comment |
-| `trailing punctuation` | 6 | R13 trailing semicolon, R13 parentheses, R13 HTML comment +3 more |
-| `emphasis (trailing)` | 1 | R13 bold |
-| `table cell (trailing)` | 1 | R13 table cell |
-| `figure value class` | 8 | R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +5 more |
-| `boolean spellings` | 2 | R14-S1 boolean t as psql prints, R14-S1 boolean f as psql prints |
-| `signed values` | 2 | R14-S1 negative, R14-S1 positive sign |
-| `percent in the value` | 3 | R13 percent, R14-S3 percent on a real figure, R14-S3 percent inside brackets |
-| `hyphen in the key` | 1 | R14-S1 hyphen in the key |
-| `key class` | 1 | named: UPPERCASE key |
-| `boolean case folding` | 1 | R14-S1 boolean True |
-| `named exemptions` | 2 | R14-S2 exempt port=55512, R14-S2 exempt migrations=87 |
+<!-- BEGIN GENERATED guard-matrix: python3 -I prep/phase11/harness/check_fenced_figures.py --emit guard-matrix -->
+
+```text
+each guard deleted on its own, and the arms that stop answering:
+
+nfkc                       reds  1 arm(s): R14-S1 full-width equals
+format characters          reds  1 arm(s): R14-S1 zero-width space
+non-ascii digits           reds  5 arm(s): R14-S1 arabic-indic digits, R14-S1 extended arabic digits, R15-S3 devanagari digits +2 more
+html comment markers       reds  1 arm(s): R13 HTML comment
+inline code span           reds  1 arm(s): R13-S1 N16 backticked comment
+blockquote and indent      reds  8 arm(s): R13 leading tab, R13 blockquote, R13 nested list item +5 more
+list marker                reds  2 arm(s): R13 list item, R13 nested list item
+heading marker             reds  1 arm(s): R14-F1 heading
+table cell (leading)       reds  1 arm(s): R13 table cell
+bracket                    reds  2 arm(s): R13 parentheses, R14-S3 percent inside brackets
+emphasis (leading)         reds  1 arm(s): R13 bold
+dash marker splits the line reds  4 arm(s): R14-F1 plain -- comment, R14-S1 behind a -- marker, R15-S2 text before the marker +1 more
+label prefix               reds  1 arm(s): R13 colon prefix
+trailing punctuation       reds  7 arm(s): R13 trailing semicolon, R13 parentheses, R13 HTML comment +4 more
+emphasis (trailing)        reds  1 arm(s): R13 bold
+table cell (trailing)      reds  1 arm(s): R13 table cell
+figure value class         reds  8 arm(s): R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +5 more
+boolean spellings          reds  2 arm(s): R14-S1 boolean t as psql prints, R14-S1 boolean f as psql prints
+signed values              reds  2 arm(s): R14-S1 negative, R14-S1 positive sign
+percent in the value       reds  3 arm(s): R13 percent, R14-S3 percent on a real figure, R14-S3 percent inside brackets
+hyphen in the key          reds  1 arm(s): R14-S1 hyphen in the key
+key class                  reds  1 arm(s): named: UPPERCASE key
+boolean case folding       reds  1 arm(s): R14-S1 boolean True
+named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
+planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
+
+25 guards, every one of them deleted and measured
+```
+
+<!-- END GENERATED guard-matrix -->
 
 **`R14-S1` (`P2`) — nine spellings, and NORMALISATION rather than nine
 patches.** A fabricated row count in Arabic-Indic digits, a negative, an
@@ -1027,10 +1034,36 @@ number in the header is reproducible rather than asserted:
 
     python3 -I prep/phase11/harness/check_fenced_figures.py --surface
 
-At this head it prints **8 of 17** — eight would red, seven pass because
-something emits them, two are exempt. That list is not the challenger's list of
-16, so the two numbers are each true of their own set and are not comparable;
-this one is the one a reader can re-run. On the coordinator's ruling the two
+The count is **generated into this document by the run**, not written here;
+round 15's `R15-F1` is why, and §7.15 gives the reason the number was wrong.
+The challenger's list of 16 is not this list, so those numbers are each true of
+their own set and are not comparable.
+
+<!-- BEGIN GENERATED surface: python3 -I prep/phase11/harness/check_fenced_figures.py --emit surface -->
+
+```text
+port=55512           not a candidate (exempted or not a figure)
+migrations=87        not a candidate (exempted or not a figure)
+rows=59              REDS THE GATE
+axes=2               passes: something emits it
+variants=6           REDS THE GATE
+cases=121            REDS THE GATE
+races=13             REDS THE GATE
+entries=80           REDS THE GATE
+copies=1             REDS THE GATE
+attempts=3           REDS THE GATE
+deleted=0            passes: something emits it
+present=true         passes: something emits it
+owner_sees=0         passes: something emits it
+chosen=1             passes: something emits it
+identities=2         passes: something emits it
+ratio=0.5            REDS THE GATE
+enabled=false        REDS THE GATE
+
+9 of 17 realistic figure-shaped lines would red the gate if a document wrote them
+```
+
+<!-- END GENERATED surface --> On the coordinator's ruling the two
 tokens exempted **by exact name** are this phase's own scratch port and its own
 migration count. That exemption is a SHAPE fix and it carries the known cost of
 one: **it cannot name a token not yet written, and a fabricated migration count
@@ -1079,6 +1112,171 @@ named and refused. A fixture proves a check can fail; the head that was green
 with the defect in it proves this check fails on the thing it was rebuilt for.
 
 **A FIFTEENTH round is owed** narrow on `3bce189..HEAD`, with the coordinator
+diff review after it. **`24f6ebe` is still the last fully signed head**, and
+nothing in this phase is self-signed.
+
+---
+
+## 7.15 The FIFTEENTH round — `REJECT` at `3838711` on one number, whose cause was a fail-open and not a typo
+
+Frozen at `/mnt/project-files/phase11/P11-CHALLENGE-3838711.md`, sha256
+`705965c0f828418017b6315248e7d53df3c6a7e4de109e39e6041a41c957437d`, 378 lines /
+17,731 bytes. Everything else reproduced: every digest with `ls` sorting, all
+six published evidence files matching their claimed sha256 and line counts, the
+published checker byte-identical to the committed one, the computed guard
+matrix re-run guard by guard, both negative-control lines printing exactly as
+pasted, and eight of the nine spelling escapes closed — verified against a
+token that appears nowhere in the tree, which matters below.
+
+**`R15-F1` (BLOCKER) — the documents said 8 of 17 and the command prints 9 of
+17.** The challenger ran it three ways to rule out its own copy: a pristine
+checkout, a scratch copy, and an independent `git clone --no-hardlinks` at the
+full SHA. All three printed 9. The sentence beside the command claimed the
+number was "reproducible rather than asserted", and it was not.
+
+**AND THE CAUSE WAS NOT A RETYPED NUMBER.** That matters, because the fix for a
+retyped number is care and the fix for this is code. The number was measured —
+on this tree, where `prep/phase11/harness/__pycache__/check_fenced_figures.cpython-313.pyc`
+was sitting, **gitignored, so invisible to `git status`**. A `.pyc` carries its
+module's string constants, so that file re-admitted **this checker's own prose**
+into the haystack, including the token `rows=59` which the header quotes as an
+example of a moment-dependent figure. The scan excludes the checker by name,
+for exactly that reason — "a token quoted in this file's own prose proves
+nothing" — and **the bytecode cache defeated the exclusion.** Measured both
+ways on the committed tree: with the cache present, 8; with it removed, 9,
+which is what three clean checkouts say.
+
+**So this is a fail-open, and the more serious half of the finding.** The
+gate's verdict depended on whether anyone had ever imported the module, and a
+figure that reds for every reader passed for its author. `haystack_files()`
+now excludes `__pycache__`, `.pyc`/`.pyo`/`.so`/`.o`, and this file by **stem**
+rather than by basename, and the run prints the haystack's inventory so the
+verdict names its own input. A number generated into the document would not
+have caught this on its own: generation on this tree would have written 8.
+
+**THE COORDINATOR'S RULING, IMPLEMENTED: a figure this instrument produces is
+GENERATED INTO the document, or it is not written at all.** Each sits between
+markers naming the generator and its command; `--regenerate` rewrites the
+blocks; `--check-blocks` refuses if a block differs from a fresh run **or if
+the generator's own sentence appears anywhere outside its block**; and the
+proof script runs it at step `0c` beside the figure scan, reporting
+`EXIT_GENERATED_BLOCKS`. Typing one of these numbers is now impossible rather
+than discouraged, which is the only form of the rule that survives six rounds.
+The counts in this section and the two blocks in §7.14 are generated:
+
+<!-- BEGIN GENERATED arm-counts: python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts -->
+
+```text
+40 catch arms, 15 skip arms, 2 pass arms, 3 others
+```
+
+<!-- END GENERATED arm-counts -->
+
+**What is enrolled, exactly**, because a net is read as covering the variants of
+what it names: the three figures **this** instrument produces — the guard
+matrix, the arm counts, the false-positive surface. The other instruments'
+figures (`121 cases`, the race counts, the digests) are not enrolled; they are
+pinned by the committed run evidence, and enrolling them is a change to those
+instruments rather than to this one. **Two bounds are disclosed rather than
+hidden:** a figure describing a PAST head cannot be generated by the present
+instrument at all, so §7.13's historical counts stay in prose, pinned by that
+head's committed evidence; and the enrolment check matches the generators' own
+English sentences, so the Arabic report must not quote these figures
+numerically, and §٢ش points at this block instead of restating it.
+
+**`R15-S1` (`P2`) — the identity test was bounded by sixteen hand-written
+lines, which is a hand-written completeness claim again.** The challenger added
+ten unconditional transformations to `_strip`, one per copy. Two were caught; **eight
+hid**: single quotes, double quotes, `+`, Devanagari digits, an en dash, a
+curly apostrophe, a non-breaking space, and `s.replace(";", "")` — which came
+back as no difference at all, because no probe line contains a semicolon. A
+negative result from an attack set proves only the set, and that is this
+project's own rule.
+
+So the claim is no longer bounded by a list of lines. **The transformer's own
+source is parsed**, and every statement that rebinds the subject must sit
+inside an `if "<name>" not in skip:` branch; the only exception is the first
+statement, which binds the subject to the untransformed input and is checked to
+be exactly that. All ten planted transformations are refused. **The keys the
+parse finds are compared with the string constants of the compiled function**,
+so a source file that has drifted from what is running is a failure and not a
+pass — deriving a subject set from a representation the subject can alter is a
+mistake this phase has already made once.
+
+**That check immediately rejected my own `_strip`.** Its leading and trailing
+strippers were a loop over a table of (name, pattern) pairs, so the guard name
+was a variable and the parse could not read it. **An indirection the parse
+cannot see is an indirection something can hide in**, so they are written out
+one statement per guard with the name as a literal, and the tables are gone.
+**Its own bound, stated:** this proves every transformation is behind a NAMED
+branch. It does not prove the name is the RIGHT one — a transformation
+smuggled into an existing guard's branch is guarded, and nothing here compares
+a transformation to the arm that is supposed to measure it. `PROVENANCE` is the
+half of that which is mechanisable.
+
+**`R15-S2` (`P2`) — the one structural gap the computed matrix could not see.**
+The matrix reported the dash-marker guard measured, and it was: the arm named
+for the finding flipped when the guard went. But the arm carried `-- figure`
+with the marker first, while the finding was about `note -- figure` with text
+BEFORE it — and that still escaped, because the comment strip **deleted** from
+the marker to the end of the line, revealing a figure in the leading form and
+deleting one in the trailing form. The matrix proves every guard load-bearing
+and no guard unnamed; **nothing in it compares an arm to the finding it is
+named for.**
+
+The deletion is replaced by a **split**: a `--` marker splits the line and
+whatever sits on either side is weighed on its own, which cannot be asymmetric.
+And each arm that names a round's finding now records that finding's own quoted
+line, with the selftest asserting the arm's body IS that line; an arm whose
+label names a finding with no provenance entry **fails**. Where a finding
+described a shape rather than quoting a line, the entry says so, so the gap is
+visible rather than absent.
+
+**`R15-S3` (`P3`) — Devanagari, Bengali and Thai digits escaped**, and naming
+three more families would have left a fourth. `unicodedata.digit` answers for
+every character Unicode calls a decimal digit, so the guard covers the category
+and the three named families are arms rather than branches.
+
+**`R15-S4` (`P3`), and the challenger's own near-miss, recorded as its.** The
+run log committed by the previous commit contains the selftest's output, which
+contains `fabricated_count=999` — the token every round has used for its
+fabricated figure — so from that commit the token passed in any document. The
+challenger's first attempt at two of its arms used that key, came back clean,
+and it was one step from reporting two escapes that were not there; it caught
+itself by reading what the stripper returned instead of trusting the exit code,
+re-ran the battery against a token nothing emits, and reported the near-miss
+rather than fixing it quietly. **A planted token is now never evidence of
+itself**, derived by running the matcher over the arm bodies rather than by
+keeping a second list beside them. The coordinator's ruling says to exclude the
+selftest output by exact name; excluding the whole run log by filename would
+throw away the real evidence in it, so the exclusion is by exact TOKEN name,
+which is what the arms plant and all they plant.
+
+**Also settled:** the `__pycache__` the challenger saw in its own haystack was
+not its artefact alone, and it is now excluded for both of us.
+
+**Still disclosed, not closed:** the substring haystack; a non-numeric,
+non-boolean value shown as output is deliberately not a candidate; the two
+exempted literals; the enrolment and historical bounds named above; a
+transformation smuggled into an existing guard's branch; and the arm's second
+direction stays a rule.
+
+**EVIDENCE AT THIS HEAD.** The run is
+`prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND15.txt`, run
+`p11-20261019T093455Z-568`: Pack A 121 ×2 and Pack B 53 ×2 with 0 failed, 13
+races with 0 findings, 80 frozen entries and 0 digest mismatches, every
+`EXIT_*` 0 — including the new `EXIT_GENERATED_BLOCKS` beside
+`EXIT_FENCED_FIGURES` at step `0c` — on PostgreSQL 16.15 at `en_US.utf8` with
+both roles `NOSUPERUSER NOBYPASSRLS`. The harness digest moves to
+`be61730f…`; the pack digests do not move. That run's tree was dirty, because
+the evidence of a commit cannot be committed before it, and the clean-tree
+re-run at the pushed SHA is published beside it. The historical red proof over
+`51686d9` was re-run again under this design, and the challenger's own final
+plants — a figure behind a marker with text before it, and a Devanagari
+figure, which produced a green run with two fabricated figures in the owner's
+document at `3838711` — are each named and refused here.
+
+**A SIXTEENTH round is owed** narrow on `3838711..HEAD`, with the coordinator
 diff review after it. **`24f6ebe` is still the last fully signed head**, and
 nothing in this phase is self-signed.
 

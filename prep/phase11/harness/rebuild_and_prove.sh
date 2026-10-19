@@ -94,6 +94,19 @@ if [ $RC_FIGURES -ne 0 ]; then
   echo "with no instrument behind it. Refusing to run."
   exit $RC_FIGURES
 fi
+# And the figures THIS instrument produces are generated into the documents,
+# never typed: two rounds in a row were rejected over a number written beside
+# the command that prints it. A block that differs from a fresh run, or one of
+# their sentences written outside a block, stops the run here.
+python3 -I $H/check_fenced_figures.py --check-blocks
+RC_BLOCKS=$?
+if [ $RC_BLOCKS -ne 0 ]; then
+  echo "A generated figure block in a document of this phase disagrees with a fresh "
+  echo "run of its generator (exit 1), or nothing is enrolled at all (exit 2). Run "
+  echo "\`python3 -I $H/check_fenced_figures.py --regenerate\` and commit what it "
+  echo "prints. Refusing to run."
+  exit $RC_BLOCKS
+fi
 echo
 
 # ── 1. the database ─────────────────────────────────────────────────────────
@@ -300,6 +313,7 @@ echo "EXIT_PROOFS_A     : $RC_PROOFS  (prep/phase11/harness/proofs.py)"
 echo "EXIT_PROOFS_B     : $RC_B  (prep/phase11/harness/proofs_b.py)"
 echo "EXIT_PROOFS_A_RUN2: $RC_PROOFS2  (the same file, the same database -- idempotence)"
 echo "EXIT_PROOFS_B_RUN2: $RC_B2  (the same file, the same database -- idempotence)"
+echo "EXIT_GENERATED_BLOCKS: $RC_BLOCKS  (prep/phase11/harness/check_fenced_figures.py --check-blocks, run at step 0c beside the figure scan)"
 echo "EXIT_FENCED_FIGURES: $RC_FIGURES  (prep/phase11/harness/check_fenced_figures.py, run at step 0c: after the cluster is up, before the database is recreated)"
 echo "EXIT_RACES        : $RCR  (prep/phase11/harness/races.py)"
 echo "EXIT_RACES_B      : $RCRB  (prep/phase11/harness/races_b.py)"
