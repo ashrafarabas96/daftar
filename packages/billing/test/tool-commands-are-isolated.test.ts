@@ -71,7 +71,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 
 const REPO = join(__dirname, '..', '..', '..');
 const PACK = process.env.P5_PACK_DIR ?? '/mnt/project-files/phase5';
@@ -938,6 +938,10 @@ describe('every written invocation of the pack tools is isolated', () => {
     // records themselves and the fix was to declare the block: an exemption
     // owes three things, and a quotation block had none of them.
     const dir = mkdtempSync(join(tmpdir(), 'f61q-'));
+    // Registered at creation, not at the end: a FAILING arm used to leak
+    // its scratch directory, and for `f61-` that meant a live shim sitting
+    // in /tmp until someone removed it by hand.
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
     const marker = join(dir, 'MARKER-QUOTED');
     const shim = join(dir, 'python3');
     writeFileSync(shim, `#!/bin/sh\nprintf executed-from-inside-a-quote > ${marker}\necho 1\n`);
@@ -988,8 +992,6 @@ describe('every written invocation of the pack tools is isolated', () => {
     const deleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*false\)/g) ?? []).length;
     expect(honouring, 'the live wrapper that honours the declaration is no longer the only one').toBe(1);
     expect(deleting, 'a second caller deletes the declaration recognition: it must be an arm, counted here').toBe(1);
-
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('holds over the pack documents this author owns, when the pack is present', () => {
@@ -1108,6 +1110,10 @@ describe('every written invocation of the pack tools is isolated', () => {
     // which both scans treat as "continue". So the deletion test is that
     // `readable` does NOT return null here.
     const dir = mkdtempSync(join(tmpdir(), 'f57-'));
+    // Registered at creation, not at the end: a FAILING arm used to leak
+    // its scratch directory, and for `f61-` that meant a live shim sitting
+    // in /tmp until someone removed it by hand.
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
     const file = join(dir, 'doc.md');
     writeFileSync(file, `\u0000python3 tools/manifest-digests.py --check\n`);
     const text = readable(file);
@@ -1118,7 +1124,6 @@ describe('every written invocation of the pack tools is isolated', () => {
     const plain = join(dir, 'plain.md');
     writeFileSync(plain, 'python3 -I tools/manifest-digests.py --check\n');
     expect(typeof readable(plain)).toBe('string');
-    rmSync(dir, { recursive: true, force: true });
     // Nothing is exempt today: measured, neither the repository walk nor the
     // pack holds a NUL byte, so an entry here would be paying for nothing.
     expect(EXEMPT_BINARIES.size, 'a binary exemption exists: it must be named with a reason and justified in the round that adds it').toBe(0);
@@ -1339,6 +1344,10 @@ describe('every written invocation of the pack tools is isolated', () => {
     // arms pass only if the refusal is NAMED and the marker file is ABSENT:
     // a red that arrives after the payload ran is not a defence.
     const dir = mkdtempSync(join(tmpdir(), 'f61-'));
+    // Registered at creation, not at the end: a FAILING arm used to leak
+    // its scratch directory, and for `f61-` that meant a live shim sitting
+    // in /tmp until someone removed it by hand.
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
     const suiteMarker = join(dir, 'MARKER-SUITE');
     const shimMarker = join(dir, 'MARKER-SHIM');
     const shimDir = join(dir, 'shimdir');
@@ -1392,7 +1401,6 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(verdictFor('shimdir/python3', ' ').refusal).toContain('REFUSED-UNCLASSIFIABLE-INTERPRETER');
     expect(existsSync(suiteMarker), 'a refusal still executed the payload').toBe(false);
     expect(existsSync(shimMarker), 'a refusal still ran the shim').toBe(false);
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('F-61: the allow-list refuses every form either reviewer named, by name', () => {
