@@ -36,6 +36,7 @@
  * — a command inside a comment or a docstring is exactly what F-50 was, so
  * stripping comments would strip the defect.
  */
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -94,6 +95,63 @@ const looksLikeReviewer = (): RegExp => {
   }
   return new RegExp(pattern);
 };
+
+/**
+ * ROUND 31, THE CHALLENGER'S B-12 (P1, blocking), which rejected `bc81b17` and
+ * cost it its own `bcf8084` signature.
+ *
+ * The B-10 remedy moved the hole from SHAPE to TIME. An enumerated list cannot
+ * name a report that does not exist yet, and a reviewer's report lands in the
+ * pack without any commit: measured on byte copies of the live pack at
+ * `b2e723c`, one file apart, 49 files each —
+ *
+ *   control  (the report as its reviewer delivered it)   -> 6 passed, rc 0
+ *   mutation (one plain ```text block added to the SAME
+ *             report, which is what an attack transcript
+ *             looks like when the reviewer does not know
+ *             this law's fence tag)                      -> 1 failed, rc 1
+ *
+ * — so a reviewer writing a report reds `packages/billing`, and the only
+ * clearance is the author amending the list afterwards. A gate over bytes
+ * nobody committed is not this package's gate.
+ *
+ * The coordinator ruled: derive the set from the manifest's reviewer-owned
+ * marker row instead, "which exists the moment the file lands". Measured, it
+ * does not — the marker is written BY the same list, and the seal refuses
+ * while a reviewer-shaped name is unenumerated:
+ *
+ *   $ python3 -I tools/manifest-digests.py --dir <live pack> --check
+ *   UNENUMERATED reviewer report: P5-CHALLENGE-bc81b17.md — add it to
+ *     REVIEWER_REPORTS by its exact name; it is not exempt by looking like one
+ *   ABSENT from the table: P5-CHALLENGE-bc81b17.md
+ *   49 files, 48 rows, 2 problems
+ *   rc=1
+ *
+ * So the remedy is not a second source for the same fact. It is that the
+ * OBLIGATION MOVES rather than disappears: a reviewer-shaped document the list
+ * does not classify is not scanned as the author's — its content is none of
+ * this law's business, and the author must not edit a reviewer's frozen bytes
+ * — and instead this law requires the AUTHOR'S OWN SEAL to refuse it by its
+ * exact name. The red then means "the seal failed to refuse", which is an
+ * author's defect, and never "a reviewer wrote a transcript".
+ *
+ * Shape still exempts nothing. It routes the document to the instrument that
+ * fails closed BY EXACT NAME, and that instrument's refusal is asserted here,
+ * read from its MESSAGE. Published residual: enrolling a name in the shared
+ * list is the author's claim, in the diff, and no instrument here can read a
+ * document's authorship out of its bytes — an author document named in
+ * reviewer shape AND enumerated is outside both scans.
+ */
+const SEAL = join(__dirname, '..', 'tools', 'manifest-digests.py');
+
+/** The seal's own output over a pack, as a subprocess — never imported. */
+const sealOutput = (pack: string): string => {
+  const r = spawnSync('python3', ['-I', SEAL, '--dir', pack, '--check'], { encoding: 'utf8' });
+  return `${r.stdout ?? ''}${r.stderr ?? ''}`;
+};
+
+/** Does that output refuse THIS name as an unenumerated reviewer report? */
+const sealRefusesByName = (out: string, name: string): boolean => out.split('\n').some((l) => l.includes('UNENUMERATED reviewer report') && l.includes(name));
 
 const TOOLS_DIR = join(__dirname, '..', 'tools');
 /** This file, by its exact path from the repository root. */
@@ -386,30 +444,63 @@ describe('every written invocation of the pack tools is isolated', () => {
     const exempt = reviewerOwned();
     const shaped = looksLikeReviewer();
     const offences: string[] = [];
-    const unenumerated: string[] = [];
+    const unclassified: string[] = [];
     let quoted = 0;
     let mine = 0;
     for (const name of readdirSync(PACK)) {
       if (exempt.has(name)) continue;
+      // B-12. A reviewer-shaped name the list does not classify is NOT read
+      // here. F-53 had made the sentence true -- "unenumerated", not
+      // "author-owned" -- while leaving the red itself on the author's
+      // package, over bytes the author may not edit. Shape exempts nothing: it
+      // routes this name to the seal, whose refusal is asserted below.
+      if (shaped.test(name)) {
+        unclassified.push(name);
+        continue;
+      }
       const text = readable(join(PACK, name));
       if (text === null) continue;
       mine += 1;
       const [found, exempted] = offencesOutsideQuotedBlocks(name, text);
-      // F-53. A scanned file whose NAME has the reviewer shape is reported as
-      // what it is -- unenumerated -- not as the author's. Shape routes the
-      // sentence; only the list decides the exemption.
-      (shaped.test(name) ? unenumerated : offences).push(...found);
+      offences.push(...found);
       quoted += exempted;
+    }
+    // The obligation MOVES, it does not disappear: for every document this law
+    // declines to read, the author's own seal must refuse it by exact name.
+    if (unclassified.length > 0) {
+      const out = sealOutput(PACK);
+      const unrefused = unclassified.filter((n) => !sealRefusesByName(out, n));
+      expect(
+        unrefused,
+        'a reviewer-shaped pack document is in neither the shared list nor the seal refusals, so NOTHING classifies it: enrol it in tools/reviewer-reports.json by its EXACT name, and do NOT edit a reviewer frozen report',
+      ).toStrictEqual([]);
     }
     expect(mine, 'no author-owned document was read from the pack').toBeGreaterThan(0);
     expect(
       quoted,
       'no declared `f-50-quote` block was found: the documents stopped quoting the defect, so that exemption is dead and should be deleted rather than left standing',
     ).toBeGreaterThan(0);
-    expect(
-      unenumerated,
-      'UNENUMERATED reviewer report prints an un-isolated command: add it to tools/reviewer-reports.json by its EXACT name — it is not exempt by looking like one, and do NOT edit a reviewer’s frozen report to satisfy this law',
-    ).toStrictEqual([]);
     expect(offences, 'an author-owned pack document prints an un-isolated command, which is the half of F-50 that routes the reader').toStrictEqual([]);
+  });
+  it('reads the seal refusal by NAME, and a silent seal classifies nothing', () => {
+    // B-12's reader, armed sequentially rather than through a race: both of
+    // the tool's branches exit 1, so the exit code cannot be the arm -- the
+    // MESSAGE is, which is round 30's F-51 lesson applied to a new reader.
+    const real =
+      'UNENUMERATED reviewer report: P5-CHALLENGE-bc81b17.md \u2014 add it to REVIEWER_REPORTS by its exact name; it is not exempt by looking like one\nABSENT from the table: P5-CHALLENGE-bc81b17.md\n49 files, 48 rows, 2 problems';
+    expect(sealRefusesByName(real, 'P5-CHALLENGE-bc81b17.md')).toBe(true);
+    // By NAME: the phrase alone must not clear a different document, or one
+    // refusal would classify every unenumerated report at once.
+    expect(sealRefusesByName(real, 'P5-CHALLENGE-deadbee.md')).toBe(false);
+    // A seal that says nothing has classified nothing. This is the fail-open
+    // the arm exists for: if it returned true here, a pack document in neither
+    // the list nor the refusals would pass unread by anything.
+    expect(sealRefusesByName('', 'P5-CHALLENGE-bc81b17.md')).toBe(false);
+    expect(sealRefusesByName('48 files, 48 rows, 0 problems', 'P5-CHALLENGE-bc81b17.md')).toBe(false);
+    // And the name alone, without the refusal, is not a refusal.
+    expect(sealRefusesByName('ABSENT from the table: P5-CHALLENGE-bc81b17.md', 'P5-CHALLENGE-bc81b17.md')).toBe(false);
+    // The instrument this law delegates to must exist, as a file, where the
+    // delegation says it is -- a moved tool would make the delegation vacuous.
+    expect(existsSync(SEAL), `the seal this law delegates to is not at ${SEAL}`).toBe(true);
   });
 });
