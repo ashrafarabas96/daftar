@@ -279,7 +279,10 @@ function checkCurrency(manifest: string, root: string, dir: string, rounds: numb
     // list rather than the claim being narrowed. WHICH round was last is not
     // measurable from a directory of SHAs, so §1 states it nowhere and points
     // at §8, where DIRECTION 4 checks every SHA named against a report.
-    { what: 'challenge rounds with a report in the pack', claimed: claim(/\*\*(\d+) جولة/), measured: rounds },
+    // Named for what it MEASURES: report FILES in the pack, keyed on filename.
+    // It is not a count of rounds that happened, and §1 says so — a listed
+    // placeholder would inflate both alike (round 15, F-R15-05).
+    { what: 'challenge round REPORT FILES in the pack', claimed: claim(/\*\*(\d+) جولة/), measured: rounds },
   ];
   for (const x of pairs) {
     if (x.claimed === null) {

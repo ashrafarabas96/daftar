@@ -101,9 +101,23 @@ export const RUNTIME_MARKERS =
  * fallback for an instrument that prints no headline, and `VERDICT_LINE` stays
  * the union of the two for any reader that wants «did it reach either».
  */
-export const VERDICT_HEADLINE = /^(?:EXIT\s+\d+\s+[—-]|(?:PHASE\s+15|P15)[^:\n]*:\s*(?:PASS|FAIL|VERIFIED|UNMEASURED|REJECT|INVALID MEASUREMENT))/m;
+/**
+ * ONE SPELLING OF «WHO IS SPEAKING», SHARED BY ALL THREE PATTERNS (round 15,
+ * F-R15-01). Round 14 widened the headline pattern to reach `load-harness.ts`'s
+ * «P15 LOAD <profile>: <verdict>» and left `CONTENTION_VERDICT` on the narrower
+ * `PHASE 15 …` prefix, so the two stopped meeting: a load run that declared
+ * INVALID MEASUREMENT reached its headline, was recognised as a headline, and
+ * was then tested against a pattern that could not match it — «MEASURED, THEN
+ * EXITED NON-ZERO … so the code is its verdict», for a second round running,
+ * in the instrument round 14 had named by name. Two patterns that must agree
+ * about who speaks are now built from ONE fragment, so widening one widens the
+ * other and they cannot drift apart again.
+ */
+const SPEAKER = String.raw`(?:PHASE\s+15|P15)[^:\n]*`;
 
-export const MACHINE_SUMMARY = /^(?:PHASE\s+15|P15)[^:\n]*:\s*\{/m;
+export const VERDICT_HEADLINE = new RegExp(`^(?:EXIT\\s+\\d+\\s+[—-]|${SPEAKER}:\\s*(?:PASS|FAIL|VERIFIED|UNMEASURED|REJECT|INVALID MEASUREMENT))`, 'm');
+
+export const MACHINE_SUMMARY = new RegExp(`^${SPEAKER}:\\s*\\{`, 'm');
 
 export const VERDICT_LINE = new RegExp(`(?:${VERDICT_HEADLINE.source})|(?:${MACHINE_SUMMARY.source})`, 'm');
 
@@ -123,7 +137,7 @@ export const VERDICT_LINE = new RegExp(`(?:${VERDICT_HEADLINE.source})|(?:${MACH
  * verdict, and it is classified as one; only a run whose verdict line IS the
  * contention headline did not measure.
  */
-export const CONTENTION_VERDICT = /^(?:PHASE\s+15\s+[A-Z0-9 /-]+:\s*)?INVALID MEASUREMENT\b/;
+export const CONTENTION_VERDICT = new RegExp(`^(?:${SPEAKER}:\\s*)?INVALID MEASUREMENT\\b`);
 
 export function reachedVerdict(r: Classifiable): string | null {
   const lines = r.output.split('\n').map((l) => l.trim());
@@ -149,8 +163,13 @@ export function machineResult(out: string): string | null {
   if (line === undefined) return null;
   try {
     const parsed: unknown = JSON.parse(line.slice(line.indexOf('{')));
-    const value = (parsed as { result?: unknown }).result;
-    return typeof value === 'string' ? value : null;
+    // The two keys this pack's instruments declare an outcome under:
+    // `pitr-proof.ts` writes `result`, `load-harness.ts` writes `verdict`.
+    // Reading only the first is how a load run's INVALID MEASUREMENT fell
+    // through the fallback as well as past the headline (round 15, F-R15-01).
+    const record = parsed as { result?: unknown; verdict?: unknown };
+    for (const value of [record.result, record.verdict]) if (typeof value === 'string') return value;
+    return null;
   } catch {
     return null;
   }

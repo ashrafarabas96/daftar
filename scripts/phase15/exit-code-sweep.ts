@@ -113,6 +113,7 @@ function apparatusIsInert(dir: string): string | null {
     if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);
     if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);
   }
+  for (const id of requireBound(sf)) imported.add(id);
   const calls = producerCalls(sf, APPARATUS);
   if (imported.size > 0)
     return `${APPARATUS} imports spawnSync as a VALUE (as ${[...imported].sort().join(', ')}), so it can run commands and its exemption is withdrawn`;
@@ -492,9 +493,47 @@ function callsTo(sf: ts.SourceFile, a: Aliases, token: string, net: boolean): ts
  * producer, over-reporting is noise and under-reporting is a fail-open, so the
  * two are not symmetric and the union is the only safe shape.
  */
+/**
+ * `spawnSync` BOUND THROUGH A CALL RATHER THAN AN IMPORT (round 15, F-R15-02).
+ *
+ * `const { spawnSync: run } = createRequire(import.meta.url)('child_process')`
+ * binds the producer under a local name with no import declaration anywhere,
+ * so the import scan found nothing and `run(…)` — a bare identifier call — was
+ * invisible. The net below catches every `<anything>.spawnSync(…)`, so only
+ * the DESTRUCTURED form was missing, and it was missing everywhere, not only
+ * in the apparatus.
+ *
+ * The callee of the loading call is deliberately not checked: `require`,
+ * `createRequire(…)(…)`, and a local alias of either are all the same act, and
+ * the pack's own rule from F-R13-01 is that over-reporting here is noise while
+ * under-reporting is a fail-open. What IS checked is the argument — a string
+ * naming `child_process` on either spelling.
+ */
+function requireBound(sf: ts.SourceFile): ReadonlySet<string> {
+  const ids = new Set<string>();
+  const walk = (n: ts.Node): void => {
+    // `unwrap` first: `req('child_process') as typeof import('node:child_process')`
+    // is an AsExpression, and reading the initializer raw missed exactly the
+    // plant this rule exists for — measured, X21 NOT RED.
+    if (ts.isVariableDeclaration(n) && n.initializer !== undefined && ts.isCallExpression(unwrap(n.initializer))) {
+      const init = unwrap(n.initializer) as ts.CallExpression;
+      const arg = init.arguments[0];
+      if (arg !== undefined && ts.isStringLiteral(arg) && /^(?:node:)?child_process$/.test(arg.text) && ts.isObjectBindingPattern(n.name))
+        for (const e of n.name.elements) {
+          const key = e.propertyName ?? e.name;
+          if (ts.isIdentifier(key) && key.text === 'spawnSync' && ts.isIdentifier(e.name)) ids.add(e.name.text);
+        }
+    }
+    n.forEachChild(walk);
+  };
+  walk(sf);
+  return ids;
+}
+
 function producerCalls(sf: ts.SourceFile, file: string): ts.CallExpression[] {
   const ids = new Set<string>(['spawnSync']);
   for (const m of ['node:child_process', 'child_process']) for (const id of aliasesOf(sf, 'spawnSync', m, file).ids) ids.add(id);
+  for (const id of requireBound(sf)) ids.add(id);
   return callsTo(sf, { ids, ns: new Set<string>() }, 'spawnSync', true);
 }
 
@@ -1372,6 +1411,33 @@ const PLANTS: readonly Plant[] = [
       r.unchecked.some((s) => s.file === 'planted-x20.ts')
         ? null
         : 'a call was credited with the laws of a same-named helper that is not in scope where the call is. A callee must be RESOLVED to the declaration the language would bind it to; a name match inside one file is the cross-file fallback again, one module in',
+  },
+  {
+    id: 'X21',
+    what: "round 15's F-R15-02 — the producer bound through `createRequire` and renamed, with no import declaration to follow",
+    plant: (dir) => {
+      const f = join(dir, 'planted-x21.ts');
+      writeFileSync(
+        f,
+        [
+          "import { createRequire } from 'node:module';",
+          'const req = createRequire(__filename);',
+          '// No import declaration binds spawnSync here, and the call is a bare',
+          '// identifier, so the net over `<expr>.spawnSync(…)` does not see it',
+          '// either. The exit code is thrown away.',
+          "const { spawnSync: run } = req('child_process') as typeof import('node:child_process');",
+          'export function head(): string {',
+          "  const r = run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x21.ts')
+        ? null
+        : 'a discarding call was hidden by binding the producer through a call instead of an import. Following import declarations is not enough: `require`, `createRequire` and a local alias of either bind the same function under any name the file likes',
   },
   {
     id: 'X9',

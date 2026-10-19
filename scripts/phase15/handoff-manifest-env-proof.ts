@@ -43,6 +43,11 @@ const PINNED = `  env.PATH = SAFE_PATH;
   const binary = gitBinary();`;
 /** What it replaced: the binary taken from whatever PATH the caller supplied. */
 const FROM_PATH = "  const binary: string | null = 'git';";
+/** Round 15's F-R15-03: the two halves of that guard, deleted ONE AT A TIME. */
+const PIN_BINARY = '  const binary = gitBinary();';
+const PIN_BINARY_WITHOUT = "  const binary: string | null = 'git';";
+const PIN_PATH = '  env.PATH = SAFE_PATH;';
+const PIN_PATH_WITHOUT = "  // the caller's PATH is left in place, which is the round-14 shape";
 
 interface Run {
   /** Named `status` so this pack's own exit-code sweep can see it read. */
@@ -127,9 +132,13 @@ function main(): number {
   const shimDir = plantGitOnPath(decoy);
   const stripped = join(ROOT, 'scripts/phase15', `.verify-handoff-manifest-unscrubbed-${String(process.pid)}.tmp.ts`);
   const unpinned = join(ROOT, 'scripts/phase15', `.verify-handoff-manifest-unpinned-${String(process.pid)}.tmp.ts`);
+  const binaryOnly = join(ROOT, 'scripts/phase15', `.verify-handoff-manifest-binary-only-${String(process.pid)}.tmp.ts`);
+  const pathOnly = join(ROOT, 'scripts/phase15', `.verify-handoff-manifest-path-only-${String(process.pid)}.tmp.ts`);
   const sweep = (): void => {
     rmSync(stripped, { force: true });
     rmSync(unpinned, { force: true });
+    rmSync(binaryOnly, { force: true });
+    rmSync(pathOnly, { force: true });
     rmSync(shimDir, { recursive: true, force: true });
     rmSync(decoy, { recursive: true, force: true });
   };
@@ -145,6 +154,16 @@ function main(): number {
     const unscrubbed = runGate(stripped, { GIT_DIR: join(decoy, '.git'), GIT_WORK_TREE: decoy });
     writeFileSync(unpinned, source.replace(PINNED, FROM_PATH));
     const unpinnedRun = runGate(unpinned, { PATH: hijackedPath });
+    // EACH HALF ON ITS OWN (round 15, F-R15-03). The deletion above removes
+    // two lines together, which cannot say what either one does. These two say
+    // it: the claim being measured is not that each half is load-bearing — it
+    // is that the two are REDUNDANT, so either one alone still refuses the
+    // planted git. If one of them does not, that claim is false and this goes
+    // red rather than printing defence in depth it does not have.
+    writeFileSync(binaryOnly, source.replace(PIN_BINARY, PIN_BINARY_WITHOUT));
+    const binaryOnlyRun = runGate(binaryOnly, { PATH: hijackedPath });
+    writeFileSync(pathOnly, source.replace(PIN_PATH, PIN_PATH_WITHOUT));
+    const pathOnlyRun = runGate(pathOnly, { PATH: hijackedPath });
 
     const problems: string[] = [];
     // The gate's own codes are 0 and 1. Anything else is the runner failing to
@@ -164,6 +183,8 @@ function main(): number {
     if (unscrubbed.status !== 0 && unscrubbed.status !== 1) bad('the unscrubbed guard-deletion copy', unscrubbed.status);
     if (onPath.status !== 0 && onPath.status !== 1) bad('the run with a git planted in PATH', onPath.status);
     if (unpinnedRun.status !== 0 && unpinnedRun.status !== 1) bad('the unpinned guard-deletion copy', unpinnedRun.status);
+    if (binaryOnlyRun.status !== 0 && binaryOnlyRun.status !== 1) bad('the copy with only the pinned binary removed', binaryOnlyRun.status);
+    if (pathOnlyRun.status !== 0 && pathOnlyRun.status !== 1) bad('the copy with only the replaced PATH removed', pathOnlyRun.status);
     if (truth === null)
       problems.push('the gate printed no DIRECTION 3 measurement on an untouched run, so there is no baseline and nothing below was measured');
     else {
@@ -194,8 +215,19 @@ function main(): number {
           `${what} STILL read this repository, so that guard is not what makes the arms above pass and they credit the behaviour to the wrong code`,
         );
     };
+    /** A half that is claimed to hold on its own must still read this repository. */
+    const holds = (what: string, got: string | null): void => {
+      if (truth === null) return;
+      if (got === null) problems.push(`${what} printed no measurement at all, so this half is UNMEASURED, not holding`);
+      else if (got !== truth)
+        problems.push(
+          `${what} read «${got}» against «${truth}»: the two halves of this guard are not redundant, and one of them alone lets the caller supply the instrument`,
+        );
+    };
     const forged = measured(unscrubbed.out);
     const forgedPath = measured(unpinnedRun.out);
+    holds('with ONLY the pinned binary removed the gate', measured(binaryOnlyRun.out));
+    holds('with ONLY the replaced PATH removed the gate', measured(pathOnlyRun.out));
     deletion('with the scrub removed the gate', forged);
     deletion('with the binary taken from PATH the gate', forgedPath);
 
@@ -211,6 +243,8 @@ function main(): number {
     console.log(
       `  the binary taken from PATH ${String(forgedPath)}  ${truth !== null && forgedPath !== null && forgedPath !== truth ? '← the forged reading, as round 14 measured it' : ''}`,
     );
+    console.log(`  only the pin removed       ${String(measured(binaryOnlyRun.out))}  ← the replaced PATH alone still refuses the planted git`);
+    console.log(`  only the PATH removed      ${String(measured(pathOnlyRun.out))}  ← the pinned binary alone still refuses it`);
     console.log('');
     if (problems.length > 0) {
       for (const p of problems) console.log(`  FINDING: ${p}`);
@@ -219,9 +253,11 @@ function main(): number {
       return 1;
     }
     console.log("The caller's environment can choose neither this gate's repository nor the git that");
-    console.log('  reads it, a read that failed is refused by name rather than counted as zero, and both');
-    console.log('  guards are load-bearing: removing either one brings a forged reading back, and a');
-    console.log('  deletion that measured nothing is reported as UNMEASURED rather than counted as proof.');
+    console.log('  reads it, and a read that failed is refused by name rather than counted as zero. The');
+    console.log('  scrub and the pinning are each load-bearing: removing either brings a forged reading');
+    console.log('  back. Inside the pinning the two lines are REDUNDANT, and that is measured here rather');
+    console.log('  than claimed — either one alone still refuses the planted git. A deletion that measured');
+    console.log('  nothing is reported as UNMEASURED rather than counted as proof.');
     console.log('  Nothing outside a throwaway directory was written.');
     return 0;
   } finally {

@@ -61,6 +61,7 @@ const INERT_AST: readonly string[] = [
   "    if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);",
   '    if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);',
   '  }',
+  '  for (const id of requireBound(sf)) imported.add(id);',
   '  const calls = producerCalls(sf, APPARATUS);',
 ];
 /** The round-13 form, which named one spelling and read the text. */
@@ -69,6 +70,34 @@ const INERT_REGEX: readonly string[] = [
   '  const imported = valueImport ? new Set<string>([`spawnSync`]) : new Set<string>();',
   '  const calls: readonly unknown[] = [];',
 ];
+
+/**
+ * THE THIRD GUARD: A PRODUCER BOUND THROUGH A CALL (round 15, F-R15-02).
+ *
+ * `const { spawnSync: run } = createRequire(…)('child_process')` binds the
+ * producer with no import declaration anywhere, so the import scan found
+ * nothing and a bare `run(…)` that discarded its code was invisible — in any
+ * pack file, not only in the apparatus.
+ */
+const REQUIRE_BOUND = '  for (const id of requireBound(sf)) ids.add(id);';
+const REQUIRE_BLIND = '  // the require-bound producers are not added, which is the round-14 shape';
+const REQUIRE_PLANT = 'planted-require-bound.ts';
+
+function plantRequireBound(dir: string): void {
+  writeFileSync(
+    join(dir, REQUIRE_PLANT),
+    [
+      "import { createRequire } from 'node:module';",
+      'const req = createRequire(__filename);',
+      "const { spawnSync: run } = req('child_process') as typeof import('node:child_process');",
+      'export function head(): string {',
+      "  const r = run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+      "  return (r.stdout ?? '').trim();",
+      '}',
+      '',
+    ].join('\n'),
+  );
+}
 
 /** Give a copy of the apparatus a real import and a real discarded exit code. */
 function plantIntoApparatus(pack: string, specifier: string): void {
@@ -176,9 +205,14 @@ function main(): number {
     console.log('');
     // ── THE APPARATUS EXEMPTION, ON BOTH SPELLINGS ────────────────────────
     const strippedInert = join(tmp, 'sweep-with-the-old-inertness-check.ts');
-    if (!INERT_AST.every((l) => me.includes(l))) {
-      console.log('  the apparatus inertness check is not written in the shape this proof removes, so the');
-      console.log('  second half measures nothing. It must be re-anchored before it is read again.');
+    // THE WHOLE BLOCK, not line by line (round 15, measured on this proof).
+    // Checking each line separately passed while the lines had drifted apart,
+    // so `replace()` found nothing, the "stripped" copy was byte-identical to
+    // the real sweep, and both arms agreed — a deletion proof that deleted
+    // nothing and reported the agreement as a result.
+    if (!me.includes(INERT_AST.join('\n'))) {
+      console.log('  the apparatus inertness check is not written, as ONE contiguous block, in the shape');
+      console.log('  this proof removes, so the second half measures nothing. Re-anchor it before reading.');
       console.log('');
       console.log('EXIT 2 — UNMEASURED.');
       return 2;
@@ -215,6 +249,38 @@ function main(): number {
     console.log('');
     console.log('  THE APPARATUS EXEMPTION, MEASURED ON BOTH SPELLINGS OF THE MODULE');
     for (const row of apparatusRows) console.log(row);
+    // ── A PRODUCER BOUND THROUGH A CALL, IN AN ORDINARY PACK FILE ─────────
+    if (!me.includes(REQUIRE_BOUND)) {
+      console.log('  the require-bound producer rule is not written in the shape this proof removes, so');
+      console.log('  the third section measures nothing. Re-anchor it before reading it again.');
+      console.log('');
+      console.log('EXIT 2 — UNMEASURED.');
+      return 2;
+    }
+    const strippedRequire = join(tmp, 'sweep-without-require-bound.ts');
+    writeFileSync(strippedRequire, me.replace(REQUIRE_BOUND, REQUIRE_BLIND));
+    const reqPack = join(tmp, 'pack-require-bound');
+    cpSync(join(ROOT, 'scripts/phase15'), reqPack, { recursive: true });
+    plantRequireBound(reqPack);
+    const reqReal = sweepFile(SWEEP, reqPack, REQUIRE_PLANT);
+    const reqWithout = sweepFile(strippedRequire, reqPack, REQUIRE_PLANT);
+    console.log('');
+    console.log('  A PRODUCER BOUND THROUGH `createRequire` AND RENAMED, IN AN ORDINARY PACK FILE');
+    console.log(
+      `  real sweep      exit ${String(reqReal.code)}  ${reqReal.ran ? (reqReal.reported ? 'REPORTED the discarded code' : 'said nothing') : 'did not run'}`,
+    );
+    console.log(
+      `  rule removed    exit ${String(reqWithout.code)}  ${reqWithout.ran ? (reqWithout.reported ? 'REPORTED it anyway' : 'said nothing — so that rule is what catches it') : 'did not run'}`,
+    );
+    if (!reqReal.ran) problems.push(`the real sweep did not run over the require-bound plant (exit ${String(reqReal.code)}), so its silence says nothing`);
+    else if (!reqReal.reported)
+      problems.push(
+        'a bare call to a producer bound through `createRequire` discarded its exit code and the sweep said nothing: a fail-open in the rule that enumerates producers',
+      );
+    if (!reqWithout.ran)
+      problems.push(`the sweep with the require-bound rule removed did not run (exit ${String(reqWithout.code)}), so that deletion is UNMEASURED`);
+    else if (reqWithout.reported) problems.push('the sweep with the require-bound rule REMOVED still reported the plant, so that rule is not what catches it');
+
     console.log('');
     if (problems.length > 0) {
       for (const p of problems) console.log(`  FINDING: ${p}`);
@@ -224,7 +290,9 @@ function main(): number {
     }
     console.log('The provenance requirement is load-bearing: deleting that one line makes the planted');
     console.log('  defect invisible, and restoring it makes it visible again. The apparatus exemption is');
-    console.log('  withdrawn on BOTH spellings of child_process, and the old check lost the bare one.');
+    console.log('  withdrawn on BOTH spellings of child_process, and the old check lost the bare one. A');
+    console.log('  producer bound through `createRequire` and renamed is enumerated, and is invisible');
+    console.log('  without the one line that enumerates it.');
     console.log('  Every plant and every run happens in a throwaway copy; neither this repository nor');
     console.log('  the pack is written to.');
     return 0;

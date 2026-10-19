@@ -77,6 +77,19 @@ const PITR = 'scripts/phase15/pitr-proof.ts';
 const PITR_MACHINE_LINE = 'console.log(`\\nP15_PITR_PROOF: ${JSON.stringify(summary)}`);';
 const PITR_HEADLINE_LINE = 'console.log(`PHASE 15 PITR PROOF: ${summary.result}`);';
 
+/**
+ * The same obligation for the load harness, which round 15 found still
+ * misclassified: O3g planted its shape with a FAIL in it and was therefore
+ * green on a classifier that could not read its INVALID MEASUREMENT at all.
+ */
+const LOAD = 'scripts/phase15/load-harness.ts';
+const LOAD_MACHINE_LINE = '`P15_LOAD: ${JSON.stringify({';
+const LOAD_HEADLINE_LINE = 'console.log(`P15 LOAD ${profile.id}: ${verdict} — ${because}`);';
+const LOAD_CONTENTION_VERDICT = "'INVALID MEASUREMENT': 3,";
+
+/** The record `load-harness.ts` prints, with the verdict this case needs in it. */
+const loadMachine = (verdict: string): string => `P15_LOAD: {"profile":"P15-LOAD-001","metric":"p95","samples":200,"verdict":"${verdict}"}`;
+
 /** The record `pitr-proof.ts` prints, with the verdict this case needs in it. */
 const pitrMachine = (result: string): string => `P15_PITR_PROOF: {"status":"PREPARED / NOT PROMOTED","part":104,"sha":"45cc461","result":"${result}"}`;
 
@@ -229,22 +242,52 @@ const CASES: readonly Case[] = [
   },
   {
     id: 'O3g',
-    what: 'CONTROL — the load harness shape: a machine record, then a headline that is not «PHASE 15 …»',
+    what: 'round 15 — the LOAD HARNESS declaring INVALID MEASUREMENT, in the shape it really prints it',
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
         entry,
         [
-          `console.log(${JSON.stringify('P15_LOAD: {"profile":"smoke","verdict":"FAIL","p95":41.2}')});`,
-          "console.log('P15 LOAD smoke: FAIL — p95 41.2ms over a 15ms bound');",
-          'process.exitCode = 1;',
+          `console.log(${JSON.stringify(loadMachine('INVALID MEASUREMENT'))});`,
+          "console.log('P15 LOAD P15-LOAD-001: INVALID MEASUREMENT — rule 2 fired: the host was contended during the window');",
+          'process.exitCode = 3;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /DID NOT MEASURE/,
+    why: 'round 14 widened the headline pattern to reach this instrument and left the contention pattern narrow, so its «I could not measure» was filed as «the code is its verdict» for a second round. The old O3g planted a FAIL here and was green over exactly that',
+  },
+  {
+    id: 'O3h',
+    what: 'CONTROL — the same load harness shape with a MEASURED failure in it',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          `console.log(${JSON.stringify(loadMachine('FAIL'))});`,
+          "console.log('P15 LOAD P15-LOAD-001: FAIL — p95 41.2ms over a 15ms bound');",
+          'process.exitCode = 2;',
           '',
         ].join('\n'),
       );
       return entry;
     },
     expect: /MEASURED, THEN EXITED NON-ZERO/,
-    why: '`load-harness.ts` prints the same record-then-headline shape, and its headline begins «P15 LOAD <profile>:», which the old pattern did not recognise at all — the record stood in for it there too',
+    why: 'the headline must still be recognised for the verdicts that ARE verdicts: a fix for the contention case that swallowed a measured failure would be the F-R12-03 defect arriving from the other side',
+  },
+  {
+    id: 'O3i',
+    what: 'round 15 — a LOAD record with no headline, declaring contention under the other key name',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(entry, [`console.log(${JSON.stringify(loadMachine('INVALID MEASUREMENT'))});`, 'process.exitCode = 3;', ''].join('\n'));
+      return entry;
+    },
+    expect: /DID NOT MEASURE/,
+    why: 'the record fallback must read the key the instrument actually writes: `pitr-proof.ts` declares its outcome under `result` and `load-harness.ts` under `verdict`, and a fallback that knows one of the two is a fallback for one instrument',
   },
   {
     id: 'O4',
@@ -289,7 +332,21 @@ function main(): number {
     console.log('EXIT 2 — UNMEASURED. A plant that claims a real shape and cannot find it measures nothing.');
     return 2;
   }
+  const load = readFileSync(join(ROOT, LOAD), 'utf8');
+  const loadMachineAt = load.indexOf(LOAD_MACHINE_LINE);
+  const loadHeadlineAt = load.indexOf(LOAD_HEADLINE_LINE);
+  if (loadMachineAt < 0 || loadHeadlineAt < 0 || loadMachineAt > loadHeadlineAt || !load.includes(LOAD_CONTENTION_VERDICT)) {
+    console.log('');
+    console.log(`  O3g and O3h claim to copy what ${LOAD} prints, and this is no longer what it prints:`);
+    console.log(`    machine record line  ${loadMachineAt < 0 ? 'NOT FOUND' : `at offset ${String(loadMachineAt)}`}`);
+    console.log(`    headline line        ${loadHeadlineAt < 0 ? 'NOT FOUND' : `at offset ${String(loadHeadlineAt)}`}`);
+    console.log(`    the verdict planted  ${load.includes(LOAD_CONTENTION_VERDICT) ? 'is still one of its own' : 'is NOT one of its own any more'}`);
+    console.log('');
+    console.log('EXIT 2 — UNMEASURED. A plant that claims a real shape and cannot find it measures nothing.');
+    return 2;
+  }
   console.log(`  anchored  ${PITR} still prints its machine record before its headline, which is the shape O3b plants.`);
+  console.log(`  anchored  ${LOAD} prints the same way and still declares INVALID MEASUREMENT, which is the shape O3g plants.`);
   console.log('');
 
   let failures = 0;
