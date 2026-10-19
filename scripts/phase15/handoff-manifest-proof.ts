@@ -437,12 +437,18 @@ const PLANTS: readonly Plant[] = [
         // must ACCEPT the forgery. If it refuses anyway, the flag is not what
         // catches this and arm 2's red would be attributed to the wrong guard.
         const gate = readFileSync(join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts'), 'utf8');
-        const flag = "['--no-replace-objects', '-c', 'core.quotePath=false', ...args]";
-        const envLine = "env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },";
+        // Re-anchored for round 13's F-R13-06, which rewrote this gate's
+        // environment handling: the variable is now set on a scrubbed env
+        // object rather than spread into an inherited one, and the argv
+        // carries an explicit `-C root`. The plant refuses rather than
+        // adapting silently when it cannot find both — which is how this
+        // staleness was caught, by the run and not by a reviewer.
+        const flag = "['--no-replace-objects', '-c', 'core.quotePath=false', '-C', root, ...args]";
+        const envLine = "  env.GIT_NO_REPLACE_OBJECTS = '1';\n";
         if (!gate.includes(flag) || !gate.includes(envLine))
           throw new Error('M11 could not plant: the gate no longer disables replace objects in the shape this plant removes');
         const stripped = join(dir, 'gate-that-believes-replace-refs.ts');
-        writeFileSync(stripped, gate.replace(flag, '[...args]').replace(envLine, 'env: { ...process.env },'));
+        writeFileSync(stripped, gate.replace(flag, "['-C', root, ...args]").replace(envLine, ''));
         const believing = spawnSync('npx', ['tsx', stripped, `--dir=${dir}`], { cwd: clone, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
         if (believing.error !== undefined || (believing.status !== 0 && believing.status !== 1))
           throw new Error(`M11 could not plant: the stripped gate did not run (exit ${String(believing.status)})`);
