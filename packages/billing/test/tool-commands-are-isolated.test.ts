@@ -809,12 +809,25 @@ const shebangIsolation = (shebang: string): { isolated: boolean; refusal?: strin
       // author who writes a shebang that echoes a convincing line on purpose;
       // the refusal name says what was measured, and a deceptive shebang is a
       // diff a reviewer reads, not a quantity this law can bound.
-      // The NONCE is what makes the answer unforgeable by a shebang that never
-      // runs the script: it exists only in this file, written microseconds
-      // ago, and only an interpreter that EXECUTES THE BODY can print it. I
-      // found the need for it by arming the deceptive case -- a shell shebang
-      // echoing a whole convincing answer line was cleared until the nonce
-      // went in, so this is measured rather than assumed.
+      // THE NONCE, AND WHAT IT IS NOT. ROUND 46, THE CHALLENGER'S R43-01 (P2):
+      // I wrote that only an interpreter which EXECUTES THE BODY can print the
+      // nonce. That was FALSE and it is retracted. The shebang's own command is
+      // handed this file's PATH, so anything that can read the file can lift
+      // the nonce out of it and echo it; the challenger measured exactly that
+      // against this function -- `#!/usr/bin/env -S sh <path>/fake.sh`, two
+      // lines of `sed` and `echo`, returned
+      // `{"isolated":true,"executable":"/usr/bin/python3"}`. No challenge
+      // written INTO the probe can separate "python ran the body" from
+      // "something else read the challenge and answered it", because the same
+      // program can read either channel.
+      //
+      // So the DECLARED LIMIT, in the same voice as R42-01 below: this law
+      // verifies that a shebang STARTS AN ISOLATED CPYTHON, and it does not
+      // defend against a shebang written to deceive it. The nonce stays
+      // because it defeats the careless and the accidental -- a shell that
+      // echoes a convincing line, which is R42-02's own case and still reds --
+      // and it claims nothing more. A deliberately deceptive shebang is a diff
+      // a reviewer reads, not a quantity this law can bound.
       const nonce = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
       writeFileSync(
         script,
@@ -1197,11 +1210,31 @@ const matchesOf = (s: string, re: RegExp): RegExpMatchArray[] => {
  * same name walked past it.
  * A name list cannot name what has not been written yet, which is
  * [[daftar-an-enumerated-exemption-moves-the-hole-from-shape-to-time]] again.
- * So the law is now a conservation law instead: the live scan must TEST every
- * logical line of the document, counted here, and its arm requires
- * `tested === logicalLines(text).length` over a fixture built to carry every
- * structural shape. Any skip added to the live path reds it, whatever it is
- * called and however it is spelled.
+ * So the law is a conservation law instead. ROUND 45 REWRITES WHAT IT CLAIMS,
+ * because the challenger's F-75 found the old sentence still standing here in
+ * the present tense after I had retracted it 237 lines away, describing a
+ * mechanism this file no longer has (`tested === logicalLines(text).length`) --
+ * which is P4 R32 in my own file: moving a guard needs two sweeps, one for
+ * sentences about its OUTCOME and one for sentences about its DISCIPLINE, and
+ * they share no words. A reader who opened `scanLines` looking for skips was
+ * told there were none to find.
+ *
+ * WHAT THIS LAW MEASURES, exactly:
+ *   - `tested` against `rawExpectation(text).lines`: every logical line the
+ *     RAW TEXT implies is reached by the matchers.
+ *   - the characters each matcher was handed, compared for IDENTITY with the
+ *     characters the raw text says it must see, in order.
+ *   - the number of matchers that read the document.
+ * So content WITHHELD from a matcher is caught, and so is content DISGUISED on
+ * the way to it -- a reversal or a same-length substitution moves the sequence
+ * even though it moves no count, which is F-74/CD-44-01 and the reason this is
+ * an identity and not a quantity.
+ *
+ * WHAT IT DOES NOT MEASURE, and this is the whole of the list: a skip whose
+ * predicate NO scanned line satisfies, which hides nothing until a document
+ * carries such a line and refuses the moment one does. Nothing here claims
+ * that every skip reds -- that sentence was measured false twice, and the two
+ * counterexamples are named in the round histories above.
  */
 const scanLines = (label: string, text: string, honourExemption: boolean, toolsDir: string = TOOLS_DIR): { found: string[]; tested: number; seen: number } => {
   const found: string[] = [];
@@ -1248,10 +1281,13 @@ const scanLines = (label: string, text: string, honourExemption: boolean, toolsD
   }
   // THE CONSERVATION LAW IS PART OF THE SCAN, not only of an arm. Every live
   // scan in this file -- the pack documents, the repository walk, every
-  // fixture -- refuses by name if the loop above did not reach the matchers
-  // with every logical line of the text it was given. A skip added to the live
-  // path is therefore measured on the real documents, whatever it is called
-  // and wherever in the body it sits, and not only on the shape fixture.
+  // fixture -- refuses by name when the loop above did not reach the matchers
+  // with every logical line of the text it was given, or handed any matcher
+  // characters other than the ones the raw text implies. So it is measured on
+  // the real documents and not only on the shape fixture, and it catches a
+  // skip ANYWHERE IN THIS BODY whose predicate some scanned line satisfies --
+  // which is what it measures, and not the stronger thing the sentence here
+  // used to claim (F-75).
   //
   // DECLARED LIMIT, and it is the honest one: a skip whose predicate NO
   // scanned line satisfies hides nothing today, so nothing can red on it. It
@@ -1636,10 +1672,13 @@ describe('every written invocation of the pack tools is isolated', () => {
     }
     // The second of those is a DELIBERATELY DECEPTIVE shebang rather than a
     // mistake, and it was CLEARED when I first armed it -- echoing a whole
-    // convincing answer line was enough. What refuses it now is the NONCE,
-    // which exists only in the probe script this law has just written, so only
-    // an interpreter that executes the body can print it. Both classes are
-    // measured, not one.
+    // convincing answer line was enough. The nonce refuses THAT shebang,
+    // because it cannot guess a value written microseconds ago. It does not
+    // refuse a shebang that READS the probe file it is handed and lifts the
+    // nonce out, which the challenger measured against this very function
+    // (R43-01), and the limit is declared at the probe rather than claimed
+    // away here. What is measured is the careless case; the deceptive one is
+    // bounded by review, not by this law.
 
     // ROUND 44, R42-01 (P3): a green verdict is a statement about the
     // `python3` that THIS pinned PATH resolves, and the law now carries that
