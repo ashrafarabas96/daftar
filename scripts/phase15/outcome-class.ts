@@ -174,6 +174,23 @@ export const CONTENTION_VERDICT = new RegExp(`^${OPENERS}?INVALID MEASUREMENT\\b
  */
 export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED|NO VERDICT)\\b`);
 
+/**
+ * A REFUSAL THAT NAMES NO SPEAKER IS STILL A REFUSAL (round 18, F-R18-09).
+ *
+ * `verify-role-convergence.ts` opens «UNMEASURED: none of 969b8605, … is
+ * reachable in this repository.» — a headline with no `EXIT n —` and no
+ * `SPEAKER:` in front of it, so `VERDICT_HEADLINE` did not match, `declared`
+ * fell through to the machine record, and a real transcript from a real run
+ * was filed UNCLASSIFIED although `DID_NOT_MEASURE` matches the line exactly.
+ *
+ * It is read ONLY where nothing else speaks for the run: a bare refusal line
+ * cannot outrank a verdict headline, because an instrument that refuses one
+ * subject and then reaches a verdict has reached a verdict. Widening the
+ * headline rule itself would have let such a line downgrade a measured FAIL
+ * to «did not measure», which is the wrong direction to be wrong in.
+ */
+export const BARE_REFUSAL = new RegExp('^(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED|NO VERDICT)\\s*[:—-]');
+
 export function reachedVerdict(r: Classifiable): string | null {
   const lines = r.output.split('\n').map((l) => l.trim());
   // The headline first, wherever it sits: a machine record printed above it is
@@ -236,7 +253,16 @@ export function outcomeClass(r: Classifiable): string {
   // What the INSTRUMENT declared: its headline when it printed one, otherwise
   // the `result` of its machine record. A headline outranks the record, which
   // is round 13's law unchanged — only the line that speaks for the run counts.
-  const declared = verdictLine !== null && VERDICT_HEADLINE.test(verdictLine) ? verdictLine : machineResult(r.output);
+  const headlineOrRecord = verdictLine !== null && VERDICT_HEADLINE.test(verdictLine) ? verdictLine : machineResult(r.output);
+  // Only when nothing else spoke for the run (round 18, F-R18-09).
+  const declared =
+    headlineOrRecord ??
+    (verdictLine === null
+      ? (r.output
+          .split('\n')
+          .map((l) => l.trim())
+          .find((l) => BARE_REFUSAL.test(l)) ?? null)
+      : null);
   if (declared !== null && CONTENTION_VERDICT.test(declared))
     return 'DID NOT MEASURE — the instrument declared INVALID MEASUREMENT (a resource it needed was held), so this exit code is a statement about the RUN and not a verdict about the subject. Re-run it alone; nothing here is evidence either way';
   if (declared !== null && DID_NOT_MEASURE.test(declared))

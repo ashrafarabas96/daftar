@@ -81,6 +81,17 @@ const PACK = process.env.P15_SWEEP_DIR ?? join(ROOT, 'scripts/phase15');
  */
 const APPARATUS = 'exit-code-sweep.ts';
 
+/** Every module specifier the apparatus imports from INSIDE the pack. */
+function apparatusPackImports(sf: ts.SourceFile): readonly string[] {
+  const found = new Set<string>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const spec = st.moduleSpecifier.text;
+    if (spec.startsWith('.') || (PACK_SRC?.has(specKey(spec)) ?? false)) found.add(spec);
+  }
+  return [...found].sort();
+}
+
 function apparatusIsInert(dir: string): string | null {
   let text: string;
   try {
@@ -105,6 +116,28 @@ function apparatusIsInert(dir: string): string | null {
   // construction, because a plant inside a string is not an import clause and
   // not a call expression, whatever column it starts in.
   const sf = ast(APPARATUS, text);
+  // A LEAF, OR NO EXEMPTION (round 18, F-R18-04).
+  //
+  // Round 17 answered the sibling-file hole by deciding this exemption from
+  // `producersIn()`, the pack resolution. That made the exemption exactly as
+  // complete as the resolution, and round 18 then walked through it on a
+  // DEFAULT export: an apparatus that called a producer and threw the code
+  // away still printed «Measured inert … calls it nowhere» and exited 0. The
+  // one file this sweep deletes from its own scan is the last place to put a
+  // claim that depends on enumerating export forms, because the next form
+  // nobody enumerated reopens it in silence.
+  //
+  // So the exemption no longer asks "did the resolution find a producer here".
+  // It asks a question whose answer cannot be incomplete: does this file
+  // import anything AT ALL from inside the pack? A file that imports no pack
+  // module cannot be handed a producer by one, whatever syntax a sibling uses
+  // to export it. Any pack import withdraws the exemption, and the file is
+  // then swept like every other — which costs nothing when it is in fact
+  // inert, and is the whole point when it is not. This is the pack's own rule
+  // that a check must fail on ABSENCE rather than on a drift it recognises.
+  const packImports = apparatusPackImports(sf);
+  if (packImports.length > 0)
+    return `${APPARATUS} imports ${packImports.join(', ')} from inside the pack, so what it can run depends on what a sibling exports; an exemption that depends on resolving the pack is only as complete as that resolution, and it is withdrawn`;
   const imported = new Set<string>();
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
@@ -113,10 +146,6 @@ function apparatusIsInert(dir: string): string | null {
     if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);
     if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);
   }
-  // Pack resolution, not file resolution (round 17, F-R17-02): an apparatus
-  // whose producer lives in a sibling pack file kept its exemption and printed
-  // that it had been «measured inert … on every spelling of the module» — a
-  // false measured claim, on the one file the sweep deletes from its own scan.
   const p = producersIn(sf, APPARATUS);
   for (const id of p.ids) if (id !== TOKEN) imported.add(id);
   for (const m of p.members) imported.add(`<object>.${m}`);
@@ -531,13 +560,48 @@ interface Producers {
   readonly ids: ReadonlySet<string>;
   /** Property names a producer was stored under: `{ run: spawnSync }` → `run`. */
   readonly members: ReadonlySet<string>;
-  /** A namespace import's local name → the pack file it names. */
+  /** A namespace local name → the pack file it names. */
   readonly ns: ReadonlyMap<string, string>;
 }
 
-function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>): Producers {
+/** Is `e` an expression that MEANS the producer, under `p`? */
+function isProducerExpr(e: ts.Expression, p: Producers): boolean {
+  const x = unwrap(e);
+  // A CONDITIONAL IS TWO BINDINGS IN ONE (round 18, F-R18-05). `unwrap()`
+  // peels wrappers that have exactly one operand; a `?:`, a `||`, a `??` and
+  // an `&&` each have two, and the producer may be in either, so the value is
+  // a producer if EITHER branch is. Reading only the whole expression made
+  // `const run = c ? spawnSync : spawnSync` a non-producer.
+  if (ts.isConditionalExpression(x)) return isProducerExpr(x.whenTrue, p) || isProducerExpr(x.whenFalse, p);
+  if (
+    ts.isBinaryExpression(x) &&
+    (x.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+      x.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+      x.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
+  )
+    return isProducerExpr(x.left, p) || isProducerExpr(x.right, p);
+  if (ts.isPropertyAccessExpression(x) && (x.name.text === TOKEN || p.members.has(x.name.text) || namespaceProducer(x, p))) return true;
+  if (
+    ts.isElementAccessExpression(x) &&
+    ts.isStringLiteral(x.argumentExpression) &&
+    (x.argumentExpression.text === TOKEN || p.members.has(x.argumentExpression.text))
+  )
+    return true;
+  return ts.isIdentifier(x) && p.ids.has(x.text);
+}
+
+/** The module a dynamic `import('./x')` names, or null. */
+function dynamicTarget(e: ts.Expression): string | null {
+  const x = unwrap(e);
+  if (!ts.isCallExpression(x) || x.expression.kind !== ts.SyntaxKind.ImportKeyword) return null;
+  const a = x.arguments[0];
+  return a !== undefined && ts.isStringLiteral(a) ? specKey(a.text) : null;
+}
+
+function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>, seedMembers: ReadonlySet<string>, seedNs: ReadonlyMap<string, string>): Producers {
   const ids = new Set<string>(seed);
-  const members = new Set<string>();
+  const members = new Set<string>(seedMembers);
+  const ns = new Map<string, string>(seedNs);
   /** Functions declared in this file, so a producer passed INTO one can be
    *  followed to the parameter it arrives as (round 17, F-R17-01). */
   const fns = new Map<string, ts.FunctionLikeDeclarationBase>();
@@ -550,19 +614,19 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>): Produce
     n.forEachChild(collectFns);
   };
   collectFns(sf);
+  const self = (): Producers => ({ ids, members, ns });
   /** `<anything>.spawnSync`, `<anything>['spawnSync']`, or a known name. */
-  const isProducerValue = (e: ts.Expression): boolean => {
-    const x = unwrap(e);
-    if (ts.isPropertyAccessExpression(x) && (x.name.text === TOKEN || members.has(x.name.text))) return true;
-    if (ts.isElementAccessExpression(x) && ts.isStringLiteral(x.argumentExpression) && x.argumentExpression.text === TOKEN) return true;
-    return ts.isIdentifier(x) && ids.has(x.text);
-  };
+  const isProducerValue = (e: ts.Expression): boolean => isProducerExpr(e, self());
   /** `{ spawnSync: x }` / `{ spawnSync }`, as a binding pattern or a target. */
-  const fromDestructure = (n: ts.Node): void => {
+  const fromDestructure = (n: ts.Node, from: string | null): void => {
     if (ts.isObjectBindingPattern(n))
       for (const el of n.elements) {
         const key = el.propertyName ?? el.name;
-        if (ts.isIdentifier(key) && key.text === TOKEN && ts.isIdentifier(el.name)) ids.add(el.name.text);
+        if (!ts.isIdentifier(key) || !ts.isIdentifier(el.name)) continue;
+        if (key.text === TOKEN) ids.add(el.name.text);
+        // `const { sh } = await import('./lib')` — the same binding the static
+        // import form already resolved (round 18, F-R18-06).
+        if (from !== null && (PACK_PRODUCER_EXPORTS.get(from)?.ids.has(key.text) ?? false)) ids.add(el.name.text);
       }
     if (ts.isObjectLiteralExpression(n))
       for (const pr of n.properties) {
@@ -581,15 +645,18 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>): Produce
   };
   // A fixpoint, because `const a = cp.spawnSync; const b = a;` is two steps and
   // the file may declare them in either order.
-  for (let before = -1; before !== ids.size + members.size; ) {
-    before = ids.size + members.size;
+  for (let before = -1; before !== ids.size + members.size + ns.size; ) {
+    before = ids.size + members.size + ns.size;
     const walk = (n: ts.Node): void => {
       if (ts.isVariableDeclaration(n)) {
-        fromDestructure(n.name);
+        const dyn = n.initializer === undefined ? null : dynamicTarget(n.initializer);
+        fromDestructure(n.name, dyn);
+        // A dynamic import is a namespace under another syntax.
+        if (dyn !== null && ts.isIdentifier(n.name)) ns.set(n.name.text, dyn);
         if (ts.isIdentifier(n.name) && n.initializer !== undefined && isProducerValue(n.initializer)) ids.add(n.name.text);
       }
       if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-        fromDestructure(unwrap(n.left));
+        fromDestructure(unwrap(n.left), null);
         if (ts.isIdentifier(n.left) && isProducerValue(n.right)) ids.add(n.left.text);
       }
       if (ts.isObjectLiteralExpression(n)) fromField(n);
@@ -606,11 +673,12 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>): Produce
     };
     walk(sf);
   }
-  return { ids, members, ns: new Map<string, string>() };
+  return { ids, members, ns };
 }
 
 /**
- * A BINDING CROSSES FILES, AND THE FIXPOINT MUST CROSS WITH IT (round 17, F-R17-01).
+ * A BINDING CROSSES FILES, AND THE FIXPOINT MUST CROSS WITH IT (round 17,
+ * F-R17-01; widened in round 18 after F-R18-01, -02 and -03).
  *
  * The resolution above runs over ONE file. A pack that factors its helper out —
  * `export const sh = spawnSync` in one file, `import { sh }` in the next — put
@@ -620,52 +688,120 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>): Produce
  * `EXIT 0`, over the same discarded exit code. The forwarder half of this
  * sweep has crossed modules since F-R13-02; only the producer did not.
  *
- * So each file's EXPORTED producer names are published as a provider set, a
- * file importing one of those names seeds its own resolution with it, and the
- * whole thing iterates to a pack-level fixpoint. Re-export declarations and
- * `export *` carry a set onward, so a barrel does not break the chain. It
+ * Round 17 published one thing across the boundary — a set of exported NAMES —
+ * and round 18 then found three more routes over the same wall, each with its
+ * own one-file control going red: a DEFAULT export (`export default run`,
+ * which is an `ExportAssignment` and not an `ExportDeclaration`), an exported
+ * object whose FIELD holds the producer (`members` was computed and never
+ * published), and an exported higher-order function handed the producer from
+ * another file (the parameter route read a per-file map of local functions).
+ * The lesson is not "add three more forms": it is that what crosses the
+ * boundary must be the whole producer SURFACE of a module — its names, its
+ * member names, and which of its parameters the pack hands a producer to —
+ * because a surface published in part is a fixpoint that terminates early.
+ *
+ * So each file publishes that surface, a file importing from it seeds its own
+ * resolution with the whole of it, and the pack iterates to a fixpoint. It
  * terminates because names are only ever added.
  */
-let PACK_PRODUCER_EXPORTS: ReadonlyMap<string, ReadonlySet<string>> = new Map<string, ReadonlySet<string>>();
+interface Surface {
+  /** Exported names that MEAN the producer. `default` is a name here. */
+  readonly ids: ReadonlySet<string>;
+  /** Field names this module stores a producer under, published to importers. */
+  readonly members: ReadonlySet<string>;
+}
+const EMPTY_SURFACE: Surface = { ids: new Set<string>(), members: new Set<string>() };
+let PACK_PRODUCER_EXPORTS: ReadonlyMap<string, Surface> = new Map<string, Surface>();
+/** `file` → `name#index` of each exported function parameter the pack hands a producer to. */
+let PACK_PRODUCER_PARAMS: ReadonlyMap<string, ReadonlySet<string>> = new Map<string, ReadonlySet<string>>();
 
-/** The producer names `sf` hands to the rest of the pack under its own exports. */
-function exportedProducers(sf: ts.SourceFile, ids: ReadonlySet<string>): Set<string> {
-  const out = new Set<string>();
+/** `local name` → `{ file, exported name }` for every pack import in `sf`. */
+function importSources(sf: ts.SourceFile): Map<string, { file: string; orig: string }> {
+  const out = new Map<string, { file: string; orig: string }>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || st.importClause === undefined) continue;
+    const file = specKey(st.moduleSpecifier.text);
+    if (!(PACK_SRC?.has(file) ?? false)) continue;
+    if (st.importClause.name !== undefined) out.set(st.importClause.name.text, { file, orig: 'default' });
+    const nb = st.importClause.namedBindings;
+    if (nb !== undefined && ts.isNamedImports(nb)) for (const el of nb.elements) out.set(el.name.text, { file, orig: (el.propertyName ?? el.name).text });
+  }
+  return out;
+}
+
+/** The producer surface `sf` hands to the rest of the pack under its own exports. */
+function exportedProducers(sf: ts.SourceFile, p: Producers): Surface {
+  const ids = new Set<string>();
+  const members = new Set<string>(p.members);
   const isExported = (st: ts.Statement): boolean =>
     ts.canHaveModifiers(st) && (ts.getModifiers(st)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false);
   for (const st of sf.statements) {
     if (ts.isVariableStatement(st) && isExported(st))
-      for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name) && ids.has(d.name.text)) out.add(d.name.text);
+      for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name) && p.ids.has(d.name.text)) ids.add(d.name.text);
+    // `export default run` and `export = run` are ExportAssignments, which no
+    // walk over ExportDeclarations can see (round 18, F-R18-01).
+    if (ts.isExportAssignment(st) && isProducerExpr(st.expression, p)) ids.add('default');
     if (!ts.isExportDeclaration(st)) continue;
     if (st.moduleSpecifier === undefined) {
       if (st.exportClause !== undefined && ts.isNamedExports(st.exportClause))
-        for (const el of st.exportClause.elements) if (ids.has((el.propertyName ?? el.name).text)) out.add(el.name.text);
+        for (const el of st.exportClause.elements) if (p.ids.has((el.propertyName ?? el.name).text)) ids.add(el.name.text);
       continue;
     }
     if (!ts.isStringLiteral(st.moduleSpecifier)) continue;
     const from = PACK_PRODUCER_EXPORTS.get(specKey(st.moduleSpecifier.text));
     if (from === undefined) continue;
-    if (st.exportClause === undefined) for (const n of from) out.add(n);
+    for (const m of from.members) members.add(m);
+    if (st.exportClause === undefined) for (const n of from.ids) ids.add(n);
     else if (ts.isNamedExports(st.exportClause))
-      for (const el of st.exportClause.elements) if (from.has((el.propertyName ?? el.name).text)) out.add(el.name.text);
+      for (const el of st.exportClause.elements) if (from.ids.has((el.propertyName ?? el.name).text)) ids.add(el.name.text);
   }
-  return out;
+  return { ids, members };
 }
 
-/** Producer names and namespaces this file imports from elsewhere in the pack. */
-function importedProducers(sf: ts.SourceFile): { ids: Set<string>; ns: Map<string, string> } {
+/** The producer surface this file imports from elsewhere in the pack. */
+function importedProducers(sf: ts.SourceFile): { ids: Set<string>; members: Set<string>; ns: Map<string, string> } {
   const ids = new Set<string>();
+  const members = new Set<string>();
   const ns = new Map<string, string>();
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
     const target = specKey(st.moduleSpecifier.text);
     const from = PACK_PRODUCER_EXPORTS.get(target);
     if (from === undefined || st.importClause === undefined) continue;
+    // Whatever this module stores a producer under, an importer can call
+    // through (round 18, F-R18-02). Over-reporting a field name is the pack's
+    // own F-R13-01 rule; losing one across a boundary is a fail-open.
+    for (const m of from.members) members.add(m);
+    if (st.importClause.name !== undefined && from.ids.has('default')) ids.add(st.importClause.name.text);
     const nb = st.importClause.namedBindings;
-    if (nb !== undefined && ts.isNamedImports(nb)) for (const el of nb.elements) if (from.has((el.propertyName ?? el.name).text)) ids.add(el.name.text);
-    if (nb !== undefined && ts.isNamespaceImport(nb) && from.size > 0) ns.set(nb.name.text, target);
+    if (nb !== undefined && ts.isNamedImports(nb)) for (const el of nb.elements) if (from.ids.has((el.propertyName ?? el.name).text)) ids.add(el.name.text);
+    if (nb !== undefined && ts.isNamespaceImport(nb) && from.ids.size + from.members.size > 0) ns.set(nb.name.text, target);
   }
-  return { ids, ns };
+  return { ids, members, ns };
+}
+
+/** Parameters of this file's exported functions that the PACK hands a producer to. */
+function packParameterSeed(sf: ts.SourceFile, file: string): Set<string> {
+  const out = new Set<string>();
+  const marks = PACK_PRODUCER_PARAMS.get(file);
+  if (marks === undefined || marks.size === 0) return out;
+  const consider = (name: string, fn: ts.FunctionLikeDeclarationBase): void => {
+    fn.parameters.forEach((pm, k) => {
+      if (ts.isIdentifier(pm.name) && marks.has(`${name}#${String(k)}`)) out.add(pm.name.text);
+    });
+  };
+  for (const st of sf.statements) {
+    const exported = ts.canHaveModifiers(st) && (ts.getModifiers(st)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false);
+    if (!exported) continue;
+    if (ts.isFunctionDeclaration(st) && st.name !== undefined) consider(st.name.text, st);
+    if (ts.isVariableStatement(st))
+      for (const d of st.declarationList.declarations) {
+        if (!ts.isIdentifier(d.name) || d.initializer === undefined) continue;
+        const init = unwrap(d.initializer);
+        if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) consider(d.name.text, init);
+      }
+  }
+  return out;
 }
 
 /** Every name this file calls the producer by, pack resolution included. */
@@ -674,24 +810,63 @@ function producersIn(sf: ts.SourceFile, file: string): Producers {
   for (const m of ['node:child_process', 'child_process']) for (const id of aliasesOf(sf, TOKEN, m, file).ids) seed.add(id);
   const imported = importedProducers(sf);
   for (const id of imported.ids) seed.add(id);
-  const derived = derivedProducers(sf, seed);
-  return { ids: derived.ids, members: derived.members, ns: imported.ns };
+  for (const id of packParameterSeed(sf, file)) seed.add(id);
+  return derivedProducers(sf, seed, imported.members, imported.ns);
+}
+
+/** Which exported parameters of OTHER pack files this file hands a producer to. */
+function parameterHandoffs(sf: ts.SourceFile, p: Producers): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  const src = importSources(sf);
+  const mark = (file: string, key: string): void => {
+    const s = out.get(file) ?? new Set<string>();
+    s.add(key);
+    out.set(file, s);
+  };
+  const walk = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const c = unwrap(n.expression);
+      let target: { file: string; orig: string } | null = null;
+      if (ts.isIdentifier(c)) target = src.get(c.text) ?? null;
+      else if (ts.isPropertyAccessExpression(c) && ts.isIdentifier(c.expression)) {
+        const f = p.ns.get(c.expression.text);
+        if (f !== undefined) target = { file: f, orig: c.name.text };
+      }
+      if (target !== null)
+        n.arguments.forEach((arg, k) => {
+          if (isProducerExpr(arg, p)) mark(target.file, `${target.orig}#${String(k)}`);
+        });
+    }
+    n.forEachChild(walk);
+  };
+  walk(sf);
+  return out;
 }
 
 /** The pack-level fixpoint: run before any file is scanned. */
 function resolvePackProducers(src: ReadonlyMap<string, readonly string[]>): void {
-  PACK_PRODUCER_EXPORTS = new Map<string, ReadonlySet<string>>();
+  PACK_PRODUCER_EXPORTS = new Map<string, Surface>();
+  PACK_PRODUCER_PARAMS = new Map<string, ReadonlySet<string>>();
   for (let before = -1, total = 0; before !== total; ) {
     before = total;
     total = 0;
-    const next = new Map<string, ReadonlySet<string>>();
+    const next = new Map<string, Surface>();
+    const params = new Map<string, Set<string>>();
     for (const [file, lines] of src) {
       const sf = ast(file, lines.join('\n'));
-      const ex = exportedProducers(sf, producersIn(sf, file).ids);
+      const p = producersIn(sf, file);
+      const ex = exportedProducers(sf, p);
       next.set(file, ex);
-      total += ex.size;
+      total += ex.ids.size + ex.members.size;
+      for (const [target, keys] of parameterHandoffs(sf, p)) {
+        const s = params.get(target) ?? new Set<string>();
+        for (const k of keys) s.add(k);
+        params.set(target, s);
+      }
     }
+    for (const s of params.values()) total += s.size;
     PACK_PRODUCER_EXPORTS = next;
+    PACK_PRODUCER_PARAMS = params;
   }
 }
 
@@ -720,11 +895,13 @@ function producerCalls(sf: ts.SourceFile, file: string): ts.CallExpression[] {
   return out;
 }
 
-/** `proc.sh(…)` where `proc` is a namespace import of a file exporting `sh`. */
+/** `proc.sh(…)` where `proc` is a namespace of a file exporting `sh`. */
 function namespaceProducer(c: ts.PropertyAccessExpression, p: Producers): boolean {
   if (!ts.isIdentifier(c.expression)) return false;
   const file = p.ns.get(c.expression.text);
-  return file !== undefined && (PACK_PRODUCER_EXPORTS.get(file)?.has(c.name.text) ?? false);
+  if (file === undefined) return false;
+  const s = PACK_PRODUCER_EXPORTS.get(file) ?? EMPTY_SURFACE;
+  return s.ids.has(c.name.text) || s.members.has(c.name.text);
 }
 
 const unwrap = (e: ts.Expression): ts.Expression => {
@@ -963,6 +1140,8 @@ interface SweepResult {
   readonly read: readonly Site[];
   readonly wrappers: readonly Wrapper[];
   readonly forwarders: readonly Forwarder[];
+  /** Why the apparatus exemption was WITHDRAWN, or null when it was taken. */
+  readonly apparatusProblem: string | null;
 }
 
 function sweep(dir: string): SweepResult {
@@ -1078,15 +1257,26 @@ function sweep(dir: string): SweepResult {
       how: s.d === null ? null : s.d.kind === 'read' ? s.d.how : `deferred to ${s.d.to}()`,
     })),
   }));
-  return { unchecked, read, wrappers, forwarders };
+  return { unchecked, read, wrappers, forwarders, apparatusProblem };
 }
 
 function report(dir: string, r: SweepResult): void {
   console.log(`  pack ${dir}`);
-  console.log(`  exempt ${APPARATUS} — this instrument's own source, which carries the TEXT of the`);
-  console.log('         defects its red proofs plant. Measured inert at every run, through the AST and');
-  console.log('         on every spelling of the module: it binds spawnSync from neither child_process');
-  console.log('         nor node:child_process and calls it nowhere, so it has no exit code to discard.');
+  // THE PARAGRAPH IS PRINTED ONLY WHEN WHAT IT SAYS WAS ESTABLISHED (round 18,
+  // F-R18-10). It used to print on every run, including runs that withdrew the
+  // exemption 160 lines below, which is a measured claim contradicted by the
+  // same output that carried it.
+  if (r.apparatusProblem === null) {
+    console.log(`  exempt ${APPARATUS} — this instrument's own source, which carries the TEXT of the`);
+    console.log('         defects its red proofs plant. The exemption is MEASURED at every run and on');
+    console.log('         a question that cannot come back half-answered: this file imports nothing');
+    console.log('         from inside the pack, so no sibling can hand it a producer by any export');
+    console.log('         form, and it binds spawnSync from no spelling of child_process and calls it');
+    console.log('         nowhere. Any pack import withdraws the exemption and the file is swept.');
+  } else {
+    console.log(`  NOT exempt ${APPARATUS} — ${r.apparatusProblem}`);
+    console.log('         It is swept like every other file in the pack.');
+  }
   console.log('');
   console.log('  WRAPPERS THAT DECIDE ON THE EXIT CODE THEMSELVES');
   console.log('    (the matched comparison is printed: a wrapper that only mentions the code, or');
@@ -1781,6 +1971,181 @@ const PLANTS: readonly Plant[] = [
       r.unchecked.some((site) => site.file === 'planted-x27.ts')
         ? null
         : 'a discarding call was hidden by storing the producer in an object field under a different name, so neither the identifier set nor the `.spawnSync` floor could see the callee',
+  },
+  {
+    id: 'X28',
+    what: "round 18's F-R18-01 — the producer DEFAULT-exported from one pack file and called, discarded, in another",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x28-lib.ts'),
+        ["import { spawnSync } from 'node:child_process';", 'const x28run = spawnSync;', 'export default x28run;', ''].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x28.ts'),
+        [
+          "import x28run from './planted-x28-lib';",
+          '// `export default` is an ExportAssignment, not an ExportDeclaration,',
+          '// so round 17 published every exported producer NAME across the',
+          '// boundary and still could not see this one. The forwarder half has',
+          '// followed default exports since round 13; the producer half had not.',
+          'export function head(): string {',
+          "  const r = x28run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x28.ts')
+        ? null
+        : 'a discarding call was hidden by DEFAULT-exporting the producer: the pack fixpoint published named exports only, so the identical bytes read EXIT 1 in one file and EXIT 0 across two',
+  },
+  {
+    id: 'X29',
+    what: "round 18's F-R18-02 — the producer in an exported object FIELD, called from another pack file",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x29-lib.ts'),
+        ["import { spawnSync } from 'node:child_process';", 'export const x29api = { go: spawnSync };', ''].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x29.ts'),
+        [
+          "import { x29api } from './planted-x29-lib';",
+          '// This is X27 with one module boundary in it. The field name was',
+          '// computed by the per-file resolution and never published, so the',
+          '// importing file had no way to know that `.go` means the producer.',
+          'export function head(): string {',
+          "  const r = x29api.go('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x29.ts')
+        ? null
+        : 'a discarding call was hidden by storing the producer in a field of an EXPORTED object: a surface published in part is a fixpoint that terminates early',
+  },
+  {
+    id: 'X30',
+    what: "round 18's F-R18-03 — the producer handed from one pack file to an exported function's PARAMETER in another",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x30-lib.ts'),
+        [
+          "import type { spawnSync as SS } from 'node:child_process';",
+          'export function x30with(run: typeof SS): string {',
+          "  const r = run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return r.stdout ?? '';",
+          '}',
+          '',
+        ].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x30.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          "import { x30with } from './planted-x30-lib';",
+          '// X26 with one module boundary. The declaring file never sees an',
+          '// argument, so its parameter was never a producer; which parameters',
+          '// the PACK hands a producer to is part of a module surface too.',
+          'export const head = x30with(spawnSync);',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x30-lib.ts')
+        ? null
+        : "a discarding call was hidden by handing the producer ACROSS a boundary into a parameter: the declaring file's own fixpoint can never see the argument",
+  },
+  {
+    id: 'X31',
+    what: "round 18's F-R18-05 — a CONDITIONAL initializer, where the producer is in a branch",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x31.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          "const pick = process.env.P15_PICK === '1';",
+          '// `unwrap()` peels wrappers with ONE operand. A `?:` has two, and a',
+          '// value is a producer if either branch is.',
+          'const x31run = pick ? spawnSync : spawnSync;',
+          'export function head(): string {',
+          "  const r = x31run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x31.ts')
+        ? null
+        : 'a discarding call was hidden behind a conditional initializer: a rule that reads only the whole expression misses a producer sitting in one of its branches',
+  },
+  {
+    id: 'X32',
+    what: "round 18's F-R18-06 — the pack file reached by a DYNAMIC import",
+    plant: (dir) => {
+      writeFileSync(join(dir, 'planted-x32-lib.ts'), ["import { spawnSync } from 'node:child_process';", 'export const x32run = spawnSync;', ''].join('\n'));
+      writeFileSync(
+        join(dir, 'planted-x32.ts'),
+        [
+          '// A dynamic import names a pack module as plainly as a static one; it',
+          '// was simply not an ImportDeclaration, so nothing read it.',
+          'export async function head(): Promise<string> {',
+          "  const m = await import('./planted-x32-lib');",
+          "  const r = m.x32run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x32.ts')
+        ? null
+        : 'a discarding call was hidden behind a dynamic import() of a pack file: the module graph a fixpoint walks must be the one the program walks',
+  },
+  {
+    id: 'X33',
+    what: "round 18's F-R18-04 — THE APPARATUS ITSELF, handed a producer by a sibling it imports",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x33-lib.ts'),
+        ["import { spawnSync } from 'node:child_process';", 'const x33run = spawnSync;', 'export default x33run;', ''].join('\n'),
+      );
+      // The one file the sweep DELETES from its own scan. Round 17 decided the
+      // exemption from the pack resolution, which made the exemption exactly
+      // as complete as that resolution: a default export walked through it and
+      // the sweep printed «Measured inert … calls it nowhere» over an
+      // apparatus that called a producer and threw the code away.
+      const f = join(dir, APPARATUS);
+      const text = readFileSync(f, 'utf8');
+      const at = text.lastIndexOf('\nimport ');
+      const end = text.indexOf('\n', text.indexOf(';', at)) + 1;
+      writeFileSync(
+        f,
+        text.slice(0, end) +
+          [
+            "import x33run from './planted-x33-lib';",
+            'export function x33head(): string {',
+            "  const r = x33run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+            "  return (r.stdout ?? '').trim();",
+            '}',
+            '',
+          ].join('\n') +
+          text.slice(end),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === APPARATUS)
+        ? null
+        : 'THE EXEMPTION IS A FAIL-OPEN AGAIN: the apparatus was handed a producer by a sibling, called it, discarded the code, and was still deleted from the scan — on the one file whose discarded codes nobody else can see',
   },
   {
     id: 'X9',

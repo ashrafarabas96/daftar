@@ -447,6 +447,50 @@ const CASES: readonly Case[] = [
     why: 'round 17 measured `SUMMARY_LINE` replaceable by a pattern matching nothing with all twenty arms still green, while the rule decides two branches of the classifier: without it this run reads «CRASHED BEFORE MEASURING», which discards a measurement that happened',
   },
   {
+    id: 'O10',
+    what: "round 18's F-R18-09 — a refusal headline with NO speaker and no `EXIT n`, the shape `verify-role-convergence.ts` actually prints",
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          "console.log('UNMEASURED: none of 969b8605, origin/phase/4-sales-pos-customers-receivables is reachable in this repository.');",
+          "console.log('  Fetch the Phase 4 ref and re-run. Nothing is claimed about a tree this box cannot read.');",
+          '// No `EXIT n —`, no `SPEAKER:`, no machine record. This is a real',
+          '// transcript from a real run, and it was filed UNCLASSIFIED while the',
+          '// rule that classifies it was in the file and never handed the line.',
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /DID NOT MEASURE — the instrument declared that it did not measure/,
+    why: 'a refusal that names no speaker is still a refusal; filing it UNCLASSIFIED sends the reader to the log for a line the classifier already understands',
+  },
+  {
+    id: 'O10b',
+    what: 'THE CONTROL for O10 — a run that refuses ONE subject and then reaches a verdict has reached a verdict',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          "console.log('UNMEASURED: one subject was skipped.');",
+          "console.log('EXIT 1 — FAIL: two checks failed.');",
+          '// The bare refusal must NOT outrank a verdict headline, or widening',
+          '// the headline rule would downgrade a measured FAIL to «did not',
+          '// measure» — the wrong direction to be wrong in.',
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /MEASURED, THEN EXITED NON-ZERO/,
+    why: 'the round-18 widening is read only where nothing else spoke for the run; without this control it could silently downgrade every verdict preceded by a skipped subject',
+  },
+  {
     id: 'O4',
     what: 'CONTROL — a clean run',
     build: (dir) => {

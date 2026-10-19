@@ -52,7 +52,6 @@ const BLANKET = "      if (ts.isPropertyAssignment(prop) && prop.name.getText(sf
  * by the real sweep, once by a copy whose inertness check is the old regex.
  */
 const INERT_AST: readonly string[] = [
-  '  const sf = ast(APPARATUS, text);',
   '  const imported = new Set<string>();',
   '  for (const st of sf.statements) {',
   '    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;',
@@ -61,10 +60,6 @@ const INERT_AST: readonly string[] = [
   "    if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);",
   '    if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);',
   '  }',
-  '  // Pack resolution, not file resolution (round 17, F-R17-02): an apparatus',
-  '  // whose producer lives in a sibling pack file kept its exemption and printed',
-  '  // that it had been \u00abmeasured inert \u2026 on every spelling of the module\u00bb \u2014 a',
-  '  // false measured claim, on the one file the sweep deletes from its own scan.',
   '  const p = producersIn(sf, APPARATUS);',
   '  for (const id of p.ids) if (id !== TOKEN) imported.add(id);',
   '  for (const m of p.members) imported.add(`<object>.${m}`);',
@@ -85,8 +80,8 @@ const INERT_REGEX: readonly string[] = [
  * nothing and a bare `run(…)` that discarded its code was invisible — in any
  * pack file, not only in the apparatus.
  */
-const REQUIRE_BOUND = '  const derived = derivedProducers(sf, seed);';
-const REQUIRE_BLIND = '  const derived = { ids: seed, members: new Set<string>(), ns: new Map<string, string>() };';
+const REQUIRE_BOUND = '  return derivedProducers(sf, seed, imported.members, imported.ns);';
+const REQUIRE_BLIND = '  return { ids: seed, members: imported.members, ns: imported.ns };';
 const REQUIRE_PLANT = 'planted-require-bound.ts';
 
 /**
@@ -104,6 +99,49 @@ const DERIVED_SOURCE: readonly string[] = [
   '}',
   '',
 ];
+
+/**
+ * THE FIFTH GUARD: THE APPARATUS EXEMPTION IS A LEAF TEST (round 18, F-R18-04).
+ *
+ * Round 17 answered the sibling-file hole by deciding the exemption from the
+ * pack resolution, which made the exemption exactly as complete as that
+ * resolution. Round 18 walked through it on a DEFAULT export: an apparatus
+ * that called a producer and discarded the code still printed «Measured inert
+ * … calls it nowhere» and the sweep exited 0. The rule removed here is the one
+ * that asks a question whose answer cannot be partial — does this file import
+ * anything at all from inside the pack — and the arm below plants exactly the
+ * shape that defeated the round-17 rule, so the deletion measures the fix and
+ * not the old hole.
+ */
+const LEAF_BOUND = '  const packImports = apparatusPackImports(sf);';
+const LEAF_BLIND = '  const packImports: readonly string[] = [];';
+const LEAF_LIB = 'planted-leaf-lib.ts';
+
+/** The apparatus handed a producer by a sibling it imports, discarding a code. */
+function plantIntoApparatusFromSibling(pack: string): void {
+  // A STATIC CLASS FIELD, on purpose. The producer resolution models object
+  // literals, destructuring, parameters, fields, namespaces and every export
+  // form round 18 enumerated — and a class member is none of them, so this
+  // plant is invisible to it. That is the point: the leaf rule has to be what
+  // catches the shape NOBODY enumerated, or it is one more entry in a list of
+  // forms, and the next form reopens the exemption exactly as a default export
+  // reopened round 17's.
+  writeFileSync(
+    join(pack, LEAF_LIB),
+    ["import { spawnSync } from 'node:child_process';", 'export class LeafRunner {', '  static go = spawnSync;', '}', ''].join('\n'),
+  );
+  const file = join(pack, 'exit-code-sweep.ts');
+  writeFileSync(
+    file,
+    `${readFileSync(file, 'utf8')}
+import { LeafRunner } from './${LEAF_LIB.replace('.ts', '')}';
+export function plantedLeafHead(): string {
+  const r = LeafRunner.go('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
+  return (r.stdout ?? '').trim();
+}
+`,
+  );
+}
 
 /**
  * THE FOURTH GUARD: THE BINDING CROSSES FILES (round 17, F-R17-01).
@@ -339,7 +377,13 @@ function main(): number {
       problems.push('the OLD inertness check also withdrew the exemption on a property-access binding, so the new check is not what catches it');
 
     console.log('');
-    console.log('  THE APPARATUS EXEMPTION, MEASURED ON EVERY SHAPE THAT CAN BIND THE PRODUCER');
+    // ROUND 18's F-R18-07: this heading used to say «MEASURED ON EVERY SHAPE
+    // THAT CAN BIND THE PRODUCER» over three shapes, and a cross-file shape
+    // then walked through the exemption. A heading that quantifies over every
+    // shape is a claim about shapes nobody has enumerated; what this section
+    // measures is the shapes it names, plus the leaf rule below, which is the
+    // one arm that does not depend on enumerating them.
+    console.log('  THE APPARATUS EXEMPTION, ON THE SHAPES NAMED HERE');
     for (const row of apparatusRows) console.log(row);
     // ── A PRODUCER BOUND THROUGH A CALL, IN AN ORDINARY PACK FILE ─────────
     if (!me.includes(REQUIRE_BOUND)) {
@@ -423,6 +467,41 @@ function main(): number {
     else if (!sameWithout.reported)
       problems.push('removing the PACK rule also blinded the sweep inside ONE file, so the deletion moves more than the boundary and attributes nothing');
 
+    // ── THE APPARATUS EXEMPTION AS A LEAF TEST (round 18, F-R18-04) ──────
+    if (!me.includes(LEAF_BOUND)) {
+      console.log('  the apparatus leaf rule is not written in the shape this proof removes, so the');
+      console.log('  fifth section measures nothing. Re-anchor it before reading it again.');
+      console.log('');
+      console.log('EXIT 2 — UNMEASURED.');
+      return 2;
+    }
+    const strippedLeaf = join(tmp, 'sweep-without-leaf-rule.ts');
+    writeFileSync(strippedLeaf, me.replace(LEAF_BOUND, LEAF_BLIND));
+    const leafPack = join(tmp, 'pack-apparatus-sibling');
+    cpSync(join(ROOT, 'scripts/phase15'), leafPack, { recursive: true });
+    plantIntoApparatusFromSibling(leafPack);
+    const leafReal = sweepFile(SWEEP, leafPack, 'exit-code-sweep.ts');
+    const leafWithout = sweepFile(strippedLeaf, leafPack, 'exit-code-sweep.ts');
+    console.log('');
+    console.log('  THE APPARATUS HANDED A PRODUCER BY A SIBLING IT IMPORTS');
+    console.log('  (this is the shape that defeated the round-17 exemption, which asked the pack');
+    console.log('  resolution instead of asking whether the apparatus imports from the pack at all)');
+    console.log(
+      `  real sweep      exit ${String(leafReal.code)}  ${leafReal.ran ? (leafReal.reported ? 'WITHDREW the exemption and read the apparatus' : 'kept the exemption — the file was never read') : 'did not run'}`,
+    );
+    console.log(
+      `  rule removed    exit ${String(leafWithout.code)}  ${leafWithout.ran ? (leafWithout.reported ? 'WITHDREW it anyway' : 'kept the exemption — so the leaf rule is what catches it') : 'did not run'}`,
+    );
+    if (!leafReal.ran)
+      problems.push(`the real sweep did not run over the sibling-apparatus plant (exit ${String(leafReal.code)}), so its silence says nothing`);
+    else if (!leafReal.reported)
+      problems.push(
+        'an apparatus handed a producer by a sibling kept its exemption and its discarded exit code was never read: the one file the sweep may skip is the one file nobody can see',
+      );
+    if (!leafWithout.ran) problems.push(`the sweep with the leaf rule removed did not run (exit ${String(leafWithout.code)}), so that deletion is UNMEASURED`);
+    else if (leafWithout.reported)
+      problems.push('the sweep with the leaf rule REMOVED still withdrew the exemption, so that rule is not what catches this shape');
+
     console.log('');
     if (problems.length > 0) {
       for (const p of problems) console.log(`  FINDING: ${p}`);
@@ -437,6 +516,12 @@ function main(): number {
     console.log('  without the one line that enumerates it. The binding is followed ACROSS a module');
     console.log('  boundary, and removing that one line blinds the cross-file plant while the SAME');
     console.log('  bytes in one file stay visible — which is what attributes the boundary to the rule.');
+    console.log('  The apparatus exemption falls to a producer a SIBLING hands it, and does not fall');
+    console.log('  without the leaf rule — the shape that walked through the round-17 exemption.');
+    console.log('  Two attributions are stated narrowly on purpose: removing the require-bound line');
+    console.log('  reddens six plants, not one, because every producer in this pack is derived through');
+    console.log('  that call; and the section above measures the apparatus shapes it names, not every');
+    console.log('  shape that can bind a producer.');
     console.log('  Every plant and every run happens in a throwaway copy; neither this repository nor');
     console.log('  the pack is written to.');
     return 0;

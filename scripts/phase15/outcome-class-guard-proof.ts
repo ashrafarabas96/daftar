@@ -95,11 +95,15 @@ const DELETIONS: readonly Deletion[] = [
     id: 'D5',
     guard: 'export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED|NO VERDICT)\\\\b`);',
     without: 'export const DID_NOT_MEASURE = /(?!)/;',
-    arms: ['O6', 'O3j', 'O6b', 'O3k', 'O6c'],
+    arms: ['O6', 'O3j', 'O6b', 'O3k', 'O6c', 'O10'],
     exact: true,
     // MEASURED at round 17: O6c dies here too, and honestly — the fourth
     // spelling lives in this same pattern, so neutralising the pattern takes
     // it with the other three. D11 is the deletion that isolates it.
+    // MEASURED at round 18: O10 joins them for the same reason. The
+    // speaker-less headline D13 isolates is still READ through this pattern,
+    // so a deletion that neutralises the pattern takes the new arm with it;
+    // the table says so rather than my expectation saying otherwise.
     what: "\u00abI could not measure\u00bb in the pack's other spellings \u2014 UNMEASURED and NOT MEASURED (round 16, F-R16-04)",
   },
   {
@@ -166,6 +170,17 @@ const DELETIONS: readonly Deletion[] = [
     what: '«NO VERDICT», the fourth spelling of «I could not measure» (round 17, F-R17-04)',
   },
   {
+    id: 'D13',
+    guard: "export const BARE_REFUSAL = new RegExp('^(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED|NO VERDICT)\\\\s*[:\u2014-]');",
+    without: 'export const BARE_REFUSAL = /(?!)/;',
+    arms: ['O10'],
+    exact: true,
+    // Round 18's F-R18-09. O10b is the control and must stay green without
+    // this rule: a bare refusal is read only where nothing else spoke for the
+    // run, so deleting it cannot change a run that printed a headline.
+    what: 'the SPEAKER-LESS refusal headline, the shape verify-role-convergence prints',
+  },
+  {
     id: 'D12',
     guard:
       'export const RUNTIME_MARKERS =\n  /(?:^|\\n)\\s*(?:Uncaught )?(?:TypeError|RangeError|ReferenceError|AssertionError|Error):|\\n\\s+at [^\\n]*\\(?[^\\n]*:\\d+:\\d+\\)?|UnhandledPromiseRejection|FATAL ERROR:|Segmentation fault/;',
@@ -223,6 +238,24 @@ function main(): number {
   console.log('━'.repeat(78));
   console.log('PHASE 15 — GUARD-DELETION PROOF: WHICH RULE CLASSIFIES WHICH RUN?   (PREPARED / NOT PROMOTED)');
   console.log('━'.repeat(78));
+  // A TABLE THAT NEEDS A CHECKOUT MUST SAY SO (round 18, F-R18-12).
+  //
+  // Arm O1 copies `verify-alert-signals.ts`, whose summary line exists only
+  // when it can search a git tree. Run from an export rather than a clone,
+  // that arm stopped reaching its totals and D10 reported a FINDING against
+  // its own table — a false defect, reported with the same words a real one
+  // would use. The precondition is now named and the proof REFUSES, because a
+  // table that quietly means something different in two directories is worse
+  // than one that will not run in the second.
+  const inCheckout = spawnSync('git', ['rev-parse', '--git-dir'], { cwd: ROOT, encoding: 'utf8' });
+  if (inCheckout.status !== 0) {
+    console.log(`  ${ROOT} is not a git checkout, and arm O1's subject reads its totals from one.`);
+    console.log('  Every deletion here would be measured against arms that cannot reach their own');
+    console.log('  summary line, so the table would report findings about the environment.');
+    console.log('');
+    console.log('EXIT 2 — UNMEASURED.');
+    return 2;
+  }
   const source = readFileSync(CLASSIFIER, 'utf8');
   const missing = DELETIONS.filter((d) => !source.includes(d.guard) || (d.second !== undefined && !source.includes(d.second.guard)));
   if (missing.length > 0) {
