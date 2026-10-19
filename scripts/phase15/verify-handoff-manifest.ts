@@ -52,6 +52,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { devNull as osDevNull } from 'node:os';
 
 const ARGV = process.argv.slice(2);
 const REWRITE = ARGV.includes('--rewrite');
@@ -112,12 +113,38 @@ interface Currency {
  * strip the flag), and `core.quotePath=false` keeps non-ASCII paths from
  * dropping out of a path list unnoticed.
  */
+const devNull = osDevNull;
+
 function gitRead(root: string, args: readonly string[], maxBuffer = 64 * 1024 * 1024): SpawnSyncReturns<string> {
-  return spawnSync('git', ['--no-replace-objects', '-c', 'core.quotePath=false', ...args], {
+  // ROUND 13's F-R13-06 — A FORGED PASS, and the most serious finding this
+  // gate has taken. `env: { ...process.env, … }` inherited every GIT_*
+  // variable, so `GIT_DIR` and `GIT_WORK_TREE` pointed this gate at a
+  // DIFFERENT repository: with a doctored `origin/main` there, a manifest
+  // asserting 0 commits, 0 new files and 0 new scripts printed «VERIFIED …
+  // header current». Disabling replace objects while letting the caller choose
+  // the repository is a lock on a door in a wall that is not there.
+  // `GIT_OBJECT_DIRECTORY` was the same hole by another route: reads failed,
+  // the helper below turned the failure into '', and the gate stated figures
+  // nobody measured.
+  //
+  // So the environment is SCRUBBED, not extended: every GIT_* name is removed
+  // and only the ones this function means are put back. Grafts go to the null
+  // device, which is P14's round-19 remedy (`--no-replace-objects` does not
+  // disable them), and system and global config are taken out of the question
+  // too — a gate whose answer depends on the caller's `~/.gitconfig` is not a
+  // gate.
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('GIT_')) env[k] = v;
+  env.GIT_NO_REPLACE_OBJECTS = '1';
+  env.GIT_GRAFT_FILE = devNull;
+  env.GIT_CONFIG_NOSYSTEM = '1';
+  env.GIT_CONFIG_GLOBAL = devNull;
+  env.GIT_CEILING_DIRECTORIES = root;
+  return spawnSync('git', ['--no-replace-objects', '-c', 'core.quotePath=false', '-C', root, ...args], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer,
-    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+    env,
   });
 }
 
@@ -126,28 +153,48 @@ function arabicToWestern(t: string): string {
 }
 
 function checkCurrency(manifest: string, root: string, dir: string): Currency {
-  const git = (args: readonly string[]): string => {
+  // A FAILED READ IS NOT AN EMPTY ANSWER (round 13, F-R13-06's second half).
+  //
+  // This returned '' when git exited non-zero, and every caller below read
+  // that as a measurement: no commits, no new files, no new script keys — or,
+  // where a count is parsed from it, a number invented out of an empty string.
+  // Absence of output from a command that failed is absence of evidence, and
+  // this gate exists to refuse exactly that confusion elsewhere.
+  const refusals: string[] = [];
+  const git = (args: readonly string[]): string | null => {
     const r = gitRead(root, args);
-    return r.status === 0 ? (r.stdout ?? '').trim() : '';
+    if (r.error !== undefined || r.status !== 0) {
+      refusals.push(
+        `\`git ${args.join(' ')}\` exited ${String(r.status)}${r.error === undefined ? '' : ` (${r.error.message})`}, so every figure read from it is UNMEASURED, not zero`,
+      );
+      return null;
+    }
+    return (r.stdout ?? '').trim();
   };
-  const headSha = git(['rev-parse', 'HEAD']);
+  const headRead = git(['rev-parse', 'HEAD']);
   const base = 'origin/main';
-  const commits = Number(git(['rev-list', '--count', `${base}..HEAD`]) || '0');
-  const newFiles = git(['diff', '--diff-filter=A', '--name-only', `${base}...HEAD`])
-    .split('\n')
-    .filter((l) => l.trim().length > 0).length;
+  const countRead = git(['rev-list', '--count', `${base}..HEAD`]);
+  const addedRead = git(['diff', '--diff-filter=A', '--name-only', `${base}...HEAD`]);
+  // -1 is this record's UNMEASURED: it cannot be mistaken for a count, and the
+  // comparisons below are written so an unmeasured figure never silently
+  // agrees with whatever the document happens to state.
+  const commits = countRead === null || !/^\d+$/.test(countRead) ? -1 : Number(countRead);
+  const newFiles = addedRead === null ? -1 : addedRead.split('\n').filter((l) => l.trim().length > 0).length;
 
-  let scriptsAdded = 0;
-  try {
-    const cur = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
-    const baseJson = JSON.parse(git(['show', `${base}:package.json`]) || '{}') as { scripts?: Record<string, string> };
-    const b = baseJson.scripts ?? {};
-    scriptsAdded = Object.keys(cur.scripts ?? {}).filter((k) => !(k in b)).length;
-  } catch {
-    scriptsAdded = -1;
-  }
+  let scriptsAdded = -1;
+  const basePkg = git(['show', `${base}:package.json`]);
+  if (basePkg !== null)
+    try {
+      const cur = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+      const baseJson = JSON.parse(basePkg) as { scripts?: Record<string, string> };
+      const b = baseJson.scripts ?? {};
+      scriptsAdded = Object.keys(cur.scripts ?? {}).filter((k) => !(k in b)).length;
+    } catch {
+      scriptsAdded = -1;
+    }
 
-  const problems: string[] = [];
+  const problems: string[] = [...refusals];
+  const headSha = headRead ?? '';
   if (headSha.length === 0) {
     problems.push('HEAD could not be read, so currency is UNMEASURED — which is not the same as current');
     return { headSha, commits, newFiles, scriptsAdded, problems };

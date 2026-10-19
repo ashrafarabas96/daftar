@@ -1231,7 +1231,7 @@ function report(sha: string, dirty: boolean, t: Timeline | undefined, ms: number
         // did not run" — with its failure nowhere in the verdict. Contention
         // says some things were NOT measured. It says nothing about the things
         // that WERE, and a failure among those is a fact the port cannot undo.
-        failed.length > 0
+        failed.length > 0 || (PROVE && redsNotRed.length > 0)
         ? 'FAIL'
         : contentionDetail !== null
           ? 'INVALID MEASUREMENT — RESOURCE CONTENTION'
@@ -1279,8 +1279,21 @@ function report(sha: string, dirty: boolean, t: Timeline | undefined, ms: number
       console.log(
         `  ${failed.length} validator(s) FAILED BEFORE the contention, and that is a measurement: the verdict above is FAIL and the exit code is 1, not 3.`,
       );
+    if (PROVE && redsNotRed.length > 0)
+      console.log(
+        `  ${redsNotRed.length} red proof(s) did NOT redden, and that is a measurement too: the verdict above is FAIL and the exit code is 1, not 3.`,
+      );
   }
-  if (failed.length > 0) process.exitCode = 1;
+  // A RED PROOF THAT DID NOT REDDEN IS A MEASURED RESULT TOO (round 13, F-R13-04).
+  //
+  // The first ordering fix ranked `failed` above contention and stopped there,
+  // so the OTHER measured adverse outcome — a planted defect the validators
+  // did not catch — was still swallowed: `R-P2` contains no `recoverTo`, so it
+  // runs to a verdict in exactly the window where the port can be busy, and a
+  // silent red proof printed «the drill did not run» and exited 3. Every
+  // adverse thing this instrument actually MEASURED outranks contention, not
+  // just the first list of them.
+  if (failed.length > 0 || (PROVE && redsNotRed.length > 0)) process.exitCode = 1;
   else if (contentionDetail !== null) process.exitCode = 3;
   else if (!ok) process.exitCode = 1;
 }

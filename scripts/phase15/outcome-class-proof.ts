@@ -148,6 +148,30 @@ const CASES: readonly Case[] = [
     why: 'contention in the body must NOT downgrade a run that reached a verdict: a measured failure is a fact the busy port cannot undo, and a classifier keyed on the mere presence of the word would lose it',
   },
   {
+    id: 'O3d',
+    what: "round 13's F-R13-05 — a MEASURED failure whose transcript also carries the contention headline at column 0",
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          "console.log('VALIDATORS');",
+          "console.log('  P1 FAIL — archiving never started');",
+          "console.log('PHASE 15 PITR PROOF: FAIL');",
+          '// Unindented, which is the whole point: O3c passed only because the',
+          '// real drill happens to print this line with two leading spaces, so',
+          '// the classification rested on whitespace rather than on the verdict.',
+          "console.log('INVALID MEASUREMENT — RESOURCE CONTENTION: the recovered cluster could not take port 55474');",
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /MEASURED, THEN EXITED NON-ZERO/,
+    why: 'the headline was matched anywhere in the transcript and before the verdict was read, so a run that reached FAIL was downgraded to «did not measure» by a later line of its own output. Only the verdict line speaks for the run',
+  },
+  {
     id: 'O4',
     what: 'CONTROL — a clean run',
     build: (dir) => {

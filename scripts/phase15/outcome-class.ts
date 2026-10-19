@@ -103,7 +103,7 @@ export const VERDICT_LINE =
  * verdict, and it is classified as one; only a run whose verdict line IS the
  * contention headline did not measure.
  */
-export const CONTENTION_VERDICT = /^(?:PHASE\s+15\s+[A-Z0-9 /-]+:\s*)?INVALID MEASUREMENT\b/m;
+export const CONTENTION_VERDICT = /^(?:PHASE\s+15\s+[A-Z0-9 /-]+:\s*)?INVALID MEASUREMENT\b/;
 
 export function reachedVerdict(r: Classifiable): string | null {
   const line = r.output
@@ -125,10 +125,17 @@ export function outcomeClass(r: Classifiable): string {
     return 'CRASHED BEFORE MEASURING — an uncaught runtime error with no summary line, so this exit code is NOT a verdict about the subject';
   if (loader || threw)
     return 'MEASURED, THEN THREW — it reached its own summary AND died on an uncaught error, so its totals describe an INCOMPLETE run and the exit code is not a verdict either';
-  if (CONTENTION_VERDICT.test(r.output))
+  // ROUND 13's F-R13-05: this was tested against the WHOLE transcript, and
+  // before the verdict was read. A drill that measured a FAILURE and ALSO hit
+  // contention prints both lines, so a measured failure was downgraded to «did
+  // not measure» by a sentence further down its own output. Arm O3c passed
+  // only because the drill happens to indent that line by two spaces — a
+  // classification resting on whitespace. It is now read from the VERDICT LINE
+  // the run reached, which is the only line that speaks for the run.
+  const verdictLine = reachedVerdict(r);
+  if (verdictLine !== null && CONTENTION_VERDICT.test(verdictLine))
     return 'DID NOT MEASURE — the instrument declared INVALID MEASUREMENT (a resource it needed was held), so this exit code is a statement about the RUN and not a verdict about the subject. Re-run it alone; nothing here is evidence either way';
   if (r.counts.readFrom !== null) return 'MEASURED, THEN EXITED NON-ZERO — the instrument reached its own summary line, so the code is its verdict';
-  const verdict = reachedVerdict(r);
-  if (verdict !== null) return `MEASURED, THEN EXITED NON-ZERO — it printed its own verdict line (“${verdict}”), so the code is its verdict`;
+  if (verdictLine !== null) return `MEASURED, THEN EXITED NON-ZERO — it printed its own verdict line (“${verdictLine}”), so the code is its verdict`;
   return 'UNCLASSIFIED NON-ZERO — no crash marker, no summary line and no verdict line this runner recognises; only the log settles it';
 }

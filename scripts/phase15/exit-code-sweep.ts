@@ -100,6 +100,9 @@ interface Wrapper {
   readonly name: string;
   readonly file: string;
   readonly line: number;
+  /** The DECLARATION this wrapper is, so a callee can be resolved to it rather
+   *  than merely spelled like it (round 13, F-R13-03). */
+  readonly decl: ts.Node;
   readonly param: string;
   /** The comparison actually matched in its body — printed, not asserted. */
   readonly matched: string;
@@ -302,7 +305,8 @@ function wrappersIn(src: ReadonlyMap<string, readonly string[]>): readonly Wrapp
         if (takes !== undefined && name !== null) {
           const param = takes.name.getText(sf);
           const matched = statusDecisionOf(takes, param, sf);
-          if (matched !== null) found.push({ name, file, line: lineOf(sf, n) + 1, param, matched });
+          const decl = n.parent !== undefined && ts.isVariableDeclaration(n.parent) ? n.parent : n;
+          if (matched !== null) found.push({ name, file, line: lineOf(sf, n) + 1, decl, param, matched });
         }
       }
       n.forEachChild(walk);
@@ -343,20 +347,78 @@ interface Aliases {
   readonly ns: ReadonlySet<string>;
 }
 
+/** A module specifier as a pack key: the pack is one flat directory. */
+const specKey = (spec: string): string => (spec.startsWith('.') ? `${basename(spec).replace(/\.(?:m|c)?[jt]s$/, '')}.ts` : spec);
+
+/**
+ * The pack's sources, so a re-export can be followed — set once per sweep.
+ *
+ * Round 13's F-R13-02: resolving an import only against the module it names
+ * left three routes open, each of which hid the X16 discarding caller —
+ * `export { raw } from './home'`, `export * from './home'`, and a default
+ * export. A barrel file is the ordinary way a pack grows, so a rule that stops
+ * at the first specifier is a rule one file re-organisation disables.
+ */
+let PACK_SRC: ReadonlyMap<string, readonly string[]> | null = null;
+
+/** Does `mod` provide `name`, directly or through re-exports, from `home`'s `token`? */
+function provides(mod: string, name: string, home: string, token: string, seen: Set<string>): boolean {
+  if (mod === home) return name === token;
+  const key = `${mod}::${name}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  const lines = PACK_SRC?.get(mod);
+  if (lines === undefined) return false;
+  const sf = ast(mod, lines.join('\n'));
+  for (const st of sf.statements) {
+    if (!ts.isExportDeclaration(st) || st.moduleSpecifier === undefined || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const target = specKey(st.moduleSpecifier.text);
+    if (st.exportClause === undefined) {
+      // `export * from './x'` — the name keeps its spelling through the star.
+      if (provides(target, name, home, token, seen)) return true;
+      continue;
+    }
+    if (!ts.isNamedExports(st.exportClause)) continue;
+    for (const el of st.exportClause.elements) if (el.name.text === name && provides(target, (el.propertyName ?? el.name).text, home, token, seen)) return true;
+  }
+  return false;
+}
+
+/** Is `home`'s DEFAULT export the declaration named `token`? */
+function defaultIsToken(home: string, token: string): boolean {
+  const lines = PACK_SRC?.get(home);
+  if (lines === undefined) return false;
+  const sf = ast(home, lines.join('\n'));
+  for (const st of sf.statements) {
+    if (ts.isExportAssignment(st) && !st.isExportEquals && ts.isIdentifier(st.expression) && st.expression.text === token) return true;
+    if (
+      ts.isFunctionDeclaration(st) &&
+      st.name !== undefined &&
+      st.name.text === token &&
+      st.modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword) === true
+    )
+      return true;
+  }
+  return false;
+}
+
 function aliasesOf(sf: ts.SourceFile, token: string, home: string, file: string): Aliases {
   const ids = new Set<string>();
   const ns = new Set<string>();
   if (file === home) ids.add(token);
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
-    const spec = st.moduleSpecifier.text;
-    const target = spec.startsWith('.') ? `${basename(spec).replace(/\.(?:m|c)?[jt]s$/, '')}.ts` : spec;
-    if (target !== home) continue;
-    const nb = st.importClause?.namedBindings;
+    const target = specKey(st.moduleSpecifier.text);
+    const clause = st.importClause;
+    if (clause === undefined) continue;
+    // `import raw from './barrel'` — a default export, possibly re-exported.
+    if (clause.name !== undefined && (target === home ? defaultIsToken(home, token) : provides(target, 'default', home, token, new Set<string>())))
+      ids.add(clause.name.text);
+    const nb = clause.namedBindings;
     if (nb === undefined) continue;
     if (ts.isNamedImports(nb)) {
-      for (const el of nb.elements) if ((el.propertyName ?? el.name).text === token) ids.add(el.name.text);
-    } else if (ts.isNamespaceImport(nb)) {
+      for (const el of nb.elements) if (provides(target, (el.propertyName ?? el.name).text, home, token, new Set<string>())) ids.add(el.name.text);
+    } else if (ts.isNamespaceImport(nb) && target === home) {
       ns.add(nb.name.text);
     }
   }
@@ -390,9 +452,27 @@ function callsTo(sf: ts.SourceFile, a: Aliases, token: string, net: boolean): ts
   return out;
 }
 
-/** Calls to the producer itself, under whatever name this file imported it. */
-const producerCalls = (sf: ts.SourceFile, file: string): ts.CallExpression[] =>
-  callsTo(sf, aliasesOf(sf, 'spawnSync', 'node:child_process', file), 'spawnSync', true);
+/**
+ * Calls to the producer itself, under whatever name this file imported it.
+ *
+ * ROUND 13's F-R13-01, AND THE WORST KIND OF FINDING: narrowing this to the
+ * resolved binding made the sweep BLIND to a shape the previous head reported.
+ * `import { spawnSync } from 'child_process'` — the same module without the
+ * `node:` prefix — resolved to no alias at all, so a discarding call in such a
+ * file was not enumerated and the sweep printed EXIT 0 over it. A fix for a
+ * hiding rule that hides more than it found is a regression, not a fix.
+ *
+ * So the producer keeps its OLD behaviour as a FLOOR — every identifier and
+ * every property access spelled `spawnSync`, from wherever — and the alias
+ * resolution is added ON TOP of it, for the renamed-import case. For the
+ * producer, over-reporting is noise and under-reporting is a fail-open, so the
+ * two are not symmetric and the union is the only safe shape.
+ */
+function producerCalls(sf: ts.SourceFile, file: string): ts.CallExpression[] {
+  const ids = new Set<string>(['spawnSync']);
+  for (const m of ['node:child_process', 'child_process']) for (const id of aliasesOf(sf, 'spawnSync', m, file).ids) ids.add(id);
+  return callsTo(sf, { ids, ns: new Set<string>() }, 'spawnSync', true);
+}
 
 const unwrap = (e: ts.Expression): ts.Expression => {
   let x = e;
@@ -515,10 +595,29 @@ function mentions(e: ts.Expression, call: ts.CallExpression, bound: ts.VariableD
  * this file, or imported from the file that declares it, under whatever local
  * name the import gave it.
  */
-function wrapperFor(callee: string | null, wrappers: readonly Wrapper[], sf: ts.SourceFile, file: string): Wrapper | undefined {
-  if (callee === null) return undefined;
-  for (const w of wrappers) if (w.file === file && w.name === callee) return w;
-  for (const w of wrappers) if (w.file !== file && aliasesOf(sf, w.name, w.file, file).ids.has(callee)) return w;
+function wrapperFor(callee: ts.Expression | undefined, wrappers: readonly Wrapper[], sf: ts.SourceFile, file: string): Wrapper | undefined {
+  if (callee === undefined) return undefined;
+  if (ts.isIdentifier(callee)) {
+    // ROUND 13's F-R13-03: matching `w.file === file && w.name === callee` is
+    // still a SPELLING test, one module in. A `gate(out: string)` declared at
+    // the top of a file was credited with the laws of an unrelated
+    // `gate(r: SpawnSyncReturns<string>)` nested inside another function of the
+    // same file — renaming that nested helper turned the same call red, which
+    // means the collision WAS the guard. A callee is resolved to the
+    // declaration actually in scope at the call, and credited only if that
+    // declaration IS a wrapper.
+    const decl = resolve(callee);
+    if (decl !== null) return wrappers.find((w) => w.file === file && w.decl === decl);
+    for (const w of wrappers) if (w.file !== file && aliasesOf(sf, w.name, w.file, file).ids.has(callee.text)) return w;
+    // Declared nowhere this resolver can see and imported from nowhere: an
+    // ambient or top-level binding it cannot place. Crediting it would be the
+    // `?? w[0]` fallback under another name.
+    return undefined;
+  }
+  if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)) {
+    const want = callee.name.text;
+    for (const w of wrappers) if (w.name === want && aliasesOf(sf, w.name, w.file, file).ns.has(callee.expression.text)) return w;
+  }
   return undefined;
 }
 
@@ -547,8 +646,7 @@ function decideCall(call: ts.CallExpression, sf: ts.SourceFile, wrappers: readon
     for (const id of usesOf(bound, want, enclosingFunction(bound))) {
       const p = id.parent;
       if (!ts.isCallExpression(p) || !p.arguments.includes(id)) continue;
-      const callee = ts.isIdentifier(p.expression) ? p.expression.text : null;
-      const via = wrapperFor(callee, wrappers, sf, file);
+      const via = wrapperFor(p.expression, wrappers, sf, file);
       if (via !== undefined) return { kind: 'read', how: `${want} → ${via.name}() at ${via.file}:${via.line}` };
     }
   }
@@ -593,8 +691,7 @@ function decideCall(call: ts.CallExpression, sf: ts.SourceFile, wrappers: readon
   for (let n: ts.Node | undefined = call.parent; n !== undefined; n = n.parent) {
     if (!ts.isCallExpression(n)) continue;
     if (!n.arguments.some((a) => a.pos <= call.pos && call.end <= a.end)) continue;
-    const callee = ts.isIdentifier(n.expression) ? n.expression.text : ts.isPropertyAccessExpression(n.expression) ? n.expression.name.text : null;
-    const via = wrapperFor(callee, wrappers, sf, file);
+    const via = wrapperFor(n.expression, wrappers, sf, file);
     if (via !== undefined) return { kind: 'read', how: `argument to ${via.name}() at ${via.file}:${via.line}` };
   }
   // 4. forwarded outward
@@ -618,6 +715,7 @@ interface SweepResult {
 function sweep(dir: string): SweepResult {
   parsed.clear(); // each pack copy is parsed on its own bytes
   const src = new Map(sources(dir));
+  PACK_SRC = src;
   const apparatusProblem = apparatusIsInert(dir);
   if (apparatusProblem === null) src.delete(APPARATUS);
   const emptyPack: Site[] = [];
@@ -1157,6 +1255,98 @@ const PLANTS: readonly Plant[] = [
       r.unchecked.some((s) => s.file === 'planted-x17.ts')
         ? null
         : 'a call was excused by a wrapper of the same name in a file it does not import. Deleting the `?? w[0]` fallback alone turns this plant red and leaves the real pack green, so the fallback only ever bought false credit',
+  },
+  {
+    id: 'X18',
+    what: "round 13's F-R13-01 — the producer imported WITHOUT the `node:` prefix, which a binding-only rule stopped seeing",
+    plant: (dir) => {
+      const f = join(dir, 'planted-x18.ts');
+      writeFileSync(
+        f,
+        [
+          "import { spawnSync } from 'child_process';",
+          '// The same module, the same function, one prefix shorter. Round 12’s fix',
+          '// resolved the producer through its import and nothing else, so this',
+          '// file resolved to no binding and its call was never enumerated: the',
+          '// sweep printed EXIT 0 over a shape the PREVIOUS head reported as',
+          '// unchecked. The floor below the alias resolution is what this measures.',
+          "spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' });",
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'planted-x18.ts')
+        ? null
+        : 'a plain discarded spawnSync is invisible because its import spelled the module without `node:`. A rule that resolves bindings must ADD to the name floor, never replace it: for the producer, over-reporting is noise and under-reporting is a fail-open',
+  },
+  {
+    id: 'X19',
+    what: "round 13's F-R13-02 — the X16 discarding caller again, this time behind a re-export barrel",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x19-home.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'export function raw(args: readonly string[]): ReturnType<typeof spawnSync> {',
+          "  return spawnSync('git', [...args], { encoding: 'utf8' });",
+          '}',
+          "export const clean = raw(['status', '--porcelain']).status === 0;",
+          '',
+        ].join('\n'),
+      );
+      // Three routes in one plant: a named re-export, a star re-export of that
+      // barrel, and the default. A rule that stops at the first module
+      // specifier sees none of them.
+      writeFileSync(join(dir, 'planted-x19-barrel.ts'), ["export { raw } from './planted-x19-home.js';", ''].join('\n'));
+      writeFileSync(join(dir, 'planted-x19-star.ts'), ["export * from './planted-x19-barrel.js';", ''].join('\n'));
+      writeFileSync(
+        join(dir, 'planted-x19.ts'),
+        [
+          "import { raw as gitRaw } from './planted-x19-star.js';",
+          "export const dirty = (gitRaw(['status', '--porcelain']).stdout ?? '').trim().length > 0;",
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'planted-x19.ts' && /discards the code/.test(s.text))
+        ? null
+        : 'a discarding call site was hidden by re-exporting the forwarder through a barrel. Following the import to the module it names is not enough: `export {…} from`, `export *` and a default export each move a declaration without moving its name, and a pack grows barrels as a matter of course',
+  },
+  {
+    id: 'X20',
+    what: "round 13's F-R13-03 — a same-named helper in the SAME file, which is not the wrapper in scope at the call",
+    plant: (dir) => {
+      const f = join(dir, 'planted-x20.ts');
+      writeFileSync(
+        f,
+        [
+          "import { spawnSync } from 'node:child_process';",
+          "import type { SpawnSyncReturns } from 'node:child_process';",
+          '// The wrapper that reads an exit code is NESTED inside another function,',
+          '// so it is not in scope at the call below. The `gate` that IS in scope',
+          '// trims a string. Matching the callee by name inside the file credited',
+          "// the call with the nested helper's laws; renaming the nested one made",
+          '// the same call red, which is how the collision was measured.',
+          'export function outer(): void {',
+          '  function gate(r: SpawnSyncReturns<string>): void {',
+          "    if (r.status !== 0) throw new Error('command failed');",
+          '  }',
+          "  gate(spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }));",
+          '}',
+          'function gate(out: string): string {',
+          '  return out.trim();',
+          '}',
+          "export const head = gate(spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout ?? '');",
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((s) => s.file === 'planted-x20.ts')
+        ? null
+        : 'a call was credited with the laws of a same-named helper that is not in scope where the call is. A callee must be RESOLVED to the declaration the language would bind it to; a name match inside one file is the cross-file fallback again, one module in',
   },
   {
     id: 'X9',
