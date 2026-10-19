@@ -153,6 +153,46 @@ ARM_LABELS = (
     "WITNESS-HANDLER",
     "WITNESS-HANDLER-CTL",
     "WITNESS-SENTINEL",
+    # ROUND 30. W-3 and W-4, the two side doors into the witness law: the
+    # relation form's shape read from the server's own keyword list, the
+    # relation-level refusal class, the handler one frame deeper, the statement
+    # that builds more SQL — and the honest case that must NOT red. W-1 and
+    # W-2: the census measured in the configuration an archive copy takes, over
+    # every static sentence of every code path, with the complement sealed.
+    "WITNESS-SHAPE",
+    "WITNESS-SHAPE-CTL",
+    "WITNESS-RELCLASS",
+    "WITNESS-RELCLASS-CTL",
+    "WITNESS-LAUNDER",
+    "WITNESS-LAUNDER-CTL",
+    "WITNESS-DYNSQL",
+    "WITNESS-DYNSQL-CTL",
+    "WITNESS-LITERAL",
+    "WITNESS-LITERAL-CTL",
+    "CENSUS-NOGIT",
+    "CENSUS-NOGIT-CTL",
+    "CENSUS-PATHS",
+    "CENSUS-PATHS-CTL",
+    "CENSUS-SEAL-COMP",
+    "CENSUS-SEAL-COMP-CTL",
+    # ROUND 30, the coordinator's F-1 to F-4: the row predicate built by the
+    # form rather than written by the case, the relation shape read from the
+    # server's keyword list, the refusal read out of the arriving exception
+    # CONTEXT, and the net over every SQL file the run loads with its byte pin.
+    "WITNESS-REACH",
+    "WITNESS-REACH-CTL",
+    "WITNESS-REACH2",
+    "WITNESS-REACH2-CTL",
+    "WITNESS-MERGE",
+    "WITNESS-SPLIT",
+    "WITNESS-BLOCK",
+    "WITNESS-BLOCK-CTL",
+    "CORE-NET-SET",
+    "CORE-NET-DYN",
+    "CORE-NET-FIX",
+    "CORE-NET-STRAY",
+    "CORE-PIN",
+    "CORE-PIN-CTL",
     "HATCH",
     "BASELINE",
     "I1-conc",
@@ -224,6 +264,25 @@ NOT_ARM_PREFIXES = (
     "role daftar_",
     "server_version=",
     "the frozen boundary is anchored to ",
+    # ROUND 30, W-1 (P1), found by the twentieth challenge and the defect this
+    # round is about. Round 29's "refuse what you cannot classify" is strictly
+    # stronger than the patterns it replaced, and it therefore turns every
+    # undeclared line of EVERY code path into a red — including the paths this
+    # container does not take. The runner's no-git branch prints this line, and
+    # a `git archive` copy with no `.git` — which is the configuration an
+    # independent reviewer runs, and the project's own definition of a subject
+    # copy — takes it. So the same head was FAILED=0 in a work tree and
+    # FAILED=1 from an archive, and the difference was a directory the gate
+    # states it does not need.
+    #
+    # It asserts nothing the gate does not measure elsewhere: in that
+    # configuration the manifest's byte check is what attests the frozen set,
+    # and it has its own red path. `CENSUS-NOGIT` below measures the census
+    # against a log with this branch taken, and `CENSUS-PATHS` measures EVERY
+    # static line the runner can print, in any configuration, against this
+    # declaration — so an undeclared line of an untaken path reds here instead
+    # of in a reviewer's container.
+    "no git work tree here",
 )
 
 # ---------------------------------------------------------------------
@@ -274,7 +333,13 @@ EXPECTED_ARMS = (
     ("CENSUS-MULT a1", 1),
     ("CENSUS-MULT a2", 1),
     ("CENSUS-MULT-CTL", 1),
+    ("CENSUS-NOGIT", 1),
+    ("CENSUS-NOGIT-CTL", 1),
+    ("CENSUS-PATHS", 1),
+    ("CENSUS-PATHS-CTL", 1),
     ("CENSUS-SEAL", 1),
+    ("CENSUS-SEAL-COMP", 1),
+    ("CENSUS-SEAL-COMP-CTL", 1),
     ("CENSUS-SHAPE", 1),
     ("CENSUS-SHAPE-CTL", 1),
     ("CENSUS-UNKNOWN", 1),
@@ -282,6 +347,12 @@ EXPECTED_ARMS = (
     ("CORE-NET", 1),
     ("CORE-NET y22", 1),
     ("CORE-NET-CTL y23", 1),
+    ("CORE-NET-DYN", 1),
+    ("CORE-NET-FIX", 1),
+    ("CORE-NET-SET", 1),
+    ("CORE-NET-STRAY", 1),
+    ("CORE-PIN", 1),
+    ("CORE-PIN-CTL", 1),
     ("GRAFTS g5", 1),
     ("GRAFTS g7", 1),
     ("GUARD-CTL y1", 1),
@@ -378,18 +449,36 @@ EXPECTED_ARMS = (
     ("WITNESS w2", 1),
     ("WITNESS-BIND", 1),
     ("WITNESS-BIND-CTL", 1),
+    ("WITNESS-BLOCK", 1),
+    ("WITNESS-BLOCK-CTL", 1),
     ("WITNESS-CTL", 1),
+    ("WITNESS-DYNSQL", 1),
+    ("WITNESS-DYNSQL-CTL", 1),
     ("WITNESS-HANDLER", 1),
     ("WITNESS-HANDLER-CTL", 1),
     ("WITNESS-KEY", 1),
     ("WITNESS-KEY-CTL", 1),
+    ("WITNESS-LAUNDER", 1),
+    ("WITNESS-LAUNDER-CTL", 1),
+    ("WITNESS-LITERAL", 1),
+    ("WITNESS-LITERAL-CTL", 1),
+    ("WITNESS-MERGE", 1),
+    ("WITNESS-REACH", 1),
+    ("WITNESS-REACH-CTL", 1),
+    ("WITNESS-REACH2", 1),
+    ("WITNESS-REACH2-CTL", 1),
+    ("WITNESS-RELCLASS", 1),
+    ("WITNESS-RELCLASS-CTL", 1),
     ("WITNESS-ROW", 1),
     ("WITNESS-ROW-CTL", 1),
     ("WITNESS-SENTINEL", 1),
+    ("WITNESS-SHAPE", 1),
+    ("WITNESS-SHAPE-CTL", 1),
+    ("WITNESS-SPLIT", 1),
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "754cb0164cbecbafcd59c417cebdb1391808f049ca4b05661eed052165eaac62"
+EXPECTED_SEAL = "bc58e937529d5b62b8412e408e4323367b33df63f864c51e567f1e74fb5c9687"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not
@@ -486,15 +575,49 @@ def census(path):
     return seen, unknown
 
 
+def _digest(body):
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def components(pairs):
+    """The four declarations this program decides by, each as its own block.
+
+    ROUND 30, W-2. The seal used to cover `EXPECTED_ARMS` alone — the set of
+    things that MUST print — and not the lists that decide which lines the
+    census is allowed to pass over. The twentieth challenge added one head to
+    `NOT_ARMS`, left `EXPECTED_SEAL` untouched, and an arm-shaped arrival that
+    had been refused by name came back as `148 named arms of 148 declared`,
+    rc 0: a whole family admitted by one line, with no re-seal.
+
+    The file's own argument for the seal — that the set must not be widened or
+    narrowed quietly in passing — applies verbatim to the complement, so all
+    four blocks are sealed together. Each is digested on its own as well, and
+    both the refusal and `--seal` print the four, so an author can see WHICH
+    declaration moved rather than only that something did.
+    """
+    return (
+        ("EXPECTED_ARMS",
+         "".join("%s\t%d\n" % (ident, n) for ident, n in pairs)),
+        ("ARM_LABELS", "".join("L\t%s\n" % w for w in ARM_LABELS)),
+        ("NOT_ARMS", "".join("N\t%s\n" % w for w in NOT_ARMS)),
+        ("NOT_ARM_PREFIXES", "".join("P\t%s\n" % w for w in NOT_ARM_PREFIXES)),
+    )
+
+
+def component_report(pairs):
+    return "; ".join("%s=%s" % (name, _digest(body)[:12])
+                     for name, body in components(pairs))
+
+
 def seal_of(pairs):
-    """The SHA-256 of the declared multiplicity, as one newline-terminated block.
+    """The SHA-256 of all four declarations, as one newline-terminated block.
 
     ROUND 29: the seal covers the COUNTS as well as the identities, so changing
     a declared count from 5 to 4 — which is how U-1's hole would be papered over
-    — breaks the seal exactly as deleting an identity does.
+    — breaks the seal exactly as deleting an identity does. ROUND 30: and the
+    three lists above, so the complement cannot be widened without a re-seal.
     """
-    body = "".join("%s\t%d\n" % (ident, n) for ident, n in pairs)
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+    return _digest("".join(body for _, body in components(pairs)))
 
 
 def declaration(pairs):
@@ -515,6 +638,19 @@ def pairs_of(counter):
 def main(argv):
     # The WHOLE argv vocabulary is validated, because round 18's N-6 was an
     # option spelling that no parser read and no refusal could therefore see.
+    # ROUND 30, W-2. The patchers that build the census's own arms used to
+    # re-seal by RE-IMPLEMENTING the digest — a copy of the law in a program
+    # whose job is to perturb it, which went wrong the moment the seal grew to
+    # cover four declarations instead of one. This mode prints the seal of THIS
+    # program's own declarations, so a patcher re-seals by asking the law rather
+    # than by restating it. It reads no log, measures nothing, and exits 2 like
+    # the other generator.
+    if len(argv) == 2 and argv[1] == "--seal-only":
+        sys.stdout.write('EXPECTED_SEAL = "%s"\n' % seal_of(list(EXPECTED_ARMS)))
+        sys.stderr.write("CENSUS: the four declarations as this file holds them — %s. "
+                         "This mode MEASURES NOTHING and exits 2 by design\n"
+                         % component_report(list(EXPECTED_ARMS)))
+        return 2
     if len(argv) == 3 and argv[1] == "--seal":
         log = argv[2]
     elif len(argv) == 2 and not argv[1].startswith("-"):
@@ -522,7 +658,8 @@ def main(argv):
     else:
         sys.stderr.write(
             "CENSUS FAIL: usage: p8-arm-census.py <run-log> | "
-            "p8-arm-census.py --seal <run-log>\n")
+            "p8-arm-census.py --seal <run-log> | "
+            "p8-arm-census.py --seal-only\n")
         return 1
 
     if argv[1] == "--seal":
@@ -573,6 +710,11 @@ def main(argv):
                 "CENSUS: this block is identical to the declaration in the "
                 "file; nothing arrived and nothing departed\n")
         sys.stderr.write(
+            "CENSUS: the seal covers four declarations, and these are their "
+            "digests as this block leaves them — %s. The three lists are "
+            "hand-written, so a change to one of them shows up as a broken "
+            "seal and is named here (W-2)\n" % component_report(pairs))
+        sys.stderr.write(
             "CENSUS: this mode MEASURES NOTHING and exits 2 by design\n")
         return 2
 
@@ -588,11 +730,12 @@ def main(argv):
     actual_seal = seal_of(declared_pairs)
     if actual_seal != EXPECTED_SEAL:
         sys.stderr.write(
-            "CENSUS FAIL: SEAL BROKEN — EXPECTED_ARMS digests to %s and "
-            "EXPECTED_SEAL says %s, so the declared set was changed without "
-            "being re-sealed and this program cannot say which version of it "
-            "the author meant. Run --seal and commit both lines together\n"
-            % (actual_seal, EXPECTED_SEAL))
+            "CENSUS FAIL: SEAL BROKEN — the four declarations digest to %s and "
+            "EXPECTED_SEAL says %s, so one of them was changed without being "
+            "re-sealed and this program cannot say which version of them the "
+            "author meant. Run --seal and commit the block and the seal "
+            "together. The four, each on its own: %s\n"
+            % (actual_seal, EXPECTED_SEAL, component_report(declared_pairs)))
         return 1
     if sorted(set(declared)) != declared:
         sys.stderr.write(

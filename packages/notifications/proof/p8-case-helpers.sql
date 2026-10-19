@@ -62,6 +62,10 @@ DROP FUNCTION IF EXISTS p8.case_refuses(TEXT, TEXT, TEXT, TEXT);
 -- dropped by signature, so no database carrying an older copy of this file keeps
 -- a door this one closed.
 DROP FUNCTION IF EXISTS p8.case_refuses_core(TEXT, TEXT, TEXT, BOOLEAN);
+-- ROUND 30, W-3: the core now takes the FORM that called it, so the arriving
+-- refusal can be checked against what that form claims. The four-argument
+-- signature goes with the same DROP the earlier ones got.
+DROP FUNCTION IF EXISTS p8.case_refuses_core(TEXT, TEXT, TEXT, TEXT);
 DROP FUNCTION IF EXISTS p8.case_refuses_unwitnessed(TEXT, TEXT, TEXT);
 -- ROUND 29. THE WITNESS IS NO LONGER SUPPLIED BY THE CASE.
 --
@@ -87,18 +91,29 @@ DROP FUNCTION IF EXISTS p8.case_refuses_unwitnessed(TEXT, TEXT, TEXT);
 -- evidence:
 --
 --   case_refuses_row(label, stmt, expect, relation, key_column, key_value)
---       The refusal is about a ROW. The statement must carry @REL@ and @KEY@;
---       the witness built from them is `SELECT 1 FROM <relation> WHERE
---       <key_column> = <key_value>` and must return at least one row, and no
---       row for the sentinel key. Vacuity is impossible: the row is read.
+--       The refusal is about a ROW. The statement must carry @REL@ and may NOT
+--       carry a predicate of its own (ROUND 30, F-1: it must not carry @KEY@);
+--       the form APPENDS `WHERE <key_column>::text = <key_value>` to the
+--       statement and builds the witness `SELECT 1 FROM <relation> WHERE
+--       <key_column> = <key_value>` from the same two values, which must return
+--       at least one row and no row for the sentinel key. The statement and the
+--       witness therefore read the same row because one expression produces
+--       both predicates — and that, not the reading of the row, is what makes
+--       vacuity impossible. ROUND 30, F-1: when the predicate was the case's own
+--       text, the row was read and the refusal was still about an empty set.
 --
 --   case_refuses_relation(label, stmt, expect, relation)
---       The refusal is about a RELATION. The statement must carry @REL@ and
---       must contain NO key predicate — a statement with a WHERE is about a
---       row, and must say so, which is what closes N-2.
+--       The refusal is about a RELATION. The statement must carry @REL@ and may
+--       carry only the SQL keywords this form declares, read from
+--       `pg_get_keywords()`: a statement that can single out a row carries a
+--       keyword nobody declared and is refused by name. ROUND 30, F-2: the
+--       earlier rule asked whether the word `where` appeared, and `MERGE … ON`
+--       reached one row without it. The arriving refusal must also be a
+--       relation-level one — 42501 that is not a row-level policy — so a
+--       refusal the ROW decides belongs in the row form.
 --
 --   case_refuses_role(label, stmt, expect, role)
---       The refusal is about a ROLE, with the same no-WHERE rule.
+--       The refusal is about a ROLE, and its declared shape is `SET ROLE`.
 --
 -- The five-argument form is GONE. So is every argument a case could use to
 -- say what its own evidence is.
@@ -113,6 +128,25 @@ LANGUAGE sql IMMUTABLE AS $$
   SELECT regexp_replace(regexp_replace(t, '/\*.*?\*/', ' ', 'gs'), '--[^\n]*', ' ', 'g')
 $$;
 
+-- ROUND 30, W-4 (second half). The handler ban below reads the statement's
+-- text, and the twentieth challenge measured the price of reading text that
+-- includes the payload: `SET obligation_key = 'B1|exception noted'` was refused
+-- as carrying a handler. There is no handler in that statement — the word is
+-- inside a string literal — and a hardening that reds an honest case is not
+-- hardening.
+--
+-- So SINGLE-QUOTED literals are removed before the handler test, and
+-- DOLLAR-QUOTED bodies are deliberately NOT: a `DO $d$ … EXCEPTION … $d$` block
+-- carries its handler inside dollar quotes, and that is the shape the ban
+-- exists for (the coordinator's N-3). Stripping those would hide exactly what
+-- must stay visible. Doubled quotes inside a literal are consumed with it; an
+-- unbalanced quote leaves the text in place, which can only make the test
+-- stricter.
+CREATE OR REPLACE FUNCTION p8.strip_sql_strings(t TEXT) RETURNS TEXT
+LANGUAGE sql IMMUTABLE AS $f$
+  SELECT regexp_replace(t, $re$'(''|[^'])*'$re$, ' ', 'g')
+$f$;
+
 -- A case statement may not carry its own exception handler (the coordinator's
 -- N-3). The witness law is derived from the SQLSTATE that ARRIVES, and a
 -- `DO … EXCEPTION WHEN insufficient_privilege THEN RAISE EXCEPTION 'denied …'`
@@ -120,12 +154,70 @@ $$;
 -- Refusing the handler is cheaper than reading through it.
 CREATE OR REPLACE FUNCTION p8.assert_no_handler(label TEXT, stmt TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
+DECLARE bare TEXT;
 BEGIN
-  IF p8.strip_sql_comments(stmt) ~* '(^|[^a-z_])exception([^a-z_]|$)' THEN
+  bare := p8.strip_sql_strings(p8.strip_sql_comments(stmt));
+  IF bare ~* '(^|[^a-z_])exception([^a-z_]|$)' THEN
     RAISE EXCEPTION '% FAIL: THE STATEMENT CARRIES AN EXCEPTION HANDLER — the witness law is '
                     'derived from the SQLSTATE that arrives, and a handler can re-raise a '
                     'permission denial as P0001, which that derivation cannot see (N-3). Write '
                     'the statement without a handler', label;
+  END IF;
+  -- ROUND 30, W-4. Reading the statement cannot see a frame BENEATH it, and the
+  -- cheapest frame to add is a string this statement executes. Both halves of
+  -- that are now closed: a handler inside a p8 frame can no longer launder a
+  -- SQLSTATE (`case_permits_rows` re-raises with `USING ERRCODE`), and a
+  -- handler inside a string this statement would EXECUTE never runs, because a
+  -- case statement may not build more SQL. No live case does
+  -- (measured: 0 occurrences of EXECUTE in the four case files), so this costs
+  -- nothing and closes the nesting the literal-stripping above would otherwise
+  -- open.
+  IF bare ~* '(^|[^a-z_])execute([^a-z_]|$)' THEN
+    RAISE EXCEPTION '% FAIL: THE STATEMENT BUILDS MORE SQL — a case statement is executed as it '
+                    'is written, so that the refusal the law reads is the refusal the reader sees. '
+                    'A statement that EXECUTEs text can carry a handler this test cannot read '
+                    '(W-4). Write the statement itself', label;
+  END IF;
+END $$;
+
+-- ROUND 30, W-3. The rule that stopped a row case being declared as a relation
+-- case (the coordinator's N-2) looked for the word `where`. The twentieth
+-- challenge reached exactly one row by its key without it:
+-- `INSERT … ON CONFLICT (business_id, attempt_key) DO UPDATE SET outcome = …`,
+-- measured as `daftar_worker`, PASS, with a witness that said only that the
+-- relation exists. Adding `on conflict` to the list of banned words is the
+-- shape that reopens on the next spelling (`using`, `having`, `merge`, …).
+--
+-- So the test is INVERTED, into the same law round 29 gave the census: refuse
+-- what you cannot classify. The statement's keywords are read with
+-- `pg_get_keywords()` — the SERVER's list, not a list of mine — and every
+-- keyword must be one this form DECLARES. `where`, `on`, `conflict`, `do`,
+-- `update`, `using`, `having` and every keyword nobody has thought of yet are
+-- refused by name, because they are not declared. The price is the same price
+-- the census pays: a relation case that genuinely needs a new keyword gets it
+-- declared, and declaring it is a claim that it cannot reach one row.
+--
+-- Identifiers are not keywords, so a column called `outcome` or `locale` costs
+-- nothing; a column that IS a keyword would have to be declared, which is
+-- correct, because then the statement cannot be read without it.
+CREATE OR REPLACE FUNCTION p8.assert_shape(label TEXT, stmt TEXT, what TEXT, form TEXT,
+                                           allowed TEXT[]) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE bad TEXT;
+BEGIN
+  SELECT string_agg(DISTINCT w, ', ' ORDER BY w) INTO bad
+    FROM (SELECT lower(m[1]) AS w
+            FROM regexp_matches(p8.strip_sql_strings(p8.strip_sql_comments(stmt)),
+                                '[A-Za-z_][A-Za-z_0-9]*', 'g') AS m) t
+    JOIN pg_get_keywords() k ON k.word = t.w
+   WHERE NOT (t.w = ANY (allowed));
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION '% FAIL: THE STATEMENT IS NOT A DECLARED % SHAPE — it carries the SQL '
+                    'keyword(s) %, which this form does not declare, so it cannot be read as a '
+                    'statement about "%" as a whole. A statement that reaches one row belongs in '
+                    'case_refuses_row with its key declared (N-2, W-3); a shape that is genuinely '
+                    'relation-level gets its keyword declared here, and that is a claim',
+                    label, form, bad, what;
   END IF;
 END $$;
 
@@ -142,17 +234,10 @@ BEGIN
                     'outside a comment, so it is not a product of the declared subject "%" and the '
                     'evidence below could be about something else (F-B, U-3)', label, what;
   END IF;
-  IF NOT allow_key AND bare ~* '(^|[^a-z_])where([^a-z_]|$)' THEN
-    RAISE EXCEPTION '% FAIL: A RELATION CASE WITH A KEY PREDICATE — this form says the refusal is '
-                    'about "%" itself, and the statement selects a row, so the refusal it measures '
-                    'would arrive whether that row existed or not. Use case_refuses_row and declare '
-                    'the key (N-2)', label, what;
-  END IF;
-  IF allow_key AND position('@KEY@' in bare) = 0 THEN
-    RAISE EXCEPTION '% FAIL: A ROW CASE WITH NO KEY IN ITS STATEMENT — this form says the refusal '
-                    'is about one row of "%", and the statement does not carry @KEY@ outside a '
-                    'comment, so nothing ties the refusal to the row the witness reads', label, what;
-  END IF;
+  -- ROUND 30, F-1: a row case no longer carries @KEY@ at all — the predicate is
+  -- composed by the form — so there is nothing to require here. The row form
+  -- refuses the placeholder instead, and `allow_key` now says only that this is
+  -- the row form.
 END $$;
 
 -- The derived witness, for all three forms: a query that must return at least
@@ -205,15 +290,40 @@ BEGIN
   END IF;
   PERFORM p8.assert_no_handler(label, stmt);
   PERFORM p8.assert_statement_built(label, stmt, relation || '.' || key_column, true);
+  -- ROUND 30, F-1. `@KEY@` used to be substituted into a predicate the CASE
+  -- wrote, and the form required only that it OCCUR. The coordinator's review
+  -- measured the gap: `WHERE id = '0fffffff-dead-…' AND @KEY@ <> ''` carries
+  -- the key, reads as witnessed, and aims at a row that does not exist — the
+  -- witness read one row, the statement touched none, PASS at rc 0. A text
+  -- test on the statement cannot bound what the statement REACHES.
+  --
+  -- So the predicate is no longer the case's to write. The case supplies the
+  -- mutation and nothing else; this form appends `WHERE <key_column>::text =
+  -- <key_value>` from the same two values the witness is built from. Reach is
+  -- then bounded by CONSTRUCTION rather than by a check: the statement and the
+  -- witness read the same row because one expression produces both. The
+  -- keywords the mutation may carry are declared, so a second predicate cannot
+  -- be smuggled in beside the composed one.
+  IF position('@KEY@' in p8.strip_sql_comments(stmt)) > 0 THEN
+    RAISE EXCEPTION '% FAIL: A ROW CASE MAY NOT WRITE ITS OWN PREDICATE — this form appends '
+                    'WHERE %::text = % to the statement itself, from the same values the witness '
+                    'is built from, so the statement and the witness cannot aim at different rows '
+                    '(F-1). Write the mutation without a WHERE and without @KEY@',
+                    label, p8.quoted_ident(key_column), quote_literal(key_value);
+  END IF;
+  PERFORM p8.assert_shape(label, stmt, relation || '.' || key_column, 'ROW',
+                          ARRAY['select','from','update','set','delete',
+                                'null','true','false','as','cast']);
   wq := 'SELECT 1 FROM ' || p8.quoted_ident(relation) || ' WHERE '
         || p8.quoted_ident(key_column) || '::text = ' || quote_literal(key_value);
   sq := 'SELECT 1 FROM ' || p8.quoted_ident(relation) || ' WHERE '
         || p8.quoted_ident(key_column) || '::text = ' || quote_literal(p8.sentinel_subject());
   PERFORM p8.assert_witness(label, relation || ' keyed by ' || key_column || ' = ' || key_value,
                             wq, sq);
-  stmt2 := replace(replace(stmt, '@REL@', p8.quoted_ident(relation)),
-                   '@KEY@', quote_literal(key_value));
-  PERFORM p8.case_refuses_core(label, stmt2, expect, key_value);
+  stmt2 := replace(stmt, '@REL@', p8.quoted_ident(relation))
+           || ' WHERE ' || p8.quoted_ident(key_column) || '::text = '
+           || quote_literal(key_value);
+  PERFORM p8.case_refuses_core(label, stmt2, expect, key_value, 'row');
 END $$;
 
 CREATE OR REPLACE FUNCTION p8.case_refuses_relation(label TEXT, stmt TEXT, expect TEXT,
@@ -227,11 +337,16 @@ BEGIN
   END IF;
   PERFORM p8.assert_no_handler(label, stmt);
   PERFORM p8.assert_statement_built(label, stmt, relation, false);
+  -- The declared relation-level keywords. Every one of them reads or writes the
+  -- relation as a whole; none of them can single out a row.
+  PERFORM p8.assert_shape(label, stmt, relation, 'RELATION',
+                          ARRAY['select','from','insert','into','values','truncate',
+                                'distinct','all','as','cast','null','true','false']);
   wq := 'SELECT 1 FROM pg_class WHERE relname = ' || quote_literal(relation);
   sq := 'SELECT 1 FROM pg_class WHERE relname = ' || quote_literal(p8.sentinel_subject());
   PERFORM p8.assert_witness(label, 'relation ' || relation, wq, sq);
   stmt2 := replace(stmt, '@REL@', p8.quoted_ident(relation));
-  PERFORM p8.case_refuses_core(label, stmt2, expect, relation);
+  PERFORM p8.case_refuses_core(label, stmt2, expect, relation, 'relation');
 END $$;
 
 CREATE OR REPLACE FUNCTION p8.case_refuses_role(label TEXT, stmt TEXT, expect TEXT, role_name TEXT)
@@ -244,11 +359,15 @@ BEGIN
   END IF;
   PERFORM p8.assert_no_handler(label, stmt);
   PERFORM p8.assert_statement_built(label, stmt, role_name, false);
+  -- A role case says what a role may or may not BECOME, so its declared shape
+  -- is `SET ROLE`. Anything that reads or writes a relation is not a role case,
+  -- and the refusal names the keyword that gave it away.
+  PERFORM p8.assert_shape(label, stmt, role_name, 'ROLE', ARRAY['set','role']);
   wq := 'SELECT 1 FROM pg_roles WHERE rolname = ' || quote_literal(role_name);
   sq := 'SELECT 1 FROM pg_roles WHERE rolname = ' || quote_literal(p8.sentinel_subject());
   PERFORM p8.assert_witness(label, 'role ' || role_name, wq, sq);
   stmt2 := replace(stmt, '@REL@', p8.quoted_ident(role_name));
-  PERFORM p8.case_refuses_core(label, stmt2, expect, role_name);
+  PERFORM p8.case_refuses_core(label, stmt2, expect, role_name, 'role');
 END $$;
 
 -- ROUND 28, T-2. The paragraph above said the obligation is DERIVED from the
@@ -282,7 +401,7 @@ BEGIN
                     'set. Call the four-argument form with a boolean naming the subject this '
                     'refusal is about (S-5)', label, expect;
   END IF;
-  PERFORM p8.case_refuses_core(label, stmt, expect, NULL);
+  PERFORM p8.case_refuses_core(label, stmt, expect, NULL, 'unwitnessed');
 END $$;
 
 -- `case_refuses_unwitnessed` is DELETED, not kept and forbidden (round 28,
@@ -311,9 +430,9 @@ END $$;
 -- a direct call and reds by name, with a control that plants one. REVOKE is not
 -- available here: the wrappers are not SECURITY DEFINER, so the case-running
 -- roles need EXECUTE on this function either way.
-CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TEXT, subject TEXT) RETURNS void
+CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TEXT, subject TEXT, kind TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
-DECLARE msg TEXT; cons TEXT; sst TEXT; witnessed BOOLEAN;
+DECLARE msg TEXT; cons TEXT; sst TEXT; ctx TEXT; witnessed BOOLEAN; rowlevel BOOLEAN;
 BEGIN
   witnessed := subject IS NOT NULL;
   -- ROUND 29, N-3. Every path into this function passes through here, including
@@ -332,7 +451,29 @@ BEGIN
   BEGIN
     EXECUTE stmt;
   EXCEPTION WHEN others THEN
-    GET STACKED DIAGNOSTICS msg = MESSAGE_TEXT, cons = CONSTRAINT_NAME, sst = RETURNED_SQLSTATE;
+    GET STACKED DIAGNOSTICS msg = MESSAGE_TEXT, cons = CONSTRAINT_NAME, sst = RETURNED_SQLSTATE,
+                            ctx = PG_EXCEPTION_CONTEXT;
+    -- ROUND 30, F-3. `assert_no_handler` reads the statement's TEXT, and the
+    -- coordinator's review split the keyword across a concatenation
+    -- (`'EXCEP' || 'TION'`) inside a statement that EXECUTEs the pieces: 42501
+    -- laundered to P0001, no witness owed, against a dead row. The text test
+    -- cannot see that, and no text test can — a regex says a keyword appears,
+    -- never that it is all that runs.
+    --
+    -- This is read from what ARRIVED instead: the server's own exception
+    -- context names the frame that raised. A refusal raised inside the
+    -- statement's own anonymous block — `inline_code_block`, which is what a
+    -- `DO` in the statement compiles to — is the statement reporting on itself,
+    -- whatever it spelled. A trigger or a function names itself in the context
+    -- and is untouched, which is why this does not red the ladder cases.
+    IF coalesce(ctx,'') ~ 'inline_code_block' THEN
+      RAISE EXCEPTION '% FAIL: THE REFUSAL CAME FROM THE STATEMENT''S OWN BLOCK — the error this '
+                      'case reads was raised inside an anonymous block in the statement '
+                      '(context: %), so what the law sees is what the statement chose to say and '
+                      'not what the server decided. Write the statement without a block of its '
+                      'own (F-3). Got [%] %',
+                      label, split_part(coalesce(ctx,''), E'\n', 1), sst, msg;
+    END IF;
     -- Derived from the refusal that ARRIVED, before its spelling is compared
     -- to anything the case wrote. 42501 is insufficient_privilege: a grant or
     -- ownership decision, taken before any row is looked at.
@@ -359,6 +500,23 @@ BEGIN
                       'The arriving refusal is what obliges it, not the wording of "%" — call the '
                       'four-argument form with a boolean naming the subject (S-5 / T-2). Got [%] %',
         label, expect, sst, msg;
+    END IF;
+    -- ROUND 30, W-3, the other half. A relation case claims its refusal is
+    -- about the relation AS A WHOLE, which for this schema means a grant or
+    -- ownership decision — SQLSTATE 42501, taken before any row is read. Any
+    -- other arriving class (a row-level security WITH CHECK violation, a check
+    -- constraint, a unique violation) depends on the row being written, so a
+    -- relation-level witness would be evidence about something the refusal did
+    -- not decide. That case belongs in the row form, with its key declared and
+    -- read. Derived from what ARRIVES, so no spelling of the statement can
+    -- dodge it.
+    rowlevel := (sst <> '42501'
+                 OR position('row-level security policy' in lower(coalesce(msg,''))) > 0);
+    IF kind = 'relation' AND rowlevel THEN
+      RAISE EXCEPTION '% FAIL: A RELATION CASE REFUSED BY SOMETHING ROW-LEVEL — this form claims '
+                      'the refusal is about "%" as a whole, and what arrived is [%] %, which is '
+                      'decided by the row rather than by a grant. Use case_refuses_row and declare '
+                      'the key the refusal is about (W-3)', label, subject, sst, msg;
     END IF;
     IF position(expect in coalesce(cons,'') || ' ' || coalesce(msg,'')) = 0 THEN
       RAISE EXCEPTION '% FAIL: refused, but NOT by "%" — got [%] % (constraint %)',
@@ -404,7 +562,16 @@ BEGIN
     GET DIAGNOSTICS n = ROW_COUNT;
   EXCEPTION WHEN others THEN
     GET STACKED DIAGNOSTICS msg = MESSAGE_TEXT, sst = RETURNED_SQLSTATE;
-    RAISE EXCEPTION '% FAIL: REFUSED, and it should not be — [%] %', label, sst, msg;
+    -- ROUND 30, W-4. This frame used to re-raise with P0001, and the twentieth
+    -- challenge made that the laundry: a case wrapped a privilege-denied
+    -- statement in `p8.case_permits`, the denial came back as P0001, and the
+    -- witness law — which is derived from the arriving 42501 — never saw it.
+    -- The handler ban could not help, because the handler is not in the
+    -- statement; it is in this function, which the pack grants to every case
+    -- role. `USING ERRCODE` keeps the arriving SQLSTATE through this frame, so
+    -- the derivation sees what the server said however deep it was caught.
+    RAISE EXCEPTION '% FAIL: REFUSED, and it should not be — [%] %', label, sst, msg
+      USING ERRCODE = sst;
   END;
   IF want IS NULL THEN
     IF n = 0 THEN

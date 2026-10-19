@@ -288,7 +288,7 @@ if cases "$OUT/baseline"; then
     say "BASELINE CASE COUNT: $_cases_got, equal to the literal this runner declares — the figure every document quotes is now asserted and not merely printed"
   fi
 else
-  say "BASELINE CASES FAILED"; grep -h "FAIL\|ERROR" "$OUT"/baseline/*.sql.log | head -5 | tee -a "$OUT/run.log"; exit 1
+  say "FAIL: BASELINE CASES FAILED"; grep -h "FAIL\|ERROR" "$OUT"/baseline/*.sql.log | head -5 | tee -a "$OUT/run.log"; exit 1
 fi
 
 # The one EXECUTED race this phase has. Round 11's runner dropped it; the fifth
@@ -298,7 +298,7 @@ fi
 if RACE_OUT=$OUT/baseline-race bash "$HERE/run-p8-race-proof.sh" > "$OUT/baseline/race.log" 2>&1; then
   say "$(grep -o 'I1-conc PASS.*' "$OUT/baseline/race.log" | head -1)"
 else
-  say "BASELINE RACE FAILED"; tail -3 "$OUT/baseline/race.log" | tee -a "$OUT/run.log"; FAILED=1
+  say "FAIL: BASELINE RACE FAILED"; tail -3 "$OUT/baseline/race.log" | tee -a "$OUT/run.log"; FAILED=1
 fi
 
 # ---------------------------------------------------------------------
@@ -504,7 +504,7 @@ if [ -n "${P8_GIT_ANCHOR_SHA:-}" ] && [ "${P8_GIT_ANCHOR_SHA}" != "$P8_ANCHOR_PI
   say "FAIL: ANCHOR IDENTITY — P8_GIT_ANCHOR_SHA=${P8_GIT_ANCHOR_SHA} is set, and this gate's anchor is pinned to $P8_ANCHOR_PIN inside the check; the variable no longer steers anything and is refused rather than ignored"
   FAILED=1
 elif [ -n "${P8_GIT_ANCHOR_SHA:-}" ]; then
-  say "note: P8_GIT_ANCHOR_SHA is set to the pin itself, which steers nothing; the check carries the pin"
+  say "NOTE: P8_GIT_ANCHOR_SHA is set to the pin itself, which steers nothing; the check carries the pin"
 fi
 # ROUND 18, the diagnostic half of N-6. The refusal below clears the variable and
 # the next branch then reported "P8_GIT_ANCHOR_DIR is not set" — a sentence that
@@ -2072,7 +2072,7 @@ SQL
 #     witness reads the row, so the refusal cannot be about an empty set.
 { wb_head; cat <<'SQL'
 SELECT p8.case_refuses_row('FB-c a row case keyed at a row that does not exist',
-  'UPDATE @REL@ SET obligation_key = ''x'' WHERE id = @KEY@', 'permission denied',
+  'UPDATE @REL@ SET obligation_key = ''x''', 'permission denied',
   'notifications', 'id', '0fffffff-dead-4000-8000-00000000dead');
 ROLLBACK;
 SQL
@@ -2105,8 +2105,8 @@ wb_probe(){        # wb_probe <file> <arm> <needle> <what-it-means>
 }
 wb_probe bind.sql    "WITNESS-BIND"    "THE STATEMENT IS NOT BUILT FROM ITS SUBJECT" \
   "a statement about a different relation that carries the placeholder only in a comment (U-3)"
-wb_probe key.sql     "WITNESS-KEY"     "A RELATION CASE WITH A KEY PREDICATE" \
-  "a relation case whose statement reaches for one row, which is how N-2 re-declared a row case"
+wb_probe key.sql     "WITNESS-KEY"     "THE STATEMENT IS NOT A DECLARED RELATION SHAPE" \
+  "a relation case whose statement reaches for one row with WHERE, which is how N-2 re-declared a row case"
 wb_probe row.sql     "WITNESS-ROW"     "NO SUBJECT" \
   "a row case keyed at a row no fixture creates (S-5)"
 wb_probe handler.sql "WITNESS-HANDLER" "THE STATEMENT CARRIES AN EXCEPTION HANDLER" \
@@ -2159,14 +2159,326 @@ wl_ctl "WITNESS-BIND-CTL" bind.sql \
   "  IF position('@REL@' in bare) = 0 THEN" \
   "the statement is a free text again and the witness can be true of something it does not touch, which is U-3"
 wl_ctl "WITNESS-KEY-CTL" key.sql \
-  "  IF NOT allow_key AND bare ~* '(^|[^a-z_])where([^a-z_]|\$)' THEN" \
+  "  IF bad IS NOT NULL THEN" \
   "a row case can be declared as a relation case once more, with its key pointed at nothing, which is N-2"
 wl_ctl "WITNESS-ROW-CTL" row.sql \
   "  IF n < 1 THEN" \
   "the refusal is evidence about an empty set again, which is S-5"
-wl_ctl "WITNESS-HANDLER-CTL" handler.sql \
-  "  IF p8.strip_sql_comments(stmt) ~* '(^|[^a-z_])exception([^a-z_]|\$)' THEN" \
-  "a permission denial re-raised as P0001 passes the SQLSTATE derivation again, which is N-3"
+
+# ---------------------------------------------------------------------
+# ROUND 30. The two SIDE DOORS into the same law (the twentieth challenge's
+# W-3 and W-4), each with its probe and its deletion control.
+# ---------------------------------------------------------------------
+# W-3: the relation form's no-key rule read for the word `where`, and
+# `INSERT … ON CONFLICT (key) DO UPDATE` reaches exactly one row without it —
+# measured as `daftar_worker`, PASS, witnessed only by the relation existing.
+# W-4: the handler ban reads the STATEMENT, and the handler that defeats the
+# SQLSTATE derivation is in the pack: `p8.case_permits_rows` caught `WHEN
+# others` and re-raised as P0001, which every case role may call. The same grep
+# reddened an HONEST case whose payload merely contained the word.
+#
+# The fixes are on the arriving side wherever one exists: the keywords are read
+# from `pg_get_keywords()` and refused unless declared, the relation form must
+# be refused by a 42501 that is not a row-level policy, and
+# `case_permits_rows` re-raises `USING ERRCODE` so a 42501 stays a 42501 through
+# whatever frame catches it. Only the two text tests that remain — a handler
+# written in the statement, and a statement that builds more SQL — are text,
+# and each is measured both ways: it must refuse the attack AND leave an honest
+# case alone.
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('FB-f a relation case that reaches one row through ON CONFLICT', $q$
+  INSERT INTO @REL@ (tenant_id, business_id, delivery_id, notification_id, attempt_no,
+                     attempt_key, outcome, retryable, consent_read_at, consent_source, attempted_at)
+  VALUES ('11111111-1111-4111-8111-111111111111','bbbbbbbb-0000-4000-8000-000000000001',
+          '0ddddddd-0000-4000-8000-0000000000a1','0fffffff-0000-4000-8000-0000000000a1',1,
+          'NO-SUCH-ATTEMPT-KEY','rejected',true,now(),'fixture',now())
+  ON CONFLICT (business_id, attempt_key) DO UPDATE SET outcome = 'rejected'
+$q$, 'permission denied', 'notification_attempts');
+ROLLBACK;
+SQL
+} > "$WB/shape.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('FB-g a relation case refused by a check constraint, not by a grant', $q$
+  INSERT INTO @REL@ (provider, provider_event_id, status_token, verification)
+  VALUES ('meta_cloud', 'evt-relclass-probe', 'delivered', 'verified')
+$q$, 'quarantine_verification_in', 'notification_provider_quarantine');
+ROLLBACK;
+SQL
+} > "$WB/relclass.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses('FB-h a permission denial laundered through case_permits',
+  $i$SELECT p8.case_permits('inner', 'UPDATE notifications SET obligation_key = ''x'' WHERE id = ''0fffffff-dead-4000-8000-00000000dead''')$i$,
+  'FAIL: REFUSED, and it should not be');
+ROLLBACK;
+SQL
+} > "$WB/launder.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses('FB-j a statement that builds more SQL and hides a handler in it', $q$
+  DO $d$ BEGIN
+    EXECUTE 'DO $x$ BEGIN UPDATE notifications SET obligation_key = ''y'' WHERE id = ''0fffffff-dead-4000-8000-00000000dead''; EXCEPTION WHEN insufficient_privilege THEN RAISE EXCEPTION ''denied for table notifications''; END $x$';
+  END $d$
+$q$, 'denied for table notifications');
+ROLLBACK;
+SQL
+} > "$WB/dynsql.sql"
+# The HONEST case, the other direction of W-4: a row case whose payload carries
+# the word `exception` inside a string literal. `pg_class` is the subject
+# because it has a row for every relation in every configuration, so this arm
+# needs no fixture of its own.
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('FB-i an honest row case with the word exception in a literal',
+  $q$UPDATE @REL@ SET relname = 'B1|exception noted'$q$,
+  'permission denied', 'pg_class', 'relname', 'notifications');
+ROLLBACK;
+SQL
+} > "$WB/literal.sql"
+
+wb_probe shape.sql    "WITNESS-SHAPE"    "THE STATEMENT IS NOT A DECLARED RELATION SHAPE" \
+  "a relation case that reaches one row through ON CONFLICT, which is the spelling the word WHERE did not see (W-3)"
+wb_probe relclass.sql "WITNESS-RELCLASS" "A RELATION CASE REFUSED BY SOMETHING ROW-LEVEL" \
+  "a relation case whose refusal is decided by the row — a check constraint — rather than by a grant (W-3)"
+wb_probe launder.sql  "WITNESS-LAUNDER"  "WITNESS REQUIRED" \
+  "a permission denial laundered into P0001 by a handler one frame deeper, inside a function the pack grants to every case role (W-4)"
+wb_probe dynsql.sql   "WITNESS-DYNSQL"   "THE STATEMENT BUILDS MORE SQL" \
+  "a statement that EXECUTEs a string carrying the handler, which no test that reads the statement can see (W-4)"
+
+# The honest case must PASS, and that is an arm of its own: a text test that
+# reds a case with no handler in it is not a hardening, and the only way to say
+# so is to run such a case.
+if "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
+             -f "$WB/literal.sql" >"$WB/literal.log" 2>&1 \
+   && grep -qF "PASS refused by permission denied" "$WB/literal.log"; then
+  say "WITNESS-LITERAL: an honest row case whose payload contains the word exception inside a string literal PASSES, so the handler ban reads the statement and not its payload (W-4, the direction that reds an honest case)"
+else
+  say "WITNESS-LITERAL: FAIL — an honest case with the word exception in a literal did not pass: $(head -2 "$WB/literal.log" | tr '\n' ' ')"
+  FAILED=1
+fi
+
+# The three controls that are not a deleted IF: a substitution, one per copy.
+cat > "$PATCHDIR/wl-sub.py" <<'PATCH'
+import sys
+src, dst, needle, repl = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+s = open(src, encoding="utf-8").read()
+assert s.count(needle) == 1, "the text is not where this patcher expects it: " + needle
+open(dst, "w", encoding="utf-8").write(s.replace(needle, repl, 1))
+PATCH
+wl_sub_ctl(){      # wl_sub_ctl <arm> <probe> <needle> <repl> <expect: pass|refuse> <needle-in-log> <sentence>
+  local arm=$1 f=$2 needle=$3 repl=$4 want=$5 lneedle=$6 sentence=$7
+  if python3 -I "$PATCHDIR/wl-sub.py" "$HERE/p8-case-helpers.sql" "$WB/sub.sql" "$needle" "$repl" \
+       >"$WB/sub-patch.log" 2>&1 \
+     && ! cmp -s "$HERE/p8-case-helpers.sql" "$WB/sub.sql" \
+     && "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+                  -f "$WB/sub.sql" >"$WB/sub-load.log" 2>&1; then
+    if "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
+                 -f "$WB/$f" >"$WB/sub-ctl.log" 2>&1; then
+      if [ "$want" = "pass" ] && grep -qF "$lneedle" "$WB/sub-ctl.log"; then
+        say "$arm: with that one change undone the same case PASSES again — $sentence"
+      else
+        say "$arm: FAIL — with the change undone the case did not land where this control says: rc=0 $(head -2 "$WB/sub-ctl.log" | tr '\n' ' ')"
+        FAILED=1
+      fi
+    elif [ "$want" = "refuse" ] && grep -qF "$lneedle" "$WB/sub-ctl.log"; then
+      say "$arm: with that one change undone the same case is REFUSED again by $lneedle — $sentence"
+    else
+      say "$arm: FAIL — with the change undone the case did not land where this control says: $(head -2 "$WB/sub-ctl.log" | tr '\n' ' ')"
+      FAILED=1
+    fi
+  else
+    say "$arm: PLANT NOT ESTABLISHED — that change could not be made in a copy of the helpers: $(tail -1 "$WB/sub-patch.log")"
+    FAILED=1
+  fi
+  if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+               -f "$HERE/p8-case-helpers.sql" >"$WB/sub-restore.log" 2>&1; then
+    :
+  else
+    say "FAIL: the real case helpers could not be loaded back after $arm — $(tail -1 "$WB/sub-restore.log")"
+    FAILED=1
+  fi
+}
+wl_ctl "WITNESS-SHAPE-CTL" shape.sql \
+  "  IF bad IS NOT NULL THEN" \
+  "the ON CONFLICT spelling reaches one row in a relation case again, with its key pointed at nothing, which is W-3"
+wl_ctl "WITNESS-RELCLASS-CTL" relclass.sql \
+  "    IF kind = 'relation' AND rowlevel THEN" \
+  "a relation case can be witnessed by the relation while its refusal is decided by the row, which is W-3's other half"
+wl_sub_ctl "WITNESS-HANDLER-CTL" handler.sql \
+  "  IF bare ~* '(^|[^a-z_])exception([^a-z_]|\$)' THEN" "  IF false THEN" \
+  refuse "THE REFUSAL CAME FROM THE STATEMENT'S OWN BLOCK" \
+  "the text ban is gone and the same statement is caught by the condition BEHIND it, which reads the arriving exception's context instead of the statement (N-3 closed twice, and round 30 learned why: the text test is the one that can be spelled around)"
+wl_sub_ctl "WITNESS-LAUNDER-CTL" launder.sql \
+  "      USING ERRCODE = sst;" "      ;" \
+  pass "PASS refused by FAIL: REFUSED, and it should not be" \
+  "the laundered permission denial passes the witness law again — the state the twentieth challenge measured (W-4)"
+wl_sub_ctl "WITNESS-DYNSQL-CTL" dynsql.sql \
+  "  IF bare ~* '(^|[^a-z_])execute([^a-z_]|\$)' THEN" "  IF false THEN" \
+  refuse "THE REFUSAL CAME FROM THE STATEMENT'S OWN BLOCK" \
+  "the ban on building SQL is gone and the laundered refusal is caught by the arriving context instead — the two conditions bound the same attack from the text side and from the server side, and only the second cannot be re-spelled (W-4, F-3)"
+wl_sub_ctl "WITNESS-LITERAL-CTL" literal.sql \
+  "  bare := p8.strip_sql_strings(p8.strip_sql_comments(stmt));" \
+  "  bare := p8.strip_sql_comments(stmt);" \
+  refuse "THE STATEMENT CARRIES AN EXCEPTION HANDLER" \
+  "the honest case is reddened by its own payload again, which is why the literals are stripped (W-4)"
+
+# ---------------------------------------------------------------------
+# ROUND 30, the coordinator's F-1, F-2 and F-3: three TEXT checks standing in
+# for BEHAVIOUR checks, each measured as a fail-open on this head's parent.
+# ---------------------------------------------------------------------
+# F-1: `@KEY@` bound its own PRESENCE. `WHERE id = '…dead' AND @KEY@ <> ''`
+# carried it, the witness read the declared row, the statement touched none, and
+# the case passed. The predicate is now APPENDED by the form from the declared
+# key, so the statement and the witness read the same row because one expression
+# builds both: the attack is not refused, it is unwritable. Three layers, each
+# with its own arm: the placeholder ban, the row shape law, and the construction
+# underneath them.
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('FB-k a row case whose declared key is a decoy beside its own predicate',
+  $q$UPDATE @REL@ SET relname = 'rewritten' WHERE relname = 'no-such-relation-at-all' AND @KEY@ <> ''$q$,
+  'permission denied', 'pg_class', 'relname', 'notifications');
+ROLLBACK;
+SQL
+} > "$WB/reach.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('FB-l a row case that writes a predicate of its own and no placeholder',
+  $q$UPDATE @REL@ SET relname = 'rewritten' WHERE relname = 'no-such-relation-at-all'$q$,
+  'permission denied', 'pg_class', 'relname', 'notifications');
+ROLLBACK;
+SQL
+} > "$WB/reach2.sql"
+# F-2: the relation form's `where` regex against `MERGE … ON`, which reaches one
+# row with no WHERE in it. The keyword law reads the server's own list, so this
+# is refused by the keywords it carries rather than by a word someone thought of.
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('FB-m a MERGE that reaches one row through ON', $q$
+  MERGE INTO @REL@ t USING (SELECT 1 AS x) s ON t.attempt_key = 'NO-SUCH-ATTEMPT'
+   WHEN MATCHED THEN UPDATE SET outcome = 'rejected'
+$q$, 'permission denied', 'notification_attempts');
+ROLLBACK;
+SQL
+} > "$WB/merge.sql"
+# F-3: the handler keyword split across a concatenation, which no regex sees.
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses('FB-n a handler assembled from pieces', $q$
+  DO $d$ BEGIN
+    EXECUTE 'DO $i$ BEGIN UPDATE notifications SET obligation_key = ''x'' WHERE id = ''0fffffff-dead-4000-8000-00000000dead''; EXCEP' || 'TION WHEN insufficient_privilege THEN RAISE EXCEP' || 'TION ''denied for table notifications''; END $i$';
+  END $d$
+$q$, 'denied for table notifications');
+ROLLBACK;
+SQL
+} > "$WB/split.sql"
+# F-3 again, from the other end: a block that reports whatever it likes and
+# carries NO handler keyword at all (`RAISE` without `EXCEPTION` raises P0001).
+# No text test can see this one; the arriving exception CONTEXT names the
+# statement's own anonymous block, and that is what refuses it.
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses('FB-o a block that reports its own refusal, with no handler keyword in it', $q$
+  DO $d$ BEGIN
+    RAISE 'denied for table notifications';
+  END $d$
+$q$, 'denied for table notifications');
+ROLLBACK;
+SQL
+} > "$WB/block.sql"
+
+wb_probe reach.sql  "WITNESS-REACH"  "A ROW CASE MAY NOT WRITE ITS OWN PREDICATE" \
+  "a row case whose declared key sits beside a decoy predicate, which is F-1: the witness read one row and the statement touched none"
+wb_probe reach2.sql "WITNESS-REACH2" "THE STATEMENT IS NOT A DECLARED ROW SHAPE" \
+  "a row case that writes a predicate of its own without the placeholder, caught by the row form's declared keywords"
+wb_probe merge.sql  "WITNESS-MERGE"  "THE STATEMENT IS NOT A DECLARED RELATION SHAPE" \
+  "MERGE … ON, which reaches exactly one row and carries no WHERE for a regex to find (F-2)"
+wb_probe split.sql  "WITNESS-SPLIT"  "THE STATEMENT BUILDS MORE SQL" \
+  "a handler assembled from 'EXCEP' || 'TION' inside a statement that EXECUTEs the pieces (F-3)"
+wb_probe block.sql  "WITNESS-BLOCK"  "THE REFUSAL CAME FROM THE STATEMENT'S OWN BLOCK" \
+  "a statement whose own anonymous block raises the refusal the case then reads, with no handler keyword anywhere in it (F-3)"
+
+wl_sub_ctl "WITNESS-REACH-CTL" reach.sql \
+  "  IF position('@KEY@' in p8.strip_sql_comments(stmt)) > 0 THEN" \
+  "  IF false THEN" \
+  refuse "THE STATEMENT IS NOT A DECLARED ROW SHAPE" \
+  "the placeholder ban is gone and the same case is caught by the row shape law instead, so the two bound the same attack independently (F-1)"
+wl_sub_ctl "WITNESS-REACH2-CTL" reach2.sql \
+  "  IF bad IS NOT NULL THEN" "  IF false THEN" \
+  refuse "refused, but NOT by" \
+  "with both text conditions gone the statement cannot even be FORMED — the form appends its own predicate beside the case's and the server rejects the result — which is the construction the two conditions sit on top of (F-1)"
+wl_sub_ctl "WITNESS-BLOCK-CTL" block.sql \
+  "    IF coalesce(ctx,'') ~ 'inline_code_block' THEN" \
+  "    IF false THEN" \
+  pass "PASS refused by denied for table notifications" \
+  "a block that reports its own refusal passes the law again, against a row that does not exist — the state the coordinator's F-3 measured, in a spelling no regex reads"
+
+# ---------------------------------------------------------------------
+# ROUND 30, F-4: the net over every SQL file the run LOADS, and its byte pin
+# ---------------------------------------------------------------------
+# `CORE-NET` above bounds CONTENT with one literal over one glob. The
+# coordinator's review walked around it twice: a core call whose name is
+# assembled at run time (`'p8.case_refuses_' || 'core'`), and a wrapper created
+# in a FIXTURES file, which `build()` and `cases()` both run and the glob never
+# covered. `p8-case-net.py` derives the file set from the runner's OWN source,
+# refuses a direct core call, any dynamic SQL and any function created in a case
+# or fixtures file, names a case file the runner does not load, and pins the
+# whole set by digest so a file swapped mid-run reds.
+NETBOX=$OUT/casenet
+rm -rf "$NETBOX"; mkdir -p "$NETBOX"
+if CASE_NET_OUT=$(python3 -I "$HERE/p8-case-net.py" "$HERE/run-p8-real-proof.sh" 2>&1); then
+  say "CORE-NET-SET: $CASE_NET_OUT"
+  CASE_NET_PIN=$(python3 -I "$HERE/p8-case-net.py" --pin "$HERE/run-p8-real-proof.sh" 2>/dev/null)
+else
+  say "CORE-NET-SET: FAIL — the net over the files this run loads refused the live set: $(printf '%s' "$CASE_NET_OUT" | head -2 | tr '\n' ' ')"
+  FAILED=1
+fi
+# The three plants, each in its own copy of the directory, because a plant in
+# the live tree is a plant in the subject.
+_netcopy(){        # _netcopy <dir>
+  rm -rf "$1"; mkdir -p "$1"
+  cp "$HERE"/*.sql "$HERE/run-p8-real-proof.sh" "$HERE/p8-case-net.py" "$1/"
+}
+net_plant(){       # net_plant <arm> <file-in-copy> <python-that-appends> <needle> <sentence>
+  local arm=$1 file=$2 appender=$3 needle=$4 sentence=$5
+  local box=$NETBOX/$arm
+  _netcopy "$box"
+  if python3 -I - "$box/$file" "$appender" >"$box/plant.log" 2>&1 <<'PY'
+import sys
+path, text = sys.argv[1], sys.argv[2]
+with open(path, "a", encoding="utf-8") as fh:
+    fh.write("\n" + text + "\n")
+PY
+  then
+    NP=$(python3 -I "$box/p8-case-net.py" "$box/run-p8-real-proof.sh" 2>&1); NPRC=$?
+    if [ "$NPRC" -ne 0 ] && printf '%s' "$NP" | grep -qF "$needle"; then
+      say "$arm: $sentence is REFUSED BY NAME ($needle)"
+    else
+      say "$arm: FAIL — $sentence was not refused by name: rc=$NPRC $(printf '%s' "$NP" | head -1)"
+      FAILED=1
+    fi
+  else
+    say "$arm: PLANT NOT ESTABLISHED — the plant could not be written into a copy: $(tail -1 "$box/plant.log")"
+    FAILED=1
+  fi
+}
+net_plant "CORE-NET-DYN" "p8-real-cases-app.sql" \
+  "DO \$outer\$ DECLARE fn TEXT := 'p8.case_refuses_' || 'core'; BEGIN EXECUTE format('SELECT %s(%L,%L,%L,%L,%L)', fn, 'ATK', 'SELECT 1', 'denied', 'x', 'row'); END \$outer\$;" \
+  "DYNAMIC SQL" \
+  "a core call whose name is assembled at run time in a case file, which the literal net cannot see (F-4a)"
+net_plant "CORE-NET-FIX" "p8-real-fixtures.sql" \
+  "CREATE OR REPLACE FUNCTION p8.case_refuses_sneaky(l TEXT, s TEXT, e TEXT) RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN PERFORM 1; END \$f\$;" \
+  "A FUNCTION CREATED" \
+  "a wrapper created in a fixtures file, which build() and cases() both run and the glob never covered (F-4b)"
+# And the completeness direction: a case file beside the loaded ones that the
+# runner names nowhere.
+CORE_STRAY=$NETBOX/stray
+_netcopy "$CORE_STRAY"
+# The name is ASSEMBLED, because a name typed here appears in the runner's own
+# source and the net derives its set from that source — so a literal would make
+# this planted file part of the declared set and the arm would measure nothing.
+# The same lesson the retirement net learned, one arm later.
+STRAY_NAME="p8-real-cases-""stray.sql"
+printf -- '-- a case file nothing loads\nSELECT 1;\n' > "$CORE_STRAY/$STRAY_NAME"
+NS=$(python3 -I "$CORE_STRAY/p8-case-net.py" "$CORE_STRAY/run-p8-real-proof.sh" 2>&1); NSRC=$?
+if [ "$NSRC" -ne 0 ] && printf '%s' "$NS" | grep -qF "A CASE OR FIXTURES FILE THE RUNNER DOES NOT LOAD"; then
+  say "CORE-NET-STRAY: a case file sitting beside the loaded ones that the runner names NOWHERE is refused by name, so the set is bounded in both directions"
+else
+  say "CORE-NET-STRAY: FAIL — an unloaded case file was not named: rc=$NSRC $(printf '%s' "$NS" | head -1)"
+  FAILED=1
+fi
 
 # And the sentinel leg. With the witness DERIVED there is no way for a case to
 # write one that ignores its subject, so this condition cannot be reached from a
@@ -3184,19 +3496,26 @@ s = s[:j] + "    if False:" + s[j + len("    if unknown:"):]
 open(dst, "w", encoding="utf-8").write(s)
 PATCH
 cat > "$PATCHDIR/census-declare-twice.py" <<'PATCH'
-import hashlib
 import re
+import subprocess
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 s = open(src, encoding="utf-8").read()
 m = re.search(r'\n    \("GUARD-CTL y20c", 1\),', s)
 assert m, "the declaration does not hold GUARD-CTL y20c with a count of 1"
 s = s[:m.start()] + '\n    ("GUARD-CTL y20c", 2),' + s[m.end():]
-# Re-seal, because the SEAL covers the counts and would otherwise speak first.
-pairs = re.findall(r'^    \("([^"]+)", ([0-9]+)\),$', s, re.M)
-body = "".join("%s\t%s\n" % (i, n) for i, n in pairs)
-s = re.sub(r'EXPECTED_SEAL = "[0-9a-f]+"',
-           'EXPECTED_SEAL = "%s"' % hashlib.sha256(body.encode()).hexdigest(), s, count=1)
+open(dst, "w", encoding="utf-8").write(s)
+# Re-seal, because the SEAL covers the declarations and would otherwise speak
+# first. ROUND 30: this used to recompute the digest here, which was a COPY of
+# the law inside a program whose job is to perturb it — and it went silently
+# wrong the moment the seal grew from one declaration to four (W-2). It now
+# asks the patched program for its own seal.
+out = subprocess.run([sys.executable, "-I", dst, "--seal-only"],
+                     capture_output=True, text=True)
+line = out.stdout.strip()
+assert line.startswith('EXPECTED_SEAL = "'), "the patched census would not state its own seal: " + out.stderr
+s = open(dst, encoding="utf-8").read()
+s = re.sub(r'EXPECTED_SEAL = "[0-9a-f]+"', line, s, count=1)
 open(dst, "w", encoding="utf-8").write(s)
 PATCH
 cat > "$PATCHDIR/drop-census-shape.py" <<'PATCH'
@@ -3470,6 +3789,246 @@ else
     say "CENSUS-SHAPE-CTL: PLANT NOT ESTABLISHED — the unclassifiable-line refusal could not be deleted: $(tail -1 "$CEN/p7.log")"
     FAILED=1
   fi
+fi
+
+
+# ---------------------------------------------------------------------
+# ROUND 30, F-4, the second half: the set must not MOVE while the run uses it
+# ---------------------------------------------------------------------
+# The scan above read the files before the cases ran. A file swapped after that
+# read would be scanned in one state and executed in another, which is the
+# shape this phase calls a projection rather than an identity. The pin is
+# re-measured here, at the end of the run, against the digest taken then.
+if [ -n "${CASE_NET_PIN:-}" ]; then
+  if CASE_PIN_OUT=$(python3 -I "$HERE/p8-case-net.py" --pin "$HERE/run-p8-real-proof.sh" "$CASE_NET_PIN" 2>&1); then
+    say "CORE-PIN: $CASE_PIN_OUT — the same bytes the net read before the cases ran are the bytes still on disk now"
+  else
+    say "CORE-PIN: FAIL — a file this run loads changed while it was being used: $(printf '%s' "$CASE_PIN_OUT" | head -2 | tr '\n' ' ')"
+    FAILED=1
+  fi
+  CPB=$OUT/casepin
+  _netcopy "$CPB"
+  CPP=$(python3 -I "$CPB/p8-case-net.py" --pin "$CPB/run-p8-real-proof.sh" 2>/dev/null)
+  printf -- '\n-- one byte after the pin was taken\n' >> "$CPB/p8-real-cases-app.sql"
+  CP=$(python3 -I "$CPB/p8-case-net.py" --pin "$CPB/run-p8-real-proof.sh" "$CPP" 2>&1); CPRC=$?
+  if [ "$CPRC" -ne 0 ] && printf '%s' "$CP" | grep -qF "THE FILE SET MOVED DURING THE RUN"; then
+    say "CORE-PIN-CTL: a case file changed after its pin was taken is REFUSED BY NAME (THE FILE SET MOVED DURING THE RUN) and the refusal prints every file's digest, so the arm above is evidence about bytes and not about a reading taken once"
+  else
+    say "CORE-PIN-CTL: FAIL — a file changed after the pin was not named: rc=$CPRC $(printf '%s' "$CP" | head -1)"
+    FAILED=1
+  fi
+else
+  say "CORE-PIN: FAIL — no pin was taken before the cases ran, so nothing here is evidence about the bytes they used"
+  FAILED=1
+fi
+
+# ---------------------------------------------------------------------
+# ROUND 30, W-1 and W-2: the census must hold in every configuration this gate
+# supports, and the list that lets it SKIP must be sealed like the list that
+# makes it count.
+# ---------------------------------------------------------------------
+# W-1 (P1) is the defect this round answers. Round 29's shape law — refuse every
+# prefixed line this program cannot classify — is strictly stronger than the two
+# admitting patterns it replaced, and it therefore turns every undeclared line
+# of EVERY code path into a red, including the paths this container never takes.
+# The runner's no-git branch prints one such line, and a `git archive` copy with
+# no `.git` takes it, so the same head was FAILED=0 here and FAILED=1 in the
+# configuration an independent reviewer runs. The declaration is in
+# `p8-arm-census.py` now; these arms are what stops it being needed again
+# without anyone noticing.
+cat > "$PATCHDIR/drop-census-nogit.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = '    "no git work tree here",\n'
+assert s.count(b) == 1, "the no-git declaration is not where this patcher expects it"
+open(dst, "w", encoding="utf-8").write(s.replace(b, "", 1))
+PATCH
+cat > "$PATCHDIR/widen-census-complement.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = 'NOT_ARMS = (\n    "NOTE",'
+assert s.count(b) == 1, "NOT_ARMS is not where this patcher expects it"
+# One head added to the complement, the seal left exactly as it was: the state
+# the twentieth challenge measured, in which a whole arm-shaped family is
+# skipped in silence (W-2).
+open(dst, "w", encoding="utf-8").write(s.replace(b, 'NOT_ARMS = (\n    "PROBE",\n    "NOTE",', 1))
+PATCH
+cat > "$PATCHDIR/drop-census-sealcheck.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = "    if actual_seal != EXPECTED_SEAL:"
+assert s.count(b) == 1, "the seal comparison is not where this patcher expects it"
+open(dst, "w", encoding="utf-8").write(s.replace(b, "    if False:", 1))
+PATCH
+
+# BOTH sentences the frozen-integrity check can print, read OUT OF THIS FILE
+# rather than retyped, so the arm cannot drift from the lines the gate actually
+# prints. One of them is in this run's log and the other is the one the OTHER
+# configuration prints; the arm swaps them, so whichever world this run is in,
+# the census is measured against the world it is not in. That is the whole of
+# W-1: round 29's declaration was complete for the configuration it was written
+# in, and the gate was red in the other one.
+NOGIT_PAIR=$(python3 -I - "$HERE/run-p8-real-proof.sh" <<'PY'
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+a = re.findall(r'\n  say "(no git work tree here[^"]*)"', s)
+b = re.findall(r'\n    say "(git agrees:[^"]*)"', s)
+if len(a) != 1 or len(b) != 1:
+    sys.stderr.write("the two integrity sentences are not where this expects them: %d/%d\n"
+                     % (len(a), len(b)))
+    raise SystemExit(1)
+sys.stdout.write(a[0] + "\n" + b[0] + "\n")
+PY
+)
+NOGIT_LINE=$(printf '%s\n' "$NOGIT_PAIR" | sed -n 1p)
+GIT_LINE=$(printf '%s\n' "$NOGIT_PAIR" | sed -n 2p)
+if [ -z "$NOGIT_LINE" ] || [ -z "$GIT_LINE" ]; then
+  say "CENSUS-NOGIT: PLANT NOT ESTABLISHED — the runner's own integrity sentences could not be read out of its source, so this arm cannot be about the lines the gate prints"
+  FAILED=1
+elif ! python3 -I - "$CEN/full.log" "$CEN/nogit.log" "$NOGIT_LINE" "$GIT_LINE" >"$CEN/nogit-build.log" 2>&1 <<'PY'
+import sys
+src, dst, nogit, git = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+lines = open(src, encoding="utf-8").readlines()
+have_git = sum(1 for l in lines if git[:12] in l)
+have_nogit = sum(1 for l in lines if nogit[:24] in l)
+assert have_git + have_nogit == 1, (
+    "this run's log carries %d git lines and %d no-git lines, and exactly one "
+    "of the two is expected" % (have_git, have_nogit))
+out = []
+for l in lines:
+    if have_git and git[:12] in l:
+        out.append(l.split(git[:12])[0] + nogit + "\n")
+    elif have_nogit and nogit[:24] in l:
+        out.append(l.split(nogit[:24])[0] + git + "\n")
+    else:
+        out.append(l)
+open(dst, "w", encoding="utf-8").writelines(out)
+sys.stderr.write("SWAPPED: %s\n" % ("git -> no-git" if have_git else "no-git -> git"))
+PY
+then
+  say "CENSUS-NOGIT: PLANT NOT ESTABLISHED — a log of the other configuration could not be built: $(tail -1 "$CEN/nogit-build.log")"
+  FAILED=1
+elif ! _mk_census "$CEN/nogit.log" "$CEN/nogit.py"; then
+  say "CENSUS-NOGIT: FAIL — a log of THIS run in the OTHER configuration cannot be classified by this census, which is W-1: the gate would be red in a tree that differs only by its .git — $(tail -1 "$CEN/nogit.py.decl.err")"
+  FAILED=1
+elif python3 -I "$CEN/nogit.py" "$CEN/nogit.log" >"$CEN/nogit-run.log" 2>&1; then
+  say "CENSUS-NOGIT: the same log with the frozen-integrity check's OTHER sentence in it ($(sed -n 's/^SWAPPED: //p' "$CEN/nogit-build.log")) is classified and ACCEPTED — $(sed -n 's/^ARM CENSUS: //p' "$CEN/nogit-run.log") — so both worlds are measured here rather than one of them in a reviewer's container (W-1)"
+else
+  say "CENSUS-NOGIT: FAIL — the other configuration's log was refused: $(head -1 "$CEN/nogit-run.log")"
+  FAILED=1
+fi
+
+# And the attribution: with that one declaration deleted, a log carrying the
+# no-git line cannot be read at all, and the refusal NAMES it. This is the arm
+# the coordinator asked for, so the line cannot go undeclared again in silence.
+if python3 -I "$PATCHDIR/drop-census-nogit.py" "$HERE/p8-arm-census.py" "$CEN/no-nogit.py" \
+     >"$CEN/p8n.log" 2>&1; then
+  CN_SRC=$CEN/nogit.log
+  if grep -qF "no git work tree here" "$CEN/full.log"; then CN_SRC=$CEN/full.log; fi
+  CN=$(python3 -I "$CEN/no-nogit.py" --seal "$CN_SRC" 2>&1 >/dev/null); CNRC=$?
+  if printf '%s' "$CN" | grep -qF "ARM LABEL UNKNOWN" \
+     && printf '%s' "$CN" | grep -qF "no git work tree here"; then
+    say "CENSUS-NOGIT-CTL: with that one declaration deleted ALONE the log carrying the no-git line is REFUSED BY NAME (ARM LABEL UNKNOWN) and the refusal quotes it — the exact state the twentieth challenge measured as FAILED=1 from an archive copy"
+  else
+    say "CENSUS-NOGIT-CTL: FAIL — with the declaration deleted the no-git line was not named: rc=$CNRC $(printf '%s' "$CN" | head -1)"
+    FAILED=1
+  fi
+else
+  say "CENSUS-NOGIT-CTL: PLANT NOT ESTABLISHED — the no-git declaration could not be deleted from a copy: $(tail -1 "$CEN/p8n.log")"
+  FAILED=1
+fi
+
+# Every line the runner can print, in any configuration. One line of one
+# untaken path is what W-1 was; this arm reads the runner's own source and
+# classifies EVERY static sentence in it, so an undeclared line reds here even
+# when this container never executes it. Lines whose first token is substituted
+# at run time are SKIPPED and the number of them is printed: their identity is
+# only knowable from a run, and the census sees it there.
+if python3 -I - "$HERE/run-p8-real-proof.sh" "$CEN/full.log" "$CEN/paths.log" \
+     >"$CEN/paths-build.log" 2>&1 <<'PY'
+import re, sys
+src, base, dst = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(src, encoding="utf-8").read()
+# Every `say "…"` with a static first token. A double-quoted shell literal ends
+# at the first unescaped quote, which is what this reads.
+lits = re.findall(r'(?m)^[\t ]*say "((?:[^"\\]|\\.)*)"', s)
+sites = len(re.findall(r'(?m)^[\t ]*say ', s))
+runtime = [t for t in lits if t.startswith("$")]
+static = [t for t in lits if not t.startswith("$")]
+subst = re.compile(r'\$\((?:[^()]|\([^()]*\))*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z_0-9]*')
+lines = [subst.sub("X", t) for t in static]
+with open(dst, "w", encoding="utf-8") as out:
+    out.write(open(base, encoding="utf-8").read())
+    for l in lines:
+        out.write("[PATHS] %s\n" % l.replace("\\$", "$").replace('\\"', '"'))
+# The claim this arm may make is bounded by what this reader covers, so all
+# three figures are printed: the sentences classified, the ones whose first
+# token is substituted at run time (their identity is only knowable from a run,
+# and the census reads it there), and the total number of say-sites, so a
+# sentence this reader cannot see is visible as a difference rather than as a
+# silence.
+sys.stderr.write("PATHS: %d static sentences classified, %d skipped as "
+                 "run-time-substituted, %d say-sites in the runner\n"
+                 % (len(lines), len(runtime), sites))
+PY
+then
+  PATHS_N=$(sed -n 's/^PATHS: \([0-9]*\) static.*/\1/p' "$CEN/paths-build.log")
+  PATHS_ALL=$(sed -n 's/^PATHS: .*, \([0-9]*\) say-sites.*/\1/p' "$CEN/paths-build.log")
+  PATHS_RT=$(sed -n 's/^PATHS: [0-9]* static sentences classified, \([0-9]*\) skipped.*/\1/p' "$CEN/paths-build.log")
+  if _mk_census "$CEN/paths.log" "$CEN/paths.py"; then
+    say "CENSUS-PATHS: every one of the $PATHS_N static sentences this runner can print — in EVERY configuration, including the paths this container does not take — is classified by the census, so an undeclared line of an untaken path reds here (W-1); of $PATHS_ALL say-sites in the runner the other $PATHS_RT begin with a value substituted at run time, so their identity is knowable only from a run and the census reads it there"
+  else
+    say "CENSUS-PATHS: FAIL — a sentence the runner can print is classified by nothing: $(tail -1 "$CEN/paths.py.decl.err")"
+    FAILED=1
+  fi
+  if [ -s "$CEN/no-nogit.py" ]; then
+    CP=$(python3 -I "$CEN/no-nogit.py" --seal "$CEN/paths.log" 2>&1 >/dev/null)
+    if printf '%s' "$CP" | grep -qF "ARM LABEL UNKNOWN" \
+       && printf '%s' "$CP" | grep -qF "no git work tree here"; then
+      say "CENSUS-PATHS-CTL: with the no-git declaration deleted ALONE the all-paths log is REFUSED BY NAME and the refusal quotes that line, so this arm is what would have caught W-1 before a reviewer did"
+    else
+      say "CENSUS-PATHS-CTL: FAIL — with that declaration deleted the all-paths log did not name the line: $(printf '%s' "$CP" | head -1)"
+      FAILED=1
+    fi
+  fi
+else
+  say "CENSUS-PATHS: PLANT NOT ESTABLISHED — the runner's static sentences could not be read out of its source: $(tail -1 "$CEN/paths-build.log")"
+  FAILED=1
+fi
+
+# W-2: the seal covers the complement now. One head added to NOT_ARMS, the seal
+# left alone, and the census must refuse — and with the seal comparison deleted
+# the smuggled family goes green again, which is what the challenger measured.
+if python3 -I "$PATCHDIR/widen-census-complement.py" "$CEN/base.py" "$CEN/widened.py" \
+     >"$CEN/p9a.log" 2>&1; then
+  cp "$CEN/full.log" "$CEN/probe.log"
+  printf '[%s] PROBE z99: a measurement smuggled in under a widened complement\n' "$RUN" >> "$CEN/probe.log"
+  CW=$(python3 -I "$CEN/widened.py" "$CEN/probe.log" 2>&1); CWRC=$?
+  if [ "$CWRC" -ne 0 ] && printf '%s' "$CW" | grep -qF "SEAL BROKEN"; then
+    say "CENSUS-SEAL-COMP: one head added to the list that decides what the census may SKIP, with the seal untouched, is REFUSED BY NAME (SEAL BROKEN) and the refusal names all four declarations, so the complement cannot be widened quietly (W-2)"
+  else
+    say "CENSUS-SEAL-COMP: FAIL — a widened complement with an untouched seal was not refused: rc=$CWRC $(printf '%s' "$CW" | head -1)"
+    FAILED=1
+  fi
+  if python3 -I "$PATCHDIR/drop-census-sealcheck.py" "$CEN/widened.py" "$CEN/widened-unsealed.py" \
+       >"$CEN/p9b.log" 2>&1; then
+    CS=$(python3 -I "$CEN/widened-unsealed.py" "$CEN/probe.log" 2>&1); CSRC=$?
+    if [ "$CSRC" -eq 0 ] && printf '%s' "$CS" | grep -qF "ARM CENSUS:"; then
+      say "CENSUS-SEAL-COMP-CTL: with the seal comparison deleted ALONE the same widened complement reports a clean census over a log carrying an undeclared arm-shaped line — the exact rc 0 the twentieth challenge measured (W-2), so the seal above is what closes it"
+    else
+      say "CENSUS-SEAL-COMP-CTL: FAIL — with the seal check deleted the widened complement did not go green: rc=$CSRC $(printf '%s' "$CS" | head -1)"
+      FAILED=1
+    fi
+  else
+    say "CENSUS-SEAL-COMP-CTL: PLANT NOT ESTABLISHED — the seal comparison could not be deleted: $(tail -1 "$CEN/p9b.log")"
+    FAILED=1
+  fi
+else
+  say "CENSUS-SEAL-COMP: PLANT NOT ESTABLISHED — the complement could not be widened in a copy: $(tail -1 "$CEN/p9a.log")"
+  FAILED=1
 fi
 
 # ---------------------------------------------------------------------

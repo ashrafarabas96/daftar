@@ -56,10 +56,17 @@ SELECT p8.case_equals('W-1b and the status actually moved',
 -- declared, the statement is built from them, and the witness is BUILT from the
 -- same three values rather than written here — so there is no witness text to
 -- point somewhere else (U-2, U-3), and no second subject to declare instead
--- (N-2). The row is read, so the refusal cannot be about an empty set (S-5).
+-- (N-2).
+-- ROUND 30, F-1: the sentence that stood here said the row is read, so the
+-- refusal cannot be about an empty set. That was FALSE while the predicate was
+-- this file's own text: the coordinator's review wrote `WHERE id = '…dead' AND
+-- @KEY@ <> ''`, the witness read the declared row, the statement touched none,
+-- and the case passed. The form now appends the predicate itself from the
+-- declared key, so this case supplies the mutation and nothing else — and the
+-- statement and the witness read the same row because one expression builds
+-- both.
 SELECT p8.case_refuses_row('W-2 may NOT rewrite the obligation key — the UPDATE grant is column-scoped', $q$
   UPDATE @REL@ SET obligation_key = 'B1|rewritten'
-   WHERE id = @KEY@
 $q$, 'permission denied',
    'notifications', 'id', '0fffffff-0000-4000-8000-0000000000a1');
 
@@ -112,12 +119,16 @@ SELECT p8.case_equals('W-5b and the appended attempt is readable by the worker',
 -- UPDATE and could otherwise edit a history.
 -- ROUND 29: a ROW case, and the one the coordinator's N-2 attacked by declaring
 -- the RELATION as the subject while the statement kept a key no fixture creates.
--- A row case now names the key column and the key value; the relation form
--- refuses a statement that carries a key predicate at all, so that attack has
--- nowhere to land.
+-- ROUND 30, F-2: the sentence that stood here said the relation form refuses a
+-- statement carrying a key predicate at all, so the attack had nowhere to land.
+-- It landed: the coordinator re-spelled this very case as `MERGE INTO @REL@ …
+-- ON t.attempt_key = 'NO-SUCH-ATTEMPT'`, which carries no WHERE, and the gate
+-- was green with this case measuring nothing. The relation form now admits only
+-- the SQL keywords it declares, read from the server's own keyword list, and
+-- the arriving refusal must be a relation-level one; this case is a ROW case
+-- and the form appends its predicate.
 SELECT p8.case_refuses_row('W-6 and may not edit one afterwards — refused by the GRANT, before the trigger', $q$
   UPDATE @REL@ SET outcome = 'rejected'
-   WHERE attempt_key = @KEY@
 $q$, 'permission denied',
    'notification_attempts', 'attempt_key',
    'B1|event:w1|invoice_issued|customer:1::whatsapp#1');
