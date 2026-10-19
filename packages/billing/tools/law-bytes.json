@@ -7,7 +7,7 @@
     "package.json": "a06c847a16043b749dd7a9c76670e168eeb41caab9c49b7c3efd95c4fda8f7b7",
     "tsconfig.json": "2a0f802f2e7d00013ca325c1ce8c0da1fa13d148c20176a09d954897a85d5fd1",
     "tsconfig.build.json": "fc260cbe86688e06932291129be27acbf84fb4b0744efa4cefa4544de09f6f59",
-    "tools/law-ran.py": "b967066e3baadc271c5f66c72eabf56df39491be9d289e703a0605889bbd535d",
+    "tools/law-ran.py": "48f715db0cdb6510a52af6d75487948acc9b25d47165e1fd6b4210f44f20b8a1",
     "tools/reviewer-reports.json": "d486c5701de288c6e711e75cdfc8507e589c973475b253f1817ca173202d7516",
     "tools/manifest-digests.py": "352d91ee7469ae6d578c6594022fdf92233066131309652ee42c4f9805f75ff4",
     "tools/status-block.py": "bff5123897bad5da75865d32a79ef1d9534986abdc9a1b9418c11a2dcae628cb",

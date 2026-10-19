@@ -198,6 +198,13 @@ REFUSED_GIT_NOT_READABLE = "REFUSED-GIT-NOT-READABLE"
 # report on disk is a document, and a stale green report is the oldest hole
 # there is.
 REFUSED_PACK_MOVED = "REFUSED-PACK-MOVED-DURING-MEASUREMENT"
+# The challenger's round-55 question about round 57's own remedy: what happens
+# when the private copy cannot be MADE at all? Before this name it was an
+# unhandled exception -- fail-closed by exit code, but not a refusal anyone can
+# read, and a traceback is exactly the output an operator retries blindly. It is
+# NEVER a fall-back to the live pack: a step that quietly measures the moving
+# subject when its own copy fails has the hole R54-S2 named, back again.
+REFUSED_PACK_COPY_IMPOSSIBLE = "REFUSED-PACK-COPY-NOT-POSSIBLE"
 
 
 def pack_digest(directory: Path) -> str:
@@ -499,7 +506,16 @@ def main() -> int:
     pinned_pack = None
     if pack_dir.is_dir():
         source_before = pack_digest(pack_dir)
-        pack_snapshot = Path(tempfile.mkdtemp(prefix="law-ran-pack-"))
+        try:
+            pack_snapshot = Path(tempfile.mkdtemp(prefix="law-ran-pack-"))
+        except OSError as exc:
+            refuse(
+                f"{REFUSED_PACK_COPY_IMPOSSIBLE}: this step could not create the private directory it "
+                f"measures the pack in ({exc}), so there is nothing it can measure that does not move. "
+                "It does NOT fall back to the live pack at "
+                f"{pack_dir}: measuring a directory other sessions write to is the hole this copy exists "
+                "to close"
+            )
         for name in sorted(os.listdir(pack_dir), key=lambda entry: entry.encode()):
             full = pack_dir / name
             if not full.is_file():
