@@ -746,15 +746,149 @@ carry a false measured claim does not get signed here even when its instrument
 is sound. Round 10 was rejected on exactly this shape, and the rule holds when
 the sentence is the author's own.
 
-The measurement that settled it is two commands:
-`git show 321e84c:prep/phase11/harness/rebuild_and_prove.sh | grep -n '^echo "=== 0'`
-returns **three** lines — the cluster's `0` and `0b` and this check's colliding
-`0` — and a plant driven through the real script with `P11_REPO` pointed at a
-copy shows the refusal happening after those two steps.
+The measurement that settled it, **with the command corrected — the version
+first printed here was wrong, and `R13-F1` of the thirteenth round rejected the
+head for it.** The command as quoted was
+`git show 321e84c:…/rebuild_and_prove.sh | grep -n '^echo "=== 0'`, and that
+returns **ONE** line, line 80: the two cluster lines are **indented** inside
+the `if [ ! -d "$S/data" ]` block, so the `^echo` anchor excludes precisely the
+two lines the sentence enumerated. The evidence as written excluded its own
+point. Unanchored it reads correctly:
+
+    git show 321e84c:prep/phase11/harness/rebuild_and_prove.sh | grep -n '=== 0'
+    35:  echo "=== 0. creating the scratch cluster at $S on en_US.utf8 ==="
+    42:  echo "=== 0b. starting the cluster (it is reaped between turns in this container) ==="
+    80:echo "=== 0. the documents' fenced figures (every quoted key=value must be emitted by something) ==="
+
+**One line anchored, three unanchored**, and the substance the `NO-SIGN` rests
+on is in the three: lines 35 and 42 create and start the cluster, and line 80
+is this check's colliding `0`. The second half of the measurement stands as
+written — a plant driven through the real script with `P11_REPO` pointed at a
+clone shows the refusal happening after those two steps, which the thirteenth
+round reproduced on its own clone.
 
 **This commit is a new SHA and carries no signature either**, and a thirteenth
 round is owed narrow on `321e84c..HEAD`, with the coordinator reviewing the same
 range after it.
+
+---
+
+## 7.13 The THIRTEENTH round — `REJECT` at `cb19811` on one sentence, and the checker redesigned a third time
+
+Frozen at `/mnt/project-files/phase11/P11-CHALLENGE-cb19811.md`, sha256
+`1bacc58fcf7bf6ee566bb421cb1f1678cb8b5b6356f100897008d21607f73159`, 413 lines /
+19,487 bytes. Everything else in `cb19811` reproduced, on a fresh
+`git clone --no-hardlinks` with `P11_REPO` pointed at it: the clean suite, the
+nine arms, the plant naming `harness/mutations/README.md:94` with zero
+`=== 1.` lines, and every digest.
+
+**`R13-F1` (BLOCKER) — the cited command excluded its own point.** §7.12 above
+is corrected in place, with both forms and the real output. One line anchored,
+three unanchored. The substance of the `NO-SIGN` is untouched; what was wrong
+was the evidence offered for it, which is the same class as `R10-F1`, as the
+§7.9 sentence, and as the step-0 sentence this very commit exists to correct.
+**Three of the last four rounds have turned on a sentence about an instrument
+rather than on an instrument**, and the cure is the one this round demonstrates
+again: run the command you are about to quote, and paste what it prints.
+
+**`R13-S1` (`P2`) — an unmeasured guard that opened an escape.** The previous
+design skipped any line containing a backtick. The challenger deleted it: **no
+arm red and the real tree was byte-identical**, so the guard was unmeasured;
+the arm that read as covering it passed for an independent reason; and it
+opened `N16` — a figure followed by a backticked `--` comment passed, in the
+wrong direction. It is **deleted**, replaced by stripping **inline code spans**
+before matching, which is narrower, keeps the named exclusion the §16.6
+withdrawal note depends on, and **is measured**: deleting the strip reds `N16`
+and nothing else.
+
+**`R13-S2` (`P3`) — eleven escapes, all from the LINE ANCHOR.** Blockquote,
+list item, bold, parentheses, trailing comma, semicolon, period, percent,
+thousands separator, HTML comment, colon prefix, table cell. A list item is the
+most idiomatic way these documents write a figure, and the repo's own gate
+table writes `4,798`.
+
+**`R13-S3` (`P3`) — the price of the previous design, measured: 7 of 14
+realistic prose shapes red the gate.** `kind=refusal` and `role=postgres` are
+`proofs.py`'s own `case()` parameters, so a future paragraph explaining the
+harness would have stopped every proof in the phase. Fail-closed, so a cost
+rather than a hole — but a cost that stops the work.
+
+**BOTH DIRECTIONS ARE CLOSED BY ONE CHANGE, NOT BY ELEVEN PATCHES.** Patching
+eleven prefixes would leave a twelfth, exactly as patching four fence syntaxes
+left a fifth. So the design changes what a candidate **is**: the arm is about
+FIGURES, and a figure is **a number or a boolean**. The value must now be
+`[0-9][0-9,._]*` or `true`/`false`, and everything around the token is markdown
+decoration that is stripped before matching. The eleven escapes are caught
+because decoration no longer matters; the seven false positives stop being
+candidates because `postgres`, `refusal`, `heads/main`, `catalog.foo_invalid`,
+`PATCH-REQ-P8-08`, `agreement` and `/var/tmp/myclone` are not figures. And
+`locale=en_US.utf8`, which the round got to PASS through the substring
+weakness, is not a candidate either.
+
+**EVERY GUARD IN THE MATCHER IS NOW MEASURED, not just the one the round
+named.** Each was deleted on its own and the arms it reds recorded:
+
+| guard deleted | arms that go red |
+|---|---|
+| inline code-span strip | `N16` backticked comment |
+| blockquote / indent strip | blockquote, nested list item |
+| list-marker strip | list item, nested list item |
+| table-cell strip | table cell |
+| bracket strip | parentheses |
+| emphasis strip (leading) | bold |
+| colon-label strip | colon prefix |
+| trailing-punctuation strip | percent, trailing semicolon, parentheses |
+| emphasis strip (trailing) | bold |
+| trailing-pipe strip | table cell |
+| HTML-comment strip | HTML comment |
+| **the figure value class** | **all seven `R13-S3` false positives** |
+
+No guard reds nothing. The selftest is **20 catch arms, 13 skip arms and 4
+others**: every shape either round planted, the named exclusions, and the seven
+false positives as arms that must now come back clean. The skip arms land on
+exit **2** — no candidate at all — which is the inert refusal doing double duty
+as the negative assertion.
+
+**The challenger's own two corrections are recorded as its, not mine.** It
+withdrew its round-12 sentence that the planted run "stopped at step 0 before a
+cluster was touched" — false for the same reason mine was, inferred from the
+absence of a `=== 1.` line, which bounds the wrong thing — and noted that its
+round-12 plant ran on copied subtrees, so its evidence carried
+`fatal: not a git repository` and an empty `SOURCE_SHA`. It found its own
+version of the defect it had rejected me for, while rejecting me for it.
+
+**Still disclosed, not closed:** the haystack is a substring match over one
+blob; a non-numeric, non-boolean value shown as output is deliberately not a
+candidate, which is the price of `R13-S3`; and the arm's second direction stays
+a rule. `E4b`'s geometry note is accepted and written into the selftest: it
+measures the haystack half, `E4a` measures the scan half, and the real tree's
+one-file-in-both-roles geometry is exercised by the plant through the script.
+
+**THE HISTORICAL RED PROOF WAS RE-RUN UNDER THE THIRD DESIGN, not inherited
+from the first.** A redesigned instrument carries none of its predecessor's
+evidence, so `prep/phase11` was exported from `51686d9` — the head round 10
+rejected — the new matcher dropped in beside it, and the scan run from that
+tree. It still names both occurrences by file and line and still exits 1:
+
+```text
+quoted figures: 9 documents, 6 candidate figures, 2 not emitted
+  NOT EMITTED: P11-LIVE-DDL-PROOF.md:2234 reports `superuser_sees=130`, and no instrument or committed evidence file under the harness emits that string. ...
+  NOT EMITTED: P11-MIGRATION-PATCH-REQUEST.md:746 reports `superuser_sees=130`, and no instrument or committed evidence file under the harness emits that string. ...
+rc=1
+```
+
+At this head the same instrument reports `9 documents, 6 candidate figures, 0
+not emitted` with `rc` 0, and the no-`-I` guard returns 4. The run is
+`prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND13.txt`, run
+`p11-20261019T081906Z-340`: Pack A 121 ×2 and Pack B 53 ×2 with 0 failed, 13
+races with 0 findings, 80 frozen entries and 0 digest mismatches, every `EXIT_*`
+0 including `EXIT_FENCED_FIGURES` at step `0c`, on PostgreSQL 16.15 at
+`en_US.utf8`. That run's tree was dirty, because the evidence of a commit
+cannot be committed before it; the clean-tree re-run at the pushed SHA is
+published beside it.
+
+**A FOURTEENTH round is owed** narrow on `cb19811..HEAD`, with the coordinator
+diff review after it. `24f6ebe` is still the last fully signed head.
 
 ---
 
