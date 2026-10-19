@@ -152,7 +152,7 @@ c558e5deed66856fb66ffc1b8eca38d6defdef1154156cdca8a0a7690ba7c422  run_migrations
 ```
 
 
-**Nothing is uncommitted.** The working tree is clean at the preparation SHA, and the shared copies are the same bytes. Note that `/mnt/project-files/` is **not in Git**: the Git copies under `prep/phase11/` are the durable ones, and that duplication exists precisely because this container is ephemeral.
+**Nothing is uncommitted.** The working tree is clean at the preparation SHA. **The unversioned copies under `/mnt/project-files/phase11/` are NOT the same bytes as the commit and nothing here says they are** — the coordinator measured five of eight differing while this sentence claimed they matched (`C25-F2`), which is the harm `R24-F2` was about, reproduced by a sentence `R24-F2`'s answer did not reach. The copies named with a head's SHA in their filename are published against that head and verified `MATCH` one at a time; the copies named without one are a convenience for a reader and pin nothing. Note that `/mnt/project-files/` is **not in Git**: the Git copies under `prep/phase11/` are the durable ones, and that duplication exists precisely because this container is ephemeral. §7.26 carries the sweep that found this sentence, the command it was run with, and its output.
 
 **Where to look first if an artifact appears to be missing** (PART 13's order, and its warning that a referenced companion document absent from an archive does **not** mean the work never existed): `git show <prep SHA>:prep/phase11/` on this branch; then `/mnt/project-files/phase11/`; then `git log --all --diff-filter=A -- 'prep/phase11/*'`. Do not recreate any of these until that search proves the file absent.
 
@@ -992,8 +992,15 @@ tree. It still names both occurrences by file and line and still exits 1:
 quoted figures: 9 documents, 6 candidate figures, 2 not emitted
   NOT EMITTED: P11-LIVE-DDL-PROOF.md:2234 reports `superuser_sees=130`, and no instrument or committed evidence file under the harness emits that string. ...
   NOT EMITTED: P11-MIGRATION-PATCH-REQUEST.md:746 reports `superuser_sees=130`, and no instrument or committed evidence file under the harness emits that string. ...
-rc=1
 ```
+
+That run returned 1, as a finding must. The exit line is elided from the quote
+above rather than pasted, and `R25-F1` is why: a figure quoted in a fence is
+legitimate here only because an INSTRUMENT emits it, and `rc=1` was emitted by
+nothing but the committed transcript this quote was copied from — which is
+exactly the authority round 25 took away. The claim the line carried is kept in
+prose, where it is a sentence a reader can check against the run, and the
+figure is not asserted twice.
 
 At this head the same instrument reports `9 documents, 6 candidate figures, 0
 not emitted` with `rc` 0, and the no-`-I` guard returns 4. The run is
@@ -1080,6 +1087,7 @@ was right twice and I was wrong twice, before the round.
 ```text
 each guard deleted on its own, and the arms that stop answering:
 
+html character references  reds  4 arm(s): C25-F1 a decimal character reference for the `=`, C25-F1 a hexadecimal character reference for the `=`, C25-F1 a named character reference for the `=` +1 more
 nfkc                       reds  1 arm(s): R14-S1 full-width equals
 format characters          reds  1 arm(s): R14-S1 zero-width space
 non-ascii digits           reds  5 arm(s): R14-S1 arabic-indic digits, R14-S1 extended arabic digits, R15-S3 devanagari digits +2 more
@@ -1098,11 +1106,11 @@ boolean case folding       reds  1 arm(s): R14-S1 boolean True
 named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
 planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
 haystack from the commit   reds 17 arm(s): R16-F1 an untracked scratch file is not evidence, R16-F1 a gitignored .pyc is not evidence, R16-F1 a directory that is no repository is refused +14 more
+only what can run emits    reds  2 arm(s): R12 E4b a doc is not its own evidence, R25-F1 a committed transcript emits nothing
 no repository redirects the subject reds 10 arm(s): R17 a repository planted inside the haystack is refused, R18-F1 planted at the harness, run from the repository root, R18-F1 planted at the harness, run from the harness directory +7 more
-markdown is not evidence   reds  1 arm(s): R12 E4b a doc is not its own evidence
 the checker is not its own evidence reds  1 arm(s): R16-F1 the checker is not its own evidence
 
-21 guards, every one of them deleted on its own and measured
+22 guards, every one of them deleted on its own and measured
 ```
 
 <!-- END GENERATED guard-matrix -->
@@ -1273,7 +1281,7 @@ The counts in this section and the two blocks in §7.14 are generated:
 <!-- BEGIN GENERATED arm-counts: python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts -->
 
 ```text
-66 catch arms, 16 skip arms, 2 pass arms, 24 others
+70 catch arms, 16 skip arms, 2 pass arms, 25 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -2900,10 +2908,246 @@ after each of its own numbers — so it moves when the generator's wording moves
 and is not a list anyone maintains. Both directions are armed: the count
 restated about the guards is caught, the same number about a round is not.
 
-**WHAT THIS HEAD CLAIMS, AND WHAT IT DOES NOT.** No signature. Round 25 and a
-coordinator diff review are owed; `24f6ebe` is still the last fully signed head;
-`READY_TO_PROMOTE` = **NO**; **no migration number exists**; and `OD-P11-07` is
-the owner's alone.
+**WHAT THIS HEAD CLAIMED, AND WHAT CAME BACK.** `36c9094` claimed no
+signature and asked for round 25 and a coordinator diff review. Both have
+returned: round 25 `PASS-WITH-SCOPE` with six named residuals, of which the
+coordinator ruled `R25-F1` a `P1`; the coordinator's diff review `NO-SIGN` with
+`C25-F1` and `C25-F2` as blockers and seven residuals. §7.26 answers all three
+blockers. `24f6ebe` was still the last fully signed head at that commit, as it
+is at this one.
+
+---
+
+## 7.26 ROUND 25 (`PASS-WITH-SCOPE` at `36c9094`, one `P1` from the coordinator's ruling on it) and the coordinator's diff review of the same head (`NO-SIGN`) — a figure is legitimate because an INSTRUMENT emits it
+
+Three blockers, one commit. Round 25's `R25-F1`, ruled `P1` by the coordinator;
+and the coordinator's own `C25-F1` and `C25-F2`. None of them is about where a
+figure SITS, which is what round 24 closed. Two are about what makes a figure
+legitimate and one is about a sentence that was false.
+
+### `R25-F1` — the haystack was RECORDED TEXT, and a recording is not an emission
+
+The gate's question has always been whether a figure a document quotes is a
+figure something in this tree EMITS. What it actually compared against was the
+text of every tracked file under `prep/phase11/harness/`, and twenty-seven of
+those files are `RUN-EVIDENCE-*.txt` — recordings of past runs. So the real
+rule was: *a figure is legitimate if it appears in a transcript somebody
+committed.* Anyone who can write a `.txt` file into that directory could
+legitimise any figure, and the standing lesson this phase keeps relearning
+names it exactly: **derive subject sets from EXECUTION, not from alterable
+text.**
+
+It was not a theoretical hole at `36c9094`; the previous commit realised it.
+`RUN-EVIDENCE-PROBE-ROUND24.txt`, added as evidence for round 24's answer,
+carries `overlay_routine=4242` twenty-two times, so round 24's own two attack
+tokens became legitimate in every document from that commit on — `R15-S4`'s
+cause from a source `planted_tokens()` cannot reach, because that set is
+derived from the arm bodies and the probe transcript is not an arm.
+
+**The answer is stated POSITIVELY, and the direction is the whole of it.** My
+first form of this fix dropped `.txt`, and round 25 had already named what that
+is: an exclusion by shape moves the hole from shape to TIME, because the next
+recording arrives under the next suffix — `.log`, `.out`, or no extension at
+all — and nobody is there to exclude it. So the haystack is the files this tree
+can RUN: `EMITTING_SUFFIXES` is `.py`, `.sh` and `.sql` — the proof suites and
+race programs, the driver, and the DDL and worlds the run applies — and
+everything else emits nothing whatever it is called. A new recording is outside
+by default rather than until someone remembers. The guard is named for what it
+decides, `only what can run emits`, and its deletion arm is a world of its own:
+a tracked `RUN-EVIDENCE-AUTHORITATIVE-ROUND99.txt` carrying the probe token,
+which reds with the guard and passes without it. The recordings stay committed,
+under their digests, as the evidence a reader opens; they stop deciding.
+
+**And a guard was DELETED by it rather than carried.** `markdown is not
+evidence`, which has stood since round 12, red no arm under the positive rule —
+a `.md` is not a file this tree runs, so it was already excluded — and a guard
+that reds nothing is deleted or armed with no third option. The shape round 12
+reported is still measured: its arm reds against the rule that decides it now,
+and the behaviour is unmoved, measured rather than promised. Two arm worlds
+moved with the same change, recorded here rather than quietly re-pointed:
+round 16's untracked plant was a `.log` and round 15's gitignored plant a
+`.pyc`, and under the positive rule neither emits anything whatever the commit
+says — so a plant in one measured the suffix rule instead of the commit
+derivation those arms exist for. Both worlds plant in a `.py` now, the `.pyc`
+kept beside it, and `haystack from the commit` reds its seventeen arms again.
+
+**What it cost, measured and not estimated.** The scan's own inventory line
+names the file count it read, before and after, and this paragraph does not
+restate it. Exactly two document lines lost their only backing, and both are
+answered where the figure is written rather than excused:
+
+| the line | what backed it | what it says now |
+|---|---|---|
+| `P11-HANDOFF-MANIFEST.md:995`, `rc=1` inside a quoted historic transcript | a committed transcript, nothing else | the exit line is elided from the quote and the claim is kept in prose beside it |
+| `P11-LIVE-DDL-PROOF.md:883`, `is_base=false` inside an abridged `INSERT` | a committed transcript, nothing else | written `is_base = false` — the same SQL, and not a claim about a number |
+
+Neither is an exemption: nothing is excused anywhere, and a fabricated figure
+written into either line still reds.
+
+One arm moved with this guard, and that is reported rather than quietly
+re-pointed. `R15-S4`'s world carried its planted token in a committed
+`RUN-EVIDENCE.txt`, which the new guard now drops — so `planted tokens` red
+nothing, and a guard that reds nothing is deleted or armed. The world carries
+the token in an instrument's own SOURCE now (`fake_arms.py`), which is where
+that guard still has to answer and where the new one does not reach. The
+`.txt` half is kept beside it so the two exclusions are measured apart rather
+than one standing in for the other.
+
+### `C25-F1` — an HTML character reference is a SPELLING of the figure
+
+`cdrprobe_zx&#61;4242`, `&#x3d;`, `&equals;` and a reference inside the value
+each render to exactly the figure a reader sees — two independent CommonMark
+renderers agree — and each one walked the whole authoritative suite green at
+`36c9094`, committed, on a clean tree. `_strip` existed for precisely this
+question: `nfkc` is there so a full-width `＝` is the same figure, and `html
+comment markers` is there because markdown passes raw HTML through, which is
+the same surface a character reference lives on. A net that normalises `＝` is
+read as covering `&#61;`.
+
+**The answer** is a fifth spelling guard, `html character references`, which
+resolves character references before anything else in `_strip` — so a reference
+to a full-width `=` is resolved and then folded. `html.unescape` does it: the
+whole standard table and the standard's own parsing rules, rather than a list
+of reference names of mine, which is the difference between a normalisation and
+an enumerated exemption. Four catch arms, one per spelling the coordinator
+drove through.
+
+**The cost was measured before the fix was claimed**, as round 24's answer was:
+over all nine documents, `_candidates` with and without the resolution returns
+the same list on every line — **0 lines changed, 25 raw candidates either
+way**. Nothing in the pack writes a character reference today.
+
+**And the object that does it is pinned.** `_strip` is parsed by
+`guarded_transformations`, which bounds where a rebinding may sit and says
+nothing about what the transformer CALLS — so `html.unescape` rebound to the
+identity would put this blocker straight back with every AST rule still
+passing. `html` is in `FRAME_MODULES` and in the import-time snapshot, because
+this file's own rule is that a module reachable from the frame with no snapshot
+is an unpinned attribute, and `TRANSFORMER_MODULE_CALLS` names the call so the
+same three checks and the same four refusal names cover it. Its arm performs
+the rebinding, reads `MODULE-ATTR-REBOUND` by name, and measures the direction
+that used to pass: with the entry deleted the frame names nothing and the
+entity figure returns 0.
+
+### `C25-F2` — the sweep, run as a sweep
+
+§2's digest table was deleted and its claim retracted in the answer to
+`R24-F2`. The same claim survived 115 lines later, at line 155: *“the shared
+copies are the same bytes.”* Measured against the unversioned copies that
+sentence is about, five of eight differed, one of them by 921 lines — and a
+reviewer who read it would review a copy that far from the commit. §7.25 had
+even written down the rule it then missed: **two sweeps, not one — the outcome
+sentence and the discipline sentence.** A retraction is not a sweep.
+
+Line 155 is corrected in place, and the sweep is run as a sweep, with the
+command written here so a reader re-runs it rather than taking this paragraph's
+word:
+
+```text
+grep -rnE '(/mnt/project-files|shared cop(y|ies)|published cop(y|ies))' prep/phase11/*.md \
+  | grep -niE 'identical|same bytes|the same|match|verbatim|pins|unchanged'
+
+for f in prep/phase11/*.md; do b=$(basename "$f"); s="/mnt/project-files/phase11/$b";
+  c=$(git show HEAD:"$f" | sha256sum | cut -c1-12);
+  if [ -f "$s" ]; then p=$(sha256sum "$s" | cut -c1-12); else p=ABSENT; fi
+  if [ "$c" = "$p" ]; then v=identical; else v=DIFFERS; fi
+  printf '%-46s commit %s  shared %s  %s\n' "$b" "$c" "$p" "$v"; done
+```
+
+Two sentences name a shared path beside an identity word: line 40, which is the
+retraction itself and quotes the false sentence in order to retract it, and
+line 155, which asserted it. The nineteen other `byte-identical` sentences in
+the pack are commit-to-commit comparisons (`da106b7` vs `22e8e2d`, the DDL
+across `e27acaf`/`1a8ba15`, `0000`–`0079` on disk); they are not about a shared
+path and this round neither confirms nor disputes them. The per-document
+measurement is the second half of the command above, and a reader should expect
+it to say `DIFFERS` for whatever this commit changed: the unversioned copies are
+republished after a commit, never before it, so they lag by construction. That
+is why nothing is allowed to claim they match.
+
+### The residuals, each ruled rather than carried silently
+
+| id | ruling |
+|---|---|
+| `C25-S2` — a probe token already in the haystack | **closed by `R25-F1`**, and closed at the cause rather than per token: nothing but a runnable file emits anything now. The advice to derive a fresh probe token each round stands anyway, and the reviewers' own rounds follow it |
+| round 25's second suggestion — scan the transcripts AS DOCUMENTS, which would close `R17-S3` in the same move | **not in this commit, and named as the next thing rather than left unsaid.** It widens what the gate WEIGHS rather than narrowing what legitimises, so its cost is a different measurement: every figure in forty-four recordings becomes a claim this gate holds to account. Offered with `R25-S1` as the next round's work |
+| `C25-S1` — the shell read `UNTRACKED:` and so missed `HARNESS-READ-DIR-ABSENT:` | **fixed.** `rebuild_and_prove.sh` reads the three names as alternatives, so a reader sent to one is not told another |
+| `C25-S7` / `R25-S1` — “nine true sentences” was a hand-written figure | **fixed by generating it.** A fourth enrolled block, `backtick-cost`, runs the gate with `inline code span` deleted and prints what it finds. It is below, and `--check-blocks` compares it with a fresh run |
+| `R25-S1` — take the last decoration removal | **carried, with the price now measured rather than asserted.** The price is in the generated block below and is not restated here, for the reason `C25-S7` exists: it is tens of document lines, not nine sentences, and it moves whenever the pack writes another quoted counter-example, so a number copied into this row would be stale by the next commit. Both reviewers leave the call here, and the call is: not in this commit. This commit already changes what makes a figure legitimate twice — character references and the transcript haystack — and a third change to the same unit, in the same commit, would mean nobody could measure which of the three moved a verdict. It is the next round's single change, offered as one |
+| `C25-S6` — “no document writes that shape today” was true only of what the gate weighs | **fixed:** the sentence says *outside a code span* now |
+| `R25-S2` — the right boundary's bound named a hyphen and a date, not the class | **fixed:** the header names the class — a value may not END before `[0-9A-Za-z_-]`, so `=7731_` and `=7731x` are not figures either |
+| `C25-S3` — a format character glues a key to the token before it | carried, P3, and named in the header: deleting a `Cf` can create an adjacency the left boundary reads as a longer identifier. The price of the attack is a line that reads as mojibake |
+| `C25-S4` — a value on the NEXT line | carried, P3, and the header now says the matcher is per line |
+| `C25-S5` — the shell's two untracked sites are unarmed | carried, P3, and stated in the header: no arm anywhere executes `rebuild_and_prove.sh`, so every shell refusal in this pack is in that position, and in both worlds the two readers still refused |
+| `R25-S3` — `SELF-READ-DIR-ABSENT` and `SELF-UNTRACKED-UNREADABLE` are read by no arm by name | carried, P3, named with `HARNESS-HEAD-DISAGREES` as `UNMEASURED-at-runtime` |
+| `R25-S4` — nothing bound the guard set | **fixed:** `guard_set_test` parses the COMMITTED bytes, collects every `skip` key the code reads and requires it to be exactly `GUARDS`. 23 and 23 at this head |
+| `R25-S5` — the second reader's untracked law is scoped to `tree_state()` | carried, P3, and it is deliberate: the deciding-BYTES check runs over narrow worlds that hold an instrument and no repository around it. The independent second reader for that direction is the migrations digest comparison, which refuses on difference |
+| `R25-S6` / `G6` | carried, not this phase's: cold root `npm run build` returns 1 on `main` too |
+
+### A finding of my own, from using the file: the GENERATOR had no frame gate
+
+While regenerating the blocks for this section I ran `--regenerate` in a
+working tree whose deciding bytes were not yet in the commit, and it wrote a
+guard matrix saying **every** guard is load-bearing for ninety-eight arms. The
+cause is plain once seen: a generated block is written by RUNNING the arms, the
+arms run the scan, the scan refused `SELF-BYTES-UNCOMMITTED` as it should, and
+an arm whose world refuses is an arm that stopped giving its verdict — which
+the matrix reads as the guard deciding everything. A false generated figure,
+written silently, into the one place this pack tells a reader to trust over its
+prose. `--check-blocks` would have disagreed with the block afterwards, which
+is how I caught it, but a check downstream of a written document is not a
+reason to write a false one.
+
+`--regenerate` and `--emit` now refuse by name
+(`GENERATION-FRAME-INADMISSIBLE`) when the frame is inadmissible for any reason
+other than the two TREE laws, which stay suspended because a generator must be
+able to run in a tree that is not yet clean — that is what the suspension is
+for. Its arm seeds one refusal into the parse cache, requires both entry points
+to return 5, and requires the same call with nothing to report to generate; and
+the arm restores the process-wide generation flag, because the first version of
+it left the tree laws suspended for every arm that followed and six tree arms
+then reported that the real run does not name its own refusals.
+
+<!-- BEGIN GENERATED backtick-cost: python3 -I prep/phase11/harness/check_fenced_figures.py --emit backtick-cost -->
+
+```text
+the price of the last decoration removal, measured:
+
+candidates with the guard deleted      114
+document lines that would red          48
+distinct tokens in them                19
+
+deleting `inline code span` would red 48 document line(s) carrying 19 distinct token(s); it is a disclosed bound and not a hole
+```
+
+<!-- END GENERATED backtick-cost -->
+
+**One consequence of that block, stated because a reader will meet it.** It is
+the first generated block whose figures depend on the DOCUMENTS and not only on
+the instruments, so any edit to any document under `prep/phase11/` — a line of
+prose, a quoted counter-example — moves its numbers and `--check-blocks` reds
+until `--regenerate` is run and the result committed. That is the same
+discipline round 15 imposed on every other generated figure and it is kept
+deliberately, but it has a reading cost: a `--check-blocks` finding on a tree
+whose documents were just edited is usually a stale count and not an attack,
+and every probe world that appends a line to a document reds this check for a
+reason that is not the shape it is testing. The probe transcript for this round
+says so beside its own rows.
+
+**THE EVIDENCE FOR THIS SECTION**, both committed under the harness and both
+outside the haystack by the very rule they are evidence for:
+`harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND25.txt` (the whole suite from zero on
+a fresh clone) and `harness/RUN-EVIDENCE-PROBE-ROUND25.txt` (thirteen committed
+plant worlds, including the extensionless recording and its deletion control).
+Each names the scratch commit it measured and states that this commit's tree is
+that one plus these two files and the lines naming them.
+
+**WHAT THIS HEAD CLAIMS, AND WHAT IT DOES NOT.** No signature, and none is
+claimed: this commit answers three blockers and is owed round 26 and a
+coordinator diff review. `24f6ebe` is still the last fully signed head;
+`READY_TO_PROMOTE` = **NO**; **no migration number exists** — none allocated,
+reserved, examined, exampled, or written in a filename or a comment; and
+`OD-P11-07` is the owner's alone.
 
 ---
 

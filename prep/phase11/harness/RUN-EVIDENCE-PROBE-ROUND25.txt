@@ -1,0 +1,138 @@
+P11 — ROUND 25's AND THE COORDINATOR'S OWN SHAPES, ON COMMITTED CLONES
+======================================================================
+
+Thirteen throwaway clones of the candidate head c7b86d89999e868db70c05eab8ba61363dac9905.
+Each has ONE fenced line appended to a committed document, COMMITTED, with a
+clean work tree, and is measured by the scan, the generated-block check and the
+second reader. Worlds 8 to 11b also commit a RECORDING carrying the figure,
+which is round 25's blocker.
+
+Read the rows with these three things in mind.
+
+1. Worlds 2 to 5 are the coordinator's `C25-F1`: an HTML character reference
+   for the `=` or for a digit. At `36c9094` each of these passed with the whole
+   suite green. Here each reds, and the verdict names the SPELLING it was
+   written in beside the figure it resolves to.
+2. World 6 is `overlay_routine=4242`, round 24's own probe token. At `36c9094`
+   it PASSED in any document, because the probe transcript committed as evidence
+   for round 24's answer carries it twenty-two times. That is the realisation
+   of `R25-F1` in the head under review, and it reds here.
+   World 7, `core_routine=1`, passes and should: an instrument emits it.
+3. Worlds 8 to 11b are the law itself, each with its own control. A figure
+   recorded in a committed `.txt` reds (8) and passes with the one guard
+   deleted (9). And a figure recorded in a committed file with NO EXTENSION AT
+   ALL reds (10b) and passes with the same guard deleted (11b) — which is the
+   measurement that matters most, because round 25 named the TIME hole in the
+   first form of this fix: an exclusion by suffix is reopened by the next
+   suffix. The rule is positive, so a recording under any name is outside.
+   (Worlds 10 and 11 in the first block below measured nothing about the rule:
+   `*.log` is gitignored in this repository, so the file never reached the
+   commit and the commit derivation refused it first. They are kept rather than
+   deleted, because a row that measured something else is worth seeing once.)
+
+`blocks rc=1` on worlds 1 to 7 is expected and is not a finding about the
+shape: the `backtick-cost` block counts document lines, so appending a line to
+a document makes it stale until `--regenerate` runs. §7.26 says so.
+
+-----------------------------------------------------------------------------
+
+candidate head: c7b86d89999e868db70c05eab8ba61363dac9905
+
+--- world 1: cfprobe_q25=4242
+    committed 3727b915d837928100c890e23d1bafb7742d0dc3, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=1  reader rc=0
+    quoted figures: 9 documents, haystack from commit 3727b915d837928100c890e23d1bafb7742d0dc3 (21 files), 22 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `cfprobe_q25=4242`, and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 2: cfprobe_q25&#61;4242
+    committed d1d63bf87624440228a2d018139e7f2e929cb980, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=1  reader rc=0
+    quoted figures: 9 documents, haystack from commit d1d63bf87624440228a2d018139e7f2e929cb980 (21 files), 22 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `cfprobe_q25=4242` (written as `cfprobe_q25&#61;4242`), and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 3: cfprobe_q25&#x3d;4242
+    committed d966f19db062dc9645fa13d060f3eaa2698930d4, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=1  reader rc=0
+    quoted figures: 9 documents, haystack from commit d966f19db062dc9645fa13d060f3eaa2698930d4 (21 files), 22 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `cfprobe_q25=4242` (written as `cfprobe_q25&#x3d;4242`), and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 4: cfprobe_q25&equals;4242
+    committed e4087bfd3808b04ba0dbee1ec78db1a6ee1e7ec3, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=1  reader rc=0
+    quoted figures: 9 documents, haystack from commit e4087bfd3808b04ba0dbee1ec78db1a6ee1e7ec3 (21 files), 22 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `cfprobe_q25=4242` (written as `cfprobe_q25&equals;4242`), and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 5: cfprobe_q25=&#52;242
+    committed 38d0fa29774701ee1e3235a5f32b6ab2e9ddcf02, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=1  reader rc=0
+    quoted figures: 9 documents, haystack from commit 38d0fa29774701ee1e3235a5f32b6ab2e9ddcf02 (21 files), 22 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `cfprobe_q25=4242` (written as `cfprobe_q25=&#52;242`), and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 6: overlay_routine=4242
+    committed e3a8d4e2e6f31710b90f7129765f2b7f8d13e6b4, work tree clean: 0 entries, tree-state: no
+    scan rc=1  blocks rc=1  reader rc=0
+    quoted figures: 9 documents, haystack from commit e3a8d4e2e6f31710b90f7129765f2b7f8d13e6b4 (21 files), 22 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `overlay_routine=4242`, and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 7: core_routine=1
+    committed dcd4d9104373dd249955d114cb37226cabcaa1d2, work tree clean: 0 entries, tree-state: no
+    scan rc=0  blocks rc=1  reader rc=0
+    quoted figures: 9 documents, haystack from commit dcd4d9104373dd249955d114cb37226cabcaa1d2 (21 files), 22 candidate figures, 0 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+
+--- world 8: cfprobe_t25=7731, written in a document AND in a committed transcript
+    committed e2b7e78df23916d67231aeb97a48e14fefb238a8, work tree clean: 0 entries, tree-state: no
+    scan rc=1
+    quoted figures: 9 documents, haystack from commit e2b7e78df23916d67231aeb97a48e14fefb238a8 (21 files), 22 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `cfprobe_t25=7731`, and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 9: the SAME tree, with the guard `only what can run emits` deleted
+    (the control: this is what every head up to and including 36c9094 did)
+quoted figures: 9 documents, haystack from commit e2b7e78df23916d67231aeb97a48e14fefb238a8 (68 files), 22 candidate figures, 0 not emitted
+  the decision frame was parsed before this verdict: four functions, no refusal
+  NOT IN THE HAYSTACK: prep/phase11/harness/__pycache__/check_fenced_figures.cpython-313.pyc differs from that commit (changed, untracked or ignored). Nothing it contains legitimises a figure.
+    scan rc=0 with that one guard deleted
+
+--- world 10: cfprobe_l25=7732, recorded in a committed .log (the TIME hole of an exclusion by suffix)
+    committed 689ade0b4b7781e0c45f3dce374ac272034a48a0, work tree clean: 0 entries, tree-state: no
+    scan rc=1
+    quoted figures: 9 documents, haystack from commit 689ade0b4b7781e0c45f3dce374ac272034a48a0 (21 files), 22 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT IN THE HAYSTACK: prep/phase11/harness/run-evidence-typed-by-hand.log differs from that commit (changed, untracked or ignored). Nothing it contains legitimises a figure.
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `cfprobe_l25=7732`, and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 11: the SAME tree, with the guard `only what can run emits` deleted
+    (the control: a recording under any suffix legitimises the figure again)
+quoted figures: 9 documents, haystack from commit 689ade0b4b7781e0c45f3dce374ac272034a48a0 (67 files), 22 candidate figures, 1 not emitted
+  the decision frame was parsed before this verdict: four functions, no refusal
+  NOT IN THE HAYSTACK: prep/phase11/harness/__pycache__/check_fenced_figures.cpython-313.pyc differs from that commit (changed, untracked or ignored). Nothing it contains legitimises a figure.
+  NOT IN THE HAYSTACK: prep/phase11/harness/run-evidence-typed-by-hand.log differs from that commit (changed, untracked or ignored). Nothing it contains legitimises a figure.
+  NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `cfprobe_l25=7732`, and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+    scan rc=1 with that one guard deleted
+DONE
+
+--- worlds 10b and 11b, the extensionless recording and its control ---
+
+candidate head: c7b86d89999e868db70c05eab8ba61363dac9905
+    tracked under the harness: 1
+
+--- world 10b: cfprobe_n25=7733, recorded in a COMMITTED file with no extension
+    committed c5c2798103f4a8f43d0da921df1002fddd8bc42d, work tree clean: 0 entries, tree-state: no
+    scan rc=1
+    quoted figures: 9 documents, haystack from commit c5c2798103f4a8f43d0da921df1002fddd8bc42d (21 files), 22 candidate figures, 1 not emitted
+      the decision frame was parsed before this verdict: four functions, no refusal
+      NOT EMITTED: P11-OPEN-DECISIONS.md:66 reports `cfprobe_n25=7733`, and no instrument under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+
+--- world 11b: the SAME tree with the guard `only what can run emits` deleted (the control)
+quoted figures: 9 documents, haystack from commit c5c2798103f4a8f43d0da921df1002fddd8bc42d (68 files), 22 candidate figures, 0 not emitted
+  the decision frame was parsed before this verdict: four functions, no refusal
+  NOT IN THE HAYSTACK: prep/phase11/harness/__pycache__/check_fenced_figures.cpython-313.pyc differs from that commit (changed, untracked or ignored). Nothing it contains legitimises a figure.
+    scan rc=0 with that one guard deleted
+DONE

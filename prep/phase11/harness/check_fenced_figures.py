@@ -101,9 +101,22 @@ commit. A file the commit does not carry cannot legitimise a figure, and the
 run names the commit it read and every file under the harness that differs
 from it.
 
-NORMALISATION, in four steps, in this order, each one separately deletable and
+NORMALISATION, in five steps, in this order, each one separately deletable and
 separately measured:
 
+  0. **HTML CHARACTER REFERENCES RESOLVED**, first, so a reference TO a
+     full-width `=` is resolved and then folded by the step below.
+     `k&#61;4242`, `k&#x3d;4242`, `k&equals;4242` and `k=&#52;242` all render
+     to the figure a reader sees -- two independent CommonMark renderers agree
+     -- and each walked the whole suite green at `36c9094`, committed, on a
+     clean tree (the coordinator's `C25-F1`). An entity is a SPELLING of the
+     figure, which is this function's department, and markdown passes raw HTML
+     through, which is the same surface the comment-marker guard exists for.
+     `html.unescape` does it: the standard's whole table and its own parsing
+     rules, rather than a list of reference names of mine, which is the
+     difference between a normalisation and an enumerated exemption. Measured
+     cost on this pack's nine documents before the fix was claimed: 0 lines
+     changed.
   1. **NFKC**, which maps the full-width `＝` and the compatibility forms of
      the digits to their ASCII spellings.
   2. **Format characters deleted** (Unicode category `Cf`), which is where
@@ -149,17 +162,26 @@ variants of the shapes it names:
     how a long option (`--port=5`) and an html comment (`<!--k=9-->`) are
     written, so `EXIT_FOR_M10-noop=4` yields the candidate `noop=4`. That is a
     FALSE RED if a document ever writes such a shape with a value nothing
-    emits; no document does today, which was measured rather than assumed, and
+    emits; no document writes one OUTSIDE A CODE SPAN today, which was measured
+    rather than assumed -- the coordinator's `C25-S6` found two lines that do
+    write it inside one, where the matcher never sees them -- and
     it is a residual rather than a bound because closing it would reopen the
     long option.
   * A figure that survives only inside an INLINE CODE SPAN. This is the
     BACKTICK RULE, it is deliberate, and round 24 names it among the bounds it
     is not attacking: this pack quotes its own counter-examples, and
     `superuser_sees=130` is the law's own illustration of a figure nothing
-    emits while `fabricated_count=999` is every round's probe token. Deleting
-    the guard makes those quotations claims and reds nine true sentences, which
-    is a measurement and not a promise. A figure with PROSE on the line is no
-    longer in this list: round 23 closed it.
+    emits while `fabricated_count=999` is every round's probe token. What
+    deleting the guard would cost is GENERATED, not written here: the
+    `backtick-cost` block in the manifest runs the gate with this guard deleted
+    and prints the document lines and distinct tokens that would red
+    (`C25-S7`: the figure that used to stand here was hand-written, matched no
+    number any command printed, and was repeated in the published record).
+    Round 25 recommends taking the removal and both reviewers leave the call to
+    the author; it is the next round's single change, because this commit
+    already moves what makes a figure legitimate twice and three changes to one
+    unit in one commit cannot be told apart (`R25-S1`). A figure with PROSE on
+    the line is no longer in this list: round 23 closed it.
   * A NON-NUMERIC, NON-BOOLEAN value, which is the deliberate price of closing
     round 13's false positives: an invented refusal name or path shown as
     output is not a candidate. `role=postgres` cannot be checked without
@@ -171,13 +193,53 @@ variants of the shapes it names:
     carries the known cost of one: it cannot name a token not yet written, and
     a fabricated `migrations=87` now passes. It is two literals, it is listed
     in `EXEMPT` where a reader finds it, and deleting it reds an arm.
-  * A DATE, and anything else whose value continues past a hyphen:
-    `date=2026-10-19` is not the figure `date=2026`, and the right boundary
-    refuses it rather than reporting a year. An arm says so.
+  * A VALUE THAT DOES NOT END WHERE THE FIGURE WOULD. The right boundary
+    refuses a value followed by any of `[0-9A-Za-z_-]`, so this is a CLASS and
+    not the two members of it that were named here before (`R25-S2`):
+    `date=2026-10-19` is not the figure `date=2026`, and `k=7731_` and
+    `k=7731x` are not figures at all. Refusing rather than reporting a year is
+    the point; an arm says so.
+  * A FORMAT CHARACTER BETWEEN AN ALPHANUMERIC AND A KEY (`C25-S3`). Deleting
+    a `Cf` character, which step 2 above does, can glue the character before it
+    to the key -- `a=1<U+200B>k=4242` becomes `a=1k=4242` -- and the left
+    boundary then reads one longer identifier and refuses both pairs. The price
+    of the attack is a line that reads as run-together mojibake to a human.
+  * A VALUE ON THE NEXT LINE (`C25-S4`). The matcher is per LINE, which is
+    said here rather than implied: `k=` on one line and `4242` on the next is
+    not a candidate, though markdown reflows the paragraph and a renderer shows
+    `k= 4242`.
   * **The haystack is a substring match over one blob**: a token emitted
     anywhere for any reason passes everywhere, so `identities=2` printed by one
     case legitimises `identities=2` written about another. Narrowing it to the
-    emitting case is a convention, not a check.
+    emitting case is a convention, not a check. What the blob holds is now
+    stated POSITIVELY: the files this tree can RUN (`.py`, `.sh`, `.sql`) and
+    nothing else. A recording of a run is not an emission, and while
+    recordings counted -- forty-four of sixty-six files -- anyone who could
+    type a file here could legitimise any figure: round 25's `R25-F1`, ruled a
+    blocker, and realised at `36c9094` by this pack's own probe transcript.
+    Round 25 also named why the first form of the fix was wrong: excluding
+    `.txt` moves the hole from shape to TIME, since the next recording arrives
+    under the next suffix.
+  * **The transcripts are not SCANNED either.** They are committed, they carry
+    figures, and nothing weighs their own (`R17-S3`). Round 25's second
+    suggestion is to scan them as documents, which would close that in the same
+    move; it is the next round's change and not this one's, because it widens
+    what the gate WEIGHS rather than narrowing what legitimises, and that is a
+    different measurement.
+  * **`backtick-cost` is the first generated block that depends on the
+    DOCUMENTS**, so any document edit moves its numbers and `--check-blocks`
+    reds until `--regenerate` runs. Deliberate -- it is round 15's discipline
+    applied to the one figure `C25-S7` found hand-written -- and it costs a
+    reader this: a blocks finding on a tree whose documents were just edited is
+    usually a stale count, not an attack.
+  * **The shell's two untracked sites are UNARMED** (`C25-S5`): no arm
+    anywhere in this pack executes `rebuild_and_prove.sh`, so every refusal it
+    raises is in that position, and in both deletion worlds the two readers
+    still refused. Stated, not claimed closed.
+  * **`SELF-READ-DIR-ABSENT`, `SELF-UNTRACKED-UNREADABLE` and
+    `HARNESS-HEAD-DISAGREES` are UNMEASURED-at-runtime** (`R25-S3`): they are
+    registered refusals with no arm that reads them by name. Not dead --
+    unmeasured, which is a different sentence.
   * **The second direction of the review arm**, which is not mechanisable here:
     whether a figure that IS emitted is a quantity the moment decides. Nothing
     in a token distinguishes `present=true`, which cannot go stale, from
@@ -266,6 +328,7 @@ if not sys.flags.isolated:
 import ast
 import atexit
 import hashlib
+import html
 import inspect
 import os
 import re
@@ -293,7 +356,7 @@ import unicodedata
 #
 # The names below must be exactly `FRAME_MODULES`, which is defined far later;
 # the two are compared at run time rather than kept in step by hand.
-_SNAPSHOT_MODULES = ("re", "os", "unicodedata")
+_SNAPSHOT_MODULES = ("re", "os", "unicodedata", "html")
 _AT_IMPORT = {m: dict(vars(sys.modules[m])) for m in _SNAPSHOT_MODULES}
 
 PHASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -346,6 +409,14 @@ BOOLEANS = "true|false|t|f"
 BOOLEANS_UNNORMALISED = "true|false"
 
 # Two tokens exempted by exact name, on the coordinator's R14-S2 ruling.
+# `R25-F1`. The suffixes of files this tree can RUN, which is what `emits`
+# means: the proof suites and the race programs (`.py`), the driver (`.sh`) and
+# the DDL and worlds the run applies (`.sql`). Nothing else under the harness
+# emits anything -- a transcript records, a `.gitignore` configures -- and a
+# file whose suffix is not here is outside the haystack whatever it is named,
+# which is how this avoids being a list of names that reopens on the next one.
+EMITTING_SUFFIXES = (".py", ".sh", ".sql")
+
 EXEMPT = ("port=55512", "migrations=87")
 
 def _fold_digits(s):
@@ -370,6 +441,7 @@ def _fold_digits(s):
 # else, and `--selftest` deletes each one in turn and requires it to flip an
 # arm. There is no hand-written table to disagree with it.
 MATCHER_GUARDS = (
+    "html character references",
     "nfkc",
     "format characters",
     "non-ascii digits",
@@ -396,8 +468,36 @@ MATCHER_GUARDS = (
 # phase stops.
 HAYSTACK_GUARDS = (
     "haystack from the commit",
+    # `R25-F1`, round 25's blocker and the standing lesson behind it: DERIVE
+    # SUBJECT SETS FROM EXECUTION, NOT FROM ALTERABLE TEXT. A committed
+    # transcript is a RECORDING of a run, and a figure is legitimate here only
+    # because an instrument EMITS it. The two are not the same claim, and the
+    # difference was realised at `36c9094`: round 24's attack tokens
+    # (`overlay_routine=4242`, `core_routine=1`) entered the haystack with the
+    # probe transcript this pack committed as evidence, so from that commit on
+    # they passed in any document -- `R15-S4`'s cause from a source
+    # `planted_tokens()` cannot reach, because it derives from the arm bodies.
+    # Anyone who can type a file into this directory could legitimise any
+    # figure, which is exactly what a haystack must not be.
+    #
+    # Stated POSITIVELY, which is the whole of the round's own warning: the
+    # first form of this fix dropped `.txt` and round 25 had already named
+    # what that is -- an exclusion by shape moves the hole from shape to TIME,
+    # because the next recording arrives under the next suffix (`.log`,
+    # `.out`, no extension at all). So the haystack is the files that can RUN,
+    # `EMITTING_SUFFIXES`, and everything else emits nothing whatever it is
+    # called. A new recording is outside by default rather than until someone
+    # remembers to exclude it.
+    "only what can run emits",
+    # `markdown is not evidence` stood here from round 12 to round 25 and is
+    # DELETED, not carried: a `.md` is not a file this tree can run, so the
+    # positive rule above already excludes it, the guard red no arm, and a
+    # guard that reds nothing is deleted or armed with no third option. The
+    # shape round 12 reported -- a markdown file under the harness, inside the
+    # haystack and outside the scan -- is still measured, by the arm that used
+    # to measure this guard, against the rule that now decides it. Behaviour
+    # unchanged: measured, with the arm's verdict unmoved.
     "no repository redirects the subject",
-    "markdown is not evidence",
     "the checker is not its own evidence",
 )
 
@@ -529,6 +629,8 @@ def _strip(line, skip=()):
     true sentences, which is the measurement beside it, not a promise.
     """
     s = line
+    if "html character references" not in skip:
+        s = html.unescape(s)
     if "nfkc" not in skip:
         s = unicodedata.normalize("NFKC", s)
     if "format characters" not in skip:
@@ -974,15 +1076,24 @@ def haystack(root, skip=()):
     stem = os.path.splitext(os.path.basename(__file__))[0]
     from_commit = "haystack from the commit" not in skip
     anchored = "no repository redirects the subject" not in skip
-    drop_md = "markdown is not evidence" not in skip
     drop_self = "the checker is not its own evidence" not in skip
-    key = (os.path.abspath(root), from_commit, anchored, drop_md, drop_self)
+    runnable_only = "only what can run emits" not in skip
+    key = (os.path.abspath(root), from_commit, anchored, drop_self, runnable_only)
     if key in _HAYSTACK:
         return _HAYSTACK[key]
 
     def keep(name):
         base = os.path.basename(name)
-        if drop_md and base.endswith(".md"):
+        # `R25-F1`. A POSITIVE rule, and the direction matters more than the
+        # set: a file emits only if it is a file this tree can RUN. Forty-four
+        # of the sixty-six files this haystack used to hold were recorded
+        # output, and a recording produces nothing -- it records what was
+        # produced once, and anyone who can type into it can legitimise a
+        # figure. What a run of these instruments prints is still read from
+        # their source, which is what the gate has always meant by `emits`;
+        # the recordings stay committed, under their digests, as the evidence a
+        # reader opens. They simply stop deciding.
+        if runnable_only and os.path.splitext(base)[1] not in EMITTING_SUFFIXES:
             return False
         # By STEM, so a `.pyc` of an excluded source is excluded with it. Under
         # the git derivation that is belt and braces; with the derivation
@@ -1776,8 +1887,8 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
             # naming only one of them is how a spelling hides.
             written = "" if tok in raw else " (written as `%s`)" % raw
             print(
-                "  NOT EMITTED: %s:%d reports `%s`%s, and no instrument or committed "
-                "evidence file under the harness emits that string. Either have a case "
+                "  NOT EMITTED: %s:%d reports `%s`%s, and no instrument under the harness "
+                "emits that string. Either have a case "
                 "emit it and paste what it emits, or drop it and keep the claim a case "
                 "pins." % (rel, n, tok, written)
             )
@@ -1916,6 +2027,18 @@ CATCH = [
         "R24-F1 the pack's own quoted control line",
         "control: '### fabricated_count=999' still becomes 'fabricated_count=999'",
     ),
+    # `C25-F1`, the coordinator's blocker: an HTML character reference is a
+    # SPELLING of the figure, not a place it sits, and the four spellings
+    # `_strip` normalised did not reach it. Two independent CommonMark
+    # renderers agree all four of these render to exactly the same figure a
+    # reader sees, and at `36c9094` each one was committed on a clean tree and
+    # walked the whole authoritative suite green. `html.unescape` resolves the
+    # whole standard table rather than a list of names of my own, which is the
+    # difference between a normalisation and an enumerated exemption.
+    ("C25-F1 a decimal character reference for the `=`", "fabricated_count&#61;999"),
+    ("C25-F1 a hexadecimal character reference for the `=`", "fabricated_count&#x3d;999"),
+    ("C25-F1 a named character reference for the `=`", "fabricated_count&equals;999"),
+    ("C25-F1 a character reference inside the value", "fabricated_count=&#57;99"),
 ]
 SKIP = [
     ("named: inline code span only", "the value `fabricated_count=999` is quoted in prose"),
@@ -2094,10 +2217,18 @@ WORLDS = {
     "plain": ({"fake_proofs.py": FAKE_PROOFS}, {}),
     # R12-E4b: a markdown file under the harness, in both roles at once.
     "md": ({"fake_proofs.py": FAKE_PROOFS, "README.md": PROBE + "\n"}, {}),
-    # R15-S4: the committed run log carries the selftest's own output.
+    # R15-S4: a planted token, committed under the harness, legitimising
+    # itself. The world used to carry it in a committed `RUN-EVIDENCE.txt`, and
+    # `R25-F1`'s guard now drops every `.txt` from the haystack -- which took
+    # this arm away and left `planted tokens` redding nothing, so the arm is
+    # moved to where that guard does not reach and this one still has to
+    # answer: an INSTRUMENT'S OWN SOURCE. The `.txt` half is kept beside it, so
+    # the world is the one round 15 reported and the two exclusions are
+    # measured apart rather than one standing in for the other.
     "runlog": (
         {
             "fake_proofs.py": FAKE_PROOFS,
+            "fake_arms.py": 'ARM = ("N0 control: a bare line", "' + PLANT + '")\n',
             "RUN-EVIDENCE.txt": (
                 "  catch  N0 control: a bare line            rc=1 (want 1) -> as required\n"
                 + PLANT
@@ -2106,12 +2237,23 @@ WORLDS = {
         },
         {},
     ),
-    # R16-F1: a scratch file in the working tree, committed nowhere.
-    "untracked": ({"fake_proofs.py": FAKE_PROOFS}, {"scratch.log": PROBE + "\n"}),
+    # R16-F1: a scratch file in the working tree, committed nowhere. The plant
+    # is a `.py` since `R25-F1`: under the positive haystack rule a `.log`
+    # emits nothing whether it is committed or not, so a plant in one measured
+    # the suffix rule instead of the commit derivation this arm is for.
+    "untracked": ({"fake_proofs.py": FAKE_PROOFS}, {"scratch.py": PROBE + "\n"}),
     # R16-F1: round 15's own fail-open, gitignored exactly as it was.
     "pyc": (
-        {"fake_proofs.py": FAKE_PROOFS, ".gitignore": "__pycache__/\n"},
-        {"__pycache__/check_fenced_figures.cpython-313.pyc": PROBE + "\n"},
+        {"fake_proofs.py": FAKE_PROOFS, ".gitignore": "__pycache__/\nignored_output.py\n"},
+        {
+            # Round 15's own shape, kept.
+            "__pycache__/check_fenced_figures.cpython-313.pyc": PROBE + "\n",
+            # And the same shape in a file the positive rule WOULD admit, for
+            # the reason the `untracked` world changed: a `.pyc` is not a file
+            # this tree runs, so a plant in one no longer reaches the commit
+            # derivation this arm measures.
+            "ignored_output.py": PROBE + "\n",
+        },
     ),
     # R17: the challenger's own plant, ranked a fail-open by the coordinator.
     # A repository is created INSIDE the haystack, carrying the token, after
@@ -2122,6 +2264,19 @@ WORLDS = {
     # arm below requires the check to REFUSE here rather than fall back to the
     # walk, which is the whole difference between a guard and a preference.
     "norepo": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    # `R25-F1`: a committed transcript carrying the token, which is round 25's
+    # own blocker. The file is tracked, under the harness, named as every
+    # recording in this directory is named -- and with the guard it legitimises
+    # nothing.
+    "transcript": (
+        {
+            "fake_proofs.py": FAKE_PROOFS,
+            "RUN-EVIDENCE-AUTHORITATIVE-ROUND99.txt": (
+                "RUN_ID : p11-the-arm-world\nEXIT_SCRIPT : 0\n" + PROBE + "\n"
+            ),
+        },
+        {},
+    ),
     # R16-F1: the checker's own prose, committed, under its own name.
     "stem": (
         {"fake_proofs.py": FAKE_PROOFS, "check_fenced_figures.py": "# " + PROBE + "\n"},
@@ -2396,6 +2551,7 @@ def _arms_with(skip=()):
         ("R16-F1 an untracked scratch file is not evidence", "untracked", PROBE),
         ("R16-F1 a gitignored .pyc is not evidence", "pyc", PROBE),
         ("R16-F1 the checker is not its own evidence", "stem", PROBE),
+        ("R25-F1 a committed transcript emits nothing", "transcript", PROBE),
     ):
         arms.append((label, 1, (lambda k=kind, x=token: _arm(x, skip, "a.md", k))))
     # Fail-closed, measured: no commit, no haystack, no verdict.
@@ -2937,7 +3093,7 @@ FRAME_BUILTINS = ("open", "enumerate", "bool")
 # set does not admit. Every entry is checked to be in use below, so a
 # permissive entry cannot sit here dead.
 FRAME_METHODS = ("append", "rstrip", "strip", "partition")
-FRAME_MODULES = ("re", "os", "unicodedata")
+FRAME_MODULES = ("re", "os", "unicodedata", "html")
 # Parsed by `guarded_transformations` rather than by these rules. The claim is
 # checked below against the tuple that function is actually run over.
 PARSED_AS_TRANSFORMERS = ("_strip",)
@@ -2988,7 +3144,9 @@ DECIDING_MODULE_CALLS = (
     # records `None` where a guard would be for the same reason `_is_figure`'s
     # return entry does -- finding the figures on a line IS this function's
     # purpose and there is no guard to name. Which PATTERN it scans with is a
-    # named guard, in `_scan_pattern`, and the parse reads it there.
+    # named guard, read off `_figure_pattern`'s own branches by the parse (the
+    # comment here used to name `_scan_pattern`, a function round 24's answer
+    # deleted when the frame's descent proved one level too shallow for it).
     # Two call sites, named apart: the control scan sits inside the branch
     # `"positive scan" in skip` opens, and the real one sits inside no guard.
     # An entry whose guard is named matches only the site that guard wraps, and
@@ -2996,6 +3154,22 @@ DECIDING_MODULE_CALLS = (
     # which is how each of the two entries ends up admitting exactly one.
     ("_candidates", "re", "findall", "return", "positive scan"),
     ("_candidates", "re", "findall", "return", None),
+)
+
+# `C25-F1`. The module call a TRANSFORMER makes, listed apart because the rules
+# above are about what may DECIDE and `_strip` decides nothing -- it is parsed
+# by `guarded_transformations`, which bounds where a rebinding may sit and says
+# nothing about the objects it calls. That distinction is real and it is not a
+# reason to leave the object unpinned: a transformation that drops a candidate
+# decides under another name, which is declared bound 2 above, so
+# `html.unescape` is read in WHAT IS RUNNING by the same three checks and the
+# same four refusal names as every entry above. `html` is therefore in
+# `FRAME_MODULES` and in the import-time snapshot, because the file's own rule
+# is that a module reachable from the frame with no snapshot is an unpinned
+# attribute. Same five-part shape as the entries above so one loop reads both;
+# the position is `transform` because there is no test and no return to name.
+TRANSFORMER_MODULE_CALLS = (
+    ("_strip", "html", "unescape", "transform", "html character references"),
 )
 
 DECISION_EXCEPTIONS = {
@@ -3183,7 +3357,7 @@ def module_call_identity():
         )
         return False, tuple(msgs)
     here = os.path.realpath(__file__)
-    for fn, mod, attr, position, _guard in DECIDING_MODULE_CALLS:
+    for fn, mod, attr, position, _guard in DECIDING_MODULE_CALLS + TRANSFORMER_MODULE_CALLS:
         module = sys.modules.get(mod)
         if globals().get(mod) is not module or getattr(module, "__name__", None) != mod:
             msgs.append(
@@ -4335,6 +4509,13 @@ PROVENANCE = {
         None,
         "this file's own prose, committed under its own name",
     ),
+    "R25-F1 a committed transcript emits nothing": (
+        None,
+        "round 25's own finding: the instrument reports a figure as passing on the "
+        "authority of committed transcript text, which anyone can type into -- "
+        "reported as the haystack's composition and not as a document line, and "
+        "realised at `36c9094` by this pack's own probe transcript",
+    ),
     "R14-F1 heading": (None, "`### fabricated_count=999`, quoted by the author in the answer"),
     "R14-F1 plain -- comment": (
         None,
@@ -4525,6 +4706,63 @@ def _surface_rows():
     return _ROWS["surface"]
 
 
+def _backtick_rows():
+    """(subject, claim) for what deleting `inline code span` would cost.
+
+    `C25-S7`, the coordinator's P2: the header said deleting this guard "reds
+    nine true sentences", and NINE was written by hand, matched no number any
+    command printed, and was then repeated in the published record. The figure
+    is generated here instead, by RUNNING the gate with the guard deleted over
+    this pack's own documents -- which is the pack's own rule, that every
+    document figure is re-counted with the command it names.
+
+    It is a COST and not a verdict: the rows say what the gate would say if the
+    last decoration removal were taken, so a reader weighing `R25-S1` reads a
+    measurement rather than my estimate of one.
+    """
+    if "backtick" not in _ROWS:
+        skip = ("inline code span",)
+        emitted = emitted_strings(os.path.join(PHASE_DIR, "harness"), skip)
+        planted = planted_tokens()
+        docs = documents(PHASE_DIR)
+        seen = 0
+        hits = []
+        for path in docs:
+            rel = os.path.relpath(path, PHASE_DIR)
+            for n, _raw, tok in tokens_in(path, skip):
+                seen += 1
+                if tok not in emitted or tok in planted:
+                    hits.append((rel, n, tok))
+        lines = {(rel, n) for rel, n, _tok in hits}
+        toks = {tok for _rel, _n, tok in hits}
+        _ROWS["backtick"] = [
+            ("candidates with the guard deleted", str(seen)),
+            ("document lines that would red", str(len(lines))),
+            ("distinct tokens in them", str(len(toks))),
+            (
+                "",
+                "deleting `inline code span` would red %d document line(s) carrying %d "
+                "distinct token(s); it is a disclosed bound and not a hole"
+                % (len(lines), len(toks)),
+            ),
+        ]
+    return _ROWS["backtick"]
+
+
+def emit_backtick_cost():
+    rows = _backtick_rows()
+    lines = ["the price of the last decoration removal, measured:", ""]
+    for subject, claim in rows[:-1]:
+        lines.append("%-38s %s" % (subject, claim))
+    lines.append("")
+    lines.append(rows[-1][1])
+    return lines
+
+
+def claims_backtick_cost():
+    return list(_backtick_rows())
+
+
 def emit_guard_matrix():
     lines = ["each guard deleted on its own, and the arms that stop answering:", ""]
     for guard, flipped in _guard_rows():
@@ -4624,6 +4862,7 @@ GENERATORS = {
     "guard-matrix": (emit_guard_matrix, claims_guard_matrix),
     "arm-counts": (emit_arm_counts, claims_arm_counts),
     "surface": (emit_surface, claims_surface),
+    "backtick-cost": (emit_backtick_cost, claims_backtick_cost),
 }
 
 _BODIES = {}
@@ -5441,6 +5680,160 @@ def identity_arms_test():
                 "as required" if good else "**SELFTEST FAILED**",
             )
         )
+
+    # 8. `C25-F1`: the module call the TRANSFORMER makes. `html.unescape`
+    # resolves the spelling `&#61;` into the `=` a reader sees, so a planter who
+    # rebinds it to the identity puts the whole round-25 blocker back while
+    # every AST rule still passes -- `_strip` is parsed for WHERE a rebinding
+    # sits, never for what it calls. The arm performs that rebinding, reads the
+    # refusal by name, and measures the direction that used to pass: with
+    # `TRANSFORMER_MODULE_CALLS` emptied the refusal is gone and the entity
+    # figure walks through the scan.
+    real_unescape = html.unescape
+
+    def _planted_unescape(text):
+        return text
+
+    # The body carries an EMITTED figure beside the entity one, so the second
+    # direction is a PASS and not an inert world: with the pin deleted the scan
+    # must weigh something, find it legitimate and return 0, which is the hole
+    # as a planter would experience it. One line with nothing but the entity on
+    # it returns 2 (`INERT`), which is the gate refusing to call an unweighed
+    # world a pass -- correct behaviour, and not the measurement this arm wants.
+    entity = "present=true fabricated_count&#61;999"
+    cache = list(_FRAME_PARSED)
+    entries = TRANSFORMER_MODULE_CALLS
+    try:
+        html.unescape = _planted_unescape
+        _with, msgs = module_call_identity()
+        _FRAME_PARSED[:] = []
+        scanned = _arm(entity, ())
+        globals()["TRANSFORMER_MODULE_CALLS"] = ()
+        _unpinned, unpinned_msgs = module_call_identity()
+        _FRAME_PARSED[:] = []
+        unpinned_scan = _arm(entity, ())
+    finally:
+        html.unescape = real_unescape
+        globals()["TRANSFORMER_MODULE_CALLS"] = entries
+        _FRAME_PARSED[:] = cache
+    name = msgs[0].split(":")[0] if msgs else "NO REFUSAL"
+    good = (
+        (not _with)
+        and name == "MODULE-ATTR-REBOUND"
+        and scanned == 5
+        and _unpinned
+        and not unpinned_msgs
+        and unpinned_scan == 0
+    )
+    ok = ok and good
+    print(
+        "  identity C25-F1 `html.unescape` rebound to the identity: refused as %s, the "
+        "scan rc=%d, and with the transformer's entry DELETED the frame named %s and the "
+        "entity figure rc=%d (want 0, the hole reopened) -> %s"
+        % (
+            name,
+            scanned,
+            "nothing at all" if not unpinned_msgs else "%d refusal(s)" % len(unpinned_msgs),
+            unpinned_scan,
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
+
+    # 9. The generator's own frame gate, which did not exist until this round
+    # and was found by using the file: a `--regenerate` from a tree whose
+    # deciding bytes were not in the commit wrote a guard matrix of refusals
+    # and called them measurements. The arm seeds one refusal into the parse
+    # cache for its own length, as arm 4 does for `--check-blocks`, and
+    # requires BOTH generation entry points to refuse; the same call with no
+    # refusal to report must still generate, or the gate would be refusing for
+    # some other reason.
+    class _Sink:
+        def write(self, _text):
+            return None
+
+        def flush(self):
+            return None
+
+    cache = list(_FRAME_PARSED)
+    # `_suspend_tree_law_for_generation` sets a PROCESS flag and nothing pops
+    # it, so a generation entry point called from inside the selftest would
+    # leave the two tree laws suspended for every arm after it -- which is
+    # exactly what it did on the first run of this arm: six tree arms then
+    # reported that the real run does not name its own refusals. Saved and
+    # restored here, and the generator's own output is swallowed so an arm
+    # cannot put a figure into a transcript.
+    generating = list(_GENERATING)
+    out = sys.stdout
+    try:
+        sys.stdout = _Sink()
+        _FRAME_PARSED[:] = [("a refusal planted for this arm only",)]
+        refused_emit = _main(["--emit", "arm-counts"])
+        refused_regen = _main(["--regenerate"])
+        _FRAME_PARSED[:] = cache
+        plain_emit = _main(["--emit", "arm-counts"])
+    finally:
+        sys.stdout = out
+        _FRAME_PARSED[:] = cache
+        _GENERATING[:] = generating
+    good = refused_emit == 5 and refused_regen == 5 and plain_emit == 0
+    ok = ok and good
+    print(
+        "  identity C25 the generator's frame gate: --emit rc=%d and --regenerate rc=%d "
+        "with a refusal to report (want 5 and 5), rc=%d without one (want 0) -> %s"
+        % (
+            refused_emit,
+            refused_regen,
+            plain_emit,
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
+    return ok
+
+
+def guard_set_test():
+    """`R25-S4`: the guard LIST and the guard keys the code READS are one set.
+
+    Round 25 derived this correspondence with an `ast` walk of its own and
+    found it exact -- 21 and 21 -- and then named the gap: nothing in the
+    instrument binds it. Dropping an ENTRY from `MATCHER_GUARDS` is refused for
+    a guard that TRANSFORMS the line, because the identity probe notices a
+    transformation the skip set no longer suspends; it is ACCEPTED for a guard
+    that NARROWS the pattern (`key boundary`, `value boundary`), because a
+    narrowing leaves the identity probe's output unchanged. An entry nobody
+    lists is a guard `--selftest` never deletes and the matrix never measures,
+    which is the same hole `SUBSUMED` used to be.
+
+    Read from the COMMITTED bytes, like every other rule, so a key added to the
+    working tree cannot bind itself.
+    """
+    _msgs, text = committed_text(os.path.basename(os.path.realpath(__file__)))
+    if text is None:
+        raise Refusal(
+            "FRAME-SOURCE-NOT-IN-COMMIT: this file's committed bytes could not be read, "
+            "so the guard set this run would bind is not the set the commit carries."
+        )
+    read = set()
+    for node in ast.walk(ast.parse(text)):
+        key = _guard_test(node) if isinstance(node, ast.Compare) else None
+        if key is not None:
+            read.add(key)
+    listed = set(GUARDS)
+    unlisted = sorted(read - listed)
+    unread = sorted(listed - read)
+    ok = not unlisted and not unread
+    print(
+        "  guards R25-S4 the committed source reads %d `skip` keys and `GUARDS` lists "
+        "%d; %s -> %s"
+        % (
+            len(read),
+            len(listed),
+            "they are the same set"
+            if ok
+            else "read and unlisted: %s; listed and never read: %s"
+            % (", ".join(unlisted) or "none", ", ".join(unread) or "none"),
+            "as required" if ok else "**SELFTEST FAILED**",
+        )
+    )
     return ok
 
 
@@ -6376,6 +6769,7 @@ def selftest():
         % (emit_arm_counts()[0], "all as required" if ok else "FAILURES ABOVE")
     )
     ok = identity_arms_test() and ok
+    ok = guard_set_test() and ok
     ok = frame_gate_test() and ok
     ok = anchor_names_test() and ok
     ok = gitfile_name_test() and ok
@@ -6429,6 +6823,36 @@ def _suspend_tree_law_for_generation():
     _GENERATING.append(True)
 
 
+def _generation_refused():
+    """A named refusal when a generator is asked to write from a frame the rules
+    do not admit, or `None`.
+
+    Found by using this file: `--regenerate` run in a working tree whose
+    deciding bytes differ from the commit wrote a guard matrix in which EVERY
+    guard "reds 98 arm(s)" -- because the arms run the scan, the scan refused
+    `SELF-BYTES-UNCOMMITTED`, and an arm whose world refuses is an arm that
+    stopped giving its verdict, which the matrix reads as the guard being
+    load-bearing for everything. A false generated figure, written silently,
+    into the one place this pack tells readers to trust over its prose.
+
+    The two TREE laws stay suspended -- a generator must be able to run in a
+    tree that is not yet clean, which is the whole reason the suspension
+    exists -- so what is required here is everything else: the deciding bytes
+    in the commit, the frame's objects, the parse. `--check-blocks` would
+    disagree with such a block afterwards, which is how this was caught, but a
+    check downstream of a written document is not a reason to write a false
+    one.
+    """
+    ok, msgs = frame_admissible()
+    if ok:
+        return None
+    return (
+        "GENERATION-FRAME-INADMISSIBLE: a generated block is written by RUNNING the "
+        "arms, so a frame the rules refuse writes a block of refusals and calls them "
+        "measurements. %d refusal(s) stand in the way, the first being: %s" % (len(msgs), msgs[0])
+    )
+
+
 # The flags that SUSPEND the two tree laws, and the flags that produce a
 # VERDICT. The coordinator's caveat on judgement call (a): the dispatch below
 # takes the first flag it matches, so `--regenerate --check-blocks` suspended
@@ -6472,6 +6896,10 @@ def _main(args):
         return surface()
     if "--regenerate" in args:
         _suspend_tree_law_for_generation()
+        why = _generation_refused()
+        if why is not None:
+            sys.stderr.write("check_fenced_figures.py REFUSED: %s\n" % why)
+            return 5
         return regenerate(PHASE_DIR)
     if "--check-blocks" in args:
         return check_blocks(PHASE_DIR)
@@ -6481,6 +6909,10 @@ def _main(args):
             sys.stderr.write("no such generator: %s\n" % name)
             return 3
         _suspend_tree_law_for_generation()
+        why = _generation_refused()
+        if why is not None:
+            sys.stderr.write("check_fenced_figures.py REFUSED: %s\n" % why)
+            return 5
         print(_block_body(name))
         return 0
     return scan(PHASE_DIR, os.path.join(PHASE_DIR, "harness"))

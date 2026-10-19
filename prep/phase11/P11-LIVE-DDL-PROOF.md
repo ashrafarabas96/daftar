@@ -880,10 +880,18 @@ Measured at `0db9450` on the world's TSHIRT, which registers two axes and holds
 one committed cell:
 
 ```
-INSERT INTO product_variants (… is_base=false, attributes='{}') -> rc=0 (NOT REFUSED)
+INSERT INTO product_variants (… is_base = false, attributes='{}') -> rc=0 (NOT REFUSED)
 non-base '{}' variants on this MATRIX product: 1
 its own stock key: 5.0000
 ```
+
+The `is_base` assignment is written with spaces in that abridged quote, which is
+`R25-F1`'s cost on this document and is recorded rather than worked around: the
+line is an abridgement of an `INSERT`, not a reported figure, and the only thing
+that used to make the unspaced form legitimate was a committed transcript —
+authority round 25 removed, because anyone who can type a `.txt` file into the
+harness could then legitimise any figure. Spaced, it is the same SQL and it is
+not a claim about a number.
 
 One matrix cell set, one row outside it, both holding stock, and under Option B
 the variant **is** the costing key. The same state round 1 reached by blanking a

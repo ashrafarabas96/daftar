@@ -79,11 +79,22 @@ esac
 # SOURCE-TREE-DIRTY because a file the commit does not hold is a different
 # thing from a file whose bytes moved, and a reader sent to one name should not
 # be told the other.
-if printf '%s' "$TREE_WHY" | grep -q 'UNTRACKED:'; then
-  echo "REFUSED: SOURCE-TREE-UNTRACKED: a directory this run READS carries a path the"
-  echo "commit does not hold, and the run applies and reads what is on disk, so nothing"
-  echo "below would be a measurement of the committed code. What the reader said:"
-  printf '%s\n' "$TREE_WHY" | grep 'UNTRACKED:' | sed 's/^/  /'
+# `C25-S1`, the coordinator's naming residual: this test used to read
+# `UNTRACKED:` alone, which matches `HARNESS-TREE-UNTRACKED:` and
+# `HARNESS-UNTRACKED-UNREADABLE:` and NOT `HARNESS-READ-DIR-ABSENT:` -- so in a
+# world where a directory the run reads is gone, the shell named
+# SOURCE-TREE-DIRTY, which is the other law. The three names the reader can
+# give for this one question are read here by name, as alternatives, because
+# the pack's own rule is that a reader sent to one name must not be told
+# another.
+if printf '%s' "$TREE_WHY" | grep -qE 'HARNESS-TREE-UNTRACKED:|HARNESS-UNTRACKED-UNREADABLE:|HARNESS-READ-DIR-ABSENT:'; then
+  echo "REFUSED: SOURCE-TREE-UNTRACKED: a directory this run READS either carries a path"
+  echo "the commit does not hold, could not be walked, or is absent -- and the run applies"
+  echo "and reads what is on disk, so nothing below would be a measurement of the"
+  echo "committed code. What the reader said:"
+  printf '%s\n' "$TREE_WHY" \
+    | grep -E 'HARNESS-TREE-UNTRACKED:|HARNESS-UNTRACKED-UNREADABLE:|HARNESS-READ-DIR-ABSENT:' \
+    | sed 's/^/  /'
   echo "and what git status lists, for a reader (it is not what decided above):"
   gitq status --porcelain | sed 's/^/  /'
   echo "EXIT_SOURCE_TREE_UNTRACKED: 5  (refused before the cluster and every gate)"
