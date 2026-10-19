@@ -1181,6 +1181,57 @@ PROOFS: list[Proof] = [
         ),
     ),
     Proof(
+        law="R-03-A-SWEEPS-TOTAL-READ-FROM-ITS-OWN-LIST-MOVES-WITH-A-NARROWING",
+        path="test/app/daftar/offline/OutcomeExhaustiveTest.kt",
+        # The find is anchored to the newline before its EIGHT spaces: this
+        # commit adds a literal pin of the same list at a deeper indentation,
+        # and an unanchored pattern matched both — the harness refused the
+        # proof as a mutation that did not land, which is what it is for.
+        find='\n        "customer.credit_limit_exceeded",\n',
+        replace='\n',
+        expect_red="no answer outside 2xx can ever produce Synced",
+        why=(
+            "R-03, found while recording the sixteenth review's withdrawal of T-02 and measured "
+            "before it was written down. This is THE load-bearing sweep \u2014 the one that says no "
+            "answer outside 2xx can ever report a sale as committed \u2014 and its exhaustiveness was "
+            "anchored at `700 * codes.size * 3 * retryAfters.size`, two of whose four factors are "
+            "read from the very lists the sweep walks. So a narrowing moved BOTH terms: deleting "
+            "ONE server code from the list left the whole suite at 99 of 99 GREEN, rc 0, with "
+            "that equality and `checked > 100_000` both in place, sweeping 168,000 inputs instead "
+            "of 184,800 with no name saying so. The existing sweep proof attacked the STATUS "
+            "range, the one factor written as a literal, which is why fourteen rounds never "
+            "reached this. What reds it now is the DOMAIN pinned by value and the total written "
+            "as a literal 184,800 \u2014 the same answer S-02 and T-02 got, in the sweep neither "
+            "review looked at"
+        ),
+    ),
+    Proof(
+        law="R-03-THE-DECISION-SHAPE-SWEEP-COUNTS-ITS-OWN-NARROWING-AS-COMPLETE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=(
+            "        val codes = listOf(\n"
+            "            null, \"\", \"IDEMPOTENCY_KEY_REUSED\", \"accounting.idempotency_conflict\",\n"
+            "            \"inventory.insufficient_stock\", \"VALIDATION_FAILED\", \"accounting.period_closed\",\n"
+            "        )"
+        ),
+        replace=(
+            "        val codes = listOf(\n"
+            "            null, \"\", \"IDEMPOTENCY_KEY_REUSED\", \"accounting.idempotency_conflict\",\n"
+            "            \"inventory.insufficient_stock\", \"VALIDATION_FAILED\",\n"
+            "        )"
+        ),
+        expect_red="the representative answers cover every decision shape the classifier can produce",
+        why=(
+            "the second instance of R-03, in the sweep that stands under the model check's lemma "
+            "about decision shapes. Its total read `700 * codes.size * 3 * 4` and was measured "
+            "the same way: deleting `accounting.period_closed` from the list left the suite at 99 "
+            "of 99 GREEN, rc 0. The claim this sweep exists to make is that the representatives "
+            "cover every shape the classifier can produce, and a narrowed domain makes that claim "
+            "about a smaller classifier than the one shipped. The domain is pinned by value and "
+            "the total is the literal 58,800"
+        ),
+    ),
+    Proof(
         law="S-02-NARROWING-THE-PREDICATE-THAT-DEFINES-A-DOMAIN-MOVES-BOTH-COUNTS-TOGETHER",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
         find=(
@@ -1497,6 +1548,12 @@ def cover_failures(
 # reason was right on the day it was harvested. A law with no entry here is a
 # FAILED proof, not an unchecked one.
 EXPECTED_REFUSAL: dict[str, str | tuple[str, ...]] = {
+    'R-03-A-SWEEPS-TOTAL-READ-FROM-ITS-OWN-LIST-MOVES-WITH-A-NARROWING': (
+        'org.opentest4j.AssertionFailedError: THE-SWEEPS-DOMAIN-CHANGED: the server codes this exhaustive sweep walks are not the ones it claims to walk, so every claim made over it is made over a narrower space than it names. codes = [null, ,    , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.idempotency_conflict, sales.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED, accounting.period_closed] ==> expected: <[null, ,    , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.idempotency_conflict, sales.idempotency_conflict, inventory.insufficient_stock, customer.credit_limit_exceeded, VALIDATION_FAILED, accounting.period_closed]> but was: <[null, ,    , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.idempotency_conflict, sales.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED, accounting.period_closed]>'
+    ),
+    'R-03-THE-DECISION-SHAPE-SWEEP-COUNTS-ITS-OWN-NARROWING-AS-COMPLETE': (
+        'org.opentest4j.AssertionFailedError: THE-SWEEPS-DOMAIN-CHANGED: the server codes this sweep covers are not the ones it claims to cover, so the lemma that reads its result is reading a narrower search than it says. codes = [null, , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED] ==> expected: <[null, , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED, accounting.period_closed]> but was: <[null, , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED]>'
+    ),
     'T-02-A-GATED-JUDGMENT-WITH-NO-TOTAL-IS-REMOVED-IN-SILENCE': (
         'org.opentest4j.AssertionFailedError: a different number of refusals was judged for being shown as something that left the device, which is the judgment that had no counter at all until T-02 ==> expected: <312> but was: <240>'
     ),

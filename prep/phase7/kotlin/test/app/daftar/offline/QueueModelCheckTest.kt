@@ -1731,11 +1731,49 @@ class QueueModelCheckTest {
             null, "", "IDEMPOTENCY_KEY_REUSED", "accounting.idempotency_conflict",
             "inventory.insufficient_stock", "VALIDATION_FAILED", "accounting.period_closed",
         )
+        val replayedValues = listOf(null, false, true)
+        val retryAfterValues = listOf<Long?>(null, 0, 30, 86_400)
+        // R-03, found while recording the sixteenth review's withdrawal of
+        // T-02, in the one loop neither that review nor the fifteenth looked
+        // at. This sweep used to end at
+        //     assertEquals(700 * codes.size * 3 * 4, swept)
+        // — a total computed from the very lists it sweeps, which is exactly
+        // the class this lane has now retired twice: a narrowing moves BOTH
+        // terms, so the equality is preserved by construction and the anchor
+        // bounds nothing. Measured rather than inferred: deleting
+        // `accounting.period_closed` from the list above left the WHOLE suite
+        // at 99 of 99 GREEN, rc 0, with this assertion in place, because
+        // `codes.size` fell from 7 to 6 along with it.
+        //
+        // So the domain is pinned HERE, by VALUE and by LITERAL size, and the
+        // total below is a literal. An edit that narrows the list AND this pin
+        // together is the declared limit of a check that lives inside its own
+        // subject, bounded by review and not by this file.
+        assertEquals(
+            listOf(
+                null, "", "IDEMPOTENCY_KEY_REUSED", "accounting.idempotency_conflict",
+                "inventory.insufficient_stock", "VALIDATION_FAILED", "accounting.period_closed",
+            ),
+            codes,
+            "THE-SWEEPS-DOMAIN-CHANGED: the server codes this sweep covers are not the ones it " +
+                "claims to cover, so the lemma that reads its result is reading a narrower " +
+                "search than it says. codes = $codes",
+        )
+        assertEquals(
+            3, replayedValues.size,
+            "THE-SWEEPS-DOMAIN-CHANGED: the replayed dimension no longer carries three values, " +
+                "so the total below no longer counts what it names",
+        )
+        assertEquals(
+            4, retryAfterValues.size,
+            "THE-SWEEPS-DOMAIN-CHANGED: the retry-after dimension no longer carries four " +
+                "values, so the total below no longer counts what it names",
+        )
         var swept = 0
         for (status in 0..699) {
             for (code in codes) {
-                for (replayed in listOf(null, false, true)) {
-                    for (ra in listOf<Long?>(null, 0, 30, 86_400)) {
+                for (replayed in replayedValues) {
+                    for (ra in retryAfterValues) {
                         val d = Outcome.classify(AttemptResult.Answered(status, code, replayed, ra), op, 2)
                         assertTrue(
                             shape(d) in covered,
@@ -1747,6 +1785,10 @@ class QueueModelCheckTest {
             }
         }
         assertTrue(shape(Outcome.classify(AttemptResult.NoAnswer, op, 2)) in covered)
-        assertEquals(700 * codes.size * 3 * 4, swept)
+        assertEquals(
+            58_800, swept,
+            "THE-SWEEPS-TOTAL-CHANGED: a different number of classifier answers was swept; " +
+                "700 statuses x 7 codes x 3 replayed values x 4 retry-after values is 58800",
+        )
     }
 }

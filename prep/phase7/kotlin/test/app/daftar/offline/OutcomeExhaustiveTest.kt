@@ -69,7 +69,49 @@ class OutcomeExhaustiveTest {
         // cannot leave this proof passing over a handful of inputs: an
         // exhaustive claim whose subject set quietly shrank is no longer
         // exhaustive, and nothing else here would notice.
-        assertEquals(700 * codes.size * 3 * retryAfters.size, checked)
+        //
+        // R-03. That sentence was true of ONE dimension and false of the other
+        // two. The total used to read `700 * codes.size * 3 * retryAfters.size`
+        // — two of its four factors were read from the very lists the sweep
+        // walks, so narrowing one of those lists moved BOTH terms and the
+        // equality held by construction. This is the class the fifteenth and
+        // sixteenth reviews retired at S-02 and T-02, surviving in the sweep
+        // neither of them looked at. Measured, not inferred: deleting
+        // `customer.credit_limit_exceeded` from `codes` left the WHOLE suite at
+        // 99 of 99 GREEN, rc 0, with this assertion and `checked > 100_000`
+        // both in place — 168,000 inputs instead of 184,800, and no name said
+        // so. Only the STATUS range, the one factor written as a literal, was
+        // ever bounded, which is why the red proof that attacks this sweep
+        // attacks that range.
+        //
+        // So the domain is pinned HERE, by VALUE, and the total is a LITERAL.
+        // The `> 100_000` stays for what it says that a total does not.
+        assertEquals(
+            listOf(
+                null,
+                "",
+                "   ",
+                "IDEMPOTENCY_KEY_REUSED",
+                "accounting.idempotency_conflict",
+                "inventory.idempotency_conflict",
+                "sales.idempotency_conflict",
+                "inventory.insufficient_stock",
+                "customer.credit_limit_exceeded",
+                "VALIDATION_FAILED",
+                "accounting.period_closed",
+            ),
+            codes,
+            "THE-SWEEPS-DOMAIN-CHANGED: the server codes this exhaustive sweep walks are not the " +
+                "ones it claims to walk, so every claim made over it is made over a narrower " +
+                "space than it names. codes = $codes",
+        )
+        assertEquals(
+            listOf<Long?>(null, -5, 0, 1, 30, 3_600, 3_601, 86_400),
+            retryAfters,
+            "THE-SWEEPS-DOMAIN-CHANGED: the retry-after values this exhaustive sweep walks are " +
+                "not the ones it claims to walk. retryAfters = $retryAfters",
+        )
+        assertEquals(184_800, checked)
         assertTrue(checked > 100_000, "the exhaustive sweep must really be exhaustive, saw $checked")
     }
 
