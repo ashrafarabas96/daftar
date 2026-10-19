@@ -556,6 +556,52 @@ const CASES: readonly Case[] = [
     why: 'anchoring the rule to the phrase instead of the postmaster\u2019s line format would let any subject mention its way out of a measured red',
   },
   {
+    id: 'O11d',
+    what: "round 21's F-R21-05 — a HEALTHY postmaster's per-address-family WARNING, which every start logs when listen_addresses names a family the kernel lacks",
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          // Taken from a real PG 16.15 start, not invented: the cluster came
+          // up and served. If this read as contention, every crash on such a
+          // cluster would be dismissed as «nothing here is evidence».
+          `console.log('2026-10-19 21:09:05.772 UTC [16513] LOG:  could not create IPv6 socket for address "::1": Address family not supported by protocol');`,
+          `console.log('2026-10-19 21:09:05.772 UTC [16513] WARNING:  could not create listen socket for "::1"');`,
+          "console.log('2026-10-19 21:09:05.780 UTC [16513] LOG:  database system is ready to accept connections');",
+          "console.log('some progress output nobody can total');",
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /UNCLASSIFIED NON-ZERO/,
+    why: 'the first version of this rule accepted a per-family WARNING and the FATAL-less listen-socket phrase, so a healthy cluster made every unclassified red look like contention',
+  },
+  {
+    id: 'O11e',
+    what: "round 21's F-R21-04 — the postmaster's shape QUOTED by the subject, behind a diff marker",
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          // The anchor used to be `^.*[pid]`, so the server's shape could sit
+          // anywhere on the line. Only a line that BEGINS as the server's own
+          // begins speaks for the server.
+          `console.log('+ 2026-10-19 19:33:48.772 UTC [15002] FATAL:  could not create any TCP/IP sockets');`,
+          `console.log('   expected: 2026-10-19 19:33:48.772 UTC [15002] LOG:  could not bind IPv4 address "127.0.0.1": Address already in use');`,
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /UNCLASSIFIED NON-ZERO/,
+    why: 'a subject that quotes a postmaster log must not be able to speak for the server, which is the defect family this pack has spent nine rounds closing',
+  },
+  {
     id: 'O4',
     what: 'CONTROL — a clean run',
     build: (dir) => {

@@ -46,6 +46,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join, resolve } from 'node:path';
 import { type Counts, outcomeClass, scrape } from './outcome-class';
 
+import { declaredClusterPorts, waitForClusterPorts } from './cluster-ports';
+
 const ROOT = resolve(__dirname, '../..');
 const LOG_DIR = process.env.P15_EVIDENCE_LOG_DIR ?? '/tmp/daftar-p15-evidence';
 
@@ -873,6 +875,7 @@ function emitSection(
   rt: ReturnType<typeof runtimeIdentity>,
   coverage: { readonly total: number; readonly missing: readonly string[]; readonly readFailed: boolean },
   preconditionState: ReadonlyMap<string, { readonly met: boolean; readonly detail: string }>,
+  portNotices: readonly string[],
 ): void {
   const L: string[] = [];
   const cell = (t: string): string => t.replace(/\|/g, '\\|').replace(/\n/g, ' ');
@@ -896,6 +899,14 @@ function emitSection(
   L.push(`| os | ${rt.os} |`);
   L.push(
     `| coverage | **${results.length} instrument(s) driven** against ${coverage.total} Phase 15 script key(s) in \`package.json\`; **${coverage.readFailed ? 'COVERAGE UNMEASURED — package.json could not be read' : `${coverage.missing.length} omission(s)`}**, measured rather than declared |`,
+  );
+  // A wait that held is part of the RUN's record (round 21, F-R21-15). Its
+  // ABSENCE is recorded too: "it never had to wait" is a different statement
+  // from "nothing was checked", and the row says which.
+  L.push(
+    portNotices.length === 0
+      ? '| cluster-port waits | **none held** \u2014 every declared cluster port was free at each cluster boundary, so the wait never had to wait. That is a statement that the ports were free, NOT a measurement that the wait works: `verify:port-wait:prove` is that. |'
+      : `| cluster-port waits | **${String(portNotices.length)} notice(s)** \u2014 ${portNotices.map(cell).join('; ')} |`,
   );
   L.push('');
   L.push('**The preconditions, measured before anything ran:**');
@@ -1100,57 +1111,6 @@ interface GateResult {
  * the record is the engine the gate ran on rather than the one this process
  * happens to be using.
  */
-/**
- * AN INSTRUMENT IS NOT FINISHED UNTIL THE PORTS IT HELD ARE FREE (round 20, F-R20-05).
- *
- * `pg_ctl stop` returning 0 says the shutdown was ASKED FOR and acknowledged;
- * it does not say the socket is closed. The gap is small and it is enough: in
- * the `ed26e00` run the next cluster instrument started inside it, failed to
- * bind port 55432, and reported «No test files found». That is the SECOND time
- * the same held port produced that sentence.
- *
- * So the runner waits, between cluster instruments, for the shared port to be
- * bindable — which is the actual question, asked by binding it, not by reading
- * a teardown's exit code or parsing another tool's output. The bind is done in
- * a child process so a successful probe cannot leave a listener of its own
- * behind in this one.
- *
- * This REMOVES the common case; it does not replace the classifier rule that
- * CATCHES it. A port held by something this runner did not start will still
- * outlast the wait, and `SERVER_BIND_FAILURE` is what reads that.
- */
-const SHARED_CLUSTER_PORT = Number(process.env['PG_PORT'] ?? 55432);
-const PORT_WAIT_MS = 30_000;
-const PORT_POLL_MS = 500;
-
-function portIsFree(port: number): boolean {
-  const probe = `const s=require('net').createServer();s.once('error',()=>process.exit(1));s.listen(${String(port)},'127.0.0.1',()=>s.close(()=>process.exit(0)));`;
-  const r = spawnSync(process.execPath, ['-e', probe], { encoding: 'utf8', timeout: 5_000 });
-  return r.status === 0;
-}
-
-/**
- * A SYNCHRONOUS sleep, because this runner is synchronous end to end: it drives
- * children with `spawnSync` so that the record is written in the order the
- * instruments ran. `Atomics.wait` on a buffer nobody else can reach is the one
- * way to wait here without burning the CPU and without pulling in a sleep
- * binary, which would make the record depend on one more thing in the
- * container.
- */
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/** Returns null when the port came free, or a sentence naming what did not. */
-function waitForSharedPort(): string | null {
-  const started = Date.now();
-  while (Date.now() - started < PORT_WAIT_MS) {
-    if (portIsFree(SHARED_CLUSTER_PORT)) return null;
-    sleepSync(PORT_POLL_MS);
-  }
-  return `port ${String(SHARED_CLUSTER_PORT)} was still bound ${String(PORT_WAIT_MS / 1000)}s after the previous cluster instrument returned`;
-}
-
 function runRepoGates(): readonly GateResult[] {
   const out: GateResult[] = [];
   for (const g of REPO_GATES) {
@@ -1270,6 +1230,7 @@ function main(): number {
 
   const chosen = INSTRUMENTS.filter((i) => !quick || !i.cluster);
   const results: Result[] = [];
+  const portNotices: string[] = [];
   let blockedByEnvironment = 0;
   for (const [i, inst] of chosen.entries()) {
     const blocked = unmetBlocking(inst);
@@ -1287,9 +1248,14 @@ function main(): number {
     );
     results.push(res);
     if (inst.cluster) {
-      const held = waitForSharedPort();
-      if (held !== null)
+      const held = waitForClusterPorts(declaredClusterPorts());
+      // The notice reaches the RECORD, not only the console: §8b is generated
+      // from these results, and a wait that printed into scrollback was a
+      // measurement nobody could read afterwards (round 21, F-R21-15).
+      if (held !== null) {
+        portNotices.push(`after ${inst.script}: ${held}`);
         console.log(`  PORT STILL HELD — ${held}. The next cluster instrument may fail to bind; the classifier reads that from the server's log.`);
+      }
     }
   }
 
@@ -1412,7 +1378,7 @@ function main(): number {
     if (path.trim().length === 0) {
       console.log('  ! --emit-section was given with no path, so nothing was written. Name the file.');
     } else {
-      emitSection(path, results, src, runtimeIdentity(), coverage, preconditionState);
+      emitSection(path, results, src, runtimeIdentity(), coverage, preconditionState, portNotices);
     }
   }
 
@@ -1482,6 +1448,17 @@ function main(): number {
     console.log("  This runner's own code is now a verdict about its instruments, not only about whether they ran");
     console.log('  (coordinator round-8 R2). An index instrument red BEFORE its regeneration is the expected');
     console.log('  case: regenerate the documents, then make the confirmation run whose rc can be quoted.');
+    // A DID-NOT-MEASURE run is REPORTED even when a measured red outranks it
+    // for the exit code (round 21, F-R21-06): returning 5 without printing it
+    // made the contention vanish from the summary in exactly the runs that
+    // have something else wrong, which is when a reader most needs to know
+    // that one instrument never started.
+    if (didNotMeasure.length > 0) {
+      console.log('');
+      console.log(`  AND ${didNotMeasure.length} instrument(s) DID NOT MEASURE in this same run \u2014 a resource they needed was held:`);
+      for (const r of didNotMeasure) console.log(`    ${r.instrument.script} exit ${String(r.exitCode)} \u2014 ${outcomeClass(r)}`);
+      console.log('    The code below is 5 because a measured red outranks these; they are still owed a solo re-run.');
+    }
     return 5;
   }
 

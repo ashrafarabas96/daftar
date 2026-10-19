@@ -104,7 +104,8 @@
     "verify:handoff-manifest:prove": "tsx scripts/phase15/handoff-manifest-proof.ts",
     "verify:handoff-manifest:env": "tsx scripts/phase15/handoff-manifest-env-proof.ts",
     "verify:outcome-class:prove": "tsx scripts/phase15/outcome-class-proof.ts",
-    "verify:outcome-class:guard": "tsx scripts/phase15/outcome-class-guard-proof.ts"
+    "verify:outcome-class:guard": "tsx scripts/phase15/outcome-class-guard-proof.ts",
+    "verify:port-wait:prove": "tsx scripts/phase15/port-wait-proof.ts"
   },
   "engines": {
     "node": ">=24 <25"

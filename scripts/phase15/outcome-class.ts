@@ -218,8 +218,29 @@ export const BARE_REFUSAL = new RegExp('^(?:INVALID MEASUREMENT|UNMEASURED|NOT M
  * This says nothing about the subject. It says the port was held, and the
  * instrument must be re-run alone before anything is claimed either way.
  */
+/**
+ * NARROWED AFTER ROUND 21 (F-R21-04, F-R21-05). The first version of this rule
+ * was itself a fail-open, in two ways the challenger measured on real output:
+ *
+ * * It accepted `WARNING: could not create listen socket for "::1"`, which a
+ *   HEALTHY postmaster logs on every start when `listen_addresses` names an
+ *   address family the kernel does not have. The challenger produced it from a
+ *   real PG 16.15 cluster. On such a cluster EVERY crash-without-verdict would
+ *   have been read as contention and sent to «re-run it alone». The phrases
+ *   kept are only the ones a FAILED bind produces: a `could not bind` that
+ *   says the address is in use, and the FATAL summary that no TCP/IP socket
+ *   could be created at all. A per-family WARNING is not a failure to start.
+ * * Its anchor was `^.*\[\d+\]`, so the postmaster's shape could sit anywhere
+ *   on the line — quoted, indented, or behind a diff marker — which is the
+ *   «value appearing anywhere in text the subject writes» family all over
+ *   again, in the rule written to close it. The anchor is now the server's own
+ *   line BEGINNING: its timestamp, then the pid, then the severity. A subject
+ *   that quotes a postmaster log no longer speaks for the server.
+ *
+ * Controls `O11c`, `O11d` and `O11e` hold all three boundaries.
+ */
 export const SERVER_BIND_FAILURE = new RegExp(
-  String.raw`^.*\[\d+\]\s+(?:LOG|WARNING|FATAL):\s+(?:could not bind \S+ address|could not create any TCP/IP sockets|could not create listen socket)`,
+  String.raw`^\d{4}-\d{2}-\d{2} [\d:.]+ \S+ \[\d+\]\s+(?:LOG|FATAL):\s+(?:could not bind \S+ address[^\n]*Address already in use|could not create any TCP/IP sockets)`,
   'm',
 );
 
