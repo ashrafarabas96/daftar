@@ -98,6 +98,7 @@
     "checkpoint:phase15:prove": "tsx scripts/phase15/checkpoint-proof.ts",
     "scan:secrets:release:prove": "tsx scripts/phase15/secret-scan-proof.ts",
     "verify:exit-codes:phase15": "tsx scripts/phase15/exit-code-sweep.ts",
+    "pitr:proof:contention": "tsx scripts/phase15/pitr-contention-proof.ts",
     "verify:exit-codes:phase15:guard": "tsx scripts/phase15/exit-code-sweep-guard-proof.ts",
     "verify:exit-codes:phase15:prove": "tsx scripts/phase15/exit-code-sweep.ts --prove",
     "verify:handoff-manifest:prove": "tsx scripts/phase15/handoff-manifest-proof.ts",

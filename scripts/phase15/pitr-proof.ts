@@ -81,7 +81,7 @@ import { protectFailingExitCode } from '../../tests/helpers/exit-code';
 protectFailingExitCode();
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { join } from 'node:path';
 import { Pool } from 'pg';
@@ -210,6 +210,23 @@ function fail(r: ValidatorResult, subjects: number, detail: string): void {
   r.verdict = 'FAIL';
   r.subjects = subjects;
   r.detail = detail;
+}
+
+/**
+ * The drill could not be performed, as distinct from performing it and finding
+ * the property broken. Measured 2026-10-13: three consecutive runs printed
+ * `P2 FAIL — the base backup plus archived WAL recovers to a consistent,
+ * read-write cluster` because a fixed port was busy and the recovery was never
+ * attempted. «Disaster recovery is broken» and «I could not run the drill» must
+ * never print the same way (PART 18), and the first of the two is a false
+ * measured claim.
+ */
+let contentionDetail: string | null = null;
+function contention(r: ValidatorResult, detail: string): void {
+  r.verdict = 'UNMEASURED';
+  r.subjects = 0;
+  r.detail = detail;
+  contentionDetail = contentionDetail ?? detail;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
@@ -376,11 +393,36 @@ function probeEntry(port: number, entryId: string): EntryProbe {
   return { present: Number(present.value) > 0, entries: Number(entries.value), unbalanced: Number(unbalanced.value) };
 }
 
+/**
+ * Is something listening on this port? Read from /proc, not from a connect
+ * attempt: a refused connection and a filtered one look the same, and this
+ * question decides whether a verdict is a measurement at all.
+ */
+function portBusy(port: number): boolean {
+  for (const f of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let text: string;
+    try {
+      text = readFileSync(f, 'utf8');
+    } catch {
+      continue; // not readable here: fall through to the bind attempt itself
+    }
+    for (const line of text.split('\n').slice(1)) {
+      const cols = line.trim().split(/\s+/);
+      const local = cols[1];
+      const state = cols[3];
+      if (local === undefined || state !== '0A') continue;
+      const hex = local.split(':')[1];
+      if (hex !== undefined && parseInt(hex, 16) === port) return true;
+    }
+  }
+  return false;
+}
+
 /** Lay the base backup down, recover it to a target, and probe. Returns the probes. */
 function recoverTo(
   target: { readonly time?: string; readonly lsn?: string },
   label: string,
-): { readonly ok: boolean; readonly detail: string; readonly port: number } {
+): { readonly ok: boolean; readonly detail: string; readonly port: number; readonly contention: boolean } {
   stopCluster(RECOVERED);
   rmSync(RECOVERED.dir, { recursive: true, force: true });
   mkdirSync(RECOVERED.dir, { recursive: true });
@@ -393,12 +435,45 @@ function recoverTo(
   // The copied backup carries the primary's port; the recovered cluster needs
   // its own, or it would collide with the primary still holding 55473.
   sh(`printf "\\nport=${RECOVERED.port}\\n" >> ${join(RECOVERED.dir, 'data', 'postgresql.auto.conf')}`);
+  // WAIT FOR THE PORT, AND TELL CONTENTION FROM A BROKEN RECOVERY.
+  //
+  // Measured 2026-10-13: three consecutive runs of this drill reported
+  // `P2 FAIL — the base backup plus archived WAL recovers to a consistent,
+  // read-write cluster`, and the cause in every one was a single line inside the
+  // server log: `could not bind IPv4 address "127.0.0.1": Address already in
+  // use` on this cluster's FIXED port. The recovery was never attempted. A
+  // verdict that says disaster recovery is broken when the truth is that a port
+  // was busy is a false measured claim, which is the one thing this pack treats
+  // as blocking — so the port is waited for, and a bind failure is reported as
+  // CONTENTION and not as a failed validator.
+  const freeBy = Date.now() + 30_000;
+  let busy = portBusy(RECOVERED.port);
+  while (busy && Date.now() < freeBy) {
+    sh('sleep 1');
+    busy = portBusy(RECOVERED.port);
+  }
+  if (busy)
+    return {
+      ok: false,
+      contention: true,
+      detail: `port ${RECOVERED.port} was still held 30s after this drill asked for it, so the recovery was never attempted: INVALID MEASUREMENT — RESOURCE CONTENTION, not a recovery failure`,
+      port: RECOVERED.port,
+    };
   const started = startExisting(RECOVERED.dir, label);
   if (started.status !== 0) {
-    return { ok: false, detail: `pg_ctl start (${label}) exit ${started.status}: ${serverLog(RECOVERED.dir).slice(-2000)}`, port: RECOVERED.port };
+    const log = serverLog(RECOVERED.dir);
+    const bind = /could not bind IPv4 address|could not create any TCP\/IP sockets|Address already in use/.test(log);
+    return {
+      ok: false,
+      contention: bind,
+      detail: bind
+        ? `INVALID MEASUREMENT — RESOURCE CONTENTION: the recovered cluster could not take port ${RECOVERED.port} (${(/could not bind[^\n]*/.exec(log) ?? ['bind failed'])[0]}), so no recovery was attempted and nothing here is a statement about recoverability`
+        : `pg_ctl start (${label}) exit ${started.status}: ${log.slice(-2000)}`,
+      port: RECOVERED.port,
+    };
   }
   const done = waitForRecovery(RECOVERED.port, 120_000);
-  return { ok: done.ok, detail: done.detail, port: RECOVERED.port };
+  return { ok: done.ok, contention: false, detail: done.detail, port: RECOVERED.port };
 }
 
 // ── the drill ─────────────────────────────────────────────────────────────
@@ -602,7 +677,11 @@ async function main(): Promise<void> {
     const rtoStart = Date.now();
     const recovered = recoverTo({ time: targetTime }, 'recover-to-target');
     const rtoMs = Date.now() - rtoStart;
-    if (!recovered.ok) {
+    if (!recovered.ok && recovered.contention) {
+      contention(vRecovers, recovered.detail);
+      contention(vCutBefore, 'the recovery was never attempted, so there is no cut to read: INVALID MEASUREMENT — RESOURCE CONTENTION');
+      contention(vCutAfter, 'the recovery was never attempted, so there is no cut to read: INVALID MEASUREMENT — RESOURCE CONTENTION');
+    } else if (!recovered.ok) {
       fail(vRecovers, 1, recovered.detail);
       fail(vCutBefore, 0, 'recovery did not complete, so no cut could be read');
       fail(vCutAfter, 0, 'recovery did not complete, so no cut could be read');
@@ -1143,11 +1222,13 @@ function report(sha: string, dirty: boolean, t: Timeline | undefined, ms: number
       ? partialResults.length > 0
         ? 'PASS WITH PARTIAL COVERAGE'
         : 'PASS'
-      : failed.length > 0
-        ? 'FAIL'
-        : unmeasured.length > 0
-          ? 'UNMEASURED'
-          : 'FAIL',
+      : contentionDetail !== null
+        ? 'INVALID MEASUREMENT — RESOURCE CONTENTION'
+        : failed.length > 0
+          ? 'FAIL'
+          : unmeasured.length > 0
+            ? 'UNMEASURED'
+            : 'FAIL',
     partialCoverage: partialResults.map((r) => ({ id: r.id, measuredSubjects: r.subjects })),
   };
 
@@ -1171,7 +1252,18 @@ function report(sha: string, dirty: boolean, t: Timeline | undefined, ms: number
   writeFileSync(join(EVIDENCE, 'pitr-run-identity.json'), `${JSON.stringify({ ...summary, tools: toolVersions(), loadavg: loadavg() }, null, 2)}\n`);
   console.log(`\nP15_PITR_PROOF: ${JSON.stringify(summary)}`);
   console.log(`PHASE 15 PITR PROOF: ${summary.result}`);
-  if (!ok) process.exitCode = 1;
+  // A DISTINCT CODE FOR "THE DRILL DID NOT RUN".
+  //
+  // Exit 1 is this instrument's verdict that a validator failed. Contention is
+  // not a verdict about recoverability at all, and a reader of exit codes alone
+  // — which is what V3 §9 makes the handoff carry — would otherwise read a busy
+  // port as a failed disaster-recovery drill. Exit 3 says: re-run it alone.
+  if (contentionDetail !== null) {
+    console.log(`  ${contentionDetail}`);
+    console.log('  Re-run this instrument ALONE. The fixed ports it and `pitr:proof:prove` share are a');
+    console.log('  named residual, not a result: nothing here is evidence about recovery either way.');
+    process.exitCode = 3;
+  } else if (!ok) process.exitCode = 1;
 }
 
 main().catch((e) => {

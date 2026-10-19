@@ -303,6 +303,13 @@ const INSTRUMENTS: readonly Instrument[] = [
     nonZeroMeans: 'the sweep did not notice a reintroduced discarded exit code, so its green verdict is worthless',
   },
   {
+    script: 'pitr:proof:contention',
+    what: 'whether the PITR drill tells a busy port from a broken restore: the same drill with its recovered port held, and a copy with that classification blinded',
+    cluster: true,
+    nonZeroMeans:
+      'either a busy port still reads as a failed disaster-recovery drill, or the classification that separates the two is not what produces the difference',
+  },
+  {
     script: 'verify:exit-codes:phase15:guard',
     what: "the guard-deletion half of the sweep's provenance rule: the same plant against the real sweep and against a copy with that one line removed",
     cluster: false,
