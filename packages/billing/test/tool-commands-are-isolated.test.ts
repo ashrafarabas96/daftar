@@ -238,7 +238,7 @@ const looksLikeReviewer = (): RegExp => {
 const REFUSED_PACK_NOT_PINNED = 'REFUSED-PACK-NOT-THE-PINNED-SET';
 
 /**
- * ROUND 55, THE CHALLENGER'S R54-F1 (P1 ground: "a gate whose subject set is a
+ * ROUND 55, THE CHALLENGER'S R53-F1 (P1 ground: "a gate whose subject set is a
  * live shared directory measures no commit"). `npm test` reads this pack TWICE
  * -- once in the suite npm starts, and again inside the run `tools/law-ran.py`
  * starts for its figures -- and other sessions write to that directory. The
@@ -266,7 +266,18 @@ const REFUSED_PACK_MOVED = 'REFUSED-PACK-MOVED-DURING-MEASUREMENT';
  */
 const packDigest = (dir: string): string => {
   const rows = readdirSync(dir)
-    .sort()
+    // ROUND 56, THE CHALLENGER'S R54-S1 (P2, latent): `.sort()` orders by
+    // UTF-16 code unit and Python's `sorted` by code point, and the two differ
+    // the moment one name holds a character above the BMP and another one
+    // above U+D7FF. The challenger measured it with these two functions over
+    // one directory holding `z\uFFFD` and `z\u{1F600}`: one instant, two
+    // digests. The consequence is worse than a missed attack -- the gate would
+    // hand down a digest the law could never match, so REFUSED-PACK-MOVED
+    // would fire on every run SAYING the pack moved when it had not: a
+    // refusal whose own words are untrue. Both sides order by the name's
+    // BYTES now, and the arm below measures that the two implementations agree
+    // over an adversarial name set rather than trusting that they do.
+    .sort((a, b) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8')))
     .map((name) => {
       const full = join(dir, name);
       let digest = '<unreadable>';
@@ -278,6 +289,43 @@ const packDigest = (dir: string): string => {
       return `${name}\u0000${digest}`;
     });
   return createHash('sha256').update(rows.join('\n')).digest('hex');
+};
+
+/**
+ * ROUND 57, THE CHALLENGER'S R54-S2 (P2), which it measured on the window I had
+ * left open and timestamped: a document added one second into a run and removed
+ * two seconds later sat in the pack for two of the run's twenty seconds, and
+ * every digest check agreed, because comparing two endpoints keeps no journal of
+ * what happened between them. Its own scoping is exact and worth keeping: that
+ * is NOT a false green about the set at the instant the law looked — anything
+ * present when the law reads the directory is caught — what it defeats is the
+ * refusal's own wording, since a green implies the pack did not change while the
+ * arm was reading, and there it had.
+ *
+ * Its remedy is the one taken here, because it REMOVES the window instead of
+ * policing it: read a private SNAPSHOT, so the subject cannot move at all.
+ * Journalling with inotify or mtimes would add a reader that can itself be
+ * blinded.
+ *
+ * What is left, stated narrowly: the copy is not atomic, so a change landing
+ * DURING it would make a mixed snapshot — which is why the source's digest is
+ * taken BEFORE the copy and compared with the snapshot's, and the source is read
+ * again at the end of the pass. The irreducible residue is a change that happens
+ * and reverts entirely between two consecutive reads of the source; closing that
+ * needs a filesystem snapshot, which is not this package's to arrange.
+ */
+const snapshotPack = (dir: string): string => {
+  const into = mkdtempSync(join(tmpdir(), 'p5-pack-snapshot-'));
+  for (const name of readdirSync(dir)) {
+    const from = join(dir, name);
+    try {
+      if (!statSync(from).isFile()) continue;
+    } catch {
+      continue;
+    }
+    writeFileSync(join(into, name), readFileSync(from));
+  }
+  return into;
 };
 
 /**
@@ -3069,6 +3117,63 @@ describe('every written invocation of the pack tools is isolated', () => {
     }
   });
 
+  it('R54-S1: the two digest readers agree over names chosen to make them disagree', () => {
+    // The pack digest is computed TWICE, once here and once in
+    // `tools/law-ran.py`, and the gate hands its value to the run this suite
+    // is part of. Two implementations of one definition is the point -- it is
+    // what establishes that two readers saw one instant -- but it is also a
+    // place where they can silently part company, which is what the
+    // challenger measured: `.sort()` by UTF-16 code unit against `sorted` by
+    // code point, disagreeing on `z\uFFFD` beside `z\u{1F600}`.
+    //
+    // So this arm does not assert that the orderings are the same by reading
+    // the two sources. It RUNS BOTH over a directory built to break them and
+    // compares the values, because a claim about an instrument is verified
+    // only by running it. The names are the challenger's pair plus the
+    // boundary either side of U+D7FF, which is where the two orders diverge.
+    //
+    // F-61 holds: every argument reaching `spawnSync` is a literal or a path
+    // this arm made, and the Python it runs is `-I` with a literal program.
+    const dir = mkdtempSync(join(tmpdir(), 'r56-digest-'));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    for (const [name, body] of [
+      ['z\uFFFD.md', 'replacement character'],
+      ['z\u{1F600}.md', 'above the BMP'],
+      ['z\uD7FF.md', 'the last code point below the surrogates'],
+      ['z\uE000.md', 'the first code point above them'],
+      ['plain.md', 'ascii'],
+    ] as const) {
+      writeFileSync(join(dir, name), body);
+    }
+    const mine = packDigest(dir);
+    // The probe must not LITTER: importing by file path compiles the module,
+    // and a `__pycache__` written into `tools/` is an untracked binary file
+    // that this law's own repository arm then refuses. `-B` and
+    // `sys.dont_write_bytecode` both say so, at the call site and inside the
+    // program, because the flag is the control and the assignment is the proof
+    // that nothing depended on inheriting it.
+    const probe = [
+      'import importlib.util, sys',
+      'sys.dont_write_bytecode = True',
+      `spec = importlib.util.spec_from_file_location('lawran', ${JSON.stringify(join(TOOLS_DIR, 'law-ran.py'))})`,
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'from pathlib import Path',
+      `print(module.pack_digest(Path(${JSON.stringify(dir)})))`,
+    ].join('\n');
+    const r = spawnSync(HARNESS_PYTHON, ['-I', '-B', '-c', probe], { encoding: 'utf8', timeout: 60_000, env: { PATH: '/usr/bin:/bin' } });
+    expect(
+      r.status,
+      `${REFUSED_PACK_MOVED}: the gate's own digest function could not be run from here, so this arm cannot say the two readers agree: ${JSON.stringify(
+        (r.stderr ?? '').trim().slice(0, 300),
+      )}`,
+    ).toBe(0);
+    expect(
+      (r.stdout ?? '').trim(),
+      `${REFUSED_PACK_MOVED}: this law and tools/law-ran.py compute DIFFERENT digests for one directory at one instant, so the value the gate hands down could never match what this suite reads and the refusal would say the pack moved when it had not (R54-S1). Both must order names by their BYTES`,
+    ).toBe(mine);
+  });
+
   it('F-62/F-64: a value may not choose a program, a directory, or a module', () => {
     // ROUND 36. The challenger's F-62 (P2) and the coordinator's measurement
     // of it, which was worse: `-X pycache_prefix=..` passes PLAIN_VALUE, needs
@@ -3381,8 +3486,16 @@ describe('every written invocation of the pack tools is isolated', () => {
       ).toBe(false);
       return;
     }
-    // R54-F1, first half: the instant this arm is about.
-    const digestAtEntry = packDigest(PACK);
+    // R53-F1 and R54-S2: the instant this arm is about, and it reads a SNAPSHOT
+    // of it so that instant cannot move underneath the pass.
+    const sourceAtEntry = packDigest(PACK);
+    const pack = snapshotPack(PACK);
+    onTestFinished(() => rmSync(pack, { recursive: true, force: true }));
+    const digestAtEntry = packDigest(pack);
+    expect(
+      digestAtEntry,
+      `${REFUSED_PACK_MOVED}: the pack at ${PACK} changed while this arm was COPYING it (the source was ${sourceAtEntry} before the copy), so the snapshot holds part of one state and part of another and no figure from it belongs to a single instant`,
+    ).toBe(sourceAtEntry);
     const handedDown = (process.env.P5_PACK_DIGEST ?? '').trim();
     expect(
       handedDown === '' || handedDown === digestAtEntry,
@@ -3399,18 +3512,18 @@ describe('every written invocation of the pack tools is isolated', () => {
     const mineNames: string[] = [];
     const recorded = enrolment();
     const movedBytes: string[] = [];
-    for (const name of readdirSync(PACK)) {
+    for (const name of readdirSync(pack)) {
       if (exempt.has(name)) {
         // R48-F3: a reviewer's report is not READ by this law -- its bytes are
         // frozen and the author may not edit them -- but it is now WEIGHED.
         // The digest beside the name is the reviewer's own announced sha256,
         // so a frozen report rewritten after enrolment is refused by name.
-        const bytes = diskText(join(PACK, name));
+        const bytes = diskText(join(pack, name));
         const actual =
           bytes === null
             ? null
             : createHash('sha256')
-                .update(readFileSync(join(PACK, name)))
+                .update(readFileSync(join(pack, name)))
                 .digest('hex');
         if (actual !== recorded.get(name)) movedBytes.push(`${name}: ${actual ?? '<unreadable>'} is not the enrolled ${recorded.get(name) ?? '<no row>'}`);
         continue;
@@ -3424,7 +3537,7 @@ describe('every written invocation of the pack tools is isolated', () => {
         unclassified.push(name);
         continue;
       }
-      const text = readable(join(PACK, name));
+      const text = readable(join(pack, name));
       // CD-47-01/CD-47-04, the same two corrections on this side: a file this
       // law cannot read is REFUSED BY NAME rather than skipped silently.
       if (text === null) {
@@ -3439,7 +3552,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       mineNames.push(name);
       // CD-47-01: the second reader here too, so the pack half is bounded
       // against disk exactly as the repository half is.
-      const onDisk = diskText(join(PACK, name));
+      const onDisk = diskText(join(pack, name));
       offences.push(...auditedScan(name, text, onDisk ?? text, TOOLS_DIR).found);
       const drifted = diskRefusal(name, text, onDisk);
       if (drifted !== undefined) offences.push(drifted);
@@ -3447,7 +3560,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     // The obligation MOVES, it does not disappear: for every document this law
     // declines to read, the author's own seal must refuse it by exact name.
     if (unclassified.length > 0) {
-      const out = sealOutput(PACK);
+      const out = sealOutput(pack);
       const unrefused = unclassified.filter((n) => !sealRefusesByName(out, n));
       expect(
         unrefused,
@@ -3479,14 +3592,23 @@ describe('every written invocation of the pack tools is isolated', () => {
     // alive, and nothing in a document is skipped: an attack line that must
     // appear is NEUTRALISED (`<python3> …`), which the arm below pins.
     expect(offences, 'an author-owned pack document prints an un-isolated command, which is the half of F-50 that routes the reader').toStrictEqual([]);
-    // R54-F1, second half: and nothing moved while this arm was reading. A
+    // R53-F1, second half: and nothing moved while this arm was reading. A
     // document added or removed mid-pass makes every figure above a statement
     // about no single instant, so it is refused BY NAME rather than left to
     // surface as a red somewhere else.
+    // The snapshot is private, so it moving at all would mean something reached
+    // into this arm's own temporary directory.
+    expect(
+      packDigest(pack),
+      `${REFUSED_PACK_MOVED}: this arm's own private snapshot at ${pack} changed while it was being read, which means something outside this run is writing into it`,
+    ).toBe(digestAtEntry);
+    // And the live pack is read again: the figures above are honest about the
+    // snapshot either way, but a pack that moved during the pass is no longer
+    // the pack they describe, and saying so is this arm's promise.
     expect(
       packDigest(PACK),
-      `${REFUSED_PACK_MOVED}: the pack at ${PACK} changed while this arm was reading it (it was ${digestAtEntry} at entry), so every figure this arm produced belongs to no single instant. Re-run against a pack nothing else is writing to, or pass P5_PACK_DIR a private copy`,
-    ).toBe(digestAtEntry);
+      `${REFUSED_PACK_MOVED}: the pack at ${PACK} changed while this arm was reading a snapshot of it (it was ${sourceAtEntry} before the copy). Every figure above is true of the snapshot and none of them describes the pack as it now stands. Re-run against a pack nothing else is writing to, or point P5_PACK_DIR at a private copy`,
+    ).toBe(sourceAtEntry);
   });
   it('reads the seal refusal by NAME, and a silent seal classifies nothing', () => {
     // B-12's reader, armed sequentially rather than through a race: both of

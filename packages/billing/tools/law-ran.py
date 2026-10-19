@@ -180,7 +180,8 @@ REFUSED_TRACKED_NODE_MODULES = "REFUSED-TRACKED-NODE-MODULES"
 REFUSED_TRACKED_RUNNER = "REFUSED-TRACKED-RUNNER"
 REFUSED_GIT_NOT_READABLE = "REFUSED-GIT-NOT-READABLE"
 
-# ROUND 55, THE CHALLENGER'S R54-F1. `npm test` reads the pack TWICE -- the
+# ROUND 55, THE CHALLENGER'S R53-F1 (report sha256 6f978eb9b782…; the two
+# sessions number rounds one apart, so the digest is what pins it). `npm test` reads the pack TWICE -- the
 # suite npm starts, and the run this step starts for its figures -- and the pack
 # is a directory other sessions write to. Reproduced by the challenger with one
 # document added 16 seconds in: the suite printed `Tests 304 passed (304)` with
@@ -202,7 +203,12 @@ REFUSED_PACK_MOVED = "REFUSED-PACK-MOVED-DURING-MEASUREMENT"
 def pack_digest(directory: Path) -> str:
     """Every name beside its sha256, sorted, hashed -- the law's definition."""
     rows = []
-    for name in sorted(os.listdir(directory)):
+    # R54-S1 (the challenger's P2, latent): ordered by the name's BYTES, not by
+    # its characters. Python sorts str by code point and JavaScript by UTF-16
+    # code unit, and the two disagree whenever one name holds a character above
+    # the BMP and another one above U+D7FF -- one directory, one instant, two
+    # digests, and a refusal that would say the pack moved when it had not.
+    for name in sorted(os.listdir(directory), key=lambda entry: entry.encode()):
         full = directory / name
         try:
             if full.is_file():
@@ -245,11 +251,13 @@ def git_lines(cwd: Path, *args: str) -> "list[str]":
 # the kind of bound this phase has been burned by four times. Change these in
 # the same commit that changes the law's tests, with the reason in the message.
 EXPECTED: dict[str, int] = {
-    # 25 -> 26 at round 54: the law gains the CD-53-01/R53-03 case, which
+    # 26 -> 27 at round 56: the law gains the R54-S1 case, which RUNS both
+    # digest implementations over a directory built to make them disagree and
+    # compares the values. 25 -> 26 at round 54: the law gains the CD-53-01/R53-03 case, which
     # refuses a Git-tracked path under either `node_modules` and twins the
     # environment half of CD-52-01. The number changes in the same commit as
     # the case, with the reason in the message.
-    "test/tool-commands-are-isolated.test.ts": 26,
+    "test/tool-commands-are-isolated.test.ts": 27,
     "test/law-bytes-are-pinned.test.ts": 1,
 }
 
@@ -463,12 +471,60 @@ def main() -> int:
             "so a binary planted in one could fabricate the report this step reads"
         )
 
-    # R54-F1: the pack is pinned by digest for the duration of the run this
+    # R53-F1: the pack is pinned by digest for the duration of the run this
     # step starts, so the figures below and the set the law checks are one
     # instant. A pack that is absent is left to the law's declared UNMEASURED
     # branch rather than invented here.
     pack_dir = Path((os.environ.get("P5_PACK_DIR") or "").strip() or "/mnt/project-files/phase5")
-    pinned_pack = pack_digest(pack_dir) if pack_dir.is_dir() else None
+    # R54-S2 (the challenger's P2 on `29cef86`): a digest taken before the run
+    # and one taken after it AGREE over any change that happens and reverts in
+    # between. The challenger measured exactly that -- an author-owned document
+    # added one second into a twenty-second run and removed two seconds later,
+    # every digest check green, because comparing two endpoints keeps no journal
+    # of the window between them. So the window is REMOVED rather than policed:
+    # this step COPIES the pack into a private directory, hands THAT directory
+    # and its digest down, and the run it starts measures a subject no other
+    # session can name. A write to the live pack after the copy then changes
+    # nothing the run claims, which is why there is no longer a refusal for it;
+    # refusing on it would be a false red about figures that are true of a real
+    # instant of the pack.
+    #
+    # The SOURCE is digested on both sides of the copy, because copying 86 files
+    # is not an instant either, and a copy that straddles a write holds part of
+    # one state and part of another. What remains is a change that happens and
+    # reverts ENTIRELY between those two reads; closing that needs a filesystem
+    # snapshot, which is not this package's to arrange, and it is declared.
+    pack_snapshot: Path | None = None
+    subject_pack: Path | None = pack_dir if os.environ.get("P5_PACK_DIR") else None
+    pinned_pack = None
+    if pack_dir.is_dir():
+        source_before = pack_digest(pack_dir)
+        pack_snapshot = Path(tempfile.mkdtemp(prefix="law-ran-pack-"))
+        for name in sorted(os.listdir(pack_dir), key=lambda entry: entry.encode()):
+            full = pack_dir / name
+            if not full.is_file():
+                continue
+            try:
+                shutil.copyfile(full, pack_snapshot / name)
+            except OSError as exc:
+                shutil.rmtree(pack_snapshot, ignore_errors=True)
+                refuse(
+                    f"{REFUSED_PACK_MOVED}: {full} could not be copied into this step's private pack "
+                    f"({exc}), so the run this step starts would measure a set this step never read whole"
+                )
+        source_after = pack_digest(pack_dir)
+        if source_after != source_before:
+            # The private copy goes BEFORE the refusal: a refusal that leaves a
+            # half-copied pack behind leaves a directory a later run could glob
+            # for, and the measurement that found this line found exactly that.
+            shutil.rmtree(pack_snapshot, ignore_errors=True)
+            refuse(
+                f"{REFUSED_PACK_MOVED}: the pack at {pack_dir} was {source_before} when this step began "
+                f"copying it and is {source_after} now, so the private copy holds part of one state and "
+                "part of another. Re-run against a pack nothing else is writing to"
+            )
+        subject_pack = pack_snapshot
+        pinned_pack = pack_digest(pack_snapshot)
 
     # R53-S1, the other default: npm's global config lives beside the node that
     # runs it, and is read whether or not a variable names it.
@@ -497,19 +553,25 @@ def main() -> int:
                 # the run this step starts would measure the DEFAULT pack while
                 # the operator had named another. Forwarded EXPLICITLY, and only
                 # when it is set, so the subject is the one that was asked for.
-                **({"P5_PACK_DIR": os.environ["P5_PACK_DIR"]} if os.environ.get("P5_PACK_DIR") else {}),
-                # R54-F1: the instant this step measured, handed to the run it
+                # R54-S2: the directory handed down is this step's PRIVATE
+                # COPY whenever the pack exists, so the run cannot be measuring
+                # a subject that moves. When the pack is absent the name the
+                # operator gave is forwarded unchanged, so the law reaches its
+                # declared UNMEASURED branch about the directory that was asked
+                # for rather than about a default this step invented.
+                **({"P5_PACK_DIR": str(subject_pack)} if subject_pack is not None else {}),
+                # R53-F1: the instant this step measured, handed to the run it
                 # starts. The law refuses by name if what it reads is not this.
                 **({"P5_PACK_DIGEST": pinned_pack} if pinned_pack else {}),
             },
         )
-        if pinned_pack is not None:
-            after = pack_digest(pack_dir)
+        if pack_snapshot is not None and pinned_pack is not None:
+            after = pack_digest(pack_snapshot)
             if after != pinned_pack:
                 refuse(
-                    f"{REFUSED_PACK_MOVED}: the pack at {pack_dir} was {pinned_pack} when this step started the run "
-                    f"and is {after} now, so the figures that run produced belong to no single instant. Re-run "
-                    "against a pack nothing else is writing to, or point P5_PACK_DIR at a private copy"
+                    f"{REFUSED_PACK_MOVED}: this step's own private copy at {pack_snapshot} was {pinned_pack} "
+                    f"when the run started and is {after} now, so something outside this step is writing into "
+                    "a directory only this step and the run it started can name"
                 )
         if not out.is_file():
             refuse(
@@ -528,6 +590,8 @@ def main() -> int:
         if out.is_file():
             out.unlink()
         out.parent.rmdir()
+        if pack_snapshot is not None:
+            shutil.rmtree(pack_snapshot, ignore_errors=True)
 
     if not isinstance(report, dict) or not isinstance(report.get("testResults"), list):
         refuse("the report has no testResults list, so nothing in it says what ran")
