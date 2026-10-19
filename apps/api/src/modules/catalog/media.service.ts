@@ -17,6 +17,18 @@ const VARIANT_SIZES = [256, 1024, 2048] as const;
 const MAX_DIMENSION = 6000;
 
 /**
+ * Every fragment of a scan verdict — a signature name, a scanner kind, a
+ * refusal reason — originates OUTSIDE this process: clamd's reply carries it,
+ * and whatever is listening on that address chooses its bytes. Interpolated
+ * raw, a CR, LF or ESC in one of them forges log records or injects terminal
+ * escapes. `JSON.stringify` renders them as one quoted, escaped line, and the
+ * bound keeps a long one from pushing the rest of the record out.
+ */
+function forLog(text: string): string {
+  return JSON.stringify(String(text)).slice(0, 200);
+}
+
+/**
  * Media pipeline (§63–64): extension/MIME agreement, magic-byte validation via
  * image-size, size + dimension limits, sharp RE-ENCODE (metadata stripped,
  * payloads neutralized), server-generated tenant+business-scoped keys.
@@ -166,10 +178,10 @@ export class MediaService {
    */
   private async assertScannedClean(file: { buffer: Buffer; originalname: string }): Promise<{ scanner: string }> {
     const unavailable = (reason: string): AppError => {
-      this.logger.error(`media upload REFUSED (fail-closed): malware scan unavailable — ${reason}`);
+      this.logger.error(`media upload REFUSED (fail-closed): malware scan unavailable — ${forLog(reason)}`);
       return new AppError('MEDIA_SCAN_UNAVAILABLE', 'Upload refused: the file could not be security-scanned', 503);
     };
-    if (!this.scanner.enabled) throw unavailable(`scanner_not_enabled:${this.scanner.kind}`);
+    if (!this.scanner.enabled) throw unavailable(`scanner_not_enabled:${forLog(this.scanner.kind)}`);
 
     let verdict: MalwareVerdict;
     try {
@@ -179,12 +191,12 @@ export class MediaService {
     }
     if (verdict?.outcome === 'clean') return { scanner: verdict.scanner };
     if (verdict?.outcome === 'infected') {
-      this.logger.error(`media upload REFUSED: malware scan reported ${verdict.signature} (scanner ${verdict.scanner})`);
+      this.logger.error(`media upload REFUSED: malware scan reported ${forLog(verdict.signature)} (scanner ${forLog(verdict.scanner)})`);
       throw new AppError('MEDIA_INFECTED', 'Upload refused: the file failed the security scan', 422);
     }
     // Includes `unavailable` AND any verdict shape this version does not know:
     // an unrecognised answer is never read as a pass.
-    throw unavailable(verdict?.outcome === 'unavailable' ? `verdict_unavailable:${verdict.reason}` : 'verdict_unreadable');
+    throw unavailable(verdict?.outcome === 'unavailable' ? `verdict_unavailable:${forLog(verdict.reason)}` : 'verdict_unreadable');
   }
 
   /** A scan that does not answer inside the budget is a refusal, not a pass. */

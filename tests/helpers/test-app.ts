@@ -304,6 +304,12 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
         ...(options.outboxSink ? { outboxSink: options.outboxSink } : {}),
         ...(options.encryptor ? { encryptor: options.encryptor } : {}),
         ...(options.storage ? { storage: options.storage } : {}),
+        // Every integration app gets a CLEAN stub unless a case supplies its
+        // own, so the hundreds of unrelated upload-touching cases do not each
+        // need a scanner. The consequence is deliberate and worth naming: the
+        // fail-closed gate's behaviour is guarded ONLY by the dedicated suites
+        // (tests/security/media-scan-fail-closed.test.ts and
+        // tests/security/clamav-scanner.test.ts), never incidentally here.
         scanner: options.scanner ?? new StubCleanMalwareScanner(),
         ...(options.metrics ? { metrics: options.metrics } : {}),
         ...(options.reconciliationClock ? { reconciliationClock: options.reconciliationClock } : {}),

@@ -9,8 +9,11 @@ import { loadConfig } from '../../apps/api/src/config';
  *
  * Two independent checks have to hold before a file is called clean, and these
  * cases exist to prove that each one refuses on its own:
- *   - the peer must answer `zPING` with exactly `PONG\0`, so a mis-pointed
- *     address can never have its answer read as a verdict at all;
+ *   - the peer must answer `zPING` with exactly `PONG\0`, so a listener that
+ *     was never clamd can never have its answer read as a verdict at all.
+ *     This is a misconfiguration detector, not authentication: anyone who
+ *     controls the address can answer `PONG\0`, and the cases below measure
+ *     only what it does catch;
  *   - the INSTREAM reply must equal clamd's own `stream: OK\0` byte for byte.
  * Both were verified against real clamd 1.5.4 before these stand-ins were
  * written: `PONG\0`, `stream: OK\0`, `stream: <sig> FOUND\0`.
@@ -55,6 +58,60 @@ describe('ClamAvMalwareScanner (clamd INSTREAM)', () => {
     if (!addr || typeof addr === 'string') throw new Error('no port');
     return addr.port;
   }
+
+  /** One TCP connection as the peer saw it: every byte that arrived on it. */
+  interface PeerConnection {
+    received: Buffer;
+  }
+
+  const PING_COMMAND = Buffer.from('zPING\0', 'utf8');
+
+  /**
+   * The same stand-in, but it records what actually reached it, one entry per
+   * TCP connection in the order they were opened, and it reads `pong` and
+   * `reply` fresh on every connection so a case can flip the peer between two
+   * scans. The recording is what makes two properties testable that the
+   * refusal reason alone cannot show: that the handshake is repeated per scan
+   * rather than cached, and that when it fails no file byte is ever written.
+   */
+  async function observedPeer(options: { reply: () => Buffer | null; pong: () => Buffer | null }): Promise<{ port: number; connections: PeerConnection[] }> {
+    const connections: PeerConnection[] = [];
+    const server = createServer((socket: Socket) => {
+      const entry: PeerConnection = { received: Buffer.alloc(0) };
+      connections.push(entry);
+      let sawTerminator = false;
+      let isPing = false;
+      socket.on('data', (buf: Buffer) => {
+        entry.received = Buffer.concat([entry.received, buf]);
+        if (buf.subarray(0, PING_COMMAND.length).equals(PING_COMMAND)) isPing = true;
+        if (isPing) {
+          // Read only when a PING actually arrives, so a case counting its
+          // answers counts handshakes and nothing else.
+          const pong = options.pong();
+          if (pong) socket.write(pong);
+          socket.end();
+          return;
+        }
+        if (buf.length >= 4 && buf.readUInt32BE(buf.length - 4) === 0) sawTerminator = true;
+        if (sawTerminator) {
+          const reply = options.reply();
+          if (reply !== null) {
+            socket.write(reply);
+            socket.end();
+          }
+        }
+      });
+      socket.on('error', () => undefined);
+    });
+    servers.push(server);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    return { port: addr.port, connections };
+  }
+
+  /** Connections that carried nothing but the PING command, in order. */
+  const handshakes = (connections: PeerConnection[]): PeerConnection[] => connections.filter((c) => c.received.equals(PING_COMMAND));
 
   const scannerFor = (port: number, timeoutMs = 3000): ClamAvMalwareScanner =>
     new ClamAvMalwareScanner(
@@ -135,8 +192,8 @@ describe('ClamAvMalwareScanner (clamd INSTREAM)', () => {
     });
   });
 
-  describe('the peer must prove it is clamd before anything is scanned', () => {
-    it('a peer that never answers `zPING` → refused by name, the stream never sent', async () => {
+  describe('a listener that does not behave like clamd is refused before anything is scanned', () => {
+    it('a peer that never answers `zPING` → refused by name', async () => {
       const v = await scanWith({ reply: raw('stream: OK\0'), pong: null }, 600);
       expect(v.outcome).toBe('unavailable');
       expect(v.outcome === 'unavailable' && v.reason).toMatch(/clamd_timeout|peer_is_not_clamd/);
@@ -163,6 +220,46 @@ describe('ClamAvMalwareScanner (clamd INSTREAM)', () => {
     });
   });
 
+  describe('the handshake is per scan, and the stream waits for it', () => {
+    const clean = (): Buffer => raw('stream: OK\0');
+
+    it('a second scan on the same instance handshakes again, and a peer that changes between scans is refused', async () => {
+      let pongs = 0;
+      // The peer answers PING correctly once and then stops being clamd.
+      const peer = await observedPeer({
+        reply: clean,
+        pong: () => (++pongs === 1 ? raw('PONG\0') : raw('HTTP/1.1 200 OK\r\n\r\n')),
+      });
+      const scanner = scannerFor(peer.port);
+
+      const first = await scanner.scan({ bytes, filename: 'a.png' });
+      expect(first.outcome).toBe('clean');
+
+      const second = await scanner.scan({ bytes, filename: 'b.png' });
+      expect(second.outcome).toBe('unavailable');
+      expect(second.outcome === 'unavailable' && second.reason).toMatch(/^peer_is_not_clamd:/);
+
+      // Two scans, two handshakes: a cached verification would leave one.
+      expect(handshakes(peer.connections)).toHaveLength(2);
+      expect(pongs).toBe(2);
+    });
+
+    it('when the handshake fails, not one file byte reaches the peer and no scan connection is opened', async () => {
+      const peer = await observedPeer({ reply: clean, pong: () => raw('HTTP/1.1 200 OK\r\n\r\n') });
+      const scanner = scannerFor(peer.port);
+
+      const v = await scanner.scan({ bytes, filename: 'a.png' });
+      expect(v.outcome).toBe('unavailable');
+      expect(v.outcome === 'unavailable' && v.reason).toMatch(/^peer_is_not_clamd:/);
+
+      // Exactly one connection, carrying exactly the PING command: the refusal
+      // reason alone cannot show this, and streaming first would break it.
+      expect(peer.connections).toHaveLength(1);
+      expect(peer.connections[0]?.received.equals(PING_COMMAND)).toBe(true);
+      const streamed = peer.connections.reduce((n, c) => n + c.received.length, 0) - PING_COMMAND.length;
+      expect(streamed).toBe(0);
+    });
+  });
   describe('transport failures are refusals', () => {
     it('server accepts but never answers the stream → unavailable on the timeout', async () => {
       const v = await scanWith({ reply: null }, 800);
@@ -174,6 +271,20 @@ describe('ClamAvMalwareScanner (clamd INSTREAM)', () => {
       for (const s of servers.splice(0)) await new Promise<void>((r) => s.close(() => r()));
       const v = await scannerFor(port, 1000).scan({ bytes, filename: 'a.png' });
       expect(v.outcome).toBe('unavailable');
+    });
+
+    it('a peer that answers with an endless reply is cut off and refused by name (stream leg)', async () => {
+      // The peer chooses how much it writes. Unbounded accumulation would be a
+      // memory sink held open by the very budget meant to bound the exchange.
+      const v = await scanWith({ reply: Buffer.alloc(1_000_000, 0x42) });
+      expect(v.outcome).toBe('unavailable');
+      expect(v.outcome === 'unavailable' && v.reason).toBe('clamd_reply_too_long');
+    });
+
+    it('a peer that answers the handshake endlessly is cut off and refused by name (ping leg)', async () => {
+      const v = await scanWith({ reply: raw('stream: OK\0'), pong: Buffer.alloc(1_000_000, 0x42) });
+      expect(v.outcome).toBe('unavailable');
+      expect(v.outcome === 'unavailable' && v.reason).toBe('clamd_reply_too_long');
     });
 
     it('bytes over the deployment ceiling are refused, not scanned', async () => {

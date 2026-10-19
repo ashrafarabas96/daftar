@@ -212,12 +212,18 @@ export class DisabledDevelopmentMalwareScanner implements MalwareScanner {
  * checked against clamd's documented wire format rather than against a
  * pattern that something else could satisfy:
  *
- * 1. **The peer is clamd.** Before every scan the adapter sends `zPING` and
- *    requires the reply to be exactly `PONG\0`. A mis-pointed address, a load
- *    balancer, an HTTP server or any other listener fails this by name, so it
- *    can never go on to have its answer read as a verdict. The handshake is
- *    not cached: a DNS or VIP change between uploads must be caught at the
- *    upload that follows it, not at process start.
+ * 1. **The peer behaves like clamd.** Before every scan the adapter sends
+ *    `zPING` and requires the reply to be exactly `PONG\0`. This is a
+ *    MISCONFIGURATION DETECTOR, not authentication: it catches a mis-pointed
+ *    address, a load balancer, an HTTP server or any other listener that was
+ *    never clamd, so such a peer can never go on to have its answer read as a
+ *    verdict. It proves nothing about an attacker who controls the address,
+ *    because anyone can answer `PONG\0`. Authenticating the scanner is the
+ *    deployment's job and is not done here: `MALWARE_SCANNER_URL` must point
+ *    at a clamd the network reaches privately, and only the operator can
+ *    establish that. The handshake is not cached: a DNS or VIP change between
+ *    uploads must be caught at the upload that follows it, not at process
+ *    start.
  * 2. **The reply is clamd's own clean reply, byte for byte.** `clean` requires
  *    the INSTREAM reply to equal exactly `stream: OK\0` — not a prefix, not a
  *    suffix, no trailing bytes, no second NUL. `infected` requires exactly
@@ -239,6 +245,11 @@ export class ClamAvMalwareScanner implements MalwareScanner {
   private static readonly CLEAN_REPLY = Buffer.from('stream: OK\0', 'utf8');
   /** clamd's reply to `zPING`, exactly. Nothing else proves the peer is clamd. */
   private static readonly PONG_REPLY = Buffer.from('PONG\0', 'utf8');
+  /**
+   * The ceiling on a single clamd reply. Its real replies are tens of bytes;
+   * this leaves room for a long signature name and nothing more.
+   */
+  private static readonly MAX_REPLY_BYTES = 4096;
   /** `stream: <signature> FOUND` + the NUL terminator, and nothing around it. */
   private static readonly FOUND_REPLY = /^stream: (\S[^\0]*?) FOUND\0$/;
   private readonly host: string;
@@ -334,11 +345,18 @@ export class ClamAvMalwareScanner implements MalwareScanner {
    * command), returning the raw reply bytes. Resolves with whatever arrived
    * when the peer closes — a partial reply is then refused by the byte-exact
    * comparison above rather than parsed.
+   *
+   * The accumulation is BOUNDED. clamd's own replies are a few dozen bytes;
+   * whatever is listening on that address chooses how many it sends, so a peer
+   * that keeps writing would otherwise grow this buffer without limit while
+   * the socket budget is reset by every chunk that arrives. Past the cap the
+   * exchange is abandoned and refused by name.
    */
   private converse(budgetMs: number, send: (socket: Socket) => void): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       const socket = connect({ host: this.host, port: this.port });
       const chunks: Buffer[] = [];
+      let received = 0;
       let settled = false;
       const finish = (err: Error | null): void => {
         if (settled) return;
@@ -349,7 +367,14 @@ export class ClamAvMalwareScanner implements MalwareScanner {
       };
       socket.setTimeout(budgetMs, () => finish(new Error('clamd_timeout')));
       socket.on('error', (e: Error) => finish(new Error(`clamd_unreachable:${e.message.slice(0, 80)}`)));
-      socket.on('data', (d: Buffer) => chunks.push(d));
+      socket.on('data', (d: Buffer) => {
+        received += d.length;
+        if (received > ClamAvMalwareScanner.MAX_REPLY_BYTES) {
+          finish(new Error('clamd_reply_too_long'));
+          return;
+        }
+        chunks.push(d);
+      });
       socket.on('end', () => finish(null));
       socket.on('close', () => finish(null));
       socket.on('connect', () => send(socket));

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@nestjs/common';
 import sharp from 'sharp';
 import { createTestApp, ownerPool, resetData, uniqueEmail } from '../helpers/test-app';
 import { DisabledDevelopmentMalwareScanner, type MalwareScanner, type ObjectStorage } from '../../apps/api/src/infra/storage';
@@ -103,6 +104,35 @@ describe('media upload fails closed without a trustworthy scan verdict', () => {
     expect(res.body.error?.code).toBe('MEDIA_INFECTED');
     expect(puts).toEqual([]);
     expect(await mediaRowCount(businessId)).toBe(0);
+  });
+
+  it('an INFECTED signature cannot forge a log record: the peer-chosen text is escaped', async () => {
+    // The signature is whatever answered on the scanner address, so it is
+    // attacker-shaped input on its way into a log line. Deleting `forLog()`
+    // from the infected branch of `assertScannedClean()` turns this red.
+    const forged = 'EICAR\nERROR media upload ACCEPTED: scan skipped\r\x1b[2J';
+    const written: string[] = [];
+    const spy = vi.spyOn(Logger.prototype, 'error').mockImplementation((...args: unknown[]) => {
+      written.push(String(args[0]));
+    });
+    try {
+      const { upload, puts, businessId } = await appWith(new StubInfectedMalwareScanner(forged));
+      const res = await upload();
+      expect(res.status).toBe(422);
+      expect(res.body.error?.code).toBe('MEDIA_INFECTED');
+      expect(puts).toEqual([]);
+      expect(await mediaRowCount(businessId)).toBe(0);
+
+      const record = written.find((line) => line.includes('malware scan reported'));
+      expect(record).toBeDefined();
+      // One line, no control characters, and the forged text is still visible
+      // in its escaped form rather than dropped.
+      expect([...(record ?? '')].filter((ch) => ch.charCodeAt(0) < 0x20)).toEqual([]);
+      expect(record).toContain('\\n');
+      expect(record).toContain('EICAR');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('scanner THROWS (clamd unreachable) → 503, nothing stored', async () => {
