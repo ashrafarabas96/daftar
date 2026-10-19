@@ -281,7 +281,21 @@ DELIVERED_REVIEWER_REPORTS = (
     # The coordinator's diff review of the same range, which SIGNS it -- so 3c62561
     # carries all three signatures. It does NOT cover 1421bff or anything after it.
     'P13-COORD-DIFF-REVIEW-3c62561.md',
+    # R20, the narrow round on 3c62561..524a0b0: PASS-WITH-SCOPE, no finding, and the
+    # signature extended to that head.
+    'P13-CHALLENGE-524a0b0.md',
 )
+# THE FIXED POINT, stated because this list has now moved the head four times for
+# bookkeeping. A reviewer's report about head H arrives AFTER H, so enumerating it needs a
+# commit after H -- which makes a new head, which can attract a report of its own. The
+# regress is structural and it cannot be closed by a better list: deciding the class by
+# SHAPE instead of by name is exactly the R14-01 fail-open, where a name decided
+# AUTHORSHIP and two files the author can create went unhashed and were credited to a
+# reviewer. So the enumeration stays by name, and this is the last commit made for
+# enumeration alone. From here a trailing reviewer report leaves `--check` at exit 1 with
+# ONE row -- "no digest row, and no named exemption covers it", naming their file -- which
+# is a true statement about a file that is not mine, disclosed rather than cleared by
+# moving a signed head. The next name goes in whenever a commit exists for its own reason.
 # The SHAPE of a reviewer report, used only to spot a file that wears the name without
 # being on the list, and MY OWN round records, which are hashed and are anchored to a
 # hexadecimal subject so that `RESPONSE2-probe` is not one of them.
