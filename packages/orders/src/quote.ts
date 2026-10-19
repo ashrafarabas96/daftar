@@ -63,7 +63,7 @@ import { NO_QUOTE_EXPIRY, type OrderQuoteConfirmationDto } from './contracts';
 import { OrderError, assertCanonicalId, type OrderErrorCode } from './errors';
 import { compareCanonical, isCanonicalInstant } from './instant';
 import { assertLineTotalRounded } from './line-rounding';
-import { type UnitPrecisionDeclaration, assertUnitPrecisionContainer, lookupUnitPrecision, requireUnitPrecision } from './unit-precision';
+import { type UnitPrecisionDeclaration, assertUnitPrecisionKeys, lookupUnitPrecision, requireUnitPrecision } from './unit-precision';
 
 /** Non-negative integer minor units as a decimal string. A shape check, so a float, a sign or padding cannot pass. */
 const NON_NEGATIVE_MINOR = /^(0|[1-9]\d*)$/;
@@ -739,6 +739,27 @@ export interface CommercialQuoteChecks {
    * two are different and are kept different.
    */
   unitPrecisionByStockKey?: ReadonlyMap<string, UnitPrecisionDeclaration>;
+  //
+  // THE CONTRACT ON THE KEY, stated because `E-A` showed it was assumed. A key
+  // is the CANONICAL stock key of a line (`productId` or `productId:variantId`,
+  // exactly as `stockKeyOf` spells it), and three rules follow from that:
+  //
+  // 1. a key that is not a string is REFUSED on every path — it can never be a
+  //    deliberate declaration, because no key this package builds has that type;
+  // 2. an ABSENT key stays lawful: declaring precisions for some stock keys and
+  //    not others is legitimate, and the line is then bounded only by the
+  //    storage scale, exactly as if no `checks` had been passed;
+  // 3. a container that is supplied, is not empty, and matches NO line this
+  //    quote prices is refused when the quote is BUILT, because the container
+  //    and the lines come from one caller in one breath and a total mismatch can
+  //    only be a mistake. That is what catches a key whose shape is wrong — the
+  //    wrong case, a trailing space — which rule 1 cannot see. It is a
+  //    coordinator default and REVERSIBLE on the owner's word (`OD-P6-08`'s
+  //    neighbourhood); the cost is that a caller holding ONE precision map for
+  //    many quotes must pass the subset that covers this one.
+  //
+  // What the STRING SHAPE of a matching key is beyond that — trimming, case
+  // folding — is the caller's business and this package states no rule for it.
 }
 
 /** The `checks` contract as a LIST, for the same reason `APPROVAL_FIELDS` is one. */
@@ -765,8 +786,8 @@ const CHECKS_FIELDS: readonly string[] = Object.freeze(['unitPrecisionByStockKey
  * the same silent omission one level down. The cost is stated: a caller holding
  * some other `ReadonlyMap` implementation converts it with `new Map(entries)`.
  */
-function assertChecksContract(checks: CommercialQuoteChecks | undefined): void {
-  if (checks === undefined) return;
+function assertChecksContract(checks: CommercialQuoteChecks | undefined): readonly string[] | undefined {
+  if (checks === undefined) return undefined;
   if (checks === null || typeof checks !== 'object') {
     throw new OrderError('order.quote_field_undeclared', 'checks must be an object stating what is checked, or be absent', {
       fields: 'checks',
@@ -795,17 +816,31 @@ function assertChecksContract(checks: CommercialQuoteChecks | undefined): void {
     }
   }
   const declarations = checks.unitPrecisionByStockKey;
-  if (declarations === undefined) return;
+  if (declarations === undefined) return undefined;
   // `instanceof Map` was the wrong question and `D-A` is what it cost: it asks
   // about the prototype, not about which `get` runs, so a Map with an own `get`,
   // a Map subclass and a Proxy over a Map all passed it and all answered
   // `undefined` for a key the honest map holds. The container is now judged by
   // whether THIS PACKAGE'S OWN LOOKUP can read it, which is asked and answered
   // in `unit-precision.ts` for every caller at once.
+  //
+  // The KEYS are judged in the same breath (`E-A`): a key that is not a string
+  // can never be a deliberate declaration, and the walk happens here, once,
+  // rather than per line.
   try {
-    assertUnitPrecisionContainer(declarations);
+    return assertUnitPrecisionKeys(declarations);
   } catch (error) {
     if (!(error instanceof CarrierFault)) throw error;
+    if (error.kind === 'not-string-key') {
+      throw new OrderError(
+        'order.quote_field_undeclared',
+        'unitPrecisionByStockKey is keyed by something that is not a stock key, so a law the caller believes it stated is not claimed',
+        {
+          fields: 'unitPrecisionByStockKey',
+          keyType: error.field ?? 'unknown',
+        },
+      );
+    }
     throw new OrderError(
       'order.quote_field_undeclared',
       'unitPrecisionByStockKey must be a Map this package can read by its own lookup; anything else answers get() for no key and drops the law silently',
@@ -850,6 +885,35 @@ function declarationFor(checks: CommercialQuoteChecks | undefined, stockKey: str
  * inventing a pricing policy.
  */
 export function buildCommercialQuote(input: CommercialQuoteInput, checks?: CommercialQuoteChecks): CommercialQuote {
+  // The `E-A` no-MATCH rule belongs to the CREATION path, which is this one. It
+  // is not reachable as an option from outside the module, and the reason it is
+  // not applied on the re-verification path is measured rather than assumed —
+  // see `buildQuote`.
+  return buildQuote(input, checks, true);
+}
+
+/**
+ * The builder's body, with ONE internal decision: whether a supplied container
+ * that matches no priced line is refused here.
+ *
+ * It is refused on the CREATION path, where the container and the lines come
+ * from the same caller in the same breath and a total mismatch can only be a
+ * mistake. It is NOT refused on the re-verification path, and that is not a
+ * convenience: `assertQuoteApproved` is called by `buildSaleCommitIntent` with a
+ * container built from the CHECKOUT's positions, which may legitimately name
+ * products the stored quote does not price — and that exact fact is already
+ * refused one layer later, by name, as "the checkout carries a position the
+ * confirmed quote does not price". Applying the rule there made THAT refusal
+ * answer under a different code and reddened two accepted cases, which is the
+ * `C-F` lesson (a refusal must not quietly change its name) arriving from the
+ * other direction. The suite's two coverage cases are the pin.
+ *
+ * What that leaves open is stated rather than papered over: on the
+ * re-verification path a wrongly SHAPED key — right product, wrong case or a
+ * trailing space — is still silent, bounded only by that coverage refusal. The
+ * KEY TYPE check runs on both paths.
+ */
+function buildQuote(input: CommercialQuoteInput, checks: CommercialQuoteChecks | undefined, requireDeclaredKeysMatch: boolean): CommercialQuote {
   // R-16: an undeclared field is refused HERE, by name, before anything is
   // computed. `canonicalCarrier` below then keeps the carrier equal to the
   // digested stream even for a caller that reaches the builder another way
@@ -862,7 +926,7 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
   // `assertQuoteIntact` re-runs the builder, `assertQuoteConfirmable` calls
   // that, and `assertQuoteApproved` calls both. One site, so a path cannot be
   // added later that reads `checks` without it.
-  assertChecksContract(checks);
+  const declaredKeys = assertChecksContract(checks);
   assertCanonicalInput(input);
   assertCanonicalId(input.quoteId, 'quoteId');
   assertCanonicalId(input.orderId, 'orderId');
@@ -946,6 +1010,37 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
     sum += lineTotalMinor;
   }
 
+  // A SUPPLIED container that matches no priced line, refused as the mirror of
+  // `checkout-intent`'s "the checkout carries a position the confirmed quote
+  // does not price" (`E-A`, the coordinator's ruling). It catches what a type
+  // check cannot: a key whose SHAPE is wrong — trailing whitespace, the wrong
+  // case, another product's key — declares a law for a line this quote does not
+  // carry, and the quantity it was meant to bound goes through unchecked.
+  //
+  // The cost is stated, because it is real: a caller that keeps ONE precision
+  // map for many quotes is refused on a quote none of whose products that map
+  // covers, and must pass the subset or drop the key. Saying "check nothing"
+  // stays lawful two ways — no `checks`, or an EMPTY container — so the refusal
+  // only ever answers a container that claims something and matches nothing.
+  // This is a coordinator default and is REVERSIBLE on the owner's word; the
+  // contract line above says what it buys and the suite pins both halves.
+  //
+  // It runs HERE, after the loop, because the keys it compares against are the
+  // CANONICAL keys the lines were proved to carry, not the strings the caller
+  // wrote; and a quote with no lines never reaches it, having already been
+  // refused `order.cart_empty`.
+  if (requireDeclaredKeysMatch && declaredKeys !== undefined && declaredKeys.length > 0 && !declaredKeys.some((key) => seen.has(key))) {
+    throw new OrderError(
+      'order.quote_field_undeclared',
+      'unitPrecisionByStockKey declares precisions for stock keys this quote does not price, so the law it states is claimed over no line',
+      {
+        fields: 'unitPrecisionByStockKey',
+        declared: String(declaredKeys.length),
+        priced: String(seen.size),
+      },
+    );
+  }
+
   const displayed = requireMinor(input.displayedTotalMinor, 'displayedTotalMinor');
   if (displayed !== sum) {
     // A displayed total that does not equal its own lines is precisely the
@@ -1010,7 +1105,7 @@ export function assertQuoteIntact(quote: CommercialQuote, checks?: CommercialQuo
   // `I6.2` would refuse an unlawful sum in the relation too, but the DDL is
   // `SPEC ONLY` until the Migration Owner applies it, so today this is the only
   // layer that holds.
-  const rebuilt: CommercialQuote = buildCommercialQuote(rest, checks);
+  const rebuilt: CommercialQuote = buildQuote(rest, checks, false);
   if (rebuilt.digest !== digest) {
     // Unreachable while the digest is a pure function of the fields: the bytes
     // were just proved to hash to `digest`. Stated as a refusal rather than

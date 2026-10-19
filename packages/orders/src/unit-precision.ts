@@ -115,6 +115,53 @@ export function assertUnitPrecisionContainer(declarations: unknown): void {
   }
 }
 
+/** The intrinsic key iterator, captured for the same reason `mapGet` is. */
+const mapKeys = Map.prototype.keys;
+
+/**
+ * Refuse a container KEY that no key of this package could ever be, and return
+ * the string keys it declares.
+ *
+ * `E-A`, measured by the independent challenger at `f44222b`: the previous
+ * remedy made the lookup honest about the VALUE and left the KEY unchecked, so a
+ * boxed `String`, a numeric key and a `Symbol` key all dropped the whole
+ * unit-precision law at the digest of a quote with no `checks` at all — `C-B`
+ * again, from the other side of the same `get`.
+ *
+ * **What is refused here, and what is deliberately NOT.** An absent key MUST
+ * stay lawful: a caller that declares precisions for some stock keys and not
+ * others is legitimate, and that is the contract this module publishes. So a key
+ * that merely FAILS TO MATCH cannot be refused by type — which leaves the
+ * challenger's whitespace and upper-cased arms silent, and that is a stated
+ * residual rather than an oversight (`OD-P6-08`'s kind of question: whether the
+ * SHAPE of a stock key is the caller's business). What a type check CAN decide
+ * is the subset that carries no information at all: a key that is not a string
+ * can never be a deliberate declaration, because no key this package builds or
+ * compares has that type.
+ *
+ * The walk happens ONCE PER CALL rather than once per lookup, which is why it is
+ * split from `lookupUnitPrecision`: a quote with `n` lines would otherwise walk
+ * the container `n` times. Its cost is proportional to entries the caller
+ * actually inserted, not to a `length` it merely claims, which is why the `R-C2`
+ * bound-before-walk rule does not apply to a `Map` the way it applied to a
+ * sparse array.
+ */
+export function assertUnitPrecisionKeys(declarations: unknown): readonly string[] {
+  assertUnitPrecisionContainer(declarations);
+  const keys: string[] = [];
+  for (const key of mapKeys.call(declarations as Map<unknown, unknown>) as IterableIterator<unknown>) {
+    if (typeof key !== 'string') {
+      throw new CarrierFault(
+        'not-string-key',
+        typeof key,
+        'a unit precision container is keyed by something that is not a string, so it declares a law for no stock key this package can ask about',
+      );
+    }
+    keys.push(key);
+  }
+  return keys;
+}
+
 /**
  * Read ONE declaration out of a caller-supplied container, as a frozen snapshot.
  *

@@ -703,6 +703,113 @@ describe("the challenger's REJECT at a869aab — the leaf the remedy itself left
     expect(buildCommercialQuote(HALF_UNIT, {}).lines[0]?.quantity).toBe('5.5000');
   });
 
+  it('E-A: a container KEY that is not a string is refused by name, with the type it was', () => {
+    // The challenger's round-26 finding: the previous remedy made the lookup
+    // honest about the VALUE and left the KEY unchecked, so each of these
+    // dropped the whole unit-precision law at the no-`checks` digest.
+    const shapes: [string, unknown][] = [
+      ['object', new String(KEY)],
+      ['number', 7],
+      ['symbol', Symbol(KEY)],
+    ];
+    for (const [keyType, key] of shapes) {
+      const error = refusalOf(
+        () => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: new Map([[key, WHOLE_UNITS.get(KEY)]]) } as unknown as CommercialQuoteChecks),
+        `a ${keyType} key`,
+      );
+      expect(error.code).toBe('order.quote_field_undeclared');
+      expect(error.details?.keyType).toBe(keyType);
+    }
+  });
+
+  it('E-A: a container that prices NO line of this quote is refused, which is what a type check cannot reach', () => {
+    const whole = WHOLE_UNITS.get(KEY);
+    if (whole === undefined) throw new Error('the fixture must declare the whole-unit product');
+    // The wrongly SHAPED key — right product, wrong case or a trailing space —
+    // and another product's key entirely. A type check admits all three, and the
+    // mirror of `checkout-intent`'s coverage refusal is what catches them.
+    for (const key of [`${KEY} `, KEY.toUpperCase(), stockKeyOf({ productId: OTHER_PRODUCT, variantId: null })]) {
+      const error = refusalOf(
+        () => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: new Map([[key, whole]]) }),
+        `a key this quote does not price: ${key}`,
+      );
+      expect(error.code).toBe('order.quote_field_undeclared');
+      expect(error.details?.declared).toBe('1');
+      expect(error.details?.priced).toBe('1');
+    }
+  });
+
+  it('E-A: the COST of that rule, stated as cases — a superset still applies the law, and saying nothing stays lawful', () => {
+    // A caller holding one precision map for several quotes is refused only when
+    // NOTHING in it matches; a map that covers this quote and more is accepted
+    // and the law it states for the priced line is applied.
+    const superset = new Map(WHOLE_UNITS);
+    superset.set(stockKeyOf({ productId: OTHER_PRODUCT, variantId: null }), { tracksInventory: false, unitDecimals: null });
+    const error = refusalOf(() => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: superset }), 'a superset container');
+    expect(error.code).toBe('order.quote_quantity_invalid');
+    // And "check nothing" is still lawful two ways, which is the half a guard
+    // like this is most likely to break.
+    expect(buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: new Map() }).lines[0]?.quantity).toBe('5.5000');
+    expect(buildCommercialQuote(HALF_UNIT).lines[0]?.quantity).toBe('5.5000');
+  });
+
+  it('E-A: the no-MATCH rule does NOT run on the re-verification path, where another refusal owns that fact', () => {
+    // The scoping is measured, not assumed: applying it there made the sales
+    // authority's own coverage refusal answer under a different code and
+    // reddened two accepted cases. `assertQuoteIntact` therefore accepts a
+    // container that prices no line of the quote — the KEY TYPE check still
+    // runs on both paths — and the two coverage cases in this file and in
+    // `checkout-intent.test.ts` are what hold the other half.
+    const whole = WHOLE_UNITS.get(KEY);
+    if (whole === undefined) throw new Error('the fixture must declare the whole-unit product');
+    const elsewhere = new Map([[stockKeyOf({ productId: OTHER_PRODUCT, variantId: null }), whole]]);
+    expect(assertQuoteIntact(CONFIRMED, { unitPrecisionByStockKey: elsewhere }).digest).toBe(CONFIRMED.digest);
+    const error = refusalOf(
+      () => assertQuoteIntact(CONFIRMED, { unitPrecisionByStockKey: new Map([[7, WHOLE_UNITS.get(KEY)]]) } as unknown as CommercialQuoteChecks),
+      'a numeric key on the re-verification path',
+    );
+    expect(error.code).toBe('order.quote_field_undeclared');
+    expect(error.details?.keyType).toBe('number');
+  });
+
+  it('E-A: the BASKET path refuses a non-string key too, under its own code', () => {
+    const error = refusalOf(
+      () =>
+        summariseBasket(
+          [{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '2', consumedByOrderId: null, retractedAt: null }] as readonly CartLineInput[],
+          new Map([[7, { tracksInventory: true, unitDecimals: 0 }]]) as unknown as ReadonlyMap<string, UnitPrecisionDeclaration>,
+          '2026-10-12T12:00:00Z',
+        ),
+      'a numeric key on the basket path',
+    );
+    expect(error.code).toBe('order.unit_precision_invalid');
+    expect(error.details?.keyType).toBe('number');
+  });
+
+  it("D-B: the snapshot's own COST, stated as cases — an extra field and a half-stated declaration are both refused", () => {
+    // The challenger named both as residuals with no case. They are the right
+    // direction and they are a BEHAVIOUR CHANGE, so they are pinned rather than
+    // left to be discovered: a declaration carrying one extra field used to
+    // reach the law and now does not.
+    const extra = refusalOf(
+      () =>
+        buildCommercialQuote(HALF_UNIT, {
+          unitPrecisionByStockKey: new Map([[KEY, { tracksInventory: true, unitDecimals: 0, unitCode: 'kg' } as unknown as UnitPrecisionDeclaration]]),
+        }),
+      'a declaration carrying an undeclared field',
+    );
+    expect(extra.code).toBe('order.unit_precision_invalid');
+    expect(extra.details?.carrier).toBe('undeclared');
+    expect(extra.details?.field).toBe('unitCode');
+    const half = refusalOf(
+      () => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: new Map([[KEY, { tracksInventory: true } as unknown as UnitPrecisionDeclaration]]) }),
+      'a declaration stating only half the law',
+    );
+    expect(half.code).toBe('order.unit_precision_invalid');
+    expect(half.details?.carrier).toBe('not-primitive');
+    expect(half.details?.field).toBe('unitDecimals');
+  });
+
   it('D-A: a container that is not a Map at all is refused up front, null and a number alike', () => {
     // The old check refused these as a side effect of `instanceof`; the new one
     // states them, and the case exists because the first guard-deletion run

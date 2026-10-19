@@ -45,6 +45,12 @@ export type CarrierFaultKind =
   // contract named the wrong kind of container" to the refusal its own
   // authority publishes instead of relabelling it a leaf fault.
   | 'not-map'
+  // A container KEY that is not a primitive string (`E-A`). Its own kind for the
+  // same reason: a caller must be able to tell "your container is keyed by
+  // something no key of mine can ever be" from "a declaration inside it is
+  // unreadable", because the first is the whole container and the second is one
+  // stock key.
+  | 'not-string-key'
   | 'sparse'
   | 'undeclared'
   | 'too-long';

@@ -25,7 +25,7 @@ import { assertQuantityRepresentable, formatQuantity, parseQuantity } from '@daf
 import { OrderError, assertCanonicalId, isCanonicalId } from './errors';
 import { compareCanonical, isCanonicalInstant } from './instant';
 import { CarrierFault } from './carrier';
-import { type UnitPrecisionDeclaration, lookupUnitPrecision, requireUnitPrecision } from './unit-precision';
+import { type UnitPrecisionDeclaration, assertUnitPrecisionKeys, lookupUnitPrecision, requireUnitPrecision } from './unit-precision';
 
 /** One basket row as the client appended it. */
 export interface CartLine {
@@ -152,6 +152,20 @@ export function summariseBasket(
   }
   if (lines.length === 0) {
     throw new OrderError('order.cart_empty', 'a basket must carry at least one line');
+  }
+  // The container's KEYS are judged once, before the loop (`E-A`): a key that is
+  // not a string declares a law for no stock key this package can ask about. The
+  // quote path's no-MATCH rule has no counterpart here and is not invented: this
+  // path already refuses a line whose key the caller declared nothing for, line
+  // by line and by name, so a key that matches nothing cannot be silent.
+  try {
+    assertUnitPrecisionKeys(precisionByStockKey);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
+    throw new OrderError('order.unit_precision_invalid', 'a unit precision container is keyed by something that is not a stock key', {
+      carrier: error.kind,
+      keyType: error.field ?? 'unknown',
+    });
   }
 
   const seenLineIds = new Set<string>();
