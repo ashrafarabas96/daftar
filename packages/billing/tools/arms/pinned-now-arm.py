@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """M119 — the two branches of `seal-check-run.pinned_now()`, exercised directly.
 
 ROUND 28. The challenger sent the same F-51 note twice, because it is the one

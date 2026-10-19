@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """The context-setting census for the Phase 5 DB lane, GENERATED.
 
 ROUND 18, THE COORDINATOR'S B-5. Round 17 wrote "per SESSION at 23 of this

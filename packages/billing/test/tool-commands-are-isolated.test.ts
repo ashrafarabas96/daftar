@@ -69,7 +69,7 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 
 import { describe, expect, it, onTestFinished } from 'vitest';
 
@@ -710,6 +710,185 @@ const isolatedByModel = (flags: string): boolean =>
 /** The whitespace split F-58 is about, kept only for its deletion arm. */
 const isolatedBeforeF58 = (flags: string): boolean => flags.split(/\s+/).some((f) => f === '-I' || (/^-[A-Za-z]+$/.test(f) && f.includes('I')));
 
+/**
+ * ROUND 43 (ROUND 41'S REVIEW), THE CHALLENGER'S F-72 (P1, A FAIL-OPEN), AND
+ * THE COORDINATOR'S RULING -- OPTION (a).
+ *
+ * `INVOCATION` is anchored on an INTERPRETER TOKEN, so a command line with no
+ * `python` written on it matched nothing however runnable it was. And these
+ * tools are runnable without one: all five carried `#!/usr/bin/env python3`
+ * and `manifest-digests.py` was mode 755, so a reader who copied
+ * `./tools/manifest-digests.py --check` ran the tool with `PYTHONPATH` and the
+ * user site directory on `sys.path` -- F-50's own harm, and the thing `-I` is
+ * here to force. Measured on the pattern as it stood before this round:
+ *
+ *   ./tools/manifest-digests.py --dir . --check                  -> 0 matches
+ *   tools/manifest-digests.py --check                            -> 0 matches
+ *   /abs/.../packages/billing/tools/manifest-digests.py --check  -> 0 matches
+ *   python3 tools/manifest-digests.py --dir . --check             -> 1 match
+ *
+ * The ruling offered two fixes and preferred (a), because it makes the bare
+ * form ISOLATED rather than forbidden: every tool's shebang is now
+ * `#!/usr/bin/env -S python3 -I`, and this law verifies that claim BY
+ * EXECUTION. `shebangIsolation` copies the tool's own shebang line verbatim to
+ * the top of a scratch script that prints `sys.flags.isolated`, marks it
+ * executable and RUNS it by path. There is no model here of how `env` splits
+ * an `-S` line -- which is the same ruling that settled F-67 (`-X` names) and
+ * F-69 (fences): derive from execution, never from a pattern that stands in
+ * for another program.
+ *
+ * The subject set is DERIVED, per B-11: every file under `tools/` that a
+ * reader can run -- an executable bit, or a shebang, since the other four were
+ * one `chmod` from `manifest-digests.py`'s shape. Not a list of names.
+ */
+const REFUSED_LINES_NOT_ALL_TESTED = 'REFUSED-LINES-NOT-ALL-TESTED';
+const REFUSED_SHEBANG_NOT_ISOLATED = 'REFUSED-SHEBANG-NOT-ISOLATED';
+const REFUSED_SHEBANG_WOULD_NOT_RUN = 'REFUSED-SHEBANG-WOULD-NOT-RUN';
+const REFUSED_RUNNABLE_WITHOUT_SHEBANG = 'REFUSED-RUNNABLE-WITHOUT-SHEBANG';
+
+/**
+ * Every file under `dir` that a reader can RUN, as a path relative to `dir`:
+ * one with an executable bit, or one carrying a shebang (which is one `chmod`
+ * away from the same thing, and a `chmod` is not a diff this law would see).
+ */
+const runnableFiles = (dir: string, prefix = ''): string[] => {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    if (entry === '__pycache__') continue;
+    const p = join(dir, entry);
+    const rel = prefix === '' ? entry : `${prefix}/${entry}`;
+    const st = statSync(p);
+    if (st.isDirectory()) {
+      out.push(...runnableFiles(p, rel));
+      continue;
+    }
+    const executable = (st.mode & 0o111) !== 0;
+    if (executable || readFileSync(p, 'latin1').startsWith('#!')) out.push(rel);
+  }
+  return out;
+};
+
+/** A file's shebang line, CR stripped, or '' when it has none. */
+const shebangOf = (p: string): string => {
+  const first = (readFileSync(p, 'utf8').split('\n')[0] ?? '').replace(/\r$/, '');
+  return first.startsWith('#!') ? first : '';
+};
+
+const shebangVerdicts = new Map<string, { isolated: boolean; refusal?: string }>();
+
+/**
+ * Does this shebang line start an ISOLATED interpreter? MEASURED, never
+ * modelled: the line is written verbatim above `print(sys.flags.isolated)`,
+ * the script is marked executable, and the script is RUN by its own path in a
+ * directory this law owns.
+ *
+ * F-61 holds: nothing a DOCUMENT supplies reaches `spawnSync`. The only input
+ * is a shebang line read from a file in this repository -- the very claim
+ * under test -- and the single program argument is the scratch path this law
+ * has just written.
+ */
+const shebangIsolation = (shebang: string): { isolated: boolean; refusal?: string } => {
+  const cached = shebangVerdicts.get(shebang);
+  if (cached !== undefined) return cached;
+  let out: { isolated: boolean; refusal?: string };
+  if (shebang === '') {
+    out = { isolated: false, refusal: REFUSED_RUNNABLE_WITHOUT_SHEBANG };
+  } else {
+    const dir = mkdtempSync(join(tmpdir(), 'p5shebang-'));
+    try {
+      const script = join(dir, 'shebang-probe.py');
+      writeFileSync(script, `${shebang}\nimport sys\nprint(sys.flags.isolated)\n`, 'utf8');
+      chmodSync(script, 0o755);
+      const r = spawnSync(script, [], { encoding: 'utf8', timeout: 10_000, cwd: dir, env: { PATH: '/usr/bin:/bin', TMPDIR: dir } });
+      const stdout = (r.stdout ?? '').trim();
+      if (r.status !== 0 || (stdout !== '0' && stdout !== '1')) {
+        // Refused, not skipped: a shebang this law cannot RUN is a shebang it
+        // cannot clear, and an unreadable answer is not a green one.
+        out = { isolated: false, refusal: `${REFUSED_SHEBANG_WOULD_NOT_RUN} ${shebang}` };
+      } else {
+        out = stdout === '1' ? { isolated: true } : { isolated: false, refusal: `${REFUSED_SHEBANG_NOT_ISOLATED} ${shebang}` };
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  shebangVerdicts.set(shebang, out);
+  return out;
+};
+
+/**
+ * Runnable files under `dir` whose shebang does not start an isolated
+ * interpreter, each named with the refusal that says why.
+ *
+ * A FUNCTION of the directory, so the arms can run the law itself over a
+ * scratch tree -- a tool mode 755 with a shebang carrying no `-I`, a runnable
+ * file with no shebang at all -- without touching the tools this pack ships.
+ */
+const shebangOffences = (dir: string): string[] => {
+  const found: string[] = [];
+  for (const rel of runnableFiles(dir)) {
+    const v = shebangIsolation(shebangOf(join(dir, rel)));
+    if (!v.isolated) found.push(`${rel}: ${v.refusal ?? REFUSED_SHEBANG_NOT_ISOLATED}`);
+  }
+  return found;
+};
+
+/**
+ * One of the tools invoked DIRECTLY by path, with no interpreter token on the
+ * line: `./tools/x.py`, `tools/x.py`, an absolute path.
+ *
+ * COMMAND POSITION only: the start of the logical line (after any
+ * indentation, and after a `$`, `>` or `#` prompt), or after a `&&`, a `;` or
+ * a pipe. A path written as an INTERPRETER'S ARGUMENT is therefore not matched
+ * here -- `python3 -I tools/x.py` is `INVOCATION`'s business -- so the two
+ * patterns do not count the same command twice. Armed both ways below.
+ *
+ * DECLARED SIMPLIFICATIONS, both in the false-RED direction or inert:
+ *   - at least one `/` is required, so a bare `manifest-digests.py --check`
+ *     is not matched. On a POSIX shell that spelling does not run the tool in
+ *     the current directory at all; the day a document writes it, this comment
+ *     is what has to change.
+ *   - the tool is recognised by BASENAME, so a path into some other tree is
+ *     judged by the shebang of the copy that ships here.
+ */
+const BARE_PATH = new RegExp(String.raw`(?:^|&&|\||;)\s*(?:[$>#]\s+)?((?:[A-Za-z0-9_.\-]*/)+(${TOOLS.join('|').replace(/\./g, '\\.')}))`, 'g');
+
+/**
+ * The conservation refusal, as a FUNCTION of the two counts, so an arm can run
+ * it over its whole domain instead of trusting the one call site: equal is the
+ * only clean answer, and short refuses by name. A count stated as a law is
+ * tested as a function -- [[daftar-a-count-stated-as-a-law-is-tested-as-a-function]].
+ */
+const conservationRefusal = (label: string, tested: number, total: number): string | undefined =>
+  tested === total ? undefined : `${label}: ${REFUSED_LINES_NOT_ALL_TESTED} ${tested}/${total}`;
+
+const scriptIndexes = new Map<string, ReadonlyMap<string, string>>();
+
+/** Basename -> path relative to `dir`, for every `*.py` under `dir`. */
+const scriptsByName = (dir: string): ReadonlyMap<string, string> => {
+  const cached = scriptIndexes.get(dir);
+  if (cached !== undefined) return cached;
+  const index = new Map<string, string>(pythonScripts(dir).map((s) => [s.split('/').pop() ?? s, s]));
+  scriptIndexes.set(dir, index);
+  return index;
+};
+
+/**
+ * The verdict on a bare-path invocation of the tool named `name`: the shebang
+ * of that tool, measured.
+ *
+ * The tool is resolved by BASENAME inside the tools directory this scan is
+ * given. A document that writes a path into some other copy of the pack is
+ * judged by the shebang of the copy that ships here, which is the one a
+ * reviewer can read -- declared, because it is an assumption and not a
+ * measurement.
+ */
+const bareVerdict = (name: string, toolsDir: string): { isolated: boolean; refusal?: string } => {
+  const rel = scriptsByName(toolsDir).get(name);
+  if (rel === undefined) return { isolated: false, refusal: `${REFUSED_RUNNABLE_WITHOUT_SHEBANG} ${name}` };
+  return shebangIsolation(shebangOf(join(toolsDir, rel)));
+};
+
 /** Every file of the repository, excluding what is not ours to read. */
 const walk = (dir: string, out: string[] = []): string[] => {
   for (const entry of readdirSync(dir)) {
@@ -753,16 +932,7 @@ const logicalLines = (text: string): { n: number; line: string }[] => {
 };
 
 /** Offending lines in one text, as `path:line: text`. */
-const offencesIn = (label: string, text: string): string[] => {
-  const found: string[] = [];
-  for (const { n, line } of logicalLines(text)) {
-    for (const m of line.matchAll(INVOCATION)) {
-      const v = verdictFor(m[1] ?? 'python3', m[2] ?? '');
-      if (!v.isolated) found.push(`${label}:${n}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
-    }
-  }
-  return found;
-};
+const offencesIn = (label: string, text: string, toolsDir: string = TOOLS_DIR): string[] => scanLines(label, text, false, toolsDir).found;
 
 /**
  * How many invocations the scan SEES in one text, isolated or not.
@@ -807,7 +977,7 @@ const matchCount = (text: string, re: RegExp = INVOCATION): number => {
  * differential are no longer enforcement, so they are deleted rather than left
  * standing as something a reader might mistake for a guard. The only fence
  * code left is the HISTORICAL reader below, `/^\s*```/` with joining before
- * recognition, reachable ONLY from `scanDocument`'s `honourExemption` arm —
+ * recognition, reachable ONLY from `scanLines`'s `honourExemption` arm —
  * it exists so the deletion control can put the exemption back and show every
  * historical fixture going green-wrong. With no exemption in the live scan,
  * C-01, F-66, F-69 and F-70 are unconstructible.
@@ -823,10 +993,36 @@ const FENCE = /^\s*```/;
  * so an arm can show that the exemption, not the scan, is what hid each
  * historical fixture. The live scan passes false and exempts nothing.
  */
-const scanDocument = (label: string, text: string, honourExemption: boolean): string[] => {
+/**
+ * ROUND 43, R41-02 (P3), THE CHALLENGER'S: this is now the ONLY loop over
+ * `matchAll`. There used to be three -- `offencesIn`, `scanDocument` and the
+ * repository walk's own inline copy -- and with the exemption gone the first
+ * two were the same function written twice. The third destructured `{ line }`
+ * alone and reported `label:` with NO LINE NUMBER, which is the half that runs
+ * in CI. Three bodies is three chances for a fix to land in two of them, which
+ * is exactly how F-52 survived its round.
+ *
+ * ROUND 43, R41-01 (P2), THE CHALLENGER'S: `tested` is the CONSERVATION
+ * COUNTER. The regression guard used to be a list of seven identifiers that
+ * must not appear, and the challenger defeated it twice over -- a second
+ * reader keyed on `f-51-quote` rather than `f-50-quote`, and the same
+ * identifier declared as a function rather than as a `const` binding -- the
+ * needle this arm looks for is the `const` form, so the other spelling of the
+ * same name walked past it.
+ * A name list cannot name what has not been written yet, which is
+ * [[daftar-an-enumerated-exemption-moves-the-hole-from-shape-to-time]] again.
+ * So the law is now a conservation law instead: the live scan must TEST every
+ * logical line of the document, counted here, and its arm requires
+ * `tested === logicalLines(text).length` over a fixture built to carry every
+ * structural shape. Any skip added to the live path reds it, whatever it is
+ * called and however it is spelled.
+ */
+const scanLines = (label: string, text: string, honourExemption: boolean, toolsDir: string = TOOLS_DIR): { found: string[]; tested: number; seen: number } => {
   const found: string[] = [];
   let inFence = false;
   let exempt = false;
+  let tested = 0;
+  let seen = 0;
   for (const { n, line } of logicalLines(text)) {
     if (honourExemption) {
       if (FENCE.test(line)) {
@@ -842,15 +1038,42 @@ const scanDocument = (label: string, text: string, honourExemption: boolean): st
       if (inFence && exempt) continue;
     }
     for (const m of line.matchAll(INVOCATION)) {
+      seen += 1;
       const v = verdictFor(m[1] ?? 'python3', m[2] ?? '');
       if (!v.isolated) found.push(`${label}:${n}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
     }
+    // F-72: the same line, read for a tool invoked by its own path with no
+    // interpreter token on it. The verdict is the tool's shebang, measured.
+    for (const m of line.matchAll(BARE_PATH)) {
+      seen += 1;
+      const v = bareVerdict(m[2] ?? '', toolsDir);
+      if (!v.isolated) found.push(`${label}:${n}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
+    }
+    // The conservation counter increments LAST, after both matchers have read
+    // the line -- so a `continue` placed anywhere in this body, before the
+    // matchers or between them, takes the count below the total. Counting on
+    // entry would have left a one-line gap: a skip written after the
+    // increment would hide the line and keep the count whole.
+    tested += 1;
   }
-  return found;
+  // THE CONSERVATION LAW IS PART OF THE SCAN, not only of an arm. Every live
+  // scan in this file -- the pack documents, the repository walk, every
+  // fixture -- refuses by name if the loop above did not reach the matchers
+  // with every logical line of the text it was given. A skip added to the live
+  // path is therefore measured on the real documents, whatever it is called
+  // and wherever in the body it sits, and not only on the shape fixture.
+  //
+  // DECLARED LIMIT, and it is the honest one: a skip whose predicate NO
+  // scanned line satisfies hides nothing today, so nothing can red on it. It
+  // is UNMEASURED at runtime rather than a live hole, and the day a document
+  // carries a line the skip matches, this refusal fires on that document. The
+  // arm below measures exactly that pair.
+  if (!honourExemption) {
+    const short = conservationRefusal(label, tested, logicalLines(text).length);
+    if (short !== undefined) found.push(short);
+  }
+  return { found, tested, seen };
 };
-
-/** The live scan: no exemption, every line of the document. */
-const offencesOutsideQuotedBlocks = (label: string, text: string): string[] => scanDocument(label, text, false);
 
 /**
  * Files that may contain a NUL byte and still not be read by this law, by
@@ -912,18 +1135,17 @@ describe('every written invocation of the pack tools is isolated', () => {
       if (label === SELF) {
         continue;
       }
-      // Through `logicalLines`, like the other two scans. ROUND 30: F-52's
-      // continuation fix went into the pack scans and NOT into this one, which
-      // reads the repository -- the half of the law that runs in CI. The
-      // challenger measured F-52 on pack documents, so the gap survived its
-      // round; a fix applied to two of three call sites is not applied.
-      for (const { line } of logicalLines(text)) {
-        for (const m of line.matchAll(INVOCATION)) {
-          seen += 1;
-          const v = verdictFor(m[1] ?? 'python3', m[2] ?? '');
-          if (!v.isolated) offences.push(`${label}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
-        }
-      }
+      // ROUND 43, R41-02 (P3), THE CHALLENGER'S: this walk used to carry its
+      // own copy of the loop, destructuring `{ line }` alone and reporting
+      // `label:` with NO LINE NUMBER -- and this is the half of the law that
+      // runs in CI. ROUND 30's F-52 is the same shape: the continuation fix
+      // went into the pack scans and not into this one, so a fix applied to
+      // two of three call sites was not applied. One loop now, so the
+      // repository half cannot drift from the pack half again, and an offence
+      // here names `label:n:` like every other.
+      const scan = scanLines(label, text, false, TOOLS_DIR);
+      seen += scan.seen;
+      offences.push(...scan.found);
     }
     expect(
       binaries,
@@ -1052,7 +1274,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       ['inside-a-declared-block', ['```text f-50-quote', offence, '```'].join('\n')],
     ];
     for (const [label, text] of fixtures) {
-      const found = offencesOutsideQuotedBlocks(label, text);
+      const found = offencesIn(label, text);
       expect(found, `${label}: the offence is not reported, so something still exempts it`).toHaveLength(1);
       expect(found[0], `${label}: the offence is reported without naming the refusal`).toContain(REFUSED_INTERPRETER);
     }
@@ -1077,7 +1299,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     ]) {
       const text = fixtures.find(([l]) => l === label)?.[1] ?? '';
       expect(
-        scanDocument(label, text, true),
+        scanLines(label, text, true).found,
         `${label}: restoring the exemption no longer hides the offence, so the exemption is not what hid it`,
       ).toStrictEqual([]);
     }
@@ -1088,19 +1310,12 @@ describe('every written invocation of the pack tools is isolated', () => {
     // spelling in the SAME position reds. So an author can still show the
     // attack without routing a reader to a runnable command.
     const neutralised = '<shimdir/python3> tools/manifest-digests.py --check';
-    expect(
-      offencesOutsideQuotedBlocks('neutral', neutralised),
-      'the neutralised spelling is read as an invocation, so there is no way to quote an attack line',
-    ).toStrictEqual([]);
-    expect(
-      offencesOutsideQuotedBlocks('raw', offence),
-      'the raw spelling in the same position does not red, so the neutralisation arm proves nothing',
-    ).toHaveLength(1);
-    expect(
-      offencesOutsideQuotedBlocks('neutral-plain', '<python3> tools/status-block.py --dir d'),
-      'the plain neutralised spelling is read as an invocation',
-    ).toStrictEqual([]);
-    expect(offencesOutsideQuotedBlocks('raw-plain', 'python3 tools/status-block.py --dir d'), 'the plain raw spelling does not red').toHaveLength(1);
+    expect(offencesIn('neutral', neutralised), 'the neutralised spelling is read as an invocation, so there is no way to quote an attack line').toStrictEqual(
+      [],
+    );
+    expect(offencesIn('raw', offence), 'the raw spelling in the same position does not red, so the neutralisation arm proves nothing').toHaveLength(1);
+    expect(offencesIn('neutral-plain', '<python3> tools/status-block.py --dir d'), 'the plain neutralised spelling is read as an invocation').toStrictEqual([]);
+    expect(offencesIn('raw-plain', 'python3 tools/status-block.py --dir d'), 'the plain raw spelling does not red').toHaveLength(1);
 
     // R40-01 (P3), the challenger's: a CRLF document used to red for a cause
     // that was not true -- the closer test required `[ \t]*$`, which `\r`
@@ -1108,24 +1323,47 @@ describe('every written invocation of the pack tools is isolated', () => {
     // would add a closing fence that was already there. With the fence machine
     // gone the structural read is only the continuation joiner, and `\r` is
     // stripped before any line test. Armed both ways.
-    expect(offencesOutsideQuotedBlocks('crlf', `Intro.\r\n\r\n${offence}\r\n`), 'a CRLF document hides the offence').toHaveLength(1);
+    expect(offencesIn('crlf', `Intro.\r\n\r\n${offence}\r\n`), 'a CRLF document hides the offence').toHaveLength(1);
     expect(
-      offencesOutsideQuotedBlocks('crlf-continuation', 'python3 \\\r\n    tools/manifest-digests.py --check'),
+      offencesIn('crlf-continuation', 'python3 \\\r\n    tools/manifest-digests.py --check'),
       'a CRLF continuation is no longer joined, so the offence split across two lines is invisible',
     ).toHaveLength(1);
     expect(
-      offencesOutsideQuotedBlocks('crlf-isolated', 'python3 -I \\\r\n    tools/manifest-digests.py --check'),
+      offencesIn('crlf-isolated', 'python3 -I \\\r\n    tools/manifest-digests.py --check'),
       'a CRLF continuation of an ISOLATED command reds, so the join is not reading the halves separately',
     ).toStrictEqual([]);
 
-    // And the in-file counts: the exemption is reachable from ARMS ONLY. One
-    // live wrapper passing false, and the arms that pass true. Needles
-    // assembled, or each counts its own literal.
+    // And the in-file counts: the exemption is reachable from ARMS ONLY. Two
+    // live callers pass false -- the wrapper every pack scan goes through, and
+    // the repository walk, which needs the match count as well as the
+    // offences -- and one arm passes true.
+    //
+    // ROUND 43, R41-01, THE CHALLENGER'S CORRECTION OF MY OWN SENTENCE. This
+    // comment used to say "needles assembled, or each counts its own literal".
+    // That was FALSE of the seven-name list below: `liveNeedle` and
+    // `fenceTests` are assembled, the seven names are plain literals in an
+    // array, and the reason the arm does not self-count is that the needle
+    // carries a `const ` prefix which the literals do not. Outcome right,
+    // mechanism wrongly stated, which is the kind of sentence that costs a
+    // reader their round when they audit B-10 compliance against it.
+    //
+    // These counts are KEPT, but they are no longer the regression guard: a
+    // list of names cannot name a reader that has not been written, and the
+    // challenger walked straight past this one twice (a second exemption keyed
+    // on `f-51-quote`, and a deleted name re-declared as a function rather
+    // than as a `const` binding, which is the only form these needles read).
+    // The guard is the CONSERVATION LAW in the test below, which is derived
+    // from execution and reds on any skip under any name.
     const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
-    const liveNeedle = ['scanDocument(label,', 'text,', 'false)'].join(' ');
-    expect(here.split(liveNeedle).length - 1, 'the live scan no longer passes false, so it may be honouring an exemption again').toBe(1);
-    const exempting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*,\s*true\)/g) ?? []).length;
-    expect(exempting, 'a second caller honours the exemption: it must be an arm, counted here').toBe(1);
+    const liveNeedle = ['scanLines(label,', 'text,', 'false,'].join(' ');
+    expect(here.split(liveNeedle).length - 1, 'the live callers passing false are not the two counted here: a third scan has appeared').toBe(2);
+    const exempting = (here.match(/scanLines\((?:[^()]|\([^()]*\))*,\s*true\)/g) ?? []).length;
+    // Three arms pass true, all in this file and all named: this test's
+    // deletion control, the conservation law's control -- which needs the one
+    // path that skips lines, in order to show its counter can fall -- and the
+    // arm showing that same control is not itself refused for testing fewer
+    // lines, which would make it useless as a control.
+    expect(exempting, 'a further caller honours the exemption: it must be an arm, counted here').toBe(3);
     const fenceTests = ['FENCE', '.test('].join('');
     expect(
       here.split(fenceTests).length - 1,
@@ -1133,10 +1371,206 @@ describe('every written invocation of the pack tools is isolated', () => {
     ).toBe(1);
     // The fence census, the CommonMark fence rules and the renderer
     // differential are DELETED, not demoted: nothing here may look like a
-    // guard when the exemption it guarded is gone.
+    // guard when the exemption it guarded is gone. Form-keyed, as the
+    // challenger showed -- it is the conservation law that closes the class.
     for (const gone of ['fenceDelimiterLines', 'fencedBodyLines', 'rendererFencedBodyLines', 'rendererLexer', 'fenceOpener', 'fenceCloser', 'indentColumns']) {
       expect(here.includes(`const ${gone} =`), `${gone} is back: the fence model was deleted with the exemption it served`).toBe(false);
     }
+  });
+
+  it('F-72: a tool run by its own path runs ISOLATED, and the bare form is visible to this law', () => {
+    // ROUND 43, THE CHALLENGER'S F-72 (P1, a fail-open), under the
+    // coordinator's ruling, option (a): make the bare form isolated rather
+    // than forbidden, and verify the shebang BY EXECUTION.
+    //
+    // THE LIVE LAW. Every runnable file under `tools/` -- derived from the
+    // tree, not listed -- starts an isolated interpreter.
+    expect(
+      shebangOffences(TOOLS_DIR),
+      'a tool a reader can run does not start an isolated interpreter: a copied `./tools/x.py` would run with PYTHONPATH and the user site directory on sys.path, which is F-50',
+    ).toStrictEqual([]);
+    // Non-vacuity, twice: the derivation finds files at all, and it finds
+    // every `*.py` this pack ships -- so the law cannot pass by looking at an
+    // empty set, and `runnableFiles` cannot narrow to the one tool that
+    // happens to carry an executable bit.
+    expect(runnableFiles(TOOLS_DIR).length, 'the derivation found no runnable file, so this law measured nothing').toBe(SCRIPTS.length);
+    expect(SCRIPTS.length, 'there are no tools to measure').toBeGreaterThan(3);
+
+    // THE INSTRUMENT, armed both ways on the two shebangs that matter. This is
+    // execution, not a reading of how `env -S` splits a line.
+    expect(shebangIsolation('#!/usr/bin/env -S python3 -I').isolated, 'the shebang this round installs does NOT isolate, measured').toBe(true);
+    const old = shebangIsolation('#!/usr/bin/env python3');
+    expect(old.isolated, 'the shebang every tool carried before this round is cleared as isolated').toBe(false);
+    expect(old.refusal, 'the old shebang is refused without naming why').toContain(REFUSED_SHEBANG_NOT_ISOLATED);
+    // A shebang that cannot run is REFUSED by its own name, never skipped.
+    const broken = shebangIsolation('#!/nonexistent/interpreter');
+    expect(broken.isolated, 'a shebang that cannot run was cleared').toBe(false);
+    expect(broken.refusal, 'an unrunnable shebang is not refused by name').toContain(REFUSED_SHEBANG_WOULD_NOT_RUN);
+
+    // THE BARE FORM IS SEEN, in the three spellings the challenger measured as
+    // invisible -- and each is GREEN now only because the shebang isolates.
+    for (const form of [
+      './tools/manifest-digests.py --dir . --check',
+      'tools/manifest-digests.py --check',
+      `${join(TOOLS_DIR, 'manifest-digests.py')} --check`,
+      '    ./tools/status-block.py --dir d',
+      '$ ./tools/seal-check-run.py --dir p --tests t',
+      'cd somewhere && ./tools/context-sites.py --dir d --tests t',
+    ]) {
+      expect(scanLines('fixture', form, false).seen, `the bare-path form is still invisible: ${form}`).toBe(1);
+      expect(offencesIn('fixture', form), `a bare-path invocation of an isolating tool is reported: ${form}`).toStrictEqual([]);
+      // THE DELETION CONTROL ON THE MATCHER: F-72 itself. The interpreter
+      // pattern alone -- the whole of this law's reach before this round --
+      // MISSES every one of these forms.
+      expect(matchCount(form, INVOCATION), `the interpreter pattern already matched this form, so this arm proves nothing: ${form}`).toBe(0);
+    }
+    // And the two patterns do not count one command twice: a path written as
+    // an interpreter's argument belongs to `INVOCATION` alone.
+    expect(scanLines('fixture', 'python3 -I tools/manifest-digests.py --check', false).seen, 'an interpreter invocation is counted twice').toBe(1);
+    expect(scanLines('fixture', '$ python3 tools/manifest-digests.py --check', false).seen, 'a prompted interpreter invocation is counted twice').toBe(1);
+    expect(offencesIn('fixture', 'see tools/manifest-digests.py for the digest table'), 'a tool named in prose, not in command position, reds').toStrictEqual(
+      [],
+    );
+
+    // THE OFFENCE DIRECTION, on a scratch tools tree this law owns: the tools
+    // as they stood before this round -- the old shebang, and mode 755 on the
+    // one the challenger measured. `shebangOffences` names each, and a
+    // document line invoking one by bare path REDS.
+    const scratch = mkdtempSync(join(tmpdir(), 'f72-'));
+    try {
+      for (const rel of SCRIPTS) {
+        const dest = join(scratch, rel);
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(dest, `#!/usr/bin/env python3\nimport sys\nprint(sys.flags.isolated)\n`, 'utf8');
+      }
+      chmodSync(join(scratch, 'manifest-digests.py'), 0o755);
+      const offences = shebangOffences(scratch);
+      expect(offences.length, 'the pre-round tools pass the shebang law, so it is not measuring the shebang').toBe(SCRIPTS.length);
+      for (const o of offences) expect(o, 'an offending tool is reported without the refusal that says why').toContain(REFUSED_SHEBANG_NOT_ISOLATED);
+      expect(
+        offences.some((o) => o.startsWith('manifest-digests.py:')),
+        'the mode-755 tool the challenger measured is not among the offences',
+      ).toBe(true);
+      // The document line, scanned against that tree: the bare path reds, by
+      // name, and says which line.
+      const found = scanLines('P5-NOTE-X.md', ['Intro.', '', './tools/manifest-digests.py --dir . --check'].join('\n'), false, scratch).found;
+      expect(found, 'a bare-path invocation of a tool whose shebang does not isolate is not reported').toHaveLength(1);
+      expect(found[0], 'the offence does not name the refusal').toContain(REFUSED_SHEBANG_NOT_ISOLATED);
+      expect(found[0], 'the offence does not say which line').toContain('P5-NOTE-X.md:3:');
+
+      // A runnable file with NO shebang is refused by its own name, not
+      // skipped: an executable bit with nothing to interpret it is still
+      // something a reader can try to run.
+      const bare = join(scratch, 'no-shebang');
+      writeFileSync(bare, 'echo nothing\n', 'utf8');
+      chmodSync(bare, 0o755);
+      expect(runnableFiles(scratch), 'a file with an executable bit and no shebang is not in the derived set').toContain('no-shebang');
+      expect(
+        shebangOffences(scratch).some((o) => o.startsWith('no-shebang:') && o.includes(REFUSED_RUNNABLE_WITHOUT_SHEBANG)),
+        'a runnable file with no shebang is skipped instead of refused by name',
+      ).toBe(true);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('R41-01: the live scan TESTS every logical line, whatever a skip would be called', () => {
+    // ROUND 43, R41-01 (P2), THE CHALLENGER'S. The regression guard was a
+    // list of seven identifiers, and it was keyed to one INSTANCE and one
+    // SPELLING: the challenger added a second declared-quotation reader to the
+    // live branch keyed on `f-51-quote`, left the control path untouched, and
+    // got 298 passed with eslint rc 0 -- while `f-51-quote` hid an offence
+    // that `f-50-quote` in the same document reported. The absence arm was
+    // form-keyed too: the `const` form of a deleted name reds and the
+    // `function` form of the very same name
+    // passes.
+    //
+    // A conservation law does not care what the skip is called. The live scan
+    // must TEST every logical line of the document; `tested` counts the lines
+    // it reaches the matchers with, and any `continue`, filter, exemption or
+    // early return on the live path takes that count below the total.
+    //
+    // The fixture carries every structural shape I can name that has ever been
+    // used to hide a line from this law, so the law is measured where the
+    // holes were: fences open and closed, a declared quotation block, the four
+    // F-70 HTML blocks, four-column and tab indentation, a continuation, a
+    // table, a list, a block quote, a heading and a bare URL.
+    const shapes = [
+      '# Heading',
+      '',
+      '```text f-50-quote',
+      'quoted body',
+      '```',
+      '',
+      '    four columns of indentation',
+      '\ta tab',
+      '',
+      '<div>',
+      'raw html body',
+      '</div>',
+      '<pre>',
+      'pre body',
+      '</pre>',
+      '<textarea>',
+      'textarea body',
+      '</textarea>',
+      '<table>',
+      '<tr><td>cell</td></tr>',
+      '</table>',
+      '',
+      '| a | b |',
+      '| - | - |',
+      '| 1 | 2 |',
+      '',
+      '- a list item',
+      '  - nested',
+      '',
+      '> a block quote',
+      '',
+      'a continuation \\',
+      '    of one logical line',
+      '',
+      'https://example.invalid/not-a-command',
+      '',
+    ].join('\n');
+    const total = logicalLines(shapes).length;
+    expect(total, 'the fixture collapsed to nothing, so this arm would pass over an empty document').toBeGreaterThan(30);
+    expect(
+      scanLines('conservation', shapes, false).tested,
+      'the live scan did not test every logical line: something on the live path is skipping lines, and this arm does not care what it is called',
+    ).toBe(total);
+
+    // THE DELETION CONTROL for the counter itself: the one path that DOES skip
+    // lines -- the historical exemption, behind its arm flag -- must take the
+    // count below the total. A counter that cannot fall is not a measurement.
+    expect(
+      scanLines('conservation', shapes, true).tested,
+      'restoring the exemption does not reduce the tested count, so `tested` is not measuring what the live path reaches',
+    ).toBeLessThan(total);
+
+    // And the same fixture through the live scan reports nothing, so the
+    // conservation count above is not being bought with a false RED.
+    expect(offencesIn('conservation', shapes), 'the shape fixture itself reports an offence').toStrictEqual([]);
+
+    // THE REFUSAL ITSELF, as a function over its whole domain rather than at
+    // one call site: equal is the only clean answer, short refuses by name,
+    // and the refusal carries both counts so a reader knows how many lines
+    // went missing. N and N-1 for several N, and the degenerate N = 0.
+    for (const n of [0, 1, 2, 17]) {
+      expect(conservationRefusal('doc', n, n), `${n} of ${n} lines tested is refused`).toBeUndefined();
+      const short = conservationRefusal('doc', n, n + 1);
+      expect(short, `${n} of ${n + 1} lines tested is cleared`).toBeDefined();
+      expect(short, 'the refusal does not name itself').toContain(REFUSED_LINES_NOT_ALL_TESTED);
+      expect(short, 'the refusal does not say how many lines were tested').toContain(`${n}/${n + 1}`);
+    }
+    // It is the LIVE scan that consults it: the refusal reaches the offence
+    // list of a document, which is what the pack scan and the repository walk
+    // read. Measured by the deletion control above, where the exemption path
+    // tests fewer lines than the document has.
+    expect(
+      scanLines('control', shapes, true).found.some((o) => o.includes(REFUSED_LINES_NOT_ALL_TESTED)),
+      'the exemption arm is itself refused for testing fewer lines, so the control cannot show what the exemption hid',
+    ).toBe(false);
   });
 
   it('F-62/F-64: a value may not choose a program, a directory, or a module', () => {
@@ -1433,7 +1867,7 @@ describe('every written invocation of the pack tools is isolated', () => {
         continue;
       }
       mine += 1;
-      offences.push(...offencesOutsideQuotedBlocks(name, text));
+      offences.push(...offencesIn(name, text));
     }
     // The obligation MOVES, it does not disappear: for every document this law
     // declines to read, the author's own seal must refuse it by exact name.

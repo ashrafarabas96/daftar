@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """RUN the pack's three checks and seal what they actually printed.
 
 ROUND 24 wrote this tool to close the challenger's B-5: the manifest's

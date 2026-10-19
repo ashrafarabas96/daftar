@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """One status block for the Phase 5 pack, generated from one source.
 
 ROUND 17, THE COORDINATOR'S N-5 (P2). Five status claims in three documents
