@@ -62,6 +62,8 @@ interface Plant {
   readonly expect: (d: ReturnType<typeof direction4>) => string | null;
   /** Set for a §3 plant: this case is measured on DIRECTION 5 instead. */
   readonly viaDirection5?: (d: ReturnType<typeof direction5>) => string | null;
+  /** Set for a HEADER plant: measured on the currency check (round 18, F-R18-15). */
+  readonly viaHeader?: (d: ReturnType<typeof headerCurrency>) => string | null;
 }
 
 const reports = (dir: string): string[] =>
@@ -122,7 +124,64 @@ function count(dir: string): number | null {
   return Number(m[1]) === Number(named[1]) ? Number(m[1]) : null;
 }
 
+/** Does the gate name the DECLARED prep SHA as stale against HEAD? */
+function headerCurrency(dir: string): { readonly text: string; readonly named: boolean; readonly ran: boolean } {
+  const r = spawnSync('npx', ['tsx', join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts'), `--dir=${dir}`], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  if (r.error !== undefined || (r.status !== 0 && r.status !== 1))
+    return { text: `${out.slice(-500)}\n[harness] the gate did not run: exit ${String(r.status)}`, named: false, ran: false };
+  return { text: out.slice(-1200), named: /STALE the header DECLARES/.test(out), ran: true };
+}
+
 const PLANTS: readonly Plant[] = [
+  {
+    id: 'M14',
+    what: "round 18's F-R18-15 — the declared prep SHA names ANOTHER commit while HEAD's SHA still appears elsewhere in the file",
+    plant: (dir) => {
+      const f = join(dir, MANIFEST);
+      // The currency check read `!manifest.includes(headSha)`, and §8b pastes a
+      // run log whose header line carries the head's full SHA. So a prep-SHA
+      // row naming an older commit satisfied it, DIRECTION 5 recounted every
+      // §3 line against THAT commit, and the gate printed «header current».
+      // Measured at 0d2c0b2 against a row still reading f554c24: VERIFIED.
+      const text = readFileSync(f, 'utf8');
+      const stale = 'f554c2415c68ba15c345d628f9fe14fde1eb4294';
+      writeFileSync(
+        f,
+        text.replace(/(\*\*Exact prep SHA\*\* \| \*\*`)[0-9a-f]{7,40}(`\*\*)/, `$1${stale}$2`) +
+          `\n\nPlanted, inside a throwaway copy only: this line carries the real head so that a check\nasking whether the SHA appears ANYWHERE is satisfied by it.\n`,
+      );
+      // THE GUARD-DELETION HALF, as M10 does it: a copy of the gate with the
+      // RESOLVED comparison put back to the old `includes` test must come back
+      // clean against this same pack, or the red below is credited to the
+      // wrong rule.
+      const gate = readFileSync(join(ROOT, 'scripts/phase15/verify-handoff-manifest.ts'), 'utf8');
+      const marker = '  else if (!headSha.startsWith(stated))';
+      if (!gate.includes(marker))
+        throw new Error('M14 could not plant: the currency check no longer compares the DECLARED SHA in the shape this plant removes');
+      const stripped = join(dir, 'gate-with-the-old-includes-test.ts');
+      writeFileSync(stripped, gate.replace(marker, '  else if (!manifest.includes(headSha))'));
+      const r = spawnSync('npx', ['tsx', stripped, `--dir=${dir}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+      const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+      if (r.error !== undefined || (r.status !== 0 && r.status !== 1))
+        throw new Error(`M14 could not plant: the stripped gate did not run (exit ${String(r.status)})`);
+      if (/STALE the header DECLARES/.test(out))
+        throw new Error(
+          'M14: with the old `includes` test in place the gate STILL named the stale row, so the red below is not attributable to the resolved comparison',
+        );
+    },
+    expect: () => null,
+    viaHeader: (d) =>
+      !d.ran
+        ? 'the gate did not run, and a gate that did not run is not a clean result'
+        : d.named
+          ? null
+          : 'the prep-SHA row named another commit and the gate did not say so: §3 is re-measured against the SHA that row names, so every line count in it then describes a commit the reader was never told about',
+  },
   {
     id: 'M1',
     what: 'a challenge report the manifest names is DELETED — the absence case',
@@ -534,7 +593,12 @@ function main(): number {
       cpSync(PACK, join(tmp, 'pack'), { recursive: true });
       const dir = join(tmp, 'pack');
       p.plant(dir);
-      const problem = p.viaDirection5 === undefined ? p.expect(direction4(dir)) : p.viaDirection5(direction5(dir));
+      const problem =
+        p.viaHeader !== undefined
+          ? p.viaHeader(headerCurrency(dir))
+          : p.viaDirection5 === undefined
+            ? p.expect(direction4(dir))
+            : p.viaDirection5(direction5(dir));
       // A case whose requirement is "the gate must NOT complain" is labelled as
       // such: printing it as RED would read as a planted defect that reddened,
       // which is the opposite of what it measures.
@@ -559,7 +623,11 @@ function main(): number {
     console.log('  established, so the manifest’s §8 is prose again and F-14 is not closed.');
     return 1;
   }
-  console.log(`All ${PLANTS.length} plants behaved as required: three reddened direction 4, and the quotation did not.`);
+  // The sentence used to read «three reddened direction 4», a figure that was
+  // true when it was written and quoted long after the arm set had grown
+  // (round 18, F-R18-15's own family). It is counted from this run.
+  const held = PLANTS.filter((q) => q.id === 'M4' || q.id === 'M12').length;
+  console.log(`All ${PLANTS.length} plants behaved as required: ${String(PLANTS.length - held)} went red and ${String(held)} had to be HELD GREEN.`);
   console.log('  What this does NOT show: that any round PASSED. A verdict is the challenger’s to');
   console.log('  state and this author’s to quote. The gate checks only that the rounds this file');
   console.log('  claims and the rounds on disk are the same set.');

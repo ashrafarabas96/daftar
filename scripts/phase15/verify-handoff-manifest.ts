@@ -246,12 +246,30 @@ function checkCurrency(manifest: string, root: string, dir: string, rounds: numb
 
   // The header must name THIS head. A manifest is an index of a commit; an
   // index naming another commit indexes something the reader does not have.
-  if (!manifest.includes(headSha)) {
-    const stated = /\*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\*/.exec(manifest);
+  //
+  // A SHA SOMEWHERE IN THE FILE IS NOT THE SHA THE FILE DECLARES (round 18,
+  // F-R18-15, found by the author while regenerating this document).
+  //
+  // This read `!manifest.includes(headSha)` — satisfied by the head's SHA
+  // appearing ANYWHERE, and §8b pastes a run log whose header line carries it
+  // in full. So the `Exact prep SHA` row could name an older commit, DIRECTION
+  // 5 would recount every §3 line against that older commit, and this gate
+  // printed «header current at <head>» over a §3 table measured at another
+  // head. Measured: at `0d2c0b2` the row said `f554c24`, the rewrite announced
+  // «§3 recounted from git at f554c24», and the verdict was VERIFIED.
+  //
+  // The declared SHA is now RESOLVED and compared, which is the same lesson
+  // this pack learned in its sweep twice: a rule that matches a spelling does
+  // not resolve a binding.
+  const stated = /\*\*Exact prep SHA\*\* \| \*\*`([0-9a-f]{7,40})`\*\*/.exec(manifest)?.[1] ?? null;
+  if (stated === null)
     problems.push(
-      `the header's exact SHA is ${stated?.[1] === undefined ? 'absent' : `\`${stated[1]}\``}, but HEAD is \`${headSha}\`. A handoff must be rewritten at the head it describes.`,
+      `the header declares no exact SHA at all, so nothing here can be measured against HEAD \`${headSha}\`. A handoff must declare the head it describes.`,
     );
-  }
+  else if (!headSha.startsWith(stated))
+    problems.push(
+      `the header DECLARES \`${stated}\` as the exact prep SHA, but HEAD is \`${headSha}\`. A handoff must be rewritten at the head it describes, and §3 is re-measured against the SHA this row names — so a stale row silently measures another commit.`,
+    );
 
   // The Arabic summary's counts, read with Arabic-Indic digits normalised.
   const summary = arabicToWestern(manifest);
