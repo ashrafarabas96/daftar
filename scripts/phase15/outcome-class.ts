@@ -123,7 +123,7 @@ const SPEAKER = String.raw`(?:PHASE\s+15|P15)[^:\n]*`;
  * the machine record stood in for them and the classifier quoted a JSON blob
  * as «its own verdict line».
  */
-const VERDICTS = 'PASS|FAIL|VERIFIED|UNMEASURED|NOT MEASURED|REJECT|INVALID MEASUREMENT';
+const VERDICTS = 'PASS|FAIL|VERIFIED|UNMEASURED|NOT MEASURED|NO VERDICT|REJECT|INVALID MEASUREMENT';
 const OPENERS = `(?:EXIT\\s+\\d+\\s*[—:-]\\s*|(?:${SPEAKER}|VERDICT):\\s*)`;
 
 export const VERDICT_HEADLINE = new RegExp(`^(?:EXIT\\s+\\d+\\s*[—:-]|(?:${SPEAKER}|VERDICT):\\s*(?:${VERDICTS}))`, 'm');
@@ -159,12 +159,20 @@ export const CONTENTION_VERDICT = new RegExp(`^${OPENERS}?INVALID MEASUREMENT\\b
  * head — filed, until now, as «MEASURED, THEN EXITED NON-ZERO … so the code is
  * its verdict». Same defect as F-R15-01, a third instrument.
  *
+ * `NO VERDICT` is the fourth spelling, and round 16 named it in its own remedy
+ * and then shipped three (round 17, F-R17-04). `load-harness.ts` prints
+ * «P15 LOAD: NO VERDICT — a refusal is not a FAIL and is never a PASS.» on
+ * every refusal path, and the classifier filed a real one as «no verdict line
+ * this runner recognises». That was honest — it sent the reader to the log —
+ * but the instrument had said in as many words that it did not measure, and a
+ * record that cannot hear that is reading the sentence and not the statement.
+ *
  * The opener is optional because a machine record declares a BARE verdict —
  * `pitr-proof.ts`'s own `result` can be the string `UNMEASURED` — and the `^`
  * anchor is what keeps this honest: a PASS that merely mentions unmeasured
  * subjects later in its own sentence does not start with the word.
  */
-export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED)\\b`);
+export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED|NO VERDICT)\\b`);
 
 export function reachedVerdict(r: Classifiable): string | null {
   const lines = r.output.split('\n').map((l) => l.trim());

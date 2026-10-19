@@ -408,6 +408,45 @@ const CASES: readonly Case[] = [
     why: 'three instruments in this pack punctuate that headline with a colon, and an opener list written for one of them speaks for none of the others',
   },
   {
+    id: 'O6c',
+    what: "round 17 — the pack's FOURTH spelling of «I could not measure»: `load-harness.ts`'s refusal line",
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          `console.log(${JSON.stringify('P15_LOAD_REFUSAL: PROFILE-NOT-FOUND — no profile with id "does-not-exist" in load-profiles.json')});`,
+          "console.log('P15 LOAD: NO VERDICT — a refusal is not a FAIL and is never a PASS.');",
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /DID NOT MEASURE/,
+    why: 'round 16 named four spellings in its own remedy and shipped three. A real refusal of a real instrument was filed as «no verdict line this runner recognises» — honest, but the instrument had said it did not measure, in a sentence this record could not hear',
+  },
+  {
+    id: 'O9',
+    what: 'round 17 — a run that reaches its SUMMARY LINE, prints no verdict line at all, and then throws',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          "console.log('23 rules: 23 measured, 0 unmeasured, 0 findings');",
+          '// No headline and no machine record, so `reachedVerdict` cannot stand',
+          '// in for the summary scrape: this arm rests on SUMMARY_LINE alone.',
+          "throw new TypeError('O9: a crash after the totals, with nothing but the totals to show for it');",
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /MEASURED, THEN THREW/,
+    why: 'round 17 measured `SUMMARY_LINE` replaceable by a pattern matching nothing with all twenty arms still green, while the rule decides two branches of the classifier: without it this run reads «CRASHED BEFORE MEASURING», which discards a measurement that happened',
+  },
+  {
     id: 'O4',
     what: 'CONTROL — a clean run',
     build: (dir) => {

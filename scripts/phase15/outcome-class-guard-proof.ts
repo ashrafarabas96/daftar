@@ -93,10 +93,13 @@ const DELETIONS: readonly Deletion[] = [
   },
   {
     id: 'D5',
-    guard: 'export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED)\\\\b`);',
+    guard: 'export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED|NO VERDICT)\\\\b`);',
     without: 'export const DID_NOT_MEASURE = /(?!)/;',
-    arms: ['O6', 'O3j', 'O6b', 'O3k'],
+    arms: ['O6', 'O3j', 'O6b', 'O3k', 'O6c'],
     exact: true,
+    // MEASURED at round 17: O6c dies here too, and honestly — the fourth
+    // spelling lives in this same pattern, so neutralising the pattern takes
+    // it with the other three. D11 is the deletion that isolates it.
     what: "\u00abI could not measure\u00bb in the pack's other spellings \u2014 UNMEASURED and NOT MEASURED (round 16, F-R16-04)",
   },
   {
@@ -138,6 +141,41 @@ const DELETIONS: readonly Deletion[] = [
     arms: ['O3k'],
     exact: true,
     what: 'where two record keys disagree, the one saying it did not measure wins (round 16, F-R16-08)',
+  },
+  {
+    id: 'D10',
+    guard: 'export const SUMMARY_LINE = /^(?:measured\\s+\\d+\\s+of\\s+\\d+:|\\d+\\s+probes?:|\\d+\\s+(?:case|check|rule|item)s?:)/i;',
+    without: 'export const SUMMARY_LINE = /(?!)/;',
+    arms: ['O9', 'O1'],
+    exact: true,
+    // MEASURED at round 17: O1 dies here too. Its subject is a real instrument
+    // that prints its totals and then throws, so without the scrape it reads
+    // «CRASHED BEFORE MEASURING» as well — which is the misclassification this
+    // rule prevents, in the arm that was supposed to be about the throw.
+    // Round 17's F-R17-03: this rule could be replaced by a pattern matching
+    // nothing and all twenty arms stayed green, while it decides two branches
+    // of the classifier. The same shape as F-R16-07, one rule along.
+    what: 'the SUMMARY LINE scrape, which is how a run says it reached its own totals',
+  },
+  {
+    id: 'D11',
+    guard: 'export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED|NO VERDICT)\\\\b`);',
+    without: 'export const DID_NOT_MEASURE = new RegExp(`^${OPENERS}?(?:INVALID MEASUREMENT|UNMEASURED|NOT MEASURED)\\\\b`);',
+    arms: ['O6c'],
+    exact: true,
+    what: '«NO VERDICT», the fourth spelling of «I could not measure» (round 17, F-R17-04)',
+  },
+  {
+    id: 'D12',
+    guard:
+      'export const RUNTIME_MARKERS =\n  /(?:^|\\n)\\s*(?:Uncaught )?(?:TypeError|RangeError|ReferenceError|AssertionError|Error):|\\n\\s+at [^\\n]*\\(?[^\\n]*:\\d+:\\d+\\)?|UnhandledPromiseRejection|FATAL ERROR:|Segmentation fault/;',
+    without: 'export const RUNTIME_MARKERS = /(?!)/;',
+    arms: ['O1', 'O5', 'O9'],
+    exact: true,
+    // Round 17's F-R17-06: load-bearing and absent from this table, which is
+    // the half of «a rule no arm measures» that was never checked for rules
+    // that ARE measured. O9 joins O1 and O5 because its own crash is a throw.
+    what: 'the RUNTIME markers, for a crash that prints a stack trace',
   },
   {
     id: 'D4',

@@ -113,7 +113,13 @@ function apparatusIsInert(dir: string): string | null {
     if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);
     if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);
   }
-  for (const id of derivedProducers(sf, new Set<string>())) imported.add(id);
+  // Pack resolution, not file resolution (round 17, F-R17-02): an apparatus
+  // whose producer lives in a sibling pack file kept its exemption and printed
+  // that it had been «measured inert … on every spelling of the module» — a
+  // false measured claim, on the one file the sweep deletes from its own scan.
+  const p = producersIn(sf, APPARATUS);
+  for (const id of p.ids) if (id !== TOKEN) imported.add(id);
+  for (const m of p.members) imported.add(`<object>.${m}`);
   const calls = producerCalls(sf, APPARATUS);
   if (imported.size > 0)
     return `${APPARATUS} imports spawnSync as a VALUE (as ${[...imported].sort().join(', ')}), so it can run commands and its exemption is withdrawn`;
@@ -519,8 +525,38 @@ function callsTo(sf: ts.SourceFile, a: Aliases, token: string, net: boolean): ts
  */
 const TOKEN = 'spawnSync';
 
-function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>): ReadonlySet<string> {
+/** What a file's producer resolution yields: names, member names, namespaces. */
+interface Producers {
+  /** Local identifiers that MEAN the producer. */
+  readonly ids: ReadonlySet<string>;
+  /** Property names a producer was stored under: `{ run: spawnSync }` → `run`. */
+  readonly members: ReadonlySet<string>;
+  /** A namespace import's local name → the pack file it names. */
+  readonly ns: ReadonlyMap<string, string>;
+}
+
+function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>): Producers {
   const ids = new Set<string>(seed);
+  const members = new Set<string>();
+  /** Functions declared in this file, so a producer passed INTO one can be
+   *  followed to the parameter it arrives as (round 17, F-R17-01). */
+  const fns = new Map<string, ts.FunctionLikeDeclarationBase>();
+  const collectFns = (n: ts.Node): void => {
+    if (ts.isFunctionDeclaration(n) && n.name !== undefined) fns.set(n.name.text, n);
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined) {
+      const init = unwrap(n.initializer);
+      if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) fns.set(n.name.text, init);
+    }
+    n.forEachChild(collectFns);
+  };
+  collectFns(sf);
+  /** `<anything>.spawnSync`, `<anything>['spawnSync']`, or a known name. */
+  const isProducerValue = (e: ts.Expression): boolean => {
+    const x = unwrap(e);
+    if (ts.isPropertyAccessExpression(x) && (x.name.text === TOKEN || members.has(x.name.text))) return true;
+    if (ts.isElementAccessExpression(x) && ts.isStringLiteral(x.argumentExpression) && x.argumentExpression.text === TOKEN) return true;
+    return ts.isIdentifier(x) && ids.has(x.text);
+  };
   /** `{ spawnSync: x }` / `{ spawnSync }`, as a binding pattern or a target. */
   const fromDestructure = (n: ts.Node): void => {
     if (ts.isObjectBindingPattern(n))
@@ -534,17 +570,19 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>): Readonl
         if (ts.isPropertyAssignment(pr) && ts.isIdentifier(pr.name) && pr.name.text === TOKEN && ts.isIdentifier(pr.initializer)) ids.add(pr.initializer.text);
       }
   };
-  /** `<anything>.spawnSync`, or a name already known to be the producer. */
-  const isProducerValue = (e: ts.Expression): boolean => {
-    const x = unwrap(e);
-    if (ts.isPropertyAccessExpression(x) && x.name.text === TOKEN) return true;
-    if (ts.isElementAccessExpression(x) && ts.isStringLiteral(x.argumentExpression) && x.argumentExpression.text === TOKEN) return true;
-    return ts.isIdentifier(x) && ids.has(x.text);
+  /** `const api = { run: spawnSync }` — the producer under another FIELD name,
+   *  so `api.run(…)` is a call to it (round 17, F-R17-01). */
+  const fromField = (n: ts.ObjectLiteralExpression): void => {
+    for (const pr of n.properties) {
+      if (!ts.isPropertyAssignment(pr)) continue;
+      const key = ts.isIdentifier(pr.name) || ts.isStringLiteral(pr.name) ? pr.name.text : null;
+      if (key !== null && isProducerValue(pr.initializer)) members.add(key);
+    }
   };
   // A fixpoint, because `const a = cp.spawnSync; const b = a;` is two steps and
   // the file may declare them in either order.
-  for (let before = -1; before !== ids.size; ) {
-    before = ids.size;
+  for (let before = -1; before !== ids.size + members.size; ) {
+    before = ids.size + members.size;
     const walk = (n: ts.Node): void => {
       if (ts.isVariableDeclaration(n)) {
         fromDestructure(n.name);
@@ -554,18 +592,139 @@ function derivedProducers(sf: ts.SourceFile, seed: ReadonlySet<string>): Readonl
         fromDestructure(unwrap(n.left));
         if (ts.isIdentifier(n.left) && isProducerValue(n.right)) ids.add(n.left.text);
       }
+      if (ts.isObjectLiteralExpression(n)) fromField(n);
+      // A producer handed to a local function ARRIVES as that parameter.
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) {
+        const fn = fns.get(n.expression.text);
+        if (fn !== undefined)
+          n.arguments.forEach((arg, k) => {
+            const pm = fn.parameters[k];
+            if (pm !== undefined && ts.isIdentifier(pm.name) && isProducerValue(arg)) ids.add(pm.name.text);
+          });
+      }
       n.forEachChild(walk);
     };
     walk(sf);
   }
-  return ids;
+  return { ids, members, ns: new Map<string, string>() };
+}
+
+/**
+ * A BINDING CROSSES FILES, AND THE FIXPOINT MUST CROSS WITH IT (round 17, F-R17-01).
+ *
+ * The resolution above runs over ONE file. A pack that factors its helper out —
+ * `export const sh = spawnSync` in one file, `import { sh }` in the next — put
+ * the producer behind a value binding no `ExportDeclaration` carries, so
+ * `provides()` found nothing and a discarding `sh(…)` was never enumerated:
+ * the identical bytes in one file read `EXIT 1`, split across two read
+ * `EXIT 0`, over the same discarded exit code. The forwarder half of this
+ * sweep has crossed modules since F-R13-02; only the producer did not.
+ *
+ * So each file's EXPORTED producer names are published as a provider set, a
+ * file importing one of those names seeds its own resolution with it, and the
+ * whole thing iterates to a pack-level fixpoint. Re-export declarations and
+ * `export *` carry a set onward, so a barrel does not break the chain. It
+ * terminates because names are only ever added.
+ */
+let PACK_PRODUCER_EXPORTS: ReadonlyMap<string, ReadonlySet<string>> = new Map<string, ReadonlySet<string>>();
+
+/** The producer names `sf` hands to the rest of the pack under its own exports. */
+function exportedProducers(sf: ts.SourceFile, ids: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>();
+  const isExported = (st: ts.Statement): boolean =>
+    ts.canHaveModifiers(st) && (ts.getModifiers(st)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false);
+  for (const st of sf.statements) {
+    if (ts.isVariableStatement(st) && isExported(st))
+      for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name) && ids.has(d.name.text)) out.add(d.name.text);
+    if (!ts.isExportDeclaration(st)) continue;
+    if (st.moduleSpecifier === undefined) {
+      if (st.exportClause !== undefined && ts.isNamedExports(st.exportClause))
+        for (const el of st.exportClause.elements) if (ids.has((el.propertyName ?? el.name).text)) out.add(el.name.text);
+      continue;
+    }
+    if (!ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const from = PACK_PRODUCER_EXPORTS.get(specKey(st.moduleSpecifier.text));
+    if (from === undefined) continue;
+    if (st.exportClause === undefined) for (const n of from) out.add(n);
+    else if (ts.isNamedExports(st.exportClause))
+      for (const el of st.exportClause.elements) if (from.has((el.propertyName ?? el.name).text)) out.add(el.name.text);
+  }
+  return out;
+}
+
+/** Producer names and namespaces this file imports from elsewhere in the pack. */
+function importedProducers(sf: ts.SourceFile): { ids: Set<string>; ns: Map<string, string> } {
+  const ids = new Set<string>();
+  const ns = new Map<string, string>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const target = specKey(st.moduleSpecifier.text);
+    const from = PACK_PRODUCER_EXPORTS.get(target);
+    if (from === undefined || st.importClause === undefined) continue;
+    const nb = st.importClause.namedBindings;
+    if (nb !== undefined && ts.isNamedImports(nb)) for (const el of nb.elements) if (from.has((el.propertyName ?? el.name).text)) ids.add(el.name.text);
+    if (nb !== undefined && ts.isNamespaceImport(nb) && from.size > 0) ns.set(nb.name.text, target);
+  }
+  return { ids, ns };
+}
+
+/** Every name this file calls the producer by, pack resolution included. */
+function producersIn(sf: ts.SourceFile, file: string): Producers {
+  const seed = new Set<string>([TOKEN]);
+  for (const m of ['node:child_process', 'child_process']) for (const id of aliasesOf(sf, TOKEN, m, file).ids) seed.add(id);
+  const imported = importedProducers(sf);
+  for (const id of imported.ids) seed.add(id);
+  const derived = derivedProducers(sf, seed);
+  return { ids: derived.ids, members: derived.members, ns: imported.ns };
+}
+
+/** The pack-level fixpoint: run before any file is scanned. */
+function resolvePackProducers(src: ReadonlyMap<string, readonly string[]>): void {
+  PACK_PRODUCER_EXPORTS = new Map<string, ReadonlySet<string>>();
+  for (let before = -1, total = 0; before !== total; ) {
+    before = total;
+    total = 0;
+    const next = new Map<string, ReadonlySet<string>>();
+    for (const [file, lines] of src) {
+      const sf = ast(file, lines.join('\n'));
+      const ex = exportedProducers(sf, producersIn(sf, file).ids);
+      next.set(file, ex);
+      total += ex.size;
+    }
+    PACK_PRODUCER_EXPORTS = next;
+  }
 }
 
 function producerCalls(sf: ts.SourceFile, file: string): ts.CallExpression[] {
-  const seed = new Set<string>([TOKEN]);
-  for (const m of ['node:child_process', 'child_process']) for (const id of aliasesOf(sf, TOKEN, m, file).ids) seed.add(id);
-  const ids = derivedProducers(sf, seed);
-  return callsTo(sf, { ids, ns: new Set<string>() }, TOKEN, true);
+  const p = producersIn(sf, file);
+  const out: ts.CallExpression[] = [];
+  const walk = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const c = unwrap(n.expression);
+      if (ts.isIdentifier(c) && p.ids.has(c.text)) out.push(n);
+      // The FLOOR: any `<expr>.spawnSync(…)`, plus a field the producer was
+      // stored under, plus `ns.<exported producer>` for a namespace import.
+      else if (ts.isPropertyAccessExpression(c) && (c.name.text === TOKEN || p.members.has(c.name.text) || namespaceProducer(c, p))) out.push(n);
+      // `cp['spawnSync'](…)` — element access AT THE CALL SITE, which the
+      // initializer rule covered and the callee match did not (round 17).
+      else if (
+        ts.isElementAccessExpression(c) &&
+        ts.isStringLiteral(c.argumentExpression) &&
+        (c.argumentExpression.text === TOKEN || p.members.has(c.argumentExpression.text))
+      )
+        out.push(n);
+    }
+    n.forEachChild(walk);
+  };
+  walk(sf);
+  return out;
+}
+
+/** `proc.sh(…)` where `proc` is a namespace import of a file exporting `sh`. */
+function namespaceProducer(c: ts.PropertyAccessExpression, p: Producers): boolean {
+  if (!ts.isIdentifier(c.expression)) return false;
+  const file = p.ns.get(c.expression.text);
+  return file !== undefined && (PACK_PRODUCER_EXPORTS.get(file)?.has(c.name.text) ?? false);
 }
 
 const unwrap = (e: ts.Expression): ts.Expression => {
@@ -810,6 +969,7 @@ function sweep(dir: string): SweepResult {
   parsed.clear(); // each pack copy is parsed on its own bytes
   const src = new Map(sources(dir));
   PACK_SRC = src;
+  resolvePackProducers(src);
   const apparatusProblem = apparatusIsInert(dir);
   if (apparatusProblem === null) src.delete(APPARATUS);
   const emptyPack: Site[] = [];
@@ -1523,6 +1683,104 @@ const PLANTS: readonly Plant[] = [
       r.unchecked.some((site) => site.file === 'planted-x23.ts')
         ? null
         : 'a discarding call was hidden behind a plain re-binding of the imported name. Resolving the import and stopping there measures the name the import introduced, not the names the file calls the function by',
+  },
+  {
+    id: 'X24',
+    what: "round 17's F-R17-01 — the producer EXPORTED from one pack file and called, discarded, in another",
+    plant: (dir) => {
+      writeFileSync(join(dir, 'planted-x24-lib.ts'), ["import { spawnSync } from 'node:child_process';", 'export const x24run = spawnSync;', ''].join('\n'));
+      writeFileSync(
+        join(dir, 'planted-x24.ts'),
+        [
+          "import { x24run } from './planted-x24-lib';",
+          '// The ordinary way a pack factors a helper out. No ExportDeclaration',
+          '// carries the producer, so following re-export declarations finds',
+          '// nothing, and the resolution that works inside one file stops at the',
+          '// module boundary. The same bytes in ONE file were reported.',
+          'export function head(): string {',
+          "  const r = x24run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x24.ts')
+        ? null
+        : 'a discarding call was hidden by a MODULE BOUNDARY: the producer was exported from a sibling pack file under a value binding, and a fixpoint that runs per file cannot cross one. The forwarder half of this sweep has crossed modules since round 13',
+  },
+  {
+    id: 'X25',
+    what: "round 17's F-R17-01 — element access AT THE CALL SITE, `cp['spawnSync'](…)`",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x25.ts'),
+        [
+          "import * as cp from 'node:child_process';",
+          '// Element access was added to the rule that reads an INITIALIZER and',
+          '// not to the one that matches a CALLEE, so a binding taken this way',
+          '// was followed while a call made this way was not.',
+          'export function head(): string {',
+          "  const r = cp['spawnSync']('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x25.ts')
+        ? null
+        : 'a discarding call was hidden by calling the producer through element access. A property access and an element access name the same member; a rule that reads one and not the other is a spelling rule again',
+  },
+  {
+    id: 'X26',
+    what: "round 17's F-R17-01 — the producer handed to a function and called through its PARAMETER",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x26.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          '// The producer arrives as an argument, so no binding in this file is',
+          '// ever assigned it; the name that calls it is a parameter.',
+          'function withRunner(run: typeof spawnSync): string {',
+          "  const r = run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return r.stdout ?? '';",
+          '}',
+          'export const head = withRunner(spawnSync);',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x26.ts')
+        ? null
+        : 'a discarding call was hidden by passing the producer INTO a function: the call is made through a parameter, which no assignment in the file ever names',
+  },
+  {
+    id: 'X27',
+    what: "round 17's F-R17-01 — the producer stored in an object FIELD under another name",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x27.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          '// `{ spawnSync: x }` was followed because the KEY is the token. Here',
+          '// the key is anything at all and the VALUE is the producer.',
+          'const x27api = { go: spawnSync };',
+          'export function head(): string {',
+          "  const r = x27api.go('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+          "  return (r.stdout ?? '').trim();",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x27.ts')
+        ? null
+        : 'a discarding call was hidden by storing the producer in an object field under a different name, so neither the identifier set nor the `.spawnSync` floor could see the callee',
   },
   {
     id: 'X9',

@@ -61,7 +61,13 @@ const INERT_AST: readonly string[] = [
   "    if (nb !== undefined && ts.isNamedImports(nb)) for (const e of nb.elements) if ((e.propertyName ?? e.name).text === 'spawnSync') imported.add(e.name.text);",
   '    if (nb !== undefined && ts.isNamespaceImport(nb)) imported.add(`${nb.name.text}.spawnSync`);',
   '  }',
-  '  for (const id of derivedProducers(sf, new Set<string>())) imported.add(id);',
+  '  // Pack resolution, not file resolution (round 17, F-R17-02): an apparatus',
+  '  // whose producer lives in a sibling pack file kept its exemption and printed',
+  '  // that it had been \u00abmeasured inert \u2026 on every spelling of the module\u00bb \u2014 a',
+  '  // false measured claim, on the one file the sweep deletes from its own scan.',
+  '  const p = producersIn(sf, APPARATUS);',
+  '  for (const id of p.ids) if (id !== TOKEN) imported.add(id);',
+  '  for (const m of p.members) imported.add(`<object>.${m}`);',
   '  const calls = producerCalls(sf, APPARATUS);',
 ];
 /** The round-13 form, which named one spelling and read the text. */
@@ -79,8 +85,8 @@ const INERT_REGEX: readonly string[] = [
  * nothing and a bare `run(…)` that discarded its code was invisible — in any
  * pack file, not only in the apparatus.
  */
-const REQUIRE_BOUND = '  const ids = derivedProducers(sf, seed);';
-const REQUIRE_BLIND = '  const ids = seed;';
+const REQUIRE_BOUND = '  const derived = derivedProducers(sf, seed);';
+const REQUIRE_BLIND = '  const derived = { ids: seed, members: new Set<string>(), ns: new Map<string, string>() };';
 const REQUIRE_PLANT = 'planted-require-bound.ts';
 
 /**
@@ -98,6 +104,54 @@ const DERIVED_SOURCE: readonly string[] = [
   '}',
   '',
 ];
+
+/**
+ * THE FOURTH GUARD: THE BINDING CROSSES FILES (round 17, F-R17-01).
+ *
+ * `derivedProducers` resolved names inside ONE file, so a pack that factored
+ * its helper out — `export const sh = spawnSync` in one file, `import { sh }`
+ * in the next — hid a discarded exit code behind a module boundary: the
+ * identical bytes read EXIT 1 in one file and EXIT 0 in two. The pack-level
+ * fixpoint is the line removed here, and the ONE-FILE sibling below is the
+ * control that shows the boundary is what the rule crosses.
+ */
+const PACK_BOUND = '  for (const id of imported.ids) seed.add(id);';
+const PACK_BLIND = '  // pack resolution removed';
+const CROSS_LIB = 'planted-cross-lib.ts';
+const CROSS_USER = 'planted-cross-user.ts';
+const SAME_FILE = 'planted-same-file.ts';
+
+/** The producer exported from one pack file and called, discarded, in another. */
+function plantCrossFile(dir: string): void {
+  writeFileSync(join(dir, CROSS_LIB), ["import { spawnSync } from 'node:child_process';", 'export const shared = spawnSync;', ''].join('\n'));
+  writeFileSync(
+    join(dir, CROSS_USER),
+    [
+      `import { shared } from './${CROSS_LIB.replace('.ts', '')}';`,
+      'export function crossHead(): string {',
+      "  const r = shared('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+      "  return (r.stdout ?? '').trim();",
+      '}',
+      '',
+    ].join('\n'),
+  );
+}
+
+/** The SAME bytes in one file: the control for the module boundary. */
+function plantSameFile(dir: string): void {
+  writeFileSync(
+    join(dir, SAME_FILE),
+    [
+      "import { spawnSync } from 'node:child_process';",
+      'const shared2 = spawnSync;',
+      'export function sameHead(): string {',
+      "  const r = shared2('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });",
+      "  return (r.stdout ?? '').trim();",
+      '}',
+      '',
+    ].join('\n'),
+  );
+}
 
 function plantRequireBound(dir: string): void {
   writeFileSync(join(dir, REQUIRE_PLANT), DERIVED_SOURCE.join('\n'));
@@ -319,6 +373,56 @@ function main(): number {
       problems.push(`the sweep with the require-bound rule removed did not run (exit ${String(reqWithout.code)}), so that deletion is UNMEASURED`);
     else if (reqWithout.reported) problems.push('the sweep with the require-bound rule REMOVED still reported the plant, so that rule is not what catches it');
 
+    // ── THE BINDING ACROSS A MODULE BOUNDARY ─────────────────────────────
+    if (!me.includes(PACK_BOUND)) {
+      console.log('  the pack-level producer rule is not written in the shape this proof removes, so');
+      console.log('  the fourth section measures nothing. Re-anchor it before reading it again.');
+      console.log('');
+      console.log('EXIT 2 — UNMEASURED.');
+      return 2;
+    }
+    const strippedPack = join(tmp, 'sweep-without-pack-resolution.ts');
+    writeFileSync(strippedPack, me.replace(PACK_BOUND, PACK_BLIND));
+    const crossPack = join(tmp, 'pack-cross-file');
+    cpSync(join(ROOT, 'scripts/phase15'), crossPack, { recursive: true });
+    plantCrossFile(crossPack);
+    plantSameFile(crossPack);
+    const crossReal = sweepFile(SWEEP, crossPack, CROSS_USER);
+    const crossWithout = sweepFile(strippedPack, crossPack, CROSS_USER);
+    const sameReal = sweepFile(SWEEP, crossPack, SAME_FILE);
+    const sameWithout = sweepFile(strippedPack, crossPack, SAME_FILE);
+    console.log('');
+    console.log('  THE PRODUCER EXPORTED FROM ONE PACK FILE AND DISCARDED IN ANOTHER');
+    console.log("  (both plants sit in ONE pack copy, so the exit code is the pack's; what is attributed");
+    console.log('  here is whether each PLANTED FILE was named in the report)');
+    console.log(
+      `  across files    real sweep exit ${String(crossReal.code)}  ${crossReal.ran ? (crossReal.reported ? 'NAMED the discarded code' : 'did NOT name it') : 'did not run'}`,
+    );
+    console.log(
+      `                  rule removed exit ${String(crossWithout.code)}  ${crossWithout.ran ? (crossWithout.reported ? 'NAMED it anyway' : 'did NOT name it — so that rule is what crosses the boundary') : 'did not run'}`,
+    );
+    console.log(
+      `  same bytes,     real sweep exit ${String(sameReal.code)}  ${sameReal.ran ? (sameReal.reported ? 'NAMED it' : 'did NOT name it') : 'did not run'}`,
+    );
+    console.log(
+      `  one file        rule removed exit ${String(sameWithout.code)}  ${sameWithout.ran ? (sameWithout.reported ? 'NAMED it too — the control: the per-file fixpoint still works' : 'did NOT name it') : 'did not run'}`,
+    );
+    if (!crossReal.ran) problems.push(`the real sweep did not run over the cross-file plant (exit ${String(crossReal.code)}), so its silence says nothing`);
+    else if (!crossReal.reported)
+      problems.push(
+        'a producer exported from one pack file and called, with its code discarded, in another was not enumerated: the fixpoint stops at the module boundary',
+      );
+    if (!crossWithout.ran)
+      problems.push(`the sweep with the pack rule removed did not run (exit ${String(crossWithout.code)}), so that deletion is UNMEASURED`);
+    else if (crossWithout.reported)
+      problems.push('the sweep with the pack-level rule REMOVED still reported the cross-file plant, so that rule is not what catches it');
+    if (!sameWithout.ran)
+      problems.push(
+        `the sweep with the pack rule removed did not run over the one-file control (exit ${String(sameWithout.code)}), so the control is UNMEASURED`,
+      );
+    else if (!sameWithout.reported)
+      problems.push('removing the PACK rule also blinded the sweep inside ONE file, so the deletion moves more than the boundary and attributes nothing');
+
     console.log('');
     if (problems.length > 0) {
       for (const p of problems) console.log(`  FINDING: ${p}`);
@@ -330,7 +434,9 @@ function main(): number {
     console.log('  defect invisible, and restoring it makes it visible again. The apparatus exemption is');
     console.log('  withdrawn on BOTH spellings of child_process, and the old check lost the bare one. A');
     console.log('  producer bound through `createRequire` and renamed is enumerated, and is invisible');
-    console.log('  without the one line that enumerates it.');
+    console.log('  without the one line that enumerates it. The binding is followed ACROSS a module');
+    console.log('  boundary, and removing that one line blinds the cross-file plant while the SAME');
+    console.log('  bytes in one file stay visible — which is what attributes the boundary to the rule.');
     console.log('  Every plant and every run happens in a throwaway copy; neither this repository nor');
     console.log('  the pack is written to.');
     return 0;
