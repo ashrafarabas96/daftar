@@ -61,7 +61,15 @@ ANCHOR = '93084f82b8e36ad49ebb207c0b6e7435d7fcb49f'
 # both tools, so every git call of this tool now runs with the graft file
 # pointed at os.devnull. GIT_SHALLOW_FILE is deliberately NOT set: it makes
 # `rev-parse --is-shallow-repository` answer true on a full clone.
-GIT_ENV = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
+# CHALLENGE R20-P0-01's scope half: this tool is GIT_DIR-sensitive too, and
+# measured FAIL-CLOSED (rc 2 CONFIGURATION ERROR against a decoy clone and
+# against an unrelated repository), so it was not a second fail-open. The
+# class reaches it and one scrub closes both, for the third round running
+# on the rule that a remedy is not applied until every sibling carries it.
+# The scrub stays inside this module's git calls, which are local reads;
+# it is NOT exported to the sweep or to CI, which fetch.
+GIT_ENV = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+GIT_ENV.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
 
 def git(repo, *args):
     return subprocess.run(['git','-C',repo,'--no-replace-objects',*args],

@@ -208,8 +208,25 @@ def main():
         # true on a full clone and this tool would refuse sound
         # repositories with its shallow-boundary sentence. Shallowness is
         # already handled by name.
-        _env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1',
-                    GIT_GRAFT_FILE=os.devnull)
+        # CHALLENGE R20-P0-01, the same class a THIRD mechanism along:
+        # `dict(os.environ, ...)` takes the caller's environment VERBATIM, and
+        # GIT_DIR is in it. GIT_DIR BEATS `-C`, so the repository this tool
+        # believes it is reading is caller-supplied. Measured: with the files of
+        # a world whose 4th revision is the forgery, and GIT_DIR naming a
+        # SEPARATE repository whose 3 revisions all already carry the forged
+        # digest at the same relative path, the row refusal disappeared at rc 0
+        # over "all 3 revision(s)"; and against the REAL pack, GIT_DIR pointed
+        # at a clone of this repository one head back moved the published
+        # revision count with the same exit code and the same sentence shape.
+        # So the environment is BUILT, not inherited: every GIT_* name is
+        # dropped and only what this tool needs is set. The scrub belongs HERE,
+        # inside the helper, and must NOT be exported to tools/gate-sweep.sh or
+        # to a CI step: every git call of this tool is a local read, while those
+        # FETCH, and they need GIT_SSL_CAINFO and the migration-freeze anchor's
+        # full-object-name fetch. GIT_EXEC_PATH is not set in this container, so
+        # whether dropping it matters is UNMEASURED and named, not a pass.
+        _env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        _env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
         return subprocess.run(['git','-C',_md,'--no-replace-objects',
                                '-c','core.quotePath=false'] + list(argv),
                               capture_output=True, text=True, env=_env)

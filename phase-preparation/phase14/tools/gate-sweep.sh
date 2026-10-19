@@ -1240,6 +1240,53 @@ for arm in default elsewhere; do
   fi
 done
 rm -rf "$G19"
+
+# ---- ROUND 20 (R20-P0-01), the same class a THIRD mechanism along: the tool's
+# git environment was dict(os.environ, ...), and GIT_DIR BEATS `-C`, so the
+# repository read was caller-supplied. Arm one points GIT_DIR at a DECOY whose
+# every revision already carries the forged digest; arm two uses a RELATIVE
+# GIT_DIR, which already failed closed at 911f2b1 but for the WRONG reason ("the
+# manifest is not in a git repository"), so this proof requires the ROW refusal
+# in both arms. Premises are read from git first: the walk GIT_DIR serves must
+# differ from the walk the pack's own repository serves.
+E20=$(mktemp -d); SCRATCH="${SCRATCH:-} $E20"
+mkreplace18 "$E20/w" base
+WR="$E20/w/repo"
+( cd "$WR" && for r in $(git replace -l); do git replace -d "$r"; done; rm -f .git/info/grafts ) >/dev/null 2>&1
+# the decoy: a SEPARATE repository, three revisions, every one of them already
+# holding the forged manifest and the forged report at the same relative path.
+mkdir -p "$E20/f/repo/pack"
+cp "$WR/pack/P14-HANDOFF-MANIFEST.md" "$WR/pack/P14-CHALLENGE-test.md" "$E20/f/repo/pack/"
+( cd "$E20/f/repo" && git init -q . && git -c user.email=p14@local -c user.name=p14 add -A \
+  && git -c user.email=p14@local -c user.name=p14 commit -q -m 'decoy 1' \
+  && printf 'decoy note\n' >> pack/P14-HANDOFF-MANIFEST.md \
+  && git -c user.email=p14@local -c user.name=p14 commit -qam 'decoy 2' \
+  && printf 'decoy note 2\n' >> pack/P14-HANDOFF-MANIFEST.md \
+  && git -c user.email=p14@local -c user.name=p14 commit -qam 'decoy 3' ) >/dev/null 2>&1
+wn=$(cd "$WR" && git rev-list HEAD | wc -l | tr -d ' ')
+fn=$(GIT_DIR="$E20/f/repo/.git" git rev-list HEAD | wc -l | tr -d ' ')
+A20="--manifest $WR/pack/P14-HANDOFF-MANIFEST.md --dir $WR/pack --witness $E20/none --check"
+if [ "$wn" = 4 ] && [ "$fn" = 3 ] && [ "$wn" != "$fn" ]; then
+  # At 911f2b1 this arm was rc 0, no refusal, "all 3 revision(s)".
+  named git-dir-decoy-refused 1 "REFUSED: P14-CHALLENGE-test.md" \
+    "GIT_DIR=$E20/f/repo/.git python3 -I $HERE/manifest-digests.py $A20"
+else
+  printf 'FAIL  %-26s premise not built (pack repo walk %s want 4, GIT_DIR walk %s want 3) — nothing was proved\n' \
+         git-dir-decoy "$wn" "$fn"
+  fail=$((fail+1))
+fi
+# arm two: a RELATIVE GIT_DIR, resolved against the CALLER's cwd (/tmp, which is
+# where `named` runs and holds no repository). The refusal must be the row
+# refusal, not a "not in a git repository" that happens to exit non-zero.
+if [ ! -e /tmp/.git ]; then
+  named git-dir-relative-refused 1 "REFUSED: P14-CHALLENGE-test.md" \
+    "GIT_DIR=.git python3 -I $HERE/manifest-digests.py $A20"
+else
+  printf 'FAIL  %-26s premise not built (/tmp/.git exists, so a relative GIT_DIR is not pointing at nothing) — nothing was proved\n' \
+         git-dir-relative
+  fail=$((fail+1))
+fi
+rm -rf "$E20"
 rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"
 
 red retracted-claim-planted \
