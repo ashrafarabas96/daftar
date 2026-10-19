@@ -27,6 +27,21 @@ The substituted values are scratch-only and the cluster takes no TCP
 connection; rendering lives in the repository because a proof whose setup is
 not in its own repository is reproducible by its author only (P2-09).
 """
+import sys
+
+if not sys.flags.isolated:
+    sys.stderr.write(
+        "RENDERER-NOT-ISOLATED: this program must run under `python3 -I`. Without it the\n"
+        "interpreter puts the script's own directory on `sys.path`, and that directory\n"
+        "is the harness -- a planted `subprocess.py` or `hashlib.py` beside it would be\n"
+        "imported by the program whose output the figure gate now treats as the only\n"
+        "legitimate source of a figure. The driver always passes `-I`; a reviewer\n"
+        "running this file by hand must too. Refusing rather than re-executing, because\n"
+        "a re-exec reads the target a second time. (The coordinator's `C27-S2`: two of\n"
+        "the pack's eight instruments refused without `-I` and six did not.)\n"
+    )
+    raise SystemExit(5)
+
 import re, subprocess, sys, tempfile, os
 
 PLACEHOLDER = re.compile(r"__([A-Z_]+)_DB_PASSWORD__")

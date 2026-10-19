@@ -1088,16 +1088,16 @@ was right twice and I was wrong twice, before the round.
 each guard deleted on its own, and the arms that stop answering:
 
 html character references  reds  5 arm(s): R26-F1 an &nbsp; entity, C25-F1 a decimal character reference for the `=`, C25-F1 a hexadecimal character reference for the `=` +2 more
-nfkc                       reds  1 arm(s): R14-S1 full-width equals
+nfkc                       reds  3 arm(s): R14-S1 full-width equals, C27-S1 an acute accent before the value, C27-S1 a diaeresis before the value
 format characters          reds  1 arm(s): R14-S1 a zero-width space after the sign
-whitespace around the equals reds  8 arm(s): R26-F1 a space before the value, R26-F1 a space on both sides, R26-F1 a space before the equals +5 more
+whitespace around the equals reds 11 arm(s): R26-F1 a space before the value, R26-F1 a space on both sides, R26-F1 a space before the equals +8 more
 non-ascii digits           reds  5 arm(s): R14-S1 arabic-indic digits, R14-S1 extended arabic digits, R15-S3 devanagari digits +2 more
 html comment markers       reds  1 arm(s): attached: an HTML comment with no spaces
 inline code span           reds  1 arm(s): named: inline code span only
 positive scan              reds 21 arm(s): R13 trailing period, R13 trailing semicolon, R13 parentheses +18 more
 key boundary               reds  1 arm(s): key boundary: a key that is the tail of an uppercase name
 value boundary             reds  1 arm(s): value boundary: a date is not a figure
-figure value class         reds 10 arm(s): R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +7 more
+figure value class         reds 14 arm(s): R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +11 more
 boolean spellings          reds  2 arm(s): R14-S1 boolean t as psql prints, R14-S1 boolean f as psql prints
 signed values              reds  3 arm(s): R14-S1 negative, R14-S1 positive sign, R14-S1 a zero-width space after the sign
 percent in the value       reds  2 arm(s): R14-S3 percent on a real figure, R14-S3 percent inside brackets
@@ -1106,11 +1106,12 @@ key class                  reds  2 arm(s): named: UPPERCASE key, key boundary: a
 boolean case folding       reds  1 arm(s): R14-S1 boolean True
 named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
 planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
-only a run emits           reds  9 arm(s): R26-S1 a comment in an instrument emits nothing, R26-S1 a committed .py nothing runs emits nothing, R26-S1 an unapplied mutation world emits nothing +6 more
+only an asserted case emits reds  7 arm(s): R27-F1 a RAISE NOTICE in a fixture requires nothing, R27-F1 an echo in the driver requires nothing, R27-F1 a printed plant with no case named requires nothing +4 more
+only a run emits           reds 12 arm(s): R26-S1 a comment in an instrument emits nothing, R26-S1 a committed .py nothing runs emits nothing, R26-S1 an unapplied mutation world emits nothing +9 more
 the same spelling on both sides reds  1 arm(s): R26-F1 a padded figure in the output is the same figure
 no repository redirects the subject reds  2 arm(s): R17 a repository planted inside the haystack is refused, R20-S2 git's toplevel and the census disagree
 
-22 guards, every one of them deleted on its own and measured
+23 guards, every one of them deleted on its own and measured
 ```
 
 <!-- END GENERATED guard-matrix -->
@@ -1283,7 +1284,7 @@ The counts in this section and the two blocks in §7.14 are generated:
 <!-- BEGIN GENERATED arm-counts: /usr/bin/python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts --run-capture $P11_RUN_CAPTURE -->
 
 ```text
-81 catch arms, 16 skip arms, 2 pass arms, 35 others
+84 catch arms, 16 skip arms, 2 pass arms, 42 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -3131,11 +3132,11 @@ then reported that the real run does not name its own refusals.
 ```text
 the price of the last decoration removal, measured:
 
-candidates with the guard deleted      138
-document lines that would red          64
-distinct tokens in them                32
+candidates with the guard deleted      141
+document lines that would red          82
+distinct tokens in them                35
 
-deleting `inline code span` would red 64 document line(s) carrying 32 distinct token(s); it is a disclosed bound and not a hole
+deleting `inline code span` would red 82 document line(s) carrying 35 distinct token(s); it is a disclosed bound and not a hole
 ```
 
 <!-- END GENERATED backtick-cost -->
@@ -3302,10 +3303,10 @@ and states no count:
 ```text
 what this pack counts, read from the commit and from this file:
 
-files the commit holds under the harness     72
-of them recordings of past runs              48
-skip keys the committed source reads         22
-arms the selftest runs                       134
+files the commit holds under the harness     74
+of them recordings of past runs              50
+skip keys the committed source reads         23
+arms the selftest runs                       144
 ```
 
 <!-- END GENERATED pack-counts -->
@@ -3401,14 +3402,254 @@ Each names the commit it measured and states that this commit's tree is that
 one plus these two files, the regenerated figures of the two generated blocks
 that counting these two files moves, and the lines naming them.
 
-**WHAT THIS HEAD CLAIMS, AND WHAT IT DOES NOT.** No signature, and none is
-claimed: an author does not sign their own work. This commit answers four
-blockers and three smaller rulings and is owed round 27 and a coordinator diff
-review. `24f6ebe` is still the last fully signed head; `READY_TO_PROMOTE` =
+**WHAT THAT HEAD CLAIMED.** It answered round 26's four blockers and was owed
+round 27 and a coordinator diff review; round 27 is in §7.28 below and
+rejected it. `24f6ebe` is still the last fully signed head; `READY_TO_PROMOTE` =
 **NO**; **no migration number exists** — none allocated, reserved, examined,
 exampled, or written in a filename or a comment; `OD-P11-07` is the owner's
 alone; and no CI has ever run this pack, so the gate's own authority is
 `UNMEASURED` outside this container.
+
+---
+
+## 7.28 ROUND 27 (`REJECT` at `fc3f845`, by two independent challengers) and the coordinator's diff review of the same head (`NO-SIGN`) — a figure is legitimate because A CASE REQUIRED it
+
+Two blockers, both measured end to end, and they are the same blocker from two
+directions. Round 26 made a figure legitimate because A RUN PRINTED it. Round
+27 drove a fabricated figure through that rule three times:
+
+| door | what carried the figure | where it reached |
+|---|---|---|
+| the driver's own echo | a directory named for the figure, handed to the driver as `TMPDIR`, printed back by the `RUN_CAPTURE` identity line | `EXIT_SCRIPT 0` |
+| a data fixture | `RAISE NOTICE '<figure>'` appended to `harness/world.sql`, printed by `psql` in the run's own voice | `EXIT_SCRIPT 0` |
+| the driver's source | one `echo "<figure>"` added to `rebuild_and_prove.sh` | `EXIT_SCRIPT 0` |
+
+**The cause, in one sentence: printing is as cheap as commenting.** A printed
+literal is computed from nothing, and no assertion anywhere fails when it
+changes. The three rounds before this one each blocked a cheaper authority --
+round 25 a committed recording, round 26 a comment in a file nothing runs --
+and each replacement was still a kind of TEXT.
+
+### `R27-F1` (`P1`, fail-open) — the criterion is now REQUIREMENT, not printing
+
+A figure in these documents is legitimate when a CASE of this run required it:
+`case(..., expect, kind="value")` in `proofs.py` or `proofs_b.py` compares the
+measured value with `expect`, marks the case `**PROOF FAILED**` if it does not
+contain it, and the suite exits non-zero. So if the number were different, the
+run would be RED. That is the binding the challenger asked for, in the
+population it named.
+
+Where it is recorded: `case()` itself writes one row per expectation line of
+every value case that PASSED into the FIGURE SINK, a file the driver creates
+for this run outside the work tree:
+
+```text
+FIGURE<TAB><suite><TAB><the case's own identifier><TAB><the expectation>
+```
+
+The row is tab-separated and its last field is the expectation verbatim, so
+`PA9-P1`'s first row carries the ledger-prune figure quoted in §16.6 of the DDL
+proof. This paragraph deliberately does not write that figure out: a figure in
+a document is a figure a case must require AND a line must attribute, and an
+illustration of the row format is neither. That rule caught this very
+paragraph in the first measured run of this commit, which is the kind of
+evidence a header sentence cannot give.
+
+The sink, not the output, is the haystack. What that excludes, by
+construction and not by a list: every `echo` in the driver, the whole identity
+block, every environment-supplied path, `psql`'s `NOTICE` output, a fixture's
+`RAISE NOTICE`, git's deprecation hints, the gate's own selftest output (which
+closes the second report's `R27-S2` as well), and a case that FAILED.
+
+Three more things changed with it:
+
+* **A pre-set `P11_RUN_CAPTURE` is a refusal by name.** It used to mean "do not
+  re-enter through `tee`", which let a file nothing in this run wrote be handed
+  to the gate as the run's own output -- the second half of the challenger's
+  `R27-F1`. `RUN-CAPTURE-PRE-SET`, exit 5, and the capture is created by the
+  run that writes it.
+* **A sink with this commit's `RUN_HEAD` and no rows is a refusal**
+  (`FIGURE-SINK-HAS-NO-ROWS`), because a gate whose haystack is empty passes
+  nothing and must not report that as a pass.
+* **The rule ladder is the control.** Deleting `only an asserted case emits`
+  restores round 26's rule exactly -- the whole text of the capture -- and
+  deleting `only a run emits` restores `bc54e4c`'s tree derivation behind it.
+  Each guard reds the arms that are about it, which is what makes "the hole is
+  closed" a measured flip: the notice arm, the echo arm and the
+  no-case-named arm all PASS with the top rung deleted.
+
+### `R27-F2` (`P1` on the coordinator's rating, not the challenger's `P2`) — a figure is a figure OF something
+
+`axes=3` is a figure this run really requires, of Pack A's apparel grid. The
+challenger asserted it of Pack B's lot-expiry grid, where the same run requires
+`axes=2`, and the gate passed the sentence: it bound the existence of a string
+and not what the string was a figure of. The coordinator rated it `P1` on the
+gate's own promise -- the refusal said "keep the claim a case pins" -- and that
+is the right reading: a reviewer acts on that sentence.
+
+So the row carries the CASE, and a document that quotes a figure must NAME that
+case, in brackets, on the same line:
+
+```text
+deleted=0      [PA9-P1]   -- DELETE FROM catalog_grid_ctx_ledger
+owner_sees=0   [PA9-P1]   -- the owner's own verification, same transaction
+present=true   [PA9-P2]   -- a superuser reading the same table, immediately afterwards
+```
+
+Three findings, each with its own name and its own arm: `NAMES NO CASE` (the
+figure is required, the line does not say by what), `ANOTHER CASE REQUIRED IT`
+(the `axes=3` shape), and `THE CASE NAMED HAS NO IDENTIFIER` (a case titled in
+prose, which the suites record as `UNIDENTIFIED-CASE`: a case a document cannot
+reference pins nothing).
+
+### `R27-F2` of the first report / the DDL pins — a digest nobody compares is not a check
+
+`prep/phase11/ddl/*.sql` is the DDL this phase APPLIES, and it was in no pinned
+set: the deciding-set walk starts at `harness/`, the tree law compares disk
+with commit and a COMMITTED edit survives that, and the driver printed
+`PACK_A_DDL_SHA256` beside nothing that compared it. `check_harness_bytes.py
+--pack-ddl` now reads the bytes on disk against external literals it holds
+itself, compares those literals with the same two in §4 of
+`P11-CONSERVATION-LAWS-AND-RED-PROOFS.md`, and refuses by name in six ways
+(digest mismatch, an unpinned `.sql` arriving in `ddl/`, a pinned file gone,
+the two copies disagreeing in either direction, an unreadable law, an absent
+directory). The driver runs it at step 0c-1 and takes its exit as
+`EXIT_PACK_DDL`. Moving a pack's DDL now takes an edit to the DDL, to the
+instrument and to that document in one commit -- the declared self-check limit,
+not a closure of it, and a diff a reviewer meets in three places instead of
+one.
+
+### The sweep, and what it cost the documents
+
+`R27-S1` of the second report was the wording, and it was right to ask for it
+separately: the refusal said "no instrument under the harness emits that
+string", which under round 26's rule a fixture satisfied. It now says that no
+value case of this run required the string, that nothing would have failed if
+the number were different, and what to do about it. The gate's `WHAT IT CHECKS`
+paragraph, the capture reader's own docstring, the guard comments and the
+selftest's world comments are swept with it -- the outcome sentence and the
+discipline sentences, which is this pack's own two-sweep rule.
+
+**The cost, stated because it is larger than any previous round's.** A figure
+no case of THIS run requires reds, however true it is. A measurement of a PAST
+run at another commit can therefore never be quoted as a figure: ten
+occurrences of `rc=0` -- "measured at `b7ee445`", "measured by the challenger
+at `04d87b3`", a quoted transcript line in §16.6's neighbourhood, and the
+Arabic report's quotation of an older gate's output -- are re-spelled as `rc 0`,
+which is prose and not a figure. Six occurrences of three figures remain in the
+documents, and each one now names the case that requires it.
+
+### The coordinator's diff review of `fc3f845` (`NO-SIGN`) — three sentences measured false, and a residual that is this round's own lesson one layer out
+
+The review built the attacks rather than rating the reports, and it found
+**no new fail-open**: the sink closed the three doors it claims to close, and
+the DDL pins compare. What it withheld the signature for is `C27-F1`, **three
+sentences a reader would ACT on and that measurement contradicts** — which is
+this pack's own stopping rule, not a style note:
+
+| sentence | measured | answered by |
+|---|---|---|
+| the gate's live refusal text promised "a claim a case pins" while a false attribution passed it | the attribution findings existed but the refusal did not name them | the refusal is reworded and now names requirement AND attribution, and `R27-F2`'s three arms are what measure it |
+| the laws document said the gate runs "before anything is applied", at step `0c` | it is **step `7b`**, after the proofs, because the sink does not exist until the cases have run; and the exits it enumerated were the old ones | row 272 rewritten: step `7b`, not a pre-flight, exit 1 for a figure no case required or one attributed to the wrong case, exit 5 for each named refusal |
+| `_close_equals`'s docstring said the step turned 21 candidate occurrences into **42** | re-measured with this file's own `tokens_in` over `bc54e4c`'s nine documents: **21 become 38**, 19 distinct, a delta of **17** | the figure is corrected in place, and the `--surface` inventory's seventeen rows are named as the bulk of the delta |
+
+**`C27-S1` is the one residual I did not carry, because it is round 26's
+finding arriving in the residue of this file's own normalisation.** `NFKC` is
+applied before the whitespace step, and it expands some fifty compatibility
+characters — `U+00B4` ACUTE ACCENT, `U+00A8` DIAERESIS, `U+00AF` MACRON,
+`U+00B8` CEDILLA, `U+02D8` BREVE — into **a space followed by a combining
+mark**. The space beside the `=` was deleted and the mark was not, so
+`fabricated_count=` + `U+00B4` + `999` was **not a candidate at all**: not
+weighed and found legitimate, not weighed. Closing it by listing the fifty
+would reopen on the fifty-first, so the class this round deletes is no longer
+"whitespace" but **what advances no width beside an `=`** — the whitespace
+categories plus the nonspacing (`Mn`) and enclosing (`Me`) marks. Three arms
+measure it (the acute accent, the diaeresis, and the bare `U+0301` the fold
+leaves behind), and two of them flip under `nfkc` as well as under
+`whitespace around the equals`, which is the composition stated rather than
+assumed. **Measured cost: the nine documents this gate scans carry 9
+candidates with the class as written and 9 with it widened, no document
+differing** — the fix is free here, which is what makes it a fix and not
+another `R26-F1` first attempt redding thirty-nine honest sites.
+
+`C27-S2` is answered in full and not carried: `sys.flags.isolated` now refuses
+by its own name at the top of all six remaining harness programs
+(`PROOFS-NOT-ISOLATED`, `PROOFS-B-NOT-ISOLATED`, `RACES-NOT-ISOLATED`,
+`RACES-B-NOT-ISOLATED`, `RENDERER-NOT-ISOLATED`,
+`MIGRATION-RUNNER-NOT-ISOLATED`), so a reviewer who runs one by hand without
+`-I` gets a refusal rather than whatever module sits in the working directory.
+`C27-S3` is answered: the pointer that said `R26-S5` was "in the header" now
+names the residual table of this document. `C27-S5` and `C27-S6` are answered
+in the driver: `MIGRATION_MANIFEST.json` is pinned by a literal digest and
+compared (`MIGRATION-MANIFEST-UNPINNED`, exit 5), and the run prints the
+deciding set's own digest. `C27-S4` is process rather than code and is adopted
+here: **from round 28 on, each reviewer's findings carry a per-reviewer
+prefix**, because `bc54e4c` was read by two challengers who both numbered in
+the `C26-F…` series and this document now carries two different findings under
+one id.
+
+### The evidence this head carries, and the commit it measures
+
+Two transcripts are committed beside the harness:
+`harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND27.txt` is the whole driver run from
+zero on a fresh clone, and `harness/RUN-EVIDENCE-PROBE-ROUND27.txt` is ten
+committed worlds and the three driver attacks. Both name
+`9bbec5a083503306ba005471360ad4b244261e6c` as their subject, which is this
+commit's tree minus those two files, the regenerated figures of the blocks that
+counting them moves, and these lines. A transcript cannot carry the digest of
+the commit that creates it; the measured commit is named and the difference
+from it is stated, which is the same discipline round 26's pair carried.
+
+What the authoritative run returned: `EXIT_SCRIPT 0`, with 87 of 87 migrations
+applied as `daftar_migrator`, both packs applied in one transaction each, Pack
+A's suite twice with no failure and Pack B's twice with no failure, the races
+clean, `EXIT_PACK_DDL 0`, `EXIT_HARNESS_BYTES 0`, `EXIT_GENERATED_BLOCKS 0`,
+`EXIT_FENCED_FIGURES 0`, the manifest's own digest compared with the literal
+the driver holds, the selftest's arms all as required, every guard
+deleted on its own and measured with none redding nothing, and the provenance
+check clean. The scan
+weighed nine documents against the sink and reported nine candidate figures and
+none unrequired.
+
+What the probe returned: worlds 1, 2, 3, 4, 9 and 10 red with
+`NOT REQUIRED BY ANY CASE`, world 5 with `ANOTHER CASE REQUIRED IT`, world 6
+with `NAMES NO CASE`, world 8 with `FIGURE-SINK-HAS-NO-ROWS` and exit 5, and
+world 7 — the pass direction — green. Attack A refused as
+`RUN-CAPTURE-PRE-SET` with exit 5 before anything ran; attack B refused at step
+`0c-1` as `PACK-DDL-DIGEST-MISMATCH`; attack C ran to completion and is the one
+to read twice: the figure the `TMPDIR` carried appears four times in the full
+log and **not once in the sink**, so the run redded on the document line that
+quoted it.
+
+### Residuals, each stated as what it is
+
+| id | `P` | what |
+|---|---|---|
+| `R27-S5` | P2 | **the honest limit of this round, and it is the same shape as `R26-S5`.** The sink is a FILE. The gate requires it to lie outside the subject, to carry this commit's `RUN_HEAD`, to be readable, to be non-empty and to hold at least one row; what ties its rows to the `case()` calls that wrote them is the process lineage of the driver, which nothing executable here can verify. A planter who can run processes on the measuring host can write rows. What the round removes is the need for host access at all: a COMMITTED print no longer suffices, which is what all three of this round's doors were |
+| `R27-S6` | P3 | the binding is to a case IDENTIFIER, and identifiers are assigned by the case's own title in the suites. A planter who renames a case's identifier to the one a document cites moves the binding without changing a value. The rename is a committed edit to a deciding file, and the suites' titles are read by the challenger's diff; it is not closed |
+| `R27-S7` | P3 | `kind="refusal"` cases are not in the sink. Their `expect` is a substring of an error message, not a figure, so a document quoting a refusal's own text is outside this rule entirely -- as it was before, and now stated |
+| `R27-S8` | P3 | the races and the renderer print real measurements and write no rows, so a figure of theirs cannot be quoted. That is a cost, not a hole: the discharge is a value case that asserts the same quantity |
+| `R27-S1` (first report) | P3 | characters that RENDER BLANK but are in no whitespace category: U+2800 BRAILLE PATTERN BLANK (`So`), U+3164, U+FFA0 and U+115F (`Lo`). Measured on this commit's own matcher: `fabricated_count=` + U+2800 + `999` is **not weighed at all**, so a figure written that way is not a candidate. The challenger's closure -- admit any run of characters that is not `[0-9A-Za-z_-]` between the key, the `=` and the value -- removes the next member, and under THIS round's rule it also makes every `\| rows \| = \| 59 \|` table cell a figure that a case must then require. Not taken unilaterally for that reason; stated, measured, and left for the coordinator to rule |
+| `R27-S2` of the second report | — | CLOSED by construction: the selftest's output is not in the sink, so nothing it prints is in the haystack |
+| `C26-S2` | — | WITHDRAWN with the rule it was about: a migration's or a fixture's own print no longer legitimises anything, so it cannot cause a false red |
+| `R27-S3`, `R27-S4` | P3 | carried as the challengers state them: `--check-blocks` staleness is never protection against a planted document line, and the inventory's row count is a size of the haystack and not a measure of evidence |
+| `R26-S5`, `R26-S7`, `R25-S1`, `R17-S3` | P2/P3 | carried. `R25-S1` is deferred again on the coordinator's ruling |
+| carried | — | the substring haystack; values continuing into `[0-9A-Za-z_-]`; uppercase keys; non-numeric values; the two named exemptions; `C25-S3`, `C25-S4`, `C25-S5`; `R25-S3`; `R25-S5`; a planter who commits; `G6` |
+| standing | — | **no CI has ever run the Phase 11 pack**, and nothing a planter inserts reaches a repository gate |
+| `C27-F1` | — | ANSWERED: three sentences re-measured and rewritten, as the table above states |
+| `C27-S1` | — | ANSWERED: the padding class is now what advances no width, with three arms and a measured cost of zero |
+| `C27-S2`, `C27-S3`, `C27-S5`, `C27-S6` | — | ANSWERED in this commit: six isolation refusals, the corrected cross-reference, the manifest pin and the deciding-set digest |
+| `C27-S4` | — | ADOPTED as process: per-reviewer finding prefixes from round 28 on. It is not a property of any commit |
+
+**WHAT THIS HEAD CLAIMS, AND WHAT IT DOES NOT.** No signature, and none is
+claimed: an author does not sign their own work. This commit answers round
+27's two blockers, the DDL-pin finding, the wording ruling and the
+coordinator's `C27-F1` with its six residuals, and is owed round 28 and a
+coordinator diff review of this head. `24f6ebe` is still the last fully
+signed head; `READY_TO_PROMOTE` = **NO**; **no migration number exists** --
+none allocated, reserved, examined, exampled, or written in a filename or a
+comment; `OD-P11-07` is the owner's alone; and no CI has ever run this pack,
+so the gate's own authority is `UNMEASURED` outside this container.
 
 ## 8. Coordinator state
 

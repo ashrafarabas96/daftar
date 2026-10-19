@@ -57,10 +57,38 @@ if not sys.flags.isolated:
 
 import hashlib
 import os
+import re
 import subprocess
 
 DECIDING_SUFFIXES = (".py", ".sh", ".sql")
 FULL_SHA = 40
+
+# `R27-F2`, round 27's second blocker, measured by the challenger: the DDL this
+# phase APPLIES -- `prep/phase11/ddl/*.sql` -- was in no pinned set. The
+# deciding-set walk below starts at `harness/`, so `ddl/` is outside it; the
+# tree law compares disk against the commit, so a COMMITTED edit is invisible
+# to it; and the driver PRINTED `PACK_A_DDL_SHA256` and compared it with
+# nothing. A digest nobody compares is not a check. One appended
+# `RAISE NOTICE` in Pack A's DDL therefore put any string into the run's own
+# output.
+#
+# These are external byte pins: the literal digest of each pack's DDL, in an
+# instrument, compared against the bytes on disk -- the bytes the run applies.
+# The same two literals are written in `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md`
+# and this file REFUSES if the two copies disagree, so moving a pack's DDL
+# takes an edit to the DDL, to this file and to that document in one commit,
+# which is the declared self-check limit and a diff a reviewer sees in three
+# places rather than one.
+PACK_DDL_PINS = {
+    "p11-pack-a-apparel.sql":
+        "f87a7ce0efb295d772d2415f962de2c3f2c173d40b36be4bada38da4b9194456",
+    "p11-pack-b-lot-expiry.sql":
+        "d5820ada9f3f0ddee2a3475271a996f5c2e3be83190845d2e85130d601c8ff75",
+}
+PACK_DDL_LAW = "P11-CONSERVATION-LAWS-AND-RED-PROOFS.md"
+PACK_DDL_LAW_LINE = re.compile(
+    r"^([0-9a-f]{64})\s\s(p11-[a-z0-9-]+\.sql)$", re.M
+)
 
 
 def _here():
@@ -556,6 +584,90 @@ def doc_digests(harness_dir=None):
     return sha, rows
 
 
+def pack_ddl(harness_dir=None):
+    """(ok, msgs) — the applied pack DDL against its external byte pins.
+
+    `R27-F2`. Four refusals, each by its own name, and the set is a CENSUS:
+    a pinned file that is gone refuses, and a `.sql` that ARRIVES in `ddl/`
+    with no pin refuses too, because the run applies Pack A and Pack B by name
+    and anything else landing in that directory is a file no pin covers.
+
+    The bytes read are the bytes ON DISK, which are the bytes the driver feeds
+    to `psql`; comparing the commit with the disk is the tree law's job one
+    function below, and it is the comparison a COMMITTED edit survives.
+    """
+    harness_dir = harness_dir or _here()
+    phase_dir = os.path.dirname(os.path.realpath(harness_dir))
+    ddl_dir = os.path.join(phase_dir, "ddl")
+    msgs = []
+    if not os.path.isdir(ddl_dir):
+        return False, [
+            "PACK-DDL-DIR-ABSENT: %s is not a directory, and this law cannot "
+            "report that the applied DDL matches its pins by finding nothing "
+            "to read." % ddl_dir
+        ]
+    # The law document's copy of the same literals. A disagreement is a
+    # refusal: one of the two was edited alone.
+    law_path = os.path.join(phase_dir, PACK_DDL_LAW)
+    try:
+        law_text = open(law_path, encoding="utf-8").read()
+    except OSError as exc:
+        return False, [
+            "PACK-DDL-LAW-UNREADABLE: %s cannot be read (%s), so the second "
+            "copy of these pins cannot be compared with the first."
+            % (law_path, exc)
+        ]
+    law = {name: sha for sha, name in PACK_DDL_LAW_LINE.findall(law_text)}
+    for name in sorted(PACK_DDL_PINS):
+        if name not in law:
+            msgs.append(
+                "PACK-DDL-LAW-PIN-ABSENT: this file pins %s but %s carries no "
+                "digest line for it, so the pin has one copy and not two."
+                % (name, PACK_DDL_LAW)
+            )
+        elif law[name] != PACK_DDL_PINS[name]:
+            msgs.append(
+                "PACK-DDL-PIN-DISAGREES-WITH-THE-LAW: %s is pinned %s here and "
+                "%s in %s. One of the two was edited alone."
+                % (name, PACK_DDL_PINS[name][:12], law[name][:12], PACK_DDL_LAW)
+            )
+    for name in sorted(law):
+        if name not in PACK_DDL_PINS:
+            msgs.append(
+                "PACK-DDL-LAW-PINS-AN-UNKNOWN-FILE: %s carries a digest for %s, "
+                "which this file does not pin at all." % (PACK_DDL_LAW, name)
+            )
+    present = sorted(n for n in os.listdir(ddl_dir) if n.endswith(".sql"))
+    for name in present:
+        if name not in PACK_DDL_PINS:
+            msgs.append(
+                "PACK-DDL-FILE-UNPINNED: %s is a `.sql` in %s and no pin covers "
+                "it. The run applies the packs this directory holds, so an "
+                "arrival here is DDL nothing compares." % (name, ddl_dir)
+            )
+            continue
+        with open(os.path.join(ddl_dir, name), "rb") as fh:
+            got = hashlib.sha256(fh.read()).hexdigest()
+        if got != PACK_DDL_PINS[name]:
+            msgs.append(
+                "PACK-DDL-DIGEST-MISMATCH: %s hashes %s on disk and its pin is "
+                "%s. These are the bytes the driver applies, so the database "
+                "this run proves is not the database these pins describe."
+                % (name, got[:12], PACK_DDL_PINS[name][:12])
+            )
+    for name in sorted(PACK_DDL_PINS):
+        # Pack B is pinned and may legitimately be absent at an older SHA; the
+        # driver skips it BY NAME there, so absence is reported rather than
+        # refused only when the driver's own skip is the reason.
+        if name not in present:
+            msgs.append(
+                "PACK-DDL-PINNED-FILE-ABSENT: %s is pinned here and is not in "
+                "%s. A pin for a file that is gone passes vacuously."
+                % (name, ddl_dir)
+            )
+    return (not msgs), msgs
+
+
 def tree_state(harness_dir=None):
     """(ok, refusals) for the WHOLE committed tree, by the bytes on disk.
 
@@ -587,6 +699,7 @@ def _main(argv):
     want_digests = False
     want_tree_state = False
     want_doc_digests = False
+    want_pack_ddl = False
     rest = list(argv)
     while rest:
         a = rest.pop(0)
@@ -596,13 +709,28 @@ def _main(argv):
             want_doc_digests = True
         elif a == "--tree-state":
             want_tree_state = True
+        elif a == "--pack-ddl":
+            want_pack_ddl = True
         elif a == "--harness" and rest:
             harness_dir = rest.pop(0)
         else:
             sys.stderr.write(
-                "usage: [--digests] [--doc-digests] [--tree-state] [--harness DIR]\n"
+                "usage: [--digests] [--doc-digests] [--tree-state] [--pack-ddl]"
+                " [--harness DIR]\n"
             )
             return 2
+    if want_pack_ddl:
+        ok, msgs = pack_ddl(harness_dir)
+        if ok:
+            print(
+                "PACK-DDL OK: %d pinned pack DDL file(s) hash exactly as this "
+                "law and %s pin them"
+                % (len(PACK_DDL_PINS), PACK_DDL_LAW)
+            )
+            return 0
+        for m in msgs:
+            print("REFUSED: %s" % m)
+        return 5
     if want_tree_state:
         ok, msgs = tree_state(harness_dir)
         # One word on stdout, because the caller prints it as a figure; the

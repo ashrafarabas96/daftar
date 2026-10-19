@@ -38,25 +38,56 @@ if [ ! -x "$PY" ]; then
   exit 5
 fi
 
-# `R26-S1`, and the whole of what makes a figure legitimate here now: THE
-# OUTPUT OF THIS RUN. The haystack used to be the text of the files under
+# `R26-S1`: the haystack used to be the text of the files under
 # `prep/phase11/harness/`, and the second challenger of round 26 drove a
 # fabricated figure through it with a `#` comment and with a committed `.py`
-# that nothing runs -- source text is alterable text. So this script captures
-# its OWN output to a file outside the work tree and hands the path to the
-# figure gate, which runs at the END of the run rather than at step 0c,
-# because a capture is only worth what has been printed into it.
+# that nothing runs -- source text is alterable text. Round 26's answer, which
+# stood for one round and is superseded below, was that this script captured
+# its OWN output and handed the path to the figure gate. The gate still runs at
+# the END of the run rather than at step 0c, because the sink it reads is only
+# worth what the cases have written into it by then.
 #
-# The capture is made by re-entering this script once with its output through
-# `tee`. `pipefail` is set above and the exit status taken is the script's own,
-# not `tee`'s.
-if [ -z "${P11_RUN_CAPTURE:-}" ]; then
-  P11_RUN_CAPTURE="$(mktemp -t p11-run-capture-XXXXXXXX)" || exit 5
-  export P11_RUN_CAPTURE
-  bash "$0" "$@" 2>&1 | tee -a "$P11_RUN_CAPTURE"
-  RC_OUTER=${PIPESTATUS[0]}
-  exit $RC_OUTER
+# `R27-F1`, round 27's blocker, measured end to end by the challenger: until
+# this round the capture was THIS SCRIPT'S WHOLE STANDARD OUTPUT, made by
+# re-entering the script once through `tee` -- and this script ECHOES ITS
+# ENVIRONMENT. `TMPDIR=/tmp/p11x-ledger_sweep=81737` put the capture's own
+# path into the capture, so a fabricated `ledger_sweep=81737` in a document
+# was a figure "this run printed", at `EXIT_SCRIPT 0`, with no instrument byte
+# changed and the capture written by this script's own `tee`. The haystack was
+# a file in round 25, a comment in round 26 and an environment variable in
+# round 27: three doors into the same authority.
+#
+# The second challenger of the same round drove the point past "which output":
+# a `RAISE NOTICE '<literal>'` in a data fixture prints in the run's own voice,
+# computes nothing, and no assertion anywhere would fail if the number were
+# different. Printing is as cheap as commenting.
+#
+# So the capture is not output at all any more. It is THE FIGURE SINK: one row
+# per expectation of every value CASE in the two proof suites that PASSED,
+# written by `case()` itself (see `proofs.py`), carrying the case's own
+# identifier. A figure in a document is legitimate when a case REQUIRED it --
+# `case(..., expect, kind="value")` fails and the suite exits non-zero if the
+# measured value does not contain `expect` -- and the gate also checks that the
+# case the DOCUMENT names is the case that required it, which closes asserting
+# a true figure of the wrong pack. Nothing this script echoes is in the sink,
+# nothing `psql` prints is in the sink, and the one line this script writes
+# into it is the `RUN_HEAD` line the gate requires, whose shape the gate pins
+# to a colon and 40 hexadecimal characters and which therefore carries no
+# figure.
+#
+# The capture must also be CREATED BY THIS RUN. A pre-set `P11_RUN_CAPTURE`
+# used to mean "do not re-enter", which let a file nothing in this run wrote
+# be handed to the gate as the run's output. It is a refusal by name now.
+if [ -n "${P11_RUN_CAPTURE:-}" ]; then
+  echo "RUN-CAPTURE-PRE-SET: \$P11_RUN_CAPTURE was set in this run's environment, and"
+  echo "the capture the figure gate weighs must be created by the run that writes it."
+  echo "Unset it and run again. Refusing to run."
+  exit 5
 fi
+P11_RUN_CAPTURE="$(mktemp -t p11-run-capture-XXXXXXXX)" || exit 5
+# Exported, because the two proof suites are the programs that WRITE the rows;
+# the gate is handed the same path on the command line at step 7b.
+export P11_RUN_CAPTURE
 
 REPO=${P11_REPO:-/home/user/daftar}
 S=${P11_SCRATCH:-/var/tmp/p11u}
@@ -208,7 +239,12 @@ echo "SOURCE_SHA        : $(gitq rev-parse HEAD)"
 # (`RUN-CAPTURE-NOT-THIS-HEAD`). It is not a proof of provenance and is not
 # written as one -- see `R26-S5` in the gate's own header.
 echo "RUN_HEAD          : $(gitq rev-parse HEAD)"
-echo "RUN_CAPTURE       : $P11_RUN_CAPTURE   (this run's own output, outside the work tree: the figure gate's haystack)"
+# The ONLY line this script writes into the capture. The gate reads it with an
+# anchored expression -- `RUN_HEAD`, a colon and 40 hexadecimal characters --
+# so it cannot carry a figure, and a capture without it is refused by name
+# (`RUN-CAPTURE-NOT-THIS-HEAD`).
+printf 'RUN_HEAD          : %s\n' "$(gitq rev-parse HEAD)" >> "$P11_RUN_CAPTURE"
+echo "RUN_CAPTURE       : $P11_RUN_CAPTURE   (the FIGURE SINK, outside the work tree: one row per expectation of every value case that passed. Nothing this script echoes is in it -- see \`R27-F1\`)"
 echo "PYTHON            : $PY   ($($PY -I -c 'import sys;print(sys.version.split()[0], "isolated" if sys.flags.isolated else "NOT ISOLATED")'))"
 echo "SOURCE_TREE_DIRTY : $TREE_STATE   (measured against the commit's own blobs, path by path, from the bytes on disk)"
 # `R23-F2`, the coordinator's measurement: this line used to read the migrations
@@ -244,7 +280,27 @@ fi
 echo "DOCUMENT DIGESTS, from the commit (no table pins these; this is the authority):"
 $PY -I $H/check_harness_bytes.py --doc-digests | sed 's/^/  /'
 echo "MIGRATIONS_TREE   : $(gitq rev-parse HEAD:infrastructure/database/migrations)  (the tree object HEAD holds, for comparison with a clean checkout)"
-echo "MANIFEST_SHA256   : $(sha256sum $REPO/infrastructure/database/MIGRATION_MANIFEST.json | cut -d' ' -f1)"
+# The coordinator's `C27-S5`: this line PRINTED the manifest's digest and
+# nothing compared it, so the only thing it was ever checked against was a
+# recording -- the class of evidence round 25 blocked. The literal below is the
+# pin, beside the `git` and interpreter pins, and the file it pins is the one
+# the frozen-digest verdict measures the migrations AGAINST. A change to it is
+# a reviewable committed change; what this closes is the silent one.
+MANIFEST_PIN=4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804
+MANIFEST_SHA=$(sha256sum $REPO/infrastructure/database/MIGRATION_MANIFEST.json | cut -d' ' -f1)
+echo "MANIFEST_SHA256   : $MANIFEST_SHA"
+if [ "$MANIFEST_SHA" != "$MANIFEST_PIN" ]; then
+  echo "MIGRATION-MANIFEST-UNPINNED: the frozen-digest verdict below measures the"
+  echo "migrations against this file, and its bytes are not the bytes this driver pins"
+  echo "($MANIFEST_PIN). Refusing to run: a freeze whose own list moved measures the list."
+  echo "EXIT_SCRIPT       : 5"
+  exit 5
+fi
+echo "MANIFEST_PINNED   : yes   (compared with the literal in this script, \`C27-S5\`)"
+# The coordinator's `C27-S6`: one digest over the DECIDING SET, so a recording
+# of this run names the instrument bytes it measured and a reader can recompute
+# the set this transcript is about rather than taking the tree's word for it.
+echo "DECIDING_SET_SHA256: $($PY -I $H/check_harness_bytes.py --digests | sha256sum | cut -d' ' -f1)   (over the second reader's own digest listing of every deciding file)"
 echo "BOOTSTRAP_SHA256  : $(sha256sum $REPO/infrastructure/database/bootstrap.sql | cut -d' ' -f1)"
 echo "PACK_A_DDL_SHA256 : $(sha256sum $REPO/prep/phase11/ddl/p11-pack-a-apparel.sql | cut -d' ' -f1)"
 echo "PACK_B_DDL_SHA256 : $(test -f $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry.sql && sha256sum $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry.sql | cut -d' ' -f1 || echo 'absent at this SHA — Pack B is not on the branch yet, and the run below skips it by name rather than silently')"
@@ -311,11 +367,30 @@ if [ $RC_HARNESS_BYTES -ne 0 ]; then
   echo "EXIT_HARNESS_BYTES: $RC_HARNESS_BYTES  (refused at step 0c-0; nothing below ran)"
   exit $RC_HARNESS_BYTES
 fi
+# `R27-F2`, round 27's second blocker: the DDL this phase APPLIES was in no
+# pinned set, and this script PRINTED `PACK_A_DDL_SHA256` beside nothing that
+# compared it. A digest nobody compares is not a check. The law below reads the
+# bytes on disk -- the bytes fed to `psql` two steps down -- against external
+# literals held in two places at once, and refuses by name on a mismatch, on a
+# `.sql` that arrives in `ddl/` unpinned, on a pinned file that is gone, and on
+# a disagreement between the two copies of the pins.
+echo "--- 0c-1. the applied pack DDL against its external byte pins ---"
+$PY -I $H/check_harness_bytes.py --pack-ddl
+RC_PACK_DDL=$?
+if [ $RC_PACK_DDL -ne 0 ]; then
+  echo "The DDL this run would apply is not the DDL these pins describe, or the two"
+  echo "copies of the pins disagree. The refusal above names which. Fatal here, for the"
+  echo "same reason as step 0c-0: every proof below reads the schema this DDL creates."
+  echo "EXIT_PACK_DDL     : $RC_PACK_DDL  (refused at step 0c-1; nothing below ran)"
+  echo "EXIT_SCRIPT       : $RC_PACK_DDL"
+  exit $RC_PACK_DDL
+fi
 # `R26-S1`: the figure scan and the block check used to stand HERE, at step 0c,
-# and they cannot any more. Their haystack is what this run printed, so they
-# run at step 7b, after the proofs and the races, when there is a run to read.
-# The selftest stays here: it builds its own worlds and reads nothing of this
-# run.
+# and they cannot any more. Since `R27-F1` their haystack is the FIGURE SINK --
+# the expectations the value cases required and passed -- so they run at step
+# 7b, after the proofs, when there are rows to read. The selftest runs there
+# too: it builds its own worlds, but the generators it exercises read the
+# haystack, and at step 0c there is none.
 RC_FIGURES=0
 RC_BLOCKS=0
 echo
@@ -577,6 +652,7 @@ echo "EXIT_PROOFS_A     : $RC_PROOFS  (prep/phase11/harness/proofs.py)"
 echo "EXIT_PROOFS_B     : $RC_B  (prep/phase11/harness/proofs_b.py)"
 echo "EXIT_PROOFS_A_RUN2: $RC_PROOFS2  (the same file, the same database -- idempotence)"
 echo "EXIT_PROOFS_B_RUN2: $RC_B2  (the same file, the same database -- idempotence)"
+echo "EXIT_PACK_DDL     : $RC_PACK_DDL  (prep/phase11/harness/check_harness_bytes.py --pack-ddl, run at step 0c-1: the applied pack DDL against the external byte pins this law and P11-CONSERVATION-LAWS-AND-RED-PROOFS.md both carry)"
 echo "EXIT_HARNESS_BYTES: $RC_HARNESS_BYTES  (prep/phase11/harness/check_harness_bytes.py, run at step 0c-0 before anything that reads the harness: every deciding file's bytes against the blob the resolved commit holds, by a reader that shares no code with the checker)"
 echo "EXIT_GENERATED_BLOCKS: $RC_BLOCKS  (prep/phase11/harness/check_fenced_figures.py --check-blocks, run at step 7b beside the figure scan, against this run'\''s own output)"
 echo "EXIT_FENCED_FIGURES: $RC_FIGURES  (prep/phase11/harness/check_fenced_figures.py, run at step 7b: after the proofs and the races, because its haystack is what this run printed)"

@@ -1,5 +1,21 @@
+import sys
+
+if not sys.flags.isolated:
+    sys.stderr.write(
+        "PROOFS-NOT-ISOLATED: this program must run under `python3 -I`. Without it the\n"
+        "interpreter puts the script's own directory on `sys.path`, and that directory\n"
+        "is the harness -- a planted `subprocess.py` or `hashlib.py` beside it would be\n"
+        "imported by the program whose output the figure gate now treats as the only\n"
+        "legitimate source of a figure. The driver always passes `-I`; a reviewer\n"
+        "running this file by hand must too. Refusing rather than re-executing, because\n"
+        "a re-exec reads the target a second time. (The coordinator's `C27-S2`: two of\n"
+        "the pack's eight instruments refused without `-I` and six did not.)\n"
+    )
+    raise SystemExit(5)
+
 import subprocess, sys, json
 import os
+import re
 # The cluster is named by the environment so the harness can create its own
 # on-target cluster and every script agrees on which one ran (finding P2-09).
 SOCK=os.environ.get("P11_SOCK","/var/tmp/p11u/run"); PORT=os.environ.get("P11_PORT","55512"); DB="daftar"
@@ -13,6 +29,63 @@ def run(sql, role="postgres", pre=""):
     r=subprocess.run(["su","postgres","-s","/bin/bash","-c"," ".join(cmd)], input=pre+sql, capture_output=True, text=True)
     return r.returncode, r.stdout.strip(), r.stderr.strip()
 
+
+# ── THE FIGURE SINK, round 27's blocker ───────────────────────────────────
+# `R27-F1`, measured end to end by both challengers of round 27: round 26 made
+# a figure legitimate because A RUN PRINTED it, and printing is as cheap as
+# commenting. One `RAISE NOTICE 'spectre_notice=7722'` in a data fixture, and
+# one `echo` in the driver, each carried a fabricated figure through the whole
+# authoritative pack to `EXIT_SCRIPT 0`. The printed string was a LITERAL: it
+# was computed from nothing, and no assertion anywhere would have failed if the
+# number had been different.
+#
+# So a figure is not legitimate because it was printed. It is legitimate when a
+# CASE REQUIRED it: `case(..., expect, kind="value")` fails, and this suite
+# exits non-zero, if the measured value does not contain `expect`. That is the
+# binding, and this is where it is recorded -- one row per expectation line of
+# every value case that PASSED, written to a file the harness creates for this
+# run and hands to the figure gate. A `RAISE NOTICE` cannot write a row here;
+# an `echo` cannot; a comment cannot; and a case whose number differed would
+# not be in the file at all, because it would not have passed.
+#
+# The row carries the CASE that required it, which is round 27's second
+# finding: `axes=3` is a figure this run really produces, for Pack A's grid,
+# and a document asserted it of Pack B's, where the same run produces
+# `axes=2`. A figure bound to its case can be attributed, so the gate can red
+# a true string asserted of the wrong thing.
+FIGURE_SINK = os.environ.get("P11_FIGURE_SINK") or os.environ.get("P11_RUN_CAPTURE")
+FIGURE_SUITE = "PACK_A"
+CASE_ID = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$")
+
+
+def _case_id(name):
+    """The case's own identifier: its first token, when that is an id.
+
+    A case named in prose pins nothing -- a document cannot reference it -- and
+    that is reported rather than guessed at: the row carries
+    `UNIDENTIFIED-CASE`, and the gate will not bind a figure to that.
+    """
+    head = name.split()[0] if name.split() else ""
+    return head if CASE_ID.match(head) else "UNIDENTIFIED-CASE"
+
+
+def _sink(name, expect):
+    """One tab-separated row per expectation LINE of a passing value case."""
+    if not FIGURE_SINK:
+        return
+    try:
+        with open(FIGURE_SINK, "a", encoding="utf-8") as fh:
+            for line in str(expect).splitlines():
+                line = line.strip()
+                if line:
+                    fh.write("FIGURE\t" + FIGURE_SUITE + "\t" + _case_id(name)
+                             + "\t" + line + "\n")
+    except OSError as exc:
+        # Loud, never silent: a gate reading a sink this suite could not write
+        # would report "no case asserted it" as if no case had.
+        print("FIGURE-SINK-UNWRITABLE: " + str(FIGURE_SINK) + " (" + str(exc) + ")")
+        raise
+
 cases=[]
 def case(name, sql, expect, role="postgres", pre="", kind="refusal"):
     rc,out,err=run(sql,role,pre)
@@ -22,6 +95,8 @@ def case(name, sql, expect, role="postgres", pre="", kind="refusal"):
     else:
         ok = rc==0 and expect in out
         detail = out if not ok else expect
+    if kind == "value" and ok:
+        _sink(name, expect)
     cases.append((name, "RED (refused as required)" if (ok and kind=="refusal") else ("GREEN" if ok else "**PROOF FAILED**"), detail))
     return ok
 

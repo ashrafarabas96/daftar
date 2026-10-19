@@ -1,0 +1,139 @@
+P11 — ROUND 27'S OWN SHAPES, DRIVEN END TO END ON COMMITTED CLONES
+==================================================================
+
+WHAT THIS IS. Ten worlds and three driver attacks, each a throwaway clone of
+this branch checked out at
+
+    9bbec5a083503306ba005471360ad4b244261e6c
+
+with one or two lines APPENDED and COMMITTED, so every row is measured on a
+CLEAN tree by the gate run from inside that clone. `work tree clean: 0 entries`
+is printed for each. The subject commit is this commit's tree minus this file,
+`RUN-EVIDENCE-AUTHORITATIVE-ROUND27.txt`, the regenerated figures of the blocks
+that counting these two files moves, and the lines of §7.28 naming them.
+
+THE SINK EACH WORLD IS GIVEN is the REAL authoritative run's own sink with its
+`RUN_HEAD` line retargeted to that world's commit — which is exactly what
+someone who can write a file would do, and the point of every red row is that
+retargeting a sink does not put a ROW into it. The real sink is 231 lines,
+sha256 92a9551d3fd42991db744ca901cc27a0f28b2278ed178e5f3ff75520ff94c212.
+
+WHAT EACH ROW MEASURES.
+  * world 1 is the control: a fabricated figure no case required.
+  * worlds 2, 3 and 4 are `R27-F1`, the three doors round 27 closed: a
+    `RAISE NOTICE` in a fixture the run APPLIES, an `echo` in the driver the
+    run RUNS, and a `RAISE NOTICE` in the applied pack DDL. Each one PRINTS the
+    figure in the run's own voice, which round 26's rule accepted.
+  * worlds 5 and 6 are `R27-F2`: a figure a case really does require, asserted
+    of another case, and asserted of no case at all.
+  * world 7 is the PASS direction, and it is the row that makes the rest
+    evidence rather than a gate that reds everything.
+  * worlds 9 and 10 are the coordinator's `C27-S1`: the same fabricated figure
+    written with `U+00B4` and with a bare `U+0301` between the `=` and the
+    value, which NFKC leaves as a combining mark the old class did not delete.
+    Each one is now a candidate and reds, and the finding prints the spelling
+    as written beside the canonical one.
+  * world 8 is a sink carrying this commit's own `RUN_HEAD` and not one row.
+  * attack A sets `P11_RUN_CAPTURE` in the driver's environment.
+  * attack B commits the `RAISE NOTICE` into the applied pack DDL, which is
+    what the round's new byte pins are about.
+  * attack C hands the driver a `TMPDIR` named for the figure, which is how the
+    first challenger drove round 26's rule to `EXIT_SCRIPT 0`.
+
+THE PROBE FOLLOWS, VERBATIM AND COMPLETE.
+
+P11 - ROUND 27'S OWN SHAPES, DRIVEN ON COMMITTED CLONES
+=======================================================
+
+subject commit : 9bbec5a083503306ba005471360ad4b244261e6c
+real sink      : /tmp/p11-run-capture-4cgTbRCi (230 rows, sha256 92a9551d3fd42991)
+each world: one or two lines APPENDED and COMMITTED, clean tree, gate run from the clone.
+
+--- world 1: the control: a fabricated figure, no case named
+    committed 497fd77bab7f42046ab91908afa0a96dd8b50428, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink1.txt, 230 rows from 33 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 497fd77bab7f), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT REQUIRED BY ANY CASE: P11-OPEN-DECISIONS.md:64 reports `probe27_bare=9931`, and no value case of this run required that string: nothing anywhere would have failed if the number were different. Either have a case assert it -- so the case fails when it changes -- and name that case beside the figure, or drop it.
+--- world 2: R27-F1 the figure plus a RAISE NOTICE in harness/world.sql, which the run APPLIES
+    committed 7a0d60b8384e042898e38fbff324ae7354d0da0c, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink2.txt, 230 rows from 33 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 7a0d60b8384e), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT REQUIRED BY ANY CASE: P11-OPEN-DECISIONS.md:64 reports `probe27_notice=9932`, and no value case of this run required that string: nothing anywhere would have failed if the number were different. Either have a case assert it -- so the case fails when it changes -- and name that case beside the figure, or drop it.
+--- world 3: R27-F1 the figure plus an echo in rebuild_and_prove.sh, which the run RUNS
+    committed fd07d3a52c1a3c8785b31b78fa9a119b8aadee5c, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink3.txt, 230 rows from 33 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD fd07d3a52c1a), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT REQUIRED BY ANY CASE: P11-OPEN-DECISIONS.md:64 reports `probe27_echo=9933`, and no value case of this run required that string: nothing anywhere would have failed if the number were different. Either have a case assert it -- so the case fails when it changes -- and name that case beside the figure, or drop it.
+--- world 4: R27-F1 the figure plus a RAISE NOTICE in the APPLIED pack DDL
+    committed 155c79d4442d1258370c99a00700981eebca036c, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink4.txt, 230 rows from 33 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 155c79d4442d), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT REQUIRED BY ANY CASE: P11-OPEN-DECISIONS.md:64 reports `probe27_ddl=9934`, and no value case of this run required that string: nothing anywhere would have failed if the number were different. Either have a case assert it -- so the case fails when it changes -- and name that case beside the figure, or drop it.
+--- world 5: R27-F2 a required figure attributed to a case that required something else
+    committed 47557aefb735f90fd8f77be43fc097fb07e2a575, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink5.txt, 230 rows from 33 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 47557aefb735), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        ANOTHER CASE REQUIRED IT: P11-OPEN-DECISIONS.md:64 reports `deleted=0` and names a case that did not require it. The case(s) that did: PACK_A PA9-P1. A true string asserted of the wrong grid, pack or world is a false sentence made of a true figure.
+--- world 6: R27-F2 a required figure naming no case at all
+    committed dbc780273e106b9ecd39d77772f9169dc8aa63fd, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink6.txt, 230 rows from 33 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD dbc780273e10), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NAMES NO CASE: P11-OPEN-DECISIONS.md:64 reports `deleted=0`. A case required it (PACK_A PA9-P1), but this line does not say which, so nothing says the figure is a figure OF what the sentence claims. Write the case in brackets on the same line.
+--- world 7: the PASS direction: a required figure naming the case that requires it
+    committed 7233ed2c2c01d09b5708b15c9759287ce46b0b5a, work tree clean: 0 entries
+    scan rc=0
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink7.txt, 230 rows from 33 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 7233ed2c2c01), 10 candidate figures, 0 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+--- world 9: C27-S1 a fabricated figure padded with U+00B4, which NFKC folds to a space and a combining mark
+    committed 895bf758c33d0899aefac700bca4812607b27937, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink9.txt, 230 rows from 33 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 895bf758c33d), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT REQUIRED BY ANY CASE: P11-OPEN-DECISIONS.md:64 reports `probe27_fold=9935` (written as `probe27_fold=´9935  [PA9-P1]`), and no value case of this run required that string: nothing anywhere would have failed if the number were different. Either have a case assert it -- so the case fails when it changes -- and name that case beside the figure, or drop it.
+--- world 10: C27-S1 the same, written with the bare combining mark U+0301
+    committed e497fb42fd17178d6f9b7bb2e9808d0c72342541, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink10.txt, 230 rows from 33 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD e497fb42fd17), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT REQUIRED BY ANY CASE: P11-OPEN-DECISIONS.md:64 reports `probe27_mark=9936` (written as `probe27_mark=́9936  [PA9-P1]`), and no value case of this run required that string: nothing anywhere would have failed if the number were different. Either have a case assert it -- so the case fails when it changes -- and name that case beside the figure, or drop it.
+--- world 8: R27-F1 a sink carrying this commit's head and no rows
+    scan rc=5
+        REFUSED: FIGURE-SINK-HAS-NO-ROWS: sink8.txt carries this commit's `RUN_HEAD` and not one `FIGURE` row, so no case in this run required any value. A gate whose haystack is empty passes nothing and must not report that as a pass.
+DONE
+
+
+THE THREE DRIVER ATTACKS, VERBATIM AND COMPLETE.
+
+=== A. a pre-set P11_RUN_CAPTURE ===
+RUN-CAPTURE-PRE-SET: $P11_RUN_CAPTURE was set in this run's environment, and
+the capture the figure gate weighs must be created by the run that writes it.
+Unset it and run again. Refusing to run.
+rc=5
+
+=== B. a RAISE NOTICE committed into the APPLIED pack DDL ===
+committed 88b90184c3403c30e1c5ebc0a6fc99bb28474d09, clean: 0 entries
+--- 0c-1. the applied pack DDL against its external byte pins ---
+REFUSED: PACK-DDL-DIGEST-MISMATCH: p11-pack-a-apparel.sql hashes c2813b9db004 on disk and its pin is f87a7ce0efb2. These are the bytes the driver applies, so the database this run proves is not the database these pins describe.
+EXIT_PACK_DDL     : 5  (refused at step 0c-1; nothing below ran)
+EXIT_SCRIPT       : 5
+DONE_ATTACKS
+
+=== C. a TMPDIR named for the figure ===
+committed 38431509a25c301f7359949b031ed077f04bbfea, clean: 0 entries
+DRIVER_EXIT=1
+RUN_CAPTURE       : /tmp/p27x-probe27_tmp=9971/p11-run-capture-tI9mkBDz   (the FIGURE SINK, outside the work tree: one row per expectation of every value case that passed. Nothing this script echoes is in it -- see `R27-F1`)
+quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (p11-run-capture-tI9mkBDz, 230 rows from 33 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 38431509a25c), 10 candidate figures, 1 not emitted
+  NOT REQUIRED BY ANY CASE: P11-OPEN-DECISIONS.md:64 reports `probe27_tmp=9971`, and no value case of this run required that string: nothing anywhere would have failed if the number were different. Either have a case assert it -- so the case fails when it changes -- and name that case beside the figure, or drop it.
+EXIT_FENCED_FIGURES: 1  (prep/phase11/harness/check_fenced_figures.py, run at step 7b: after the proofs and the races, because its haystack is what this run printed)
+EXIT_SCRIPT       : 1  (0 means every step above returned 0)
+the sink the run wrote: /tmp/p27x-probe27_tmp=9971/p11-run-capture-tI9mkBDz
+rows: 230   lines: 231
+does the sink contain the TMPDIR-supplied figure? 0 occurrence(s)
+does the FULL LOG contain it? 4 occurrence(s)
+DONE_TMPDIR

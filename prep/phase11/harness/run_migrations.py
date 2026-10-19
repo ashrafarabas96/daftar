@@ -1,3 +1,18 @@
+import sys
+
+if not sys.flags.isolated:
+    sys.stderr.write(
+        "MIGRATION-RUNNER-NOT-ISOLATED: this program must run under `python3 -I`. Without it the\n"
+        "interpreter puts the script's own directory on `sys.path`, and that directory\n"
+        "is the harness -- a planted `subprocess.py` or `hashlib.py` beside it would be\n"
+        "imported by the program whose output the figure gate now treats as the only\n"
+        "legitimate source of a figure. The driver always passes `-I`; a reviewer\n"
+        "running this file by hand must too. Refusing rather than re-executing, because\n"
+        "a re-exec reads the target a second time. (The coordinator's `C27-S2`: two of\n"
+        "the pack's eight instruments refused without `-I` and six did not.)\n"
+    )
+    raise SystemExit(5)
+
 import hashlib, os, re, subprocess, sys, json
 import os
 # The cluster is named by the environment so the harness can create its own

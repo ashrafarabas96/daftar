@@ -94,30 +94,37 @@ measured before the change was claimed, the way round 13's widening was:
 
 WHAT IT CHECKS. Every `*.md` anywhere under the phase directory, including
 subdirectories. Every occurrence of `key=<number|boolean>` on a line is a
-candidate, and the exact token must appear in **WHAT THIS RUN PRINTED** --
-the output of `rebuild_and_prove.sh`, captured by that script outside the work
-tree and handed here as `--run-capture PATH`. Not in a file under the harness:
-in the output of a run. A figure is legitimate because a run of this phase
-PRINTED it.
+candidate, and the exact token must be one **A CASE OF THIS RUN REQUIRED** --
+an expectation of a `kind="value"` case in `proofs.py` or `proofs_b.py` that
+PASSED, recorded by `case()` itself in the figure sink the driver creates and
+handed here as `--run-capture PATH`. Not in a file under the harness, and not
+merely in the run's output: in the set of values this run would have FAILED
+on if they had been different. And the document must NAME THE CASE, in
+brackets on the same line, because a figure is a figure of something.
 
-`R26-S1` and the coordinator's `C26-F1` are why, and the sentence that stood
-here until this round -- "the exact token must appear in the commit under
-`prep/phase11/harness/`, excluding markdown, in an instrument or in a
-committed run-evidence file" -- is the rule they blocked, twice over: round 25
-blocked the committed recordings (anyone who can type a file there can
-legitimise any figure), and round 26 blocked what replaced it (a `#` comment,
-a committed `.py` nothing runs, and a `--` comment in a mutation world the run
-never applies, each one legitimising a fabricated figure with the whole
-authoritative pack green). A whitelist of SUFFIXES is a whitelist over source
-TEXT, and source text is alterable text. What a run prints is not.
+`R27-F1` and `R27-F2` are why, and the sentence that stood here until this
+round -- "the exact token must appear in WHAT THIS RUN PRINTED" -- is the rule
+both challengers of round 27 blocked. One `RAISE NOTICE '<literal>'` appended
+to a data fixture, one `echo` added to the driver, and one directory named
+`/tmp/p11x-<figure>` handed to the driver as `TMPDIR` each carried a
+fabricated figure through the whole authoritative pack to `EXIT_SCRIPT 0`: a
+printed literal is computed from nothing, and nothing anywhere fails when it
+changes. PRINTING IS AS CHEAP AS COMMENTING, which is what the two rounds
+before this one blocked (round 25 the committed recordings, round 26 the
+suffix whitelist over source text). The ladder of rules this file has held is
+kept as its own control: deleting `only an asserted case emits` restores round
+26's rule exactly, and deleting `only a run emits` restores `bc54e4c`'s
+tree derivation behind it.
 
-What that costs, stated because it is real: a figure no run of this phase
-prints REDS, whatever is written about it in any file -- and the discharge is
-the one this gate has always prescribed, to have a case EMIT it and paste what
-it emits. Three document lines were re-spelled rather than emitted this round
-and each is named in `§7.27` of the manifest. The reach is the harness's own
-instruments as the driver runs them (`C26-S2`): a figure a migration or a pack
-DDL genuinely prints is a false red, named there and not hidden here.
+What that costs, stated because it is real, and it is a larger cost than the
+previous rounds': a figure no case of this run REQUIRES reds, however true it
+is and whoever printed it. A measurement of a PAST run, at another commit, can
+therefore never be quoted as a figure -- this round re-spelled ten such
+occurrences of `rc=0` as prose, because no case of this run requires them --
+and a figure of a migration, a fixture or the pack DDL reds unless a case
+asserts it (`C26-S2` is withdrawn with the rule it was about). The discharge is
+the one the refusal names: have a case assert it, so the case fails when it
+changes, and name that case beside the figure.
 
 NORMALISATION, in six steps, in this order, each one separately deletable and
 separately measured:
@@ -464,6 +471,27 @@ EXEMPT = ("port=55512", "migrations=87")
 # SHAPE to TIME on the fifth, which is this phase's own standing lesson.
 WHITESPACE_CATEGORIES = ("Zs", "Zl", "Zp", "Cc", "Cf")
 
+# `C27-S1`, the coordinator's diff review of `fc3f845`: the class above closed
+# the characters that ARE whitespace, and the compatibility characters that
+# FOLD INTO whitespace arrived one layer out. `NFKC` is applied before this
+# step, and it expands `U+00B4` ACUTE ACCENT, `U+00A8` DIAERESIS, `U+00AF`
+# MACRON, `U+00B8` CEDILLA, `U+02D8` BREVE and some fifty more into A SPACE
+# FOLLOWED BY A COMBINING MARK. The space beside the `=` was then deleted and
+# the MARK was not, so `total=\u00b455` normalised to the three codepoints
+# `=`, `U+0020`, `U+0301` before the value, the space was deleted, THE MARK
+# STAYED between the `=` and the value, and the line was NOT A CANDIDATE AT
+# ALL -- not weighed and found legitimate, not weighed, which is round 26's
+# own `R26-F1` shape repeating in the residue of a normalisation this file
+# performs itself.
+#
+# The class is therefore not "whitespace" but WHAT ADVANCES NO WIDTH beside an
+# `=`: whitespace within a line, and the nonspacing (`Mn`) and enclosing (`Me`)
+# marks a compatibility fold leaves behind. Stated as two more CATEGORIES
+# rather than as the fifty codepoints whose expansion begins with a space,
+# because a list of fifty reopens on the fifty-first -- the same reason the
+# whitespace class above is a category class.
+PADDING_CATEGORIES = WHITESPACE_CATEGORIES + ("Mn", "Me")
+
 
 def _breaks_a_line(c):
     """Does this character end a line? Asked of Python rather than listed."""
@@ -506,9 +534,20 @@ def _close_equals(s):
     The same rule is applied to the haystack under `the same spelling on both
     sides`, because a run that PRINTS `rows = 59` emits that figure.
 
-    The pack's own prose was measured BEFORE this was claimed as a fix: 21
-    candidate figures become 42 occurrences over the nine documents, of which
-    the `--surface` inventory's own seventeen rows were the bulk -- that block
+    `C27-S1` widened the class this deletes from WHITESPACE to WHAT ADVANCES
+    NO WIDTH, because `NFKC` expands some fifty compatibility characters into a
+    space and a combining mark and only the space was being deleted. Measured
+    over the nine documents this gate scans, as written and with the wider
+    class: **9 candidates either way**, no document differing -- the fix is free
+    here, and `total=\u00b455`, `total=\u00a855` and `total=\u00af55` are candidates now
+    where they were invisible before.
+
+    The pack's own prose was measured BEFORE this was claimed as a fix, and the
+    figure here was WRONG for one round: it said 42 where the measurement is
+    38, and the coordinator's `C27-F1` named it. Re-measured with this file's
+    own `tokens_in` over `bc54e4c`'s nine documents, this step deleted and
+    present: **21 candidate occurrences become 38** (19 distinct), a delta of
+    17, of which the `--surface` inventory's own seventeen rows were the bulk -- that block
     wrote its probe shapes with spaces around the `=` precisely because the
     matcher refused them, which is a generator that depended on the hole. It
     names the key and the value in two columns now and writes no `=` at all.
@@ -518,11 +557,12 @@ def _close_equals(s):
     keep = [True] * n
 
     def padding(c):
-        # Whitespace WITHIN a line: a line terminator is not padding, because
-        # deleting one would join two lines into a figure neither of them
-        # carries.
+        # What advances no width WITHIN a line -- whitespace, and the
+        # combining marks a compatibility fold leaves beside the `=` (`C27-S1`).
+        # A line terminator is not padding, because deleting one would join two
+        # lines into a figure neither of them carries.
         return (
-            unicodedata.category(c) in WHITESPACE_CATEGORIES
+            unicodedata.category(c) in PADDING_CATEGORIES
             and c not in LINE_TERMINATORS
         )
 
@@ -589,6 +629,29 @@ MATCHER_GUARDS = (
 # `--selftest` in exactly the same way: each one reds an arm by name or the
 # phase stops.
 HAYSTACK_GUARDS = (
+    # `R27-F1`, round 27's blocker, measured end to end by BOTH challengers:
+    # round 26 made a figure legitimate because A RUN PRINTED it, and printing
+    # is as cheap as commenting. `TMPDIR=/tmp/p11x-ledger_sweep=81737` put the
+    # capture's own path into the capture; a `RAISE NOTICE 'spectre=7722'` in a
+    # data fixture, and an `echo` in the driver, each carried a fabricated
+    # figure through the whole authoritative pack to `EXIT_SCRIPT 0`. The
+    # printed string is a LITERAL: it is computed from nothing, and no
+    # assertion anywhere would fail if the number were different.
+    #
+    # So printing is not the criterion. A figure is legitimate when a CASE
+    # REQUIRED it: the proof suites' `case(..., expect, kind="value")` fails,
+    # and the suite exits non-zero, if the measured value does not contain
+    # `expect`. Every value case that PASSES writes one row per expectation
+    # line into the FIGURE SINK -- suite, case identifier, `key=value` -- and
+    # this guard makes those rows, and nothing else, the haystack. A fixture
+    # cannot write a row; an `echo` cannot; an environment variable cannot;
+    # and a case whose number differed would not be in the sink, because it
+    # would not have passed.
+    #
+    # Deleting this guard restores round 26's rule exactly -- the whole text of
+    # the capture, whatever wrote it -- which is what makes the notice arm and
+    # the echo arm below a measured FLIP rather than a claim.
+    "only an asserted case emits",
     # `R26-S1`, ruled a blocker by the coordinator after the second
     # challenger measured the previous rule end to end: a `#` comment in an
     # instrument, and a committed `.py` that nothing imports or runs,
@@ -599,21 +662,30 @@ HAYSTACK_GUARDS = (
     #
     # The direction of round 25's fix was right and its KIND of authority was
     # not: `.py`, `.sh` and `.sql` was a whitelist over SOURCE TEXT, and source
-    # text is alterable text. So the haystack is THE OUTPUT THIS RUN PRINTED,
-    # captured by `rebuild_and_prove.sh` outside the work tree and handed to
-    # this gate as `--run-capture`. A figure is legitimate because a run of
-    # this phase printed it. A comment prints nothing; a file nothing runs
-    # prints nothing; a mutation world that is never applied prints nothing; a
+    # text is alterable text. So round 26 made the haystack THE OUTPUT OF THE
+    # RUN, captured outside the work tree and handed to this gate as
+    # `--run-capture`: a comment prints nothing, a file nothing runs prints
+    # nothing, a mutation world that is never applied prints nothing, and a
     # recording of an older run carries another commit's `RUN_HEAD` and is
-    # refused by name.
+    # refused by name. That rule is the MIDDLE RUNG now, superseded by
+    # `only an asserted case emits` above it, because printing turned out to be
+    # as cheap as commenting (`R27-F1`). It still decides every one of those
+    # shapes, and this entry still reds the arms that are about WHICH FILE
+    # emits.
     #
     # Deleting this guard restores the ENTIRE tree-derived haystack of
     # `bc54e4c` -- the commit derivation, the suffix whitelist, the anchor and
-    # the stem exclusion -- which is what the arms below are measured against,
-    # and what makes "the hole is closed" a measurement rather than a claim.
-    # The four guard entries that rule stood on are deleted with it: they are
-    # the CONTROL now, not the law, and a guard that reds nothing is deleted or
-    # armed with no third option.
+    # the stem exclusion -- which is what the file-shaped arms below are
+    # measured against.
+    #
+    # `R27-F1` added a THIRD rule above these two, and the three are a LADDER
+    # read in the order the rungs were built, not a chain of short circuits:
+    # deleting THIS entry drops to the tree derivation whatever the entry above
+    # says, so each guard still reds the arms that are about it. Round 26's
+    # rule -- the whole text of the capture -- is the middle rung, restored by
+    # deleting `only an asserted case emits` alone. Without that ordering the
+    # sink would be read first in every world, this entry would red nothing,
+    # and a guard that reds nothing is deleted or armed with no third option.
     "only a run emits",
     # The spelling rule, applied to the haystack as well as to the line, under
     # a name of its own so one entry decides one site: a run that prints
@@ -1061,12 +1133,32 @@ _RUN_CAPTURE = []
 
 # The line `rebuild_and_prove.sh` prints, and the only thing that ties a
 # capture to a commit. It is not a proof of provenance and is not written as
-# one: see `R26-S5` in the header.
+# one: `C27-S3` found this pointer aimed at the header, where the statement is
+# not. It is `R26-S5` in the residual table of `prep/phase11/P11-HANDOFF-MANIFEST.md`,
+# under round 26, and the round-27 entry `R27-S5` repeats it for the sink: a
+# capture is a FILE, and what ties it to a RUN is the process lineage of the
+# driver that wrote it, which nothing executable here can verify.
 RUN_HEAD_LINE = re.compile(r"^RUN_HEAD\s*:\s*([0-9a-f]{40})\s*$", re.M)
+
+# `R27-F1`. One row per expectation of a value case that PASSED, written by
+# `case()` in `proofs.py` and `proofs_b.py`: the suite, the case's own
+# identifier, and the expectation itself. Tab-separated, because the sink is
+# not prose and nothing that merely PRINTS reaches it.
+FIGURE_ROW = re.compile(r"^FIGURE\t([A-Z][A-Z0-9_]*)\t([^\t\n]+)\t([^\t\n]+)$", re.M)
+# `R27-F2`. The case a DOCUMENT names beside the figure it quotes. A figure is
+# a figure OF something, and `axes=3` -- true of Pack A's grid -- was asserted
+# of Pack B's, where the same run requires `axes=2`. Binding the quotation to
+# the case lets that red.
+CASE_REF = re.compile(r"\[([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)\]")
+UNIDENTIFIED = "UNIDENTIFIED-CASE"
 
 
 def _run_capture_text(path, sha, top):
-    """The output this run printed, or a NAMED refusal. Never a fallback.
+    """The FIGURE SINK this run wrote, or a NAMED refusal. Never a fallback.
+
+    Since `R27-F1` the file holds one row per expectation a value case required
+    and passed, not the run's output; the four file-level refusals below are
+    unchanged, because a sink is still a file.
 
     `R26-S1`. Four refusals, each by its own name, because the previous design
     could not tell a file someone typed from something a run produced:
@@ -1281,6 +1373,39 @@ def _subject_top(root, checked=True):
     return top
 
 
+_ASSERTED = {}
+
+
+def _haystack_key(root, skip):
+    """The cache key, derived once so `haystack` and `asserted` cannot drift."""
+    return (
+        os.path.abspath(root),
+        "only an asserted case emits" not in skip,
+        "only a run emits" not in skip,
+        "the same spelling on both sides" not in skip,
+        (_RUN_CAPTURE[0] if _RUN_CAPTURE else None),
+        "no repository redirects the subject" not in skip,
+    )
+
+
+def asserted(root, skip=()):
+    """{figure: {(suite, case id)}} — which case REQUIRED each figure.
+
+    `R27-F2`. Empty when `only an asserted case emits` is deleted, because the
+    control it restores binds nothing: round 26's rule knew only whether a
+    string was printed, never what it was a figure OF. The scan therefore
+    stops asking about attribution in that world, which is what makes the
+    misattribution arm a flip of THIS guard and not of the matcher.
+    """
+    if "only an asserted case emits" in skip or "only a run emits" in skip:
+        # Either rung below the sink binds nothing: round 26's rule knew only
+        # whether a string was printed, and `bc54e4c`'s knew only which file
+        # held it. Neither knows what a figure is a figure OF.
+        return {}
+    haystack(root, skip)
+    return _ASSERTED.get(_haystack_key(root, skip), {})
+
+
 def haystack(root, skip=()):
     """(label, paths, text): what EMITS here, and where that was read from.
 
@@ -1293,11 +1418,12 @@ def haystack(root, skip=()):
     spawn a subprocess per guard per arm.
     """
     stem = os.path.splitext(os.path.basename(__file__))[0]
+    asserted_only = "only an asserted case emits" not in skip
     from_run = "only a run emits" not in skip
     same_spelling = "the same spelling on both sides" not in skip
     capture = _RUN_CAPTURE[0] if _RUN_CAPTURE else None
     anchored = "no repository redirects the subject" not in skip
-    key = (os.path.abspath(root), from_run, same_spelling, capture, anchored)
+    key = _haystack_key(root, skip)
     if key in _HAYSTACK:
         return _HAYSTACK[key]
 
@@ -1321,7 +1447,50 @@ def haystack(root, skip=()):
             return False
         return True
 
+    if asserted_only and from_run:
+        # `R27-F1`. The haystack is the sink's ROWS, and a row exists because a
+        # case required the value and passed. The capture's file-level laws are
+        # unchanged and run first -- outside the subject, this commit's
+        # `RUN_HEAD`, readable, not empty -- because a sink is still a file.
+        top = _subject_top(root, anchored)
+        sha = _commit_of(top if anchored else root)
+        data = _run_capture_text(capture, sha, top)
+        rows = FIGURE_ROW.findall(data)
+        if not rows:
+            raise Refusal(
+                "FIGURE-SINK-HAS-NO-ROWS: %s carries this commit's `RUN_HEAD` and "
+                "not one `FIGURE` row, so no case in this run required any value. "
+                "A gate whose haystack is empty passes nothing and must not "
+                "report that as a pass." % os.path.basename(os.path.realpath(capture))
+            )
+        bound = {}
+        for suite, case_id, figure in rows:
+            fig = _close_equals(figure) if same_spelling else figure
+            for tok in figures_on(fig, skip):
+                bound.setdefault(tok, set()).add((suite, case_id))
+        text = "\n".join(
+            (_close_equals(f) if same_spelling else f) for _s, _c, f in rows
+        )
+        cases = sorted({c for _s, c, _f in rows})
+        digest = hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()
+        label = (
+            "the expectations the value cases of this run REQUIRED (%s, %d rows from "
+            "%d case(s), sha256 %s of the text weighed, RUN_HEAD %s)"
+            % (
+                os.path.basename(os.path.realpath(capture)), len(rows), len(cases),
+                digest[:12], sha[:12],
+            )
+        )
+        got = (label, [os.path.realpath(capture)], text)
+        _HAYSTACK[key] = got
+        _ASSERTED[key] = bound
+        return got
+
     if from_run:
+        # THE FIRST CONTROL, round 26's rule exactly: the whole text of the
+        # capture, whatever wrote it. Restored by deleting
+        # `only an asserted case emits`, which is what makes the notice and
+        # echo arms a measured flip.
         # The anchor and the head are still resolved from the repository,
         # because the capture is checked AGAINST this commit and must not lie
         # inside it. Deleting the census therefore changes which repository's
@@ -2079,6 +2248,7 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
         return 5
     docs = documents(docs_dir)
     planted = () if "planted tokens" in skip else planted_tokens()
+    bound = asserted(harness_dir, skip)
     seen = 0
     findings = []
     for path in docs:
@@ -2086,7 +2256,22 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
         for n, raw, tok in tokens_in(path, skip):
             seen += 1
             if tok not in emitted or tok in planted:
-                findings.append((rel, n, tok, raw))
+                findings.append((rel, n, tok, raw, "unasserted", ()))
+                continue
+            if not bound:
+                # The control: `only an asserted case emits` is deleted, so
+                # there is nothing to attribute a figure to.
+                continue
+            # `R27-F2`. The figure is required by SOME case; this asks whether
+            # it is required by the case this document names it of.
+            owners = bound.get(tok, set())
+            named = set(CASE_REF.findall(raw))
+            if not named:
+                findings.append((rel, n, tok, raw, "no case named", owners))
+            elif UNIDENTIFIED in named:
+                findings.append((rel, n, tok, raw, "unidentified case", owners))
+            elif not (named & {c for _s, c in owners}):
+                findings.append((rel, n, tok, raw, "another case", owners))
     if not quiet:
         # The inventory, because a verdict that does not name its own input is
         # a verdict nobody can reproduce: `R15-F1` was a gitignored `.pyc` in
@@ -2117,18 +2302,48 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
                 "check is measuring nothing, which it must not report as a pass."
             )
         return 2
-    for rel, n, tok, raw in findings:
+    for rel, n, tok, raw, why, owners in findings:
         if not quiet:
             # The normalised token is what was searched for; the line as written
             # is what a reader sees. When they differ, both are reported, because
             # naming only one of them is how a spelling hides.
             written = "" if tok in raw else " (written as `%s`)" % raw
-            print(
-                "  NOT EMITTED: %s:%d reports `%s`%s, and no instrument under the harness "
-                "emits that string. Either have a case "
-                "emit it and paste what it emits, or drop it and keep the claim a case "
-                "pins." % (rel, n, tok, written)
-            )
+            who = ", ".join("%s %s" % (sx, c) for sx, c in sorted(owners))
+            if why == "unasserted":
+                # `R27-S1` of the second round-27 report, and it is the sentence
+                # a reviewer acts on: the old wording said "no instrument under
+                # the harness emits that string", which under round 26's rule
+                # was satisfied by anything that PRINTED -- a fixture's
+                # `RAISE NOTICE`, an `echo` in the driver. What passing means is
+                # stated exactly now.
+                print(
+                    "  NOT REQUIRED BY ANY CASE: %s:%d reports `%s`%s, and no value "
+                    "case of this run required that string: nothing anywhere would "
+                    "have failed if the number were different. Either have a case "
+                    "assert it -- so the case fails when it changes -- and name that "
+                    "case beside the figure, or drop it." % (rel, n, tok, written)
+                )
+            elif why == "no case named":
+                print(
+                    "  NAMES NO CASE: %s:%d reports `%s`%s. A case required it (%s), "
+                    "but this line does not say which, so nothing says the figure is "
+                    "a figure OF what the sentence claims. Write the case in brackets "
+                    "on the same line." % (rel, n, tok, written, who)
+                )
+            elif why == "unidentified case":
+                print(
+                    "  THE CASE NAMED HAS NO IDENTIFIER: %s:%d reports `%s`%s and "
+                    "names `%s`, which is what the suites record for a case titled in "
+                    "prose. A case a document cannot reference cannot pin a figure; "
+                    "give the case an identifier." % (rel, n, tok, written, UNIDENTIFIED)
+                )
+            else:
+                print(
+                    "  ANOTHER CASE REQUIRED IT: %s:%d reports `%s`%s and names a case "
+                    "that did not require it. The case(s) that did: %s. A true string "
+                    "asserted of the wrong grid, pack or world is a false sentence made "
+                    "of a true figure." % (rel, n, tok, written, who or "none")
+                )
     return 1 if findings else 0
 
 
@@ -2187,8 +2402,8 @@ CATCH = [
     ("R15-S3 bengali digits", "fabricated_rows=\u09ef\u09ef\u09ef"),
     ("R15-S3 thai digits", "fabricated_rows=\u0e59\u0e59\u0e59"),
     # R14-S3: the figure checked must be the figure shown.
-    ("R14-S3 percent on a real figure", "deleted=0%"),
-    ("R14-S3 percent inside brackets", "(deleted=0%)"),
+    ("R14-S3 percent on a real figure", "deleted=0% [FA-02]"),
+    ("R14-S3 percent inside brackets", "(deleted=0%) [FA-02]"),
     # `R23-F1`: a candidate is a TOKEN, so a second `key=value` on the line no
     # longer swallows the first one's value -- and these are the shapes the
     # challenger measured empty at `78f9392`, each of them a line this phase's
@@ -2245,6 +2460,15 @@ CATCH = [
     ("R26-F1 a narrow no-break space", "fabricated_count=\u202f999"),
     ("R26-F1 an &nbsp; entity", "fabricated_count=&nbsp;999"),
     ("R26-F1 the padded shape the pack prints", "rows = 81737 fabricated_count = 999"),
+    # `C27-S1`, the coordinator's residual on `fc3f845` and the same class one
+    # layer out: these three characters are NOT whitespace, and `NFKC` expands
+    # each of them into a space and a COMBINING MARK, so the whitespace step
+    # deleted the space and left the mark between the `=` and the value. Three
+    # spellings of the fold, with the rule decided by the categories `Mn` and
+    # `Me` rather than by these three codepoints or the fifty like them.
+    ("C27-S1 an acute accent before the value", "fabricated_count=\u00b4999"),
+    ("C27-S1 a diaeresis before the value", "fabricated_count=\u00a8999"),
+    ("C27-S1 a bare combining mark before the value", "fabricated_count=\u0301999"),
     # Measured consequence of the step above, and the reason these two arms
     # exist: deleting whitespace that touches the `=` also deletes a format
     # character there, so round 14's own arm (a zero-width space BEFORE the
@@ -2293,7 +2517,7 @@ CATCH = [
     # the two tokens get different verdicts. `deleted=0` IS emitted and
     # `zz-deleted=0` is not, so with the guard the arm catches a fabricated
     # figure and with it deleted the scan weighs `deleted=0` and passes.
-    ("R24-F1 a fabricated figure whose hyphenated key ends in an emitted one", "zz-deleted=0"),
+    ("R24-F1 a fabricated figure whose hyphenated key ends in an emitted one", "zz-deleted=0 [FA-02]"),
     (
         "R24-F1 the pack's own quoted control line",
         "control: '### fabricated_count=999' still becomes 'fabricated_count=999'",
@@ -2336,8 +2560,12 @@ SKIP = [
     ("value boundary: a date is not a figure", "date=2026-10-19"),
 ]
 PASSES = [
-    ("an emitted figure", "present=true"),
-    ("R14-S3 control: the figure itself", "deleted=0"),
+    # `R27-F2`: a figure quoted WITH the case that required it. The bracketed
+    # identifier is not decoration -- it is what makes the quotation a claim
+    # about something, and a figure quoted without one is a finding of its own
+    # (`NAMES NO CASE`), armed below.
+    ("an emitted figure", "present=true [FA-01]"),
+    ("R14-S3 control: the figure itself", "deleted=0 [FA-02]"),
 ]
 
 # The realistic prose shapes `--surface` measures the price over. Not arms:
@@ -2474,9 +2702,27 @@ FAKE_PROOFS = (
     'case("b", "SELECT 2", "deleted=0")\n'
 )
 # What a RUN of `fake_proofs.py` PRINTS -- the two cases it holds, as output
-# and not as source. Since `R26-S1` this is a world's haystack: the file's text
-# emits nothing, and what the run printed is the whole of what emits.
+# and not as source. It was a world's whole haystack under round 26's rule;
+# since `R27-F1` it is only the PRINTED half of a world, kept in every world
+# beside the rows so that "printed but required by nothing" is a world this
+# selftest actually contains.
 FAKE_RUN_OUTPUT = "  a  SELECT 1 -> present=true\n  b  SELECT 2 -> deleted=0\n"
+# `R27-F1`. What a world's SINK holds: one row per expectation a value case
+# required and passed, in the shape `case()` writes. The printed text above is
+# kept beside it deliberately -- every world's sink carries BOTH, so a figure
+# that is only PRINTED is in the world and legitimises nothing, which is what
+# the notice and echo arms measure.
+def _row(case_id, figure, suite="PACK_A"):
+    return "FIGURE\t%s\t%s\t%s\n" % (suite, case_id, figure)
+
+
+FAKE_SINK = (
+    FAKE_RUN_OUTPUT + _row("FA-01", "present=true") + _row("FA-02", "deleted=0")
+)
+# The two fixture plants of round 27, each PRINTED in the run's own voice and
+# required by nothing.
+NOTICE_PLANT = "spectre_notice=7722"
+ECHO_PLANT = "spectre_echo=4409"
 PLANT = "fabricated_count=999"
 # The haystack arms cannot use `PLANT`: it is a token the arms plant, so the
 # `planted tokens` guard catches it whatever the haystack says, and a haystack
@@ -2570,11 +2816,13 @@ WORLDS = {
         {"fake_proofs.py": FAKE_PROOFS, "M10-noop.sql": "-- " + PROBE + "\n"},
         {},
     ),
-    # The PASS direction of the new rule: the run PRINTED the figure, so the
-    # figure is legitimate. Nothing in this world's files carries it.
+    # The PASS direction: a case REQUIRED the figure, so it is legitimate and
+    # the document may quote it -- naming that case. Nothing in this world's
+    # files carries it.
     "printed": ({"fake_proofs.py": FAKE_PROOFS}, {}),
-    # `the same spelling on both sides`: the run printed the figure PADDED, the
-    # way this pack's own output prints it, and the document writes it bare.
+    # `the same spelling on both sides`: the case's expectation is recorded
+    # PADDED, the way this pack's own output prints it, and the document writes
+    # it bare.
     "padded": ({"fake_proofs.py": FAKE_PROOFS}, {}),
     # The capture's own four refusals, each read by NAME in
     # `capture_names_test`.
@@ -2583,6 +2831,15 @@ WORLDS = {
     "capture-inside": ({"fake_proofs.py": FAKE_PROOFS}, {}),
     "capture-otherhead": ({"fake_proofs.py": FAKE_PROOFS}, {}),
     "capture-empty": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    # `R27-F1`: the two worlds the second challenger drove. The repository is
+    # the plain one; the plant is in what the run PRINTED, which is where a
+    # fixture's `RAISE NOTICE` and the driver's `echo` land.
+    "notice": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    "echo": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    # A sink carrying this commit's head and not one row.
+    "norows": ({"fake_proofs.py": FAKE_PROOFS}, {}),
+    # `R27-F2`: a case titled in prose.
+    "unidentified": ({"fake_proofs.py": FAKE_PROOFS}, {}),
 }
 
 # What each world's run printed, where it is not just what `fake_proofs.py`
@@ -2595,20 +2852,43 @@ WORLD_OUTPUT = {
     # genuinely in the haystack of every real run, and `planted_tokens()` is
     # what keeps a token this instrument printed from legitimising itself. The
     # world says so by printing the plant the way the selftest prints it.
-    "runlog": FAKE_RUN_OUTPUT
-    + "  catch  N0 control: a bare line            rc=1 (want 1) -> as required\n"
-    + PLANT
-    + "\n",
-    "printed": FAKE_RUN_OUTPUT + "  c  SELECT 3 -> " + PROBE + "\n",
+    # `R15-S4` under round 27's rule. A token this instrument plants in its own
+    # arms must not legitimise itself, and since `R27-F1` the only way into the
+    # haystack is a CASE'S EXPECTATION -- so the world carries the plant as a
+    # ROW, which is a case in the suites asserting the arm's own token. That is
+    # exactly the planter's remaining path, and `planted_tokens()` is what
+    # closes it. The committed recording and the arm source are kept in the
+    # world beside it: under this rule neither emits anything, which is what
+    # `only an asserted case emits` is for.
+    "runlog": FAKE_SINK
+    + _row("FA-04", PLANT)
+    + "  catch  N0 control: a bare line            rc=1 (want 1) -> as required\n",
+    "printed": FAKE_SINK + _row("FA-03", PROBE),
     # The line-terminator half of `R26-F1`: the run printed the key and its
     # `=` at the end of one line and the value at the start of the next. That
     # is not a figure any line of the output carries, and deleting the newline
     # would have made one.
-    "split": FAKE_RUN_OUTPUT + "  c  SELECT 3 -> " + PROBE.replace("=", "=\n"),
-    "padded": FAKE_RUN_OUTPUT
-    + "  c  SELECT 3 -> "
-    + PROBE.replace("=", "\u00a0=\t")
+    # Two rows of ONE case, the key and its `=` in one and the value in the
+    # other: not a figure either row carries, and deleting the line terminator
+    # beside the `=` would have made one.
+    "split": FAKE_SINK + _row("FA-03", "world_probe=") + _row("FA-03", "404"),
+    # Padded on both sides with a no-break space: the TAB is the sink's own
+    # field separator, so a row cannot carry one, and a spelling rule measured
+    # with a character the row cannot hold measures nothing.
+    "padded": FAKE_SINK + _row("FA-03", PROBE.replace("=", "\u00a0=\u00a0")),
+    # `R27-F1`, the second challenger's two worlds. The sink is the real one;
+    # the plants are PRINTED beside it, exactly as `psql` and the driver print,
+    # and nothing required either number.
+    "notice": FAKE_SINK
+    + "psql:/var/tmp/p11/prep/phase11/harness/world.sql:75: NOTICE:  "
+    + NOTICE_PLANT
     + "\n",
+    "echo": FAKE_SINK + "=== 5c. the driver says: " + ECHO_PLANT + " ===\n",
+    # `R27-F1`'s refusal: a sink with this commit's head and not one row.
+    "norows": FAKE_RUN_OUTPUT,
+    # `R27-F2`: a case whose title is prose, which the suites record as
+    # `UNIDENTIFIED-CASE`. A case a document cannot reference pins nothing.
+    "unidentified": FAKE_SINK + _row(UNIDENTIFIED, PROBE),
 }
 
 # The worlds whose subject is the CAPTURE rather than the tree: no capture at
@@ -2729,7 +3009,7 @@ def _world_capture(kind, harness):
         sha = "0" * 40
     if kind == "capture-otherhead":
         sha = "1" * 40
-    output = WORLD_OUTPUT.get(kind, FAKE_RUN_OUTPUT)
+    output = WORLD_OUTPUT.get(kind, FAKE_SINK)
     if kind == "capture-empty":
         fd, path = tempfile.mkstemp(prefix="p11-capture-empty-", suffix=".txt")
         os.close(fd)
@@ -2924,7 +3204,7 @@ def _seat_capture(tag, root):
         sha = _commit_of(root)
     except Refusal:
         sha = "0" * 40
-    _SEAT_CAPTURES[tag] = _capture_file(tag, sha, FAKE_RUN_OUTPUT)
+    _SEAT_CAPTURES[tag] = _capture_file(tag, sha, FAKE_SINK)
     return _SEAT_CAPTURES[tag]
 
 
@@ -2975,7 +3255,7 @@ def _arms_with(skip=()):
     # measured claim rather than a sentence in this header.
     for label, kind, token in (
         ("R12 E4b a doc is not its own evidence", "md", PROBE),
-        ("R15-S4 a planted token is not its own evidence", "runlog", PLANT),
+        ("R15-S4 a planted token is not its own evidence", "runlog", PLANT + " [FA-04]"),
         ("R16-F1 an untracked scratch file is not evidence", "untracked", PROBE),
         ("R16-F1 a gitignored .pyc is not evidence", "pyc", PROBE),
         ("R16-F1 the checker is not its own evidence", "stem", PROBE),
@@ -2990,12 +3270,79 @@ def _arms_with(skip=()):
     ):
         arms.append((label, 1, (lambda k=kind, x=token: _arm(x, skip, "a.md", k))))
     # The PASS direction of the same rule, which is what keeps it from being a
-    # net that reds everything: the run PRINTED the figure.
+    # net that reds everything: a case required the figure and the document
+    # names that case.
     arms.append(
         (
             "R26-S1 what the run printed is emitted",
             0,
-            (lambda: _arm(PROBE, skip, "a.md", "printed")),
+            (lambda: _arm(PROBE + " [FA-03]", skip, "a.md", "printed")),
+        )
+    )
+    # ── `R27-F1`: PRINTING IS NOT REQUIRING ───────────────────────────────
+    # Both challengers of round 27 drove a fabricated figure to
+    # `EXIT_SCRIPT 0` through something that merely PRINTED: a `RAISE NOTICE`
+    # in a data fixture, an `echo` in the driver, and the driver's own echo of
+    # `TMPDIR`. Each world below carries the real sink AND the plant in the
+    # printed text beside it, so what is measured is the difference between
+    # printed and required, with everything else held still. Deleting
+    # `only an asserted case emits` makes all three PASS -- that is round 26's
+    # rule, restored by value.
+    arms.append(
+        (
+            "R27-F1 a RAISE NOTICE in a fixture requires nothing",
+            1,
+            (lambda: _arm(NOTICE_PLANT + " [FA-01]", skip, "a.md", "notice")),
+        )
+    )
+    arms.append(
+        (
+            "R27-F1 an echo in the driver requires nothing",
+            1,
+            (lambda: _arm(ECHO_PLANT + " [FA-01]", skip, "a.md", "echo")),
+        )
+    )
+    # The same world, with no case named: the figure is not required either
+    # way, and the finding a reader gets must be the one about requirement.
+    arms.append(
+        (
+            "R27-F1 a printed plant with no case named requires nothing",
+            1,
+            (lambda: _arm(NOTICE_PLANT, skip, "a.md", "notice")),
+        )
+    )
+    # A sink that carries this commit's head and not one row is a REFUSAL, not
+    # a pass: a gate whose haystack is empty passes nothing.
+    arms.append(
+        (
+            "R27-F1 a sink with no rows is refused",
+            5,
+            (lambda: _arm(PROBE + " [FA-03]", skip, "a.md", "norows")),
+        )
+    )
+    # ── `R27-F2`: A FIGURE IS A FIGURE *OF* SOMETHING ─────────────────────
+    # `axes=3` is true of Pack A's grid and was asserted of Pack B's, where
+    # the same run requires `axes=2`. The three arms are the three ways a
+    # quotation can fail to be about the case that required it.
+    arms.append(
+        (
+            "R27-F2 a figure attributed to another case",
+            1,
+            (lambda: _arm("present=true [FA-02]", skip, "a.md")),
+        )
+    )
+    arms.append(
+        (
+            "R27-F2 a required figure naming no case at all",
+            1,
+            (lambda: _arm("present=true", skip, "a.md")),
+        )
+    )
+    arms.append(
+        (
+            "R27-F2 a figure naming a case the suites could not identify",
+            1,
+            (lambda: _arm(PROBE + " [" + UNIDENTIFIED + "]", skip, "a.md", "unidentified")),
         )
     )
     # The other direction of the same rule, and a hole this round found in its
@@ -3005,16 +3352,16 @@ def _arms_with(skip=()):
         (
             "R26-F1 a figure split across two printed lines emits nothing",
             1,
-            (lambda: _arm(PROBE, skip, "a.md", "split")),
+            (lambda: _arm(PROBE + " [FA-03]", skip, "a.md", "split")),
         )
     )
-    # `the same spelling on both sides`: the run printed it PADDED, the
+    # `the same spelling on both sides`: the case required it PADDED, the
     # document writes it bare, and they are one figure.
     arms.append(
         (
             "R26-F1 a padded figure in the output is the same figure",
             0,
-            (lambda: _arm(PROBE, skip, "a.md", "padded")),
+            (lambda: _arm(PROBE + " [FA-03]", skip, "a.md", "padded")),
         )
     )
     # The capture's four refusals. `capture_names_test` reads each one BY NAME;
@@ -4814,6 +5161,43 @@ PROVENANCE = {
     "R26-F1 the padded shape the pack prints": (
         None, "two padded pairs on one line, the shape the `--surface` inventory "
               "printed until this round"),
+    "C27-S1 an acute accent before the value": (
+        None, "`U+00B4`, which NFKC expands into a space and `U+0301`: the space was "
+              "deleted beside the `=` and the mark was not, so the line was never a "
+              "candidate at all"),
+    "C27-S1 a diaeresis before the value": (
+        None, "`U+00A8`, the same fold through a different compatibility character"),
+    "C27-S1 a bare combining mark before the value": (
+        None, "`U+0301` written on its own, which is the residue the fold leaves and "
+              "the thing the widened class actually deletes"),
+    # `R27-F1` and `R27-F2`, round 27's two blockers. Both challengers quote
+    # their plants verbatim in their reports; the entries here are DESCRIPTIONS
+    # for the reason the `R24-F1` entries give -- an arm body's figures are
+    # PLANTED, and a round's probe token quoted into this file would plant a
+    # token beside a real key.
+    "R27-F1 a RAISE NOTICE in a fixture requires nothing": (
+        None, "the fixture's `RAISE NOTICE '<literal>'`, printed by `psql` in the "
+              "run's own voice and required by no case, which the second challenger "
+              "drove to `EXIT_SCRIPT 0`"),
+    "R27-F1 an echo in the driver requires nothing": (
+        None, "an `echo` added to `rebuild_and_prove.sh`, the same attack through the "
+              "driver's own voice"),
+    "R27-F1 a printed plant with no case named requires nothing": (
+        None, "the same printed plant quoted with no case reference, so the finding a "
+              "reader gets is the one about requirement and not about attribution"),
+    "R27-F1 a sink with no rows is refused": (
+        None, "a sink carrying this commit's `RUN_HEAD` and not one row, which is an "
+              "empty haystack and must not pass as a verdict"),
+    "R27-F2 a figure attributed to another case": (
+        None, "the first challenger's `axes=3` shape: a figure one case requires, "
+              "quoted of another case, which is a false sentence made of a true "
+              "figure"),
+    "R27-F2 a required figure naming no case at all": (
+        None, "a required figure quoted with no case beside it, so nothing says what "
+              "the figure is a figure OF"),
+    "R27-F2 a figure naming a case the suites could not identify": (
+        None, "a case titled in prose, which the suites record as the unidentified "
+              "case: a case a document cannot reference pins nothing"),
     "R26-F1 a figure split across two printed lines emits nothing": (
         None, "the hole this round found inside its own fix: the run printed the key "
               "and its `=` at the end of one line and the value at the start of the "
@@ -5069,7 +5453,12 @@ PROVENANCE = {
     "R14-S1 hyphen in the key": (None, "a hyphen in the key, named as a shape"),
     "R14-S1 behind a -- marker": (None, "a figure after a `--` marker, named as a shape"),
     "R14-S3 percent on a real figure": (None, "`deleted=0%`, quoted in the finding"),
-    "R14-S3 control: the figure itself": ("deleted=0", None),
+    # Described rather than quoted since `R27-F2`: the body carries the case
+    # that REQUIRES the figure, in brackets, which the round's own finding did
+    # not quote because the convention is this round's.
+    "R14-S3 control: the figure itself": (
+        None, "`deleted=0`, the figure itself, with the case that requires it named "
+              "beside it as every quotation of a figure must be since `R27-F2`"),
     "R14-S3 percent inside brackets": (None, "`(deleted=0%)`, quoted in the finding"),
     "R13-S1 N16 backticked comment": (None, "a backticked comment after a figure"),
     "R12 in a backtick fence": (None, "a fenced block, the caught control of round 12"),
@@ -6319,7 +6708,7 @@ def identity_arms_test():
     # as a planter would experience it. One line with nothing but the entity on
     # it returns 2 (`INERT`), which is the gate refusing to call an unweighed
     # world a pass -- correct behaviour, and not the measurement this arm wants.
-    entity = "present=true fabricated_count&#61;999"
+    entity = "present=true [FA-01] fabricated_count&#61;999"
     cache = list(_FRAME_PARSED)
     entries = TRANSFORMER_MODULE_CALLS
     try:

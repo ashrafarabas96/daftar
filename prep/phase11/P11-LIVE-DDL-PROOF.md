@@ -430,7 +430,7 @@ and this round narrows only the first two items of it.
 | the law | `C-APP-01`: a matrix product's non-base variant `attributes` name **exactly** its product's registered axis set |
 | what was guarded | the VARIANT insert (round 0), and since round 1 every REMOVAL path on both registries |
 | what was not | **adding an axis to a matrix that already has variants** |
-| measured at `23a7139` | on a product holding one committed `{size:m,color:blue}`: `INSERT INTO product_matrix_axes … 'material',3` → **rc=0, not refused**; the matrix then registered `[size,color,material]`; committed variants not naming exactly the registered set: **1** |
+| measured at `23a7139` | on a product holding one committed `{size:m,color:blue}`: `INSERT INTO product_matrix_axes … 'material',3` → **rc 0, not refused**; the matrix then registered `[size,color,material]`; committed variants not naming exactly the registered set: **1** |
 | the cost | not a duplicate cell this time — a variant **nothing can address through the matrix**, since no 2-axis cell exists on a 3-axis product, while it keeps its own stock key and its whole movement history. Under Option B the variant **is** the costing key, so this is the same split identity `P0-01` produced |
 | why it matters more than its class | it is the door a merchant walks through **on purpose**: *"add a material axis to this shirt"* |
 
@@ -678,7 +678,7 @@ when that side moved.
 **Measured** from a state every law in the pack accepts (key `8`, cache `8`,
 both lots cached): one more lot-tracked movement through the **official
 command**, with its allocation and no cache write, under `SET CONSTRAINTS ALL
-IMMEDIATE` — `COMMIT rc=0`, **the key at 12.0000 against a cache summing to
+IMMEDIATE` — `COMMIT rc 0`, **the key at 12.0000 against a cache summing to
 8.0000**. `C-LOT-01` was satisfied, so the first trigger passed and the second
 never ran. It is item **6** of this preparation's own *"what a challenger
 should attack"* list, and it attacked successfully. The handoff's status
@@ -768,7 +768,7 @@ Recorded because that is the standard this round is held to as well.
 ### 10.4 The three notes
 
 - **A lot's facts were freely rewritable** — `UPDATE stock_lots SET
-  expiry_date = '2099-01-01'` on an expired lot returned `rc=0`, which makes an
+  expiry_date = '2099-01-01'` on an expired lot returned `rc 0`, which makes an
   `expiry_policy` that admits only `refuse` weaker than it reads, and
   `received_seq` (which the picker's index orders by) had the same gap. Nothing
   in the pack *claimed* immutability, so this was a gap in the law set rather
@@ -880,7 +880,7 @@ Measured at `0db9450` on the world's TSHIRT, which registers two axes and holds
 one committed cell:
 
 ```
-INSERT INTO product_variants (… is_base …, attributes='{}') -> rc=0 (NOT REFUSED)
+INSERT INTO product_variants (… is_base …, attributes='{}') -> rc 0 (NOT REFUSED)
 non-base '{}' variants on this MATRIX product: 1
 its own stock key: 5.0000
 ```
@@ -1185,7 +1185,7 @@ rejected Pack A was opened by the previous round's own correct remedy.
 Measured by the challenger on `TSHIRT-RECOVER`: archive both cells (permitted,
 0061 requires zero stock and it held), register a third axis (permitted — the
 freeze guard now reads LIVE variants only, which is round 3's fix for `PA-02`),
-then `UPDATE product_variants SET status='active'` → **rc=0**, leaving one live
+then `UPDATE product_variants SET status='active'` → **rc 0**, leaving one live
 non-base variant naming two of the product's three axes and holding 7.0000 on
 its own stock key. The challenger also showed the door is NEW at this SHA: the
 same sequence at `0db9450` was refused at its second step.
@@ -1241,7 +1241,7 @@ Six of fifteen spellings passed `catalog_policy_qual_is_tautology`. One of them
 is not a spelling but a measured cross-tenant hole: `(business_id =
 business_id)` installed as `tenant_membership`'s USING and WITH CHECK — **the
 policy name unchanged, so the set pin beside it passes** — made a cross-tenant
-read return 6 rows instead of 0 and a cross-tenant INSERT return rc=0 instead of
+read return 6 rows instead of 0 and a cross-tenant INSERT return rc 0 instead of
 rc 3. **Form 4** is added: `(col = col)` and `NOT (col <> col)` over a column the
 catalogue marks `attnotnull`, and `col IS NOT DISTINCT FROM col` whatever the
 nullability, because that one is true of the NULL rows too. Both directions are
@@ -1437,7 +1437,7 @@ then before `COMMIT` drop to `daftar_app` and `RESET` the request context.
 ```
 privileges : true true true true      <- has_table_privilege says yes, four times
 rows visible: 0                       <- FORCE RLS, no app_bypass, no context
-rc = 0  NOT REFUSED
+rc 0  NOT REFUSED
 live variants outside their grid after COMMIT: 1
 ```
 
@@ -2237,13 +2237,18 @@ reports success and then **confirms itself**. Measured on this tree as the
 OWNER, `daftar_migrator`:
 
 ```
-deleted=0            -- DELETE FROM catalog_grid_ctx_ledger
-owner_sees=0         -- the owner's own verification, same transaction
-present=true         -- a superuser reading the same table, immediately afterwards
+deleted=0      [PA9-P1]   -- DELETE FROM catalog_grid_ctx_ledger
+owner_sees=0   [PA9-P1]   -- the owner's own verification, same transaction
+present=true   [PA9-P2]   -- a superuser reading the same table, immediately afterwards
 ```
 
-Those three lines are `PA9-P1`'s and `PA9-P2`'s own output, verbatim and
-complete: the two cases assert exactly those strings and nothing else.
+Those three figures are exactly what `PA9-P1` and `PA9-P2` REQUIRE: each case
+asserts that string and fails if the value differs, which is what makes the
+figure citable at all since `R27-F1`. The bracketed identifier beside each one
+names the case that requires it, and that is checked rather than decorative:
+quoting a figure of the wrong case, or of no case, is a finding of its own
+(`ANOTHER CASE REQUIRED IT`, `NAMES NO CASE`). The brackets are this round's
+addition to the lines; the figures and the comments are the cases' own.
 
 **Correction, `R10-F1`.** Until this round the third line of that block read
 `superuser_sees=130`, and **no instrument in this tree emits it**. `PA9-P2`
