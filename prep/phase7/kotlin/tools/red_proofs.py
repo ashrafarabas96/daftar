@@ -49,7 +49,7 @@ class Proof:
     """The test that MUST fail. Matched against the runner's failure lines."""
     expect_red: str
     why: str
-    edits: tuple[tuple[str, str], ...] = ()
+    edits: tuple[tuple[str, ...], ...] = ()
     """Further (find, replace) pairs applied after the one above, in order.
 
     A defect that is one edit in one place is one edit here, which is every
@@ -60,6 +60,10 @@ class Proof:
     mutation changes nothing measures nothing. Every pair is held to the same
     rule as the first — matched literally, exactly once, and a miss is a FAILED
     proof — so a multi-edit plant cannot half-land.
+
+    A pair is an edit to `path`. A TRIPLE is `(path, find, replace)`, for a
+    plant that spans two files — the thirteenth review's blocker is one: a
+    wrapper in the test and the kernel arm it hides the loss of.
     """
 
 
@@ -810,12 +814,101 @@ PROOFS: list[Proof] = [
             + CLAIM_SITE
         ),
         edits=((
-            '                            }\n                            if (event is QueueEvent.ByScope &&',
+            '                            }\n                            if (aForeignScopeRefusal) {\n'
+            '                                foreignScopeRefusals++',
             '                            }\n                            }\n'
-            '                            if (event is QueueEvent.ByScope &&',
+            '                            if (aForeignScopeRefusal) {\n'
+            '                                foreignScopeRefusals++',
         ),),
         expect_red="every reachable configuration honours every invariant",
         why="the twelfth review's blocker, and the only FAIL-OPEN this phase has had since L-01. The site is wrapped in a condition that is REACHED \u2014 UNKNOWN_OUTCOME rows do reach that arm and do produce refusals, so the registration fires and the registry's equality is satisfied \u2014 while `offline.not_sendable` is produced only on CAPTURED rows, so the body runs ZERO times. The review then planted proof 64's own harm underneath it, E-04's refusal arm deleted, and measured the pair GREEN at 98 of 98 against rc 1 red by name on a clean subject: a cashier's own capture refused with \u201canother member must confirm this\u201d, with every assertion in the file passing. The observability loop cannot see it either, because the code IS produced \u2014 by the rows the conditioned site no longer looks at. `claimsExercised` records the branch that actually runs the claim, so this plant now reds by name on the site that never exercised. **A registration certifies that a site ran; only the branch inside it certifies that anything was tested.**",
+    ),
+    Proof(
+        law="Q-01-A-CLAIM-EXERCISED-ONCE-IS-NOT-A-CLAIM-EXERCISED-OVER-ITS-DOMAIN",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=CLAIM_SITE,
+        replace=(
+            '                            if (event !is QueueEvent.ByScope ||\n'
+            '                                permittedToAct(\n'
+            '                                    event.actingScope, op.scope, QueueEvent.Release(event.actingScope),\n'
+            '                                )\n'
+            '                            ) {\n'
+            + CLAIM_SITE
+        ),
+        edits=(
+            (
+                '                            }\n                            if (aForeignScopeRefusal) {\n'
+                '                                foreignScopeRefusals++',
+                '                            }\n                            }\n'
+                '                            if (aForeignScopeRefusal) {\n'
+                '                                foreignScopeRefusals++',
+            ),
+            (
+                "src/app/daftar/offline/Queue.kt",
+                "                    ?: refusalForACaptureSomebodyElseMustConfirm(event.actingScope)\n",
+                "",
+            ),
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="the thirteenth review's blocker, a FAIL-OPEN inside the remedy that review had itself specified one round earlier. The site is wrapped in its OWN PRECONDITION rather than in an excluding state \u2014 `event !is ByScope || permittedToAct(\u2026, Release(\u2026))`, the very condition its second assertion exists to judge. Rows whose actor may release still produce the code, so the site runs, the body runs, and BOTH the made and the exercised equalities are satisfied; the only rows excluded are the ones the assertion is for. With E-04's refusal arm deleted underneath (the third edit, which is why this plant spans two files) the review measured **99 of 99 GREEN**, against rc 1 red by name on a clean subject \u2014 reproduced here on a `git archive 00cf44f` export before the fix was written. A registration of exercise says the claim ran once SOMEWHERE. The count equality reads it as a RATIO against the domain declared for the claim, so the wrapper drops the numerator from 6 to 0 of 6 and the shortfall is named with the site, the code and the domain. The wrapper ALONE is green, here as there, and that is correct rather than a miss: without the harm the only productions of the code are rows the wrapper keeps",
+    ),
+    Proof(
+        law="Q-02-TWO-SITES-UNDER-ONE-LABEL-RUN-TWICE-THEIR-DOMAIN",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=CLAIM_SITE,
+        replace=(
+            '                            claimAbout(\n'
+            '                                "E-04/not-sendable-offers-a-button-its-reader-can-press",\n'
+            '                                "offline.not_sendable",\n'
+            '                                step.code,\n'
+            '                            ) {\n'
+            '                                assertEquals(\n'
+            '                                    OperationState.CAPTURED, op.state,\n'
+            '                                    "a not_sendable refusal outside CAPTURED",\n'
+            '                                )\n'
+            '                            }\n'
+            + CLAIM_SITE
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="the thirteenth review's Q-02. The pair anchor's loss bound was defeated by REUSING a label, and the review was careful to say why that is not forgery: `INV-9a/\u2026` already labels two pairs in the literal total, so a second claim under one invariant inherits the label by copy-paste. Two sites under one label collapsed into one pair, and the anchor could not tell. The count is what bounds it without any convention about labelling: the label's body now runs 12 times against a declared domain of 6, and 2N against N is named as such",
+    ),
+    Proof(
+        law="Q-02-A-LABEL-NAMES-ONE-SITE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=CLAIM_SITE,
+        replace=(
+            '                            if (op.attempts > 1_000) {\n'
+            '                                claimAbout(\n'
+            '                                    "E-04/not-sendable-offers-a-button-its-reader-can-press",\n'
+            '                                    "offline.not_sendable",\n'
+            '                                    step.code,\n'
+            '                                ) {\n'
+            '                                    assertTrue(true, "a second site under a copied label")\n'
+            '                                }\n'
+            '                            }\n'
+            + CLAIM_SITE
+        ),
+        expect_red="a claim about a refusal code is written through the registering helper",
+        why="the half of Q-02 the count cannot see, and the reason the convention check also counts LABELS. A second site under an existing label, in a branch the search never reaches, changes no pair and no count: 6 of 6 still holds and the registry is satisfied. Only the text says there are two sites where the declaration names one. It reds through the CONVENTION CHECK, which is where a text check belongs \u2014 it derives nothing and carries that check's stated fail-open. What it cannot catch is a DECOY that replaces a claim's body in place while keeping its label and its count: measured green at 99 of 99 on this tree, and caught instead by THIS HARNESS, which reports proof 64 as `STAYED GREEN \u2014 the law is undefended` and exits 1. Bounding the loss of a site's CONTENT is what the harness is for; bounding the loss of a SITE is what the registry is for",
+    ),
+    Proof(
+        law="Q-03-A-LOCAL-VARIABLE-IS-NOT-A-SPELLING",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=CLAIM_SITE,
+        replace=(
+            '                            val codeHere = step.code\n'
+            '                            when (codeHere) {\n'
+            '                                "offline.permission_revoked" ->\n'
+            '                                    assertEquals(\n'
+            '                                        OperationState.NEEDS_ATTENTION, op.state,\n'
+            '                                        "a permission refusal outside NEEDS_ATTENTION",\n'
+            '                                    )\n'
+            '                                else -> {}\n'
+            '                            }\n'
+            + CLAIM_SITE
+        ),
+        expect_red="a claim about a refusal code is written through the registering helper",
+        why="the thirteenth review's Q-03, and the correction it asked for in the DISCLOSURE as much as in the code. The convention check said its fail-open was that \u201ca steered spelling escapes it\u201d, and the review measured two escapes that are not spellings: a local variable assigned from `step.code` and then compared, and the same comparison broken across two lines \u2014 each green at 99 of 99 with its control red. An assignment is a pattern now, so this plant reds; the line break is NOT reachable by a line-wise check and the disclosure says so in those words instead. A fail-open stated too kindly is worse than one stated plainly, because a reader believes the kind version",
     ),
     Proof(
         law="P-03-AN-ANCHOR-BOUNDS-THE-LOSS-OF-A-SITE-NOT-OF-A-CODE",
@@ -870,8 +963,8 @@ PROOFS: list[Proof] = [
     Proof(
         law="O-03-A-CLAIM-SITE-NOTHING-EVALUATES-REGISTERS-NOTHING",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
-        find="                            if (op.isTerminal &&",
-        replace="                            if (false && op.isTerminal &&",
+        find="                            if (aFinishedRowAnsweringAPerson) {",
+        replace="                            if (false && aFinishedRowAnsweringAPerson) {",
         expect_red="every reachable configuration honours every invariant",
         why="the honest cost of deriving the subject set from EXECUTION, measured here rather than left for the next review to find \u2014 and the review said it would attack exactly this. A claim site in a branch nothing reaches registers nothing, so INV-15\u2019s two codes would vanish from `claimsMade` as quietly as a missed spelling once did. That is what the literal total is for: the registry is asserted for EQUALITY, so the two codes go missing by name. The site\u2019s own non-vacuity assertion (`terminalRefusals > 0`) is the second net, and the registry equality is asserted first so the message a reader sees names the codes",
     ),
@@ -965,28 +1058,27 @@ def main() -> int:
         tree = tempfile.mkdtemp(prefix=f"p7-proof-{i}-")
         for part in ("src", "test"):
             shutil.copytree(os.path.join(ROOT, part), os.path.join(tree, part))
-        target = os.path.join(tree, proof.path)
-        after = open(target, encoding="utf-8").read()
-
-        for n, (find, replace) in enumerate(((proof.find, proof.replace),) + proof.edits, start=1):
-            hits = after.count(find)
+        for n, edit in enumerate(((proof.find, proof.replace),) + proof.edits, start=1):
+            rel, find, replace = edit if len(edit) == 3 else (proof.path, edit[0], edit[1])
+            target = os.path.join(tree, rel)
+            before = open(target, encoding="utf-8").read()
+            hits = before.count(find)
             if hits != 1:
                 return (
                     i,
                     proof,
-                    f"{proof.law}: edit {n} matched {hits} times in {proof.path} "
+                    f"{proof.law}: edit {n} matched {hits} times in {rel} "
                     f"(must be exactly 1) — THE MUTATION DID NOT LAND, so this proof measured nothing",
                     f"MUTATION DID NOT LAND (edit {n}, {hits} matches)",
                 )
-            before = after
-            after = after.replace(find, replace)
+            after = before.replace(find, replace)
             if after == before:
                 return (
                     i, proof,
                     f"{proof.law}: edit {n} produced an identical file",
                     f"REPLACEMENT WAS A NO-OP (edit {n})",
                 )
-        open(target, "w", encoding="utf-8").write(after)
+            open(target, "w", encoding="utf-8").write(after)
 
         rc, failing, _log = run_suite(tree)
         named = any(proof.expect_red in name for name in failing)

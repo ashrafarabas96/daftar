@@ -62,13 +62,49 @@ class QueueModelCheckTest {
          * the equality could not fail. An assertion that cannot fail says
          * nothing, whatever it is about.
          */
-        val CLAIMS_THIS_CHECK_MAKES: Set<Pair<String, String>> = setOf(
-            "E-04/not-sendable-offers-a-button-its-reader-can-press" to "offline.not_sendable",
-            "INV-9a/a-foreign-scope-is-refused-as-a-scope-problem" to "offline.another_members_capture",
-            "INV-9a/a-foreign-scope-is-refused-as-a-scope-problem" to "offline.scope_switched",
-            "INV-15/a-finished-row-answers-in-its-own-terms" to "offline.already_recorded",
-            "INV-15/a-finished-row-answers-in-its-own-terms" to "offline.already_abandoned",
+        val CLAIMS_THIS_CHECK_MAKES: Map<Pair<String, String>, ClaimDomain> = mapOf(
+            ("E-04/not-sendable-offers-a-button-its-reader-can-press" to "offline.not_sendable")
+                to ClaimDomain.EVERY_PRODUCTION,
+            ("INV-9a/a-foreign-scope-is-refused-as-a-scope-problem" to "offline.scope_switched")
+                to ClaimDomain.EVERY_PRODUCTION,
+            ("INV-15/a-finished-row-answers-in-its-own-terms" to "offline.already_recorded")
+                to ClaimDomain.EVERY_PRODUCTION,
+            ("INV-15/a-finished-row-answers-in-its-own-terms" to "offline.already_abandoned")
+                to ClaimDomain.EVERY_PRODUCTION,
+            // The only claim here whose domain is narrower than every
+            // production of its code, and it is narrower for a reason that is
+            // itself counted: `offline.another_members_capture` is produced on
+            // a foreign-scope refusal, which INV-9a judges, AND by E-04's own
+            // arm, where the event is permitted and the release is not. Those
+            // are different questions about one code, so this claim's
+            // denominator is the foreign-scope count — and the partition
+            // assertion below requires every production of the code to fall in
+            // one of those two classes, so a third producer reds rather than
+            // hiding in the gap a narrower domain opens.
+            ("INV-9a/a-foreign-scope-is-refused-as-a-scope-problem" to "offline.another_members_capture")
+                to ClaimDomain.ON_A_FOREIGN_SCOPE_REFUSAL,
         )
+
+        /**
+         * What a claim's body is required to have run over: the DENOMINATOR
+         * the count equality reads it against.
+         *
+         * The thirteenth review's Q-01: recording that a claim was exercised
+         * records that it ran ONCE SOMEWHERE in the search, which is not that
+         * it ran on the cases it is about. A site wrapped in its own
+         * precondition — the very condition its second assertion exists to
+         * judge — still runs, still registers, and excludes exactly the rows
+         * that matter. So a claim states where it must have run, and the count
+         * says whether it did.
+         *
+         * `EVERY_PRODUCTION` is the strongest denominator available and the
+         * one to prefer: the body must run on every production of the code
+         * anywhere in the reachable space. A narrower domain is a claim of its
+         * own and is counted independently of the branch its site sits in —
+         * counted at the top of the refusal arm, so a condition added inside
+         * the site drops the numerator while the denominator stands.
+         */
+        enum class ClaimDomain { EVERY_PRODUCTION, ON_A_FOREIGN_SCOPE_REFUSAL }
 
         /**
          * Comparisons against a refusal code that this file forbids outside
@@ -82,10 +118,17 @@ class QueueModelCheckTest {
          * twelfth review then measured: the tenth review's `when (step.code)`
          * plant is green at 98 of 98 against the registry alone.
          *
-         * **Its own fail-open, stated because a reader of this file will
-         * otherwise assume a text check here is a derivation and trust it as
-         * one:** it reads text, so a steered spelling escapes it, exactly as
-         * four spellings escaped the sweep this file used to carry. The
+         * **Its own fail-open, stated precisely, because a reader of this
+         * file will otherwise assume a text check here is a derivation and
+         * trust it as one:** it sees a comparison against the EXPRESSION
+         * `step.code` written ON ONE LINE, and nothing else. The thirteenth
+         * review measured two escapes that are not spellings at all — a local
+         * variable assigned from `step.code` and then compared, and the same
+         * comparison broken across two lines — each green at 99 of 99 with its
+         * control red. An assignment is one of the patterns below now; a line
+         * break is not reachable by a line-wise check at all, and "a steered
+         * spelling escapes it" was too kind to this check, because a local
+         * variable is not a spelling. The
          * difference is the direction of the failure. A subject set derived
          * from steered text yields a false GREEN, which is every finding of
          * the tenth and eleventh reviews. A prohibition that is steered yields
@@ -105,6 +148,7 @@ class QueueModelCheckTest {
             "==" + " step.code",
             "step.code" + " in ",
             "when (" + "step.code" + ")",
+            " = " + "step.code",
         )
 
         /**
@@ -360,11 +404,64 @@ class QueueModelCheckTest {
      * observability loop cannot see it either, because the code IS produced —
      * by the rows the conditioned site no longer looks at.
      *
-     * So the branch that runs the claim records it. A claim never exercised is
-     * a claim asserted of nothing, which is the whole proposition this loop
-     * defends, and it is now asserted rather than assumed.
+     * So the branch that runs the claim records it. **That records EXISTENCE
+     * of exercise and nothing more, and the sentence that used to stand here
+     * — that the proposition this loop defends is now asserted rather than
+     * assumed — was false as measured.** The thirteenth review wrapped this
+     * same site in its own precondition instead of an excluding state:
+     *
+     *     if (event !is QueueEvent.ByScope ||
+     *         permittedToAct(event.actingScope, op.scope, QueueEvent.Release(event.actingScope))
+     *     ) { claimAbout(…) { … } }
+     *
+     * Rows whose actor may release still produce the code, so the site ran,
+     * the body ran, both equalities were satisfied — and the only rows
+     * excluded were the ones the second assertion exists for. With E-04's
+     * refusal arm deleted underneath it: **99 of 99 green**, against rc 1 and
+     * red by name on a clean subject. The hole was in the remedy that review
+     * had itself specified, built as specified.
+     *
+     * What closes it is a COUNT, not an existence. `timesTheBodyRan` is read
+     * against `timesTheCodeWasProduced` pair by pair, so a claim must be
+     * exercised on EVERY production of the code it is about, over the domain
+     * declared for it in `CLAIMS_THIS_CHECK_MAKES`. A wrapper drops the
+     * numerator below the denominator and names the shortfall. Counting is
+     * also what bounds a REUSED label (Q-02): two sites under one label show
+     * as 2N against N, so the pair anchor no longer has to be defended by a
+     * convention about labelling.
+     *
+     * The residual, named because it is the next thing to attack and the
+     * review has already announced it: a site whose declared DOMAIN is itself
+     * steered. Three of the five claims declare `EVERY_PRODUCTION`, which is
+     * the strongest denominator available, and two declare a narrower one
+     * that is counted independently of the branch the site sits in.
      */
     private val claimsExercised = mutableSetOf<Pair<String, String>>()
+
+    /** How many times each claim site's body actually ran, keyed on (site, code). */
+    private val timesTheBodyRan = mutableMapOf<Pair<String, String>, Int>()
+
+    /** How many times each refusal code was produced anywhere in the search. */
+    private val timesTheCodeWasProduced = mutableMapOf<String, Int>()
+
+    /**
+     * How many times each code was produced on a refusal of a FOREIGN-SCOPE
+     * event, and on a refusal of a finished row that answers a person —
+     * counted at the top of the refusal arm, from the same predicate the
+     * branches use, so a condition added INSIDE a site drops its numerator
+     * while its denominator stands.
+     */
+    private val timesProducedOnAForeignScopeRefusal = mutableMapOf<String, Int>()
+
+    /**
+     * How many times each code was produced on a CAPTURED row by a session
+     * whose event is permitted — the other producer of
+     * `offline.another_members_capture`, which is E-04's own arm. It exists so
+     * that the one claim with a narrower domain has its excluded productions
+     * ACCOUNTED FOR rather than merely declared: the two counts must add up to
+     * every production of that code, so a third producer reds.
+     */
+    private val timesProducedOnACaptureSomebodyElseMustConfirm = mutableMapOf<String, Int>()
 
     /**
      * Registers a claim made at `site` about `code`, and returns the code, so
@@ -380,6 +477,7 @@ class QueueModelCheckTest {
     private fun claimingCode(site: String, code: String): String {
         claimsMade += site to code
         claimsExercised += site to code
+        timesTheBodyRan[site to code] = (timesTheBodyRan[site to code] ?: 0) + 1
         return code
     }
 
@@ -393,6 +491,7 @@ class QueueModelCheckTest {
         claimsMade += site to code
         if (produced == code) {
             claimsExercised += site to code
+            timesTheBodyRan[site to code] = (timesTheBodyRan[site to code] ?: 0) + 1
             claim()
         }
     }
@@ -460,6 +559,42 @@ class QueueModelCheckTest {
             "this check's patterns match a plain READ of the code, so it forbids the reads this " +
                 "file is built on rather than the comparisons it means to forbid",
         )
+
+        // And a site's LABEL names one site, which is the other half of the
+        // same convention.
+        //
+        // The thirteenth review's Q-02: a second claim written under an
+        // existing site's label is not forgery — `INV-9a/…` already labels two
+        // pairs, so a second claim under one invariant inherits the label by
+        // copy-paste. The count equality catches that version, because two
+        // sites under one label run 2N times against a denominator of N. It
+        // does NOT catch a DECOY: a site under a copied label that runs the
+        // same number of times and asserts nothing, with the real claim's
+        // assertions deleted. Measured on this tree, with E-04's refusal arm
+        // deleted underneath it, that is green — so the registry's promise
+        // that a removed claim site goes missing by name holds against a
+        // plausible edit and not against a deliberate one.
+        //
+        // This closes the deliberate one at the only place it can be seen: a
+        // label occurs once where its site is, plus once for each pair
+        // declared under it. It is part of the CONVENTION CHECK and carries
+        // the same fail-open as the rest of it — it reads text, and it is not
+        // what the registry relies on.
+        for ((site, pairs) in CLAIMS_THIS_CHECK_MAKES.keys.groupBy { it.first }) {
+            val occurrences = text.lines().count { line ->
+                val code = line.trimStart()
+                val prose = code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")
+                !prose && site in code
+            }
+            assertEquals(
+                pairs.size + 1, occurrences,
+                "the label $site occurs $occurrences times in this file's code, and it is " +
+                    "declared for ${pairs.size} claim(s), so it should occur ${pairs.size + 1} " +
+                    "times: once for each declaration and once at the single site that carries " +
+                    "it. A label on two sites makes the registry's pairs collapse, which is how " +
+                    "a site that asserts nothing can stand in for one that does",
+            )
+        }
     }
 
     @Test
@@ -501,6 +636,29 @@ class QueueModelCheckTest {
                             refusals++
                             codesSeen += step.code
 
+                            // The DENOMINATORS, counted here and not inside
+                            // the branches, which is what makes a condition
+                            // added inside a claim site visible: the numerator
+                            // falls and the denominator does not.
+                            timesTheCodeWasProduced[step.code] =
+                                (timesTheCodeWasProduced[step.code] ?: 0) + 1
+                            val aForeignScopeRefusal = event is QueueEvent.ByScope &&
+                                !permittedToAct(event.actingScope, op.scope, event)
+                            if (aForeignScopeRefusal) {
+                                timesProducedOnAForeignScopeRefusal[step.code] =
+                                    (timesProducedOnAForeignScopeRefusal[step.code] ?: 0) + 1
+                            }
+                            if (!aForeignScopeRefusal && op.state == OperationState.CAPTURED) {
+                                timesProducedOnACaptureSomebodyElseMustConfirm[step.code] =
+                                    (timesProducedOnACaptureSomebodyElseMustConfirm[step.code] ?: 0) + 1
+                            }
+                            val aFinishedRowAnsweringAPerson = op.isTerminal &&
+                                event !is QueueEvent.RetentionDeadlineReached &&
+                                (
+                                    event !is QueueEvent.ByScope ||
+                                        permittedToAct(event.actingScope, op.scope, event)
+                                    )
+
                             // E-04, first half: `not_sendable`'s view says
                             // "confirm this capture", so it may be refused
                             // only where that instruction is true — a CAPTURED
@@ -528,9 +686,7 @@ class QueueModelCheckTest {
                                         "(offline.not_sendable): $op on $event",
                                 )
                             }
-                            if (event is QueueEvent.ByScope &&
-                                !permittedToAct(event.actingScope, op.scope, event)
-                            ) {
+                            if (aForeignScopeRefusal) {
                                 foreignScopeRefusals++
                                 // INV-9a: a foreign scope is refused AS a scope
                                 // problem, never as a payload or a sequencing
@@ -594,10 +750,7 @@ class QueueModelCheckTest {
                             // not by accident: it is the only event in this
                             // kernel that no person performs, so its refusal
                             // is not an answer to anybody.
-                            if (op.isTerminal &&
-                                event !is QueueEvent.RetentionDeadlineReached &&
-                                (event !is QueueEvent.ByScope || permittedToAct(event.actingScope, op.scope, event))
-                            ) {
+                            if (aFinishedRowAnsweringAPerson) {
                                 terminalRefusals++
                                 assertEquals(
                                     claimingCode(
@@ -951,7 +1104,7 @@ class QueueModelCheckTest {
         // can be lost and what can be lost is a site: two sites about one code
         // collapsed into one member when this was keyed on codes.
         assertEquals(
-            CLAIMS_THIS_CHECK_MAKES.toSortedSet(compareBy({ it.first }, { it.second })),
+            CLAIMS_THIS_CHECK_MAKES.keys.toSortedSet(compareBy({ it.first }, { it.second })),
             claimsMade.toSortedSet(compareBy({ it.first }, { it.second })),
             "the claims this check REGISTERED are not the claims it is written to make. A pair " +
                 "missing from the right-hand side is a claim site nothing evaluated at all; a " +
@@ -959,7 +1112,7 @@ class QueueModelCheckTest {
                 "down here, so nothing bounds what else it changed",
         )
         assertEquals(
-            CLAIMS_THIS_CHECK_MAKES.toSortedSet(compareBy({ it.first }, { it.second })),
+            CLAIMS_THIS_CHECK_MAKES.keys.toSortedSet(compareBy({ it.first }, { it.second })),
             claimsExercised.toSortedSet(compareBy({ it.first }, { it.second })),
             "a claim this check makes was never EXERCISED: its site ran and registered, and the " +
                 "branch that tests the claim never did, so whatever it asserts was asserted of " +
@@ -968,6 +1121,65 @@ class QueueModelCheckTest {
                 "how a refusal telling a cashier that a colleague must confirm their own capture " +
                 "stayed green at 98 of 98",
         )
+
+        // And the COUNT, which is the assertion the two above could not make.
+        //
+        // The thirteenth review's Q-01: a registration of exercise says the
+        // claim ran once SOMEWHERE in the search. Wrapping this file's E-04
+        // site in its own precondition — `event !is ByScope ||
+        // permittedToAct(…, Release(…))`, the very condition its second
+        // assertion exists to judge — leaves the site running, the body
+        // running, both sets complete, and only the rows that matter excluded.
+        // With E-04's refusal arm deleted underneath, that was 99 of 99 GREEN.
+        //
+        // So each claim is read as a RATIO against the domain declared for it:
+        // the body must have run as many times as the code was produced in
+        // that domain. A wrapper drops the numerator and the shortfall is
+        // named. Two sites sharing one label show as 2N against N, which is
+        // what bounds a reused label (Q-02) without a convention about
+        // labelling. The denominators are counted at the top of the refusal
+        // arm, never inside the branch a site sits in.
+        for ((claim, domain) in CLAIMS_THIS_CHECK_MAKES) {
+            val (site, code) = claim
+            val ran = timesTheBodyRan[claim] ?: 0
+            val denominator = when (domain) {
+                ClaimDomain.EVERY_PRODUCTION -> timesTheCodeWasProduced[code] ?: 0
+                ClaimDomain.ON_A_FOREIGN_SCOPE_REFUSAL ->
+                    timesProducedOnAForeignScopeRefusal[code] ?: 0
+            }
+            assertTrue(
+                denominator > 0,
+                "nothing in the reachable space produced $code inside the domain $domain " +
+                    "declared for the claim at $site, so the count below is a ratio of nothing " +
+                    "to nothing and would hold however little the claim ran",
+            )
+            assertEquals(
+                denominator, ran,
+                "the claim at $site about $code ran $ran times where its declared domain " +
+                    "$domain was reached $denominator times. A claim that runs on some of its " +
+                    "cases is asserted of the rest not at all, and a site reached under a " +
+                    "condition that excludes the cases its claim is about registers and counts " +
+                    "exactly like a working one until this ratio is read",
+            )
+            if (domain == ClaimDomain.ON_A_FOREIGN_SCOPE_REFUSAL) {
+                // A narrower domain opens a gap, so the gap is ACCOUNTED FOR
+                // rather than declared: every production of this code is
+                // either a foreign-scope refusal, which this claim judges, or
+                // E-04's own arm on a CAPTURED row, which the E-04 claim is
+                // about. A third producer of the same code reds here instead
+                // of living in the difference.
+                assertEquals(
+                    timesTheCodeWasProduced[code] ?: 0,
+                    denominator + (timesProducedOnACaptureSomebodyElseMustConfirm[code] ?: 0),
+                    "$code is produced ${timesTheCodeWasProduced[code]} times, and the two " +
+                        "classes this check accounts for — a foreign-scope refusal and a " +
+                        "capture somebody else must confirm — cover only $denominator plus " +
+                        "${timesProducedOnACaptureSomebodyElseMustConfirm[code]}. The claim at " +
+                        "$site is declared over the narrower of them, so a third producer " +
+                        "would sit in the difference judged by nothing",
+                )
+            }
+        }
 
         // Non-vacuity. A model check that explored three configurations and
         // asserted nothing would pass every invariant above, so the search
@@ -1087,7 +1299,7 @@ class QueueModelCheckTest {
         // review's ruling, and they are NOT registered as claims of this file:
         // registering them put them on both sides of an equality that then
         // could not fail for them (P-04).
-        val claimed = claimsMade.map { it.second }.toSet() + WaitIsHonest.reasons.keys
+        val claimed = claimsExercised.map { it.second }.toSet() + WaitIsHonest.reasons.keys
         for (key in CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE.keys.sorted()) {
             assertTrue(
                 key in claimed,
