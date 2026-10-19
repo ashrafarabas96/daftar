@@ -238,6 +238,49 @@ const looksLikeReviewer = (): RegExp => {
 const REFUSED_PACK_NOT_PINNED = 'REFUSED-PACK-NOT-THE-PINNED-SET';
 
 /**
+ * ROUND 55, THE CHALLENGER'S R54-F1 (P1 ground: "a gate whose subject set is a
+ * live shared directory measures no commit"). `npm test` reads this pack TWICE
+ * -- once in the suite npm starts, and again inside the run `tools/law-ran.py`
+ * starts for its figures -- and other sessions write to that directory. The
+ * challenger reproduced the consequence deliberately, adding one document 16
+ * seconds in: the suite printed `Tests 304 passed (304)` with no assertion
+ * anywhere in its output, and the gate refused with failing figures belonging
+ * to a run that printed nothing. A clean green and an rc 1 about two different
+ * instants. Against a FROZEN pack it measured 10/10 rc 0, so the suite is not
+ * flaky -- its SUBJECT MOVES.
+ *
+ * The fix is this phase's own rule applied to the instrument rather than the
+ * dispatch: pin the subject by digest, and have both halves assert the SAME
+ * digest. This arm measures the digest before it reads anything and again
+ * after, so a pack that moves UNDER the measurement is a refusal BY NAME
+ * instead of a confusing red; and when the gate hands a digest down in
+ * `P5_PACK_DIGEST`, the run it started must be looking at exactly that pack.
+ */
+const REFUSED_PACK_MOVED = 'REFUSED-PACK-MOVED-DURING-MEASUREMENT';
+
+/**
+ * The pack's identity: every name beside its sha256, sorted, hashed. The gate
+ * computes the same value from the same definition, which is deliberate --
+ * here agreement between the two IS the thing being bound, because what is
+ * being established is that two readers looked at one instant.
+ */
+const packDigest = (dir: string): string => {
+  const rows = readdirSync(dir)
+    .sort()
+    .map((name) => {
+      const full = join(dir, name);
+      let digest = '<unreadable>';
+      try {
+        digest = statSync(full).isFile() ? createHash('sha256').update(readFileSync(full)).digest('hex') : '<not-a-file>';
+      } catch {
+        digest = '<unreadable>';
+      }
+      return `${name}\u0000${digest}`;
+    });
+  return createHash('sha256').update(rows.join('\n')).digest('hex');
+};
+
+/**
  * ROUND 51, THE COORDINATOR'S CD-50-01 (P1). A gate that is only OFFERED as
  * its own script is a gate nobody runs: `npm test` could be made to collect
  * neither law file and still exit 0. This is the name the arm below refuses by
@@ -3338,6 +3381,13 @@ describe('every written invocation of the pack tools is isolated', () => {
       ).toBe(false);
       return;
     }
+    // R54-F1, first half: the instant this arm is about.
+    const digestAtEntry = packDigest(PACK);
+    const handedDown = (process.env.P5_PACK_DIGEST ?? '').trim();
+    expect(
+      handedDown === '' || handedDown === digestAtEntry,
+      `${REFUSED_PACK_MOVED}: the gate that started this run measured the pack at ${handedDown} and this run reads ${digestAtEntry}, so the figures this run produces and the set the gate checked are two different instants`,
+    ).toBe(true);
     const exempt = reviewerOwned();
     const shaped = looksLikeReviewer();
     const offences: string[] = [];
@@ -3429,6 +3479,14 @@ describe('every written invocation of the pack tools is isolated', () => {
     // alive, and nothing in a document is skipped: an attack line that must
     // appear is NEUTRALISED (`<python3> …`), which the arm below pins.
     expect(offences, 'an author-owned pack document prints an un-isolated command, which is the half of F-50 that routes the reader').toStrictEqual([]);
+    // R54-F1, second half: and nothing moved while this arm was reading. A
+    // document added or removed mid-pass makes every figure above a statement
+    // about no single instant, so it is refused BY NAME rather than left to
+    // surface as a red somewhere else.
+    expect(
+      packDigest(PACK),
+      `${REFUSED_PACK_MOVED}: the pack at ${PACK} changed while this arm was reading it (it was ${digestAtEntry} at entry), so every figure this arm produced belongs to no single instant. Re-run against a pack nothing else is writing to, or pass P5_PACK_DIR a private copy`,
+    ).toBe(digestAtEntry);
   });
   it('reads the seal refusal by NAME, and a silent seal classifies nothing', () => {
     // B-12's reader, armed sequentially rather than through a race: both of

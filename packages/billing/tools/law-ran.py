@@ -91,6 +91,7 @@ if not sys.flags.isolated:
 
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -178,6 +179,40 @@ REFUSED_RUNNER_NO_REPORT = "REFUSED-RUNNER-WROTE-NO-REPORT"
 REFUSED_TRACKED_NODE_MODULES = "REFUSED-TRACKED-NODE-MODULES"
 REFUSED_TRACKED_RUNNER = "REFUSED-TRACKED-RUNNER"
 REFUSED_GIT_NOT_READABLE = "REFUSED-GIT-NOT-READABLE"
+
+# ROUND 55, THE CHALLENGER'S R54-F1. `npm test` reads the pack TWICE -- the
+# suite npm starts, and the run this step starts for its figures -- and the pack
+# is a directory other sessions write to. Reproduced by the challenger with one
+# document added 16 seconds in: the suite printed `Tests 304 passed (304)` with
+# no assertion in its output and this step refused with failing figures from a
+# run that printed nothing. Against a frozen pack, 10/10 rc 0. The suite is not
+# flaky; its SUBJECT MOVES.
+#
+# So the subject is PINNED BY DIGEST and handed down: this step measures the
+# pack, passes the digest to the run it starts in `P5_PACK_DIGEST`, and measures
+# again afterwards. The law refuses by name unless the pack it reads hashes to
+# the value handed down, and this step refuses by name if the pack moved while
+# the run was happening. Reading the report the FIRST run wrote would also fix
+# the two-instants problem and is rejected for the reason round 50 recorded: a
+# report on disk is a document, and a stale green report is the oldest hole
+# there is.
+REFUSED_PACK_MOVED = "REFUSED-PACK-MOVED-DURING-MEASUREMENT"
+
+
+def pack_digest(directory: Path) -> str:
+    """Every name beside its sha256, sorted, hashed -- the law's definition."""
+    rows = []
+    for name in sorted(os.listdir(directory)):
+        full = directory / name
+        try:
+            if full.is_file():
+                digest = hashlib.sha256(full.read_bytes()).hexdigest()
+            else:
+                digest = "<not-a-file>"
+        except OSError:
+            digest = "<unreadable>"
+        rows.append(f"{name}\x00{digest}")
+    return hashlib.sha256("\n".join(rows).encode()).hexdigest()
 
 # The pinned git invocation: an ABSOLUTE program, a `/usr/bin` PATH, replace
 # objects disabled, and an environment with no `GIT_*` of its own, because
@@ -275,26 +310,40 @@ def main() -> int:
     # legitimate invocation. The VALUE is the subject instead: the file those
     # variables name may not carry a `script-shell` line. That is the same shape
     # as the file check below and refuses none of npm's own defaults.
+    #
+    # R53-S1 (the challenger's P3, against its OWN remedy from the round
+    # before): reading those variables ALONE is a hole in the direction that
+    # matters. Through npm the override silences this step before it runs; run
+    # DIRECTLY -- the CI terminus -- the variables are absent, so a check that
+    # only reads them is SKIPPED while the compromised file still sits on disk,
+    # and CI would be green while every developer's `npm test` ran nothing. So
+    # the DEFAULT paths npm reads are checked whether or not a variable names
+    # them: the user config at `~/.npmrc`, and the global one beside the node
+    # that will run the suite (below, once that node is resolved).
+    def refuse_if_sets_shell(label: str, named: "Path") -> None:
+        if not named.is_file():
+            return
+        try:
+            text = named.read_text(errors="replace")
+        except OSError as exc:
+            refuse(f"{REFUSED_NPM_CONFIG}: {label} ({named}) cannot be read, so this step cannot say what it configures: {exc}")
+        for line in text.splitlines():
+            key = line.split("=", 1)[0].strip().lower().replace("_", "-")
+            if key in ("script-shell", "shell"):
+                refuse(
+                    f"{REFUSED_NPM_CONFIG}: {label} is {named}, which sets {key!r}. That replaces the shell npm "
+                    "hands every script to, from a file outside the two this step checks, so the pinned command "
+                    "would be handed to a program of someone else's choosing"
+                )
+
     for var in [
         key
         for key in os.environ
         if key.lower().replace("-", "_") in ("npm_config_userconfig", "npm_config_globalconfig")
     ]:
-        named = Path(os.environ[var]).expanduser() if os.environ.get(var) else None
-        if named is None or not named.is_file():
-            continue
-        try:
-            text = named.read_text(errors="replace")
-        except OSError as exc:
-            refuse(f"{REFUSED_NPM_CONFIG}: {var}={named} cannot be read, so this step cannot say what it configures: {exc}")
-        for line in text.splitlines():
-            key = line.split("=", 1)[0].strip().lower().replace("_", "-")
-            if key in ("script-shell", "shell"):
-                refuse(
-                    f"{REFUSED_NPM_CONFIG}: {var} names {named}, which sets {key!r}. That replaces the shell npm "
-                    "hands every script to, from a file outside the two this step checks, so the pinned command "
-                    "would be handed to a program of someone else's choosing"
-                )
+        if os.environ.get(var):
+            refuse_if_sets_shell(var, Path(os.environ[var]).expanduser())
+    refuse_if_sets_shell("npm's default user config", Path.home() / ".npmrc")
 
     # CD-52-01: no npm configuration may stand between the pinned command and
     # the shell that runs it. Checked here as well as in the law, so neither is
@@ -339,8 +388,28 @@ def main() -> int:
         refuse("no vitest entry at " + " or ".join(str(c) for c in candidates) + ", so this step could not run the suite at all")
 
     # CD-53-01, first half: Git tracks nothing under either `node_modules`.
-    for where in (package, package.parent.parent):
-        tracked = git_lines(where, "ls-files", "-z", "--", "node_modules")
+    #
+    # R53-S2 (the challenger's P3): the census used to run with its working
+    # directory AT THE PACKAGE, so a `git init` inside `packages/billing` gave
+    # it a different repository to answer about and it saw nothing. The runner
+    # check below already ran from the root and caught that case, so there was
+    # no hole -- but a census answered by the wrong repository is worth closing
+    # at the census. It runs from the ROOT now, with each directory named
+    # relative to it, and a nested repository inside the package is refused by
+    # name rather than worked around.
+    root = package.parent.parent
+    # `rev-parse` has no NUL form, so its one line is read and stripped here
+    # rather than split: `-z` would be taken for a revision.
+    toplevel = [entry.strip() for entry in git_lines(package, "rev-parse", "--show-toplevel") if entry.strip()]
+    if toplevel and Path(toplevel[0]).resolve() != root.resolve():
+        refuse(
+            f"{REFUSED_TRACKED_NODE_MODULES}: {package} belongs to the repository at {toplevel[0]}, not to "
+            f"{root}. A repository nested inside the package answers a census about a different history, so what "
+            "this step could say about committed files would be about the wrong tree"
+        )
+    for where in (package, root):
+        relative = where.relative_to(root) / "node_modules" if where != root else Path("node_modules")
+        tracked = git_lines(root, "ls-files", "-z", "--", str(relative))
         if tracked:
             refuse(
                 f"{REFUSED_TRACKED_NODE_MODULES}: Git tracks {len(tracked)} path(s) under "
@@ -394,6 +463,17 @@ def main() -> int:
             "so a binary planted in one could fabricate the report this step reads"
         )
 
+    # R54-F1: the pack is pinned by digest for the duration of the run this
+    # step starts, so the figures below and the set the law checks are one
+    # instant. A pack that is absent is left to the law's declared UNMEASURED
+    # branch rather than invented here.
+    pack_dir = Path((os.environ.get("P5_PACK_DIR") or "").strip() or "/mnt/project-files/phase5")
+    pinned_pack = pack_digest(pack_dir) if pack_dir.is_dir() else None
+
+    # R53-S1, the other default: npm's global config lives beside the node that
+    # runs it, and is read whether or not a variable names it.
+    refuse_if_sets_shell("npm's default global config", Path(node).parent.parent / "etc" / "npmrc")
+
     out = Path(tempfile.mkdtemp(prefix="law-ran-")) / "report.json"
     try:
         done = subprocess.run(
@@ -418,8 +498,19 @@ def main() -> int:
                 # the operator had named another. Forwarded EXPLICITLY, and only
                 # when it is set, so the subject is the one that was asked for.
                 **({"P5_PACK_DIR": os.environ["P5_PACK_DIR"]} if os.environ.get("P5_PACK_DIR") else {}),
+                # R54-F1: the instant this step measured, handed to the run it
+                # starts. The law refuses by name if what it reads is not this.
+                **({"P5_PACK_DIGEST": pinned_pack} if pinned_pack else {}),
             },
         )
+        if pinned_pack is not None:
+            after = pack_digest(pack_dir)
+            if after != pinned_pack:
+                refuse(
+                    f"{REFUSED_PACK_MOVED}: the pack at {pack_dir} was {pinned_pack} when this step started the run "
+                    f"and is {after} now, so the figures that run produced belong to no single instant. Re-run "
+                    "against a pack nothing else is writing to, or point P5_PACK_DIR at a private copy"
+                )
         if not out.is_file():
             refuse(
                 f"{REFUSED_RUNNER_NO_REPORT}: the program this step started wrote no report. "
