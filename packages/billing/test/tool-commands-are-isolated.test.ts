@@ -432,16 +432,23 @@ const concurrencyOffences = (node: Record<string, unknown>, into: string[]): voi
 };
 
 const GATE_PROGRAM = 'tools/law-ran.py';
-const notStartedByTheGate = (): string => {
-  if (!existsSync('/proc/self/status')) {
-    return 'this platform has no /proc, so a run cannot be shown to descend from the gate at all';
+const notStartedByTheGate = (procRoot = '/proc', startPid = process.pid): string => {
+  // THE COORDINATOR'S ADDITION TO R58: this is a claim about a PROCESS, so it
+  // needs an arm that reds when the check is ABSENT or CANNOT RUN -- not only
+  // when it fails. A claim about an instrument is verified by running it, so
+  // the two things it reads are arguments: the /proc root and the pid to start
+  // from. The arm below builds trees where each failure mode is the only thing
+  // wrong, and reads which sentence comes back. Production passes neither
+  // argument.
+  if (!existsSync(join(procRoot, 'self', 'status')) && !existsSync(join(procRoot, String(startPid), 'status'))) {
+    return `this platform has no readable ${procRoot}, so a run cannot be shown to descend from the gate at all`;
   }
   const seen: string[] = [];
-  let pid = process.pid;
+  let pid = startPid;
   for (let hop = 0; hop < 32; hop += 1) {
     let status: string;
     try {
-      status = readFileSync(`/proc/${pid}/status`, 'utf8');
+      status = readFileSync(join(procRoot, String(pid), 'status'), 'utf8');
     } catch (error) {
       return `the parent chain stopped at pid ${pid}, which cannot be read (${String(error)})`;
     }
@@ -451,7 +458,7 @@ const notStartedByTheGate = (): string => {
     if (pid <= 1) break;
     let argv: string[] = [];
     try {
-      argv = readFileSync(`/proc/${pid}/cmdline`)
+      argv = readFileSync(join(procRoot, String(pid), 'cmdline'))
         .toString('utf8')
         .split('\0')
         .filter((word) => word.length > 0);
@@ -496,7 +503,7 @@ const notStartedByTheGate = (): string => {
     // entry the chain is walked with.
     let ancestorCwd = '';
     try {
-      ancestorCwd = realpathSync(`/proc/${pid}/cwd`);
+      ancestorCwd = realpathSync(join(procRoot, String(pid), 'cwd'));
     } catch {
       // Unreadable cwd leaves only the absolute form below, which is the safe
       // way round: a word that cannot be resolved is not a match.
@@ -3615,15 +3622,42 @@ describe('every written invocation of the pack tools is isolated', () => {
       fifo.status,
       `${REFUSED_PACK_MOVED}: this arm could not create a FIFO to compare the two readers over, so one kind of entry stays untested here: ${JSON.stringify((fifo.stderr ?? '').trim().slice(0, 200))}`,
     ).toBe(0);
-    const fromSubject = existsSync(PACK)
-      ? readdirSync(PACK).filter((name) => {
-          try {
-            return statSync(join(PACK, name)).isFile();
-          } catch {
-            return false;
-          }
-        })
-      : [];
+    // THE COORDINATOR'S R58-C-08 (P3): this derivation was the third reader of
+    // the pack and the only one still SKIPPING what it could not classify --
+    // `catch { return false }` -- which is the shape R57-C-04 closed in the
+    // gate's copier and in `snapshotPack`. Not a hole here, because this arm's
+    // subject is NAMES and a skipped entry only shrinks the alphabet it tests;
+    // but one package may not hold two doctrines about one event, and the same
+    // reader also decoded names as JavaScript strings, so a non-UTF-8 name
+    // reached it as replacement characters and it would have written a name the
+    // pack does not carry. Names are read as BUFFERS and every entry is
+    // classified, by the same single `stat` the other two readers use.
+    const fromSubject: string[] = [];
+    if (existsSync(PACK)) {
+      for (const raw of readdirSync(PACK, { encoding: 'buffer' })) {
+        const name = raw.toString('utf8');
+        expect(
+          Buffer.from(name, 'utf8').equals(raw),
+          `${REFUSED_PACK_NAME_NOT_UTF8}: ${PACK} holds a filename that is not valid UTF-8 (${JSON.stringify(raw.toString('latin1'))}), so this arm would derive a name the pack does not carry and compare the two readers over it`,
+        ).toBe(true);
+        let mode: number;
+        try {
+          mode = statSync(join(PACK, name)).mode;
+        } catch (error) {
+          expect(
+            String(error),
+            `${REFUSED_FILE_NOT_READABLE}: ${join(PACK, name)} is in the pack and could not be read at all, so this arm cannot say whether its name belongs in the set it derives`,
+          ).toBe('<unreachable: this entry cannot be classified>');
+          continue;
+        }
+        // eslint-disable-next-line no-bitwise
+        expect(
+          (mode & 0o170000) === 0o100000,
+          `${REFUSED_PACK_ENTRY_NOT_A_FILE}: ${join(PACK, name)} is in the pack and is not a regular file. The pack is a flat set of documents, and this arm refuses what it cannot classify rather than dropping it out of the derived alphabet in silence`,
+        ).toBe(true);
+        fromSubject.push(name);
+      }
+    }
     for (const name of fromSubject) {
       // The NAME is the subject here, not the bytes, so each is written with a
       // body of its own name: nothing of the pack's content is copied and the
@@ -3661,6 +3695,116 @@ describe('every written invocation of the pack tools is isolated', () => {
       (r.stdout ?? '').trim(),
       `${REFUSED_PACK_MOVED}: this law and tools/law-ran.py compute DIFFERENT digests for one directory at one instant, so the value the gate hands down could never match what this suite reads and the refusal would say the pack moved when it had not (R54-S1). Both must order names by their BYTES`,
     ).toBe(mine);
+  });
+
+  it("R58: the provenance check refuses when it cannot show provenance, and admits only this package's own gate", () => {
+    // THE COORDINATOR'S ADDITION TO R58. `notStartedByTheGate` is what makes
+    // REFUSED-PACK-HANDED-DOWN-DIRECTORY-NOT-PRIVATE mean anything, and until
+    // this arm existed it was measured only in the two states a whole run can
+    // reach: the real `npm test` (admitted) and a forged one (refused). A claim
+    // about a PROCESS also has to be measured where the check is ABSENT or
+    // CANNOT RUN -- no /proc, a cmdline that is empty by construction, a chain
+    // that reports no parent -- because every one of those is a route to
+    // "cannot say", and a "cannot say" that returned '' would admit anything.
+    //
+    // So the function is RUN here over /proc trees this arm builds, one failure
+    // mode at a time, and the SENTENCE it returns is read. Every path below is
+    // one this arm made; nothing is executed.
+    const root = mkdtempSync(join(tmpdir(), 'r58-proc-'));
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+    const gate = join(__dirname, '..', 'tools', 'law-ran.py');
+    const pkg = join(__dirname, '..');
+    type Node = { pid: number; ppid: number; argv?: string[]; cwd?: string; noParent?: boolean };
+    const tree = (name: string, chain: Node[]): string => {
+      const procRoot = join(root, name);
+      mkdirSync(procRoot);
+      for (const node of chain) {
+        const dir = join(procRoot, String(node.pid));
+        mkdirSync(dir);
+        writeFileSync(join(dir, 'status'), node.noParent === true ? 'Name:\tx\n' : `Name:\tx\nPPid:\t${node.ppid}\n`);
+        if (node.argv !== undefined) writeFileSync(join(dir, 'cmdline'), `${node.argv.join('\0')}\0`);
+        if (node.cwd !== undefined) symlinkSync(node.cwd, join(dir, 'cwd'));
+      }
+      return procRoot;
+    };
+    // A copy of the gate: same bytes, same name, different inode.
+    const copyDir = join(root, 'a-copy-of-the-gate', 'tools');
+    mkdirSync(copyDir, { recursive: true });
+    writeFileSync(join(copyDir, 'law-ran.py'), readFileSync(gate));
+
+    const admitted = tree('admits-the-real-gate', [
+      { pid: 10, ppid: 20 },
+      { pid: 20, ppid: 1, argv: ['python3', '-I', 'tools/law-ran.py'], cwd: pkg },
+    ]);
+    expect(
+      notStartedByTheGate(admitted, 10),
+      'the provenance check does not admit the one invocation `npm test` actually makes, a relative gate path resolved against the ancestor cwd — which would make every honest run refuse',
+    ).toBe('');
+    const absolute = tree('admits-an-absolute-path', [
+      { pid: 10, ppid: 20 },
+      { pid: 20, ppid: 1, argv: ['/usr/bin/python3', '-I', gate] },
+    ]);
+    expect(
+      notStartedByTheGate(absolute, 10),
+      'the provenance check needs a cwd link to admit an ABSOLUTE gate path, so an unreadable cwd would refuse an honest run',
+    ).toBe('');
+
+    for (const [label, procRoot, startPid, expected] of [
+      ['no /proc at all', join(root, 'there-is-no-such-tree'), 10, 'no readable'],
+      [
+        'a cmdline that is empty by construction',
+        tree('empty-cmdline', [
+          { pid: 10, ppid: 20 },
+          { pid: 20, ppid: 1, argv: [], cwd: pkg },
+        ]),
+        10,
+        'no ancestor of this process',
+      ],
+      [
+        'no cmdline file at all, which is what a process that exits mid-walk leaves',
+        tree('no-cmdline', [
+          { pid: 10, ppid: 20 },
+          { pid: 20, ppid: 1, cwd: pkg },
+        ]),
+        10,
+        'no ancestor of this process',
+      ],
+      ['a chain whose status carries no PPid', tree('no-ppid', [{ pid: 10, ppid: 0, noParent: true }]), 10, 'reports no parent'],
+      ['a parent that cannot be read', tree('unreadable-parent', [{ pid: 10, ppid: 777 }]), 10, 'the parent chain stopped at pid 777'],
+      [
+        'a COPY of the gate: same bytes, same name, different inode',
+        tree('a-copy', [
+          { pid: 10, ppid: 20 },
+          { pid: 20, ppid: 1, argv: ['python3', '-I', join(copyDir, 'law-ran.py')] },
+        ]),
+        10,
+        'no ancestor of this process',
+      ],
+      [
+        'the real gate run by something that is not a python interpreter',
+        tree('not-python', [
+          { pid: 10, ppid: 20 },
+          { pid: 20, ppid: 1, argv: ['bash', gate], cwd: pkg },
+        ]),
+        10,
+        'no ancestor of this process',
+      ],
+      [
+        'a chain that is its own parent, so the walk never reaches pid 1',
+        tree('a-loop', [{ pid: 10, ppid: 10, argv: ['python3', '-I', 'nothing.py'], cwd: pkg }]),
+        10,
+        'no ancestor of this process',
+      ],
+    ] as const) {
+      const said = notStartedByTheGate(procRoot as string, startPid as number);
+      expect(
+        said === '' ? '<admitted>' : said,
+        `the provenance check ADMITTED a run it cannot show provenance for (${label}): a "cannot say" that returns the empty string makes REFUSED-PACK-HANDED-DOWN-DIRECTORY-NOT-PRIVATE unreachable and the privacy claim worthless`,
+      ).not.toBe('<admitted>');
+      expect(said, `the provenance check refuses ${label} with a sentence that does not say why: an operator reads the sentence, not the code`).toContain(
+        expected as string,
+      );
+    }
   });
 
   it('F-62/F-64: a value may not choose a program, a directory, or a module', () => {
@@ -4145,8 +4289,19 @@ describe('every written invocation of the pack tools is isolated', () => {
     // words conceded it. Worse in practice: the default pack is a directory
     // sibling sessions write to BY DESIGN, so an ordinary `npm test` went red
     // whenever anyone enrolled a document during the twenty seconds the suite
-    // reads -- measured by the challenger at `1 failed | 304 passed (305)` --
-    // and a red gate carries no signature.
+    // reads -- the challenger's round-55 measurement, reported as
+    // `1 failed | 304 passed (305)` -- and a red gate carries no signature.
+    //
+    // THE COORDINATOR'S R58-C-10 (P4): those figures are NOT a diagnostic, and
+    // crediting them to an enrolment is a citation this comment cannot support.
+    // The same shape -- one failed case, 304 passed, rc 1 -- is produced by a
+    // per-case TIMEOUT under machine load, which carries no refusal name at
+    // all, and that is what the unexplained 21:11:05 red turned out to be
+    // (round 59, reproduced 3/3 by the coordinator under load). Two causes, one
+    // shape. The discriminator is the refusal NAME in the output:
+    // REFUSED-PACK-MOVED-DURING-MEASUREMENT for the enrolment, nothing at all
+    // for the clock. The mechanism below is real and was measured; the figures
+    // are not what proves it.
     //
     // So the law agrees with the gate now, and the distinction is WHOSE
     // directory moved. A movement in a copy the GATE handed down (it hands its

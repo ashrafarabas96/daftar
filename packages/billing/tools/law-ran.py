@@ -255,6 +255,25 @@ REFUSED_FILE_NOT_READABLE = "REFUSED-FILE-NOT-READABLE"
 # dies after the report is written are all invisible to a reader of cases.
 # The exit code is a verdict too, and this step may not discard it.
 REFUSED_RUNNER_NONZERO = "REFUSED-RUNNER-EXITED-NONZERO"
+# THE COORDINATOR'S R58-C-01 (P2), a route neither reviewer had measured
+# before it: this step read every case and SKIPPED the ones whose status is
+# `passed`, so a case that failed once and passed on a RETRY carried its
+# failure message into the report and this step threw it away -- with the
+# case COUNT unchanged, so `EXPECTED` could not refuse either. The
+# coordinator measured the mechanism on this runner and then built the
+# attack on the subject: `retry: 3` in the config greens the direct gate
+# over a PLANTED law violation and prints clean figures. A passed case
+# carrying a non-empty `failureMessages` was retried, and that is a refusal.
+REFUSED_CASE_RETRIED = "REFUSED-CASE-PASSED-AFTER-RETRY"
+# THE COORDINATOR'S R58-C-09 (P3): every dispatch in this phase names THIS
+# program as the gate, and it was weaker than `npm test` by exactly the
+# pinned-now arm -- a broken `pinned_now` with its pin moved gave `npm test`
+# rc 1 and this step rc 0 with clean figures. Of the two remedies the
+# coordinator offered, this is the one taken: the arm is chained HERE, where
+# the gate is, so the terminus a dispatch names is not weaker than the
+# command a developer runs. The `test` script keeps its own invocation too,
+# because its bytes are what pin the chain for `npm test`.
+REFUSED_ARM_NOT_AS_SPECIFIED = "REFUSED-ARM-NOT-AS-SPECIFIED"
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -324,13 +343,21 @@ def git_lines(cwd: Path, *args: str) -> "list[str]":
 # the kind of bound this phase has been burned by four times. Change these in
 # the same commit that changes the law's tests, with the reason in the message.
 EXPECTED: dict[str, int] = {
+    # 27 -> 28 at round 60g: the law gains the arm the coordinator asked for on
+    # top of R58 -- `notStartedByTheGate` RUN as a function over /proc trees the
+    # arm builds, one failure mode at a time (no /proc, an empty cmdline, no
+    # cmdline, no PPid, an unreadable parent, a COPY of the gate, a non-python
+    # program, a chain that is its own parent), plus the two states that must be
+    # ADMITTED so the arm is not vacuous. A "cannot say" that returned the empty
+    # string would make REFUSED-PACK-HANDED-DOWN-DIRECTORY-NOT-PRIVATE
+    # unreachable.
     # 26 -> 27 at round 56: the law gains the R54-S1 case, which RUNS both
     # digest implementations over a directory built to make them disagree and
     # compares the values. 25 -> 26 at round 54: the law gains the CD-53-01/R53-03 case, which
     # refuses a Git-tracked path under either `node_modules` and twins the
     # environment half of CD-52-01. The number changes in the same commit as
     # the case, with the reason in the message.
-    "test/tool-commands-are-isolated.test.ts": 27,
+    "test/tool-commands-are-isolated.test.ts": 28,
     "test/law-bytes-are-pinned.test.ts": 1,
 }
 
@@ -627,7 +654,7 @@ def main() -> int:
                 refuse(
                     f"{REFUSED_PACK_COPY_IMPOSSIBLE}: the private directory this step measures the pack in "
                     f"landed at {pack_snapshot}, inside {inside[0]}, which is a tree this step and the run "
-                    "it starts both measure. Point TMPDIR at a directory outside the repository"
+                    f"it starts both measure. Point TMPDIR at a directory outside {inside[0]}"
                 )
         except OSError as exc:
             refuse(
@@ -809,6 +836,22 @@ def main() -> int:
             continue
         if len(cases) != expected:
             problems.append(f"{relative} ran {len(cases)} cases, not the {expected} this step pins")
+        # R58-C-01: BEFORE the not-passed branch, because a retried case is
+        # `passed` and would never reach it. The evidence is in the report and
+        # this step used to discard it.
+        for case in cases:
+            if case.get("status") != "passed":
+                continue
+            said = [str(m).strip() for m in (case.get("failureMessages") or []) if str(m).strip()]
+            if not said:
+                continue
+            title = str(case.get("fullName") or case.get("title") or "<unnamed case>")
+            problems.append(
+                f"{REFUSED_CASE_RETRIED}: {relative} :: {title} is reported `passed` and carries "
+                f"{len(said)} failure message(s), so it FAILED at least once and the runner retried it. A law "
+                "case that passes only on a second attempt measured nothing the first time, and the case count "
+                f"cannot see the difference. First message: {said[0].splitlines()[0][:300]!r}"
+            )
         not_passed = sorted({str(c.get("status")) for c in cases if c.get("status") != "passed"})
         if not_passed:
             problems.append(f"{relative} has cases that did not pass: {', '.join(not_passed)}")
@@ -843,6 +886,34 @@ def main() -> int:
 
     if problems:
         refuse("; ".join(problems))
+
+    # R58-C-09: the arm, where the gate is. It is a program, run isolated, by
+    # the same node-independent interpreter this step was started with, and its
+    # verdict is READ -- a non-zero exit is a refusal by name here, not a line
+    # on someone's terminal. Its own output is printed first so an operator sees
+    # the four branches before this step's figures.
+    arm = package / "tools" / "arms" / "pinned-now-arm.py"
+    subject = package / "tools" / "seal-check-run.py"
+    if not arm.is_file() or not subject.is_file():
+        refuse(
+            f"{REFUSED_ARM_NOT_AS_SPECIFIED}: this step cannot run {arm} over {subject} because one of them is "
+            "not there, so the branch arm the dispatch counts on measured nothing"
+        )
+    armed = subprocess.run(
+        [sys.executable, "-I", str(arm), str(subject)],
+        cwd=str(package),
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env={"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/tmp")},
+    )
+    print(armed.stdout.rstrip())
+    if armed.returncode != 0:
+        refuse(
+            f"{REFUSED_ARM_NOT_AS_SPECIFIED}: {arm} over {subject} exited {armed.returncode}, so the four "
+            "branches of the seal's `pinned_now` are not as specified and this step will not report the law as "
+            f"having run. Its stderr: {armed.stderr.strip()[-400:]!r}"
+        )
 
     total = report.get("numTotalTests")
     print(
