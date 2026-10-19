@@ -714,6 +714,74 @@ PROOFS: list[Proof] = [
         expect_red="every reachable configuration honours every invariant",
         why="challenger finding M-01, and the review\u2019s own plant: a sixth conditional claim, about `offline.permission_revoked`, which reaches a row only as `lastCode` and never as `step.code`. The review measured it green at 98 of 98 against the hand-written five \u2014 L-01 again, inside the guard L-01 produced. With the subject set now READ out of this file, the same plant enrolls itself and fails by absence: the claim is about a code the reachable space does not produce, and the loop says so by name. This is the third subject set in this phase to be moved from a list to a derivation, after the vocabulary sweep\u2019s alphabet and the capture counter\u2019s file, and it is the coordinator\u2019s ruling for the class",
     ),
+    Proof(
+        law="N-01-A-DERIVATION-KEYED-ON-ONE-SPELLING-IS-A-LIST-OF-ONE-SYNTAX",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find='                            if (step.code == "offline.not_sendable") {',
+        replace=(
+            '                            when (step.code) {\n'
+            '                                "offline.permission_revoked" ->\n'
+            '                                    assertEquals(\n'
+            '                                        OperationState.NEEDS_ATTENTION, op.state,\n'
+            '                                        "a permission refusal outside NEEDS_ATTENTION",\n'
+            '                                    )\n'
+            '                                else -> {}\n'
+            '                            }\n'
+            '                            if (step.code == "offline.not_sendable") {'
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="challenger finding N-01, the fourth instance of this phase\u2019s recurring family and the first found INSIDE the remedy for it. M-01\u2019s derivation gathered claims by the spelling `step.code == \"\u2014\"`, which is ONE form of the rule its own comment stated. The review measured three other forms green at 98 of 98 \u2014 a `when (step.code)` subject (the shape this very file uses a few lines above), a reversed equality, and a named `val` \u2014 and showed with a control that the planted construct is live code whose assertion is enforced when its antecedent holds, so the green was genuine vacuity and not a dead branch. The sweep now takes LITERALS, whatever surrounds them, so there is no syntax left to get around",
+    ),
+    Proof(
+        law="N-02-AN-EXEMPTION-MAY-NOT-HIDE-A-LIVE-OBLIGATION",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=(
+            "        val CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE: Map<String, String> = "
+            "emptyMap()"
+        ),
+        replace=(
+            "        val CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE: Map<String, String> =\n"
+            '            mapOf("offline.not_sendable" to "a reason nobody checked")'
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="challenger finding N-02, filed P2 and rightly: `offline.not_sendable` is the only code this loop makes a derived claim about at this head, so ONE line in the exemption map removed the loop\u2019s entire live obligation with the suite green at 98 of 98 and nothing naming the loss. The guard built to make a silent weakening impossible could be silently weakened in one line. An exemption is now a claim of its own: a code the reachable space DOES produce may not be exempted, so this plant reds by name",
+    ),
+    Proof(
+        law="N-02-AN-EXEMPTION-MUST-NAME-A-CODE-SOMETHING-CLAIMS",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=(
+            "        val CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE: Map<String, String> = "
+            "emptyMap()"
+        ),
+        replace=(
+            "        val CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE: Map<String, String> =\n"
+            '            mapOf("offline.a_code_no_claim_mentions" to "stale, and nobody noticed")'
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="challenger finding N-02, the other direction: a key for a code no claim mentions any more sat in the map green at 98 of 98, and the next reader takes a stale exemption for a justified one. Every key must now name a code this file or RecoveryTest actually claims something about, so an exemption rots loudly instead of quietly",
+    ),
+    Proof(
+        law="N-02-AN-EXEMPTION-WITHOUT-A-REASON-IS-NOT-AN-EXEMPTION",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=(
+            "        val CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE: Map<String, String> = "
+            "emptyMap()"
+        ),
+        replace=(
+            "        val CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE: Map<String, String> =\n"
+            '            mapOf("offline.not_sendable" to "   ")'
+        ),
+        expect_red="every reachable configuration honours every invariant",
+        why="the third of N-02\u2019s directions, and the cheapest to get wrong: the map\u2019s type requires a reason and nothing required the reason to SAY anything, so whitespace would have bought the same silence as a sentence. The reason is asserted non-blank where it is read",
+    ),
+    Proof(
+        law="N-03-A-SWEEP-OF-SOURCE-MAY-NOT-READ-THE-PROSE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="        val line = Regex(" + chr(34) * 3 + "//[^" + chr(92) + "n]*" + chr(34) * 3 + ")",
+        replace="        val line = Regex(" + chr(34) * 3 + "ThisPatternMatchesNothing" + chr(34) * 3 + ")",
+        expect_red="every reachable configuration honours every invariant",
+        why="challenger finding N-03: the sweep read the whole file, so a code named in this file\u2019s own PROSE was outside the swept set only because of where a line break fell. The review reflowed that comment onto one line, changed no code at all, and reddened the suite \u2014 loud rather than open, so a residual, but a file whose paragraphs cannot be retidied without breaking its own test carries a trap for whoever formats it next. With the stripper disabled by this plant, the prose-only sentinel is found in the code sweep and the check says so by name, which is what makes the stripping measured rather than asserted",
+    ),
 ]
 
 FAILURE_LINE = re.compile(r"^\s+JUnit Jupiter:(\S+):(.+)\(\)\s*$")

@@ -3,6 +3,7 @@ package app.daftar.offline
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -243,14 +244,95 @@ class QueueModelCheckTest {
             "this check could not find its own source under ${tests?.path}, so the set of codes " +
                 "it makes claims about cannot be derived and nothing here is guarded",
         )
-        val codes = CLAIM_ON_A_CODE.findAll(own!!.readText()).map { it.groupValues[1] }.toSet()
+        val text = own!!.readText()
+        val code = withoutTheInstruments(withoutComments(text))
+        val codes = CODE_IN_A_LITERAL.findAll(code).map { it.groupValues[1] }.toSet()
+
+        // Non-vacuity, in both the directions this sweep can fail.
+        //
+        // It must still find the claims this file is known to make: two of
+        // them, not one, so a pattern that matches by accident is caught.
         assertTrue(
-            "offline.not_sendable" in codes,
-            "the claim sweep did not find the one claim this file is known to make " +
-                "(offline.not_sendable), so its pattern no longer matches this file: found = " +
-                "${codes.sorted()}",
+            "offline.not_sendable" in codes && "offline.another_members_capture" in codes,
+            "the literal sweep did not find the codes this file is known to name in its CODE " +
+                "(offline.not_sendable and offline.another_members_capture), so its pattern no " +
+                "longer matches this file: found = ${codes.sorted()}",
+        )
+        // And the comment stripper must actually strip: this file names
+        // `offline.permission_revoked` in its PROSE and nowhere in its code,
+        // because that is the code the ninth and tenth reviews planted claims
+        // about. If it shows up here, the stripper is not stripping and the
+        // file's prose has become load-bearing on where its line breaks fall,
+        // which is N-03 exactly.
+        //
+        // The sentinel is ASSEMBLED rather than written: a sweep of this
+        // file's literals would otherwise find the sentinel itself, and a
+        // guard that trips over its own test data measures nothing.
+        val proseOnly = "offline." + "permission_revoked"
+        assertTrue(
+            proseOnly in text,
+            "this file no longer names $proseOnly in its prose, so the comment stripper below " +
+                "has nothing to be checked against: name it in a comment again, or check the " +
+                "stripper against another code this file mentions only in prose",
+        )
+        assertFalse(
+            proseOnly in codes,
+            "the comment stripper is not stripping: $proseOnly is named in this file's PROSE " +
+                "only, and the sweep of its code found it anyway, which means the file's " +
+                "paragraphs are load-bearing on where their line breaks fall (N-03)",
         )
         return codes
+    }
+
+    /**
+     * `text` with its comments removed, so the sweep above reads CODE.
+     *
+     * N-03, from the tenth review: the sweep read the whole file, and the
+     * pattern written in this file's own prose was outside it only because of
+     * where a line break happened to fall. The review reflowed that comment
+     * onto one line, changed no code at all, and reddened the suite. It failed
+     * loud rather than open, which is why it was a residual and not a defect —
+     * but a file whose paragraphs cannot be retidied without breaking its own
+     * test is carrying a trap for whoever formats it next.
+     */
+    /**
+     * `text` with the companion object removed, so the sweep reads the CHECK
+     * and not its instruments.
+     *
+     * Measured, by this file's own harness, which is the only reason it is
+     * here: the proof that a stale exemption key must redden came back GREEN.
+     * A key planted in `CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE` is a
+     * literal in this file, so a sweep of the file's literals enrolled the key
+     * into the very set the key was then checked against. The governance
+     * assertion was true of its own input and could not fail. A guard whose
+     * subject set is derived from a text that contains the guard's own
+     * exceptions is not deriving anything.
+     *
+     * So the claims are swept from the body, where claims are written, and the
+     * companion — the patterns, the map — is removed first.
+     */
+    private fun withoutTheInstruments(text: String): String {
+        val start = text.indexOf("private companion object {")
+        assertTrue(start >= 0, "this file no longer has the companion object the sweep excludes")
+        var depth = 0
+        var i = text.indexOf('{', start)
+        val open = i
+        while (i < text.length) {
+            if (text[i] == '{') depth++
+            if (text[i] == '}') {
+                depth--
+                if (depth == 0) break
+            }
+            i++
+        }
+        assertTrue(depth == 0 && i > open, "the companion object's braces do not balance")
+        return text.removeRange(start, i + 1)
+    }
+
+    private fun withoutComments(text: String): String {
+        val block = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL)
+        val line = Regex("""//[^\n]*""")
+        return line.replace(block.replace(text, " "), " ")
     }
 
     /**
@@ -834,10 +916,51 @@ class QueueModelCheckTest {
         // this file, and the codes `RecoveryTest` licenses a wait for, out of
         // that file. A claim added to either place is enrolled by being
         // written.
+        //
+        // N-01 and N-02, from the tenth review, are the fourth and fifth
+        // instances of the same family — and the first found INSIDE the class
+        // remedy itself. The derivation keyed on one spelling,
+        // `step.code == "…"`, so `when (step.code) { "…" -> }` — the shape this
+        // file already uses a few lines above — was green at 98 of 98 with a
+        // claim about a code nothing produces. It is swept by LITERAL now,
+        // whatever surrounds it, with comments stripped so that prose is not
+        // load-bearing (N-03).
+        //
+        // And the exemption map was a hatch. One line — `offline.not_sendable`
+        // exempted — removed this loop's entire live obligation with the suite
+        // green at 98 of 98 and nothing naming the loss; a stale key for a code
+        // no claim mentions sat there equally quietly. So an exemption is now a
+        // CLAIM OF ITS OWN, which is the coordinator's ruling for the class,
+        // and it goes red when it stops being true in either direction: it must
+        // carry a reason, the code it exempts must really be unproducible, and
+        // every key must name a code this file actually claims something about.
         val claimed = conditionalClaimCodes() + waitIsHonestCodes()
+        for (key in CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE.keys.sorted()) {
+            assertTrue(
+                key in claimed,
+                "$key is exempted from the observability loop, but no claim in this file or in " +
+                    "RecoveryTest's waitIsHonest mentions it any more, so the exemption is stale " +
+                    "and the next reader will take it for a justified one: claimed = " +
+                    "${claimed.sorted()}",
+            )
+        }
         for (code in claimed.sorted()) {
             val exemption = CLAIMS_ABOUT_A_CODE_THIS_SPACE_CANNOT_PRODUCE[code]
-            if (exemption != null) continue
+            if (exemption != null) {
+                assertTrue(
+                    exemption.isNotBlank(),
+                    "$code is exempted with no reason given, and an exemption without a reason is " +
+                        "the silent weakening this loop exists to make impossible",
+                )
+                assertFalse(
+                    code in codesSeen,
+                    "the exemption for $code is stale in the direction that matters: the reachable " +
+                        "space DOES produce it, so the claim about it is measurable and the " +
+                        "exemption is hiding a live obligation rather than excusing an " +
+                        "unmeasurable one",
+                )
+                continue
+            }
             assertTrue(
                 code in codesSeen,
                 "a conditional claim is written about $code, but nothing in the reachable space " +
