@@ -36,10 +36,10 @@ Each document exists in **two places**: the shared project-files location (the c
 |---|---|---|---|
 | `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8be8503e62d4e280eb3918fb0d01ca20482135b0d7193eb0fd0ce46080230759` |
 | `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `b38f81c3d6ece206bd819b8f89bb2617c763fb7d66c307810edad88939976b36` |
-| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `188ca4ba4927bf2807c78977a5cf15c474c844d55dfc6cdba42d076345e47c22` |
+| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `c8001a3159d9fd2a3628429717df3683d8108ca860367802e7214532d60783b7` |
 | `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `6923f0add88d2a0bc31b89fa1b91be8ce20a7540fa6f95e20bf42ae2dd791979` |
 | `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `983e026a9bc6c7fe3b65cfc22fb7672ee33d30cd042e6f31ee176a1bb23055f1` |
-| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `a012c2815cf4690544c0e47194bb20c4aedb4ef031e799ad2a0e07dc083eb1dc` |
+| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `9f97c59d90440cb826e7f44670c976eff75cee421978c0294fe21cedb1e171f6` |
 | `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `180830b48401dc12323ce070b1c2256925f104d9f7028554914e70c21196bbf4`|
 | `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
 | `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
@@ -995,7 +995,7 @@ key class                  reds  1 arm(s): named: UPPERCASE key
 boolean case folding       reds  1 arm(s): R14-S1 boolean True
 named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
 planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
-haystack from the commit   reds 13 arm(s): R16-F1 an untracked scratch file is not evidence, R16-F1 a gitignored .pyc is not evidence, R16-F1 a directory that is no repository is refused +10 more
+haystack from the commit   reds 16 arm(s): R16-F1 an untracked scratch file is not evidence, R16-F1 a gitignored .pyc is not evidence, R16-F1 a directory that is no repository is refused +13 more
 no repository redirects the subject reds 10 arm(s): R17 a repository planted inside the haystack is refused, R18-F1 planted at the harness, run from the repository root, R18-F1 planted at the harness, run from the harness directory +7 more
 markdown is not evidence   reds  1 arm(s): R12 E4b a doc is not its own evidence
 the checker is not its own evidence reds  1 arm(s): R16-F1 the checker is not its own evidence
@@ -1171,7 +1171,7 @@ The counts in this section and the two blocks in §7.14 are generated:
 <!-- BEGIN GENERATED arm-counts: python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts -->
 
 ```text
-40 catch arms, 15 skip arms, 2 pass arms, 20 others
+40 catch arms, 15 skip arms, 2 pass arms, 23 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -1633,9 +1633,13 @@ refused by name; and each entry is checked to be live, for the reason
 The round's own plant is an arm. **What made this a `P1` rather than a note was
 the paragraph meant to bound the design:** three exclusions were listed under
 this project's own rule that a net is read as covering the variants of what it
-names, and the one that worked was not among them. A fourth is now stated
-there, and it says what remains: a decision on a listed pair is trusted to the
-named guard that wraps it and to the honesty of that guard's name.
+names, and the one that worked was not among them. A fourth was stated
+there, and it said what remains: a decision on a listed pair is trusted to the
+named guard that wraps it and to the honesty of that guard's name. **ROUND 19
+MEASURED THAT SENTENCE FALSE** — nothing in the parse required a wrapper, and a
+listed pair reached through a helper that RETURNS it was outside the rule
+altogether. It is kept here as the record of what this round claimed; what the
+parse actually refuses is in §7.19, and the rule it now states is the fifth.
 
 **`R18-S2` (`P3`) — the descent terminated by skipping, and then crashed.** I
 had asked the challenger to check that the recursive descent terminates. The
@@ -1694,6 +1698,167 @@ parse and the decision parse FIRST, and a frame the rules do not admit stops
 the selftest there, by name, with the arms NOT run. A refusal earned by a
 re-entrant frame is worth nothing if the arms execute that frame first and the
 reader gets a traceback instead of the refusal.
+
+## 7.19 The NINETEENTH round — `REJECT` at `e90bd70`: the allow-list's stated bound was false, and the shape outside it needed no guard at all
+
+The round confirmed that `R18-F1` is closed — the repository planted at
+`prep/phase11` is refused by name from all three seats, and the guard matrix
+arms it — that `R18-S1` was addressed in the right place, that `R18-S2`'s
+re-entry is refused rather than skipped, and that no entry of the new
+allow-list was dead. **No arm of the round was invalid as run**, which is the
+first time in three rounds that is true. Then it defeated this instrument in
+the place it has now been defeated four rounds running: **the sentence I wrote
+to bound my own fix.**
+
+**`R19-F1` (BLOCKER) — a decision on a listed pair needed no guard, and a
+listed pair reached through a helper was outside the rule entirely.** §7.18 and
+the checker's header both said that what remains outside
+`DECIDING_MODULE_CALLS` is "a decision on a listed pair is trusted to the named
+guard that wraps it and to the honesty of that guard's name". That is a
+measured-false claim by the agreed test — a reader sent to it would check the
+names of the guards around `re.fullmatch` and conclude the hole was closed —
+and the two shapes it fails to exclude are fail-opens, with the fabricated
+figure committed and the suite reporting `selftest 0`, `--check-blocks 0`,
+`scan 0`, no traceback:
+
+- **`B1`**, three lines inserted after the `"=" not in s` test: a SECOND test on
+  the listed pair `("_is_figure", "re", "fullmatch")`, **inside no guard at
+  all**. The list admitted it, because the list said nothing about wrappers.
+- **`B2`**, the question I had asked the challenger myself, answered against
+  me: the listed pair reached through a helper that RETURNS it is **neither**
+  the helper's decision nor the caller's. At the helper the call sits in a
+  `return` position and the rule read only test positions; at the call site the
+  test is on a local function rule 2 admits. **This escape does not need a
+  listed entry to exist at all**, which makes it the wider of the two.
+- **`B3`**, the same pair used in `figures_on` rather than in the listed
+  function, was refused — by `--selftest`, which the suite runs. The round
+  recorded that **the bare scan still returned 0 there**, which is `R19-S3`.
+
+**Both halves of the discharge are implemented, and the rule is now stated in
+POSITIONS.** `DECIDING_MODULE_CALLS` is five-part — `(function, module,
+attribute, position, wrapping guard)` — and the parse walks **every position a
+module call can occupy inside the frame**: `test` (anywhere inside an `if` or
+`if`-expression condition), `return` (anywhere inside a returned value) and
+`other`. A call in a `test` position is admitted only if the guard its entry
+names **lexically wraps it**, which is the wrapper the old paragraph merely
+presupposed. A call in a `return` position is admitted only from a function the
+list names, and that entry records `None` where a guard would be, because the
+value-class decision IS `_is_figure`'s purpose and there is no guard to name:
+written down rather than implied. **Each entry admits exactly one site** — a
+count stated as a law is tested as a function of its domain, and with "at least
+one" the planted second test would simply have matched the entry the real one
+matches. This is the FIFTH rule of the closed sub-language, stated as a rule
+beside the other four rather than as a paragraph about them. **Round 17's
+lesson, for the third time: a rule is only as wide as the positions it walks.**
+
+**Both of the round's own shapes are arms, each planted with the challenger's
+own lines verbatim, and each with the rule DELETED beside it.** The deletion is
+by value and not by approximation: `decision_frame(enforce=False)` restores
+round 18's behaviour exactly — a module call admitted in any position, with no
+entry and no guard required — so the published probe reads `refused with the
+rule, PASSES with the rule deleted` for each. An arm that fails both ways
+measures nothing, and the selftest fails if either does.
+
+**What is outside rule 5, and it is one thing: the honesty of a guard's NAME.**
+The parse proves that `re.fullmatch` in `_is_figure` sits inside the branch
+`"key class" not in skip` opens, that it is the only such call there, and that
+nothing else in the frame calls a module at all. It cannot prove that the
+branch deserves its name — that is the guard matrix's job, by deleting the
+guard and reading which arms stop giving their verdict. This paragraph is now a
+report of what the parse refuses rather than a promise about it, which is the
+whole of the finding.
+
+**`R19-S1` (`P2`) — a fail-closed regression, left closed on the coordinator's
+ruling, with the accusation removed.** The census refuses `GIT-NESTED-REPO` for
+an ORDINARY nested checkout: a clone inside a monorepo, under a versioned
+dotfiles tree, or in a CI workspace that is itself a repository cannot run this
+gate at all. The challenger proposed refusing only at or below the repository
+being read. **The coordinator ruled it stays fail-closed and is a named
+residual**, because an ancestor repository is exactly where round 18's plant
+sat. Two things change rather than the shape: the refusal text now **lists the
+repositories and names no intent** — a nested checkout is refused whether or
+not anything was planted, and the likeliest cause is where the operator put the
+clone, not an attack — and the consequence is recorded where it lands: **CI must
+run this gate in a workspace that is not nested inside another repository.**
+
+**`R19-S2` (`P2`) — a repository the census could not SEE, now refused by
+name.** I had asked for this attack. The census reads a `.git` ENTRY, and a
+BARE repository has none: `HEAD`, `objects` and `refs` sit directly in the
+directory. The round planted one at `prep/phase11` and the census walked
+straight past it. It did not become an escape — the run ended `rc 5`
+`GIT-FAILED`, because git itself errors when asked to resolve an anchor from
+inside a bare repository — and **a hole covered by another tool's error message
+is not a hole this gate measured.** So the census is now made to AGREE with
+git, both ways and each by name: `GIT-BARE-REPOSITORY` when git resolves the
+subject inside a bare repository, and `GIT-TOPLEVEL-DISAGREES` when git's own
+discovery names a repository the census did not. The arm is the round's own
+plant, converted from a live nested plant so it carries a real commit, run from
+all three seats — **and it is read by REFUSAL NAME and not by exit code**,
+because the exit code was already 5: with the anchor it refuses as
+`GIT-BARE-REPOSITORY`, and with the anchor deleted as `GIT-FAILED`, which is
+git's accident. The `.git` symlink half of the question the round closed in my
+favour.
+
+**`R19-S3` (`P3`) — the bare scan had no parse gate, and now runs the parse
+itself.** The decision parse gated the arms but not the scan or
+`--check-blocks`, so anyone running the checker by hand, and any CI job that
+invokes it directly, got no protection: `B3` is refused by `--selftest` and
+scanned 0. Both entry points now run the frame parse first, cached once per
+process, and refuse `FRAME-INADMISSIBLE` with the first refusal printed. The
+scan also **says** it ran it, in the inventory line above its verdict, because
+a reader told nothing has to take this header's word for it. The branch is
+armed without editing the subject: the arm seeds the per-process cache with one
+refusal for its own length and requires the same arm to give its own verdict
+without the seed — **a red proof never edits a frozen or published file to
+prove itself.**
+
+**One thing added that no finding asked for, recorded as pre-emptive and not as
+an answer.** The round said where it would look next: rule 5 matches a module
+BY SPELLING, so attack the spelling — shadow `re`, alias it, reach `fullmatch`
+through `getattr` or through `re.compile(...).fullmatch`. Of those four, three
+are already refused by rules the frame has: an alias and an attribute chain are
+attribute calls the method whitelist refuses by name, and `getattr` is not in
+`FRAME_BUILTINS`. **The fourth would have been admitted** — a parameter named
+`re`, which is round 18's shadowed-default shape, caught then by the arms and
+not by the parse. So a parameter, loop target or binding that shadows a module
+name rule 5 matches is refused by name, each listed module is checked in what
+is RUNNING to BE the module it spells, and the parameter shape is an arm with
+its own deletion control. **A triple matched by spelling does not match by
+identity** — Phase 8 recorded it about path guards and Phase 15 about
+`spawnSync`.
+
+**Still disclosed, not closed:** everything §7.15, §7.16, §7.17 and §7.18 list,
+the three carried residuals, `R19-S1` as a named fail-closed residual with its
+CI consequence recorded, and the guard matrix's own bound, which the round
+stated plainly and which I am not claiming to have closed: **deleting each
+guard and finding it reds an arm proves every guard is load-bearing, not that
+the set is complete.** **No signature is claimed here.** This is the author
+answering; the round-20 challenge on `e90bd70..HEAD` and the coordinator diff
+review after it are owed, and **`24f6ebe` is still the last fully signed
+head**. `READY_TO_PROMOTE = NO`. `OD-P11-07` is the owner's.
+
+**EVIDENCE AT THIS HEAD.** The run is
+`prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND19.txt`, run
+`p11-20261019T134755Z-9613`, and it was taken on a **clean tree**: the final
+bytes of this commit were copied to a scratch directory and committed there, so
+`SOURCE_TREE_DIRTY : no` and the figure gate derived its haystack from a commit
+carrying every line of this round. Pack A 121 cases twice and Pack B 53 cases
+twice with 0 failed, the Pack A and Pack B races with no findings, 80 frozen
+entries and `digest mismatches: []`, and **every `EXIT_*` 0** — including
+`EXIT_GENERATED_BLOCKS` and `EXIT_FENCED_FIGURES` at step `0c`, which is where
+this round's work is exercised — on PostgreSQL 16.15 at `en_US.utf8` with both
+roles `NOSUPERUSER NOBYPASSRLS`. The step-`0c` self-measurement is in §7.14's
+generated blocks, where it is printed rather than typed; the arm counts and the
+guard count moved, and nothing in this section repeats them. `HARNESS_SHA256`
+moves to `5305b376…`; the pack digests do not move, and neither does the
+migrations tree. **The scratch commit that run names is not this commit and was
+never pushed** — the evidence of a commit cannot be inside the commit before it
+exists — so the clean-clone re-run **at the pushed SHA** is published beside it,
+with this round's two probes: **the two escapes, each planted with the
+challenger's own lines and each run with the positions rule DELETED**, and **the
+bare repository from three seats, read by refusal NAME rather than by exit
+code.** `check_fenced_figures.py` is 3,539 lines at this head, sha256
+`8270149d…`.
 
 ---
 

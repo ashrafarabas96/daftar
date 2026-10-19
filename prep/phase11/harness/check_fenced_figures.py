@@ -714,13 +714,18 @@ def _subject_top(root, checked=True):
       1. A CENSUS of every ancestor of the subject up to `/`, and of the
          subject itself, for a `.git` entry -- a directory, or the file a
          worktree leaves. None is `GIT-NO-REPOSITORY`. More than one is
-         `GIT-NESTED-REPO`, listing them all: two repositories contain the
-         haystack, one of them is a plant, and the gate does not pick.
+         `GIT-NESTED-REPO`, listing them all and naming no intent (`R19-S1`):
+         two repositories contain the haystack and the gate does not pick,
+         which is why CI must not run it in a nested workspace.
       2. The subject must be a STRICT subdirectory of the one that is left. A
          subject that is its own repository is round 17's plant exactly.
       3. No `.git` anywhere INSIDE the subject, which is the one position the
          census cannot reach, because it is not an ancestor.
-      4. By value: `HEAD` resolved FROM THE SUBJECT must be the same commit as
+      4. The census must AGREE WITH GIT: the repository git itself discovers
+         from the subject must be the one the census named, and a bare
+         repository -- which has no `.git` entry for the census to see -- is a
+         refusal of its own (`R19-S2`).
+      5. By value: `HEAD` resolved FROM THE SUBJECT must be the same commit as
          `HEAD` resolved from that repository.
 
     The arms plant a repository at the harness, one level above it and two
@@ -751,7 +756,8 @@ def _subject_top(root, checked=True):
     # So: every ancestor of the subject up to `/`, and the subject itself, is
     # examined for a `.git` entry (a directory, or the file a worktree leaves).
     # MORE THAN ONE is a refusal that lists them all -- the gate does not pick
-    # between two repositories, because picking is what let the subject choose.
+    # between two repositories, because picking is what let the subject choose,
+    # and it says nothing about which of them was meant to be there.
     # Exactly one is the anchor.
     repos = []
     at = subject
@@ -769,11 +775,19 @@ def _subject_top(root, checked=True):
             "fall back to reading the directory." % subject
         )
     if len(repos) > 1:
+        # `R19-S1`. The wording used to call one of the two a plant. It does not
+        # know that: a nested checkout, a vendored dependency with its own
+        # history, a `git init` someone forgot are all this shape, and the gate
+        # refuses every one of them for the same structural reason. So the
+        # refusal LISTS what it found and states the rule, and the consequence
+        # is recorded where it lands: CI must run this gate in a workspace that
+        # is not nested inside another repository.
         raise Refusal(
             "GIT-NESTED-REPO: %d repositories contain the haystack %s (%s). The gate "
-            "does not choose between them: one of them is a plant, and choosing is what "
-            "let the subject pick the commit it was judged against."
-            % (len(repos), subject, ", ".join(repos))
+            "does not choose between them, because choosing is what let the subject "
+            "pick the commit it was judged against. This is refused whether or not "
+            "anything was planted: run the gate in a workspace that is not nested "
+            "inside another repository." % (len(repos), subject, ", ".join(repos))
         )
     top = repos[0]
     if not (subject + os.sep).startswith(top + os.sep):
@@ -782,6 +796,31 @@ def _subject_top(root, checked=True):
             "lies outside it), so a repository planted at or inside the subject would "
             "BE the toplevel. The haystack must be a strict subdirectory of the "
             "repository it is read from." % subject
+        )
+    # `R19-S2`. The census reads a `.git` ENTRY, and a BARE repository has
+    # none: its `HEAD`, `objects` and `refs` sit directly in the directory, so
+    # an ancestor turned bare is INVISIBLE to the census while git's own
+    # discovery finds it and answers every later question from it. At `e90bd70`
+    # that shape was fail-closed by accident -- git either errored or the HEAD
+    # comparison below disagreed -- and a hole covered by another tool's error
+    # message is not a hole this gate measured. So the census is made to AGREE
+    # with git, by name, and a disagreement is a refusal rather than a choice.
+    if _git(subject, ["rev-parse", "--is-bare-repository"]).decode(
+        "ascii", "replace"
+    ).strip() != "false":
+        raise Refusal(
+            "GIT-BARE-REPOSITORY: git resolves the haystack %s inside a BARE "
+            "repository, which an ancestor walk cannot see: a bare repository holds no "
+            "`.git` entry to find. The subject is read from a work tree or not at all."
+            % subject
+        )
+    discovered = os.path.realpath(_toplevel(subject))
+    if discovered != os.path.realpath(top):
+        raise Refusal(
+            "GIT-TOPLEVEL-DISAGREES: the census of ancestors names %s as the one "
+            "repository holding the haystack %s, and git's own discovery names %s. "
+            "Where the two differ, every answer taken from git comes from a repository "
+            "the census never examined." % (top, subject, discovered)
         )
     # Every directory between the toplevel and the subject is already covered:
     # it is an ancestor of the subject, so a `.git` there is a second
@@ -896,10 +935,45 @@ def planted_tokens():
     return toks
 
 
+_FRAME_PARSED = []
+
+
+def frame_admissible():
+    """(ok, refusals) for the REAL decision frame, parsed once per process.
+
+    `R19-S3`. The decision parse lived in `--selftest` only, so the bare scan
+    -- the thing CI and a reader actually run -- executed whatever frame was on
+    disk and said nothing about having read it. A gate that has an instrument
+    and does not run it is a gate whose claim about itself is a sentence. The
+    parse is cheap and deterministic; it is cached because `--selftest` calls
+    `scan` once per arm and the answer cannot change inside one process.
+    """
+    if not _FRAME_PARSED:
+        msgs = []
+        for func in (figures_on, tokens_in, _exempted, _is_figure):
+            _ok, m, _k = decision_frame(
+                _source_of(func), DECISION_EXCEPTIONS.get(func.__name__, ())
+            )
+            msgs = msgs + m
+        _FRAME_PARSED.append(tuple(msgs))
+    return not _FRAME_PARSED[0], _FRAME_PARSED[0]
+
+
 def scan(docs_dir, harness_dir, quiet=False, skip=()):
     """0 = every quoted figure is emitted. 1 = a finding. 2 = inert. 5 = a
-    NAMED REFUSAL: the haystack could not be derived from a commit, so the
-    check says so and exits non-zero instead of reading the working tree."""
+    NAMED REFUSAL: the haystack could not be derived from a commit, or the
+    decision frame is not one the rules admit, so the check says so and exits
+    non-zero instead of reading the working tree."""
+    admissible, refusals = frame_admissible()
+    if not admissible:
+        if not quiet:
+            print(
+                "  REFUSED: FRAME-INADMISSIBLE: the decision frame on disk is not one "
+                "the closed sub-language admits, so nothing it decides is read as a "
+                "verdict. %d refusal(s), the first of them: %s"
+                % (len(refusals), refusals[0])
+            )
+        return 5
     try:
         label, files, emitted = haystack(harness_dir, skip)
     except Refusal as why:
@@ -923,6 +997,12 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
         print(
             "quoted figures: %d documents, haystack from %s (%d files), %d candidate "
             "figures, %d not emitted" % (len(docs), label, len(files), seen, len(findings))
+        )
+        # `R19-S3`: said rather than assumed. The parse ran above; a reader who
+        # is told nothing about it has to take the header's word for it.
+        print(
+            "  the decision frame was parsed before this verdict: four functions, "
+            "no refusal"
         )
         # Named, not silent: `R15-F1` was a gitignored file the gate read and
         # the output never mentioned. These no longer count, and they are no
@@ -1327,7 +1407,9 @@ def _arm(body, skip=(), relpath="a.md", kind="plain"):
 # (`prep/phase11/harness`, the real layout), and for the planted positions a
 # second repository at the harness, one level above it, or two. Each is run
 # from the outer root, from the harness itself and from an unrelated sibling.
-ANCHOR_POSITIONS = ("none", "at", "up1", "up2")
+# `bare` is `R19-S2`: the same plant as `up1`, converted to a BARE
+# repository, which the ancestor census cannot see at all.
+ANCHOR_POSITIONS = ("none", "at", "up1", "up2", "bare")
 ANCHOR_CWDS = ("the repository root", "the harness directory", "an unrelated subdir")
 _ANCHOR = {}
 
@@ -1357,6 +1439,7 @@ def _anchor_world(where):
             "at": harness,
             "up1": os.path.join(d, "prep", "phase11"),
             "up2": os.path.join(d, "prep"),
+            "bare": os.path.join(d, "prep", "phase11"),
         }[where]
         # The plant carries the token, committed in ITSELF and in nothing else,
         # so if its commit is ever read the figure looks emitted. The file is
@@ -1373,6 +1456,20 @@ def _anchor_world(where):
             ["-c", "user.name=phase11", "-c", "user.email=phase11@example.invalid",
              "commit", "-q", "--no-gpg-sign", "-m", "the planted repository"],
         )
+        if where == "bare":
+            # `R19-S2`. The same live plant, converted to a BARE repository: its
+            # `HEAD`, `objects` and `refs` move up out of `.git` and into the
+            # directory itself, so the ancestor census -- which looks for a
+            # `.git` ENTRY -- walks straight past it, while git's own discovery
+            # finds it and reads the plant's commit. Converted rather than
+            # created empty, so the plant is as live here as in `up1`: a bare
+            # repository with no commit would be refused by git's own error and
+            # the arm would measure that instead.
+            gitdir = os.path.join(at, ".git")
+            for entry in sorted(os.listdir(gitdir)):
+                shutil.move(os.path.join(gitdir, entry), os.path.join(at, entry))
+            os.rmdir(gitdir)
+            _git(at, ["config", "core.bare", "true"])
     _ANCHOR[where] = (d, harness, sibling)
     return _ANCHOR[where]
 
@@ -1453,13 +1550,15 @@ def _arms_with(skip=()):
         for seat in ANCHOR_CWDS:
             arms.append(
                 (
-                    "R18-F1 %s, run from %s"
+                    "%s %s, run from %s"
                     % (
+                        "R19-S2" if where == "bare" else "R18-F1",
                         {
                             "none": "no planted repository",
                             "at": "planted at the harness",
                             "up1": "planted one level above",
                             "up2": "planted two levels above",
+                            "bare": "a BARE repository planted one level above",
                         }[where],
                         seat,
                     ),
@@ -1782,18 +1881,43 @@ def structure_test():
 # selftest machinery are not in the frame and are not parsed -- they decide
 # nothing about whether a document's figure is emitted.
 #
-# A FOURTH, added because round 18 found it live and NOT in the three above:
-# the rules are closed over node TYPES and were open over WHICH MODULE CALLS
-# MAY DECIDE. Rule 2 admitted "a call the frame admits" and rule 3 admitted an
-# attribute call on a module in `FRAME_MODULES`, so `if re.match("zz_", s)`
-# planted in the real `figures_on` was admissible as written -- and it could
-# not simply be banned, because `_is_figure` decides on `re.fullmatch`
-# legitimately. `DECIDING_MODULE_CALLS` now names the (function, module,
-# attribute) triples that may decide, each checked to be live, and every other
-# attribute call in a test position is refused by name. What remains outside,
-# stated rather than derived: a decision on a LISTED pair is trusted to the
-# named guard that wraps it and to the honesty of that guard's name, which is
-# the second exclusion above and not a new one.
+# A FIFTH RULE, which rounds 18 and 19 wrote between them: the four rules above
+# are closed over node TYPES and were open over WHICH MODULE CALLS MAY DECIDE.
+# Rule 2 admitted "a call the frame admits" and rule 3 admitted an attribute
+# call on a module in `FRAME_MODULES`, so `if re.match("zz_", s)` planted in
+# the real `figures_on` was admissible as written -- and it could not simply be
+# banned, because `_is_figure` decides on `re.fullmatch` legitimately.
+#
+#   5. EVERY ATTRIBUTE CALL ON A MODULE, IN EVERY POSITION IT CAN OCCUPY, is
+#      admitted only by an entry of `DECIDING_MODULE_CALLS` naming that
+#      function, that module, that attribute and that POSITION -- `test`
+#      (anywhere inside an `if` or `if`-expression condition), `return`
+#      (anywhere inside a returned value) or `other`. An entry for a `test`
+#      names the guard that must LEXICALLY WRAP the call, and the parse
+#      requires it to be there. Each entry admits EXACTLY ONE site: at zero it
+#      permits a decision nothing takes, and above one it covers a call nobody
+#      read. Everything else is refused by name, wherever it sits.
+#
+# Round 19 rejected the three-part form of this rule, and the sentence that
+# bounded it, twice over -- which is why the rule above is stated in positions
+# and the paragraph below says only what the parse refuses:
+#
+#   * a SECOND test on a listed pair, inside NO guard at all, was admitted,
+#     while the bounding sentence said the decision is "trusted to the named
+#     guard that wraps it". Nothing required a wrapper;
+#   * the listed pair reached through a helper that RETURNS it was outside the
+#     rule entirely: in the helper the call sat in a `return` position and the
+#     rule read only tests, and at the call site the test was on a local
+#     function rule 2 admits.
+#
+# WHAT IS STILL OUTSIDE RULE 5, and it is one thing: the HONESTY OF A GUARD'S
+# NAME. The parse can prove that `re.fullmatch` in `_is_figure` sits inside the
+# branch `"key class" not in skip` opens, and that nothing else in the frame
+# calls a module at all; it cannot prove that the branch deserves that name.
+# That is the second exclusion above, and it is what the guard matrix measures
+# by deleting the guard and reading which arms stop giving their verdict. Both
+# of round 19's escapes are arms of their own, each with the rule deleted
+# beside it, so this paragraph is a report rather than a promise.
 
 FRAME_NODES = frozenset(
     (
@@ -1856,8 +1980,35 @@ PARSED_AS_TRANSFORMERS = ("_strip", "_segments")
 # attribute call in a test position is refused by name. Each entry is checked
 # to be live below, for the same reason `FRAME_METHODS` is: a permissive entry
 # nothing uses only widens the language.
+# Each entry is (function, module, attribute, POSITION, wrapping guard). Round
+# 19 rejected the three-part form, and it was right twice over:
+#
+#   * `R19-F1` B1 -- a SECOND test on the listed pair, at the top of
+#     `_is_figure` and inside NO guard at all, was admitted, while the
+#     paragraph bounding the rule said the decision is "trusted to the named
+#     guard that wraps it". Nothing required a wrapper. The sentence did not
+#     bound what it claimed to bound.
+#   * `R19-F1` B2 -- the listed pair reached through a helper that RETURNS it
+#     was neither the helper's decision nor the caller's: at the helper the
+#     call sat in a RETURN position and the rule only looked at TEST positions,
+#     and at the call site the test was on a local function rule 2 admits. The
+#     allow-list was never consulted at all.
+#
+# So the rule walks EVERY position a module call can occupy inside the frame,
+# not the one position a decision is written in most often -- round 17's lesson
+# again: a rule is only as wide as the positions it walks. A call in a `test`
+# position must sit lexically inside the guard its entry names. A call in a
+# `return` position is admitted only from a function the list names, and its
+# entry records `None` where a guard would be, because the value-class decision
+# IS this function's purpose and there is no guard to name: that is written
+# down rather than implied.
+#
+# AND EACH ENTRY ADMITS EXACTLY ONE CALL SITE. A count stated as a law is
+# tested as a function of its domain: with "at least one" the planted second
+# test would simply have matched the entry the real one matches.
 DECIDING_MODULE_CALLS = (
-    ("_is_figure", "re", "fullmatch"),
+    ("_is_figure", "re", "fullmatch", "test", "key class"),
+    ("_is_figure", "re", "fullmatch", "return", None),
 )
 
 DECISION_EXCEPTIONS = {
@@ -1904,12 +2055,66 @@ def _source_of(func):
     return ast.parse(textwrap.dedent(inspect.getsource(func))).body[0]
 
 
-def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
+def _module_call_sites(fn):
+    """Every attribute call on a frame module inside `fn`, with the POSITION it
+    occupies and the named guards that LEXICALLY wrap it.
+
+    `R19-F1`. The three-part allow-list looked only at tests, so the same pair
+    reached in a `return` position was outside the rule entirely, and a test
+    that sat inside no guard at all matched an entry whose fifth field did not
+    exist. A rule is only as wide as the positions it walks, so this walks all
+    of them: `test` (anywhere inside an `if`/`if`-expression condition),
+    `return` (anywhere inside a returned value) and `other`. The guard set is
+    built on the way down, from the `if` statements this node is lexically
+    inside -- a guard's OWN test is not wrapped by it, so the key is added only
+    for the body and the `else`.
+    """
+    sites = []
+
+    def visit(node, position, guards):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            on = node.func.value
+            if isinstance(on, ast.Name) and on.id in FRAME_MODULES:
+                sites.append((node, on.id, node.func.attr, position, guards))
+        if isinstance(node, ast.If):
+            inner = node.test
+            if isinstance(inner, ast.UnaryOp) and isinstance(inner.op, ast.Not):
+                inner = inner.operand
+            key = _guard_test(inner)
+            visit(node.test, "test", guards)
+            inside = guards | frozenset([key]) if key is not None else guards
+            for sub in node.body + node.orelse:
+                visit(sub, "other", inside)
+            return
+        if isinstance(node, ast.IfExp):
+            visit(node.test, "test", guards)
+            visit(node.body, position, guards)
+            visit(node.orelse, position, guards)
+            return
+        if isinstance(node, ast.Return):
+            if node.value is not None:
+                visit(node.value, "return", guards)
+            return
+        for sub in ast.iter_child_nodes(node):
+            visit(sub, position, guards)
+
+    for sub in fn.body:
+        visit(sub, "other", frozenset())
+    return sites
+
+
+def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce=True):
     """(ok, messages, guard keys) for one decision function's AST.
 
     `lookup` resolves a called name; the default resolves it in this module, and
     the plants pass their own so a planted helper can be descended into without
     being defined here.
+
+    `enforce=False` is the GUARD-DELETION switch for `R19-F1`, and nothing else
+    may pass it: it restores round 18's behaviour by value -- a module call
+    admitted in any position, with no entry and no guard required -- so the
+    control run beside each of round 19's two arms shows the plant passing with
+    the rule deleted rather than merely failing with it present.
     """
     lookup = lookup or _frame_lookup
     # `R18-S2`: the names on the CURRENT descent, copied at each level rather
@@ -1929,6 +2134,23 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
                 if isinstance(sub, ast.Name):
                     loop_targets.add(sub.id)
 
+    # Rule 5 matches a module BY SPELLING, so the spelling is nailed down here
+    # and its identity is checked in `decision_test`. Round 19 said where it
+    # would look next -- shadow `re`, alias it, reach it through `getattr` --
+    # and of those only a shadowing binding is matched by rule 5 as written: an
+    # alias (`import re as _r`) and an attribute chain
+    # (`re.compile(...).fullmatch`) are attribute calls the method whitelist
+    # already refuses, and `getattr` is not in `FRAME_BUILTINS`. A PARAMETER
+    # named `re` is the one that would be admitted, which is round 18's
+    # shadowed-default shape caught by the arms rather than by the parse.
+    # Refused by name now.
+    for bad in sorted((params | loop_targets) & set(FRAME_MODULES)) if enforce else ():
+        msgs.append(
+            "%s: `%s` is a parameter or a loop target here, and it is the name rule 5 "
+            "matches a module by -- a listed pair whose module name can be rebound is "
+            "matched by spelling and not by identity" % (name, bad)
+        )
+
     # The listed exceptions own their own nodes: `not key or not val` is a
     # `BoolOp`, which the node set does not admit anywhere else.
     tests = [n.test for n in ast.walk(fn) if isinstance(n, (ast.If, ast.IfExp))]
@@ -1941,7 +2163,6 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
                 exempt.add(id(sub))
 
     # Rule 2: every decision.
-    decided = set()
     for test in tests:
         if id(test) in exempt:
             continue
@@ -1953,27 +2174,9 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
             keys.add(key)
             continue
         if isinstance(inner, ast.Call):
-            func = inner.func
-            on_module = (
-                isinstance(func, ast.Attribute)
-                and isinstance(func.value, ast.Name)
-                and func.value.id in FRAME_MODULES
-            )
-            if on_module:
-                pair = (name, func.value.id, func.attr)
-                if pair in DECIDING_MODULE_CALLS:
-                    decided.add(pair)
-                else:
-                    msgs.append(
-                        "%s: line %d DECIDES on `%s.%s(...)`, which is not on the "
-                        "deciding-call list. An admitted module call is admitted as a "
-                        "CALL; deciding on one is a narrowing, and `R18-S1` planted "
-                        "exactly this one."
-                        % (name, test.lineno, func.value.id, func.attr)
-                    )
-            # Anything else in a test position is a call the frame classifies
-            # under rule 3 below, which is where a method on the value is
-            # refused.
+            # Classified below, in every position at once: a module call is
+            # weighed against `DECIDING_MODULE_CALLS` wherever it sits, and a
+            # method on the value is refused by the method list.
             continue
         msgs.append(
             "%s: line %d decides on `%s`, which is neither a named guard nor a call the "
@@ -2010,6 +2213,12 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
                                 sub.id,
                                 "a parameter" if sub.id in params else "a loop target",
                             )
+                        )
+                    if sub.id in FRAME_MODULES and enforce:
+                        msgs.append(
+                            "%s: line %d binds `%s`, which is the name rule 5 matches a "
+                            "module by -- see the parameter case above"
+                            % (name, node.lineno, sub.id)
                         )
                     if sub.id in bound:
                         msgs.append(
@@ -2060,6 +2269,7 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
                             lookup,
                             seen,
                             _depth + 1,
+                            enforce,
                         )
                         msgs = msgs + sub_msgs
                         keys = keys | sub_keys
@@ -2079,12 +2289,66 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
                     % (name, node.lineno)
                 )
 
-    for pair in DECIDING_MODULE_CALLS:
-        if pair[0] == name and pair not in decided:
+    # `R19-F1`. The allow-list is ENFORCED here rather than described above:
+    # every module call inside this function, in whatever position it occupies,
+    # must be admitted by an entry naming that function, that module, that
+    # attribute, that POSITION and -- for a test -- a guard that lexically
+    # wraps it. Nothing else about a module call is admissible anywhere in the
+    # frame, which is what makes the bounding paragraph a statement about the
+    # parse.
+    matched = {}
+    for node, module, attr, position, guards in (
+        _module_call_sites(fn) if enforce else ()
+    ):
+        if id(node) in exempt:
+            continue
+        entry = None
+        for cand in DECIDING_MODULE_CALLS:
+            if (cand[0], cand[1], cand[2], cand[3]) != (name, module, attr, position):
+                continue
+            if cand[4] is not None and cand[4] not in guards:
+                continue
+            entry = cand
+            break
+        if entry is None:
             msgs.append(
-                "%s: the deciding-call entry `%s.%s` is not a test in this function any "
-                "more, so it permits a decision nothing takes -- a permissive entry "
-                "nothing uses only widens the language" % (name, pair[1], pair[2])
+                "%s: line %d calls `%s.%s` in a %s position%s, and no entry of "
+                "DECIDING_MODULE_CALLS admits it -- a module call that decides outside "
+                "the guard its entry names, or in a position the list does not cover, "
+                "is refused by name"
+                % (
+                    name,
+                    node.lineno,
+                    module,
+                    attr,
+                    position,
+                    (
+                        " inside the guards %s" % ", ".join(sorted(guards))
+                        if guards
+                        else " inside no named guard"
+                    ),
+                )
+            )
+            continue
+        matched.setdefault(entry, []).append(node.lineno)
+    for pair in DECIDING_MODULE_CALLS:
+        if pair[0] != name or not enforce:
+            continue
+        at = matched.get(pair, [])
+        if len(at) != 1:
+            msgs.append(
+                "%s: the deciding-call entry `%s.%s` in a %s position admits EXACTLY "
+                "ONE site and matched %d (%s) -- a count stated as a law is tested as a "
+                "function of its domain, and at zero the entry permits a decision "
+                "nothing takes while above one it covers a call nobody read"
+                % (
+                    name,
+                    pair[1],
+                    pair[2],
+                    pair[3],
+                    len(at),
+                    ", ".join("line %d" % n for n in at) or "none",
+                )
             )
     for src in exceptions:
         if src not in used:
@@ -2137,6 +2401,15 @@ _PLANTED_H2 = '''def _r18_h2(s):
     return False
 '''
 
+# `R19-F1` B2, as the round ran it: the listed pair reached through a helper
+# that RETURNS it. At `e90bd70` this was admitted twice over -- in the helper
+# the call sat in a RETURN position and the rule read only TEST positions, and
+# at the call site the test was on a local function rule 2 admits -- so the
+# allow-list was never consulted at all.
+_PLANTED_RETURNS = '''def _r19_shape(s):
+    return re.fullmatch(r"zz_.*", s)
+'''
+
 DECISION_PLANTS = (
     ("R17-F1 comprehension filter", '        out = [x for x in out if not x.startswith("zz_")]'),
     ("R17-F1 helper this file does not define", '        if _r17_helper(s):\n            continue'),
@@ -2162,6 +2435,34 @@ DECISION_PLANTS = (
     ("R18-S2 a mutual pair of helpers", '        if _r18_h1(s):\n            continue'),
 )
 
+# `R19-F1` B1, as the round ran it: a SECOND test on the pair the list names,
+# at the top of the real `_is_figure` and inside NO guard at all. It cannot be
+# planted in the template, because the template's function is not the one the
+# entry names -- which is the point: the escape needed the author's own
+# function, so the arm uses the author's own source.
+_IS_FIGURE_ANCHOR = '    if "=" not in s:'
+
+IS_FIGURE_PLANTS = (
+    (
+        "R19-F1 B1 a second test on the listed pair, inside no guard",
+        '    if re.fullmatch(r"zz_.*", s):\n        return False',
+    ),
+    (
+        "R19-F1 B2 the listed pair reached through a helper that RETURNS it",
+        '    if _r19_shape(s):\n        return False',
+    ),
+)
+
+
+def _is_figure_planted(stmt):
+    """`_is_figure`'s own source with one statement planted above its first
+    decision -- the author's function, not a stand-in for it."""
+    src = textwrap.dedent(inspect.getsource(_is_figure))
+    assert src.count(_IS_FIGURE_ANCHOR) == 1
+    return ast.parse(
+        src.replace(_IS_FIGURE_ANCHOR, stmt + "\n" + _IS_FIGURE_ANCHOR, 1)
+    ).body[0]
+
 
 def _plant_lookup(name):
     """The frame's lookup, plus the planted helper -- so `R17-S1`'s remedy is
@@ -2172,6 +2473,7 @@ def _plant_lookup(name):
         "_r18_self": _PLANTED_SELF,
         "_r18_h1": _PLANTED_H1,
         "_r18_h2": _PLANTED_H2,
+        "_r19_shape": _PLANTED_RETURNS,
     }
     if name in planted:
         return ("planted", ast.parse(planted[name]).body[0])
@@ -2197,6 +2499,19 @@ def decision_test():
         for node in ast.walk(_source_of(func)):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 seen_methods.add(node.func.attr)
+    # Rule 5's modules, checked to BE the modules they spell. A triple matched
+    # by spelling does not match by identity -- Phase 8 recorded it about path
+    # guards and Phase 15 about `spawnSync` -- so the spelling is tied to the
+    # object once, here, in what is running.
+    for mod in FRAME_MODULES:
+        obj = globals().get(mod)
+        if obj is not sys.modules.get(mod) or getattr(obj, "__name__", None) != mod:
+            print(
+                "  decision **FAILED**: `%s` in this module is %r and not the module of "
+                "that name, so every DECIDING_MODULE_CALLS entry naming it is matched "
+                "by spelling against something else" % (mod, obj)
+            )
+            ok = False
     dead = [m for m in FRAME_METHODS if m not in seen_methods]
     if dead:
         print(
@@ -2248,6 +2563,45 @@ def decision_test():
         "  decision: %d of %d planted decisions refused, the unplanted frame accepted "
         "-- %s" % (refused, len(DECISION_PLANTS), "all of them" if ok else "FAILURES ABOVE")
     )
+    # `R19-F1`'s own arms, each with the deletion control beside it. The
+    # control runs the SAME plant with `enforce=False`, which is round 18's
+    # rule restored by value: a plant that the rule refuses and the deleted
+    # rule admits measures the hole that was there, and one that fails both
+    # ways measures nothing.
+    arms = [(label, _is_figure_planted(stmt.replace("\\n", "\n")), "_is_figure")
+            for label, stmt in IS_FIGURE_PLANTS]
+    # Not a round-19 finding: the shape round 19 said it would attack next, and
+    # the only one of its four that rule 5 would have admitted as written.
+    shadowed = textwrap.dedent(inspect.getsource(_is_figure)).replace(
+        "def _is_figure(s, skip=()):", "def _is_figure(s, skip=(), re=None):", 1
+    )
+    arms.append(
+        (
+            "R19 pre-emptive: a parameter shadowing the module name rule 5 matches",
+            ast.parse(shadowed).body[0],
+            "_is_figure",
+        )
+    )
+    for label, tree, where in arms:
+        excs = DECISION_EXCEPTIONS.get(tree.name, ())
+        with_rule, msgs, _k = decision_frame(tree, excs, _plant_lookup)
+        without, _m, _k2 = decision_frame(tree, excs, _plant_lookup, enforce=False)
+        good = (not with_rule) and without
+        if not good:
+            ok = False
+        print(
+            "  decision %s, planted in %s: refused=%s, and with the positions rule "
+            "DELETED it %s -> %s"
+            % (
+                label,
+                where,
+                "yes" if not with_rule else "NO",
+                "passes" if without else "still fails, so the arm measures nothing",
+                "as required" if good else "FAILED",
+            )
+        )
+        if not with_rule:
+            print("    refusal: %s" % msgs[0])
     return ok
 
 
@@ -2283,6 +2637,18 @@ PROVENANCE = {
         None,
         "round 15's own `__pycache__/check_fenced_figures.cpython-313.pyc`, gitignored, "
         "which the round quoted as the fail-open",
+    ),
+    "R19-S2 a BARE repository planted one level above, run from the repository root": (
+        None,
+        "round 19's `S-2`: a bare repository is invisible to the ancestor census, reported as the shape the census cannot see rather than as a line -- the refusal NAME is asserted by `anchor_names_test`, because the exit code was already 5",
+    ),
+    "R19-S2 a BARE repository planted one level above, run from the harness directory": (
+        None,
+        "round 19's `S-2` from THE SEAT THE ROUNDS RAN FROM, reported as a shape rather than as a line -- the refusal NAME is asserted by `anchor_names_test`",
+    ),
+    "R19-S2 a BARE repository planted one level above, run from an unrelated subdir": (
+        None,
+        "round 19's `S-2` from a seat that is no ancestor of the harness, reported as a shape rather than as a line -- the refusal NAME is asserted by `anchor_names_test`",
     ),
     "R18-F1 no planted repository, run from the repository root": (
         None,
@@ -2874,7 +3240,20 @@ def regenerate(docs_dir, quiet=False):
 def check_blocks(docs_dir, quiet=False):
     """0 = every generated block matches a fresh run and no figure of theirs is
     typed outside one. 1 = a difference. 2 = nothing enrolled, which must not
-    report a pass."""
+    report a pass. 5 = the decision frame is not one the rules admit."""
+    # `R19-S3`. The same gate as the scan, for the same reason: the generators
+    # read the matcher, so a frame the rules refuse decides what these blocks
+    # say.
+    admissible, refusals = frame_admissible()
+    if not admissible:
+        if not quiet:
+            print(
+                "  REFUSED: FRAME-INADMISSIBLE: the decision frame on disk is not one "
+                "the closed sub-language admits, so the generated blocks are not read "
+                "as evidence. %d refusal(s), the first of them: %s"
+                % (len(refusals), refusals[0])
+            )
+        return 5
     findings = []
     enrolled = 0
     for path in documents(docs_dir):
@@ -3013,6 +3392,70 @@ def blocks_test():
     return ok
 
 
+def frame_gate_test():
+    """`R19-S3`'s own arm: the scan's refusal branch, measured rather than read.
+
+    A red proof never edits the subject, so the frame is not made inadmissible
+    on disk. The per-process cache the parse fills is SEEDED with one refusal
+    for the length of this arm, which exercises exactly the branch a planted
+    frame would take, and the same arm without the seed must still give its own
+    verdict -- otherwise the gate would be refusing for some other reason.
+    """
+    saved = list(_FRAME_PARSED)
+    try:
+        _FRAME_PARSED[:] = [("a refusal planted for this arm only",)]
+        refused = _arm(PROBE, ())
+    finally:
+        _FRAME_PARSED[:] = saved
+    plain = _arm(PROBE, ())
+    good = refused == 5 and plain == 1
+    print(
+        "  frame  R19-S3 the scan refuses an inadmissible frame rc=%d (want 5), and "
+        "with no refusal to report the same arm rc=%d (want 1) -> %s"
+        % (refused, plain, "as required" if good else "**SELFTEST FAILED**")
+    )
+    return good
+
+
+def anchor_names_test():
+    """`R19-S2`, read the way a refusal has to be read: by NAME.
+
+    The exit code is 5 either way. At `e90bd70` the bare plant was already
+    fail-closed -- git's own error, or the HEAD comparison -- and a hole
+    another tool's error message covers is not a hole this gate measured. So
+    the refusal NAME is printed with the anchor present and with it deleted,
+    and the arm asserts only the first: that the gate now names this shape
+    itself.
+    """
+    ok = True
+    for seat in ANCHOR_CWDS:
+        names = {}
+        for label, skip in (("with the anchor", ()), ("with the anchor deleted",
+                            ("no repository redirects the subject",))):
+            root, harness, sibling = _anchor_world("bare")
+            was = os.getcwd()
+            try:
+                os.chdir({"the repository root": root,
+                          "the harness directory": harness,
+                          "an unrelated subdir": sibling}[seat])
+                try:
+                    haystack(harness, skip)
+                    names[label] = "NO REFUSAL"
+                except Refusal as why:
+                    names[label] = str(why).split(":")[0]
+            finally:
+                os.chdir(was)
+        good = names["with the anchor"] == "GIT-BARE-REPOSITORY"
+        ok = ok and good
+        print(
+            "  anchor R19-S2 bare repository, from %-22s refuses as %s, and with the "
+            "anchor deleted as %s -> %s"
+            % (seat, names["with the anchor"], names["with the anchor deleted"],
+               "as required" if good else "**SELFTEST FAILED**")
+        )
+    return ok
+
+
 def selftest():
     # THE PARSES RUN FIRST, and an inadmissible frame is not executed.
     #
@@ -3044,6 +3487,8 @@ def selftest():
         "  %s -- %s"
         % (emit_arm_counts()[0], "all as required" if ok else "FAILURES ABOVE")
     )
+    ok = frame_gate_test() and ok
+    ok = anchor_names_test() and ok
     ok = guard_matrix() and ok
     ok = identity_test() and ok
     ok = blocks_test() and ok
