@@ -103,6 +103,7 @@ if not sys.flags.isolated:
 
 import argparse
 import datetime
+import hashlib
 import io
 import re
 import subprocess
@@ -222,21 +223,32 @@ def tally(manifest: Path) -> tuple[int, int, int]:
     return digests, markers, selfrow
 
 
-def pinned_by_digest(manifest: Path) -> set[str]:
-    """The names the table pins by BYTES, i.e. the rows carrying a sha256.
+def pinned_now(manifest: Path, base: Path, name: str) -> bool:
+    """Does the table pin THIS file by a sha256 that still matches its bytes?
 
     ROUND 28, the challenger's F-51. A marker row ("reviewer-owned") pins
     nothing, so a reviewer-owned document may change its bytes with no check
     able to object — which is exactly the B-8(a) case the ordering test below
     exists to catch. The distinction has to be read off the table, not guessed
     from the extension.
+
+    AND IT IS COMPUTED HERE, NOT REMEMBERED. The challenger's second F-51 note,
+    which it sent twice because it is the one way this remedy becomes a
+    fail-open: the sentence "its bytes are the audited bytes" must be true at
+    the instant the refusal is printed, so this re-reads the row AND re-hashes
+    the file now. Reusing the exit code `agree()` saw earlier would be B-7's
+    exact shape — a capture believed to describe bytes it no longer describes —
+    reappearing inside the sentence written to explain a refusal, and the
+    gentler sentence is the one a reader waves through.
     """
-    pinned = set()
+    want = None
     for line in io.open(manifest, encoding="utf-8"):
         m = ROW.match(line.rstrip("\n"))
-        if m and m.group(2).startswith("`") and len(m.group(2)) == 66:
-            pinned.add(m.group(1))
-    return pinned
+        if m and m.group(1) == name and m.group(2).startswith("`") and len(m.group(2)) == 66:
+            want = m.group(2).strip("`")
+    if want is None:
+        return False
+    return hashlib.sha256((base / name).read_bytes()).hexdigest() == want
 
 
 def agree(summary_line: str, digests: int, markers: int, selfrow: int) -> None:
@@ -402,18 +414,17 @@ def main() -> int:
         # not stop refusing, because a clock cannot settle which one it is and
         # re-sealing costs one run.
         #
-        # `agree()` above has already refused on any nonzero `problems`, so at
-        # this line every digest row verified. That makes the distinction a real
-        # one: if the newest file's bytes are pinned by a verified row, they are
-        # the audited bytes whatever moved the mtime. If it carries a marker
-        # instead, or no row, nothing here pins it and a change cannot be ruled
-        # out — the wording must not soften then.
-        if mfile in pinned_by_digest(manifest):
+        # The gentler wording is taken ONLY on a digest recomputed at this
+        # instant, never on `agree()`'s earlier reading. A file with no digest
+        # row — reviewer-owned, or absent from the table — pins nothing, and
+        # that is the B-8(a) case this test exists for, so the wording does not
+        # soften there.
+        if pinned_now(manifest, pack, mfile):
             why = (
-                f"\n  {mfile} is pinned by a digest row and every row verified in this same "
-                f"run, so its BYTES are the audited bytes and this reads as an mtime bump "
-                f"from the synced volume rather than an edit. Refusing anyway: the clock "
-                f"cannot establish that, and re-sealing is one run."
+                f"\n  {mfile} is pinned by a digest row and its bytes STILL hash to that row, "
+                f"re-hashed at this refusal and not carried from the check above, so this "
+                f"reads as an mtime bump from the synced volume rather than an edit. "
+                f"Refusing anyway: the clock cannot establish that, and re-sealing is one run."
             )
         else:
             why = (
