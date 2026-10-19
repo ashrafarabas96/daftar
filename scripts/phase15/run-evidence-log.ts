@@ -335,6 +335,13 @@ const INSTRUMENTS: readonly Instrument[] = [
     nonZeroMeans: 'direction 4 did not redden on a planted contradiction, or it failed a correction for quoting the claim it retracts',
   },
   {
+    script: 'verify:handoff-manifest:env',
+    what: "whether the caller's environment can choose which repository the handoff gate measures, and whether a failed git read is refused by name rather than counted as zero",
+    cluster: false,
+    nonZeroMeans:
+      "GIT_DIR, GIT_WORK_TREE or GIT_OBJECT_DIRECTORY changed what the gate measured, or a read that failed became a figure — either of which makes the gate's VERIFIED a statement about a repository the caller chose",
+  },
+  {
     script: 'checkpoint:phase15',
     what: 'the PART 22 resumable checkpoint, re-checked (read-only: this runner never regenerates it)',
     cluster: false,
