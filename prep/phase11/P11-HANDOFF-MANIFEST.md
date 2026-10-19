@@ -36,37 +36,56 @@ Each document exists in **two places**: the shared project-files location (the c
 |---|---|---|---|
 | `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8be8503e62d4e280eb3918fb0d01ca20482135b0d7193eb0fd0ce46080230759` |
 | `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `b38f81c3d6ece206bd819b8f89bb2617c763fb7d66c307810edad88939976b36` |
-| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `ea788e6aef467eee94ee7109e906635c8658669ec1c023ac5122638db770cdd5` |
+| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `c9b3e23e7a2af9048daa07184e622733aa211683e0cd475e3949fc866337d578` |
 | `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `6923f0add88d2a0bc31b89fa1b91be8ce20a7540fa6f95e20bf42ae2dd791979` |
 | `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `983e026a9bc6c7fe3b65cfc22fb7672ee33d30cd042e6f31ee176a1bb23055f1` |
-| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `7579c9620df36bf934cc4eaefd7ba787c36535a79c5bd7a52b864bee21e73f54` |
+| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `25acaf2dcfdf9767b3aeaf2d956a3dc3df343cdd6bf66ae6c39edccbf9cb3faa` |
 | `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `180830b48401dc12323ce070b1c2256925f104d9f7028554914e70c21196bbf4`|
 | `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
 | `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
 
-### 2a. The harness's own bytes, pinned here
+### 2a. The deciding files are read from the COMMIT
 
-This table is the pin the harness is read against, and it is here rather than in
-the harness because **a file cannot be the authority on its own bytes**: the edit
-that moves the bytes can delete the comparison in the same stroke. The reader is
-`prep/phase11/harness/check_harness_bytes.py`, which shares no code with
-`check_fenced_figures.py`, is pinned by a row of this table itself, and refuses
-by name — `HARNESS-BYTES-MOVED`, `HARNESS-FILE-UNPINNED`,
-`HARNESS-FILE-ABSENT`, `HARNESS-PIN-UNREADABLE`, `HARNESS-UNREADABLE`. The scan
-and `--check-blocks` run it as a SUBPROCESS and refuse on it, so it is not a
-`--selftest`-only instrument; `rebuild_and_prove.sh` runs it as its own exit
-code. Regenerate with `python3 -I check_harness_bytes.py --emit` **in the same
-commit as the change it records**.
+**There is no pin table here any more, and its absence is the fix.** The first
+answer to the coordinator's `C21-F1` was a table of harness digests in this
+section. Round 21 measured that whole class again one level up: the matcher's
+constants were pinned by a literal in the file a plant edits, the refusal text
+told the maintainer to re-run `--decision-constants` and commit the new digest,
+and taking exactly that step reopened the escape with every gate at 0. **A pin
+inside the thing it pins is not a pin, and a table a planter edits in the same
+commit is the same mistake with one more file in it.**
 
-**The one limit, stated at the law:** an edit that changes a harness file AND its
-row here in the same commit is bounded only by REVIEW. A pin inside the thing it
-pins is not a pin, which is why this phase's chain is author, independent
-challenger, coordinator, with the diff read by someone who did not write it.
+So the authority is the commit. Every deciding file under
+`prep/phase11/harness/` — every `.py`, `.sh` and `.sql`, by walking rather than
+by a list, so a file added tomorrow is covered the day it is written — must equal
+`git show <resolved anchored sha>:<path>`. It is read **twice**: once by
+`check_fenced_figures.py` itself (`SELF-BYTES-UNCOMMITTED`,
+`SELF-FILE-UNCOMMITTED`, `SELF-FILE-ABSENT`, `SELF-ANCHOR-UNRESOLVED`) and once
+by `harness/check_harness_bytes.py` (`HARNESS-BYTES-UNCOMMITTED` and its
+siblings), which imports nothing from the checker and is itself one of the
+deciding files — because a file cannot be the authority on its own bytes. And
+`_source_of` now takes the frame's source **from that blob** rather than from
+`inspect.getsource`, so a working-tree edit cannot be measured as a rule at all.
+The scan and `--check-blocks` refuse on both readings; `rebuild_and_prove.sh`
+runs the second reader at step `0c-0`, fatally, before anything that reads those
+bytes.
 
-<!-- P11-HARNESS-BYTES-PIN v1 BEGIN -->
+**What this does not do, stated at the law:** it does not stop a planter who
+COMMITS. Nothing executable can. What it changes is that every escape from
+rounds 16 to 21 — the gitignored artefact, the AST gaps, the receiver, the
+rebound attribute, the argument, the re-pin, the added admit-list entry — has to
+be in the diff, under the digests published below, in front of an independent
+challenger and the coordinator. That is the whole of the guarantee, and it is
+why this phase's chain has three links and why no author signs their own work.
+
+The digests below are **published for a reader**, not compared by the run: they
+say which commit's bytes the reviews were issued against. Nothing in the harness
+reads this list.
+
+<!-- P11-DECIDING-BYTES-PUBLISHED-AT-THE-REVIEWED-COMMIT -->
 ```
-22aca4d9da065fd346805cefeeaaa86184c81c5c4d89dcbe85b2f71bcad2a64e  check_fenced_figures.py
-7a775549817cc3471097c9bf87d2a13cfb123939b323ce7d20557b28c07703b9  check_harness_bytes.py
+28253d3b99a171e2d7ed22da0110931776f39ddbf52dc4250fe43a7d31d6f83e  check_fenced_figures.py
+f7f759197c02df7f818934b221bbe883611b3a1e50e52fa7be87214770381fa5  check_harness_bytes.py
 3555bc5947f567fc2ef67b512bafad49c7b0ab0baae1d0b59a7fca98d93324ad  mutations/M10-noop.sql
 b6b715810b22883898e778cbcafac136517ca3bde7c1b0c3000cca2282c0ac37  mutations/M11-defeat-the-write-identity-comparison.sql
 4481a3e78a4bdeec5b443a1395a5e24b12a75801b3c0270f0a45f61359c5b616  mutations/M13-column-acl-and-notnull.sql
@@ -82,13 +101,12 @@ dec4091025a28e212e98d1dd1509a8522337ab4038c26b31a408279c4a64da91  mutations/M7-d
 05b3eaddb18fe0db3af4b838abcd1f824eec4f97a9afafe6009762a861b7ace8  proofs_b.py
 8aa0059c405295e4e289a20137ab9e6a19eeb8ee7c8c54cf5ee684fe8f11313c  races.py
 4edd65bdad7544c30061a02d6e55a73e01a8efda6eaf88f138955edc06c49491  races_b.py
-362859efea33ca858a5147748eec511e6572b8c4658615d4a19929eaff879450  rebuild_and_prove.sh
+743950cf4e0dcf3c4e576a54a652531354725c891caefd4dfff452606c8d478f  rebuild_and_prove.sh
 73720ff9da0caaf7eff624c34aaedb10ee70151c34b26e4c1b64d98e145bf73b  render_bootstrap.py
 c558e5deed66856fb66ffc1b8eca38d6defdef1154156cdca8a0a7690ba7c422  run_migrations.py
 10844c6f72090fb5aff606d7c839b71e144f0606d7065740917b7689b85e340f  world.sql
 6ae8f159ca5e653c4cfd46c85816339257bddfbad4f076188db45f3fec89afcc  world_b.sql
 ```
-<!-- P11-HARNESS-BYTES-PIN v1 END -->
 
 
 **Nothing is uncommitted.** The working tree is clean at the preparation SHA, and the shared copies are the same bytes. Note that `/mnt/project-files/` is **not in Git**: the Git copies under `prep/phase11/` are the durable ones, and that duplication exists precisely because this container is ephemeral.
@@ -2056,7 +2074,15 @@ Every entry of `DECIDING_MODULE_CALLS` and every name in `FRAME_METHODS` is
 checked to be live, and that is a check for DEAD entries, not for MISSING ones.
 It does not have to be more here — anything the lists do not admit is refused BY
 NAME, so the admit-lists are read through a refusal rather than through their
-own completeness — and the documents now say only what is checked. The header's
+own completeness — and the documents now say only what is checked.
+
+> **That middle clause is measured FALSE by round 21 and is deleted at the
+> source (§7.22).** The planter's move is not to evade the list but to EXTEND
+> it: one new entry, its call inside the guard the entry names, and the
+> fabricated figure passed every gate. Reading a list through a refusal does not
+> help when the entry exists. The sentence is gone from the instrument's own
+> header rather than qualified there; the gap stays disclosed, and what it costs
+> a planter is that the entry must be in the commit. The header's
 bound is restated as a **count with four lines, each of them a thing the parse
 does NOT do**: the honesty of a guard's name; what a transformer may do (round
 20's own next-look, and not closed); the completeness of the admit-lists; and
@@ -2212,6 +2238,109 @@ here.** This is the author answering a review; the round-21 challenge on
 `142f88e..HEAD` and the coordinator diff review after it are owed, and **`24f6ebe`
 is still the last fully signed head**. `READY_TO_PROMOTE = NO`. `OD-P11-07` is the
 owner's.
+
+---
+
+## 7.22 ROUND 21 (`REJECT` at `142f88e`) and the coordinator's diff review of `04f2db2` — the deciding code is read from the COMMIT
+
+Round 21 and the coordinator's review of `142f88e` agreed, independently, on the
+same blocker, and the coordinator's ruling for this round replaces rule-by-rule
+work with one change of direction. Both reviews first confirmed a long list as
+genuinely closed — round 20's `A1`, `A4`, `A4c`, `C20-F1`'s two shapes, the
+decorator, the lambda, `R20-S1`, `R20-S2` now MEASURED rather than unmeasured,
+the `^R1\d` exemption, the keyed deletion controls, and the DB suite green at the
+full SHA (121 cases twice, Pack B 53 twice, every `EXIT_*` 0). The challenger also
+reported two arms of its own as invalid as run and rebuilt them rather than
+dropping them, which is the discipline this phase asks of itself.
+
+**`R21-F1` (BLOCKER), both halves.** `C20-F1` was not closed. The matcher's
+decision constants were pinned by a digest held as a **literal in the same file
+whose constants it pins**, and the refusal text said:
+
+> If the change was deliberate, run `--decision-constants` and commit the digest
+> it prints.
+
+So the challenger did exactly that. Two edits — the coordinator's own argument
+narrowing, plus the one line the error message prescribes — and `selftest 0`,
+`--check-blocks 0`, `scan 0`, no traceback, the fabricated figure through. It did
+the same with the guarded `keyre` narrowing. **Half two:** the rule had no
+deletion control. Forcing the comparison to pass (`if True:`) left the arm
+printing `as required`, because the arm hashed two strings and compared them
+itself — it measured arithmetic, not the instrument — and `RULE_KEYS` had no key
+for it. By this phase's own law, *a fix is done only when deleting IT reds a
+gate*, the fix was not done.
+
+This is this phase's `P7 R11` law coming back: **a derived subject set must not be
+derived from a representation the subject can alter.** A constant beside the
+constants is such a representation. So is a table of digests in a document a
+planter can edit in the same commit — which is what §2a held after the
+coordinator's `C21-F1`, and why the first answer to that finding was the same
+mistake with one more file in it.
+
+**The ruling, and it subsumes six rounds of rules: the deciding code is read from
+the COMMIT.**
+
+- Every deciding file under `prep/phase11/harness/` — every `.py`, `.sh`, `.sql`,
+  found by walking rather than by a list — must equal
+  `git show <resolved anchored sha>:<path>`. Refused by name:
+  `SELF-BYTES-UNCOMMITTED`, `SELF-FILE-UNCOMMITTED`, `SELF-FILE-ABSENT`,
+  `SELF-ANCHOR-UNRESOLVED`.
+- **`_source_of` takes the frame's source from that blob**, not from
+  `inspect.getsource`. A name the commit does not define at module level is a
+  named refusal and never a fallback to the running file, because falling back
+  is exactly the hole.
+- The law is read **twice**: once with the checker's own code, and once by
+  `harness/check_harness_bytes.py`, which imports nothing from it and is itself
+  one of the deciding files — a file cannot be the authority on its own bytes.
+  The second reader runs as a SUBPROCESS, never an import.
+- **No literal in the file pins anything.** `DECISION_CONSTANTS_SHA256` is gone;
+  `--decision-constants` still prints the canonical text and its digest, marked
+  informational, and the committed digests are published in §2a **for a reader**,
+  with nothing in the harness reading them.
+- **No refusal text instructs its reader how to satisfy it.** The old one
+  prescribed the re-pin step that silenced it, which is a manual rather than a
+  law. These name what moved and stop.
+- The anchor is the same structural one the haystack already uses — every
+  ancestor examined, more than one repository refused by name, `realpath` not
+  `abspath`, bare repositories and `core.worktree` redirects refused — which is
+  the most attacked and best armed machinery in this phase.
+
+An escape from any round between 16 and 21 therefore has to be **committed** to
+work: the gitignored artefact, the AST gaps, the receiver, the rebound attribute,
+the argument, the re-pin, the added admit-list entry.
+
+**What this does not do, stated at the law and not in a footnote:** it does not
+stop a planter who commits. Nothing executable can. What it changes is that the
+change is in the diff, under the published digest, in front of an independent
+challenger and the coordinator. That is the whole of the guarantee, and it is why
+this phase's chain has three links and why no author signs their own work.
+
+**`R21-S1`, and the coordinator ruled this sentence alone would block.** Item 3
+of the bound disclosed that the admit-lists are checked for dead entries and not
+for missing ones, and then argued the gap was harmless: *"it does not have to
+here — anything the lists do not admit is refused BY NAME."* Round 21 measured
+that false by **extending** the list rather than evading it — one new entry, its
+call inside the guard the entry names, the figure through. Reading a list through
+a refusal does not help when the entry exists. **The sentence is deleted at the
+source**, in the instrument's own header and in this manifest; the gap stays
+disclosed, and what it costs a planter now is a commit.
+
+**`R21-S2` (selective transformer drop) stays a named residual** and shrinks on
+its own under the ruling: the drop adds a literal, so it has to be committed, and
+the re-pin that made it reachable no longer exists. **`R21-S3` is closed:** the
+lambda refusal has a `RULE_KEYS` key (`lambda`), so no arm in the set names none.
+**`R21-S4`** is the pre-existing cold root build, which is not this phase's.
+
+**Folded into the same commit, per the ruling:** the coordinator's `C21-F1`
+default-argument escape and the five refusals that had no deletion control
+(`GIT-TOPLEVEL-DISAGREES`, whose arm read an exit code the hole also returns; the
+`shadow` key's binding branch; `MODULE-ATTR-FOREIGN`; `FRAME-FUNCTION-FOREIGN`;
+`FRAME-FUNCTION-NESTED`), which were answered in `04f2db2` and are carried here
+with their arms now reading refusal names in both directions.
+
+**No signature is claimed.** The round-22 challenge and the coordinator diff
+review after it are owed; **`24f6ebe` is still the last fully signed head**.
+`READY_TO_PROMOTE = NO`. `OD-P11-07` is the owner's.
 
 ---
 

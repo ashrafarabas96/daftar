@@ -973,7 +973,7 @@ _FRAME_PARSED = []
 # refusal at all, so deleting the comparison left the arm printing
 # `as required`. A check with no deletion control is a check nobody has
 # measured ([[a fix is done only when deleting IT reds a gate]]).
-OBJECT_KEYS = ("attr-identity", "fn-identity", "const-pin", "harness-bytes")
+OBJECT_KEYS = ("attr-identity", "fn-identity", "self-bytes", "harness-bytes")
 
 
 def _objects_enabled(objects):
@@ -981,29 +981,183 @@ def _objects_enabled(objects):
     return frozenset(OBJECT_KEYS) if objects is None else frozenset(objects)
 
 
+# The files whose bytes DECIDE: every executable file under the harness. The
+# set is derived by walking, not listed, so a file added to the harness is
+# covered by the law the day it is written rather than the day someone
+# remembers to name it (`R16`'s lesson: an enumerated exemption cannot name
+# what has not been written yet).
+DECIDING_SUFFIXES = (".py", ".sh", ".sql")
+
+
+def _deciding_files(harness_dir):
+    """Every deciding file under `harness_dir`, by path relative to it.
+
+    `followlinks=True`: a symlinked subdirectory is a directory the harness can
+    be reached through, and a file this walk cannot see is a file the law does
+    not cover.
+    """
+    out = []
+    for root, dirs, names in os.walk(harness_dir, followlinks=True):
+        dirs.sort()
+        for n in sorted(names):
+            if n.endswith(DECIDING_SUFFIXES):
+                out.append(os.path.relpath(os.path.join(root, n), harness_dir))
+    return sorted(out)
+
+
+def committed_harness(harness_dir=None, compare=True):
+    """(refusals, {relpath: committed text}) for the deciding files.
+
+    THE RULING THIS IMPLEMENTS, and it subsumes six rounds of rules. Round 21
+    measured the previous answer false: the ARGUMENTS of an admitted call were
+    pinned by a digest held as a literal IN THE FILE THE PLANT EDITS, and the
+    refusal text told the maintainer how to move it, so two edits -- one of them
+    the one the error message prescribed -- reopened the escape with every gate
+    at 0. That is this project's `P7 R11` law: **a derived subject set must not
+    be derived from a representation the subject can alter.** A constant beside
+    the constants is such a representation.
+
+    So nothing in this file pins anything any more. The deciding code is read
+    from THE COMMIT: every deciding file's bytes must equal
+    `git show <resolved anchored sha>:<path>`, and the frame parse takes its
+    source from that blob rather than from `inspect.getsource`. The anchor is
+    the same structural one the haystack already uses -- the most attacked and
+    best armed machinery in this phase -- so an escape from any round between 16
+    and 21 has to be COMMITTED to work, and a commit is what review reads.
+
+    WHAT THIS DOES NOT DO, stated here rather than beside it: it does not stop a
+    planter who commits. Nothing executable can. What it changes is that the
+    change is then in the diff, under the published digest, in front of the
+    independent challenger and the coordinator -- which is the whole of the
+    guarantee and is why this phase's chain has three links.
+    """
+    # `harness_dir` is a parameter so the law can be MEASURED on a copy: the
+    # arm builds a scratch repository, commits a copy of the harness into it,
+    # edits one deciding file on disk and reads the refusal by name. `compare`
+    # is the by-value deletion of the comparison itself, which is what makes
+    # the arm a measurement rather than an assertion -- the arm runs the same
+    # poisoned world with it deleted and requires that nothing reds.
+    harness_dir = harness_dir or os.path.dirname(os.path.realpath(__file__))
+    try:
+        top = _subject_top(harness_dir)
+        sha = _commit_of(top)
+    except Refusal as why:
+        return (
+            "SELF-ANCHOR-UNRESOLVED: the deciding code is read from the commit and the "
+            "anchor could not be resolved, so this run cannot say what the rules it is "
+            "about to apply are. The anchor refused: %s" % why,
+        ), {}
+    found = _deciding_files(harness_dir)
+    rel_of = {
+        n: os.path.relpath(os.path.realpath(os.path.join(harness_dir, n)), top)
+        for n in found
+    }
+    try:
+        # Only the DECIDING files: `_tracked_paths` answers for everything the
+        # commit holds under the harness, and the evidence transcripts beside
+        # the instruments decide nothing. Filtering here rather than in the
+        # loops below, so the absent-file check reads the same set as the
+        # present-file check and cannot report a transcript as a missing rule.
+        tracked = {
+            n
+            for n in _tracked_paths(top, sha, os.path.relpath(harness_dir, top))
+            if n.endswith(DECIDING_SUFFIXES)
+        }
+    except Refusal as why:
+        return ("SELF-ANCHOR-UNRESOLVED: %s" % why,), {}
+    msgs = []
+    want = [n for n in found if rel_of[n] in tracked]
+    for n in found:
+        if rel_of[n] not in tracked:
+            msgs.append(
+                "SELF-FILE-UNCOMMITTED: `%s` is a deciding file this run can execute and "
+                "commit %s does not hold it. The rules are read from the commit, so a "
+                "file that is not in it decides nothing it is allowed to decide."
+                % (rel_of[n], sha[:12])
+            )
+    for n in sorted(tracked - {rel_of[k] for k in want}):
+        msgs.append(
+            "SELF-FILE-ABSENT: commit %s holds the deciding file `%s` and it is not under "
+            "the harness. A deciding file that is gone is not a run with one fewer rule."
+            % (sha[:12], n)
+        )
+    blobs = {}
+    if want:
+        try:
+            texts = _blobs(top, sha, [rel_of[n] for n in want])
+        except Refusal as why:
+            return (tuple(msgs) + ("SELF-BLOB-UNREADABLE: %s" % why,)), {}
+        for n, text in zip(want, texts):
+            blobs[n] = text
+            full = os.path.join(harness_dir, n)
+            try:
+                with open(full, "rb") as fh:
+                    disk = fh.read()
+            except OSError as exc:
+                msgs.append(
+                    "SELF-BYTES-UNREADABLE: `%s` is a deciding file and could not be read "
+                    "(%s)." % (rel_of[n], exc)
+                )
+                continue
+            if compare and hashlib.sha256(disk).hexdigest() != hashlib.sha256(
+                text.encode("utf-8", "surrogateescape")
+            ).hexdigest():
+                msgs.append(
+                    "SELF-BYTES-UNCOMMITTED: `%s` on disk digests to %s and commit %s "
+                    "holds %s. What moved is the working tree, not the commit: a default "
+                    "argument, a flag on a compiled pattern, a transformer that returns "
+                    "early, a deleted comparison, an added admit-list entry. The rules are "
+                    "read from the commit, so this run refuses rather than measuring a "
+                    "file nobody has reviewed."
+                    % (
+                        rel_of[n],
+                        hashlib.sha256(disk).hexdigest()[:12],
+                        sha[:12],
+                        hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()[:12],
+                    )
+                )
+    return tuple(msgs), blobs
+
+
+_COMMITTED = []
+
+
+def committed_text(name=None):
+    """The COMMITTED text of a deciding file, read once per process."""
+    if not _COMMITTED:
+        _COMMITTED.append(committed_harness())
+    msgs, blobs = _COMMITTED[0]
+    if name is None:
+        return msgs, blobs
+    return msgs, blobs.get(name)
+
+
+def self_bytes_committed():
+    """(ok, refusals) that every deciding file is the file the commit holds."""
+    msgs, _blobs_ = committed_text()
+    return not msgs, tuple(msgs)
+
+
 def harness_bytes_pinned():
-    """(ok, refusals) that every harness file's BYTES are the pinned bytes.
+    """(ok, refusals) from the SECOND reader, which shares no code with this file.
 
-    The coordinator's `C21-F1` walked out of this instrument through a DEFAULT
-    ARGUMENT -- `def scan(..., skip=("hyphen in the key",))` -- which is
-    outside the decision parse (`scan` is not one of the four functions it
-    reads), outside the constants digest (which hashes body literals, not
-    defaults) and outside every rule key. Its ruling was to stop pinning shapes
-    inside this file and pin THE FILE, against a value held outside it, read by
-    a reader sharing no code with it.
+    `self_bytes_committed` above reads the same law with this file's own code,
+    and a file cannot be the authority on its own bytes: the edit that moves
+    them can delete the comparison in the same stroke. So the law is read twice,
+    once here by `check_harness_bytes.py`, which imports nothing from this file
+    and is itself one of the deciding files the law covers.
 
-    So this is a SUBPROCESS, never an import: an instrument that is part of the
-    set it measures must not be loaded into the process it is measuring, and
-    `check_harness_bytes.py` is itself a pinned row of the same table. Its
-    refusal lines are passed through unchanged, because the name that refused
-    is the thing an arm reads.
+    A SUBPROCESS, never an import: an instrument that is part of the set it
+    measures must not be loaded into the process measuring it. Its refusal lines
+    are passed through unchanged, because the name that refused is what an arm
+    reads.
     """
     reader = os.path.join(os.path.dirname(os.path.realpath(__file__)), "check_harness_bytes.py")
     if not os.path.isfile(reader):
         return False, (
-            "HARNESS-BYTES-READER-ABSENT: the reader that pins this harness's bytes is "
-            "not at %s. Deleting the instrument is a way of silencing it, so its "
-            "absence is a refusal and not a skip" % reader,
+            "HARNESS-BYTES-READER-ABSENT: the second reader of the byte law is not at "
+            "%s. Deleting an instrument is a way of silencing it, so its absence is a "
+            "refusal and not a skip" % reader,
         )
     try:
         got = subprocess.run(
@@ -1061,8 +1215,8 @@ def _frame_refusals(keys):
     if "fn-identity" in keys:
         _ok, m = frame_function_identity()
         msgs += list(m)
-    if "const-pin" in keys:
-        _ok, m = decision_constants_pinned()
+    if "self-bytes" in keys:
+        _ok, m = self_bytes_committed()
         msgs += list(m)
     if "harness-bytes" in keys:
         _ok, m = harness_bytes_pinned()
@@ -2128,56 +2282,74 @@ def structure_test():
 #      and every name in `FRAME_METHODS` is checked to be LIVE, and that is a
 #      check for DEAD entries and not for MISSING ones. The coordinator's
 #      standing ruling on this phase: `each entry is live` may never stand in
-#      for `the set is complete`. It does not have to here -- anything the lists
-#      do not admit is refused BY NAME, so the admit-lists are read through a
-#      refusal rather than through their own completeness -- but the documents
-#      say only what is checked, which is that a dead entry reds.
+#      for `the set is complete`. What stood here argued the gap was harmless --
+#      that anything the lists do not admit is refused BY NAME, so they are read
+#      through a refusal rather than through their own completeness -- and round
+#      21 measured that argument FALSE: **the planter's move is not to evade the
+#      list but to EXTEND it.** One new entry, its call inside the guard the
+#      entry names, and the fabricated figure passed every gate. Reading a list
+#      through a refusal does not help when the entry exists. The sentence is
+#      deleted rather than qualified; what is checked is that a dead entry reds,
+#      and the gap is the gap. What it costs a planter now is that the entry has
+#      to be in the COMMIT, under the published digest, in the diff two
+#      reviewers read.
 #
-# THE FILE'S OWN BYTES WERE THE FOURTH LINE HERE, and they are no longer
-# outside the rules -- they are a LAW, because the coordinator's twenty-first
-# review walked out through them. Its escape was one line, and no rule above
-# covers it:
+# THE DECIDING CODE IS READ FROM THE COMMIT, and that single change is what
+# replaces the fourth line that used to stand here. The line said the file's own
+# bytes were outside the rules -- `HARNESS_SHA256` printed and never compared --
+# which read as a disclosure and worked as a hole, because it would have covered
+# every escape in this list, the one ruled a blocker included. **A residual that
+# covers everything discharges nothing.** Two reviews then walked out of it in
+# succession:
 #
 #     -def scan(docs_dir, harness_dir, quiet=False, skip=()):
 #     +def scan(docs_dir, harness_dir, quiet=False, skip=("hyphen in the key",)):
 #
-# `_main` calls `scan()` with no `skip`, so the default switches a named guard
-# off for every real run. It is outside the decision parse (`scan` is not one of
-# the four functions it reads), outside the constants digest (which hashes body
-# literals, not defaults) and outside every rule key -- and the same shape was
-# available through `_fold_digits`, through a flag on a compiled pattern, and
-# through any line of this file nobody has thought of. The previous wording,
-# that `HARNESS_SHA256` is printed and not checked, read as a disclosure and
-# worked as a hole: residual 4 would have covered every escape in this list,
-# including the one that was ruled a blocker.
+# `_main` calls `scan()` with no `skip`, so that default switches a named guard
+# off for every real run -- outside the decision parse, outside the constants
+# digest, outside every rule key. The first answer pinned every harness byte
+# against a TABLE in the manifest; round 21 measured the same class one level up
+# by taking the step the refusal text itself prescribed -- edit the pattern,
+# re-run `--decision-constants`, commit the printed digest -- and every gate
+# returned 0 with the fabricated figure through. **A pin inside the thing it
+# pins is not a pin, and a table a planter edits in the same commit is the same
+# mistake with one more file in it.**
 #
-# So the ruling, and it ends the class instead of chasing it: THE HARNESS'S OWN
-# BYTES ARE PINNED OUTSIDE THE HARNESS. Every executable file under
-# `prep/phase11/harness/` is digested and compared with a row of the table in
-# `prep/phase11/P11-HANDOFF-MANIFEST.md` §2a by `check_harness_bytes.py` -- a
-# reader that shares NO CODE with this file, is itself a pinned row of the same
-# table, and refuses by name (`HARNESS-BYTES-MOVED`, `HARNESS-FILE-UNPINNED`,
-# `HARNESS-FILE-ABSENT`, `HARNESS-PIN-UNREADABLE`, `HARNESS-UNREADABLE`). It is
-# run as a SUBPROCESS by `frame_admissible`, so the scan and `--check-blocks`
-# refuse on it, and by `rebuild_and_prove.sh` as its own exit code before
-# anything that reads these bytes. A default argument, a flag, a transformer
-# that returns early, a deleted comparison: one law, by the bytes, not a rule
-# per shape.
+# So nothing in this file pins anything. The rules are read from the COMMIT:
 #
-#   THE ONE LIMIT, and it is the only thing left on this line: an edit that
-#   changes a harness file AND its pinned row in the same commit is bounded
-#   only by REVIEW. A pin inside the thing it pins is not a pin. That is why
-#   this phase's chain is author, independent challenger, coordinator, with the
-#   diff read by someone who did not write it.
+#   * every deciding file under `prep/phase11/harness/` must equal
+#     `git show <resolved anchored sha>:<path>`, refused by name as
+#     `SELF-BYTES-UNCOMMITTED`, `SELF-FILE-UNCOMMITTED`, `SELF-FILE-ABSENT`;
+#   * `_source_of` takes the frame's source from THAT BLOB rather than from
+#     `inspect.getsource`, so a working-tree edit cannot be measured as a rule
+#     at all, and a name the commit does not define is a named refusal and never
+#     a fallback to the running file;
+#   * the law is read TWICE, once with this file's own code and once by
+#     `check_harness_bytes.py`, which imports nothing from here and is itself one
+#     of the deciding files -- because a file cannot be the authority on its own
+#     bytes;
+#   * the anchor is the same structural one the haystack uses, which is the most
+#     attacked and best armed machinery in this phase.
+#
+# An escape from any round between 16 and 21 -- a gitignored artefact, an AST
+# gap, a receiver, a rebound attribute, an argument, a re-pin, an added
+# admit-list entry -- therefore has to be COMMITTED to work.
+#
+#   WHAT THIS DOES NOT DO: it does not stop a planter who commits. Nothing
+#   executable can. What it changes is that the change is in the diff, under the
+#   published digest, in front of an independent challenger and a coordinator.
+#   That is the whole of the guarantee, and it is why this phase's chain has
+#   three links and why no author signs their own work.
 #
 # Every claim in this paragraph is armed: round 19's two escapes, round 20's
-# three, the coordinator's three, and `C21`'s own line, each with the ONE thing
-# that refuses it deleted beside it -- a rule by key (`RULE_KEYS`), an object
-# check by key (`OBJECT_KEYS`), or, for the byte law, the comparison itself
-# deleted from a COPY of the reader. Each arm reads the REFUSAL NAME. That last
-# point is `C21-F2`: the arm that used to stand for the argument-edit pin
-# compared two digests and never ran the refusal, so when the coordinator
-# deleted the comparison the arm went on printing `as required`.
+# three, the coordinator's three, `C21`'s own line and round 21's own, each with
+# the ONE thing that refuses it deleted beside it -- a rule by key (`RULE_KEYS`,
+# which now includes `lambda`, so no arm in the set names none), an object check
+# by key (`OBJECT_KEYS`), or, for the byte law, the comparison itself deleted
+# from a COPY of the reader. Each arm reads the REFUSAL NAME, which is `C21-F2`
+# and `R21-F1`'s second half: the arm that used to stand for the argument pin
+# compared two digests and never ran the refusal, so deleting the refusal left
+# it printing `as required`.
 
 FRAME_NODES = frozenset(
     (
@@ -2299,7 +2471,11 @@ DECISION_EXCEPTIONS = {
 # not move, and a flag is part of what a pattern decides. Regenerate it with
 # `--decision-constants` after a
 # deliberate change, exactly as a generated block is regenerated.
-DECISION_CONSTANTS_SHA256 = "9d67a25b20b0efccc07d4d7b0b69229f5426228ffe3c2ea32937117c3ead388c"
+# There is NO pinned literal here any more, and its absence is the fix. See
+# `decision_constants_digest`: the digest below is published in the manifest and
+# the constants are pinned by being read from the COMMIT, because a digest held
+# beside the constants it pins is a representation the subject can alter
+# (`R21-F1`, this phase's `P7 R11` law).
 
 
 def _frame_globals(fn):
@@ -2350,32 +2526,29 @@ def decision_constants():
     return "\n".join(rows) + "\n"
 
 
-def decision_constants_pinned():
-    """(ok, refusals) that the matcher's decision constants are the pinned ones."""
+def decision_constants_digest():
+    """The digest of the canonical constants text — INFORMATIONAL, nothing else.
+
+    `R21-F1`. This used to be a RULE: the digest was compared with a literal
+    `DECISION_CONSTANTS_SHA256` held in this same file. Round 21 ran the step
+    the refusal text itself prescribed -- edit the pattern, re-run
+    `--decision-constants`, commit the printed digest -- and every gate returned
+    0 with the fabricated figure through. **A pin inside the thing it pins is
+    not a pin**, and a refusal that tells its reader how to satisfy it is a
+    manual, not a law.
+
+    The literal is gone. What pins the constants now is that they are read from
+    the COMMIT: the constants are literals and module-level values of the
+    deciding file, `self_bytes_committed` refuses unless that file is the file
+    the commit holds, and the committed digest is published in the manifest for
+    a reader. So an argument edit is still visible -- it is in the diff, under a
+    published digest, in front of two reviewers -- and it is no longer something
+    this file claims to catch by itself.
+    """
     try:
-        text = decision_constants()
-    except (OSError, TypeError, SyntaxError, IndexError) as exc:
-        # Same correction as in `_frame_refusals`: a body this file cannot read
-        # is a NAMED refusal and never a traceback, whichever instrument reaches
-        # it first. `C21`'s `FRAME-FUNCTION-FOREIGN` arm reaches it here when
-        # `fn-identity` is deleted, because the constants are read off the same
-        # four functions.
-        return False, (
-            "DECISION-CONSTANTS-UNREADABLE: the constants the matcher's decisions read "
-            "could not be collected (%s: %s), so this run cannot say whether they are "
-            "the pinned ones" % (type(exc).__name__, exc),
-        )
-    got = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    if got == DECISION_CONSTANTS_SHA256:
-        return True, ()
-    return False, (
-        "DECISION-CONSTANTS-MOVED: the constants the matcher's decisions read digest to "
-        "%s and this file pins %s. An ARGUMENT of an admitted call is part of what that "
-        "call decides -- `(?!4242$)` added to a pattern inside the admitted call is a "
-        "narrowing rule 5 cannot see -- so a changed constant is a refusal. If the "
-        "change was deliberate, run `--decision-constants` and commit the digest it "
-        "prints." % (got, DECISION_CONSTANTS_SHA256),
-    )
+        return hashlib.sha256(decision_constants().encode("utf-8")).hexdigest()
+    except (Refusal, OSError, TypeError, SyntaxError, IndexError):
+        return None
 
 
 def frame_function_identity():
@@ -2538,8 +2711,45 @@ def _frame_lookup(name):
     return (None, None)
 
 
+_COMMITTED_AST = {}
+
+
 def _source_of(func):
-    return ast.parse(textwrap.dedent(inspect.getsource(func))).body[0]
+    """The `FunctionDef` for `func`, taken from the COMMITTED bytes of this file.
+
+    Round 21's direction, adopted as a ruling: the deciding code is read from
+    the commit, not the working tree. `inspect.getsource` reads the file on
+    disk, so every rule below used to be a rule about whatever was on disk at
+    the moment the gate ran -- which is how a default argument, a re-pinned
+    digest and an added admit-list entry each decided something no reviewer had
+    seen. The source comes out of `git show <resolved anchored sha>:<path>`
+    now, and `self_bytes_committed` refuses by name when the two differ, so a
+    working-tree edit cannot be measured as a rule at all.
+
+    A name the commit does not define at module level is a NAMED refusal and
+    never a fallback to the running file: falling back is exactly the hole.
+    """
+    name = getattr(func, "__name__", None)
+    if not _COMMITTED_AST:
+        _msgs, text = committed_text(os.path.basename(os.path.realpath(__file__)))
+        if text is None:
+            raise Refusal(
+                "FRAME-SOURCE-NOT-IN-COMMIT: this file's committed bytes could not be "
+                "read, so the rules this run would apply are not the rules the commit "
+                "carries. The anchor's own refusal is reported beside this one."
+            )
+        tree = ast.parse(text)
+        _COMMITTED_AST.update(
+            {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        )
+    got = _COMMITTED_AST.get(name)
+    if got is None:
+        raise Refusal(
+            "FRAME-SOURCE-NOT-IN-COMMIT: the commit's copy of this file defines no "
+            "module-level function named %r, so there is no reviewed source for what is "
+            "running under that name." % name
+        )
+    return got
 
 
 # `R20-F1`. Rule 3's method whitelist was a list of method NAMES with no
@@ -2656,7 +2866,10 @@ def _module_call_sites(fn):
 # and `enforce=False` deleted all of them at once, so no single rule was
 # measured. `True` is every key, `False` is none (kept for the arms written
 # before the keys existed), and a set is exactly those keys.
-RULE_KEYS = ("positions", "one-site", "receiver", "data", "shadow")
+# `R21-S3`: the lambda refusal was the one arm in the set that named no key, so
+# the round's own law -- a fix is done only when deleting IT reds a gate -- did
+# not reach it. It has a key now, and every arm in the set names one.
+RULE_KEYS = ("positions", "one-site", "receiver", "data", "shadow", "lambda")
 
 
 def _enabled(enforce):
@@ -2802,7 +3015,7 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce
             func = node.func
             if isinstance(func, ast.Name):
                 what, payload = lookup(func.id)
-                if what == "lambda":
+                if what == "lambda" and "lambda" in rules:
                     msgs.append(
                         "%s: line %d calls `%s`, which this file binds to a `lambda` "
                         "rather than to a `def`. The rules descend into a function by "
@@ -3119,9 +3332,9 @@ IS_FIGURE_PLANTS = (
         ("receiver",),
     ),
     (
-        "C20 P3 a module-level lambda, refused by name rather than followed",
+        "C20 P3/R21-S3 a module-level lambda, refused by name rather than followed",
         '    if _ARM_LAMBDA(s):\n        return False',
-        (),
+        ("lambda",),
     ),
 )
 
@@ -3203,9 +3416,9 @@ def decision_test():
     # one level short of the function.
     ident_ok, ident_msgs = module_call_identity()
     fn_ok, fn_msgs = frame_function_identity()
-    pin_ok, pin_msgs = decision_constants_pinned()
-    ident_ok = ident_ok and fn_ok and pin_ok
-    ident_msgs = tuple(ident_msgs) + tuple(fn_msgs) + tuple(pin_msgs)
+    self_ok, self_msgs = self_bytes_committed()
+    ident_ok = ident_ok and fn_ok and self_ok
+    ident_msgs = tuple(ident_msgs) + tuple(fn_msgs) + tuple(self_msgs)
     for m in ident_msgs:
         print("  decision **FAILED**: %s" % m)
     ok = ok and ident_ok
@@ -4229,67 +4442,74 @@ def identity_arms_test():
         )
     )
 
-    # 3. `C20-F1`: an ARGUMENT of an admitted call, and the coordinator's
-    # `C21-F2` on the arm that used to stand here.
+    # 3. `R21-F1`: the deciding code read from the COMMIT, which replaces the
+    # in-file constants pin entirely.
     #
-    # WHAT WAS WRONG WITH THE OLD ARM, kept because it is the lesson. It
-    # digested the canonical text, digested an edited copy of that text, saw the
-    # two differ, and printed `the edit reds by name -> as required`. It never
-    # ran the refusal. The coordinator deleted the comparison
-    # (`if got == DECISION_CONSTANTS_SHA256:` -> `if True:`) and the arm went on
-    # printing `as required`, with the fabricated figure passing the gates CI
-    # runs. **An arm that compares two digests has measured arithmetic, not an
-    # instrument** -- a claim about an instrument is verified only by RUNNING
-    # the instrument. So this arm MOVES a pinned constant in this process, reads
-    # the refusal BY NAME, takes the scan's exit code, and deletes the check by
-    # value beside it.
-    target = None
-    for _f in (figures_on, tokens_in, _exempted, _is_figure):
-        for g, _t in _frame_globals(_source_of(_f)):
-            if isinstance(globals().get(g), tuple) and len(globals()[g]) > 1:
-                target = g
-                break
-        if target:
-            break
-    before = globals().get(target)
-    cache = list(_FRAME_PARSED)
-    try:
-        # A NARROWING, which is what `C20-F1`'s shape is: one boolean spelling
-        # dropped from the set the matcher recognises, so a figure whose value
-        # is that spelling stops being a figure. The file is untouched; the
-        # object the decisions read is what moves.
-        globals()[target] = before[:-1]
-        _with, msgs = decision_constants_pinned()
-        deleted_ok, deleted_msgs = frame_admissible(
-            objects=frozenset(OBJECT_KEYS) - {"const-pin"}
-        )
-        _FRAME_PARSED[:] = []
-        scanned = _arm(PROBE, ())
-    finally:
-        globals()[target] = before
-        _FRAME_PARSED[:] = cache
-    name = msgs[0].split(":")[0] if msgs else "NO REFUSAL"
+    # WHAT WAS WRONG WITH WHAT STOOD HERE, kept because it is the lesson, twice
+    # over. The fix was a digest of the matcher's constants compared with a
+    # LITERAL IN THIS FILE, and its refusal text told the maintainer to re-run
+    # `--decision-constants` and commit the printed digest. Round 21 took
+    # exactly that step: two edits, one of them prescribed by the error
+    # message, and every gate returned 0 with the fabricated figure through.
+    # **A pin inside the thing it pins is not a pin.** And the arm beside it
+    # digested two strings, saw them differ, and printed `as required`; with the
+    # comparison forced to pass it went on printing `as required`, because it
+    # had measured arithmetic and not the instrument.
+    #
+    # So there is no literal and no re-pin step. The deciding files must BE the
+    # files the commit holds, and this arm measures that law on a COPY: a
+    # scratch repository with a copy of the harness committed into it, one
+    # deciding file edited on disk afterwards, the refusal read BY NAME, and the
+    # comparison deleted by value beside it.
+    world = tempfile.mkdtemp(prefix="p11-selfbytes-")
+    atexit.register(shutil.rmtree, world, True)
+    here = os.path.dirname(os.path.realpath(__file__))
+    rel = os.path.join("prep", "phase11", "harness")
+    copy = os.path.join(world, rel)
+    os.makedirs(os.path.dirname(copy))
+    shutil.copytree(here, copy)
+    _git(world, ["init", "-q"])
+    _git(world, ["add", "-A", "--", "."])
+    _git(
+        world,
+        ["-c", "user.name=phase11", "-c", "user.email=phase11@example.invalid",
+         "commit", "-q", "--no-gpg-sign", "-m", "a copy of the harness, committed"],
+    )
+    clean_msgs, _b = committed_harness(copy)
+    subject = os.path.join(copy, os.path.basename(os.path.realpath(__file__)))
+    with open(subject, "r", encoding="utf-8") as fh:
+        was = fh.read()
+    # The review's own line, in the copy and NOT in the commit: a default
+    # argument that switches a named guard off for every real run.
+    tail = '\n    """0 = every quoted figure is emitted.'
+    planted = was.replace(
+        "def scan(docs_dir, harness_dir, quiet=False, skip=()):" + tail,
+        'def scan(docs_dir, harness_dir, quiet=False, skip=("hyphen in the key",)):' + tail,
+        1,
+    )
+    with open(subject, "w", encoding="utf-8") as fh:
+        fh.write(planted)
+    moved_msgs, _b2 = committed_harness(copy)
+    deleted_msgs, _b3 = committed_harness(copy, compare=False)
+    name = moved_msgs[0].split(":")[0] if moved_msgs else "NO REFUSAL"
     good = (
-        (not _with)
-        and name == "DECISION-CONSTANTS-MOVED"
-        and scanned == 5
-        and deleted_ok
-        and not deleted_msgs
+        planted != was
+        and not clean_msgs
+        and name == "SELF-BYTES-UNCOMMITTED"
+        and not [m for m in deleted_msgs if m.split(":")[0] == "SELF-BYTES-UNCOMMITTED"]
     )
     ok = ok and good
     print(
-        "  identity C20-F1/C21-F2 a pinned constant MOVED in this process (`%s` narrowed "
-        "by one entry): refused as %s, the scan rc=%d, and with `const-pin` DELETED the "
-        "frame named %s -> %s"
+        "  identity R21-F1 a deciding file edited on disk and NOT in the commit (the "
+        "review's own `skip=` default, in a copy): the committed copy named %s, the "
+        "edited one %s, and with the comparison DELETED %s -> %s"
         % (
-            target,
+            "nothing" if not clean_msgs else "%d refusal(s)" % len(clean_msgs),
             name,
-            scanned,
-            "nothing at all" if not deleted_msgs else "%d refusal(s)" % len(deleted_msgs),
+            "that refusal is gone" if not [m for m in deleted_msgs if m.split(":")[0] == "SELF-BYTES-UNCOMMITTED"] else "it still reds, so the arm measures nothing",
             "as required" if good else "**SELFTEST FAILED**",
         )
     )
-
     # 4. `C20` `P2`: the frame gate in front of `--check-blocks`, which had none
     # until round 19 and no arm until now.
     cache = list(_FRAME_PARSED)
@@ -4525,105 +4745,121 @@ def gitfile_name_test():
 
 
 def harness_bytes_arm():
-    """`C21-F1`, end to end, on COPIES: the shape, and the law deleted.
+    """The byte law read by the SECOND reader, armed on copies, by name.
 
-    The review's own escape was a default argument --
-    `def scan(..., skip=("hyphen in the key",))` switches a named guard off for
-    every real run -- outside the decision parse, outside the constants digest
-    and outside every rule key. The law that closes it is the harness's own
-    bytes against a table held in the manifest.
+    `self_bytes_committed` reads this law with this file's own code; the second
+    reader reads it with code this file does not share. Both directions are
+    measured on COPIES and never on the subject: a red proof does not edit the
+    instrument the whole run is read through, and these files are that
+    instrument.
 
-    Both directions are measured on COPIES and never on the subject: a red
-    proof does not edit the thing it is proving, and these files are the
-    instrument this whole run is read through. One copy of the harness carries
-    the review's line; one copy of the READER has its comparison deleted. The
-    arm reads the REFUSAL NAME, because the exit code alone is what `C21`
-    showed to be worthless.
+    One copy of the harness carries the review's own escape -- a default
+    argument that switches a named guard off for every real run -- committed
+    NOWHERE, which is the shape the law is about. One copy of the READER has its
+    comparison deleted, which is the single edit that would let every byte move
+    unnoticed. The arm reads the REFUSAL NAME, because round 21 showed an exit
+    code and a digest comparison to be worth nothing as a measurement.
     """
     here = os.path.dirname(os.path.realpath(__file__))
     reader = os.path.join(here, "check_harness_bytes.py")
-    pin = os.path.join(os.path.dirname(here), "P11-HANDOFF-MANIFEST.md")
-    subject = os.path.basename(__file__)
+    subject = os.path.basename(os.path.realpath(__file__))
     ok = True
-    with tempfile.TemporaryDirectory() as tmp:
-        copy = os.path.join(tmp, "harness")
-        shutil.copytree(here, copy)
-        target = os.path.join(copy, subject)
-        with open(target, "r", encoding="utf-8") as fh:
-            text = fh.read()
-        tail = '\n    """0 = every quoted figure is emitted.'
-        original = "def scan(docs_dir, harness_dir, quiet=False, skip=()):" + tail
-        plant = (
-            'def scan(docs_dir, harness_dir, quiet=False, skip=("hyphen in the key",)):'
-            + tail
-        )
-        if text.count(original) != 1:
-            print(
-                "  bytes  C21-F1 **SELFTEST FAILED**: the line this arm plants into a "
-                "copy (%r) is not in the subject exactly once, so the arm is measuring "
-                "nothing" % original
-            )
-            return False
-        with open(target, "w", encoding="utf-8") as fh:
-            fh.write(text.replace(original, plant, 1))
-        for label, run_with in (("the real reader", reader),):
-            got = subprocess.run(
-                [sys.executable, "-I", run_with, "--harness", copy, "--pin", pin],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120,
-            )
-            lines = [
-                l.split("REFUSED: ", 1)[1] for l in got.stdout.splitlines()
-                if l.startswith("REFUSED: ")
-            ]
-            names = sorted({l.split(":")[0] for l in lines})
-            named_the_file = any(("`%s`" % subject) in l for l in lines)
-            good = names == ["HARNESS-BYTES-MOVED"] and named_the_file and got.returncode == 5
-            ok = ok and good
-            print(
-                "  bytes  C21-F1 `skip` given a non-empty DEFAULT in a copy, read by %s: "
-                "refused as %s naming %s, rc=%d -> %s"
-                % (
-                    label,
-                    ", ".join(names) or "NOTHING",
-                    subject if named_the_file else "no file",
-                    got.returncode,
-                    "as required" if good else "**SELFTEST FAILED**",
-                )
-            )
-        # The deletion control: the comparison removed from a COPY of the
-        # reader, which is the one edit that would let every byte move
-        # unnoticed. It lives outside the harness copy so that its own row is
-        # not what reds.
-        broken = os.path.join(tmp, "reader_with_the_law_deleted.py")
-        with open(reader, "r", encoding="utf-8") as fh:
-            rtext = fh.read()
-        cmp_line = "        if got != rows[rel]:"
-        if rtext.count(cmp_line) != 1:
-            print(
-                "  bytes  C21-F2 **SELFTEST FAILED**: the comparison this control deletes "
-                "(%r) is not in the reader exactly once" % cmp_line
-            )
-            return False
-        with open(broken, "w", encoding="utf-8") as fh:
-            fh.write(rtext.replace(cmp_line, "        if False:", 1))
-        got = subprocess.run(
-            [sys.executable, "-I", broken, "--harness", copy, "--pin", pin],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120,
-        )
-        named = [l for l in got.stdout.splitlines() if l.startswith("REFUSED: ")]
-        good = got.returncode == 0 and not named
-        ok = ok and good
+    world = tempfile.mkdtemp(prefix="p11-bytearm-")
+    atexit.register(shutil.rmtree, world, True)
+    copy = os.path.join(world, "prep", "phase11", "harness")
+    os.makedirs(os.path.dirname(copy))
+    shutil.copytree(here, copy)
+    _git(world, ["init", "-q"])
+    _git(world, ["add", "-A", "--", "."])
+    _git(
+        world,
+        ["-c", "user.name=phase11", "-c", "user.email=phase11@example.invalid",
+         "commit", "-q", "--no-gpg-sign", "-m", "a copy of the harness, committed"],
+    )
+    # The control: the copy as committed. If this reds, every arm below is
+    # measuring the copy rather than the plant.
+    clean = subprocess.run(
+        [sys.executable, "-I", reader, "--harness", copy],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180,
+    )
+    good = clean.returncode == 0
+    ok = ok and good
+    print(
+        "  bytes  control: a committed copy of the harness, read by the second reader: "
+        "rc=%d -> %s" % (clean.returncode, "as required" if good else "**SELFTEST FAILED**")
+    )
+    target = os.path.join(copy, subject)
+    with open(target, "r", encoding="utf-8") as fh:
+        was = fh.read()
+    tail = '\n    """0 = every quoted figure is emitted.'
+    original = "def scan(docs_dir, harness_dir, quiet=False, skip=()):" + tail
+    planted = (
+        'def scan(docs_dir, harness_dir, quiet=False, skip=("hyphen in the key",)):' + tail
+    )
+    if was.count(original) != 1:
         print(
-            "  bytes  C21-F2 the same copy read by a reader with the comparison DELETED: "
-            "rc=%d and it named %s -> %s"
-            % (
-                got.returncode,
-                "nothing, so the comparison is the whole of the law" if not named
-                else "%d refusal(s), so this control measures nothing" % len(named),
-                "as required" if good else "**SELFTEST FAILED**",
-            )
+            "  bytes  C21-F1 **SELFTEST FAILED**: the line this arm plants into a copy is "
+            "not in the subject exactly once, so the arm is measuring nothing"
         )
+        return False
+    with open(target, "w", encoding="utf-8") as fh:
+        fh.write(was.replace(original, planted, 1))
+    got = subprocess.run(
+        [sys.executable, "-I", reader, "--harness", copy],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180,
+    )
+    lines = [
+        l.split("REFUSED: ", 1)[1] for l in got.stdout.splitlines()
+        if l.startswith("REFUSED: ")
+    ]
+    names = sorted({l.split(":")[0] for l in lines})
+    named_the_file = any(("`%s" % "prep/phase11/harness/" + subject) in l for l in lines)
+    good = names == ["HARNESS-BYTES-UNCOMMITTED"] and named_the_file and got.returncode == 5
+    ok = ok and good
+    print(
+        "  bytes  C21-F1 the review's own `skip=` default, on disk in the copy and in no "
+        "commit: refused as %s naming %s, rc=%d -> %s"
+        % (
+            ", ".join(names) or "NOTHING",
+            subject if named_the_file else "no file",
+            got.returncode,
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
+    # The deletion control: the comparison removed from a COPY of the reader,
+    # which lives outside the harness copy so that its own blob is not what
+    # reds.
+    broken = os.path.join(world, "reader_with_the_law_deleted.py")
+    with open(reader, "r", encoding="utf-8") as fh:
+        rtext = fh.read()
+    cmp_line = "        if hashlib.sha256(disk).hexdigest() != hashlib.sha256(blob).hexdigest():"
+    if rtext.count(cmp_line) != 1:
+        print(
+            "  bytes  R21-F1 **SELFTEST FAILED**: the comparison this control deletes is "
+            "not in the second reader exactly once"
+        )
+        return False
+    with open(broken, "w", encoding="utf-8") as fh:
+        fh.write(rtext.replace(cmp_line, "        if False:", 1))
+    got = subprocess.run(
+        [sys.executable, "-I", broken, "--harness", copy],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180,
+    )
+    named = [l for l in got.stdout.splitlines() if l.startswith("REFUSED: ")]
+    good = got.returncode == 0 and not named
+    ok = ok and good
+    print(
+        "  bytes  R21-F1 the same copy read by a reader with the comparison DELETED: "
+        "rc=%d and it named %s -> %s"
+        % (
+            got.returncode,
+            "nothing, so the comparison is the whole of the law" if not named
+            else "%d refusal(s), so this control measures nothing" % len(named),
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
     return ok
+
 
 
 def selftest():
@@ -4687,10 +4923,14 @@ def _main(args):
         # Not a generated block in a document: a digest a reader regenerates
         # when a constant changes on purpose, printed above the text it is taken
         # over, so the change itself is readable and not only its hash.
+        # The canonical text and its digest, printed so a reader can see WHAT
+        # the matcher's decisions read and not only a hash of it. It pins
+        # nothing by itself: no literal in this file holds it, and the digest a
+        # reader checks is the published one for the commit.
         text = decision_constants()
         sys.stdout.write(text)
         print(
-            "DECISION_CONSTANTS_SHA256 = %r"
+            "DECISION_CONSTANTS_DIGEST (informational, published in the manifest) = %r"
             % hashlib.sha256(text.encode("utf-8")).hexdigest()
         )
         return 0

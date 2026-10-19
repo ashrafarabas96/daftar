@@ -1,47 +1,46 @@
-"""The harness's own bytes, pinned OUTSIDE the harness and read by a reader
-that shares no code with it.
+"""The harness's deciding files, read against THE COMMIT by a second reader.
 
-WHY THIS FILE EXISTS. Rounds 11 to 20 closed eight escapes one shape at a time:
-a second test outside a guard, a helper that returns a listed pair, a method
-name on a receiver of the planter's own, a rebound module attribute, an
-argument added inside an admitted call. Each fix was a rule about a SHAPE
-inside four parsed functions, and the coordinator's twenty-first review walked
-out through a shape no rule covers at all -- a DEFAULT ARGUMENT:
+WHY THIS FILE EXISTS, in two steps, because the first answer was wrong.
+
+Rounds 11 to 20 closed eight escapes one shape at a time, each fix a rule about
+a SHAPE inside four parsed functions. The coordinator's twenty-first review
+walked out through a shape no rule covered -- a DEFAULT ARGUMENT:
 
     -def scan(docs_dir, harness_dir, quiet=False, skip=()):
     +def scan(docs_dir, harness_dir, quiet=False, skip=("hyphen in the key",)):
 
-`_main` calls `scan()` with no `skip`, so that one line switches a named guard
-off for every real run, and the figure check returned 0 with a fabricated
-figure committed. It was outside the decision parse (`scan` is not one of the
-four functions it reads), outside the constants digest (which hashes body
-literals, not defaults), and outside every rule key. Patching it would have
-bought the next round the same escape through another line of the same file.
+The real call passes no `skip`, so that line switches a named guard off for
+every run. The first answer was this file, pinning every harness byte against a
+TABLE held in the manifest. The independent challenger's round 21 then measured
+the same class again one level up: the matcher's constants were pinned by a
+digest held as a literal in the file the plant edits, and the refusal text told
+the maintainer how to move it. Two edits -- one of them prescribed by the error
+message -- reopened the escape with every gate at 0.
 
-So the coordinator's ruling, and this file is it: stop pinning shapes inside
-the file and pin THE FILE. Every byte of every executable file in the harness
-is digested and compared with a value held outside the harness -- a row in
-`prep/phase11/P11-HANDOFF-MANIFEST.md`, which is a document under review --
-and a difference is a NAMED REFUSAL. That covers defaults, `scan`, the regex
-flags the review left as a residual, `_fold_digits`, and every self-edit
-nobody has thought of yet, in one law instead of a rule per shape.
+**A pin inside the thing it pins is not a pin, and a table a planter edits in
+the same commit is the same mistake with one more file in it.** So the pin is
+gone and so is the table. The authority is THE COMMIT:
 
-WHY A SECOND READER. A file cannot be the authority on its own bytes: the edit
-that moves the bytes can delete the comparison in the same stroke. This reader
-shares NO CODE with `check_fenced_figures.py` -- it imports nothing from it,
-parses nothing it parses, and its own bytes are pinned by a row of the same
-table, so editing this file to lie moves its own pin. It imports `hashlib`,
-`os` and `sys` and nothing else.
+    every deciding file's bytes must equal `git show <resolved sha>:<path>`
 
-THE ONE LIMIT, stated where the law is: an edit that changes a harness file AND
-its pinned row in the same commit is bounded only by REVIEW. That is not a hole
-this instrument can close -- a pin inside the thing it pins is not a pin -- and
-it is the reason the chain is author, independent challenger, coordinator, with
-the diff read by someone who did not write it.
+read here by a reader that shares NO CODE with `check_fenced_figures.py` --
+imports nothing from it, parses nothing it parses -- and is itself one of the
+deciding files, so editing this file to lie moves its own blob.
 
-Run it as `python3 -I check_harness_bytes.py`. `--emit` prints the table to
-paste into the manifest after a deliberate change, exactly as a generated block
-is regenerated. Exit 0 = every file matches its row; exit 5 = a named refusal.
+WHAT THIS DOES NOT DO, stated here rather than in a footnote: it does not stop a
+planter who COMMITS. Nothing executable can. What it changes is that an escape
+from any round between 16 and 21 -- a gitignored artefact, an AST gap, a
+receiver, a rebound attribute, an argument, a re-pin, an added admit-list entry
+-- has to be in the diff, under the published digest, in front of the
+independent challenger and the coordinator. That is the whole of the guarantee,
+and it is why this phase's chain has three links.
+
+NO REFUSAL BELOW TELLS ITS READER HOW TO SATISFY IT. The previous version said
+"run `--emit` and commit the table it prints", and a refusal that prescribes the
+step that silences it is a manual, not a law. These name what moved and stop.
+
+Run it as `python3 -I check_harness_bytes.py`. Exit 0 = every deciding file is
+the file the commit holds; exit 5 = a named refusal.
 """
 
 import sys
@@ -49,193 +48,190 @@ import sys
 if not sys.flags.isolated:
     sys.stderr.write(
         "HARNESS-BYTES-NOT-ISOLATED: this reader must run under `python3 -I`. Without "
-        "it the interpreter puts the script's own directory on `sys.path`, and the "
-        "directory it reads is the harness it is pinning -- a planted `hashlib.py` "
-        "beside the subject would be imported by the instrument measuring the "
-        "subject. Refusing instead of re-executing, because a re-exec would read the "
-        "target a second time.\n"
+        "it the interpreter puts the script's own directory on `sys.path`, and that "
+        "directory is the harness it is reading -- a planted `hashlib.py` beside the "
+        "subject would be imported by the instrument measuring the subject. Refusing "
+        "rather than re-executing, because a re-exec reads the target a second time.\n"
     )
     raise SystemExit(5)
 
 import hashlib
 import os
+import subprocess
 
-MARK_OPEN = "<!-- P11-HARNESS-BYTES-PIN v1 BEGIN -->"
-MARK_CLOSE = "<!-- P11-HARNESS-BYTES-PIN v1 END -->"
-
-# What is pinned: every file the harness EXECUTES or is executed against.
-# Evidence transcripts (`.txt`) are not pinned -- they are outputs, they are
-# published with their own digests, and a run writes them.
-PINNED_SUFFIXES = (".py", ".sh", ".sql")
+DECIDING_SUFFIXES = (".py", ".sh", ".sql")
+FULL_SHA = 40
 
 
 def _here():
     return os.path.dirname(os.path.realpath(__file__))
 
 
-def _subject_files(harness_dir):
-    """Every pinned file under `harness_dir`, by path relative to it.
+def _git(root, argv):
+    """git, with the environment built from scratch rather than inherited.
 
-    `followlinks=True`: a symlinked subdirectory is a directory this walk must
-    descend into, or a file reachable by the harness is invisible to the pin.
+    Phase 14's lesson, applied here because this reader's whole answer comes out
+    of git: a tool that sets two environment keys still inherits the rest. Every
+    `GIT_*` key is dropped, object replacement and grafts are disabled, and the
+    `PATH` is pinned -- otherwise a planted `git` earlier on the path, or a
+    `GIT_DIR` in the environment, answers for the subject.
     """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["PATH"] = "/usr/bin:/bin:/usr/local/bin"
+    env["GIT_GRAFT_FILE"] = os.devnull
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["HOME"] = os.devnull
+    got = subprocess.run(
+        ["/usr/bin/git", "--no-replace-objects", "-C", root] + list(argv),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        timeout=120,
+    )
+    if got.returncode != 0:
+        raise RuntimeError(
+            "git %s in %s exited %d: %s"
+            % (" ".join(argv), root, got.returncode, got.stderr.decode("utf-8", "replace").strip())
+        )
+    return got.stdout
+
+
+def _deciding_files(harness_dir):
     out = []
     for root, dirs, names in os.walk(harness_dir, followlinks=True):
         dirs.sort()
         for n in sorted(names):
-            if n.endswith(PINNED_SUFFIXES):
-                full = os.path.join(root, n)
-                out.append(os.path.relpath(full, harness_dir))
+            if n.endswith(DECIDING_SUFFIXES):
+                out.append(os.path.relpath(os.path.join(root, n), harness_dir))
     return sorted(out)
 
 
-def _digest(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        while True:
-            chunk = fh.read(1 << 16)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def read_pin(pin_path):
-    """(rows, refusals). `rows` maps a relative path to its pinned digest."""
-    if not os.path.isfile(pin_path):
-        return {}, (
-            "HARNESS-PIN-UNREADABLE: the pinned table lives at %s and there is no file "
-            "there, so this run has nothing to compare the harness with" % pin_path,
-        )
-    with open(pin_path, "r", encoding="utf-8") as fh:
-        text = fh.read()
-    if text.count(MARK_OPEN) != 1 or text.count(MARK_CLOSE) != 1:
-        return {}, (
-            "HARNESS-PIN-UNREADABLE: %s carries %d opening and %d closing markers for "
-            "the pin table and exactly one of each is required -- two tables mean a "
-            "reader and a planter can be reading different ones"
-            % (pin_path, text.count(MARK_OPEN), text.count(MARK_CLOSE)),
-        )
-    body = text.split(MARK_OPEN, 1)[1].split(MARK_CLOSE, 1)[0]
-    rows = {}
-    msgs = []
-    for raw in body.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("```"):
-            continue
-        parts = line.split()
-        if len(parts) != 2 or len(parts[0]) != 64:
-            msgs.append(
-                "HARNESS-PIN-UNREADABLE: %r inside the pin table is not `<sha256> "
-                "<path>` -- a row this reader cannot parse is a row it would otherwise "
-                "skip, and skipping is how a file leaves the pin" % raw
-            )
-            continue
-        try:
-            int(parts[0], 16)
-        except ValueError:
-            msgs.append(
-                "HARNESS-PIN-UNREADABLE: %r is not a hexadecimal digest" % parts[0]
-            )
-            continue
-        if parts[1] in rows:
-            msgs.append(
-                "HARNESS-PIN-UNREADABLE: `%s` has two rows in the pin table, so which "
-                "digest it is pinned to depends on the order a reader reads"
-                % parts[1]
-            )
-            continue
-        rows[parts[1]] = parts[0]
-    if not rows and not msgs:
-        msgs.append(
-            "HARNESS-PIN-UNREADABLE: the pin table in %s is empty, and an empty table "
-            "pins nothing while reading as a table" % pin_path
-        )
-    return rows, tuple(msgs)
-
-
-def check(harness_dir=None, pin_path=None):
-    """(ok, refusals) for the harness's own bytes against the external pin."""
+def check(harness_dir=None):
+    """(ok, refusals) that every deciding file is the file the commit holds."""
     harness_dir = harness_dir or _here()
-    if pin_path is None:
-        pin_path = os.path.join(
-            os.path.dirname(harness_dir.rstrip(os.sep)), "P11-HANDOFF-MANIFEST.md"
+    try:
+        top = os.path.realpath(
+            _git(harness_dir, ["rev-parse", "--show-toplevel"]).decode("utf-8", "replace").strip()
         )
-    rows, msgs = read_pin(pin_path)
-    msgs = list(msgs)
-    if msgs:
-        return False, tuple(msgs)
-    found = _subject_files(harness_dir)
-    for rel in found:
-        full = os.path.join(harness_dir, rel)
-        if rel not in rows:
+        sha = _git(harness_dir, ["rev-parse", "--verify", "HEAD^{commit}"]).decode(
+            "ascii", "replace"
+        ).strip()
+    except (RuntimeError, OSError) as exc:
+        return False, (
+            "HARNESS-ANCHOR-UNRESOLVED: the deciding files are read against the commit "
+            "and the commit could not be resolved (%s)." % exc,
+        )
+    if len(sha) != FULL_SHA:
+        return False, (
+            "HARNESS-ANCHOR-UNRESOLVED: `rev-parse --verify HEAD^{commit}` returned %r, "
+            "which is not a full 40-character object name." % sha,
+        )
+    rel_root = os.path.relpath(os.path.realpath(harness_dir), top)
+    try:
+        listed = _git(
+            top, ["ls-tree", "-r", "-z", "--full-tree", "--name-only", sha, "--", rel_root]
+        ).decode("utf-8", "surrogateescape")
+    except (RuntimeError, OSError) as exc:
+        return False, (
+            "HARNESS-ANCHOR-UNRESOLVED: commit %s could not be listed under %s (%s)."
+            % (sha[:12], rel_root, exc),
+        )
+    tracked = {
+        n for n in listed.split("\0") if n and n.endswith(DECIDING_SUFFIXES)
+    }
+    found = _deciding_files(harness_dir)
+    msgs = []
+    for n in found:
+        rel = os.path.relpath(os.path.realpath(os.path.join(harness_dir, n)), top)
+        if rel not in tracked:
             msgs.append(
-                "HARNESS-FILE-UNPINNED: `%s` is a harness file this run can execute and "
-                "the pin table has no row for it. A file with no row is a file whose "
-                "bytes nothing checks, which is the whole of what this law closes"
-                % rel
+                "HARNESS-FILE-UNCOMMITTED: `%s` is a deciding file this harness can "
+                "execute and commit %s does not hold it." % (rel, sha[:12])
             )
             continue
         try:
-            got = _digest(full)
+            blob = _git(top, ["show", "%s:%s" % (sha, rel)])
+        except (RuntimeError, OSError) as exc:
+            msgs.append(
+                "HARNESS-BLOB-UNREADABLE: `%s` is held by commit %s and could not be "
+                "read from the object store (%s)." % (rel, sha[:12], exc)
+            )
+            continue
+        try:
+            with open(os.path.join(harness_dir, n), "rb") as fh:
+                disk = fh.read()
         except OSError as exc:
             msgs.append(
-                "HARNESS-UNREADABLE: `%s` is pinned and could not be read (%s), so this "
-                "run cannot say whether its bytes moved" % (rel, exc)
+                "HARNESS-BYTES-UNREADABLE: `%s` is a deciding file and could not be "
+                "read (%s)." % (rel, exc)
             )
             continue
-        if got != rows[rel]:
+        if hashlib.sha256(disk).hexdigest() != hashlib.sha256(blob).hexdigest():
             msgs.append(
-                "HARNESS-BYTES-MOVED: `%s` digests to %s and the pin table holds %s. "
-                "Any edit to a harness file moves this digest -- a changed default "
-                "argument, a flag added to a compiled pattern, a transformer that "
-                "returns early, a deleted comparison -- so the bytes are refused "
-                "rather than parsed shape by shape. If the change was deliberate, run "
-                "`python3 -I check_harness_bytes.py --emit` and commit the table it "
-                "prints in the same commit as the change" % (rel, got, rows[rel])
+                "HARNESS-BYTES-UNCOMMITTED: `%s` on disk digests to %s and commit %s "
+                "holds %s. What moved is the working tree, not the commit."
+                % (
+                    rel,
+                    hashlib.sha256(disk).hexdigest()[:12],
+                    sha[:12],
+                    hashlib.sha256(blob).hexdigest()[:12],
+                )
             )
-    for rel in sorted(set(rows) - set(found)):
+    on_disk = {
+        os.path.relpath(os.path.realpath(os.path.join(harness_dir, n)), top) for n in found
+    }
+    for rel in sorted(tracked - on_disk):
         msgs.append(
-            "HARNESS-FILE-ABSENT: the pin table has a row for `%s` and no such file is "
-            "under the harness. A pinned file that is gone fails this check BY "
-            "ABSENCE, because deleting an instrument is a way of silencing it" % rel
+            "HARNESS-FILE-ABSENT: commit %s holds the deciding file `%s` and it is not "
+            "under the harness. A run with an instrument missing is not a run with one "
+            "fewer rule." % (sha[:12], rel)
         )
     return not msgs, tuple(msgs)
 
 
-def emit(harness_dir=None):
+def digests(harness_dir=None):
+    """The committed digest of each deciding file, for publication."""
     harness_dir = harness_dir or _here()
-    lines = [MARK_OPEN, "```"]
-    for rel in _subject_files(harness_dir):
-        lines.append("%s  %s" % (_digest(os.path.join(harness_dir, rel)), rel))
-    lines.append("```")
-    lines.append(MARK_CLOSE)
-    return "\n".join(lines) + "\n"
+    top = os.path.realpath(
+        _git(harness_dir, ["rev-parse", "--show-toplevel"]).decode("utf-8", "replace").strip()
+    )
+    sha = _git(harness_dir, ["rev-parse", "--verify", "HEAD^{commit}"]).decode(
+        "ascii", "replace"
+    ).strip()
+    rows = []
+    for n in _deciding_files(harness_dir):
+        rel = os.path.relpath(os.path.realpath(os.path.join(harness_dir, n)), top)
+        try:
+            blob = _git(top, ["show", "%s:%s" % (sha, rel)])
+        except (RuntimeError, OSError):
+            continue
+        rows.append("%s  %s" % (hashlib.sha256(blob).hexdigest(), n))
+    return sha, rows
 
 
 def _main(argv):
     harness_dir = None
-    pin_path = None
-    want_emit = False
+    want_digests = False
     rest = list(argv)
     while rest:
         a = rest.pop(0)
-        if a == "--emit":
-            want_emit = True
+        if a == "--digests":
+            want_digests = True
         elif a == "--harness" and rest:
             harness_dir = rest.pop(0)
-        elif a == "--pin" and rest:
-            pin_path = rest.pop(0)
         else:
-            sys.stderr.write("usage: --emit | [--harness DIR] [--pin MANIFEST]\n")
+            sys.stderr.write("usage: [--digests] [--harness DIR]\n")
             return 2
-    if want_emit:
-        sys.stdout.write(emit(harness_dir))
+    if want_digests:
+        sha, rows = digests(harness_dir)
+        print("the deciding files as commit %s holds them:" % sha)
+        for r in rows:
+            print(r)
         return 0
-    ok, msgs = check(harness_dir, pin_path)
+    ok, msgs = check(harness_dir)
     if ok:
-        n = len(_subject_files(harness_dir or _here()))
-        print("HARNESS-BYTES-PIN OK: %d harness files match the table in the manifest" % n)
+        n = len(_deciding_files(harness_dir or _here()))
+        print("HARNESS-BYTES OK: %d deciding files are the files the commit holds" % n)
         return 0
     for m in msgs:
         print("REFUSED: %s" % m)
