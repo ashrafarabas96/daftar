@@ -270,6 +270,20 @@ const REFUSED_PACK_ENTRY_NOT_A_FILE = 'REFUSED-PACK-ENTRY-NOT-A-FILE';
 // is broken -- so it is a refusal of its own rather than a movement refusal
 // whose sentence would be untrue.
 const REFUSED_PACK_NOT_PRIVATE = 'REFUSED-PACK-HANDED-DOWN-DIRECTORY-NOT-PRIVATE';
+// ROUND 61, THE COORDINATOR'S ITEM 2 (third part). Provenance above admits any
+// DESCENDANT of a gate run -- including a descendant of a gate run that is not
+// this one, and including a run whose environment was captured from an earlier
+// one. The gate therefore writes a fresh random value for each run into a
+// mode-600 file of its own and hands both the value and the path down; this
+// run must be able to READ that file and find exactly the value it was given.
+// What this buys, stated honestly: a replayed or stale environment no longer
+// satisfies the claim, because the value is new every run and the file it is
+// read from is only readable by this uid. What it does NOT buy: a forger who
+// builds the whole set at once -- the directory, the file and both variables --
+// supplies a value it chose, and the census and the content scan remain what
+// stop such a run from producing a false GREEN.
+const REFUSED_NONCE_NOT_AS_SPECIFIED = 'REFUSED-NONCE-NOT-AS-SPECIFIED';
+const GATE_NONCE_PREFIX = 'law-ran-nonce-';
 
 /**
  * The pack's identity: every name beside its sha256, sorted, hashed. The gate
@@ -382,11 +396,68 @@ const notTheGatesPrivateCopy = (dir: string): string => {
     return `it cannot be stat'ed (${String(error)})`;
   }
   if (!st.isDirectory()) return 'it is not a directory';
-  // eslint-disable-next-line no-bitwise
   const mode = st.mode & 0o777;
   if (mode !== 0o700) return `its permissions are ${mode.toString(8)}, not the 700 that mkdtemp creates`;
   const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
   if (uid !== undefined && st.uid !== uid) return `it is owned by uid ${st.uid}, not by this run's uid ${uid}`;
+  return '';
+};
+
+/**
+ * ROUND 61 -- the per-run half of the same question. Returns '' when this run
+ * was handed a nonce it can read back in full, and otherwise the reason it
+ * cannot say so. Every branch is a REFUSAL, including an unreadable file and a
+ * missing variable: a run handed a pack digest is a run the gate started, and
+ * the gate always writes the nonce before it starts the suite, so an absent or
+ * unreadable nonce is a run whose environment did not come from this gate run.
+ */
+const nonceNotAsSpecified = (): string => {
+  const value = (process.env.P5_PACK_NONCE ?? '').trim();
+  const where = (process.env.P5_PACK_NONCE_FILE ?? '').trim();
+  if (value === '') return 'P5_PACK_NONCE is empty or unset, and the gate sets it beside every pack digest it hands down';
+  if (where === '') return 'P5_PACK_NONCE_FILE is empty or unset, so there is nothing to read the value back from';
+  // The shape is the gate's own: 16 bytes of `secrets.token_hex`. A value of
+  // any other shape was not written by the program this claim names.
+  if (!/^[0-9a-f]{32}$/.test(value)) return `P5_PACK_NONCE is ${JSON.stringify(value)}, which is not the 32 hex characters tools/law-ran.py writes`;
+  let resolved: string;
+  try {
+    resolved = realpathSync(where);
+  } catch (error) {
+    return `the nonce file ${where} cannot be resolved (${String(error)})`;
+  }
+  if (basename(resolved) !== 'nonce') return `the nonce file resolves to ${resolved}, whose name is not the ${JSON.stringify('nonce')} the gate writes`;
+  const dir = dirname(resolved);
+  if (!basename(dir).startsWith(GATE_NONCE_PREFIX)) {
+    return `the nonce file sits in ${dir}, whose name does not start with the ${JSON.stringify(GATE_NONCE_PREFIX)} that the gate's mkdtemp gives it`;
+  }
+  let temp = tmpdir();
+  try {
+    temp = realpathSync(temp);
+  } catch {
+    // As above: an unresolvable tmpdir makes the comparison below fail, which
+    // refuses, which is the safe way round.
+  }
+  if (dirname(dir) !== temp) return `the nonce file's directory sits in ${dirname(dir)}, not in the temporary directory ${temp} where the gate creates it`;
+  let st;
+  try {
+    st = statSync(resolved);
+  } catch (error) {
+    return `the nonce file cannot be stat'ed (${String(error)})`;
+  }
+  if (!st.isFile()) return 'the path P5_PACK_NONCE_FILE names is not a regular file';
+  const mode = st.mode & 0o777;
+  if (mode !== 0o600) return `the nonce file's permissions are ${mode.toString(8)}, not the 600 the gate sets`;
+  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  if (uid !== undefined && st.uid !== uid) return `the nonce file is owned by uid ${st.uid}, not by this run's uid ${uid}`;
+  let written: string;
+  try {
+    written = readFileSync(resolved, 'utf8');
+  } catch (error) {
+    return `the nonce file cannot be read (${String(error)})`;
+  }
+  if (written !== value) {
+    return `the nonce file holds ${JSON.stringify(written)} and P5_PACK_NONCE is ${JSON.stringify(value)}, so the value this run was handed is not the value the gate wrote for it`;
+  }
   return '';
 };
 
@@ -432,7 +503,14 @@ const concurrencyOffences = (node: Record<string, unknown>, into: string[]): voi
 };
 
 const GATE_PROGRAM = 'tools/law-ran.py';
-const notStartedByTheGate = (procRoot = '/proc', startPid = process.pid): string => {
+// ROUND 61, THE COORDINATOR'S R60-C-03. The identity test below is `(dev,
+// ino)` against THIS package's own gate, so it reads that file -- and when
+// the file is not there the read THREW, which reaches a reader as a stack
+// trace and not as a verdict. An absent gate is a real state (a checkout
+// that dropped it, a run from a tree where it was deleted), and the rule for
+// it is the rule for everything here: refuse BY NAME on ABSENCE.
+const REFUSED_GATE_PROGRAM_ABSENT = 'REFUSED-GATE-PROGRAM-ABSENT';
+const notStartedByTheGate = (procRoot = '/proc', startPid = process.pid, gatePath = join(__dirname, '..', GATE_PROGRAM)): string => {
   // THE COORDINATOR'S ADDITION TO R58: this is a claim about a PROCESS, so it
   // needs an arm that reds when the check is ABSENT or CANNOT RUN -- not only
   // when it fails. A claim about an instrument is verified by running it, so
@@ -490,7 +568,14 @@ const notStartedByTheGate = (procRoot = '/proc', startPid = process.pid): string
     // path that resolves to itself -- and a path comparison would have refused
     // the real gate reached that way, which is a false red of the same shape as
     // the clock. The identity of a file is its (dev, ino).
-    const ourGateStat = statSync(join(__dirname, '..', GATE_PROGRAM));
+    let ourGateStat;
+    try {
+      ourGateStat = statSync(gatePath);
+    } catch (error) {
+      return `${REFUSED_GATE_PROGRAM_ABSENT}: ${GATE_PROGRAM} cannot be read in this package (${String(
+        error,
+      )}), so no ancestor can be compared with it and descent from the gate cannot be decided either way`;
+    }
     const sameFile = (candidate: string): boolean => {
       const st = statSync(candidate);
       return st.dev === ourGateStat.dev && st.ino === ourGateStat.ino;
@@ -2690,7 +2775,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     }
   });
 
-  it('F-73: the live scan READS every character of every logical line, and the expectation is not its own', (ctx) => {
+  it('F-73: the live scan READS every character of every logical line, and the expectation is not its own', async (ctx) => {
     // ROUND 43, R41-01 (P2), THE CHALLENGER'S. The regression guard was a
     // list of seven identifiers, and it was keyed to one INSTANCE and one
     // SPELLING: the challenger added a second declared-quotation reader to the
@@ -3308,71 +3393,144 @@ describe('every written invocation of the pack tools is isolated', () => {
       siblings,
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: a case or suite in this very file runs concurrently or retries, which no config setting and no command-line flag has to show: it.concurrent and describe.concurrent mark one case at a time. The arms in this file write temporary directories, spawn processes and read a private snapshot of the pack, and they assume they are the only one doing so`,
     ).toStrictEqual([]);
-    const runnerConfigFile = readFileSync(join(__dirname, '..', 'vitest.config.ts'), 'utf8');
-    // The COMMENTS are stripped before anything is read out of this file, and
-    // the first version of this arm is why: the reasons written beside each
-    // setting quote values (`retry: 1` as the measurement that hid a red), and
-    // the reader matched the PROSE before the setting -- refusing that retry
-    // was 1 when the code set it to 0. A reader a comment can fool is the shape
-    // this phase hunts, so it reads CODE.
-    const runnerConfig = runnerConfigFile.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-    expect(
-      runnerConfig.includes('defineConfig'),
-      `${REFUSED_TEST_WITHOUT_LAW_GATE}: stripping comments from vitest.config.ts left nothing that looks like a config, so this arm would be reading its own blind spot rather than the runner's settings`,
-    ).toBe(true);
-    const clock = /testTimeout:\s*([0-9_]+)/.exec(runnerConfig);
-    expect(
-      clock,
-      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts sets no testTimeout, so every case in this law runs on the runner's 5000ms default -- and the three heaviest here measure 2.0s to 3.2s on an idle container, so ordinary machine load produces a red with NO refusal name in it`,
-    ).not.toBeNull();
-    expect(
-      Number((clock?.[1] ?? '0').replace(/_/g, '')),
-      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts sets a per-case timeout under 60000ms, which is close enough to this law's own measured durations that machine load alone can red it without naming a refusal`,
-    ).toBeGreaterThanOrEqual(60_000);
-    // ROUND 59, THE COORDINATOR'S FOLLOW-UP on the gap this author named: the
-    // clock was ONE default of the runner that decides whether this law reaches
-    // a verdict, and it was not the only one. Each setting below is read here,
-    // by value, because pinning the config's BYTES says only that the file did
-    // not change -- it says nothing about a dependency bump changing what the
-    // ABSENCE of a setting means. `allowOnly` measured TRUE by default in this
-    // version, and one `it.only` in this file leaves every other case skipped.
+    // ROUND 61, THE CHALLENGER'S F-2 (P1 FAIL-OPEN) AND THE COORDINATOR'S SAME
+    // RULING. Every per-key read here was a REGEX over the config's text, and a
+    // regex takes the FIRST occurrence of a key while JavaScript takes the
+    // LAST. Measured by the challenger: one appended
+    // `dangerouslyIgnoreUnhandledErrors: true`, the byte pin moved with it, and
+    // a planted unhandled rejection -- the runner exited 0 with 307 passed and
+    // the gate exited 0, where without the duplicate the same plant reds.
+    // esbuild prints a duplicate-key WARNING and nothing here read it.
     //
-    // Why each can decide a verdict is written beside it in `vitest.config.ts`.
-    // The two that fail OPEN if they drift are `retry` (a non-deterministic red
-    // passes on a second attempt -- measured: with `retry: 1` and the clock back
-    // at 5000ms under load, this round's timeout red came back GREEN) and
-    // `dangerouslyIgnoreUnhandledErrors` (an unhandled rejection is swallowed
-    // and the file stays green). The rest fail CLOSED through the gate's own
-    // per-file case count, and are pinned so the diff never has to argue it.
-    for (const [key, want] of [
-      ['retry', '0'],
-      ['bail', '0'],
-      ['allowOnly', 'false'],
-      ['passWithNoTests', 'false'],
-      ['isolate', 'true'],
-      ['fileParallelism', 'false'],
-      ['maxConcurrency', '1'],
-      ['dangerouslyIgnoreUnhandledErrors', 'false'],
-    ] as const) {
-      const found = new RegExp(`\\b${key}:\\s*([A-Za-z0-9_']+)`).exec(runnerConfig);
+    // A regex over a source file was the wrong instrument twice over, and this
+    // is the same lesson as the comments that fooled the first version of this
+    // arm: a text match says what the file CONTAINS, not what the program
+    // MEANS. So the settings are read as VALUES from two resolved objects:
+    //
+    //   the RUNNER's own resolved config, out of the worker vitest is running
+    //   this case in -- the authority for what this run uses, flags included;
+    //   the CONFIG MODULE, imported, so duplicate keys resolve the way the
+    //   runner's own loader resolves them, for the settings the worker's
+    //   resolved config does not carry (fileParallelism and
+    //   dangerouslyIgnoreUnhandledErrors are absent from it here, measured).
+    //
+    // And every key present in both must AGREE, so a divergence between what
+    // the file says and what the run uses refuses by name instead of being
+    // split between two readers.
+    const workerConfig = (globalThis as unknown as { __vitest_worker__?: { config?: Record<string, unknown> } }).__vitest_worker__?.config;
+    expect(
+      typeof workerConfig,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: this runner exposes no resolved config to the worker, so this arm would be left matching the config file's TEXT -- which is the fail-open the challenger measured at round 57 (a duplicate key reads as its FIRST occurrence here and as its LAST in JavaScript)`,
+    ).toBe('object');
+    const resolved = workerConfig ?? {};
+    const moduleConfig = ((await import('../vitest.config')) as { default?: { test?: Record<string, unknown> } }).default?.test;
+    expect(
+      typeof moduleConfig,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not import as a config with a \`test\` section, so the settings the worker's resolved config omits could not be read as values at all`,
+    ).toBe('object');
+    const fromModule = moduleConfig ?? {};
+    const sequence = (resolved.sequence ?? {}) as Record<string, unknown>;
+    const moduleSequence = (fromModule.sequence ?? {}) as Record<string, unknown>;
+    // ROUND 61, THE COORDINATOR'S R60-C-04 AND R60-C-05. These were thirteen
+    // separate assertions, and thirteen separate assertions answer thirteen
+    // separate questions: each one says a value is what it should be, and none
+    // of them says the SET is the set. A key that disappears from the resolved
+    // config between vitest versions reads as `undefined` against its wanted
+    // value and reds, which is correct; a key that ARRIVES, or one this arm
+    // forgets to list, is not a question anyone asked. So the eleven settings
+    // the RUN decides are built into one object and compared with one
+    // `toStrictEqual`, which answers "are these exactly these" in a single
+    // reading, and prints the whole disagreement at once when it is not.
+    //
+    // The authority for each setting is named by which object it comes from:
+    // `run` is the runner's resolved config -- the eleven below -- and `file`
+    // is the imported module, for the two the worker's resolved config does
+    // not carry at all (measured, even when the flags are passed). Why each
+    // one can decide a verdict is written in `vitest.config.ts` beside the
+    // setting itself.
+    const settingsOfThisRun = {
+      testTimeout: resolved.testTimeout,
+      hookTimeout: resolved.hookTimeout,
+      retry: resolved.retry,
+      bail: resolved.bail,
+      allowOnly: resolved.allowOnly,
+      passWithNoTests: resolved.passWithNoTests,
+      isolate: resolved.isolate,
+      maxConcurrency: resolved.maxConcurrency,
+      pool: resolved.pool,
+      'sequence.shuffle': sequence.shuffle,
+      'sequence.concurrent': sequence.concurrent,
+    };
+    expect(
+      settingsOfThisRun,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: the settings THIS RUN is using are not the eleven this law's verdict depends on. A default is not a decision, a value read from the config file's TEXT is not the value the run uses, and a command-line flag moves the run without moving the file: today \`--pool=threads\` and \`--retry=1\` are both reachable from the shell. Read the object printed beside this sentence against the one it was compared with`,
+    ).toStrictEqual({
+      testTimeout: 120_000,
+      hookTimeout: 120_000,
+      retry: 0,
+      bail: 0,
+      allowOnly: false,
+      passWithNoTests: false,
+      isolate: true,
+      maxConcurrency: 1,
+      pool: 'forks',
+      'sequence.shuffle': false,
+      'sequence.concurrent': false,
+    });
+    // The two the resolved config does not carry, read from the imported
+    // module -- and the gate forces both on the command line as well, so the
+    // run cannot be using a value this file never states.
+    expect(
+      { fileParallelism: fromModule.fileParallelism, dangerouslyIgnoreUnhandledErrors: fromModule.dangerouslyIgnoreUnhandledErrors },
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not ask for fileParallelism: false and dangerouslyIgnoreUnhandledErrors: false. The second one decides whether an unhandled rejection is rc 1 or rc 0, which is the whole of round 60c`,
+    ).toStrictEqual({ fileParallelism: false, dangerouslyIgnoreUnhandledErrors: false });
+    // The two readers must not disagree where both can see. A flag, an
+    // environment key or a duplicate that moves one and not the other is a run
+    // whose settings nobody can state, and that is refused rather than averaged.
+    for (const key of ['testTimeout', 'hookTimeout', 'retry', 'bail', 'allowOnly', 'passWithNoTests', 'isolate', 'maxConcurrency', 'pool'] as const) {
+      if (fromModule[key] === undefined) continue;
       expect(
-        found?.[1],
-        `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not set ${key} to ${want}, so this law's verdict depends on what the runner's DEFAULT for ${key} happens to be in the installed version -- and a default is not a decision. Set it explicitly in the same commit, with the reason beside it`,
-      ).toBe(want);
+        resolved[key],
+        `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts asks for ${key} = ${JSON.stringify(fromModule[key])} and this RUN is using ${JSON.stringify(resolved[key])}, so the file and the run are two different instruments and no sentence about this law's settings is true of both`,
+      ).toStrictEqual(fromModule[key]);
     }
+    for (const key of ['shuffle', 'concurrent'] as const) {
+      if (moduleSequence[key] === undefined) continue;
+      expect(
+        sequence[key],
+        `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts asks for sequence.${key} = ${JSON.stringify(moduleSequence[key])} and this RUN is using ${JSON.stringify(sequence[key])}`,
+      ).toStrictEqual(moduleSequence[key]);
+    }
+    // A DUPLICATE KEY is refused on its own, by name, even though both readers
+    // above now resolve it the way the runner does. It is what F-2 was built
+    // on, the runner's own bundler only WARNS about it, and a config with one
+    // key written twice cannot be reviewed by reading it: whoever reviews the
+    // diff reads the first one.
+    const runnerConfigText = readFileSync(join(__dirname, '..', 'vitest.config.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    const duplicated = (
+      [
+        'testTimeout',
+        'hookTimeout',
+        'retry',
+        'bail',
+        'allowOnly',
+        'passWithNoTests',
+        'isolate',
+        'pool',
+        'fileParallelism',
+        'maxConcurrency',
+        'sequence',
+        'dangerouslyIgnoreUnhandledErrors',
+        'shuffle',
+        'concurrent',
+      ] as const
+    ).filter((key) => (runnerConfigText.match(new RegExp(`\\b${key}:`, 'g')) ?? []).length > 1);
     expect(
-      /pool:\s*'forks'/.test(runnerConfig),
-      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not pin the pool, so the execution model these cases are measured in is whatever the installed runner defaults to`,
-    ).toBe(true);
-    // R56-S4's enumeration, the one entry of it this law did not yet read:
-    // `sequence.concurrent` makes every case in a file run CONCURRENTLY, which
-    // would let this arm's pack snapshot race the arms that write temporary
-    // directories, and the law's serial assumptions are written nowhere else.
-    // `maxConcurrency` bounds how many run at once, not whether they do.
-    expect(
-      /sequence:\s*\{\s*shuffle:\s*false,\s*concurrent:\s*false\s*\}/.test(runnerConfig),
-      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not pin sequence.shuffle AND sequence.concurrent to false, so a random case order could make an order-dependent pass or failure irreproducible -- which is the one thing a measured record cannot survive -- or every case in a file could run at once, racing the temporary directories these arms write`,
-    ).toBe(true);
+      duplicated,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts writes a setting TWICE. JavaScript takes the last occurrence and a reader takes the first, which is exactly how a duplicate dangerouslyIgnoreUnhandledErrors passed this arm at round 57. Write each setting once, where its reason is`,
+    ).toStrictEqual([]);
     //
     // THE RESIDUAL THIS ARM DOES NOT CLOSE, STATED AS MEASURED -- AND THE
     // PREVIOUS WORDING OF THIS PARAGRAPH WAS FALSE, which R51-F1 measured and
@@ -3650,7 +3808,6 @@ describe('every written invocation of the pack tools is isolated', () => {
           ).toBe('<unreachable: this entry cannot be classified>');
           continue;
         }
-        // eslint-disable-next-line no-bitwise
         expect(
           (mode & 0o170000) === 0o100000,
           `${REFUSED_PACK_ENTRY_NOT_A_FILE}: ${join(PACK, name)} is in the pack and is not a regular file. The pack is a flat set of documents, and this arm refuses what it cannot classify rather than dropping it out of the derived alphabet in silence`,
@@ -3749,7 +3906,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       'the provenance check needs a cwd link to admit an ABSOLUTE gate path, so an unreadable cwd would refuse an honest run',
     ).toBe('');
 
-    for (const [label, procRoot, startPid, expected] of [
+    for (const [label, procRoot, startPid, expected, gateFile] of [
       ['no /proc at all', join(root, 'there-is-no-such-tree'), 10, 'no readable'],
       [
         'a cmdline that is empty by construction',
@@ -3795,8 +3952,24 @@ describe('every written invocation of the pack tools is isolated', () => {
         10,
         'no ancestor of this process',
       ],
+      // ROUND 61, THE COORDINATOR'S R60-C-03. The check compares an ancestor's
+      // argument with THIS package's gate by (dev, ino), so it reads that file
+      // -- and when the file is not there the read used to THROW, which
+      // reaches an operator as a stack trace from inside a helper and not as a
+      // verdict. The gate's path is an argument for exactly this measurement;
+      // production passes none of the three.
+      [
+        'the gate program itself absent from this package',
+        tree('gate-absent', [
+          { pid: 10, ppid: 20 },
+          { pid: 20, ppid: 1, argv: ['python3', '-I', 'tools/law-ran.py'], cwd: pkg },
+        ]),
+        10,
+        REFUSED_GATE_PROGRAM_ABSENT,
+        join(root, 'no-gate-here', 'tools', 'law-ran.py'),
+      ],
     ] as const) {
-      const said = notStartedByTheGate(procRoot as string, startPid as number);
+      const said = notStartedByTheGate(procRoot as string, startPid as number, (gateFile as string | undefined) ?? gate);
       expect(
         said === '' ? '<admitted>' : said,
         `the provenance check ADMITTED a run it cannot show provenance for (${label}): a "cannot say" that returns the empty string makes REFUSED-PACK-HANDED-DOWN-DIRECTORY-NOT-PRIVATE unreachable and the privacy claim worthless`,
@@ -4173,7 +4346,15 @@ describe('every written invocation of the pack tools is isolated', () => {
       const notDescended = notStartedByTheGate();
       expect(
         notDescended,
-        `${REFUSED_PACK_NOT_PRIVATE}: this run was handed a pack digest in P5_PACK_DIGEST, so it claims to have been started by tools/law-ran.py, and ${notDescended}. A directory with mkdtemp's own name, mode and owner can be built by hand; being the gate's child cannot`,
+        `${REFUSED_PACK_NOT_PRIVATE}: this run was handed a pack digest in P5_PACK_DIGEST, so it claims to have been started by tools/law-ran.py, and ${notDescended}. What this says is that no ancestor PRESENTS ITSELF as a python interpreter running this exact file: argv is self-reported, so a program that only spawns the suite while naming the gate in its own argv passes this check (measured by the challenger at round 57). What stops a forged run from producing a false GREEN is the census and the content scan, which refuse a planted document and a planted invocation`,
+      ).toBe('');
+      // And provenance down to THIS run rather than to any run of the gate:
+      // the value is fresh for every run and the file it is read back from is
+      // the gate's own, mode 600, in its own temporary directory.
+      const nonceWhy = nonceNotAsSpecified();
+      expect(
+        nonceWhy,
+        `${REFUSED_NONCE_NOT_AS_SPECIFIED}: this run was handed a pack digest in P5_PACK_DIGEST, so tools/law-ran.py started it and wrote a per-run nonce for it to read, and ${nonceWhy}. A captured environment from an earlier gate run satisfies the ancestry check above and fails here`,
       ).toBe('');
     }
     expect(

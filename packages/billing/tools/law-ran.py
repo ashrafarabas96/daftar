@@ -102,6 +102,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import stat
 import subprocess
@@ -274,6 +275,55 @@ REFUSED_CASE_RETRIED = "REFUSED-CASE-PASSED-AFTER-RETRY"
 # command a developer runs. The `test` script keeps its own invocation too,
 # because its bytes are what pin the chain for `npm test`.
 REFUSED_ARM_NOT_AS_SPECIFIED = "REFUSED-ARM-NOT-AS-SPECIFIED"
+# THE COORDINATOR'S INTERIM RULING ON `03907d0`, item 2: the per-file counts
+# above pin the two LAW files and nothing pinned the SET of files that run, so
+# a new test file moved the printed total from 306 to 307 at rc 0 and this step
+# said nothing. A census pins its SET: arrivals AND departures refuse. The
+# TOTAL is not pinned as a literal on purpose -- a case added to a
+# domain test is ordinary work -- but a FILE arriving or leaving changes what
+# "the suite passed" means, and the gate's verdict is now coupled to the whole
+# package's exit code, so a new file is a new way for this gate to go red.
+REFUSED_TEST_FILE_SET_MOVED = "REFUSED-TEST-FILE-SET-MOVED"
+# The per-run nonce (the coordinator's item 2, second half): this step writes a
+# fresh value into a mode-600 file of its own and hands the law the value and
+# the path, so the law's privacy claim binds to THIS run. What that defeats is
+# measured and stated narrowly: a REPLAYED directory, a stale digest, or an
+# environment copied out of an earlier run. It does not make provenance
+# unforgeable -- a program that forges every piece at once still passes, which
+# the challenger measured at round 57 -- and what stops such a run from
+# producing a false GREEN is the census and the content scan, not this nonce.
+REFUSED_NONCE_NOT_AS_SPECIFIED = "REFUSED-NONCE-NOT-AS-SPECIFIED"
+
+# The SET of test files this suite collects, pinned by value. A file arriving
+# or leaving is refused by name; change this list in the same commit that adds
+# or removes the file, with the reason in the message.
+EXPECTED_TEST_FILES: tuple[str, ...] = (
+    "test/addon-meters.test.ts",
+    "test/addons.test.ts",
+    "test/collection.test.ts",
+    "test/coverage-truth.test.ts",
+    "test/credit-application.test.ts",
+    "test/credit.test.ts",
+    "test/currency-is-canonical.test.ts",
+    "test/db-refusals-name-their-defence.test.ts",
+    "test/dunning.test.ts",
+    "test/error-codes-are-live.test.ts",
+    "test/errors-carry-no-money.test.ts",
+    "test/fake-provider.test.ts",
+    "test/invoice-states.test.ts",
+    "test/invoice.test.ts",
+    "test/law-bytes-are-pinned.test.ts",
+    "test/lexer.test.ts",
+    "test/no-hardcoded-pricing.test.ts",
+    "test/no-merchant-posting.test.ts",
+    "test/period.test.ts",
+    "test/plan-change.test.ts",
+    "test/platform-authority-law.test.ts",
+    "test/proration.test.ts",
+    "test/repo-format-gate.test.ts",
+    "test/subscription-states.test.ts",
+    "test/tool-commands-are-isolated.test.ts",
+)
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -725,6 +775,22 @@ def main() -> int:
         pinned_pack = pack_digest(pack_snapshot)
 
 
+    nonce_dir: Path | None = None
+    nonce_value = ""
+    try:
+        nonce_dir = Path(tempfile.mkdtemp(prefix="law-ran-nonce-")).resolve()
+        nonce_value = secrets.token_hex(16)
+        nonce_file = nonce_dir / "nonce"
+        nonce_file.write_text(nonce_value)
+        nonce_file.chmod(0o600)
+    except OSError as exc:
+        if nonce_dir is not None:
+            shutil.rmtree(nonce_dir, ignore_errors=True)
+        shutil.rmtree(pack_snapshot, ignore_errors=True) if pack_snapshot is not None else None
+        refuse(
+            f"{REFUSED_NONCE_NOT_AS_SPECIFIED}: this step could not write the per-run nonce the law reads "
+            f"({exc}), so the run it starts could not bind its privacy claim to THIS run"
+        )
     try:
         out = Path(tempfile.mkdtemp(prefix="law-ran-")) / "report.json"
     except OSError as exc:
@@ -737,7 +803,24 @@ def main() -> int:
         )
     try:
         done = subprocess.run(
-            [str(node), str(runner), "run", "--reporter=json", f"--outputFile={out}"],
+            [
+                str(node),
+                str(runner),
+                "run",
+                "--reporter=json",
+                f"--outputFile={out}",
+                # THE COORDINATOR'S INTERIM RULING, item 1. The law reads every
+                # runner setting out of the EFFECTIVE run, and MEASURED: the
+                # worker's resolved config never carries these two, not even
+                # when the command line sets them. So this step does not ask
+                # the config for them -- it FORCES them on the run that
+                # produces the verdict. Measured: with the config saying
+                # `dangerouslyIgnoreUnhandledErrors: true` and a planted
+                # unhandled rejection, the plain run is rc 0 and this flag
+                # makes it rc 1.
+                "--no-dangerously-ignore-unhandled-errors",
+                "--no-file-parallelism",
+            ],
             cwd=str(package),
             capture_output=True,
             text=True,
@@ -767,6 +850,16 @@ def main() -> int:
                 # R53-F1: the instant this step measured, handed to the run it
                 # starts. The law refuses by name if what it reads is not this.
                 **({"P5_PACK_DIGEST": pinned_pack} if pinned_pack else {}),
+                # The nonce goes down beside the digest, and only when there is a
+                # private copy to speak about. It is NOT written into the pack
+                # copy: a file inside it would change the very digest both
+                # readers compare, and an exempt name inside the measured set is
+                # a hole of its own.
+                **(
+                    {"P5_PACK_NONCE": nonce_value, "P5_PACK_NONCE_FILE": str(nonce_dir / "nonce")}
+                    if pinned_pack and nonce_dir is not None
+                    else {}
+                ),
             },
         )
         # The challenger's R55-S1: the law no longer refuses when the SHARED
@@ -809,6 +902,8 @@ def main() -> int:
         out.parent.rmdir()
         if pack_snapshot is not None:
             shutil.rmtree(pack_snapshot, ignore_errors=True)
+        if nonce_dir is not None:
+            shutil.rmtree(nonce_dir, ignore_errors=True)
 
     if not isinstance(report, dict) or not isinstance(report.get("testResults"), list):
         refuse("the report has no testResults list, so nothing in it says what ran")
@@ -913,6 +1008,24 @@ def main() -> int:
             f"{REFUSED_ARM_NOT_AS_SPECIFIED}: {arm} over {subject} exited {armed.returncode}, so the four "
             "branches of the seal's `pinned_now` are not as specified and this step will not report the law as "
             f"having run. Its stderr: {armed.stderr.strip()[-400:]!r}"
+        )
+
+    # The coordinator's item 2: the SET of files that ran, by value.
+    collected = sorted(
+        {
+            str(Path(str(result.get("name", ""))).relative_to(package))
+            for result in report["testResults"]
+            if str(result.get("name", "")).startswith(str(package))
+        }
+    )
+    missing = [name for name in EXPECTED_TEST_FILES if name not in collected]
+    arrived = [name for name in collected if name not in EXPECTED_TEST_FILES]
+    if missing or arrived:
+        refuse(
+            f"{REFUSED_TEST_FILE_SET_MOVED}: the suite this step started did not run the set of test files this "
+            f"step pins. Departed: {missing or 'none'}. Arrived: {arrived or 'none'}. This step's verdict is "
+            "coupled to the whole package's exit code, so a file arriving or leaving changes what a green run "
+            "means; update EXPECTED_TEST_FILES in the same commit, with the reason in the message"
         )
 
     total = report.get("numTotalTests")
