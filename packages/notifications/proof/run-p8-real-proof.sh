@@ -59,6 +59,36 @@ mkdir -p "$OUT"
 FAILED=0
 
 say(){ echo "[$RUN] $*" | tee -a "$OUT/run.log"; }
+
+# ---------------------------------------------------------------------
+# WHERE THIS GATE STANDS (round 28, F-C)
+# ---------------------------------------------------------------------
+# Until round 28 this gate inherited the caller's working directory and passed
+# it to every child, including an arm that deletes a guard and then renames
+# frozen migration files relative to cwd. Run from the proof directory that arm
+# was vacuous; run from the repository root it renumbered all 80 frozen
+# migrations. A gate whose RESULT depends on where it was invoked from was never
+# "run twice, FAILED=0" — it was run twice from one place.
+#
+# So the gate states where it was invoked, asserts the paths it derived, and
+# MOVES to its own run directory, which is what every child now inherits. The
+# repository is still reachable by its absolute path and nothing else resolves
+# relative to it.
+STARTED_IN=$PWD
+for _need in "$HERE/p8-overlay.sql" "$HERE/p8-case-helpers.sql" \
+             "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" \
+             "$REPO/infrastructure/database/migrations"; do
+  if [ ! -e "$_need" ]; then
+    say "ABORT: this gate derived $_need from its own location and it is not there, so either the runner was copied out of the pack or the tree is not the one it was written for. Refusing rather than measuring something else"
+    exit 2
+  fi
+done
+if [ -e "$REPO/infrastructure/database/.p8-sandbox" ]; then
+  say "ABORT: $REPO declares itself a PLANT SANDBOX, which the repository must never do — a disposable copy's marker has been committed or copied into the real tree, and every plant would then be allowed to rename its frozen migrations"
+  exit 2
+fi
+cd "$OUT" || { say "ABORT: the run directory $OUT could not be entered, and this gate will not run from an inherited working directory"; exit 2; }
+say "cwd: invoked from $STARTED_IN, running from $PWD — every child inherits THIS directory, and the repository is reached only by its absolute path $REPO"
 sup(){ "$B/psql" -h "$D" -p "$P" -U p8super -d "${2:-postgres}" -qt -v ON_ERROR_STOP=1 -c "$1"; }
 
 # ---------------------------------------------------------------------
@@ -115,12 +145,40 @@ assert_roles(){    # called AFTER bootstrap, because bootstrap is what creates t
 # return. Every other build, including every mutant, reads the real file.
 CASE_HELPERS=$HERE/p8-case-helpers.sql
 
+# ROUND 28, F-C. `p8-plant.py` renames and deletes frozen migration files under
+# its CURRENT DIRECTORY, and the only thing between it and the real tree was the
+# identity guard — which one arm exists to DELETE. The coordinator's review ran
+# that arm with cwd at the repository root, and the first run renumbered all 80
+# frozen migrations and rewrote MIGRATION_MANIFEST.json. The frozen set is
+# byte-immutable by standing instruction, mutation testing included, so a plant
+# now refuses any tree that does not DECLARE itself disposable, and this is what
+# writes that declaration into every copy this gate makes. A copy without it is
+# refused by name; the repository must never contain one.
+sandbox_marker(){   # sandbox_marker <copy-root>
+  printf '%s\n' "P8 PLANT SANDBOX — a disposable copy; this file is never committed" \
+    > "$1/infrastructure/database/.p8-sandbox"
+}
+
 build(){           # build <overlay-file> <logdir>
   local ov=$1
   local ld=$2
   mkdir -p "$ld"
-  sup "DROP DATABASE IF EXISTS daftar" >/dev/null 2>&1
-  sup "CREATE DATABASE daftar OWNER daftar_migrator" >/dev/null
+  # ROUND 28, T-4. These two statements ESTABLISH the subject, and their exit
+  # status used to be discarded — the DROP with its stderr too. The eighteenth
+  # challenge hit it for real: with a backend left `idle in transaction` by an
+  # interrupted run, the DROP failed 55006 and the CREATE failed "already
+  # exists", both swallowed, and the run reported `overlay failed / BASELINE
+  # BUILD FAILED` — a refusal naming the wrong reason, in the very range whose
+  # title is that defect. It fails CLOSED, so it was never a fail-open; the
+  # cause was simply misattributed, which costs a reader the one thing the
+  # refusal is for. Every other step in this function names its own failure;
+  # now these do too, and the DROP keeps its stderr for the message.
+  if ! sup "DROP DATABASE IF EXISTS daftar" >"$ld/dropdb.log" 2>&1; then
+    echo "the database could not be dropped: $(tail -1 "$ld/dropdb.log")"; return 1
+  fi
+  if ! sup "CREATE DATABASE daftar OWNER daftar_migrator" >"$ld/createdb.log" 2>&1; then
+    echo "the database could not be created: $(tail -1 "$ld/createdb.log")"; return 1
+  fi
   # bootstrap.sql grants ON DATABASE by the name `daftar`, so the database is
   # created under that name and the file runs unmodified.
   "$B/psql" -h "$D" -p "$P" -U p8super -d daftar -q -v ON_ERROR_STOP=1 -f "$REPO/infrastructure/database/bootstrap.sql" > "$ld/bootstrap.log" 2>&1 \
@@ -218,7 +276,10 @@ if cases "$OUT/baseline"; then
   # a syntax slip, a renamed file or a dropped `SELECT` would lower the number
   # and nothing would red. It is now a LITERAL, compared, and a case added
   # deliberately must raise it here in the same commit.
-  P8_EXPECT_CASES=98
+  # ROUND 28: 98 -> 101, three cases that RECORD the NULL-event-id gap
+  # (`G-NULL-a`/`-b`/`-c`), raised here in the same commit that adds them,
+  # which is the discipline this literal exists for.
+  P8_EXPECT_CASES=101
   _cases_got=$(cat "$OUT/baseline/passes" | xargs)
   if [ "$_cases_got" != "$P8_EXPECT_CASES" ]; then
     say "FAIL: BASELINE CASE COUNT — expected $P8_EXPECT_CASES, measured $_cases_got. A case was added, lost or renamed: if it was added, raise the literal in this runner in the same commit; if it was lost, the pack is measuring less than every document in it claims"
@@ -355,6 +416,10 @@ mutate         11  "T2 every tenant-scoped relation carries a composite tenant k
 mutate         13  "N6-e but the obligation is NOT released: no second channel"
 mutate         14  "I3-d read -> sent is a regression"
 mutate         15  "W-2 may NOT rewrite the obligation key — the UPDATE grant is column-scoped"
+# ROUND 28. The one mutant that TIGHTENS: it simulates the owner deciding
+# `OD-P8-NULL-EVENT`, and `G-NULL-b` must red, which is what makes the three
+# cases recording the NULL gap load-bearing instead of prose beside a comment.
+mutate         16  "G-NULL-b and a SECOND one is accepted too"
 mutate_race    12
 
 # <<< P8-Y7-CUT-END-A >>>
@@ -590,6 +655,7 @@ integrity_must_refuse(){   # integrity_must_refuse <id> <setup> <expect> [extra-
   rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
   cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
   cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+  sandbox_marker "$sand"
   ( cd "$sand" && eval "$setup" ) >/dev/null 2>&1
   # ROUND 14: assert the plant LANDED. Without this, a setup that silently fails
   # — a mistyped filename, which this round had — runs the check against an
@@ -742,6 +808,7 @@ anchor_is_loadbearing(){   # anchor_is_loadbearing <id> <setup> <expect>
   rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
   cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
   cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+  sandbox_marker "$sand"
   ( cd "$sand" && eval "$setup" ) >/dev/null 2>&1
   if [ "$(copied_digest "$REPO/infrastructure/database")" \
      = "$(copied_digest "$sand/infrastructure/database")" ]; then
@@ -891,6 +958,7 @@ anchor_identity(){   # anchor_identity <id> <doctor-the-anchor-clone> <extra-arg
   mkdir -p "$sand/infrastructure/database"
   cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
   cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+  sandbox_marker "$sand"
   printf '\n-- mutant\n' >> "$sand/infrastructure/database/migrations/0006_rls.sql"
   python3 -I - "$sand" <<'PLANT'
 import hashlib, json, os, sys
@@ -1016,6 +1084,7 @@ arg_shape(){   # arg_shape <id> <refuse|pass> <expect-text> [args...]
   rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
   cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
   cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+  sandbox_marker "$sand"
   # The subject is an HONEST copy, deliberately. What is under test here is the
   # argument shape, not a tree mutation: a planted byte would red for the wrong
   # reason and the arm would stop being evidence about the argv.
@@ -1129,6 +1198,7 @@ tamper_consistently(){   # tamper_consistently <sandbox-root>
   rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
   cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
   cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+  sandbox_marker "$sand"
   printf '\n-- mutant\n' >> "$sand/infrastructure/database/migrations/0006_rls.sql"
   python3 -I - "$sand" <<'TAMPER'
 import hashlib, json, os, sys
@@ -1155,6 +1225,7 @@ guard_control(){   # guard_control <id> <patcher> <tampered|honest> <present|abs
     rm -rf "$sand"; mkdir -p "$sand/infrastructure/database"
     cp -r "$REPO/infrastructure/database/migrations" "$sand/infrastructure/database/migrations"
     cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$sand/infrastructure/database/"
+    sandbox_marker "$sand"
   fi
   local nog=$work/no-guard.py pat=0
   python3 -I "$patcher" "$HERE/p8-frozen-integrity.py" "$nog" >"$work/patch.log" 2>&1 || pat=$?
@@ -1870,6 +1941,156 @@ else
   head -2 "$WIT/unwitnessed.log" | tee -a "$OUT/run.log"; FAILED=1
 fi
 
+# ROUND 28, T-2. The obligation above was derived from the case's own
+# EXPECTATION, and the eighteenth challenge measured what that derivation
+# actually read: the author's prose. `denied for table notifications` is a true
+# substring of the real message, carries SQLSTATE 42501, and does not contain
+# the phrase the test looked for — so the three-argument form accepted it,
+# pointed at a dead uuid, at `passes=98`. It is now derived from the refusal
+# that ARRIVES, which the server spells and the case cannot.
+cat > "$PATCHDIR/drop-sqlstate-check.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = ("    IF NOT witnessed AND sst = '42501'\n"
+     "       AND position('row-level security policy' in lower(coalesce(msg,''))) = 0 THEN")
+assert s.count(b) == 1, "the SQLSTATE derivation is not where this patcher expects it"
+# BOTH lines of the condition, or the continuation is left dangling and the
+# helper file stops parsing — which is how this control reported PLANT NOT
+# ESTABLISHED on its first run instead of a measurement.
+s = s.replace(b, "    IF false THEN", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+WS=$OUT/witness-sqlstate
+mkdir -p "$WS"
+cat > "$WS/probe.sql" <<'SQL'
+SET search_path = p8, public;
+BEGIN;
+SET LOCAL app.tenant_id   = '11111111-1111-4111-8111-111111111111';
+SET LOCAL app.business_id = 'bbbbbbbb-0000-4000-8000-000000000001';
+-- The challenger's own case, verbatim in shape: the three-argument form, a
+-- permission refusal spelled WITHOUT the phrase the prose test reads, and the
+-- row pointed at a uuid no fixture creates.
+SELECT p8.case_refuses('T2-a W-2 spelled around the prose test', $q$
+  UPDATE notifications SET obligation_key = 'B1|rewritten'
+   WHERE id = '0fffffff-dead-4000-8000-00000000dead'
+$q$, 'denied for table notifications');
+ROLLBACK;
+SQL
+if "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
+             -f "$WS/probe.sql" >"$WS/probe.log" 2>&1; then
+  say "WITNESS-SQLSTATE: FAIL — a permission refusal spelled around the prose test was ACCEPTED against a row that does not exist, which is T-2 unfixed"
+  FAILED=1
+elif grep -qF "WITNESS REQUIRED" "$WS/probe.log" \
+     && grep -qF "SQLSTATE 42501" "$WS/probe.log"; then
+  say "WITNESS-SQLSTATE: a permission refusal spelled around the prose test is REFUSED, and the message names SQLSTATE 42501 as what obliged it — a string only the arriving-refusal branch can print, so this arm reads the derivation and not the label (the y20d lesson, applied to the guard the same challenger found next)"
+else
+  say "WITNESS-SQLSTATE: FAIL — it refused, but not by WITNESS REQUIRED naming SQLSTATE 42501"
+  head -2 "$WS/probe.log" | tee -a "$OUT/run.log"; FAILED=1
+fi
+
+# The attribution: the SQLSTATE derivation deleted ALONE must bring the
+# challenger's acceptance back. The patched helpers are loaded over the live
+# baseline — ONE deletion, nothing else touched — and the real file is loaded
+# back immediately afterwards WITH the guard re-measured, because a control that
+# leaves the subject patched has moved the baseline every later arm reads.
+if python3 -I "$PATCHDIR/drop-sqlstate-check.py" "$HERE/p8-case-helpers.sql" "$WS/p8-case-helpers.sql" >"$WS/patch.log" 2>&1 \
+   && ! cmp -s "$HERE/p8-case-helpers.sql" "$WS/p8-case-helpers.sql" \
+   && "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 -f "$WS/p8-case-helpers.sql" >"$WS/load.log" 2>&1; then
+  if "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
+               -f "$WS/probe.sql" >"$WS/ctl.log" 2>&1; then
+    say "WITNESS-SQLSTATE-CTL: with the SQLSTATE derivation deleted ALONE the same case PASSES again — the acceptance of 787aa11 returns through a spelling the prose test never covered, so that one condition is what closes T-2"
+  else
+    say "WITNESS-SQLSTATE-CTL: FAIL — with the derivation deleted the case still reddened, so the arm above is measuring something else"
+    head -2 "$WS/ctl.log" | tee -a "$OUT/run.log"; FAILED=1
+  fi
+  if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 -f "$HERE/p8-case-helpers.sql" >"$WS/restore.log" 2>&1; then
+    if "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
+                 -f "$WS/probe.sql" >"$WS/verify.log" 2>&1 \
+       || ! grep -qF "SQLSTATE 42501" "$WS/verify.log"; then
+      say "FAIL: the real case helpers were loaded back after the T-2 control but the derivation did not come back with them, so every later case ran against a patched helper"
+      FAILED=1
+    fi
+  else
+    say "FAIL: the real case helpers could not be loaded back after the T-2 control — $(tail -1 "$WS/restore.log")"
+    FAILED=1
+  fi
+else
+  say "WITNESS-SQLSTATE-CTL: PLANT NOT ESTABLISHED — the SQLSTATE derivation could not be deleted from a copy of the helpers: $(tail -1 "$WS/patch.log")"
+  FAILED=1
+fi
+
+# ROUND 28, F-B. The witness used to be a free expression beside the statement.
+# The coordinator moved ONLY the statement's uuid and `W-2` passed at 98, with
+# the witness still true of a row the statement no longer read; round 27's arm
+# could not see it because it retargets both halves together. The subject is now
+# ONE value substituted into both, and these arms measure the divergence that
+# form is supposed to make unwritable.
+cat > "$PATCHDIR/drop-subject-bind.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = "  IF position('@SUBJECT@' in stmt) = 0 AND position(subject in stmt) = 0 THEN"
+assert s.count(b) == 1, "the statement-side binding is not where this patcher expects it"
+s = s.replace(b, "  IF false THEN", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+WB=$OUT/witness-bind
+mkdir -p "$WB"
+cat > "$WB/probe.sql" <<'SQL'
+SET search_path = p8, public;
+BEGIN;
+SET LOCAL app.tenant_id   = '11111111-1111-4111-8111-111111111111';
+SET LOCAL app.business_id = 'bbbbbbbb-0000-4000-8000-000000000001';
+-- The coordinator's A3, in the new form: the witness is about the subject and
+-- the STATEMENT has been pointed at a different row, which is the divergence.
+-- The subject is a RELATION that certainly exists, and the statement is about a
+-- DIFFERENT one that the worker certainly cannot read: the witness is true, the
+-- statement is refused, and the two are about different objects. A row-shaped
+-- version of this probe would need a fixture, and a probe that depends on a
+-- fixture it does not create measures the fixture.
+SELECT p8.case_refuses('FB-a a witness about one relation and a statement about another',
+  'SELECT count(*) FROM notification_provider_quarantine', 'permission denied',
+  $w$to_regclass(@SUBJECT@) IS NOT NULL$w$,
+  'notifications');
+ROLLBACK;
+SQL
+if "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
+             -f "$WB/probe.sql" >"$WB/probe.log" 2>&1; then
+  say "WITNESS-BIND: FAIL — a witness about one row and a statement about another was ACCEPTED, which is F-B unfixed"
+  FAILED=1
+elif grep -qF "SUBJECT NOT IN THE STATEMENT" "$WB/probe.log"; then
+  say "WITNESS-BIND: a statement that does not name its declared subject is REFUSED BY NAME (SUBJECT NOT IN THE STATEMENT), so the coordinator's A3 — move only the statement and leave the witness true — cannot be written in this form"
+else
+  say "WITNESS-BIND: FAIL — it refused, but not by SUBJECT NOT IN THE STATEMENT"
+  head -2 "$WB/probe.log" | tee -a "$OUT/run.log"; FAILED=1
+fi
+if python3 -I "$PATCHDIR/drop-subject-bind.py" "$HERE/p8-case-helpers.sql" "$WB/p8-case-helpers.sql" >"$WB/patch.log" 2>&1 \
+   && ! cmp -s "$HERE/p8-case-helpers.sql" "$WB/p8-case-helpers.sql" \
+   && "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 -f "$WB/p8-case-helpers.sql" >"$WB/load.log" 2>&1; then
+  if "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
+               -f "$WB/probe.sql" >"$WB/ctl.log" 2>&1; then
+    say "WITNESS-BIND-CTL: with the statement-side binding deleted ALONE the diverged case PASSES again — the witness true, the statement elsewhere, exactly the F-B acceptance at e6e3c6e — so that one condition is what closes it"
+  else
+    say "WITNESS-BIND-CTL: FAIL — with the binding deleted the diverged case still reddened, so the arm above is measuring something else"
+    head -2 "$WB/ctl.log" | tee -a "$OUT/run.log"; FAILED=1
+  fi
+  if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 -f "$HERE/p8-case-helpers.sql" >"$WB/restore.log" 2>&1; then
+    if "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
+                 -f "$WB/probe.sql" >"$WB/verify.log" 2>&1 \
+       || ! grep -qF "SUBJECT NOT IN THE STATEMENT" "$WB/verify.log"; then
+      say "FAIL: the real case helpers were loaded back after the F-B control but the binding did not come back with them"
+      FAILED=1
+    fi
+  else
+    say "FAIL: the real case helpers could not be loaded back after the F-B control — $(tail -1 "$WB/restore.log")"
+    FAILED=1
+  fi
+else
+  say "WITNESS-BIND-CTL: PLANT NOT ESTABLISHED — the statement-side binding could not be deleted from a copy of the helpers: $(tail -1 "$WB/patch.log")"
+  FAILED=1
+fi
+
 # THE ZERO-ROW HATCH, armed. `case_permits_rows(label, stmt, 0)` is the escape
 # for a permit that genuinely means zero. An escape nobody measures is a hole
 # with a name, so: a case DECLARING 0 whose statement affects a row must red.
@@ -2440,6 +2661,28 @@ print('rp-differs' if os.path.realpath(b) != os.path.realpath(srcdir) else 'rp-s
   # refusal to go away BY NAME; and the block itself is then held identical
   # across the three programs by bytes, so arming one copy keeps meaning
   # something about the others.
+  # ROUND 28, F-C. The control below DELETES the identity guard and then runs
+  # the program for real. `p8-plant.py` renames and deletes frozen migration
+  # files under its CURRENT DIRECTORY, and round 27's version of this arm passed
+  # the caller's cwd straight through: from the proof directory the program
+  # refused with "no migrations copy" — so the control was VACUOUS and still
+  # printed its pass, because it asserted a NEGATIVE ("no longer refused on
+  # isolation") that any other refusal satisfies — and from the repository root
+  # it renumbered all 80 frozen migrations. One arm, two defects, and the worse
+  # one was the quiet one.
+  #
+  # So each control now runs in a PRIVATE SANDBOX it creates, and asserts
+  # POSITIVELY that the program got past the isolation test and did its own
+  # work: the plant must report the rename it made, the mutant must leave a
+  # changed overlay. And after the plant control, the REPOSITORY's own frozen
+  # tree is compared against the digest taken before it ran, because the one
+  # thing F-C proved is that this gate could damage the tree it judges.
+  _psb=$ISO/plant-sandbox
+  rm -rf "$_psb"; mkdir -p "$_psb/infrastructure/database"
+  cp -r "$REPO/infrastructure/database/migrations" "$_psb/infrastructure/database/migrations"
+  cp "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" "$_psb/infrastructure/database/"
+  sandbox_marker "$_psb"
+  _frozen_before=$( (ls "$REPO/infrastructure/database/migrations"; sha256sum "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" | cut -d' ' -f1) | sha256sum | cut -d' ' -f1)
   for _prog in p8-plant.py p8-mutants.py; do
     case "$_prog" in
       p8-plant.py)   _tag=y21a; _ctl=y21b; _args="tail-renumber"; _expect="PLANT FAIL: NOT ISOLATED";;
@@ -2447,10 +2690,12 @@ print('rp-differs' if os.path.realpath(b) != os.path.realpath(srcdir) else 'rp-s
     esac
     cp "$HERE/$_prog" "$ISO/planted/$_prog"
     cp "$HERE/p8-overlay.sql" "$ISO/mut-overlay.sql"
-    # Unpatched: the bind spelling must refuse, naming the reading.
+    # Unpatched: the bind spelling must refuse, naming the reading. It refuses at
+    # IMPORT, before either program looks at a path, which is why this half is
+    # safe to run anywhere.
     _o=$ISO/$_tag.log
-    if python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" \
-               "$ISO/planted/$_prog" $_args >"$_o" 2>&1; then
+    if ( cd "$_psb" && python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" \
+               "$ISO/planted/$_prog" $_args ) >"$_o" 2>&1; then
       say "FAIL: GUARD-CTL $_tag — $_prog ran with a bind mount of its own directory on sys.path and did not refuse"
       FAILED=1
     elif grep -qF "$_expect" "$_o" && grep -q "matched by samefile" "$_o"; then
@@ -2459,22 +2704,42 @@ print('rp-differs' if os.path.realpath(b) != os.path.realpath(srcdir) else 'rp-s
       say "FAIL: GUARD-CTL $_tag — $_prog refused, but not by its own NOT ISOLATED refusal naming samefile"
       head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
     fi
-    # The attribution: that reading deleted ALONE in THIS copy.
+    # The attribution: that reading deleted ALONE in THIS copy, run in the
+    # sandbox, and required to SHOW that it got through.
     _nos2=$ISO/planted/no-samefile-$_prog
     if ! python3 -I "$PATCHDIR/drop-samefile.py" "$ISO/planted/$_prog" "$_nos2" >"$ISO/patch-$_tag.log" 2>&1; then
       say "FAIL: GUARD-CTL $_ctl — the samefile reading could not be deleted from $_prog alone, so $_tag is unattributed"
       head -2 "$ISO/patch-$_tag.log" | tee -a "$OUT/run.log"; FAILED=1
     else
       _o=$ISO/$_ctl.log
-      python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" "$_nos2" $_args >"$_o" 2>&1
+      ( cd "$_psb" && python3 -I "$PATCHDIR/with-path-entry.py" "$BINDPOINT" "$_nos2" $_args ) >"$_o" 2>&1
+      # The POSITIVE evidence, per program: work that only a program past the
+      # isolation test can have done.
+      case "$_prog" in
+        p8-plant.py)   _did=$(grep -c "^renamed [0-9]*," "$_o" || true); _what="reported the rename it planted in its sandbox";;
+        p8-mutants.py) _did=0; cmp -s "$HERE/p8-overlay.sql" "$ISO/mut-overlay.sql" || _did=1; _what="left a CHANGED overlay copy behind";;
+      esac
       if grep -qF "$_expect" "$_o"; then
         say "FAIL: GUARD-CTL $_ctl — with the samefile reading deleted from $_prog the bind spelling was STILL refused on isolation, so $_tag is not measuring that reading"
         head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
+      elif [ "$_did" != 1 ]; then
+        say "FAIL: GUARD-CTL $_ctl — with the reading deleted $_prog was not refused on isolation, but it did not $_what either, so this control asserts a NEGATIVE that any other refusal satisfies — which is exactly how it was vacuous at e6e3c6e"
+        head -2 "$_o" | tee -a "$OUT/run.log"; FAILED=1
       else
-        say "GUARD-CTL $_ctl: with the samefile reading deleted ALONE from $_prog the bind spelling is no longer refused on isolation, so that reading is this copy's own guard and not the other file's"
+        say "GUARD-CTL $_ctl: with the samefile reading deleted ALONE from $_prog the bind spelling gets PAST the isolation test and $_what in a private sandbox, so that reading is this copy's own guard and the control is not satisfied by some other refusal"
       fi
     fi
   done
+  # And the tree this gate judges is untouched by the control that deletes the
+  # guard protecting it. This is F-C stated as a measurement rather than as a
+  # promise.
+  _frozen_after=$( (ls "$REPO/infrastructure/database/migrations"; sha256sum "$REPO/infrastructure/database/MIGRATION_MANIFEST.json" | cut -d' ' -f1) | sha256sum | cut -d' ' -f1)
+  if [ "$_frozen_before" = "$_frozen_after" ]; then
+    say "ISOLATION: the repository's own frozen set is unchanged by the guard-deletion controls — the file list and the manifest digest together hash to $_frozen_after before and after, measured around the arm that renumbered all 80 of them at e6e3c6e"
+  else
+    say "FAIL: ISOLATION — the guard-deletion controls CHANGED the repository's frozen set ($_frozen_before -> $_frozen_after), which is the standing instruction this gate exists to keep"
+    FAILED=1
+  fi
   # And the block is the SAME block in all three: arming one copy says something
   # about the others only while they are identical, and a divergence is how a
   # guard quietly loses a reading in one file. The comparison is made between
@@ -2619,7 +2884,196 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# The ARM CENSUS, as a conservation law rather than a pattern in a document
+# The CENSUS's OWN arms (round 28, T-1)
+# ---------------------------------------------------------------------
+# Round 26b gave the arm count a program and called it a conservation law. The
+# eighteenth challenge measured that an ARRIVAL is refused and a DEPARTURE is
+# not: it silenced one arm's own report in this runner, changed nothing else,
+# and the gate came back `ARM CENSUS: 96 named arms` / `FAILED=0`. 97 to 96,
+# green. So the census now declares the SET and refuses in both directions, and
+# the refusals get arms of their own — because the last two rounds are a record
+# of what an unarmed guard is worth.
+cat > "$PATCHDIR/drop-census-missing.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = "    missing = [a for a in declared if a not in set(arms)]"
+assert s.count(b) == 1, "the ARM MISSING check is not where this patcher expects it"
+s = s.replace(b, "    missing = []", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+cat > "$PATCHDIR/drop-census-count.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+b = "    if len(arms) != len(declared):"
+assert s.count(b) == 1, "the count law is not where this patcher expects it"
+s = s.replace(b, "    if False:", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+cat > "$PATCHDIR/break-census-seal.py" <<'PATCH'
+import re
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+# Rename ONE declared identity and leave EXPECTED_SEAL alone, which is exactly
+# the edit the seal exists to notice.
+m = re.search(r'\n    "(GUARD-CTL y1)",', s)
+assert m, "the declared set does not hold the entry this patcher renames"
+s = s[:m.start()] + '\n    "GUARD-CTL y1x",' + s[m.end():]
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+
+CEN=$OUT/census-arms
+mkdir -p "$CEN"
+# A snapshot of THIS run's log with one arm's line removed. The snapshot is
+# mid-run, so the census arms below have not printed their own lines yet and are
+# legitimately absent from it too; what is asserted is that the departure of
+# `GUARD-CTL y20c` is REFUSED and NAMED, which is the direction that used to be
+# silent.
+# BOTH snapshots are taken at the SAME instant: the live log keeps growing as
+# the arms below print, so a "full" figure read later would differ from the
+# snapshot by every line printed in between and not by the one removed.
+cp "$OUT/run.log" "$CEN/full.log"
+grep -v "GUARD-CTL y20c:" "$CEN/full.log" > "$CEN/lost.log"
+if [ "$(wc -l < "$CEN/lost.log")" -lt "$(wc -l < "$CEN/full.log")" ]; then
+  if CEN_OUT=$(python3 -I "$HERE/p8-arm-census.py" "$CEN/lost.log" 2>&1); then
+    say "CENSUS-LOSS: FAIL — a log with one arm's line removed was accepted, so T-1 is unfixed and the count still moves down in silence"
+    FAILED=1
+  elif printf '%s' "$CEN_OUT" | grep -qF "ARM MISSING" \
+       && printf '%s' "$CEN_OUT" | grep -qF "GUARD-CTL y20c"; then
+    say "CENSUS-LOSS: a log with one arm's line removed is REFUSED BY NAME (ARM MISSING) and the refusal names GUARD-CTL y20c, so a departure now costs what an arrival costs — this is the exact state the eighteenth challenge took green at 96"
+  else
+    say "CENSUS-LOSS: FAIL — it refused, but not by ARM MISSING naming the arm that went: $(printf '%s' "$CEN_OUT" | head -1)"
+    FAILED=1
+  fi
+else
+  say "CENSUS-LOSS: PLANT NOT ESTABLISHED — no 'GUARD-CTL y20c:' line to remove from this run's log"
+  FAILED=1
+fi
+
+# THREE controls, because there are now TWO guards over a departure — the named
+# comparison and the count law — and one control over two guards measures the
+# pair (round 26's own lesson, learned from a control that had to be thrown
+# away).
+if python3 -I "$PATCHDIR/drop-census-missing.py" "$HERE/p8-arm-census.py" "$CEN/no-missing.py" >"$CEN/p1.log" 2>&1; then
+  C1=$(python3 -I "$CEN/no-missing.py" "$CEN/lost.log" 2>&1); C1RC=$?
+  if [ "$C1RC" != 0 ] && printf '%s' "$C1" | grep -qF "COUNT DISAGREES" \
+     && ! printf '%s' "$C1" | grep -qF "ARM MISSING"; then
+    say "CENSUS-LOSS-CTL-1: with the named comparison deleted ALONE the same log still reds — by COUNT DISAGREES and NOT by ARM MISSING — so the count law is a guard in its own right and this arm attributes to it"
+  else
+    say "CENSUS-LOSS-CTL-1: FAIL — with the named comparison deleted the outcome was not the count law's: rc=$C1RC $(printf '%s' "$C1" | head -1)"
+    FAILED=1
+  fi
+else
+  say "CENSUS-LOSS-CTL-1: PLANT NOT ESTABLISHED — the named comparison could not be deleted: $(tail -1 "$CEN/p1.log")"
+  FAILED=1
+fi
+if python3 -I "$PATCHDIR/drop-census-count.py" "$HERE/p8-arm-census.py" "$CEN/no-count.py" >"$CEN/p2.log" 2>&1; then
+  C2=$(python3 -I "$CEN/no-count.py" "$CEN/lost.log" 2>&1); C2RC=$?
+  if [ "$C2RC" != 0 ] && printf '%s' "$C2" | grep -qF "ARM MISSING"; then
+    say "CENSUS-LOSS-CTL-2: with the count law deleted ALONE the same log still reds by ARM MISSING, so the named comparison is a guard in its own right and CTL-1 measured one guard rather than the patcher"
+  else
+    say "CENSUS-LOSS-CTL-2: FAIL — with the count law deleted the loss was not caught by name: rc=$C2RC $(printf '%s' "$C2" | head -1)"
+    FAILED=1
+  fi
+else
+  say "CENSUS-LOSS-CTL-2: PLANT NOT ESTABLISHED — the count law could not be deleted: $(tail -1 "$CEN/p2.log")"
+  FAILED=1
+fi
+if python3 -I "$PATCHDIR/drop-census-missing.py" "$HERE/p8-arm-census.py" "$CEN/neither-a.py" >"$CEN/p3.log" 2>&1 \
+   && python3 -I "$PATCHDIR/drop-census-count.py" "$CEN/neither-a.py" "$CEN/neither.py" >>"$CEN/p3.log" 2>&1; then
+  # The figures are DERIVED, not written here: the snapshot this run produced is
+  # mid-run and legitimately shorter than the declared set, so a literal would
+  # have to be rewritten every time an arm is added — and a literal that must be
+  # rewritten is a literal that gets rewritten wrong. What is asserted is the
+  # relation: with both guards gone the lost log exits 0 and counts EXACTLY ONE
+  # arm fewer than THE SAME SNAPSHOT with the line present, which is the T-1
+  # state. Both figures come from $CEN/full.log and $CEN/lost.log, two files that
+  # differ by exactly the removed line; reading the live $OUT/run.log here would
+  # compare two different instants and make the difference the number of arms
+  # that happened to print in between.
+  C3=$(python3 -I "$CEN/neither.py" "$CEN/lost.log" 2>&1); C3RC=$?
+  C3FULL=$(python3 -I "$CEN/neither.py" "$CEN/full.log" 2>&1 | sed -n 's/^ARM CENSUS: \([0-9]*\) .*/\1/p')
+  C3LOST=$(printf '%s' "$C3" | sed -n 's/^ARM CENSUS: \([0-9]*\) .*/\1/p')
+  if [ "$C3RC" = 0 ] && [ -n "$C3FULL" ] && [ -n "$C3LOST" ] \
+     && [ "$C3LOST" = "$((C3FULL - 1))" ]; then
+    say "CENSUS-LOSS-CTL-3: with BOTH deleted the lost arm goes GREEN again and the count simply drops by one ($C3FULL -> $C3LOST, rc 0) — the exact state the eighteenth challenge measured on this gate, which is what makes the pair responsible for closing T-1"
+  else
+    say "CENSUS-LOSS-CTL-3: FAIL — with both guards deleted the loss did not reproduce as a green count one lower: rc=$C3RC full=$C3FULL lost=$C3LOST $(printf '%s' "$C3" | head -1)"
+    FAILED=1
+  fi
+else
+  say "CENSUS-LOSS-CTL-3: PLANT NOT ESTABLISHED — both guards could not be deleted from one copy: $(tail -1 "$CEN/p3.log")"
+  FAILED=1
+fi
+
+# The ARRIVAL direction had no arm either (the coordinator's P3): it measured by
+# hand that the census refuses `PROBE z1:`, and noted that with the check
+# deleted the census still printed its number and exited 0. So both directions
+# are armed, and a control attributes each.
+cat > "$PATCHDIR/drop-census-unknown.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+# Anchored on the census branch's own message, because `if unknown:` occurs
+# twice — the --seal generator has one too, and patching that one changes
+# nothing a census does.
+b = ('    if unknown:\n'
+     '        sys.stderr.write(\n'
+     '            "CENSUS FAIL: ARM LABEL UNKNOWN — these lines are arm-shaped and "')
+assert s.count(b) == 1, "the unknown-label check is not where this patcher expects it"
+s = s.replace(b, b.replace("    if unknown:", "    if False:", 1), 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+{ cat "$OUT/run.log"; echo "[$RUN] PROBE z1: an arm-shaped line whose label nothing declares"; } > "$CEN/arrived.log"
+CU=$(python3 -I "$HERE/p8-arm-census.py" "$CEN/arrived.log" 2>&1); CURC=$?
+if [ "$CURC" != 0 ] && printf '%s' "$CU" | grep -qF "ARM LABEL UNKNOWN" \
+   && printf '%s' "$CU" | grep -qF "PROBE z1"; then
+  say "CENSUS-UNKNOWN: an arm-shaped line whose label nothing declares is REFUSED BY NAME (ARM LABEL UNKNOWN) and the refusal quotes it, so a new arm family cannot be added without this census being told"
+else
+  say "CENSUS-UNKNOWN: FAIL — an undeclared arm-shaped label was not refused by name: rc=$CURC $(printf '%s' "$CU" | head -1)"
+  FAILED=1
+fi
+if python3 -I "$PATCHDIR/drop-census-unknown.py" "$HERE/p8-arm-census.py" "$CEN/no-unknown.py" >"$CEN/p5.log" 2>&1; then
+  CU2=$(python3 -I "$CEN/no-unknown.py" "$CEN/arrived.log" 2>&1); CU2RC=$?
+  # What is asserted is that the ARRIVAL stops being refused BY NAME. The
+  # snapshot is mid-run, so the departure guards legitimately red on it for a
+  # reason of their own; the attribution is that with this one check deleted the
+  # undeclared label is named NOWHERE — invisible again, which is what it was
+  # before round 26b.
+  if ! printf '%s' "$CU2" | grep -qF "ARM LABEL UNKNOWN" \
+     && ! printf '%s' "$CU2" | grep -qF "PROBE z1"; then
+    say "CENSUS-UNKNOWN-CTL: with that check deleted ALONE the undeclared label is named NOWHERE in the output (rc=$CU2RC, and what reds instead is the unrelated mid-run departure) — it is invisible again, which is the state the coordinator measured by hand and what makes the refusal above load-bearing"
+  else
+    say "CENSUS-UNKNOWN-CTL: FAIL — with the unknown-label check deleted the undeclared label was STILL named, so the arm above is not measuring that check: rc=$CU2RC $(printf '%s' "$CU2" | head -1)"
+    FAILED=1
+  fi
+else
+  say "CENSUS-UNKNOWN-CTL: PLANT NOT ESTABLISHED — the unknown-label check could not be deleted: $(tail -1 "$CEN/p5.log")"
+  FAILED=1
+fi
+
+# And the seal: an edit to the declared set that does not re-seal must be
+# refused BEFORE the log is read, by a DIFFERENT name, so that the two
+# conditions cannot be confused for each other.
+if python3 -I "$PATCHDIR/break-census-seal.py" "$HERE/p8-arm-census.py" "$CEN/unsealed.py" >"$CEN/p4.log" 2>&1 \
+   && ! cmp -s "$HERE/p8-arm-census.py" "$CEN/unsealed.py"; then
+  C4=$(python3 -I "$CEN/unsealed.py" "$OUT/run.log" 2>&1); C4RC=$?
+  if [ "$C4RC" != 0 ] && printf '%s' "$C4" | grep -qF "SEAL BROKEN" \
+     && ! printf '%s' "$C4" | grep -qF "ARM MISSING"; then
+    say "CENSUS-SEAL: one declared identity renamed and the digest left alone is refused by SEAL BROKEN, and NOT by ARM MISSING, so the seal is read before the log and the two refusals name different things"
+  else
+    say "CENSUS-SEAL: FAIL — an unsealed edit to the declared set was not refused by SEAL BROKEN: rc=$C4RC $(printf '%s' "$C4" | head -1)"
+    FAILED=1
+  fi
+else
+  say "CENSUS-SEAL: PLANT NOT ESTABLISHED — the declared set could not be edited in a copy: $(tail -1 "$CEN/p4.log")"
+  FAILED=1
+fi
+
+# ---------------------------------------------------------------------
+# The ARM CENSUS, now a set and not only a count
 # ---------------------------------------------------------------------
 # Round 26: ten new arms ran and the published `grep` pattern reported the same
 # 74 as the round before, because the pattern has no `VACUITY` alternative and

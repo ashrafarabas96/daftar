@@ -93,7 +93,11 @@ SELECT p8.case_refuses('A7 the app may not become the platform',
                        'SET ROLE daftar_platform', 'permission denied to set role',
                        -- S-5: the subject is the ROLE. If `daftar_platform` did not exist the
                        -- refusal would still arrive, and would mean something else entirely.
-                       $w$EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'daftar_platform')$w$);
+                       -- ROUND 28, F-B: the subject is declared ONCE and substituted into both
+                       -- halves, so the witness cannot be true of something the statement does
+                       -- not name. The statement carries the role's text verbatim.
+                       $w$EXISTS (SELECT 1 FROM pg_roles WHERE rolname = @SUBJECT@)$w$,
+                       'daftar_platform');
 
 -- ---- A8: back in scope, the row is still there ----
 -- A guard against the shape of failure where an isolation suite passes because
@@ -114,7 +118,8 @@ SELECT p8.case_refuses('A10 the app may not read unattributed events',
                        'permission denied for table notification_provider_quarantine',
                        -- S-5: the subject is the RELATION. A refusal to read a table that is
                        -- not there reads the same as a refusal to read one that is.
-                       $w$to_regclass('notification_provider_quarantine') IS NOT NULL$w$);
+                       $w$to_regclass(@SUBJECT@) IS NOT NULL$w$,
+                       'notification_provider_quarantine');
 
 -- ---- A11: the SETTINGS relation is isolated, measured and not merely asserted ----
 -- ROUND 12, R-4. The overlay's §7 asserts that every tenant-scoped relation is

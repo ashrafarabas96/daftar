@@ -62,10 +62,20 @@
 #     unexercised refusals. It put 23 in one group and 16 in "accepted paths or
 #     catalogue censuses", but four of those sixteen are `case_refuses` —
 #     `I8e-a`, `I8e-d`, `I9a1-c` and `I9c1` — so a reader counting refusals got
-#     23 where the number is **27**. Classifying by the helper each case calls,
-#     rather than by what its label reads like, the forty-five are: **27
-#     refusals that nothing exercises** (23 naming a constraint the overlay
-#     carries, 4 naming none), **8 accepted paths**, **4 catalogue censuses**,
+#     23 where the number is 27. **ROUND 28 CORRECTION** (the eighteenth
+#     challenge's T-3): that figure was still one too many, and in the same
+#     direction as the defect it fixed — by reading a GROUP rather than each
+#     case's helper. `I1b-a` ("an ISO occurrence with colons",
+#     `retired/p8-ddl-cases.sql:50`) sits in the group of 23 and is a
+#     `case_permits`: an ACCEPTED PATH, under a heading that says "refusal
+#     UNMEASURED" about a case with no refusal in it. Re-measured by grepping
+#     the helper each of the forty-five calls, one at a time: the group of 23
+#     holds 22 `case_refuses` and that one `case_permits`, and the group of 16
+#     holds 4 `case_refuses` (`I8e-a`, `I8e-d`, `I9a1-c`, `I9c1` — each with a
+#     label that reads like a transition), 8 `case_permits` and 4 `case_equals`.
+#     So the forty-five are: **26
+#     refusals that nothing exercises** (22 naming a constraint the overlay
+#     carries, 4 naming none), **9 accepted paths**, **4 catalogue censuses**,
 #     **4** naming a principal the frozen role set does not contain (`G-5` with
 #     `H-1`/`H-2`/`H-4`), and **2** grant censuses on the app role. Each of the fifty-five is named, one by one, in
 #     `P8-HANDOFF-MANIFEST.md`, section "THE RETIRED IDS, ONE BY ONE". A
@@ -84,13 +94,14 @@ echo "         quarantine H-3* as the real daftar_worker, with mutants 14 and 15
 echo "         (round 24)." >&2
 echo "         NOT covered, UNMEASURED at runtime: H-1, H-2, H-4 — they are rules" >&2
 echo "         about a WEBHOOK principal and the frozen role set has no such role." >&2
-echo "         THE COUNT (round 25; corrected round 27): of the 93 case ids declared" >&2
-echo "         here, 56 have no live counterpart by name. One of the 56 is not an" >&2
+echo "         THE COUNT (round 25; corrected in rounds 27 and 28): of the 93" >&2
+echo "         case ids declared here, 56 have no live counterpart by name." >&2
+echo "         One of the 56 is not an" >&2
 echo "         id but the loop-constructed family 'I1b-' || (i+1), which a static" >&2
 echo "         scan cannot enumerate, so the table names 55. TEN are carried," >&2
 echo "         FORTY-FIVE are not:" >&2
-echo "         27 REFUSALS that nothing exercises (23 naming a constraint the" >&2
-echo "         overlay carries, 4 naming none), 8 accepted paths, 4 catalogue" >&2
+echo "         26 REFUSALS that nothing exercises (22 naming a constraint the" >&2
+echo "         overlay carries, 4 naming none), 9 accepted paths, 4 catalogue" >&2
 echo "         censuses, 4 with no live principal, 2 grant censuses on the app" >&2
 echo "         role. Every one is named in" >&2
 echo "         P8-HANDOFF-MANIFEST.md, 'THE RETIRED IDS, ONE BY ONE'." >&2

@@ -40,7 +40,8 @@ SELECT p8.case_equals('P4b and every membership, with no business scope',
 SELECT p8.case_refuses('P4c but it may not read a customer at all',
   'SELECT count(*) FROM customers', 'permission denied for table customers',
   -- S-5: the subject is the frozen `customers` relation, which this pack does not create.
-  $w$to_regclass('public.customers') IS NOT NULL$w$);
+  $w$to_regclass('public.' || @SUBJECT@) IS NOT NULL$w$,
+  'customers');
 
 -- The Phase 8 worker needs the customer's phone and locale, and the customer's
 -- row is the only place they are. It has no grant for them, and neither has the

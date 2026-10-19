@@ -168,6 +168,25 @@ import shutil
 MDIR = os.path.join("infrastructure", "database", "migrations")
 MPATH = os.path.join("infrastructure", "database", "MIGRATION_MANIFEST.json")
 
+# ROUND 28, F-C — THE WORST DEFECT THIS PHASE HAS FOUND IN ITS OWN APPARATUS.
+# This program renames and deletes files under the CURRENT DIRECTORY, and it had
+# nothing but the identity guard above between it and a real tree. The arm that
+# deletes that guard (`y21b`) then ran it with the caller's cwd: from the
+# repository root the coordinator's review measured the first run at rc 0, with
+# **the 80 frozen migrations renumbered and MIGRATION_MANIFEST.json rewritten**,
+# and the second run at rc 1 because the boundary had moved. The frozen set is
+# BYTE-IMMUTABLE by standing instruction — including for mutation testing — so a
+# guard-deletion control that can reach it is not a control, it is the failure
+# it was built to prevent.
+#
+# A plant therefore operates ONLY on a tree that DECLARES ITSELF disposable.
+# The marker is positive and the refusal is by name: no marker, no plant, and a
+# caller that forgot to make a copy is told so instead of modifying the one
+# tree that must never change. The runner writes this file into every copy it
+# makes; the repository does not contain it and must not.
+SANDBOX = os.path.join("infrastructure", "database", ".p8-sandbox")
+SANDBOX_TOKEN = "P8 PLANT SANDBOX — a disposable copy; this file is never committed"
+
 
 def load():
     with open(MPATH, encoding="utf-8") as fh:
@@ -230,5 +249,22 @@ if __name__ == "__main__":
         sys.exit(2)
     if not os.path.isdir(MDIR) or not os.path.isfile(MPATH):
         sys.stderr.write("refusing: no migrations copy in %s\n" % os.getcwd())
+        sys.exit(2)
+    # The sandbox requirement, BEFORE anything is renamed or removed.
+    try:
+        with open(SANDBOX, encoding="utf-8") as fh:
+            declared = fh.read().strip()
+    except OSError:
+        declared = None
+    if declared != SANDBOX_TOKEN:
+        sys.stderr.write(
+            "PLANT FAIL: NOT A SANDBOX — this program renames and deletes "
+            "frozen migration files, and the tree at " + os.getcwd() + " does "
+            "not declare itself a disposable copy: " + SANDBOX + " is "
+            + ("absent" if declared is None else "present but does not carry the token")
+            + ". The frozen set is byte-immutable, including for mutation "
+              "testing, so a plant refuses rather than trusts its working "
+              "directory (round 28, F-C: a guard-deletion arm ran this from the "
+              "repository root and renumbered all 80 frozen migrations)\n")
         sys.exit(2)
     PLANTS[sys.argv[1]]()

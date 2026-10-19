@@ -381,6 +381,31 @@ def widen_worker_update_grant(s):
     return s.replace(old, "GRANT UPDATE ON notifications TO daftar_worker;", 1)
 
 
+
+def tighten_event_once(s):
+    """Add NULLS NOT DISTINCT to `provider_statuses_event_once`.
+
+    ROUND 28. This mutant is the odd one in the table: it does not WEAKEN the
+    overlay, it simulates the OWNER'S DECISION on `OD-P8-NULL-EVENT`. The
+    constraint is `UNIQUE (provider, provider_event_id)` on a nullable column,
+    PostgreSQL treats NULLs as DISTINCT, and so two landings that carry no
+    provider event id both insert. Round 27 wrote that gap down in the overlay
+    and left the decision to the owner, which stands. The eighteenth challenge
+    pointed out what was missing: nothing ASSERTED the present behaviour, so the
+    day the constraint is tightened the paragraph would quietly become false.
+
+    `G-NULL-a`/`G-NULL-b`/`G-NULL-c` now record it, and this mutant is what
+    makes them load-bearing: tighten the constraint and `G-NULL-b` must red by
+    name, which sends whoever tightened it to the prose that has to change.
+    """
+    old = "CONSTRAINT provider_statuses_event_once UNIQUE (provider, provider_event_id)"
+    assert old in s, "the event-once constraint was not found in the shape this mutant edits"
+    return s.replace(
+        old,
+        "CONSTRAINT provider_statuses_event_once UNIQUE NULLS NOT DISTINCT (provider, provider_event_id)",
+        1)
+
+
 MUTANTS = {
     "1":  [drop_restrictive],
     "1b": [drop_restrictive, blind_sec7],
@@ -402,6 +427,7 @@ MUTANTS = {
     "13":  [drop_arrival_release_term],
     "14":  [drop_status_monotonic],
     "15":  [widen_worker_update_grant],
+    "16":  [tighten_event_once],
 }
 
 

@@ -482,4 +482,43 @@ SELECT p8.case_equals('I8f-e the partial index still carries the arrival conjunc
      AND indexname = 'deliveries_one_live_channel'
      AND indexdef LIKE '%NOT arrival_ever_recorded%'), 1::bigint);
 
+-- ---------------------------------------------------------------------
+-- THE NAMED GAP, UNDER AN INSTRUMENT (round 28, the eighteenth challenge)
+-- ---------------------------------------------------------------------
+-- `provider_statuses_event_once` is `UNIQUE (provider, provider_event_id)` on a
+-- NULLABLE column, and PostgreSQL treats NULLs as DISTINCT, so two landings
+-- that carry no provider event id both insert. Round 27 named that gap in a
+-- comment in the overlay and left the decision to the owner, which is right and
+-- stays right: tightening it has a real consequence for a provider that omits
+-- the field.
+--
+-- What round 27 did NOT do is put an instrument under the sentence. By this
+-- project's own rule a named exception is itself a CLAIM and must go red when it
+-- stops being true, and nothing here asserted the present behaviour: no live
+-- case touched this constraint and no mutant aimed at it, so the day someone
+-- adds `NULLS NOT DISTINCT` or makes the column NOT NULL, the paragraph in the
+-- overlay would quietly become false and no run would say so.
+--
+-- These three cases RECORD the gap; they do not endorse it. If the owner
+-- tightens the constraint, `G-NULL-b` reds and whoever tightened it has to come
+-- here and rewrite the prose — which is the whole point of writing the claim
+-- down where it costs something.
+SELECT p8.case_permits('G-NULL-a a landing that carries NO provider event id is accepted', $q$
+  INSERT INTO notification_provider_statuses (id, tenant_id, business_id, delivery_id, provider,
+                                              provider_message_id, status, verification)
+  VALUES ('0bbbbbbb-0000-4000-8000-0000000000f1',
+          '11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0ddddddd-0000-4000-8000-0000000000f1', 'meta_cloud', 'wamid.n6a', 'delivered', 'verified')
+$q$);
+SELECT p8.case_permits('G-NULL-b and a SECOND one is accepted too — NULLs are DISTINCT, so "event once" means once per event id THAT EXISTS', $q$
+  INSERT INTO notification_provider_statuses (id, tenant_id, business_id, delivery_id, provider,
+                                              provider_message_id, status, verification)
+  VALUES ('0bbbbbbb-0000-4000-8000-0000000000f2',
+          '11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
+          '0ddddddd-0000-4000-8000-0000000000f1', 'meta_cloud', 'wamid.n6a', 'read', 'verified')
+$q$);
+SELECT p8.case_equals('G-NULL-c and both are there, which is the gap stated as a number', (
+  SELECT count(*) FROM notification_provider_statuses
+   WHERE provider = 'meta_cloud' AND provider_event_id IS NULL), 2::bigint);
+
 ROLLBACK;
