@@ -46,42 +46,29 @@ on these bytes.
 """
 from __future__ import annotations
 
-# ROUND 26, THE CHALLENGER'S F-46, AND ROUND 27, THE COORDINATOR'S R-1.
-# Subprocesses inherit the environment, so a PYTHONPATH that shadows a stdlib
-# module changes what the tools compute: with a twenty-line `hashlib.py` on the
-# path, writing then sealing gave rc 0 over a table of twenty-four all-zero
-# digests. `-I` (isolated) ignores PYTHONPATH, PYTHONHOME and the user site
-# directory, so this tool re-execs ITSELF isolated rather than trusting its
-# caller to remember a flag, and passes `-I` to every child.
+# B-9, round 27. This tool must run ISOLATED: `python3 -I tools/seal-check-run.py`.
+# Without `-I`, the interpreter puts `PYTHONPATH` and the user site directory on
+# `sys.path` BEFORE any line here runs, so a shadowed stdlib module — or a
+# `sitecustomize.py`, which `site` imports at startup — decides what this tool
+# computes, in a tool whose whole purpose is to be the thing a reader does not
+# have to trust.
 #
-# R-1: round 26 put that re-exec BELOW the imports, so a shadowed `datetime`,
-# `subprocess` or `re` was imported — and its top-level code EXECUTED — before
-# the process replaced itself.
-#
-# Measured, and narrower than it first looks, which is why it is stated rather
-# than dramatised: `execv` discards everything the pre-exec process imported,
-# so the shadow could NOT change a sealed figure. A `datetime.py` returning
-# 2099 left no 2099 string anywhere in the record, at either version. What it
-# could do is RUN: a shadow that writes a file and raises executed once and
-# took the tool down at rc 1 (round 26), and executes zero times now. That is
-# the whole of R-1 — an arbitrary-code window, not a wrong number — and the
-# fix costs three lines. The check is now
-# the FIRST statement after the `__future__` directive, which must by language
-# rule come first, and it uses only `sys` (a builtin module) and `posix` (also
-# builtin), never `os`, because `os` is an ordinary stdlib file and is exactly
-# as shadowable as the modules this is defending. `-I` sets
-# `sys.flags.isolated`, so the re-exec happens at most once and cannot loop.
-#
-# What this does NOT cover, named rather than implied: `__future__` itself is
-# imported before the check by language rule, and the interpreter named by
-# `sys.executable` is whatever invoked this file.
+# It REFUSES rather than re-execing itself with `-I`. Round 27's first attempt
+# re-exec'd, which re-reads this file from disk: code that has already lost the
+# startup race can rewrite the exec target, and the isolated process then runs
+# the attacker's file while LOOKING clean. A refusal cannot be redirected.
+# `sys` is a builtin module, so this guard cannot itself be shadowed; it stands
+# above every other import so nothing else is loaded before the check.
 import sys
 
-if not sys.flags.isolated:  # pragma: no cover - the isolated process runs the rest
-    import posix
+if not sys.flags.isolated:
+    raise SystemExit(
+        "refusing to run without -I: run `python3 -I tools/seal-check-run.py`. "
+        "Without isolation PYTHONPATH and the user site directory are on sys.path "
+        "before this file is read, so what this tool computes is not this tool's."
+    )
 
-    _self = __file__ if __file__.startswith("/") else posix.getcwd() + "/" + __file__
-    posix.execv(sys.executable, [sys.executable, "-I", _self, *sys.argv[1:]])
+
 
 
 import argparse
@@ -89,8 +76,6 @@ import datetime
 import io
 import re
 import subprocess
-import os
-import sys
 from pathlib import Path
 
 
