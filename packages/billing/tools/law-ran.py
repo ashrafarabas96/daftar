@@ -146,12 +146,75 @@ PINNED_TEST_SCRIPT = "vitest run && python3 -I tools/law-ran.py"
 # says so.
 REFUSED_NPM_CONFIG = "REFUSED-NPM-CONFIG-PRESENT"
 
+# ROUND 54, THE CHALLENGER'S ASK on round 53's §4 caveat. The no-report case used
+# to refuse with "the suite wrote no report", which is TRUE of a replaced runner,
+# of a broken install and of a node the suite cannot run on alike -- the
+# challenger hit it with a vitest shim, could not tell which of the three it had,
+# and said so in the report rather than claim the refusal was the shim's. A
+# refusal that covers three causes tells a reader only that the run died. So the
+# case has its own NAME, and the message carries the three things that tell the
+# causes apart: the PROGRAM this step resolved and started, its exit code, and
+# the tail of its stderr. The name does not claim WHICH cause it was -- nothing
+# here can know that -- it says that the program this step started produced no
+# report, which is the fact this step measured.
+REFUSED_RUNNER_NO_REPORT = "REFUSED-RUNNER-WROTE-NO-REPORT"
+
+# ROUND 54, THE COORDINATOR'S CD-53-01 (P1, a fail-open of the terminus this
+# phase nominates for CI). The runner was resolved by PATH ON DISK, which bounds
+# WHICH program runs and says nothing about WHO WROTE IT. `node_modules` is
+# gitignored, but ignored is not untrackable: one `git add -f` of a nine-line
+# stub at `packages/billing/node_modules/vitest/vitest.mjs` wrote a fabricated
+# report and made THIS step print `26 law cases ran inside 303 total, 0 skipped,
+# 0 failed` at rc 0 with a plant present. Root `npm ci` does not remove it,
+# because this package is not a workspace, so the committed file sat outside the
+# declared "node_modules is bounded by npm ci" limit. Reproduced independently
+# in a fresh clone of `3a29afc` before the fix.
+#
+# Two refusals follow, both by name. An installed tree is NEVER committed, so
+# Git tracking anything under either `node_modules` is refused; and the runner
+# this step is about to start is refused if Git tracks it, whatever path it sits
+# at. Git being unreadable is refused too -- fail on ABSENCE, never skip what
+# cannot be classified.
+REFUSED_TRACKED_NODE_MODULES = "REFUSED-TRACKED-NODE-MODULES"
+REFUSED_TRACKED_RUNNER = "REFUSED-TRACKED-RUNNER"
+REFUSED_GIT_NOT_READABLE = "REFUSED-GIT-NOT-READABLE"
+
+# The pinned git invocation: an ABSOLUTE program, a `/usr/bin` PATH, replace
+# objects disabled, and an environment with no `GIT_*` of its own, because
+# `GIT_DIR` beats any directory handed in. Absent git is a named refusal.
+GIT = "/usr/bin/git"
+GIT_ENV = {"PATH": "/usr/bin", "GIT_NO_REPLACE_OBJECTS": "1"}
+
+
+def git_lines(cwd: Path, *args: str) -> "list[str]":
+    """Run git in `cwd` and return its NUL-separated answer, or refuse by name."""
+    if not Path(GIT).is_file():
+        refuse(f"{REFUSED_GIT_NOT_READABLE}: no git at {GIT}, so this step cannot say whether a file is committed")
+    done = subprocess.run(
+        [GIT, "--no-replace-objects", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=GIT_ENV,
+    )
+    if done.returncode != 0:
+        refuse(
+            f"{REFUSED_GIT_NOT_READABLE}: `git {' '.join(args)}` in {cwd} exited {done.returncode}, so this step "
+            f"cannot say whether a file is committed: {done.stderr.strip()[-300:]!r}"
+        )
+    return [entry for entry in done.stdout.split("\0") if entry]
+
 # The literal counts. A count stated as a law is tested as a function, and a
 # count stated as a number must be the number -- "more than zero tests ran" is
 # the kind of bound this phase has been burned by four times. Change these in
 # the same commit that changes the law's tests, with the reason in the message.
 EXPECTED: dict[str, int] = {
-    "test/tool-commands-are-isolated.test.ts": 25,
+    # 25 -> 26 at round 54: the law gains the CD-53-01/R53-03 case, which
+    # refuses a Git-tracked path under either `node_modules` and twins the
+    # environment half of CD-52-01. The number changes in the same commit as
+    # the case, with the reason in the message.
+    "test/tool-commands-are-isolated.test.ts": 26,
     "test/law-bytes-are-pinned.test.ts": 1,
 }
 
@@ -179,13 +242,59 @@ def main() -> int:
     # something this file can close. The variable is checked and not the whole
     # `npm_config_*` family, because npm sets several of them on every script
     # run and refusing those would refuse every legitimate invocation.
-    for var in ("npm_config_script_shell", "npm_config_shell"):
+    # R53-02 (the coordinator's P3): npm honours `NPM_CONFIG_SCRIPT_SHELL` as
+    # well as the lower-case spelling, so the keys are matched WITHOUT CASE and
+    # with `-` normalised to `_`. The two names are still the subject; the
+    # spelling is not.
+    #
+    # R52-S1 (the challenger's P2), SAID HERE RATHER THAN THREE PARAGRAPHS AWAY:
+    # this check cannot fire where the variable does its damage. Set through
+    # `npm test`, the variable stops this step from running at all, so the only
+    # invocation it can refuse is a DIRECT one -- where no npm sits between the
+    # command and this step and the variable is already harmless. It is kept
+    # because a direct run is the terminus this phase nominates for CI and a
+    # named refusal there is worth more than silence; what actually bounds the
+    # npm path is PATCH-REQ-P5-001.
+    for var in [
+        key
+        for key in os.environ
+        if key.lower().replace("-", "_") in ("npm_config_script_shell", "npm_config_shell")
+    ]:
         if os.environ.get(var):
             refuse(
                 f"{REFUSED_NPM_CONFIG}: {var}={os.environ[var]!r} is set in this step's environment. "
                 "That replaces the shell npm hands every script to, exactly as `script-shell` in an .npmrc does, "
                 "so the pinned command would be handed to a program of someone else's choosing"
             )
+
+    # R52-S2 (the challenger's P3): two more config sources carry the same
+    # override -- `npm_config_userconfig` and `npm_config_globalconfig`, in
+    # either case. Their PRESENCE cannot be the subject, because npm sets both
+    # itself on every script run (measured by the challenger: `/root/.npmrc` and
+    # the node prefix's `etc/npmrc`), so refusing presence would refuse every
+    # legitimate invocation. The VALUE is the subject instead: the file those
+    # variables name may not carry a `script-shell` line. That is the same shape
+    # as the file check below and refuses none of npm's own defaults.
+    for var in [
+        key
+        for key in os.environ
+        if key.lower().replace("-", "_") in ("npm_config_userconfig", "npm_config_globalconfig")
+    ]:
+        named = Path(os.environ[var]).expanduser() if os.environ.get(var) else None
+        if named is None or not named.is_file():
+            continue
+        try:
+            text = named.read_text(errors="replace")
+        except OSError as exc:
+            refuse(f"{REFUSED_NPM_CONFIG}: {var}={named} cannot be read, so this step cannot say what it configures: {exc}")
+        for line in text.splitlines():
+            key = line.split("=", 1)[0].strip().lower().replace("_", "-")
+            if key in ("script-shell", "shell"):
+                refuse(
+                    f"{REFUSED_NPM_CONFIG}: {var} names {named}, which sets {key!r}. That replaces the shell npm "
+                    "hands every script to, from a file outside the two this step checks, so the pinned command "
+                    "would be handed to a program of someone else's choosing"
+                )
 
     # CD-52-01: no npm configuration may stand between the pinned command and
     # the shell that runs it. Checked here as well as in the law, so neither is
@@ -228,6 +337,33 @@ def main() -> int:
     runner = next((c for c in candidates if c.is_file()), None)
     if runner is None:
         refuse("no vitest entry at " + " or ".join(str(c) for c in candidates) + ", so this step could not run the suite at all")
+
+    # CD-53-01, first half: Git tracks nothing under either `node_modules`.
+    for where in (package, package.parent.parent):
+        tracked = git_lines(where, "ls-files", "-z", "--", "node_modules")
+        if tracked:
+            refuse(
+                f"{REFUSED_TRACKED_NODE_MODULES}: Git tracks {len(tracked)} path(s) under "
+                f"{where / 'node_modules'}, the first being {tracked[0]!r}. An installed tree is never committed, "
+                "and a committed file there can BE the runner this step starts, fabricating these very figures at "
+                "rc 0 with no npm ci able to remove it"
+            )
+
+    # CD-53-01, second half, and it does not depend on the path: the program
+    # this step is about to start must not be a file Git tracks, wherever it
+    # sits. The census above is the SET; this is the one file that decides what
+    # the figures mean.
+    # The path is RESOLVED first, because `node_modules` can be a symlink into
+    # a directory that IS tracked under another name -- there the census above
+    # sees nothing and only the real path tells the truth.
+    real_runner = runner.resolve()
+    if git_lines(package.parent.parent, "ls-files", "-z", "--", str(real_runner)):
+        refuse(
+            f"{REFUSED_TRACKED_RUNNER}: the runner this step resolved, {runner} (really {real_runner}), "
+            "is tracked by Git. "
+            "A committed runner is a program a reader of the diff chose, not the one `npm ci` installed, and it can "
+            "write whatever report it likes"
+        )
 
     # `node` itself cannot be PINNED by a file in this repository (see the
     # remaining limit in this module's docstring), but the directories it is
@@ -285,7 +421,14 @@ def main() -> int:
             },
         )
         if not out.is_file():
-            refuse(f"the suite wrote no report (rc {done.returncode}); last stderr: {done.stderr.strip()[-400:]!r}")
+            refuse(
+                f"{REFUSED_RUNNER_NO_REPORT}: the program this step started wrote no report. "
+                f"Program: {node} {runner}; exit code {done.returncode}; "
+                f"last stderr: {done.stderr.strip()[-400:]!r}. "
+                "A runner replaced by a stand-in, an install that cannot run, and a node this suite "
+                "does not support all reach this line; the exit code and the stderr above are what "
+                "tell them apart, and this step does not guess which it was"
+            )
         try:
             report = json.loads(out.read_text())
         except json.JSONDecodeError as exc:

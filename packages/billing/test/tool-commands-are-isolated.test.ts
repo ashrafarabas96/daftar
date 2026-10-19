@@ -283,6 +283,25 @@ const REFUSED_NPM_CONFIG = 'REFUSED-NPM-CONFIG-PRESENT';
  */
 const REFUSED_REPO_HEAD_NOT_READABLE = 'REFUSED-REPO-HEAD-NOT-READABLE';
 
+/**
+ * ROUND 54, THE COORDINATOR'S CD-53-01 (P1, a fail-open of the named terminus).
+ * The gate resolved its runner at `node_modules/vitest/vitest.mjs` under the
+ * package FIRST, and `node_modules` is gitignored -- but ignored is not
+ * untrackable. One `git add -f` of a nine-line stub that writes a fabricated
+ * report made `python3 -I tools/law-ran.py` print `26 law cases ran inside 303
+ * total, 0 skipped, 0 failed` and exit 0 with a plant present, and root
+ * `npm ci` does NOT remove it, because this package is not a workspace. So the
+ * committed file sat OUTSIDE the declared "node_modules is bounded by npm ci"
+ * limit, and it defeated the one check this phase nominates for CI.
+ *
+ * What is required is that Git tracks NOTHING under either `node_modules`: an
+ * installed tree is never committed, so an empty `git ls-files` there is the
+ * honest invariant, and anything in it is a file someone forced into history.
+ * Git being unreadable is refused by name too -- fail on ABSENCE.
+ */
+const REFUSED_TRACKED_NODE_MODULES = 'REFUSED-TRACKED-NODE-MODULES';
+const REFUSED_GIT_NOT_READABLE = 'REFUSED-GIT-NOT-READABLE';
+
 /** The pinned author-owned set, read from the repository and not from the pack. */
 const pinnedPackSet = (): string[] => {
   const raw = JSON.parse(readFileSync(join(__dirname, '..', 'tools', 'pack-set.json'), 'utf8')) as { names?: unknown };
@@ -2932,6 +2951,79 @@ describe('every written invocation of the pack tools is isolated', () => {
       [...UNREAD_DIRS],
       'the list of directories this law does not read has changed: a subtree has been exempted, which is a claim in the diff',
     ).toStrictEqual(['.git', 'node_modules', 'dist', '.next']);
+  });
+
+  it('CD-53-01/R53-03: Git tracks nothing under node_modules, and no npm shell override reaches this run', () => {
+    // The runner the gate starts is resolved by PATH under the package, which
+    // bounds WHICH program runs and says nothing about WHO WROTE IT. A
+    // force-committed `packages/billing/node_modules/vitest/vitest.mjs` is
+    // immune to `npm ci` here (this package is not a workspace), survives a
+    // fresh clone, and fabricates the gate's own figures. This arm refuses the
+    // only honest invariant: an installed tree is not committed.
+    //
+    // F-61 holds: every argument reaching `spawnSync` is a literal or a path
+    // this file computed. Nothing a document supplies is passed. The git
+    // invocation is the pinned one -- absolute program, `/usr/bin` PATH only,
+    // replace objects disabled, and no inherited `GIT_*` reaching it, because
+    // `GIT_DIR` would beat any directory given.
+    for (const where of [join(__dirname, '..'), REPO]) {
+      const probe = spawnSync('/usr/bin/git', ['--no-replace-objects', 'ls-files', '-z', '--', 'node_modules'], {
+        cwd: where,
+        encoding: 'utf8',
+        env: { PATH: '/usr/bin', GIT_NO_REPLACE_OBJECTS: '1' },
+        timeout: 60_000,
+      });
+      expect(
+        probe.status,
+        `${REFUSED_GIT_NOT_READABLE}: \`git ls-files -- node_modules\` in ${where} did not answer (status ${String(probe.status)}), so this arm cannot say whether a runner was committed: ${JSON.stringify((probe.stderr ?? '').trim().slice(0, 200))}`,
+      ).toBe(0);
+      const tracked = (probe.stdout ?? '').split('\0').filter((entry) => entry.length > 0);
+      expect(
+        tracked,
+        `${REFUSED_TRACKED_NODE_MODULES}: Git tracks ${tracked.length} path(s) under ${join(where, 'node_modules')}. An installed tree is never committed, and a committed file there can BE the runner this phase's gate starts: one such stub fabricates the gate's figures at rc 0 and no \`npm ci\` removes it (CD-53-01). If a path there must be tracked, that is a reviewed change and this arm changes with it`,
+      ).toStrictEqual([]);
+    }
+
+    // R53-03: the env half of CD-52-01 had a single reader, `tools/law-ran.py`.
+    // This is its twin, so neither is the only reader -- and it is matched
+    // case-INSENSITIVELY, because npm honours `NPM_CONFIG_SCRIPT_SHELL` as
+    // well as the lower-case spelling (R53-02). npm's own per-script variables
+    // are not refused, only the two that replace the shell.
+    //
+    // R52-S1, said here rather than elsewhere: set through `npm test`, that
+    // variable stops this suite from being run at all, so this arm can only
+    // ever refuse an invocation where no npm stands between the command and
+    // the run -- which is where the variable is already harmless. What bounds
+    // the npm path is a CI step that calls the gate directly
+    // (PATCH-REQ-P5-001), not this arm.
+    //
+    // R52-S2: `npm_config_userconfig` and `npm_config_globalconfig` carry the
+    // same override from a file elsewhere, and npm sets BOTH itself on every
+    // script run, so their presence cannot be refused. Their VALUE is checked
+    // instead -- the file they name may not set `script-shell` -- which is the
+    // same shape as the `.npmrc` arm above and refuses none of npm's defaults.
+    const shellOverrides = Object.keys(process.env).filter((key) =>
+      ['npm_config_script_shell', 'npm_config_shell'].includes(key.toLowerCase().replace(/-/g, '_')),
+    );
+    expect(
+      shellOverrides,
+      `${REFUSED_NPM_CONFIG}: ${shellOverrides.join(', ')} is set in this run's environment. That replaces the shell npm hands every script to, exactly as \`script-shell\` in an .npmrc does, so the pinned command would be handed to a program of someone else's choosing`,
+    ).toStrictEqual([]);
+
+    const namedConfigs = Object.keys(process.env)
+      .filter((key) => ['npm_config_userconfig', 'npm_config_globalconfig'].includes(key.toLowerCase().replace(/-/g, '_')))
+      .map((key) => ({ key, file: (process.env[key] ?? '').trim() }))
+      .filter(({ file }) => file.length > 0 && existsSync(file));
+    for (const { key, file } of namedConfigs) {
+      const sets = readFileSync(file, 'utf8')
+        .split('\n')
+        .map((line) => (line.split('=', 1)[0] ?? '').trim().toLowerCase().replace(/_/g, '-'))
+        .filter((name) => name === 'script-shell' || name === 'shell');
+      expect(
+        sets,
+        `${REFUSED_NPM_CONFIG}: ${key} names ${file}, which sets ${sets.join(', ')}. That replaces the shell npm hands every script to, from a file outside the two this law checks`,
+      ).toStrictEqual([]);
+    }
   });
 
   it('F-62/F-64: a value may not choose a program, a directory, or a module', () => {
