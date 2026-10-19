@@ -8,7 +8,7 @@
     "tsconfig.json": "2a0f802f2e7d00013ca325c1ce8c0da1fa13d148c20176a09d954897a85d5fd1",
     "tsconfig.build.json": "fc260cbe86688e06932291129be27acbf84fb4b0744efa4cefa4544de09f6f59",
     "tools/law-ran.py": "12121e762d319d6f7b844556342fafe26bbc526edcdd19a104fc58dc2380f19a",
-    "tools/reviewer-reports.json": "2b6aff3cc17282794c9dfa1f6d4e9ead8977ff97d49435c408aa2c918ca9f7b3",
+    "tools/reviewer-reports.json": "4a932dea860fe5921d2fa9c48c35f1f16bf8cfea4b5a61d1ab8ea936ba6e4d0e",
     "tools/manifest-digests.py": "352d91ee7469ae6d578c6594022fdf92233066131309652ee42c4f9805f75ff4",
     "tools/status-block.py": "bff5123897bad5da75865d32a79ef1d9534986abdc9a1b9418c11a2dcae628cb",
     "tools/context-sites.py": "1daa1968bc7b109925145118ab7acc20803c0a76cb587e336292b8d910e38eb6",
