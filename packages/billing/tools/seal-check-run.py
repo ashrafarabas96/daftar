@@ -33,8 +33,8 @@ remains refuses, and is red-proved: a nonzero tool, a digest line whose
 `N files, N rows` disagrees with the tally counted here, a run that is not
 after the newest document mtime, an empty capture, and a missing sentinel pair.
 
-    python3 tools/seal-check-run.py --dir <pack> --tests <test/db dir>
-    python3 tools/seal-check-run.py --dir <pack> --tests <dir> --verify-after-write
+    python3 -I tools/seal-check-run.py --dir <pack> --tests <test/db dir>
+    python3 -I tools/seal-check-run.py --dir <pack> --tests <dir> --verify-after-write
 
 `--verify-after-write` is the second pass. Writing the block changes this
 file's bytes, so the first pass's strings describe bytes that no longer exist.
@@ -56,9 +56,39 @@ from __future__ import annotations
 # It REFUSES rather than re-execing itself with `-I`. Round 27's first attempt
 # re-exec'd, which re-reads this file from disk: code that has already lost the
 # startup race can rewrite the exec target, and the isolated process then runs
-# the attacker's file while LOOKING clean. A refusal cannot be redirected.
-# `sys` is a builtin module, so this guard cannot itself be shadowed; it stands
-# above every other import so nothing else is loaded before the check.
+# the attacker's file while LOOKING clean.
+# `sys` is a builtin module, so the guard cannot be defeated by shadowing a
+# stdlib import, and it stands above every other import in this file.
+#
+# ROUND 28, THE COORDINATOR'S F-50, RATED P1. What the wording here used to claim
+# was FALSE, and the correction is the finding. Run this tool WITHOUT `-I` and
+# `site` imports `sitecustomize` — and `usercustomize` — at interpreter startup,
+# BEFORE line 1 of this file: code is loaded before the check, and the refusal CAN
+# be redirected. Measured: a plant on `PYTHONPATH`, reached through the un-isolated
+# command this file's own docstring used to print, produced a forged `0 problems`
+# at rc 0 over a pack with a drifted file.
+#
+# AND THE GUARD ITSELF IS FORGEABLE, which is the challenger's §9 and the reason
+# nothing here may be read as establishing isolation. `sys.flags` is an ordinary
+# writable attribute of an ordinary module, so a startup plant can hand this check
+# a `flags` whose `isolated` is 1: measured, an un-isolated run then printed NO
+# refusal and exited 0. THE ABSENCE OF THE REFUSAL IS THEREFORE NOT EVIDENCE OF
+# ISOLATION, and an un-isolated run that looks clean proves nothing about what
+# computed its figures.
+#
+# So this guard buys one thing only: an un-isolated run with nothing already
+# planted against it says so instead of computing. Inside a non-isolated run it
+# defends nothing and attests nothing. The real control is `-I` AT THE CALL SITE —
+# which is why every usage line here, every command in the pack and every child
+# this tool spawns carries it, and why a test asserts that and reds if one loses
+# it.
+#
+# ROUND 28, F-50's companion, stated rather than coded: this tests the `-I` FLAG,
+# not the condition, so `python3 -E -s` is refused although it also clears
+# `PYTHONPATH` and the user site directory. That is deliberate. `-E -s` still
+# leaves the script's own directory first on `sys.path`, which is the one place
+# an attacker who can write next to this file does not need `PYTHONPATH` at all.
+# One flag, one documented command, nothing to reason about at the call site.
 import sys
 
 if not sys.flags.isolated:
@@ -190,6 +220,23 @@ def tally(manifest: Path) -> tuple[int, int, int]:
         elif "reviewer-owned" in v:
             markers += 1
     return digests, markers, selfrow
+
+
+def pinned_by_digest(manifest: Path) -> set[str]:
+    """The names the table pins by BYTES, i.e. the rows carrying a sha256.
+
+    ROUND 28, the challenger's F-51. A marker row ("reviewer-owned") pins
+    nothing, so a reviewer-owned document may change its bytes with no check
+    able to object — which is exactly the B-8(a) case the ordering test below
+    exists to catch. The distinction has to be read off the table, not guessed
+    from the extension.
+    """
+    pinned = set()
+    for line in io.open(manifest, encoding="utf-8"):
+        m = ROW.match(line.rstrip("\n"))
+        if m and m.group(2).startswith("`") and len(m.group(2)) == 66:
+            pinned.add(m.group(1))
+    return pinned
 
 
 def agree(summary_line: str, digests: int, markers: int, selfrow: int) -> None:
@@ -345,10 +392,39 @@ def main() -> int:
     # because a reviewer-owned file carries a marker instead of a digest. The
     # test now runs on `run_utc` as it will be WRITTEN, whichever pass this is.
     if run_utc <= iso(mtime):
+        # ROUND 28, the challenger's F-51. This refusal fired on a pack nobody
+        # had touched: `/mnt/project-files` is a synced volume and five
+        # documents took fresh mtimes minutes after the seal, while all 44
+        # digest rows still verified. Fail-CLOSED, so not a blocker — but a
+        # refusal that fires on untampered packs is one readers learn to wave
+        # through, and this is the refusal B-7 and B-8 exist to provide. So the
+        # message now DISTINGUISHES the two cases, strictly additively; it does
+        # not stop refusing, because a clock cannot settle which one it is and
+        # re-sealing costs one run.
+        #
+        # `agree()` above has already refused on any nonzero `problems`, so at
+        # this line every digest row verified. That makes the distinction a real
+        # one: if the newest file's bytes are pinned by a verified row, they are
+        # the audited bytes whatever moved the mtime. If it carries a marker
+        # instead, or no row, nothing here pins it and a change cannot be ruled
+        # out — the wording must not soften then.
+        if mfile in pinned_by_digest(manifest):
+            why = (
+                f"\n  {mfile} is pinned by a digest row and every row verified in this same "
+                f"run, so its BYTES are the audited bytes and this reads as an mtime bump "
+                f"from the synced volume rather than an edit. Refusing anyway: the clock "
+                f"cannot establish that, and re-sealing is one run."
+            )
+        else:
+            why = (
+                f"\n  {mfile} carries no digest row — reviewer-owned, or not in the table — "
+                f"so nothing in this run pins its bytes and a change cannot be ruled out, "
+                f"whatever moved the mtime. This is the case the test exists for."
+            )
         raise SystemExit(
             f"the time this record would claim as its check run ({run_utc}) is not after the "
             f"newest document mtime ({iso(mtime)}, {mfile}) — a document changed since that "
-            f"run, so re-seal rather than confirming a stale one"
+            f"run, so re-seal rather than confirming a stale one" + why
         )
 
     text = io.open(manifest, encoding="utf-8").read()

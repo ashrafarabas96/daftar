@@ -41,9 +41,39 @@ from __future__ import annotations
 # It REFUSES rather than re-execing itself with `-I`. Round 27's first attempt
 # re-exec'd, which re-reads this file from disk: code that has already lost the
 # startup race can rewrite the exec target, and the isolated process then runs
-# the attacker's file while LOOKING clean. A refusal cannot be redirected.
-# `sys` is a builtin module, so this guard cannot itself be shadowed; it stands
-# above every other import so nothing else is loaded before the check.
+# the attacker's file while LOOKING clean.
+# `sys` is a builtin module, so the guard cannot be defeated by shadowing a
+# stdlib import, and it stands above every other import in this file.
+#
+# ROUND 28, THE COORDINATOR'S F-50, RATED P1. What the wording here used to claim
+# was FALSE, and the correction is the finding. Run this tool WITHOUT `-I` and
+# `site` imports `sitecustomize` — and `usercustomize` — at interpreter startup,
+# BEFORE line 1 of this file: code is loaded before the check, and the refusal CAN
+# be redirected. Measured: a plant on `PYTHONPATH`, reached through the un-isolated
+# command this file's own docstring used to print, produced a forged `0 problems`
+# at rc 0 over a pack with a drifted file.
+#
+# AND THE GUARD ITSELF IS FORGEABLE, which is the challenger's §9 and the reason
+# nothing here may be read as establishing isolation. `sys.flags` is an ordinary
+# writable attribute of an ordinary module, so a startup plant can hand this check
+# a `flags` whose `isolated` is 1: measured, an un-isolated run then printed NO
+# refusal and exited 0. THE ABSENCE OF THE REFUSAL IS THEREFORE NOT EVIDENCE OF
+# ISOLATION, and an un-isolated run that looks clean proves nothing about what
+# computed its figures.
+#
+# So this guard buys one thing only: an un-isolated run with nothing already
+# planted against it says so instead of computing. Inside a non-isolated run it
+# defends nothing and attests nothing. The real control is `-I` AT THE CALL SITE —
+# which is why every usage line here, every command in the pack and every child
+# this tool spawns carries it, and why a test asserts that and reds if one loses
+# it.
+#
+# ROUND 28, F-50's companion, stated rather than coded: this tests the `-I` FLAG,
+# not the condition, so `python3 -E -s` is refused although it also clears
+# `PYTHONPATH` and the user site directory. That is deliberate. `-E -s` still
+# leaves the script's own directory first on `sys.path`, which is the one place
+# an attacker who can write next to this file does not need `PYTHONPATH` at all.
+# One flag, one documented command, nothing to reason about at the call site.
 import sys
 
 if not sys.flags.isolated:
