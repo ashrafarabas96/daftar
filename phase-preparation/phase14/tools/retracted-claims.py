@@ -15,7 +15,63 @@ quotes it. Anywhere else is an exit 1 naming the file, the line and the reason.
 
   usage: tools/retracted-claims.py [--pack DIR] [--list FILE] [--check]
 """
-import argparse, os, sys
+import argparse, hashlib, os, shutil, subprocess, sys
+
+# CHALLENGE R27-P1-01 and the coordinator's ruling: all THREE instruments over
+# this pack load ONE enumeration, by path, refused unless its sha256 equals the
+# literal below. Round 26 wrote the structural exclusion into two tools and
+# proved the sentence against the two it was thinking of; the third pruned by
+# NAME and a planted repository-shaped directory moved a published figure. A
+# shared module cannot drift, and an edited one refuses in all three until each
+# pin is updated deliberately.
+_DOMAIN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pack-domain.py')
+_DOMAIN_SHA = '471a2b3ef7c37f64e54a9710e93432041139ffce49c590963262c9ec805a1fbd'
+
+# CHALLENGE R27-P1-01, the other half: this tool had NO git at all, so it could
+# not ask the question its sibling asks. The pinned resolution is the one the
+# other two carry, system locations first and the binary resolved once and
+# passed absolute, so no lookup inside a child can reach a shim.
+_PINNED_PATH = '/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin:/usr/local/sbin'
+_GIT_BIN = shutil.which('git', path=_PINNED_PATH)
+_GIT_ENV = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+_GIT_ENV.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull, PATH=_PINNED_PATH)
+
+
+def _load_domain():
+    try:
+        raw = open(_DOMAIN_FILE, 'rb').read()
+    except OSError as exc:
+        print('CONFIGURATION ERROR: THE SHARED ENUMERATION COULD NOT BE READ. %s (%s: %s), so'
+              ' this tool does not know which files are in this pack and no retracted claim was'
+              ' looked for.' % (_DOMAIN_FILE, type(exc).__name__, exc), file=sys.stderr)
+        raise SystemExit(2)
+    got = hashlib.sha256(raw).hexdigest()
+    if got != _DOMAIN_SHA:
+        print('CONFIGURATION ERROR: THE SHARED ENUMERATION DOES NOT MATCH ITS PIN. %s hashes %s'
+              ' and this tool is pinned to %s. The domain these three instruments share is not'
+              ' the one this tool was reviewed against, so no retracted claim was looked for.'
+              % (_DOMAIN_FILE, got, _DOMAIN_SHA), file=sys.stderr)
+        raise SystemExit(2)
+    ns = {'__name__': 'pack_domain', '__file__': _DOMAIN_FILE}
+    exec(compile(raw, _DOMAIN_FILE, 'exec'), ns)
+    return ns
+
+
+_D = _load_domain()
+
+
+def _git_is_repo(path):
+    """True / False / None (git could not be asked)."""
+    if _GIT_BIN is None:
+        return None
+    try:
+        r = subprocess.run([_GIT_BIN, '--git-dir=' + path, '--no-replace-objects',
+                            'rev-parse', '--git-dir'],
+                           capture_output=True, text=True, env=_GIT_ENV)
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    return r.returncode == 0
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -50,26 +106,30 @@ def main():
     # where the repository happened to sit, which is round 8's defect again.
     # The skip is now relative to the pack, and a run that scanned NO document
     # refuses: measuring nothing is not a pass.
-    # CHALLENGE R26-P1-01: the two instruments over this directory must enumerate
-    # the SAME domain. The whole of that fail-open was an asymmetry -- a file this
-    # tool read and `manifest-digests.py` could not see, which is how a plant
-    # moved a published document count while the pin stayed green. So the one
-    # structural exclusion is written here too: a directory that IS a git
-    # repository (HEAD, objects and refs present) is a repository, not pack
-    # content. The test is structure, not spelling.
-    def _is_repo_dir(p):
-        return (os.path.isfile(os.path.join(p,'HEAD'))
-                and os.path.isdir(os.path.join(p,'objects'))
-                and os.path.isdir(os.path.join(p,'refs')))
+    # CHALLENGE R26-P1-01, then R27-P1-01: the instruments over this directory
+    # must enumerate the SAME domain. That fail-open was an asymmetry -- a file
+    # this tool read and `manifest-digests.py` could not see, which is how a
+    # plant moved a published document count while the pin stayed green. Round 26
+    # wrote a structural exclusion into TWO tools and proved the sentence against
+    # the two it was thinking of; the pack has THREE, and the third pruned by
+    # name. So there is no exclusion written here at all: the walk comes from
+    # `tools/pack-domain.py`, loaded by digest, and the question "is this
+    # directory a repository" is put to git itself rather than to a
+    # HEAD/objects/refs test, which the challenger's empty-HEAD forgery passed.
+    _entries, _excluded, _dref = _D['walk'](a.pack, _git_is_repo)
+    if _dref:
+        for _r in sorted(set(_dref)):
+            print(_r, file=sys.stderr)
+        print('%d path(s) under --pack (%s) could not be classified, so the population this run'
+              ' would have measured is UNDECIDED and no retracted claim was looked for.'
+              % (len(set(_dref)), a.pack), file=sys.stderr)
+        return 2
     files = []
-    for root, _dirs, names in os.walk(a.pack):
-        _dirs[:] = [x for x in sorted(_dirs) if not _is_repo_dir(os.path.join(root,x))]
-        relroot = os.path.relpath(root, a.pack)
-        if relroot == 'tools' or relroot.startswith('tools' + os.sep):
+    for _rel, _ap in _entries:
+        if _rel == 'tools' or _rel.startswith('tools/'):
             continue                      # the list itself quotes every claim
-        for n in sorted(names):
-            if n.endswith(('.md', '.yaml')):
-                files.append(os.path.join(root, n))
+        if _rel.endswith(('.md', '.yaml')):
+            files.append(_ap)
     if not files:
         print('%s: no .md or .yaml document was found under --pack (%s), so no retracted claim'
               ' was looked for. An empty population is not a pass.' % (a.list, a.pack),
@@ -127,6 +187,14 @@ def main():
           ' exempt in code (a reviewer\'s words, challenger or coordinator, are the record of'
           ' what was claimed).'
           % (len(claims), len(files) - exempt, exempt))
+    # CHALLENGE R27-P1-01: every instrument says what its population IS and what
+    # it leaves out, in its own output, so two figures over this pack can be
+    # compared without reading either tool.
+    print('population: %s, minus this tool\'s own `tools/` directory (the list quotes every'
+          ' claim), scanned for .md and .yaml; %d directory(ies) excluded as a repository%s'
+          % (_D['DOMAIN'], len(_excluded),
+             (': ' + ', '.join(os.path.relpath(x, a.pack) for x in sorted(_excluded)))
+             if _excluded else ''))
     if bad:
         print('%d occurrence(s) of a retracted claim survive outside the files that record the'
               ' retraction. Correct the prose, or add the file to the allowed list ONLY if it'

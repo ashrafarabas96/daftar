@@ -45,40 +45,70 @@ PLACEHOLDER = 'UNSIGNED'
 # A first-level directory is pinned by ONE row named with a trailing slash whose
 # digest is taken over the name, size and SHA-256 of every file beneath it, at
 # any depth, so an added, removed, renamed or edited file moves it; a
-# first-level directory with no such row refuses by name. The digest is written
-# so a reviewer can recompute it without this tool:
+# first-level directory with no such row refuses by name.
 #
-#   find <dir> -type f | LC_ALL=C sort | while read -r f; do \
-#     printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "${f#<dir>/}"; done \
+# CHALLENGE R27-P2-01 measured the law "an added, removed, renamed or edited file
+# moves this digest" FALSE: a record of the form "<digest>  <relpath>" is not
+# injective, because a FILENAME MAY CONTAIN A NEWLINE. Two different trees were
+# built that hash identically over identical byte totals. Two changes answer it,
+# both in `tools/pack-domain.py`: the file COUNT is part of the digested text,
+# and the names a line-based record cannot carry (NUL, newline, CR) are REFUSED
+# rather than digested -- as are symbolic links, dangling ones included, which
+# the shell recipe below would follow and the tool would not.
+#
+# The digest is written so a reviewer can recompute it without this tool, and the
+# recipe is the tool's text EXACTLY -- the count line first, then one line per
+# file -- because a published recipe that is merely close is a false sentence
+# about how the figure was made. It is faithful only on a tree the tool would
+# accept: a refused name or link makes the tool refuse and leaves the shell
+# computing a digest of something the pack does not contain.
+#
+#   { printf '%s file(s)\n' "$(find <dir> -type f | wc -l)"; \
+#     find <dir> -type f | LC_ALL=C sort | while read -r f; do \
+#       printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "${f#<dir>/}"; done; } \
 #     | sha256sum
-# The ONE structural exclusion, and it is not by name: a directory that IS a git
-# repository (HEAD, objects and refs all present) is a repository, not pack
-# content, so neither this tool nor `retracted-claims.py` enumerates it -- they
-# must agree on the domain, because the whole of R26-P1-01 was one instrument
-# reading what another could not see. The test is structure and not spelling, so
-# a directory merely CALLED `x.git` is still pinned. At the head that adds this,
-# the real pack contains no such directory and the exclusion excludes nothing; it
-# exists because this pack's own attack worlds legitimately carry repositories
-# inside a synthetic pack directory, and those proofs must measure what they are
-# about.
-def is_repo_dir(p):
-    return (os.path.isfile(os.path.join(p,'HEAD'))
-            and os.path.isdir(os.path.join(p,'objects'))
-            and os.path.isdir(os.path.join(p,'refs')))
+# CHALLENGE R27-P1-01, a FAIL-OPEN, and the coordinator's ruling: the pack's
+# domain is no longer defined in this file at all. It lives in
+# `tools/pack-domain.py`, which every instrument loads by path and REFUSES
+# unless its sha256 equals the literal pinned here, then execs. Three
+# instruments cannot drift apart if there is one walk; and an edited domain
+# refuses in all three until each pin is updated deliberately. The previous
+# shape -- a structural `is_repo_dir` here and in `retracted-claims.py`, a name
+# test in `citation-provenance.py` -- let a planted
+# `zz-hide/{HEAD, objects/, refs/, zz-doc.md}` hide a pack document from THIS
+# gate while moving a figure published for that SHA from 42 to 43 document(s).
+# Round 26's structural test was itself too weak: the challenger's cheapest
+# forgery is three entries with an EMPTY `HEAD`, which git rejects and a
+# HEAD/objects/refs test accepts. The question is now put to git.
+_DOMAIN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pack-domain.py')
+_DOMAIN_SHA = '471a2b3ef7c37f64e54a9710e93432041139ffce49c590963262c9ec805a1fbd'
 
-def subtree_digest(d):
-    rows, total = [], 0
-    for root, dirs, files in os.walk(d):
-        dirs[:] = [x for x in sorted(dirs) if not is_repo_dir(os.path.join(root,x))]
-        for f in sorted(files):
-            fp = os.path.join(root, f)
-            b = open(fp,'rb').read()
-            rows.append((os.path.relpath(fp, d).replace(os.sep,'/'),
-                         hashlib.sha256(b).hexdigest()))
-            total += len(b)
-    rows.sort()
-    text = ''.join('%s  %s\n' % (h, r) for r, h in rows)
-    return hashlib.sha256(text.encode()).hexdigest(), total, len(rows)
+
+def _load_domain():
+    try:
+        src = open(_DOMAIN_FILE, 'rb').read()
+    except OSError as exc:
+        # The three instruments say this in the SAME words, because a refusal a
+        # runner greps for is a name, and three spellings of one condition is
+        # three conditions to a reader. The sweep arms key on this sentence.
+        print('CONFIGURATION ERROR: THE SHARED ENUMERATION COULD NOT BE READ. %s (%s: %s), so this'
+              ' run enumerated nothing and nothing here is a verdict about this manifest.'
+              % (_DOMAIN_FILE, type(exc).__name__, exc), file=sys.stderr)
+        raise SystemExit(2)
+    got = hashlib.sha256(src).hexdigest()
+    if got != _DOMAIN_SHA:
+        print('CONFIGURATION ERROR: THE SHARED ENUMERATION DOES NOT MATCH ITS PIN. %s hashes %s'
+              ' and this tool is pinned to %s. The three instruments of this pack must enumerate'
+              ' one domain, so a domain this tool cannot recognise is refused rather than used.'
+              % (_DOMAIN_FILE, got, _DOMAIN_SHA), file=sys.stderr)
+        raise SystemExit(2)
+    ns = {'__name__': 'pack_domain', '__file__': _DOMAIN_FILE}
+    exec(compile(src, _DOMAIN_FILE, 'exec'), ns)
+    return ns
+
+
+_D = _load_domain()
+
 # COORD DIFF REVIEW AT c812aa5, R-03: only names beginning P14-CHALLENGE- were held
 # to the reviewer-row rules, so a coordinator's review could be tampered with and
 # re-signed. A review is a review whoever wrote it.
@@ -164,6 +194,30 @@ def _refuse_unrunnable_git(exc):
           % (_GIT_BIN, type(exc).__name__, exc), file=sys.stderr)
     raise SystemExit(2)
 
+
+def _git_is_repo(path):
+    """True / False / None -- None meaning git could not be asked.
+
+    The question is whether PATH IS a git directory, not whether it sits inside
+    one: `git -C <dir> rev-parse` answers rc 0 for every directory of this
+    repository and would have excluded `proofs/`. Measured on this container:
+    `--git-dir=` answers rc 0 for a real bare repository and for the real
+    `.git`, rc 128 for `proofs/` and rc 128 for the challenger's cheapest
+    forgery (three entries with an EMPTY HEAD). The runner is this tool's own
+    hardened one -- every GIT_* scrubbed, replace objects and grafts disabled,
+    the binary resolved once on the pinned PATH and passed absolute."""
+    if _GIT_BIN is None:
+        return None
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull, PATH=_PINNED_PATH)
+    try:
+        r = subprocess.run([_GIT_BIN, '--git-dir=' + path, 'rev-parse', '--git-dir'],
+                           capture_output=True, text=True, env=env)
+    except OSError:
+        return None
+    return r.returncode == 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -184,6 +238,16 @@ def main():
     ap.add_argument('--reports-in-tree', action='store_true',
                     help='refuse if a reviewer report in the counterpart directory'
                          ' is not carried by this commit (index or HEAD)')
+    # CHALLENGE R27-P3-04, and the coordinator's wording: "add an --at-head leg that
+    # reads HEAD alone and run it in the sweep after the commit". The index leg
+    # answers BEFORE a commit, which is what the lane was added for, and it is
+    # satisfied by `git add` -- so it cannot tell a staged report from a
+    # committed one. The two legs answer two different questions and the sweep
+    # now runs both: --reports-in-tree before the commit, --reports-at-head
+    # after it, where only the commit itself can satisfy it.
+    ap.add_argument('--reports-at-head', action='store_true',
+                    help='refuse if a reviewer report in the counterpart directory'
+                         ' is not carried by HEAD itself (the index does not count)')
     ap.add_argument('--write', action='store_true')
     ap.add_argument('--check', action='store_true')
     # CHALLENGE R11-P2-01 and the COORDINATOR RE-REVIEW's remedy, which is the
@@ -774,7 +838,9 @@ def main():
             if not os.path.isdir(sd):
                 stale.append('%s: ROW WITH NO DIRECTORY in %s' % (name, a.dir))
                 out.append(ln); continue
-            sh, sbytes, sfiles = subtree_digest(sd)
+            sh, sbytes, sfiles, _sexc, _sref = _D['subtree_digest'](sd, _git_is_repo)
+            for _r in _sref:
+                stale.append('%s: %s' % (name, _r))
             sdrift = (sh != dig or ('%d' % sbytes) != size.replace(',',''))
             if dig == PLACEHOLDER or size == PLACEHOLDER:
                 sdrift = True
@@ -885,18 +951,9 @@ def main():
     # every first-level directory required to be declared. The manifest's own
     # file is the one exclusion, because a file cannot carry its own digest.
     _mb = os.path.basename(a.manifest)
-    on_disk, sub = [], {}
-    for root, dirs, files in os.walk(a.dir):
-        dirs[:] = [x for x in sorted(dirs) if not is_repo_dir(os.path.join(root,x))]
-        rel = os.path.relpath(root, a.dir).replace(os.sep,'/')
-        for f in sorted(files):
-            if rel == '.':
-                if f == _mb or f == 'P14-HANDOFF-MANIFEST.md':
-                    continue
-                on_disk.append(f)
-            else:
-                sub.setdefault(rel.split('/')[0] + '/', []).append(rel + '/' + f)
-    on_disk.sort()
+    on_disk, sub, _excluded, _dref = _D['enumerate_pack'](a.dir, _mb, _git_is_repo)
+    for _r in _dref:
+        stale.append(_r)
     subtotal = sum(len(v) for v in sub.values())
     unlisted = [f for f in on_disk if f not in listed]
     missing  = [n for n in listed
@@ -904,12 +961,23 @@ def main():
 
     for u in unlisted: stale.append('%s: ARTIFACT WITH NO ROW' % u)
     for d in sorted(d for d in sub if d not in listed):
+        # CHALLENGE R27-P1-01, found while arming the plants for its own remedy:
+        # this refusal carried round 26's domain sentence -- "excluding only this
+        # manifest and any directory that IS a git repository" -- after the test
+        # had become git's own verdict and after the manifest's self-exclusion
+        # had been separated from the shared domain. A reader sent to the
+        # refusal would have gone looking for a HEAD/objects/refs test that no
+        # longer exists. The sentence is now the shared DOMAIN itself, so it
+        # cannot describe a discipline this tool does not run, and the files are
+        # NAMED rather than only counted.
+        _names = sorted(sub[d])
         stale.append('SUBTREE WITH NO ROW: %s holds %d file(s) that no row of this manifest'
-                     ' pins. The domain this manifest enforces is EVERY file under %s, at any'
-                     ' depth, in any extension and in any case, excluding only this manifest'
-                     ' and any directory that IS a git repository; a directory is pinned by one'
-                     ' row named `%s` whose digest covers the name, size and SHA-256 of every'
-                     ' file beneath it.' % (d, len(sub[d]), a.dir, d))
+                     ' pins (%s%s). The domain this manifest enforces under %s is %s, minus'
+                     ' this manifest itself; a directory is pinned by one row named `%s` whose'
+                     ' digest covers the name, size and SHA-256 of every file beneath it.'
+                     % (d, len(_names), ', '.join(_names[:5]),
+                        (', and %d more' % (len(_names) - 5)) if len(_names) > 5 else '',
+                        a.dir, _D['DOMAIN'], d))
     # It fires only when there IS a reviewer row to protect, so it cannot red a
     # manifest that has none.
     # CHALLENGE R12-P2-01, a FAIL-OPEN: this refusal fired only when a reviewer
@@ -1100,15 +1168,40 @@ def main():
     _ptop = _g('rev-parse','--show-toplevel')
     _pdir = _g('rev-parse','--absolute-git-dir')
     # ---- R26-P3-02: the pre-commit comparison, named refusals only.
-    if a.reports_in_tree:
+    if a.reports_in_tree or a.reports_at_head:
         _rdir = a.witness or witness_default()
-        _pfx = _g('rev-parse','--show-prefix').stdout.strip()
+        _pfxr = _g('rev-parse','--show-prefix')
+        _pfx = _pfxr.stdout.strip()
+        _at_head_only = a.reports_at_head and not a.reports_in_tree
+        _leg = 'HEAD itself' if _at_head_only else 'this commit (index or HEAD)'
         if not os.path.isdir(_rdir):
             stale.append('REPORTS DIRECTORY NOT READABLE: %s does not exist, so this run says'
-                         ' NOTHING about whether a reviewer report is carried by this commit.'
-                         % _rdir)
+                         ' NOTHING about whether a reviewer report is carried by %s.'
+                         % (_rdir, _leg))
+        elif _ptop.returncode != 0 or not _ptop.stdout.strip() or _pfxr.returncode != 0:
+            # CHALLENGE R27-P3-05: with no repository to ask -- an archive
+            # export, a `tar` of the pack, a copy taken outside any checkout --
+            # both legs failed and the refusal read "this commit does not carry
+            # it" while the SAME run printed "repository NONE". It BLAMED a
+            # commit it had not been able to look at. There is no commit to
+            # blame; the question could not be put, and this pack's rule is to
+            # refuse what it cannot classify rather than to answer it.
+            stale.append('NO REPOSITORY TO ASK: this pack was read at %s, where git reports no'
+                         ' repository (`rev-parse --show-toplevel` rc %d, `--show-prefix` rc'
+                         ' %d), so whether %s carries the reviewer report(s) in %s is a question'
+                         ' that COULD NOT BE PUT and nothing here is a verdict about it. Run'
+                         ' this lane in a checkout.'
+                         % (a.dir, _ptop.returncode, _pfxr.returncode, _leg, _rdir))
         else:
-            for _n in sorted(f for f in os.listdir(_rdir) if f.startswith(REVIEWER_PREFIXES)):
+            # CHALLENGE R27-P3-06: this enumerated with `os.listdir` and a
+            # case-sensitive prefix test, which is R26-P1-01's own defect inside
+            # the fix for R26-P3-02 -- `p14-challenge-zzzzzzz.md` and
+            # `sub/P14-CHALLENGE-zzzzzzz.md` both answered rc 0. It is now the
+            # shared walk: recursive, any case.
+            _reports, _rexc, _rref = _D['reviewer_reports'](_rdir, REVIEWER_PREFIXES, _git_is_repo)
+            for _r in _rref:
+                stale.append('%s: %s' % (_rdir, _r))
+            for _n in _reports:
                 _why = []
                 if _n not in listed:
                     _why.append('it has no row in this manifest')
@@ -1121,20 +1214,26 @@ def main():
                 # so the pathspec carries `:(top)` and the two legs agree on
                 # which path they mean. This pack has the same lesson written
                 # down for GIT_DIR; it cost a second reading here.
-                _idx = _g('ls-files','--cached','--error-unmatch','--',
-                          ':(top)%s%s' % (_pfx,_n))
                 _hd  = _g('cat-file','-e','HEAD:%s%s' % (_pfx,_n))
-                if _idx.returncode != 0 and _hd.returncode != 0:
-                    _why.append('this commit does not carry it (neither the index nor HEAD'
-                                ' has %s%s)' % (_pfx,_n))
+                if _at_head_only:
+                    if _hd.returncode != 0:
+                        _why.append('HEAD does not carry it (HEAD:%s%s does not resolve, and a'
+                                    ' staged file does not count on this leg)' % (_pfx,_n))
+                else:
+                    _idx = _g('ls-files','--cached','--error-unmatch','--',
+                              ':(top)%s%s' % (_pfx,_n))
+                    if _idx.returncode != 0 and _hd.returncode != 0:
+                        _why.append('this commit does not carry it (neither the index nor HEAD'
+                                    ' has %s%s)' % (_pfx,_n))
                 if _why:
-                    stale.append('REVIEWER REPORT NOT IN THIS COMMIT: %s is in %s and %s. A'
+                    stale.append('REVIEWER REPORT NOT CARRIED BY %s: %s is in %s and %s. A'
                                  ' reviewer\'s words are the record behind a signature, so a head'
                                  ' that does not carry them cannot be verified from the pack by'
                                  ' anyone reading it. Commit the file unedited with its row'
                                  ' BEFORE pushing; this refusal exists because that was missed'
                                  ' twice in consecutive rounds and both times a lane read after'
-                                 ' the push is what found it.' % (_n, _rdir, ' and '.join(_why)))
+                                 ' the push is what found it.'
+                                 % (_leg.upper(), _n, _rdir, ' and '.join(_why)))
     _pver = _g('--version')
     # CHALLENGE R22-P1-02, second half: this line REPORTS the object that ran --
     # _GIT_BIN, resolved once at import and passed absolute to every call --
@@ -1144,10 +1243,15 @@ def main():
              (_pdir.stdout.strip() or 'NONE'),
              (_pver.stdout.strip() or 'git version UNKNOWN'), _GIT_BIN))
     print('manifest: %d artifact row(s) + the manifest itself; %d file(s) at the top level of'
-          ' %s and %d file(s) under %d declared subtree(s), which is EVERY file there at any'
-          ' depth, in any extension and in any case (R26-P1-01); reviewer-row history %s'
+          ' %s and %d file(s) under %d declared subtree(s); the domain enumerated is %s'
+          ' (R26-P1-01, R27-P1-01), minus this manifest itself because a file cannot carry its'
+          ' own digest — an exclusion that is THIS tool\'s and not the shared domain\'s — and'
+          ' %d directory(ies) were excluded as repositories: %s; reviewer-row history %s'
           % (len(listed), len(on_disk), a.dir, subtotal,
-             len([n for n in listed if n.endswith('/')]), history))
+             len([n for n in listed if n.endswith('/')]), _D['DOMAIN'],
+             len(_excluded),
+             (', '.join(os.path.relpath(x, a.dir) for x in sorted(_excluded))
+              if _excluded else 'none'), history))
     if a.write:
         open(a.manifest,'w',encoding='utf-8').write('\n'.join(out))
         for s in stale: print('  updated/flagged: %s' % s)

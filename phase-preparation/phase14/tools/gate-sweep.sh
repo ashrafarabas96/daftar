@@ -232,6 +232,13 @@ offrepo manifest-shared "$SHARED" "python3 -I $HERE/manifest-digests.py --dir $S
 # folder is read only for the reviewer-prefixed names it holds, which is why
 # this is an off-repository lane and not part of the figure quoted for a SHA.
 offrepo reports-in-tree "$SHARED" "python3 -I $HERE/manifest-digests.py --dir $PACK --witness $SHARED --reports-in-tree --check"
+# CHALLENGE R27-P3-04, and the coordinator's wording: "add an --at-head leg that
+# reads HEAD alone and run it in the sweep after the commit". The lane above is
+# satisfied by `git add`, so it cannot tell a STAGED reviewer report from a
+# COMMITTED one -- and what the signature rests on is the commit. This lane
+# ignores the index. Before the commit that carries a new report it is RED, and
+# that is the lane working; after it, green.
+offrepo reports-at-head "$SHARED" "python3 -I $HERE/manifest-digests.py --dir $PACK --witness $SHARED --reports-at-head --check"
 gate retracted-claims    "python3 -I $HERE/retracted-claims.py --pack $PACK --check"
 # R12-P2-02's lesson applied to this run's ENTRY condition, after two sweeps
 # answered 1 on both DB lanes with "Connection refused" and no attribution: the
@@ -409,12 +416,94 @@ if [ -n "$WT2" ]; then
   # A first-level directory nothing declares: the refusal that names the domain.
   plant plant-new-subdirectory  zz-dir/zz-planted.md        "SUBTREE WITH NO ROW: zz-dir/"
   rm -rf "$WP/zz-dir"
+  # CHALLENGE R27-P1-01 and the coordinator's ruling, which asked for both of
+  # these by name. Round 26 excluded a repository directory by STRUCTURE
+  # (HEAD + objects/ + refs/ present). The challenger's cheapest forgery is
+  # those three entries with an EMPTY `HEAD`, which GIT REJECTS and that test
+  # ACCEPTS -- so a planted document one directory down was outside the pin and
+  # inside `retracted-claims.py`'s population. The test is now git's own verdict
+  # (`git --git-dir=<dir> rev-parse --git-dir`), and these two arms are the
+  # shapes that separate structure, spelling and git.
+  mkdir -p "$WP/zz-hide/objects" "$WP/zz-hide/refs"; : > "$WP/zz-hide/HEAD"
+  plant plant-repo-shaped-forgery zz-hide/zz-doc.md        "SUBTREE WITH NO ROW: zz-hide/"
+  rm -rf "$WP/zz-hide"
+  # ...and SPELLING is not structure either: a directory merely CALLED `x.git`
+  # is pack content and stays pinned. This arm is `R27-P3-07`: the challenger
+  # deleted round 26's exclusion and 4 arms moved, then WIDENED it from
+  # structure to spelling and NOTHING moved -- so the comment's discipline
+  # sentence was true and wholly unarmed, which is the two-sweep rule of P4 R32
+  # (a guard's OUTCOME and a guard's DISCIPLINE share no words). The arm above
+  # arms the outcome; this one arms the discipline.
+  plant plant-spelling-dot-git    zz.git/zz-doc.md         "SUBTREE WITH NO ROW: zz.git/"
+  rm -rf "$WP/zz.git"
+  # The other side of the same exclusion, and the residual it leaves, measured
+  # rather than asserted: inside a REAL repository (git answers rc 0) the
+  # document is excluded, this gate stays GREEN, and the summary SAYS which
+  # directory it stopped at. Nothing in this pack pins that file, and nothing in
+  # this pack claims to. The arm exists so that sentence is measured and so a
+  # future head that silently starts pinning it, or silently stops naming it,
+  # reds here.
+  if git init -q --bare "$WP/zz-real" 2>/dev/null; then
+    printf 'planted inside a REAL repository\n' > "$WP/zz-real/zz-doc.md"
+    named plant-real-repo-excluded 0 "excluded as repositories: zz-real" \
+      "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+    rm -rf "$WP/zz-real"
+  else
+    printf 'FAIL  %-26s `git init --bare` failed, so the real-repository arm asked nothing\n' \
+           plant-real-repo-excluded
+    fail=$((fail+1))
+  fi
+  # CHALLENGE R27-P1-01, the ruling's own requirement -- "every instrument
+  # imports it or execs it by digest, so their domains cannot diverge". The
+  # mechanism that guarantees it is the PIN, so the pin is red-proofed: one byte
+  # appended to the shared domain must make ALL THREE instruments refuse at the
+  # CONFIGURATION code with the same named refusal. If any one of them answered
+  # anything else, the three could drift again.
+  if [ -f "$WH/pack-domain.py" ]; then
+    cp -p "$WH/pack-domain.py" "$T/pack-domain.bak"
+    printf '\n# one byte appended by gate-sweep.sh\n' >> "$WH/pack-domain.py"
+    named domain-pin-manifest   2 "THE SHARED ENUMERATION DOES NOT MATCH ITS PIN" \
+      "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+    named domain-pin-retracted  2 "THE SHARED ENUMERATION DOES NOT MATCH ITS PIN" \
+      "python3 -I $WH/retracted-claims.py --pack $WP --check"
+    named domain-pin-provenance 2 "THE SHARED ENUMERATION DOES NOT MATCH ITS PIN" \
+      "python3 -I $WH/citation-provenance.py --pack $WP --repo $WT2 --check $WP/P14-MIGRATION-PATCH-REQUEST.md"
+    cp -p "$T/pack-domain.bak" "$WH/pack-domain.py"
+  else
+    printf 'FAIL  %-26s the shared domain is not in the worktree, so the pin arms asked nothing\n' \
+           domain-pin-arms
+    fail=$((fail+1))
+  fi
+  # CHALLENGE R27-P2-01: the subtree digest's law was measured FALSE because a
+  # line-based record is not injective over names that may contain a newline.
+  # The shapes that would make the record ambiguous, and the links the published
+  # shell recipe would follow while the tool would not, are REFUSED by name
+  # rather than digested -- so they red, here, instead of hashing to something.
+  ln -sfn ../P14-HANDOFF-MANIFEST.md "$WP/proofs/zz-link.md" 2>/dev/null \
+    && named plant-symlink-in-subtree 1 "SYMBOLIC LINK IN THE PACK: zz-link.md" \
+         "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check" \
+    || { printf 'FAIL  %-26s the symlink could not be created, so this arm asked nothing\n' \
+                plant-symlink-in-subtree; fail=$((fail+1)); }
+  rm -f "$WP/proofs/zz-link.md"
+  ln -sfn zz-absent-target.md "$WP/proofs/zz-dangling.md" 2>/dev/null \
+    && named plant-dangling-symlink 1 "SYMBOLIC LINK IN THE PACK: zz-dangling.md" \
+         "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check" \
+    || { printf 'FAIL  %-26s the dangling symlink could not be created, so this arm asked nothing\n' \
+                plant-dangling-symlink; fail=$((fail+1)); }
+  rm -f "$WP/proofs/zz-dangling.md"
+  NLN=$(printf 'proofs/zz\nnewline.md')
+  : > "$WP/$NLN" 2>/dev/null \
+    && named plant-newline-in-name 1 "UNNAMEABLE PATH" \
+         "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check" \
+    || { printf 'FAIL  %-26s a file name with a newline could not be created here, so this arm asked nothing\n' \
+                plant-newline-in-name; fail=$((fail+1)); }
+  rm -f "$WP/$NLN"
   # and the baseline again, so a plant left behind by any arm above is not
   # carried silently into the rest of this run.
   named plant-baseline-restored 0 "every artifact row matches the file on disk" \
     "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
 else
-  printf 'FAIL  %-26s no second worktree, so the seven plant arms of R26-P1-01 asked nothing\n' \
+  printf 'FAIL  %-26s no second worktree, so the plant arms of R26-P1-01 and R27-P1-01/P2-01 asked nothing\n' \
          plant-arms-not-run
   fail=$((fail+1))
 fi
@@ -1472,12 +1561,28 @@ fi
 # What IS shipped are two arms that need no system write, because they copy the
 # tool into a temporary directory and change ONE constant in the copy.
 P22=$(mktemp -d); SCRATCH="${SCRATCH:-} $P22"
+# CHALLENGE R27-P1-01's remedy made every instrument depend on a SIBLING file,
+# `tools/pack-domain.py`, loaded by path and refused unless it matches a pinned
+# digest. A new dependency is a new way to fail, so the two ways it can fail are
+# armed here before anything else uses a copied tool: the sibling ABSENT, and
+# the sibling PRESENT but one byte different. Both must be the CONFIGURATION
+# refusal at rc 2 -- never rc 1, which is this gate's STALE code, and never a
+# run that enumerates something.
+PDOM=$(mktemp -d); SCRATCH="${SCRATCH:-} $PDOM"; mkdir -p "$PDOM/a/tools" "$PDOM/b/tools"
+cp "$HERE/manifest-digests.py" "$PDOM/a/tools/"
+named domain-sibling-absent 2 "THE SHARED ENUMERATION COULD NOT BE READ" \
+  "python3 -I $PDOM/a/tools/manifest-digests.py --dir $PACK --check"
+cp "$HERE/manifest-digests.py" "$PDOM/b/tools/"; cp "$HERE/pack-domain.py" "$PDOM/b/tools/"
+printf '\n# one byte appended by gate-sweep.sh\n' >> "$PDOM/b/tools/pack-domain.py"
+named domain-sibling-mutated 2 "THE SHARED ENUMERATION DOES NOT MATCH ITS PIN" \
+  "python3 -I $PDOM/b/tools/manifest-digests.py --dir $PACK --check"
 mkdir -p "$P22/nogit/tools" "$P22/empty" "$P22/first/tools" "$P22/last/tools"
 PIN_SHIPPED='/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin:/usr/local/sbin'
 # arm 1: no git anywhere on the pinned path. At abe95fc this was a
 # FileNotFoundError TRACEBACK at rc 1 -- and rc 1 is this gate's STALE code, so
 # a runner could not tell a stale manifest from a tool that could not run.
 cp "$HERE/manifest-digests.py" "$P22/nogit/tools/"
+cp "$HERE/pack-domain.py" "$P22/nogit/tools/"
 sed -i "s|^_PINNED_PATH = .*|_PINNED_PATH = '$P22/empty'|" "$P22/nogit/tools/manifest-digests.py"
 ng=$(python3 -I -c "import shutil,sys; print(shutil.which('git', path=sys.argv[1]) or 'NONE')" "$P22/empty")
 pin_ok=$(grep -c "^_PINNED_PATH = '$PIN_SHIPPED'$" "$HERE/manifest-digests.py")
@@ -1497,6 +1602,7 @@ fi
 # nothing. The second copy is the SHIPPED order and must refuse by the law.
 for arm in first last; do
   cp "$HERE/manifest-digests.py" "$P22/$arm/tools/"
+  cp "$HERE/pack-domain.py" "$P22/$arm/tools/"
   if [ "$arm" = first ]; then NEWPIN="$SH:$PIN_SHIPPED"; else NEWPIN="$PIN_SHIPPED:$SH"; fi
   sed -i "s|^_PINNED_PATH = .*|_PINNED_PATH = '$NEWPIN'|" "$P22/$arm/tools/manifest-digests.py"
 done
@@ -1529,6 +1635,7 @@ mkdir -p "$P23/bad" "$P23/unrun/tools" "$P23/sib/tools" "$P23/empty"
 printf '#!/nonexistent-interpreter-for-p14\n' > "$P23/bad/git"
 chmod +x "$P23/bad/git"
 cp "$HERE/manifest-digests.py" "$P23/unrun/tools/"
+cp "$HERE/pack-domain.py" "$P23/unrun/tools/"
 sed -i "s|^_PINNED_PATH = .*|_PINNED_PATH = '$P23/bad'|" "$P23/unrun/tools/manifest-digests.py"
 sel=$(python3 -I -c "import shutil,sys; print(shutil.which('git', path=sys.argv[1]) or 'NONE')" "$P23/bad")
 "$P23/bad/git" --version >/dev/null 2>&1; badrc=$?
@@ -1542,6 +1649,7 @@ else
 fi
 # R-COORD-1: the SIBLING's own named refusal, with its own sentence.
 cp "$HERE/citation-provenance.py" "$P23/sib/tools/"
+cp "$HERE/pack-domain.py" "$P23/sib/tools/"
 sed -i "s|^_PINNED_PATH = .*|_PINNED_PATH = '$P23/empty'|" "$P23/sib/tools/citation-provenance.py"
 sibpin=$(grep -c "^_PINNED_PATH = '$PIN_SHIPPED'$" "$HERE/citation-provenance.py")
 sibng=$(python3 -I -c "import shutil,sys; print(shutil.which('git', path=sys.argv[1]) or 'NONE')" "$P23/empty")
@@ -1563,6 +1671,7 @@ fi
 # SIBLING'S OWN sentence, so neither arm can pass on the other tool's refusal.
 mkdir -p "$P23/sibunrun/tools"
 cp "$HERE/citation-provenance.py" "$P23/sibunrun/tools/"
+cp "$HERE/pack-domain.py" "$P23/sibunrun/tools/"
 sed -i "s|^_PINNED_PATH = .*|_PINNED_PATH = '$P23/bad'|" "$P23/sibunrun/tools/citation-provenance.py"
 if [ "$sel" = "$P23/bad/git" ] && [ "$badrc" != 0 ] && [ "$sibpin" = 1 ]; then
   named sibling-unrunnable-refused 2 "could not be run (.*), so no provenance could be read" \

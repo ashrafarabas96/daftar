@@ -19,7 +19,7 @@ generated table; --check regenerates it and exits 1 when DOC's block is stale,
 which is what `P14-GATE-032` runs so the table cannot drift from the trees it
 describes. A table that cannot detect its own staleness is a claim again.
 """
-import argparse, os, re, shutil, subprocess, sys, collections
+import argparse, hashlib, os, re, shutil, subprocess, sys, collections
 
 # ROUND-6 CHALLENGE P2-01: this pattern carried SEVEN extensions and the
 # sentence it fed said "35 cited files". `json` was not among them, so
@@ -105,6 +105,66 @@ def git(repo, *args):
 def tracked(repo, rev):
     r = git(repo,'ls-tree','-r','--name-only',rev)
     return r.stdout.splitlines() if r.returncode==0 else []
+
+# CHALLENGE R27-P1-01, a P1 FAIL-OPEN, and the coordinator's ruling: this tool
+# pruned a repository directory by NAME (`d != '.git'`) at both of its walks
+# while its two siblings pruned by STRUCTURE, so one directory was pack content
+# to this tool and invisible to the pin. Measured by the challenger and
+# reproduced before the fix: with `zz-hide/{HEAD, objects/, refs/, zz-doc.md}`
+# planted, `--write` moved a figure PUBLISHED for that SHA from 42 to 43
+# document(s) and named the planted file as the source of a provenance row,
+# while `manifest-digests.py --check` answered rc 0 saying every file had a row.
+# The domain is now ONE module, loaded by path and refused unless its sha256
+# equals the literal below, so these three tools cannot drift from one another.
+_DOMAIN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pack-domain.py')
+_DOMAIN_SHA = '471a2b3ef7c37f64e54a9710e93432041139ffce49c590963262c9ec805a1fbd'
+
+
+def _load_domain():
+    try:
+        raw = open(_DOMAIN_FILE, 'rb').read()
+    except OSError as exc:
+        print('CONFIGURATION ERROR: THE SHARED ENUMERATION COULD NOT BE READ. %s (%s: %s), so'
+              ' this tool does not know which files are in this pack and nothing here is a'
+              ' verdict about this block.' % (_DOMAIN_FILE, type(exc).__name__, exc),
+              file=sys.stderr)
+        raise SystemExit(2)
+    got = hashlib.sha256(raw).hexdigest()
+    if got != _DOMAIN_SHA:
+        print('CONFIGURATION ERROR: THE SHARED ENUMERATION DOES NOT MATCH ITS PIN. %s hashes %s'
+              ' and this tool is pinned to %s. The domain these three instruments share is not'
+              ' the one this tool was reviewed against, so nothing here is a verdict about this'
+              ' block.' % (_DOMAIN_FILE, got, _DOMAIN_SHA), file=sys.stderr)
+        raise SystemExit(2)
+    ns = {'__name__': 'pack_domain', '__file__': _DOMAIN_FILE}
+    exec(compile(raw, _DOMAIN_FILE, 'exec'), ns)
+    return ns
+
+
+_D = _load_domain()
+
+
+def _git_is_repo(path):
+    """True / False / None (git could not be asked), through this tool's own runner."""
+    if _GIT_BIN is None:
+        return None
+    try:
+        r = subprocess.run([_GIT_BIN, '--git-dir=' + path, '--no-replace-objects',
+                            'rev-parse', '--git-dir'],
+                           capture_output=True, text=True, env=GIT_ENV)
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    return r.returncode == 0
+
+
+def _refuse_domain(refusals):
+    """A named refusal per unclassifiable path; the population is then UNDECIDED."""
+    for r in sorted(set(refusals)):
+        print(r, file=sys.stderr)
+    print('%d path(s) under --pack could not be classified, so the population this block'
+          ' describes is UNDECIDED and nothing here is a verdict about it.' % len(set(refusals)),
+          file=sys.stderr)
+    return 2
 
 def main():
     ap = argparse.ArgumentParser()
@@ -195,13 +255,17 @@ def main():
     # `proofs/README.md` and every case header were outside the population while
     # the output said "cited files". The walk is recursive now, and the scanned
     # set is printed with the result.
+    # CHALLENGE R27-P1-01: one shared enumeration, so this tool's population and
+    # the manifest's pin cannot disagree about what is in the pack.
+    _entries, _excluded, _dref = _D['walk'](a.pack, _git_is_repo)
+    if _dref:
+        return _refuse_domain(_dref)
     docs = []
-    for root, dirs, names in os.walk(a.pack):
-        dirs[:] = [d for d in dirs if d != '.git']
-        for f in sorted(names):
-            if f.endswith(('.md','.yaml')) and not f.startswith('P14-CHALLENGE') \
-               and not f.startswith('P14-COORD-DIFF-REVIEW'):
-                docs.append(os.path.relpath(os.path.join(root, f), a.pack))
+    for _rel, _ap in _entries:
+        _b = os.path.basename(_rel)
+        if _rel.endswith(('.md','.yaml')) and not _b.startswith('P14-CHALLENGE') \
+           and not _b.startswith('P14-COORD-DIFF-REVIEW'):
+            docs.append(_rel)
     docs = sorted(docs)
     hits = collections.defaultdict(set)          # cited token -> {doc, ...}
     for d in docs:
@@ -353,11 +417,9 @@ def main():
             # to be found by the next reviewer, so the list is gone: the pack is
             # WALKED, and a token belongs to the pack when it is a real file
             # under it, at any depth, matched at a path boundary.
-            pack_rel = set()
-            for _root, _dirs, _files in os.walk(a.pack):
-                _dirs[:] = [d for d in _dirs if d != '.git']
-                for _f in _files:
-                    pack_rel.add(os.path.relpath(os.path.join(_root, _f), a.pack))
+            # CHALLENGE R27-P1-01: the SAME enumeration as the document scan
+            # above and as the manifest's pin, walked once and reused here.
+            pack_rel = {_r.replace('/', os.sep) for _r, _a in _entries}
             def in_pack(tok):
                 if os.path.isabs(tok):
                     return False          # not ours to resolve on this host
