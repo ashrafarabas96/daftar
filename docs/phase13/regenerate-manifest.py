@@ -262,6 +262,13 @@ DELIVERED_REVIEWER_REPORTS = (
     'P13-COORD-DIFF-REVIEW-12fe9a4.md',
     # R16's coordinator diff review, frozen and delivered into the pack.
     'P13-COORD-DIFF-REVIEW-ef15738.md',
+    # R17, the narrow round on ef15738..8215af5, delivered into the pack by the
+    # challenger. It was in the pack while the A-02 fix was being written, which
+    # is why it is enumerated in a commit of its own, after that fix: a reviewer's
+    # file is not mine to hash as one of my artifacts, and an unlisted file wearing
+    # the name is reported as a lookalike -- so leaving it out would have put their
+    # report into my digest table and named it suspicious in the same run.
+    'P13-CHALLENGE-8215af5.md',
 )
 # The SHAPE of a reviewer report, used only to spot a file that wears the name without
 # being on the list, and MY OWN round records, which are hashed and are anchored to a
