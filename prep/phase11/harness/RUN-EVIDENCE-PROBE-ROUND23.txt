@@ -1,0 +1,91 @@
+# RUN EVIDENCE — Phase 11, round 23's answer — THE PROBE, ON ITS OWN
+#
+# WHAT TREE THIS MEASURED. The subject of every world is a scratch clone of this
+# branch at commit 7596ddd4141f07b0fc9bec1a50e6c38576b97432, which is this
+# commit's tree minus the two RUN-EVIDENCE-*-ROUND23.txt files. Neither is a
+# deciding file.
+#
+# WHAT EACH WORLD IS FOR:
+#   control            the candidate tree, committed, nothing planted.
+#   r23f1              a fenced line carrying TWO `key=value` pairs, COMMITTED,
+#                      so no tree law can answer it: at 78f9392 that line was
+#                      never a candidate and the scan was green. The scan now
+#                      names BOTH tokens.
+#   r23f2              a frozen migration drifted on disk AND the drift hidden
+#                      from the index with `git update-index --skip-worktree` --
+#                      the coordinator's own escape. `git status --porcelain`
+#                      prints nothing (the line that says so is in the output
+#                      below), and the run is refused anyway: by bytes in both
+#                      readers, and by SOURCE-INDEX-FLAGGED in the shell step
+#                      before the cluster is built.
+#   r23f2-noflag       the same drift with NO flag, so the byte comparison is
+#                      the only reader that can see it.
+#   r23f2-nolaw        the same, plus the index law DELETED in the same
+#                      uncommitted file: the declared limit of round 22,
+#                      re-measured. The byte half of the law, which that edit
+#                      does not delete, still refuses.
+#
+# NO MUTATION TOUCHED THE PROJECT TREE. Each world is a clone made for it and
+# deleted after it; no frozen migration was modified anywhere a reviewer or a
+# build reads from.
+
+=== 2. round 23, re-measured on throwaway clones ===
+=== round 23, re-measured on THROWAWAY clones of the candidate commit ===
+subject: the candidate tree, committed at 7596ddd4141f07b0fc9bec1a50e6c38576b97432
+NOTE  : every mutation below is applied inside a throwaway clone made for
+        this probe and deleted after it. No file of the project working
+        tree is touched, and no frozen migration is modified anywhere a
+        reviewer or a build reads from.
+
+--- control ---
+  selftest       rc=0
+  scan           rc=0
+  blocks         rc=0
+  second reader  rc=0
+      selftest failures: 0
+--- r23f1 ---
+  selftest       rc=0
+  scan           rc=1
+  blocks         rc=0
+  second reader  rc=0
+        NOT EMITTED: P11-HANDOFF-MANIFEST.md:2751 reports `core_routine=1`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+        NOT EMITTED: P11-HANDOFF-MANIFEST.md:2751 reports `zz_r23_probe=4242`, and no instrument or committed evidence file under the harness emits that string. Either have a case emit it and paste what it emits, or drop it and keep the claim a case pins.
+      selftest failures: 0
+  (the drifted file in the throwaway clone: infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql)
+  git status in that clone: []
+--- r23f2 ---
+  selftest       rc=5
+  scan           rc=5
+  blocks         rc=5
+  second reader  rc=5
+      scan refused: FRAME-INADMISSIBLE
+      blocks refused: FRAME-INADMISSIBLE
+      reader refused: HARNESS-TREE-DIRTY
+      selftest failures: 0
+  -- the authoritative script in the r23f2 clone --
+    REFUSED: SOURCE-INDEX-FLAGGED: tracked paths are flagged so that git stops
+    EXIT_SOURCE_INDEX_FLAGGED: 5  (refused before the cluster and every gate)
+--- r23f2-noflag ---
+  selftest       rc=5
+  scan           rc=5
+  blocks         rc=5
+  second reader  rc=5
+      scan refused: FRAME-INADMISSIBLE
+      blocks refused: FRAME-INADMISSIBLE
+      reader refused: HARNESS-TREE-DIRTY
+      selftest failures: 0
+  -- the authoritative script in the r23f2-noflag clone --
+    REFUSED: SOURCE-TREE-DIRTY: the work tree at /var/tmp/p11pr27-r23f2-noflag is not the tree the commit
+      REFUSED: HARNESS-TREE-DIRTY: 1 path the commit holds is not what is on disk at /var/tmp/p11pr27-r23f2-noflag, so a run from it is not a run of the committed tree and its transcript is not evidence. Moved: infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql. 
+    EXIT_SOURCE_TREE_DIRTY: 5  (refused before the cluster, the identity block and every gate)
+  the law is here once: True
+--- r23f2-nolaw ---
+  selftest       rc=1
+  scan           rc=5
+  blocks         rc=5
+  second reader  rc=5
+      scan refused: FRAME-INADMISSIBLE
+      blocks refused: FRAME-INADMISSIBLE
+      reader refused: HARNESS-TREE-DIRTY
+      selftest failures: 0
+

@@ -30,7 +30,47 @@ export P11_SOCK=$SOCK P11_PORT=$PORT
 H=$REPO/prep/phase11/harness
 PSQL_P="$PG/psql -h $SOCK -p $PORT"
 
-DIRTY="$(git -C $REPO status --porcelain)"
+# `R23-S2`. Both readers build git's environment from scratch and pin the
+# binary; this script asked the ambient `git` with the ambient environment, and
+# `GIT_DIR` beats `-C` while `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME` and a
+# planted `git` earlier on `PATH` each answer for the subject. One function, used
+# for every read below.
+gitq () {
+  env -i PATH=/usr/bin:/bin HOME=/dev/null XDG_CONFIG_HOME=/dev/null \
+      GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_GRAFT_FILE=/dev/null \
+      GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0 LC_ALL=C \
+      /usr/bin/git --no-replace-objects -C "$REPO" "$@"
+}
+
+# `R23-F2`. This used to be `gitq status --porcelain` alone, and that is a
+# statement about the INDEX: the coordinator flagged a frozen migration with
+# `--skip-worktree`, appended a `CREATE TABLE`, and `status` printed nothing
+# while the planted table ran. The question is asked of the DISK now, by the
+# second reader, which recomputes every committed path's blob name from the
+# bytes on disk; `status` is kept beside it only to LIST entries for a human,
+# never to decide. The reader is a deciding file whose own bytes are compared
+# at step 0c-0, and it refuses itself if they moved.
+TREE_STATE="$(python3 -I $H/check_harness_bytes.py --tree-state 2>/var/tmp/p11-treestate.$$ || true)"
+TREE_WHY="$(cat /var/tmp/p11-treestate.$$ 2>/dev/null; rm -f /var/tmp/p11-treestate.$$)"
+DIRTY=""
+[ "$TREE_STATE" = "no" ] || DIRTY="$TREE_STATE"
+FLAGGED="$(gitq ls-files -v | grep -E '^([a-z]|S) ' || true)"
+if [ -n "$FLAGGED" ]; then
+  # `R23-F2` and the coordinator's `F1` on the head before this one: an index
+  # flag -- `git update-index --assume-unchanged` or `--skip-worktree` -- stops
+  # git looking at a tracked path. It edits no file and commits nothing, and the
+  # coordinator put such a flag on a MIGRATION, appended a CREATE TABLE, and got
+  # a full green suite that printed `SOURCE_TREE_DIRTY : no` while the planted
+  # table really ran. So the flags are refused here by a name of their own, and
+  # both readers refuse them again by theirs -- and what no flag can move, the
+  # bytes, is what the readers compare.
+  echo "REFUSED: SOURCE-INDEX-FLAGGED: tracked paths are flagged so that git stops"
+  echo "looking at them, so neither the line above nor anything below is a statement"
+  echo "about what this run reads. The flagged paths:"
+  echo "$FLAGGED" | sed 's/^/  /'
+  echo "EXIT_SOURCE_INDEX_FLAGGED: 5  (refused before the cluster and every gate)"
+  exit 5
+fi
 if [ -n "$DIRTY" ]; then
   # THE COORDINATOR'S `F1` RULING, round 22. The byte law covers every deciding
   # file and it cannot cover THE FILE THAT INVOKES IT: an uncommitted version of
@@ -46,10 +86,13 @@ if [ -n "$DIRTY" ]; then
   # when it was produced from a CLEAN tree whose HEAD is the committed sha, and
   # reviewers run from fresh clones. An uncommitted edit -- one file or many --
   # is then the declared limit rather than a measured escape.
-  echo "REFUSED: SOURCE-TREE-DIRTY: the work tree at $REPO carries uncommitted"
-  echo "changes, so nothing below would be a measurement of the committed code and"
-  echo "its transcript would not be evidence. The entries:"
-  git -C $REPO status --porcelain | sed 's/^/  /'
+  echo "REFUSED: SOURCE-TREE-DIRTY: the work tree at $REPO is not the tree the commit"
+  echo "holds -- measured by recomputing each committed path's blob name from the bytes"
+  echo "on disk -- so nothing below would be a measurement of the committed code and its"
+  echo "transcript would not be evidence. What the comparison said:"
+  echo "$TREE_WHY" | sed 's/^/  /'
+  echo "and what git status lists, for a reader (it is not what decided above):"
+  gitq status --porcelain | sed 's/^/  /'
   echo "EXIT_SOURCE_TREE_DIRTY: 5  (refused before the cluster, the identity block and every gate)"
   exit 5
 fi
@@ -73,11 +116,18 @@ RUN_ID="p11-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 echo "RUN_ID            : $RUN_ID"
 echo "RUN_AT_UTC_START  : $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "HOST_KERNEL       : $(uname -sr)"
-echo "SOURCE_REPO       : $(git -C $REPO config --get remote.origin.url)"
-echo "SOURCE_BRANCH     : $(git -C $REPO rev-parse --abbrev-ref HEAD)"
-echo "SOURCE_SHA        : $(git -C $REPO rev-parse HEAD)"
-echo "SOURCE_TREE_DIRTY : $(test -z "$(git -C $REPO status --porcelain)" && echo no || echo YES)"
-echo "MIGRATIONS_SHA    : $(git -C $REPO rev-parse HEAD:infrastructure/database/migrations)"
+echo "SOURCE_REPO       : $(gitq config --get remote.origin.url)"
+echo "SOURCE_BRANCH     : $(gitq rev-parse --abbrev-ref HEAD)"
+echo "SOURCE_SHA        : $(gitq rev-parse HEAD)"
+echo "SOURCE_TREE_DIRTY : $TREE_STATE   (measured against the commit's own blobs, path by path, from the bytes on disk)"
+# `R23-F2`, the coordinator's measurement: this line used to read the migrations
+# TREE OBJECT out of HEAD, so it printed the same digest whether or not the files
+# the suite actually applied were those bytes -- a skip-worktree flag plus an
+# appended CREATE TABLE left it unchanged while the planted table ran. Two lines
+# now, and the first is read from the DISK: `ls` sorts, so the bytes hashed are
+# the files in alphabetical order.
+echo "MIGRATIONS_SHA256 : $(cat $(ls -1 $REPO/infrastructure/database/migrations/*.sql | sort) | sha256sum | cut -d' ' -f1)  (the bytes ON DISK, which are what the run below applies)"
+echo "MIGRATIONS_TREE   : $(gitq rev-parse HEAD:infrastructure/database/migrations)  (the tree object HEAD holds, for comparison with a clean checkout)"
 echo "MANIFEST_SHA256   : $(sha256sum $REPO/infrastructure/database/MIGRATION_MANIFEST.json | cut -d' ' -f1)"
 echo "BOOTSTRAP_SHA256  : $(sha256sum $REPO/infrastructure/database/bootstrap.sql | cut -d' ' -f1)"
 echo "PACK_A_DDL_SHA256 : $(sha256sum $REPO/prep/phase11/ddl/p11-pack-a-apparel.sql | cut -d' ' -f1)"
@@ -370,7 +420,17 @@ else
   RCRB="n/a"
 fi
 echo "=== 7. the frozen tree, after the run ==="
-cd $REPO && git status --porcelain -- infrastructure/database | wc -l | sed 's/^/tracked changes under infrastructure\/database: /'
+# `R23-F2`: this line asked `git status` whether the frozen tree had moved
+# DURING the run, and that is the figure the coordinator's flag falsified. It is
+# the byte comparison now, re-run after everything above, and the migrations'
+# disk digest is printed again so a reader can compare it with the one printed
+# before the run rather than take a word for it.
+AFTER_STATE="$(python3 -I $H/check_harness_bytes.py --tree-state 2>/var/tmp/p11-after.$$ || true)"
+echo "tree differs from the commit, after the run: $AFTER_STATE   (by the bytes on disk, every committed path)"
+[ "$AFTER_STATE" = "no" ] || sed 's/^/  /' /var/tmp/p11-after.$$
+rm -f /var/tmp/p11-after.$$
+echo "MIGRATIONS_SHA256 after the run: $(cat $(ls -1 $REPO/infrastructure/database/migrations/*.sql | sort) | sha256sum | cut -d' ' -f1)"
+gitq status --porcelain -- infrastructure/database | wc -l | sed 's/^/what git status lists under infrastructure\/database, for a reader: /'
 python3 -I - <<PY
 import json,hashlib,os
 m=json.load(open('$REPO/infrastructure/database/MIGRATION_MANIFEST.json'))

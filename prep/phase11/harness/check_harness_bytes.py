@@ -222,45 +222,134 @@ def _census_top(subject):
 
 
 def _tree_dirty(top):
-    """The uncommitted entries in the whole work tree, or a named refusal.
+    """Every path the commit holds, compared with what is on disk.
 
-    THE COORDINATOR'S `F1` RULING, and it is what turns an uncommitted edit
-    from a hole into a declared limit. The byte law covered every deciding
-    file; it did not cover THE FILE THAT INVOKES IT. An uncommitted
-    `rebuild_and_prove.sh` with four lines replaced by `true`, or an
-    uncommitted `check_fenced_figures.py` whose call site passes the guard off
-    and whose invocation of this reader returns early, produced a full green
-    run with the law never executed. No check inside a self-run entry point
-    can stop that -- the entry point is what would run the check.
+    THE COORDINATOR'S `F1` RULING, round 22, and its correction in round 23.
+    The byte law covered every deciding file and not THE FILE THAT INVOKES it,
+    so a dirty tree had to become a refusal wherever a run is entered; no check
+    inside a self-run entry point can stop an uncommitted edit to that entry
+    point, and what can be true is that such a tree produces NO ADMISSIBLE
+    TRANSCRIPT.
 
-    What CAN be true, and is enforced here and in the shell step and in the
-    other reader, is that such a tree produces NO ADMISSIBLE TRANSCRIPT: a
-    dirty tree is refused by name, wherever the run is entered. So a transcript
-    is evidence only when it was produced from a clean tree whose `HEAD` is the
-    committed sha, and reviewers run from fresh clones. An uncommitted edit --
-    one file or many -- is then the declared limit rather than a measured
-    escape, because what it can no longer produce is a green run anyone is
-    allowed to read.
+    Round 23 then measured the first version of that law false. It asked
+    `git status --porcelain`, which is a statement about the INDEX:
+    `git update-index --assume-unchanged` or `--skip-worktree` is the
+    documented way to stop git looking, edits no file and commits nothing, and
+    one flag defeated all three clean-tree sites at once. The coordinator built
+    the consequence: that flag on migration `0086` plus an appended
+    `CREATE TABLE` produced a full green suite printing `SOURCE_TREE_DIRTY :
+    no`, with `MIGRATIONS_SHA` unchanged because it was read from `HEAD`, and
+    the planted table really ran.
+
+    So nothing here asks git what changed. Every path the COMMIT holds is read
+    off the disk and its blob name recomputed from the bytes -- which no index
+    flag can move -- and the executable bit is compared with the mode the
+    commit carries, because `core.fileMode=false` hides a mode change from git
+    and the disk's own bits are not git's opinion.
+
+    This reader derives all of it from its own calls. Sharing the checker's
+    code would make one bug a bug in both.
     """
     try:
-        out = _git(top, ["status", "--porcelain"]).decode("utf-8", "surrogateescape")
+        fmt = _git(top, ["rev-parse", "--show-object-format"]).decode("ascii", "replace").strip()
+        sha = _git(top, ["rev-parse", "--verify", "HEAD^{commit}"]).decode(
+            "ascii", "replace"
+        ).strip()
+        listed = _git(top, ["ls-tree", "-r", "-z", "--full-tree", sha]).decode(
+            "utf-8", "surrogateescape"
+        )
     except (RuntimeError, OSError) as exc:
         return (
-            "HARNESS-TREE-STATE-UNREADABLE: whether the work tree at %s carries "
-            "uncommitted changes could not be determined (%s)." % (top, exc),
+            "HARNESS-TREE-STATE-UNREADABLE: whether the work tree at %s is the tree "
+            "the commit holds could not be determined (%s)." % (top, exc),
         )
-    entries = [l for l in out.split("\n") if l.strip()]
-    if not entries:
+    if fmt != "sha1":
+        return (
+            "HARNESS-OBJECT-FORMAT-UNSUPPORTED: this repository's object format is %r "
+            "and the comparison here computes blob names as sha1, so it cannot say "
+            "whether the work tree is the committed tree." % fmt,
+        )
+    moved, gone, modes = [], [], []
+    for row in listed.split("\0"):
+        if not row:
+            continue
+        meta, _tab, path = row.partition("\t")
+        bits = meta.split(" ")
+        if len(bits) < 3 or bits[1] != "blob":
+            continue
+        mode, oid = bits[0], bits[2]
+        full = os.path.join(top, path)
+        try:
+            if mode == "120000":
+                data = os.readlink(full).encode("utf-8", "surrogateescape")
+            else:
+                with open(full, "rb") as fh:
+                    data = fh.read()
+        except OSError:
+            gone.append(path)
+            continue
+        if hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() != oid:
+            moved.append(path)
+        if mode in ("100644", "100755"):
+            try:
+                executable = bool(os.stat(full).st_mode & 0o111)
+            except OSError:
+                gone.append(path)
+                continue
+            if executable != (mode == "100755"):
+                modes.append(path)
+    count = len(moved) + len(gone) + len(modes)
+    if not count:
         return ()
     return (
-        "HARNESS-TREE-DIRTY: the work tree at %s carries %d uncommitted entr%s, so a "
-        "run from it is not a run of the committed code and its transcript is not "
-        "evidence. The first of them: %s"
+        "HARNESS-TREE-DIRTY: %d path%s the commit holds %s not what is on disk at %s, "
+        "so a run from it is not a run of the committed tree and its transcript is not "
+        "evidence. %s%s%s"
         % (
+            count,
+            "" if count == 1 else "s",
+            "is" if count == 1 else "are",
             top,
-            len(entries),
-            "y" if len(entries) == 1 else "ies",
-            "; ".join(e.strip() for e in entries[:5]),
+            "Moved: %s. " % "; ".join(sorted(moved)[:5]) if moved else "",
+            "Missing: %s. " % "; ".join(sorted(gone)[:5]) if gone else "",
+            "Mode: %s." % "; ".join(sorted(modes)[:5]) if modes else "",
+        ),
+    )
+
+
+def _index_flagged(top):
+    """The tracked paths whose index entry says git is to stop looking at them.
+
+    A refusal of its own, beside the comparison above: a flag can hide a
+    MISSING file as easily as a changed one, and a run whose inputs are marked
+    not-to-be-read is not a measurement of the committed tree. `ls-files -v`
+    tags assume-unchanged in lower case and skip-worktree with `S`.
+    """
+    try:
+        out = _git(top, ["ls-files", "-v", "-z"]).decode("utf-8", "surrogateescape")
+    except (RuntimeError, OSError) as exc:
+        return (
+            "HARNESS-INDEX-STATE-UNREADABLE: whether any tracked path is flagged "
+            "assume-unchanged or skip-worktree could not be determined (%s)." % exc,
+        )
+    flagged = []
+    for row in out.split("\0"):
+        if not row or len(row) < 2 or row[1] != " ":
+            continue
+        tag, path = row[0], row[2:]
+        if tag == "S" or tag.islower():
+            flagged.append(
+                "%s (%s)" % (path, "skip-worktree" if tag == "S" else "assume-unchanged")
+            )
+    if not flagged:
+        return ()
+    return (
+        "HARNESS-INDEX-FLAGGED: %d tracked path%s flagged so that git stops looking at "
+        "%s: %s." % (
+            len(flagged),
+            " is" if len(flagged) == 1 else "s are",
+            "it" if len(flagged) == 1 else "them",
+            "; ".join(sorted(flagged)[:5]),
         ),
     )
 
@@ -277,7 +366,7 @@ def check(harness_dir=None):
             "HARNESS-ANCHOR-UNRESOLVED: the deciding files are read against the commit "
             "and the commit could not be resolved (%s)." % exc,
         )
-    dirty = _tree_dirty(top)
+    dirty = tuple(_tree_dirty(top)) + tuple(_index_flagged(top))
     rel_root = os.path.relpath(os.path.realpath(harness_dir), top)
     try:
         listed = _git(
@@ -356,19 +445,56 @@ def digests(harness_dir=None):
     return sha, rows
 
 
+def tree_state(harness_dir=None):
+    """(ok, refusals) for the WHOLE committed tree, by the bytes on disk.
+
+    `R23-F2`, the half of it the shell step cannot answer for itself. The
+    script printed `SOURCE_TREE_DIRTY` from `git status --porcelain`, and that
+    is a statement about the INDEX: a `--skip-worktree` flag on a frozen
+    migration plus an appended `CREATE TABLE` left the line reading `no` while
+    the planted table really ran. The figure has to be a MEASUREMENT, so the
+    script asks this reader for it -- the same comparison this file already
+    makes for the deciding files, over every path the commit holds.
+    """
+    harness_dir = harness_dir or _here()
+    try:
+        top, _sha = _census_top(os.path.realpath(harness_dir))
+    except Anchor as why:
+        return False, (str(why),)
+    except (RuntimeError, OSError) as exc:
+        return False, (
+            "HARNESS-ANCHOR-UNRESOLVED: the tree state is read against the commit and "
+            "the commit could not be resolved (%s)." % exc,
+        )
+    return (lambda bad: (not bad, bad))(
+        tuple(_tree_dirty(top)) + tuple(_index_flagged(top))
+    )
+
+
 def _main(argv):
     harness_dir = None
     want_digests = False
+    want_tree_state = False
     rest = list(argv)
     while rest:
         a = rest.pop(0)
         if a == "--digests":
             want_digests = True
+        elif a == "--tree-state":
+            want_tree_state = True
         elif a == "--harness" and rest:
             harness_dir = rest.pop(0)
         else:
-            sys.stderr.write("usage: [--digests] [--harness DIR]\n")
+            sys.stderr.write("usage: [--digests] [--tree-state] [--harness DIR]\n")
             return 2
+    if want_tree_state:
+        ok, msgs = tree_state(harness_dir)
+        # One word on stdout, because the caller prints it as a figure; the
+        # reasons go to stderr so the transcript carries them too.
+        print("no" if ok else "YES")
+        for m in msgs:
+            sys.stderr.write("REFUSED: %s\n" % m)
+        return 0 if ok else 5
     if want_digests:
         sha, rows = digests(harness_dir)
         print("the deciding files as commit %s holds them:" % sha)

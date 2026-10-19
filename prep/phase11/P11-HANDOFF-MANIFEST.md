@@ -77,6 +77,13 @@ tree is now refused by name wherever the run is entered (`SELF-TREE-DIRTY`,
 `HARNESS-TREE-DIRTY`, `SOURCE-TREE-DIRTY`) and why the limit is stated for the
 reader: a transcript is evidence only when it was produced from a CLEAN tree
 whose `HEAD` is the committed sha, and reviewers run from fresh clones (§7.23).
+**Round 23 then measured how that dirtiness was being ASKED, and the answer is
+not where it was:** all three refusals read `git status --porcelain`, which is a
+statement about the INDEX, so one `git update-index --skip-worktree` on a frozen
+migration let a planted `CREATE TABLE` run under a transcript printing
+`SOURCE_TREE_DIRTY : no`. Every one of the three now recomputes each committed
+path's blob name from the bytes ON DISK and refuses an index flag by name as
+well (§7.24).
 What the law changes is that every escape from rounds 16 to 21 — the gitignored
 artefact, the AST gaps, the receiver, the rebound attribute, the argument, the
 re-pin, the added admit-list entry — has to be in the diff, under the digests
@@ -87,8 +94,8 @@ The digests below are **published for a reader**, not compared by the run: they
 say which commit's bytes the reviews were issued against. Nothing in the harness
 reads this list.
 
-**They were taken at `868f25d`, the previously reviewed commit, and three of them
-have moved in the commit that carries §7.23** — `check_fenced_figures.py`,
+**They were taken at `868f25d`, an earlier reviewed commit, and three of them
+have moved in the commits that carry §7.23 and §7.24** — `check_fenced_figures.py`,
 `check_harness_bytes.py` and `rebuild_and_prove.sh`. That is not an omission to
 be tidied by editing the rows: a list inside a commit cannot carry its own
 commit's digests, and the ruling that removed the self-pin is the reason this
@@ -1053,19 +1060,20 @@ each guard deleted on its own, and the arms that stop answering:
 nfkc                       reds  1 arm(s): R14-S1 full-width equals
 format characters          reds  1 arm(s): R14-S1 zero-width space
 non-ascii digits           reds  5 arm(s): R14-S1 arabic-indic digits, R14-S1 extended arabic digits, R15-S3 devanagari digits +2 more
-html comment markers       reds  1 arm(s): R13 HTML comment
-inline code span           reds  1 arm(s): R13-S1 N16 backticked comment
-blockquote and indent      reds  8 arm(s): R13 leading tab, R13 blockquote, R13 nested list item +5 more
-list marker                reds  2 arm(s): R13 list item, R13 nested list item
-heading marker             reds  1 arm(s): R14-F1 heading
-table cell (leading)       reds  1 arm(s): R13 table cell
+html comment markers       reds  1 arm(s): attached: an HTML comment with no spaces
+inline code span           reds  1 arm(s): attached: a backticked word against the figure
+blockquote and indent      reds  2 arm(s): attached: an HTML comment with no spaces, attached: a blockquote with no space
+list marker                reds  0 arm(s) alone, 2 behind the guard that subsumes it: R13 list item, R13 nested list item
+heading marker             reds  1 arm(s): attached: a heading with no space
+table cell (leading)       reds  1 arm(s): attached: a table cell opened with no padding
 bracket                    reds  2 arm(s): R13 parentheses, R14-S3 percent inside brackets
 emphasis (leading)         reds  1 arm(s): R13 bold
-dash marker splits the line reds  4 arm(s): R14-F1 plain -- comment, R14-S1 behind a -- marker, R15-S2 text before the marker +1 more
-label prefix               reds  1 arm(s): R13 colon prefix
-trailing punctuation       reds  7 arm(s): R13 trailing semicolon, R13 parentheses, R13 HTML comment +4 more
+dash marker splits the line reds  0 arm(s) alone, 4 behind the guard that subsumes it: R14-F1 plain -- comment, R14-S1 behind a -- marker, R15-S2 text before the marker +1 more
+whitespace splits the line reds  8 arm(s): R23-F1 a second pair after the figure, R23-F1 a pair before the figure, R23-F1 a tab between the pairs +5 more
+label prefix               reds  1 arm(s): attached: a label with no space
+trailing punctuation       reds  5 arm(s): R13 trailing semicolon, R13 parentheses, R14-S3 percent inside brackets +2 more
 emphasis (trailing)        reds  1 arm(s): R13 bold
-table cell (trailing)      reds  1 arm(s): R13 table cell
+table cell (trailing)      reds  1 arm(s): attached: a table cell closed with no padding
 figure value class         reds  8 arm(s): R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +5 more
 boolean spellings          reds  2 arm(s): R14-S1 boolean t as psql prints, R14-S1 boolean f as psql prints
 signed values              reds  2 arm(s): R14-S1 negative, R14-S1 positive sign
@@ -1080,7 +1088,7 @@ no repository redirects the subject reds 10 arm(s): R17 a repository planted ins
 markdown is not evidence   reds  1 arm(s): R12 E4b a doc is not its own evidence
 the checker is not its own evidence reds  1 arm(s): R16-F1 the checker is not its own evidence
 
-29 guards, every one of them deleted and measured
+30 guards, every one of them deleted and measured; 2 of them measured behind the guard that subsumes them
 ```
 
 <!-- END GENERATED guard-matrix -->
@@ -1126,23 +1134,23 @@ their own set and are not comparable.
 <!-- BEGIN GENERATED surface: python3 -I prep/phase11/harness/check_fenced_figures.py --emit surface -->
 
 ```text
-port=55512           not a candidate (exempted or not a figure)
-migrations=87        not a candidate (exempted or not a figure)
-rows=59              REDS THE GATE
-axes=2               passes: something emits it
-variants=6           REDS THE GATE
-cases=121            REDS THE GATE
-races=13             REDS THE GATE
-entries=80           REDS THE GATE
-copies=1             REDS THE GATE
-attempts=3           REDS THE GATE
-deleted=0            passes: something emits it
-present=true         passes: something emits it
-owner_sees=0         passes: something emits it
-chosen=1             passes: something emits it
-identities=2         passes: something emits it
-ratio=0.5            REDS THE GATE
-enabled=false        REDS THE GATE
+port = 55512           not a candidate (exempted or not a figure)
+migrations = 87        not a candidate (exempted or not a figure)
+rows = 59              REDS THE GATE
+axes = 2               passes: something emits it
+variants = 6           REDS THE GATE
+cases = 121            REDS THE GATE
+races = 13             REDS THE GATE
+entries = 80           REDS THE GATE
+copies = 1             REDS THE GATE
+attempts = 3           REDS THE GATE
+deleted = 0            passes: something emits it
+present = true         passes: something emits it
+owner_sees = 0         passes: something emits it
+chosen = 1             passes: something emits it
+identities = 2         passes: something emits it
+ratio = 0.5            REDS THE GATE
+enabled = false        REDS THE GATE
 
 9 of 17 realistic figure-shaped lines would red the gate if a document wrote them
 ```
@@ -1251,7 +1259,7 @@ The counts in this section and the two blocks in §7.14 are generated:
 <!-- BEGIN GENERATED arm-counts: python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts -->
 
 ```text
-40 catch arms, 15 skip arms, 2 pass arms, 24 others
+55 catch arms, 14 skip arms, 2 pass arms, 24 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -2550,6 +2558,168 @@ this plant therefore survives the bare scan and reds `--selftest`, which is the
 first time this class has been caught by anything in the harness.
 
 **No signature is claimed.** Round 23 of the independent challenge and the
+coordinator diff review after it are owed on this range; **`24f6ebe` is still the
+last fully signed head**, `READY_TO_PROMOTE = NO`, no migration number exists,
+and `OD-P11-07` is the owner's alone.
+
+---
+
+## 7.24 ROUND 23 (`REJECT` at `78f9392`) and the coordinator's diff review of the same head (`NO-SIGN`) — a candidate is a TOKEN, and dirtiness is a question about the DISK
+
+Both reviews, again independently, measured the same two defects, and the second
+one is the more serious because it makes a green transcript indistinguishable
+from an admissible one.
+
+**`R23-F1` (BLOCKER): a fenced line carrying two `key=value` pairs was checked
+not at all.** `_is_figure` partitions on the FIRST `=`, so on
+`core_routine=1 fabricated_count=999` the key is `core_routine` and the value is
+`1 fabricated_count=999` — not a number, therefore not a figure, therefore not a
+candidate. The line was never weighed. That is this pack's own output shape: the
+probe inventory and several tables print two pairs on a line, which is exactly
+what a reader pastes. **The answer is structural:** a candidate is a TOKEN now,
+not a line. `_segments` splits on whitespace as well as on the `--` marker, under
+a named guard of its own (`whitespace splits the line`), and every token is
+weighed in its own right. Eight new arms carry the round's shapes — a pair after
+the figure, a pair before it, a tab between them, a semicolon between them, two
+table cells, three pairs, the instrument's own shape — and the ninth is the bound
+this phase has CARRIED since round 13 and can now close: **prose on the same line
+no longer excuses the figure beside it.**
+
+**The price of that widening was measured on this pack's own prose, the way round
+13's was.** Candidates rose from 7 to 22 and the scan went red with nine
+`NOT EMITTED` findings, every one of them from the manifest's own generated
+`surface` block, which printed `rows=59` and sixteen more shapes as figures of
+its own. They are a probe INVENTORY, not measurements, so the generator now
+prints them as `rows = 59` — spaces around the `=`, which the key class refuses —
+with the reason written at the generator rather than in an exemption list. Two
+further consequences were measured and answered rather than waived:
+
+- **Nine decoration guards lost their last arm to the split**, because a space
+  between `<!--`, `|`, `>`, `###` or `result:` and the figure is now a token
+  boundary. Seven are re-armed with the same decorations written WITHOUT the
+  space, which is how a generator writes them: `<!--fabricated_count=999-->`,
+  `|fabricated_count=999`, `fabricated_count=999|`, `###fabricated_count=999`,
+  `>fabricated_count=999`, `result:fabricated_count=999` and a backticked word
+  against the figure. The remaining two — `list marker` and
+  `dash marker splits the line` — cannot fire inside a segment that was cut on
+  whitespace at all, so they are declared SUBSUMED, with the guard that subsumes
+  them named; and the matrix MEASURES the subsumption instead of asserting it: it
+  deletes the subsuming guard and then deletes the subsumed one behind it, and
+  the entry fails unless the second deletion reds an arm the first does not. An
+  entry that starts reding arms on its own fails too. The generated block prints
+  both figures.
+- **A digit run inside a NAME is not a figure.** The restatement rule flagged
+  seven sentences in three documents, all of them because this pack's triggers
+  carry positions — `product_variants_30_archive_requires_zero_stock`, `._20_`,
+  `._30_` — and the guard count happens to be that same number. A gate that reds the truth is
+  a gate people learn to ignore, so `NUMBER` now excludes a digit run adjacent to
+  an underscore, with an arm on each side of that boundary: the summary's figure
+  restated in prose is still caught, and the same digits inside a trigger name
+  are not. Two sentences that wrote a bare position were reworded to `` `_30_` ``
+  so they say what they mean.
+
+**`R23-F2` (BLOCKER): `git status --porcelain` is a statement about the INDEX,
+and it was the only evidence all three refusals had.** The coordinator built it
+on a frozen migration: `git update-index --skip-worktree` on
+`0086_phase4_rls_quals_once_per_query.sql`, then a `CREATE TABLE` appended to it.
+`git status --porcelain` printed nothing, the whole suite returned 0 with
+`SOURCE_TREE_DIRTY : no`, `MIGRATIONS_SHA` unchanged — it was read from `HEAD`'s
+tree, not from the disk — and the planted table was in the database at the end of
+the run. **The transcript could not be told apart from an admissible one.**
+
+The replacement asks the DISK, in all three places, and nothing asks the index
+for the answer any more:
+
+1. **Every committed path's bytes are recomputed and compared with the blob the
+   commit holds** — `sha1("blob %d\0" % len(data) + data)` against the `ls-tree`
+   object name — so drift, a missing file (a sparse checkout leaves `status`
+   clean) and a changed EXECUTABLE BIT are each named: `SELF-TREE-DIRTY`,
+   `HARNESS-TREE-DIRTY`, `SOURCE-TREE-DIRTY`. Reading the mode from `os.stat`
+   rather than from git closes the coordinator's `F2` as well, because
+   `core.fileMode=false` hides a mode change from git and hides nothing from the
+   disk.
+2. **An index flag is a refusal of its own**, by name, from `git ls-files -v`:
+   `SELF-INDEX-FLAGGED`, `HARNESS-INDEX-FLAGGED`, `SOURCE-INDEX-FLAGGED`. A tree
+   that LIES about being dirty is refused for lying, separately from being dirty,
+   which is the distinction the round turned on.
+3. **`MIGRATIONS_SHA256` is computed from the files on disk**, with the digest
+   `HEAD` holds printed beside it. A figure taken from the commit cannot measure
+   what ran.
+4. **`SOURCE_TREE_DIRTY` is a measurement, not a report.** The shell step asks
+   the second reader (`--tree-state`), which recomputes every committed path's
+   blob name from the bytes on disk, and `git status` is kept beside it only to
+   LIST entries for a human. The same question is asked again in step 7, where
+   the claim that the frozen tree did not move DURING the run used to be
+   `git status` counting zero — which is precisely the figure the coordinator's
+   flag falsified — and the migrations' disk digest is printed a second time so
+   a reader can compare the two rather than take a word for it.
+
+**The clean-tree law is a KEY now, with arms that read refusal names.** The round
+was right that it was unarmed: no arm read `SELF-TREE-DIRTY` by name, and
+deleting the checker's half — one line, committed on a copy — red nothing. There
+are two keys, `clean-tree` and `index-flags`, and four worlds measured against
+the LIVE consultation: a committed document drifted on disk, an executable bit
+the commit does not carry, a committed document deleted from the tree, and the
+same drift hidden behind `--assume-unchanged`. Each reads the name, with the key
+deleted beside it; the deletion control on the reader's copy removes the live
+`dirty = tuple(_tree_dirty(top)) + tuple(_index_flagged(top))` line and the name
+goes.
+
+**Two things the law's widening cost, both answered rather than carried.** A
+generator must be able to run in a tree that is not yet clean — regeneration is
+HOW a tree is brought to the state the law demands — so `--regenerate` and
+`--emit` suspend the two tree keys for the process, and nothing else does: they
+WRITE documents and print no verdict, while `scan`, `--check-blocks` and
+`--selftest` all keep consulting both. And a dirty tree now reds `--selftest`
+through ninety-odd arms that each return 5, so the selftest refuses FIRST, by
+name, and says the tree is not the committed tree instead of leaving a reader to
+diagnose it.
+
+**`R23-S1` is two-thirds closed and the remaining third is named, not described
+as armed.** The second reader's census refusals are read by NAME now, in worlds
+built for them: a `.git` inside the harness gives `HARNESS-NESTED-REPO`, and a
+`.git` FILE whose gitdir carries `core.worktree` gives
+`HARNESS-TOPLEVEL-DISAGREES` — each with a rename control, so the arm reads the
+name and not the exit code. **`HARNESS-HEAD-DISAGREES` is NOT armed:** both reads
+resolve `HEAD` through the same repository, and every construction I could build
+where they differ is refused earlier by the census for another reason, so the arm
+would measure that earlier refusal. It stays UNMEASURED-at-runtime, which is what
+`R20-S2` asked for in the same position and is not the same sentence as "armed".
+**`R23-S2` is closed:** every git read in `rebuild_and_prove.sh` now goes through
+one hardened `gitq` — the `GIT_*` set scrubbed whole, `GIT_CONFIG_NOSYSTEM`,
+`GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME` and `HOME` to `/dev/null`,
+`--no-replace-objects`, a pinned `PATH` — so the shell step is no longer the one
+site without this phase's own Phase 14 hardening. **`R23-S3` and `R23-S4` stay
+named residuals**, unchanged: the interpreter at step `0c-0` is resolved from
+`PATH` and `-I` does not disable a system-site `.pth`, which is scope rather than
+a hole in the law; and `G6`'s cold root build is red on `main` too.
+
+**What this law still does not stop, stated at the law.** A planter who COMMITS;
+nothing executable can. An uncommitted edit that deletes the law in the same
+file — the declared limit of round 22, re-measured here and unchanged. And an
+ignored file with no deciding suffix, which the coordinator measured and which
+decides nothing.
+
+**EVIDENCE.** Every world below is a throwaway clone of the candidate commit,
+made for the probe and deleted after it; the project's working tree was not
+edited and **no frozen migration was modified anywhere a reviewer or a build
+reads from** — the drift is planted in a clone and the clone is thrown away. The
+transcripts are `harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND23.txt` (the four gates
+on the committed clone, the five probe worlds, and the authoritative suite from
+zero on PG 16 at `en_US.utf8` with `NOSUPERUSER NOBYPASSRLS` roles) and
+`harness/RUN-EVIDENCE-PROBE-ROUND23.txt` (the probe on its own). Each says in its
+own header which tree it measured: a scratch commit whose tree is this commit's
+minus those two `.txt` files, which are not deciding files.
+
+| world | selftest / scan / blocks / reader | what refused |
+|---|---|---|
+| control: the candidate tree, committed | 0 / 0 / 0 / 0, 0 failed arms | nothing |
+| `R23-F1`: a fenced line with two pairs, COMMITTED | 0 / **1** / 0 / 0 | the scan, naming BOTH tokens `NOT EMITTED` — at `78f9392` this line was green |
+| `R23-F2`: a frozen migration drifted, hidden with `--skip-worktree` | 5 / 5 / 5 / 5 | `git status --porcelain` printed NOTHING; `SELF-TREE-DIRTY` and `HARNESS-TREE-DIRTY` by bytes, and the script `SOURCE-INDEX-FLAGGED` before the cluster |
+| the same drift with NO flag | 5 / 5 / 5 / 5 | the same by bytes; the script `SOURCE-TREE-DIRTY` before the cluster |
+| the same, plus the index law deleted in the same uncommitted file | 1 / 5 / 5 / 5 | **the declared limit** — and the byte half of the law, which that edit does not delete, still refuses, so the scan and the block check are 5 and the selftest reds on the edited file's own bytes |
+
+**No signature is claimed.** Round 24 of the independent challenge and a
 coordinator diff review after it are owed on this range; **`24f6ebe` is still the
 last fully signed head**, `READY_TO_PROMOTE = NO`, no migration number exists,
 and `OD-P11-07` is the owner's alone.

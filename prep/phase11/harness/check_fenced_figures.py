@@ -265,6 +265,12 @@ LEAD_PAREN = re.compile(r"^[(\[]+")
 LEAD_EMPH = re.compile(r"^[*_]{1,3}")
 LABEL = re.compile(r"^[A-Za-z][A-Za-z ]{0,30}:\s*")  # `result: deleted=0`
 MARKER = re.compile(r"(?:(?<=\s)|^)--+(?=\s|$)")  # a `--` comment marker
+# `R23-F1`. A line was ONE candidate after the marker split, and `_is_figure`
+# partitions on the FIRST `=`, so a second `key=value` on the same line landed
+# inside the first one's value and the value stopped matching: `rows=4242 a=1`
+# was not weighed and rejected, it was never a candidate, and neither was the
+# pair beside it. Whitespace splits the line too, so a candidate is a TOKEN.
+SPACES = re.compile(r"\s+")
 TRAIL_EMPH = re.compile(r"[*_]{1,3}$")
 TRAIL_CELL = re.compile(r"\|\s*$")
 # `%` is deliberately absent: it belongs to the value, not to the decoration.
@@ -311,6 +317,7 @@ MATCHER_GUARDS = (
     "bracket",
     "emphasis (leading)",
     "dash marker splits the line",
+    "whitespace splits the line",
     "label prefix",
     "trailing punctuation",
     "emphasis (trailing)",
@@ -339,6 +346,25 @@ HAYSTACK_GUARDS = (
 )
 
 GUARDS = MATCHER_GUARDS + HAYSTACK_GUARDS
+
+# A guard whose work another guard now does on its own, with the guard that
+# does it. `R23-F1` made every whitespace-separated token a candidate in its
+# own right, and two guards lost their last arm to it: `LEAD_LIST` wants
+# `\s+` after the marker and `MARKER` wants whitespace or the line end after
+# the dashes, and neither can see whitespace inside a segment that was cut on
+# whitespace.
+#
+# The law is still "a guard that reds nothing: delete it or arm it", and this
+# is the arming, not an exemption: the matrix DELETES the subsuming guard and
+# then deletes this one behind it, and the entry fails unless the second
+# deletion reds an arm the first does not. An entry that starts reding arms on
+# its own fails too, because then it is no longer subsumed and the sentence
+# above it has gone stale. Nothing here is a promise: both halves are
+# measured, and the generated block prints both figures.
+SUBSUMED = {
+    "list marker": "whitespace splits the line",
+    "dash marker splits the line": "whitespace splits the line",
+}
 
 def _is_figure(s, skip=()):
     """Is `s` a bare `key=<number|boolean>`? The narrowest part of the design.
@@ -439,12 +465,34 @@ def _segments(line, skip=()):
     cannot be asymmetric: whatever sits on either side of the marker is
     weighed on its own.
 
+    `R23-F1`, and it is the shape eight rounds walked past: after the marker
+    split a LINE was one candidate, and `_is_figure` partitions on the FIRST
+    `=`. So `rows=4242 a=1` put `4242 a=1` in the value, the value stopped
+    matching, and the line produced NO candidate at all -- not a candidate
+    weighed and rejected, which the count would have shown, but nothing. The
+    challenger measured `rows=4242 a=1`, `a=1 rows=4242`, a tab between them, a
+    semicolon, two table cells and three pairs, all of them empty, and drove it
+    end to end: `overlay_routine=4242` alone reds, and
+    `core_routine=1 overlay_routine=4242` passes. **And that shape is what this
+    phase's own instruments PRINT** -- `core_routine=1 overlay_routine=0` comes
+    out of Pack B and sits in ten committed transcripts -- so the likeliest
+    thing a reader pastes was the one shape never checked. It is not the
+    disclosed bound, which is about PROSE around a figure: two `key=value`
+    pairs are not prose.
+
+    So WHITESPACE splits the line as well, and a candidate is a TOKEN. The cost
+    in the other direction is measured rather than asserted, the way round 13's
+    widening was: `--surface` reports it against the real haystack, and the
+    enrolled block in the manifest carries the number.
+
     EVERY transformation here is behind a named guard, for the same reason as
     in `_strip`, and `--selftest` parses this function to check it.
     """
     parts = [line]
     if "dash marker splits the line" not in skip:
         parts = MARKER.split(line)
+    if "whitespace splits the line" not in skip:
+        parts = SPACES.split(" ".join(parts))
     return parts
 
 
@@ -588,6 +636,11 @@ def _git_env():
     env["GIT_GRAFT_FILE"] = os.devnull
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
     env["GIT_TERMINAL_PROMPT"] = "0"
+    # `R22-S3`, applied in both readers rather than in one: the GLOBAL config is
+    # found through `HOME` and through `XDG_CONFIG_HOME`, and neither is a
+    # `GIT_*` key, so neither was removed by the scrub above.
+    env["XDG_CONFIG_HOME"] = os.devnull
+    env["HOME"] = os.devnull
     env["LC_ALL"] = "C"
     return env
 
@@ -973,12 +1026,37 @@ _FRAME_PARSED = []
 # refusal at all, so deleting the comparison left the arm printing
 # `as required`. A check with no deletion control is a check nobody has
 # measured ([[a fix is done only when deleting IT reds a gate]]).
-OBJECT_KEYS = ("attr-identity", "fn-identity", "self-bytes", "harness-bytes")
+OBJECT_KEYS = (
+    "attr-identity",
+    "fn-identity",
+    "self-bytes",
+    "harness-bytes",
+    # `R23`: the clean-tree law and the index-flag law were consulted inside
+    # `committed_harness`, which is the `self-bytes` check, so neither had a
+    # deletion control of its own -- the challenger deleted the checker's half
+    # in one line, committed on a copy, and nothing red. They are keys now,
+    # which is what makes "deleting IT reds a gate" measurable per law.
+    "clean-tree",
+    "index-flags",
+)
+
+
+# The two tree laws, named once so the generation suspension below and the
+# keyed deletion arms read the same strings.
+TREE_LAW_KEYS = frozenset(("clean-tree", "index-flags"))
+
+# Set for the whole process by `--regenerate` and `--emit`, and by nothing
+# else. See `_suspend_tree_law_for_generation`.
+_GENERATING = []
 
 
 def _objects_enabled(objects):
     """`None` = every object check (the real run). A set = only those keys."""
-    return frozenset(OBJECT_KEYS) if objects is None else frozenset(objects)
+    if objects is not None:
+        return frozenset(objects)
+    if _GENERATING:
+        return frozenset(OBJECT_KEYS) - TREE_LAW_KEYS
+    return frozenset(OBJECT_KEYS)
 
 
 # The files whose bytes DECIDE: every executable file under the harness. The
@@ -1021,31 +1099,146 @@ def _tree_dirty(top):
     What can be true, and is enforced here, in the second reader and in the
     shell step, is that such a tree PRODUCES NO ADMISSIBLE TRANSCRIPT. A dirty
     tree is refused by name wherever the run is entered, including the bare
-    scan a reader or CI runs alone. So the sentence this file used to carry --
+    scan a reader or CI runs alone.
+
+    `R23-F2`, and it is why this reads bytes rather than a report:
+    `git status --porcelain` is a statement about the INDEX, and
+    `git update-index --assume-unchanged <path>` is the documented way to stop
+    it looking. One such flag edits no file, commits nothing and defeated all
+    three clean-tree sites at once -- the challenger produced a full
+    authoritative run printing `SOURCE_TREE_DIRTY : no`, at the committed sha,
+    with a fabricated figure on disk in a document the commit does not hold.
+    Its bite was on the DOCUMENTS, which the byte law does not cover and which
+    are where the figures are. So nothing here asks git what changed: every
+    path the COMMIT holds is read off the disk and its blob name recomputed
+    from the bytes, which no index flag can move.
+
+    WHAT THIS DOES NOT COVER, said here rather than discovered: a file the
+    commit does not hold. An untracked `.py`, `.sh` or `.sql` under the harness
+    is refused by the byte law (`SELF-FILE-UNCOMMITTED`); an untracked document
+    can only ever ADD a figure, and a figure is legitimised by the haystack,
+    which is read from the commit -- so it reds rather than passes. A mode
+    change is not a content change and is not read here. So the sentence this file used to carry --
     "an escape therefore has to be COMMITTED to work" -- is replaced by the
     one that is true: a transcript is evidence only when it was produced from a
     CLEAN tree whose `HEAD` is the committed sha, and reviewers run from fresh
     clones. An uncommitted edit, one file or many, is the declared limit.
     """
     try:
-        out = _git(top, ["status", "--porcelain"]).decode("utf-8", "surrogateescape")
+        fmt = _git(top, ["rev-parse", "--show-object-format"]).decode("ascii", "replace").strip()
+        sha = _commit_of(top)
+        listed = _git(top, ["ls-tree", "-r", "-z", "--full-tree", sha]).decode(
+            "utf-8", "surrogateescape"
+        )
     except (Refusal, RuntimeError, OSError) as exc:
         return (
-            "SELF-TREE-STATE-UNREADABLE: whether the work tree at %s carries "
-            "uncommitted changes could not be determined (%s)." % (top, exc),
+            "SELF-TREE-STATE-UNREADABLE: whether the work tree at %s is the tree the "
+            "commit holds could not be determined (%s)." % (top, exc),
         )
-    entries = [l for l in out.split("\n") if l.strip()]
-    if not entries:
+    if fmt != "sha1":
+        return (
+            "SELF-OBJECT-FORMAT-UNSUPPORTED: this repository's object format is %r and "
+            "the comparison below computes blob names as sha1, so this run cannot say "
+            "whether the work tree is the committed tree." % fmt,
+        )
+    moved, gone, mode_moved = [], [], []
+    for row in listed.split("\0"):
+        if not row:
+            continue
+        meta, _tab, path = row.partition("\t")
+        bits = meta.split(" ")
+        if len(bits) < 3 or bits[1] != "blob":
+            # A gitlink (`commit`) is another repository's HEAD and not bytes
+            # this tree carries; the census refuses a nested repository by name
+            # before this runs.
+            continue
+        mode, oid = bits[0], bits[2]
+        full = os.path.join(top, path)
+        try:
+            if mode == "120000":
+                data = os.readlink(full).encode("utf-8", "surrogateescape")
+            else:
+                with open(full, "rb") as fh:
+                    data = fh.read()
+        except OSError:
+            gone.append(path)
+            continue
+        if hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() != oid:
+            moved.append(path)
+        if mode in ("100644", "100755"):
+            # The coordinator's `F2` (low): with `core.fileMode=false` a mode
+            # change is invisible to `git status` in all four places. The disk's
+            # own bits are not git's opinion, so they are read here: an
+            # executable bit the commit does not carry, or one it carries and
+            # the file has lost, is drift like any other.
+            try:
+                executable = bool(os.stat(full).st_mode & 0o111)
+            except OSError:
+                gone.append(path)
+                continue
+            if executable != (mode == "100755"):
+                mode_moved.append(path)
+    if not moved and not gone and not mode_moved:
+        return ()
+    count = len(moved) + len(gone) + len(mode_moved)
+    return (
+        "SELF-TREE-DIRTY: %d path%s the commit holds %s not what is on disk at %s, so "
+        "this run is not a run of the committed tree and its output is not evidence. "
+        "%s%s%s"
+        % (
+            count,
+            "" if count == 1 else "s",
+            "is" if count == 1 else "are",
+            top,
+            "Moved: %s. " % "; ".join(sorted(moved)[:5]) if moved else "",
+            "Missing: %s. " % "; ".join(sorted(gone)[:5]) if gone else "",
+            "Mode: %s." % "; ".join(sorted(mode_moved)[:5]) if mode_moved else "",
+        ),
+    )
+
+
+def _index_flagged(top):
+    """The paths whose INDEX ENTRY has been flagged to stop git looking at them.
+
+    The coordinator's `F1` on the previous head, which is `R23-F2` carried one
+    step further and measured: `git update-index --skip-worktree` on migration
+    `0086` plus an appended `CREATE TABLE` gave a full green suite printing
+    `SOURCE_TREE_DIRTY : no`, with `MIGRATIONS_SHA` matching the clean run
+    because it was read from `HEAD`, and the planted table really ran.
+    `--assume-unchanged` does the same.
+
+    The byte comparison above already catches the drift those flags hide. This
+    refusal is separate and by its own name because the flag itself is a
+    statement that a tracked path is not to be looked at, and a run that reads
+    that path has no business proceeding on it -- and because a flag can hide a
+    MISSING file (sparse checkout) as easily as a changed one. `ls-files -v`
+    marks assume-unchanged with a lowercase tag and skip-worktree with `S`.
+    """
+    try:
+        out = _git(top, ["ls-files", "-v", "-z"]).decode("utf-8", "surrogateescape")
+    except (Refusal, RuntimeError, OSError) as exc:
+        return (
+            "SELF-INDEX-STATE-UNREADABLE: whether any tracked path is flagged "
+            "assume-unchanged or skip-worktree could not be determined (%s)." % exc,
+        )
+    flagged = []
+    for row in out.split("\0"):
+        if not row or len(row) < 2 or row[1] != " ":
+            continue
+        tag, path = row[0], row[2:]
+        if tag == "S" or tag.islower():
+            flagged.append("%s (%s)" % (path, "skip-worktree" if tag == "S" else "assume-unchanged"))
+    if not flagged:
         return ()
     return (
-        "SELF-TREE-DIRTY: the work tree at %s carries %d uncommitted entr%s, so this "
-        "run is not a run of the committed code and its output is not evidence. The "
-        "first of them: %s"
+        "SELF-INDEX-FLAGGED: %d tracked path%s flagged so that git stops looking at "
+        "%s: %s. A run whose inputs are marked not-to-be-read is not a measurement of "
+        "the committed tree."
         % (
-            top,
-            len(entries),
-            "y" if len(entries) == 1 else "ies",
-            "; ".join(e.strip() for e in entries[:5]),
+            len(flagged),
+            " is" if len(flagged) == 1 else "s are",
+            "it" if len(flagged) == 1 else "them",
+            "; ".join(sorted(flagged)[:5]),
         ),
     )
 
@@ -1142,7 +1335,7 @@ def committed_harness(harness_dir=None, compare=True):
         }
     except Refusal as why:
         return ("SELF-ANCHOR-UNRESOLVED: %s" % why,), {}
-    msgs = list(_tree_dirty(top))
+    msgs = []
     want = [n for n in found if rel_of[n] in tracked]
     for n in found:
         if rel_of[n] not in tracked:
@@ -1265,6 +1458,36 @@ def harness_bytes_pinned():
     return False, tuple(msgs)
 
 
+def tree_committed():
+    """The clean-tree law, consulted live: refusals or nothing.
+
+    A key of its own since `R23`, so deleting it is a measurable deletion and
+    not a line nobody's arm reads. The subject is resolved exactly as the
+    deciding bytes are, through the structural anchor, so a run that cannot say
+    which commit it is standing on refuses here too rather than skipping.
+    """
+    try:
+        top = _subject_top(_harness_dir())
+    except Refusal as why:
+        return (
+            "SELF-TREE-ANCHOR-UNRESOLVED: whether the work tree is the committed tree "
+            "cannot be asked without the commit. The anchor refused: %s" % why,
+        )
+    return _tree_dirty(top)
+
+
+def index_unflagged():
+    """The index-flag law, consulted live: refusals or nothing."""
+    try:
+        top = _subject_top(_harness_dir())
+    except Refusal as why:
+        return (
+            "SELF-INDEX-ANCHOR-UNRESOLVED: whether a tracked path is flagged cannot be "
+            "asked without the repository. The anchor refused: %s" % why,
+        )
+    return _index_flagged(top)
+
+
 def frame_admissible(objects=None):
     """(ok, refusals) for the REAL decision frame, parsed once per process.
 
@@ -1299,6 +1522,10 @@ def _frame_refusals(keys):
     if "harness-bytes" in keys:
         _ok, m = harness_bytes_pinned()
         msgs += list(m)
+    if "clean-tree" in keys:
+        msgs += list(tree_committed())
+    if "index-flags" in keys:
+        msgs += list(index_unflagged())
     for func in (figures_on, tokens_in, _exempted, _is_figure):
         try:
             tree = _source_of(func)
@@ -1452,11 +1679,42 @@ CATCH = [
     # R14-S3: the figure checked must be the figure shown.
     ("R14-S3 percent on a real figure", "deleted=0%"),
     ("R14-S3 percent inside brackets", "(deleted=0%)"),
+    # `R23-F1`: a candidate is a TOKEN, so a second `key=value` on the line no
+    # longer swallows the first one's value -- and these are the shapes the
+    # challenger measured empty at `78f9392`, each of them a line this phase's
+    # own instruments could print. The last one is Pack B's own output shape
+    # with a fabricated number in it, which is the likeliest thing a reader
+    # pastes.
+    ("R23-F1 a second pair after the figure", "fabricated_count=999 a=1"),
+    ("R23-F1 a pair before the figure", "a=1 fabricated_count=999"),
+    ("R23-F1 a tab between the pairs", "fabricated_count=999\ta=1"),
+    ("R23-F1 a semicolon between the pairs", "fabricated_count=999; a=1"),
+    ("R23-F1 two table cells", "| fabricated_count=999 | a=1 |"),
+    ("R23-F1 three pairs", "fabricated_count=999 a=1 b=2"),
+    ("R23-F1 the instrument's own shape", "core_routine=1 fabricated_count=999"),
+    # And the bound this closes rather than carries: PROSE on the line used to
+    # excuse the figure beside it, disclosed as a residual since round 13. A
+    # token is weighed wherever it sits now, and `--surface` reports what that
+    # costs on this pack's own prose.
+    ("R23-F1 prose no longer excuses the figure", "it printed fabricated_count=999 and then stopped"),
+    # The seven shapes that KEEP the decoration guards measured now that a
+    # token, not a line, is the candidate. Splitting on whitespace separates
+    # `<!--` or `|` from the figure whenever a space sits between them, so the
+    # arms that used to measure those guards stopped measuring them and the
+    # matrix said so. These are the same decorations written WITHOUT the
+    # space -- which is how a generator writes them, not a contrivance -- and
+    # each one reds its own guard again.
+    ("attached: an HTML comment with no spaces", "<!--fabricated_count=999-->"),
+    ("attached: a backticked word against the figure", "fabricated_count=999`note`"),
+    ("attached: a blockquote with no space", ">fabricated_count=999"),
+    ("attached: a heading with no space", "###fabricated_count=999"),
+    ("attached: a table cell opened with no padding", "|fabricated_count=999"),
+    ("attached: a table cell closed with no padding", "fabricated_count=999|"),
+    ("attached: a label with no space", "result:fabricated_count=999"),
 ]
 SKIP = [
     ("named: inline code span only", "the value `fabricated_count=999` is quoted in prose"),
     ("named: UPPERCASE key", "FABRICATED_COUNT=999"),
-    ("named: prose on the line", "it printed fabricated_count=999 and then stopped"),
     ("R13-S3 p11_repo=/var/tmp/myclone", "p11_repo=/var/tmp/myclone"),
     ("R13-S3 ref=heads/main", "ref=heads/main"),
     ("R13-S3 expect=catalog.foo_invalid", "expect=catalog.foo_invalid"),
@@ -2006,18 +2264,30 @@ def guard_matrix():
     """
     ok = True
     print("  -- each guard deleted on its own, and the arms that stop answering --")
-    for guard in GUARDS:
-        flipped = [label for label, want, run in _arms_with((guard,)) if run() != want]
-        good = bool(flipped)
+    for guard, flipped, behind in _guard_rows():
         shown = ", ".join(flipped[:3]) + (" +%d more" % (len(flipped) - 3) if len(flipped) > 3 else "")
-        print(
-            "  guard  %-24s reds %2d arm(s): %-52s -> %s"
-            % (guard, len(flipped), shown, "measured" if good else "**REDS NOTHING: delete it or arm it**")
-        )
+        if behind is None:
+            good = bool(flipped)
+            verdict = "measured" if good else "**REDS NOTHING: delete it or arm it**"
+        elif flipped:
+            # The entry says another guard does this one's work, and it is
+            # doing work of its own: the sentence has gone stale.
+            good = False
+            verdict = "**NO LONGER SUBSUMED: it reds arms on its own, drop the entry**"
+        else:
+            good = bool(behind)
+            shown = ", ".join(behind[:3]) + (" +%d more" % (len(behind) - 3) if len(behind) > 3 else "")
+            verdict = (
+                "measured behind %r" % SUBSUMED[guard]
+                if good
+                else "**REDS NOTHING EVEN BEHIND %r: delete it or arm it**" % SUBSUMED[guard]
+            )
+        print("  guard  %-24s reds %2d arm(s): %-52s -> %s" % (guard, len(flipped if behind is None else behind), shown, verdict))
         ok = ok and good
     print(
-        "  %d guards, every one of them deleted and measured -- %s"
-        % (len(GUARDS), "none reds nothing" if ok else "FAILURES ABOVE")
+        "  %d guards, every one of them deleted and measured, %d of them behind the "
+        "guard that subsumes them -- %s"
+        % (len(GUARDS), len(SUBSUMED), "none reds nothing" if ok else "FAILURES ABOVE")
     )
     return ok
 
@@ -3659,6 +3929,45 @@ def decision_test():
 # are listed too, with the description, so the gap is visible rather than
 # absent. An arm whose label names a finding with no entry here FAILS.
 PROVENANCE = {
+    # `R23-F1`: the round measured the DEFECT -- `_is_figure` partitions on the
+    # first `=`, so a line carrying two pairs was never a candidate at all --
+    # and reported it as that defect over shapes, not as nine document lines.
+    # Each arm below is a shape, so each records a description and not a
+    # verbatim plant, and the shape it plants is the one the finding names.
+    "R23-F1 a second pair after the figure": (
+        None,
+        "two `key=value` pairs on one line, the defect the round reported",
+    ),
+    "R23-F1 a pair before the figure": (
+        None,
+        "the same two pairs in the other order, which the round's reading covers",
+    ),
+    "R23-F1 a tab between the pairs": (
+        None,
+        "the same two pairs separated by a tab rather than a space",
+    ),
+    "R23-F1 a semicolon between the pairs": (
+        None,
+        "the same two pairs with punctuation between them",
+    ),
+    "R23-F1 two table cells": (
+        None,
+        "the same two pairs in a markdown table row, reported as a shape",
+    ),
+    "R23-F1 three pairs": (
+        None,
+        "the same defect with a third pair, which bounds it at more than two",
+    ),
+    "R23-F1 the instrument's own shape": (
+        None,
+        "this pack's own probe output, whose two pairs per line are exactly what "
+        "the round pasted -- reported as the instrument's shape, not as a line",
+    ),
+    "R23-F1 prose no longer excuses the figure": (
+        None,
+        "the bound this phase disclosed in round 13 and carried until now: prose "
+        "on the line, reported as a residual rather than as a plant",
+    ),
     "R15-S2 text before the marker": ("note -- fabricated_count=999", None),
     "R15-S2 label before the marker": (None, "`result: -- figure`, reported as a shape"),
     "R15-S3 devanagari digits": (None, "Devanagari named as a family, not as a line"),
@@ -3914,10 +4223,22 @@ _ROWS = {}
 def _guard_rows():
     """(guard, the arms its deletion reds) for every guard, computed once."""
     if "guard" not in _ROWS:
-        _ROWS["guard"] = [
-            (guard, [label for label, want, run in _arms_with((guard,)) if run() != want])
-            for guard in GUARDS
-        ]
+        def reds(skip):
+            return [label for label, want, run in _arms_with(skip) if run() != want]
+
+        rows = []
+        for guard in GUARDS:
+            alone = reds((guard,))
+            behind = None
+            if guard in SUBSUMED:
+                # Measured, not asserted: the arms this guard reds once the
+                # guard that subsumes it is gone, minus the arms that guard's
+                # own deletion already reds.
+                over = SUBSUMED[guard]
+                already = set(reds((over,)))
+                behind = [a for a in reds((guard, over)) if a not in already]
+            rows.append((guard, alone, behind))
+        _ROWS["guard"] = rows
     return _ROWS["guard"]
 
 
@@ -3942,13 +4263,28 @@ def _surface_rows():
 
 def emit_guard_matrix():
     lines = ["each guard deleted on its own, and the arms that stop answering:", ""]
-    for guard, flipped in _guard_rows():
+    for guard, flipped, behind in _guard_rows():
         shown = ", ".join(flipped[:3]) + (
             " +%d more" % (len(flipped) - 3) if len(flipped) > 3 else ""
         )
-        lines.append("%-26s reds %2d arm(s): %s" % (guard, len(flipped), shown))
+        if behind is None:
+            lines.append("%-26s reds %2d arm(s): %s" % (guard, len(flipped), shown))
+        else:
+            lines.append(
+                "%-26s reds %2d arm(s) alone, %d behind the guard that subsumes it: %s"
+                % (
+                    guard,
+                    len(flipped),
+                    len(behind),
+                    ", ".join(behind[:3])
+                    + (" +%d more" % (len(behind) - 3) if len(behind) > 3 else ""),
+                )
+            )
     lines.append("")
-    lines.append("%d guards, every one of them deleted and measured" % len(GUARDS))
+    lines.append(
+        "%d guards, every one of them deleted and measured; %d of them measured "
+        "behind the guard that subsumes them" % (len(GUARDS), len(SUBSUMED))
+    )
     return lines
 
 
@@ -3957,10 +4293,25 @@ def claims_guard_matrix():
     # behind it. The labels are detail, and putting them in the claim gave the
     # comparison a vocabulary of hundreds of words, which matched the pack's
     # ordinary prose everywhere and measured nothing.
-    rows = [
-        (guard, "reds %d arm(s)" % len(flipped)) for guard, flipped in _guard_rows()
-    ]
-    rows.append(("", "%d guards, every one of them deleted and measured" % len(GUARDS)))
+    rows = []
+    for guard, flipped, behind in _guard_rows():
+        if behind is None:
+            rows.append((guard, "reds %d arm(s)" % len(flipped)))
+        else:
+            rows.append(
+                (
+                    guard,
+                    "reds %d arm(s) alone, %d behind the guard that subsumes it"
+                    % (len(flipped), len(behind)),
+                )
+            )
+    rows.append(
+        (
+            "",
+            "%d guards, every one of them deleted and measured; %d of them measured "
+            "behind the guard that subsumes them" % (len(GUARDS), len(SUBSUMED)),
+        )
+    )
     return rows
 
 
@@ -3981,8 +4332,21 @@ def claims_arm_counts():
 
 
 def emit_surface():
+    # `R23-F1`'s cost, and the one place it had to be paid. A candidate is a
+    # TOKEN since round 23, so this INVENTORY of probe shapes -- nine of whose
+    # rows are figure-shaped by construction, because that is what it measures
+    # the price of -- became nine reports of figures no instrument emits, and
+    # the scan red on them. The probes are not reports: each is written here
+    # with SPACES around the `=`, which the matcher's own key class refuses, so
+    # the inventory says what shape was measured without being a set of claims.
+    # The verdict beside each row is the gate's answer on the BARE token.
+    #
+    # Not an exemption and not a list: nothing is excused anywhere, this block
+    # simply stops asserting figures. A fabricated figure written into this
+    # block still reds, because `--check-blocks` compares the block with a
+    # fresh run of this generator.
     rows = _surface_rows()
-    lines = ["%-20s %s" % (shape, verdict) for shape, verdict in rows]
+    lines = ["%-22s %s" % (shape.replace("=", " = ", 1), verdict) for shape, verdict in rows]
     red = len([1 for _shape, verdict in rows if verdict == "REDS THE GATE"])
     lines.append("")
     lines.append(
@@ -4037,7 +4401,16 @@ def _block_body(name):
 # digit run inside `d15315e19cb3` is part of a digest, not a figure, and
 # counting it made a digest line a restatement of anything with a `17` in it.
 WORD = re.compile(r"[a-z][a-z-]{4,}")
-NUMBER = re.compile(r"(?<![0-9a-z])[0-9]+(?![0-9a-z])")
+# A digit run is a FIGURE only where it stands on its own. The underscore is
+# excluded on both sides because this pack's subject matter is full of names
+# that carry a position: `product_variants_30_archive_requires_zero_stock`,
+# `._30_`, `products_20_unit_history_lock`. With `_` counted as a boundary the
+# `30` inside those names was read as the guard matrix's `30 guards` and redded
+# seven sentences in three documents that restate nothing -- and a hardening
+# that causes a false red is not hardening, it is a gate people learn to
+# ignore. A figure a document really does restate is still bounded by spaces,
+# an `=`, a bracket or a comma, none of which this changes.
+NUMBER = re.compile(r"(?<![0-9a-z_])[0-9]+(?![0-9a-z_])")
 
 
 def _claims_of(name):
@@ -4365,7 +4738,11 @@ BLOCK_ARMS = (
     (
         "R16-S2 the claim reworded in Arabic-Indic digits",
         1,
-        "\u0664\u0660 catch arms, and the skip arms beside them",
+        # `@@AN@@`, not a literal: the arm carried `\u0664\u0660` -- forty --
+        # and stopped measuring the day an arm was added, because a number
+        # typed into an arm is the same hand-written figure this whole block
+        # rule exists to refuse.
+        "@@AN@@ catch arms, and the skip arms beside them",
     ),
     ("R16-S2 a block whose body was edited", 1, None),
     # `R17-S2`. The enrolment now compares EVERY row the generators print, not
@@ -4392,6 +4769,21 @@ BLOCK_ARMS = (
         "R17-S2-B1 residual: the verdict one clause away is NOT caught",
         0,
         "rows=59 is the shape at issue. Something emits it, so it passes.",
+    ),
+    # The boundary `NUMBER` draws, measured from both sides. The restatement
+    # it must still catch is the figure standing on its own; the false red it
+    # must not raise is the same digits INSIDE a name, which is what seven
+    # sentences in this pack carry because its triggers are numbered.
+    (
+        "the summary's figure restated in prose is still caught",
+        1,
+        "the selftest runs @@N@@ catch arms today",
+    ),
+    (
+        "control: the same digits inside a trigger name are not a figure",
+        0,
+        "`product_variants_@@N@@_archive_requires_zero_stock` names a position, "
+        "and the catch arms are counted in the block below",
     ),
 )
 
@@ -4424,8 +4816,13 @@ def blocks_test():
         if extra is None:
             rc = _blocks_arm("", edit=True)
         else:
-            filled = extra.replace("@@CLAIM@@", _claims_of("arm-counts")[0][1]).replace(
-                "@@N@@", str(len(CATCH))
+            filled = (
+                extra.replace("@@CLAIM@@", _claims_of("arm-counts")[0][1])
+                .replace("@@N@@", str(len(CATCH)))
+                .replace(
+                    "@@AN@@",
+                    "".join(chr(0x0660 + int(d)) for d in str(len(CATCH))),
+                )
             )
             rc = _blocks_arm(filled)
         good = rc == want
@@ -4837,6 +5234,89 @@ def gitfile_name_test():
     return good
 
 
+def _reader_name(harness_dir, rename=None):
+    """The refusal NAME the SECOND reader prints, run from `harness_dir`.
+
+    `rename` renames one refusal's own literal in the copy that is run, which
+    is the control that makes this arm read the NAME and not the exit code: the
+    same world refuses for the same reason either way, and only an arm reading
+    the name can tell the two apart.
+    """
+    src = os.path.join(_harness_dir(), "check_harness_bytes.py")
+    with open(src, "rb") as fh:
+        text = fh.read()
+    if rename is not None:
+        assert text.count(rename.encode("ascii")) >= 1
+        text = text.replace(rename.encode("ascii"), rename.encode("ascii") + b"-RENAMED")
+    dst = os.path.join(harness_dir, "check_harness_bytes.py")
+    with open(dst, "wb") as fh:
+        fh.write(text)
+    out = subprocess.run(
+        [sys.executable, "-I", dst],
+        cwd=harness_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    said = out.stdout.decode("utf-8", "replace")
+    found = re.search(r"(HARNESS-[A-Z-]+):", said)
+    return out.returncode, (found.group(1) if found else "NO REFUSAL")
+
+
+def reader_census_arms():
+    """`R23-S1`: the SECOND reader's own census refusals, read by NAME.
+
+    The round's finding: the reader grew a census of its own at `78f9392` --
+    three refusals that decide which commit its bytes are read against -- and
+    no arm read any of their names, so renaming each one on a committed copy
+    left `--selftest` at rc 0. A refusal nothing reads by name is a refusal
+    whose deletion nothing measures.
+
+    Two of the three have a world, and both are built here rather than
+    described: a `.git` inside the harness, which is the second site of
+    `HARNESS-NESTED-REPO`, and a `.git` FILE whose gitdir carries
+    `core.worktree`, which is the shape `R20-S2` found for the checker's own
+    census and which the reader answers with `HARNESS-TOPLEVEL-DISAGREES`.
+
+    `HARNESS-HEAD-DISAGREES` has no world here and is NOT armed: both reads
+    resolve `HEAD` through the same repository, and every construction I could
+    build where they differ -- a linked worktree, a `.git` file -- is refused
+    earlier by the census for a different reason, so the arm would measure that
+    earlier refusal. It stays a named residual, UNMEASURED-at-runtime, which is
+    what `R20-S2` asked for in the same position and is not the same sentence
+    as "armed".
+    """
+    ok = True
+    worlds = []
+
+    def _plant_nested(copy):
+        inner = os.path.join(copy, "sub", ".git")
+        os.makedirs(inner)
+        with open(os.path.join(inner, "HEAD"), "w", encoding="utf-8") as fh:
+            fh.write("ref: refs/heads/master\n")
+
+    _world, copy = _deciding_copy("p11-readercensus-", after=_plant_nested)
+    worlds.append(("a `.git` inside the harness", copy, "HARNESS-NESTED-REPO"))
+    _subject, gitfile_harness = _gitfile_world()
+    worlds.append(
+        (
+            "a `.git` FILE whose gitdir carries `core.worktree`",
+            gitfile_harness,
+            "HARNESS-TOPLEVEL-DISAGREES",
+        )
+    )
+    for label, where, want in worlds:
+        rc, live = _reader_name(where)
+        rc_renamed, renamed = _reader_name(where, rename=want)
+        good = rc == 5 and live == want and renamed == want + "-RENAMED"
+        ok = ok and good
+        print(
+            "  reader R23-S1 %-48s refuses as %s (rc=%d), and with the name renamed as "
+            "%s -> %s"
+            % (label, live, rc, renamed, "as required" if good else "**SELFTEST FAILED**")
+        )
+    return ok
+
+
 def harness_bytes_arm():
     """The byte law read by the SECOND reader, armed on copies, by name.
 
@@ -5182,6 +5662,136 @@ def live_byte_keys_arm():
     return ok
 
 
+def tree_law_arm():
+    """`R23`: the clean-tree and index-flag laws, deleted by key, read by name.
+
+    Round 23's finding about my own arms: no arm read `SELF-TREE-DIRTY` by
+    name, and deleting the checker's half -- one line, committed on a copy --
+    red nothing, so the law that answers the coordinator's `F1` was itself
+    unarmed. The law is a KEY now, and each world below is one the law exists
+    for, with the deletion applied to the LIVE consultation:
+
+      1. a DOCUMENT drifted after the commit, which the byte law does not cover
+         and which is where the figures are;
+      2. the same drift hidden behind `git update-index --assume-unchanged`,
+         which is what defeated the previous version in all three places at
+         once -- `git status --porcelain` is a statement about the INDEX;
+      3. an executable bit the commit does not carry, which `core.fileMode`
+         can hide from git and which the disk's own bits cannot hide;
+      4. a committed document DELETED from the tree, because a sparse checkout
+         leaves `status` clean while files are missing.
+
+    Each is read by refusal NAME, with the key deleted beside it, and the scan
+    is run in the same bound world so what is measured is the verdict.
+    """
+    ok = True
+    doc_rel = os.path.join("..", "P11-ARM-DOCUMENT.md")
+    fab = "arm_fabricated_rows=4242\n"
+
+    def _write_doc(copy):
+        with open(os.path.join(copy, doc_rel), "w", encoding="utf-8") as fh:
+            fh.write("a document this arm commits\n")
+
+    def _drift_doc(copy):
+        with open(os.path.join(copy, doc_rel), "a", encoding="utf-8") as fh:
+            fh.write(fab)
+
+    def _flag_doc(copy):
+        _drift_doc(copy)
+        # The path is relative to the directory the read runs in, which is the
+        # harness copy, not the repository top: a path spelled from the top
+        # makes git refuse with 128 and the arm measures the refusal instead
+        # of the law.
+        _git(copy, ["update-index", "--assume-unchanged", "--", doc_rel])
+
+    def _chmod_doc(copy):
+        target = os.path.join(copy, doc_rel)
+        os.chmod(target, os.stat(target).st_mode | 0o111)
+
+    def _unlink_doc(copy):
+        os.unlink(os.path.join(copy, doc_rel))
+
+    for label, after, want, key in (
+        ("a committed DOCUMENT drifted on disk", _drift_doc, "SELF-TREE-DIRTY", "clean-tree"),
+        ("an executable bit the commit does not carry", _chmod_doc, "SELF-TREE-DIRTY", "clean-tree"),
+        ("a committed document DELETED from the tree", _unlink_doc, "SELF-TREE-DIRTY", "clean-tree"),
+        ("the same drift behind --assume-unchanged", _flag_doc, "SELF-INDEX-FLAGGED", "index-flags"),
+    ):
+        _world, copy = _deciding_copy("p11-treearm-", mutate=_write_doc, after=after)
+        names, scanned = _live_names(copy, frozenset(OBJECT_KEYS))
+        deleted, deleted_rc = _live_names(copy, frozenset(OBJECT_KEYS) - {key})
+        good = (
+            want in names
+            and scanned == 5
+            and want not in deleted
+        )
+        ok = ok and good
+        print(
+            "  tree   R23 %s: the run named %s and the scan rc=%d; with `%s` DELETED %s "
+            "and the scan rc=%d -> %s"
+            % (
+                label,
+                ", ".join(names) or "NOTHING",
+                scanned,
+                key,
+                "that name is gone" if want not in deleted else "IT STILL REDS",
+                deleted_rc,
+                "as required" if good else "**SELFTEST FAILED**",
+            )
+        )
+    # The second reader's own half, deleted by value in a COPY of the reader
+    # that lives outside the harness copy, so what reds is the law and not the
+    # reader's own blob. The reader is a separate program: its deletion control
+    # cannot be a key in this process.
+    _world, copy = _deciding_copy("p11-treearm-reader-", mutate=_write_doc, after=_drift_doc)
+    reader = os.path.join(_harness_dir(), "check_harness_bytes.py")
+    with open(reader, "r", encoding="utf-8") as fh:
+        rtext = fh.read()
+    cut = "    dirty = tuple(_tree_dirty(top)) + tuple(_index_flagged(top))"
+    if rtext.count(cut) != 1:
+        print(
+            "  tree   R23 **SELFTEST FAILED**: the line this control deletes is not in "
+            "the second reader exactly once"
+        )
+        return False
+    broken = os.path.join(os.path.dirname(copy), "reader_with_the_tree_law_deleted.py")
+    with open(broken, "w", encoding="utf-8") as fh:
+        fh.write(rtext.replace(cut, "    dirty = ()", 1))
+    with_law = subprocess.run(
+        [sys.executable, "-I", reader, "--harness", copy],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180,
+    )
+    without = subprocess.run(
+        [sys.executable, "-I", broken, "--harness", copy],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180,
+    )
+    def _names(out):
+        return sorted({
+            l.split("REFUSED: ", 1)[1].split(":")[0]
+            for l in out.splitlines() if l.startswith("REFUSED: ")
+        })
+    had, lost = _names(with_law.stdout), _names(without.stdout)
+    good = (
+        "HARNESS-TREE-DIRTY" in had
+        and with_law.returncode == 5
+        and "HARNESS-TREE-DIRTY" not in lost
+        and without.returncode == 0
+    )
+    ok = ok and good
+    print(
+        "  tree   R23 the second reader on the same world: named %s rc=%d; with its own "
+        "tree law DELETED it named %s rc=%d -> %s"
+        % (
+            ", ".join(had) or "NOTHING",
+            with_law.returncode,
+            ", ".join(lost) or "nothing",
+            without.returncode,
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
+    return ok
+
+
 def selftest():
     # THE PARSES RUN FIRST, and an inadmissible frame is not executed.
     #
@@ -5200,6 +5810,28 @@ def selftest():
             "the rules refuse would report its behaviour as if the rules had passed."
         )
         return 1
+    # A DIRTY TREE STOPS HERE, BY NAME, and not as 93 failing arms.
+    #
+    # `R23-F2` widened the tree law from the deciding files to every committed
+    # path, which is what closes the escape -- and it also means that an author
+    # with one document open has a tree the law refuses. Most arms call `scan`,
+    # so the frame is consulted inside them and each one returns 5 against a
+    # `want` of 0, 1 or 2: the run reds correctly and reports the cause as
+    # ninety-odd unrelated arm failures, which is a reader's time spent on a
+    # diagnosis the instrument already has.
+    #
+    # The verdict does not change -- a selftest run from a tree that is not the
+    # committed tree is not evidence either -- only what it says. The clean
+    # clone is how this phase measures anything (and the project's own ruling
+    # of 2026-10-19): commit the candidate tree into a scratch clone, run the
+    # gates there, write the outputs outside it.
+    admissible, why = frame_admissible()
+    if not admissible:
+        print(
+            "  THE TREE IS NOT THE COMMITTED TREE: the arms are NOT run. %s"
+            % " ".join(why)
+        )
+        return 5
     for label, want, run in _arms_with():
         rc = run()
         good = rc == want
@@ -5217,8 +5849,10 @@ def selftest():
     ok = frame_gate_test() and ok
     ok = anchor_names_test() and ok
     ok = gitfile_name_test() and ok
+    ok = reader_census_arms() and ok
     ok = harness_bytes_arm() and ok
     ok = live_byte_keys_arm() and ok
+    ok = tree_law_arm() and ok
     ok = guard_matrix() and ok
     ok = identity_test() and ok
     ok = blocks_test() and ok
@@ -5237,6 +5871,32 @@ def surface():
     for line in emit_surface():
         print(("  " + line) if line else "")
     return 0
+
+
+def _suspend_tree_law_for_generation():
+    """Consult every object check EXCEPT the two tree laws, for generation only.
+
+    `R23-F2` put a clean-tree law and an index-flag law into the decision
+    frame, and a generator is the one entry point that must run in a tree that
+    is not yet clean: regeneration is HOW the working tree is brought to the
+    state the law demands, so a generator that refuses a dirty tree could
+    never be used to clean one.
+
+    This is admissible because a generator WRITES documents and prints no
+    verdict. Nothing a reader cites comes out of `--regenerate` or `--emit`:
+    the verdicts are `scan`, `--check-blocks` and `--selftest`, and all three
+    keep consulting both tree laws -- `--check-blocks` especially, since it is
+    the verdict that says a generated block agrees with a fresh run. A block
+    written from a dirty tree therefore earns no transcript until the tree is
+    committed and `--check-blocks` passes on it.
+
+    The suspension is a process flag read by `_objects_enabled`, not a seeded
+    cache: the generators clear the frame cache on purpose (a guard-deletion
+    world must re-parse), so a seeded cache would be thrown away and the real
+    parse -- tree law included -- would run inside the very world being
+    measured.
+    """
+    _GENERATING.append(True)
 
 
 def _main(args):
@@ -5260,6 +5920,7 @@ def _main(args):
     if "--surface" in args:
         return surface()
     if "--regenerate" in args:
+        _suspend_tree_law_for_generation()
         return regenerate(PHASE_DIR)
     if "--check-blocks" in args:
         return check_blocks(PHASE_DIR)
@@ -5268,6 +5929,7 @@ def _main(args):
         if name not in GENERATORS:
             sys.stderr.write("no such generator: %s\n" % name)
             return 3
+        _suspend_tree_law_for_generation()
         print(_block_body(name))
         return 0
     return scan(PHASE_DIR, os.path.join(PHASE_DIR, "harness"))
