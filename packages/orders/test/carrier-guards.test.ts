@@ -367,9 +367,15 @@ describe('B-2 — a leaf that is not a primitive (coordinator diff review and th
   // These four run against the CONFIRMATION rather than the quote, and that is
   // the point: the quote's own fields are type-checked one by one in `quote.ts`,
   // so a boxed currency is refused there and `requirePrimitiveLeaf` never
-  // answers (mutation M120 reds the boxed-currency cases on its own; the
-  // pair-drop M119 reds exactly the same four, which is how I know which guard
-  // they rest on). A confirmation field has no such individual check — the
+  // answers. The measurement that says so is the one the challenger's `D-C`
+  // corrected, and it is a better one than I first offered: the currency check
+  // ALONE reds the four CURRENCY cases, the leaf refusal alone reds these four
+  // CONFIRMATION cases, and the pair-drop reds all EIGHT — disjoint halves whose
+  // union is the pair, which attributes each set to its own guard and shows both
+  // load-bearing. My published figure for the pair was 4, taken from a tree that
+  // carried only one of the row's two edits; the runner now asserts that every
+  // edit landed before any figure is taken. A confirmation field has no such
+  // individual check — the
   // snapshot of `CONFIRMATION_FIELDS` is all that stands between it and the
   // comparison, so here the leaf refusal is load-bearing and testable.
   const BOXED_CONFIRMATION_FIELDS: [string, (confirmation: OrderQuoteConfirmationDto) => OrderQuoteConfirmationDto][] = [
@@ -695,6 +701,140 @@ describe("the challenger's REJECT at a869aab — the leaf the remedy itself left
     // no law must stay accepted, or the guard has quietly become a requirement.
     expect(buildCommercialQuote(HALF_UNIT).lines[0]?.quantity).toBe('5.5000');
     expect(buildCommercialQuote(HALF_UNIT, {}).lines[0]?.quantity).toBe('5.5000');
+  });
+
+  it('D-A: a container that is not a Map at all is refused up front, null and a number alike', () => {
+    // The old check refused these as a side effect of `instanceof`; the new one
+    // states them, and the case exists because the first guard-deletion run
+    // found this refusal UNTESTED rather than masked.
+    for (const container of [null, 7, 'a map']) {
+      const error = refusalOf(
+        () => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: container as unknown as Map<string, UnitPrecisionDeclaration> }),
+        `a container that is ${String(container)}`,
+      );
+      expect(error.code).toBe('order.quote_field_undeclared');
+      expect(error.details?.fields).toBe('unitPrecisionByStockKey');
+      expect(error.details?.carrier).toBe('not-map');
+    }
+  });
+
+  it('D-A: a Map with an own get cannot answer for what the map HOLDS, so the law still applies', () => {
+    // The challenger's shape, and the plant is proved to have landed before the
+    // refusal is asserted: the container's own `get` really does answer
+    // `undefined` for the key the map holds, and the whole-unit law is applied
+    // anyway, because the lookup is the intrinsic one.
+    const ownGet = new Map(WHOLE_UNITS);
+    Object.defineProperty(ownGet, 'get', { value: () => undefined });
+    expect(ownGet.get(KEY)).toBeUndefined();
+    expect(ownGet instanceof Map).toBe(true);
+    const error = refusalOf(() => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: ownGet }), 'a Map with an own get');
+    expect(error.code).toBe('order.quote_quantity_invalid');
+    expect(error.details?.stated).toBe('5.5000');
+  });
+
+  it('D-A: a Map SUBCLASS overriding get cannot either, which instanceof could never have caught', () => {
+    class Forgetful extends Map<string, UnitPrecisionDeclaration> {
+      override get(_key: string): UnitPrecisionDeclaration | undefined {
+        return undefined;
+      }
+    }
+    const subclass = new Forgetful(WHOLE_UNITS);
+    expect(subclass.get(KEY)).toBeUndefined();
+    expect(subclass instanceof Map).toBe(true);
+    const error = refusalOf(() => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: subclass }), 'a Map subclass');
+    expect(error.code).toBe('order.quote_quantity_invalid');
+    expect(error.details?.stated).toBe('5.5000');
+  });
+
+  it('D-A: a PROXY over a real Map is refused as a container, naming the proxy', () => {
+    // `instanceof` goes through the `getPrototypeOf` trap, so this one passed
+    // the old check with a real Map behind it. It is refused rather than read
+    // through: every field of a Proxy can answer twice, which is this package's
+    // oldest law and it simply did not reach the VALUE of a declared field.
+    const behind = new Map(WHOLE_UNITS);
+    const proxied = new Proxy(behind, {
+      get: (target, key) => (key === 'get' ? () => undefined : (Reflect.get(target, key) as unknown)),
+    });
+    expect(proxied instanceof Map).toBe(true);
+    const error = refusalOf(
+      () => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: proxied as unknown as Map<string, UnitPrecisionDeclaration> }),
+      'a Proxy over a real Map',
+    );
+    expect(error.code).toBe('order.quote_field_undeclared');
+    expect(error.details?.fields).toBe('unitPrecisionByStockKey');
+    expect(error.details?.carrier).toBe('proxy');
+  });
+
+  it('D-B: a unitDecimals ACCESSOR is refused, and the control shows what it would otherwise have bought', () => {
+    // It answered `0` to every check and `4` to the read whose value is
+    // RETURNED — five reads, measured — so a whole-unit product accepted
+    // `5.5000` at the digest a quote with no `checks` produces. The box was
+    // never the escape: `Number.isInteger` does not coerce.
+    let reads = 0;
+    const switching = {
+      tracksInventory: true,
+      get unitDecimals(): number {
+        reads += 1;
+        return reads >= 5 ? 4 : 0;
+      },
+    } as unknown as UnitPrecisionDeclaration;
+    const error = refusalOf(() => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: new Map([[KEY, switching]]) }), 'an accessor unit precision');
+    expect(error.code).toBe('order.unit_precision_invalid');
+    expect(error.details?.carrier).toBe('accessor');
+    expect(error.details?.stockKey).toBe(KEY);
+    // The refusal is reached with NO read of the accessor at all, which is the
+    // point of a snapshot: the switch never gets a turn.
+    expect(reads).toBe(0);
+  });
+
+  it('D-B: a tracksInventory ACCESSOR is refused, where the honest object it imitates is refused by the LAW', () => {
+    const switching = {
+      unitDecimals: null,
+      get tracksInventory(): boolean {
+        return true;
+      },
+    } as unknown as UnitPrecisionDeclaration;
+    const error = refusalOf(() => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: new Map([[KEY, switching]]) }), 'an accessor tracksInventory');
+    expect(error.code).toBe('order.unit_precision_invalid');
+    expect(error.details?.carrier).toBe('accessor');
+    // The control: the same two values as OWN DATA are refused under the
+    // catalogue's own law, which is what the accessor was for — answering
+    // `true` to the `typeof` check and `false` to the law admitted a TRACKED
+    // product with no precision at all.
+    const honest = refusalOf(
+      () =>
+        buildCommercialQuote(HALF_UNIT, {
+          unitPrecisionByStockKey: new Map([[KEY, { tracksInventory: true, unitDecimals: null } as UnitPrecisionDeclaration]]),
+        }),
+      'a tracked product declaring no precision',
+    );
+    expect(honest.code).toBe('order.unit_precision_required');
+  });
+
+  it('D-B: the BASKET path reads a declaration the same way, where the flag is recorded a third time', () => {
+    // Found by taking `D-B` to its sibling rather than waiting to be shown it:
+    // `summariseBasket` reads `tracksInventory` for the law and records it on
+    // the position, so an accessor could put a flag on a position that is not
+    // the flag the law was applied to — and the position is what checkout
+    // reads.
+    const switching = {
+      unitDecimals: 0,
+      get tracksInventory(): boolean {
+        return true;
+      },
+    } as unknown as UnitPrecisionDeclaration;
+    const error = refusalOf(
+      () =>
+        summariseBasket(
+          [{ lineId: LINE1, productId: PRODUCT, variantId: VARIANT, quantity: '2', consumedByOrderId: null, retractedAt: null }] as readonly CartLineInput[],
+          new Map([[KEY, switching]]),
+          '2026-10-12T12:00:00Z',
+        ),
+      'an accessor declaration on the basket path',
+    );
+    expect(error.code).toBe('order.unit_precision_invalid');
+    expect(error.details?.carrier).toBe('accessor');
+    expect(error.details?.lineId).toBe(LINE1);
   });
 
   it('C-F: more positions than the authority accepts are refused BY ITS OWN CODE, before the container is walked', () => {

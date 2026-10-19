@@ -38,6 +38,7 @@
  * frozen catalogue admits, which is the conservative direction for a default,
  * and the question is raised rather than answered by refusing.
  */
+import { CarrierFault, assertNotProxyCarrier, snapshotFields } from './carrier';
 import { OrderError } from './errors';
 
 /**
@@ -74,6 +75,86 @@ export interface UnitPrecisionDeclaration {
  * `unitDecimals` is `undefined` rather than `null` would otherwise read as
  * "no precision" from a product that tracks inventory and must have one.
  */
+/** The two fields a declaration states, as a LIST, so an undeclared one is refused rather than ignored. */
+const DECLARATION_FIELDS: readonly string[] = Object.freeze(['tracksInventory', 'unitDecimals']);
+
+/**
+ * The intrinsic lookup, captured at module load, before any caller exists.
+ *
+ * `D-A`: `declarations instanceof Map` asks about the PROTOTYPE, not about which
+ * `get` runs, and the independent challenger measured three shapes that are
+ * `instanceof Map` and answer `undefined` for a key the honest map holds — a Map
+ * with an own `get`, a `Map` subclass overriding `get`, and a Proxy over a real
+ * Map (`instanceof` goes through the `getPrototypeOf` trap). All three accepted
+ * `5.5000` on a product the catalogue declares in WHOLE units, at the digest a
+ * quote with NO `checks` produces: the C-B omission again, one level down.
+ *
+ * So the lookup is not asked of the object. `Map.prototype.get` reads the map's
+ * internal slots, which no own property, no subclass override and no trap can
+ * answer for, and it throws a `TypeError` for anything that has no such slots —
+ * a Proxy over a Map included. That is the check and the read in one call.
+ */
+const mapGet = Map.prototype.get;
+
+/**
+ * Refuse a declaration container this package cannot read by its own lookup.
+ *
+ * Split out so a caller can state the contract defect UP FRONT, where it belongs
+ * — `checks` naming a container that is not a Map is wrong about the contract
+ * whether or not any line ever asks it for a key.
+ */
+export function assertUnitPrecisionContainer(declarations: unknown): void {
+  if (declarations === null || typeof declarations !== 'object') {
+    throw new CarrierFault('not-map', null, 'a unit precision container is not an object');
+  }
+  assertNotProxyCarrier(declarations);
+  try {
+    mapGet.call(declarations as Map<unknown, unknown>, undefined);
+  } catch {
+    throw new CarrierFault('not-map', null, "a unit precision container is not a Map, so this package's own lookup cannot read it");
+  }
+}
+
+/**
+ * Read ONE declaration out of a caller-supplied container, as a frozen snapshot.
+ *
+ * Two laws in one place, because they were two halves of one hole:
+ *
+ * - the container is read by the intrinsic lookup above, so the value is the
+ *   one the map HOLDS rather than the one its `get` chose to return (`D-A`);
+ * - the declaration itself is SNAPSHOTTED, because `requireUnitPrecision` reads
+ *   `tracksInventory` twice and `unitDecimals` five times, and `cart.ts` records
+ *   `tracksInventory` on the position a sixth. `D-B` measured both: a
+ *   `unitDecimals` accessor answering `0` to every check and `4` to the read
+ *   whose value is RETURNED accepted `5.5000` on a whole-unit product, and a
+ *   `tracksInventory` accessor answering `true` to the `typeof` check and
+ *   `false` to the law admitted a TRACKED product with no precision, which the
+ *   honest object is refused for by `order.unit_precision_required`. The boxes
+ *   were never the escape — `Number.isInteger` does not coerce — the second read
+ *   was.
+ *
+ * `snapshotFields` carries the rest of the discipline: a Proxy, a non-plain
+ * prototype, an accessor on any key, an undeclared field or a non-primitive leaf
+ * is refused by name, and what comes back is frozen own data, so every later
+ * read of it is the read that was checked. A missing field reads as `undefined`,
+ * which is not a primitive leaf, so a half-stated declaration is refused here
+ * instead of reaching the law as "no precision".
+ *
+ * Faults are raised as `CarrierFault` and mapped by the caller: a `field` of
+ * `null` is the CONTAINER's defect and a named `field` is the declaration's, so
+ * a caller can keep the contract refusal it already publishes for the first and
+ * name the stock key in the second.
+ */
+export function lookupUnitPrecision(declarations: unknown, stockKey: string): UnitPrecisionDeclaration | undefined {
+  assertUnitPrecisionContainer(declarations);
+  const value: unknown = mapGet.call(declarations as Map<unknown, unknown>, stockKey);
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== 'object') {
+    throw new CarrierFault('not-primitive', stockKey, 'a unit precision declaration is not an object stating the two halves of the law');
+  }
+  return snapshotFields<UnitPrecisionDeclaration>(value, DECLARATION_FIELDS);
+}
+
 export function requireUnitPrecision(declaration: UnitPrecisionDeclaration, detail: Readonly<Record<string, string>>): number | null {
   if (typeof declaration.tracksInventory !== 'boolean') {
     throw new OrderError('order.unit_precision_invalid', 'a unit precision declaration states whether the product tracks inventory, as a boolean', {

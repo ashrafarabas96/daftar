@@ -33,7 +33,21 @@
 import { types as nodeTypes } from 'node:util';
 
 /** Why a carrier cannot be read as its own data. One per family, so a caller can map it to its own subject. */
-export type CarrierFaultKind = 'proxy' | 'prototype' | 'null-prototype' | 'accessor' | 'not-primitive' | 'not-array' | 'sparse' | 'undeclared' | 'too-long';
+export type CarrierFaultKind =
+  | 'proxy'
+  | 'prototype'
+  | 'null-prototype'
+  | 'accessor'
+  | 'not-primitive'
+  | 'not-array'
+  // A container that is not a `Map` this package can read by the intrinsic
+  // lookup (`D-A`). Its own kind, like `too-long`, so the caller can map "the
+  // contract named the wrong kind of container" to the refusal its own
+  // authority publishes instead of relabelling it a leaf fault.
+  | 'not-map'
+  | 'sparse'
+  | 'undeclared'
+  | 'too-long';
 
 /** A carrier-level refusal, before any domain meaning is attached. `field` is the key, index or field name where one exists. */
 export class CarrierFault extends Error {

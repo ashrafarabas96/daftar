@@ -24,7 +24,8 @@
 import { assertQuantityRepresentable, formatQuantity, parseQuantity } from '@daftar/inventory';
 import { OrderError, assertCanonicalId, isCanonicalId } from './errors';
 import { compareCanonical, isCanonicalInstant } from './instant';
-import { type UnitPrecisionDeclaration, requireUnitPrecision } from './unit-precision';
+import { CarrierFault } from './carrier';
+import { type UnitPrecisionDeclaration, lookupUnitPrecision, requireUnitPrecision } from './unit-precision';
 
 /** One basket row as the client appended it. */
 export interface CartLine {
@@ -283,7 +284,29 @@ export function summariseBasket(
     }
 
     const key = stockKeyOf(line);
-    const declaration = precisionByStockKey.get(key);
+    // The container's own `get` is NOT asked, and the declaration is read as a
+    // frozen snapshot — `D-A` and `D-B`, which the challenger measured on the
+    // quote path and which this path had in the same shape and one read worse:
+    // `requireUnitPrecision` reads `tracksInventory` twice, and the position
+    // built below records it a THIRD time, so an accessor could put a flag on a
+    // position that is not the flag the law was applied to. The whole law lives
+    // in `unit-precision.ts`; this site only names its own subject.
+    let declaration: UnitPrecisionDeclaration | undefined;
+    try {
+      declaration = lookupUnitPrecision(precisionByStockKey, key);
+    } catch (error) {
+      if (!(error instanceof CarrierFault)) throw error;
+      throw new OrderError(
+        'order.unit_precision_invalid',
+        'a supplied unit precision declaration is not plain own data, so it can answer the check and the use differently',
+        {
+          lineId: line.lineId,
+          stockKey: key,
+          carrier: error.kind,
+          field: error.field ?? 'container',
+        },
+      );
+    }
     if (declaration === undefined) {
       throw new OrderError('order.cart_line_invalid', 'no unit precision declaration was supplied for the line stock key', {
         lineId: line.lineId,

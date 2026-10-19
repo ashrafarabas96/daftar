@@ -63,7 +63,7 @@ import { NO_QUOTE_EXPIRY, type OrderQuoteConfirmationDto } from './contracts';
 import { OrderError, assertCanonicalId, type OrderErrorCode } from './errors';
 import { compareCanonical, isCanonicalInstant } from './instant';
 import { assertLineTotalRounded } from './line-rounding';
-import { type UnitPrecisionDeclaration, requireUnitPrecision } from './unit-precision';
+import { type UnitPrecisionDeclaration, assertUnitPrecisionContainer, lookupUnitPrecision, requireUnitPrecision } from './unit-precision';
 
 /** Non-negative integer minor units as a decimal string. A shape check, so a float, a sign or padding cannot pass. */
 const NON_NEGATIVE_MINOR = /^(0|[1-9]\d*)$/;
@@ -795,13 +795,51 @@ function assertChecksContract(checks: CommercialQuoteChecks | undefined): void {
     }
   }
   const declarations = checks.unitPrecisionByStockKey;
-  if (declarations !== undefined && !(declarations instanceof Map)) {
+  if (declarations === undefined) return;
+  // `instanceof Map` was the wrong question and `D-A` is what it cost: it asks
+  // about the prototype, not about which `get` runs, so a Map with an own `get`,
+  // a Map subclass and a Proxy over a Map all passed it and all answered
+  // `undefined` for a key the honest map holds. The container is now judged by
+  // whether THIS PACKAGE'S OWN LOOKUP can read it, which is asked and answered
+  // in `unit-precision.ts` for every caller at once.
+  try {
+    assertUnitPrecisionContainer(declarations);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
     throw new OrderError(
       'order.quote_field_undeclared',
-      'unitPrecisionByStockKey must be a Map; anything else answers get() for no key and drops the law silently',
+      'unitPrecisionByStockKey must be a Map this package can read by its own lookup; anything else answers get() for no key and drops the law silently',
       {
         fields: 'unitPrecisionByStockKey',
-        carrier: declarations === null ? 'null' : typeof declarations,
+        carrier: error.kind,
+      },
+    );
+  }
+}
+
+/**
+ * Read the declaration for one stock key, under the quote's own refusals.
+ *
+ * The CONTAINER has already been checked once per call in `assertChecksContract`,
+ * so a fault here names a DECLARATION, and it is refused under the unit-precision
+ * authority's own code rather than as a quote-field defect: an unreadable
+ * precision is a defect in the caller's figure, which is the same reason the
+ * round-5 challenge gave for not relabelling it a bad quantity.
+ */
+function declarationFor(checks: CommercialQuoteChecks | undefined, stockKey: string): UnitPrecisionDeclaration | undefined {
+  const declarations = checks?.unitPrecisionByStockKey;
+  if (declarations === undefined) return undefined;
+  try {
+    return lookupUnitPrecision(declarations, stockKey);
+  } catch (error) {
+    if (!(error instanceof CarrierFault)) throw error;
+    throw new OrderError(
+      'order.unit_precision_invalid',
+      'a supplied unit precision declaration is not plain own data, so it can answer the check and the use differently',
+      {
+        stockKey,
+        carrier: error.kind,
+        field: error.field ?? 'container',
       },
     );
   }
@@ -890,7 +928,7 @@ export function buildCommercialQuote(input: CommercialQuoteInput, checks?: Comme
         expected: canonicalKey,
       });
     }
-    const quantityQ4 = requireQuoteQuantity(line, checks?.unitPrecisionByStockKey?.get(canonicalKey));
+    const quantityQ4 = requireQuoteQuantity(line, declarationFor(checks, canonicalKey));
     if (seen.has(line.stockKey)) {
       throw new OrderError('order.quote_line_duplicate', 'two quote lines name one stock key', { stockKey: line.stockKey });
     }
