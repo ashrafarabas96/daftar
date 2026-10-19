@@ -170,6 +170,23 @@ def main() -> int:
     args = ap.parse_args()
     package = Path(args.package).resolve()
 
+    # CD-52-01, and the challenger's named next target with it: npm config does
+    # not live only in a FILE. `npm_config_script_shell` in the environment does
+    # the same job as `script-shell` in an `.npmrc`, so it is refused here BY
+    # NAME. This one IS a named key rather than a class, and the class -- every
+    # other interpreter between an operator's command and this step -- stays the
+    # declared execution-environment limit in this module's docstring, not
+    # something this file can close. The variable is checked and not the whole
+    # `npm_config_*` family, because npm sets several of them on every script
+    # run and refusing those would refuse every legitimate invocation.
+    for var in ("npm_config_script_shell", "npm_config_shell"):
+        if os.environ.get(var):
+            refuse(
+                f"{REFUSED_NPM_CONFIG}: {var}={os.environ[var]!r} is set in this step's environment. "
+                "That replaces the shell npm hands every script to, exactly as `script-shell` in an .npmrc does, "
+                "so the pinned command would be handed to a program of someone else's choosing"
+            )
+
     # CD-52-01: no npm configuration may stand between the pinned command and
     # the shell that runs it. Checked here as well as in the law, so neither is
     # the only reader.
