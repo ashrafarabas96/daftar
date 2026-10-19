@@ -1134,6 +1134,53 @@ PROOFS: list[Proof] = [
         why="the coordinator's condition on R-01: the accounting must be FAIL-CLOSED, so a new domain is a failure until its accounting exists rather than a hole waiting for a search to reach it. Three things stand between a domain and silence, and this plant is the one that tests the first: the denominator's `when` is exhaustive with no `else`, so the compiler refuses a value with no denominator; a DECLARED narrow domain with no entry in this map reds here, before any count is read; and a MEASURED gap with no cover reds in the model check. Emptying the map leaves every count true \u2014 the search is unchanged \u2014 and reds on the declaration alone, which is what makes the rule independent of what this particular search happens to reach",
     ),
     Proof(
+        law="T-02-NARROWING-THE-WAIT-JUDGMENT-DROPS-A-CLASS-TOTAL",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="""                            if (view.action == RecoveryAction.WAIT_IT_IS_IN_PROGRESS ||
+                                view.message in assertsSomethingLeftTheDevice
+                            ) {""",
+        replace="""                            if ((view.action == RecoveryAction.WAIT_IT_IS_IN_PROGRESS ||
+                                view.message in assertsSomethingLeftTheDevice) &&
+                                op.state != OperationState.UNKNOWN_OUTCOME
+                            ) {""",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the sixteenth review's T-02, in the form that actually removes judgments. Two words "
+            "added to a gated condition stop the till being judged for telling a cashier to wait "
+            "while nothing is pending. The judgment was counted, but its count was bounded by "
+            "`> 0` — witness survival, which one surviving row satisfies — so the loss was "
+            "invisible to the suite and to all 89 proofs. What reds it now is a LITERAL TOTAL for "
+            "that class: 939 judgments, not at least one. The review's own narrowing excluded "
+            "CAPTURED rows, and that one is a NO-OP in this space, measured rather than argued: "
+            "the states reaching this judgment are QUEUED 399, IN_FLIGHT 210 and UNKNOWN_OUTCOME "
+            "330, and CAPTURED is not among them — it cannot be, because a CAPTURED row here "
+            "would fail the assertion this branch makes. So that plant removes an EMPTY set and "
+            "stays green on a literal total too, which is correct. This one excludes a state the "
+            "space does produce, which is what arms the anchor"
+        ),
+    ),
+    Proof(
+        law="T-02-A-GATED-JUDGMENT-WITH-NO-TOTAL-IS-REMOVED-IN-SILENCE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="""                            if (view.message in assertsSomethingLeftTheDevice) {
+                                // T-02, the sixteenth review: this judgment was""",
+        replace="""                            if (view.message in assertsSomethingLeftTheDevice &&
+                                op.state != OperationState.QUEUED
+                            ) {
+                                // T-02, the sixteenth review: this judgment was""",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the sharper half of T-02: this was the ONE gated judgment in the search loop with no "
+            "counter at all, so narrowing it removed a merchant-visible promise — that a refusal "
+            "is never shown as something that left the device when nothing was sent — with "
+            "nothing in the file able to notice. It is counted now and pinned at 312: QUEUED 72, "
+            "IN_FLIGHT 180, UNKNOWN_OUTCOME 60, measured. This plant excludes QUEUED, which the "
+            "space does produce here, and reds on the total. The review's own vD1 excluded "
+            "CAPTURED, which this judgment never sees, so it removed nothing and was green for "
+            "that reason rather than for want of an anchor"
+        ),
+    ),
+    Proof(
         law="S-02-NARROWING-THE-PREDICATE-THAT-DEFINES-A-DOMAIN-MOVES-BOTH-COUNTS-TOGETHER",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
         find=(
@@ -1311,6 +1358,86 @@ def covers_the_source_declares(text: str) -> set[tuple[str, str]]:
     return declared
 
 
+# T-01, the sixteenth review. F-1's answer compares two derivations, and the
+# review then measured what neither the coordinator nor this session had: the
+# five lines that PRINT the covers are planted by no proof, so `grep` finds
+# `P7-COVER-CLAIM` in this harness exactly once, in the regex that parses it.
+# The comparison refuses when they are deleted — but nothing in the shipped
+# harness was DOING that deletion, so the whole obligation rested on a line
+# whose removal was measured only by hand, in a review, by one session at a
+# time.
+#
+# So the harness does it itself, once per run, on a copy: delete those five
+# lines, run the suite, and require the comparison to refuse. The arm is held
+# to the same rule as a plant — the text must match exactly once, and a miss is
+# a FAILURE rather than a skip — which makes the five lines load-bearing twice
+# over: delete them in the subject and the arm no longer lands.
+COVER_PRINT_LOOP = """        for ((claim, cover) in WHAT_COVERS_WHAT_A_NARROW_CLAIM_LEAVES_OUT) {
+            if (cover is WhatCoversTheRest.AnotherClaimOverEveryProduction) {
+                println("P7-COVER-CLAIM|${cover.site}|${claim.second}")
+            }
+        }
+"""
+
+
+def omission_arm(declared: set[tuple[str, str]]) -> tuple[list[str], str]:
+    """Delete the lines that print the covers, and require a refusal."""
+    if not declared:
+        return (
+            [
+                "the omission arm has nothing to omit: no cover is declared in "
+                f"{COVER_MAP_FILE}, so the arm measures nothing and cannot be read as a pass"
+            ],
+            "NOTHING DECLARED",
+        )
+    tree = tempfile.mkdtemp(prefix="p7-omission-arm-")
+    for part in ("src", "test"):
+        shutil.copytree(os.path.join(ROOT, part), os.path.join(tree, part))
+    target = os.path.join(tree, COVER_MAP_FILE)
+    before = open(target, encoding="utf-8").read()
+    hits = before.count(COVER_PRINT_LOOP)
+    if hits != 1:
+        return (
+            [
+                f"the omission arm's edit matched {hits} times in {COVER_MAP_FILE} (must be "
+                f"exactly 1) \u2014 THE ARM DID NOT LAND, so the one line the cover obligation "
+                f"rests on is unmeasured again, which is T-01"
+            ],
+            f"ARM DID NOT LAND ({hits} matches)",
+        )
+    open(target, "w", encoding="utf-8").write(before.replace(COVER_PRINT_LOOP, ""))
+    rc, _failing, _details, log = run_suite(tree)
+    if rc != 0:
+        return (
+            [
+                "the omission arm's copy is not green with the print loop removed, so the arm "
+                "cannot tell a refusal from a broken tree"
+            ],
+            f"ARM TREE NOT GREEN (rc {rc})",
+        )
+    printed = covers_the_suite_declared(log)
+    if printed:
+        return (
+            [
+                "the omission arm deleted the loop that prints the covers and the run printed "
+                f"covers anyway: {sorted(printed)} \u2014 something else prints them, so this arm "
+                f"is not measuring what it claims to"
+            ],
+            "ARM MEASURED NOTHING",
+        )
+    refusals = cover_failures(printed, declared, set(A_PROOF_DEFENDS_THIS_COVER.values()))
+    if not any("F-1: omission" in refusal for refusal in refusals):
+        return (
+            [
+                "the omission arm removed every printed cover and the comparison did not refuse: "
+                f"{refusals or 'no refusal at all'} \u2014 the obligation fails OPEN on absence, "
+                f"which is T-01"
+            ],
+            "NO REFUSAL ON ABSENCE",
+        )
+    return ([], f"refused as required ({len(printed)} printed, {len(declared)} declared)")
+
+
 def cover_failures(
     printed: set[tuple[str, str]],
     declared: set[tuple[str, str]],
@@ -1369,7 +1496,13 @@ def cover_failures(
 # CHANGED, which is what F-2 is about, and proves nothing about whether the
 # reason was right on the day it was harvested. A law with no entry here is a
 # FAILED proof, not an unchecked one.
-EXPECTED_REFUSAL: dict[str, str] = {
+EXPECTED_REFUSAL: dict[str, str | tuple[str, ...]] = {
+    'T-02-A-GATED-JUDGMENT-WITH-NO-TOTAL-IS-REMOVED-IN-SILENCE': (
+        'org.opentest4j.AssertionFailedError: a different number of refusals was judged for being shown as something that left the device, which is the judgment that had no counter at all until T-02 ==> expected: <312> but was: <240>'
+    ),
+    'T-02-NARROWING-THE-WAIT-JUDGMENT-DROPS-A-CLASS-TOTAL': (
+        'org.opentest4j.AssertionFailedError: a different number of refusals was judged for telling the merchant to wait while nothing is pending, which is the judgment a narrowing of that condition removes in silence ==> expected: <939> but was: <609>'
+    ),
     'E-03-A-CODE-NO-QUEUE-STATE-EVER-PRODUCES': (
         'org.opentest4j.AssertionFailedError: the set of refusals that tell a merchant something is in progress is not the set of refusals the model check has proven can only be produced while something is pending on the device (P7-L20-A-DESTRUCTION-IS-RECORDED-BEFORE-IT-HAPPENS). A code that belongs here needs its state proven in QueueModelCheckTest first; a code that no longer belongs is a line to delete from waitIsHonest, with its reason ==> expected: <[offline.already_released, offline.already_sending, offline.cancel_after_send, offline.no_attempt_in_flight]> but was: <[offline.already_released, offline.already_sending, offline.cancel_after_send, offline.no_attempt_in_flight, offline.session_expired]>'
     ),
@@ -1487,8 +1620,13 @@ EXPECTED_REFUSAL: dict[str, str] = {
     'P-01-A-REGISTRATION-PROVES-THE-SITE-RAN-NOT-THAT-THE-CLAIM-WAS-EXERCISED': (
         'org.opentest4j.AssertionFailedError: a claim this check makes was never EXERCISED: its site ran and registered, and the branch that tests the claim never did, so whatever it asserts was asserted of nothing. A site reached under a condition that excludes the cases its claim is about looks identical to a working one in every other assertion here, which is how a refusal telling a cashier that a colleague must confirm their own capture stayed green at 98 of 98 ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]>'
     ),
+    # Two FRAGMENTS rather than one message, because the whole refusal holds a LINE
+    # NUMBER, and a line number is a coordinate this file's own edits move: round 17
+    # added one line above it and 827 became 828. The fragments carry the prose and
+    # the spelling that distinguishes this proof from its neighbour, and no coordinate.
     'P-02-A-CLAIM-WRITTEN-AROUND-THE-HELPER-IS-ENROLLED-BY-NOTHING': (
-        'org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout, so whatever is claimed there is enrolled in neither registry and is asserted of nothing the moment the code stops being produced. Write it as a claim site. This is a CONVENTION CHECK and not a derivation: it can only add reds, and a spelling it does not know escapes it ==> expected: <[]> but was: <[827: when (step.code) {]>'
+        'org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout, so whatever is claimed there is enrolled in neither registry and is asserted of nothing the moment the code stops being produced. Write it as a claim site. This is a CONVENTION CHECK and not a derivation: it can only add reds, and a spelling it does not know escapes it ==> expected: <[]> but was: <[',
+        'when (step.code) {]>',
     ),
     'P-03-AN-ANCHOR-BOUNDS-THE-LOSS-OF-A-SITE-NOT-OF-A-CODE': (
         'org.opentest4j.AssertionFailedError: the claims this check REGISTERED are not the claims it is written to make. A pair missing from the right-hand side is a claim site nothing evaluated at all; a pair missing from the left is a claim site that was added without being written down here, so nothing bounds what else it changed ==> expected: <[(E-04/not-sendable-offers-a-button-its-reader-can-press, offline.not_sendable), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture)]> but was: <[(INV-15/a-finished-row-answers-in-its-own-terms, offline.already_abandoned), (INV-15/a-finished-row-answers-in-its-own-terms, offline.already_recorded), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.another_members_capture), (INV-9a/a-foreign-scope-is-refused-as-a-scope-problem, offline.scope_switched), (INV-9c/a-colleagues-capture-is-refused-only-where-the-actor-may-not-release-it, offline.another_members_capture), (a-second-lawful-site/about-the-same-code, offline.not_sendable)]>'
@@ -1628,8 +1766,13 @@ EXPECTED_REFUSAL: dict[str, str] = {
     'Q-02-TWO-SITES-UNDER-ONE-LABEL-RUN-TWICE-THEIR-DOMAIN': (
         'org.opentest4j.AssertionFailedError: the claim at E-04/not-sendable-offers-a-button-its-reader-can-press about offline.not_sendable ran 12 times where its declared domain EVERY_PRODUCTION was reached 6 times. A claim that runs on some of its cases is asserted of the rest not at all, and a site reached under a condition that excludes the cases its claim is about registers and counts exactly like a working one until this ratio is read ==> expected: <6> but was: <12>'
     ),
+    # Two FRAGMENTS rather than one message, because the whole refusal holds a LINE
+    # NUMBER, and a line number is a coordinate this file's own edits move: round 17
+    # added one line above it and 827 became 828. The fragments carry the prose and
+    # the spelling that distinguishes this proof from its neighbour, and no coordinate.
     'Q-03-A-LOCAL-VARIABLE-IS-NOT-A-SPELLING': (
-        'org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout, so whatever is claimed there is enrolled in neither registry and is asserted of nothing the moment the code stops being produced. Write it as a claim site. This is a CONVENTION CHECK and not a derivation: it can only add reds, and a spelling it does not know escapes it ==> expected: <[]> but was: <[827: val codeHere = step.code]>'
+        'org.opentest4j.AssertionFailedError: a refusal code is compared outside claimAbout, so whatever is claimed there is enrolled in neither registry and is asserted of nothing the moment the code stops being produced. Write it as a claim site. This is a CONVENTION CHECK and not a derivation: it can only add reds, and a spelling it does not know escapes it ==> expected: <[]> but was: <[',
+        'val codeHere = step.code]>',
     ),
     'R-01-A-COVER-THAT-NAMES-A-CLAIM-THAT-IS-NOT-THERE-COVERS-NOTHING': (
         'org.opentest4j.AssertionFailedError: the gap the claim at INV-9a/a-foreign-scope-is-refused-as-a-scope-problem leaves is declared to be covered by the claim at INV-9c/a-claim-that-is-not-in-this-map about offline.another_members_capture over every production, and that claim is not in CLAIMS_THIS_CHECK_MAKES with that domain, so the cover names nothing that judges those 6 productions ==> expected: <EVERY_PRODUCTION> but was: <null>'
@@ -1705,16 +1848,55 @@ def failures_with_details(log: str) -> dict[str, str]:
     return {name: " | ".join(lines) for name, lines in out.items()}
 
 
+LINE_COORDINATE = re.compile(r"<\[\d+: ")
+
+
+def declared_fragments(law: str) -> tuple[str, ...]:
+    """What `law` declares, as fragments. A string is one fragment."""
+    declared = EXPECTED_REFUSAL.get(law)
+    if declared is None:
+        return ()
+    return (declared,) if isinstance(declared, str) else tuple(declared)
+
+
+def coordinate_failures() -> list[str]:
+    """No frozen expectation may hold a coordinate the subject's edits move.
+
+    The second thing this round learned by being caught: a line NUMBER inside a
+    refusal is as volatile as a drawn value, and for a worse reason \u2014 it moves
+    when an unrelated line is added above it, so the expectation rots on the
+    next commit rather than on the next run. Such a refusal is frozen as
+    FRAGMENTS around the coordinate instead, and this refuses the whole-message
+    form wherever it reappears.
+    """
+    failures = []
+    for law in sorted(EXPECTED_REFUSAL):
+        for fragment in declared_fragments(law):
+            if LINE_COORDINATE.search(fragment):
+                failures.append(
+                    f"{law}'s expected refusal holds a line number ({fragment[-60:]!r}), which "
+                    f"this file's own edits move \u2014 freeze the prose and the spelling as "
+                    f"separate fragments and leave the coordinate out"
+                )
+    return failures
+
+
 def refusal_mismatch(law: str, expect_red: str, details: dict[str, str]) -> str | None:
-    """None when the named test's own refusal is the one this law declares."""
-    expected = EXPECTED_REFUSAL.get(law)
-    if not expected:
+    """None when the named test's own refusal is the one this law declares.
+
+    Every declared fragment must appear in ONE printed refusal. Fragments exist
+    for a refusal whose middle is volatile; requiring all of them in the same
+    text is what keeps two fragments from being satisfied by two different
+    failures.
+    """
+    expected = declared_fragments(law)
+    if not expected or not all(expected):
         return (
             f"{law}: no expected refusal is declared for this proof, so a red run proves the "
             f"named test failed and not WHY it failed (F-2)"
         )
     printed = [text for name, text in details.items() if expect_red in name]
-    if any(expected in text for text in printed):
+    if any(all(fragment in text for fragment in expected) for text in printed):
         return None
     return (
         f"{law}: '{expect_red}' failed, but not with the refusal this proof declares. "
@@ -1790,6 +1972,22 @@ def self_test() -> int:
         "a law with no declared refusal is a refusal (F-2)",
         (refusal_mismatch("NO-ENTRY", "SomeTest", {"SomeTest:a case": "anything"}) or "")
         .find("F-2") > 0,
+    )
+
+    globals()["EXPECTED_REFUSAL"] = {"COORD": "but was: <[827: when (step.code) {]>"}
+    expect(
+        "a frozen expectation holding a line number is a refusal",
+        any("holds a line number" in f for f in coordinate_failures()),
+    )
+    globals()["EXPECTED_REFUSAL"] = {"FRAGS": ("but was: <[", "when (step.code) {]>")}
+    expect(
+        "the same refusal frozen as fragments around the coordinate is clean",
+        coordinate_failures() == [],
+    )
+    expect(
+        "every fragment must appear in ONE printed refusal",
+        refusal_mismatch("FRAGS", "T", {"T:c": "but was: <[828: when (step.code) {]>"}) is None
+        and refusal_mismatch("FRAGS", "T", {"T:c": "but was: <[828: val x = y]>"}) is not None,
     )
 
     drawn = Proof(
@@ -1986,6 +2184,14 @@ def main() -> int:
 
     print(f"Running {len(PROOFS)} proofs across {workers} worker(s); each in its own tree.\n")
     failures: list[str] = []
+
+    # T-01's arm, run before the proofs because it is cheap beside them and
+    # because a harness whose own cover obligation fails open should say so
+    # before it says anything else.
+    arm_failures, arm_verdict = omission_arm(declared_covers)
+    print(f"OMISSION ARM (T-01): the print loop deleted on a copy \u2014 {arm_verdict}\n")
+    failures.extend(arm_failures)
+
     # An expectation for a law no proof carries is a STALE expectation: it was
     # harvested from a proof that has since been renamed or removed, and it
     # would read as coverage. A missing one is caught per proof, below.
@@ -2018,6 +2224,7 @@ def main() -> int:
         )
     failures.extend(cover_failures(covers, declared_covers, reddened))
     failures.extend(exemption_failures(PROOFS))
+    failures.extend(coordinate_failures())
 
     # §83: the baseline must RESTORE green. Each proof ran in its own copy, so
     # nothing could have leaked into the original — but "could not have" is an
@@ -2060,10 +2267,17 @@ def main() -> int:
     print("  7. Each proof's expected refusal (F-2) was HARVESTED from a measured run and then")
     print("     frozen. It proves the reason a proof reds has not CHANGED since it was read; it")
     print("     does not prove the reason was the right one on the day it was harvested.")
-    print("  8. 86 of those 89 refusals name the law or the refusal in prose. Three are bare")
+    print("  8. 88 of those 91 refusals name the law or the refusal in prose. Three are bare")
     print("     assertion text carrying the values that identify them, and ONE (P7-L8) is")
     print("     exempted from freezing its values because its own plant draws them \u2014 an")
     print("     exemption this harness measures against the plants, in both directions.")
+    print("     TWO are frozen as fragments around a line NUMBER rather than whole, because a")
+    print("     coordinate moves when a line is added above it; the whole-message form is")
+    print("     refused wherever it reappears.")
+    print("  9. The omission arm deletes the print loop on a copy and requires a refusal, so")
+    print("     that line is load-bearing twice over \u2014 but the ARM's own removal is bounded")
+    print("     by review and not by measurement. The regress stops here, and is named here")
+    print("     rather than left for a reader to find.")
     return 0
 
 

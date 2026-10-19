@@ -772,6 +772,7 @@ class QueueModelCheckTest {
         var custodyRecordsBeforeAnErase = 0
         var waitsJudged = 0
         var terminalRefusals = 0
+        var transmissionsJudged = 0
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
         val codesSeen = mutableSetOf<String>()
@@ -970,6 +971,12 @@ class QueueModelCheckTest {
                                 )
                             }
                             if (view.message in assertsSomethingLeftTheDevice) {
+                                // T-02, the sixteenth review: this judgment was
+                                // the one gated branch in this loop with no
+                                // counter at all, so narrowing its condition
+                                // removed it in silence. It is counted now, and
+                                // the count is pinned with the others below.
+                                transmissionsJudged++
                                 assertTrue(
                                     op.attempts > 0,
                                     "a refusal with nothing sent (${step.code}) is shown as " +
@@ -1627,6 +1634,60 @@ class QueueModelCheckTest {
         )
         assertEquals(2_925, foreignScopeRefusals, "a different number of foreign-scope refusals")
         assertEquals(969, terminalRefusals, "a different number of refusals of a finished row")
+        // T-02, the sixteenth review. The five anchors above bound the loss of
+        // the two classes the fifteenth review happened to attack, and the
+        // review that answered it left nine other gated judgments in this loop
+        // bounded by `> 0` — witness survival, which is the form this lane
+        // retired in round 18 and which a narrowing cannot break while one
+        // witness remains. The review measured the cost: narrowing the two wait
+        // judgments to exclude CAPTURED rows, and narrowing the transmission
+        // judgment alone, were both 99 of 99 GREEN with every anchor, total and
+        // ratio intact — and the judgments removed are two this phase exists to
+        // make, that a till never tells a cashier to wait while nothing is
+        // pending and never shows a refusal as something that left the device
+        // when nothing was sent.
+        //
+        // So every counter in this loop carries a LITERAL TOTAL. The `> 0`
+        // assertions above are kept for what they say that a total does not —
+        // that a zero would make a named invariant vacuous — and these bound
+        // the LOSS. They are deliberately brittle: a change to what the
+        // reachable space produces is a deliberate edit here, with its reason
+        // in the commit, and never a silent consequence of narrowing a
+        // condition somewhere else.
+        assertEquals(7_650, edges, "a different number of edges was explored")
+        assertEquals(6_876, refusals, "a different number of events was refused")
+        assertEquals(
+            75, nextShiftSends,
+            "a different number of events under another member of the same business moved a row",
+        )
+        assertEquals(
+            3, releasesOfAnUnsentRow,
+            "a different number of releases moved an unsent row, which is the ground INV-13's " +
+                "relaxation stands on",
+        )
+        assertEquals(
+            75, custodyRecords,
+            "a different number of moves was made by a session other than the row's own",
+        )
+        assertEquals(
+            6, custodyRecordsBeforeAnErase,
+            "a different number of foreign-session moves erased the local row",
+        )
+        assertEquals(
+            276, refusalsWithNothingSent,
+            "a different number of refusals was produced with nothing sent",
+        )
+        assertEquals(
+            939, waitsJudged,
+            "a different number of refusals was judged for telling the merchant to wait while " +
+                "nothing is pending, which is the judgment a narrowing of that condition removes " +
+                "in silence",
+        )
+        assertEquals(
+            312, transmissionsJudged,
+            "a different number of refusals was judged for being shown as something that left " +
+                "the device, which is the judgment that had no counter at all until T-02",
+        )
         assertTrue(edges > 1_000, "only $edges edges were explored")
     }
 
