@@ -409,6 +409,28 @@ const notTheGatesPrivateCopy = (dir: string): string => {
  * reds instead of waving the claim through. This container is Linux and the
  * suite's own cases read `/proc` elsewhere.
  */
+/**
+ * ROUND 60e, THE COMPLEMENT OF READING THIS CASE'S OWN SETTINGS. `it.concurrent`
+ * and `describe.concurrent` mark ONE case or ONE suite, with the config and the
+ * command line untouched, so a case that reads only its own `task` sees nothing
+ * and the serial order this file's arms assume is gone for its neighbours. Every
+ * task in THIS FILE is read instead, from `task.file` downward.
+ *
+ * `mode` is deliberately NOT read here: a filtered run (`-t`) leaves the other
+ * cases `skip`, and refusing on that would red the way every reviewer debugs.
+ * `concurrent` and `retry` are unaffected by filtering, and they are the two
+ * that change what a pass MEANS.
+ */
+const concurrencyOffences = (node: Record<string, unknown>, into: string[]): void => {
+  for (const task of (node.tasks as Array<Record<string, unknown>> | undefined) ?? []) {
+    const kind = String(task.type ?? '');
+    const name = String(task.name ?? '<unnamed>');
+    if (task.concurrent === true) into.push(`${kind} ${JSON.stringify(name)} is concurrent`);
+    if (Number(task.retry ?? 0) > 0) into.push(`${kind} ${JSON.stringify(name)} retries ${String(task.retry)} times`);
+    concurrencyOffences(task, into);
+  }
+};
+
 const GATE_PROGRAM = 'tools/law-ran.py';
 const notStartedByTheGate = (): string => {
   if (!existsSync('/proc/self/status')) {
@@ -3268,6 +3290,17 @@ describe('every written invocation of the pack tools is isolated', () => {
       String(effective.mode),
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: this case's mode in this RUN is ${String(effective.mode)}, not 'run' -- a skipped or todo case asserts nothing, and the gate's count would not see the difference if the mode were applied to others`,
     ).toBe('run');
+    const fileNode = effective.file as Record<string, unknown> | undefined;
+    expect(
+      typeof fileNode,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: this runner gave the case no handle on its own FILE, so this arm can read its own settings and nothing about its neighbours -- and one it.concurrent beside it would not be visible`,
+    ).toBe('object');
+    const siblings: string[] = [];
+    if (fileNode !== undefined) concurrencyOffences(fileNode, siblings);
+    expect(
+      siblings,
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: a case or suite in this very file runs concurrently or retries, which no config setting and no command-line flag has to show: it.concurrent and describe.concurrent mark one case at a time. The arms in this file write temporary directories, spawn processes and read a private snapshot of the pack, and they assume they are the only one doing so`,
+    ).toStrictEqual([]);
     const runnerConfigFile = readFileSync(join(__dirname, '..', 'vitest.config.ts'), 'utf8');
     // The COMMENTS are stripped before anything is read out of this file, and
     // the first version of this arm is why: the reasons written beside each
