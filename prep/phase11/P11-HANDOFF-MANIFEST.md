@@ -634,8 +634,15 @@ coordinator adopted it. The check reads the FENCED blocks of this phase's
 documents, takes the lines that are nothing but a lowercase `key=value` token,
 and requires each token to appear somewhere under `prep/phase11/harness/` —
 which holds both the instruments and the committed run evidence. It is now
-**step 0 of `rebuild_and_prove.sh`**, before a cluster exists, and the run
-refuses on it: `EXIT_FENCED_FIGURES` is in the exit-code block, exit 1 is a
+**step `0c` of `rebuild_and_prove.sh`** — and the sentence that stood here
+first, "step 0, before a cluster exists", was **wrong in both halves**; see
+§7.12, which found it by running the plant rather than by reading the script.
+Steps `0` and `0b` create and start the scratch cluster, so the number
+collided with them and the check runs after the cluster is up. What the claim
+was for is still true and is now stated as what was measured: it runs **before
+the database is dropped and recreated, before the roles are bootstrapped and
+before any migration or pack is applied**, so nothing under test has been
+touched when it refuses. The run refuses on it: `EXIT_FENCED_FIGURES` is in the exit-code block, exit 1 is a
 figure nothing emits and **exit 2 is the check having matched nothing at all**,
 which it must not report as a pass.
 
@@ -664,6 +671,90 @@ in `P11-LIVE-DDL-PROOF.md` §1.
 
 **A TWELFTH round is owed** narrow on `24f6ebe..HEAD`. Nothing here is
 self-signed.
+
+---
+
+## 7.12 The TWELFTH round — **`PASS-WITH-SCOPE`** at `321e84c`: the instrument is real, and its net was thinner than its own header admitted
+
+Narrow on `24f6ebe..321e84c`. Frozen at
+`/mnt/project-files/phase11/P11-CHALLENGE-321e84c.md`, sha256
+`bf5b1088077a5ca05b835cc5cf913fa40029d8ab29b5f1e6f64f806f06f3badc`, 198 lines /
+10,999 bytes.
+
+The challenger ran a full round rather than carrying anything forward, because
+the moved `HARNESS_SHA256` is exactly the case its round-11 signature named as
+voiding it. It recomputed the digest to `2aa31de7…`, reproduced every claim made
+for the checker, and **defeated the wiring rather than reading it**: on its own
+copy with one fabricated figure planted, the real script printed the finding
+and `Refusing to run`, with no `=== 1.` line in the log.
+
+**`R12-S1` (`P3`), five shapes, one control.** The same fabricated token each
+time; only its position changed. A backtick fence was caught (the control).
+Not seen: a `~~~` tilde fence; a four-space indented block; a block downstream
+of an earlier UNCLOSED fence, where `inside = not inside` flipped parity while
+the candidate count stayed plausible; markdown in a subdirectory, because the
+scan was `os.listdir` of the phase directory; and — the one that mattered — a
+figure written into `harness/mutations/README.md`, a real file that was
+**outside the scan AND inside the haystack**, so it could hide a fabricated
+figure and legitimise the identical token in a document that *was* scanned.
+A document used as an instrument is the exact thing this check exists to stop.
+
+**All five are closed here, and not with five patches.** A line that is nothing
+but `key=value` is output-shaped **wherever it sits**, so the fence parsing is
+deleted and every escape from it goes with it; the walk now covers `**/*.md`
+under the phase directory; and **`.md` is excluded from the haystack**, so no
+document can be its own evidence. The selftest is now **nine hermetic arms, one
+per shape**, each with its expected exit, run before the real scan — and the
+plant was driven through the real script again afterwards, where it is named by
+file and line (`harness/mutations/README.md:94`) and the run stops without
+reaching the database.
+
+**Two limits are now disclosed in the file rather than closed**, at the
+challenger's request: the haystack is a **substring match over one blob**, so a
+token emitted anywhere for any reason passes everywhere (`identities=2` printed
+by one case legitimises `identities=2` written about another) — narrowing it to
+the emitting case is a convention, not a check; and the arm's second direction
+stays a rule, because nothing in a token distinguishes a boolean that cannot go
+stale from a count true only of an instant.
+
+**AND A DEFECT OF MY OWN, found while re-proving the gate.** §7.11 above and
+the checker's own header said it runs at "step 0, before a cluster exists".
+**Both halves were false.** `rebuild_and_prove.sh` already had steps `0` and
+`0b`, which create and start the scratch cluster, so the new step collided with
+their number and ran after the cluster was up. It is renumbered **`0c`** and
+the claim is restated as what is measured: it runs before the database is
+dropped and recreated, before the roles are bootstrapped and before any
+migration or pack is applied, so nothing under test has been touched when it
+refuses. It was found by **running** the plant, not by reading the script — a
+claim about an instrument, written beside the instrument, where only the
+instrument had been checked. That is the same class as the sentence the tenth
+round rejected and as the §7.9 sentence the eleventh round recorded as its own
+miss, and it is corrected in place with the correction stated.
+
+None of `R12-S1` is a blocker under the stopping rule, and the challenger said
+so.
+
+**BUT `321e84c` CARRIES NO SIGNATURE, AND THAT IS BECAUSE OF THE SENTENCE
+ABOVE, NOT BECAUSE OF THE SCOPE.** The step-0 claim is a **false measured
+claim**, which is the one thing this phase's stopping rule blocks on, so the
+coordinator ruled **`NO-SIGN` on `321e84c`** and stopped its diff review of
+that head, there being nothing left for it to decide. **`24f6ebe` remains the
+last fully signed head of this phase.** The challenger's `PASS-WITH-SCOPE`
+stands as its own verdict on the instrument and the figures, both of which
+reproduce; it is the documentation that was false, and a head whose documents
+carry a false measured claim does not get signed here even when its instrument
+is sound. Round 10 was rejected on exactly this shape, and the rule holds when
+the sentence is the author's own.
+
+The measurement that settled it is two commands:
+`git show 321e84c:prep/phase11/harness/rebuild_and_prove.sh | grep -n '^echo "=== 0'`
+returns **three** lines — the cluster's `0` and `0b` and this check's colliding
+`0` — and a plant driven through the real script with `P11_REPO` pointed at a
+copy shows the refusal happening after those two steps.
+
+**This commit is a new SHA and carries no signature either**, and a thirteenth
+round is owed narrow on `321e84c..HEAD`, with the coordinator reviewing the same
+range after it.
 
 ---
 

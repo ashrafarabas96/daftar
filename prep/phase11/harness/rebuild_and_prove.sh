@@ -70,14 +70,21 @@ echo "NODE_VERSION      : $(node -v) (repository engines: $(node -e "process.std
 echo "FIXTURES          : world.sql (Pack A)$(test -f $H/world_b.sql && echo ', world_b.sql (Pack B, with its definer fixture)'). Within the packs present, no fixture and no case is skipped; a pack that is not on the branch is named as skipped above and below."
 echo
 
-# ── 0. the documents' fenced figures ────────────────────────────────────────
-# Round 10 rejected a head over a figure shown inside a fenced block that no
-# instrument emitted. Round 11 made the honest objection that the arm added in
-# answer was a rule in a document with nothing enforcing it. This is the
-# enforcement, and it runs FIRST -- before a cluster exists -- for the same
-# reason the renderer's selftest does: a defect a check can see should stop the
-# run before anything expensive happens. Its own red proof runs before it.
-echo "=== 0. the documents' fenced figures (every quoted key=value must be emitted by something) ==="
+# ── 0c. the documents' quoted figures ───────────────────────────────────────
+# Round 10 rejected a head over a figure shown as output that no instrument
+# emitted. Round 11 made the honest objection that the arm added in answer was
+# a rule in a document with nothing enforcing it. This is the enforcement.
+#
+# WHERE IT RUNS, stated exactly, because the first version of this comment got
+# it wrong and said "before a cluster exists": steps 0 and 0b above create and
+# start the scratch cluster, so this step runs AFTER the cluster is up and
+# BEFORE the database is dropped and recreated, before the roles are
+# bootstrapped and before any migration or pack is applied. Nothing under test
+# has been touched when it refuses. It is numbered 0c rather than 0 because 0
+# and 0b were already taken -- the first version collided with them.
+#
+# Its own red proof runs before it, as the renderer's selftest does.
+echo "=== 0c. the documents' quoted figures (every key=value shown as output must be emitted by something) ==="
 python3 -I $H/check_fenced_figures.py --selftest || { echo "the fenced-figure check cannot fail; refusing to trust it"; exit 1; }
 python3 -I $H/check_fenced_figures.py
 RC_FIGURES=$?
@@ -293,7 +300,7 @@ echo "EXIT_PROOFS_A     : $RC_PROOFS  (prep/phase11/harness/proofs.py)"
 echo "EXIT_PROOFS_B     : $RC_B  (prep/phase11/harness/proofs_b.py)"
 echo "EXIT_PROOFS_A_RUN2: $RC_PROOFS2  (the same file, the same database -- idempotence)"
 echo "EXIT_PROOFS_B_RUN2: $RC_B2  (the same file, the same database -- idempotence)"
-echo "EXIT_FENCED_FIGURES: $RC_FIGURES  (prep/phase11/harness/check_fenced_figures.py, run at step 0)"
+echo "EXIT_FENCED_FIGURES: $RC_FIGURES  (prep/phase11/harness/check_fenced_figures.py, run at step 0c: after the cluster is up, before the database is recreated)"
 echo "EXIT_RACES        : $RCR  (prep/phase11/harness/races.py)"
 echo "EXIT_RACES_B      : $RCRB  (prep/phase11/harness/races_b.py)"
 echo "EXIT_SCRIPT       : $RC  (0 means every step above returned 0)"
