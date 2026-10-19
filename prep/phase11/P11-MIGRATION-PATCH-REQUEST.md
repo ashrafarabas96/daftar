@@ -743,8 +743,15 @@ Measured on a scratch cluster as the ledger's OWNER, `daftar_migrator`
 ```
 deleted=0            -- DELETE FROM catalog_grid_ctx_ledger
 owner_sees=0         -- the owner's own verification, in the same transaction
-superuser_sees=130   -- a superuser immediately afterwards
+present=true         -- a superuser reading the same table, immediately afterwards
 ```
+
+(That block previously ended `superuser_sees=130`, a number no case in this
+tree emits. It is withdrawn as `R10-F1`, and it is not replaced by a measured
+count: the suites run twice on one database and the ledger accumulates, so a
+row count depends on when it is taken, while `PA9-P2` reads partway through
+the first pass. The load-bearing claim is the boolean, and `PA9-P2` asserts
+it. `P11-LIVE-DDL-PROOF.md` §16.6 carries the full correction.)
 
 `catalog_grid_ctx_ledger` is `FORCE ROW LEVEL SECURITY`, so its policies bind
 the owner, and neither policy matches another transaction's rows. A retention

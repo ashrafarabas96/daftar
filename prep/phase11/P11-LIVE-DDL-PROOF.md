@@ -2179,7 +2179,7 @@ rebuild, and the figures are pass-1 counts over 121 Pack A cases:
 | `M18` make the write policy `PERMISSIVE` | 2 | commits — and so does `PA6-L2` | the two it reds are exactly both arms, so it reds the predicate for every role at once and attributes nothing to the owner |
 | **`M21` `NO FORCE`, policy kept** | **3** | **commits (`no error`), while `PA6-L2` stays refused** | — it is the only one that leaves the control red |
 
-`M21`'s third and fourth reds are a second, independent confirmation of §16.6:
+`M21`'s second and third reds are a second, independent confirmation of §16.6:
 without FORCE, the owner's prune **works** — `PA9-P1` fails with `deleted=53`
 and `PA9-P2` with `present=false`. All three of `M21`'s flips are the same leg,
 and `PA6-L2` staying red is what says so.
@@ -2231,8 +2231,29 @@ OWNER, `daftar_migrator`:
 ```
 deleted=0            -- DELETE FROM catalog_grid_ctx_ledger
 owner_sees=0         -- the owner's own verification, same transaction
-superuser_sees=130   -- a superuser immediately afterwards
+present=true         -- a superuser reading the same table, immediately afterwards
 ```
+
+Those three lines are `PA9-P1`'s and `PA9-P2`'s own output, verbatim and
+complete: the two cases assert exactly those strings and nothing else.
+
+**Correction, `R10-F1`.** Until this round the third line of that block read
+`superuser_sees=130`, and **no instrument in this tree emits it**. `PA9-P2`
+asserts a boolean, `present=true`; `grep -rn superuser_sees
+prep/phase11/harness/` returns nothing; and the string is in neither published
+evidence file. It was a number written into a document, presented inside a
+fenced block as one observation at one moment, and it is withdrawn. A count is
+also the wrong shape for that line even when it is emitted, which is why it is
+not being replaced by a measured count: the suites run **twice on one
+database** and the ledger accumulates, so the number of rows in it is a
+function of **when** you look, while `PA9-P2` looks partway through pass 1.
+The independent challenger measured, at this head, that a complete pass leaves
+59 rows and a second complete pass leaves 112 — **their figures, re-stated
+here and NOT re-measured by me** — so a number near 130 is reachable only at
+the end of a whole run, which is a different moment from the one this block
+describes. The claim that carries the finding is that a superuser still sees
+what the owner believed it had deleted, and that claim is a boolean, pinned by
+a case.
 
 `PA9-P1` and `PA9-P2` are those two reads. FORCE RLS binds the owner and no
 policy matches another transaction's rows, so a retention job written as the

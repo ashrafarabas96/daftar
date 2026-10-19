@@ -488,8 +488,12 @@ all three review links complete**: the challenger's `PASS-WITH-SCOPE`, and a
 coordinator diff review that signs it after re-running the clean suite itself
 (116 ×2 and 53 ×2). The signature covers `9c23f17` only, with
 `f87a7ce0…` / `d5820ada…` / `02e31c35…`, and **does not transfer** — the follow-up
-commit below changes Pack A and the harness, so this head carries no signature
-and a tenth round is owed narrow on `9c23f17..HEAD`.
+commit below changes the harness (`proofs.py`, a new mutation) and the
+documents, so the head it creates carries no signature and a tenth round is
+owed narrow on `9c23f17..HEAD`. It does **not** change either pack: Pack A
+stays `f87a7ce0…` and Pack B `d5820ada…` across `9c23f17`, `51686d9` and the
+head below. (An earlier draft of this paragraph said the follow-up changes
+Pack A. It does not, and that is corrected here.)
 
 Neither ask was a blocker and both are this phase's own standard applied to it:
 
@@ -538,6 +542,52 @@ PG18.
 **A TENTH round is owed** on `9c23f17..HEAD`, and **nothing here is
 self-signed.** `READY_TO_PROMOTE` = **NO**; **no migration number exists**; no
 CI has executed any of it. `OD-P11-07` is the owner's.
+
+---
+
+## 7.10 The TENTH independent challenge round (2026-10-19) — `REJECT` on two sentences of prose, answered
+
+Narrow on `9c23f17..51686d9`. The challenger reproduced every substantive claim
+in that commit — `M15` 19 reds with `PA8-O1` **not** among them, `M18` exactly
+two (`PA6-L2` and `PA8-O1`), `M21` exactly three with `PA6-L2` **staying red**,
+the five new cases, the clean suite at 121 ×2 and 53 ×2, 13 race scenarios, 80
+frozen entries with 0 mismatches, and the gate table identical in every cell to
+`9c23f17`, `02befb6` and `2bfb6d5` — and **REJECTED the head on two sentences**.
+Both are fixed here, in the documents only. No code changed, no pack digest
+moved, and nothing was re-measured, because nothing in the fix touches an
+instrument.
+
+**`R10-F1` (`P3`) — a figure inside a fenced block that no instrument emits.**
+§16.6 showed three lines as one observation at one moment, and the third,
+`superuser_sees=130`, is not output: `PA9-P2` asserts the boolean
+`present=true`, `grep -rn superuser_sees prep/phase11/harness/` returns
+nothing, and the string appears in neither published evidence file. It is
+withdrawn rather than replaced by a measured count, and §16.6 says why: the
+suites run **twice on one database** and the ledger accumulates, so a row count
+is a function of when it is read, while `PA9-P2` reads partway through pass 1.
+The challenger measured 59 rows after a complete pass and 112 after a second —
+**their figures, carried here and not re-measured by this author** — so a
+number near 130 belongs to the end of a whole run, a different moment from the
+one the block describes. This is the class of defect this phase's stopping rule
+treats as blocking, and the challenger was right to reject on it over a correct
+instrument: it is the same shape as `R8`'s single false sentence, and the rule
+has to hold when the author is the one who got it nearly right.
+
+**`R10-F2` (`P3`) — "`M21`'s third and fourth reds"** in §16.4, four lines under
+a table cell reading 3 and four lines above "All three of `M21`'s flips". The
+two meant are the **second and third**. One word, fixed.
+
+**Recorded, not fixed:** the challenger looked for a hazard in `PA9-P1` and did
+not find one — under `M21` that case really does empty the ledger mid-suite
+(`deleted=53`), and it cannot corrupt the cases after it because every law in
+this pack reads only `txid = pg_current_xact_id()` and nothing ever reads the
+ledger's history. That is also why `TRUNCATE`-style pruning is safe at all
+(§16.6). It is worth knowing and it is not a defect.
+
+**An ELEVENTH round is owed** narrow on `51686d9..HEAD`. The challenger has
+said this head is signable on the same evidence once those two sentences are
+fixed, and that it will not re-run the suite unless a pack digest moves —
+neither of which is a signature, and neither is mine to give.
 
 ---
 
