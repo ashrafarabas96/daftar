@@ -757,15 +757,32 @@ export interface CommercialQuoteChecks {
   //    that a caller holding ONE precision map for many quotes must pass the
   //    subset that covers this one.
   //
-  // What the STRING SHAPE of a key is beyond that — trimming, case folding — is
-  // the caller's business and this package states no rule for it. **So a PARTIAL
-  // miss is ACCEPTED: a container that names one priced key correctly and
-  // another with the wrong case or a trailing space satisfies rule 3, and that
-  // second line's quantity is bounded only by the storage scale, exactly as if
-  // the key had been absent.** That is the published contract and the suite pins
-  // it, because it was measured (`F-A`) rather than reasoned about: an earlier
-  // version of this contract claimed rule 3 caught a wrongly shaped key, and it
-  // does so only when NO key matches.
+  // 4. a declared key that is NOT a priced key but equals one after trimming and
+  //    case folding is refused when the quote is BUILT. Rule 3 is an ALL-MISS
+  //    test, so without this a container naming one priced key correctly and
+  //    another with the wrong case satisfied it and that second line's quantity
+  //    went unbounded, at the digest of a quote with no `checks` at all
+  //    (`F-A`). The fold recognises the mistake and never matches a declaration:
+  //    a key is matched for the law by exact equality only.
+  //
+  // What the STRING SHAPE of a MATCHING key is beyond that — a key this quote
+  // prices exactly — is the caller's business and this package states no rule
+  // for it. Rules 3 and 4 are coordinator defaults, both REVERSIBLE on the
+  // owner's word, and the suite pins what each one costs.
+}
+
+/**
+ * The ONE normalisation of a stock key in this module, and it exists only to
+ * recognise a mistake.
+ *
+ * A declaration is matched to a line by EXACT equality and never by this. A
+ * normalisation that sits beside an exact comparison is otherwise an invitation
+ * to a second, looser way of claiming the same thing, so the rule is written
+ * once here and used in exactly one place: refusing a key that is not a priced
+ * key and differs from one only by case or surrounding space.
+ */
+function foldStockKey(key: string): string {
+  return key.trim().toLowerCase();
 }
 
 /** The `checks` contract as a LIST, for the same reason `APPROVAL_FIELDS` is one. */
@@ -1030,16 +1047,11 @@ function buildQuote(input: CommercialQuoteInput, checks: CommercialQuoteChecks |
   // — was true of a single-key container and false of a partial miss. That is
   // the `C-A` class: a correct guard under a claim the guard does not support.
   //
-  // The partial miss is left ACCEPTED ON PURPOSE, not by oversight, and the
-  // suite pins it as such so the next reader cannot read today's silence as
-  // coverage: the SHAPE of a key is the caller's business under rule 3 of the
-  // contract above (the coordinator's standing ruling), and a near-miss rule
-  // would be this package deciding that question. It is `OD-P6-08`'s
-  // neighbourhood and the owner's answer governs it, together with this whole
-  // rule. My own view is recorded rather than acted on: the cheap near-miss
-  // refusal — a declared key that is NOT a priced key but equals one after
-  // trimming and case folding — would close the measured hole and charges a
-  // genuine superset nothing, and I would take it if the owner rules that way.
+  // So the partial miss is closed by the NEAR-MISS rule below rather than by
+  // widening this one: a silent fractional quantity on a whole-unit product is a
+  // fail-open, and the measurement showed the cheap close costs a genuine
+  // superset nothing. The per-key alternative was measured too and does charge
+  // it — `P6-ROUND28-PER-KEY-COST-PROBE.log` — which is why it was not taken.
   //
   // The cost of what IS refused here is real: a caller that keeps ONE precision
   // map for many quotes is refused on a quote none of whose products that map
@@ -1053,6 +1065,38 @@ function buildQuote(input: CommercialQuoteInput, checks: CommercialQuoteChecks |
   // CANONICAL keys the lines were proved to carry, not the strings the caller
   // wrote; and a quote with no lines never reaches it, having already been
   // refused `order.cart_empty`.
+  // A DECLARED KEY THAT IS NOT A PRICED KEY BUT WOULD BE ONE if it were trimmed
+  // and case-folded (`F-A`). It is refused BEFORE the all-miss rule, because it
+  // is the more specific statement of what went wrong and the refusal should
+  // say so.
+  //
+  // This folding never ACCEPTS anything: a key is matched for the law by exact
+  // equality and only ever by that. The fold exists to recognise a MISTAKE, so
+  // it cannot become a second, looser way to claim a declaration — which is the
+  // one thing a normalisation introduced beside an exact comparison is otherwise
+  // good for. That is also why no rule about a MATCHING key's shape follows from
+  // it: rule 3 of the contract stands.
+  //
+  // Scoped like the rule below, and for the same measured reason rather than by
+  // analogy: on the re-verification path the container is built from the
+  // CHECKOUT's positions, and a mis-cased position key is already refused there
+  // by the authority that owns that fact.
+  if (requireDeclaredKeysMatch && declaredKeys !== undefined) {
+    const folded = new Set([...seen].map(foldStockKey));
+    const nearMiss = declaredKeys.find((key) => !seen.has(key) && folded.has(foldStockKey(key)));
+    if (nearMiss !== undefined) {
+      throw new OrderError(
+        'order.quote_field_undeclared',
+        'unitPrecisionByStockKey declares a key that is not a stock key this quote prices but differs from one only in case or surrounding space, so the law it states is claimed over no line',
+        {
+          fields: 'unitPrecisionByStockKey',
+          stated: nearMiss,
+          expected: foldStockKey(nearMiss),
+        },
+      );
+    }
+  }
+
   if (requireDeclaredKeysMatch && declaredKeys !== undefined && declaredKeys.length > 0 && !declaredKeys.some((key) => seen.has(key))) {
     throw new OrderError(
       'order.quote_field_undeclared',

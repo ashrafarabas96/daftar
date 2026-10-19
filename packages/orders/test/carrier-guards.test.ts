@@ -725,17 +725,32 @@ describe("the challenger's REJECT at a869aab — the leaf the remedy itself left
   it('E-A: a container that prices NO line of this quote is refused, which is what a type check cannot reach', () => {
     const whole = WHOLE_UNITS.get(KEY);
     if (whole === undefined) throw new Error('the fixture must declare the whole-unit product');
-    // The wrongly SHAPED key — right product, wrong case or a trailing space —
-    // and another product's key entirely. A type check admits all three, and the
-    // mirror of `checkout-intent`'s coverage refusal is what catches them.
-    for (const key of [`${KEY} `, KEY.toUpperCase(), stockKeyOf({ productId: OTHER_PRODUCT, variantId: null })]) {
+    // Another product's key entirely: nothing matches, so the ALL-MISS rule
+    // answers and says how many keys were declared against how many were priced.
+    const error = refusalOf(
+      () => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: new Map([[stockKeyOf({ productId: OTHER_PRODUCT, variantId: null }), whole]]) }),
+      "a key naming another product's stock",
+    );
+    expect(error.code).toBe('order.quote_field_undeclared');
+    expect(error.details?.declared).toBe('1');
+    expect(error.details?.priced).toBe('1');
+  });
+
+  it('F-A: a NEAR-MISS key is refused by the more specific rule, which names the key and not a count', () => {
+    // The wrongly SHAPED key — right product, wrong case or a trailing space.
+    // Which refusal answers is the point of this case: the near-miss rule runs
+    // BEFORE the all-miss rule, so the message says what actually went wrong
+    // rather than reporting a count.
+    const whole = WHOLE_UNITS.get(KEY);
+    if (whole === undefined) throw new Error('the fixture must declare the whole-unit product');
+    for (const key of [`${KEY} `, KEY.toUpperCase(), ` ${KEY}`]) {
       const error = refusalOf(
         () => buildCommercialQuote(HALF_UNIT, { unitPrecisionByStockKey: new Map([[key, whole]]) }),
-        `a key this quote does not price: ${key}`,
+        `a near-miss key: ${JSON.stringify(key)}`,
       );
       expect(error.code).toBe('order.quote_field_undeclared');
-      expect(error.details?.declared).toBe('1');
-      expect(error.details?.priced).toBe('1');
+      expect(error.details?.stated).toBe(key);
+      expect(error.details?.declared).toBeUndefined();
     }
   });
 
@@ -783,14 +798,14 @@ describe("the challenger's REJECT at a869aab — the leaf the remedy itself left
     expect(buildCommercialQuote(lawful, { unitPrecisionByStockKey: superset }).lines[0]?.quantity).toBe('2.0000');
   });
 
-  it('F-A: a PARTIAL miss is ACCEPTED ON PURPOSE — one correct key, one mis-cased, and the law not applied', () => {
-    // The challenger's round-27 finding, pinned as the contract rather than
-    // fixed: rule 3 is an ALL-miss test, so one matching key satisfies it and a
-    // second key with the wrong case or a trailing space goes unexamined. This
-    // case exists so the next reader cannot read that silence as coverage, and
-    // it is the half that must be DELETED if the owner rules the other way —
-    // `OD-P6-08`'s neighbourhood, and the mutation record carries the
-    // measurement of what a per-key rule would cost instead.
+  it('F-A: a PARTIAL miss is REFUSED — one correct key, one mis-cased, and the law no longer dropped', () => {
+    // The challenger's round-27 finding, and the measurement that made the case
+    // what it is: rule 3 is an ALL-miss test, so with one key matching, a second
+    // key with the wrong case or a trailing space USED TO GO UNEXAMINED and that
+    // line's quantity was accepted at the digest of the same quote with no
+    // `checks` at all. The near-miss rule closes it. Both halves are asserted:
+    // the honest declaration refuses for the QUANTITY, and the mis-cased one
+    // refuses for the KEY — two different faults, each named.
     const other = stockKeyOf({ productId: OTHER_PRODUCT, variantId: null });
     const twoLines: CommercialQuoteInput = {
       quoteId: QUOTE_ID,
@@ -807,8 +822,7 @@ describe("the challenger's REJECT at a869aab — the leaf the remedy itself left
     };
     const whole = WHOLE_UNITS.get(KEY);
     if (whole === undefined) throw new Error('the fixture must declare the whole-unit product');
-    // The CONTROL first: declared honestly, the whole-unit law refuses 5.5000.
-    const refused = refusalOf(
+    const honest = refusalOf(
       () =>
         buildCommercialQuote(twoLines, {
           unitPrecisionByStockKey: new Map([
@@ -818,19 +832,25 @@ describe("the challenger's REJECT at a869aab — the leaf the remedy itself left
         }),
       'both keys declared honestly',
     );
-    expect(refused.code).toBe('order.quote_quantity_invalid');
-    // And the partial miss is accepted, at the digest of the same quote with no
-    // `checks` at all — which is the whole of what is being pinned.
+    expect(honest.code).toBe('order.quote_quantity_invalid');
+    expect(honest.details?.stated).toBe('5.5000');
+    // The quote this used to be ACCEPTED as, kept as the thing being prevented:
+    // the same bytes a quote with no `checks` at all produces.
     const bare = buildCommercialQuote(twoLines).digest;
+    expect(bare).toBe(buildCommercialQuote(twoLines, { unitPrecisionByStockKey: new Map() }).digest);
     for (const nearMiss of [KEY.toUpperCase(), `${KEY} `]) {
-      const built = buildCommercialQuote(twoLines, {
-        unitPrecisionByStockKey: new Map([
-          [other, whole],
-          [nearMiss, whole],
-        ]),
-      });
-      expect(built.digest).toBe(bare);
-      expect(built.lines[1]?.quantity).toBe('5.5000');
+      const error = refusalOf(
+        () =>
+          buildCommercialQuote(twoLines, {
+            unitPrecisionByStockKey: new Map([
+              [other, whole],
+              [nearMiss, whole],
+            ]),
+          }),
+        `a partial miss: ${JSON.stringify(nearMiss)}`,
+      );
+      expect(error.code).toBe('order.quote_field_undeclared');
+      expect(error.details?.stated).toBe(nearMiss);
     }
   });
 
