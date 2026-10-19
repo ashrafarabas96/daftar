@@ -261,6 +261,16 @@ def _git(gitdir, *args):
                  "GIT_NAMESPACE", "GIT_LITERAL_PATHSPECS"):
         env.pop(name, None)
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    # ROUND 20, R-B: replacement objects were disabled and GRAFTS were not.
+    # `<git-dir>/info/grafts` rewrites a commit's parents for every traversal,
+    # so one line in the witness turned `merge-base --is-ancestor` from 1 into 0
+    # and the round-19 lineage guard accepted a repository descended from
+    # nothing. Measured here on an orphan clone: rc 1 before the file, rc 0
+    # after it, rc 1 again with this variable set. Grafts are deprecated and
+    # still honoured, which is the worst combination — and this project already
+    # paid for the same lesson in phase 14. Pointing the variable at an empty
+    # file is the documented way to ignore the repository's own.
+    env["GIT_GRAFT_FILE"] = os.devnull
     proc = subprocess.run(("git", "--no-replace-objects", "-C", gitdir) + args,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     return proc.returncode, proc.stdout, proc.stderr.decode("utf-8", "replace").strip()
@@ -318,11 +328,28 @@ def main():
     # same hole as an argument it silently PREFERS, so an option-shaped token it
     # does not recognise is refused by name, and so is a repeated option, whose
     # resolution `_arg` was deciding by position alone.
+    #
+    # ROUND 20, N-8: round 18 validated the argv and then left the READER alone,
+    # and a parser and its reader are two parties. `--git-anchor
+    # --inner-guards-only` made this loop CONSUME the flag as --git-anchor's
+    # value and record no flag at all, while the reader below still asked
+    # `"--inner-guards-only" in sys.argv` and saw it — so the anchor leg was
+    # turned off by a flag no caller had asked for, at exit 0, on a tampered
+    # tree. Measured before this fix. Two changes close it at the root rather
+    # than at the membership test:
+    #   (1) NO value option may consume an option-shaped token. Round 17 refused
+    #       that for --git-dir alone; the hole was the four options it did not
+    #       cover.
+    #   (2) the parser RECORDS what it parsed, and every reader below reads that
+    #       record. There is one parse and one consumer, so the two cannot
+    #       disagree again — `_argv_values`/`_argv_flags` replace `_arg`'s second
+    #       walk over sys.argv.
     value_opts = ("--git-dir", "--git-anchor", "--expect-covered", "--expect-boundary",
                   "--expect-covered-digest")
     flag_opts = ("--inner-guards-only",)
     i = 1
     seen = {}
+    values = {}
     while i < len(argv):
         tok = argv[i]
         if tok in value_opts:
@@ -332,7 +359,17 @@ def main():
                                  "rather than falling back to a default this run did not ask "
                                  "for\n" % tok)
                 return 1
+            val = argv[i + 1]
+            if val.startswith("-"):
+                sys.stderr.write("INTEGRITY FAIL: ARGUMENT INJECTION — %s was given '%s' as its "
+                                 "value, which is option-shaped. A value option that CONSUMES a "
+                                 "flag is the same hole as one that ignores it: the flag then "
+                                 "reaches no parser while still being present on the command "
+                                 "line. Refusing rather than deciding by position which of the "
+                                 "two the caller meant\n" % (tok, val))
+                return 1
             seen[tok] = seen.get(tok, 0) + 1
+            values[tok] = val
             i += 2
             continue
         if tok in flag_opts:
@@ -355,12 +392,14 @@ def main():
                          % ", ".join(repeated))
         return 1
     repo = argv[0]
-    anchor_sha = _arg("--git-anchor", ANCHOR_PIN)
-    anchor_dir = _arg("--git-dir")
-    inner_only = "--inner-guards-only" in sys.argv
-    want_covered = _arg("--expect-covered")
-    want_boundary = _arg("--expect-boundary")
-    want_digest = _arg("--expect-covered-digest")
+    # ROUND 20, N-8: every one of these now comes from `values`/`seen`, which the
+    # loop above built and validated. Nothing below re-walks sys.argv.
+    anchor_sha = values.get("--git-anchor", ANCHOR_PIN)
+    anchor_dir = values.get("--git-dir")
+    inner_only = "--inner-guards-only" in seen
+    want_covered = values.get("--expect-covered")
+    want_boundary = values.get("--expect-boundary")
+    want_digest = values.get("--expect-covered-digest")
     mdir = os.path.join(repo, "infrastructure", "database", "migrations")
     mpath = os.path.join(repo, "infrastructure", "database", "MIGRATION_MANIFEST.json")
 
@@ -558,14 +597,42 @@ def main():
         # made it exist. It closes a different and smaller thing — an anchor
         # repository that merely holds the object — and PATCH-REQ-P8-08 still
         # carries the pin edit alone.
+        #
+        # ROUND 20, N-9: `merge-base --is-ancestor` answers from the graph it
+        # HAS. A shallow repository has a truncated graph, so it returns 1 — a
+        # definite "not an ancestor" — for a commit that IS one. Round 19 wrote
+        # the undecided branch below and then could never reach it, because the
+        # one genuinely undecidable case arrives wearing a decided answer.
+        # Measured with the recipe PATCH-REQ-P8-08 itself used to recommend:
+        # `clone --depth 1` then `fetch --depth 1 origin <the forty characters>`
+        # leaves the pin PRESENT, `--is-shallow-repository` true, is-ancestor 1,
+        # and the truth 0 in a full clone of the same branch. The refusal then
+        # said of that checkout that it "happens to hold" the object. It does
+        # not: it descends from it. A lie in a refusal is the mirror image of a
+        # lie in a pass, so shallowness is probed BEFORE a 1 is believed and is
+        # routed to the undecided branch, naming itself.
+        shallow_rc, shallow_out, _shallow_err = _git(anchor_dir, "rev-parse",
+                                                     "--is-shallow-repository")
+        shallow = (shallow_rc == 0
+                   and shallow_out.decode("utf-8", "replace").strip() == "true")
         rc, _out, err = _git(anchor_dir, "merge-base", "--is-ancestor",
                              anchor_sha, "HEAD")
+        if shallow and rc != 0:
+            sys.stderr.write("INTEGRITY FAIL: ANCHOR LINEAGE — %s is present in %s, but that "
+                             "repository is SHALLOW, so git answered the ancestry question from a "
+                             "truncated graph (exit %d) and its answer carries no information "
+                             "either way. An undecided lineage is not a passed one, and a "
+                             "truncated graph's definite 'no' is undecided: pass a complete "
+                             "checkout (fetch-depth 0, and no --depth on any later fetch); "
+                             "refusing\n" % (anchor_sha, anchor_dir, rc))
+            return 1
         if rc == 1:
             sys.stderr.write("INTEGRITY FAIL: ANCHOR LINEAGE — %s exists in %s but is NOT an "
                              "ancestor of that repository's HEAD, so it is an object the "
                              "repository happens to hold rather than a commit this code descends "
-                             "from; refusing to call it the frozen history's witness\n"
-                             % (anchor_sha, anchor_dir))
+                             "from; refusing to call it the frozen history's witness. (That "
+                             "repository is not shallow, so this is git's answer from a complete "
+                             "graph.)\n" % (anchor_sha, anchor_dir))
             return 1
         if rc != 0:
             sys.stderr.write("INTEGRITY FAIL: ANCHOR LINEAGE — the ancestry of %s in %s could not "

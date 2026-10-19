@@ -205,6 +205,8 @@ fi
 BASE_SHA=$(sha256sum "$HERE/p8-overlay.sql" | cut -d' ' -f1)
 MUT=$HERE/p8-mutants.py
 
+# <<< P8-Y7-CUT-BEGIN-A >>>
+
 plant(){           # plant <id> <dir> — mutate a COPY, and refuse a no-op
   # NOTE ON `local`: bash expands every word on the line before any of the
   # assignments take effect, so `local id=$1 md=$OUT/mut-$id` reads an empty
@@ -270,7 +272,7 @@ mutate_refuses(){  # mutate_refuses <id> <expect-apply-error>
     say "MUT $id: FAIL — the overlay applied anyway, so its own check does not fail on absence"
     FAILED=1; return
   fi
-  if grep -qF "$expect" "$md/overlay.log" 2>/dev/null; then
+  if grep -qF -e "$expect" "$md/overlay.log" 2>/dev/null; then
     say "MUT $id: RED — the overlay refused itself with '$expect'"
   else
     say "MUT $id: FAIL — the build failed, but NOT with '$expect'"
@@ -303,6 +305,7 @@ mutate         10b "A12 the quarantine is not under RLS, because it has no tenan
 mutate         11  "T2 every tenant-scoped relation carries a composite tenant key"
 mutate_race    12
 
+# <<< P8-Y7-CUT-END-A >>>
 # ---------------------------------------------------------------------
 # 3  The overlay must be untouched, and the frozen history must be VERIFIED
 # ---------------------------------------------------------------------
@@ -349,6 +352,23 @@ case "$P8_ANCHOR_PIN" in
   [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
   *) say "FAIL: the check did not report a forty-character anchor pin (got '$P8_ANCHOR_PIN'), so this gate has nothing to require of it"; FAILED=1 ;;
 esac
+# ROUND 20, N-11: the gate's own reads of the anchor repository used plain
+# `git -C`, which was the ONE git read in this pack without --no-replace-objects
+# and without the environment scrub the check's `_git()` does. A replace ref or
+# an inherited GIT_* key could therefore make the GATE's precondition disagree
+# with the CHECK's guard — and a precondition that disagrees with the guard
+# behind it masks every arm it gates. Same scrub, same flag, one helper.
+anchor_git(){   # anchor_git <dir> <git args...>
+  local d=$1; shift
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
+      -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+      -u GIT_CEILING_DIRECTORIES -u GIT_REPLACE_REF_BASE -u GIT_NAMESPACE \
+      -u GIT_LITERAL_PATHSPECS -u GIT_CONFIG -u GIT_CONFIG_GLOBAL \
+      -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT \
+      GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null \
+      git --no-replace-objects -C "$d" "$@"
+}
+
 P8_ANCHOR_DIR=${P8_GIT_ANCHOR_DIR:-}
 P8_EXPECT_COVERED=80
 P8_EXPECT_BOUNDARY=0079_phase4_pos_till_sessions_cart.sql
@@ -388,12 +408,34 @@ if [ "$ANCHOR_DIR_REJECTED" = 1 ]; then
 elif [ -z "$P8_ANCHOR_DIR" ]; then
   say "FAIL: P8_GIT_ANCHOR_DIR is not set, so the frozen boundary has no witness outside the tree under test; refusing to report a pass without it"
   FAILED=1
-elif ! git -C "$P8_ANCHOR_DIR" rev-parse --verify "${P8_ANCHOR_PIN}^{commit}" >/dev/null 2>&1; then
+elif ! anchor_git "$P8_ANCHOR_DIR" rev-parse --verify "${P8_ANCHOR_PIN}^{commit}" >/dev/null 2>&1; then
   say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR does not contain the anchor commit $P8_ANCHOR_PIN"
+  FAILED=1
+# ROUND 20, N-11: this precondition used to test CONTAINMENT only — the very
+# relation round 19 declared insufficient — so the gate announced an anchor and
+# the check then refused it, and every arm behind the announcement reported
+# "refused, but did not name …": the masking lesson a fourth time, one level up,
+# where the arms have no precondition of their own to assert because the anchor
+# belongs to the gate. The precondition now MIRRORS the guard behind it, in the
+# same order the check applies: shallow first (a truncated graph's definite "no"
+# is undecided, N-9), then ancestry.
+elif ! anchor_git "$P8_ANCHOR_DIR" merge-base --is-ancestor "$P8_ANCHOR_PIN" HEAD 2>/dev/null; then
+  # A shallow repository's YES is trustworthy — reachability is proved by the
+  # graph that is present — and only its NO is uninformative, because absence
+  # may be truncation. So the ancestry answer is taken first and shallowness is
+  # consulted only to explain a non-zero one. Measured here the hard way: the
+  # first version of this precondition refused any shallow anchor and reddened
+  # the whole gate against this container's own checkout, which was shallow
+  # (532 of 930 commits) while answering the ancestry question CORRECTLY.
+  if [ "$(anchor_git "$P8_ANCHOR_DIR" rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
+    say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR holds $P8_ANCHOR_PIN but is SHALLOW and its ancestry answer was negative, which a truncated graph cannot distinguish from absence; pass a complete checkout (fetch-depth 0, no --depth on any later fetch)"
+  else
+    say "FAIL: P8_GIT_ANCHOR_DIR=$P8_ANCHOR_DIR holds $P8_ANCHOR_PIN but does not DESCEND from it, so it is a repository that happens to hold the object; the check would refuse it as ANCHOR LINEAGE and every arm behind this line would report itself untested instead of naming its own guard"
+  fi
   FAILED=1
 else
   ANCHOR_ARGS=(--git-dir "$P8_ANCHOR_DIR")
-  say "the frozen boundary is anchored to $P8_ANCHOR_PIN (the ONE pin, read out of the check itself) in $P8_ANCHOR_DIR, read with replacement objects disabled"
+  say "the frozen boundary is anchored to $P8_ANCHOR_PIN (the ONE pin, read out of the check itself) in $P8_ANCHOR_DIR, which CONTAINS it, is not shallow, and DESCENDS from it, read with replacement objects disabled"
 fi
 CLAIM_ARGS=(--expect-covered "$P8_EXPECT_COVERED" --expect-boundary "$P8_EXPECT_BOUNDARY" --expect-covered-digest "$P8_EXPECT_COVERED_DIGEST")
 INTEGRITY_OUT=$OUT/frozen-integrity.log
@@ -416,6 +458,7 @@ else
   FAILED=1
 fi
 
+# <<< P8-Y7-CUT-BEGIN-B >>>
 # A check that cannot fail is worth nothing, so the check is itself measured —
 # the lesson round 11 wrote into `mutate_refuses` and then did not apply to its
 # own last ten lines. TWELVE ways of breaking it, each required to exit non-zero
@@ -505,7 +548,7 @@ integrity_must_refuse(){   # integrity_must_refuse <id> <setup> <expect> [extra-
     say "INTEGRITY-MUT $id: FAIL — the check PASSED on a broken tree"
     FAILED=1; return
   fi
-  if grep -qF "$expect" "$out"; then
+  if grep -qF -e "$expect" "$out"; then
     say "INTEGRITY-MUT $id: refused, and named it — '$expect'"
   else
     say "INTEGRITY-MUT $id: FAIL — it refused, but did not name '$expect'"
@@ -646,7 +689,7 @@ anchor_is_loadbearing(){   # anchor_is_loadbearing <id> <setup> <expect>
     say "ANCHOR-MUT $id: FAIL — the ANCHORED arm passed too; the fail-open is still open"
     FAILED=1; return
   fi
-  if grep -qF "$expect" "$anch"; then
+  if grep -qF -e "$expect" "$anch"; then
     say "ANCHOR-MUT $id: anchored — refused, and named it — '$expect'"
   else
     say "ANCHOR-MUT $id: FAIL — the anchored arm refused, but did not name '$expect'"
@@ -803,7 +846,7 @@ PLANT
     say "ANCHOR-ID $id: FAIL — the check CONFIRMED a forged tree against a doctored anchor"
     FAILED=1; return
   fi
-  if grep -qF "$expect" "$out"; then
+  if grep -qF -e "$expect" "$out"; then
     say "ANCHOR-ID $id: refused, and named it — '$expect'"
   else
     say "ANCHOR-ID $id: FAIL — it refused, but did not name '$expect'"
@@ -921,7 +964,7 @@ arg_shape(){   # arg_shape <id> <refuse|pass> <expect-text> [args...]
     say "ARGSHAPE $id: FAIL — the check refused an HONEST caller (rc=$rc): $(head -1 "$out")"
     FAILED=1; return
   fi
-  if grep -qF "$expect" "$out"; then
+  if grep -qF -e "$expect" "$out"; then
     say "ARGSHAPE $id ($mode, rc=$rc): named it — '$expect'"
   else
     say "ARGSHAPE $id: FAIL — rc=$rc as required, but '$expect' is not in the output"
@@ -948,6 +991,19 @@ fi
 # (w) THE HONEST SPACED PATH. The quoting fix is only proved by a caller a
 #     naive implementation would truncate: this directory's name contains a
 #     space, and the run must exercise the anchor leg against it and say so.
+# ROUND 20, (y) and (z) — the twelfth challenge's N-8. Round 18 validated the
+# argv as a closed vocabulary and left the READER alone, so a value option could
+# CONSUME a flag: the parser recorded no flag, the membership test saw one
+# anyway, and `--git-anchor --inner-guards-only` turned the anchor leg off at
+# exit 0 on a tampered tree. Reproduced before the fix. (y) is the challenger's
+# own spelling; (z) is the sibling it named, to show the refusal is keyed on the
+# SHAPE of the value and not on one option's name.
+arg_shape y refuse \
+  "ARGUMENT INJECTION — --git-anchor was given '--inner-guards-only' as its value" \
+  --git-anchor --inner-guards-only
+arg_shape z refuse \
+  "ARGUMENT INJECTION — --expect-covered was given '--inner-guards-only' as its value" \
+  --expect-covered --inner-guards-only
 if [ -n "$P8_ANCHOR_DIR" ]; then
   SPACED="$OUT/spaced anchor dir"
   rm -rf "$SPACED"; mkdir -p "$SPACED"
@@ -1058,9 +1114,29 @@ cat > "$PATCHDIR/injection.py" <<'PATCH'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 s = open(src, encoding="utf-8").read()
+# ROUND 20: round 17's refusal below is now SUBSUMED. The parser refuses an
+# option-shaped VALUE for every value option, and it runs first, so
+# `--git-dir --inner-guards-only` never reaches the later check. Round 17's line
+# is kept as defence in depth for any future caller that reaches `main()`'s body
+# another way, and it is therefore UNMEASURED at runtime rather than dead — this
+# arm deletes BOTH, because deleting only one leaves the other refusing and the
+# arm would credit the wrong guard. Measured: with only the later one deleted,
+# y1 reported "the check still refused".
+a0 = '            if val.startswith("-"):'
+assert s.count(a0) == 1, "the parser's option-shaped value refusal is not where this expects it"
+s = s.replace(a0, "            if False:", 1)
 a = '    if anchor_dir is not None and anchor_dir.startswith("-"):'
 assert s.count(a) == 1, "the option-shaped refusal is not where this expects it"
 s = s.replace(a, "    if False:", 1)
+# And the reader, for the same reason: with both refusals gone the parser still
+# CONSUMES the flag as a value, so `in seen` is false and the check walks the
+# anchor path and refuses for a third reason ("not reachable in
+# --inner-guards-only"). Measured. Round 18's fail-open — rc 0, ANCHOR LEG NOT
+# EXERCISED — comes back only when the reader is also put back on sys.argv, so
+# what this arm measures is the THREE together, which is the honest claim.
+c = '    inner_only = "--inner-guards-only" in seen'
+assert s.count(c) == 1, "the parser-record reader is not where this expects it"
+s = s.replace(c, '    inner_only = "--inner-guards-only" in sys.argv', 1)
 b = "    if inner_only and anchor_dir is not None:"
 assert s.count(b) == 1, "the incoherence refusal is not where this expects it"
 s = s.replace(b, "    if False:", 1)
@@ -1163,7 +1239,11 @@ if [ -n "$P8_ANCHOR_DIR" ]; then
       say "LINEAGE: FAIL — the doctored clone still descends from the pin, so the plant did not land"
       FAILED=1
     else
-      say "LINEAGE: the plant holds the pin as an object and is not descended from it, as required"
+      if [ "$(git -C "$LIN/orphan" rev-parse --is-shallow-repository)" = true ]; then
+        say "LINEAGE: FAIL — the plant is SHALLOW, so round 20's completeness guard would decide this arm instead of the lineage guard it names; unshallow the anchor (fetch-depth 0)"
+        FAILED=1
+      else
+      say "LINEAGE: the plant holds the pin as an object and is not descended from it, and is not shallow, as required"
       if python3 "$HERE/p8-frozen-integrity.py" "$LIN/tree" --git-dir "$LIN/orphan" >"$LIN/guarded.log" 2>&1; then
         say "LINEAGE: FAIL — an HONEST tree was confirmed against a repository that merely HOLDS the pin"
         FAILED=1
@@ -1190,10 +1270,291 @@ open(dst, "w", encoding="utf-8").write(s)
 PATCH
       guard_control y6 "$PATCHDIR/lineage.py" honest present \
         "ANCHOR LEG EXERCISED:" --git-dir "$LIN/orphan"
+      fi
     fi
   fi
 else
   say "LINEAGE: FAIL — no anchor directory, so the lineage guard is untested"
+  FAILED=1
+fi
+
+# ---------------------------------------------------------------------
+# ROUND 20, N-9 — a definite "no" from a truncated graph is an undecided answer
+# ---------------------------------------------------------------------
+# `merge-base --is-ancestor` answers from the graph it HAS. A shallow repository
+# has a truncated graph, so it returns 1 — git's definite "not an ancestor" —
+# for a commit that IS one, and round 19's lineage refusal then said of an
+# honest CI checkout that it "happens to hold" the object. The undecided branch
+# round 19 wrote could never be reached, because the one genuinely undecidable
+# case arrives wearing a decided answer. The plant is built with the recipe
+# PATCH-REQ-P8-08 itself used to recommend, and the arm asserts BOTH halves of
+# the trap before measuring: the pin present, and the repository shallow.
+# ---------------------------------------------------------------------
+# ROUND 20, R-B — a grafts file in the witness defeated the lineage check
+# ---------------------------------------------------------------------
+# Round 16 disabled replacement objects by argument AND by environment. It did
+# not disable GRAFTS, the older mechanism that does the same thing to parent
+# traversal, is deprecated, and is still honoured. One line in
+# `<git-dir>/info/grafts` makes the pin an ancestor of anything, so the
+# round-19 lineage guard accepted a repository descended from nothing. The
+# content legs still verified, which is why this is P3 and not a blocker — but
+# the guard it defeats is the one round 19 was entirely about.
+say "=== the anchor's GRAFTS, measured ==="
+if [ -n "$P8_ANCHOR_DIR" ]; then
+  GRF=$OUT/grafts
+  rm -rf "$GRF"; mkdir -p "$GRF"
+  if ! git clone -q "$P8_ANCHOR_DIR" "$GRF/repo" 2>"$GRF/clone.log"; then
+    say "GRAFTS: FAIL — could not clone the anchor repository: $(tail -1 "$GRF/clone.log")"
+    FAILED=1
+  else
+    ( cd "$GRF/repo" \
+      && git config user.email p8@local && git config user.name p8 \
+      && git config advice.graftFileDeprecated false \
+      && git checkout -q --orphan p8-grafted \
+      && git rm -rq --cached . \
+      && git commit -q --allow-empty -m "unrelated to the frozen history" ) \
+      >"$GRF/build.log" 2>&1
+    if ! git -C "$GRF/repo" rev-parse --verify -q "${P8_ANCHOR_PIN}^{commit}" >/dev/null; then
+      say "GRAFTS: FAIL — the plant no longer holds the pin, so it tests reachability rather than grafts"
+      FAILED=1
+    elif git -C "$GRF/repo" merge-base --is-ancestor "$P8_ANCHOR_PIN" HEAD 2>/dev/null; then
+      say "GRAFTS: FAIL — the plant already descends from the pin before any graft, so the graft would prove nothing"
+      FAILED=1
+    else
+      mkdir -p "$GRF/repo/.git/info"
+      printf '%s %s\n' "$(git -C "$GRF/repo" rev-parse HEAD)" "$P8_ANCHOR_PIN" \
+        > "$GRF/repo/.git/info/grafts"
+      if ! git -C "$GRF/repo" merge-base --is-ancestor "$P8_ANCHOR_PIN" HEAD 2>/dev/null; then
+        say "GRAFTS: FAIL — the graft did not take effect in this git, so the plant did not land"
+        FAILED=1
+      else
+        say "GRAFTS: the plant is grafted — plain git now calls the pin an ancestor of an unrelated history, as required"
+        gout=$GRF/out.log; grc=0
+        python3 "$HERE/p8-frozen-integrity.py" "$REPO" --git-dir "$GRF/repo" >"$gout" 2>&1 || grc=$?
+        if [ "$grc" -eq 0 ]; then
+          say "GRAFTS: FAIL — a grafted witness was accepted (rc 0), so the lineage guard reads the graft file"
+          FAILED=1
+        elif grep -qF "ANCHOR LINEAGE" "$gout"; then
+          say "GRAFTS: refused, and named it — 'ANCHOR LINEAGE', so the graft file does not reach this check"
+        else
+          say "GRAFTS: FAIL — it refused (rc=$grc) but not by the lineage guard's name: $(head -1 "$gout")"
+          FAILED=1
+        fi
+        # y10 — the scrub measured BY DELETING IT. With GIT_GRAFT_FILE gone the
+        # grafted witness is accepted again at rc 0, which is the fail-open R-B
+        # names.
+        cat > "$PATCHDIR/graftfile.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = '    env["GIT_GRAFT_FILE"] = os.devnull'
+assert s.count(a) == 1, "the graft-file scrub is not where this expects it"
+s = s.replace(a, "    pass", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+        nog=$GRF/no-scrub.py; pat=0
+        python3 "$PATCHDIR/graftfile.py" "$HERE/p8-frozen-integrity.py" "$nog" >"$GRF/patch.log" 2>&1 || pat=$?
+        if [ "$pat" -ne 0 ] || [ ! -s "$nog" ]; then
+          say "GUARD-CTL y10: FAIL — the patcher did not apply (exit $pat: $(tail -1 "$GRF/patch.log")), so this arm measured nothing"
+          FAILED=1
+        else
+          yout=$GRF/y10.log; yrc=0
+          python3 "$nog" "$REPO" --git-dir "$GRF/repo" >"$yout" 2>&1 || yrc=$?
+          if [ "$yrc" -eq 0 ] && grep -qF "ANCHOR LEG EXERCISED:" "$yout"; then
+            say "GUARD-CTL y10: with the graft-file scrub deleted the grafted witness is ACCEPTED again (rc 0, 'ANCHOR LEG EXERCISED:'), so the scrub is what closes it"
+          else
+            say "GUARD-CTL y10: FAIL — with the scrub deleted the grafted witness was still refused (rc $yrc: $(head -1 "$yout")), so this arm credits the scrub with something else"
+            FAILED=1
+          fi
+        fi
+      fi
+    fi
+  fi
+else
+  say "GRAFTS: FAIL — no anchor directory, so the graft scrub is untested"
+  FAILED=1
+fi
+
+say "=== the anchor's COMPLETENESS, measured ==="
+if [ -n "$P8_ANCHOR_DIR" ]; then
+  SHAL=$OUT/shallow
+  rm -rf "$SHAL"; mkdir -p "$SHAL"
+  if ! git clone -q --depth 1 "file://$P8_ANCHOR_DIR" "$SHAL/repo" 2>"$SHAL/clone.log"; then
+    say "SHALLOW: FAIL — could not make a shallow clone of the anchor repository: $(tail -1 "$SHAL/clone.log")"
+    FAILED=1
+  elif ! git -C "$SHAL/repo" fetch -q --depth 1 origin "$P8_ANCHOR_PIN" 2>"$SHAL/fetch.log"; then
+    say "SHALLOW: FAIL — could not fetch the pin into the shallow clone: $(tail -1 "$SHAL/fetch.log")"
+    FAILED=1
+  elif ! git -C "$SHAL/repo" rev-parse --verify -q "${P8_ANCHOR_PIN}^{commit}" >/dev/null; then
+    say "SHALLOW: FAIL — the shallow clone does not hold the pin, so this plant tests absence, not shallowness"
+    FAILED=1
+  elif [ "$(git -C "$SHAL/repo" rev-parse --is-shallow-repository)" != true ]; then
+    say "SHALLOW: FAIL — the clone is not shallow, so the plant did not land"
+    FAILED=1
+  else
+    say "SHALLOW: the plant holds the pin and is shallow, as required"
+    sout=$SHAL/out.log; src=0
+    python3 "$HERE/p8-frozen-integrity.py" "$REPO" --git-dir "$SHAL/repo" >"$sout" 2>&1 || src=$?
+    if [ "$src" -eq 0 ]; then
+      say "SHALLOW: FAIL — an answer computed from a truncated graph was accepted (rc 0)"
+      FAILED=1
+    elif ! grep -qF "that repository is SHALLOW" "$sout"; then
+      say "SHALLOW: FAIL — it refused (rc=$src) but did not name shallowness: $(head -1 "$sout")"
+      FAILED=1
+    elif grep -qF "happens to hold rather than a commit this code descends from" "$sout"; then
+      say "SHALLOW: FAIL — it still says the repository merely HOLDS the pin, which is the false sentence this round removes"
+      FAILED=1
+    else
+      say "SHALLOW: refused, and named it — 'that repository is SHALLOW', without the false 'happens to hold' sentence"
+    fi
+
+    # y9 — the probe measured BY DELETING IT. This one does not restore a
+    # fail-open: it restores a measured-FALSE refusal, which is the mirror image
+    # and is why it has its own arm rather than guard_control's shape.
+    cat > "$PATCHDIR/shallowprobe.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = "        if shallow and rc != 0:"
+assert s.count(a) == 1, "the shallow routing is not where this expects it"
+s = s.replace(a, "        if False:", 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+    nog=$SHAL/no-probe.py; pat=0
+    python3 "$PATCHDIR/shallowprobe.py" "$HERE/p8-frozen-integrity.py" "$nog" >"$SHAL/patch.log" 2>&1 || pat=$?
+    if [ "$pat" -ne 0 ] || [ ! -s "$nog" ]; then
+      say "GUARD-CTL y9: FAIL — the patcher did not apply (exit $pat: $(tail -1 "$SHAL/patch.log")), so this arm measured nothing"
+      FAILED=1
+    else
+      yout=$SHAL/y9.log; yrc=0
+      python3 "$nog" "$REPO" --git-dir "$SHAL/repo" >"$yout" 2>&1 || yrc=$?
+      if grep -qF "happens to hold rather than a commit this code descends from" "$yout"; then
+        say "GUARD-CTL y9: with the probe deleted the FALSE sentence returns (rc $yrc, 'happens to hold'), so the probe is what makes the refusal true"
+      else
+        say "GUARD-CTL y9: FAIL — with the probe deleted the old false sentence did not return (rc $yrc: $(head -1 "$yout")), so this arm credits the probe with something else"
+        FAILED=1
+      fi
+    fi
+  fi
+else
+  say "SHALLOW: FAIL — no anchor directory, so the completeness guard is untested"
+  FAILED=1
+fi
+
+# ---------------------------------------------------------------------
+# ROUND 20, N-8 — the pair that closes the consumed-flag hole, measured
+# ---------------------------------------------------------------------
+# N-8 is closed TWICE over: the parser refuses an option-shaped value for every
+# value option, and the reader reads the parser's record instead of sys.argv.
+# Either half alone refuses the attack, so an arm that deletes one and finds the
+# other still refusing cannot use "the old fail-open returns". y8 therefore
+# deletes BOTH and requires the round-18 behaviour back, which is the
+# conservative claim: the PAIR is what closes it.
+cat > "$PATCHDIR/consumedvalue.py" <<'PATCH'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+a = '            if val.startswith("-"):'
+assert s.count(a) == 1, "the option-shaped value refusal is not where this expects it"
+s = s.replace(a, "            if False:", 1)
+b = '    inner_only = "--inner-guards-only" in seen'
+assert s.count(b) == 1, "the parser-record reader is not where this expects it"
+s = s.replace(b, '    inner_only = "--inner-guards-only" in sys.argv', 1)
+open(dst, "w", encoding="utf-8").write(s)
+PATCH
+guard_control y8 "$PATCHDIR/consumedvalue.py" tampered present \
+  "ANCHOR LEG NOT EXERCISED" --git-anchor --inner-guards-only
+
+# ---------------------------------------------------------------------
+# ROUND 20, N-12 — the token REQUIREMENT, measured through the runner
+# ---------------------------------------------------------------------
+# y5 deletes the token `print` and asserts the string is absent from the
+# patched check's own output. That measures the PRODUCER. What this pack relies
+# on is the consumer: the runner's `grep -qF "$WANT_TOKEN"`. No arm removed the
+# token and then ran the GATE, so the requirement was load-bearing and
+# undemonstrated — the challenger supplied the missing control itself. y7 is
+# that control, inside the pack.
+#
+# It runs a COPY of this runner against a COPY of the check whose token print is
+# renamed. Three things make that honest rather than circular: the copy sits at
+# the same depth as the original so its own `REPO=$HERE/../../..` resolves to a
+# tree holding the REAL migrations; the copy's own mutant and arm sections are
+# CUT at the sentinels, so this arm neither recurses into itself nor re-runs
+# work already measured; and the patcher asserts every anchor it replaces, so a
+# patcher that no longer matches is reported as such instead of being credited
+# with a red.
+say "=== the token requirement, measured through the RUNNER ==="
+if [ -n "$P8_ANCHOR_DIR" ]; then
+  Y7=$OUT/y7
+  rm -rf "$Y7"; mkdir -p "$Y7/repo/packages/notifications"
+  # A symlink farm, not a copy: every top-level entry of the real repository is
+  # linked in, so the copy's own `REPO=$HERE/../../..` resolves to a tree that
+  # holds the REAL migrations, the REAL applier (apps/api/src/infra/migrate.ts)
+  # and the REAL node_modules. Only `proof` is a true copy, because only the
+  # check inside it is patched. Measured the hard way twice: without
+  # node_modules the copy aborted on a missing tsx, and without apps/ the
+  # project applier failed.
+  for _e in "$REPO"/*; do
+    _b=$(basename "$_e"); [ "$_b" = packages ] && continue
+    ln -s "$_e" "$Y7/repo/$_b"
+  done
+  for _e in "$REPO"/packages/*; do
+    _b=$(basename "$_e"); [ "$_b" = notifications ] && continue
+    ln -s "$_e" "$Y7/repo/packages/$_b"
+  done
+  for _e in "$REPO"/packages/notifications/*; do
+    _b=$(basename "$_e"); [ "$_b" = proof ] && continue
+    ln -s "$_e" "$Y7/repo/packages/notifications/$_b"
+  done
+  cp -r "$HERE" "$Y7/repo/packages/notifications/proof"
+  cat > "$PATCHDIR/notoken.py" <<'PATCH'
+import sys
+chk, run = sys.argv[1], sys.argv[2]
+s = open(chk, encoding="utf-8").read()
+a = 'print("ANCHOR LEG EXERCISED: pin=%s dir=%s covered=%d anchored=%d boundary=%s"'
+assert s.count(a) == 1, "the token print is not where this expects it"
+s = s.replace(a, 'print("ANCHOR LEG WAS HERE: pin=%s dir=%s covered=%d anchored=%d boundary=%s"', 1)
+open(chk, "w", encoding="utf-8").write(s)
+r = open(run, encoding="utf-8").read()
+# The sentinel strings are built here rather than written out, because a
+# literal copy of one in this patcher would itself be an occurrence in the file
+# the patcher counts — which is how the first version of this arm reported "a
+# cut sentinel is missing" about sentinels that were present twice.
+_S = "# <<< P8-Y7-CUT-"
+for lo, hi in ((_S + "BEGIN-A >>>", _S + "END-A >>>"),
+               (_S + "BEGIN-B >>>", _S + "END-B >>>")):
+    assert r.count(lo) == 1 and r.count(hi) == 1, "a cut sentinel is missing: %s" % lo
+    i, j = r.index(lo), r.index(hi)
+    assert i < j, "the cut sentinels are out of order: %s" % lo
+    r = r[:i] + r[j + len(hi):]
+assert "GUARD-CTL y7" not in r and "=== the token requirement" not in r, \
+    "the copy still contains this arm, so it would recurse"
+open(run, "w", encoding="utf-8").write(r)
+PATCH
+  pat=0
+  python3 "$PATCHDIR/notoken.py" \
+    "$Y7/repo/packages/notifications/proof/p8-frozen-integrity.py" \
+    "$Y7/repo/packages/notifications/proof/run-p8-real-proof.sh" \
+    >"$Y7/patch.log" 2>&1 || pat=$?
+  if [ "$pat" -ne 0 ]; then
+    say "GUARD-CTL y7: FAIL — the patcher did not apply (exit $pat: $(tail -1 "$Y7/patch.log")), so this arm measured nothing"
+    FAILED=1
+  else
+    y7rc=0
+    RUN_ID="$RUN-Y7" bash "$Y7/repo/packages/notifications/proof/run-p8-real-proof.sh" \
+      >"$Y7/run.log" 2>&1 || y7rc=$?
+    if [ "$y7rc" -eq 0 ]; then
+      say "GUARD-CTL y7: FAIL — with the token removed the GATE still passed (rc 0), so the runner's requirement is not what makes the leg's claim load-bearing"
+      FAILED=1
+    elif grep -qF "never said it exercised the anchor leg" "$Y7/run.log"; then
+      say "GUARD-CTL y7: with the token removed the RUNNER reds by name (rc $y7rc, 'never said it exercised the anchor leg'), so the requirement — not the print — is what carries the claim"
+    else
+      say "GUARD-CTL y7: FAIL — the gate red (rc $y7rc) but not by the token requirement's name, so this arm credits it with someone else's refusal"
+      FAILED=1
+    fi
+  fi
+else
+  say "GUARD-CTL y7: FAIL — no anchor directory, so the token requirement is untested"
   FAILED=1
 fi
 
@@ -1231,6 +1592,7 @@ else
   say "no git work tree here, so git is not consulted — the manifest check above is what attests (this is the case round 11 silently passed)"
 fi
 
+# <<< P8-Y7-CUT-END-B >>>
 # ---------------------------------------------------------------------
 # 4  Rebuild the baseline, so the cluster is left in the proved state
 # ---------------------------------------------------------------------
